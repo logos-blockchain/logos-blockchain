@@ -15,8 +15,8 @@ use crate::{
                 command_file_utils::{
                     execute_coin_splits_all_user_wallets,
                     execute_continuous_next_wallet_user_wallet,
-                    execute_continuous_round_robin_user_wallets, perform_manual_step_control,
-                    verify_min_outputs_all_user_wallets,
+                    execute_continuous_round_robin_user_wallets, log_wallet_balances,
+                    perform_manual_step_control, verify_min_outputs_all_user_wallets,
                 },
                 tracked_transactions::{
                     submit_funded_transfer_transaction, submit_invalid_transfer_transaction,
@@ -31,7 +31,10 @@ use crate::{
                 },
             },
         },
-        wallet::sync::{WalletSendReadiness, wait_wallet_send_ready},
+        wallet::{
+            submissions::create_and_submit_transaction_hashes_with_utxo_cache,
+            sync::{WalletSendReadiness, wait_wallet_send_ready},
+        },
         world::{CucumberWorld, WalletInfo},
     },
     non_zero,
@@ -84,6 +87,79 @@ async fn step_do_coin_split(
         "Submitted coin split transaction for `{wallet_name}/{}`, outputs: {number_of_outputs}, \
         value: {output_value}, tx hash: {tx_hash_hex}",
         wallet.node_name
+    );
+
+    Ok(())
+}
+
+/// Tops up a node's funding wallet from a user wallet with `note_count`
+/// notes of `note_value` LGO each, in a single transaction.
+///
+/// Funding a transaction reserves one wallet note until the transaction is
+/// mined, so a funding wallet supports at most `note count` concurrent
+/// in-flight funded transactions — and its single `10_000` genesis note cannot
+/// pay the fees of scenarios that publish many messages at non-zero gas
+/// prices. This mirrors the workflow of a real node operator provisioning
+/// their sequencer's funding wallet.
+#[when(
+    expr = "wallet {string} sends {int} notes of {int} LGO to node {string} funding wallet as {string}"
+)]
+async fn step_topup_node_funding_wallet(
+    world: &mut CucumberWorld,
+    step: &Step,
+    wallet_name: String,
+    note_count: usize,
+    note_value: u64,
+    node_name: String,
+    transaction_alias: String,
+) -> StepResult {
+    let funding_wallet = world
+        .resolve_wallet(&format!("{node_name}_WALLET"))
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+        })?;
+    let funding_pk = funding_wallet.public_key().inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
+
+    let mut available_utxos = WalletUtxos::new();
+    let best_node_info = wait_wallet_send_ready(
+        world,
+        &step.value,
+        &wallet_name,
+        180,
+        note_count as u64 * note_value,
+        WalletSendReadiness::TotalValueOnly,
+        &mut available_utxos,
+        &HashSet::new(),
+    )
+    .await?;
+
+    let receivers = vec![(funding_pk, note_value); note_count];
+    let tx_hashes = create_and_submit_transaction_hashes_with_utxo_cache(
+        world,
+        &step.value,
+        &wallet_name,
+        &receivers,
+        Some(&best_node_info),
+        Some(&mut available_utxos),
+    )
+    .await
+    .inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
+    let tx_hash = tx_hashes
+        .first()
+        .copied()
+        .ok_or_else(|| StepError::LogicalError {
+            message: "funding wallet top-up produced no transaction".to_owned(),
+        })?;
+    world.remember_submitted_transaction(transaction_alias.clone(), tx_hash);
+
+    info!(
+        target: TARGET,
+        "Submitted funding wallet top-up `{transaction_alias}`: {note_count} notes of \
+        {note_value} LGO from `{wallet_name}` to `{node_name}_WALLET`",
     );
 
     Ok(())
@@ -320,6 +396,15 @@ async fn step_wallet_has_exact_coins_and_value(
         WalletOutputState::OnChain,
     )
     .await
+}
+
+#[when(expr = "I log wallet balances for all wallets")]
+#[then(expr = "I log wallet balances for all wallets")]
+async fn step_wallet_balance_all_wallets(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    let mut wallets = world.all_user_wallets();
+    wallets.extend(world.all_funding_wallets());
+
+    log_wallet_balances(world, &step.value, wallets).await
 }
 
 #[when(expr = "wallet {string} has all submitted transactions settled in {int} seconds")]
@@ -681,7 +766,11 @@ fn step_faucet_details(world: &mut CucumberWorld, base_url: String) {
 
 #[given(expr = "I request {int} rounds of faucet funds for wallet {string}")]
 #[when(expr = "I request {int} rounds of faucet funds for wallet {string}")]
-async fn step_request_faucet_funds_for_wallet(
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Required by cucumber expression"
+)]
+fn step_request_faucet_funds_for_wallet(
     world: &mut CucumberWorld,
     step: &Step,
     number_of_rounds: usize,
@@ -693,8 +782,6 @@ async fn step_request_faucet_funds_for_wallet(
 
     let wallet_pk_hex = wallet.public_key_hex();
 
-    track_wallets_before_faucet_request(world, step).await?;
-
     utils::request_faucet_funds(
         world,
         &step.value,
@@ -705,7 +792,7 @@ async fn step_request_faucet_funds_for_wallet(
 
 #[given(expr = "I request {int} rounds of faucet funds for all wallets")]
 #[when(expr = "I request {int} rounds of faucet funds for all wallets")]
-async fn step_request_faucet_funds_for_all_wallets(
+fn step_request_faucet_funds_for_all_wallets(
     world: &mut CucumberWorld,
     step: &Step,
     number_of_rounds: usize,
@@ -715,8 +802,6 @@ async fn step_request_faucet_funds_for_all_wallets(
         .values()
         .map(WalletInfo::public_key_hex)
         .collect::<Vec<_>>();
-
-    track_wallets_before_faucet_request(world, step).await?;
 
     utils::request_faucet_funds(
         world,
@@ -728,7 +813,7 @@ async fn step_request_faucet_funds_for_all_wallets(
 
 #[given(expr = "I request {int} rounds of faucet funds for all user wallets")]
 #[when(expr = "I request {int} rounds of faucet funds for all user wallets")]
-async fn step_request_faucet_funds_for_all_user_wallets(
+fn step_request_faucet_funds_for_all_user_wallets(
     world: &mut CucumberWorld,
     step: &Step,
     number_of_rounds: usize,
@@ -740,8 +825,6 @@ async fn step_request_faucet_funds_for_all_user_wallets(
         .map(WalletInfo::public_key_hex)
         .collect::<Vec<_>>();
 
-    track_wallets_before_faucet_request(world, step).await?;
-
     utils::request_faucet_funds(
         world,
         &step.value,
@@ -752,7 +835,7 @@ async fn step_request_faucet_funds_for_all_user_wallets(
 
 #[given(expr = "I request {int} rounds of faucet funds for all funding wallets")]
 #[when(expr = "I request {int} rounds of faucet funds for all funding wallets")]
-async fn step_request_faucet_funds_for_all_funding_wallets(
+fn step_request_faucet_funds_for_all_funding_wallets(
     world: &mut CucumberWorld,
     step: &Step,
     number_of_rounds: usize,
@@ -764,28 +847,10 @@ async fn step_request_faucet_funds_for_all_funding_wallets(
         .map(WalletInfo::public_key_hex)
         .collect::<Vec<_>>();
 
-    track_wallets_before_faucet_request(world, step).await?;
-
     utils::request_faucet_funds(
         world,
         &step.value,
         non_zero!("number of rounds", number_of_rounds)?,
         &all_wallets_pk_hex,
     )
-}
-
-async fn track_wallets_before_faucet_request(world: &mut CucumberWorld, step: &Step) -> StepResult {
-    world
-        .ensure_wallet_block_feed()
-        .await
-        .inspect_err(|error| {
-            warn!(target: TARGET, "Step `{}` error: {error}", step.value);
-        })?;
-
-    world
-        .track_known_wallets_with_block_feed()
-        .await
-        .inspect_err(|error| {
-            warn!(target: TARGET, "Step `{}` error: {error}", step.value);
-        })
 }

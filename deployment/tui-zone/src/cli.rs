@@ -3,7 +3,7 @@ use std::{error::Error, path::PathBuf};
 use clap::{Args, Parser, Subcommand};
 
 use crate::run_commands::{
-    run_balance::{run_state_balance, run_state_full},
+    run_balance::run_state_full,
     run_config::{
         run_config, run_config_combine, run_config_prepare, run_config_sign, run_config_submit,
     },
@@ -69,10 +69,12 @@ enum ConfigCommand {
 
 #[derive(Subcommand, Debug)]
 enum StateCommand {
-    /// Print the channel balance and configuration state.
+    /// Print the channel configuration state.
     Full(StateArgs),
-    /// Print the channel balance.
-    Balance(StateArgs),
+    // TODO: support channel note tracking, which restores the
+    //  channel balance command.
+    // /// Print the channel balance.
+    // Balance(StateArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -90,6 +92,18 @@ pub struct NodeKeyArgs {
     /// Path to the signing key file (created if it doesn't exist)
     #[arg(long, default_value = "sequencer.key", env = "KEY_PATH")]
     pub key_path: String,
+
+    /// Node wallet public key (hex, 32 bytes) used to pay transaction fees.
+    /// The value comes from the node's own configuration. When absent,
+    /// transactions are built fee-less (only valid while gas prices are
+    /// zero).
+    #[arg(long, env = "FUNDING_PK")]
+    pub funding_pk: Option<String>,
+
+    /// Cap on a single transaction's fee (in gas units) when funding via
+    /// `--funding-pk`.
+    #[arg(long, default_value_t = 1_000_000, env = "MAX_TX_FEE")]
+    pub max_tx_fee: u64,
 }
 
 #[derive(Args, Debug)]
@@ -128,8 +142,9 @@ pub struct ConfigArgs {
     /// Number of accredited signatures required for future config updates.
     pub configuration_threshold: u16,
     #[arg(long)]
-    /// Number of accredited signatures required for withdrawals.
-    pub withdraw_threshold: u16,
+    /// Number of accredited signatures required to transfer or withdraw the
+    /// channel's notes.
+    pub transfer_threshold: u16,
     #[arg(long, default_value_t = 0)]
     /// Number of slots assigned to an accredited poster.
     pub posting_timeframe: u32,
@@ -162,8 +177,9 @@ pub struct ConfigPrepareArgs {
     /// Number of accredited signatures required for future config updates.
     pub configuration_threshold: u16,
     #[arg(long)]
-    /// Number of accredited signatures required for withdrawals.
-    pub withdraw_threshold: u16,
+    /// Number of accredited signatures required to transfer or withdraw the
+    /// channel's notes.
+    pub transfer_threshold: u16,
     #[arg(long, default_value_t = 0)]
     /// Number of slots assigned to an accredited poster.
     pub posting_timeframe: u32,
@@ -315,7 +331,6 @@ pub async fn run_cli(cli: Cli) -> RunResult<()> {
         },
         Some(Command::State { command }) => match command {
             StateCommand::Full(args) => run_state_full(args).await,
-            StateCommand::Balance(args) => run_state_balance(args).await,
         },
         Some(Command::Deposit(args)) => run_deposit(args).await,
         Some(Command::Keygen(args)) => {

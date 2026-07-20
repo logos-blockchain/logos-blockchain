@@ -10,6 +10,7 @@ use lb_core::{
     events::{HeaderEvent, TxEvent},
     mantle::{
         NoteId, OpProof, TxHash, Utxo, Value,
+        channel::Channels,
         ledger::Operation,
         ops::sdp::{
             SDPActiveExecutionContext, SDPActiveOp, SDPActiveValidationContext,
@@ -27,8 +28,11 @@ use lb_core::{
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use rewards::{Error as RewardsError, Rewards};
+use tracing::debug;
 
 use crate::{EpochState, UtxoTree, mantle::sdp::rewards::blend};
+
+const LOG_TARGET: &str = "ledger::mantle::sdp";
 
 type Declarations = rpds::RedBlackTreeMapSync<DeclarationId, Declaration>;
 
@@ -191,14 +195,20 @@ impl<R: Rewards> ServiceState<R> {
                 &service_params,
                 rewards_params,
             );
-            events.extend(
-                reward_utxos
-                    .iter()
-                    .map(|utxo| HeaderEvent::SdpRewardDistributed {
-                        service_type: self.service_type,
-                        utxo: *utxo,
-                    }),
-            );
+            events.extend(reward_utxos.iter().map(|utxo| {
+                debug!(
+                    target: LOG_TARGET,
+                    service_type = ?self.service_type,
+                    ?utxo,
+                    old_epoch = %last_epoch_state.epoch,
+                    new_epoch = %epoch_state.epoch,
+                    "SDP reward distributed",
+                );
+                HeaderEvent::SdpRewardDistributed {
+                    service_type: self.service_type,
+                    utxo: *utxo,
+                }
+            }));
         }
 
         (self, reward_utxos, events)
@@ -297,6 +307,7 @@ impl SdpLedger {
     pub fn from_genesis<'a>(
         config: &Config,
         utxo_tree: &UtxoTree,
+        channels: &Channels,
         epoch_state: &EpochState,
         ops: impl Iterator<Item = (&'a SDPDeclareOp, &'a OpProof)> + 'a,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
@@ -305,7 +316,8 @@ impl SdpLedger {
 
         let mut all_events = Vec::new();
         for (op, _) in ops {
-            let (result, events) = sdp.try_apply_genesis_sdp_declaration(utxo_tree, op, config)?;
+            let (result, events) =
+                sdp.try_apply_genesis_sdp_declaration(utxo_tree, channels, op, config)?;
             sdp = result;
             all_events.extend(events);
         }
@@ -387,6 +399,7 @@ impl SdpLedger {
     pub fn try_apply_genesis_sdp_declaration(
         mut self,
         utxo_tree: &UtxoTree,
+        channels: &Channels,
         op: &SDPDeclareOp,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
@@ -397,6 +410,7 @@ impl SdpLedger {
         // Validate SDP Declare
         op.validate(&SDPDeclareGenesisValidationContext {
             utxo_tree,
+            channels,
             locked_notes: &self.locked_notes,
             declarations: service_state.declarations(),
             min_stake: &config.min_stake,
@@ -420,9 +434,14 @@ impl SdpLedger {
         Ok((self, events))
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The declaration is validated against several independent pieces of ledger state."
+    )]
     pub fn try_apply_sdp_declaration(
         mut self,
         utxo_tree: &UtxoTree,
+        channels: &Channels,
         op: &SDPDeclareOp,
         zk_sig: &ZkSignature,
         ed25519_sig: &Ed25519Signature,
@@ -436,6 +455,7 @@ impl SdpLedger {
         // Validate SDP Declare
         op.validate(&SDPDeclareValidationContext {
             utxo_tree,
+            channels,
             locked_notes: &self.locked_notes,
             tx_hash: &tx_hash,
             declare_zk_sig: zk_sig,
@@ -706,7 +726,15 @@ mod tests {
         let ed25519_sig = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
 
         sdp_ledger
-            .try_apply_sdp_declaration(utxos, op, &zk_sig, &ed25519_sig, tx_hash, config)
+            .try_apply_sdp_declaration(
+                utxos,
+                &Channels::new(),
+                op,
+                &zk_sig,
+                &ed25519_sig,
+                tx_hash,
+                config,
+            )
             .map(|(sdp_ledger, _)| sdp_ledger)
     }
 

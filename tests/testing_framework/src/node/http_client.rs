@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, pin::Pin, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, pin::Pin, time::Duration};
 
 use common_http_client::{
     ApiBlock, BasicAuthCredentials, CommonHttpClient, Error, ProcessedBlockEvent,
@@ -14,8 +14,10 @@ use lb_core::{
 use lb_http_api_common::{
     bodies::{
         blend::JoinBlendRequestBody,
+        mantle::GasPricesResponseBody,
         wallet::{
             balance::WalletBalanceResponseBody,
+            fund::{WalletFundRequestBody, WalletFundResponseBody},
             transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
         },
     },
@@ -71,6 +73,14 @@ impl NodeHttpClient {
         self.with_timeout(
             "Consensus info request",
             self.http_client.consensus_info(self.base_url.clone()),
+        )
+        .await
+    }
+
+    pub async fn gas_prices(&self, tip: Option<HeaderId>) -> Result<GasPricesResponseBody, Error> {
+        self.with_timeout(
+            "Gas prices request",
+            self.http_client.gas_prices(self.base_url.clone(), tip),
         )
         .await
     }
@@ -173,7 +183,18 @@ impl NodeHttpClient {
         .await
     }
 
-    pub async fn get_sdp_declarations(&self) -> Result<Vec<Declaration>, Error> {
+    pub async fn fund_tx(
+        &self,
+        body: WalletFundRequestBody,
+    ) -> Result<WalletFundResponseBody, Error> {
+        self.with_timeout(
+            "Fund transaction request",
+            self.http_client.fund_tx(self.base_url.clone(), body),
+        )
+        .await
+    }
+
+    pub async fn get_sdp_declarations(&self) -> Result<HashMap<DeclarationId, Declaration>, Error> {
         self.get_sdp_declarations_at(self.base_url.clone()).await
     }
 
@@ -213,13 +234,16 @@ impl NodeHttpClient {
     }
 
     /// Fetches testing-only SDP declarations from one explicit base URL.
-    async fn get_sdp_declarations_at(&self, base_url: Url) -> Result<Vec<Declaration>, Error> {
+    async fn get_sdp_declarations_at(
+        &self,
+        base_url: Url,
+    ) -> Result<HashMap<DeclarationId, Declaration>, Error> {
         let request_url = Self::join_path(&base_url, MANTLE_SDP_DECLARATIONS)?;
 
         self.with_timeout(
             "SDP declarations request",
             self.http_client
-                .get::<(), Vec<Declaration>>(request_url, None),
+                .get::<(), HashMap<DeclarationId, Declaration>>(request_url, None),
         )
         .await
     }

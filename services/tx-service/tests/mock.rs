@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, HashSet},
     convert::Infallible,
     path::{Path, PathBuf},
     pin::Pin,
@@ -8,8 +8,9 @@ use std::{
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _, stream};
+use indexmap::IndexSet;
 use lb_core::{
-    block::MAX_BLOCK_SIZE,
+    block::MAX_BLOCK_TRANSACTIONS_SIZE,
     codec::{DeserializeOp as _, SerializeOp as _},
     header::HeaderId,
     mantle::mock::{MockTransaction, MockTxId},
@@ -215,7 +216,7 @@ impl MempoolStorageAdapter<RuntimeServiceId> for InMemoryStorageAdapter {
 
     async fn get_items(
         &self,
-        keys: &BTreeSet<Self::Key>,
+        keys: &[Self::Key],
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, Self::Error> {
         let items = {
             let storage = self
@@ -264,7 +265,7 @@ impl MempoolStorageAdapter<RuntimeServiceId> for FailingStorageAdapter {
 
     async fn get_items(
         &self,
-        _keys: &BTreeSet<Self::Key>,
+        _keys: &[Self::Key],
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, Self::Error> {
         Ok(Box::pin(stream::empty()))
     }
@@ -277,7 +278,7 @@ impl MempoolStorageAdapter<RuntimeServiceId> for FailingStorageAdapter {
 #[test]
 fn test_mock_pool_recovery_state() {
     let recovery_state = PoolRecoveryState::<MockTxId> {
-        pending_items: BTreeSet::new(),
+        pending_items: IndexSet::new(),
         removed_items: BTreeMap::new(),
         last_item_timestamp: 1_234_567_890,
     };
@@ -435,7 +436,7 @@ fn local_submission_rejects_oversized_tx() {
             .block_on(async { app.handle().relay::<MockMempoolService>().await.unwrap() });
 
         let oversized_tx = MockTransaction::new(MockMessage {
-            payload: "x".repeat(MAX_BLOCK_SIZE + 1),
+            payload: "x".repeat(MAX_BLOCK_TRANSACTIONS_SIZE + 1),
             content_topic: MOCK_TX_CONTENT_TOPIC,
             version: 0,
             timestamp: 0,
@@ -451,8 +452,8 @@ fn local_submission_rejects_oversized_tx() {
             error,
             MempoolError::ItemTooLarge {
                 size,
-                max: MAX_BLOCK_SIZE,
-            } if size > MAX_BLOCK_SIZE
+                max: MAX_BLOCK_TRANSACTIONS_SIZE,
+            } if size > MAX_BLOCK_TRANSACTIONS_SIZE
         ));
 
         assert!(
@@ -461,6 +462,65 @@ fn local_submission_rejects_oversized_tx() {
                 .block_on(pending_txs(&mempool_outbound))
                 .is_empty()
         );
+
+        drop(app.runtime().handle().block_on(app.handle().shutdown()));
+        app.blocking_wait_finished();
+    });
+}
+
+#[test]
+fn mempool_view_preserves_receive_order() {
+    let recovery_file_path = get_test_random_path();
+    run_with_recovery_teardown(&recovery_file_path, || {
+        let (settings, _temp_dir) = mock_pool_node_settings(&recovery_file_path, Vec::new());
+        let app = OverwatchRunner::<MockPoolNode>::run(settings, None)
+            .map_err(|e| eprintln!("Error encountered: {e}"))
+            .unwrap();
+
+        drop(
+            app.runtime()
+                .handle()
+                .block_on(app.handle().start_all_services()),
+        );
+
+        let mempool_outbound = app
+            .runtime()
+            .handle()
+            .block_on(async { app.handle().relay::<MockMempoolService>().await.unwrap() });
+
+        let first_tx = MockTransaction::new(MockMessage {
+            payload: "first".to_owned(),
+            content_topic: MOCK_TX_CONTENT_TOPIC,
+            version: 0,
+            timestamp: 1,
+        });
+
+        let second_tx = MockTransaction::new(MockMessage {
+            payload: "second".to_owned(),
+            content_topic: MOCK_TX_CONTENT_TOPIC,
+            version: 0,
+            timestamp: 2,
+        });
+
+        let expected_txs = if first_tx.id() < second_tx.id() {
+            vec![second_tx, first_tx]
+        } else {
+            vec![first_tx, second_tx]
+        };
+
+        for tx in &expected_txs {
+            app.runtime()
+                .handle()
+                .block_on(add_tx(&mempool_outbound, tx.clone()))
+                .expect("tx should be added");
+        }
+
+        let pending = app
+            .runtime()
+            .handle()
+            .block_on(pending_txs(&mempool_outbound));
+
+        assert_eq!(pending, expected_txs);
 
         drop(app.runtime().handle().block_on(app.handle().shutdown()));
         app.blocking_wait_finished();

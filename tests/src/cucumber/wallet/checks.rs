@@ -12,7 +12,7 @@ use crate::{
         fee_reserve::SCENARIO_FEE_ACCOUNT_NAME,
         wallet::{
             TARGET,
-            best_node::get_best_node_info,
+            best_node::{display_group_key, get_best_node_info},
             sync::{current_wallet_output_balance, current_wallet_state_for_key},
             wallet_output_state_label,
         },
@@ -117,10 +117,24 @@ enum WalletBalanceBoundsError {
     MissingBound,
 }
 
+/// Assert that TF's tracked wallet fees match the on-chain spend from the
+/// sponsored fee account.
+///
+/// This catches accounting drift between locally reserved/submitted wallet fees
+/// and the fee account balance observed from chain state.
 pub async fn assert_tracked_wallet_fees_equal_sponsored_fee_account_spend(
     world: &mut CucumberWorld,
     step_value: &str,
 ) -> StepResult {
+    let submitted_tx_hashes = world.with_wallets(TrackedWallets::submitted_tx_hashes)?;
+    wait_for_observed_transaction_hashes(
+        world,
+        step_value,
+        &submitted_tx_hashes,
+        Duration::from_secs(30),
+    )
+    .await?;
+
     let sponsored_genesis_account =
         world
             .fee_state
@@ -177,14 +191,17 @@ pub async fn assert_tracked_wallet_fees_equal_sponsored_fee_account_spend(
     Ok(())
 }
 
+/// Wait until the wallet scanner has observed all expected transaction
+/// hashes in blocks.
+///
+/// This checks inclusion through TF's observed-chain feed, not just successful
+/// transaction submission to a node.
 pub async fn wait_for_observed_transaction_hashes<S: BuildHasher + Sync>(
     world: &mut CucumberWorld,
     step: &str,
     expected_hashes: &HashSet<TxHash, S>,
     timeout: Duration,
 ) -> Result<(), StepError> {
-    world.ensure_wallet_block_feed().await?;
-
     let start = Instant::now();
 
     loop {
@@ -205,10 +222,29 @@ pub async fn wait_for_observed_transaction_hashes<S: BuildHasher + Sync>(
 
         if start.elapsed() >= timeout {
             let missing_set = missing.into_iter().collect::<HashSet<_>>();
+            let scanner_status = world
+                .wallet_scanner_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .groups
+                .values()
+                .map(|group| {
+                    format!(
+                        "{}: source={:?} applied={} target={:?} status={:?} last_error={:?}",
+                        display_group_key(&group.group_id),
+                        group.source_node,
+                        group.applied_height,
+                        group.target_height,
+                        group.status,
+                        group.last_error
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" | ");
 
             let msg = format!(
                 "Step `{step}` transaction inclusion timeout: submitted={} \
-                chain_observed={observed} missing={}",
+                chain_observed={observed} missing={} scanner={scanner_status}",
                 expected_hashes.len(),
                 missing_set.len(),
             );
@@ -225,6 +261,10 @@ pub async fn wait_for_observed_transaction_hashes<S: BuildHasher + Sync>(
     clippy::too_many_arguments,
     reason = "This function is more readable with explicit arguments rather than packing them into structs or tuples."
 )]
+/// Wait until a wallet balance matches the requested output-count/value bounds.
+///
+/// The balance is read from tracked wallet state at the selected best node, so
+/// the assertion follows the same fork-group logic used by transaction steps.
 pub async fn wait_for_wallet_output_state(
     world: &mut CucumberWorld,
     step: &str,

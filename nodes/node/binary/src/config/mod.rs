@@ -263,10 +263,10 @@ pub struct CryptarchiaArgs {
     )]
     pub cryptarchia_funding_pk: Option<ZkPublicKey>,
 
-    /// Enable Initial Block Download (IBD) using peers
-    /// passed via `--net-initial-peers`/`-p`.
-    #[clap(long = "ibd", default_value_t = false)]
-    pub ibd: bool,
+    /// Disable Initial Block Download (IBD) by leaving the IBD peer list
+    /// empty, regardless of any peers passed via `--net-initial-peers`/`-p`.
+    #[clap(long = "skip-ibd", default_value_t = false)]
+    pub skip_ibd: bool,
 }
 
 #[derive(Parser, Debug, Default, Clone, Copy)]

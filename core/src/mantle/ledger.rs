@@ -5,7 +5,7 @@ use bytes::Bytes;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
-use lb_utils::bounded_vec::BoundedError;
+use lb_utils::bounded::{BoundedError, UpperBoundedVec};
 use lb_utxotree::UtxoTree;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
@@ -15,12 +15,28 @@ use crate::{
     crypto::{Hash, ZkHasher},
     events::TxEvent,
     mantle::{
-        encoding::{BoundedInputs, BoundedOutputs},
+        channel::Channels,
         nom::NomCodec,
-        ops::OpId,
+        ops::{OpId, channel::ChannelId},
     },
     sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
 };
+
+// ==============================================================================
+// Memory Safety Limits
+// ==============================================================================
+// These limits are not designed to mimic system limits, but rather to prevent
+// unbounded memory usage from malicious inputs. They prevent memory
+// over-allocation attacks where untrusted input specifies allocation sizes.
+// Values are chosen to not limit normal operations while preventing excessive
+// memory usage (e.g., 68GB allocation). As an example, if the network currently
+// limits maximum transaction size to 1MiB, for memory safety limits we can
+// allow 4MiB.
+const MAX_TRANSACTION_INPUTS: usize = u8::MAX as usize;
+const MAX_TRANSACTION_OUTPUTS: usize = u8::MAX as usize;
+pub type BoundedUtxos = UpperBoundedVec<Utxo, MAX_TRANSACTION_INPUTS>;
+pub type BoundedInputs = UpperBoundedVec<NoteId, MAX_TRANSACTION_INPUTS>;
+pub type BoundedOutputs = UpperBoundedVec<Note, MAX_TRANSACTION_OUTPUTS>;
 
 pub trait Operation<ValidationContext> {
     type ExecutionContext<'a>
@@ -45,6 +61,10 @@ pub enum InputsError {
     InexistingNote(NoteId),
     #[error("Locked note: {0:?}")]
     LockedNote(NoteId),
+    #[error("Channel note: {0:?}")]
+    ChannelNote(NoteId),
+    #[error("Note is not a channel note of the expected channel: {0:?}")]
+    NotAChannelNote(NoteId),
     #[error("Inputs contain try to double spend the same NoteId")]
     DoubleSpend,
     #[error("Sum of input values overflows")]
@@ -233,13 +253,62 @@ impl Inputs {
         <&Self as IntoIterator>::into_iter(self)
     }
 
-    pub fn validate(&self, locked_notes: &LockedNotes, utxos: &Utxos) -> Result<(), InputsError> {
-        // Check that there is no duplicate
+    /// Validates that every input is spendable as a regular note: unique,
+    /// unlocked, not owned by a channel, and present in the ledger.
+    ///
+    /// This is the `assert_spendable(inputs, None)` case of the spec.
+    pub fn validate_not_in_channel(
+        &self,
+        locked_notes: &LockedNotes,
+        channels: &Channels,
+        utxos: &Utxos,
+    ) -> Result<(), InputsError> {
+        self.validate_uniqueness()?;
+        self.validate_unlocked_and_present(locked_notes, utxos)?;
+        for input in &self.0 {
+            // A channel note is owned by a channel and cannot be spent directly.
+            if channels.is_channel_note(input) {
+                return Err(InputsError::ChannelNote(*input));
+            }
+        }
+        Ok(())
+    }
+
+    /// Validates that every input is spendable as a channel note of
+    /// `channel_id`: unique, unlocked, present in the ledger, and registered as
+    /// a channel note owned by `channel_id`.
+    ///
+    /// This is the `assert_spendable(inputs, channel_id)` case of the spec.
+    pub fn validate_in_channel(
+        &self,
+        locked_notes: &LockedNotes,
+        channels: &Channels,
+        channel_id: &ChannelId,
+        utxos: &Utxos,
+    ) -> Result<(), InputsError> {
+        self.validate_uniqueness()?;
+        self.validate_unlocked_and_present(locked_notes, utxos)?;
+        for input in &self.0 {
+            if !channels.is_channel_note_of(input, channel_id) {
+                return Err(InputsError::NotAChannelNote(*input));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_uniqueness(&self) -> Result<(), InputsError> {
         let unique: HashSet<_> = self.0.iter().collect();
         if unique.len() != self.0.len() {
             return Err(InputsError::DoubleSpend);
         }
-        // Check each note is spendable
+        Ok(())
+    }
+
+    fn validate_unlocked_and_present(
+        &self,
+        locked_notes: &LockedNotes,
+        utxos: &Utxos,
+    ) -> Result<(), InputsError> {
         for input in &self.0 {
             // Check the note isn't locked
             if locked_notes.contains(input) {

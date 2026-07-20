@@ -5,6 +5,7 @@ mod deployment_artifacts;
 mod image;
 mod k8s;
 pub mod local;
+mod snapshot;
 
 use std::{
     env,
@@ -23,6 +24,7 @@ use lb_config::kms::key_id_for_preload_backend;
 use lb_core::block::genesis::GenesisBlock;
 use lb_node::config::RunConfig;
 use reqwest::Url;
+pub use snapshot::NodeStateSnapshotStore;
 use testing_framework_core::{
     scenario::{
         Application, DynError, ExternalNodeSource, NodeAccess,

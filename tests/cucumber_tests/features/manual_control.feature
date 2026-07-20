@@ -23,8 +23,8 @@ Feature: Manual control of transactions
   #   CONTINUOUS_NEXT_WALLET_USER_WALLETS, cycles <count>, num_transactions <count>, value <amount>
   #   FAUCET_ALL_USER_WALLETS, rounds <count>
   #   FAUCET_ALL_FUNDING_WALLETS, rounds <count>
-  #   CREATE_BLOCKCHAIN_SNAPSHOT_ALL_NODES, snapshot_name '<snapshot_name>'
-  #   CREATE_BLOCKCHAIN_SNAPSHOT_NODE, snapshot_name '<snapshot_name>', node_name '<node_name>'
+  #   CREATE_SNAPSHOT_ALL_NODES, snapshot_name '<snapshot_name>'
+  #   CREATE_SNAPSHOT_NODE, snapshot_name '<snapshot_name>', node_name '<node_name>'
   #   RESTART_NODE, node_name '<node_name>'
   #   CRYPTARCHIA_INFO_ALL_NODES
   #   WAIT_ALL_NODES_SYNCED_TO_CHAIN    (requires `I have public cryptarchia endpoint peers:`)
@@ -45,9 +45,9 @@ Feature: Manual control of transactions
   #   STOP
   # Example command file content, continuous steps:
   #   WAIT_ALL_NODES_SYNCED_TO_CHAIN
-  #   CREATE_BLOCKCHAIN_SNAPSHOT_NODE, snapshot_name 'SNAP_TEST_01', node_name 'NODE_1'
+  #   CREATE_SNAPSHOT_NODE, snapshot_name 'SNAP_TEST_01', node_name 'NODE_1'
   #   RESTART_NODE, node_name 'NODE_1'
-  #   CREATE_BLOCKCHAIN_SNAPSHOT_ALL_NODES, snapshot_name 'SNAP_TEST_02'
+  #   CREATE_SNAPSHOT_ALL_NODES, snapshot_name 'SNAP_TEST_02'
   #   CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs 10, coin_split_value 100, num_transactions 10, value 100, cycles 3
   #   STOP
 
@@ -57,6 +57,27 @@ Feature: Manual control of transactions
       | account_index | token_count | token_amount |
       | 1             | 3           | 1000000      |
       | 2             | 3           | 1000000      |
+    And I have a cluster with capacity of 2 nodes
+#    And we use IBD peers
+    And all peers must be mode online after startup in 30 seconds
+    And I start nodes with wallet resources:
+      | node_name | account_index | wallet_name | connected_to |
+      | NODE_1    | 1             | WALLET_1A   |              |
+      | NODE_2    | 2             | WALLET_2A   | NODE_1       |
+    When all nodes have at least 2 blocks and converged to within 1 blocks in 300 seconds
+    When I perform manual control of transactions for all wallets no time-out
+    Then I stop all nodes
+
+  @manual_control_transactions
+  Scenario: Tokio console transactions manual control
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 1000000      |
+      | 2             | 3           | 1000000      |
+    And I will have tokio console profile nodes:
+      | node_name |
+      | NODE_1    |
+      | NODE_2    |
     And I have a cluster with capacity of 2 nodes
 #    And we use IBD peers
     And all peers must be mode online after startup in 30 seconds
@@ -124,9 +145,9 @@ Feature: Manual control of transactions
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When node "NODE_1" is at height 10000 in 30000 seconds
-    When I create a blockchain snapshot "SNAP_TEST_01" of node "NODE_1"
+    When I create a snapshot "SNAP_TEST_01" of node "NODE_1"
     When node "NODE_2" is at height 10000 in 30000 seconds
-    When I create a blockchain snapshot "SNAP_TEST_01" of node "NODE_2"
+    When I create a snapshot "SNAP_TEST_01" of node "NODE_2"
     Then I stop all nodes
 
   @devnet_snapshots
@@ -134,7 +155,7 @@ Feature: Manual control of transactions
     Given I have a devnet cluster with capacity of 2 nodes
     And we join an external network
     And I will initialize started nodes from snapshot "SNAP_TEST_01" source node "NODE_1"
-    And I will create a blockchain snapshot "SNAP_TEST_03" of all nodes when stopping
+    And I will create a snapshot "SNAP_TEST_03" of all nodes when stopping
     And I have a faucet with URL "https://devnet.blockchain.logos.co/web/faucet-backend/"
     And I have initial peers:
       | initial_peer                                                                                   |

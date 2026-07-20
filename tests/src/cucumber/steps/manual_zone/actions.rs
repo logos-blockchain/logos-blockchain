@@ -5,12 +5,15 @@ use futures::future::join_all;
 use lb_common_http_client::CommonHttpClient;
 use lb_core::mantle::{
     TxHash, Utxo,
+    gas::GasCost,
     ops::channel::{config::Keys, deposit::Metadata, inscribe::Inscription},
 };
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_testing_framework::NodeHttpClient;
 use lb_zone_sdk::{
-    adapter::NodeHttpClient as ZoneNodeHttpClient, indexer::ZoneIndexer, sequencer::ZoneSequencer,
+    adapter::NodeHttpClient as ZoneNodeHttpClient,
+    indexer::ZoneIndexer,
+    sequencer::{FundingConfig, ZoneSequencer},
 };
 use tokio::{
     sync::broadcast,
@@ -24,12 +27,13 @@ use super::{
     runner::{Event, PublishResult, SequencerCheckpoint, SequencerClient},
     steps::DEFAULT_ZONE_SEQUENCER,
     support::{
-        AtomicZoneDepositRequest, DiscardedPayloads, PublishDeadline, ZoneAccountBalances,
-        ZoneDeposit, build_zone_deposit, ensure_zone_transactions_included, keygen,
-        publish_atomic_zone_withdraw, publish_message_with_retry, sequencer_config,
+        AtomicZoneDepositRequest, CustomRepublishDeps, DiscardedPayloads, PublishDeadline,
+        ZoneAccountBalances, ZoneDeposit, build_zone_deposit, ensure_zone_transactions_included,
+        keygen, publish_atomic_zone_withdraw, publish_message_with_retry, sequencer_config,
         sequencer_config_with_pending_submit_depth, start_balance_aware_policy,
-        start_republish_lineage_policy, start_sequencer_event_loop, start_sorted_conflict_policy,
-        submit_atomic_zone_deposit, submit_zone_deposit, submit_zone_withdraw,
+        start_custom_republish_policy, start_republish_lineage_policy, start_sequencer_event_loop,
+        start_sorted_conflict_policy, submit_atomic_zone_deposit, submit_zone_deposit,
+        submit_zone_withdraw,
     },
     tables::{ConcurrentZoneMessageRow, ZoneNodeResourcesRow, group_zone_messages_by_sequencer},
 };
@@ -75,6 +79,9 @@ pub(super) enum DriveMode {
     BalanceAware {
         initial_balances: ZoneAccountBalances,
         planned_payloads: Vec<Inscription>,
+    },
+    CustomRepublish {
+        deps: Box<CustomRepublishDeps>,
     },
 }
 
@@ -763,6 +770,20 @@ async fn start_named_sequencer_with_config(
         world.zone_node_http_client_for_sequencer(&sequencer_alias),
     )?;
     let node_url = log_step_error(step, world.zone_node_url_for_sequencer(&sequencer_alias))?;
+    // Fund sequencer transactions from the node's own funding wallet. Falls
+    // back to fee-less transactions when the node has no registered funding
+    // wallet (only viable on zero-gas-price clusters).
+    let funding = world
+        .zone
+        .sequencer_node_name(&sequencer_alias)
+        .and_then(|node_name| world.resolve_wallet(&format!("{node_name}_WALLET")))
+        .and_then(|wallet| wallet.public_key())
+        .map(|funding_pk| FundingConfig {
+            funding_pk,
+            max_tx_fee: GasCost::new(u64::MAX),
+        })
+        .ok();
+    let config = lb_zone_sdk::sequencer::SequencerConfig { funding, ..config };
     let sequencer = ZoneSequencer::init_with_config(
         world.zone.sequencer_channel_id(&sequencer_alias)?,
         signing_key,
@@ -885,5 +906,8 @@ fn start_sequencer_runtime(
             start_balance_aware_policy(sequencer, initial_balances, planned_payloads),
             None,
         ),
+        DriveMode::CustomRepublish { deps } => {
+            from_policy_runtime(start_custom_republish_policy(sequencer, *deps), None)
+        }
     }
 }

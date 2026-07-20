@@ -1,5 +1,5 @@
 use lb_cryptarchia_engine::Slot;
-use lb_utils::bounded_vec::NonEmptyBoundedVec;
+use lb_utils::bounded::NonEmptyBoundedVec;
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Ed25519PublicKey, MsgId};
@@ -25,7 +25,7 @@ pub struct ChannelConfigOp {
     pub posting_timeframe: SlotTimeframe,
     pub posting_timeout: SlotTimeout,
     pub configuration_threshold: u16,
-    pub withdraw_threshold: u16,
+    pub transfer_threshold: u16,
 }
 
 impl ChannelConfigOp {
@@ -60,7 +60,7 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
         // index. This is enforced by the proof structure that enforces it.
 
         // Check config wellformness
-        if self.configuration_threshold == 0 || self.withdraw_threshold == 0 || self.keys.is_empty()
+        if self.configuration_threshold == 0 || self.transfer_threshold == 0 || self.keys.is_empty()
         {
             return Err(Error::InvalidChannelConfig);
         }
@@ -109,7 +109,7 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
             channel.tip_sequencer_starting_slot = ctx.block_slot;
             channel.posting_timeframe = self.posting_timeframe.clone();
             channel.posting_timeout = self.posting_timeout.clone();
-            channel.withdraw_threshold = self.withdraw_threshold;
+            channel.transfer_threshold = self.transfer_threshold;
             channel.tip_slot = ctx.block_slot;
             channel.tip_message = self.id();
         } else {
@@ -123,9 +123,7 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
                     tip_sequencer: 0,
                     tip_sequencer_starting_slot: ctx.block_slot,
                     posting_timeframe: self.posting_timeframe.clone(),
-                    balance: 0,
-                    withdraw_threshold: self.withdraw_threshold,
-                    withdrawal_nonce: 0,
+                    transfer_threshold: self.transfer_threshold,
                     posting_timeout: self.posting_timeout.clone(),
                 },
             );

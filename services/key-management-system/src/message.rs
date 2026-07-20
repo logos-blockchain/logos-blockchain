@@ -38,5 +38,6 @@ where
     Execute {
         key_id: Backend::KeyId,
         operator: Backend::KeyOperations,
+        reply_channel: oneshot::Sender<Result<(), Backend::Error>>,
     },
 }

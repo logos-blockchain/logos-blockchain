@@ -266,6 +266,13 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 self.connect(dial);
             }
             NetworkCommand::Info { reply } => {
+                let discovered_peers: Vec<PeerId> = self
+                    .swarm
+                    .kademlia_discovered_peers()
+                    .into_iter()
+                    .map(|peer_info| peer_info.peer_id)
+                    .collect();
+                let n_discovered_peers = discovered_peers.len();
                 let swarm = self.swarm.swarm();
                 let network_info = swarm.network_info();
                 let counters = network_info.connection_counters();
@@ -276,6 +283,8 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                     n_peers: network_info.num_peers(),
                     n_connections: counters.num_connections(),
                     n_pending_connections: counters.num_pending(),
+                    discovered_peers,
+                    n_discovered_peers,
                 };
                 log_error!(reply.send(info));
             }
@@ -359,7 +368,7 @@ const fn exp_backoff(retry: usize) -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use std::{net::Ipv4Addr, sync::Once, time::Instant};
+    use std::{collections::HashSet, net::Ipv4Addr, sync::Once, time::Instant};
 
     use lb_libp2p::{
         libp2p::core::{ConnectedPoint, Endpoint, transport::PortUse},
@@ -727,5 +736,70 @@ mod tests {
             "Expected the stale WrongPeerId address to be removed from Kademlia, \
              even though the dial was not initiated via `connect()`",
         );
+    }
+
+    #[tokio::test]
+    async fn info_reports_discovered_peers() {
+        init_tracing();
+
+        let (tx, rx) = mpsc::channel(10);
+        let (pubsub_events_tx, _) = broadcast::channel(10);
+        let (chainsync_events_tx, _) = broadcast::channel(10);
+
+        let config = create_libp2p_config(vec![], get_available_udp_port().unwrap());
+        let mut handler =
+            SwarmHandler::new(config, tx, rx, pubsub_events_tx, chainsync_events_tx, OsRng);
+
+        let expected_peers: Vec<(PeerId, Multiaddr)> = std::iter::repeat_with(|| {
+            let peer_id = PeerId::random();
+            let addr = format!(
+                "/ip4/127.0.0.1/udp/{}/quic-v1",
+                get_available_udp_port().unwrap()
+            )
+            .parse::<Multiaddr>()
+            .unwrap()
+            .with(Protocol::P2p(peer_id));
+            (peer_id, addr)
+        })
+        .take(3)
+        .collect();
+
+        handler.bootstrap_kad_from_peers(
+            &expected_peers
+                .iter()
+                .map(|(_, addr)| addr.clone())
+                .collect::<Vec<_>>(),
+        );
+
+        let (reply, info_rx) = oneshot::channel();
+        handler.handle_network_command(NetworkCommand::Info { reply });
+        let info = info_rx.await.expect("info reply");
+
+        let expected: HashSet<PeerId> = expected_peers.iter().map(|(id, _)| *id).collect();
+        let actual: HashSet<PeerId> = info.discovered_peers.iter().copied().collect();
+        assert_eq!(actual, expected);
+        assert_eq!(info.n_discovered_peers, expected.len());
+    }
+
+    #[tokio::test]
+    async fn info_reports_empty_discovered_peers() {
+        init_tracing();
+
+        let (tx, rx) = mpsc::channel(10);
+        let (pubsub_events_tx, _) = broadcast::channel(10);
+        let (chainsync_events_tx, _) = broadcast::channel(10);
+
+        let config = create_libp2p_config(vec![], get_available_udp_port().unwrap());
+        let mut handler =
+            SwarmHandler::new(config, tx, rx, pubsub_events_tx, chainsync_events_tx, OsRng);
+
+        handler.bootstrap_kad_from_peers(&vec![]);
+
+        let (reply, info_rx) = oneshot::channel();
+        handler.handle_network_command(NetworkCommand::Info { reply });
+        let info = info_rx.await.expect("info reply");
+
+        assert!(info.discovered_peers.is_empty());
+        assert_eq!(info.n_discovered_peers, 0);
     }
 }

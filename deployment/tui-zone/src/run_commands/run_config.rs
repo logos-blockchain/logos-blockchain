@@ -3,11 +3,12 @@ use std::path::PathBuf;
 use lb_core::{
     mantle::{
         Op, OpProof, SignedMantleTx, Transaction as _,
-        encoding::{encode_mantle_tx, encode_signed_mantle_tx},
+        nom::NomEncode as _,
         ops::channel::{
             ChannelId, ChannelKeyIndex,
             config::{ChannelConfigOp, Keys},
         },
+        transactions::codec::encode_signed_mantle_tx,
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
@@ -40,7 +41,7 @@ pub(crate) async fn run_config(args: ConfigArgs) -> RunResult<()> {
         authorized_keys_for_paths(&args.node_key.key_path, &args.authorized_key_paths);
     validate_config_thresholds(
         args.configuration_threshold,
-        args.withdraw_threshold,
+        args.transfer_threshold,
         authorized_keys.len(),
     )?;
 
@@ -49,13 +50,16 @@ pub(crate) async fn run_config(args: ConfigArgs) -> RunResult<()> {
         start_cli_sequencer_with_channel_state(&args.node_key).await?;
     print_channel_state("zone_config before", &channel_id, channel_state.as_ref());
     let status_rx = sequencer.subscribe_tx_status();
-    let (_result, _checkpoint, signed_tx) = sequencer.handle().channel_config(
-        Keys::try_from(authorized_keys)?,
-        args.posting_timeframe.into(),
-        args.posting_timeout.into(),
-        args.configuration_threshold,
-        args.withdraw_threshold,
-    )?;
+    let (_result, _checkpoint, signed_tx) = sequencer
+        .handle()
+        .channel_config(
+            Keys::try_from(authorized_keys)?,
+            args.posting_timeframe.into(),
+            args.posting_timeout.into(),
+            args.configuration_threshold,
+            args.transfer_threshold,
+        )
+        .await?;
     let tx_hash = signed_tx.hash();
     let goal = CommandGoal::Tx { tx_hash };
     let wait_for = if args.wait_finalized {
@@ -83,7 +87,7 @@ pub(crate) async fn run_config_prepare(args: ConfigPrepareArgs) -> RunResult<()>
         authorized_keys_for_paths(&args.node_key.key_path, &args.authorized_key_paths);
     validate_config_thresholds(
         args.configuration_threshold,
-        args.withdraw_threshold,
+        args.transfer_threshold,
         authorized_keys.len(),
     )?;
     let channel_id = resolve_channel_id(&args.node_key)?;
@@ -97,7 +101,7 @@ pub(crate) async fn run_config_prepare(args: ConfigPrepareArgs) -> RunResult<()>
         args.posting_timeframe,
         args.posting_timeout,
         args.configuration_threshold,
-        args.withdraw_threshold,
+        args.transfer_threshold,
     )?;
     let msg_id = config_op.id();
     let tx = lb_core::mantle::MantleTx([Op::ChannelConfig(config_op)].into());
@@ -109,13 +113,13 @@ pub(crate) async fn run_config_prepare(args: ConfigPrepareArgs) -> RunResult<()>
         tx_hash: hex::encode(tx_hash.as_ref()),
         msg_id: hex::encode(msg_id.as_ref()),
         required_threshold: channel_state.configuration_threshold,
-        mantle_tx: hex::encode(encode_mantle_tx(&tx)),
+        mantle_tx: hex::encode(tx.encode()),
         new_authorized_keys: authorized_keys
             .iter()
             .map(|key| hex::encode(key.to_bytes()))
             .collect(),
         configuration_threshold: args.configuration_threshold,
-        withdraw_threshold: args.withdraw_threshold,
+        transfer_threshold: args.transfer_threshold,
         posting_timeframe: args.posting_timeframe,
         posting_timeout: args.posting_timeout,
         authorized_signers: channel_state
@@ -214,7 +218,7 @@ pub(crate) fn run_config_combine(args: ConfigCombineArgs) -> RunResult<()> {
             signature: sig.signature,
         });
     }
-    let proof = ChannelMultiSigProof::new(
+    let proof = ChannelMultiSigProof::try_new(
         signature_entries
             .iter()
             .map(|sig| {
@@ -222,7 +226,8 @@ pub(crate) fn run_config_combine(args: ConfigCombineArgs) -> RunResult<()> {
                 decode_hex_bincode::<Ed25519Signature>(&sig.signature)
                     .map(|signature| IndexedSignature::new(sig.signer_key_index, signature))
             })
-            .collect::<RunResult<Vec<_>>>()?,
+            .collect::<RunResult<Vec<_>>>()?
+            .try_into()?,
     )?;
     if proof.signatures().len() != intent.required_threshold as usize {
         return Err(format!(
@@ -305,18 +310,18 @@ pub(crate) async fn run_config_submit(args: ConfigSubmitArgs) -> RunResult<()> {
 
 fn validate_config_thresholds(
     configuration_threshold: u16,
-    withdraw_threshold: u16,
+    transfer_threshold: u16,
     authorized_key_count: usize,
 ) -> RunResult<()> {
-    if withdraw_threshold == 0 {
-        return Err("withdraw_threshold must be greater than 0".into());
+    if transfer_threshold == 0 {
+        return Err("transfer_threshold must be greater than 0".into());
     }
     if configuration_threshold == 0 {
         return Err("configuration_threshold must be greater than 0".into());
     }
-    if withdraw_threshold as usize > authorized_key_count {
+    if transfer_threshold as usize > authorized_key_count {
         return Err(format!(
-            "withdraw_threshold {withdraw_threshold} exceeds authorized key count {authorized_key_count}"
+            "transfer_threshold {transfer_threshold} exceeds authorized key count {authorized_key_count}"
         )
         .into());
     }
@@ -350,7 +355,7 @@ fn build_config_op(
     posting_timeframe: u32,
     posting_timeout: u32,
     configuration_threshold: u16,
-    withdraw_threshold: u16,
+    transfer_threshold: u16,
 ) -> RunResult<ChannelConfigOp> {
     Ok(ChannelConfigOp {
         channel: channel_id,
@@ -358,7 +363,7 @@ fn build_config_op(
         posting_timeframe: posting_timeframe.into(),
         posting_timeout: posting_timeout.into(),
         configuration_threshold,
-        withdraw_threshold,
+        transfer_threshold,
     })
 }
 

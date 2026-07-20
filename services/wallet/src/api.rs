@@ -4,8 +4,7 @@ use lb_core::{
         Note, SignedMantleTx, TxHash, Value,
         gas::GasCost,
         ops::leader_claim::{RewardsRoot, VoucherCm},
-        tx::MantleTxContext,
-        tx_builder::{MantleTxBuilder, TxBuilderError},
+        transactions::{MantleTxBuilder, MantleTxContext, TxBuilderError},
     },
 };
 use lb_key_management_system_service::keys::{
@@ -133,6 +132,7 @@ where
         tx_builder: MantleTxBuilder,
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
+        priority_fee: Value,
     ) -> Result<TipResponse<MantleTxBuilder>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
@@ -142,6 +142,7 @@ where
                 tx_builder,
                 change_pk,
                 funding_pks,
+                priority_fee,
                 resp_tx,
             })
             .await?;
@@ -192,11 +193,10 @@ where
         recipient_pk: ZkPublicKey,
         amount: Value,
     ) -> Result<TipResponse<SignedMantleTx>, WalletApiError> {
-        let context = self.get_tx_context(tip).await?;
         let mantle_tx_builder =
-            MantleTxBuilder::new(context).add_ledger_output(Note::new(amount, recipient_pk))?;
+            MantleTxBuilder::new().add_ledger_output(Note::new(amount, recipient_pk))?;
         let funded_tx_builder = self
-            .fund_tx(tip, mantle_tx_builder, change_pk, funding_pks)
+            .fund_tx(tip, mantle_tx_builder, change_pk, funding_pks, 0)
             .await?;
         self.sign_tx(tip, funded_tx_builder.response).await
     }
@@ -273,7 +273,7 @@ where
         self.relay
             .send(WalletMsg::GenerateNewVoucherSecret { resp_tx })
             .await?;
-        Ok(rx.await?)
+        Ok(rx.await??)
     }
 
     pub async fn get_claimable_vouchers(
@@ -294,7 +294,7 @@ mod tests {
 
     use lb_core::mantle::{
         ops::channel::{ChannelId, ChannelKeyIndex},
-        tx::{GasPrices, MantleTxGasContext},
+        transactions::{GasPrices, MantleTxGasContext},
     };
     use overwatch::services::state::{NoOperator, NoState};
     use tokio::sync::mpsc;
@@ -364,13 +364,13 @@ mod tests {
             .expect("gas context should round-trip through the wallet API");
 
         assert_eq!(
-            context.gas_context.withdraw_threshold(&expected_channel_id),
+            context.gas_context.transfer_threshold(&expected_channel_id),
             Some(expected_threshold)
         );
         assert_eq!(
             context
                 .gas_context
-                .withdraw_threshold(&ChannelId::from([1u8; 32])),
+                .transfer_threshold(&ChannelId::from([1u8; 32])),
             None
         );
         assert_eq!(context.leader_reward_amount, 0);

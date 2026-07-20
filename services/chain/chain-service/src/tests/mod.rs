@@ -7,7 +7,7 @@ use std::{
 
 use futures::StreamExt as _;
 use lb_core::{
-    block::Block,
+    block::{Block, BlockTransactions},
     mantle::{
         Note, SignedMantleTx, Utxo,
         ops::leader_claim::{VoucherCm, VoucherSecret},
@@ -428,7 +428,7 @@ pub fn try_build_block(
                 parent,
                 slot.into(),
                 proof,
-                Vec::<SignedMantleTx>::new(),
+                BlockTransactions::empty(),
                 &signing_key,
             )
             .unwrap(),

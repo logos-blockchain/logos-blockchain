@@ -2,8 +2,6 @@ use std::collections::HashMap;
 
 use lb_core::mantle::{
     OpProof, TxHash,
-    gas::GasPrice,
-    genesis_tx::GENESIS_STORAGE_GAS_PRICE,
     ops::{
         Op,
         channel::{
@@ -11,8 +9,10 @@ use lb_core::mantle::{
             inscribe::{Inscription, InscriptionOp},
         },
     },
-    tx::{GasPrices, MantleTxContext, MantleTxGasContext},
-    tx_builder::MantleTxBuilder,
+    transactions::{
+        GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GasPrices, MantleTxBuilder,
+        MantleTxContext, MantleTxGasContext,
+    },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 
@@ -21,27 +21,29 @@ pub fn build_inscription_tx_builder(
     signing_key: &Ed25519Key,
     channel_id: ChannelId,
     parent: Option<MsgId>,
-) -> MantleTxBuilder {
+) -> (MantleTxBuilder, MantleTxContext) {
     let tx_context = MantleTxContext {
         gas_context: MantleTxGasContext::new(
             HashMap::new(),
             HashMap::new(),
             GasPrices {
-                execution_base_gas_price: GasPrice::new(0),
+                execution_base_gas_price: GENESIS_EXECUTION_GAS_PRICE,
                 storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
             },
         ),
         leader_reward_amount: 0,
     };
 
-    MantleTxBuilder::new(tx_context)
+    let tx_builder = MantleTxBuilder::new()
         .push_op(Op::ChannelInscribe(InscriptionOp {
             channel_id,
             inscription,
             parent: parent.unwrap_or_else(MsgId::root),
             signer: signing_key.public_key(),
         }))
-        .expect("inscription test builder should fit op bounds")
+        .expect("inscription test builder should fit op bounds");
+
+    (tx_builder, tx_context)
 }
 
 #[must_use]

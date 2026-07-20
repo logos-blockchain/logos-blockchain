@@ -16,8 +16,10 @@ use crate::{
         ProofsVerifier,
         decapsulated::DecapsulationOutput,
         encapsulated::{EncapsulatedMessage, EncapsulatedPart},
+        expected_serialized_len,
         validated::{
-            EncapsulatedMessageWithVerifiedPublicHeader, RequiredProofOfSelectionVerificationInputs,
+            EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
+            RequiredProofOfSelectionVerificationInputs,
         },
     },
     input::EncapsulationInput,
@@ -386,6 +388,77 @@ fn decapsulate_empty_private_headers_returns_error() {
     );
     assert!(matches!(result, Err(Error::EmptyEncapsulationInputs)));
 }
+
+fn sample_message(num_layers: usize) -> EncapsulatedMessageWithVerifiedPublicHeader {
+    let (inputs, _) = generate_inputs(num_layers);
+    EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+        &inputs,
+        PayloadType::Data,
+        b"payload".as_slice().try_into().unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn serialized_size_constants_match_wire_format() {
+    // The O(1) size gate in `deserialize_from_remote` relies on
+    // `expected_serialized_len` being exact. Build real, genuinely-encapsulated
+    // messages of varying layer counts and confirm the constant-derived length
+    // matches the actual encoded length — this pins every size constant to the
+    // real wire encoding.
+    for num_layers in 1..=4u64 {
+        let message = EncapsulatedMessage::from(sample_message(num_layers as usize));
+
+        let actual_len = message.encode().len() as u64;
+        let expected_len = expected_serialized_len(num_layers.try_into().unwrap()) as u64;
+
+        assert_eq!(
+            expected_len, actual_len,
+            "expected_serialized_len mismatch for {num_layers} layer(s)"
+        );
+    }
+}
+
+#[test]
+fn encode_decode_round_trip() {
+    // A message encoded to the wire format and decoded back with the expected
+    // layer count reconstructs the original.
+    for num_layers in 1..=4u64 {
+        let message = EncapsulatedMessage::from(sample_message(num_layers as usize));
+
+        let encoded = message.encode();
+        let (remaining, decoded) =
+            EncapsulatedMessage::decode(&encoded, num_layers.try_into().unwrap()).unwrap();
+
+        assert!(
+            remaining.is_empty(),
+            "leftover bytes for {num_layers} layer(s)"
+        );
+        assert_eq!(
+            decoded, message,
+            "round-trip mismatch for {num_layers} layer(s)"
+        );
+    }
+}
+
+#[test]
+fn wire_bytes_identical_across_message_types() {
+    // The send path serializes a verified variant; the receiver decodes an
+    // `EncapsulatedMessage`. All three must produce byte-identical wire output.
+    let with_public_header = sample_message(3);
+    let with_signature: EncapsulatedMessageWithVerifiedSignature =
+        with_public_header.clone().into();
+    let unverified = EncapsulatedMessage::from(with_public_header.clone());
+
+    let bytes = with_public_header.encode();
+    assert_eq!(with_signature.encode(), bytes);
+    assert_eq!(unverified.encode(), bytes);
+}
+
+// Rejecting a message whose layer count differs from the expected one is now
+// the responsibility of the network-side size gate (it compares the received
+// length against `EncapsulatedMessage::expected_serialized_len`), covered by
+// the `blend-network` tests. `decode` itself assumes a correctly-sized input.
 
 fn generate_inputs(cnt: usize) -> (Vec<EncapsulationInput>, Vec<X25519PrivateKey>) {
     let recipient_signing_keys =

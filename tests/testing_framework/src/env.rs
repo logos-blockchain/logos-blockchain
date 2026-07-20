@@ -106,3 +106,36 @@ pub fn logos_blockchain_system_monitor_enabled() -> bool {
 pub fn logos_blockchain_system_monitor_interval_secs() -> u64 {
     env_u64("LOGOS_BLOCKCHAIN_SYSTEM_MONITOR_INTERVAL_SECS", 10)
 }
+
+/// Set an environment variable to a default value if it is not already set.
+pub fn set_default_env(key: &str, value: &str) {
+    if std::env::var_os(key).is_none() {
+        // SAFETY: Used as an early-run default. Prefer setting env vars in the
+        // shell for multi-threaded runs.
+        unsafe {
+            std::env::set_var(key, value);
+        }
+    }
+}
+
+/// Replace an environment variable to a default value, returning the current
+/// optional value if already set or Noneotherwise.
+#[must_use]
+pub fn replace_default_env(key: &str, value: &str) -> Option<String> {
+    let current = std::env::var(key).ok();
+    // SAFETY: Used as an early-run default. Prefer setting env vars in the
+    // shell for multi-threaded runs.
+    unsafe { std::env::set_var(key, value) };
+    current
+}
+
+/// Remove an environment variable if set.
+pub fn remove_default_env(key: &str) {
+    if std::env::var_os(key).is_some() {
+        // SAFETY: Used as an early-run default. Prefer setting env vars in the
+        // shell for multi-threaded runs.
+        unsafe {
+            std::env::remove_var(key);
+        }
+    }
+}

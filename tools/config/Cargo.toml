@@ -24,6 +24,7 @@ lb-groth16                       = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-libp2p                        = { workspace = true }
 lb-node                          = { workspace = true }
+lb-tracing                       = { workspace = true }
 lb-utils                         = { workspace = true }
 num-bigint                       = { workspace = true }
 rand                             = { workspace = true }

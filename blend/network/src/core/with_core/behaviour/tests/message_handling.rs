@@ -2,6 +2,7 @@ use core::time::Duration;
 use std::collections::HashSet;
 
 use futures::StreamExt as _;
+use lb_blend_scheduling::serialize_encapsulated_message_with_verified_public_header;
 use lb_libp2p::SwarmEvent;
 use libp2p_swarm_test::SwarmExt as _;
 use test_log::test;
@@ -115,6 +116,63 @@ async fn undeserializable_message_received() {
         .behaviour_mut()
         .force_send_serialized_message_to_current_epoch_peer(
             b"msg".to_vec(),
+            *listening_swarm.local_peer_id(),
+        )
+        .unwrap();
+
+    let mut events_to_match = 2u8;
+    loop {
+        select! {
+            _ = dialing_swarm.select_next_some() => {}
+            listening_swarm_event = listening_swarm.select_next_some() => {
+                match listening_swarm_event {
+                    SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id, peer_state)) => {
+                        assert_eq!(peer_id, *dialing_swarm.local_peer_id());
+                        assert_eq!(peer_state, NegotiatedPeerState::Spammy(SpamReason::UndeserializableMessage));
+                        events_to_match -= 1;
+                    }
+                    SwarmEvent::ConnectionClosed { peer_id, endpoint, .. } => {
+                        assert_eq!(peer_id, *dialing_swarm.local_peer_id());
+                        assert!(endpoint.is_listener());
+                        events_to_match -= 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if events_to_match == 0 {
+            break;
+        }
+    }
+}
+
+#[test(tokio::test)]
+async fn message_with_unexpected_layer_count_disconnects_peer() {
+    // The listening node expects a single encapsulation layer, but the sender
+    // delivers a well-formed 3-layer message. The size gate in
+    // `EncapsulatedMessage::deserialize_from_remote` rejects it up front, and
+    // the sender is treated exactly like one delivering undeserializable bytes.
+    let (mut identities, nodes) = new_nodes_with_empty_address(2);
+    let mut dialing_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+    let mut listening_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id)
+            .with_membership(&nodes)
+            .with_num_blend_layers(1)
+            .build()
+    });
+
+    listening_swarm.listen().with_memory_addr_external().await;
+    dialing_swarm
+        .connect_and_wait_for_upgrade(&mut listening_swarm)
+        .await;
+
+    let message = TestEncapsulatedMessage::new(b"unexpected_layer_count");
+    dialing_swarm
+        .behaviour_mut()
+        .force_send_serialized_message_to_current_epoch_peer(
+            serialize_encapsulated_message_with_verified_public_header(message.as_ref()),
             *listening_swarm.local_peer_id(),
         )
         .unwrap();

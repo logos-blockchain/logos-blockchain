@@ -84,10 +84,21 @@ rand             = { workspace = true }
 serde_urlencoded = { workspace = true }
 
 [features]
-default                          = ["tracing"]
-dhat-heap                        = ["dep:dhat"]
-jemalloc                         = ["dep:tikv-jemallocator"]
-profiling                        = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]
+default   = ["tracing"]
+dhat-heap = ["dep:dhat"]
+jemalloc  = ["dep:tikv-jemallocator"]
+# Existing broad profiling feature. Keep this as an umbrella feature for
+# backwards compatibility: HTTP pprof + tokio-console support.
+profiling                        = ["lb-http-api-common/profiling", "tokio-console"]
 testing                          = ["lb-key-management-system-service/unsafe"]
 testing-disable-proposal-publish = ["lb-chain-leader-service/testing-disable-proposal-publish"]
-tracing                          = []
+
+# Tokio task/resource profiling via tokio-console.
+#
+# This feature only compiles in support. Runtime activation still requires
+# `tracing.console: !Console` in the node config.
+#
+# Builds using this feature must also be compiled with:
+#   RUSTFLAGS="--cfg tokio_unstable"
+tokio-console = ["lb-tracing-service/tokio-console", "tokio/tracing"]
+tracing       = []

@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 
 use lb_core::mantle::{
-    MantleTx, NoteId, Op, Transaction as _, TxHash, Utxo, tx_builder::MantleTxBuilder,
+    MantleTx, NoteId, Op, Transaction as _, TxHash, Utxo,
+    transactions::{MantleTxBuilder, MantleTxContext},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 
@@ -16,8 +17,14 @@ use super::{
 };
 use crate::common::wallet::{WalletFundingResources, WalletFundingSource, WalletReservedInputs};
 
+/// Intermediate transaction state after funding/input reservation but before
+/// proof generation.
+///
+/// Keeping this separate lets tests reserve inputs cheaply, then finalize
+/// expensive proof/signing work concurrently.
 pub struct PreparedWalletTransactionWorkItem {
     funded_builder: MantleTxBuilder,
+    context: MantleTxContext,
     tx_hash: TxHash,
     ops: Vec<Op>,
     transfer_signers: WalletTransferSigners,
@@ -31,6 +38,7 @@ impl PreparedWalletTransactionWorkItem {
     }
 }
 
+/// Prepare and immediately finalize a wallet transaction.
 pub fn prepare_wallet_transaction(
     intent: WalletTransactionIntent,
     resources: WalletFundingResources,
@@ -38,6 +46,10 @@ pub fn prepare_wallet_transaction(
     finalize_prepared_wallet_transaction(prepare_wallet_transaction_work_item(intent, resources)?)
 }
 
+/// Fund a transaction and compute the inputs that must be reserved.
+///
+/// The returned work item has enough information to prevent duplicate input
+/// selection before transfer proofs are built.
 pub fn prepare_wallet_transaction_work_item(
     intent: WalletTransactionIntent,
     resources: WalletFundingResources,
@@ -47,7 +59,7 @@ pub fn prepare_wallet_transaction_work_item(
     let transfer_signers = transfer_signers_for_funding(&resources);
     let input_utxos_by_note_id = input_utxos_by_note_id(&resources);
 
-    let funded_builder = fund_wallet_transaction(intent, resources)?;
+    let (funded_builder, context) = fund_wallet_transaction(intent, resources)?;
     let mantle_tx = funded_builder.clone().build()?;
     let tx_hash = mantle_tx.hash();
     let funding_inputs = funding_inputs_from_transfers(&mantle_tx, &input_utxos_by_note_id)?;
@@ -59,6 +71,7 @@ pub fn prepare_wallet_transaction_work_item(
 
     Ok(PreparedWalletTransactionWorkItem {
         funded_builder,
+        context,
         tx_hash,
         ops: mantle_tx.ops().to_vec(),
         transfer_signers,
@@ -66,11 +79,13 @@ pub fn prepare_wallet_transaction_work_item(
     })
 }
 
+/// Build transfer proofs and return a fully prepared transaction.
 pub fn finalize_prepared_wallet_transaction(
     work_item: PreparedWalletTransactionWorkItem,
 ) -> Result<PreparedWalletTransaction, WalletTransactionError> {
     let PreparedWalletTransactionWorkItem {
         funded_builder,
+        context,
         tx_hash,
         ops,
         transfer_signers,
@@ -80,6 +95,7 @@ pub fn finalize_prepared_wallet_transaction(
 
     Ok(PreparedWalletTransaction::new(
         funded_builder,
+        context,
         tx_hash,
         transfer_proofs,
         reserved_inputs,

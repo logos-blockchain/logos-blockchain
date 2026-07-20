@@ -3,8 +3,10 @@
 use std::collections::HashMap;
 
 use lb_core::mantle::{
-    AuthenticatedMantleTx as _, NoteId, Op, OpProof, SignedMantleTx, TxHash,
-    gas::MainnetGasConstants, tx_builder::MantleTxBuilder,
+    AuthenticatedMantleTx as _, MantleTx, NoteId, Op, OpProof, SignedMantleTx, Transaction as _,
+    TxHash,
+    gas::MainnetGasConstants,
+    transactions::{MantleTxBuilder, MantleTxContext},
 };
 use lb_key_management_system_service::keys::ZkKey;
 
@@ -16,12 +18,13 @@ pub(super) type WalletTransferSigners = HashMap<NoteId, ZkKey>;
 
 pub(super) fn sign_prepared_wallet_transaction(
     funded_builder: MantleTxBuilder,
+    context: &MantleTxContext,
     tx_hash: TxHash,
     transfer_proofs: Vec<OpProof>,
     reserved_inputs: WalletReservedInputs,
     leading_op_proofs: Vec<OpProof>,
 ) -> Result<SignedWalletTransaction, WalletTransactionError> {
-    let gas_prices = funded_builder.get_gas_prices();
+    let gas_prices = context.gas_context.get_gas_prices();
     let mantle_tx = funded_builder.build()?;
     let mut op_proofs = leading_op_proofs;
     op_proofs.extend(transfer_proofs);
@@ -37,6 +40,34 @@ pub(super) fn sign_prepared_wallet_transaction(
         reserved_inputs,
         spent_fee,
     ))
+}
+
+/// Build one `ZkSig` proof per transfer op in a funded transaction, signing
+/// every input with the same wallet key. Suitable for transactions whose
+/// funding inputs all come from a single wallet account.
+pub fn transfer_proofs_for_funded_wallet_tx(
+    tx: &MantleTx,
+    signing_key: &ZkKey,
+) -> Result<Vec<OpProof>, WalletTransactionError> {
+    let tx_hash = tx.hash();
+    tx.ops()
+        .iter()
+        .filter_map(|op| match op {
+            Op::Transfer(transfer_op) => Some(transfer_op),
+            _ => None,
+        })
+        .map(|transfer_op| {
+            let signing_keys = transfer_op
+                .inputs
+                .iter()
+                .map(|_| signing_key.clone())
+                .collect::<Vec<_>>();
+            Ok(OpProof::ZkSig(ZkKey::multi_sign(
+                &signing_keys,
+                &tx_hash.to_fr(),
+            )?))
+        })
+        .collect()
 }
 
 pub(super) fn build_transfer_proofs(

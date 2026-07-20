@@ -12,7 +12,7 @@ use lb_key_management_system_service::{
     operators::zk::leader::CheckLotteryWinning,
 };
 use lb_ledger::{EpochState, UtxoTree};
-use overwatch::services::AsServiceId;
+use overwatch::{DynError, services::AsServiceId};
 use tokio::sync::oneshot;
 
 use crate::leadership::{
@@ -30,7 +30,7 @@ pub trait KmsAdapter<RuntimeServiceId> {
         key_id: Self::KeyId,
         utxo: &Utxo,
         public_inputs: &LeaderPublic,
-    ) -> bool;
+    ) -> Result<bool, DynError>;
 
     async fn build_private_inputs_for_winning_utxo_and_slot(
         &self,
@@ -56,23 +56,24 @@ where
         key_id: Self::KeyId,
         utxo: &Utxo,
         public_inputs: &LeaderPublic,
-    ) -> bool {
+    ) -> Result<bool, DynError> {
         let (output_tx, output_rx) = oneshot::channel();
         // clone to send
         let utxo = *utxo;
         let public_inputs = *public_inputs;
-        let () = self
-            .execute(
-                key_id,
-                KeyOperators::Zk(Box::new(CheckLotteryWinning::new(
-                    output_tx,
-                    utxo,
-                    public_inputs,
-                ))),
-            )
+        self.execute(
+            key_id,
+            KeyOperators::Zk(Box::new(CheckLotteryWinning::new(
+                output_tx,
+                utxo,
+                public_inputs,
+            ))),
+        )
+        .await?;
+
+        Ok(output_rx
             .await
-            .expect("KMS API should be invoked");
-        output_rx.await.expect("KMS API should respond")
+            .map_err(|_| "KMS API did not respond to the lottery winning check")?)
     }
 
     async fn build_private_inputs_for_winning_utxo_and_slot(
@@ -94,10 +95,15 @@ where
                 public_inputs,
                 &latest_tree,
             )?;
-        let () = self
-            .execute(key_id, KeyOperators::Zk(Box::new(operator)))
+        self.execute(key_id, KeyOperators::Zk(Box::new(operator)))
             .await
-            .expect("KMS API should be invoked");
-        Ok((output_rx.await.expect("KMS API should respond"), key))
+            .map_err(|error| PrivateInputsError::KmsApi(Box::new(error)))?;
+
+        Ok((
+            output_rx
+                .await
+                .map_err(|_| PrivateInputsError::KmsResponse)?,
+            key,
+        ))
     }
 }

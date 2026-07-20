@@ -21,6 +21,7 @@ use utoipa::OpenApi;
         crate::api::handlers::post_activity,
         crate::api::handlers::post_withdrawal,
         crate::api::handlers::get_sdp_declarations,
+        crate::api::handlers::get_sdp_snapshot,
         crate::api::handlers::leader_claim,
         crate::api::handlers::immutable_blocks,
         crate::api::handlers::block,
@@ -29,7 +30,10 @@ use utoipa::OpenApi;
         crate::api::handlers::transaction,
         crate::api::handlers::wallet::get_balance,
         crate::api::handlers::wallet::get_claimable_vouchers,
+        crate::api::handlers::get_gas_prices,
         crate::api::handlers::wallet::post_transactions_transfer_funds,
+        crate::api::handlers::wallet::fund,
+        crate::api::tracing::reload_tracing_filter,
     ),
     components(schemas(schema::Status, schema::MempoolMetrics)),
     tags()

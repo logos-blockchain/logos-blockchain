@@ -27,6 +27,7 @@ lb-services-utils                = { workspace = true }
 lb-time-service                  = { workspace = true }
 lb-tracing                       = { workspace = true }
 lb-tx-service                    = { workspace = true }
+lb-utils                         = { workspace = true }
 lb-wallet-service                = { workspace = true }
 overwatch                        = { workspace = true }
 rand                             = { workspace = true }
@@ -39,7 +40,6 @@ tracing-futures                  = { workspace = true }
 
 [dev-dependencies]
 lb-groth16 = { workspace = true }
-lb-utils   = { workspace = true }
 
 [features]
 default = []

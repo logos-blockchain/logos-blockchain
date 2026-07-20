@@ -18,6 +18,16 @@ pub trait KmsServiceData: ServiceData<Message = KMSMessage<Self::Backend>> {
     type Backend: KMSBackend;
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum KmsExecuteError<BackendError> {
+    #[error("Failed to send execute request")]
+    SendRequest,
+    #[error("Failed to receive execute response")]
+    ReceiveResponse,
+    #[error("Failed to execute KMS operator: {0}")]
+    Backend(BackendError),
+}
+
 impl<B, RuntimeServiceId> KmsServiceData for KMSService<B, RuntimeServiceId>
 where
     B: KMSBackend<KeyId: Debug, Key: Debug, Settings: Clone> + 'static,
@@ -153,11 +163,21 @@ where
         &self,
         key_id: <Kms::Backend as KMSBackend>::KeyId,
         operator: <Kms::Backend as KMSBackend>::KeyOperations,
-    ) -> Result<(), DynError> {
+    ) -> Result<(), KmsExecuteError<<Kms::Backend as KMSBackend>::Error>> {
+        let (reply_channel, rx) = oneshot::channel();
+
         self.relay
-            .send(KMSMessage::Execute { key_id, operator })
+            .send(KMSMessage::Execute {
+                key_id,
+                operator,
+                reply_channel,
+            })
             .await
-            .map_err(|_| "Failed to send execute request")?;
+            .map_err(|_| KmsExecuteError::SendRequest)?;
+
+        rx.await
+            .map_err(|_| KmsExecuteError::ReceiveResponse)?
+            .map_err(KmsExecuteError::Backend)?;
 
         Ok(())
     }

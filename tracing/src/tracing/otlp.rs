@@ -1,7 +1,7 @@
-use std::error::Error;
+use std::{collections::HashMap, error::Error};
 
 use opentelemetry::{KeyValue, global, trace::TracerProvider as _};
-use opentelemetry_otlp::{WithExportConfig as _, WithTonicConfig as _};
+use opentelemetry_otlp::{WithExportConfig as _, WithHttpConfig as _, WithTonicConfig as _};
 use opentelemetry_sdk::{
     Resource,
     propagation::TraceContextPropagator,
@@ -13,14 +13,14 @@ use tonic::metadata::MetadataMap;
 use tracing::Subscriber;
 use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::registry::LookupSpan;
-use url::Url;
+
+use crate::{OtlpProtocol, OtlpServiceConfig};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OtlpTracingConfig {
-    pub endpoint: Url,
+    #[serde(flatten)]
+    pub service: OtlpServiceConfig,
     pub sample_ratio: f64,
-    pub service_name: String,
-    pub authorization_header: Option<String>,
 }
 
 pub fn create_otlp_tracing_layer<S>(
@@ -30,26 +30,23 @@ where
     S: Subscriber + for<'span> LookupSpan<'span>,
 {
     let resource = Resource::builder()
-        .with_attributes(vec![KeyValue::new(SERVICE_NAME, config.service_name)])
+        .with_attributes(vec![KeyValue::new(
+            SERVICE_NAME,
+            config.service.service_name.clone(),
+        )])
         .build();
 
-    let exporter = {
-        let mut exporter = opentelemetry_otlp::SpanExporter::builder()
-            .with_tonic()
-            .with_endpoint(config.endpoint.to_string());
-        if let Some(auth_header) = config.authorization_header {
-            let mut metadata = MetadataMap::new();
-            metadata.insert("authorization", auth_header.parse()?);
-            exporter = exporter.with_metadata(metadata);
-        }
+    let sample_ratio = config.sample_ratio;
 
-        exporter.build()?
+    let exporter = match config.service.protocol {
+        OtlpProtocol::Grpc => build_grpc_exporter(config)?,
+        OtlpProtocol::Http => build_http_exporter(config)?,
     };
 
     let tracer_provider = SdkTracerProvider::builder()
         .with_resource(resource)
         .with_sampler(Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(
-            config.sample_ratio,
+            sample_ratio,
         ))))
         .with_batch_exporter(exporter)
         .build();
@@ -60,4 +57,34 @@ where
     let tracer: Tracer = tracer_provider.tracer("LogosBlockchainTracer");
 
     Ok(OpenTelemetryLayer::new(tracer))
+}
+
+fn build_grpc_exporter(
+    config: OtlpTracingConfig,
+) -> Result<opentelemetry_otlp::SpanExporter, Box<dyn Error + Send + Sync>> {
+    let mut builder = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint(config.service.url.to_string());
+
+    if let Some(auth) = config.service.authorization_header {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("authorization", auth.parse()?);
+        builder = builder.with_metadata(metadata);
+    }
+
+    Ok(builder.build()?)
+}
+
+fn build_http_exporter(
+    config: OtlpTracingConfig,
+) -> Result<opentelemetry_otlp::SpanExporter, Box<dyn Error + Send + Sync>> {
+    let mut builder = opentelemetry_otlp::SpanExporter::builder()
+        .with_http()
+        .with_endpoint(config.service.url.to_string());
+
+    if let Some(auth) = config.service.authorization_header {
+        builder = builder.with_headers(HashMap::from([("authorization".to_owned(), auth)]));
+    }
+
+    Ok(builder.build()?)
 }

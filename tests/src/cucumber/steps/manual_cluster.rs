@@ -3,7 +3,8 @@ use std::{collections::HashMap, hash::BuildHasher, time::Duration};
 use lb_libp2p::{Multiaddr, PeerId, Protocol};
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, LbcLocalDeployer, NodeHttpClient, TopologyConfig,
-    configs::wallet::WalletAccount, internal::DeploymentPlan,
+    configs::{deployment::NodeBinaryProfile, wallet::WalletAccount},
+    internal::DeploymentPlan,
 };
 use testing_framework_core::scenario::{StartNodeOptions, StartedNode};
 use tokio::time::{Instant, sleep};
@@ -45,7 +46,12 @@ pub fn build_manual_cluster_deployment(
     let config = TopologyConfig::with_node_numbers(nodes_count)
         .with_allow_multiple_genesis_tokens(true)
         .with_allow_zero_value_genesis_tokens(true)
-        .with_test_context(world.test_context.clone());
+        .with_test_context(world.test_context.clone())
+        .with_node_binary_profile(if world.tokio_console_profile_enabled() {
+            NodeBinaryProfile::TokioConsole
+        } else {
+            NodeBinaryProfile::Normal
+        });
     let mut config = apply_blend_core_nodes(world, config, nodes_count)?;
 
     for genesis_token in &world.genesis_tokens {
@@ -79,18 +85,26 @@ pub fn build_manual_cluster_deployment(
         None => None,
     };
 
-    let deployment =
-        DeploymentBuilder::new(config)
-            .build()
-            .map_err(|e| StepError::LogicalError {
-                message: format!("failed to build manual cluster: {e}"),
-            })?;
+    world.node_provisioned_wallet_pks = config
+        .wallet_config
+        .accounts
+        .iter()
+        .map(WalletAccount::public_key)
+        .collect();
+
+    let deployment = DeploymentBuilder::new(config)
+        .with_deployment_seed(world.manual_cluster_deployment_seed())
+        .build()
+        .map_err(|e| StepError::LogicalError {
+            message: format!("failed to build manual cluster: {e}"),
+        })?;
 
     if let Some(genesis_block) = deployment.config.genesis_block.clone() {
         world.genesis_block_utxos =
             crate::cucumber::steps::manual_nodes::utils::genesis_block_utxos(
                 &genesis_block.genesis_tx(),
             );
+        world.genesis_block_id = Some(genesis_block.header().id());
     }
 
     Ok(deployment)
@@ -120,15 +134,23 @@ fn build_devnet_manual_cluster_deployment(
     // settings, so locally generated genesis outputs are not meaningful for
     // wallet tracking.
     world.genesis_block_utxos.clear();
+    world.genesis_block_id = None;
     world.wallet_accounts.clear();
+    world.node_provisioned_wallet_pks.clear();
 
     let config = TopologyConfig::with_node_numbers(nodes_count)
         .with_allow_multiple_genesis_tokens(true)
         .with_allow_zero_value_genesis_tokens(true)
-        .with_test_context(world.test_context.clone());
+        .with_test_context(world.test_context.clone())
+        .with_node_binary_profile(if world.tokio_console_profile_enabled() {
+            NodeBinaryProfile::TokioConsole
+        } else {
+            NodeBinaryProfile::Normal
+        });
     let config = apply_blend_core_nodes(world, config, nodes_count)?;
 
     DeploymentBuilder::new(config)
+        .with_deployment_seed(world.manual_cluster_deployment_seed())
         .build()
         .map_err(|e| StepError::LogicalError {
             message: format!("failed to build devnet manual cluster: {e}"),
@@ -368,7 +390,6 @@ pub async fn insert_started_node_info<S: BuildHasher>(
     wallet_info: HashMap<String, WalletInfo, S>,
 ) -> StepResult {
     let wallet_info: HashMap<String, WalletInfo> = wallet_info.into_iter().collect();
-    let client = started_node.client.clone();
 
     world
         .wallet_info
@@ -386,9 +407,6 @@ pub async fn insert_started_node_info<S: BuildHasher>(
             immediate_start: world.network_immediate_start(logical_node_name),
         },
     );
-    world
-        .register_wallet_block_feed_source(logical_node_name, client)
-        .await?;
 
     Ok(())
 }

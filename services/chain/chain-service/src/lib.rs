@@ -11,7 +11,7 @@ mod tests;
 
 use core::fmt::Debug;
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt::Display,
     path::PathBuf,
     pin::Pin,
@@ -28,7 +28,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, GenesisTx as _, Transaction, TxHash, gas::MainnetGasConstants,
-        tx::GasPrices,
+        transactions::GasPrices,
     },
     sdp::{Declaration, DeclarationId},
 };
@@ -143,8 +143,13 @@ pub enum ConsensusMsg<Tx> {
         block_id: HeaderId,
         reply_channel: oneshot::Sender<Option<LedgerState>>,
     },
+    /// Returns all declarations in the current SDP registry, not snapshot
     GetSdpDeclarations {
-        reply_channel: oneshot::Sender<Vec<(DeclarationId, Declaration)>>,
+        reply_channel: oneshot::Sender<HashMap<DeclarationId, Declaration>>,
+    },
+    /// Returns the frozen SDP snapshot for the current epoch
+    GetSdpSnapshot {
+        reply_channel: oneshot::Sender<HashMap<DeclarationId, Declaration>>,
     },
     GetEpochState {
         slot: Slot,
@@ -364,7 +369,7 @@ impl Cryptarchia {
         current_slot: Slot,
     ) -> Result<(PrunedBlocks<HeaderId>, ReorgedBlocks<HeaderId>, Events), Error>
     where
-        Tx: AuthenticatedMantleTx<Context = GasPrices>,
+        Tx: AuthenticatedMantleTx<Context = GasPrices> + Clone,
     {
         let header = block.header();
         let id = header.id();
@@ -658,10 +663,11 @@ where
         let mut chain_start_timer: Option<Pin<Box<tokio::time::Sleep>>> = None;
 
         if let StartingState::Genesis { genesis_block } = starting_state {
-            let genesis_time = genesis_block
+            let genesis_time: OffsetDateTime = genesis_block
                 .genesis_tx()
                 .cryptarchia_parameter()
-                .genesis_time;
+                .genesis_time
+                .into();
             let now = OffsetDateTime::now_utc();
 
             if genesis_time > now {
@@ -938,6 +944,28 @@ where
                     error!("Could not send SDP declarations through channel");
                 });
             }
+            ConsensusMsg::GetSdpSnapshot { reply_channel } => {
+                let tip = cryptarchia.tip();
+                let declarations = cryptarchia
+                    .ledger
+                    .state(&tip)
+                    .map(|ledger_state| {
+                        ledger_state
+                            .epoch_state()
+                            .active_declarations
+                            .iter()
+                            .flat_map(|(_, declarations)| {
+                                declarations
+                                    .iter()
+                                    .map(|(id, declaration)| (*id, declaration.clone()))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                reply_channel.send(declarations).unwrap_or_else(|_| {
+                    error!("Could not send SDP snapshot through channel");
+                });
+            }
             ConsensusMsg::GetEpochState {
                 slot,
                 reply_channel,
@@ -1112,7 +1140,7 @@ where
             }
         };
         if let Err(e) = new_block_subscription_sender.send(processed_block_event) {
-            warn!("No new-block subscribers to notify: {e}");
+            debug!("No new-block subscribers to notify: {e}");
         }
 
         if prev_lib != new_lib {
@@ -1402,7 +1430,7 @@ where
             }
         };
         if let Err(e) = self.new_block_subscription_sender.send(init_event) {
-            warn!("No new-block subscribers to notify: {e}");
+            debug!("No new-block subscribers to notify: {e}");
         }
 
         // Phase 1: Collect and load blocks in (LIB, tip].

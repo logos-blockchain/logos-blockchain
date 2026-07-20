@@ -31,7 +31,7 @@ opentelemetry-otlp = { features = [
   "http-proto",
   "logs",
   "metrics",
-  "reqwest-client",
+  "reqwest-blocking-client",
 ], workspace = true }
 opentelemetry-semantic-conventions = { workspace = true }
 opentelemetry_sdk = { features = ["logs", "rt-tokio"], workspace = true }

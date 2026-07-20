@@ -2,12 +2,9 @@ use std::path::PathBuf;
 
 use lb_core::{
     mantle::{
-        Note, Op, OpProof, SignedMantleTx, Transaction as _,
-        encoding::{encode_mantle_tx, encode_signed_mantle_tx},
-        ledger::Outputs,
-        ops::channel::{
-            ChannelId, ChannelKeyIndex, inscribe::Inscription, withdraw::ChannelWithdrawOp,
-        },
+        Op, OpProof, SignedMantleTx, Transaction as _,
+        ops::channel::{ChannelId, ChannelKeyIndex},
+        transactions::codec::encode_signed_mantle_tx,
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
@@ -18,86 +15,91 @@ pub(crate) use crate::{
         RunResult, WithdrawCombineArgs, WithdrawPrepareArgs, WithdrawSignArgs, WithdrawSubmitArgs,
     },
     run_commands::{
-        ZONE_FILE_TRANSFER_VERSION, ZONE_SIGNED_TRANSACTION, ZONE_WALLET_FUNDS_EXPORT,
-        ZONE_WITHDRAW_INTENT, ZONE_WITHDRAW_SIGNATURE,
+        ZONE_FILE_TRANSFER_VERSION, ZONE_SIGNED_TRANSACTION, ZONE_WITHDRAW_INTENT,
+        ZONE_WITHDRAW_SIGNATURE,
         driver::{CommandGoal, WaitFor, drive_until_observed},
         types::{
-            AuthorizedSigner, SignedWithdrawFile, WalletFundsExport, WithdrawFileEntry,
-            WithdrawIntent, WithdrawSignatureEntry, WithdrawSignatureFile,
+            SignedWithdrawFile, WithdrawIntent, WithdrawSignatureEntry, WithdrawSignatureFile,
         },
         utils::{
             decode_ed25519_public_key_hex, decode_hex_bincode, decode_mantle_tx_hex,
-            decode_msg_id_hex, decode_signed_mantle_tx_hex, decode_zk_public_key_hex,
-            encode_hex_bincode, ensure_tx_hash, fixed_bytes, load_or_create_signing_key,
-            node_client, print_channel_balance, query_channel_state, read_json, resolve_channel_id,
-            start_cli_sequencer, start_cli_sequencer_with_channel_state, timestamp, validate_kind,
-            write_json,
+            decode_msg_id_hex, decode_signed_mantle_tx_hex, encode_hex_bincode, ensure_tx_hash,
+            fixed_bytes, load_or_create_signing_key, read_json, start_cli_sequencer, timestamp,
+            validate_kind, write_json,
         },
     },
 };
 
-pub(crate) async fn run_withdraw_prepare(args: WithdrawPrepareArgs) -> RunResult<()> {
-    let funds = read_json::<WalletFundsExport>(&args.recipient_funds)?;
-    validate_kind(&funds.kind, ZONE_WALLET_FUNDS_EXPORT, funds.version)?;
-    let recipient = decode_zk_public_key_hex(&funds.public_key)?;
-    let channel_id = resolve_channel_id(&args.node_key)?;
-    let (mut sequencer, channel_state) =
-        start_cli_sequencer_with_channel_state(&args.node_key).await?;
-    let channel_state =
-        channel_state.ok_or_else(|| format!("channel state not found for {channel_id}"))?;
-    print_channel_balance("withdraw before", &channel_id, Some(&channel_state));
-    if args.amount > channel_state.balance {
-        return Err(format!(
-            "insufficient channel balance for withdraw: requested {}, available {}",
-            args.amount, channel_state.balance
-        )
-        .into());
-    }
-    let withdraw_nonce = channel_state.withdrawal_nonce;
-    let withdraw = ChannelWithdrawOp {
-        channel_id,
-        outputs: Outputs::new([Note::new(args.amount, recipient)]),
-        withdraw_nonce,
-    };
-    let inscription = Inscription::try_from(args.message.into_bytes())?;
-    let (tx, msg_id, inscription_signature) = sequencer
-        .handle()
-        .prepare_tx([Op::ChannelWithdraw(withdraw)].into(), inscription)?;
-    let tx_hash = tx.hash();
-    let intent = WithdrawIntent {
-        version: ZONE_FILE_TRANSFER_VERSION,
-        kind: ZONE_WITHDRAW_INTENT.to_owned(),
-        channel_id: hex::encode(channel_id.as_ref()),
-        tx_hash: hex::encode(tx_hash.as_ref()),
-        msg_id: hex::encode(msg_id.as_ref()),
-        required_threshold: channel_state.withdraw_threshold,
-        mantle_tx: hex::encode(encode_mantle_tx(&tx)),
-        inscription_signature: encode_hex_bincode(&inscription_signature)?,
-        withdraws: vec![WithdrawFileEntry {
-            amount: args.amount,
-            recipient_public_key: funds.public_key,
-            withdraw_nonce,
-        }],
-        authorized_signers: channel_state
-            .accredited_keys
-            .iter()
-            .enumerate()
-            .map(|(index, key)| AuthorizedSigner {
-                key_index: index as ChannelKeyIndex,
-                public_key: hex::encode(key.to_bytes()),
-            })
-            .collect(),
-        signatures: Vec::new(),
-    };
-    write_json(&args.out, &intent)?;
-    println!(
-        "{} withdraw: intent tx_hash={} msg_id={}",
-        timestamp(),
-        intent.tx_hash,
-        intent.msg_id
-    );
-    Ok(())
+// TODO: rebuild withdraw prepare on CHANNEL_TRANSFER + CHANNEL_WITHDRAW. A
+//  withdraw now only releases an existing channel note to the key it already
+//  carries, so paying a recipient an arbitrary amount first requires
+//  transferring a channel note to their key. That needs channel note tracking.
+pub(crate) async fn run_withdraw_prepare(_args: WithdrawPrepareArgs) -> RunResult<()> {
+    Err("withdraw prepare is unsupported until channel notes are tracked".into())
 }
+
+// pub(crate) async fn run_withdraw_prepare(args: WithdrawPrepareArgs) ->
+// RunResult<()> {     let funds =
+// read_json::<WalletFundsExport>(&args.recipient_funds)?;     validate_kind(&
+// funds.kind, ZONE_WALLET_FUNDS_EXPORT, funds.version)?;     let recipient =
+// decode_zk_public_key_hex(&funds.public_key)?;     let channel_id =
+// resolve_channel_id(&args.node_key)?;     let (mut sequencer, channel_state) =
+//         start_cli_sequencer_with_channel_state(&args.node_key).await?;
+//     let channel_state =
+//         channel_state.ok_or_else(|| format!("channel state not found for
+// {channel_id}"))?;     print_channel_balance("withdraw before", &channel_id,
+// Some(&channel_state));     if args.amount > channel_state.balance {
+//         return Err(format!(
+//             "insufficient channel balance for withdraw: requested {},
+// available {}",             args.amount, channel_state.balance
+//         )
+//         .into());
+//     }
+//     let withdraw_nonce = channel_state.withdrawal_nonce;
+//     let withdraw = ChannelWithdrawOp {
+//         channel_id,
+//         outputs: Outputs::new([Note::new(args.amount, recipient)]),
+//         withdraw_nonce,
+//     };
+//     let inscription = Inscription::try_from(args.message.into_bytes())?;
+//     let (tx, msg_id, inscription_signature) = sequencer
+//         .handle()
+//         .prepare_tx([Op::ChannelWithdraw(withdraw)].into(), inscription)?;
+//     let tx_hash = tx.hash();
+//     let intent = WithdrawIntent {
+//         version: ZONE_FILE_TRANSFER_VERSION,
+//         kind: ZONE_WITHDRAW_INTENT.to_owned(),
+//         channel_id: hex::encode(channel_id.as_ref()),
+//         tx_hash: hex::encode(tx_hash.as_ref()),
+//         msg_id: hex::encode(msg_id.as_ref()),
+//         required_threshold: channel_state.transfer_threshold,
+//         mantle_tx: hex::encode(tx.encode()),
+//         inscription_signature: encode_hex_bincode(&inscription_signature)?,
+//         withdraws: vec![WithdrawFileEntry {
+//             amount: args.amount,
+//             recipient_public_key: funds.public_key,
+//             withdraw_nonce,
+//         }],
+//         authorized_signers: channel_state
+//             .accredited_keys
+//             .iter()
+//             .enumerate()
+//             .map(|(index, key)| AuthorizedSigner {
+//                 key_index: index as ChannelKeyIndex,
+//                 public_key: hex::encode(key.to_bytes()),
+//             })
+//             .collect(),
+//         signatures: Vec::new(),
+//     };
+//     write_json(&args.out, &intent)?;
+//     println!(
+//         "{} withdraw: intent tx_hash={} msg_id={}",
+//         timestamp(),
+//         intent.tx_hash,
+//         intent.msg_id
+//     );
+//     Ok(())
+// }
 
 pub(crate) fn run_withdraw_sign(args: &WithdrawSignArgs) -> RunResult<()> {
     let intent = read_json::<WithdrawIntent>(&args.input)?;
@@ -172,7 +174,7 @@ pub(crate) fn run_withdraw_combine(args: WithdrawCombineArgs) -> RunResult<()> {
             signature: sig.signature,
         });
     }
-    let proof = ChannelMultiSigProof::new(
+    let proof = ChannelMultiSigProof::try_new(
         signature_entries
             .iter()
             .map(|sig| {
@@ -180,7 +182,8 @@ pub(crate) fn run_withdraw_combine(args: WithdrawCombineArgs) -> RunResult<()> {
                 decode_hex_bincode::<Ed25519Signature>(&sig.signature)
                     .map(|signature| IndexedSignature::new(sig.signer_key_index, signature))
             })
-            .collect::<RunResult<Vec<_>>>()?,
+            .collect::<RunResult<Vec<_>>>()?
+            .try_into()?,
     )?;
     if proof.signatures().len() < intent.required_threshold as usize {
         return Err(format!(
@@ -305,8 +308,9 @@ pub(crate) async fn run_withdraw_submit(args: WithdrawSubmitArgs) -> RunResult<(
         "withdraw",
     )
     .await?;
-    let node = node_client(&node_key.node_url)?;
-    let channel_state = query_channel_state(&node, channel_id).await;
-    print_channel_balance("withdraw after", &channel_id, channel_state.as_ref());
+    // TODO: report the channel balance again once channel notes are tracked.
+    // let node = node_client(&node_key.node_url)?;
+    // let channel_state = query_channel_state(&node, channel_id).await;
+    // print_channel_balance("withdraw after", &channel_id, channel_state.as_ref());
     Ok(())
 }

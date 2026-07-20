@@ -1,5 +1,5 @@
 use core::fmt::Debug;
-use std::{collections::BTreeSet, fmt::Display, num::NonZeroUsize, ops::RangeInclusive};
+use std::{collections::HashMap, fmt::Display, num::NonZeroUsize, ops::RangeInclusive};
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt as _, future::join_all};
@@ -13,7 +13,7 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction, TxHash, channel::ChannelState, ops::channel::ChannelId},
-    sdp::Declaration,
+    sdp::{Declaration, DeclarationId},
 };
 use lb_log_targets::api;
 use lb_storage_service::{
@@ -816,7 +816,7 @@ where
 ///
 /// - `handle`: A reference to the `OverwatchHandle` to interact with the
 ///   runtime and storage service.
-/// - `tx_hashes`: The set of [`TxHash`]es to fetch.
+/// - `tx_hashes`: The ordered [`TxHash`]es to fetch.
 ///
 /// # Returns
 ///
@@ -824,7 +824,7 @@ where
 /// Returns a boxed `DynError` if any error occurs during processing.
 pub async fn get_transactions<Transaction, StorageBackend, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-    tx_hashes: BTreeSet<TxHash>,
+    tx_hashes: Vec<TxHash>,
 ) -> Result<
     impl Stream<Item = Transaction> + use<Transaction, StorageBackend, RuntimeServiceId>,
     super::DynError,
@@ -891,11 +891,9 @@ where
         + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
         + 'static,
 {
-    let mut stream = get_transactions::<Transaction, StorageBackend, RuntimeServiceId>(
-        handle,
-        BTreeSet::from([tx_hash]),
-    )
-    .await?;
+    let mut stream =
+        get_transactions::<Transaction, StorageBackend, RuntimeServiceId>(handle, vec![tx_hash])
+            .await?;
 
     // Assume only one transaction is returned
     Ok(stream.next().await)
@@ -903,7 +901,7 @@ where
 
 pub async fn get_sdp_declarations<RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-) -> Result<Vec<Declaration>, super::DynError>
+) -> Result<HashMap<DeclarationId, Declaration>, super::DynError>
 where
     RuntimeServiceId: Debug
         + Send
@@ -923,11 +921,30 @@ where
         .await
         .map_err(|(e, _)| e)?;
 
-    let declarations = receiver
-        .await?
-        .into_iter()
-        .map(|(_, declaration)| declaration)
-        .collect();
+    Ok(receiver.await?)
+}
 
-    Ok(declarations)
+pub async fn get_sdp_snapshot<RuntimeServiceId>(
+    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
+) -> Result<HashMap<DeclarationId, Declaration>, super::DynError>
+where
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + 'static,
+{
+    let relay = handle.relay::<Cryptarchia<RuntimeServiceId>>().await?;
+    let (sender, receiver) = oneshot::channel();
+
+    relay
+        .send(ConsensusMsg::GetSdpSnapshot {
+            reply_channel: sender,
+        })
+        .await
+        .map_err(|(e, _)| e)?;
+
+    Ok(receiver.await?)
 }

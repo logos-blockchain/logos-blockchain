@@ -1,7 +1,11 @@
 use lb_core_macros::nom_wire_fixtures;
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
+use lb_poc::PoCProof;
 
-use crate::mantle::ops::leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier};
+use crate::{
+    mantle::ops::leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
+    proofs::leader_claim_proof::Groth16LeaderClaimProof,
+};
 
 nom_wire_fixtures!(
     RewardsRoot,
@@ -20,4 +24,9 @@ nom_wire_fixtures!(
         voucher_nullifier: Fr::ONE.into(),
         pk: Fr::ZERO.into()
     } => "000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+);
+
+nom_wire_fixtures!(
+    Groth16LeaderClaimProof,
+    Self::new(PoCProof::from_bytes(&[1u8; _])) => "0101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101"
 );

@@ -3,7 +3,7 @@ use std::ffi::c_char;
 use lb_api_service::http::storage::StorageAdapter as _;
 use lb_chain_service::api::CryptarchiaServiceApi;
 use lb_core::{
-    block::Block as CoreBlock,
+    block::{Block as CoreBlock, BlockTransactions},
     mantle::{StorageSize, Transaction, TransactionHasher, TxHash},
 };
 use lb_node::{
@@ -22,6 +22,7 @@ use crate::{
 
 #[derive(Serialize)]
 #[serde(rename = "SignedMantleTx")]
+#[derive(Clone)]
 pub struct TxWithId {
     id: TxHash,
     #[serde(flatten)]
@@ -88,7 +89,8 @@ pub fn subscribe_to_new_blocks_sync(
                                 .collect();
                             let block: CoreBlock<TxWithId> = CoreBlock::reconstruct(
                                 block.header().clone(),
-                                txs_with_id,
+                                BlockTransactions::try_from(txs_with_id)
+                                    .expect("Block should always build from valid block"),
                                 *block.signature(),
                             )
                             .expect("Block should always build from valid block");

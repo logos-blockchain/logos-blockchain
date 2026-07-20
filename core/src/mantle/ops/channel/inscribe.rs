@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::Ed25519Signature;
-use lb_utils::bounded_vec::UpperBoundedVec;
+use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Ed25519PublicKey, MsgId};
 use crate::{
-    block::MAX_BLOCK_SIZE,
+    block::MAX_BLOCK_TRANSACTIONS_SIZE,
     crypto::{Digest as _, Hasher},
     events::TxEvent,
     mantle::{
@@ -19,7 +19,10 @@ use crate::{
     },
 };
 
-pub const MAX_BYTES: usize = MAX_BLOCK_SIZE * 7 / 8;
+/// The maximum number of bytes that can be inscribed in a single inscription
+/// operation. This is derived from the maximum block transactions size,
+/// allowing for some overhead.
+pub const MAX_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 7 / 8;
 pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
@@ -122,9 +125,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
                 tip_sequencer: 0,
                 tip_sequencer_starting_slot: ctx.block_slot,
                 posting_timeframe: 0.into(),
-                balance: 0,
-                withdraw_threshold: crate::mantle::channel::DEFAULT_WITHDRAW_THRESHOLD,
-                withdrawal_nonce: 0,
+                transfer_threshold: crate::mantle::channel::DEFAULT_TRANSFER_THRESHOLD,
                 posting_timeout: 0.into(),
             });
 
@@ -148,7 +149,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
 
 #[cfg(test)]
 mod tests {
-    use lb_utils::bounded_vec::BoundedError;
+    use lb_utils::bounded::BoundedError;
 
     use super::*;
     use crate::mantle::nom::NomDecode as _;

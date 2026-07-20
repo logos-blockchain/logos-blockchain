@@ -5,15 +5,17 @@ use lb_core::{
     crypto::Hash,
     header::HeaderId,
     mantle::{
-        SignedMantleTx, Value,
+        SignedMantleTx, Transaction as _, Value,
         channel::ChannelState,
+        gas::GasCost,
         ledger::{Inputs, Outputs},
         ops::channel::{
             ChannelId, MsgId, deposit::Metadata, inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
-        tx::TxHash,
+        transactions::TxHash,
     },
 };
+use lb_key_management_system_service::keys::ZkPublicKey;
 
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
@@ -42,8 +44,9 @@ pub struct SequencerCheckpoint {
 /// atomic-withdraw bundles. The tx has been accepted into the sequencer's
 /// pending set and the post is queued onto the drive loop's in-flight pool;
 /// it has not necessarily been delivered to the node yet. Consumers use this
-/// to record their local outbox and to dedup the same entry when it later
-/// shows up in [`ChannelUpdate::adopted`] (match by `this_msg`).
+/// to apply the entry to their local state right away — it won't echo back
+/// in [`ChannelUpdate::adopted`] on chain extension. On a branch change the
+/// full delta is reported, where `this_msg` is the dedup identity.
 #[derive(Debug, Clone)]
 pub struct PublishResult {
     /// The enqueued tx (inscription or atomic withdraw bundle).
@@ -60,38 +63,77 @@ impl PublishResult {
 
 /// One withdraw to bundle atomically with an inscription.
 ///
-/// The SDK fills `channel_id` and `withdraw_nonce` from internal state.
+/// The SDK fills `channel_id` from internal state.
 /// The caller only specifies the outputs (recipients + amounts).
 #[derive(Debug, Clone)]
 pub struct WithdrawArg {
     pub outputs: Outputs,
 }
 
-/// A pending tx that has been orphaned by a chain update.
+/// A tx reported in a [`ChannelUpdate`], in both `adopted` and `orphaned`.
 ///
-/// The consumer republishes by calling the same SDK method they used
-/// originally with the data carried inside the variant:
-/// - [`OrphanedTx::Inscription`] → [`super::SequencerHandle::publish`] with
+/// The variants mirror the submission flows, so an orphaned entry is
+/// recovered with the same method that produced it:
+/// - [`ChannelUpdateTx::Inscription`] →
+///   [`SequencerHandle::publish`](super::SequencerHandle::publish) with
 ///   `info.payload`
-/// - [`OrphanedTx::AtomicWithdraw`] →
-///   [`super::SequencerHandle::publish_atomic_withdraw`] with
-///   `info.inscription.payload` and `WithdrawArg`s reconstructed from
-///   `info.withdraws[i].op.outputs`. The SDK fills fresh `parent_msg` and
-///   current `withdraw_nonce` internally on each publish.
+/// - [`ChannelUpdateTx::AtomicWithdraw`] →
+///   [`SequencerHandle::publish_atomic_withdraw`](super::SequencerHandle::publish_atomic_withdraw)
+///   with `info.inscription.payload` and `WithdrawArg`s reconstructed from
+///   `info.withdraws[i].op.inputs`. The SDK fills a fresh `parent_msg`
+///   internally on each publish.
+/// - [`ChannelUpdateTx::Custom`] → the `prepare_tx` + `submit_signed_tx` flow:
+///   the SDK cannot demystify the tx, so it hands back the whole
+///   [`SignedMantleTx`] and the caller's own logic decides how to parse and
+///   whether/how to rebuild it (an orphaned tx cannot be re-posted as-is — its
+///   parent slot is consumed).
+///   [`channel_inscriptions`](super::channel_inscriptions) extracts the tx's
+///   channel inscriptions the way the SDK sees them.
 #[derive(Debug, Clone)]
-pub enum OrphanedTx {
+pub enum ChannelUpdateTx {
+    /// A published message.
     Inscription(InscriptionInfo),
+    /// An atomic inscription+withdraw bundle.
     AtomicWithdraw(AtomicWithdrawInfo),
+    /// A tx shape the SDK cannot produce (bundled deposits, multi-inscribe,
+    /// other custom-built txs), reported whole as a unit.
+    Custom(SignedMantleTx),
 }
 
-impl OrphanedTx {
+impl ChannelUpdateTx {
     #[must_use]
-    pub const fn tx_hash(&self) -> TxHash {
+    pub fn tx_hash(&self) -> TxHash {
         match self {
             Self::Inscription(i) => i.tx_hash,
             Self::AtomicWithdraw(a) => a.tx_hash,
+            Self::Custom(tx) => tx.mantle_tx.hash(),
         }
     }
+
+    /// The inscription carried by this entry; `None` for [`Self::Custom`]
+    /// entries, whose content the caller parses itself (see
+    /// [`channel_inscriptions`](super::channel_inscriptions)).
+    #[must_use]
+    pub const fn inscription(&self) -> Option<&InscriptionInfo> {
+        match self {
+            Self::Inscription(i) => Some(i),
+            Self::AtomicWithdraw(a) => Some(&a.inscription),
+            Self::Custom(_) => None,
+        }
+    }
+}
+
+/// Configuration for funding transactions from the node's wallet.
+///
+/// Mirrors the node's SDP wallet config: both values come from the operator's
+/// own node configuration (the node sponsors the gas; change returns to
+/// `funding_pk`).
+#[derive(Clone, Debug)]
+pub struct FundingConfig {
+    /// The node wallet key that pays transaction fees.
+    pub funding_pk: ZkPublicKey,
+    /// Hard cap on the fee of a single transaction.
+    pub max_tx_fee: GasCost,
 }
 
 /// Configuration for the zone sequencer.
@@ -103,6 +145,9 @@ pub struct SequencerConfig {
     pub min_slots_remaining_in_turn: u64,
     pub max_pending_publish_depth: usize,
     pub max_local_tx_tracking: usize,
+    /// Fund transactions from the node's wallet before signing. `None`
+    /// builds fee-less transactions (only valid while gas prices are zero).
+    pub funding: Option<FundingConfig>,
 }
 
 impl Default for SequencerConfig {
@@ -114,6 +159,7 @@ impl Default for SequencerConfig {
             min_slots_remaining_in_turn: 1,
             max_pending_publish_depth: 10,
             max_local_tx_tracking: DEFAULT_MAX_LOCAL_TX_TRACKING,
+            funding: None,
         }
     }
 }
@@ -173,9 +219,10 @@ pub enum Error {
 /// status signals; they do not mutate consumer state and do not carry a
 /// checkpoint.
 ///
-/// Publishes mutate state synchronously inside the [`super::SequencerHandle`]
-/// methods that produce them; those methods return the resulting
-/// [`SequencerCheckpoint`] inline. There is no separate `Published` event.
+/// Publishes mutate state synchronously inside the
+/// [`SequencerHandle`](super::SequencerHandle) methods that produce them; those
+/// methods return the resulting [`SequencerCheckpoint`] inline. There is no
+/// separate `Published` event.
 #[derive(Debug, Clone)]
 pub enum Event {
     /// Fires per ingested block. Carries finalized txs and the non-finalized
@@ -188,12 +235,16 @@ pub enum Event {
         channel_update: ChannelUpdate,
         finalized: Vec<FinalizedTx>,
     },
-    /// Cold-start backfill is complete and the sequencer has a baseline
-    /// channel view — publishes are now meaningful. Emitted exactly once
-    /// per sequencer lifetime. Stream drops and reconnects after this
-    /// point are invisible on the event stream: in-memory state stays
-    /// valid, publishes keep flowing, and any tx invalidated by the
-    /// catch-up surfaces via [`ChannelUpdate::orphaned`] on the next
+    /// The sequencer is connected and ready to publish. Emitted once when
+    /// cold-start backfill completes, and again after every mid-life
+    /// reconnect once a live block confirms the connection.
+    ///
+    /// With funding configured ([`SequencerConfig::funding`]), publishes
+    /// fail fast with [`Error::Unavailable`] while disconnected (funding
+    /// needs the node), so the re-emission is the signal to retry. Fee-less
+    /// sequencers accept publishes locally throughout a disconnect;
+    /// in-memory state stays valid either way, and any tx invalidated by
+    /// the catch-up surfaces via [`ChannelUpdate::orphaned`] on the next
     /// `BlocksProcessed` once the stream resumes.
     Ready,
     /// Transaction was accepted by the node post API and is expected to be in
@@ -282,23 +333,24 @@ pub enum TxSource {
 ///    genuinely-dead work is re-sent.
 #[derive(Debug, Clone)]
 pub struct ChannelUpdate {
-    /// Inscriptions removed from the channel: ones that were on chain, plus our
+    /// Txs removed from the channel: ones that were on chain, plus our
     /// own pending that can no longer finalize because a conflicting
     /// inscription took their place in the chain (a parent double-spend).
     /// Revert from state and treat as republish candidates.
     ///
-    /// For [`OrphanedTx::Inscription`] entries, the consumer republishes
-    /// via [`super::SequencerHandle::publish`]. For
-    /// [`OrphanedTx::AtomicWithdraw`] entries, the consumer republishes
-    /// via [`super::SequencerHandle::publish_atomic_withdraw`] with the
-    /// original payload and reconstructed [`WithdrawArg`]s from the
-    /// bundle's `withdraws`. The SDK fills fresh `parent_msg` and current
-    /// `withdraw_nonce` internally on each publish.
-    pub orphaned: Vec<OrphanedTx>,
-    /// Inscriptions added to the channel. Includes entries this instance
-    /// submitted — consumers dedup by `this_msg` against the values returned
-    /// from their publish calls.
-    pub adopted: Vec<InscriptionInfo>,
+    /// See [`ChannelUpdateTx`] for how the consumer republishes each
+    /// variant.
+    pub orphaned: Vec<ChannelUpdateTx>,
+    /// Txs added to the channel — every tx that advanced the canonical
+    /// channel tip: messages, atomic withdraw bundles or custom txs.
+    ///
+    /// On a pure extension (`orphaned` empty) this carries only entries the
+    /// sequencer wasn't already tracking — its own publishes apply to
+    /// consumer state at publish time and don't echo back. On a branch
+    /// change the full delta is reported (entries can move between
+    /// branches), so consumers dedup by `this_msg` against their own state
+    /// there.
+    pub adopted: Vec<ChannelUpdateTx>,
 }
 
 /// Information about whose turn it is to post and the current posting
@@ -347,7 +399,7 @@ pub struct WithdrawInfo {
     /// `tx_hash`; for standalone withdraws surfaced via
     /// [`FinalizedOp::Withdraw`] this is the source tx.
     pub tx_hash: TxHash,
-    /// The withdraw op (`channel_id`, outputs, `withdraw_nonce`).
+    /// The withdraw op (`channel_id`, inputs).
     pub op: ChannelWithdrawOp,
 }
 
@@ -387,7 +439,7 @@ pub struct DepositInfo {
 ///
 /// Either our own pending publish (inscription / atomic withdraw bundle), or
 /// a pending bundle reconstructed on checkpoint resume. Returned from publish
-/// methods and carried by [`OrphanedTx`] adjacent contexts. The "pending"
+/// methods and carried by [`ChannelUpdateTx`] adjacent contexts. The "pending"
 /// framing reflects that the tx has been accepted into local pending state
 /// and queued for posting, not that the node has accepted it yet — see
 /// [`PublishResult`].

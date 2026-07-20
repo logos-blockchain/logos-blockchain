@@ -2,7 +2,7 @@
 
 set -e
 
-export CFG_DEPLOYMENT_PATH="/node-data/cfgsync/deployment-settings.yaml" 
+export CFG_DEPLOYMENT_PATH="/node-data/deployment.yaml"
 
 /usr/bin/logos-blockchain-faucet \
     --port $FAUCET_PORT \

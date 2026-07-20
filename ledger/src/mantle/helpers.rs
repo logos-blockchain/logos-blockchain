@@ -1,6 +1,6 @@
 use lb_core::mantle::{
     ops::channel::{ChannelId, ChannelKeyIndex},
-    tx::{OperationVerificationHelper, VerificationError},
+    transactions::{OperationVerificationHelper, VerificationError},
 };
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
 
@@ -18,7 +18,7 @@ impl<'a> MantleOperationVerificationHelper<'a> {
 }
 
 impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
-    fn get_channel_withdraw_threshold(
+    fn get_channel_transfer_threshold(
         &self,
         channel_id: &ChannelId,
     ) -> Result<ChannelKeyIndex, VerificationError> {
@@ -28,7 +28,7 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
             .ok_or(VerificationError::ChannelNotFound {
                 channel_id: *channel_id,
             })
-            .map(|channel_state| channel_state.withdraw_threshold)
+            .map(|channel_state| channel_state.transfer_threshold)
     }
 
     fn get_key_from_channel_at_index(

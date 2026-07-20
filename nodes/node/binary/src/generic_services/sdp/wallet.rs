@@ -1,11 +1,14 @@
 use lb_core::{
-    mantle::{Op, SignedMantleTx, gas::MainnetGasConstants, tx_builder::MantleTxBuilder},
+    mantle::{Op, SignedMantleTx, transactions::MantleTxBuilder},
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
 };
 use lb_sdp_service::wallet::{
     SdpWalletAdapter as SdpWalletAdapterTrait, SdpWalletConfig, SdpWalletError,
 };
-use lb_wallet_service::api::{WalletApi, WalletServiceData};
+use lb_wallet_service::{
+    TipResponse,
+    api::{WalletApi, WalletServiceData},
+};
 use overwatch::services::{AsServiceId, ServiceData, relay::OutboundRelay};
 
 pub struct SdpWalletAdapter<Service, RuntimeServiceId>
@@ -38,14 +41,22 @@ where
     ) -> Result<SignedMantleTx, SdpWalletError> {
         tx_builder = tx_builder.push_op(Op::SDPDeclare(declaration))?;
 
-        let funded = self
+        let TipResponse {
+            tip,
+            response: funded,
+        } = self
             .api
-            .fund_tx(None, tx_builder, config.funding_pk, vec![config.funding_pk])
+            .fund_tx(
+                None,
+                tx_builder,
+                config.funding_pk,
+                vec![config.funding_pk],
+                0,
+            )
             .await
-            .map_err(|e| SdpWalletError::WalletApi(e.into()))?
-            .response;
+            .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
 
-        let tx_fee = funded.gas_cost::<MainnetGasConstants>()?;
+        let tx_fee = funded.tx_fee()?;
         if tx_fee > config.max_tx_fee {
             return Err(SdpWalletError::TxFeeExceedsMaxFee {
                 tx_fee,
@@ -55,7 +66,7 @@ where
 
         let signed_tx = self
             .api
-            .sign_tx(None, funded)
+            .sign_tx(Some(tip), funded)
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?
             .response;
@@ -71,14 +82,22 @@ where
     ) -> Result<SignedMantleTx, SdpWalletError> {
         tx_builder = tx_builder.push_op(Op::SDPWithdraw(withdraw))?;
 
-        let funded = self
+        let TipResponse {
+            tip,
+            response: funded,
+        } = self
             .api
-            .fund_tx(None, tx_builder, config.funding_pk, vec![config.funding_pk])
+            .fund_tx(
+                None,
+                tx_builder,
+                config.funding_pk,
+                vec![config.funding_pk],
+                0,
+            )
             .await
-            .map_err(|e| SdpWalletError::WalletApi(e.into()))?
-            .response;
+            .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
 
-        let tx_fee = funded.gas_cost::<MainnetGasConstants>()?;
+        let tx_fee = funded.tx_fee()?;
         if tx_fee > config.max_tx_fee {
             return Err(SdpWalletError::TxFeeExceedsMaxFee {
                 tx_fee,
@@ -88,7 +107,7 @@ where
 
         let signed_tx = self
             .api
-            .sign_tx(None, funded)
+            .sign_tx(Some(tip), funded)
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?
             .response;
@@ -104,14 +123,22 @@ where
     ) -> Result<SignedMantleTx, SdpWalletError> {
         tx_builder = tx_builder.push_op(Op::SDPActive(active))?;
 
-        let funded = self
+        let TipResponse {
+            tip,
+            response: funded,
+        } = self
             .api
-            .fund_tx(None, tx_builder, config.funding_pk, vec![config.funding_pk])
+            .fund_tx(
+                None,
+                tx_builder,
+                config.funding_pk,
+                vec![config.funding_pk],
+                0,
+            )
             .await
-            .map_err(|e| SdpWalletError::WalletApi(e.into()))?
-            .response;
+            .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
 
-        let tx_fee = funded.gas_cost::<MainnetGasConstants>()?;
+        let tx_fee = funded.tx_fee()?;
         if tx_fee > config.max_tx_fee {
             return Err(SdpWalletError::TxFeeExceedsMaxFee {
                 tx_fee,
@@ -121,7 +148,7 @@ where
 
         let signed_tx = self
             .api
-            .sign_tx(None, funded)
+            .sign_tx(Some(tip), funded)
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?
             .response;

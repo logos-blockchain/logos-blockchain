@@ -12,8 +12,7 @@ use lb_core::mantle::{
     GasCalculator as _, GenesisTx as _, Note, OpProof, SignedMantleTx, Transaction as _, Utxo,
     gas::MainnetGasConstants,
     ops::OpId as _,
-    tx::{GasPrices, MantleTxContext, MantleTxGasContext},
-    tx_builder::MantleTxBuilder,
+    transactions::{GasPrices, MantleTxBuilder, MantleTxGasContext},
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use rand::{seq::SliceRandom as _, thread_rng};
@@ -193,7 +192,7 @@ impl<'a, E: LbcScenarioEnv> Submission<'a, E> {
 
     async fn execute(mut self) -> Result<(), DynError> {
         let gas_context =
-            MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
+            MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::default());
         while let Some(input) = self.plan.pop_front() {
             submit_wallet_transaction(self.ctx, &input, gas_context.clone()).await?;
             if !self.interval.is_zero() {
@@ -279,12 +278,8 @@ fn build_wallet_transaction(
     gas_context: &MantleTxGasContext,
 ) -> Result<SignedMantleTx, DynError> {
     let receiver = input.account.public_key();
-    let tx_context = MantleTxContext {
-        gas_context: gas_context.clone(),
-        leader_reward_amount: 0,
-    };
 
-    let provisional_tx = MantleTxBuilder::new(tx_context.clone())
+    let provisional_tx = MantleTxBuilder::new()
         .add_ledger_input(input.utxo)
         .map_err(|err| format!("failed to add provisional input: {err}"))?
         .add_ledger_output(Note::new(input.utxo.note.value, receiver))
@@ -302,7 +297,7 @@ fn build_wallet_transaction(
         )
     })?;
 
-    let tx = MantleTxBuilder::new(tx_context)
+    let tx = MantleTxBuilder::new()
         .add_ledger_input(input.utxo)
         .map_err(|err| format!("failed to add input: {err}"))?
         .add_ledger_output(Note::new(output_value, receiver))
@@ -321,7 +316,7 @@ fn build_wallet_transaction(
 }
 
 fn wallet_utxo_map(
-    genesis_tx: &lb_core::mantle::genesis_tx::GenesisTx,
+    genesis_tx: &lb_core::mantle::transactions::GenesisTx,
 ) -> HashMap<ZkPublicKey, Utxo> {
     let transfer_op = genesis_tx.genesis_transfer().clone();
     let op_id = transfer_op.op_id();

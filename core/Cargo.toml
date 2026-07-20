@@ -32,6 +32,7 @@ lb-pol                        = { workspace = true }
 lb-poseidon2                  = { workspace = true }
 lb-utils                      = { workspace = true }
 lb-utxotree                   = { workspace = true }
+lb-zksign                     = { workspace = true }
 multiaddr                     = { workspace = true }
 nom                           = { features = ["alloc"], workspace = true }
 num-bigint                    = { workspace = true }

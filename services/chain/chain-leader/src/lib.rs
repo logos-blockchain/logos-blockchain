@@ -17,7 +17,7 @@ use lb_chain_service::{
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
-    block::{Block, Error as BlockError, MAX_BLOCK_SIZE, MAX_BLOCK_TRANSACTIONS},
+    block::{Block, BlockTransactions, Error as BlockError, MAX_BLOCK_TRANSACTIONS_SIZE},
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, SignedMantleTx, StorageSize, Transaction, TxHash,
@@ -440,8 +440,27 @@ where
                         };
 
                         let latest_tree = tip_state.latest_utxos();
+                        let proof = match build_proof_for(
+                            &eligible_aged,
+                            latest_tree,
+                            &epoch_state,
+                            slot,
+                            &wallet_api,
+                            &kms_api,
+                        )
+                        .await
+                        {
+                            Ok(proof) => proof,
+                            Err(e) => {
+                                error!(
+                                    target: LOG_TARGET,
+                                    "Failed to build leadership proof for slot {slot:?}: {e}"
+                                );
+                                continue;
+                            }
+                        };
 
-                       if let Some((proof, signing_key)) = build_proof_for(&eligible_aged, latest_tree, &epoch_state, slot, &wallet_api, &kms_api).await {
+                        if let Some((proof, signing_key)) = proof {
                             // TODO: spawn as a separate task?
                             match Self::propose_block(
                                 tip,
@@ -458,7 +477,7 @@ where
                                     Self::apply_and_publish_block_proposal(block, &chain_network_api, &blend_adapter).await;
                                 }
                                 Err(e) => {
-                                    metrics::consensus_proposals_create_failed();
+                                    metrics::consensus_proposals_create_failed("propose_block");
                                     error!(target: LOG_TARGET, "{e}");
                                 }
                             }
@@ -772,30 +791,33 @@ where
 
 /// Select transactions for a block, truncating the stream at the first
 /// transaction that trips the block size or count limits.
-async fn txs_for_block<Tx, S>(mut txs: S) -> Vec<Tx>
+async fn txs_for_block<Tx, S>(mut txs: S) -> BlockTransactions<Tx>
 where
     Tx: StorageSize,
     S: Stream<Item = Tx> + Unpin,
 {
-    let mut block_size: usize = 0;
-    let mut selected_txs = Vec::new();
+    let mut block_transactions_size: usize = 0;
+    let mut selected_txs = BlockTransactions::empty();
 
-    while selected_txs.len() < MAX_BLOCK_TRANSACTIONS {
+    loop {
         let Some(tx) = txs.next().await else {
             break;
         };
 
         let tx_size = tx.storage_size();
-        let Some(next_block_size) = block_size.checked_add(tx_size) else {
+        let Some(next_block_transactions_size) = block_transactions_size.checked_add(tx_size)
+        else {
             break;
         };
 
-        if next_block_size > MAX_BLOCK_SIZE {
+        if next_block_transactions_size > MAX_BLOCK_TRANSACTIONS_SIZE {
             break;
         }
 
-        block_size = next_block_size;
-        selected_txs.push(tx);
+        if selected_txs.try_push(tx).is_err() {
+            break;
+        }
+        block_transactions_size = next_block_transactions_size;
     }
 
     selected_txs
@@ -818,21 +840,24 @@ mod tests {
 
     #[tokio::test]
     async fn block_tx_selection_respects_transaction_count_limit() {
-        let txs = stream::iter(vec![TestTx { size: 1 }; MAX_BLOCK_TRANSACTIONS + 1]);
+        let txs = stream::iter(vec![
+            TestTx { size: 1 };
+            BlockTransactions::<TestTx>::MAX + 1
+        ]);
 
         let selected = txs_for_block(txs).await;
 
-        assert_eq!(selected.len(), MAX_BLOCK_TRANSACTIONS);
+        assert_eq!(selected.len(), BlockTransactions::<TestTx>::MAX);
     }
 
     #[tokio::test]
     async fn block_tx_selection_respects_block_size_limit() {
         let txs = stream::iter(vec![
             TestTx {
-                size: MAX_BLOCK_SIZE / 2,
+                size: MAX_BLOCK_TRANSACTIONS_SIZE / 2,
             },
             TestTx {
-                size: MAX_BLOCK_SIZE / 2,
+                size: MAX_BLOCK_TRANSACTIONS_SIZE / 2,
             },
             TestTx { size: 1 },
         ]);
@@ -841,7 +866,7 @@ mod tests {
         let selected_size: usize = selected.iter().map(StorageSize::storage_size).sum();
 
         assert_eq!(selected.len(), 2);
-        assert_eq!(selected_size, MAX_BLOCK_SIZE);
+        assert_eq!(selected_size, MAX_BLOCK_TRANSACTIONS_SIZE);
     }
 
     #[tokio::test]
@@ -852,7 +877,7 @@ mod tests {
         let txs = stream::iter(vec![
             TestTx { size: 10 },
             TestTx {
-                size: MAX_BLOCK_SIZE,
+                size: MAX_BLOCK_TRANSACTIONS_SIZE,
             },
             TestTx { size: 10 },
         ]);
@@ -860,7 +885,7 @@ mod tests {
         let selected = txs_for_block(txs).await;
 
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].storage_size(), 10);
+        assert_eq!(selected.as_slice()[0].storage_size(), 10);
     }
 
     #[tokio::test]
@@ -871,7 +896,7 @@ mod tests {
         // reaching here, but the prefix invariant must hold regardless.)
         let txs = stream::iter(vec![
             TestTx {
-                size: MAX_BLOCK_SIZE + 1,
+                size: MAX_BLOCK_TRANSACTIONS_SIZE + 1,
             },
             TestTx { size: 1 },
         ]);

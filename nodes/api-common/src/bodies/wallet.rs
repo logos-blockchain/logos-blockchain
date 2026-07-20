@@ -114,7 +114,7 @@ pub mod transfer_funds {
 
     #[derive(Serialize, Deserialize)]
     pub struct WalletTransferFundsResponseBody {
-        pub hash: lb_core::mantle::tx::TxHash,
+        pub hash: lb_core::mantle::transactions::TxHash,
     }
 
     impl From<SignedMantleTx> for WalletTransferFundsResponseBody {
@@ -140,6 +140,43 @@ pub mod transfer_funds {
 
             (StatusCode::CREATED, json).into_response()
         }
+    }
+}
+
+pub mod fund {
+    use lb_core::{
+        header::HeaderId,
+        mantle::{
+            OpProof, Value,
+            gas::GasCost,
+            transactions::{MantleTx, builder::MantleTxBuilder},
+        },
+    };
+    use lb_key_management_system_keys::keys::ZkPublicKey;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletFundRequestBody {
+        pub tip: Option<HeaderId>,
+        pub tx_builder: MantleTxBuilder,
+        pub change_public_key: ZkPublicKey,
+        pub funding_public_keys: Vec<ZkPublicKey>,
+        pub max_tx_fee: GasCost,
+        #[serde(default)]
+        pub priority_fee: Value,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletFundResponseBody {
+        /// Tip the transaction was funded against.
+        pub tip: HeaderId,
+        /// The funded transaction, with the fee transfer appended as the last
+        /// op. All ops are still unsigned.
+        pub funded_tx: MantleTx,
+        /// Proof for the appended fee transfer, signed over the funded
+        /// transaction hash. `None` if funding required no transfer (zero
+        /// fee and no inputs pulled in).
+        pub transfer_proof: Option<OpProof>,
     }
 }
 

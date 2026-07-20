@@ -11,7 +11,7 @@ use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_utils::bounded_vec::{BoundedVec, NonEmptyBoundedVec, UpperBoundedVec};
+use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec, UpperBoundedVec};
 use multiaddr::{Multiaddr, Protocol};
 use nom::{
     IResult,
@@ -99,93 +99,52 @@ pub struct InactivityPeriodTooSmall {
     pub period: NumberOfEpochs,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(try_from = "Multiaddr")]
-struct BoundedMultiaddr<const MAX_SIZE: usize>(Multiaddr);
-
-impl<const MAX_SIZE: usize> AsRef<Multiaddr> for BoundedMultiaddr<MAX_SIZE> {
-    fn as_ref(&self) -> &Multiaddr {
-        &self.0
-    }
-}
-
-impl<const MAX_SIZE: usize> TryFrom<Multiaddr> for BoundedMultiaddr<MAX_SIZE> {
-    type Error = String;
-
-    fn try_from(value: Multiaddr) -> Result<Self, Self::Error> {
-        if value.len() > MAX_SIZE {
-            return Err(format!(
-                "Multiaddr must not exceed {MAX_LOCATOR_BYTE_SIZE} bytes: {value}"
-            ));
-        }
-
-        Ok(Self(value))
-    }
-}
-
-impl<const MAX_SIZE: usize> TryFrom<Vec<u8>> for BoundedMultiaddr<MAX_SIZE> {
-    type Error = String;
-
-    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
-        let multiaddr =
-            Multiaddr::try_from(value).map_err(|e| format!("Invalid multiaddr: {e}"))?;
-        Self::try_from(multiaddr)
-    }
-}
-
-impl<const MAX_SIZE: usize, const MIN: usize, const MAX: usize> TryFrom<BoundedVec<u8, MIN, MAX>>
-    for BoundedMultiaddr<MAX_SIZE>
-{
-    type Error = String;
-
-    fn try_from(value: BoundedVec<u8, MIN, MAX>) -> Result<Self, Self::Error> {
-        const {
-            assert!(
-                MAX <= MAX_LOCATOR_BYTE_SIZE,
-                "Max size cannot be more than the maximum allowed byte size for a multiaddr."
-            );
-        }
-        Self::try_from(value.into_inner())
-    }
-}
-
 pub const MAX_LOCATOR_BYTE_SIZE: usize = 329;
 
+/// A [`Multiaddr`] whose byte length is bounded to `[0,
+/// MAX_LOCATOR_BYTE_SIZE]`.
+///
+/// The shared `lb_utils::bounded` wrapper enforces the byte-length invariant
+/// using `Multiaddr::len()`. `Locator::try_from` performs the additional
+/// locator-specific validation below, such as rejecting unspecified, loopback,
+/// multicast, documentation, and link-local addresses.
+type BoundedMultiaddr = lb_utils::bounded::multiaddr::BoundedMultiaddr<0, MAX_LOCATOR_BYTE_SIZE>;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "Multiaddr")]
-pub struct Locator(BoundedMultiaddr<MAX_LOCATOR_BYTE_SIZE>);
+pub struct Locator(BoundedMultiaddr);
 
 impl Locator {
     #[must_use]
     pub const fn new_unchecked(addr: Multiaddr) -> Self {
-        Self(BoundedMultiaddr(addr))
+        Self(BoundedMultiaddr::new_unchecked(addr))
     }
 
     #[must_use]
     pub fn into_inner(self) -> Multiaddr {
-        self.0.0
+        self.0.into_inner()
     }
 
     #[must_use]
     pub fn len(&self) -> usize {
-        self.0.0.len()
+        self.0.as_inner().len()
     }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.0.0.is_empty()
+        self.0.as_inner().is_empty()
     }
 }
 
 impl AsRef<Multiaddr> for Locator {
     fn as_ref(&self) -> &Multiaddr {
-        self.0.as_ref()
+        self.0.as_inner()
     }
 }
 
 impl AsRef<[u8]> for Locator {
     fn as_ref(&self) -> &[u8] {
-        self.0.as_ref().as_ref()
+        self.0.as_inner().as_ref()
     }
 }
 
@@ -193,10 +152,10 @@ impl TryFrom<Multiaddr> for Locator {
     type Error = String;
 
     fn try_from(value: Multiaddr) -> Result<Self, Self::Error> {
-        let bounded_multiaddr = BoundedMultiaddr::<MAX_LOCATOR_BYTE_SIZE>::try_from(value.clone())
+        BoundedMultiaddr::check_len_against_bounds(value.len())
             .map_err(|e| format!("Invalid multiaddr: {e}"))?;
 
-        for protocol in bounded_multiaddr.as_ref() {
+        for protocol in &value {
             match protocol {
                 Protocol::Ip4(ip) if ip.is_unspecified() => {
                     return Err(format!(
@@ -217,7 +176,7 @@ impl TryFrom<Multiaddr> for Locator {
             }
         }
 
-        Ok(Self(bounded_multiaddr))
+        Ok(Self(BoundedMultiaddr::new_unchecked(value)))
     }
 }
 
@@ -258,7 +217,7 @@ impl FromStr for Locator {
 
 impl Display for Locator {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.0.0.fmt(f)
+        self.0.fmt(f)
     }
 }
 

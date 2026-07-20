@@ -13,7 +13,7 @@ use lb_tracing::{
         gelf::{GelfConfig, create_gelf_layer},
         local::{AppenderType, FileConfig, create_file_layer, create_writer_layer},
         loki::{LokiConfig, create_loki_layer},
-        otlp::{OtlpConfig, create_otlp_layer},
+        otlp::{OtlpLoggingConfig, create_otlp_layer},
     },
     metrics::otlp::{OtlpMetricsConfig, create_otlp_metrics_layer},
     tracing::otlp::{OtlpTracingConfig, create_otlp_tracing_layer},
@@ -32,7 +32,7 @@ use tracing_subscriber::{
     EnvFilter, filter::LevelFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _,
 };
 
-#[cfg(feature = "profiling")]
+#[cfg(feature = "tokio-console")]
 mod console;
 
 type LoggerSubscriber =
@@ -164,7 +164,7 @@ pub enum LoggerLayer {
     Gelf(GelfConfig),
     File(FileConfig),
     Loki(LokiConfig),
-    Otlp(OtlpConfig),
+    Otlp(OtlpLoggingConfig),
     Stdout,
     Stderr,
     #[serde(skip)]
@@ -178,7 +178,7 @@ pub struct LoggerLayerSettings {
     pub file: Option<FileConfig>,
     pub loki: Option<LokiConfig>,
     pub gelf: Option<GelfConfig>,
-    pub otlp: Option<OtlpConfig>,
+    pub otlp: Option<OtlpLoggingConfig>,
     pub stdout: bool,
     pub stderr: bool,
 }
@@ -361,17 +361,21 @@ where
             let mut layers: Vec<Box<dyn tracing_subscriber::Layer<_> + Send + Sync>> = vec![];
 
             let level_filter = {
-                #[cfg(feature = "profiling")]
-                if let ConsoleLayerSettings::Console(console_config) = &config.console
-                    && let Some(console_layer) = console::create_console_layer(console_config)
+                #[cfg(feature = "tokio-console")]
                 {
-                    layers.push(console_layer);
-                    LevelFilter::TRACE
-                } else {
+                    if let ConsoleLayerSettings::Console(console_config) = &config.console
+                        && let Some(console_layer) = console::create_console_layer(console_config)
+                    {
+                        layers.push(console_layer);
+                        LevelFilter::TRACE
+                    } else {
+                        LevelFilter::from(config.level)
+                    }
+                }
+                #[cfg(not(feature = "tokio-console"))]
+                {
                     LevelFilter::from(config.level)
                 }
-                #[cfg(not(feature = "profiling"))]
-                LevelFilter::from(config.level)
             };
 
             layers.extend(other_layers);

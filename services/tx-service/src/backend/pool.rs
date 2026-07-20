@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fmt::Debug,
     hash::Hash,
     pin::Pin,
@@ -8,6 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 use futures::Stream;
+use indexmap::IndexSet;
 use lb_log_targets::mempool;
 use serde::{Deserialize, Serialize};
 
@@ -26,13 +27,13 @@ pub struct PoolRecoveryState<Key>
 where
     Key: Hash + Eq + Ord,
 {
-    pub pending_items: BTreeSet<Key>,
+    pub pending_items: IndexSet<Key>,
     pub removed_items: BTreeMap<Key, u64>,
     pub last_item_timestamp: u64,
 }
 
 pub struct Mempool<BlockId, Item, Key, Storage, RuntimeServiceId> {
-    pending_items: BTreeSet<Key>,
+    pending_items: IndexSet<Key>,
     removed_items: BTreeMap<Key, u64>,
     last_item_timestamp: u64,
     storage_adapter: Storage,
@@ -76,7 +77,7 @@ where
 
     fn new(_settings: Self::Settings, storage: Self::Storage) -> Self {
         Self {
-            pending_items: BTreeSet::new(),
+            pending_items: IndexSet::new(),
             removed_items: BTreeMap::new(),
             last_item_timestamp: 0,
             storage_adapter: storage,
@@ -122,8 +123,8 @@ where
         &self,
         _ancestor_hint: BlockId,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, MempoolError> {
-        let keys: BTreeSet<Key> = self.pending_items.iter().cloned().collect();
-        self.get_items_by_keys(keys).await
+        self.get_items_by_keys(self.pending_items.iter().cloned())
+            .await
     }
 
     async fn get_items_by_keys<I>(
@@ -133,9 +134,10 @@ where
     where
         I: IntoIterator<Item = Self::Key> + Send,
     {
-        let keys_set: BTreeSet<Self::Key> = keys.into_iter().collect();
+        let ordered_keys = keys.into_iter().collect::<Vec<_>>();
+
         self.storage_adapter
-            .get_items(&keys_set)
+            .get_items(&ordered_keys)
             .await
             .map_err(|e| MempoolError::StorageError(format!("{e:?}")))
     }
@@ -147,7 +149,7 @@ where
         let removed_at = current_timestamp_millis();
 
         for key in keys {
-            self.pending_items.remove(key);
+            self.pending_items.shift_remove(key);
             self.removed_items.insert(key.clone(), removed_at);
         }
         log_removed_items(removed_count, self.pending_items.len());

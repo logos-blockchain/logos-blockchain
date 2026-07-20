@@ -1,17 +1,34 @@
 use std::{
     fs,
-    path::{Component, Path, PathBuf},
+    path::{Component, Path},
 };
 
+use lb_testing_framework::NodeStateSnapshotStore;
+
 use crate::cucumber::{
-    defaults::{SNAPSHOT_STATE_SUBDIRS, snapshots_root_dir},
+    defaults::snapshots_root_dir,
     error::{StepError, StepResult},
-    utils::copy_dir_recursive,
     world::NodeSnapshot,
 };
 
-fn snapshot_dir(snapshot_name: &str) -> PathBuf {
-    snapshots_root_dir().join(snapshot_name)
+fn snapshot_store() -> NodeStateSnapshotStore {
+    NodeStateSnapshotStore::new(snapshots_root_dir())
+}
+
+pub(super) fn reset_named_snapshot(snapshot_name: &str) -> StepResult {
+    validate_snapshot_path_component(snapshot_name, "Snapshot name")?;
+
+    let snapshot_dir = snapshots_root_dir().join(snapshot_name);
+    if snapshot_dir.exists() {
+        fs::remove_dir_all(&snapshot_dir).map_err(|source| StepError::LogicalError {
+            message: format!(
+                "failed to reset snapshot directory '{}': {source}",
+                snapshot_dir.display()
+            ),
+        })?;
+    }
+
+    Ok(())
 }
 
 pub(super) fn validate_snapshot_path_component(
@@ -35,33 +52,18 @@ pub(super) fn validate_snapshot_path_component(
     }
 }
 
-/// Saves the current node blockchain state into a named snapshot location.
-pub fn save_named_blockchain_snapshot(
+/// Saves the current node state into a named snapshot location.
+pub fn save_named_node_state_snapshot(
     snapshot_name: &str,
     node_name: &str,
     node_runtime_dir: &Path,
 ) -> StepResult {
-    validate_snapshot_path_component(snapshot_name, "Snapshot name")?;
-    validate_snapshot_path_component(node_name, "Node name")?;
-
-    let destination = snapshot_dir(snapshot_name).join(node_name);
-    sanitize_path_and_clear_dir(&destination)?;
-
-    for dir_name in SNAPSHOT_STATE_SUBDIRS {
-        copy_dir_recursive(
-            &node_runtime_dir.join(dir_name),
-            &destination.join(dir_name),
-        )
-        .map_err(|e| StepError::LogicalError {
-            message: format!(
-                "failed to copy node `{node_name}` data from '{}' to '{}': {e}",
-                node_runtime_dir.display(),
-                destination.display()
-            ),
-        })?;
-    }
-
-    Ok(())
+    snapshot_store()
+        .save_node(snapshot_name, node_name, node_runtime_dir)
+        .map(|_| ())
+        .map_err(|source| StepError::LogicalError {
+            message: source.to_string(),
+        })
 }
 
 /// Replaces a runtime node state with the contents from a snapshot node
@@ -73,52 +75,14 @@ pub fn restore_node_state_from_snapshot(
     validate_snapshot_path_component(&node_snapshot.name, "Snapshot name")?;
     validate_snapshot_path_component(&node_snapshot.node, "Node name")?;
 
-    let snapshot_node_dir = snapshot_dir(&node_snapshot.name).join(&node_snapshot.node);
-    for dir_name in SNAPSHOT_STATE_SUBDIRS {
-        let snapshot_state_dir = snapshot_node_dir.join(dir_name);
-        sanitize_path_as_dir(&snapshot_state_dir)?;
-        let runtime_state_dir = runtime_node_dir.join(dir_name);
-        sanitize_path_and_clear_dir(&runtime_state_dir)?;
-        copy_dir_recursive(&snapshot_state_dir, &runtime_state_dir)?;
-    }
-
-    Ok(())
-}
-
-fn sanitize_path_and_clear_dir(path: &Path) -> StepResult {
-    if path.exists() {
-        if !path.is_dir() {
-            return Err(StepError::LogicalError {
-                message: format!(
-                    "Failed to remove directory '{}': path exists but is not a directory",
-                    path.display()
-                ),
-            });
-        }
-        fs::remove_dir_all(path).map_err(|e| StepError::LogicalError {
+    snapshot_store()
+        .restore_named_node(&node_snapshot.name, &node_snapshot.node, runtime_node_dir)
+        .map_err(|source| StepError::LogicalError {
             message: format!(
-                "Failed to clear existing directory '{}': {e}",
-                path.display()
+                "failed to restore node state snapshot {}/{} into '{}': {source}",
+                node_snapshot.name,
+                node_snapshot.node,
+                runtime_node_dir.display()
             ),
-        })?;
-    }
-    Ok(())
-}
-
-fn sanitize_path_as_dir(path: &Path) -> StepResult {
-    if !path.exists() {
-        return Err(StepError::LogicalError {
-            message: format!("Path does '{}' not exist", path.display()),
-        });
-    }
-    if !path.is_dir() {
-        return Err(StepError::LogicalError {
-            message: format!(
-                "snapshot state path '{}' exists but is not a directory",
-                path.display()
-            ),
-        });
-    }
-
-    Ok(())
+        })
 }

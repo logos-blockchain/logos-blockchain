@@ -1,13 +1,13 @@
 //! Applies wallet funding decisions to Mantle transaction builders.
 
-use std::cmp::Ordering;
+use std::{cmp::Ordering, collections::HashSet};
 
 use lb_core::mantle::{
     Note, Op, Utxo,
     gas::MainnetGasConstants,
     ledger::{Inputs, Outputs},
     ops::transfer::TransferOp,
-    tx_builder::MantleTxBuilder,
+    transactions::{MantleTxBuilder, MantleTxContext},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_mmr::MerkleMountainRange;
@@ -23,11 +23,15 @@ use crate::common::wallet::{
 pub fn fund_builder_from_wallet_source(
     source: &WalletFundingSource,
     tx_builder: &MantleTxBuilder,
+    context: &MantleTxContext,
 ) -> Result<MantleTxBuilder, WalletError> {
     wallet_state_from_utxos(source.available_utxos().to_vec()).fund_tx::<MainnetGasConstants>(
         tx_builder,
         source.public_key(),
         [source.public_key()],
+        context,
+        &HashSet::new(),
+        0,
     )
 }
 
@@ -62,24 +66,30 @@ pub fn wallet_state_from_utxos(utxos: Vec<Utxo>) -> WalletState {
 pub(super) fn fund_wallet_transaction(
     intent: WalletTransactionIntent,
     resources: WalletFundingResources,
-) -> Result<MantleTxBuilder, WalletError> {
+) -> Result<(MantleTxBuilder, MantleTxContext), WalletError> {
     let (sender, fee_sponsor) = resources.into_parts();
-    let (tx_builder, sender_output_total) = intent.into_parts();
+    let (tx_builder, context, sender_output_total) = intent.into_parts();
 
-    match fee_sponsor {
-        None => fund_unsponsored_wallet_transaction(&tx_builder, sender.into_funding_utxos()),
+    let funded_builder = match fee_sponsor {
+        None => {
+            fund_unsponsored_wallet_transaction(&tx_builder, sender.into_funding_utxos(), &context)?
+        }
         Some(fee_sponsor) => fund_sponsored_wallet_transaction(
             tx_builder,
             sender_output_total,
             fee_sponsor.into_funding_utxos(),
             sender.into_funding_utxos(),
-        ),
-    }
+            &context,
+        )?,
+    };
+
+    Ok((funded_builder, context))
 }
 
 fn fund_unsponsored_wallet_transaction(
     tx_builder: &MantleTxBuilder,
     sender: WalletFundingUtxos,
+    context: &MantleTxContext,
 ) -> Result<MantleTxBuilder, WalletError> {
     let sender_change_pk = sender.change_pk();
 
@@ -87,6 +97,7 @@ fn fund_unsponsored_wallet_transaction(
         tx_builder,
         sender_change_pk,
         &WalletFundingPlan::largest_first(sender.into_available_utxos(), Vec::new()),
+        context,
     )
 }
 
@@ -95,6 +106,7 @@ fn fund_sponsored_wallet_transaction(
     output_total: u64,
     fee_sponsor: WalletFundingUtxos,
     sender: WalletFundingUtxos,
+    context: &MantleTxContext,
 ) -> Result<MantleTxBuilder, WalletError> {
     let sender_change_pk = sender.change_pk();
     let fee_sponsor_change_pk = fee_sponsor.change_pk();
@@ -114,6 +126,7 @@ fn fund_sponsored_wallet_transaction(
             fee_sponsor.into_available_utxos(),
             sender_inputs.into_utxos(),
         ),
+        context,
     )
 }
 
@@ -137,9 +150,10 @@ fn fund_builder_from_plan(
     tx_builder: &MantleTxBuilder,
     change_pk: ZkPublicKey,
     plan: &WalletFundingPlan,
+    context: &MantleTxContext,
 ) -> Result<MantleTxBuilder, WalletError> {
     plan.fund_with(|selected_inputs| {
-        evaluate_funding_inputs(tx_builder, selected_inputs, change_pk)
+        evaluate_funding_inputs(tx_builder, selected_inputs, change_pk, context)
     })
 }
 
@@ -147,17 +161,18 @@ fn evaluate_funding_inputs(
     tx_builder: &MantleTxBuilder,
     selected_inputs: &[Utxo],
     change_pk: ZkPublicKey,
+    context: &MantleTxContext,
 ) -> Result<WalletFundingOutcome<MantleTxBuilder>, WalletError> {
     if selected_inputs.is_empty() && tx_builder.ledger_inputs().is_empty() {
         return Ok(WalletFundingOutcome::NeedsMoreInputs);
     }
 
     if selected_inputs.len() <= super::signing::ZKSIGN_MAX_INPUTS {
-        return evaluate_standard_funding_inputs(tx_builder, selected_inputs, change_pk);
+        return evaluate_standard_funding_inputs(tx_builder, selected_inputs, change_pk, context);
     }
 
     Ok(
-        build_chunked_funded_tx(tx_builder, selected_inputs, change_pk)?.map_or(
+        build_chunked_funded_tx(tx_builder, selected_inputs, change_pk, context)?.map_or(
             WalletFundingOutcome::NeedsMoreInputs,
             WalletFundingOutcome::Funded,
         ),
@@ -168,19 +183,20 @@ fn evaluate_standard_funding_inputs(
     tx_builder: &MantleTxBuilder,
     selected_inputs: &[Utxo],
     change_pk: ZkPublicKey,
+    context: &MantleTxContext,
 ) -> Result<WalletFundingOutcome<MantleTxBuilder>, WalletError> {
     let funded_builder = tx_builder
         .clone()
         .extend_ledger_inputs(selected_inputs.iter().copied())?;
 
     match funded_builder
-        .funding_delta::<MainnetGasConstants>()?
+        .funding_delta::<MainnetGasConstants>(context)?
         .cmp(&0)
     {
         Ordering::Less => Ok(WalletFundingOutcome::NeedsMoreInputs),
         Ordering::Equal => Ok(WalletFundingOutcome::Funded(funded_builder)),
         Ordering::Greater => Ok(funded_builder
-            .return_change::<MainnetGasConstants>(change_pk)?
+            .return_change::<MainnetGasConstants>(context, change_pk, 0)?
             .map_or(
                 WalletFundingOutcome::NeedsMoreInputs,
                 WalletFundingOutcome::Funded,
@@ -192,6 +208,7 @@ fn build_chunked_funded_tx(
     tx_builder: &MantleTxBuilder,
     funding_utxos: &[Utxo],
     change_pk: ZkPublicKey,
+    context: &MantleTxContext,
 ) -> Result<Option<MantleTxBuilder>, WalletError> {
     if funding_utxos.len() <= super::signing::ZKSIGN_MAX_INPUTS
         || !tx_builder.ledger_inputs().is_empty()
@@ -206,7 +223,8 @@ fn build_chunked_funded_tx(
     let output_sum = pending_transfer_output_sum(tx_builder);
 
     let chunked_builder = with_transfer_input_chunks(tx_builder, funding_utxos)?;
-    let funding_delta = funding_delta_for_chunked_builder(&chunked_builder, input_sum, output_sum)?;
+    let funding_delta =
+        funding_delta_for_chunked_builder(&chunked_builder, input_sum, output_sum, context)?;
 
     match funding_delta.cmp(&0) {
         Ordering::Less => Ok(None),
@@ -217,6 +235,7 @@ fn build_chunked_funded_tx(
             input_sum,
             output_sum,
             funding_delta,
+            context,
         ),
     }
 }
@@ -227,12 +246,17 @@ fn add_chunked_change_output(
     input_sum: u128,
     output_sum: u128,
     funding_delta: i128,
+    context: &MantleTxContext,
 ) -> Result<Option<MantleTxBuilder>, WalletError> {
     let builder_with_dummy_change = chunked_builder
         .clone()
         .add_ledger_output(Note::new(0, change_pk))?;
-    let delta_with_change =
-        funding_delta_for_chunked_builder(&builder_with_dummy_change, input_sum, output_sum)?;
+    let delta_with_change = funding_delta_for_chunked_builder(
+        &builder_with_dummy_change,
+        input_sum,
+        output_sum,
+        context,
+    )?;
 
     if delta_with_change <= 0 {
         return Ok(None);
@@ -246,6 +270,7 @@ fn add_chunked_change_output(
             &tx_with_change,
             input_sum,
             output_sum + u128::from(change),
+            context,
         )?,
         0
     );
@@ -295,8 +320,13 @@ fn funding_delta_for_chunked_builder(
     tx_builder: &MantleTxBuilder,
     input_sum: u128,
     output_sum: u128,
+    context: &MantleTxContext,
 ) -> Result<i128, WalletError> {
-    let gas_cost = u128::from(tx_builder.gas_cost::<MainnetGasConstants>()?.into_inner());
+    let gas_cost = u128::from(
+        tx_builder
+            .gas_cost::<MainnetGasConstants>(context)?
+            .into_inner(),
+    );
     Ok(i128::try_from(input_sum)
         .expect("Input sum must fit in i128")
         .checked_sub(i128::try_from(output_sum).expect("Output sum must fit in i128"))
@@ -306,28 +336,42 @@ fn funding_delta_for_chunked_builder(
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::ops::channel::inscribe::Inscription;
+    use std::collections::HashMap;
+
+    use lb_core::mantle::{
+        ops::channel::{
+            ChannelId, MsgId,
+            inscribe::{Inscription, InscriptionOp},
+        },
+        transactions::{GasPrices, MantleTxGasContext},
+    };
     use lb_key_management_system_service::keys::Ed25519Key;
     use lb_testing_framework::configs::wallet::WalletAccount;
 
     use super::*;
-    use crate::common::mantle_inscription::{
-        build_inscription_tx_builder, channel_id_for_payload_size,
-    };
 
     #[test]
     fn zero_cost_wallet_transaction_still_uses_funding_input() {
-        let payload_size = 1024;
         let signing_key = Ed25519Key::from_bytes(&[0u8; 32]);
-        let tx_builder = build_inscription_tx_builder(
-            Inscription::new_unchecked(vec![0xab; payload_size]),
-            &signing_key,
-            channel_id_for_payload_size(payload_size),
-            None,
-        );
+        let context = MantleTxContext {
+            gas_context: MantleTxGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+            ),
+            leader_reward_amount: 0,
+        };
+        let tx_builder = MantleTxBuilder::new()
+            .push_op(Op::ChannelInscribe(InscriptionOp {
+                channel_id: ChannelId::from([0xAA; 32]),
+                inscription: Inscription::new_unchecked(vec![0xab; 1024]),
+                parent: MsgId::root(),
+                signer: signing_key.public_key(),
+            }))
+            .expect("inscription test builder should fit op bounds");
         assert_eq!(
             tx_builder
-                .funding_delta::<MainnetGasConstants>()
+                .funding_delta::<MainnetGasConstants>(&context)
                 .expect("zero-gas inscription funding delta should calculate"),
             0
         );
@@ -337,14 +381,17 @@ mod tests {
         let funding_utxo = Utxo::new([7u8; 32], 0, Note::new(2_000_000, account.public_key()));
         let funding_source = WalletFundingSource::new(account, vec![funding_utxo]);
 
-        let funded_builder =
-            fund_unsponsored_wallet_transaction(&tx_builder, funding_source.into_funding_utxos())
-                .expect("zero-cost wallet transaction should still select a funding input");
+        let funded_builder = fund_unsponsored_wallet_transaction(
+            &tx_builder,
+            funding_source.into_funding_utxos(),
+            &context,
+        )
+        .expect("zero-cost wallet transaction should still select a funding input");
 
         assert_eq!(funded_builder.ledger_inputs(), &[funding_utxo]);
         assert_eq!(
             funded_builder
-                .funding_delta::<MainnetGasConstants>()
+                .funding_delta::<MainnetGasConstants>(&context)
                 .expect("funded inscription delta should calculate"),
             0
         );

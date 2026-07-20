@@ -26,6 +26,8 @@ pub trait CompressSize: Pairing {
     type G2CompressedSize: ArrayLength;
 }
 
+pub const COMPRESSED_PROOF_SIZE: usize = 128;
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CompressedProof<E: CompressSize> {
     pub pi_a: GenericArray<u8, E::G1CompressedSize>,
@@ -67,8 +69,8 @@ impl<E: CompressSize> CompressedProof<E> {
 impl CompressedProof<Bn254> {
     /// Total size = G1 + G2 + G1 at the type level.
     #[must_use]
-    pub fn to_bytes(&self) -> [u8; 128] {
-        let mut bytes = [0u8; 128];
+    pub fn to_bytes(&self) -> [u8; COMPRESSED_PROOF_SIZE] {
+        let mut bytes = [0u8; COMPRESSED_PROOF_SIZE];
         let g1 = <Bn254 as CompressSize>::G1CompressedSize::to_usize();
         let g2 = <Bn254 as CompressSize>::G2CompressedSize::to_usize();
 
@@ -81,7 +83,7 @@ impl CompressedProof<Bn254> {
 
     /// Type-level length bound: accepts exactly G1 + G2 + G1 bytes.
     #[must_use]
-    pub fn from_bytes(bytes: &[u8; 128]) -> Self {
+    pub fn from_bytes(bytes: &[u8; COMPRESSED_PROOF_SIZE]) -> Self {
         let g1 = <Bn254 as CompressSize>::G1CompressedSize::to_usize();
         let g2 = <Bn254 as CompressSize>::G2CompressedSize::to_usize();
 

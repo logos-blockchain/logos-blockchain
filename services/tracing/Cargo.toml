@@ -13,7 +13,10 @@ version     = { workspace = true }
 workspace = true
 
 [features]
-profiling = ["console-subscriber"]
+tokio-console = ["dep:console-subscriber"]
+# Backwards-compatible alias. Existing users of `profiling` still get the
+# tracing service's tokio-console support.
+profiling = ["tokio-console"]
 
 [dependencies]
 async-trait        = { workspace = true }

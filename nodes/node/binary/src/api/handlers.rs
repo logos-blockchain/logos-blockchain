@@ -26,8 +26,8 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx, Transaction, TxHash, gas::MainnetGasConstants, ops::channel::ChannelId,
-        tx_builder::MantleTxBuilder,
+        Op, OpProof, SignedMantleTx, Transaction, TxHash, ops::channel::ChannelId,
+        transactions::MantleTxBuilder,
     },
 };
 use lb_http_api_common::{
@@ -35,6 +35,7 @@ use lb_http_api_common::{
     bodies::{
         blend::JoinBlendRequestBody,
         channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
+        mantle::GasPricesResponseBody,
         wallet::{
             balance::WalletBalanceResponseBody,
             claimable_vouchers::{
@@ -975,8 +976,7 @@ where
             handle.relay::<WalletService>().await?,
         );
 
-        let tx_context = wallet.get_tx_context(None).await?;
-        let tx_builder = MantleTxBuilder::new(tx_context)
+        let tx_builder = MantleTxBuilder::new()
             .push_op(Op::ChannelDeposit(req.deposit))
             .map_err(|e| overwatch::DynError::from(e.to_string()))?;
         let lb_wallet_service::TipResponse {
@@ -988,10 +988,11 @@ where
                 tx_builder,
                 req.change_public_key,
                 req.funding_public_keys,
+                0,
             )
             .await?;
 
-        let tx_fee = funded_tx_builder.gas_cost::<MainnetGasConstants>()?;
+        let tx_fee = funded_tx_builder.tx_fee()?;
         if tx_fee > req.max_tx_fee {
             return Err(overwatch::DynError::from(format!(
                 "tx_fee({tx_fee}) exceeds max_tx_fee({})",
@@ -1218,7 +1219,7 @@ where
     get,
     path = paths::MANTLE_SDP_DECLARATIONS,
     responses(
-        (status = 200, description = "Get current SDP declarations", body = Vec<lb_core::sdp::Declaration>),
+        (status = 200, description = "Get current SDP declarations keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, lb_core::sdp::Declaration>),
         (status = 500, description = "Internal server error", body = String),
     )
 )]
@@ -1230,6 +1231,24 @@ where
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
     make_request_and_return_response!(mantle::get_sdp_declarations::<RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    get,
+    path = paths::MANTLE_SDP_SNAPSHOT,
+    responses(
+        (status = 200, description = "Get the SDP snapshot for the current epoch keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, lb_core::sdp::Declaration>),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn get_sdp_snapshot<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    make_request_and_return_response!(mantle::get_sdp_snapshot::<RuntimeServiceId>(&handle))
 }
 
 #[utoipa::path(
@@ -1285,7 +1304,7 @@ where
 }
 
 #[utoipa::path(
-    post,
+    get,
     path = paths::BLOCKS_DETAIL,
     responses(
         (status = 200, description = "Block found"),
@@ -1348,6 +1367,59 @@ where
     }
 }
 
+#[derive(Deserialize)]
+pub struct GasPricesQuery {
+    tip: Option<HeaderId>,
+}
+
+#[utoipa::path(
+    get,
+    path = paths::MANTLE_GAS_PRICES,
+    responses(
+        (status = 200, description = "Get the gas prices from the ledger state at the tip"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn get_gas_prices<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Query(query): Query<GasPricesQuery>,
+) -> Response
+where
+    RuntimeServiceId:
+        AsServiceId<Cryptarchia<RuntimeServiceId>> + Debug + Sync + Display + Send + 'static,
+{
+    let relay = match get_relay_or_500(&handle).await {
+        Ok(relay) => relay,
+        Err(error_response) => return error_response,
+    };
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>, RuntimeServiceId>::new(relay);
+
+    let block_id = match query.tip {
+        Some(tip) => tip,
+        None => match consensus::cryptarchia_info::<RuntimeServiceId>(&handle).await {
+            Ok(info) => info.cryptarchia_info.tip,
+            Err(error) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+            }
+        },
+    };
+
+    match chain_api.get_ledger_state(block_id).await {
+        Ok(Some(ledger_state)) => {
+            let gas_prices = ledger_state.get_gas_prices();
+            Json(GasPricesResponseBody {
+                tip: block_id,
+                execution_base_gas_price: gas_prices.execution_base_gas_price,
+                storage_gas_price: gas_prices.storage_gas_price,
+            })
+            .into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "Ledger state not found for block").into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
 #[utoipa::path(
     get,
     path = paths::BLOCKS_STREAM,
@@ -1385,7 +1457,7 @@ where
 
 #[utoipa::path(
     get,
-    path = paths::BLOCKS_STREAM,
+    path = paths::BLOCKS_RANGE_STREAM,
     params(BlocksStreamQuery),
     responses(
         (status = 200, description = "Stream of processed blocks with chain state in slot order. \
@@ -1473,7 +1545,7 @@ where
 }
 
 #[utoipa::path(
-    post,
+    get,
     path = paths::TRANSACTION,
     responses(
         (status = 200, description = "Transaction found"),
@@ -1515,9 +1587,12 @@ where
 }
 
 pub mod wallet {
-    use lb_http_api_common::bodies::wallet::sign::{
-        WalletSignTxEd25519RequestBody, WalletSignTxEd25519ResponseBody, WalletSignTxZkRequestBody,
-        WalletSignTxZkResponseBody,
+    use lb_http_api_common::bodies::wallet::{
+        fund::{WalletFundRequestBody, WalletFundResponseBody},
+        sign::{
+            WalletSignTxEd25519RequestBody, WalletSignTxEd25519ResponseBody,
+            WalletSignTxZkRequestBody, WalletSignTxZkResponseBody,
+        },
     };
     use lb_key_management_system_service::keys::ZkPublicKey;
 
@@ -1820,6 +1895,106 @@ pub mod wallet {
 
             let sig = wallet.sign_tx_with_zk(req.tx_hash, req.pks).await?;
             Ok::<_, DynError>(WalletSignTxZkResponseBody { sig })
+        })
+    }
+
+    #[utoipa::path(
+        post,
+        path = paths::wallet::FUND,
+        responses(
+            (status = 200, description = "Funded transaction with fee transfer proof"),
+            (status = 500, description = "Internal server error", body = String),
+        )
+    )]
+    pub async fn fund<WalletService, StorageAdapter, RuntimeServiceId>(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Json(req): Json<WalletFundRequestBody>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData,
+        StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+                RuntimeServiceId,
+                Item = SignedMantleTx,
+                Key = <SignedMantleTx as Transaction>::Hash,
+            > + Send
+            + Sync
+            + Clone
+            + 'static,
+        StorageAdapter::Error: Debug,
+        RuntimeServiceId: Debug
+            + Display
+            + Send
+            + Sync
+            + 'static
+            + AsServiceId<WalletService>
+            + AsServiceId<
+                TxMempoolService<
+                    MempoolNetworkAdapter<
+                        SignedMantleTx,
+                        <SignedMantleTx as Transaction>::Hash,
+                        RuntimeServiceId,
+                    >,
+                    Mempool<
+                        HeaderId,
+                        SignedMantleTx,
+                        <SignedMantleTx as Transaction>::Hash,
+                        StorageAdapter,
+                        RuntimeServiceId,
+                    >,
+                    StorageAdapter,
+                    RuntimeServiceId,
+                >,
+            >,
+    {
+        make_request_and_return_response!(async {
+            let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+                handle.relay::<WalletService>().await?,
+            );
+
+            let lb_wallet_service::TipResponse {
+                tip,
+                response: funded_tx_builder,
+            } = wallet
+                .fund_tx(
+                    req.tip,
+                    req.tx_builder,
+                    req.change_public_key,
+                    req.funding_public_keys,
+                    req.priority_fee,
+                )
+                .await?;
+
+            let tx_fee = funded_tx_builder.tx_fee()?;
+            if tx_fee > req.max_tx_fee {
+                return Err(overwatch::DynError::from(format!(
+                    "tx_fee({tx_fee}) exceeds max_tx_fee({})",
+                    req.max_tx_fee
+                )));
+            }
+
+            // Owners of the funding inputs, in input order — the ledger
+            // verifies the transfer proof against this exact list.
+            let funding_note_pks: Vec<ZkPublicKey> = funded_tx_builder
+                .ledger_inputs()
+                .iter()
+                .map(|utxo| utxo.note.pk)
+                .collect();
+
+            let funded_tx = funded_tx_builder.build()?;
+            let transfer_proof = if funding_note_pks.is_empty() {
+                None
+            } else {
+                let tx_hash = funded_tx.hash();
+                Some(OpProof::ZkSig(
+                    wallet.sign_tx_with_zk(tx_hash, funding_note_pks).await?,
+                ))
+            };
+
+            Ok::<_, DynError>(WalletFundResponseBody {
+                tip,
+                funded_tx,
+                transfer_proof,
+            })
         })
     }
 }

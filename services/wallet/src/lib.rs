@@ -27,8 +27,7 @@ use lb_core::{
             },
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
-        tx::MantleTxContext,
-        tx_builder::{MantleTxBuilder, TxBuilderError},
+        transactions::{MantleTxBuilder, MantleTxContext, TxBuilderError},
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
 };
@@ -143,6 +142,7 @@ pub enum WalletMsg {
         tx_builder: MantleTxBuilder,
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
+        priority_fee: Value,
         resp_tx: Sender<Result<TipResponse<MantleTxBuilder>, WalletServiceError>>,
     },
     BuildLeaderClaimTx {
@@ -173,7 +173,7 @@ pub enum WalletMsg {
         resp_tx: Sender<Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError>>,
     },
     GenerateNewVoucherSecret {
-        resp_tx: Sender<VoucherCm>,
+        resp_tx: Sender<Result<VoucherCm, WalletServiceError>>,
     },
     GetClaimableVouchers {
         tip: Option<HeaderId>,
@@ -203,6 +203,7 @@ pub struct UtxoWithKeyId {
 struct LeaderClaimTx {
     signed_tx: SignedMantleTx,
     voucher_nullifier: VoucherNullifier,
+    funded_notes: Vec<NoteId>,
 }
 
 struct LeaderClaimTxRequest {
@@ -245,6 +246,17 @@ pub struct WalletServiceSettings {
     pub known_keys: HashMap<KeyId, ZkPublicKey>,
     pub voucher_master_key_id: KeyId,
     pub recovery_path: PathBuf,
+    /// How much LIB progress a pending note reservation survives before being
+    /// evicted. Notes funded into in-flight transactions are excluded from
+    /// funding until they are observed spent in a block or this many immutable
+    /// blocks have passed since the reservation.
+    #[serde(default = "default_pending_note_expiry_blocks")]
+    pub pending_note_expiry_blocks: u64,
+}
+
+#[must_use]
+pub const fn default_pending_note_expiry_blocks() -> u64 {
+    10
 }
 
 impl FileBackendSettings for WalletServiceSettings {
@@ -413,7 +425,7 @@ where
         loop {
             tokio::select! {
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
-                    Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage_adapter, &cryptarchia_api, &kms, &epoch_config).await;
+                    Box::pin(Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage_adapter, &cryptarchia_api, &kms, &epoch_config)).await;
                 }
                 Ok(event) = new_block_receiver.recv() => {
                     Self::handle_new_block(event.block_id, &mut state, &storage_adapter, &cryptarchia_api, &epoch_config).await;
@@ -497,6 +509,7 @@ where
                 tx_builder,
                 change_pk,
                 funding_pks,
+                priority_fee,
                 resp_tx,
             } => {
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
@@ -507,11 +520,24 @@ where
                     }
                 };
 
-                let funded = match state.wallet().fund_tx::<MainnetGasConstants>(
+                // Fetch the tx context (gas prices) fresh at fund time. It is
+                // tip-dependent, so a builder handed to us earlier must be funded
+                // against the current context rather than a stale one.
+                let context = match Self::ledger_state_at(tip, cryptarchia).await {
+                    Ok(ledger) => ledger.tx_context(),
+                    Err(err) => {
+                        Self::send_err(resp_tx, err);
+                        return;
+                    }
+                };
+
+                let funded = match state.fund_tx::<MainnetGasConstants>(
                     tip,
                     &tx_builder,
                     change_pk,
                     funding_pks,
+                    &context,
+                    priority_fee,
                 ) {
                     Ok(funded) => funded,
                     Err(err) => {
@@ -520,6 +546,9 @@ where
                     }
                 };
 
+                let funded_notes: Vec<NoteId> = funded.consumed_or_locked_notes().collect();
+                state.reserve_pending_notes(funded_notes.iter().copied());
+
                 if resp_tx
                     .send(Ok(TipResponse {
                         tip,
@@ -527,6 +556,7 @@ where
                     }))
                     .is_err()
                 {
+                    state.release_pending_notes(funded_notes);
                     debug!(target: LOG_TARGET, "Failed to respond to FundTx");
                 }
             }
@@ -557,6 +587,7 @@ where
                 match response {
                     Ok(built_tx) => {
                         let voucher_nullifier = built_tx.voucher_nullifier;
+                        let funded_notes = built_tx.funded_notes;
                         if resp_tx
                             .send(Ok(TipResponse {
                                 tip,
@@ -565,6 +596,7 @@ where
                             .is_err()
                         {
                             state.release_claim_reservation(voucher_nullifier);
+                            state.release_pending_notes(funded_notes);
                             debug!(target: LOG_TARGET, "Failed to respond to BuildLeaderClaimTx");
                         }
                     }
@@ -596,6 +628,8 @@ where
                     }
                 };
 
+                let funded_notes: Vec<NoteId> = tx_builder.consumed_or_locked_notes().collect();
+
                 let resp = Self::sign_tx(tx_builder, tip, ledger, kms, state.wallet())
                     .await
                     .map(|signed_tx| TipResponse {
@@ -603,7 +637,14 @@ where
                         response: signed_tx,
                     });
 
-                if resp_tx.send(resp).is_err() {
+                let signing_failed = resp.is_err();
+                let response_delivered = resp_tx.send(resp).is_ok();
+
+                if signing_failed || !response_delivered {
+                    state.release_pending_notes(funded_notes);
+                }
+
+                if !response_delivered {
                     debug!(target: LOG_TARGET, "Failed to respond to SignTx");
                 }
             }
@@ -809,7 +850,8 @@ where
                 leader_claim_op.voucher_nullifier,
             ))?;
         let voucher_secret =
-            Self::derive_voucher_from_kms(kms, voucher_master_key_id.clone(), *voucher_index).await;
+            Self::derive_voucher_from_kms(kms, voucher_master_key_id.clone(), *voucher_index)
+                .await?;
 
         let voucher_cm = VoucherCm::from_secret(voucher_secret);
         let path = wallet
@@ -864,7 +906,7 @@ where
                     Self::sign_channel_deposit(tx_hash, deposit_op.inputs.clone(), kms, &tip_leader)
                         .await?
                 }
-                Op::ChannelWithdraw(_channel_withdraw_op) => {
+                Op::ChannelWithdraw(_) | Op::ChannelTransfer(_) => {
                     let proof = channel_multi_sig_proofs
                         .remove(&i)
                         .ok_or(WalletServiceError::ChannelMultiSigProofNotFound(i))?;
@@ -1045,16 +1087,22 @@ where
         state: &mut ServiceState<'_>,
         master_key_id: KeyId,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-        resp_tx: Sender<VoucherCm>,
+        resp_tx: Sender<Result<VoucherCm, WalletServiceError>>,
     ) {
-        let index = state.get_and_inc_next_new_voucher_index();
-        let secret = Self::derive_voucher_from_kms(kms, master_key_id.clone(), index).await;
+        let index = state.next_new_voucher_index();
+        let secret = match Self::derive_voucher_from_kms(kms, master_key_id.clone(), index).await {
+            Ok(secret) => secret,
+            Err(err) => {
+                Self::send_err(resp_tx, err);
+                return;
+            }
+        };
         let cm = VoucherCm::from_secret(secret);
         let nf = VoucherNullifier::from_secret(secret);
 
-        state.add_known_voucher(cm, nf, (master_key_id, index));
+        state.add_next_known_voucher(cm, nf, master_key_id);
 
-        if let Err(e) = resp_tx.send(cm) {
+        if let Err(e) = resp_tx.send(Ok(cm)) {
             debug!(target: LOG_TARGET, "Failed to send voucher secret: {e:?}");
         }
     }
@@ -1065,22 +1113,24 @@ where
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         key_id: KeyId,
         index: u64,
-    ) -> VoucherSecret {
+    ) -> Result<VoucherSecret, WalletServiceError> {
         let (output_tx, output_rx) = oneshot::channel();
-        let () = kms
-            .execute(
-                key_id,
-                KeyOperators::Zk(Box::new(UnsafeVoucherOperator::new(
-                    index.into(),
-                    output_tx,
-                ))),
-            )
+        kms.execute(
+            key_id,
+            KeyOperators::Zk(Box::new(UnsafeVoucherOperator::new(
+                index.into(),
+                output_tx,
+            ))),
+        )
+        .await
+        .map_err(|error| WalletServiceError::KmsApi(Box::new(error)))?;
+
+        Ok(output_rx
             .await
-            .expect("KMS API should be invoked");
-        output_rx
-            .await
-            .expect("KMS API should respond with voucher_cm")
-            .into()
+            .map_err(|_| {
+                WalletServiceError::KmsApi("KMS API did not respond with voucher_cm".into())
+            })?
+            .into())
     }
 
     async fn build_leader_claim_tx(
@@ -1100,9 +1150,10 @@ where
             state.release_claim_reservation(voucher_nullifier);
         }
 
-        result.map(|signed_tx| LeaderClaimTx {
+        result.map(|(signed_tx, funded_notes)| LeaderClaimTx {
             signed_tx,
             voucher_nullifier,
+            funded_notes,
         })
     }
 
@@ -1173,33 +1224,59 @@ where
         request: LeaderClaimTxRequest,
         voucher_nullifier: VoucherNullifier,
         ledger: LedgerState,
-        state: &ServiceState<'_>,
+        state: &mut ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-    ) -> Result<SignedMantleTx, WalletServiceError> {
-        let tx_builder =
-            MantleTxBuilder::new(ledger.tx_context()).push_op(Op::LeaderClaim(LeaderClaimOp {
-                rewards_root: request.rewards_root,
-                voucher_nullifier,
-                pk: request.funding_pk,
-            }))?;
+    ) -> Result<(SignedMantleTx, Vec<NoteId>), WalletServiceError> {
+        let context = ledger.tx_context();
+        let tx_builder = MantleTxBuilder::new().push_op(Op::LeaderClaim(LeaderClaimOp {
+            rewards_root: request.rewards_root,
+            voucher_nullifier,
+            pk: request.funding_pk,
+        }))?;
 
-        let funded_tx_builder = state.wallet().fund_tx::<MainnetGasConstants>(
+        let funded_tx_builder = state.fund_tx::<MainnetGasConstants>(
             request.tip,
             &tx_builder,
             request.funding_pk,
             [request.funding_pk],
+            &context,
+            0,
         )?;
 
-        let tx_fee = funded_tx_builder.gas_cost::<MainnetGasConstants>()?;
+        let funded_notes: Vec<NoteId> = funded_tx_builder.consumed_or_locked_notes().collect();
+        state.reserve_pending_notes(funded_notes.iter().copied());
+
+        match Self::sign_funded_leader_claim_tx(request, funded_tx_builder, ledger, state, kms)
+            .await
+        {
+            Ok(signed_tx) => Ok((signed_tx, funded_notes)),
+            Err(err) => {
+                state.release_pending_notes(funded_notes);
+                Err(err)
+            }
+        }
+    }
+
+    async fn sign_funded_leader_claim_tx(
+        request: LeaderClaimTxRequest,
+        funded_tx_builder: MantleTxBuilder,
+        ledger: LedgerState,
+        state: &ServiceState<'_>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<SignedMantleTx, WalletServiceError> {
+        let context = ledger.tx_context();
+        let net_balance = funded_tx_builder.net_balance();
+        let gas_cost = funded_tx_builder.gas_cost::<MainnetGasConstants>(&context)?;
         debug!(
             target: LOG_TARGET,
-            net_balance = funded_tx_builder.net_balance(),
-            gas_cost = ?tx_fee,
+            net_balance,
+            gas_cost = ?gas_cost,
             reward_amount = request.reward_amount,
             n_inputs = funded_tx_builder.ledger_inputs().len(),
             "leader claim tx builder state after funding"
         );
 
+        let tx_fee = funded_tx_builder.tx_fee()?;
         if tx_fee > request.max_tx_fee {
             return Err(WalletServiceError::TxFeeExceedsMaxFee {
                 max_fee: request.max_tx_fee,

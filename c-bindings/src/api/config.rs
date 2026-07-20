@@ -36,7 +36,7 @@ pub struct GenerateConfigArgs {
     pub state_path: *const c_char,
     pub storage_path: *const c_char,
     pub logs_path: *const c_char,
-    pub ibd: *const bool,
+    pub skip_ibd: *const bool,
     pub log_filter: *const c_char,
     pub kms_file: *const c_char,
 }
@@ -116,9 +116,9 @@ impl From<GenerateConfigArgs> for EmbeddedInitArgs {
             init_args.logs_path = Some(logs_path.to_string_lossy().to_string().into());
         }
 
-        // ---- ibd ----
-        if !value.ibd.is_null() {
-            init_args.ibd = unsafe { *value.ibd };
+        // ---- skip_ibd ----
+        if !value.skip_ibd.is_null() {
+            init_args.skip_ibd = unsafe { *value.skip_ibd };
         }
 
         // ---- log_filter ----

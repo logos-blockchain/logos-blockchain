@@ -242,5 +242,15 @@ pub async fn get_services_to_start(
     let blend_inner_service_ids = [RuntimeServiceId::BlendCore, RuntimeServiceId::BlendEdge];
     service_ids.retain(|value| !blend_inner_service_ids.contains(value));
 
+    // Start tracing first so the global subscriber is installed before the
+    // rest of the node services spawn their long-running tasks.
+    if let Some(index) = service_ids
+        .iter()
+        .position(|value| *value == RuntimeServiceId::Tracing)
+    {
+        let tracing = service_ids.remove(index);
+        service_ids.insert(0, tracing);
+    }
+
     Ok(service_ids)
 }

@@ -587,10 +587,10 @@ mod tests {
 
     use futures::StreamExt as _;
     use lb_core::{
-        codec::DeserializeOp as _,
+        block::BlockTransactions,
         crypto::ZkHasher,
         events::Events,
-        mantle::{Note, SignedMantleTx, ledger::Utxo, ops::leader_claim::VoucherCm},
+        mantle::{MantleTx, Note, SignedMantleTx, ledger::Utxo, ops::leader_claim::VoucherCm},
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };
     use lb_cryptarchia_engine::Config;
@@ -642,7 +642,7 @@ mod tests {
 
         let ids = env.create_storage_only_blocks(3).await;
         let stale_block = env
-            .build_block_with_parent(ids[0], Slot::from(2))
+            .build_block_with_parent(ids[0], Slot::from(3))
             .expect("stale block should be valid");
 
         let stale_block_id = stale_block.header().id();
@@ -830,7 +830,8 @@ mod tests {
             let mut prev_header = HeaderId::from([0u8; 32]);
 
             for i in 0..count {
-                let slot = Slot::from(slot_offset + i as u64);
+                // Genesis slot is not allowed for normal blocks
+                let slot = Slot::from(slot_offset + (i + 1) as u64);
                 let block = self
                     .build_block_with_parent(prev_header, slot)
                     .expect("Failed to build block with parent");
@@ -903,7 +904,7 @@ mod tests {
                 prev_header,
                 slot,
                 self.proof.clone(),
-                vec![],
+                BlockTransactions::empty(),
                 &dummy_signing_key,
             )
             .ok()
@@ -986,7 +987,7 @@ mod tests {
             if let Some(ProviderResponse::Available(mut stream)) = rx.recv().await {
                 while let Some(res) = &stream.next().await {
                     if let Ok(bytes) = &res {
-                        let block: Block<()> = Block::from_bytes(bytes).unwrap();
+                        let block: Block<MantleTx> = Block::try_from(bytes.clone()).unwrap();
                         blocks.push(block.header().id());
                     } else {
                         break;
@@ -1030,7 +1031,7 @@ mod tests {
                     }
                     ProviderResponse::Available(mut stream) => match stream.next().await {
                         Some(Ok(bytes)) => {
-                            let block: Block<()> = Block::from_bytes(&bytes).unwrap();
+                            let block: Block<MantleTx> = Block::try_from(bytes).unwrap();
                             (
                                 false,
                                 format!("Available(first_block={:?})", block.header().id()),

@@ -183,7 +183,7 @@ pub struct InitArgs {
 #[derive(Debug)]
 pub struct EmbeddedInitArgs {
     /// Trusted peers to bootstrap from (multiaddr format).
-    /// If `--ibd` is set, peers whose multiaddrs include a `PeerId`
+    /// If `--skip-ibd` is not set, peers whose multiaddrs include a `PeerId`
     /// are also used as IBD peers.
     pub initial_peers: Vec<Multiaddr>,
 
@@ -207,9 +207,9 @@ pub struct EmbeddedInitArgs {
     pub storage_path: Option<PathBuf>,
     pub logs_path: Option<PathBuf>,
 
-    /// Enable Initial Block Download (IBD) using peers
-    /// passed via `--initial-peers`/`-p`.
-    pub ibd: bool,
+    /// Disable Initial Block Download (IBD) by leaving the IBD peer list
+    /// empty, regardless of any peers passed via `--initial-peers`/`-p`.
+    pub skip_ibd: bool,
 
     /// Log filter directives to write into the generated config, e.g.
     /// `warn,logos_blockchain=debug,libp2p_gossipsub::behaviour=error`.
@@ -239,7 +239,7 @@ impl From<EmbeddedInitArgs> for InitArgs {
         init_args.blend.blend_addr =
             Some(BlendCoreConfig::default_listening_address(args.blend_port));
 
-        init_args.cryptarchia.ibd = args.ibd;
+        init_args.cryptarchia.skip_ibd = args.skip_ibd;
         init_args.api.addr = Some(args.http_addr);
         init_args.state.path.clone_from(&args.state_path);
         init_args.storage_path.clone_from(&args.storage_path);
@@ -263,7 +263,7 @@ impl Default for EmbeddedInitArgs {
             state_path: None,
             storage_path: None,
             logs_path: None,
-            ibd: false,
+            skip_ibd: false,
             log_filter: None,
             kms_file: None,
         }

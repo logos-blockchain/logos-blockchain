@@ -24,6 +24,10 @@ impl Gas {
     pub fn checked_add(self, rhs: Self) -> Result<Self, GasOverflow> {
         self.0.checked_add(rhs.0).ok_or(GasOverflow).map(Self)
     }
+
+    pub fn checked_mul(self, rhs: Value) -> Result<Self, GasOverflow> {
+        self.0.checked_mul(rhs).ok_or(GasOverflow).map(Self)
+    }
 }
 
 impl From<Value> for Gas {
@@ -165,6 +169,9 @@ pub trait GasConstants {
     /// Verify the withdrawal signature.
     const CHANNEL_WITHDRAW: Gas;
 
+    /// Verify the transfer signature.
+    const CHANNEL_TRANSFER: Gas;
+
     /// Verify the proof of ownership.
     const SDP_DECLARE: Gas;
 
@@ -186,6 +193,7 @@ impl GasConstants for MainnetGasConstants {
     const CHANNEL_CONFIG: Gas = Gas(56);
     const CHANNEL_DEPOSIT: Gas = Gas(590);
     const CHANNEL_WITHDRAW: Gas = Gas(56);
+    const CHANNEL_TRANSFER: Gas = Gas(56);
     const SDP_DECLARE: Gas = Gas(646);
     const SDP_WITHDRAW: Gas = Gas(590);
     const SDP_ACTIVE: Gas = Gas(590);

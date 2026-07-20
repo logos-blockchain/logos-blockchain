@@ -1,4 +1,8 @@
-use core::{num::NonZeroUsize, ops::RangeInclusive, time::Duration};
+use core::{
+    num::{NonZeroU64, NonZeroUsize},
+    ops::RangeInclusive,
+    time::Duration,
+};
 use std::{
     collections::{HashMap, VecDeque},
     iter::repeat_with,
@@ -87,6 +91,7 @@ pub struct BehaviourBuilder {
     provider: Option<IntervalProvider>,
     peering_degree: Option<RangeInclusive<usize>>,
     minimum_network_size: Option<NonZeroUsize>,
+    num_blend_layers: Option<NonZeroU64>,
 }
 
 impl BehaviourBuilder {
@@ -97,6 +102,7 @@ impl BehaviourBuilder {
             provider: None,
             peering_degree: None,
             minimum_network_size: None,
+            num_blend_layers: None,
         }
     }
 
@@ -124,6 +130,11 @@ impl BehaviourBuilder {
         self
     }
 
+    pub fn with_num_blend_layers(mut self, num_blend_layers: u64) -> Self {
+        self.num_blend_layers = Some(num_blend_layers.try_into().unwrap());
+        self
+    }
+
     pub fn build(self) -> Behaviour<IntervalProvider> {
         Behaviour {
             negotiated_peers: HashMap::new(),
@@ -144,6 +155,9 @@ impl BehaviourBuilder {
             minimum_network_size: self
                 .minimum_network_size
                 .unwrap_or_else(|| 1usize.try_into().unwrap()),
+            num_blend_layers: self
+                .num_blend_layers
+                .unwrap_or_else(|| 3.try_into().unwrap()),
             old_epoch: None,
             message_cache: MessageCache::new(),
         }

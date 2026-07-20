@@ -1,6 +1,8 @@
 pub const MANTLE_METRICS: &str = "/mantle/metrics";
 pub const MANTLE_STATUS: &str = "/mantle/status";
 pub const MANTLE_SDP_DECLARATIONS: &str = "/mantle/sdp/declarations";
+pub const MANTLE_SDP_SNAPSHOT: &str = "/mantle/sdp/snapshot";
+pub const MANTLE_GAS_PRICES: &str = "/mantle/gas-prices";
 pub const CRYPTARCHIA_INFO: &str = "/cryptarchia/info";
 pub const CRYPTARCHIA_HEADERS: &str = "/cryptarchia/headers";
 pub const CRYPTARCHIA_LIB_STREAM: &str = "/cryptarchia/lib-stream";
@@ -33,6 +35,7 @@ pub mod wallet {
     pub const TRANSACTIONS_TRANSFER_FUNDS: &str = "/wallet/transactions/transfer-funds";
     pub const SIGN_TX_ED25519: &str = "/wallet/sign/ed25519";
     pub const SIGN_TX_ZK: &str = "/wallet/sign/zk";
+    pub const FUND: &str = "/wallet/fund";
 }
 
 pub mod admin {

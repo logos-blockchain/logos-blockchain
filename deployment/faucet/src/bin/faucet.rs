@@ -1,12 +1,17 @@
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 
 use clap::Parser;
 use lb_groth16::fr_from_bytes;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_node::config::DeploymentSettings;
-use logos_blockchain_faucet::{faucet::Faucet, server::faucet_app};
+use logos_blockchain_faucet::{
+    faucet::{Faucet, run_worker},
+    server::{FaucetServerState, faucet_app},
+};
 use reqwest::Url;
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::mpsc};
+
+const DRIP_QUEUE_CAPACITY: usize = 1024;
 
 #[derive(Parser, Debug)]
 #[command(about = "Faucet")]
@@ -21,8 +26,11 @@ struct Args {
     /// Hex-encoded faucet public key.
     #[arg(long, conflicts_with = "deployment_file")]
     faucet_pk: Option<String>,
-    #[arg(short, long)]
+    #[arg(long)]
     drip_amount: u64,
+    /// Minimum number of seconds between drips for the same recipient key.
+    #[arg(long, default_value_t = 300)]
+    cooldown_secs: u64,
 }
 
 #[tokio::main]
@@ -52,7 +60,14 @@ async fn main() {
             .expect("faucet should be created"),
     );
 
-    let app = faucet_app(faucet);
+    let (queue, requests) = mpsc::channel(DRIP_QUEUE_CAPACITY);
+    tokio::spawn(run_worker(Arc::clone(&faucet), requests));
+
+    let state = Arc::new(FaucetServerState::new(
+        queue,
+        Duration::from_secs(args.cooldown_secs),
+    ));
+    let app = faucet_app(state);
 
     println!("Faucet server running on http://0.0.0.0:{}", args.port);
     let listener = TcpListener::bind(&format!("0.0.0.0:{}", args.port))

@@ -7,14 +7,15 @@ mod tests {
     };
 
     use lb_core::mantle::{
-        MantleTx, Note, Op, SignedMantleTx, Transaction as _, Utxo, Value,
-        encoding::{Ops, encode_mantle_tx, encode_signed_mantle_tx},
-        ledger::{Inputs, Outputs},
+        MantleTx, Note, NoteId, Op, SignedMantleTx, Transaction as _, Utxo, Value,
+        ledger::Inputs,
+        nom::NomEncode as _,
         ops::channel::{
             ChannelId, MsgId,
             inscribe::{Inscription, InscriptionOp},
             withdraw::ChannelWithdrawOp,
         },
+        transactions::{Ops, codec::encode_signed_mantle_tx},
     };
     use lb_groth16::{Fr, fr_to_bytes};
     use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key, ZkKey};
@@ -22,8 +23,9 @@ mod tests {
     use crate::{
         cli::{WithdrawCombineArgs, WithdrawSignArgs},
         run_commands::{
-            ZONE_FILE_TRANSFER_VERSION, ZONE_WITHDRAW_INTENT, ZONE_WITHDRAW_SIGNATURE,
-            run_withdraw::{ZONE_WALLET_FUNDS_EXPORT, run_withdraw_combine, run_withdraw_sign},
+            ZONE_FILE_TRANSFER_VERSION, ZONE_WALLET_FUNDS_EXPORT, ZONE_WITHDRAW_INTENT,
+            ZONE_WITHDRAW_SIGNATURE,
+            run_withdraw::{run_withdraw_combine, run_withdraw_sign},
             types::{
                 AuthorizedSigner, ExportedUtxo, SignedWithdrawFile, WalletFundsExport,
                 WithdrawFileEntry, WithdrawIntent, WithdrawSignatureFile,
@@ -112,7 +114,7 @@ mod tests {
     #[test]
     fn mantle_tx_decoders_reject_trailing_bytes_and_hash_mismatches() {
         let tx = empty_mantle_tx();
-        let encoded = hex::encode(encode_mantle_tx(&tx));
+        let encoded = hex::encode(tx.encode());
         assert_eq!(decode_mantle_tx_hex(&encoded).unwrap(), tx);
         assert!(decode_mantle_tx_hex(&format!("{encoded}00")).is_err());
 
@@ -223,8 +225,7 @@ mod tests {
         let recipient = test_zk_key().to_public_key();
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new([Note::new(500, recipient)]),
-            withdraw_nonce: 0,
+            inputs: Inputs::new([NoteId::from(Fr::from(500u64))]),
         };
         let inscribe = InscriptionOp {
             channel_id,
@@ -248,7 +249,7 @@ mod tests {
             tx_hash: hex::encode(tx_hash.as_ref()),
             msg_id: hex::encode(msg_id.as_ref()),
             required_threshold: 1,
-            mantle_tx: hex::encode(encode_mantle_tx(&tx)),
+            mantle_tx: hex::encode(tx.encode()),
             inscription_signature: encode_hex_bincode(
                 &inscriber.sign_payload(tx_hash.as_signing_bytes().as_ref()),
             )
@@ -304,8 +305,7 @@ mod tests {
         let tx = MantleTx(
             Ops::try_from(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id: ChannelId::from([9; 32]),
-                outputs: Outputs::new([Note::new(1, test_zk_key().to_public_key())]),
-                withdraw_nonce: 0,
+                inputs: Inputs::new([NoteId::from(Fr::from(1u64))]),
             })])
             .unwrap(),
         );
@@ -316,7 +316,7 @@ mod tests {
             tx_hash: hex::encode(tx.hash().as_ref()),
             msg_id: hex::encode(MsgId::root().as_ref()),
             required_threshold: 1,
-            mantle_tx: hex::encode(encode_mantle_tx(&tx)),
+            mantle_tx: hex::encode(tx.encode()),
             inscription_signature: encode_hex_bincode(
                 &test_signing_key(4).sign_payload(tx.hash().as_signing_bytes().as_ref()),
             )
@@ -351,8 +351,7 @@ mod tests {
         let tx = MantleTx(
             Ops::try_from(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id,
-                outputs: Outputs::new([Note::new(1, test_zk_key().to_public_key())]),
-                withdraw_nonce: 0,
+                inputs: Inputs::new([NoteId::from(Fr::from(1u64))]),
             })])
             .unwrap(),
         );
@@ -364,7 +363,7 @@ mod tests {
             tx_hash: hex::encode(tx_hash.as_ref()),
             msg_id: hex::encode(MsgId::root().as_ref()),
             required_threshold: 2,
-            mantle_tx: hex::encode(encode_mantle_tx(&tx)),
+            mantle_tx: hex::encode(tx.encode()),
             inscription_signature: encode_hex_bincode(
                 &signer.sign_payload(tx_hash.as_signing_bytes().as_ref()),
             )
@@ -426,8 +425,7 @@ mod tests {
         let tx = MantleTx(
             Ops::try_from(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id,
-                outputs: Outputs::new([Note::new(1, test_zk_key().to_public_key())]),
-                withdraw_nonce: 0,
+                inputs: Inputs::new([NoteId::from(Fr::from(1u64))]),
             })])
             .unwrap(),
         );
@@ -439,7 +437,7 @@ mod tests {
             tx_hash: hex::encode(tx_hash.as_ref()),
             msg_id: hex::encode(MsgId::root().as_ref()),
             required_threshold: 1,
-            mantle_tx: hex::encode(encode_mantle_tx(&tx)),
+            mantle_tx: hex::encode(tx.encode()),
             inscription_signature: encode_hex_bincode(
                 &signer.sign_payload(tx_hash.as_signing_bytes().as_ref()),
             )
