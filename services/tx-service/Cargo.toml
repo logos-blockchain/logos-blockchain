@@ -29,7 +29,7 @@ lb-network-service = { workspace = true }
 lb-services-utils  = { workspace = true }
 lb-storage-service = { workspace = true }
 lb-tracing         = { workspace = true }
-lb-utils           = { workspace = true }
+lb-utils           = { features = ["tokio"], workspace = true }
 overwatch          = { workspace = true }
 rand               = { workspace = true }
 serde              = { workspace = true }
@@ -51,4 +51,5 @@ default         = []
 rocksdb-backend = ["lb-storage-service/rocksdb-backend"]
 
 # enable to help generate OpenAPI
-openapi = ["dep:serde_json", "dep:utoipa"]
+openapi          = ["dep:serde_json", "dep:utoipa"]
+tokio-task-names = ["lb-utils/tokio-task-names"]

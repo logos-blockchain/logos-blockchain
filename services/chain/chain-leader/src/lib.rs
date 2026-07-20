@@ -36,6 +36,7 @@ use lb_tx_service::{
     network::NetworkAdapter as MempoolNetworkAdapter,
     storage::MempoolStorageAdapter,
 };
+use lb_utils::tokio::task::spawn;
 use lb_wallet_service::api::{WalletApi, WalletApiError};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -722,14 +723,17 @@ where
                 // channel providing backpressure.
                 let (epoch_handoff_sender, epoch_handoff_receiver) =
                     mpsc::channel(WINNING_POL_EPOCH_HANDOFF_BUFFER_SIZE);
-                tokio::spawn(search_for_winning_slots(
-                    (*cryptarchia).clone(),
-                    (*wallet).clone(),
-                    (*kms).clone(),
-                    (*time_relay).clone(),
-                    (*ledger_config).clone(),
-                    epoch_handoff_sender,
-                ));
+                spawn(
+                    "logos/chain/winning-slot-scanner",
+                    search_for_winning_slots(
+                        (*cryptarchia).clone(),
+                        (*wallet).clone(),
+                        (*kms).clone(),
+                        (*time_relay).clone(),
+                        (*ledger_config).clone(),
+                        epoch_handoff_sender,
+                    ),
+                );
                 let stream: WinningPolEpochSlotsStream =
                     Box::pin(ReceiverStream::new(epoch_handoff_receiver));
                 if sender.send(stream).is_err() {

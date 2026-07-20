@@ -30,7 +30,7 @@ use lb_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
 };
-use lb_utils::bounded::BoundedError;
+use lb_utils::{bounded::BoundedError, tokio::task::spawn};
 use network::NetworkAdapter;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -451,7 +451,7 @@ where
                         let adapter = tip_poll_adapter.clone();
                         let cryptarchia = relays.cryptarchia().clone();
                         let tx = polled_tip_tx.clone();
-                        tip_poll_task = Some(tokio::spawn(async move {
+                        tip_poll_task = Some(spawn("logos/chain/tip-poll", async move {
                             if let Some(polled) = poll_peer_tips_if_behind(
                                 &adapter,
                                 &cryptarchia,

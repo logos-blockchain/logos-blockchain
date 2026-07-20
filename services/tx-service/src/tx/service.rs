@@ -27,6 +27,7 @@ use lb_services_utils::{
     wait_until_services_are_ready,
 };
 use lb_storage_service::StorageService;
+use lb_utils::tokio::task::spawn;
 use overwatch::{
     OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
@@ -396,7 +397,7 @@ where
             Err(MempoolError::ExistingItem) => {
                 // Tx already in pool, but since this came from a local submission
                 // (not gossip), re-gossip it so leader nodes can pick it up.
-                tokio::spawn(async move {
+                spawn("logos/mempool/transaction-regossip", async move {
                     let adapter = NetworkAdapter::new(settings, network_relay).await;
                     adapter.send(item_for_broadcast).await;
                 });
@@ -497,7 +498,7 @@ where
     ) {
         state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
 
-        tokio::spawn(async move {
+        spawn("logos/mempool/transaction-broadcast", async move {
             let adapter = NetworkAdapter::new(settings, network_relay).await;
             adapter.send(item_for_broadcast).await;
         });

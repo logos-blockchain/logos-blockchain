@@ -28,6 +28,7 @@ use lb_libp2p::{
     },
 };
 use lb_log_targets::network_service;
+use lb_utils::tokio::task::spawn;
 use rand::RngCore;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::StreamExt as _;
@@ -346,7 +347,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         tracing::debug!(target: LOG_TARGET, "Retry dialing in {wait:?}: {dial:?}");
 
         let commands_tx = self.commands_tx.clone();
-        tokio::spawn(async move {
+        spawn("logos/network/dial-retry", async move {
             tokio::time::sleep(wait).await;
             Self::schedule_connect(dial, commands_tx).await;
         });

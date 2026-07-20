@@ -10,6 +10,7 @@ use lb_blend::message::encap::validated::{
 };
 use lb_chain_service::Epoch;
 use lb_log_targets::blend;
+use lb_utils::tokio::task::spawn_on;
 use libp2p::PeerId;
 use overwatch::overwatch::handle::OverwatchHandle;
 use rand::RngCore;
@@ -80,9 +81,11 @@ where
         });
 
         let (swarm_task_abort_handle, swarm_task_abort_registration) = AbortHandle::new_pair();
-        overwatch_handle
-            .runtime()
-            .spawn(Abortable::new(swarm.run(), swarm_task_abort_registration));
+        spawn_on(
+            overwatch_handle.runtime(),
+            "logos/blend/libp2p-swarm",
+            Abortable::new(swarm.run(), swarm_task_abort_registration),
+        );
 
         Self {
             swarm_task_abort_handle,

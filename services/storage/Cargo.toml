@@ -20,6 +20,7 @@ lb-core               = { workspace = true }
 lb-cryptarchia-engine = { workspace = true }
 lb-log-targets        = { workspace = true }
 lb-tracing            = { workspace = true }
+lb-utils              = { features = ["tokio"], workspace = true }
 overwatch             = { workspace = true }
 rocksdb               = { features = ["bindgen-runtime"], optional = true, workspace = true }
 serde                 = { workspace = true }
@@ -31,8 +32,9 @@ tracing               = { workspace = true }
 tempfile = { workspace = true }
 
 [features]
-default         = []
-rocksdb-backend = ["dep:rocksdb"]
+default          = []
+rocksdb-backend  = ["dep:rocksdb"]
+tokio-task-names = ["lb-utils/tokio-task-names"]
 
 [[bin]]
 name              = "logos-blockchain-rocksdb"

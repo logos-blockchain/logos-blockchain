@@ -20,6 +20,7 @@ lb-blend-proofs     = { workspace = true }
 lb-blend-scheduling = { workspace = true }
 
 [features]
+tokio-task-names = ["lb-blend-scheduling/tokio-task-names"]
 unsafe-test-functions = [
   "lb-blend-message/unsafe-test-functions",
   "lb-blend-network/unsafe-test-functions",

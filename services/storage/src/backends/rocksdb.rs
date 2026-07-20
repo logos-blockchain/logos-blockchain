@@ -2,6 +2,7 @@ use std::{num::NonZeroUsize, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use lb_utils::tokio::task::spawn_blocking;
 use rocksdb::{DB, Direction, Error, IteratorMode, Options};
 use serde::{Deserialize, Serialize};
 
@@ -122,7 +123,7 @@ impl StorageBackend for RocksBackend {
 
         // Use spawn_blocking to avoid blocking the async runtime during the bulk
         // operation
-        tokio::task::spawn_blocking(move || {
+        spawn_blocking("logos/storage/rocksdb-bulk-store-blocking", move || {
             let mut batch = rocksdb::WriteBatch::default();
             let mut has_items = false;
 

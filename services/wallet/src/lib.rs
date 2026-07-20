@@ -48,6 +48,7 @@ use lb_services_utils::{
     wait_until_services_are_ready,
 };
 use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
+use lb_utils::tokio::task::spawn_blocking;
 use lb_wallet::{WalletBalance, WalletBlock, WalletError};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -861,7 +862,7 @@ where
         let rewards_root = leader_claim_op.rewards_root;
 
         // TODO: This should happen in KMS
-        let poc = tokio::task::spawn_blocking(move || {
+        let poc = spawn_blocking("logos/wallet/leader-claim-proof-blocking", move || {
             Self::generate_poc(voucher_secret, &path, rewards_root, tx_hash)
         })
         .await??;
