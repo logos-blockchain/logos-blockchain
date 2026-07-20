@@ -763,7 +763,7 @@ mod tests {
                 withdraw::ChannelWithdrawOp,
             },
         },
-        transactions::Ops,
+        transactions::{Ops, tx::OpsProofs},
     };
     use lb_groth16::Fr;
     use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
@@ -778,7 +778,7 @@ mod tests {
         let mantle_tx = MantleTx(Ops::try_from(ops).unwrap());
         SignedMantleTx::new_unverified(
             mantle_tx,
-            vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n],
+            OpsProofs::new_unchecked(vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n]),
         )
     }
 
@@ -1152,7 +1152,7 @@ mod tests {
         );
         SignedMantleTx::new_unverified(
             mantle_tx,
-            vec![OpProof::Ed25519Sig(Ed25519Signature::zero())],
+            [OpProof::Ed25519Sig(Ed25519Signature::zero())].into(),
         )
     }
 

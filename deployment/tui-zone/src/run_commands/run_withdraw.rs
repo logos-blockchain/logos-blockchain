@@ -203,7 +203,8 @@ pub(crate) fn run_withdraw_combine(args: WithdrawCombineArgs) -> RunResult<()> {
             Op::ChannelInscribe(_) => Ok(OpProof::Ed25519Sig(inscription_signature)),
             other => Err(format!("unexpected op in withdraw intent: {other:?}").into()),
         })
-        .collect::<RunResult<Vec<_>>>()?;
+        .collect::<RunResult<Vec<_>>>()?
+        .try_into()?;
     let signed_tx = SignedMantleTx::new(tx, op_proofs)?;
     let signed = SignedWithdrawFile {
         version: ZONE_FILE_TRANSFER_VERSION,

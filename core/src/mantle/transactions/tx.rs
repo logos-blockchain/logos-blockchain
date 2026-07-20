@@ -8,6 +8,7 @@ use bytes::Bytes;
 use lb_core_macros::NomCodec;
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
+use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
@@ -23,7 +24,7 @@ use crate::{
             transfer::TransferOp,
         },
         transactions::{
-            Ops,
+            MAX_OPS_PER_TX, Ops,
             codec::{
                 decode_signed_mantle_tx, encode_signed_mantle_tx, predict_signed_mantle_tx_size,
             },
@@ -333,6 +334,8 @@ impl From<SignedMantleTx> for MantleTx {
     }
 }
 
+pub type OpsProofs = UpperBoundedVec<OpProof, MAX_OPS_PER_TX>;
+
 // Deserializing here is dangerous, as it bypasses the verification without
 // confirmation.
 // TODO: Split entity into a system that allows for verification in different
@@ -341,7 +344,7 @@ impl From<SignedMantleTx> for MantleTx {
 pub struct SignedMantleTx {
     pub mantle_tx: MantleTx,
     // TODO: make this more efficient
-    pub ops_proofs: Vec<OpProof>,
+    pub ops_proofs: OpsProofs,
 }
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
@@ -413,7 +416,7 @@ impl SignedMantleTx {
     /// This enforces at construction time that:
     /// - `ChannelInscribe` operations have a valid Ed25519 signature from the
     ///   declared signer
-    pub fn new(mantle_tx: MantleTx, ops_proofs: Vec<OpProof>) -> Result<Self, VerificationError> {
+    pub fn new(mantle_tx: MantleTx, ops_proofs: OpsProofs) -> Result<Self, VerificationError> {
         let tx = Self {
             mantle_tx,
             ops_proofs,
@@ -426,7 +429,7 @@ impl SignedMantleTx {
     /// This should only be used for `GenesisTx` or in tests.
     #[doc(hidden)]
     #[must_use]
-    pub const fn new_unverified(mantle_tx: MantleTx, ops_proofs: Vec<OpProof>) -> Self {
+    pub const fn new_unverified(mantle_tx: MantleTx, ops_proofs: OpsProofs) -> Self {
         Self {
             mantle_tx,
             ops_proofs,
@@ -739,7 +742,7 @@ impl<'de> Deserialize<'de> for SignedMantleTx {
             #[derive(Deserialize)]
             struct SignedMantleTxHelper {
                 mantle_tx: MantleTx,
-                ops_proofs: Vec<OpProof>,
+                ops_proofs: OpsProofs,
             }
 
             let helper = SignedMantleTxHelper::deserialize(deserializer)?;
@@ -856,7 +859,7 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let proof = create_channel_multi_sig_proof(&tx_hash, signing_keys);
 
-        SignedMantleTx::new(mantle_tx, vec![OpProof::ChannelMultiSigProof(proof)]).unwrap()
+        SignedMantleTx::new(mantle_tx, [OpProof::ChannelMultiSigProof(proof)].into()).unwrap()
     }
 
     fn create_config_op(channel: ChannelId, signing_key: &Ed25519Key) -> ChannelConfigOp {
@@ -950,11 +953,12 @@ mod tests {
 
         let signed_tx = SignedMantleTx::new(
             mantle_tx,
-            vec![
+            [
                 OpProof::ChannelMultiSigProof(config_proof),
                 OpProof::ZkSig(deposit_proof),
                 OpProof::ChannelMultiSigProof(withdraw_proof),
-            ],
+            ]
+            .into(),
         )
         .unwrap();
 
@@ -983,7 +987,7 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
-        let result = SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(signature)]);
+        let result = SignedMantleTx::new(mantle_tx, [OpProof::Ed25519Sig(signature)].into());
 
         assert!(result.is_ok());
     }
@@ -993,7 +997,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let inscribe_op = create_test_inscribe_op(&signing_key);
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
-        let result = SignedMantleTx::new(mantle_tx, vec![]);
+        let result = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
 
         assert!(matches!(
             result,
@@ -1015,7 +1019,7 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let signature = wrong_signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
-        let result = SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(signature)]);
+        let result = SignedMantleTx::new(mantle_tx, [OpProof::Ed25519Sig(signature)].into());
 
         assert!(matches!(
             result,
@@ -1032,7 +1036,7 @@ mod tests {
         // Use wrong proof type
         let tx_hash = mantle_tx.hash();
         let zk_sig = OpProof::ZkSig(ZkKey::multi_sign(&[], &tx_hash.to_fr()).unwrap());
-        let result = SignedMantleTx::new(mantle_tx, vec![zk_sig]);
+        let result = SignedMantleTx::new(mantle_tx, [zk_sig].into());
 
         assert!(matches!(
             result,
@@ -1062,7 +1066,7 @@ mod tests {
 
         let result = SignedMantleTx::new(
             mantle_tx,
-            vec![OpProof::Ed25519Sig(sig1), OpProof::Ed25519Sig(sig2)],
+            [OpProof::Ed25519Sig(sig1), OpProof::Ed25519Sig(sig2)].into(),
         );
 
         assert!(result.is_ok());
@@ -1088,7 +1092,7 @@ mod tests {
 
         let result = SignedMantleTx::new(
             mantle_tx,
-            vec![OpProof::Ed25519Sig(sig1), OpProof::Ed25519Sig(sig2)],
+            [OpProof::Ed25519Sig(sig1), OpProof::Ed25519Sig(sig2)].into(),
         );
 
         assert!(matches!(
@@ -1107,7 +1111,7 @@ mod tests {
         let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
         let signed_tx =
-            SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(signature)]).unwrap();
+            SignedMantleTx::new(mantle_tx, [OpProof::Ed25519Sig(signature)].into()).unwrap();
 
         // Serialize and deserialize
         let serialized = serde_json::to_string(&signed_tx).unwrap();
@@ -1125,7 +1129,7 @@ mod tests {
 
         let helper = SignedMantleTx {
             mantle_tx,
-            ops_proofs: vec![],
+            ops_proofs: OpsProofs::empty(),
         };
 
         let serialized = serde_json::to_string(&helper).unwrap();
@@ -1151,7 +1155,7 @@ mod tests {
 
         let helper = SignedMantleTx {
             mantle_tx,
-            ops_proofs: vec![OpProof::Ed25519Sig(wrong_signature)],
+            ops_proofs: [OpProof::Ed25519Sig(wrong_signature)].into(),
         };
 
         let serialized = serde_json::to_string(&helper).unwrap();
@@ -1171,7 +1175,7 @@ mod tests {
         let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
         // Test too few proofs
-        let result = SignedMantleTx::new(mantle_tx.clone(), vec![]);
+        let result = SignedMantleTx::new(mantle_tx.clone(), OpsProofs::empty());
         assert!(matches!(
             result,
             Err(VerificationError::ProofCountMismatch {
@@ -1183,10 +1187,11 @@ mod tests {
         // Test too many proofs
         let result = SignedMantleTx::new(
             mantle_tx,
-            vec![
+            [
                 OpProof::Ed25519Sig(signature),
                 OpProof::Ed25519Sig(signature),
-            ],
+            ]
+            .into(),
         );
         assert!(matches!(
             result,

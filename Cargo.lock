@@ -5307,6 +5307,7 @@ dependencies = [
  "logos-blockchain-mmr",
  "logos-blockchain-services-utils",
  "logos-blockchain-storage-service",
+ "logos-blockchain-utils",
  "logos-blockchain-wallet",
  "overwatch",
  "serde",

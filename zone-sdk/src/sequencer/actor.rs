@@ -613,7 +613,7 @@ mod tests {
                     withdraw::ChannelWithdrawOp,
                 },
             },
-            transactions::Ops,
+            transactions::{Ops, tx::OpsProofs},
         },
         proofs::leader_proof::Groth16LeaderProof,
     };
@@ -643,7 +643,7 @@ mod tests {
         let mantle_tx = MantleTx(Ops::try_from(ops).unwrap());
         SignedMantleTx::new_unverified(
             mantle_tx,
-            vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n],
+            OpsProofs::new_unchecked(vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n]),
         )
     }
 
@@ -699,13 +699,14 @@ mod tests {
         // Sign the `MantleTx`
         let signed_tx = SignedMantleTx::new(
             tx.clone(),
-            vec![
+            [
                 OpProof::ZkSig(
                     ZkKey::multi_sign(std::slice::from_ref(&sk), &tx.clone().hash().to_fr())
                         .unwrap(),
                 ),
                 OpProof::Ed25519Sig(inscription_sig),
-            ],
+            ]
+            .into(),
         )
         .unwrap();
 
@@ -1002,7 +1003,7 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let signed_tx = SignedMantleTx {
             mantle_tx,
-            ops_proofs: Vec::new(),
+            ops_proofs: OpsProofs::empty(),
         };
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
@@ -1037,7 +1038,7 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let signed_tx = SignedMantleTx {
             mantle_tx,
-            ops_proofs: Vec::new(),
+            ops_proofs: OpsProofs::empty(),
         };
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
@@ -1065,7 +1066,7 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let signed_tx = SignedMantleTx {
             mantle_tx,
-            ops_proofs: Vec::new(),
+            ops_proofs: OpsProofs::empty(),
         };
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());

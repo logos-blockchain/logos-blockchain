@@ -269,6 +269,7 @@ mod tests {
         MantleTx, Note,
         ledger::Inputs,
         ops::channel::{ChannelId, deposit::DepositOp},
+        transactions::tx::OpsProofs,
     };
 
     use super::*;
@@ -328,7 +329,7 @@ mod tests {
                 })]
                 .into(),
             ),
-            Vec::new(),
+            OpsProofs::empty(),
         );
 
         let update = chain_state.apply_transaction(&tx);

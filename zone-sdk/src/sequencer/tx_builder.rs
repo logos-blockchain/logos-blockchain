@@ -10,7 +10,7 @@ use lb_core::{
                 inscribe::{Inscription, InscriptionOp},
             },
         },
-        transactions::{MantleTxBuilder, Ops, TxHash},
+        transactions::{MantleTxBuilder, Ops, TxHash, tx::OpsProofs},
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
@@ -74,9 +74,9 @@ where
 /// op; a fee-less transaction carries none).
 pub(super) fn attach_transfer_proof(
     tx: &MantleTx,
-    mut channel_proofs: Vec<OpProof>,
+    mut channel_proofs: OpsProofs,
     transfer_proof: Option<OpProof>,
-) -> Result<Vec<OpProof>, Error> {
+) -> Result<OpsProofs, Error> {
     let transfer_count = tx
         .ops()
         .iter()
@@ -84,7 +84,9 @@ pub(super) fn attach_transfer_proof(
         .count();
     match (transfer_count, transfer_proof) {
         (0, _) => {}
-        (1, Some(proof)) => channel_proofs.push(proof),
+        (1, Some(proof)) => channel_proofs
+            .try_push(proof)
+            .map_err(|e| Error::Network(format!("too many operation proofs: {e:?}")))?,
         (1, None) => {
             return Err(Error::Network(
                 "funded transaction carries a fee transfer but no transfer proof".into(),
@@ -114,19 +116,25 @@ pub(super) fn build_atomic_withdraw_ops_proofs(
     own_key_index: ChannelKeyIndex,
     own_sig: Ed25519Signature,
     transfer_proof: Option<&OpProof>,
-) -> Result<Vec<OpProof>, Error> {
+) -> Result<OpsProofs, Error> {
     let withdraw_proof =
         ChannelMultiSigProof::try_new([IndexedSignature::new(own_key_index, own_sig)].into())
             .map_err(|e| Error::Network(format!("multi-sig proof assembly failed: {e:?}")))?;
-    let mut ops_proofs = Vec::with_capacity(tx.ops().len());
+    let mut ops_proofs = OpsProofs::empty();
     for op in tx.ops() {
         match op {
             Op::ChannelWithdraw(_) => {
-                ops_proofs.push(OpProof::ChannelMultiSigProof(withdraw_proof.clone()));
+                ops_proofs
+                    .try_push(OpProof::ChannelMultiSigProof(withdraw_proof.clone()))
+                    .map_err(|e| Error::Network(format!("too many operation proofs: {e:?}")))?;
             }
-            Op::ChannelInscribe(_) => ops_proofs.push(OpProof::Ed25519Sig(own_sig)),
+            Op::ChannelInscribe(_) => ops_proofs
+                .try_push(OpProof::Ed25519Sig(own_sig))
+                .map_err(|e| Error::Network(format!("too many operation proofs: {e:?}")))?,
             Op::Transfer(_) => match transfer_proof {
-                Some(proof) => ops_proofs.push(proof.clone()),
+                Some(proof) => ops_proofs
+                    .try_push(proof.clone())
+                    .map_err(|e| Error::Network(format!("too many operation proofs: {e:?}")))?,
                 None => {
                     return Err(Error::Network(
                         "funded transaction carries a fee transfer but no transfer proof".into(),
@@ -192,7 +200,7 @@ where
     let signature = sign_tx(tx_hash, signing_key);
     let ops_proofs = attach_transfer_proof(
         &inscribe_tx,
-        vec![OpProof::Ed25519Sig(signature)],
+        [OpProof::Ed25519Sig(signature)].into(),
         transfer_proof,
     )?;
 
@@ -250,7 +258,7 @@ where
     let proof = ChannelMultiSigProof::try_new(signatures).unwrap();
     let ops_proofs = attach_transfer_proof(
         &config_tx,
-        vec![OpProof::ChannelMultiSigProof(proof)],
+        [OpProof::ChannelMultiSigProof(proof)].into(),
         transfer_proof,
     )?;
 

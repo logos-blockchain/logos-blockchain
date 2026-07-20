@@ -1339,7 +1339,7 @@ pub(crate) fn channel_deposit_sync(
             })?;
         let signed_tx = SignedMantleTx::new(
             tx,
-            vec![OpProof::ZkSig(user_sig.clone()), OpProof::ZkSig(user_sig)],
+            [OpProof::ZkSig(user_sig.clone()), OpProof::ZkSig(user_sig)].into(),
         )
         .map_err(|error| {
             OperationStatus::error(

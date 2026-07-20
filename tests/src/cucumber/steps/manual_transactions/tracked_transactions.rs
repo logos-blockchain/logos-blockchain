@@ -211,7 +211,7 @@ pub fn create_invalid_transaction() -> SignedMantleTx {
         .expect("invalid transfer proof should still be constructible");
 
     SignedMantleTx {
-        ops_proofs: vec![OpProof::ZkSig(transfer_proof)],
+        ops_proofs: [OpProof::ZkSig(transfer_proof)].into(),
         mantle_tx,
     }
 }

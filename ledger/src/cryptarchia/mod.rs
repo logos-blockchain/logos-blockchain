@@ -1597,7 +1597,7 @@ pub mod tests {
         let transfer_sig = ZkKey::multi_sign(&sks, &mantle_tx.hash().to_fr()).unwrap();
         (
             SignedMantleTx {
-                ops_proofs: vec![ZkSig(transfer_sig.clone())],
+                ops_proofs: [ZkSig(transfer_sig.clone())].into(),
                 mantle_tx,
             },
             transfer_op,
