@@ -168,7 +168,7 @@ impl LedgerState {
         Ok((self, events))
     }
 
-    pub fn try_apply_channel_set_keys(
+    pub fn try_apply_channel_config(
         mut self,
         config_op: &ChannelConfigOp,
         block_slot: Slot,

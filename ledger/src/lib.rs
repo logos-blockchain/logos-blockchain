@@ -551,7 +551,7 @@ impl LedgerState {
             Op::ChannelConfig(op) => {
                 let (result, events) = self
                     .mantle_ledger
-                    .try_apply_channel_set_keys(op, self.cryptarchia_ledger.slot)?;
+                    .try_apply_channel_config(op, self.cryptarchia_ledger.slot)?;
                 self.mantle_ledger = result;
                 tx_events.extend(events);
             }
