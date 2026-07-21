@@ -616,14 +616,13 @@ mod tests {
 
     use super::{
         super::{
-            test_support::{
-                MockNode, StreamEnd, StreamScript, api_block, live_event, scripts,
-                unverified_tx_with_ops,
-            },
             types::{FinalizedOp, SequencerConfig},
             zone_sequencer::track_pending_tx,
         },
         *,
+    };
+    use crate::test_support::{
+        MockNode, StreamEnd, StreamScript, api_block, live_event, scripts, unverified_tx_with_ops,
     };
 
     #[must_use]

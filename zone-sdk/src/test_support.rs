@@ -1,5 +1,4 @@
-//! Configurable [`adapter::Node`] mock and block/tx builders shared by the
-//! sequencer unit tests.
+//! Configurable [`adapter::Node`] mock and shared builders for unit tests.
 
 use std::{
     collections::VecDeque,
@@ -43,14 +42,14 @@ use crate::{
 
 /// One scripted `block_stream` connection: serve `events`, then `then`.
 #[derive(Clone)]
-pub(super) struct StreamScript {
+pub struct StreamScript {
     pub events: Vec<ProcessedBlockEvent>,
     pub then: StreamEnd,
 }
 
 /// How a scripted stream behaves after its events.
 #[derive(Clone, Copy)]
-pub(super) enum StreamEnd {
+pub enum StreamEnd {
     /// Stay open without further events.
     Hang,
     /// End the stream — a dropped connection.
@@ -58,26 +57,31 @@ pub(super) enum StreamEnd {
 }
 
 /// Wrap stream scripts for [`MockNode::scripts`].
-pub(super) fn scripts(scripts: Vec<StreamScript>) -> Arc<Mutex<VecDeque<StreamScript>>> {
+pub fn scripts(scripts: Vec<StreamScript>) -> Arc<Mutex<VecDeque<StreamScript>>> {
     Arc::new(Mutex::new(scripts.into()))
 }
 
 /// Configurable mock node. Construct with struct-update syntax over
 /// [`MockNode::default`], overriding only what the scenario needs.
 #[derive(Clone)]
-pub(super) struct MockNode {
+pub struct MockNode {
     /// Served by `channel_state()`.
     pub channel_state: Option<ChannelState>,
     /// LIB and tip ids reported by `consensus_info()`.
     pub lib: HeaderId,
     pub tip: HeaderId,
-    /// Successive `block_stream` connections consume these; the last script
-    /// is reused once the queue would run dry.
+    /// LIB slot (and current slot) reported by `consensus_info()`.
+    pub lib_slot: Slot,
+    /// Successive `block_stream()` connections consume these; the last
+    /// script is reused once the queue would run dry.
     pub scripts: Arc<Mutex<VecDeque<StreamScript>>>,
     /// Served by `block()`, keyed by header id; unknown ids yield `None`.
     pub blocks: Vec<ApiBlock>,
     /// Served by `immutable_blocks()`, filtered by the queried slot range.
     pub immutable: Vec<ApiBlock>,
+    /// Served by `zone_messages_in_blocks()`, filtered by the queried slot
+    /// range.
+    pub zone_messages: Vec<(ZoneMessage, Slot)>,
     /// When set, `block_stream` errors while `false` and open streams end on
     /// the next `true -> false` transition, driving the reconnect path.
     pub up: Option<watch::Receiver<bool>>,
@@ -91,12 +95,14 @@ impl Default for MockNode {
             channel_state: Some(single_key_channel_state()),
             lib: header_id(0),
             tip: header_id(0),
+            lib_slot: Slot::genesis(),
             scripts: scripts(vec![StreamScript {
                 events: vec![live_event(&api_block(1, 0, 1, Vec::new()))],
                 then: StreamEnd::Hang,
             }]),
             blocks: Vec::new(),
             immutable: Vec::new(),
+            zone_messages: Vec::new(),
             up: None,
             posted: None,
         }
@@ -135,9 +141,9 @@ impl adapter::Node for MockNode {
         Ok(ChainServiceInfo {
             cryptarchia_info: CryptarchiaInfo {
                 lib: self.lib,
-                lib_slot: Slot::genesis(),
+                lib_slot: self.lib_slot,
                 tip: self.tip,
-                slot: Slot::genesis(),
+                slot: self.lib_slot,
                 height: 0,
             },
             mode: ChainServiceMode::Started(State::Online),
@@ -218,11 +224,10 @@ impl adapter::Node for MockNode {
         slot_from: Slot,
         slot_to: Slot,
     ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
-        let (from, to) = (u64::from(slot_from), u64::from(slot_to));
         Ok(self
             .immutable
             .iter()
-            .filter(|b| (from..=to).contains(&u64::from(b.header.slot)))
+            .filter(|b| b.header.slot >= slot_from && b.header.slot <= slot_to)
             .cloned()
             .collect())
     }
@@ -237,11 +242,17 @@ impl adapter::Node for MockNode {
 
     async fn zone_messages_in_blocks(
         &self,
-        _slot_from: Slot,
-        _slot_to: Slot,
+        slot_from: Slot,
+        slot_to: Slot,
         _channel_id: ChannelId,
     ) -> Result<BoxStream<(ZoneMessage, Slot)>, lb_common_http_client::Error> {
-        Ok(Box::pin(futures::stream::empty()))
+        let messages: Vec<_> = self
+            .zone_messages
+            .iter()
+            .filter(|(_, slot)| *slot >= slot_from && *slot <= slot_to)
+            .cloned()
+            .collect();
+        Ok(Box::pin(futures::stream::iter(messages)))
     }
 
     async fn post_transaction(
@@ -272,7 +283,7 @@ impl adapter::Node for MockNode {
 
 /// Channel state with a single accredited key (the zero Ed25519 key) and all
 /// thresholds at 1.
-pub(super) fn single_key_channel_state() -> ChannelState {
+pub fn single_key_channel_state() -> ChannelState {
     ChannelState {
         accredited_keys: Keys::from(Ed25519Key::from_bytes(&[0; 32]).public_key()).into(),
         configuration_threshold: 1,
@@ -286,18 +297,13 @@ pub(super) fn single_key_channel_state() -> ChannelState {
     }
 }
 
-pub(super) fn header_id(n: u8) -> HeaderId {
+pub fn header_id(n: u8) -> HeaderId {
     let mut bytes = [0u8; 32];
     bytes[0] = n;
     HeaderId::from(bytes)
 }
 
-pub(super) fn api_block(
-    id: u8,
-    parent: u8,
-    slot: u64,
-    transactions: Vec<SignedMantleTx>,
-) -> ApiBlock {
+pub fn api_block(id: u8, parent: u8, slot: u64, transactions: Vec<SignedMantleTx>) -> ApiBlock {
     ApiBlock {
         header: ApiHeader {
             id: header_id(id),
@@ -312,7 +318,7 @@ pub(super) fn api_block(
 
 /// A live stream event delivering `block` with the tip at that same block
 /// and LIB pinned at genesis.
-pub(super) fn live_event(block: &ApiBlock) -> ProcessedBlockEvent {
+pub fn live_event(block: &ApiBlock) -> ProcessedBlockEvent {
     ProcessedBlockEvent {
         block: block.clone(),
         tip: block.header.id,
@@ -324,7 +330,7 @@ pub(super) fn live_event(block: &ApiBlock) -> ProcessedBlockEvent {
 
 /// Build a `SignedMantleTx` carrying the given ops, with placeholder proofs.
 /// Suitable for tests that only care about op extraction, not verification.
-pub(super) fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedMantleTx {
+pub fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedMantleTx {
     let n = ops.len();
     let mantle_tx = MantleTx(Ops::try_from(ops).expect("ops fit"));
     SignedMantleTx::new_unverified(
@@ -334,7 +340,7 @@ pub(super) fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedMantleTx {
 }
 
 /// An inscription op signed by the zero Ed25519 key.
-pub(super) fn inscribe_op(channel_id: ChannelId, parent: MsgId, payload: &[u8]) -> InscriptionOp {
+pub fn inscribe_op(channel_id: ChannelId, parent: MsgId, payload: &[u8]) -> InscriptionOp {
     InscriptionOp {
         channel_id,
         inscription: Inscription::new_unchecked(payload.to_vec()),

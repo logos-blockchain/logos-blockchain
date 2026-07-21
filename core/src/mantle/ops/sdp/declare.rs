@@ -41,6 +41,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         if declarations.contains_key(&self.id()) {
             return Err(SdpError::DuplicateDeclaration(self.id()));
         }
+        validate_service_scoped_uniqueness(self, declarations)?;
 
         // A channel note cannot be used as collateral for a service declaration.
         if channels.is_channel_note(&self.locked_note_id) {
@@ -92,6 +93,31 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
 
         Ok((ctx, Vec::new()))
     }
+}
+
+/// `provider_id` and `zk_id` must each be unique within the same service.
+fn validate_service_scoped_uniqueness(
+    op: &SDPDeclareOp,
+    declarations: &Declarations,
+) -> Result<(), SdpError> {
+    declarations
+        .values()
+        .filter(|d| d.service_type == op.service_type)
+        .try_for_each(|existing| {
+            if existing.provider_id == op.provider_id {
+                Err(SdpError::DuplicateProviderId {
+                    service_type: op.service_type,
+                    provider_id: Box::new(op.provider_id),
+                })
+            } else if existing.zk_id == op.zk_id {
+                Err(SdpError::DuplicateZkId {
+                    service_type: op.service_type,
+                    zk_id: op.zk_id,
+                })
+            } else {
+                Ok(())
+            }
+        })
 }
 
 pub struct SDPDeclareValidationContext<'a> {

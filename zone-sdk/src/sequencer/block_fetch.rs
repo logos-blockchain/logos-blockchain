@@ -768,11 +768,9 @@ mod tests {
     use lb_groth16::Fr;
     use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 
-    use super::{
-        super::test_support::{
-            MockNode, api_block, header_id, inscribe_op, live_event, unverified_tx_with_ops,
-        },
-        *,
+    use super::*;
+    use crate::test_support::{
+        MockNode, api_block, header_id, inscribe_op, live_event, unverified_tx_with_ops,
     };
 
     fn deposit_op(channel_id: ChannelId, input_seed: u32, metadata: Metadata) -> DepositOp {

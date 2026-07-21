@@ -62,6 +62,8 @@
 pub mod adapter;
 pub mod indexer;
 pub mod sequencer;
+#[cfg(test)]
+mod test_support;
 
 pub use lb_common_http_client::{CommonHttpClient, Slot};
 pub use lb_core::mantle::ops::channel::Ed25519PublicKey;
