@@ -187,10 +187,7 @@ impl<Tx> Block<Tx> {
         self.validate_total_transactions_size()?;
 
         // 3. Block root matches transactions merkle hash
-        let calculated_content_id = Self::calculate_content_id(&self.transactions);
-        if self.header.block_root() != &calculated_content_id {
-            return Err(Error::BlockRootMismatch);
-        }
+        self.validate_block_root()?;
 
         // 4. Signature is valid over the header bytes
         let leader_public_key = self.header.leader_proof().leader_key();
@@ -226,6 +223,18 @@ impl<Tx> Block<Tx> {
         }
 
         Ok(total)
+    }
+
+    fn validate_block_root(&self) -> Result<(), Error>
+    where
+        Tx: Transaction<Hash = TxHash>,
+    {
+        let calculated_content_id = Self::calculate_content_id(&self.transactions);
+        if self.header.block_root() != &calculated_content_id {
+            return Err(Error::BlockRootMismatch);
+        }
+
+        Ok(())
     }
 
     fn calculate_content_id(transactions: &[Tx]) -> ContentId
