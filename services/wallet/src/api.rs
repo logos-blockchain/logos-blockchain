@@ -364,13 +364,13 @@ mod tests {
             .expect("gas context should round-trip through the wallet API");
 
         assert_eq!(
-            context.gas_context.withdraw_threshold(&expected_channel_id),
+            context.gas_context.transfer_threshold(&expected_channel_id),
             Some(expected_threshold)
         );
         assert_eq!(
             context
                 .gas_context
-                .withdraw_threshold(&ChannelId::from([1u8; 32])),
+                .transfer_threshold(&ChannelId::from([1u8; 32])),
             None
         );
         assert_eq!(context.leader_reward_amount, 0);

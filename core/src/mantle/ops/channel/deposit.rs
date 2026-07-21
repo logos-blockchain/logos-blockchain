@@ -40,7 +40,6 @@ pub struct DepositValidationContext<'a> {
 
 pub struct DepositExecutionContext {
     pub channels: Channels,
-    pub locked_notes: LockedNotes,
     pub utxos: Utxos,
     pub tx_hash: TxHash,
 }
@@ -60,8 +59,9 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
             });
         }
 
-        // Check that inputs are valid
-        self.inputs.validate(ctx.locked_notes, ctx.utxos)?;
+        // Check that inputs are spendable and not already channel notes
+        self.inputs
+            .validate_not_in_channel(ctx.locked_notes, ctx.channels, ctx.utxos)?;
 
         // Check the signature
         let pks = self.inputs.get_pk(ctx.utxos)?;
@@ -76,24 +76,16 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
         &self,
         mut ctx: Self::ExecutionContext<'_>,
     ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
-        // Get the amount deposited
+        // Get the amount deposited for the event payload
         let amount_deposited = self.inputs.amount(&ctx.utxos)?;
 
-        // Remove inputs from the ledger
-        ctx.utxos = self.inputs.execute(ctx.utxos)?;
-
-        // Increase the balance of the channel
-        if let Some(channel) = ctx.channels.channels.get_mut(&self.channel_id) {
-            channel.balance = channel
-                .balance
-                .checked_add(amount_deposited)
-                .ok_or(Error::BalanceOverflow)?;
-            Ok(self)
-        } else {
-            Err(Error::ChannelNotFound {
-                channel_id: self.channel_id,
-            })
-        }?;
+        // Mark the inputs as channel notes owned by the channel. The notes keep
+        // their NoteId, value and ZkPublicKey and stay in the ledger.
+        for note_id in self.inputs.iter() {
+            ctx.channels = ctx
+                .channels
+                .register_channel_note(note_id, &self.channel_id)?;
+        }
 
         let events = std::iter::once(TxEvent::new(
             ctx.tx_hash,

@@ -602,7 +602,7 @@ mod tests {
         header::{ContentId, HeaderId},
         mantle::{
             MantleTx, Note, Op, SignedMantleTx, Transaction as _, Utxo,
-            ledger::{Inputs, Outputs},
+            ledger::Inputs,
             ops::{
                 OpProof,
                 channel::{
@@ -752,9 +752,7 @@ mod tests {
                         tip_sequencer_starting_slot: Slot::default(),
                         posting_timeframe: 0u32.into(),
                         posting_timeout: 0u32.into(),
-                        balance: 0,
-                        withdrawal_nonce: 0,
-                        withdraw_threshold: 1,
+                        transfer_threshold: 1,
                     }),
                 },
                 rx,
@@ -980,15 +978,13 @@ mod tests {
         // Restore should put it in pending (not pending_other) with the
         // withdraws field populated, so on orphan we emit
         // ChannelUpdateTx::AtomicWithdraw (not Inscription).
+        use lb_core::mantle::NoteId;
+        use lb_groth16::Fr;
+
         let channel_id = ChannelId::from([1u8; 32]);
-        let outputs = Outputs::new([Note::new(
-            5,
-            ZkKey::from(BigUint::from(0u64)).to_public_key(),
-        )]);
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
-            outputs,
-            withdraw_nonce: 0,
+            inputs: Inputs::new([NoteId::from(Fr::from(0u64))]),
         };
         let inscribe_op = InscriptionOp {
             channel_id,
@@ -1407,9 +1403,7 @@ mod tests {
             tip_sequencer_starting_slot: Slot::default(),
             posting_timeframe: 0u32.into(),
             posting_timeout: 0u32.into(),
-            balance: 0,
-            withdrawal_nonce: 0,
-            withdraw_threshold: 1,
+            transfer_threshold: 1,
         });
 
         let node = ColdStartMockNode {

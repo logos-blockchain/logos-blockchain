@@ -51,7 +51,7 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
         Op::LeaderClaim(_) => map(Groth16LeaderClaimProof::decode, OpProof::PoC).parse(input),
 
         // ChannelMultiSigProof — also used by ChannelConfig (threshold sigs)
-        Op::ChannelWithdraw(_) | Op::ChannelConfig(_) => {
+        Op::ChannelWithdraw(_) | Op::ChannelTransfer(_) | Op::ChannelConfig(_) => {
             map(ChannelMultiSigProof::decode, OpProof::ChannelMultiSigProof).parse(input)
         }
     }
@@ -94,7 +94,7 @@ pub const fn proof_matches(proof: &OpProof, op: &Op) -> bool {
         (OpProof::Ed25519Sig(_), Op::ChannelInscribe(_))
             | (
                 OpProof::ChannelMultiSigProof(_),
-                Op::ChannelWithdraw(_) | Op::ChannelConfig(_)
+                Op::ChannelWithdraw(_) | Op::ChannelTransfer(_) | Op::ChannelConfig(_)
             )
             | (OpProof::ZkAndEd25519Sigs { .. }, Op::SDPDeclare(_))
             | (

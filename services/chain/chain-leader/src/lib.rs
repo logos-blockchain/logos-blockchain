@@ -369,23 +369,23 @@ where
         );
 
         // Wait for other services to become ready, with timeout.
-        // (except Chain and ChainLeader)
+        // (except Chain, ChainNetwork, and Blend)
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
             Some(Duration::from_mins(1)),
-            BlendService,
             TxMempoolService<_, _, _, _>,
             TimeService<_, _>,
             Wallet,
             PreloadKmsService<_>
         )
         .await?;
-        // Wait for Chain and ChainLeader services to become ready, without timeout
+        // Wait for the remaining dependencies to become ready, without timeout
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
             None,
             CryptarchiaService, // becomes ready after recoverying blocks
-            ChainNetwork        // becomes ready after IBD
+            ChainNetwork,       // becomes ready after IBD
+            BlendService        // becomes ready after chain becomes online
         )
         .await?;
 

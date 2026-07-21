@@ -11,9 +11,8 @@ use crate::{
         types::WalletFundsExport,
         utils::{
             build_deposit_op, build_deposit_transfer, decode_exported_utxos,
-            decode_required_hex_bincode, node_client, print_channel_balance, query_channel_state,
-            read_json, resolve_channel_id, start_cli_sequencer_with_channel_state, timestamp,
-            validate_kind,
+            decode_required_hex_bincode, read_json, resolve_channel_id,
+            start_cli_sequencer_with_channel_state, timestamp, validate_kind,
         },
     },
 };
@@ -32,9 +31,9 @@ pub(crate) async fn run_deposit(args: DepositArgs) -> RunResult<()> {
     let channel_id = resolve_channel_id(&args.node_key)?;
     let deposit = build_deposit_op(channel_id, &transfer, &args.metadata)?;
     let inscription = Inscription::try_from(args.message.into_bytes())?;
-    let (mut sequencer, channel_state) =
+    // TODO: report the channel balance again once channel notes are tracked.
+    let (mut sequencer, _channel_state) =
         start_cli_sequencer_with_channel_state(&args.node_key).await?;
-    print_channel_balance("deposit before", &channel_id, channel_state.as_ref());
     let status_rx = sequencer.subscribe_tx_status();
     let goal_inputs = deposit.inputs.clone();
     let goal_metadata = deposit.metadata.clone();
@@ -81,16 +80,12 @@ pub(crate) async fn run_deposit(args: DepositArgs) -> RunResult<()> {
     )
     .await?;
 
-    let node = node_client(&args.node_key.node_url)?;
-    let channel_state = query_channel_state(&node, channel_id).await;
+    // TODO: report the channel balance again once channel notes are tracked. It
+    //  is now the sum of the channel's notes rather than a field on
+    //  `ChannelState`.
     println!(
-        "{} deposit: balance={}, tx_hash={} msg_id={}",
+        "{} deposit: tx_hash={} msg_id={}",
         timestamp(),
-        if let Some(state) = channel_state {
-            state.balance
-        } else {
-            0
-        },
         hex::encode(tx_hash.as_ref()),
         hex::encode(msg_id.as_ref())
     );

@@ -907,7 +907,7 @@ where
                     Self::sign_channel_deposit(tx_hash, deposit_op.inputs.clone(), kms, &tip_leader)
                         .await?
                 }
-                Op::ChannelWithdraw(_channel_withdraw_op) => {
+                Op::ChannelWithdraw(_) | Op::ChannelTransfer(_) => {
                     let proof = channel_multi_sig_proofs
                         .remove(&i)
                         .ok_or(WalletServiceError::ChannelMultiSigProofNotFound(i))?;

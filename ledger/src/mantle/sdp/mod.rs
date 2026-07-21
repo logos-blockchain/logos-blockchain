@@ -10,6 +10,7 @@ use lb_core::{
     events::{HeaderEvent, TxEvent},
     mantle::{
         NoteId, OpProof, TxHash, Utxo, Value,
+        channel::Channels,
         ledger::Operation,
         ops::sdp::{
             SDPActiveExecutionContext, SDPActiveOp, SDPActiveValidationContext,
@@ -306,6 +307,7 @@ impl SdpLedger {
     pub fn from_genesis<'a>(
         config: &Config,
         utxo_tree: &UtxoTree,
+        channels: &Channels,
         epoch_state: &EpochState,
         ops: impl Iterator<Item = (&'a SDPDeclareOp, &'a OpProof)> + 'a,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
@@ -314,7 +316,8 @@ impl SdpLedger {
 
         let mut all_events = Vec::new();
         for (op, _) in ops {
-            let (result, events) = sdp.try_apply_genesis_sdp_declaration(utxo_tree, op, config)?;
+            let (result, events) =
+                sdp.try_apply_genesis_sdp_declaration(utxo_tree, channels, op, config)?;
             sdp = result;
             all_events.extend(events);
         }
@@ -396,6 +399,7 @@ impl SdpLedger {
     pub fn try_apply_genesis_sdp_declaration(
         mut self,
         utxo_tree: &UtxoTree,
+        channels: &Channels,
         op: &SDPDeclareOp,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
@@ -406,6 +410,7 @@ impl SdpLedger {
         // Validate SDP Declare
         op.validate(&SDPDeclareGenesisValidationContext {
             utxo_tree,
+            channels,
             locked_notes: &self.locked_notes,
             declarations: service_state.declarations(),
             min_stake: &config.min_stake,
@@ -429,9 +434,14 @@ impl SdpLedger {
         Ok((self, events))
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The declaration is validated against several independent pieces of ledger state."
+    )]
     pub fn try_apply_sdp_declaration(
         mut self,
         utxo_tree: &UtxoTree,
+        channels: &Channels,
         op: &SDPDeclareOp,
         zk_sig: &ZkSignature,
         ed25519_sig: &Ed25519Signature,
@@ -445,6 +455,7 @@ impl SdpLedger {
         // Validate SDP Declare
         op.validate(&SDPDeclareValidationContext {
             utxo_tree,
+            channels,
             locked_notes: &self.locked_notes,
             tx_hash: &tx_hash,
             declare_zk_sig: zk_sig,
@@ -649,7 +660,7 @@ mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
     use lb_core::{
-        mantle::ledger::Utxos,
+        mantle::{ledger::Utxos, ops::sdp::SdpError},
         sdp::{Locator, SNAPSHOT_FINALIZATION_DELAY},
     };
     use lb_groth16::{AdditiveGroup as _, Fr};
@@ -705,17 +716,25 @@ mod tests {
         sdp_ledger: SdpLedger,
         op: &SDPDeclareOp,
         zk_sk: &ZkKey,
+        signing_key: &Ed25519Key,
         config: &Config,
     ) -> Result<SdpLedger, Error> {
         let (note_sk, _) = utxo_with_sk();
         let tx_hash = TxHash([0u8; 32]);
         let zk_sig = ZkKey::multi_sign(&[note_sk, zk_sk.clone()], &tx_hash.to_fr()).unwrap();
 
-        let signing_key = create_signing_key();
         let ed25519_sig = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
 
         sdp_ledger
-            .try_apply_sdp_declaration(utxos, op, &zk_sig, &ed25519_sig, tx_hash, config)
+            .try_apply_sdp_declaration(
+                utxos,
+                &Channels::new(),
+                op,
+                &zk_sig,
+                &ed25519_sig,
+                tx_hash,
+                config,
+            )
             .map(|(sdp_ledger, _)| sdp_ledger)
     }
 
@@ -838,6 +857,7 @@ mod tests {
             ledger,
             declare_op,
             &zk_key,
+            &signing_key,
             &config,
         )
         .unwrap();
@@ -895,6 +915,7 @@ mod tests {
             ledger,
             declare_op,
             &zk_key,
+            &signing_key,
             &config,
         )
         .unwrap();
@@ -952,6 +973,7 @@ mod tests {
             ledger,
             declare_op,
             &zk_key,
+            &signing_key,
             &config,
         )
         .unwrap();
@@ -1029,6 +1051,7 @@ mod tests {
             ledger,
             declare_op,
             &zk_key,
+            &signing_key,
             &config,
         )
         .unwrap();
@@ -1128,6 +1151,7 @@ mod tests {
             ledger,
             declare_op,
             &zk_key,
+            &signing_key,
             &config,
         )
         .unwrap();
@@ -1201,30 +1225,136 @@ mod tests {
         }
     }
 
-    /// Regression test: the per-epoch membership build must not panic on an
-    /// SDP snapshot that contains two declarations with the same `zk_id`.
-    ///
-    /// `DeclarationId = Hash(service || provider_id || zk_id || locators)`
-    /// does not bind `zk_id` uniqueness (the SDP spec explicitly permits
-    /// duplicates), so two declarations with the *same* `zk_id` but
-    /// *different* locators (hence different `DeclarationId`s) can both be on
-    /// chain. `membership_info_from_epoch_state` (and, once rewards are
-    /// re-enabled, `providers_and_zk_root` inside `try_apply_header`) feed
-    /// their `zk_id`s into `sort_nodes_and_build_merkle_tree(..).expect(..)`,
-    /// which used to return `Err(DuplicateKey)` on the collision and so
-    /// panicked every Blend node at the epoch boundary. The builder now
-    /// reduces duplicate keys to a single leaf, so the build succeeds.
+    /// Two declarations in the same service sharing the same `provider_id`
+    /// (different `zk_id` and locators) must be rejected by the SDP
+    /// per-service uniqueness check.
     #[test]
-    fn membership_merkle_build_tolerates_duplicate_zk_ids() {
-        use lb_blend_crypto::merkle::sort_nodes_and_build_merkle_tree;
+    fn rejects_duplicate_provider_id_within_service() {
+        let config = setup(ServiceParameters {
+            inactivity_period: 20.try_into().unwrap(),
+            epoch: 0.into(),
+        });
+        let sdp_ledger = dummy_sdp_ledger(0.into(), &config);
 
         let signing_key = create_signing_key();
+        let (_sk_a, utxo_a) = utxo_with_sk();
+        let (_sk_b, utxo_b) = utxo_with_sk();
+
+        let declare_a = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locked_note_id: utxo_a.id(),
+            zk_id: create_zk_key(1).to_public_key(),
+            provider_id: ProviderId(signing_key.public_key()),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+        };
+        let declare_b = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locked_note_id: utxo_b.id(),
+            zk_id: create_zk_key(2).to_public_key(),
+            provider_id: ProviderId(signing_key.public_key()),
+            locators: "/ip4/2.2.2.2/udp/0".parse::<Locator>().unwrap().into(),
+        };
+
+        let utxos = utxo_tree(vec![utxo_a, utxo_b]);
+        let sdp_ledger = apply_declare_with_dummies(
+            &utxos,
+            sdp_ledger,
+            &declare_a,
+            &create_zk_key(1),
+            &signing_key,
+            &config,
+        )
+        .unwrap();
+
+        let result = apply_declare_with_dummies(
+            &utxos,
+            sdp_ledger,
+            &declare_b,
+            &create_zk_key(2),
+            &signing_key,
+            &config,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(Error::SdpOp(SdpError::DuplicateProviderId { .. }))
+            ),
+            "expected DuplicateProviderId, got {result:?}"
+        );
+    }
+
+    /// Two declarations in the same service sharing the same `zk_id`
+    /// (different `provider_id` and locators) must be rejected by the SDP
+    /// per-service uniqueness check.
+    #[test]
+    fn rejects_duplicate_zk_id_within_service() {
+        let config = setup(ServiceParameters {
+            inactivity_period: 20.try_into().unwrap(),
+            epoch: 0.into(),
+        });
+        let sdp_ledger = dummy_sdp_ledger(0.into(), &config);
+
+        let signing_key_a = Ed25519Key::from_bytes(&[1; 32]);
+        let signing_key_b = Ed25519Key::from_bytes(&[2; 32]);
         let zk_key = create_zk_key(1);
         let (_sk_a, utxo_a) = utxo_with_sk();
         let (_sk_b, utxo_b) = utxo_with_sk();
 
-        // Two declarations sharing the SAME zk_id, differing only in locators
-        // (and locked note) -> distinct DeclarationIds, identical zk_id.
+        let declare_a = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locked_note_id: utxo_a.id(),
+            zk_id: zk_key.to_public_key(),
+            provider_id: ProviderId(signing_key_a.public_key()),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+        };
+        let declare_b = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locked_note_id: utxo_b.id(),
+            zk_id: zk_key.to_public_key(),
+            provider_id: ProviderId(signing_key_b.public_key()),
+            locators: "/ip4/2.2.2.2/udp/0".parse::<Locator>().unwrap().into(),
+        };
+
+        let utxos = utxo_tree(vec![utxo_a, utxo_b]);
+        let sdp_ledger = apply_declare_with_dummies(
+            &utxos,
+            sdp_ledger,
+            &declare_a,
+            &zk_key,
+            &signing_key_a,
+            &config,
+        )
+        .unwrap();
+
+        let result = apply_declare_with_dummies(
+            &utxos,
+            sdp_ledger,
+            &declare_b,
+            &zk_key,
+            &signing_key_b,
+            &config,
+        );
+        assert!(
+            matches!(result, Err(Error::SdpOp(SdpError::DuplicateZkId { .. }))),
+            "expected DuplicateZkId, got {result:?}"
+        );
+    }
+
+    /// Once a Blend declaration is withdrawn/removed at its `withdraw_at`
+    /// epoch, its `provider_id` and `zk_id` become reusable
+    /// — a fresh declaration reusing both must be accepted.
+    #[test]
+    fn accepts_reused_ids_after_withdrawn_epoch() {
+        let config = setup(ServiceParameters {
+            inactivity_period: 20.try_into().unwrap(),
+            epoch: 0.into(),
+        });
+
+        let signing_key = create_signing_key();
+        let zk_key = create_zk_key(1);
+        let (utxo_sk_a, utxo_a) = utxo_with_sk();
+        let (_utxo_sk_b, utxo_b) = utxo_with_sk();
+
         let declare_a = SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
             locked_note_id: utxo_a.id(),
@@ -1232,6 +1362,60 @@ mod tests {
             provider_id: ProviderId(signing_key.public_key()),
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
+        let declaration_id_a = declare_a.id();
+
+        let epoch0 = dummy_epoch_state(0.into());
+        let sdp_ledger = dummy_sdp_ledger(0.into(), &config);
+        let utxos = utxo_tree(vec![utxo_a, utxo_b]);
+
+        let sdp_ledger = apply_declare_with_dummies(
+            &utxos,
+            sdp_ledger,
+            &declare_a,
+            &zk_key,
+            &signing_key,
+            &config,
+        )
+        .unwrap();
+
+        // Withdraw A.
+        let withdraw_op = &SDPWithdrawOp {
+            declaration_id: declaration_id_a,
+            nonce: 1,
+            locked_note_id: utxo_a.id(),
+        };
+        let sdp_ledger = apply_withdraw_with_dummies(
+            sdp_ledger,
+            withdraw_op,
+            utxo_sk_a,
+            zk_key.clone(),
+            &config,
+        )
+        .unwrap();
+
+        let withdraw_epoch = sdp_ledger
+            .get_declaration(&declaration_id_a)
+            .expect("declaration must still exist until the withdrawn epoch is reached")
+            .withdraw_at
+            .expect("withdraw_at must be set after withdraw tx is accepted");
+
+        // Advance epochs until A is removed at `withdraw_epoch`.
+        let mut sdp_ledger = sdp_ledger;
+        let mut last_epoch_state = epoch0;
+        for epoch in 1..=withdraw_epoch.into_inner() {
+            let new_epoch_state = next_epoch_state(epoch.into(), &sdp_ledger, &config);
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
+                .unwrap();
+            last_epoch_state = new_epoch_state;
+        }
+        assert!(
+            sdp_ledger.get_declaration(&declaration_id_a).is_none(),
+            "declaration A must be removed at the withdrawn epoch"
+        );
+
+        // Re-declare reusing A's `provider_id` and `zk_id` (fresh locked note
+        // and locators, so the `declaration_id` differs). Must be accepted.
         let declare_b = SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
             locked_note_id: utxo_b.id(),
@@ -1239,20 +1423,17 @@ mod tests {
             provider_id: ProviderId(signing_key.public_key()),
             locators: "/ip4/2.2.2.2/udp/0".parse::<Locator>().unwrap().into(),
         };
-        assert_ne!(declare_a.id(), declare_b.id());
-        assert_eq!(declare_a.zk_id, declare_b.zk_id);
-
-        // Exactly what `membership_info_from_epoch_state` does with the
-        // snapshot: build the core-membership Merkle tree keyed by each
-        // declaration's zk_id. Production `.expect()`s this result.
-        let mut zk_ids = vec![declare_a.zk_id.into_inner(), declare_b.zk_id.into_inner()];
-        let result = sort_nodes_and_build_merkle_tree(&mut zk_ids, |zk_id| *zk_id);
-
         assert!(
-            result.is_ok(),
-            "membership Merkle build must not error (and thus `.expect()`-panic) \
-             on duplicate zk_ids: {:?}",
-            result.err()
+            apply_declare_with_dummies(
+                &utxos,
+                sdp_ledger,
+                &declare_b,
+                &zk_key,
+                &signing_key,
+                &config,
+            )
+            .is_ok(),
+            "declaration reusing A's provider_id and zk_id must be accepted after A is removed"
         );
     }
 
@@ -1283,9 +1464,15 @@ mod tests {
         let sdp_ledger = dummy_sdp_ledger(0.into(), &config);
 
         let utxo_tree = utxo_tree(vec![utxo]);
-        let sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree, sdp_ledger, declare_op, &zk_key, &config)
-                .unwrap();
+        let sdp_ledger = apply_declare_with_dummies(
+            &utxo_tree,
+            sdp_ledger,
+            declare_op,
+            &zk_key,
+            &signing_key,
+            &config,
+        )
+        .unwrap();
 
         // Verify declaration is present
         assert!(sdp_ledger.get_declaration(&declaration_id).is_some());
@@ -1315,19 +1502,10 @@ mod tests {
             (sdp_ledger, HeaderEffect { events, .. }) = sdp_ledger
                 .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
                 .unwrap();
-            let unlock_events = events.into_iter().filter_map(|event| {
-                let HeaderEvent::SdpNoteUnlocked {
-                    note_id: unlocked_note,
-                    service_type,
-                    declaration_id: id,
-                } = &event
-                else {
-                    return None;
-                };
-                (*unlocked_note == note_id && *service_type == service_a && *id == declaration_id)
-                    .then_some(event)
-            });
-            assert_eq!(unlock_events.count(), 0);
+            assert_eq!(
+                count_unlock_events(events, note_id, service_a, declaration_id),
+                0
+            );
             last_epoch_state = new_epoch_state;
         }
         assert!(
@@ -1348,19 +1526,10 @@ mod tests {
         (sdp_ledger, HeaderEffect { events, .. }) = sdp_ledger
             .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
             .unwrap();
-        let unlock_events = events.into_iter().filter_map(|event| {
-            let HeaderEvent::SdpNoteUnlocked {
-                note_id: unlocked_note,
-                service_type,
-                declaration_id: id,
-            } = &event
-            else {
-                return None;
-            };
-            (*unlocked_note == note_id && *service_type == service_a && *id == declaration_id)
-                .then_some(event)
-        });
-        assert_eq!(unlock_events.count(), 1);
+        assert_eq!(
+            count_unlock_events(events, note_id, service_a, declaration_id),
+            1
+        );
         assert!(
             sdp_ledger.get_declaration(&declaration_id).is_none(),
             "declaration must be removed at the withdrawn epoch"
@@ -1371,5 +1540,26 @@ mod tests {
                 .is_locked_for_service(&declare_op.locked_note_id, &ServiceType::BlendNetwork),
             "the provider's note must be unlocked at the withdrawn epoch"
         );
+    }
+
+    fn count_unlock_events(
+        events: Vec<HeaderEvent>,
+        note_id: NoteId,
+        service_type: ServiceType,
+        declaration_id: DeclarationId,
+    ) -> usize {
+        events
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    HeaderEvent::SdpNoteUnlocked {
+                        note_id: n,
+                        service_type: s,
+                        declaration_id: d,
+                    } if *n == note_id && *s == service_type && *d == declaration_id
+                )
+            })
+            .count()
     }
 }

@@ -6,6 +6,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         Note, TxHash,
+        channel::Channels,
         ledger::{Declarations, Operation, Utxos},
     },
     sdp::{Declaration, MinStake, locked_notes::LockedNotes},
@@ -15,6 +16,7 @@ trait SDPDeclareValidationExt {
     fn validate(
         &self,
         note: Note,
+        channels: &Channels,
         declarations: &Declarations,
         locked_notes: &LockedNotes,
         min_stake: &MinStake,
@@ -30,6 +32,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
     fn validate(
         &self,
         note: Note,
+        channels: &Channels,
         declarations: &Declarations,
         locked_notes: &LockedNotes,
         min_stake: &MinStake,
@@ -37,6 +40,12 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         // Check that the declaration doesn't already exist
         if declarations.contains_key(&self.id()) {
             return Err(SdpError::DuplicateDeclaration(self.id()));
+        }
+        validate_service_scoped_uniqueness(self, declarations)?;
+
+        // A channel note cannot be used as collateral for a service declaration.
+        if channels.is_channel_note(&self.locked_note_id) {
+            return Err(SdpError::ChannelNote(self.locked_note_id));
         }
 
         // Ensure value of locked note is sufficient for joining the service.
@@ -86,8 +95,34 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
     }
 }
 
+/// `provider_id` and `zk_id` must each be unique within the same service.
+fn validate_service_scoped_uniqueness(
+    op: &SDPDeclareOp,
+    declarations: &Declarations,
+) -> Result<(), SdpError> {
+    declarations
+        .values()
+        .filter(|d| d.service_type == op.service_type)
+        .try_for_each(|existing| {
+            if existing.provider_id == op.provider_id {
+                Err(SdpError::DuplicateProviderId {
+                    service_type: op.service_type,
+                    provider_id: Box::new(op.provider_id),
+                })
+            } else if existing.zk_id == op.zk_id {
+                Err(SdpError::DuplicateZkId {
+                    service_type: op.service_type,
+                    zk_id: op.zk_id,
+                })
+            } else {
+                Ok(())
+            }
+        })
+}
+
 pub struct SDPDeclareValidationContext<'a> {
     pub utxo_tree: &'a Utxos,
+    pub channels: &'a Channels,
     pub locked_notes: &'a LockedNotes,
     pub tx_hash: &'a TxHash,
     pub declare_zk_sig: &'a ZkSignature,
@@ -98,6 +133,7 @@ pub struct SDPDeclareValidationContext<'a> {
 
 pub struct SDPDeclareGenesisValidationContext<'a> {
     pub utxo_tree: &'a Utxos,
+    pub channels: &'a Channels,
     pub locked_notes: &'a LockedNotes,
     pub declarations: &'a Declarations,
     pub min_stake: &'a MinStake,
@@ -146,6 +182,7 @@ impl Operation<SDPDeclareValidationContext<'_>> for SDPDeclareOp {
         SDPDeclareValidationExt::validate(
             self,
             note,
+            ctx.channels,
             ctx.declarations,
             ctx.locked_notes,
             ctx.min_stake,
@@ -177,6 +214,7 @@ impl Operation<SDPDeclareGenesisValidationContext<'_>> for SDPDeclareOp {
         SDPDeclareValidationExt::validate(
             self,
             note,
+            ctx.channels,
             ctx.declarations,
             ctx.locked_notes,
             ctx.min_stake,

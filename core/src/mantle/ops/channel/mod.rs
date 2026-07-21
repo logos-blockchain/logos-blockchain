@@ -1,3 +1,4 @@
+pub mod channel_transfer;
 pub mod config;
 pub mod deposit;
 pub mod inscribe;

@@ -1,4 +1,5 @@
 pub mod channel;
+mod channel_notes;
 pub mod gas;
 pub mod ledger;
 pub mod mock;
