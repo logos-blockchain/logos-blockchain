@@ -170,6 +170,24 @@ impl LocalDeployerEnv for LbcEnv {
         config.user.state.base_folder = dir.to_path_buf();
         "db".clone_into(&mut config.user.storage.backend.folder_name);
 
+        if let config::tracing::serde::console::Layer::Console(console) =
+            &mut config.user.tracing.console
+            && let Some(recording_path) = &mut console.recording_path
+        {
+            if recording_path.is_relative() {
+                let relative_path = recording_path.clone();
+                *recording_path = dir.join(relative_path);
+            }
+            if let Some(parent) = recording_path.parent() {
+                fs::create_dir_all(parent).map_err(|source| {
+                    io::Error::other(format!(
+                        "failed to prepare Tokio console recording path `{}`: {source}",
+                        recording_path.display()
+                    ))
+                })?;
+            }
+        }
+
         let user_yaml = serde_yaml::to_string(&config.user).map_err(io::Error::other)?;
         let deployment_yaml =
             serde_yaml::to_string(&config.deployment).map_err(io::Error::other)?;

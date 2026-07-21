@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone)]
 pub struct TokioConsoleProfileNode {
     pub port: u16,
+    pub record_raw: bool,
 }
 
 #[derive(Debug, Clone, Default)]

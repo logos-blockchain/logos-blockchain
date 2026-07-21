@@ -75,9 +75,9 @@ Feature: Manual control of transactions
       | 1             | 3           | 1000000      |
       | 2             | 3           | 1000000      |
     And I will have tokio console profile nodes:
-      | node_name |
-      | NODE_1    |
-      | NODE_2    |
+      | node_name | record_raw |
+      | NODE_1    | true       |
+      | NODE_2    | false      |
     And I have a cluster with capacity of 2 nodes
 #    And we use IBD peers
     And all peers must be mode online after startup in 30 seconds
