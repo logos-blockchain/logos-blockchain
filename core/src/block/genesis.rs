@@ -1314,22 +1314,26 @@ mod tests {
             Op::ChannelInscribe(valid_inscription()),
         ];
         ops.extend(extra_ops);
-        let ops_proofs = OpsProofs::try_from(
-            ops.iter()
-                .map(|op| match op {
-                    Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
-                    Op::Transfer(_) => OpProof::ZkSig(ZkSignature::new(
-                        CompressedGroth16Proof::from_bytes(&[0u8; 128]),
-                    )),
-                    Op::SDPDeclare(_) => OpProof::ZkAndEd25519Sigs {
-                        zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
-                        ed25519_sig: Ed25519Signature::zero(),
-                    },
-                    other => unreachable!("unexpected genesis op in tests: {}", other.as_str()),
-                })
-                .collect::<Vec<_>>(),
-        )
-        .expect("genesis transaction proofs are bounded");
+
+        let mut ops_proofs = OpsProofs::empty();
+        for op in &ops {
+            let proof = match op {
+                Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
+                Op::Transfer(_) => OpProof::ZkSig(ZkSignature::new(
+                    CompressedGroth16Proof::from_bytes(&[0u8; 128]),
+                )),
+                Op::SDPDeclare(_) => OpProof::ZkAndEd25519Sigs {
+                    zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
+                    ed25519_sig: Ed25519Signature::zero(),
+                },
+                other => unreachable!("unexpected genesis op in tests: {}", other.as_str()),
+            };
+
+            ops_proofs
+                .try_push(proof)
+                .expect("genesis transaction proofs are bounded");
+        }
+
         SignedMantleTx::new_unverified(MantleTx(Ops::new_unchecked(ops)), ops_proofs)
     }
 
