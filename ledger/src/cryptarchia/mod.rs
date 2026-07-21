@@ -625,11 +625,7 @@ impl LedgerState {
             return Err(LedgerError::InputInGenesis(first_input));
         }
 
-        Ok(Self::from_utxos(
-            transfer_op.outputs.utxos(transfer_op),
-            config,
-            epoch_nonce,
-        ))
+        Ok(Self::from_utxos(transfer_op.utxos(), config, epoch_nonce))
     }
 
     pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, config: &Config, nonce: Fr) -> Self {

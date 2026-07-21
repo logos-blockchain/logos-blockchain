@@ -142,7 +142,7 @@ impl ScannerAccounting {
                     for note_id in transfer.inputs.iter().copied() {
                         self.remove_spent_note(note_id);
                     }
-                    for utxo in transfer.outputs.utxos(transfer) {
+                    for utxo in transfer.utxos() {
                         self.add_owned_output(utxo);
                     }
                 }

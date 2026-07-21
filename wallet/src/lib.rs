@@ -369,7 +369,7 @@ impl WalletState {
                         for input_id in transfer.inputs.iter() {
                             remove_spent_utxo(input_id, &mut utxos, &mut pk_index);
                         }
-                        for utxo in transfer.outputs.utxos(transfer) {
+                        for utxo in transfer.utxos() {
                             insert_utxo_if_owned(utxo, known_keys, &mut utxos, &mut pk_index);
                         }
                     }
@@ -387,7 +387,7 @@ impl WalletState {
                             remove_spent_utxo(input_id, &mut utxos, &mut pk_index);
                             channel_notes.remove_mut(input_id);
                         }
-                        for utxo in op.outputs.utxos(op) {
+                        for utxo in op.utxos() {
                             if insert_utxo_if_owned(utxo, known_keys, &mut utxos, &mut pk_index) {
                                 channel_notes.insert_mut(utxo.id());
                             }

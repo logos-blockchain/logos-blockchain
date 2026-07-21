@@ -128,10 +128,7 @@ impl WalletChainState {
                     transfer.inputs.iter().copied(),
                     &mut changes.observed_spends,
                 );
-                self.apply_owned_outputs(
-                    transfer.outputs.utxos(transfer),
-                    &mut changes.observed_outputs,
-                );
+                self.apply_owned_outputs(transfer.utxos(), &mut changes.observed_outputs);
             }
             Op::ChannelDeposit(deposit) => {
                 self.apply_spent_note_ids(

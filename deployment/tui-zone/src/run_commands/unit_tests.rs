@@ -162,7 +162,7 @@ mod tests {
             build_deposit_transfer(vec![test_utxo(4, 0), test_utxo(10, 1)], public_key, 7).unwrap();
 
         assert_eq!(selected, vec![test_utxo(10, 1)]);
-        let outputs = transfer.outputs.utxos(&transfer).collect::<Vec<_>>();
+        let outputs = transfer.utxos().collect::<Vec<_>>();
         assert_eq!(outputs.len(), 2);
         assert_eq!(outputs[0].note.value, 7);
         assert_eq!(outputs[1].note.value, 3);
