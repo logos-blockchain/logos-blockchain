@@ -1064,6 +1064,9 @@ fn prepare_config_patch(
         config.user.tracing.console = ConsoleLayer::Console(TokioConfig {
             bind_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
             port: node.port,
+            recording_path: node
+                .record_raw
+                .then(|| PathBuf::from("tokio-console-raw.jsonl")),
         });
     }
 

@@ -205,6 +205,7 @@ pub enum MetricsLayerSettings {
 pub struct TokioConsoleConfig {
     pub bind_address: String,
     pub port: u16,
+    pub recording_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -357,15 +358,30 @@ where
             ..
         } = logger_layers;
 
+        #[cfg(feature = "tokio-console")]
+        let console_layer = match &config.console {
+            ConsoleLayerSettings::Console(console_config) => {
+                console::create_console_layer::<LoggerSubscriber>(console_config)?
+            }
+            ConsoleLayerSettings::None => None,
+        };
+
         ONCE_INIT.call_once(move || {
             let mut layers: Vec<Box<dyn tracing_subscriber::Layer<_> + Send + Sync>> = vec![];
 
             let level_filter = {
                 #[cfg(feature = "tokio-console")]
                 {
-                    if let ConsoleLayerSettings::Console(console_config) = &config.console
-                        && let Some(console_layer) = console::create_console_layer(console_config)
-                    {
+                    if let Some(console_layer) = console_layer {
+                        if let ConsoleLayerSettings::Console(console_config) = &config.console
+                            && let Some(recording_path) = &console_config.recording_path
+                        {
+                            tracing::info!(
+                                target: LOG_TARGET,
+                                "Tokio console raw recording is enabled at `{}`",
+                                recording_path.display()
+                            );
+                        }
                         layers.push(console_layer);
                         LevelFilter::TRACE
                     } else {
