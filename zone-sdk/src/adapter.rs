@@ -329,3 +329,127 @@ fn op_to_zone_message(
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use lb_core::mantle::{
+        NoteId,
+        ledger::Inputs,
+        ops::channel::{
+            deposit::{DepositOp, Metadata},
+            withdraw::ChannelWithdrawOp,
+        },
+    };
+    use lb_groth16::Fr;
+
+    use super::*;
+    use crate::test_support::unverified_tx_with_ops;
+
+    fn deposit_op(channel_id: ChannelId, input_seed: u32, metadata: Metadata) -> DepositOp {
+        DepositOp {
+            channel_id,
+            inputs: Inputs::new([NoteId::from(Fr::from(input_seed))]),
+            metadata,
+        }
+    }
+
+    /// A withdraw op is identified by `hash(channel_id || inputs)` — it
+    /// carries no nonce — so distinct `input_seed`s are what give two
+    /// withdraws distinct `op_id`s. That mirrors the chain, where the notes
+    /// being released are spent-once.
+    fn withdraw_op(channel_id: ChannelId, input_seed: u32) -> ChannelWithdrawOp {
+        ChannelWithdrawOp {
+            channel_id,
+            inputs: Inputs::new([NoteId::from(Fr::from(input_seed))]),
+        }
+    }
+
+    /// Each indexer-facing message must carry the identity of the op it was
+    /// built from — not a neighbouring op's, and not a neighbouring tx's.
+    /// Zone consumers correlate an L2 mint to a finalized L1 deposit by
+    /// `(tx_hash, op_id)`, so a crossed identity is silent corruption of the
+    /// exactly-once key rather than a visible failure.
+    #[test]
+    fn block_to_messages_stamps_each_op_with_its_own_identity() {
+        let channel_id = ChannelId::from([0; 32]);
+        let other_channel = ChannelId::from([9; 32]);
+
+        // tx_a mixes three ops so a walker that reused the wrong op's id
+        // (or the wrong channel's) would surface here.
+        let our_deposit = deposit_op(channel_id, 1, b"to Alice".into());
+        let foreign_deposit = deposit_op(other_channel, 2, b"to Bob".into());
+        let our_withdraw = withdraw_op(channel_id, 42);
+        let tx_a = unverified_tx_with_ops(vec![
+            Op::ChannelDeposit(our_deposit.clone()),
+            Op::ChannelDeposit(foreign_deposit.clone()),
+            Op::ChannelWithdraw(our_withdraw.clone()),
+        ]);
+        let tx_a_hash = tx_a.hash();
+
+        // A second tx proves `tx_hash` is stamped per-tx, not per-block.
+        let later_withdraw = withdraw_op(channel_id, 7);
+        let tx_b = unverified_tx_with_ops(vec![Op::ChannelWithdraw(later_withdraw.clone())]);
+        let tx_b_hash = tx_b.hash();
+
+        // Both deposits get an event, so channel filtering is proven to be
+        // the reason the foreign one is dropped — not a missing amount.
+        let deposit_amounts = HashMap::from([
+            ((tx_a_hash, our_deposit.op_id()), 1234),
+            ((tx_a_hash, foreign_deposit.op_id()), 999),
+        ]);
+
+        let messages = block_to_messages(vec![tx_a, tx_b], channel_id, &deposit_amounts);
+
+        assert_eq!(
+            messages.len(),
+            3,
+            "two ops on our channel in tx_a, one in tx_b"
+        );
+        match &messages[0] {
+            ZoneMessage::Deposit(deposit) => {
+                assert_eq!(deposit.tx_hash, tx_a_hash);
+                assert_eq!(deposit.op_id, our_deposit.op_id());
+                assert_eq!(deposit.amount, 1234);
+                assert_eq!(deposit.inputs, our_deposit.inputs);
+                assert_ne!(
+                    deposit.op_id,
+                    our_withdraw.op_id(),
+                    "deposit must not inherit its tx-mate's identity"
+                );
+            }
+            other => panic!("expected Deposit, got {other:?}"),
+        }
+        match &messages[1] {
+            ZoneMessage::Withdraw(withdraw) => {
+                assert_eq!(withdraw.tx_hash, tx_a_hash);
+                assert_eq!(withdraw.op_id, our_withdraw.op_id());
+                assert_eq!(withdraw.inputs, our_withdraw.inputs);
+            }
+            other => panic!("expected Withdraw, got {other:?}"),
+        }
+        match &messages[2] {
+            ZoneMessage::Withdraw(withdraw) => {
+                assert_eq!(withdraw.tx_hash, tx_b_hash);
+                assert_eq!(withdraw.op_id, later_withdraw.op_id());
+            }
+            other => panic!("expected Withdraw, got {other:?}"),
+        }
+    }
+
+    /// A deposit whose amount is absent from the block's events is dropped
+    /// entirely, taking its identity with it — consumers never see a deposit
+    /// they cannot value.
+    #[test]
+    fn block_to_messages_skips_deposit_without_matching_event() {
+        let channel_id = ChannelId::from([0; 32]);
+        let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(deposit_op(
+            channel_id,
+            1,
+            b"to Alice".into(),
+        ))]);
+
+        let messages = block_to_messages(vec![tx], channel_id, &HashMap::new());
+
+        assert!(messages.is_empty(), "deposit without an event is skipped");
+    }
+}
