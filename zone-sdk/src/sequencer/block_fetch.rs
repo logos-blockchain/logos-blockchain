@@ -106,13 +106,10 @@ where
         *lib_slot = new_lib_slot;
     }
 
-    // Capture the channel lineage at the old tip BEFORE this event mutates
-    // non-finalized state: both the canonical backfill and the live block
-    // insert blocks the lineage walk bridges through, and anything already
-    // present when the "before" side of the diff is computed is treated as
-    // known to the consumer and never reported as adopted. Deliberately
-    // AFTER the LIB backfill above — its blocks are emitted as `finalized`
-    // in this same event, so counting them as known avoids double-reporting.
+    // Capture the old-tip lineage before anything below adds blocks: the
+    // lineage walk bridges through held blocks, and whatever is already in
+    // the store lands on the "before" side of the update diff. Kept after
+    // the LIB backfill, whose content surfaces via `finalized` instead.
     let old_lineage = old_tip.map(|old| s.channel_lineage(old));
 
     // 2. Backfill canonical chain if parent is missing
@@ -754,50 +751,29 @@ fn touches_channel_tip(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use async_trait::async_trait;
-    use lb_common_http_client::{
-        ApiBlock, ApiHeader, BlockInfo, ChainServiceInfo, Events, TimeInfo,
-    };
-    use lb_core::{
-        header::ContentId,
-        mantle::{
-            MantleTx, NoteId,
-            channel::{ChannelState, SlotTimeframe, SlotTimeout},
-            ledger::Inputs,
-            ops::{
-                OpId as _, OpProof,
-                channel::{
-                    config::{ChannelConfigOp, Keys},
-                    deposit::{DepositOp, Metadata},
-                    inscribe::InscriptionOp,
-                    withdraw::ChannelWithdrawOp,
-                },
+    use lb_core::mantle::{
+        MantleTx, NoteId,
+        channel::{SlotTimeframe, SlotTimeout},
+        ledger::Inputs,
+        ops::{
+            OpId as _, OpProof,
+            channel::{
+                config::{ChannelConfigOp, Keys},
+                deposit::{DepositOp, Metadata},
+                inscribe::InscriptionOp,
+                withdraw::ChannelWithdrawOp,
             },
-            transactions::Ops,
         },
-        proofs::leader_proof::Groth16LeaderProof,
     };
     use lb_groth16::Fr;
-    use lb_http_api_common::{
-        bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
-        queries::BlocksStreamQuery,
-    };
     use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 
-    use super::*;
-    use crate::{ZoneMessage, adapter::BoxStream};
-
-    /// Build a `SignedMantleTx` carrying the given ops, with placeholder
-    /// proofs. Suitable for tests that only care about op extraction, not
-    /// verification.
-    fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedMantleTx {
-        let n = ops.len();
-        let mantle_tx = MantleTx(Ops::try_from(ops).unwrap());
-        SignedMantleTx::new_unverified(
-            mantle_tx,
-            vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n],
-        )
-    }
+    use super::{
+        super::test_support::{
+            MockNode, api_block, header_id, inscribe_op, live_event, unverified_tx_with_ops,
+        },
+        *,
+    };
 
     fn deposit_op(channel_id: ChannelId, input_seed: u32, metadata: Metadata) -> DepositOp {
         DepositOp {
@@ -1142,21 +1118,6 @@ mod tests {
         }
     }
 
-    fn inscribe_op(channel_id: ChannelId, parent: MsgId, payload: &[u8]) -> InscriptionOp {
-        InscriptionOp {
-            channel_id,
-            inscription: Inscription::new_unchecked(payload.to_vec()),
-            parent,
-            signer: Ed25519Key::from_bytes(&[0u8; 32]).public_key(),
-        }
-    }
-
-    fn header_id(n: u8) -> HeaderId {
-        let mut bytes = [0u8; 32];
-        bytes[0] = n;
-        HeaderId::from(bytes)
-    }
-
     fn dummy_pending_tx(seed: u8) -> SignedMantleTx {
         let mantle_tx = MantleTx(
             [Op::ChannelInscribe(InscriptionOp {
@@ -1370,132 +1331,6 @@ mod tests {
         );
     }
 
-    /// Minimal node mock for the canonical-backfill path: serves exactly one
-    /// gap block via `block()`; every other endpoint is off-limits for the
-    /// scenario under test.
-    struct GapMockNode {
-        gap_block: ApiBlock,
-    }
-
-    #[async_trait]
-    impl adapter::Node for GapMockNode {
-        async fn consensus_info(&self) -> Result<ChainServiceInfo, lb_common_http_client::Error> {
-            unimplemented!()
-        }
-
-        async fn time_info(&self) -> Result<TimeInfo, lb_common_http_client::Error> {
-            unimplemented!()
-        }
-
-        async fn channel_state(
-            &self,
-            _channel_id: ChannelId,
-        ) -> Result<Option<ChannelState>, lb_common_http_client::Error> {
-            unimplemented!()
-        }
-
-        async fn block_stream(
-            &self,
-        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
-            unimplemented!()
-        }
-
-        async fn blocks_range_stream(
-            &self,
-            _params: BlocksStreamQuery,
-        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
-            unimplemented!()
-        }
-
-        async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, lb_common_http_client::Error> {
-            unimplemented!()
-        }
-
-        async fn block(
-            &self,
-            id: HeaderId,
-        ) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
-            assert_eq!(
-                id, self.gap_block.header.id,
-                "only the gap block should be fetched by the canonical backfill"
-            );
-            Ok(Some(self.gap_block.clone()))
-        }
-
-        async fn block_events(
-            &self,
-            _id: HeaderId,
-        ) -> Result<Option<Events>, lb_common_http_client::Error> {
-            Ok(None)
-        }
-
-        async fn immutable_blocks(
-            &self,
-            _slot_from: Slot,
-            _slot_to: Slot,
-        ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
-            unimplemented!()
-        }
-
-        async fn zone_messages_in_block(
-            &self,
-            _id: HeaderId,
-            _channel_id: ChannelId,
-        ) -> Result<BoxStream<ZoneMessage>, lb_common_http_client::Error> {
-            unimplemented!()
-        }
-
-        async fn zone_messages_in_blocks(
-            &self,
-            _slot_from: Slot,
-            _slot_to: Slot,
-            _channel_id: ChannelId,
-        ) -> Result<BoxStream<(ZoneMessage, Slot)>, lb_common_http_client::Error> {
-            unimplemented!()
-        }
-
-        async fn post_transaction(
-            &self,
-            _tx: SignedMantleTx,
-        ) -> Result<(), lb_common_http_client::Error> {
-            unimplemented!()
-        }
-
-        async fn fund_tx(
-            &self,
-            _request: WalletFundRequestBody,
-        ) -> Result<WalletFundResponseBody, lb_common_http_client::Error> {
-            unimplemented!()
-        }
-    }
-
-    fn api_block(id: u8, parent: u8, slot: u64, transactions: Vec<SignedMantleTx>) -> ApiBlock {
-        ApiBlock {
-            header: ApiHeader {
-                id: header_id(id),
-                parent_block: header_id(parent),
-                slot: slot.into(),
-                block_root: ContentId::from([0; 32]),
-                proof_of_leadership: Groth16LeaderProof::genesis(),
-            },
-            transactions,
-        }
-    }
-
-    /// A live stream event delivering `block` with the tip at that same block
-    /// and LIB pinned at genesis.
-    fn live_event(block: ApiBlock) -> ProcessedBlockEvent {
-        let tip = block.header.id;
-        let tip_slot = block.header.slot;
-        ProcessedBlockEvent {
-            block,
-            tip,
-            tip_slot,
-            lib: header_id(0),
-            lib_slot: Slot::genesis(),
-        }
-    }
-
     #[tokio::test]
     async fn canonical_backfill_gap_inscriptions_surface_as_adopted() {
         // A sequencer whose block stream skipped a block self-heals via
@@ -1529,14 +1364,17 @@ mod tests {
         );
         let b3 = api_block(3, 2, 3, Vec::new());
 
-        let node = GapMockNode { gap_block: b2 };
+        let node = MockNode {
+            blocks: vec![b2],
+            ..MockNode::default()
+        };
         let mut state = None;
         let mut current_tip = None;
         let mut lib_slot = Slot::genesis();
 
         // First live event: B1 arrives normally and adopts A.
         let first = handle_block_event(
-            &live_event(b1),
+            &live_event(&b1),
             &mut state,
             &mut current_tip,
             &mut lib_slot,
@@ -1559,7 +1397,7 @@ mod tests {
         // from this sequencer's perspective and was never surfaced before,
         // so this event's channel update must report it as adopted.
         let second = handle_block_event(
-            &live_event(b3),
+            &live_event(&b3),
             &mut state,
             &mut current_tip,
             &mut lib_slot,
@@ -1580,6 +1418,290 @@ mod tests {
              got adopted={:?}, orphaned={:?}",
             update.adopted,
             update.orphaned,
+        );
+    }
+
+    /// An L1 branch change served by the canonical backfill: the new branch
+    /// re-mines the old branch's inscription A and adds Y on top. Only Y is
+    /// news to the consumer — A must be neither re-adopted (it was already
+    /// reported) nor orphaned (its position is intact on the new branch).
+    #[tokio::test]
+    async fn reorg_backfill_reports_only_new_inscriptions_as_adopted() {
+        // Chain: G(0) <- B1            (old branch, delivered live)
+        //        G(0) <- C1 <- C2 <- C3 (new branch, C1/C2 via backfill)
+        //   B1 and C1 both carry inscription A (same tx, re-mined)
+        //   C2 carries inscription Y (parent = A)
+        //   C3 is empty, delivered live with C2/C1 missing
+        let channel_id = ChannelId::from([0u8; 32]);
+
+        let a = inscribe_op(channel_id, MsgId::root(), b"a");
+        let a_id = a.id();
+        let y = inscribe_op(channel_id, a_id, b"y");
+        let y_id = y.id();
+        let a_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(a)]);
+        let y_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(y)]);
+
+        let b1 = api_block(1, 0, 1, vec![a_tx.clone()]);
+        let c1 = api_block(4, 0, 2, vec![a_tx]);
+        let c2 = api_block(5, 4, 3, vec![y_tx]);
+        let c3 = api_block(6, 5, 4, Vec::new());
+
+        let node = MockNode {
+            blocks: vec![c1, c2],
+            ..MockNode::default()
+        };
+        let mut state = None;
+        let mut current_tip = None;
+        let mut lib_slot = Slot::genesis();
+
+        let first = handle_block_event(
+            &live_event(&b1),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing B1 succeeds");
+        assert!(
+            first.channel_update.is_some(),
+            "sanity: A is adopted on the first event"
+        );
+
+        let second = handle_block_event(
+            &live_event(&c3),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing C3 succeeds");
+        let update = second
+            .channel_update
+            .expect("the backfilled branch added Y; expected a channel update");
+        assert!(
+            update
+                .adopted
+                .iter()
+                .any(|t| t.inscription().is_some_and(|i| i.this_msg == y_id)),
+            "inscription mined on the backfilled branch must be reported as adopted; \
+             got adopted={:?}, orphaned={:?}",
+            update.adopted,
+            update.orphaned,
+        );
+        assert!(
+            !update
+                .adopted
+                .iter()
+                .any(|t| t.inscription().is_some_and(|i| i.this_msg == a_id)),
+            "re-mined A was already reported adopted and must not echo"
+        );
+        assert!(
+            update.orphaned.is_empty(),
+            "A's position is intact on the new branch; nothing is orphaned, got {:?}",
+            update.orphaned,
+        );
+        assert_eq!(update.new_channel_tip, y_id);
+    }
+
+    /// Blocks pulled in by the LIB backfill surface exclusively through
+    /// `finalized`: not double-reported as adopted, not misreported as
+    /// orphaned.
+    #[tokio::test]
+    async fn lib_backfilled_blocks_surface_as_finalized_not_adopted() {
+        // Chain: G(0) <- B1 <- B2 <- B3, LIB advances to B2 on the second
+        // event.
+        //   B1 carries inscription A (parent = root), delivered live
+        //   B2 carries inscription Y (parent = A), never seen live; reaches
+        //      state only through the LIB backfill of slots 1..=2
+        //   B3 is empty, delivered live with LIB at B2
+        let channel_id = ChannelId::from([0u8; 32]);
+
+        let a = inscribe_op(channel_id, MsgId::root(), b"a");
+        let a_id = a.id();
+        let y = inscribe_op(channel_id, a_id, b"y");
+        let y_id = y.id();
+
+        let b1 = api_block(
+            1,
+            0,
+            1,
+            vec![unverified_tx_with_ops(vec![Op::ChannelInscribe(a)])],
+        );
+        let b2 = api_block(
+            2,
+            1,
+            2,
+            vec![unverified_tx_with_ops(vec![Op::ChannelInscribe(y)])],
+        );
+        let b3 = api_block(3, 2, 3, Vec::new());
+
+        let node = MockNode {
+            immutable: vec![b1.clone(), b2],
+            ..MockNode::default()
+        };
+        let mut state = None;
+        let mut current_tip = None;
+        let mut lib_slot = Slot::genesis();
+
+        let first = handle_block_event(
+            &live_event(&b1),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing B1 succeeds");
+        assert!(
+            first.channel_update.is_some(),
+            "sanity: A is adopted on the first event"
+        );
+
+        let event = ProcessedBlockEvent {
+            block: b3,
+            tip: header_id(3),
+            tip_slot: Slot::from(3),
+            lib: header_id(2),
+            lib_slot: Slot::from(2),
+        };
+        let second = handle_block_event(
+            &event,
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing B3 succeeds");
+
+        let finalized_msgs: Vec<MsgId> = second
+            .finalized_items
+            .iter()
+            .flat_map(|t| t.ops.iter())
+            .filter_map(|op| match op {
+                FinalizedOp::Inscription(i) => Some(i.this_msg),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            finalized_msgs.contains(&a_id) && finalized_msgs.contains(&y_id),
+            "both inscriptions finalize via the LIB backfill; got {finalized_msgs:?}"
+        );
+
+        if let Some(update) = second.channel_update {
+            assert!(
+                !update
+                    .adopted
+                    .iter()
+                    .any(|t| t.inscription().is_some_and(|i| i.this_msg == y_id)),
+                "LIB-backfilled Y reaches the consumer as finalized and must not \
+                 double-report as adopted"
+            );
+            assert!(
+                update.orphaned.is_empty(),
+                "content finalized by this event must not be misreported as orphaned; \
+                 got {:?}",
+                update.orphaned,
+            );
+        }
+    }
+
+    /// A finalized inscription must never be reported `orphaned`: LIB
+    /// advancing past its block (steady state, no reorg) removes it from
+    /// the lineage walk's range but not from the channel.
+    #[tokio::test]
+    async fn finalized_inscription_is_not_reported_orphaned() {
+        // Chain: G(0) <- B1(A) <- B2 <- B3, all delivered live; LIB advances
+        // one block per event: genesis, B1, B2.
+        let channel_id = ChannelId::from([0u8; 32]);
+        let a = inscribe_op(channel_id, MsgId::root(), b"a");
+        let b1 = api_block(
+            1,
+            0,
+            1,
+            vec![unverified_tx_with_ops(vec![Op::ChannelInscribe(a)])],
+        );
+        let b2 = api_block(2, 1, 2, Vec::new());
+        let b3 = api_block(3, 2, 3, Vec::new());
+
+        let node = MockNode {
+            immutable: vec![b1.clone(), b2.clone()],
+            ..MockNode::default()
+        };
+        let mut state = None;
+        let mut current_tip = None;
+        let mut lib_slot = Slot::genesis();
+
+        handle_block_event(
+            &live_event(&b1),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing B1 succeeds");
+
+        // LIB advances to B1 — the block carrying A. A finalizes here.
+        let e2 = ProcessedBlockEvent {
+            block: b2,
+            tip: header_id(2),
+            tip_slot: Slot::from(2),
+            lib: header_id(1),
+            lib_slot: Slot::from(1),
+        };
+        let second = handle_block_event(
+            &e2,
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing B2 succeeds");
+        assert!(
+            second
+                .channel_update
+                .as_ref()
+                .is_none_or(|u| u.orphaned.is_empty()),
+            "nothing is orphaned when A's block becomes LIB; got {:?}",
+            second.channel_update,
+        );
+
+        // LIB advances to B2 — A's block is now strictly below LIB and its
+        // store entry is pruned.
+        let e3 = ProcessedBlockEvent {
+            block: b3,
+            tip: header_id(3),
+            tip_slot: Slot::from(3),
+            lib: header_id(2),
+            lib_slot: Slot::from(2),
+        };
+        let third = handle_block_event(
+            &e3,
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing B3 succeeds");
+        assert!(
+            third
+                .channel_update
+                .as_ref()
+                .is_none_or(|u| u.orphaned.is_empty()),
+            "a finalized inscription must never be reported orphaned; got {:?}",
+            third.channel_update,
         );
     }
 }

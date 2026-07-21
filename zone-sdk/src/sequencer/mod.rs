@@ -69,6 +69,8 @@ mod client;
 mod handle;
 mod slot_clock;
 mod state;
+#[cfg(test)]
+mod test_support;
 mod tx_builder;
 mod types;
 mod zone_sequencer;

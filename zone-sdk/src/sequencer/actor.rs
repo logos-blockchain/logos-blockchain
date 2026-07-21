@@ -592,19 +592,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering as AtomicOrdering},
-    };
-
-    use async_trait::async_trait;
-    use futures::StreamExt as _;
-    use lb_common_http_client::{
-        ApiBlock, ApiHeader, BlockInfo, ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, State,
-        TimeInfo,
-    };
     use lb_core::{
-        header::{ContentId, HeaderId},
+        header::HeaderId,
         mantle::{
             MantleTx, Note, Op, SignedMantleTx, Transaction as _, Utxo,
             ledger::Inputs,
@@ -612,7 +601,6 @@ mod tests {
                 OpProof,
                 channel::{
                     ChannelId, MsgId,
-                    config::Keys,
                     deposit::DepositOp,
                     inscribe::{Inscription, InscriptionOp},
                     withdraw::ChannelWithdrawOp,
@@ -620,37 +608,23 @@ mod tests {
             },
             transactions::Ops,
         },
-        proofs::leader_proof::Groth16LeaderProof,
     };
-    use lb_http_api_common::{
-        bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
-        queries::BlocksStreamQuery,
-    };
-    use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
+    use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
-    use tokio::sync::{mpsc, watch};
+    use tokio::sync::watch;
 
     use super::{
         super::{
+            test_support::{
+                MockNode, StreamEnd, StreamScript, api_block, live_event, scripts,
+                unverified_tx_with_ops,
+            },
             types::{FinalizedOp, SequencerConfig},
             zone_sequencer::track_pending_tx,
         },
         *,
     };
-    use crate::{ZoneMessage, adapter::BoxStream};
-
-    /// Build a `SignedMantleTx` carrying the given ops, with placeholder
-    /// proofs. Suitable for tests that only care about op extraction, not
-    /// verification.
-    fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedMantleTx {
-        let n = ops.len();
-        let mantle_tx = MantleTx(Ops::try_from(ops).unwrap());
-        SignedMantleTx::new_unverified(
-            mantle_tx,
-            vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n],
-        )
-    }
 
     #[must_use]
     pub fn utxo_with_sk() -> (ZkKey, Utxo) {
@@ -671,7 +645,7 @@ mod tests {
         // Init a sequencer
         let channel_id = ChannelId::from([0; 32]);
         let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
-        let (node, mut posted_txs) = MockNode::new();
+        let (node, mut posted_txs) = MockNode::with_posted_channel();
         let mut sequencer = ZoneSequencer::init(channel_id, sequencer_key, node, None);
 
         // Drive sequencer until ready
@@ -735,178 +709,6 @@ mod tests {
         }
     }
 
-    #[derive(Clone)]
-    struct MockNode {
-        posted_transactions_sender: mpsc::Sender<SignedMantleTx>,
-        channel_state: Option<ChannelState>,
-    }
-
-    impl MockNode {
-        fn new() -> (Self, mpsc::Receiver<SignedMantleTx>) {
-            let (tx, rx) = mpsc::channel(10);
-            (
-                Self {
-                    posted_transactions_sender: tx,
-                    channel_state: Some(ChannelState {
-                        accredited_keys: Keys::from(Ed25519Key::from_bytes(&[0; 32]).public_key())
-                            .into(),
-                        configuration_threshold: 1,
-                        tip_message: MsgId::root(),
-                        tip_slot: Slot::default(),
-                        tip_sequencer: 0,
-                        tip_sequencer_starting_slot: Slot::default(),
-                        posting_timeframe: 0u32.into(),
-                        posting_timeout: 0u32.into(),
-                        transfer_threshold: 1,
-                    }),
-                },
-                rx,
-            )
-        }
-    }
-
-    /// Like [`MockNode`], but with a controllable connectivity flag.
-    ///
-    /// Used to exercise reconnect behavior. While "down" (`up` set to `false`),
-    /// `block_stream` errors and any previously-returned live stream ends, so
-    /// the sequencer notices the disconnect and re-enters `ensure_connected`.
-    #[derive(Clone)]
-    struct ReconnectMockNode {
-        inner: MockNode,
-        up_rx: watch::Receiver<bool>,
-    }
-
-    impl ReconnectMockNode {
-        fn new() -> (Self, mpsc::Receiver<SignedMantleTx>, watch::Sender<bool>) {
-            let (inner, posted_rx) = MockNode::new();
-            let (up_tx, up_rx) = watch::channel(true);
-            (Self { inner, up_rx }, posted_rx, up_tx)
-        }
-    }
-
-    #[async_trait]
-    impl adapter::Node for ReconnectMockNode {
-        async fn consensus_info(&self) -> Result<ChainServiceInfo, lb_common_http_client::Error> {
-            self.inner.consensus_info().await
-        }
-
-        async fn time_info(&self) -> Result<TimeInfo, lb_common_http_client::Error> {
-            self.inner.time_info().await
-        }
-
-        async fn channel_state(
-            &self,
-            channel_id: ChannelId,
-        ) -> Result<Option<ChannelState>, lb_common_http_client::Error> {
-            self.inner.channel_state(channel_id).await
-        }
-
-        async fn block_stream(
-            &self,
-        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
-            if !*self.up_rx.borrow() {
-                return Err(lb_common_http_client::Error::Client("node down".to_owned()));
-            }
-            let initial = futures::stream::once(async {
-                ProcessedBlockEvent {
-                    block: ApiBlock {
-                        header: ApiHeader {
-                            id: HeaderId::from([1; 32]),
-                            parent_block: HeaderId::from([0; 32]),
-                            slot: 1.into(),
-                            block_root: ContentId::from([0; 32]),
-                            proof_of_leadership: Groth16LeaderProof::genesis(),
-                        },
-                        transactions: Vec::new(),
-                    },
-                    tip: HeaderId::from([1; 32]),
-                    tip_slot: 1.into(),
-                    lib: HeaderId::from([0; 32]),
-                    lib_slot: Slot::genesis(),
-                }
-            });
-            // Stay open until the node goes down, then end so the sequencer
-            // re-enters `ensure_connected` (where `block_stream` errors).
-            let up_rx = self.up_rx.clone();
-            let until_down = futures::stream::once(async move {
-                let mut up_rx = up_rx;
-                while *up_rx.borrow_and_update() {
-                    if up_rx.changed().await.is_err() {
-                        break;
-                    }
-                }
-            })
-            .filter_map(async |()| None::<ProcessedBlockEvent>);
-            Ok(Box::pin(initial.chain(until_down)))
-        }
-
-        async fn blocks_range_stream(
-            &self,
-            params: BlocksStreamQuery,
-        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
-            self.inner.blocks_range_stream(params).await
-        }
-
-        async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, lb_common_http_client::Error> {
-            self.inner.lib_stream().await
-        }
-
-        async fn block(
-            &self,
-            id: HeaderId,
-        ) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
-            self.inner.block(id).await
-        }
-
-        async fn block_events(
-            &self,
-            id: HeaderId,
-        ) -> Result<Option<lb_common_http_client::Events>, lb_common_http_client::Error> {
-            self.inner.block_events(id).await
-        }
-
-        async fn immutable_blocks(
-            &self,
-            slot_from: Slot,
-            slot_to: Slot,
-        ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
-            self.inner.immutable_blocks(slot_from, slot_to).await
-        }
-
-        async fn zone_messages_in_block(
-            &self,
-            id: HeaderId,
-            channel_id: ChannelId,
-        ) -> Result<BoxStream<ZoneMessage>, lb_common_http_client::Error> {
-            self.inner.zone_messages_in_block(id, channel_id).await
-        }
-
-        async fn zone_messages_in_blocks(
-            &self,
-            slot_from: Slot,
-            slot_to: Slot,
-            channel_id: ChannelId,
-        ) -> Result<BoxStream<(ZoneMessage, Slot)>, lb_common_http_client::Error> {
-            self.inner
-                .zone_messages_in_blocks(slot_from, slot_to, channel_id)
-                .await
-        }
-
-        async fn post_transaction(
-            &self,
-            tx: SignedMantleTx,
-        ) -> Result<(), lb_common_http_client::Error> {
-            self.inner.post_transaction(tx).await
-        }
-
-        async fn fund_tx(
-            &self,
-            request: WalletFundRequestBody,
-        ) -> Result<WalletFundResponseBody, lb_common_http_client::Error> {
-            self.inner.fund_tx(request).await
-        }
-    }
-
     /// Comment #1 regression guard for client publishes during reconnect.
     ///
     /// A `SequencerClient::publish` issued while the node is down (reconnect in
@@ -917,7 +719,9 @@ mod tests {
     async fn client_publish_accepted_locally_during_reconnect() {
         let channel_id = ChannelId::from([0; 32]);
         let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
-        let (node, mut posted_txs, up_tx) = ReconnectMockNode::new();
+        let (up_tx, up_rx) = watch::channel(true);
+        let (mut node, mut posted_txs) = MockNode::with_posted_channel();
+        node.up = Some(up_rx);
         let config = SequencerConfig {
             reconnect_delay: std::time::Duration::from_millis(20),
             resubmit_interval: std::time::Duration::from_millis(20),
@@ -1086,275 +890,6 @@ mod tests {
         );
     }
 
-    #[async_trait]
-    impl adapter::Node for MockNode {
-        async fn consensus_info(&self) -> Result<ChainServiceInfo, lb_common_http_client::Error> {
-            Ok(ChainServiceInfo {
-                cryptarchia_info: CryptarchiaInfo {
-                    lib: HeaderId::from([0; 32]),
-                    lib_slot: Slot::genesis(),
-                    tip: HeaderId::from([0; 32]),
-                    slot: Slot::genesis(),
-                    height: 0,
-                },
-                mode: ChainServiceMode::Started(State::Online),
-            })
-        }
-
-        async fn time_info(&self) -> Result<TimeInfo, lb_common_http_client::Error> {
-            Ok(TimeInfo {
-                slot_duration_ms: 1_000,
-                genesis_time_unix_ms: 0,
-                current_slot: 0,
-                current_epoch: 0,
-            })
-        }
-
-        async fn channel_state(
-            &self,
-            _channel_id: ChannelId,
-        ) -> Result<Option<ChannelState>, lb_common_http_client::Error> {
-            Ok(self.channel_state.clone())
-        }
-
-        async fn block_stream(
-            &self,
-        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
-            Ok(Box::pin(
-                futures::stream::once(async {
-                    ProcessedBlockEvent {
-                        block: ApiBlock {
-                            header: ApiHeader {
-                                id: HeaderId::from([1; 32]),
-                                parent_block: HeaderId::from([0; 32]),
-                                slot: 1.into(),
-                                block_root: ContentId::from([0; 32]),
-                                proof_of_leadership: Groth16LeaderProof::genesis(),
-                            },
-                            transactions: Vec::new(),
-                        },
-                        tip: HeaderId::from([1; 32]),
-                        tip_slot: 1.into(),
-                        lib: HeaderId::from([0; 32]),
-                        lib_slot: Slot::genesis(),
-                    }
-                })
-                .chain(futures::stream::pending()),
-            ))
-        }
-
-        async fn blocks_range_stream(
-            &self,
-            _params: BlocksStreamQuery,
-        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
-            unimplemented!()
-        }
-
-        async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, lb_common_http_client::Error> {
-            Ok(Box::pin(futures::stream::pending()))
-        }
-
-        async fn block(
-            &self,
-            _id: HeaderId,
-        ) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
-            unimplemented!()
-        }
-
-        async fn block_events(
-            &self,
-            _id: HeaderId,
-        ) -> Result<Option<lb_common_http_client::Events>, lb_common_http_client::Error> {
-            Ok(None)
-        }
-
-        async fn immutable_blocks(
-            &self,
-            _slot_from: Slot,
-            _slot_to: Slot,
-        ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
-            Ok(Vec::new())
-        }
-
-        async fn zone_messages_in_block(
-            &self,
-            _id: HeaderId,
-            _channel_id: ChannelId,
-        ) -> Result<BoxStream<ZoneMessage>, lb_common_http_client::Error> {
-            Ok(Box::pin(futures::stream::pending()))
-        }
-
-        async fn zone_messages_in_blocks(
-            &self,
-            _slot_from: Slot,
-            _slot_to: Slot,
-            _channel_id: ChannelId,
-        ) -> Result<BoxStream<(ZoneMessage, Slot)>, lb_common_http_client::Error> {
-            Ok(Box::pin(futures::stream::pending()))
-        }
-
-        async fn post_transaction(
-            &self,
-            tx: SignedMantleTx,
-        ) -> Result<(), lb_common_http_client::Error> {
-            self.posted_transactions_sender.send(tx).await.unwrap();
-            Ok(())
-        }
-
-        async fn fund_tx(
-            &self,
-            request: WalletFundRequestBody,
-        ) -> Result<WalletFundResponseBody, lb_common_http_client::Error> {
-            // Fee-less passthrough: build the request's ops unchanged, as the
-            // node would at zero gas price.
-            Ok(WalletFundResponseBody {
-                tip: HeaderId::from([0; 32]),
-                funded_tx: request.tx_builder.build().map_err(|e| {
-                    lb_common_http_client::Error::Server(format!("mock funding failed: {e:?}"))
-                })?,
-                transfer_proof: None,
-            })
-        }
-    }
-
-    /// Mock node that serves a single genesis-slot block with a channel
-    /// inscription, used to verify the cold-start backfill picks up slot 0.
-    #[derive(Clone)]
-    struct ColdStartMockNode {
-        genesis_block: ApiBlock,
-        live_block: ApiBlock,
-        channel_state: Option<ChannelState>,
-    }
-
-    #[async_trait]
-    impl adapter::Node for ColdStartMockNode {
-        async fn consensus_info(&self) -> Result<ChainServiceInfo, lb_common_http_client::Error> {
-            Ok(ChainServiceInfo {
-                cryptarchia_info: CryptarchiaInfo {
-                    lib: self.genesis_block.header.id,
-                    lib_slot: Slot::genesis(),
-                    tip: self.genesis_block.header.id,
-                    slot: Slot::genesis(),
-                    height: 0,
-                },
-                mode: ChainServiceMode::Started(State::Online),
-            })
-        }
-
-        async fn time_info(&self) -> Result<TimeInfo, lb_common_http_client::Error> {
-            Ok(TimeInfo {
-                slot_duration_ms: 1_000,
-                genesis_time_unix_ms: 0,
-                current_slot: 0,
-                current_epoch: 0,
-            })
-        }
-
-        async fn block_stream(
-            &self,
-        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
-            let block = self.live_block.clone();
-            let genesis_id = self.genesis_block.header.id;
-            Ok(Box::pin(
-                futures::stream::once(async move {
-                    ProcessedBlockEvent {
-                        block,
-                        tip: HeaderId::from([2; 32]),
-                        tip_slot: 1.into(),
-                        lib: genesis_id,
-                        lib_slot: Slot::genesis(),
-                    }
-                })
-                .chain(futures::stream::pending()),
-            ))
-        }
-
-        async fn blocks_range_stream(
-            &self,
-            _params: BlocksStreamQuery,
-        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
-            Ok(Box::pin(futures::stream::empty()))
-        }
-
-        async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, lb_common_http_client::Error> {
-            Ok(Box::pin(futures::stream::pending()))
-        }
-
-        async fn block(
-            &self,
-            _id: HeaderId,
-        ) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
-            Ok(None)
-        }
-
-        async fn block_events(
-            &self,
-            _id: HeaderId,
-        ) -> Result<Option<lb_common_http_client::Events>, lb_common_http_client::Error> {
-            Ok(None)
-        }
-
-        async fn immutable_blocks(
-            &self,
-            slot_from: Slot,
-            slot_to: Slot,
-        ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
-            // Cold-start backfill range is [0, 0] when lib_slot is genesis,
-            // so we only return the genesis block for that exact range.
-            if slot_from == Slot::genesis() && slot_to == Slot::genesis() {
-                Ok(vec![self.genesis_block.clone()])
-            } else {
-                Ok(Vec::new())
-            }
-        }
-
-        async fn zone_messages_in_block(
-            &self,
-            _id: HeaderId,
-            _channel_id: ChannelId,
-        ) -> Result<BoxStream<ZoneMessage>, lb_common_http_client::Error> {
-            Ok(Box::pin(futures::stream::empty()))
-        }
-
-        async fn zone_messages_in_blocks(
-            &self,
-            _slot_from: Slot,
-            _slot_to: Slot,
-            _channel_id: ChannelId,
-        ) -> Result<BoxStream<(ZoneMessage, Slot)>, lb_common_http_client::Error> {
-            Ok(Box::pin(futures::stream::empty()))
-        }
-
-        async fn post_transaction(
-            &self,
-            _tx: SignedMantleTx,
-        ) -> Result<(), lb_common_http_client::Error> {
-            Ok(())
-        }
-
-        async fn fund_tx(
-            &self,
-            request: WalletFundRequestBody,
-        ) -> Result<WalletFundResponseBody, lb_common_http_client::Error> {
-            // Fee-less passthrough: build the request's ops unchanged, as the
-            // node would at zero gas price.
-            Ok(WalletFundResponseBody {
-                tip: HeaderId::from([0; 32]),
-                funded_tx: request.tx_builder.build().map_err(|e| {
-                    lb_common_http_client::Error::Server(format!("mock funding failed: {e:?}"))
-                })?,
-                transfer_proof: None,
-            })
-        }
-
-        async fn channel_state(
-            &self,
-            _channel_id: ChannelId,
-        ) -> Result<Option<ChannelState>, lb_common_http_client::Error> {
-            Ok(self.channel_state.clone())
-        }
-    }
-
     /// Cold start with a channel inscription at slot 0 (genesis): the
     /// sequencer must include that slot in its initial backfill and emit it
     /// in a `Finalized` state change. Regression guard for the off-by-one fix
@@ -1376,45 +911,26 @@ mod tests {
         let genesis_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(inscribe)]);
         let genesis_tx_hash = genesis_tx.mantle_tx.hash();
 
-        let genesis_block = ApiBlock {
-            header: ApiHeader {
-                id: HeaderId::from([1; 32]),
-                parent_block: HeaderId::from([0; 32]),
-                slot: Slot::genesis(),
-                block_root: ContentId::from([0; 32]),
-                proof_of_leadership: Groth16LeaderProof::genesis(),
-            },
-            transactions: vec![genesis_tx],
-        };
+        let genesis_block = api_block(1, 0, 0, vec![genesis_tx]);
         // Empty block at slot 1 so the block stream advances and the
         // sequencer signals `Ready`, giving the test a clean exit signal.
-        let live_block = ApiBlock {
-            header: ApiHeader {
-                id: HeaderId::from([2; 32]),
-                parent_block: HeaderId::from([1; 32]),
-                slot: 1.into(),
-                block_root: ContentId::from([0; 32]),
-                proof_of_leadership: Groth16LeaderProof::genesis(),
-            },
-            transactions: Vec::new(),
-        };
+        let live_block = api_block(2, 1, 1, Vec::new());
 
-        let channel_state = Some(ChannelState {
-            accredited_keys: Keys::from(Ed25519Key::from_bytes(&[0; 32]).public_key()).into(),
-            configuration_threshold: 1,
-            tip_message: MsgId::root(),
-            tip_slot: Slot::default(),
-            tip_sequencer: 0,
-            tip_sequencer_starting_slot: Slot::default(),
-            posting_timeframe: 0u32.into(),
-            posting_timeout: 0u32.into(),
-            transfer_threshold: 1,
-        });
-
-        let node = ColdStartMockNode {
-            genesis_block,
-            live_block,
-            channel_state,
+        let node = MockNode {
+            lib: genesis_block.header.id,
+            tip: genesis_block.header.id,
+            scripts: scripts(vec![StreamScript {
+                events: vec![ProcessedBlockEvent {
+                    block: live_block.clone(),
+                    tip: live_block.header.id,
+                    tip_slot: live_block.header.slot,
+                    lib: genesis_block.header.id,
+                    lib_slot: Slot::genesis(),
+                }],
+                then: StreamEnd::Hang,
+            }]),
+            immutable: vec![genesis_block],
+            ..MockNode::default()
         };
         let mut sequencer = ZoneSequencer::init(channel_id, sequencer_key, node, None);
 
@@ -1444,150 +960,6 @@ mod tests {
                 assert_eq!(info.this_msg, expected_msg_id);
             }
             other => panic!("expected Inscription, got {other:?}"),
-        }
-    }
-
-    /// Mock node for the stream-gap scenario. The first `block_stream` call
-    /// delivers B1 and then ends — a dropped stream. B2 is "mined" while the
-    /// sequencer is disconnected. The second call resumes at B3, whose parent
-    /// (B2) is unknown locally, so the canonical backfill must fetch B2 via
-    /// `block()`.
-    #[derive(Clone)]
-    struct GapStreamMockNode {
-        inner: MockNode,
-        stream_calls: Arc<AtomicUsize>,
-        b1: ApiBlock,
-        b2: ApiBlock,
-        b3: ApiBlock,
-    }
-
-    impl GapStreamMockNode {
-        fn new(b1: ApiBlock, b2: ApiBlock, b3: ApiBlock) -> (Self, mpsc::Receiver<SignedMantleTx>) {
-            let (inner, posted_rx) = MockNode::new();
-            (
-                Self {
-                    inner,
-                    stream_calls: Arc::new(AtomicUsize::new(0)),
-                    b1,
-                    b2,
-                    b3,
-                },
-                posted_rx,
-            )
-        }
-
-        fn live_event(block: &ApiBlock) -> ProcessedBlockEvent {
-            ProcessedBlockEvent {
-                block: block.clone(),
-                tip: block.header.id,
-                tip_slot: block.header.slot,
-                lib: HeaderId::from([0; 32]),
-                lib_slot: Slot::genesis(),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl adapter::Node for GapStreamMockNode {
-        async fn consensus_info(&self) -> Result<ChainServiceInfo, lb_common_http_client::Error> {
-            self.inner.consensus_info().await
-        }
-
-        async fn time_info(&self) -> Result<TimeInfo, lb_common_http_client::Error> {
-            self.inner.time_info().await
-        }
-
-        async fn channel_state(
-            &self,
-            channel_id: ChannelId,
-        ) -> Result<Option<ChannelState>, lb_common_http_client::Error> {
-            self.inner.channel_state(channel_id).await
-        }
-
-        async fn block_stream(
-            &self,
-        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
-            if self.stream_calls.fetch_add(1, AtomicOrdering::SeqCst) == 0 {
-                // First connection: deliver B1, then end the stream (drop).
-                let event = Self::live_event(&self.b1);
-                Ok(Box::pin(futures::stream::once(async move { event })))
-            } else {
-                // Reconnection: resume at B3 — B2 was missed while down.
-                let event = Self::live_event(&self.b3);
-                Ok(Box::pin(
-                    futures::stream::once(async move { event }).chain(futures::stream::pending()),
-                ))
-            }
-        }
-
-        async fn blocks_range_stream(
-            &self,
-            params: BlocksStreamQuery,
-        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
-            self.inner.blocks_range_stream(params).await
-        }
-
-        async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, lb_common_http_client::Error> {
-            self.inner.lib_stream().await
-        }
-
-        async fn block(
-            &self,
-            id: HeaderId,
-        ) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
-            assert_eq!(
-                id, self.b2.header.id,
-                "only the missed gap block (B2) should be fetched by the canonical backfill"
-            );
-            Ok(Some(self.b2.clone()))
-        }
-
-        async fn block_events(
-            &self,
-            id: HeaderId,
-        ) -> Result<Option<lb_common_http_client::Events>, lb_common_http_client::Error> {
-            self.inner.block_events(id).await
-        }
-
-        async fn immutable_blocks(
-            &self,
-            slot_from: Slot,
-            slot_to: Slot,
-        ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
-            self.inner.immutable_blocks(slot_from, slot_to).await
-        }
-
-        async fn zone_messages_in_block(
-            &self,
-            id: HeaderId,
-            channel_id: ChannelId,
-        ) -> Result<BoxStream<ZoneMessage>, lb_common_http_client::Error> {
-            self.inner.zone_messages_in_block(id, channel_id).await
-        }
-
-        async fn zone_messages_in_blocks(
-            &self,
-            slot_from: Slot,
-            slot_to: Slot,
-            channel_id: ChannelId,
-        ) -> Result<BoxStream<(ZoneMessage, Slot)>, lb_common_http_client::Error> {
-            self.inner
-                .zone_messages_in_blocks(slot_from, slot_to, channel_id)
-                .await
-        }
-
-        async fn post_transaction(
-            &self,
-            tx: SignedMantleTx,
-        ) -> Result<(), lb_common_http_client::Error> {
-            self.inner.post_transaction(tx).await
-        }
-
-        async fn fund_tx(
-            &self,
-            request: WalletFundRequestBody,
-        ) -> Result<WalletFundResponseBody, lb_common_http_client::Error> {
-            self.inner.fund_tx(request).await
         }
     }
 
@@ -1627,31 +999,34 @@ mod tests {
         };
         let y_id = y.id();
 
-        let block = |id: u8, parent: u8, slot: u64, transactions: Vec<SignedMantleTx>| ApiBlock {
-            header: ApiHeader {
-                id: HeaderId::from([id; 32]),
-                parent_block: HeaderId::from([parent; 32]),
-                slot: slot.into(),
-                block_root: ContentId::from([0; 32]),
-                proof_of_leadership: Groth16LeaderProof::genesis(),
-            },
-            transactions,
-        };
-        let b1 = block(
+        let b1 = api_block(
             1,
             0,
             1,
             vec![unverified_tx_with_ops(vec![Op::ChannelInscribe(a)])],
         );
-        let b2 = block(
+        let b2 = api_block(
             2,
             1,
             2,
             vec![unverified_tx_with_ops(vec![Op::ChannelInscribe(y)])],
         );
-        let b3 = block(3, 2, 3, Vec::new());
+        let b3 = api_block(3, 2, 3, Vec::new());
 
-        let (node, _posted_rx) = GapStreamMockNode::new(b1, b2, b3);
+        let node = MockNode {
+            scripts: scripts(vec![
+                StreamScript {
+                    events: vec![live_event(&b1)],
+                    then: StreamEnd::End,
+                },
+                StreamScript {
+                    events: vec![live_event(&b3)],
+                    then: StreamEnd::Hang,
+                },
+            ]),
+            blocks: vec![b2],
+            ..MockNode::default()
+        };
         let mut sequencer = ZoneSequencer::init(channel_id, sequencer_key, node, None);
 
         // Phase 1: drive until B1's channel update adopts A (Ready and turn

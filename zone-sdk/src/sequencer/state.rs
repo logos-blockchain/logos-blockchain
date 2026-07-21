@@ -766,6 +766,9 @@ impl TxState {
     /// - `orphaned`: txs that left it (replaced by a conflict). A bare un-mine
     ///   is a no-op — the link stays in the lineage via its held block.
     ///
+    /// Content at or below the finalized boundary is excluded from both
+    /// sides: it is immutable on every branch and surfaces via `finalized`.
+    ///
     /// Returns `None` if no channel state change.
     #[must_use]
     pub fn detect_channel_update(
@@ -779,16 +782,23 @@ impl TxState {
         let old_ids: HashSet<MsgId> = old_lineage.iter().map(|i| i.this_msg).collect();
         let new_ids: HashSet<MsgId> = new_lineage.iter().map(|i| i.this_msg).collect();
 
+        // Each lineage stops at the LIB of its capture time, so a LIB
+        // advance between the captures shifts the diff's lower boundary.
+        // Mask the finalized prefix on both sides so the shifted floor
+        // doesn't read as adopted/orphaned content.
+        let mut finalized = self.finalized_prefix_ids(old_lineage);
+        finalized.extend(self.finalized_prefix_ids(&new_lineage));
+
         let adopted = self.update_txs_from_infos(
             new_lineage
                 .iter()
-                .filter(|i| !old_ids.contains(&i.this_msg)),
+                .filter(|i| !old_ids.contains(&i.this_msg) && !finalized.contains(&i.this_msg)),
         );
 
         let orphaned = self.update_txs_from_infos(
             old_lineage
                 .iter()
-                .filter(|i| !new_ids.contains(&i.this_msg)),
+                .filter(|i| !new_ids.contains(&i.this_msg) && !finalized.contains(&i.this_msg)),
         );
 
         if orphaned.is_empty() && adopted.is_empty() {
@@ -800,6 +810,18 @@ impl TxState {
             adopted,
             new_channel_tip,
         })
+    }
+
+    /// Msg-ids of `lineage`'s prefix up to and including the last occurrence
+    /// of `finalized_msg` (same-block config replay can repeat an id); empty
+    /// when the finalized boundary lies below the lineage's start.
+    fn finalized_prefix_ids(&self, lineage: &[InscriptionInfo]) -> HashSet<MsgId> {
+        lineage
+            .iter()
+            .rposition(|i| i.this_msg == self.finalized_msg)
+            .map_or_else(HashSet::new, |pos| {
+                lineage[..=pos].iter().map(|i| i.this_msg).collect()
+            })
     }
 
     /// One update entry per tx: a multi-op custom tx contributes several
