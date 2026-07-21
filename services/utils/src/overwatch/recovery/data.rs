@@ -1,19 +1,27 @@
-use std::{collections::HashMap, fmt, sync::Arc};
+use std::{
+    collections::HashMap,
+    fmt,
+    sync::{Arc, Mutex},
+};
 
 use bytes::Bytes;
 
+use super::{RecoveryError, RecoveryResult};
+
 #[derive(Clone, Default)]
-pub struct RecoveryData(Arc<HashMap<Vec<u8>, Bytes>>);
+pub struct RecoveryData(Arc<Mutex<HashMap<Vec<u8>, Bytes>>>);
 
 impl RecoveryData {
     #[must_use]
     pub fn new(entries: HashMap<Vec<u8>, Bytes>) -> Self {
-        Self(Arc::new(entries))
+        Self(Arc::new(Mutex::new(entries)))
     }
 
-    #[must_use]
-    pub fn get(&self, key: &[u8]) -> Option<Bytes> {
-        self.0.get(key).cloned()
+    pub fn take(&self, key: &[u8]) -> RecoveryResult<Option<Bytes>> {
+        self.0
+            .lock()
+            .map_err(|error| RecoveryError::Backend(error.to_string()))
+            .map(|mut entries| entries.remove(key))
     }
 }
 
@@ -28,18 +36,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn clones_read_multiple_entries() {
+    fn clones_take_their_entries_from_shared_data() {
         let data = RecoveryData::new(HashMap::from([
             (b"recovery/one".to_vec(), Bytes::from_static(b"one")),
             (b"recovery/two".to_vec(), Bytes::from_static(b"two")),
         ]));
         let cloned_data = data.clone();
 
-        assert_eq!(data.get(b"recovery/one"), Some(Bytes::from_static(b"one")));
         assert_eq!(
-            cloned_data.get(b"recovery/two"),
+            data.take(b"recovery/one").unwrap(),
+            Some(Bytes::from_static(b"one"))
+        );
+        assert_eq!(cloned_data.take(b"recovery/one").unwrap(), None);
+        assert_eq!(
+            cloned_data.take(b"recovery/two").unwrap(),
             Some(Bytes::from_static(b"two"))
         );
-        assert_eq!(data.get(b"recovery/missing"), None);
+        assert_eq!(data.take(b"recovery/missing").unwrap(), None);
     }
 }

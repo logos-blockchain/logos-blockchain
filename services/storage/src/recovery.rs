@@ -94,7 +94,7 @@ where
     }
 
     fn load_state(settings: &Settings) -> RecoveryResult<Option<Self::State>> {
-        let Some(bytes) = settings.recovery_data().get(Settings::RECOVERY_KEY) else {
+        let Some(bytes) = settings.recovery_data().take(Settings::RECOVERY_KEY)? else {
             return Ok(None);
         };
 
@@ -182,7 +182,7 @@ mod tests {
     }
 
     #[test]
-    fn loads_state_from_configured_key() {
+    fn loads_and_removes_state_from_configured_key() {
         let expected = TestState {
             value: "restored".into(),
         };
@@ -209,9 +209,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(state, expected);
-        assert_eq!(
-            <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(&settings).unwrap(),
-            Some(expected)
+        assert!(
+            <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(&settings)
+                .unwrap()
+                .is_none()
         );
     }
 
@@ -275,7 +276,9 @@ mod tests {
             <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(&settings).is_err()
         );
         assert!(
-            <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(&settings).is_err()
+            <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(&settings)
+                .unwrap()
+                .is_none()
         );
     }
 }
