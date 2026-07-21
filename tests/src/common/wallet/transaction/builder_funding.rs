@@ -56,6 +56,7 @@ pub fn wallet_state_from_utxos(utxos: Vec<Utxo>) -> WalletState {
         utxos: utxo_map,
         pk_index,
         locked_notes: HashTrieSetSync::new_sync(),
+        channel_notes: HashTrieSetSync::new_sync(),
         epoch: 0.into(),
         vouchers: MerkleMountainRange::new(),
         voucher_paths: HashTrieMapSync::new_sync(),
