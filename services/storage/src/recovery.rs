@@ -2,9 +2,10 @@ use std::{fmt::Display, marker::PhantomData};
 
 use bytes::Bytes;
 use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
-use lb_services_utils::overwatch::recovery::{
-    RecoveryBackend, RecoveryData, RecoveryError, RecoveryResult,
-};
+#[cfg(feature = "rocksdb-backend")]
+use lb_services_utils::overwatch::recovery::RecoveryData;
+pub use lb_services_utils::overwatch::recovery::StorageRecoverySettings;
+use lb_services_utils::overwatch::recovery::{RecoveryBackend, RecoveryError, RecoveryResult};
 #[cfg(feature = "rocksdb-backend")]
 use overwatch::DynError;
 use overwatch::{
@@ -18,9 +19,10 @@ use tokio::sync::OnceCell;
 use crate::backends::rocksdb::{RocksBackend, RocksBackendSettings};
 use crate::{StorageMsg, StorageService, backends::StorageBackend};
 
-pub(crate) const RECOVERY_PREFIX: &[u8] = b"recovery/";
+const RECOVERY_PREFIX: &[u8] = b"recovery/";
 
-fn recovery_key(suffix: &[u8]) -> Bytes {
+#[must_use]
+pub fn recovery_key(suffix: &[u8]) -> Bytes {
     let mut key = Vec::with_capacity(RECOVERY_PREFIX.len() + suffix.len());
     key.extend_from_slice(RECOVERY_PREFIX);
     key.extend_from_slice(suffix);
@@ -39,12 +41,6 @@ fn recovery_data_from_backend(backend: &RocksBackend) -> Result<RecoveryData, Dy
         .load_prefix_entries(RECOVERY_PREFIX)
         .map(RecoveryData::new)
         .map_err(Into::into)
-}
-
-pub trait StorageRecoverySettings {
-    const RECOVERY_KEY_SUFFIX: &'static [u8];
-
-    fn recovery_data(&self) -> &RecoveryData;
 }
 
 pub struct StorageRecoveryBackend<State, Settings, Storage: StorageBackend, RuntimeServiceId> {

@@ -1,8 +1,6 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-
-pub const RECOVERY_FOLDER_NAME: &str = "recovery";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
@@ -15,14 +13,5 @@ impl Default for Config {
         Self {
             base_folder: "./state".into(),
         }
-    }
-}
-
-impl Config {
-    #[must_use]
-    pub fn get_path_for_recovery_state(&self, recovery_path: &Path) -> PathBuf {
-        self.base_folder
-            .join(RECOVERY_FOLDER_NAME)
-            .join(recovery_path)
     }
 }

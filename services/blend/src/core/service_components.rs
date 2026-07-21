@@ -27,6 +27,7 @@ impl<
     TimeBackend,
     ChainService,
     PolInfoProvider,
+    StateStorage,
     RuntimeServiceId,
 > ServiceComponents<RuntimeServiceId>
     for BlendService<
@@ -39,11 +40,20 @@ impl<
         TimeBackend,
         ChainService,
         PolInfoProvider,
+        StateStorage,
         RuntimeServiceId,
     >
 where
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
     Network: crate::core::network::NetworkAdapter<RuntimeServiceId>,
+    StateStorage: lb_services_utils::overwatch::recovery::RecoveryBackend<
+            RuntimeServiceId,
+            State = crate::core::state::RecoveryServiceState<
+                Backend::Settings,
+                Network::BroadcastSettings,
+            >,
+        > + Send
+        + Sync,
 {
     type NetworkAdapter = Network;
     type BackendSettings = Backend::Settings;

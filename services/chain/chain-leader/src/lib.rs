@@ -29,6 +29,7 @@ use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
 use lb_ledger::LedgerState;
 use lb_services_utils::wait_until_services_are_ready;
+use lb_storage_service::StorageService;
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
 use lb_tx_service::{
     TxMempoolService,
@@ -287,12 +288,19 @@ where
     ChainNetwork: ChainNetworkServiceData<Tx = Mempool::Item>,
     Wallet: lb_wallet_service::api::WalletServiceData + 'static,
     RuntimeServiceId: Debug
+        + Clone
         + Send
         + Sync
         + Display
         + 'static
         + AsServiceId<Self>
         + AsServiceId<BlendService>
+        + AsServiceId<
+            StorageService<
+                <Mempool::Storage as MempoolStorageAdapter<RuntimeServiceId>>::Backend,
+                RuntimeServiceId,
+            >,
+        >
         + AsServiceId<
             TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
         >

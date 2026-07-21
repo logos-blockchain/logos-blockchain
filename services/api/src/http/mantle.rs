@@ -104,12 +104,17 @@ where
         + 'static,
     StorageAdapter::Error: Debug,
     RuntimeServiceId: Debug
+        + Clone
         + Sync
         + Send
         + Display
+        + 'static
+        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
         + AsServiceId<MempoolService<StorageAdapter, RuntimeServiceId>>,
 {
-    let relay = handle.relay().await?;
+    let relay = handle
+        .relay::<MempoolService<StorageAdapter, RuntimeServiceId>>()
+        .await?;
     let (sender, receiver) = oneshot::channel();
     relay
         .send(MempoolMsg::Metrics {
@@ -134,12 +139,17 @@ where
         + 'static,
     StorageAdapter::Error: Debug,
     RuntimeServiceId: Debug
+        + Clone
         + Sync
         + Send
         + Display
+        + 'static
+        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
         + AsServiceId<MempoolService<StorageAdapter, RuntimeServiceId>>,
 {
-    let relay = handle.relay().await?;
+    let relay = handle
+        .relay::<MempoolService<StorageAdapter, RuntimeServiceId>>()
+        .await?;
     let (sender, receiver) = oneshot::channel();
     relay
         .send(MempoolMsg::Status {

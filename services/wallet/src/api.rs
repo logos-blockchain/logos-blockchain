@@ -10,6 +10,7 @@ use lb_core::{
 use lb_key_management_system_service::keys::{
     Ed25519Key, ZkPublicKey, ZkSignature, secured_key::SecuredKey,
 };
+use lb_storage_service::backends::StorageBackend;
 use lb_wallet::WalletBalance;
 use overwatch::{
     overwatch::OverwatchHandle,
@@ -58,6 +59,8 @@ pub trait WalletServiceData:
 
 impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> WalletServiceData
     for crate::WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
+where
+    Storage: StorageBackend + Send + Sync + 'static,
 {
     type Kms = Kms;
     type Cryptarchia = Cryptarchia;

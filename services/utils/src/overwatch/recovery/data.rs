@@ -11,6 +11,12 @@ use super::{RecoveryError, RecoveryResult};
 #[derive(Clone, Default)]
 pub struct RecoveryData(Arc<Mutex<HashMap<Vec<u8>, Bytes>>>);
 
+pub trait StorageRecoverySettings {
+    const RECOVERY_KEY_SUFFIX: &'static [u8];
+
+    fn recovery_data(&self) -> &RecoveryData;
+}
+
 impl RecoveryData {
     #[must_use]
     pub fn new(entries: HashMap<Vec<u8>, Bytes>) -> Self {

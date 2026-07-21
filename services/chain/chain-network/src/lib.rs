@@ -25,6 +25,7 @@ pub use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_ledger::EpochState;
 use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
+use lb_storage_service::StorageService;
 use lb_time_service::{TimeService, TimeServiceMessage};
 use lb_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
@@ -208,6 +209,7 @@ where
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
     RuntimeServiceId: Debug
+        + Clone
         + Send
         + Sync
         + Display
@@ -215,6 +217,12 @@ where
         + AsServiceId<Self>
         + AsServiceId<Cryptarchia>
         + AsServiceId<NetworkService<NetAdapter::Backend, RuntimeServiceId>>
+        + AsServiceId<
+            StorageService<
+                <Mempool::Storage as MempoolStorageAdapter<RuntimeServiceId>>::Backend,
+                RuntimeServiceId,
+            >,
+        >
         + AsServiceId<
             TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
         >

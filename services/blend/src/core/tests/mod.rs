@@ -68,7 +68,7 @@ async fn test_handle_incoming_blend_message() {
     let mut epoch = 0.into();
     let minimal_network_size = 1;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let (settings, _recovery_file) = settings(
+    let settings = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
         (),
@@ -301,7 +301,7 @@ async fn test_duplicate_decapsulated_replica_handled_gracefully() {
     let epoch = 0.into();
     let minimal_network_size = 1;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let (settings, _recovery_file) = settings(
+    let settings = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
         (),
@@ -397,7 +397,7 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
 
     let minimal_network_size = 1;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let (settings, _recovery_file) = settings(
+    let settings = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
         (),
@@ -482,7 +482,7 @@ async fn test_handle_epoch_transition_expired() {
     let epoch = 0.into();
     let minimal_network_size = 1;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let (mut settings, _recovery_file) = settings(
+    let mut settings = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
         (),
@@ -557,7 +557,7 @@ async fn test_handle_epoch_event() {
     let epoch = 0.into();
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let (settings, _recovery_file) = settings(
+    let settings = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
         (),
@@ -723,7 +723,7 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
     let epoch = 0.into();
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let (settings, _recovery_file) = settings(
+    let settings = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
         (),
@@ -818,7 +818,7 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
     let epoch = 0.into();
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let (settings, _recovery_file) = settings(
+    let settings = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
         (),
@@ -912,7 +912,7 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
     let epoch = 0.into();
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let (settings, _recovery_file) = settings(
+    let settings = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
         (),
@@ -978,7 +978,7 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
     let epoch = 0.into();
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let (settings, _recovery_file) = settings(
+    let settings = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
         (),
@@ -1051,7 +1051,7 @@ async fn complete_old_epoch_after_main_loop_done() {
     let (membership, local_private_key) = new_membership(minimal_network_size);
 
     // Create settings.
-    let (settings, _recovery_file) = settings(
+    let settings = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
         (),
@@ -1198,7 +1198,7 @@ async fn stop_on_empty_epoch() {
     let (membership, local_private_key) = new_membership(minimal_network_size);
 
     // Create settings.
-    let (settings, _recovery_file) = settings(
+    let settings = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
         (),
@@ -1334,7 +1334,7 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
     let (membership, local_private_key) = new_membership(minimal_network_size);
 
     // Create settings.
-    let (settings, _recovery_file) = settings(
+    let settings = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
         (),
@@ -1471,7 +1471,7 @@ async fn test_proof_generator_epoch_binding() {
     let epoch_1 = 1.into();
     let minimal_network_size = 1;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let (settings, _recovery_file) = settings(
+    let settings = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
         (),
@@ -1619,7 +1619,7 @@ async fn test_proof_generator_epoch_binding() {
 async fn test_initialize_recovers_matching_saved_state() {
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let (settings, _recovery_file) = settings(
+    let settings = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
         (),

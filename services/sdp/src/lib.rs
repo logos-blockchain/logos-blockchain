@@ -7,7 +7,6 @@ pub mod wallet;
 use std::{
     collections::BTreeSet,
     fmt::{Debug, Display},
-    path::PathBuf,
     pin::Pin,
 };
 
@@ -30,7 +29,7 @@ use lb_core::{
     },
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_services_utils::overwatch::{RecoveryOperator, recovery::backends::FileBackendSettings};
+use lb_services_utils::overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData},
@@ -88,12 +87,15 @@ pub struct SdpSettings {
     /// will be fetched from the ledger.
     pub declaration_id: Option<DeclarationId>,
     pub wallet_config: SdpWalletConfig,
-    pub recovery_path: PathBuf,
+    #[serde(skip)]
+    pub recovery_data: RecoveryData,
 }
 
-impl FileBackendSettings for SdpSettings {
-    fn recovery_file(&self) -> &PathBuf {
-        &self.recovery_path
+impl StorageRecoverySettings for SdpSettings {
+    const RECOVERY_KEY_SUFFIX: &'static [u8] = b"sdp";
+
+    fn recovery_data(&self) -> &RecoveryData {
+        &self.recovery_data
     }
 }
 

@@ -1,9 +1,12 @@
 use std::{
+    collections::HashMap,
     net::{IpAddr, Ipv4Addr},
     path::Path,
 };
 
+use bytes::Bytes;
 use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_services_utils::overwatch::RecoveryData;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use tracing::Level;
 
@@ -39,6 +42,26 @@ use crate::{
         },
     },
 };
+
+const BLEND_RECOVERY_MARKER: &[u8] = b"recovery/test/blend";
+const MEMPOOL_RECOVERY_MARKER: &[u8] = b"recovery/test/mempool";
+const SDP_RECOVERY_MARKER: &[u8] = b"recovery/test/sdp";
+const WALLET_RECOVERY_MARKER: &[u8] = b"recovery/test/wallet";
+
+fn recovery_data_fixture() -> RecoveryData {
+    RecoveryData::new(HashMap::from([
+        (BLEND_RECOVERY_MARKER.to_vec(), Bytes::from_static(b"blend")),
+        (
+            MEMPOOL_RECOVERY_MARKER.to_vec(),
+            Bytes::from_static(b"mempool"),
+        ),
+        (SDP_RECOVERY_MARKER.to_vec(), Bytes::from_static(b"sdp")),
+        (
+            WALLET_RECOVERY_MARKER.to_vec(),
+            Bytes::from_static(b"wallet"),
+        ),
+    ]))
+}
 
 #[test]
 fn tokio_console_config_defaults_to_loopback_default_console_port() {
@@ -106,8 +129,9 @@ fn parse_config_path() {
 }
 
 #[test]
-fn common_recovery_folder() {
+fn service_settings_receive_recovery_data() {
     const STATE_PATH: &str = "./state";
+    let recovery_data = recovery_data_fixture();
 
     let blend_config = BlendConfig::with_required_values(BlendRequiredValues {
         non_ephemeral_signing_key_id: "non_ephemeral_signing_key_id".into(),
@@ -146,51 +170,53 @@ fn common_recovery_folder() {
         deployment: deployment_settings.blend,
     }
     .into_blend_services_settings(
-        &user_config.state,
+        recovery_data.clone(),
         &deployment_settings.time,
         &deployment_settings.cryptarchia,
     );
-    assert!(
+    assert_eq!(
         blend_service_settings
             .common
-            .recovery_path_prefix
-            .starts_with(Path::new(STATE_PATH).join("recovery").join("blend"))
+            .recovery_data
+            .take(BLEND_RECOVERY_MARKER)
+            .unwrap(),
+        Some(Bytes::from_static(b"blend"))
     );
 
     let wallet_service_settings = WalletServiceConfig {
         user: user_config.wallet.clone(),
     }
-    .into_wallet_service_settings(&user_config.state);
-    assert!(
+    .into_wallet_service_settings(recovery_data.clone());
+    assert_eq!(
         wallet_service_settings
-            .recovery_path
-            .starts_with(Path::new(STATE_PATH).join("recovery").join("wallet"))
+            .recovery_data
+            .take(WALLET_RECOVERY_MARKER)
+            .unwrap(),
+        Some(Bytes::from_static(b"wallet"))
     );
 
     let mempool_service_settings = MempoolServiceConfig {
         deployment: deployment_settings.mempool,
     }
-    .into_mempool_service_settings(&user_config.state);
-    assert!(
+    .into_mempool_service_settings(recovery_data.clone());
+    assert_eq!(
         mempool_service_settings
-            .recovery_path
-            .starts_with(Path::new(STATE_PATH).join("recovery").join("mempool"))
+            .recovery_data
+            .take(MEMPOOL_RECOVERY_MARKER)
+            .unwrap(),
+        Some(Bytes::from_static(b"mempool"))
     );
 
-    // The SDP service must own its recovery file under `recovery/sdp`. If it
-    // shares a path with another service (e.g. the mempool), that service
-    // overwrites the persisted `declaration_id`, so a restarted blend core node
-    // loses its declaration and silently drops out of the blend network.
     let sdp_service_settings = SdpServiceConfig {
         user: user_config.sdp.clone(),
     }
-    .into_sdp_service_settings(&user_config.state);
-    assert!(
+    .into_sdp_service_settings(recovery_data);
+    assert_eq!(
         sdp_service_settings
-            .recovery_path
-            .starts_with(Path::new(STATE_PATH).join("recovery").join("sdp")),
-        "SDP recovery path must live under recovery/sdp, but was {:?} (collides with another service's recovery file)",
-        sdp_service_settings.recovery_path
+            .recovery_data
+            .take(SDP_RECOVERY_MARKER)
+            .unwrap(),
+        Some(Bytes::from_static(b"sdp"))
     );
 
     let storage_service_settings = StorageServiceConfig {

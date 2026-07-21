@@ -140,6 +140,14 @@ where
         >
         + AsServiceId<BlockStorageService<RuntimeServiceId>>
         + AsServiceId<
+            StorageService<
+                <MempoolStorageAdapter as lb_tx_service::storage::MempoolStorageAdapter<
+                    RuntimeServiceId,
+                >>::Backend,
+                RuntimeServiceId,
+            >,
+        >
+        + AsServiceId<
             TxMempoolService<
                 lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
                     SignedMantleTx<Preverified>,

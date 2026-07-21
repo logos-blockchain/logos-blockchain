@@ -103,7 +103,7 @@ pub type ApiService = lb_api_service::ApiService<
         RocksStorageAdapter<SignedMantleTx<Preverified>, TxHash>,
         SdpMempoolAdapter<RuntimeServiceId>,
         SdpWalletAdapter<RuntimeServiceId>,
-        SdpRecoveryBackend,
+        SdpRecoveryBackend<RuntimeServiceId>,
         CryptarchiaLeaderService,
     >,
     RuntimeServiceId,
@@ -141,12 +141,19 @@ pub fn run_node_from_config(
 ) -> Result<Overwatch<RuntimeServiceId>, DynError> {
     let blend_rewards_params = config.deployment.blend_reward_params();
 
+    let storage_config = StorageConfig {
+        user: config.user.storage,
+    }
+    .into_rocks_backend_settings(&config.user.state);
+
+    let recovery_data = load_recovery_data(storage_config.clone())?;
+
     let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
         user: config.user.blend,
         deployment: config.deployment.blend,
     }
     .into_blend_services_settings(
-        &config.user.state,
+        recovery_data.clone(),
         &config.deployment.time,
         &config.deployment.cryptarchia,
     );
@@ -157,23 +164,16 @@ pub fn run_node_from_config(
     }
     .into_time_service_settings(&config.deployment.cryptarchia);
 
-    let storage_config = StorageConfig {
-        user: config.user.storage,
-    }
-    .into_rocks_backend_settings(&config.user.state);
-
-    let recovery_data = load_recovery_data(storage_config.clone())?;
-
     let (chain_service_config, chain_network_config, chain_leader_config) = CryptarchiaConfig {
         user: config.user.cryptarchia,
         deployment: config.deployment.cryptarchia,
     }
-    .into_cryptarchia_services_settings(blend_rewards_params, recovery_data);
+    .into_cryptarchia_services_settings(blend_rewards_params, recovery_data.clone());
 
     let mempool_service_config = MempoolConfig {
         deployment: config.deployment.mempool,
     }
-    .into_mempool_service_settings(&config.user.state);
+    .into_mempool_service_settings(recovery_data.clone());
 
     let network_service_config = NetworkConfig {
         user: config.user.network,
@@ -184,7 +184,7 @@ pub fn run_node_from_config(
     let wallet_config = WalletConfig {
         user: config.user.wallet,
     }
-    .into_wallet_service_settings(&config.user.state);
+    .into_wallet_service_settings(recovery_data.clone());
 
     let kms_config = KmsConfig {
         user: config.user.kms,
@@ -194,7 +194,7 @@ pub fn run_node_from_config(
     let sdp_config = SdpConfig {
         user: config.user.sdp,
     }
-    .into_sdp_service_settings(&config.user.state);
+    .into_sdp_service_settings(recovery_data);
 
     let tracing_config = config::tracing::ServiceConfig {
         user: config.user.tracing,
