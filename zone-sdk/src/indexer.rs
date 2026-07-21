@@ -121,27 +121,15 @@ where
 #[cfg(test)]
 mod tests {
 
-    use async_trait::async_trait;
-    use lb_common_http_client::{
-        ApiBlock, BlockInfo, ChainServiceInfo, ChainServiceMode, CryptarchiaInfo,
-        ProcessedBlockEvent, State,
-    };
-    use lb_core::{
-        header::HeaderId,
-        mantle::{
-            NoteId, SignedMantleTx,
-            ledger::Inputs,
-            ops::channel::{MsgId, deposit::Metadata, inscribe::Inscription},
-        },
+    use lb_core::mantle::{
+        NoteId,
+        ledger::Inputs,
+        ops::channel::{MsgId, deposit::Metadata, inscribe::Inscription},
     };
     use lb_groth16::Fr;
-    use lb_http_api_common::{
-        bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
-        queries::BlocksStreamQuery,
-    };
 
     use super::*;
-    use crate::{Deposit, ZoneBlock, adapter::BoxStream};
+    use crate::{Deposit, ZoneBlock, test_support::MockNode};
 
     #[tokio::test]
     async fn next_messages_empty() {
@@ -320,125 +308,12 @@ mod tests {
     }
 
     fn indexer(lib_slot: Slot, messages: Vec<(ZoneMessage, Slot)>) -> ZoneIndexer<MockNode> {
-        let node = MockNode { lib_slot, messages };
+        let node = MockNode {
+            channel_state: None,
+            lib_slot,
+            zone_messages: messages,
+            ..MockNode::default()
+        };
         ZoneIndexer::new(ChannelId::from([0u8; 32]), node)
-    }
-
-    /// Mock node that returns preconfigured zone messages.
-    #[derive(Clone)]
-    struct MockNode {
-        lib_slot: Slot,
-        messages: Vec<(ZoneMessage, Slot)>,
-    }
-
-    #[async_trait]
-    impl adapter::Node for MockNode {
-        async fn consensus_info(&self) -> Result<ChainServiceInfo, lb_common_http_client::Error> {
-            Ok(ChainServiceInfo {
-                cryptarchia_info: CryptarchiaInfo {
-                    lib: HeaderId::from([0; 32]),
-                    lib_slot: self.lib_slot,
-                    tip: HeaderId::from([0; 32]),
-                    slot: self.lib_slot,
-                    height: 0,
-                },
-                mode: ChainServiceMode::Started(State::Online),
-            })
-        }
-
-        async fn time_info(
-            &self,
-        ) -> Result<lb_common_http_client::TimeInfo, lb_common_http_client::Error> {
-            Ok(lb_common_http_client::TimeInfo {
-                slot_duration_ms: 1_000,
-                genesis_time_unix_ms: 0,
-                current_slot: 0,
-                current_epoch: 0,
-            })
-        }
-
-        async fn channel_state(
-            &self,
-            _channel_id: ChannelId,
-        ) -> Result<Option<lb_core::mantle::channel::ChannelState>, lb_common_http_client::Error>
-        {
-            Ok(None)
-        }
-
-        async fn block_stream(
-            &self,
-        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
-            Ok(Box::pin(futures::stream::empty()))
-        }
-
-        async fn blocks_range_stream(
-            &self,
-            _params: BlocksStreamQuery,
-        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
-            Ok(Box::pin(futures::stream::empty()))
-        }
-
-        async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, lb_common_http_client::Error> {
-            Ok(Box::pin(futures::stream::empty()))
-        }
-
-        async fn block(
-            &self,
-            _id: HeaderId,
-        ) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
-            Ok(None)
-        }
-
-        async fn block_events(
-            &self,
-            _id: HeaderId,
-        ) -> Result<Option<lb_common_http_client::Events>, lb_common_http_client::Error> {
-            Ok(None)
-        }
-
-        async fn immutable_blocks(
-            &self,
-            _slot_from: Slot,
-            _slot_to: Slot,
-        ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
-            Ok(Vec::new())
-        }
-
-        async fn zone_messages_in_block(
-            &self,
-            _id: HeaderId,
-            _channel_id: ChannelId,
-        ) -> Result<BoxStream<ZoneMessage>, lb_common_http_client::Error> {
-            Ok(Box::pin(futures::stream::empty()))
-        }
-
-        async fn zone_messages_in_blocks(
-            &self,
-            slot_from: Slot,
-            slot_to: Slot,
-            _channel_id: ChannelId,
-        ) -> Result<BoxStream<(ZoneMessage, Slot)>, lb_common_http_client::Error> {
-            let msgs: Vec<_> = self
-                .messages
-                .iter()
-                .filter(move |(_, slot)| *slot >= slot_from && *slot <= slot_to)
-                .cloned()
-                .collect();
-            Ok(Box::pin(futures::stream::iter(msgs)))
-        }
-
-        async fn post_transaction(
-            &self,
-            _tx: SignedMantleTx,
-        ) -> Result<(), lb_common_http_client::Error> {
-            unimplemented!()
-        }
-
-        async fn fund_tx(
-            &self,
-            _request: WalletFundRequestBody,
-        ) -> Result<WalletFundResponseBody, lb_common_http_client::Error> {
-            unimplemented!()
-        }
     }
 }

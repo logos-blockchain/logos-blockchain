@@ -763,24 +763,12 @@ mod tests {
                 withdraw::ChannelWithdrawOp,
             },
         },
-        transactions::Ops,
     };
     use lb_groth16::Fr;
     use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 
     use super::*;
-
-    /// Build a `SignedMantleTx` carrying the given ops, with placeholder
-    /// proofs. Suitable for tests that only care about op extraction, not
-    /// verification.
-    fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedMantleTx {
-        let n = ops.len();
-        let mantle_tx = MantleTx(Ops::try_from(ops).unwrap());
-        SignedMantleTx::new_unverified(
-            mantle_tx,
-            vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n],
-        )
-    }
+    use crate::test_support::{header_id, inscribe_op, unverified_tx_with_ops};
 
     fn deposit_op(channel_id: ChannelId, input_seed: u32, metadata: Metadata) -> DepositOp {
         DepositOp {
@@ -1123,21 +1111,6 @@ mod tests {
             configuration_threshold: 1,
             transfer_threshold: 1,
         }
-    }
-
-    fn inscribe_op(channel_id: ChannelId, parent: MsgId, payload: &[u8]) -> InscriptionOp {
-        InscriptionOp {
-            channel_id,
-            inscription: Inscription::new_unchecked(payload.to_vec()),
-            parent,
-            signer: Ed25519Key::from_bytes(&[0u8; 32]).public_key(),
-        }
-    }
-
-    fn header_id(n: u8) -> HeaderId {
-        let mut bytes = [0u8; 32];
-        bytes[0] = n;
-        HeaderId::from(bytes)
     }
 
     fn dummy_pending_tx(seed: u8) -> SignedMantleTx {
