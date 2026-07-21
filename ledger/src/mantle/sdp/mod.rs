@@ -1158,24 +1158,14 @@ mod tests {
         };
 
         let utxos = utxo_tree(vec![utxo_a, utxo_b]);
-        let sdp_ledger = apply_declare_with_dummies(
-            &utxos,
-            sdp_ledger,
-            &declare_a,
-            &create_zk_key(1),
-            &signing_key,
-            &config,
-        )
-        .unwrap();
+        let sdp_ledger = sdp_ledger
+            .try_apply_sdp_declaration(&utxos, &declare_a, &config)
+            .map(|(sdp_ledger, _)| sdp_ledger)
+            .unwrap();
 
-        let result = apply_declare_with_dummies(
-            &utxos,
-            sdp_ledger,
-            &declare_b,
-            &create_zk_key(2),
-            &signing_key,
-            &config,
-        );
+        let result = sdp_ledger
+            .try_apply_sdp_declaration(&utxos, &declare_b, &config)
+            .map(|(sdp_ledger, _)| sdp_ledger);
         assert!(
             matches!(
                 result,
@@ -1218,24 +1208,14 @@ mod tests {
         };
 
         let utxos = utxo_tree(vec![utxo_a, utxo_b]);
-        let sdp_ledger = apply_declare_with_dummies(
-            &utxos,
-            sdp_ledger,
-            &declare_a,
-            &zk_key,
-            &signing_key_a,
-            &config,
-        )
-        .unwrap();
+        let sdp_ledger = sdp_ledger
+            .try_apply_sdp_declaration(&utxos, &declare_a, &config)
+            .map(|(sdp_ledger, _)| sdp_ledger)
+            .unwrap();
 
-        let result = apply_declare_with_dummies(
-            &utxos,
-            sdp_ledger,
-            &declare_b,
-            &zk_key,
-            &signing_key_b,
-            &config,
-        );
+        let result = sdp_ledger
+            .try_apply_sdp_declaration(&utxos, &declare_b, &config)
+            .map(|(sdp_ledger, _)| sdp_ledger);
         assert!(
             matches!(result, Err(Error::SdpOp(SdpError::DuplicateZkId { .. }))),
             "expected DuplicateZkId, got {result:?}"
@@ -1254,7 +1234,7 @@ mod tests {
 
         let signing_key = create_signing_key();
         let zk_key = create_zk_key(1);
-        let (utxo_sk_a, utxo_a) = utxo_with_sk();
+        let (_utxo_sk_a, utxo_a) = utxo_with_sk();
         let (_utxo_sk_b, utxo_b) = utxo_with_sk();
 
         let declare_a = SDPDeclareOp {
@@ -1270,30 +1250,20 @@ mod tests {
         let sdp_ledger = dummy_sdp_ledger(0.into(), &config);
         let utxos = utxo_tree(vec![utxo_a, utxo_b]);
 
-        let sdp_ledger = apply_declare_with_dummies(
-            &utxos,
-            sdp_ledger,
-            &declare_a,
-            &zk_key,
-            &signing_key,
-            &config,
-        )
-        .unwrap();
+        let sdp_ledger = sdp_ledger
+            .try_apply_sdp_declaration(&utxos, &declare_a, &config)
+            .map(|(sdp_ledger, _)| sdp_ledger)
+            .unwrap();
 
         // Withdraw A.
-        let withdraw_op = &SDPWithdrawOp {
+        let withdraw_op = SDPWithdrawOp {
             declaration_id: declaration_id_a,
             nonce: 1,
             locked_note_id: utxo_a.id(),
         };
-        let sdp_ledger = apply_withdraw_with_dummies(
-            sdp_ledger,
-            withdraw_op,
-            utxo_sk_a,
-            zk_key.clone(),
-            &config,
-        )
-        .unwrap();
+        let (sdp_ledger, _events) = sdp_ledger
+            .apply_withdrawn_msg(&withdraw_op, &config)
+            .unwrap();
 
         let withdraw_epoch = sdp_ledger
             .get_declaration(&declaration_id_a)
@@ -1325,18 +1295,11 @@ mod tests {
             provider_id: ProviderId(signing_key.public_key()),
             locators: "/ip4/2.2.2.2/udp/0".parse::<Locator>().unwrap().into(),
         };
-        assert!(
-            apply_declare_with_dummies(
-                &utxos,
-                sdp_ledger,
-                &declare_b,
-                &zk_key,
-                &signing_key,
-                &config,
-            )
-            .is_ok(),
-            "declaration reusing A's provider_id and zk_id must be accepted after A is removed"
-        );
+        sdp_ledger
+            .try_apply_sdp_declaration(&utxos, &declare_b, &config)
+            .expect(
+                "Declaration reusing A's provider_id and zk_id must be accepted after A is removed",
+            );
     }
 
     #[test]
