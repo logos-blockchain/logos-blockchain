@@ -119,6 +119,7 @@ impl<'block, State: VerificationState> From<&'block BlockWithChainState<SignedMa
 }
 
 #[derive(Serialize)]
+#[serde(transparent)]
 pub struct ApiProcessedBlockEventOwned<State: VerificationState> {
     #[serde(with = "ApiProcessedBlockEvent")]
     block_with_chain_state: BlockWithChainState<SignedMantleTx<State>>,
