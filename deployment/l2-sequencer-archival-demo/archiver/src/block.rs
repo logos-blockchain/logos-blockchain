@@ -5,8 +5,9 @@ use lb_common_http_client::CommonHttpClient;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx, Transaction as _, TxHash,
+        Op, SignedMantleTx, TxHash,
         ops::channel::{ChannelId, inscribe::InscriptionOp},
+        traits::Hashable as _,
         transactions::states::Unverified,
     },
 };

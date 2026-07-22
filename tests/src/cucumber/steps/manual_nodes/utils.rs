@@ -10,7 +10,7 @@ use cucumber::gherkin::Table;
 use futures::future::try_join_all;
 use hex::ToHex as _;
 use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, State};
-use lb_core::mantle::{GenesisTx as _, Utxo, ops::OpId as _};
+use lb_core::mantle::{Utxo, ops::OpId as _, traits::GenesisTx as _};
 use lb_http_api_common::paths::CRYPTARCHIA_INFO;
 use lb_libp2p::PeerId;
 use lb_node::config::{

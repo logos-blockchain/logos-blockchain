@@ -11,9 +11,10 @@ use lb_core::{
     events::TxEvent,
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx, Transaction as _, TxHash, Value,
+        Op, SignedMantleTx, TxHash, Value,
         channel::ChannelState,
         ops::{OpId as _, channel::ChannelId},
+        traits::Hashable as _,
         transactions::states::{Unverified, VerificationState},
     },
 };

@@ -7,7 +7,7 @@ use std::{
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     header::HeaderId,
-    mantle::{AuthenticatedMantleTx, TxHash},
+    mantle::{TxHash, traits::MantleTxWithProofs},
 };
 use lb_network_service::{NetworkService, message::BackendNetworkMsg};
 use lb_storage_service::StorageService;
@@ -61,7 +61,7 @@ where
         + Send
         + Sync
         + 'static
-        + AuthenticatedMantleTx,
+        + MantleTxWithProofs,
     Mempool::Settings: Clone + Send + Sync,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>

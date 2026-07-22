@@ -7,7 +7,7 @@ use serde::Serialize;
 #[derive(Serialize)]
 #[serde(remote = "MantleTx")]
 pub struct ApiTransactionSerializer {
-    #[serde(getter = "<MantleTx as lb_core::mantle::Transaction>::hash")]
+    #[serde(getter = "<MantleTx as lb_core::mantle::traits::Hashable>::hash")]
     hash: TxHash,
     #[serde(getter = "MantleTx::ops")]
     ops: Ops,

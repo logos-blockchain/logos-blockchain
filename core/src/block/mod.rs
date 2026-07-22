@@ -12,7 +12,10 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use crate::{
     codec::{DeserializeOp as _, SerializeOp as _},
     header::{ContentId, Header, HeaderId},
-    mantle::{StorageSize, Transaction, TxHash},
+    mantle::{
+        TxHash,
+        traits::{Hashable, StorageSize},
+    },
     proofs::leader_proof::{Groth16LeaderProof, LeaderProof as _},
     utils::merkle,
 };
@@ -65,7 +68,7 @@ pub struct Block<Tx> {
 
 impl<'de, Tx> Deserialize<'de> for Block<Tx>
 where
-    Tx: Clone + Eq + Deserialize<'de> + Transaction<Hash = TxHash> + StorageSize,
+    Tx: Clone + Eq + Deserialize<'de> + Hashable<Hash = TxHash> + StorageSize,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -123,7 +126,7 @@ impl<Tx> Block<Tx> {
         signing_key: &Ed25519Key,
     ) -> Result<Self, Error>
     where
-        Tx: Transaction<Hash = TxHash> + StorageSize,
+        Tx: Hashable<Hash = TxHash> + StorageSize,
     {
         // 1. Non-genesis blocks only
         if slot == Slot::genesis() {
@@ -162,7 +165,7 @@ impl<Tx> Block<Tx> {
         signature: Ed25519Signature,
     ) -> Result<Self, Error>
     where
-        Tx: Transaction<Hash = TxHash> + StorageSize,
+        Tx: Hashable<Hash = TxHash> + StorageSize,
     {
         let block = Self {
             header,
@@ -176,7 +179,7 @@ impl<Tx> Block<Tx> {
 
     fn into_verified(self) -> Result<Self, Error>
     where
-        Tx: Transaction<Hash = TxHash> + StorageSize,
+        Tx: Hashable<Hash = TxHash> + StorageSize,
     {
         // 1. Non-genesis blocks only
         if self.header.slot() == Slot::genesis() {
@@ -205,7 +208,7 @@ impl<Tx> Block<Tx> {
 
     fn validate_total_transactions_size(&self) -> Result<usize, Error>
     where
-        Tx: Transaction<Hash = TxHash> + StorageSize,
+        Tx: Hashable<Hash = TxHash> + StorageSize,
     {
         let mut total = 0usize;
 
@@ -230,7 +233,7 @@ impl<Tx> Block<Tx> {
 
     fn calculate_content_id(transactions: &[Tx]) -> ContentId
     where
-        Tx: Transaction<Hash = TxHash>,
+        Tx: Hashable<Hash = TxHash>,
     {
         let root_hash = merkle::calculate_block_root(transactions);
         ContentId::from(root_hash)
@@ -263,10 +266,10 @@ impl<Tx> Block<Tx> {
 
     pub fn to_proposal(self) -> Proposal
     where
-        Tx: Transaction<Hash = TxHash>,
+        Tx: Hashable<Hash = TxHash>,
     {
         let mempool_transactions: Vec<TxHash> =
-            self.transactions.iter().map(Transaction::hash).collect();
+            self.transactions.iter().map(Hashable::hash).collect();
         let references = References {
             mempool_transactions,
         };
@@ -279,7 +282,7 @@ impl<Tx> Block<Tx> {
     }
 }
 
-impl<Tx: Clone + Eq + Serialize + DeserializeOwned + Transaction<Hash = TxHash> + StorageSize>
+impl<Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize>
     TryFrom<Bytes> for Block<Tx>
 {
     type Error = crate::codec::Error;
@@ -294,7 +297,9 @@ impl<Tx: Clone + Eq + Serialize + DeserializeOwned + Transaction<Hash = TxHash> 
     }
 }
 
-impl<Tx: Clone + Eq + Serialize + DeserializeOwned> TryFrom<Block<Tx>> for Bytes {
+impl<Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash>> TryFrom<Block<Tx>>
+    for Bytes
+{
     type Error = crate::codec::Error;
 
     fn try_from(block: Block<Tx>) -> Result<Self, Self::Error> {
@@ -316,9 +321,10 @@ mod tests {
     use crate::{
         crypto::ZkHasher,
         mantle::{
-            MantleTx, TransactionHasher,
+            MantleTx,
             ledger::{Note, Utxo},
             ops::leader_claim::VoucherCm,
+            traits::hashable,
             transactions::Ops,
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
@@ -471,10 +477,10 @@ mod tests {
     #[derive(Clone, Copy, Debug)]
     struct TestMantleTx<const SIZE: usize>;
 
-    impl<const SIZE: usize> Transaction for TestMantleTx<SIZE> {
+    impl<const SIZE: usize> Hashable for TestMantleTx<SIZE> {
         //noinspection RsTypeCheck: The type is correct, but the linter is confused by
         // the closure.
-        const HASHER: TransactionHasher<Self> = |_tx| TxHash::from([0u8; 32]);
+        const HASHER: hashable::Hasher<Self> = |_tx| TxHash::from([0u8; 32]);
         type Hash = TxHash;
 
         fn as_signing(&self) -> Vec<u8> {

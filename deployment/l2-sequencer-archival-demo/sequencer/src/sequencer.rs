@@ -4,7 +4,7 @@ use lb_common_http_client::{ChainServiceInfo, CommonHttpClient};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        MantleTx, SignedMantleTx, Transaction as _,
+        MantleTx, SignedMantleTx,
         ops::{
             Op, OpProof,
             channel::{
@@ -12,6 +12,7 @@ use lb_core::{
                 inscribe::{Inscription, InscriptionOp},
             },
         },
+        traits::Hashable as _,
         transactions::states::{Unverified, VerificationState},
     },
 };

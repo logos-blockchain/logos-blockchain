@@ -4,9 +4,10 @@ use lb_chain_service::{ChainServiceMode, State};
 use lb_core::{
     block::genesis::GenesisBlockBuilder,
     mantle::{
-        GenesisTime, GenesisTx as _,
+        GenesisTime,
         nom::NomEncode as _,
         ops::channel::inscribe::{Inscription, InscriptionOp},
+        traits::GenesisTx as _,
     },
 };
 use lb_node::config::{RunConfig, cryptarchia::deployment::EpochConfig};

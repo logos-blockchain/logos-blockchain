@@ -5,7 +5,9 @@ use lb_chain_service::api::CryptarchiaServiceApi;
 use lb_core::{
     block::{Block as CoreBlock, BlockTransactions},
     mantle::{
-        StorageSize, Transaction, TransactionHasher, TxHash, transactions::states::Unverified,
+        TxHash,
+        traits::{Hashable, StorageSize, hashable},
+        transactions::states::Unverified,
     },
 };
 use lb_node::{
@@ -31,12 +33,12 @@ pub struct TxWithId {
     tx: SignedMantleTx<Unverified>,
 }
 
-impl Transaction for TxWithId {
+impl Hashable for TxWithId {
     //noinspection RsTypeCheck: The type is correct, but the linter is confused by
     // the closure.
-    const HASHER: TransactionHasher<Self> =
-        |tx| <SignedMantleTx<Unverified> as Transaction>::HASHER(&tx.tx);
-    type Hash = <SignedMantleTx<Unverified> as Transaction>::Hash;
+    const HASHER: hashable::Hasher<Self> =
+        |tx| <SignedMantleTx<Unverified> as Hashable>::HASHER(&tx.tx);
+    type Hash = <SignedMantleTx<Unverified> as Hashable>::Hash;
 
     fn as_signing(&self) -> Vec<u8> {
         self.tx.as_signing()

@@ -1270,9 +1270,10 @@ mod tests {
     use crate::{
         header::HeaderId,
         mantle::{
-            CryptarchiaParameter, GenesisTime, GenesisTx as _, NoteId,
+            CryptarchiaParameter, GenesisTime, NoteId,
             nom::NomEncode as _,
             ops::channel::{ChannelId, MsgId, inscribe::Inscription},
+            traits::genesis::GenesisTx as _,
             transactions::states::Preverified,
         },
         sdp::{Locator, ProviderId, ServiceType},

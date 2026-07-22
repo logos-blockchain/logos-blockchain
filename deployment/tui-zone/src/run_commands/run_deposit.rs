@@ -1,5 +1,5 @@
 use lb_core::mantle::{
-    Op, OpProof, SignedMantleTx, Transaction as _, ops::channel::inscribe::Inscription,
+    Op, OpProof, SignedMantleTx, ops::channel::inscribe::Inscription, traits::Hashable as _,
 };
 use lb_key_management_system_service::keys::ZkKey;
 

@@ -19,7 +19,10 @@ use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     block::{Block, BlockTransactions, Proposal},
     header::HeaderId,
-    mantle::{AuthenticatedMantleTx, Transaction, TxHash},
+    mantle::{
+        TxHash,
+        traits::{Hashable, MantleTxWithProofs},
+    },
 };
 pub use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_ledger::EpochState;
@@ -125,7 +128,7 @@ pub struct ChainNetwork<
     Mempool::Settings: Clone,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::Item: Clone + Eq + Debug + 'static,
-    Mempool::Item: AuthenticatedMantleTx,
+    Mempool::Item: MantleTxWithProofs,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
     MempoolNetAdapter::Settings: Send + Sync,
@@ -153,7 +156,7 @@ where
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    Mempool::Item: AuthenticatedMantleTx + Clone + Eq + Debug,
+    Mempool::Item: MantleTxWithProofs + Clone + Eq + Debug,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
     MempoolNetAdapter::Settings: Send + Sync,
@@ -190,8 +193,8 @@ where
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone + Send + Sync + 'static,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    Mempool::Item: Transaction<Hash = Mempool::Key>
-        + AuthenticatedMantleTx
+    Mempool::Item: Hashable<Hash = Mempool::Key>
+        + MantleTxWithProofs
         + Debug
         + Clone
         + Eq
@@ -507,8 +510,8 @@ where
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone + Send + Sync + 'static,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    Mempool::Item: Transaction<Hash = Mempool::Key>
-        + AuthenticatedMantleTx
+    Mempool::Item: Hashable<Hash = Mempool::Key>
+        + MantleTxWithProofs
         + Debug
         + Clone
         + Eq
@@ -776,7 +779,7 @@ async fn should_process_block<Cryptarchia, RuntimeServiceId>(
 ) -> Result<(), DoNotProcessBlock>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: MantleTxWithProofs + Debug + Clone + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
     if !is_after_lib(cryptarchia, block_id, block_slot).await {
@@ -808,7 +811,7 @@ async fn is_after_lib<Cryptarchia, RuntimeServiceId>(
 ) -> bool
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: MantleTxWithProofs + Debug + Clone + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
     match cryptarchia.info().await {
@@ -931,7 +934,7 @@ async fn apply_block_and_reconcile_mempool<Cryptarchia, Mempool, RuntimeServiceI
 ) -> Result<(), Error>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: MantleTxWithProofs + Debug + Clone + Send + Sync,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
     RuntimeServiceId: Send + Sync,
@@ -956,7 +959,7 @@ where
             .remove_transactions(
                 &block
                     .transactions_iter()
-                    .map(Transaction::hash)
+                    .map(Hashable::hash)
                     .collect::<Vec<_>>(),
             )
             .await
@@ -990,7 +993,7 @@ async fn reconstruct_block_from_proposal<Item>(
     mempool: &MempoolAdapter<Item>,
 ) -> Result<Block<Item>, Error>
 where
-    Item: AuthenticatedMantleTx<Hash = TxHash> + Clone + Send + Sync + 'static,
+    Item: MantleTxWithProofs<Hash = TxHash> + Clone + Send + Sync + 'static,
 {
     let mempool_hashes: Vec<TxHash> = proposal.mempool_transactions().to_vec();
     let mempool_response = mempool

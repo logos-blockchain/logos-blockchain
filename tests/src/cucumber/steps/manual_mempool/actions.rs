@@ -3,7 +3,8 @@ use std::{collections::BTreeSet, time::Duration};
 use lb_core::{
     codec::DeserializeOp as _,
     mantle::{
-        SignedMantleTx, Transaction as _, TxHash,
+        SignedMantleTx, TxHash,
+        traits::Hashable as _,
         transactions::{states::Preverified, tx::OpsProofs},
     },
 };

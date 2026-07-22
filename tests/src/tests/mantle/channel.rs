@@ -6,10 +6,11 @@ use lb_core::{
     events::{Event, Events, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
-        GenesisTx as _, NoteId, Transaction as _, TxHash,
+        NoteId, TxHash,
         gas::GasCost,
         ledger::Inputs,
         ops::channel::{ChannelId, deposit::DepositOp},
+        traits::{GenesisTx as _, Hashable as _},
     },
 };
 use lb_http_api_common::bodies::{

@@ -14,7 +14,7 @@ use super::{SignedMantleTx, TxHash};
 use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
-        MantleTx, OpProof, Transaction, TransactionHasher,
+        MantleTx, OpProof,
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
         nom::{NomDecode, NomEncode},
         ops::{
@@ -24,6 +24,7 @@ use crate::{
             sdp::SDPDeclareOp,
             transfer::TransferOp,
         },
+        traits::{GenesisTx as GenesisTxTrait, Hashable, hashable},
         transactions::states::Preverified,
     },
 };
@@ -159,11 +160,12 @@ fn valid_cryptarchia_inscription(
     )
 }
 
-impl Transaction for GenesisTx {
+impl Hashable for GenesisTx {
     //noinspection RsTypeCheck: The type is correct, but the linter is confused by
     // the closure.
-    const HASHER: TransactionHasher<Self> = |tx| TxHash(Hasher::digest(tx.as_signing()).into());
+    const HASHER: hashable::Hasher<Self> = |tx| TxHash(Hasher::digest(tx.as_signing()).into());
     type Hash = TxHash;
+
     fn as_signing(&self) -> Vec<u8> {
         self.tx.as_signing()
     }
@@ -199,7 +201,7 @@ impl GasCalculator for GenesisTx {
     }
 }
 
-impl crate::mantle::GenesisTx for GenesisTx {
+impl GenesisTxTrait for GenesisTx {
     fn genesis_transfer(&self) -> &TransferOp {
         // Safe to unwrap because we validated this in from_tx
         match &self.mantle_tx().ops()[0] {
@@ -776,8 +778,6 @@ mod tests {
 
     #[test]
     fn test_genesis_tx_cryptarchia_parameter() {
-        use crate::mantle::GenesisTx as _;
-
         let param = cryptarchia_param();
         let tx = create_trusted_tx(
             vec![Op::ChannelInscribe(inscription_op(

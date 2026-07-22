@@ -95,7 +95,7 @@ pub mod transfer_funds {
     use lb_core::{
         header::HeaderId,
         mantle::{
-            SignedMantleTx, Transaction as _, Value, transactions::states::VerificationState,
+            SignedMantleTx, Value, traits::Hashable as _, transactions::states::VerificationState,
         },
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;

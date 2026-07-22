@@ -2,9 +2,10 @@ use std::collections::{HashMap, HashSet};
 
 use lb_common_http_client::{ApiBlock, Error as HttpClientError};
 use lb_core::mantle::{
-    Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
+    Op, OpProof, SignedMantleTx, TxHash, Utxo,
     gas::MainnetGasConstants,
     ops::channel::{ChannelId, ChannelKeyIndex},
+    traits::Hashable as _,
     transactions::{
         GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext, states::Unverified,
         tx::OpsProofs,
@@ -156,7 +157,7 @@ where
     let mut transactions_hashes = HashSet::new();
     for block in tail_blocks {
         apply_block_transactions(&mut chain_state, &block);
-        transactions_hashes.extend(block.transactions.iter().map(lb_node::Transaction::hash));
+        transactions_hashes.extend(block.transactions.iter().map(lb_node::Hashable::hash));
     }
 
     Ok((

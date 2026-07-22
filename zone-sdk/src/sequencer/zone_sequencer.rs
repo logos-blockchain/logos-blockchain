@@ -11,9 +11,10 @@ use lb_common_http_client::{ProcessedBlockEvent, Slot};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        MantleTx, Op, SignedMantleTx, Transaction as _,
+        MantleTx, Op, SignedMantleTx,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         ops::channel::{ChannelId, MsgId, config::Keys, inscribe::Inscription},
+        traits::Hashable as _,
         transactions::{Ops, TxHash, states::Unverified},
     },
 };

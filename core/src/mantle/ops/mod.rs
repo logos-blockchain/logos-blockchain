@@ -304,10 +304,11 @@ mod mantle_test_vectors {
     use super::*;
     use crate::{
         mantle::{
-            MantleTx, Note, Transaction as _,
+            MantleTx, Note,
             channel::{SlotTimeframe, SlotTimeout},
             ledger::{Inputs, NoteId, Outputs},
             ops::channel::{ChannelId, MsgId, config::Keys, deposit::Metadata},
+            traits::Hashable as _,
             transactions::Ops,
         },
         sdp::{

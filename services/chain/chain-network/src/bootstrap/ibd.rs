@@ -12,7 +12,7 @@ use lb_chain_service::{
 use lb_core::{
     block::Block,
     header::HeaderId,
-    mantle::{AuthenticatedMantleTx, TxHash},
+    mantle::{TxHash, traits::MantleTxWithProofs},
 };
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_tx_service::backend::RecoverableMempool;
@@ -33,7 +33,7 @@ pub trait IbdBlockProcessor<B> {
 pub struct ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool, RuntimeServiceId>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: MantleTxWithProofs + Debug + Clone + Send + Sync,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
     RuntimeServiceId: Send + Sync,
@@ -46,7 +46,7 @@ impl<Cryptarchia, Mempool, RuntimeServiceId> IbdBlockProcessor<Block<Cryptarchia
     for ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool, RuntimeServiceId>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: MantleTxWithProofs + Debug + Clone + Send + Sync,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
     RuntimeServiceId: Send + Sync,

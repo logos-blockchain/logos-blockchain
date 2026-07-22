@@ -15,13 +15,14 @@ use lb_core::{
     events::{Event, Events, HeaderEvent, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, GasConstants, NoteId, TxHash, Utxo, Value,
+        GasConstants, NoteId, TxHash, Utxo, Value,
         ops::{
             Op, OpId as _,
             channel::{channel_transfer::ChannelTransferOp, withdraw::ChannelWithdrawOp},
             leader_claim::{VoucherCm, VoucherNullifier},
             transfer::TransferOp,
         },
+        traits::MantleTxWithProofs,
         transactions::{MantleTxContext, builder::MantleTxBuilder},
     },
     proofs::leader_proof::LeaderProof as _,
@@ -106,7 +107,7 @@ impl WalletBlock {
     #[must_use]
     pub fn from_block<Tx>(block: &Block<Tx>, epoch: Epoch, events: &Events) -> Self
     where
-        Tx: AuthenticatedMantleTx + Clone,
+        Tx: MantleTxWithProofs + Clone,
     {
         // TODO: devise a better way to mirror ledger's execution always correctly: https://github.com/logos-blockchain/logos-blockchain/issues/2627
         let (header_events, tx_events) = group_events(events);
@@ -509,7 +510,7 @@ fn transform_txs<'t, Tx>(
     mut events_by_tx: HashMap<TxHash, HashMap<Hash, TxEventPayload>>,
 ) -> impl Iterator<Item = WalletTx> + 't
 where
-    Tx: AuthenticatedMantleTx + 't,
+    Tx: MantleTxWithProofs + 't,
 {
     txs.map(move |tx| {
         let mut events_by_op = events_by_tx.remove(&tx.hash()).unwrap_or_default();

@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 
 use lb_core::mantle::{
-    MantleTx, NoteId, Op, Transaction as _, TxHash, Utxo,
+    MantleTx, NoteId, Op, TxHash, Utxo,
+    traits::Hashable as _,
     transactions::{MantleTxBuilder, MantleTxContext},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;

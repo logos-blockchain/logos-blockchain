@@ -4,7 +4,7 @@ use std::fmt::Debug;
 use lb_chain_service::api::CryptarchiaServiceData;
 use lb_core::{
     header::HeaderId,
-    mantle::{AuthenticatedMantleTx, TxHash},
+    mantle::{TxHash, traits::MantleTxWithProofs},
 };
 use lb_storage_service::StorageService;
 use lb_time_service::{TimeService, TimeServiceMessage, backends::TimeBackend as TimeBackendTrait};
@@ -50,7 +50,7 @@ where
         + Send
         + Sync
         + 'static
-        + AuthenticatedMantleTx,
+        + MantleTxWithProofs,
     Mempool::Settings: Clone,
     MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>
         + Send

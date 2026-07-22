@@ -3,7 +3,7 @@ use std::pin::Pin;
 use futures::Stream;
 use lb_core::{
     header::HeaderId,
-    mantle::{Transaction, TxHash},
+    mantle::{TxHash, traits::Hashable},
 };
 use lb_tx_service::MempoolMsg;
 use overwatch::services::relay::OutboundRelay;
@@ -25,7 +25,7 @@ impl<Tx> MempoolAdapter<Tx> {
 #[async_trait::async_trait]
 impl<Tx> MempoolAdapterTrait<Tx> for MempoolAdapter<Tx>
 where
-    Tx: Transaction<Hash = TxHash> + Send + Sync + 'static,
+    Tx: Hashable<Hash = TxHash> + Send + Sync + 'static,
 {
     async fn get_mempool_view(
         &self,

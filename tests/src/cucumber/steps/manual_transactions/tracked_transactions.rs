@@ -2,9 +2,10 @@ use std::{collections::HashSet, time::Duration};
 
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
-    MantleTx, Note, Op, OpProof, SignedMantleTx, Transaction as _, TxHash,
+    MantleTx, Note, Op, OpProof, SignedMantleTx, TxHash,
     ledger::{Inputs, Outputs},
     ops::transfer::TransferOp,
+    traits::Hashable as _,
     transactions::states::Unverified,
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};

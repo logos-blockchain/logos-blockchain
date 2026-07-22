@@ -8,7 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 use lb_core::mantle::{
-    MantleTx, SignedMantleTx, Transaction as _,
+    MantleTx, SignedMantleTx,
     ops::{
         Op, OpProof,
         channel::{
@@ -16,6 +16,7 @@ use lb_core::mantle::{
             inscribe::{Inscription, InscriptionOp},
         },
     },
+    traits::Hashable as _,
     transactions::{TxHash, states::Preverified},
 };
 use lb_key_management_system_service::keys::Ed25519Key;

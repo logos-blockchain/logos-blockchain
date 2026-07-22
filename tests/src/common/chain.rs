@@ -3,7 +3,7 @@ use std::{collections::HashSet, hash::BuildHasher, time::Duration};
 use lb_common_http_client::ApiBlock;
 use lb_core::{
     header::HeaderId,
-    mantle::{Transaction as _, TxHash},
+    mantle::{TxHash, traits::Hashable as _},
 };
 use lb_testing_framework::NodeHttpClient;
 use tokio::time::{sleep, timeout};

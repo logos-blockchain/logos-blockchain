@@ -9,7 +9,7 @@ use lb_http_api_common::bodies::wallet::{
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::{
-    Transaction as _, TxHash,
+    Hashable as _, TxHash,
     config::{RunConfig, cryptarchia::deployment::EpochConfig},
 };
 use lb_testing_framework::{

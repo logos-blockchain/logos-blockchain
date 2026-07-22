@@ -5,7 +5,7 @@ use std::{
 
 use lb_core::{
     header::HeaderId,
-    mantle::{SignedMantleTx, Transaction as _, TxHash, transactions::states::Preverified},
+    mantle::{SignedMantleTx, TxHash, traits::Hashable as _, transactions::states::Preverified},
 };
 use lb_sdp_service::mempool::{MempoolAdapterError, SdpMempoolAdapter as SdpMempoolAdapterTrait};
 use lb_storage_service::StorageService;

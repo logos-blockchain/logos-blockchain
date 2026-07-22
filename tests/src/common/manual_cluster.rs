@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use lb_core::mantle::{GenesisTx as _, Utxo};
+use lb_core::mantle::{Utxo, traits::GenesisTx as _};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::Multiaddr;
 use lb_node::{UserConfig, config::RunConfig};

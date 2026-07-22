@@ -3,7 +3,7 @@ use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapter;
 use lb_chain_service::CryptarchiaConsensus;
 use lb_core::{
     header::HeaderId,
-    mantle::{SignedMantleTx, Transaction, TxHash, transactions::states::Preverified},
+    mantle::{SignedMantleTx, TxHash, traits::Hashable, transactions::states::Preverified},
 };
 use lb_key_management_system_service::backend::preload::PreloadKMSBackend;
 use lb_sdp_service::{SdpSettings, state::SdpState};
@@ -19,7 +19,7 @@ pub mod sdp;
 pub type TxMempoolService<RuntimeServiceId> = lb_tx_service::TxMempoolService<
     lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
         SignedMantleTx<Preverified>,
-        <SignedMantleTx<Preverified> as Transaction>::Hash,
+        <SignedMantleTx<Preverified> as Hashable>::Hash,
         RuntimeServiceId,
     >,
     Mempool<
@@ -28,13 +28,13 @@ pub type TxMempoolService<RuntimeServiceId> = lb_tx_service::TxMempoolService<
         TxHash,
         RocksStorageAdapter<
             SignedMantleTx<Preverified>,
-            <SignedMantleTx<Preverified> as Transaction>::Hash,
+            <SignedMantleTx<Preverified> as Hashable>::Hash,
         >,
         RuntimeServiceId,
     >,
     RocksStorageAdapter<
         SignedMantleTx<Preverified>,
-        <SignedMantleTx<Preverified> as Transaction>::Hash,
+        <SignedMantleTx<Preverified> as Hashable>::Hash,
     >,
     RuntimeServiceId,
 >;
@@ -44,17 +44,17 @@ pub type TimeService<RuntimeServiceId> =
 
 pub type MempoolAdapter<RuntimeServiceId> = lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
     SignedMantleTx<Preverified>,
-    <SignedMantleTx<Preverified> as Transaction>::Hash,
+    <SignedMantleTx<Preverified> as Hashable>::Hash,
     RuntimeServiceId,
 >;
 
 pub type MempoolBackend<RuntimeServiceId> = Mempool<
     HeaderId,
     SignedMantleTx<Preverified>,
-    <SignedMantleTx<Preverified> as Transaction>::Hash,
+    <SignedMantleTx<Preverified> as Hashable>::Hash,
     RocksStorageAdapter<
         SignedMantleTx<Preverified>,
-        <SignedMantleTx<Preverified> as Transaction>::Hash,
+        <SignedMantleTx<Preverified> as Hashable>::Hash,
     >,
     RuntimeServiceId,
 >;
@@ -110,7 +110,7 @@ pub type SdpMempoolAdapter<RuntimeServiceId> = sdp::mempool::SdpMempoolAdapter<
         TxHash,
         RocksStorageAdapter<
             SignedMantleTx<Preverified>,
-            <SignedMantleTx<Preverified> as Transaction>::Hash,
+            <SignedMantleTx<Preverified> as Hashable>::Hash,
         >,
         RuntimeServiceId,
     >,

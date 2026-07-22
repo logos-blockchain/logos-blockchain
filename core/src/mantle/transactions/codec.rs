@@ -103,7 +103,7 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
-            Note, NoteId, OpProof, Transaction as _, Utxo,
+            Note, NoteId, OpProof, Utxo,
             ledger::{BoundedInputs, BoundedOutputs, Inputs, Outputs},
             ops::{
                 channel::{
@@ -116,6 +116,7 @@ mod tests {
                 sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
                 transfer::TransferOp,
             },
+            traits::Hashable as _,
             transactions::{GasPrices, Ops, tx::OpsProofs},
         },
         proofs::{

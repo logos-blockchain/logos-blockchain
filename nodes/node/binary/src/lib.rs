@@ -17,7 +17,7 @@ use lb_core::mantle::transactions::states::Preverified;
 pub use lb_core::{
     codec,
     header::HeaderId,
-    mantle::{SignedMantleTx, Transaction, TxHash},
+    mantle::{SignedMantleTx, TxHash, traits::Hashable},
 };
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 pub use lb_storage_service::backends::{

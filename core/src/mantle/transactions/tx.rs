@@ -17,7 +17,6 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
-        AuthenticatedMantleTx, PreverifiedMantleTx, StorageSize, Transaction, TransactionHasher,
         Value,
         channel::Channels,
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
@@ -36,6 +35,10 @@ use crate::{
                 SDPWithdrawValidationContext,
             },
             transfer::{TransferOp, TransferValidationContext},
+        },
+        traits::{
+            Hashable, MantleTxWithProofs, PreverifiedMantleTx, StorageSize, hashable,
+            mantle_tx::OpWithProof,
         },
         transactions::{
             MAX_OPS_PER_TX, Ops,
@@ -326,12 +329,12 @@ impl MantleTx {
     }
 }
 
-static MANTLE_TXHASH_V1_BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| b"MANTLE_TXHASH_V1".to_vec());
+static MANTLE_TX_HASH_V1_BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| b"MANTLE_TXHASH_V1".to_vec());
 
-impl Transaction for MantleTx {
+impl Hashable for MantleTx {
     //noinspection RsTypeCheck: The type is correct, but the linter is confused by
     // the closure.
-    const HASHER: TransactionHasher<Self> = |tx| {
+    const HASHER: hashable::Hasher<Self> = |tx| {
         let bytes: [u8; 32] = Hasher::digest(tx.as_signing()).into();
         TxHash::from(bytes)
     };
@@ -340,7 +343,7 @@ impl Transaction for MantleTx {
     fn as_signing(&self) -> Vec<u8> {
         // constant and structure as defined in the Mantle specification:
         // https://www.notion.so/nomos-tech/v1-3-Mantle-Specification-31e261aa09df818f9327ee87e5a6d433#31e261aa09df80aea7cff4eb98d61b6e
-        let mut buffer = MANTLE_TXHASH_V1_BYTES.to_vec();
+        let mut buffer = MANTLE_TX_HASH_V1_BYTES.to_vec();
         buffer.extend(self.encode());
         buffer
     }
@@ -926,10 +929,10 @@ fn verify_channel_multi_sig(
     Ok(())
 }
 
-impl<State: VerificationState> Transaction for SignedMantleTx<State> {
+impl<State: VerificationState> Hashable for SignedMantleTx<State> {
     //noinspection RsTypeCheck: The type is correct, but the linter is confused by
     // the closure.
-    const HASHER: TransactionHasher<Self> = |tx| {
+    const HASHER: hashable::Hasher<Self> = |tx| {
         let bytes: [u8; 32] = Hasher::digest(tx.as_signing()).into();
         TxHash::from(bytes)
     };
@@ -940,43 +943,13 @@ impl<State: VerificationState> Transaction for SignedMantleTx<State> {
     }
 }
 
-impl<State: VerificationState> AuthenticatedMantleTx for SignedMantleTx<State> {
-    type Context = GasPrices;
-
+impl<State: VerificationState> MantleTxWithProofs for SignedMantleTx<State> {
     fn mantle_tx(&self) -> &MantleTx {
         &self.mantle_tx
     }
 
-    fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)> {
+    fn ops_with_proof(&self) -> impl Iterator<Item = OpWithProof<'_>> {
         self.ops_with_proof()
-    }
-
-    fn total_gas_cost<Constants: GasConstants>(
-        &self,
-        context: <Self as AuthenticatedMantleTx>::Context,
-    ) -> Result<GasCost, GasOverflow> {
-        GasCalculator::total_gas_cost::<Constants>(&self, &context)
-    }
-
-    fn storage_gas_cost(
-        &self,
-        context: <Self as AuthenticatedMantleTx>::Context,
-    ) -> Result<GasCost, GasOverflow> {
-        GasCalculator::storage_gas_cost(&self, &context)
-    }
-
-    fn execution_gas_consumption<Constants: GasConstants>(
-        &self,
-        context: <Self as AuthenticatedMantleTx>::Context,
-    ) -> Result<Gas, GasOverflow> {
-        GasCalculator::execution_gas_consumption::<Constants>(&self, &context)
-    }
-
-    fn storage_gas_consumption(
-        &self,
-        context: <Self as AuthenticatedMantleTx>::Context,
-    ) -> Result<Gas, GasOverflow> {
-        GasCalculator::storage_gas_consumption(&self, &context)
     }
 }
 

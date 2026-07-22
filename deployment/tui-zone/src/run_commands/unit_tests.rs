@@ -7,7 +7,7 @@ mod tests {
     };
 
     use lb_core::mantle::{
-        MantleTx, Note, NoteId, Op, SignedMantleTx, Transaction as _, Utxo, Value,
+        MantleTx, Note, NoteId, Op, SignedMantleTx, Utxo, Value,
         ledger::Inputs,
         nom::NomEncode as _,
         ops::channel::{
@@ -15,6 +15,7 @@ mod tests {
             inscribe::{Inscription, InscriptionOp},
             withdraw::ChannelWithdrawOp,
         },
+        traits::Hashable as _,
         transactions::{Ops, codec::encode_signed_mantle_tx, tx::OpsProofs},
     };
     use lb_groth16::{Fr, fr_to_bytes};
