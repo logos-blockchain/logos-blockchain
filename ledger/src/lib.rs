@@ -782,7 +782,7 @@ mod tests {
                 sdp::SDPActiveOp,
                 transfer::TransferOp,
             },
-            transactions::Ops,
+            transactions::{Ops, tx::OpsProofs},
         },
         proofs::{
             channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
@@ -817,9 +817,10 @@ mod tests {
         );
         let mantle_tx = MantleTx([Op::Transfer(transfer_op)].into());
         SignedMantleTx {
-            ops_proofs: vec![OpProof::ZkSig(
+            ops_proofs: [OpProof::ZkSig(
                 ZkKey::multi_sign(sks, &mantle_tx.hash().to_fr()).unwrap(),
-            )],
+            )]
+            .into(),
             mantle_tx,
         }
     }
@@ -904,7 +905,8 @@ mod tests {
                 Key::EmptyZk => OpProof::ZkSig(ZkKey::multi_sign(&[], &tx_hash.to_fr()).unwrap()),
                 Key::MultiSequencer(proof) => OpProof::ChannelMultiSigProof(proof.clone()),
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let ops_proofs = OpsProofs::try_from(ops_proofs).expect("operation proofs are bounded");
 
         SignedMantleTx::new(mantle_tx, ops_proofs)
             .expect("Test transaction should have valid signatures")

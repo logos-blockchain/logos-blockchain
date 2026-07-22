@@ -1,17 +1,22 @@
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
-use nom::{IResult, Parser as _, combinator::map};
+use nom::{
+    IResult, Parser as _,
+    combinator::map,
+    error::{Error, ErrorKind},
+};
 
 use crate::{
     mantle::{
         Op, OpProof,
         nom::{NomDecode as _, NomEncode as _},
+        transactions::tx::OpsProofs,
     },
     proofs::{
         channel_multi_sig_proof::ChannelMultiSigProof, leader_claim_proof::Groth16LeaderClaimProof,
     },
 };
 
-pub fn decode_ops_proofs<'a>(input: &'a [u8], ops: &[Op]) -> IResult<&'a [u8], Vec<OpProof>> {
+pub fn decode_ops_proofs<'a>(input: &'a [u8], ops: &[Op]) -> IResult<&'a [u8], OpsProofs> {
     let mut remaining = input;
     let mut proofs = Vec::with_capacity(ops.len());
 
@@ -20,8 +25,10 @@ pub fn decode_ops_proofs<'a>(input: &'a [u8], ops: &[Op]) -> IResult<&'a [u8], V
         proofs.push(proof);
         remaining = new_remaining;
     }
+    let ops_proofs = OpsProofs::try_from(proofs)
+        .map_err(|_| nom::Err::Error(Error::new(remaining, ErrorKind::LengthValue)))?;
 
-    Ok((remaining, proofs))
+    Ok((remaining, ops_proofs))
 }
 
 fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {

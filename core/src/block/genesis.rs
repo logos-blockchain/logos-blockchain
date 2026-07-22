@@ -13,7 +13,9 @@ use crate::{
         MantleTx, Note, Op, OpProof, SignedMantleTx,
         ledger::{BoundedOutputs, Inputs, Outputs},
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp, transfer::TransferOp},
-        transactions::{GenesisTx, MAX_OPS_PER_TX, Ops, VerificationError, genesis_tx},
+        transactions::{
+            GenesisTx, MAX_OPS_PER_TX, Ops, VerificationError, genesis_tx, tx::OpsProofs,
+        },
     },
 };
 
@@ -66,11 +68,11 @@ where
     I: IntoIterator<Item = N>,
     N: Into<Note>,
 {
-    let notes: Vec<Note> = notes.into_iter().map(Into::into).collect();
-    if notes.is_empty() {
+    let mut notes_iter = notes.into_iter().map(Into::into).peekable();
+    if notes_iter.peek().is_none() {
         return Err(Error::EmptyNotes);
     }
-    BoundedOutputs::try_from(notes).map_err(|error| map_notes_bounded_error(&error))
+    BoundedOutputs::try_from_iter(notes_iter).map_err(|error| map_notes_bounded_error(&error))
 }
 
 fn push_note(mut notes: BoundedOutputs, note: Note) -> Result<BoundedOutputs> {
@@ -80,21 +82,17 @@ fn push_note(mut notes: BoundedOutputs, note: Note) -> Result<BoundedOutputs> {
     Ok(notes)
 }
 
-fn extend_non_empty_notes<I, N>(mut existing: BoundedOutputs, notes: I) -> Result<BoundedOutputs>
+fn extend_non_empty_notes<I, N>(existing: BoundedOutputs, notes: I) -> Result<BoundedOutputs>
 where
     I: IntoIterator<Item = N>,
     N: Into<Note>,
 {
-    let mut iter = notes.into_iter().peekable();
-    if iter.peek().is_none() {
+    let mut notes_iter = notes.into_iter().map(Into::into).peekable();
+    if notes_iter.peek().is_none() {
         return Err(Error::EmptyNotes);
     }
-    for note in iter.map(Into::into) {
-        existing
-            .try_push(note)
-            .map_err(|error| map_notes_bounded_error(&error))?;
-    }
-    Ok(existing)
+    BoundedOutputs::try_from_iter(existing.into_iter().chain(notes_iter))
+        .map_err(|error| map_notes_bounded_error(&error))
 }
 
 /// A [`Block`] whose transactions are all [`GenesisTx`] values.
@@ -812,14 +810,20 @@ where
     I: IntoIterator<Item = D>,
     D: Into<SDPDeclareOp>,
 {
-    let declarations: Vec<SDPDeclareOp> = declarations.into_iter().map(Into::into).collect();
-
-    let attempted_op_count = GENESIS_REQUIRED_OPS + declarations.len();
-
-    GenesisSDPDeclareOps::try_from(declarations).map_err(|_| {
-        Error::InvalidGenesisTx(genesis_tx::Error::TooManyOps {
-            count: attempted_op_count,
-        })
+    GenesisSDPDeclareOps::try_from_iter(declarations.into_iter().map(Into::into)).map_err(|error| {
+        match error {
+            BoundedError::TooManyItems { count, .. } => {
+                Error::InvalidGenesisTx(genesis_tx::Error::TooManyOps {
+                    count: GENESIS_REQUIRED_OPS + count,
+                })
+            }
+            BoundedError::EmptyInput | BoundedError::TooFewItems { .. } => {
+                unreachable!("GenesisSDPDeclareOps has a zero minimum bound")
+            }
+            BoundedError::IndexOutOfBounds { .. } => {
+                unreachable!("construction cannot produce an index error")
+            }
+        }
     })
 }
 
@@ -1226,24 +1230,21 @@ impl GenesisBlockBuilder<WithAll> {
                 count: n,
             }));
         };
-        let signed_tx = SignedMantleTx::new_unverified(
-            MantleTx(capped_ops),
-            vec![
-                OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
-                    &[0u8; 128],
-                ))),
-                OpProof::Ed25519Sig(Ed25519Signature::zero()),
-            ]
-            .into_iter()
-            .chain(vec![
-                OpProof::ZkAndEd25519Sigs {
+        let mut ops_proofs = OpsProofs::from([
+            OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
+                &[0u8; 128],
+            ))),
+            OpProof::Ed25519Sig(Ed25519Signature::zero()),
+        ]);
+        for _ in 0..n - 2 {
+            ops_proofs
+                .try_push(OpProof::ZkAndEd25519Sigs {
                     zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
                     ed25519_sig: Ed25519Signature::zero(),
-                };
-                n - 2
-            ])
-            .collect(),
-        );
+                })
+                .expect("genesis transaction proofs are bounded");
+        }
+        let signed_tx = SignedMantleTx::new_unverified(MantleTx(capped_ops), ops_proofs);
         Ok(GenesisBlock::genesis(GenesisTx::from_tx(signed_tx)?))
     }
 }
@@ -1345,20 +1346,20 @@ mod tests {
             Op::ChannelInscribe(valid_inscription()),
         ];
         ops.extend(extra_ops);
-        let ops_proofs = ops
-            .iter()
-            .map(|op| match op {
-                Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
-                Op::Transfer(_) => OpProof::ZkSig(ZkSignature::new(
-                    CompressedGroth16Proof::from_bytes(&[0u8; 128]),
-                )),
-                Op::SDPDeclare(_) => OpProof::ZkAndEd25519Sigs {
-                    zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
-                    ed25519_sig: Ed25519Signature::zero(),
-                },
-                other => unreachable!("unexpected genesis op in tests: {}", other.as_str()),
-            })
-            .collect();
+
+        let ops_proofs = OpsProofs::try_from_iter(ops.iter().map(|op| match op {
+            Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
+            Op::Transfer(_) => OpProof::ZkSig(ZkSignature::new(
+                CompressedGroth16Proof::from_bytes(&[0u8; 128]),
+            )),
+            Op::SDPDeclare(_) => OpProof::ZkAndEd25519Sigs {
+                zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
+                ed25519_sig: Ed25519Signature::zero(),
+            },
+            other => unreachable!("unexpected genesis op in tests: {}", other.as_str()),
+        }))
+        .expect("genesis transaction proofs are bounded");
+
         SignedMantleTx::new_unverified(MantleTx(Ops::new_unchecked(ops)), ops_proofs)
     }
 
@@ -1806,5 +1807,58 @@ mod tests {
                 .contains("genesis block must contain exactly one transaction"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn genesis_declaration_helpers_preserve_items_and_enforce_bounds() {
+        let empty = try_collect_sdp_declarations(std::iter::empty::<SDPDeclareOp>())
+            .expect("empty declaration set should be valid");
+
+        assert!(empty.is_empty());
+
+        let declarations =
+            require_non_empty([make_sdp_decl(0), make_sdp_decl(1)], "test declarations");
+
+        let mut declarations =
+            try_collect_sdp_declarations(declarations).expect("initial declarations should fit");
+
+        assert_eq!(declarations.len(), 2);
+
+        declarations = try_push_genesis_declaration(declarations, make_sdp_decl(2))
+            .expect("single declaration should fit");
+
+        assert_eq!(declarations.len(), 3);
+
+        declarations =
+            try_extend_genesis_declarations(declarations, [make_sdp_decl(3), make_sdp_decl(4)])
+                .expect("multiple declarations should fit");
+
+        assert_eq!(declarations.len(), 5);
+
+        let full = try_collect_sdp_declarations(
+            std::iter::repeat_with(|| make_sdp_decl(0)).take(MAX_GENESIS_DECLARATIONS),
+        )
+        .expect("maximum declaration capacity should fit");
+
+        let error = try_push_genesis_declaration(full, make_sdp_decl(0))
+            .expect_err("pushing beyond capacity should fail");
+
+        assert!(matches!(
+            error,
+            Error::InvalidGenesisTx(genesis_tx::Error::TooManyOps { count })
+                if count == MAX_OPS_PER_TX + 1
+        ));
+
+        let error = try_extend_genesis_declarations(
+            GenesisSDPDeclareOps::empty(),
+            std::iter::repeat_with(|| make_sdp_decl(0)).take(MAX_GENESIS_DECLARATIONS + 1),
+        )
+        .expect_err("extending beyond capacity should fail");
+
+        assert!(matches!(
+            error,
+            Error::InvalidGenesisTx(genesis_tx::Error::TooManyOps { count })
+                if count == MAX_OPS_PER_TX + 1
+        ));
     }
 }

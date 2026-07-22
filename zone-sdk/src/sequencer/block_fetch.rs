@@ -1147,7 +1147,7 @@ mod tests {
         );
         SignedMantleTx::new_unverified(
             mantle_tx,
-            vec![OpProof::Ed25519Sig(Ed25519Signature::zero())],
+            [OpProof::Ed25519Sig(Ed25519Signature::zero())].into(),
         )
     }
 

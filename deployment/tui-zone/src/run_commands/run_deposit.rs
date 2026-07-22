@@ -44,11 +44,12 @@ pub(crate) async fn run_deposit(args: DepositArgs) -> RunResult<()> {
     let user_sig = ZkKey::multi_sign(&[wallet_key], &tx.hash().to_fr())?;
     let signed_tx = SignedMantleTx::new(
         tx,
-        vec![
+        [
             OpProof::ZkSig(user_sig.clone()),
             OpProof::ZkSig(user_sig),
             OpProof::Ed25519Sig(sequencer_sig),
-        ],
+        ]
+        .into(),
     )?;
     let tx_hash = signed_tx.hash();
 

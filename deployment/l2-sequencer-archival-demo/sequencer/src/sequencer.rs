@@ -179,7 +179,7 @@ impl Sequencer {
             lb_key_management_system_service::keys::Ed25519Signature::from_bytes(&signature_bytes);
 
         SignedMantleTx {
-            ops_proofs: vec![OpProof::Ed25519Sig(signature)],
+            ops_proofs: [OpProof::Ed25519Sig(signature)].into(),
             mantle_tx: inscribe_tx,
         }
     }

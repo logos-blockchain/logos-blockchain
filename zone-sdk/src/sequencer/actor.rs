@@ -606,7 +606,7 @@ mod tests {
                     withdraw::ChannelWithdrawOp,
                 },
             },
-            transactions::Ops,
+            transactions::{Ops, tx::OpsProofs},
         },
     };
     use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
@@ -675,13 +675,14 @@ mod tests {
         // Sign the `MantleTx`
         let signed_tx = SignedMantleTx::new(
             tx.clone(),
-            vec![
+            [
                 OpProof::ZkSig(
                     ZkKey::multi_sign(std::slice::from_ref(&sk), &tx.clone().hash().to_fr())
                         .unwrap(),
                 ),
                 OpProof::Ed25519Sig(inscription_sig),
-            ],
+            ]
+            .into(),
         )
         .unwrap();
 
@@ -808,7 +809,7 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let signed_tx = SignedMantleTx {
             mantle_tx,
-            ops_proofs: Vec::new(),
+            ops_proofs: OpsProofs::empty(),
         };
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
@@ -843,7 +844,7 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let signed_tx = SignedMantleTx {
             mantle_tx,
-            ops_proofs: Vec::new(),
+            ops_proofs: OpsProofs::empty(),
         };
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
@@ -871,7 +872,7 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let signed_tx = SignedMantleTx {
             mantle_tx,
-            ops_proofs: Vec::new(),
+            ops_proofs: OpsProofs::empty(),
         };
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());

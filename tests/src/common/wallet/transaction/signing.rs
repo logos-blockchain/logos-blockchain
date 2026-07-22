@@ -6,7 +6,7 @@ use lb_core::mantle::{
     AuthenticatedMantleTx as _, MantleTx, NoteId, Op, OpProof, SignedMantleTx, Transaction as _,
     TxHash,
     gas::MainnetGasConstants,
-    transactions::{MantleTxBuilder, MantleTxContext},
+    transactions::{MantleTxBuilder, MantleTxContext, tx::OpsProofs},
 };
 use lb_key_management_system_service::keys::ZkKey;
 
@@ -20,14 +20,15 @@ pub(super) fn sign_prepared_wallet_transaction(
     funded_builder: MantleTxBuilder,
     context: &MantleTxContext,
     tx_hash: TxHash,
-    transfer_proofs: Vec<OpProof>,
+    transfer_proofs: OpsProofs,
     reserved_inputs: WalletReservedInputs,
-    leading_op_proofs: Vec<OpProof>,
+    leading_op_proofs: OpsProofs,
 ) -> Result<SignedWalletTransaction, WalletTransactionError> {
     let gas_prices = context.gas_context.get_gas_prices();
     let mantle_tx = funded_builder.build()?;
-    let mut op_proofs = leading_op_proofs;
+    let mut op_proofs = leading_op_proofs.into_inner();
     op_proofs.extend(transfer_proofs);
+    let op_proofs = OpsProofs::new_unchecked(op_proofs);
 
     let signed_tx = SignedMantleTx::new(mantle_tx, op_proofs)?;
     let spent_fee = signed_tx
@@ -48,15 +49,16 @@ pub(super) fn sign_prepared_wallet_transaction(
 pub fn transfer_proofs_for_funded_wallet_tx(
     tx: &MantleTx,
     signing_key: &ZkKey,
-) -> Result<Vec<OpProof>, WalletTransactionError> {
+) -> Result<OpsProofs, WalletTransactionError> {
     let tx_hash = tx.hash();
-    tx.ops()
+    let proofs = tx
+        .ops()
         .iter()
         .filter_map(|op| match op {
             Op::Transfer(transfer_op) => Some(transfer_op),
             _ => None,
         })
-        .map(|transfer_op| {
+        .map(|transfer_op| -> Result<OpProof, WalletTransactionError> {
             let signing_keys = transfer_op
                 .inputs
                 .iter()
@@ -67,20 +69,22 @@ pub fn transfer_proofs_for_funded_wallet_tx(
                 &tx_hash.to_fr(),
             )?))
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(OpsProofs::try_from(proofs).expect("transaction proofs are bounded"))
 }
 
 pub(super) fn build_transfer_proofs(
     ops: &[Op],
     tx_hash: &TxHash,
     transfer_signers: &WalletTransferSigners,
-) -> Result<Vec<OpProof>, WalletTransactionError> {
-    ops.iter()
+) -> Result<OpsProofs, WalletTransactionError> {
+    let proofs = ops
+        .iter()
         .filter_map(|op| match op {
             Op::Transfer(transfer_op) => Some(transfer_op),
             _ => None,
         })
-        .map(|transfer_op| {
+        .map(|transfer_op| -> Result<OpProof, WalletTransactionError> {
             let signing_keys = transfer_op
                 .inputs
                 .iter()
@@ -97,5 +101,6 @@ pub(super) fn build_transfer_proofs(
                 &tx_hash.to_fr(),
             )?))
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(OpsProofs::try_from(proofs).expect("transaction proofs are bounded"))
 }

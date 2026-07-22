@@ -968,6 +968,7 @@ impl TxState {
 mod tests {
     use lb_core::mantle::{
         MantleTx, Op::ChannelInscribe, Transaction as _, ops::channel::inscribe::InscriptionOp,
+        transactions::tx::OpsProofs,
     };
     use lb_key_management_system_service::keys::Ed25519PublicKey;
 
@@ -985,7 +986,7 @@ mod tests {
             .into(),
         );
         SignedMantleTx {
-            ops_proofs: vec![],
+            ops_proofs: OpsProofs::empty(),
             mantle_tx,
         }
     }

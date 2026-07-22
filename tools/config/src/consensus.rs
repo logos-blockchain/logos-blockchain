@@ -14,7 +14,7 @@ use lb_core::{
             },
             transfer::TransferOp,
         },
-        transactions::{GenesisTx, Ops},
+        transactions::{GenesisTx, Ops, tx::OpsProofs},
     },
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };
@@ -307,12 +307,12 @@ pub fn create_genesis_block_with_declarations(
     let mantle_tx = MantleTx(Ops::new_unchecked(ops));
 
     let mantle_tx_hash = mantle_tx.hash();
-    let mut ops_proofs = vec![
+    let mut ops_proofs = OpsProofs::from([
         OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
             &EMPTY_GROTH16_PROOF_BYTES,
         ))),
         OpProof::Ed25519Sig(Ed25519Signature::zero()),
-    ];
+    ]);
 
     for provider in providers {
         let zk_sig =
@@ -321,10 +321,12 @@ pub fn create_genesis_block_with_declarations(
         let ed25519_sig = provider
             .provider_sk
             .sign_payload(mantle_tx_hash.as_signing_bytes().as_ref());
-        ops_proofs.push(OpProof::ZkAndEd25519Sigs {
-            zk_sig,
-            ed25519_sig,
-        });
+        ops_proofs
+            .try_push(OpProof::ZkAndEd25519Sigs {
+                zk_sig,
+                ed25519_sig,
+            })
+            .expect("genesis transaction proofs are bounded");
     }
 
     let signed_mantle_tx = SignedMantleTx {

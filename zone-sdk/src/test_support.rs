@@ -19,7 +19,7 @@ use lb_core::{
                 inscribe::{Inscription, InscriptionOp},
             },
         },
-        transactions::Ops,
+        transactions::{Ops, tx::OpsProofs},
     },
     proofs::leader_proof::Groth16LeaderProof,
 };
@@ -290,7 +290,7 @@ pub fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedMantleTx {
     let mantle_tx = MantleTx(Ops::try_from(ops).expect("ops fit"));
     SignedMantleTx::new_unverified(
         mantle_tx,
-        vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n],
+        OpsProofs::new_unchecked(vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n]),
     )
 }
 

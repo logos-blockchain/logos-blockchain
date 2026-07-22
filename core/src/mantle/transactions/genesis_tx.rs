@@ -24,6 +24,7 @@ use crate::{
             sdp::SDPDeclareOp,
             transfer::TransferOp,
         },
+        transactions::tx::OpsProofs,
     },
 };
 
@@ -258,7 +259,7 @@ impl<'de> Deserialize<'de> for GenesisTx {
         #[derive(Deserialize)]
         struct Helper {
             mantle_tx: MantleTx,
-            ops_proofs: Vec<OpProof>,
+            ops_proofs: OpsProofs,
         }
 
         let helper = Helper::deserialize(deserializer)?;
@@ -482,15 +483,18 @@ mod tests {
 
     // Helper function to create a basic signed transaction
     // Genesis transactions don't need verified proofs for Blob/Inscription ops
-    fn create_tx(mut ops: Vec<Op>, mut ops_proofs: Vec<OpProof>) -> SignedMantleTx {
+    fn create_tx(mut ops: Vec<Op>, ops_proofs: Vec<OpProof>) -> SignedMantleTx {
         let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new([create_test_note(1000)]));
         let mut new_ops = vec![Op::Transfer(transfer_op)];
         new_ops.append(&mut ops);
         let mantle_tx = MantleTx(Ops::new_unchecked(new_ops));
-        let mut new_op_proofs = vec![OpProof::ZkSig(
+        let ops_proofs = OpsProofs::try_from(ops_proofs).unwrap();
+        let mut new_op_proofs = OpsProofs::from(OpProof::ZkSig(
             ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr()).unwrap(),
-        )];
-        new_op_proofs.append(&mut ops_proofs);
+        ));
+        for proof in ops_proofs {
+            new_op_proofs.try_push(proof).unwrap();
+        }
         SignedMantleTx {
             mantle_tx,
             ops_proofs: new_op_proofs,

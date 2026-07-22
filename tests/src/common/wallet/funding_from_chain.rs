@@ -5,7 +5,9 @@ use lb_core::mantle::{
     Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
     gas::MainnetGasConstants,
     ops::channel::{ChannelId, ChannelKeyIndex},
-    transactions::{GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext},
+    transactions::{
+        GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext, tx::OpsProofs,
+    },
 };
 use lb_testing_framework::{NodeHttpClient, configs::wallet::WalletAccount};
 use thiserror::Error;
@@ -90,8 +92,8 @@ pub async fn funded_signed_tx(
             .expect("transfer proofs should build"),
     );
 
-    let signed_tx =
-        SignedMantleTx::new(mantle_tx, proofs).expect("funded transaction should be valid");
+    let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::try_from(proofs).unwrap())
+        .expect("funded transaction should be valid");
 
     (signed_tx, fee)
 }
