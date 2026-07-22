@@ -27,7 +27,9 @@ use lb_core::{
             },
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
-        transactions::{MantleTxBuilder, MantleTxContext, TxBuilderError, tx::OpsProofs, states::Preverified},
+        transactions::{
+            MantleTxBuilder, MantleTxContext, TxBuilderError, states::Preverified, tx::OpsProofs,
+        },
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
 };

@@ -211,8 +211,5 @@ pub fn create_invalid_transaction() -> SignedMantleTx<Unverified> {
     let transfer_proof = ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr())
         .expect("invalid transfer proof should still be constructible");
 
-    SignedMantleTx::new(
-        mantle_tx,
-        [OpProof::ZkSig(transfer_proof)].into(),
-    )
+    SignedMantleTx::new(mantle_tx, [OpProof::ZkSig(transfer_proof)].into())
 }

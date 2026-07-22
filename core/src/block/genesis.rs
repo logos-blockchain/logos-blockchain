@@ -1598,7 +1598,10 @@ mod tests {
         let block = builder
             .build()
             .expect("maximum-size genesis block should build");
-        let tx = block.transactions().next().expect("genesis transaction");
+        let tx = block
+            .transactions_iter()
+            .next()
+            .expect("genesis transaction");
 
         assert_eq!(tx.sdp_declarations().count(), MAX_GENESIS_DECLARATIONS);
         assert_eq!(tx.mantle_tx().ops().len(), MAX_OPS_PER_TX);

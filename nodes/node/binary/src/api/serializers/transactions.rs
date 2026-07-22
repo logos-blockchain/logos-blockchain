@@ -1,8 +1,8 @@
 use lb_core::mantle::{
-    MantleTx, SignedMantleTx, TxHash, transactions::{Ops, states::VerificationState},
+    MantleTx, SignedMantleTx, TxHash,
+    transactions::{Ops, states::VerificationState, tx::OpsProofs},
 };
 use serde::Serialize;
-use lb_core::mantle::transactions::tx::OpsProofs;
 
 #[derive(Serialize)]
 #[serde(remote = "MantleTx")]

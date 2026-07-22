@@ -10,7 +10,7 @@ use nom::{
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use super::{states, SignedMantleTx, TxHash};
+use super::{SignedMantleTx, TxHash};
 use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
@@ -24,7 +24,7 @@ use crate::{
             sdp::SDPDeclareOp,
             transfer::TransferOp,
         },
-        transactions::{states::Preverified, tx::OpsProofs},
+        transactions::states::Preverified,
     },
 };
 
@@ -407,7 +407,7 @@ mod tests {
         mantle::{
             ledger::{Inputs, Note, Outputs, Utxo, Value},
             ops::channel::{Ed25519PublicKey, inscribe::Inscription},
-            transactions::Ops,
+            transactions::{Ops, tx::OpsProofs},
         },
         sdp::{Locator, ProviderId, ServiceType},
     };
@@ -485,10 +485,7 @@ mod tests {
         for proof in ops_proofs {
             new_op_proofs.try_push(proof).unwrap();
         }
-        SignedMantleTx::new_trusted(
-            mantle_tx,
-            new_op_proofs,
-        )
+        SignedMantleTx::new_trusted(mantle_tx, new_op_proofs)
     }
 
     #[test]

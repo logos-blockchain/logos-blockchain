@@ -5,8 +5,10 @@ use std::{
     time::Duration,
 };
 
-use lb_core::mantle::{SignedMantleTx, Transaction as _, TxHash, transactions::tx::OpsProofs};
-use lb_core::mantle::{transactions::states::Preverified};
+use lb_core::mantle::{
+    SignedMantleTx, Transaction as _, TxHash,
+    transactions::{states::Preverified, tx::OpsProofs},
+};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_tx_service::{backend::PoolRecoveryState, tx::state::TxMempoolState};
 use tokio::time::{sleep, timeout};

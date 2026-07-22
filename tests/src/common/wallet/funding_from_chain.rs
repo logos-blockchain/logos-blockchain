@@ -6,7 +6,8 @@ use lb_core::mantle::{
     gas::MainnetGasConstants,
     ops::channel::{ChannelId, ChannelKeyIndex},
     transactions::{
-        GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext, tx::OpsProofs, states::Unverified,
+        GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext, states::Unverified,
+        tx::OpsProofs,
     },
 };
 use lb_testing_framework::{NodeHttpClient, configs::wallet::WalletAccount};

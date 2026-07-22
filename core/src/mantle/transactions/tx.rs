@@ -10,8 +10,8 @@ use lb_core_macros::NomCodec;
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
-use nom::{Parser as _, combinator::all_consuming};
 use lb_utils::bounded::UpperBoundedVec;
+use nom::{Parser as _, combinator::all_consuming};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
@@ -1338,7 +1338,9 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let proof = create_channel_multi_sig_proof(&tx_hash, signing_keys);
 
-        let tx = SignedMantleTx::new(mantle_tx, [OpProof::ChannelMultiSigProof(proof)].into()).preverify().unwrap();
+        let tx = SignedMantleTx::new(mantle_tx, [OpProof::ChannelMultiSigProof(proof)].into())
+            .preverify()
+            .unwrap();
         assert_eq!(
             tx.ops_with_proof().count(),
             1,
@@ -1471,7 +1473,8 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
-        let result = SignedMantleTx::new(mantle_tx, [OpProof::Ed25519Sig(signature)].into()).preverify();
+        let result =
+            SignedMantleTx::new(mantle_tx, [OpProof::Ed25519Sig(signature)].into()).preverify();
 
         assert!(result.is_ok());
     }
@@ -1503,7 +1506,8 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let signature = wrong_signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
-        let result = SignedMantleTx::new(mantle_tx, [OpProof::Ed25519Sig(signature)].into()).preverify();
+        let result =
+            SignedMantleTx::new(mantle_tx, [OpProof::Ed25519Sig(signature)].into()).preverify();
 
         assert!(matches!(
             result,
@@ -1551,7 +1555,8 @@ mod tests {
         let result = SignedMantleTx::new(
             mantle_tx,
             [OpProof::Ed25519Sig(sig1), OpProof::Ed25519Sig(sig2)].into(),
-        ).preverify();
+        )
+        .preverify();
 
         assert!(result.is_ok());
     }
@@ -1577,7 +1582,8 @@ mod tests {
         let result = SignedMantleTx::new(
             mantle_tx,
             [OpProof::Ed25519Sig(sig1), OpProof::Ed25519Sig(sig2)].into(),
-        ).preverify();
+        )
+        .preverify();
 
         assert!(matches!(
             result,
@@ -1594,8 +1600,9 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
-        let signed_tx =
-            SignedMantleTx::new(mantle_tx, [OpProof::Ed25519Sig(signature)].into()).preverify().unwrap();
+        let signed_tx = SignedMantleTx::new(mantle_tx, [OpProof::Ed25519Sig(signature)].into())
+            .preverify()
+            .unwrap();
 
         // Serialize and deserialize
         let serialized = serde_json::to_string(&signed_tx).unwrap();
@@ -1644,10 +1651,7 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let wrong_signature = wrong_key.sign_payload(&tx_hash.as_signing_bytes());
 
-        let helper = SignedMantleTx::new(
-            mantle_tx,
-            [OpProof::Ed25519Sig(wrong_signature)].into(),
-        );
+        let helper = SignedMantleTx::new(mantle_tx, [OpProof::Ed25519Sig(wrong_signature)].into());
 
         let serialized = serde_json::to_string(&helper).unwrap();
 
@@ -1693,7 +1697,8 @@ mod tests {
                 OpProof::Ed25519Sig(signature),
             ]
             .into(),
-        ).preverify();
+        )
+        .preverify();
         assert!(matches!(
             result,
             Err(VerificationError::ProofCountMismatch {
@@ -1763,7 +1768,7 @@ mod tests {
             let mantle_tx = create_test_mantle_tx(vec![Op::Transfer(transfer_op)]);
             let transfer_sig = ZkKey::multi_sign(&[input_sk], &mantle_tx.hash().to_fr())
                 .expect("Signing should succeed");
-            SignedMantleTx::new(mantle_tx, vec![OpProof::ZkSig(transfer_sig)])
+            SignedMantleTx::new(mantle_tx, [OpProof::ZkSig(transfer_sig)].into())
                 .preverify()
                 .expect("Transfer transaction should preverify")
         };

@@ -607,10 +607,9 @@ mod tests {
                 },
             },
             transactions::{Ops, tx::OpsProofs},
-            transactions::states::Unverified,
         },
     };
-    use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
+    use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
     use tokio::sync::watch;
@@ -622,20 +621,7 @@ mod tests {
         },
         *,
     };
-    use crate::{ZoneMessage, adapter::BoxStream};
     use crate::test_support::{MockNode, api_block, unverified_tx_with_ops};
-
-    /// Build a `SignedMantleTx` carrying the given ops, with placeholder
-    /// proofs. Suitable for tests that only care about op extraction, not
-    /// verification.
-    fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedMantleTx<Unverified> {
-        let n = ops.len();
-        let mantle_tx = MantleTx(Ops::try_from(ops).unwrap());
-        SignedMantleTx::new(
-            mantle_tx,
-            [OpProof::Ed25519Sig(Ed25519Signature::zero()); n].into(),
-        )
-    }
 
     #[must_use]
     pub fn utxo_with_sk() -> (ZkKey, Utxo) {

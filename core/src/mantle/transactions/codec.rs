@@ -158,9 +158,7 @@ mod tests {
     fn test_decode_signed_mantle_tx_empty() {
         let mantle_tx = MantleTx(Ops::new_unchecked(vec![]));
 
-        let signed_tx = SignedMantleTx::new(
-            mantle_tx, OpsProofs::empty(),
-        );
+        let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
 
         #[expect(
             clippy::string_add,
@@ -794,10 +792,7 @@ mod tests {
             Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
 
         // Construct directly to skip proof verification (dummy proof won't verify)
-        let signed_tx = SignedMantleTx::new(
-            mantle_tx,
-            [OpProof::PoC(poc_proof)].into(),
-        );
+        let signed_tx = SignedMantleTx::new(mantle_tx, [OpProof::PoC(poc_proof)].into());
 
         let encoded = encode_signed_mantle_tx(&signed_tx);
         assert_eq!(predicted_size, encoded.len());

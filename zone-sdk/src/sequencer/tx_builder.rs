@@ -10,7 +10,7 @@ use lb_core::{
                 inscribe::{Inscription, InscriptionOp},
             },
         },
-        transactions::{MantleTxBuilder, Ops, TxHash, tx::OpsProofs, states::Unverified},
+        transactions::{MantleTxBuilder, Ops, TxHash, states::Unverified, tx::OpsProofs},
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };

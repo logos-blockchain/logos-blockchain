@@ -769,7 +769,8 @@ mod tests {
         let mantle_tx = MantleTx([Op::Transfer(transfer_op)].into());
         let ops_proofs = [OpProof::ZkSig(
             ZkKey::multi_sign(sks, &mantle_tx.hash().to_fr()).unwrap(),
-        )].into();
+        )]
+        .into();
         SignedMantleTx::new(mantle_tx, ops_proofs)
     }
 

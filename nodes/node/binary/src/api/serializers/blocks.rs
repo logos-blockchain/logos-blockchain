@@ -46,6 +46,7 @@ impl<'block, State: VerificationState> From<&'block Block<SignedMantleTx<State>>
 }
 
 #[derive(Serialize)]
+#[serde(transparent)]
 pub struct ApiBlockOwned<State: VerificationState> {
     #[serde(with = "ApiBlock")]
     block: Block<SignedMantleTx<State>>,
