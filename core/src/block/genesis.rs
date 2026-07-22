@@ -66,11 +66,11 @@ where
     I: IntoIterator<Item = N>,
     N: Into<Note>,
 {
-    let notes: Vec<Note> = notes.into_iter().map(Into::into).collect();
-    if notes.is_empty() {
+    let mut notes_iter = notes.into_iter().map(Into::into).peekable();
+    if notes_iter.peek().is_none() {
         return Err(Error::EmptyNotes);
     }
-    BoundedOutputs::try_from(notes).map_err(|error| map_notes_bounded_error(&error))
+    BoundedOutputs::try_from_iter(notes_iter).map_err(|error| map_notes_bounded_error(&error))
 }
 
 fn push_note(mut notes: BoundedOutputs, note: Note) -> Result<BoundedOutputs> {
@@ -80,21 +80,17 @@ fn push_note(mut notes: BoundedOutputs, note: Note) -> Result<BoundedOutputs> {
     Ok(notes)
 }
 
-fn extend_non_empty_notes<I, N>(mut existing: BoundedOutputs, notes: I) -> Result<BoundedOutputs>
+fn extend_non_empty_notes<I, N>(existing: BoundedOutputs, notes: I) -> Result<BoundedOutputs>
 where
     I: IntoIterator<Item = N>,
     N: Into<Note>,
 {
-    let mut iter = notes.into_iter().peekable();
-    if iter.peek().is_none() {
+    let mut notes_iter = notes.into_iter().map(Into::into).peekable();
+    if notes_iter.peek().is_none() {
         return Err(Error::EmptyNotes);
     }
-    for note in iter.map(Into::into) {
-        existing
-            .try_push(note)
-            .map_err(|error| map_notes_bounded_error(&error))?;
-    }
-    Ok(existing)
+    BoundedOutputs::try_from_iter(existing.into_iter().chain(notes_iter))
+        .map_err(|error| map_notes_bounded_error(&error))
 }
 
 /// A [`Block`] whose transactions are all [`GenesisTx`] values.
@@ -1315,24 +1311,18 @@ mod tests {
         ];
         ops.extend(extra_ops);
 
-        let mut ops_proofs = OpsProofs::empty();
-        for op in &ops {
-            let proof = match op {
-                Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
-                Op::Transfer(_) => OpProof::ZkSig(ZkSignature::new(
-                    CompressedGroth16Proof::from_bytes(&[0u8; 128]),
-                )),
-                Op::SDPDeclare(_) => OpProof::ZkAndEd25519Sigs {
-                    zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
-                    ed25519_sig: Ed25519Signature::zero(),
-                },
-                other => unreachable!("unexpected genesis op in tests: {}", other.as_str()),
-            };
-
-            ops_proofs
-                .try_push(proof)
-                .expect("genesis transaction proofs are bounded");
-        }
+        let ops_proofs = OpsProofs::try_from_iter(ops.iter().map(|op| match op {
+            Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
+            Op::Transfer(_) => OpProof::ZkSig(ZkSignature::new(
+                CompressedGroth16Proof::from_bytes(&[0u8; 128]),
+            )),
+            Op::SDPDeclare(_) => OpProof::ZkAndEd25519Sigs {
+                zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
+                ed25519_sig: Ed25519Signature::zero(),
+            },
+            other => unreachable!("unexpected genesis op in tests: {}", other.as_str()),
+        }))
+        .expect("genesis transaction proofs are bounded");
 
         SignedMantleTx::new_unverified(MantleTx(Ops::new_unchecked(ops)), ops_proofs)
     }
