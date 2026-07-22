@@ -371,7 +371,7 @@ fn build_genesis_block(
         .set_inscription(inscription)
         .add_declaration(first_decl);
     for decl in decls_iter {
-        builder = builder.add_declaration(decl);
+        builder = builder.add_declaration(decl)?;
     }
 
     builder.build().context("failed to build genesis block")
