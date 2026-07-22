@@ -129,6 +129,34 @@ struct RecoveryBlocks<Tx> {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub enum ConsensusMsg<Tx> {
+    /// Read-only queries and subscriptions.
+    /// These are served in every service phase.
+    Query(Query),
+    /// Apply a block to the chain,
+    /// and return the tip and reorged txs if successful.
+    ApplyBlock {
+        block: Box<Block<Tx>>,
+        reply_channel: oneshot::Sender<Result<(HeaderId, Vec<Tx>), Error>>,
+    },
+    /// Forward chain sync events from the network to chain-service.
+    /// Chain-service will handle these directly and respond via the embedded
+    /// `reply_sender`.
+    ChainSync(ChainSyncEvent),
+    /// Notification from chain-network that Initial Block Download has
+    /// completed.
+    IbdCompleted,
+}
+
+impl<Tx> From<Query> for ConsensusMsg<Tx> {
+    fn from(query: Query) -> Self {
+        Self::Query(query)
+    }
+}
+
+/// Read-only queries and subscriptions, served in every service phase.
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub enum Query {
     Info {
         reply_channel: oneshot::Sender<ChainServiceInfo>,
     },
@@ -170,20 +198,6 @@ pub enum ConsensusMsg<Tx> {
         id: HeaderId,
         reply_channel: oneshot::Sender<Option<Events>>,
     },
-    /// Apply a block to the chain,
-    /// and return the tip and reorged txs if successful.
-    ApplyBlock {
-        block: Box<Block<Tx>>,
-        reply_channel: oneshot::Sender<Result<(HeaderId, Vec<Tx>), Error>>,
-    },
-    /// Forward chain sync events from the network to chain-service.
-    /// Chain-service will handle these directly and respond via the embedded
-    /// `reply_sender`.
-    ChainSync(ChainSyncEvent),
-    /// Notification from chain-network that Initial Block Download has
-    /// completed. Chain-service should start the prolonged bootstrap timer
-    /// upon receiving this.
-    IbdCompleted,
     /// Subscribe to be notified when the chain becomes online mode.
     /// Since chain never goes back after entering online,
     /// the notification is delivered at most once.

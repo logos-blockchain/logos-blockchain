@@ -5,7 +5,7 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt as _, future::join_all};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
 use lb_chain_service::{
-    ConsensusMsg, CryptarchiaInfo, ProcessedBlockEvent, Slot,
+    ConsensusMsg, CryptarchiaInfo, ProcessedBlockEvent, Query, Slot,
     storage::{StorageAdapter as _, adapters::StorageAdapter},
 };
 use lb_core::{
@@ -208,7 +208,7 @@ where
     let (sender, receiver) = oneshot::channel();
 
     relay
-        .send(ConsensusMsg::NewBlockSubscribe { sender })
+        .send(Query::NewBlockSubscribe { sender }.into())
         .await
         .map_err(|(error, _)| error)?;
 
@@ -881,9 +881,12 @@ where
     let (sender, receiver) = oneshot::channel();
 
     relay
-        .send(ConsensusMsg::GetSdpDeclarations {
-            reply_channel: sender,
-        })
+        .send(
+            Query::GetSdpDeclarations {
+                reply_channel: sender,
+            }
+            .into(),
+        )
         .await
         .map_err(|(e, _)| e)?;
 
@@ -906,9 +909,12 @@ where
     let (sender, receiver) = oneshot::channel();
 
     relay
-        .send(ConsensusMsg::GetSdpSnapshot {
-            reply_channel: sender,
-        })
+        .send(
+            Query::GetSdpSnapshot {
+                reply_channel: sender,
+            }
+            .into(),
+        )
         .await
         .map_err(|(e, _)| e)?;
 
