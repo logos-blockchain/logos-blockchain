@@ -973,12 +973,7 @@ mod tests {
     use lb_key_management_system_service::keys::Ed25519PublicKey;
 
     use super::*;
-
-    fn header_id(n: u8) -> HeaderId {
-        let mut bytes = [0u8; 32];
-        bytes[0] = n;
-        HeaderId::from(bytes)
-    }
+    use crate::test_support::header_id;
 
     fn make_dummy_tx(data: u8) -> SignedMantleTx {
         let mantle_tx = MantleTx(

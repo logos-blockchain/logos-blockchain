@@ -47,6 +47,7 @@ fn tokio_console_config_defaults_to_loopback_default_console_port() {
 
     assert_eq!(config.bind_address, IpAddr::V4(Ipv4Addr::LOCALHOST));
     assert_eq!(config.port, 6_669);
+    assert_eq!(config.recording_path, None);
 }
 
 #[test]
@@ -66,6 +67,33 @@ fn tokio_console_config_deserializes() {
 
     assert_eq!(config.bind_address, IpAddr::V4(Ipv4Addr::LOCALHOST));
     assert_eq!(config.port, 6_669);
+    assert_eq!(config.recording_path, None);
+}
+
+#[test]
+fn tokio_console_config_deserializes_recording_path_and_converts() {
+    let layer: ConsoleLayer = serde_yaml::from_str(
+        "
+            !Console
+            bind_address: 127.0.0.1
+            port: 6669
+            recording_path: /tmp/node-tokio-console.jsonl
+        ",
+    )
+    .expect("tokio-console config should deserialize");
+
+    let ConsoleLayer::Console(config) = layer else {
+        panic!("expected console layer");
+    };
+    let tracing_config: lb_tracing_service::ConsoleLayerSettings =
+        ConsoleLayer::Console(config.clone()).into();
+    let lb_tracing_service::ConsoleLayerSettings::Console(tracing_config) = tracing_config else {
+        panic!("expected console layer");
+    };
+
+    assert_eq!(tracing_config.bind_address, "127.0.0.1");
+    assert_eq!(tracing_config.port, 6_669);
+    assert_eq!(tracing_config.recording_path, config.recording_path);
 }
 
 #[test]

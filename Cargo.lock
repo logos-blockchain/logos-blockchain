@@ -5385,6 +5385,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
+name = "manyhow"
+version = "0.11.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b33efb3ca6d3b07393750d4030418d594ab1139cee518f0dc88db70fec873587"
+dependencies = [
+ "manyhow-macros",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
+name = "manyhow-macros"
+version = "0.11.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46fce34d199b78b6e6073abf984c9cf5fd3e9330145a93ee0738a7443e371495"
+dependencies = [
+ "proc-macro-utils",
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
 name = "match-lookup"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6175,7 +6198,7 @@ dependencies = [
 [[package]]
 name = "overwatch"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/Overwatch?rev=448c192#448c192895b8311c742b1726a1bb12ee314ad95c"
+source = "git+https://github.com/logos-co/Overwatch?rev=ef70b69fb82b0b585cfef1427972c4e97ea88c84#ef70b69fb82b0b585cfef1427972c4e97ea88c84"
 dependencies = [
  "async-trait",
  "futures",
@@ -6190,10 +6213,10 @@ dependencies = [
 [[package]]
 name = "overwatch-derive"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/Overwatch?rev=448c192#448c192895b8311c742b1726a1bb12ee314ad95c"
+source = "git+https://github.com/logos-co/Overwatch?rev=ef70b69fb82b0b585cfef1427972c4e97ea88c84#ef70b69fb82b0b585cfef1427972c4e97ea88c84"
 dependencies = [
  "convert_case 0.8.0",
- "proc-macro-error2",
+ "manyhow",
  "proc-macro2",
  "quote",
  "syn 2.0.118",
@@ -6583,6 +6606,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.118",
+]
+
+[[package]]
+name = "proc-macro-utils"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eeaf08a13de400bc215877b5bdc088f241b12eb42f0a548d3390dc1c56bb7071"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "smallvec",
 ]
 
 [[package]]

@@ -481,6 +481,9 @@ impl PendingTx {
 pub struct FinalizedTx {
     /// Transaction hash of the Mantle tx.
     pub tx_hash: TxHash,
+    /// L1 slot of the block this tx finalized in. Every op in one Mantle tx
+    /// shares the block, hence the slot, so it is stamped per-tx.
+    pub l1_slot: Slot,
     /// Channel-relevant ops in on-chain execution order. A tx with a
     /// deposit and an inscription emits both, deposit-first.
     pub ops: Vec<FinalizedOp>,
