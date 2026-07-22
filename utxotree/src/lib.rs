@@ -3,7 +3,7 @@ pub mod test_fr;
 
 use std::{collections::BTreeMap, marker::PhantomData};
 
-use ark_ff::Field;
+use ark_ff::AdditiveGroup;
 // TODO: Change `DynamicMerkleTree` back to private once we adopt MMR for vouchers in the
 // wallet service.
 pub use lb_dynamic_merkle::{DynamicMerkleTree, MerkleNode, MerklePath};
@@ -27,7 +27,7 @@ where
     type Item = Key;
     type Hash = Fr;
 
-    const EMPTY_VALUE: Fr = <Fr as Field>::ZERO;
+    const EMPTY_VALUE: Fr = <Fr as AdditiveGroup>::ZERO;
 
     fn leaf_hash(item: &Key) -> Fr {
         *item.as_ref()

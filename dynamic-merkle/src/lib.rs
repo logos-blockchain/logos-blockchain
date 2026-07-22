@@ -578,7 +578,7 @@ pub type MerklePath<T> = Vec<MerkleNode<T>>;
 
 #[cfg(test)]
 mod test_fr {
-    use ark_ff::Field;
+    use ark_ff::AdditiveGroup;
     use lb_poseidon2::{Digest, Fr, Poseidon2Bn254Hasher};
     use num_bigint::BigUint;
     use rand::RngCore;
@@ -612,7 +612,7 @@ mod test_fr {
         type Item = TestFr;
         type Hash = Fr;
 
-        const EMPTY_VALUE: Fr = <Fr as Field>::ZERO;
+        const EMPTY_VALUE: Fr = <Fr as AdditiveGroup>::ZERO;
 
         fn leaf_hash(item: &TestFr) -> Fr {
             *item.as_ref()
