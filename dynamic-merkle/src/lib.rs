@@ -294,7 +294,7 @@ impl<Item, Hash: Copy> Node<Item, Hash> {
 /// Removed items are replaced with an empty leaf node, which prevents
 /// the whole tree reordering and their position is recorded for future
 /// insertions. Compared to a MPT, the height of this tree is predictable and
-/// bounded by the number of items, allowing for efficient and simple proof of
+/// bounded by the number of items, for example allowing for efficient and simple proof of
 /// memberships for `PoL`.
 pub struct DynamicMerkleTree<H: MerkleHasher> {
     root: Arc<Node<H::Item, H::Hash>>,
