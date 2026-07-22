@@ -91,6 +91,7 @@ enum Node<Item, Hash> {
     Inner {
         left: Arc<Self>,
         right: Arc<Self>,
+        // Hash is bound to a value, not to confuse with Hasher
         value: Hash,
         right_subtree_size: usize,
         left_subtree_size: usize,
@@ -294,8 +295,8 @@ impl<Item, Hash: Copy> Node<Item, Hash> {
 /// Removed items are replaced with an empty leaf node, which prevents
 /// the whole tree reordering and their position is recorded for future
 /// insertions. Compared to a MPT, the height of this tree is predictable and
-/// bounded by the number of items, for example allowing for efficient and simple proof of
-/// memberships for `PoL`.
+/// bounded by the number of items, for example allowing for efficient and
+/// simple proof of memberships for `PoL`.
 pub struct DynamicMerkleTree<H: MerkleHasher> {
     root: Arc<Node<H::Item, H::Hash>>,
     holes: RedBlackTreeSetSync<usize>,
@@ -508,7 +509,7 @@ pub mod serde {
     use std::{marker::PhantomData, sync::Arc};
 
     use rpds::RedBlackTreeSetSync;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeStruct as _};
+    use serde::{ser::SerializeStruct as _, Deserialize, Deserializer, Serialize, Serializer};
 
     use super::MerkleHasher;
 
