@@ -38,7 +38,7 @@ members = [
   "c-bindings",
   "consensus/cryptarchia-engine",
   "consensus/cryptarchia-sync",
-  "core",
+  "core", "dynamic-merkle",
   "kms/keys",
   "kms/macros",
   "kms/operators",

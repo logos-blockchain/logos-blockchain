@@ -1,0 +1,17 @@
+[package]
+name = "dynamic-merkle"
+categories.workspace = true
+description.workspace = true
+edition.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+rand = { workspace = true }
+rpds = { workspace = true }
+[lints]
+workspace = true
