@@ -497,7 +497,7 @@ pub struct CryptarchiaSettings {
 }
 
 impl StorageRecoverySettings for CryptarchiaSettings {
-    const RECOVERY_KEY: &'static [u8] = b"recovery/cryptarchia";
+    const RECOVERY_KEY_SUFFIX: &'static [u8] = b"cryptarchia";
 
     fn recovery_data(&self) -> &RecoveryData {
         &self.recovery_data

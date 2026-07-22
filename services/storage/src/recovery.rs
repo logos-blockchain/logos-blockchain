@@ -18,8 +18,14 @@ use tokio::sync::OnceCell;
 use crate::backends::rocksdb::{RocksBackend, RocksBackendSettings};
 use crate::{StorageMsg, StorageService, backends::StorageBackend};
 
-#[cfg(feature = "rocksdb-backend")]
 pub(crate) const RECOVERY_PREFIX: &[u8] = b"recovery/";
+
+fn recovery_key(suffix: &[u8]) -> Bytes {
+    let mut key = Vec::with_capacity(RECOVERY_PREFIX.len() + suffix.len());
+    key.extend_from_slice(RECOVERY_PREFIX);
+    key.extend_from_slice(suffix);
+    key.into()
+}
 
 #[cfg(feature = "rocksdb-backend")]
 pub fn load_recovery_data(settings: RocksBackendSettings) -> Result<RecoveryData, DynError> {
@@ -36,7 +42,7 @@ fn recovery_data_from_backend(backend: &RocksBackend) -> Result<RecoveryData, Dy
 }
 
 pub trait StorageRecoverySettings {
-    const RECOVERY_KEY: &'static [u8];
+    const RECOVERY_KEY_SUFFIX: &'static [u8];
 
     fn recovery_data(&self) -> &RecoveryData;
 }
@@ -94,7 +100,10 @@ where
     }
 
     fn load_state(settings: &Settings) -> RecoveryResult<Option<Self::State>> {
-        let Some(bytes) = settings.recovery_data().take(Settings::RECOVERY_KEY)? else {
+        let Some(bytes) = settings
+            .recovery_data()
+            .take(&recovery_key(Settings::RECOVERY_KEY_SUFFIX))?
+        else {
             return Ok(None);
         };
 
@@ -115,7 +124,7 @@ where
             .await?;
 
         let message = StorageMsg::Store {
-            key: Bytes::from_static(Settings::RECOVERY_KEY),
+            key: recovery_key(Settings::RECOVERY_KEY_SUFFIX),
             value: state
                 .to_bytes()
                 .map_err(|error| RecoveryError::Backend(error.to_string()))?,
@@ -174,7 +183,7 @@ mod tests {
     }
 
     impl StorageRecoverySettings for TestSettings {
-        const RECOVERY_KEY: &'static [u8] = b"recovery/test";
+        const RECOVERY_KEY_SUFFIX: &'static [u8] = b"test";
 
         fn recovery_data(&self) -> &RecoveryData {
             &self.recovery_data
@@ -196,7 +205,7 @@ mod tests {
         let bytes = expected.to_bytes().unwrap();
         reader
             .txn(move |database| {
-                database.put(TestSettings::RECOVERY_KEY, bytes)?;
+                database.put(recovery_key(TestSettings::RECOVERY_KEY_SUFFIX), bytes)?;
                 Ok(None)
             })
             .execute()
@@ -264,7 +273,10 @@ mod tests {
         .unwrap();
         reader
             .txn(|database| {
-                database.put(TestSettings::RECOVERY_KEY, b"invalid recovery state")?;
+                database.put(
+                    recovery_key(TestSettings::RECOVERY_KEY_SUFFIX),
+                    b"invalid recovery state",
+                )?;
                 Ok(None)
             })
             .execute()
