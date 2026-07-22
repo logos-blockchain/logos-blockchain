@@ -1327,10 +1327,12 @@ mod tests {
     fn create_withdraw_tx(
         channel_id: ChannelId,
         signing_keys: &[&Ed25519Key],
+        inputs: Option<Inputs>,
     ) -> SignedMantleTx<Preverified> {
+        let inputs = inputs.unwrap_or_else(|| Inputs::new([NoteId(Fr::from(0u64))]));
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([NoteId(Fr::from(0u64))]),
+            inputs,
         })]);
 
         let tx_hash = mantle_tx.hash();
@@ -1707,13 +1709,25 @@ mod tests {
         let key0 = Ed25519Key::from_bytes(&[8; 32]);
         let key1 = Ed25519Key::from_bytes(&[9; 32]);
         let keys = Keys::new_unchecked(vec![key0.public_key(), key1.public_key()]);
-        let signed_tx = create_withdraw_tx(channel_id, &[&key0, &key1]);
+
+        let input_sk = ZkKey::from(BigUint::from(1u8));
+        let utxo = Utxo {
+            op_id: [1u8; 32],
+            output_index: 0,
+            note: Note::new(10, input_sk.to_public_key()),
+        };
+        let note_id = utxo.id();
+        let withdraw_inputs = Inputs::from([note_id]);
+
+        let signed_tx = create_withdraw_tx(channel_id, &[&key0, &key1], Some(withdraw_inputs));
 
         let channels = {
             let mut channels = Channels::new();
             let channel_state = make_channel_state(2, Some(keys));
             channels.channels.insert_mut(channel_id, channel_state);
             channels
+                .register_channel_note(&note_id, &channel_id)
+                .expect("Note should be registered.")
         };
 
         let helper = TestOperationVerificationHelper::new(
@@ -1722,7 +1736,8 @@ mod tests {
                 ((channel_id, 0), key0.public_key()),
                 ((channel_id, 1), key1.public_key()),
             ],
-        );
+        )
+        .with_utxos(vec![utxo]);
 
         signed_tx
             .verified_ops()
@@ -1772,7 +1787,7 @@ mod tests {
     fn helper_backed_verification_rejects_missing_channel() {
         let channel_id = ChannelId::from([10u8; 32]);
         let key0 = Ed25519Key::from_bytes(&[0; 32]);
-        let signed_tx = create_withdraw_tx(channel_id, &[&key0]);
+        let signed_tx = create_withdraw_tx(channel_id, &[&key0], None);
 
         let channels = Channels::new();
         let helper = TestOperationVerificationHelper::new(channels, []);
@@ -1789,7 +1804,7 @@ mod tests {
         let channel_id = ChannelId::from([10u8; 32]);
         let key0 = Ed25519Key::from_bytes(&[0; 32]);
         let key1 = Ed25519Key::from_bytes(&[1; 32]);
-        let signed_tx = create_withdraw_tx(channel_id, &[&key0, &key1]);
+        let signed_tx = create_withdraw_tx(channel_id, &[&key0, &key1], None);
 
         let channels = {
             let mut channels = Channels::new();
@@ -1814,7 +1829,7 @@ mod tests {
     fn helper_backed_verification_rejects_not_enough_signatures() {
         let channel_id = ChannelId::from([10u8; 32]);
         let key0 = Ed25519Key::from_bytes(&[0; 32]);
-        let signed_tx = create_withdraw_tx(channel_id, &[&key0]);
+        let signed_tx = create_withdraw_tx(channel_id, &[&key0], None);
 
         let channels = {
             let mut channels = Channels::new();
@@ -1841,7 +1856,7 @@ mod tests {
         let channel_id = ChannelId::from([10u8; 32]);
         let expected_key = Ed25519Key::from_bytes(&[0; 32]);
         let wrong_key = Ed25519Key::from_bytes(&[9; 32]);
-        let signed_tx = create_withdraw_tx(channel_id, &[&wrong_key]);
+        let signed_tx = create_withdraw_tx(channel_id, &[&wrong_key], None);
 
         let channels = {
             let mut channels = Channels::new();

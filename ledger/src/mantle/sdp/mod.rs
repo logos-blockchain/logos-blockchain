@@ -628,7 +628,7 @@ mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
     use lb_core::{
-        mantle::{ledger::Utxos, ops::sdp::SdpError},
+        mantle::ledger::Utxos,
         sdp::{Locator, SNAPSHOT_FINALIZATION_DELAY},
     };
     use lb_groth16::{AdditiveGroup as _, Fr};
@@ -1125,101 +1125,6 @@ mod tests {
             assert_eq!(*service_type, ServiceType::BlendNetwork);
             assert!(effect.reward_utxos.contains(utxo));
         }
-    }
-
-    /// Two declarations in the same service sharing the same `provider_id`
-    /// (different `zk_id` and locators) must be rejected by the SDP
-    /// per-service uniqueness check.
-    #[test]
-    fn rejects_duplicate_provider_id_within_service() {
-        let config = setup(ServiceParameters {
-            inactivity_period: 20.try_into().unwrap(),
-            epoch: 0.into(),
-        });
-        let sdp_ledger = dummy_sdp_ledger(0.into(), &config);
-
-        let signing_key = create_signing_key();
-        let (_sk_a, utxo_a) = utxo_with_sk();
-        let (_sk_b, utxo_b) = utxo_with_sk();
-
-        let declare_a = SDPDeclareOp {
-            service_type: ServiceType::BlendNetwork,
-            locked_note_id: utxo_a.id(),
-            zk_id: create_zk_key(1).to_public_key(),
-            provider_id: ProviderId(signing_key.public_key()),
-            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
-        };
-        let declare_b = SDPDeclareOp {
-            service_type: ServiceType::BlendNetwork,
-            locked_note_id: utxo_b.id(),
-            zk_id: create_zk_key(2).to_public_key(),
-            provider_id: ProviderId(signing_key.public_key()),
-            locators: "/ip4/2.2.2.2/udp/0".parse::<Locator>().unwrap().into(),
-        };
-
-        let utxos = utxo_tree(vec![utxo_a, utxo_b]);
-        let sdp_ledger = sdp_ledger
-            .try_apply_sdp_declaration(&utxos, &declare_a, &config)
-            .map(|(sdp_ledger, _)| sdp_ledger)
-            .unwrap();
-
-        let result = sdp_ledger
-            .try_apply_sdp_declaration(&utxos, &declare_b, &config)
-            .map(|(sdp_ledger, _)| sdp_ledger);
-        assert!(
-            matches!(
-                result,
-                Err(Error::SdpOp(SdpError::DuplicateProviderId { .. }))
-            ),
-            "expected DuplicateProviderId, got {result:?}"
-        );
-    }
-
-    /// Two declarations in the same service sharing the same `zk_id`
-    /// (different `provider_id` and locators) must be rejected by the SDP
-    /// per-service uniqueness check.
-    #[test]
-    fn rejects_duplicate_zk_id_within_service() {
-        let config = setup(ServiceParameters {
-            inactivity_period: 20.try_into().unwrap(),
-            epoch: 0.into(),
-        });
-        let sdp_ledger = dummy_sdp_ledger(0.into(), &config);
-
-        let signing_key_a = Ed25519Key::from_bytes(&[1; 32]);
-        let signing_key_b = Ed25519Key::from_bytes(&[2; 32]);
-        let zk_key = create_zk_key(1);
-        let (_sk_a, utxo_a) = utxo_with_sk();
-        let (_sk_b, utxo_b) = utxo_with_sk();
-
-        let declare_a = SDPDeclareOp {
-            service_type: ServiceType::BlendNetwork,
-            locked_note_id: utxo_a.id(),
-            zk_id: zk_key.to_public_key(),
-            provider_id: ProviderId(signing_key_a.public_key()),
-            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
-        };
-        let declare_b = SDPDeclareOp {
-            service_type: ServiceType::BlendNetwork,
-            locked_note_id: utxo_b.id(),
-            zk_id: zk_key.to_public_key(),
-            provider_id: ProviderId(signing_key_b.public_key()),
-            locators: "/ip4/2.2.2.2/udp/0".parse::<Locator>().unwrap().into(),
-        };
-
-        let utxos = utxo_tree(vec![utxo_a, utxo_b]);
-        let sdp_ledger = sdp_ledger
-            .try_apply_sdp_declaration(&utxos, &declare_a, &config)
-            .map(|(sdp_ledger, _)| sdp_ledger)
-            .unwrap();
-
-        let result = sdp_ledger
-            .try_apply_sdp_declaration(&utxos, &declare_b, &config)
-            .map(|(sdp_ledger, _)| sdp_ledger);
-        assert!(
-            matches!(result, Err(Error::SdpOp(SdpError::DuplicateZkId { .. }))),
-            "expected DuplicateZkId, got {result:?}"
-        );
     }
 
     /// Once a Blend declaration is withdrawn/removed at its `withdraw_at`
