@@ -122,9 +122,9 @@ where
 mod tests {
 
     use lb_core::mantle::{
-        NoteId,
+        NoteId, TxHash,
         ledger::Inputs,
-        ops::channel::{MsgId, deposit::Metadata, inscribe::Inscription},
+        ops::channel::{MsgId, inscribe::Inscription},
     };
     use lb_groth16::Fr;
 
@@ -144,10 +144,7 @@ mod tests {
     async fn next_messages_no_skip() {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
-            (
-                deposit_msg(Inputs::new([NoteId::from(Fr::from(10u32))]), 0, [10].into()),
-                Slot::new(0),
-            ),
+            (deposit_msg(10), Slot::new(0)),
             (block_msg(2, &[2]), Slot::new(1)),
         ];
         let indexer = indexer(Slot::new(1), messages.clone());
@@ -164,10 +161,7 @@ mod tests {
     async fn next_messages_until_lib() {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
-            (
-                deposit_msg(Inputs::new([NoteId::from(Fr::from(10u32))]), 0, [10].into()),
-                Slot::new(1),
-            ),
+            (deposit_msg(10), Slot::new(1)),
             (block_msg(2, &[2]), Slot::new(2)), // after LIB
         ];
         let indexer = indexer(Slot::new(1), messages.clone());
@@ -183,15 +177,9 @@ mod tests {
     async fn next_messages_resume_from_cursor() {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
-            (
-                deposit_msg(Inputs::new([NoteId::from(Fr::from(10u32))]), 0, [10].into()),
-                Slot::new(0),
-            ),
+            (deposit_msg(10), Slot::new(0)),
             (block_msg(2, &[2]), Slot::new(1)),
-            (
-                deposit_msg(Inputs::new([NoteId::from(Fr::from(11u32))]), 0, [11].into()),
-                Slot::new(2),
-            ),
+            (deposit_msg(11), Slot::new(2)),
             (block_msg(3, &[3]), Slot::new(2)),
         ];
         let indexer = indexer(Slot::new(2), messages.clone());
@@ -208,10 +196,7 @@ mod tests {
     async fn next_messages_cursor_at_lib_emits_nothing() {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
-            (
-                deposit_msg(Inputs::new([NoteId::from(Fr::from(10u32))]), 0, [10].into()),
-                Slot::new(0),
-            ),
+            (deposit_msg(10), Slot::new(0)),
             (block_msg(2, &[2]), Slot::new(1)),
         ];
         let indexer = indexer(Slot::new(1), messages);
@@ -243,10 +228,7 @@ mod tests {
     async fn next_messages_across_batches() {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
-            (
-                deposit_msg(Inputs::new([NoteId::from(Fr::from(10u32))]), 0, [10].into()),
-                BATCH_SIZE,
-            ),
+            (deposit_msg(10), BATCH_SIZE),
             (
                 block_msg(2, &[2]),
                 BATCH_SIZE.into_inner().checked_mul(2).unwrap().into(),
@@ -256,7 +238,7 @@ mod tests {
                 BATCH_SIZE.into_inner().checked_mul(2).unwrap().into(),
             ),
             (
-                deposit_msg(Inputs::new([NoteId::from(Fr::from(11u32))]), 0, [11].into()),
+                deposit_msg(11),
                 BATCH_SIZE.into_inner().checked_mul(3).unwrap().into(),
             ),
             (
@@ -299,11 +281,22 @@ mod tests {
         })
     }
 
-    fn deposit_msg(inputs: Inputs, amount: u64, metadata: Metadata) -> ZoneMessage {
+    /// Deposit fixture whose every field derives from `seed`, so two
+    /// fixtures never share an identity. `tx_hash` and `op_id` differ from
+    /// each other as well, so a swap between the two is visible.
+    fn deposit_msg(seed: u8) -> ZoneMessage {
+        let mut tx_hash = [0u8; 32];
+        tx_hash[0] = seed;
+        let mut op_id = [0u8; 32];
+        op_id[0] = seed;
+        op_id[31] = 1;
+
         ZoneMessage::Deposit(Deposit {
-            inputs,
-            amount,
-            metadata,
+            tx_hash: TxHash::from(tx_hash),
+            op_id,
+            inputs: Inputs::new([NoteId::from(Fr::from(u32::from(seed)))]),
+            amount: 0,
+            metadata: [seed].into(),
         })
     }
 
