@@ -51,17 +51,14 @@ use lb_storage_service::{
 use lb_time_service::TimeService;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
-    services::{AsServiceId, ServiceCore, ServiceData, state::StateUpdater},
+    services::{AsServiceId, ServiceCore, ServiceData, relay::InboundRelay, state::StateUpdater},
 };
 use relays::BroadcastRelay;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_with::serde_as;
 use thiserror::Error;
 use time::OffsetDateTime;
-use tokio::{
-    sync::{broadcast, mpsc, oneshot, watch},
-    time::Instant,
-};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tracing::{Level, debug, error, info, instrument, span, trace, warn};
 use tracing_futures::Instrument as _;
 
@@ -113,6 +110,8 @@ pub enum Error {
     HeaderIdNotFound(HeaderId),
     #[error("Parent header ID not found for child={0}")]
     ParentIdNotFound(HeaderId),
+    #[error("Awaiting genesis time")]
+    AwaitingGenesisTime,
 }
 
 struct InitializedCryptarchia {
@@ -210,10 +209,17 @@ pub enum Query {
 pub(crate) type HeaderIdStream =
     Pin<Box<dyn Stream<Item = Result<HeaderId, Error>> + Send + 'static>>;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ChainServiceMode {
-    AwaitingStart,
-    Started(State),
+/// The phase of the chain service, which advances one-directionally
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ChainServicePhase {
+    /// The genesis time is in the future. Only read-only queries are served.
+    AwaitingGenesisTime,
+    /// Applying blocks while waiting for Initial Block Download to complete.
+    InitialBlockDownload,
+    /// The Prolonged Bootstrap Period is running.
+    ProlongedBootstrapPeriod,
+    /// Following the chain in real time
+    Following,
 }
 
 #[serde_as]
@@ -221,7 +227,7 @@ pub enum ChainServiceMode {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ChainServiceInfo {
     pub cryptarchia_info: CryptarchiaInfo,
-    pub mode: ChainServiceMode,
+    pub phase: ChainServicePhase,
 }
 
 #[serde_as]
@@ -233,6 +239,7 @@ pub struct CryptarchiaInfo {
     pub tip: HeaderId,
     pub slot: Slot,
     pub height: u64,
+    pub state: State,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -358,6 +365,7 @@ impl Cryptarchia {
             tip: tip_branch.id(),
             slot: tip_branch.slot(),
             height: tip_branch.length(),
+            state: *self.state(),
         }
     }
 
@@ -615,8 +623,7 @@ where
         })
     }
 
-    #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
-    async fn run(mut self) -> Result<(), DynError> {
+    async fn run(self) -> Result<(), DynError> {
         let relays: CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId> =
             CryptarchiaConsensusRelays::from_service_resources_handle::<TimeBackend>(
                 &self.service_resources_handle,
@@ -644,24 +651,24 @@ where
         )
         .await?;
 
-        let (mut current_slot, mut slot_timer) = Self::get_slot_timer(&relays).await?;
+        let (current_slot, slot_timer) = Self::get_slot_timer(&relays).await?;
 
         let InitializedCryptarchia {
-            mut cryptarchia,
+            cryptarchia,
             pruned_blocks,
             fell_back_to_lib,
-        } = self
-            .initialize_cryptarchia(
-                &bootstrap_config,
-                ledger_config.clone(),
-                &relays,
-                current_slot,
-            )
-            .await;
+        } = Runtime::initialize_cryptarchia(
+            &self,
+            &bootstrap_config,
+            ledger_config.clone(),
+            &relays,
+            current_slot,
+        )
+        .await;
 
         // These are blocks that have been pruned by the cryptarchia engine but have not
         // yet been deleted from the storage layer.
-        let mut storage_blocks_to_remove = Self::delete_stale_blocks_from_storage(
+        let storage_blocks_to_remove = Runtime::delete_stale_blocks_from_storage(
             pruned_blocks.stale_blocks().copied(),
             &self.state.storage_blocks_to_remove,
             relays.storage_adapter(),
@@ -669,7 +676,7 @@ where
         .await;
 
         if fell_back_to_lib {
-            Self::update_state(
+            persist_recovery_state(
                 &cryptarchia,
                 storage_blocks_to_remove.clone(),
                 &self.service_resources_handle.state_updater,
@@ -681,33 +688,8 @@ where
             sync_config.block_provider,
         );
 
-        // Chain start timer will prevent the chain service to process and produce
-        // blocks if the starting state is GenesisBlock and has chain start time
-        // set in future.
-        let mut chain_start_timer: Option<Pin<Box<tokio::time::Sleep>>> = None;
-
-        if let StartingState::Genesis { genesis_block } = starting_state {
-            let genesis_time: OffsetDateTime = genesis_block
-                .genesis_tx()
-                .cryptarchia_parameter()
-                .genesis_time
-                .into();
-            let now = OffsetDateTime::now_utc();
-
-            if genesis_time > now {
-                let delay = (genesis_time - now).try_into().unwrap_or_default();
-                info!("Chain configured to start in the future: {genesis_time}");
-                chain_start_timer = Some(Box::pin(tokio::time::sleep(delay)));
-            }
-        }
-
-        // The prolonged bootstrap timer will be started when chain-network notifies us
-        // that IBD has completed. This ensures we don't transition to Online mode
-        // before the node has caught up with the network.
-        let mut prolonged_bootstrap_timer: Option<Pin<Box<tokio::time::Sleep>>> = None;
-
         // Start the timer for periodic state recording for offline grace period
-        let mut state_recording_timer = tokio::time::interval(
+        let state_recording_timer = tokio::time::interval(
             bootstrap_config
                 .offline_grace_period
                 .state_recording_interval,
@@ -719,113 +701,26 @@ where
         // even while in bootstrap mode waiting for IBD+PBP to complete.
         self.notify_service_ready();
 
-        let async_loop = async {
-            loop {
-                tokio::select! {
-                    () = async { if let Some(timer) = chain_start_timer.as_mut() { timer.await; } }, if chain_start_timer.is_some() => {
-                        info!("Genesis time reached. Chain is now starting...");
-                        chain_start_timer = None;
-
-                        // Just like in the Ibd case, the bootstrap timer is started after the chain
-                        // start time began.
-                        prolonged_bootstrap_timer = Some(Box::pin(tokio::time::sleep_until(
-                            Instant::now() + bootstrap_config.prolonged_bootstrap_period,
-                        )));
-                    }
-
-                    () = async { prolonged_bootstrap_timer.as_mut().unwrap().as_mut().await }, if prolonged_bootstrap_timer.is_some() && cryptarchia.is_bootstrapping() => {
-                        info!(
-                            "Prolonged Bootstrap Period finished. Switching chain to online mode."
-                        );
-                        (cryptarchia, storage_blocks_to_remove) = Self::switch_to_online(
-                            cryptarchia,
-                            &storage_blocks_to_remove,
-                            relays.storage_adapter(),
-                            &chain_online_notifier,
-                        ).await;
-                        Self::update_state(
-                            &cryptarchia,
-                            storage_blocks_to_remove.clone(),
-                            &self.service_resources_handle.state_updater,
-                        );
-                    }
-
-                    Some(msg) = self.service_resources_handle.inbound_relay.next() => {
-                        // Handle ApplyBlock, ChainSync, and IbdCompleted separately since they need async context
-                        match msg {
-                            ConsensusMsg::IbdCompleted => {
-                                if chain_start_timer.is_none() {
-                                    info!("Initial Block Download completed. Starting Prolonged Bootstrap Period before going online.");
-                                    // Start the prolonged bootstrap timer now that IBD is complete
-                                    prolonged_bootstrap_timer = Some(Box::pin(tokio::time::sleep_until(
-                                        Instant::now() + bootstrap_config.prolonged_bootstrap_period,
-                                    )));
-                                }
-                            }
-                            // Blocks will be applied if chain start time didn't begin yet.
-                            ConsensusMsg::ApplyBlock { block, reply_channel } if chain_start_timer.is_none() => {
-                                // TODO: move this into the process_message() function after making the process_message async.
-                                match Self::process_block_and_update_state(
-                                        &mut cryptarchia,
-                                        *block,
-                                        current_slot,
-                                        &storage_blocks_to_remove,
-                                        &relays,
-                                        &self.new_block_subscription_sender,
-                                        &self.lib_subscription_sender,
-                                        &self.service_resources_handle.state_updater,
-                                    ).await {
-                                    Ok((new_storage_blocks_to_remove, reorged_txs)) => {
-                                        storage_blocks_to_remove = new_storage_blocks_to_remove;
-                                        reply_channel.send(Ok((cryptarchia.tip(), reorged_txs))).unwrap_or_else(|_| {
-                                            error!("Could not send process block result through channel");
-                                        });
-                                    }
-                                    Err(e) => {
-                                        log_process_block_error(&e);
-                                        reply_channel.send(Err(e)).unwrap_or_else(|_| {
-                                            error!("Could not send process block error through channel");
-                                        });
-                                    }
-                                }
-                            }
-                            ConsensusMsg::ChainSync(event) => {
-                                if cryptarchia.state().is_online() {
-                                    Self::handle_chainsync_event(&cryptarchia, &sync_blocks_provider, event).await;
-                                } else {
-                                    Self::reject_chain_sync_event(event).await;
-                                }
-                            }
-                            ConsensusMsg::Info { reply_channel } => {
-                                let cryptarchia_info = cryptarchia.info();
-                                let mode = match chain_start_timer {
-                                    Some(_) => ChainServiceMode::AwaitingStart,
-                                    None => ChainServiceMode::Started(*cryptarchia.state()),
-                                };
-                                reply_channel.send(ChainServiceInfo{cryptarchia_info, mode}).unwrap_or_else(|e| {
-                                    error!("Could not send consensus info through channel: {:?}", e);
-                                });
-                            }
-                            msg => {
-                                Self::process_message(&cryptarchia, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg, relays.storage_adapter()).await;
-                            }
-                        }
-                    }
-
-                    Some(lb_time_service::SlotTick { slot: new_slot, .. }) = slot_timer.next() => {
-                        current_slot = new_slot;
-                    }
-
-                    _ = state_recording_timer.tick() => {
-                        // Periodically record the current timestamp and engine state
-                        Self::update_state(
-                            &cryptarchia,
-                            storage_blocks_to_remove.clone(),
-                            &self.service_resources_handle.state_updater,
-                        );
-                    }
-                }
-            }
+        let Self {
+            service_resources_handle,
+            new_block_subscription_sender,
+            lib_subscription_sender,
+            ..
+        } = self;
+        let runner = Runtime {
+            inbound_relay: service_resources_handle.inbound_relay,
+            state_updater: service_resources_handle.state_updater,
+            new_block_subscription_sender,
+            lib_subscription_sender,
+            cryptarchia,
+            chain_online_notifier,
+            current_slot,
+            storage_blocks_to_remove,
+            relays,
+            sync_blocks_provider,
+            slot_timer,
+            state_recording_timer,
+            prolonged_bootstrap_period: bootstrap_config.prolonged_bootstrap_period,
         };
 
         // It sucks to use `SERVICE_ID` when we have `<RuntimeServiceId as
@@ -835,7 +730,10 @@ where
         // Hypothesis:
         // 1. Probably related to too many generics.
         // 2. It seems `span` requires a `const` string literal.
-        async_loop.instrument(span!(Level::TRACE, SERVICE_ID)).await;
+        runner
+            .run(starting_state)
+            .instrument(span!(Level::TRACE, SERVICE_ID))
+            .await;
 
         Ok(())
     }
@@ -857,7 +755,7 @@ where
         + 'static,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
+    <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
     <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     TimeBackend: lb_time_service::backends::TimeBackend,
     RuntimeServiceId: Display + AsServiceId<Self> + 'static,
@@ -898,61 +796,326 @@ where
 
         Ok((current_slot, slot_timer))
     }
+}
 
-    #[expect(clippy::too_many_lines, reason = "TODO: refactor into funcs")]
-    async fn process_message(
-        cryptarchia: &Cryptarchia,
-        new_block_channel: &broadcast::Sender<ProcessedBlockEvent>,
-        lib_channel: &broadcast::Sender<LibUpdate>,
-        chain_online_notifier: &ChainOnlineNotifier,
-        msg: ConsensusMsg<Tx>,
-        storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
+/// The runtime of the chain service,
+/// which holds everything shared by all phases.
+struct Runtime<Tx, Storage, RuntimeServiceId>
+where
+    Tx: PreverifiedMantleTx + Clone + Eq + Debug,
+    Storage: StorageBackend + Send + Sync + 'static,
+    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+{
+    inbound_relay: InboundRelay<ConsensusMsg<Tx>>,
+    state_updater: StateUpdater<Option<CryptarchiaConsensusState>>,
+    new_block_subscription_sender: broadcast::Sender<ProcessedBlockEvent>,
+    lib_subscription_sender: broadcast::Sender<LibUpdate>,
+    cryptarchia: Cryptarchia,
+    chain_online_notifier: ChainOnlineNotifier,
+    current_slot: Slot,
+    storage_blocks_to_remove: HashSet<HeaderId>,
+    relays: CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
+    sync_blocks_provider: BlockProvider<Storage, Tx>,
+    slot_timer: lb_time_service::EpochSlotTickStream,
+    state_recording_timer: tokio::time::Interval,
+    prolonged_bootstrap_period: Duration,
+}
+
+impl<Tx, Storage, RuntimeServiceId> Runtime<Tx, Storage, RuntimeServiceId>
+where
+    Tx: PreverifiedMantleTx
+        + AuthenticatedMantleTx<Context = GasPrices>
+        + Debug
+        + Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + Send
+        + Sync
+        + Unpin
+        + 'static,
+    Storage: StorageBackend + Send + Sync + 'static,
+    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
+    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
+    RuntimeServiceId: Display + 'static,
+{
+    /// Run all phases in order.
+    async fn run(mut self, starting_state: StartingState) {
+        // Run `AwaitingGenesisTime` phase.
+        // `IbdCompleted` can be received during this phase if IBD has been skipped.
+        let ibd_skipped = if let Some(genesis_timer) = Self::create_genesis_timer(starting_state) {
+            self.phase_awaiting_genesis_time(genesis_timer).await
+        } else {
+            false
+        };
+
+        // Run `InitialBlockDownload` phase.
+        if !ibd_skipped {
+            self.phase_initial_block_download().await;
+        }
+
+        // Run `ProlongedBootstrapPeriod` phase
+        if self.cryptarchia.is_bootstrapping() {
+            self = self.phase_prolonged_bootstrap_period().await;
+        }
+
+        // Run `Following` phase.
+        self.phase_following().await;
+    }
+
+    /// Creates a timer that fires when the genesis time is reached,
+    /// if the starting state is `Genesis` and the genesis time is in the
+    /// future.
+    /// Returns `None`, otherwise.
+    fn create_genesis_timer(starting_state: StartingState) -> Option<Pin<Box<tokio::time::Sleep>>> {
+        if let StartingState::Genesis { genesis_block } = starting_state {
+            let genesis_time: OffsetDateTime = genesis_block
+                .genesis_tx()
+                .cryptarchia_parameter()
+                .genesis_time
+                .into();
+            let now = OffsetDateTime::now_utc();
+
+            if genesis_time > now {
+                info!(target: LOG_TARGET, %genesis_time, "genesis time is in the future");
+                let delay = (genesis_time - now).try_into().unwrap_or_default();
+                return Some(Box::pin(tokio::time::sleep(delay)));
+            }
+        }
+        None
+    }
+
+    /// `AwaitingGenesisTime` phase: Wait until the genesis time is reached.
+    /// Returns whether IBD has been skipped during this phase.
+    #[expect(clippy::cognitive_complexity, reason = "better in one fn")]
+    async fn phase_awaiting_genesis_time(
+        &mut self,
+        mut genesis_timer: Pin<Box<tokio::time::Sleep>>,
+    ) -> bool {
+        let phase = ChainServicePhase::AwaitingGenesisTime;
+        info!(target: LOG_TARGET, "entering {phase:?} phase");
+
+        let mut ibd_skipped = false;
+        loop {
+            tokio::select! {
+                () = genesis_timer.as_mut() => {
+                    info!(target: LOG_TARGET, "genesis time reached: finishing {phase:?} phase");
+                    return ibd_skipped;
+                }
+                Some(msg) = self.inbound_relay.next() => match msg {
+                    ConsensusMsg::Query(query) => {
+                        self.process_query(query, phase).await;
+                    }
+                    ConsensusMsg::ApplyBlock { reply_channel, .. } => {
+                        debug!(target: LOG_TARGET, "rejecting a block received during {phase:?} phase");
+                        reply_channel.send(Err(Error::AwaitingGenesisTime)).unwrap_or_else(|_| {
+                            error!(target: LOG_TARGET, "failed to send error through channel");
+                        });
+                    }
+                    ConsensusMsg::ChainSync(event) => Self::reject_chain_sync_event(event).await,
+                    ConsensusMsg::IbdCompleted => {
+                        info!(target: LOG_TARGET, "Initial Block Download has been skipped during {phase:?} phase");
+                        ibd_skipped = true;
+                    }
+                },
+                Some(tick) = self.slot_timer.next() => self.current_slot = tick.slot,
+                _ = self.state_recording_timer.tick() => self.record_recovery_state(),
+            }
+        }
+    }
+
+    /// `InitialBlockDownload` phase: Apply blocks until IBD completes.
+    async fn phase_initial_block_download(&mut self) {
+        let phase = ChainServicePhase::InitialBlockDownload;
+        info!(target: LOG_TARGET, "entering {phase:?} phase");
+
+        loop {
+            tokio::select! {
+                Some(msg) = self.inbound_relay.next() => match msg {
+                    ConsensusMsg::Query(query) => {
+                        self.process_query(query, phase).await;
+                    }
+                    ConsensusMsg::ApplyBlock { block, reply_channel } => {
+                        self.apply_block_and_reply(*block, reply_channel).await;
+                    }
+                    ConsensusMsg::ChainSync(event) => Self::reject_chain_sync_event(event).await,
+                    ConsensusMsg::IbdCompleted => {
+                        info!(target: LOG_TARGET, "Initial Block Download completed");
+                        return;
+                    }
+                },
+                Some(tick) = self.slot_timer.next() => self.current_slot = tick.slot,
+                _ = self.state_recording_timer.tick() => self.record_recovery_state(),
+            }
+        }
+    }
+
+    /// `ProlongedBootstrapPeriod` phase: Apply blocks until PBP is over.
+    /// At the end of the phase, `Cryptarchia` is switched to online.
+    #[expect(clippy::cognitive_complexity, reason = "better in one fn")]
+    async fn phase_prolonged_bootstrap_period(mut self) -> Self {
+        let phase = ChainServicePhase::ProlongedBootstrapPeriod;
+        info!(target: LOG_TARGET, "entering {phase:?} phase");
+
+        let mut pbp_timer = Box::pin(tokio::time::sleep(self.prolonged_bootstrap_period));
+        loop {
+            tokio::select! {
+                () = pbp_timer.as_mut() => {
+                    break;
+                },
+                Some(msg) = self.inbound_relay.next() => match msg {
+                    ConsensusMsg::Query(query) => {
+                        self.process_query(query, phase).await;
+                    }
+                    ConsensusMsg::ApplyBlock { block, reply_channel } => {
+                        self.apply_block_and_reply(*block, reply_channel).await;
+                    }
+                    ConsensusMsg::ChainSync(event) => Self::reject_chain_sync_event(event).await,
+                    ConsensusMsg::IbdCompleted => {
+                        debug!(target: LOG_TARGET, "ignoring IbdCompleted: already in {phase:?} phase");
+                    }
+                },
+                Some(tick) = self.slot_timer.next() => self.current_slot = tick.slot,
+                _ = self.state_recording_timer.tick() => self.record_recovery_state(),
+            }
+        }
+
+        info!(target: LOG_TARGET, "Prolonged Bootstrap Period completed: switching chain to online");
+        (self.cryptarchia, self.storage_blocks_to_remove) = Self::switch_to_online(
+            self.cryptarchia,
+            &self.storage_blocks_to_remove,
+            self.relays.storage_adapter(),
+            &self.chain_online_notifier,
+        )
+        .await;
+        self.record_recovery_state();
+        self
+    }
+
+    /// `Following` phase: Follow the chain in real time. This phase never ends.
+    async fn phase_following(&mut self) {
+        let phase = ChainServicePhase::Following;
+        info!(target: LOG_TARGET, "entering {phase:?} phase");
+
+        loop {
+            tokio::select! {
+                Some(msg) = self.inbound_relay.next() => match msg {
+                    ConsensusMsg::Query(query) => {
+                        self.process_query(query, phase).await;
+                    }
+                    ConsensusMsg::ApplyBlock { block, reply_channel } => {
+                        self.apply_block_and_reply(*block, reply_channel).await;
+                    }
+                    ConsensusMsg::ChainSync(event) => {
+                        Self::handle_chainsync_event(&self.cryptarchia, &self.sync_blocks_provider, event).await;
+                    }
+                    ConsensusMsg::IbdCompleted => {
+                        debug!(target: LOG_TARGET, "ignoring IbdCompleted: already in {phase:?} phase");
+                    }
+                },
+                Some(tick) = self.slot_timer.next() => self.current_slot = tick.slot,
+                _ = self.state_recording_timer.tick() => self.record_recovery_state(),
+            }
+        }
+    }
+
+    /// Apply a block to the chain and reply with the result.
+    async fn apply_block_and_reply(
+        &mut self,
+        block: Block<Tx>,
+        reply_channel: oneshot::Sender<Result<(HeaderId, Vec<Tx>), Error>>,
     ) {
-        match msg {
-            ConsensusMsg::NewBlockSubscribe { sender } => {
+        match Self::process_block_and_update_state(
+            &mut self.cryptarchia,
+            block,
+            self.current_slot,
+            &self.storage_blocks_to_remove,
+            &self.relays,
+            &self.new_block_subscription_sender,
+            &self.lib_subscription_sender,
+            &self.state_updater,
+        )
+        .await
+        {
+            Ok((storage_blocks_to_remove, reorged_txs)) => {
+                self.storage_blocks_to_remove = storage_blocks_to_remove;
+                reply_channel
+                    .send(Ok((self.cryptarchia.tip(), reorged_txs)))
+                    .unwrap_or_else(|_| {
+                        error!("Could not send process block result through channel");
+                    });
+            }
+            Err(e) => {
+                log_process_block_error(&e);
+                reply_channel.send(Err(e)).unwrap_or_else(|_| {
+                    error!("Could not send process block error through channel");
+                });
+            }
+        }
+    }
+
+    /// Serve a read-only query. Available in every phase.
+    #[expect(clippy::too_many_lines, reason = "TODO: refactor into funcs")]
+    async fn process_query(&self, query: Query, phase: ChainServicePhase) {
+        match query {
+            Query::Info { reply_channel } => {
+                reply_channel
+                    .send(ChainServiceInfo {
+                        cryptarchia_info: self.cryptarchia.info(),
+                        phase,
+                    })
+                    .unwrap_or_else(|e| {
+                        error!("Could not send consensus info through channel: {:?}", e);
+                    });
+            }
+            Query::NewBlockSubscribe { sender } => {
                 sender
-                    .send(new_block_channel.subscribe())
+                    .send(self.new_block_subscription_sender.subscribe())
                     .unwrap_or_else(|_| {
                         error!("Could not subscribe to new block channel");
                     });
             }
-            ConsensusMsg::LibSubscribe { sender } => {
-                sender.send(lib_channel.subscribe()).unwrap_or_else(|_| {
-                    error!("Could not subscribe to LIB updates channel");
-                });
+            Query::LibSubscribe { sender } => {
+                sender
+                    .send(self.lib_subscription_sender.subscribe())
+                    .unwrap_or_else(|_| {
+                        error!("Could not subscribe to LIB updates channel");
+                    });
             }
-            ConsensusMsg::GetHeaders {
+            Query::GetHeaders {
                 from_descendant,
                 to_ancestor,
                 reply_channel,
             } => {
                 // default to tip block if not present
-                let from_descendant = from_descendant.unwrap_or_else(|| cryptarchia.tip());
+                let from_descendant = from_descendant.unwrap_or_else(|| self.cryptarchia.tip());
                 // default to LIB block if not present
-                let to_ancestor = to_ancestor.unwrap_or_else(|| cryptarchia.lib());
+                let to_ancestor = to_ancestor.unwrap_or_else(|| self.cryptarchia.lib());
 
                 let stream = Self::get_block_ids(
                     from_descendant,
                     to_ancestor,
-                    cryptarchia,
-                    storage_adapter.clone(),
+                    &self.cryptarchia,
+                    self.relays.storage_adapter().clone(),
                 );
                 reply_channel
                     .send(stream)
                     .unwrap_or_else(|_| error!("could not send block stream through channel"));
             }
-            ConsensusMsg::GetLedgerState {
+            Query::GetLedgerState {
                 block_id,
                 reply_channel,
             } => {
-                let ledger_state = cryptarchia.ledger.state(&block_id).cloned();
+                let ledger_state = self.cryptarchia.ledger.state(&block_id).cloned();
                 reply_channel.send(ledger_state).unwrap_or_else(|_| {
                     error!("Could not send ledger state through channel");
                 });
             }
-            ConsensusMsg::GetSdpDeclarations { reply_channel } => {
-                let tip = cryptarchia.tip();
-                let declarations = cryptarchia
+            Query::GetSdpDeclarations { reply_channel } => {
+                let tip = self.cryptarchia.tip();
+                let declarations = self
+                    .cryptarchia
                     .ledger
                     .state(&tip)
                     .map(|ledger_state| ledger_state.mantle_ledger().sdp.declarations())
@@ -968,9 +1131,10 @@ where
                     error!("Could not send SDP declarations through channel");
                 });
             }
-            ConsensusMsg::GetSdpSnapshot { reply_channel } => {
-                let tip = cryptarchia.tip();
-                let declarations = cryptarchia
+            Query::GetSdpSnapshot { reply_channel } => {
+                let tip = self.cryptarchia.tip();
+                let declarations = self
+                    .cryptarchia
                     .ledger
                     .state(&tip)
                     .map(|ledger_state| {
@@ -990,61 +1154,46 @@ where
                     error!("Could not send SDP snapshot through channel");
                 });
             }
-            ConsensusMsg::GetEpochState {
+            Query::GetEpochState {
                 slot,
                 reply_channel,
             } => {
-                let result = cryptarchia.epoch_state_for_slot(slot);
+                let result = self.cryptarchia.epoch_state_for_slot(slot);
                 reply_channel.send(result).unwrap_or_else(|_| {
                     error!("Could not send epoch state through channel");
                 });
             }
-            ConsensusMsg::GetEpochConfig { reply_channel } => {
-                let config = cryptarchia.ledger.config();
+            Query::GetEpochConfig { reply_channel } => {
+                let config = self.cryptarchia.ledger.config();
                 reply_channel
                     .send((config.epoch_config, config.consensus_config.clone()))
                     .unwrap_or_else(|_| {
                         error!("Could not send epoch config through channel");
                     });
             }
-            ConsensusMsg::GetBlockEvents { id, reply_channel } => {
-                let events = storage_adapter.get_block_events(&id).await;
+            Query::GetBlockEvents { id, reply_channel } => {
+                let events = self.relays.storage_adapter().get_block_events(&id).await;
                 reply_channel.send(events).unwrap_or_else(|_| {
                     error!("Could not send block events through channel");
                 });
             }
-            ConsensusMsg::Info { .. } => {
-                // Info is handled separately in the run loop where we have async
-                // context. This should never be reached since we filter it out
-                // before calling process_message.
-                panic!("Info should be handled in the run loop, not in process_message");
-            }
-            ConsensusMsg::ApplyBlock { .. } => {
-                // ApplyBlock is handled separately in the run loop where we have async
-                // context This should never be reached since we filter it out
-                // before calling process_message
-                panic!("ApplyBlock should be handled in the run loop, not in process_message");
-            }
-            ConsensusMsg::ChainSync(_) => {
-                // ChainSync is handled separately in the run loop where we have async
-                // context. This should never be reached since we filter it out
-                // before calling process_message
-                panic!("ChainSync should be handled in the run loop, not in process_message");
-            }
-            ConsensusMsg::IbdCompleted => {
-                // IbdCompleted is handled separately in the run loop where we need to modify
-                // the prolonged_bootstrap_timer. This should never be reached since we filter
-                // it out before calling process_message
-                panic!("IbdCompleted should be handled in the run loop, not in process_message");
-            }
-            ConsensusMsg::SubscribeChainOnline { sender } => {
+            Query::SubscribeChainOnline { sender } => {
                 sender
-                    .send(chain_online_notifier.subscribe())
+                    .send(self.chain_online_notifier.subscribe())
                     .unwrap_or_else(|_| {
                         error!("Could not subscribe to new block channel");
                     });
             }
         }
+    }
+
+    /// Record the current service state.
+    fn record_recovery_state(&self) {
+        persist_recovery_state(
+            &self.cryptarchia,
+            self.storage_blocks_to_remove.clone(),
+            &self.state_updater,
+        );
     }
 
     /// Process a block and update the state accordingly.
@@ -1078,27 +1227,9 @@ where
         )
         .await;
 
-        Self::update_state(cryptarchia, storage_blocks_to_remove.clone(), state_updater);
+        persist_recovery_state(cryptarchia, storage_blocks_to_remove.clone(), state_updater);
 
         Ok((storage_blocks_to_remove, reorged_txs))
-    }
-
-    fn update_state(
-        cryptarchia: &Cryptarchia,
-        storage_blocks_to_remove: HashSet<HeaderId>,
-        state_updater: &StateUpdater<Option<CryptarchiaConsensusState>>,
-    ) {
-        match <Self as ServiceData>::State::from_cryptarchia_and_unpruned_blocks(
-            cryptarchia,
-            storage_blocks_to_remove,
-        ) {
-            Ok(state) => {
-                state_updater.update(Some(state));
-            }
-            Err(e) => {
-                error!(target: LOG_TARGET, "Failed to update state: {}", e);
-            }
-        }
     }
 
     /// Try to add a [`Block`] to [`Cryptarchia`].
@@ -1411,34 +1542,37 @@ where
         clippy::cognitive_complexity,
         reason = "TODO: address this in a dedicated refactor"
     )]
-    async fn initialize_cryptarchia(
-        &self,
+    async fn initialize_cryptarchia<TimeBackend>(
+        service: &CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>,
         bootstrap_config: &BootstrapConfig,
         ledger_config: lb_ledger::Config,
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
         current_slot: Slot,
-    ) -> InitializedCryptarchia {
+    ) -> InitializedCryptarchia
+    where
+        TimeBackend: lb_time_service::backends::TimeBackend,
+    {
         info!(
-            target: LOG_TARGET, tip = ?self.state.tip, lib = ?self.state.lib, lib_height = self.state.lib_block_length, genesis = ?self.state.genesis_id,
+            target: LOG_TARGET, tip = ?service.state.tip, lib = ?service.state.lib, lib_height = service.state.lib_block_length, genesis = ?service.state.genesis_id,
             "recovering chain state",
         );
 
-        let lib_id = self.state.lib;
-        let genesis_id = self.state.genesis_id;
+        let lib_id = service.state.lib;
+        let genesis_id = service.state.genesis_id;
         let state = choose_engine_state(
             lib_id,
             genesis_id,
             bootstrap_config,
-            self.state.last_engine_state.as_ref(),
+            service.state.last_engine_state.as_ref(),
         );
         let mut cryptarchia = Cryptarchia::from_lib(
             lib_id,
-            self.state.lib_ledger_state.clone(),
+            service.state.lib_ledger_state.clone(),
             genesis_id,
             ledger_config,
             state,
-            self.state.lib_block_slot,
-            self.state.lib_block_length,
+            service.state.lib_block_slot,
+            service.state.lib_block_length,
         );
 
         // Stream the already applied state.
@@ -1453,20 +1587,20 @@ where
                 lib_slot: lib.slot(),
             }
         };
-        if let Err(e) = self.new_block_subscription_sender.send(init_event) {
+        if let Err(e) = service.new_block_subscription_sender.send(init_event) {
             debug!("No new-block subscribers to notify: {e}");
         }
 
         // Phase 1: Collect and load blocks in (LIB, tip].
         info!(
-            target: LOG_TARGET, lib = ?lib_id, tip = ?self.state.tip,
+            target: LOG_TARGET, lib = ?lib_id, tip = ?service.state.tip,
             "loading stored blocks for chain recovery",
         );
         let RecoveryBlocks {
             blocks,
             fell_back_to_lib,
         } = Self::load_recovery_blocks_or_fall_back_to_lib(
-            self.state.tip,
+            service.state.tip,
             lib_id,
             relays.storage_adapter().clone(),
         )
@@ -1486,8 +1620,8 @@ where
                 block,
                 current_slot,
                 relays,
-                &self.new_block_subscription_sender,
-                &self.lib_subscription_sender,
+                &service.new_block_subscription_sender,
+                &service.lib_subscription_sender,
             )
             .await
             {
@@ -1710,4 +1844,23 @@ async fn broadcast_finalized_block(
         .send(BlockBroadcastMsg::BroadcastFinalizedBlock(block_info))
         .await
         .map_err(|(error, _)| Box::new(error) as DynError)
+}
+
+/// Update and persist `CryptarchiaConsensusState`.
+fn persist_recovery_state(
+    cryptarchia: &Cryptarchia,
+    storage_blocks_to_remove: HashSet<HeaderId>,
+    state_updater: &StateUpdater<Option<CryptarchiaConsensusState>>,
+) {
+    match CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
+        cryptarchia,
+        storage_blocks_to_remove,
+    ) {
+        Ok(state) => {
+            state_updater.update(Some(state));
+        }
+        Err(e) => {
+            error!(target: LOG_TARGET, "Failed to update state: {}", e);
+        }
+    }
 }

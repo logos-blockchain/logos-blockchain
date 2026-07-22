@@ -430,7 +430,7 @@ impl From<lb_chain_service::ChainServiceInfo> for ConsensusSnapshot {
         Self {
             height: value.cryptarchia_info.height,
             slot: value.cryptarchia_info.slot.into_inner(),
-            mode: format!("{:?}", value.mode),
+            mode: format!("{:?}", value.phase),
         }
     }
 }

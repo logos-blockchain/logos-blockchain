@@ -2055,6 +2055,7 @@ mod tests {
             lib_slot: Slot::new(LIB_SLOT),
             height: HEIGHT,
             tip: HeaderId::from([3; 32]),
+            state: lb_chain_service::State::Online,
         }
     }
 
@@ -2065,6 +2066,7 @@ mod tests {
             lib_slot: Slot::new(0),
             height: 1,
             tip: HeaderId::from([3; 32]),
+            state: lb_chain_service::State::Online,
         }
     }
 

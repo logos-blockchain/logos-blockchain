@@ -1,6 +1,6 @@
 use std::{num::NonZero, path::PathBuf, time::Duration};
 
-use lb_chain_service::{ChainServiceMode, State};
+use lb_chain_service::ChainServicePhase;
 use lb_core::{
     block::genesis::GenesisBlockBuilder,
     mantle::{
@@ -52,21 +52,21 @@ async fn delayed_chain_start() {
 
     let info =
         wait_for_consensus_mode(&node0.client, Duration::from_secs(MODE_TIMEOUT_SECS), |i| {
-            i.mode == ChainServiceMode::AwaitingStart
+            i.phase == ChainServicePhase::AwaitingGenesisTime
         })
         .await
-        .expect("Failed to get AwaitingStart mode");
+        .expect("Failed to get AwaitingGenesisTime phase");
 
-    assert_eq!(info.mode, ChainServiceMode::AwaitingStart);
+    assert_eq!(info.phase, ChainServicePhase::AwaitingGenesisTime);
 
     let info =
         wait_for_consensus_mode(&node0.client, Duration::from_secs(MODE_TIMEOUT_SECS), |i| {
-            matches!(i.mode, ChainServiceMode::Started(State::Online))
+            matches!(i.phase, ChainServicePhase::Following)
         })
         .await
-        .expect("Failed to reach Started(State::Online)");
+        .expect("Failed to reach the Following phase");
 
-    assert_eq!(info.mode, ChainServiceMode::Started(State::Online));
+    assert_eq!(info.phase, ChainServicePhase::Following);
 
     wait_for_nodes_height(&[&node0.client], 1, Duration::from_secs(500)).await;
 }
