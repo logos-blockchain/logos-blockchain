@@ -234,7 +234,65 @@ tracing:
   console: !Console
     bind_address: 127.0.0.1
     port: 6669
+    recording_path: /absolute/path/to/node-1-tokio-console.jsonl
 ```
+
+`recording_path` enables subscriber-side raw Tokio Console recording. Omitting it
+leaves raw recording disabled while the live Tokio Console endpoint remains
+available. Absolute paths are recommended; the node process must be able to
+create and write the file. Use a unique path for each node and profiling run.
+Recordings can grow substantially during long runs, and recording adds
+instrumentation and disk-I/O overhead. Stop the node gracefully so the recorder
+can flush as much telemetry as possible. The file contains raw subscriber
+telemetry for offline analysis and is different from Tokio Console client
+diagnostic logs.
+
+The verified `console-subscriber 0.5.0` format is newline-delimited JSON: the
+first line is a version header (`{"v":1}`), followed by raw `Spawn`, `Enter`,
+`Exit`, `Close`, and `Waker` event records. This recording format is currently
+experimental and may change between subscriber versions. The Tokio Console
+client connects to a live endpoint; it does not currently replay these raw
+files directly, so offline analysis requires a compatible parser or tooling.
+
+For multiple nodes, use unique ports and recording paths:
+
+```yaml
+# NODE_1
+tracing:
+  console: !Console
+    bind_address: 127.0.0.1
+    port: 6669
+    recording_path: /profiles/run-001/node-1.jsonl
+```
+
+```yaml
+# NODE_2
+tracing:
+  console: !Console
+    bind_address: 127.0.0.1
+    port: 6670
+    recording_path: /profiles/run-001/node-2.jsonl
+```
+
+When using Cucumber, select recording independently for each profiled node:
+
+```gherkin
+And I will have tokio console profile nodes:
+  | node_name | record_raw |
+  | NODE_1    | true       |
+  | NODE_2    | false      |
+```
+
+`true` enables the live endpoint and raw recording; `false` enables only the
+live endpoint. Nodes omitted from the table are unaffected. For an enabled
+node, Cucumber stores the recording at:
+
+```text
+<scenario-runtime-directory>/<node-runtime-directory>/tokio-console-raw.jsonl
+```
+
+The path is resolved after the node runtime directory is created and remains
+with the scenario and node artifacts after shutdown.
 
 **Note:** Port `6669` is the default port for the console, but you can change it in your config and use the 
 corresponding value in the runtime if needed, for example, use a different port when multiple instrumented node 

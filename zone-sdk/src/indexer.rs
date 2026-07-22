@@ -121,27 +121,15 @@ where
 #[cfg(test)]
 mod tests {
 
-    use async_trait::async_trait;
-    use lb_common_http_client::{
-        ApiBlock, BlockInfo, ChainServiceInfo, ChainServiceMode, CryptarchiaInfo,
-        ProcessedBlockEvent, State,
-    };
-    use lb_core::{
-        header::HeaderId,
-        mantle::{
-            NoteId, SignedMantleTx,
-            ledger::Inputs,
-            ops::channel::{MsgId, deposit::Metadata, inscribe::Inscription},
-        },
+    use lb_core::mantle::{
+        NoteId, TxHash,
+        ledger::Inputs,
+        ops::channel::{MsgId, inscribe::Inscription},
     };
     use lb_groth16::Fr;
-    use lb_http_api_common::{
-        bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
-        queries::BlocksStreamQuery,
-    };
 
     use super::*;
-    use crate::{Deposit, ZoneBlock, adapter::BoxStream};
+    use crate::{Deposit, ZoneBlock, test_support::MockNode};
 
     #[tokio::test]
     async fn next_messages_empty() {
@@ -156,10 +144,7 @@ mod tests {
     async fn next_messages_no_skip() {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
-            (
-                deposit_msg(Inputs::new([NoteId::from(Fr::from(10u32))]), 0, [10].into()),
-                Slot::new(0),
-            ),
+            (deposit_msg(10), Slot::new(0)),
             (block_msg(2, &[2]), Slot::new(1)),
         ];
         let indexer = indexer(Slot::new(1), messages.clone());
@@ -176,10 +161,7 @@ mod tests {
     async fn next_messages_until_lib() {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
-            (
-                deposit_msg(Inputs::new([NoteId::from(Fr::from(10u32))]), 0, [10].into()),
-                Slot::new(1),
-            ),
+            (deposit_msg(10), Slot::new(1)),
             (block_msg(2, &[2]), Slot::new(2)), // after LIB
         ];
         let indexer = indexer(Slot::new(1), messages.clone());
@@ -195,15 +177,9 @@ mod tests {
     async fn next_messages_resume_from_cursor() {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
-            (
-                deposit_msg(Inputs::new([NoteId::from(Fr::from(10u32))]), 0, [10].into()),
-                Slot::new(0),
-            ),
+            (deposit_msg(10), Slot::new(0)),
             (block_msg(2, &[2]), Slot::new(1)),
-            (
-                deposit_msg(Inputs::new([NoteId::from(Fr::from(11u32))]), 0, [11].into()),
-                Slot::new(2),
-            ),
+            (deposit_msg(11), Slot::new(2)),
             (block_msg(3, &[3]), Slot::new(2)),
         ];
         let indexer = indexer(Slot::new(2), messages.clone());
@@ -220,10 +196,7 @@ mod tests {
     async fn next_messages_cursor_at_lib_emits_nothing() {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
-            (
-                deposit_msg(Inputs::new([NoteId::from(Fr::from(10u32))]), 0, [10].into()),
-                Slot::new(0),
-            ),
+            (deposit_msg(10), Slot::new(0)),
             (block_msg(2, &[2]), Slot::new(1)),
         ];
         let indexer = indexer(Slot::new(1), messages);
@@ -255,10 +228,7 @@ mod tests {
     async fn next_messages_across_batches() {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
-            (
-                deposit_msg(Inputs::new([NoteId::from(Fr::from(10u32))]), 0, [10].into()),
-                BATCH_SIZE,
-            ),
+            (deposit_msg(10), BATCH_SIZE),
             (
                 block_msg(2, &[2]),
                 BATCH_SIZE.into_inner().checked_mul(2).unwrap().into(),
@@ -268,7 +238,7 @@ mod tests {
                 BATCH_SIZE.into_inner().checked_mul(2).unwrap().into(),
             ),
             (
-                deposit_msg(Inputs::new([NoteId::from(Fr::from(11u32))]), 0, [11].into()),
+                deposit_msg(11),
                 BATCH_SIZE.into_inner().checked_mul(3).unwrap().into(),
             ),
             (
@@ -311,134 +281,32 @@ mod tests {
         })
     }
 
-    fn deposit_msg(inputs: Inputs, amount: u64, metadata: Metadata) -> ZoneMessage {
+    /// Deposit fixture whose every field derives from `seed`, so two
+    /// fixtures never share an identity. `tx_hash` and `op_id` differ from
+    /// each other as well, so a swap between the two is visible.
+    fn deposit_msg(seed: u8) -> ZoneMessage {
+        let mut tx_hash = [0u8; 32];
+        tx_hash[0] = seed;
+        let mut op_id = [0u8; 32];
+        op_id[0] = seed;
+        op_id[31] = 1;
+
         ZoneMessage::Deposit(Deposit {
-            inputs,
-            amount,
-            metadata,
+            tx_hash: TxHash::from(tx_hash),
+            op_id,
+            inputs: Inputs::new([NoteId::from(Fr::from(u32::from(seed)))]),
+            amount: 0,
+            metadata: [seed].into(),
         })
     }
 
     fn indexer(lib_slot: Slot, messages: Vec<(ZoneMessage, Slot)>) -> ZoneIndexer<MockNode> {
-        let node = MockNode { lib_slot, messages };
+        let node = MockNode {
+            channel_state: None,
+            lib_slot,
+            zone_messages: messages,
+            ..MockNode::default()
+        };
         ZoneIndexer::new(ChannelId::from([0u8; 32]), node)
-    }
-
-    /// Mock node that returns preconfigured zone messages.
-    #[derive(Clone)]
-    struct MockNode {
-        lib_slot: Slot,
-        messages: Vec<(ZoneMessage, Slot)>,
-    }
-
-    #[async_trait]
-    impl adapter::Node for MockNode {
-        async fn consensus_info(&self) -> Result<ChainServiceInfo, lb_common_http_client::Error> {
-            Ok(ChainServiceInfo {
-                cryptarchia_info: CryptarchiaInfo {
-                    lib: HeaderId::from([0; 32]),
-                    lib_slot: self.lib_slot,
-                    tip: HeaderId::from([0; 32]),
-                    slot: self.lib_slot,
-                    height: 0,
-                },
-                mode: ChainServiceMode::Started(State::Online),
-            })
-        }
-
-        async fn time_info(
-            &self,
-        ) -> Result<lb_common_http_client::TimeInfo, lb_common_http_client::Error> {
-            Ok(lb_common_http_client::TimeInfo {
-                slot_duration_ms: 1_000,
-                genesis_time_unix_ms: 0,
-                current_slot: 0,
-                current_epoch: 0,
-            })
-        }
-
-        async fn channel_state(
-            &self,
-            _channel_id: ChannelId,
-        ) -> Result<Option<lb_core::mantle::channel::ChannelState>, lb_common_http_client::Error>
-        {
-            Ok(None)
-        }
-
-        async fn block_stream(
-            &self,
-        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
-            Ok(Box::pin(futures::stream::empty()))
-        }
-
-        async fn blocks_range_stream(
-            &self,
-            _params: BlocksStreamQuery,
-        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
-            Ok(Box::pin(futures::stream::empty()))
-        }
-
-        async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, lb_common_http_client::Error> {
-            Ok(Box::pin(futures::stream::empty()))
-        }
-
-        async fn block(
-            &self,
-            _id: HeaderId,
-        ) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
-            Ok(None)
-        }
-
-        async fn block_events(
-            &self,
-            _id: HeaderId,
-        ) -> Result<Option<lb_common_http_client::Events>, lb_common_http_client::Error> {
-            Ok(None)
-        }
-
-        async fn immutable_blocks(
-            &self,
-            _slot_from: Slot,
-            _slot_to: Slot,
-        ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
-            Ok(Vec::new())
-        }
-
-        async fn zone_messages_in_block(
-            &self,
-            _id: HeaderId,
-            _channel_id: ChannelId,
-        ) -> Result<BoxStream<ZoneMessage>, lb_common_http_client::Error> {
-            Ok(Box::pin(futures::stream::empty()))
-        }
-
-        async fn zone_messages_in_blocks(
-            &self,
-            slot_from: Slot,
-            slot_to: Slot,
-            _channel_id: ChannelId,
-        ) -> Result<BoxStream<(ZoneMessage, Slot)>, lb_common_http_client::Error> {
-            let msgs: Vec<_> = self
-                .messages
-                .iter()
-                .filter(move |(_, slot)| *slot >= slot_from && *slot <= slot_to)
-                .cloned()
-                .collect();
-            Ok(Box::pin(futures::stream::iter(msgs)))
-        }
-
-        async fn post_transaction(
-            &self,
-            _tx: SignedMantleTx,
-        ) -> Result<(), lb_common_http_client::Error> {
-            unimplemented!()
-        }
-
-        async fn fund_tx(
-            &self,
-            _request: WalletFundRequestBody,
-        ) -> Result<WalletFundResponseBody, lb_common_http_client::Error> {
-            unimplemented!()
-        }
     }
 }

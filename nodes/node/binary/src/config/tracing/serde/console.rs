@@ -1,4 +1,5 @@
 use core::net::{IpAddr, Ipv4Addr};
+use std::path::PathBuf;
 
 use lb_tracing_service::{ConsoleLayerSettings, TokioConsoleConfig};
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,7 @@ impl From<Layer> for ConsoleLayerSettings {
             Layer::Console(config) => Self::Console(TokioConsoleConfig {
                 bind_address: config.bind_address.to_string(),
                 port: config.port,
+                recording_path: config.recording_path,
             }),
             Layer::None => Self::None,
         }
@@ -27,6 +29,7 @@ impl From<Layer> for ConsoleLayerSettings {
 pub struct TokioConfig {
     pub bind_address: IpAddr,
     pub port: u16,
+    pub recording_path: Option<PathBuf>,
 }
 
 impl Default for TokioConfig {
@@ -34,6 +37,7 @@ impl Default for TokioConfig {
         Self {
             bind_address: Ipv4Addr::LOCALHOST.into(),
             port: 6_669,
+            recording_path: None,
         }
     }
 }
