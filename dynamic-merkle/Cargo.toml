@@ -10,8 +10,14 @@ repository.workspace = true
 version.workspace = true
 
 [dependencies]
-serde = { workspace = true, features = ["derive"] }
-rand = { workspace = true }
-rpds = { workspace = true }
+serde = { workspace = true, features = ["alloc", "derive", "rc"] }
+rpds = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+ark-ff       = { workspace = true }
+lb-poseidon2 = { workspace = true }
+num-bigint   = { workspace = true }
+rand         = { workspace = true }
+
 [lints]
 workspace = true

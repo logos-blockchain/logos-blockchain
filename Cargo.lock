@@ -1838,6 +1838,9 @@ checksum = "4c3cf4824e2d5f025c7b531afcb2325364084a16806f6d47fbc1f5fbd9960590"
 name = "dynamic-merkle"
 version = "0.1.2"
 dependencies = [
+ "ark-ff 0.4.2",
+ "logos-blockchain-poseidon2",
+ "num-bigint",
  "rand 0.8.5",
  "rpds",
  "serde",
