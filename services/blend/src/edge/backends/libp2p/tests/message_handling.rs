@@ -65,15 +65,15 @@ async fn edge_message_propagation() {
 
     // Verify that both peers receive the message, even though the edge swarm is
     // connected to only one of them.
-    let (swarm_1_received_message, swarm_1_message_session) =
+    let (swarm_1_received_message, swarm_1_message_epoch) =
         core_swarm_1_incoming_message_receiver.recv().await.unwrap();
-    let (swarm_2_received_message, swarm_2_message_session) =
+    let (swarm_2_received_message, swarm_2_message_epoch) =
         core_swarm_2_incoming_message_receiver.recv().await.unwrap();
 
     assert_eq!(swarm_1_received_message, message.clone().into());
-    assert_eq!(swarm_1_message_session, 1);
+    assert_eq!(swarm_1_message_epoch, 1);
     assert_eq!(swarm_2_received_message, message.clone().into());
-    assert_eq!(swarm_2_message_session, 1);
+    assert_eq!(swarm_2_message_epoch, 1);
 }
 
 #[test(tokio::test)]

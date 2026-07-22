@@ -1,21 +1,22 @@
-use std::{str::FromStr as _, time::Duration};
+use std::{collections::HashSet, time::Duration};
 
 use cucumber::{gherkin::Step, given, then, when};
+use tokio::time::timeout;
 use tracing::{info, warn};
 
 use crate::{
+    common::wallet::WalletUtxos,
     cucumber::{
         error::{StepError, StepResult},
         steps::{
             TARGET,
             manual_transactions::{
-                best_node::get_best_node_info,
                 command_file_parsing::ManualCommand,
                 command_file_utils::{
                     execute_coin_splits_all_user_wallets,
                     execute_continuous_next_wallet_user_wallet,
-                    execute_continuous_round_robin_user_wallets, perform_manual_step_control,
-                    verify_min_outputs_all_user_wallets,
+                    execute_continuous_round_robin_user_wallets, log_wallet_balances,
+                    perform_manual_step_control, verify_min_outputs_all_user_wallets,
                 },
                 tracked_transactions::{
                     submit_funded_transfer_transaction, submit_invalid_transfer_transaction,
@@ -23,13 +24,17 @@ use crate::{
                 },
                 utils,
                 utils::{
-                    WalletStateType, assert_tracked_wallet_fees_equal_sponsored_fee_account_spend,
-                    create_and_submit_transaction, wait_for_transactions_inclusion,
-                    wait_for_wallet_or_encumbered_state,
+                    WalletOutputState,
+                    assert_tracked_wallet_fees_equal_sponsored_fee_account_spend,
+                    create_and_submit_transaction, parse_wallet_output_state,
+                    wait_for_wallet_output_state, wait_for_wallet_submitted_transactions_inclusion,
                 },
             },
         },
-        utils::resolve_literal_or_env,
+        wallet::{
+            submissions::create_and_submit_transaction_hashes_with_utxo_cache,
+            sync::{WalletSendReadiness, wait_wallet_send_ready},
+        },
         world::{CucumberWorld, WalletInfo},
     },
     non_zero,
@@ -47,22 +52,114 @@ async fn step_do_coin_split(
         warn!(target: TARGET, "Step `{}` error: {e}", step.value);
     })?;
 
+    let mut available_utxos = WalletUtxos::new();
+    let best_node_info = wait_wallet_send_ready(
+        world,
+        &step.value,
+        &wallet_name,
+        180,
+        number_of_outputs as u64 * output_value,
+        WalletSendReadiness::TotalValueOnly,
+        &mut available_utxos,
+        &HashSet::new(),
+    )
+    .await?;
+
     let self_pk = wallet.public_key().inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step.value);
     })?;
     let receivers = vec![(self_pk, output_value); number_of_outputs];
-    let tx_hash_hex =
-        create_and_submit_transaction(world, &step.value, &wallet_name, &receivers, None)
-            .await
-            .inspect_err(|e| {
-                warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-            })?;
+    let tx_hash_hex = create_and_submit_transaction(
+        world,
+        &step.value,
+        &wallet_name,
+        &receivers,
+        Some(&best_node_info),
+        Some(&mut available_utxos),
+    )
+    .await
+    .inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
 
     info!(
         target: TARGET,
         "Submitted coin split transaction for `{wallet_name}/{}`, outputs: {number_of_outputs}, \
         value: {output_value}, tx hash: {tx_hash_hex}",
         wallet.node_name
+    );
+
+    Ok(())
+}
+
+/// Tops up a node's funding wallet from a user wallet with `note_count`
+/// notes of `note_value` LGO each, in a single transaction.
+///
+/// Funding a transaction reserves one wallet note until the transaction is
+/// mined, so a funding wallet supports at most `note count` concurrent
+/// in-flight funded transactions — and its single `10_000` genesis note cannot
+/// pay the fees of scenarios that publish many messages at non-zero gas
+/// prices. This mirrors the workflow of a real node operator provisioning
+/// their sequencer's funding wallet.
+#[when(
+    expr = "wallet {string} sends {int} notes of {int} LGO to node {string} funding wallet as {string}"
+)]
+async fn step_topup_node_funding_wallet(
+    world: &mut CucumberWorld,
+    step: &Step,
+    wallet_name: String,
+    note_count: usize,
+    note_value: u64,
+    node_name: String,
+    transaction_alias: String,
+) -> StepResult {
+    let funding_wallet = world
+        .resolve_wallet(&format!("{node_name}_WALLET"))
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+        })?;
+    let funding_pk = funding_wallet.public_key().inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
+
+    let mut available_utxos = WalletUtxos::new();
+    let best_node_info = wait_wallet_send_ready(
+        world,
+        &step.value,
+        &wallet_name,
+        180,
+        note_count as u64 * note_value,
+        WalletSendReadiness::TotalValueOnly,
+        &mut available_utxos,
+        &HashSet::new(),
+    )
+    .await?;
+
+    let receivers = vec![(funding_pk, note_value); note_count];
+    let tx_hashes = create_and_submit_transaction_hashes_with_utxo_cache(
+        world,
+        &step.value,
+        &wallet_name,
+        &receivers,
+        Some(&best_node_info),
+        Some(&mut available_utxos),
+    )
+    .await
+    .inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
+    let tx_hash = tx_hashes
+        .first()
+        .copied()
+        .ok_or_else(|| StepError::LogicalError {
+            message: "funding wallet top-up produced no transaction".to_owned(),
+        })?;
+    world.remember_submitted_transaction(transaction_alias.clone(), tx_hash);
+
+    info!(
+        target: TARGET,
+        "Submitted funding wallet top-up `{transaction_alias}`: {note_count} notes of \
+        {note_value} LGO from `{wallet_name}` to `{node_name}_WALLET`",
     );
 
     Ok(())
@@ -77,7 +174,7 @@ async fn step_wallet_has_at_least_coins(
     min_coin_count: usize,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_output_state(
         world,
         &step.value,
         wallet_name,
@@ -86,7 +183,7 @@ async fn step_wallet_has_at_least_coins(
         None,
         None,
         time_out_seconds,
-        WalletStateType::OnChain,
+        WalletOutputState::OnChain,
     )
     .await
 }
@@ -100,7 +197,7 @@ async fn step_wallet_has_at_most_coins(
     max_coin_count: usize,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_output_state(
         world,
         &step.value,
         wallet_name,
@@ -109,7 +206,7 @@ async fn step_wallet_has_at_most_coins(
         None,
         None,
         time_out_seconds,
-        WalletStateType::OnChain,
+        WalletOutputState::OnChain,
     )
     .await
 }
@@ -123,7 +220,7 @@ async fn step_wallet_has_exact_coins(
     coin_count: usize,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_output_state(
         world,
         &step.value,
         wallet_name,
@@ -132,7 +229,7 @@ async fn step_wallet_has_exact_coins(
         None,
         None,
         time_out_seconds,
-        WalletStateType::OnChain,
+        WalletOutputState::OnChain,
     )
     .await
 }
@@ -146,7 +243,7 @@ async fn step_wallet_has_at_most_encumbered_coins(
     max_coin_count: usize,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_output_state(
         world,
         &step.value,
         wallet_name,
@@ -155,7 +252,7 @@ async fn step_wallet_has_at_most_encumbered_coins(
         None,
         None,
         time_out_seconds,
-        WalletStateType::Encumbered,
+        WalletOutputState::Reserved,
     )
     .await
 }
@@ -169,7 +266,7 @@ async fn step_wallet_has_at_least_value(
     min_token_value: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_output_state(
         world,
         &step.value,
         wallet_name,
@@ -178,7 +275,7 @@ async fn step_wallet_has_at_least_value(
         Some(&min_token_value),
         None,
         time_out_seconds,
-        WalletStateType::OnChain,
+        WalletOutputState::OnChain,
     )
     .await
 }
@@ -192,7 +289,7 @@ async fn step_wallet_has_exact_value(
     token_value: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_output_state(
         world,
         &step.value,
         wallet_name,
@@ -201,7 +298,7 @@ async fn step_wallet_has_exact_value(
         Some(&token_value),
         Some(&token_value),
         time_out_seconds,
-        WalletStateType::OnChain,
+        WalletOutputState::OnChain,
     )
     .await
 }
@@ -215,7 +312,7 @@ async fn step_wallet_has_at_most_value(
     max_token_value: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_output_state(
         world,
         &step.value,
         wallet_name,
@@ -224,7 +321,7 @@ async fn step_wallet_has_at_most_value(
         None,
         Some(&max_token_value),
         time_out_seconds,
-        WalletStateType::OnChain,
+        WalletOutputState::OnChain,
     )
     .await
 }
@@ -239,7 +336,7 @@ async fn step_wallet_has_at_least_coins_and_value(
     min_token_value: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_output_state(
         world,
         &step.value,
         wallet_name,
@@ -248,7 +345,7 @@ async fn step_wallet_has_at_least_coins_and_value(
         Some(&min_token_value),
         None,
         time_out_seconds,
-        WalletStateType::OnChain,
+        WalletOutputState::OnChain,
     )
     .await
 }
@@ -263,7 +360,7 @@ async fn step_wallet_has_at_most_coins_and_value(
     max_token_value: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_output_state(
         world,
         &step.value,
         wallet_name,
@@ -272,7 +369,7 @@ async fn step_wallet_has_at_most_coins_and_value(
         None,
         Some(&max_token_value),
         time_out_seconds,
-        WalletStateType::OnChain,
+        WalletOutputState::OnChain,
     )
     .await
 }
@@ -287,7 +384,7 @@ async fn step_wallet_has_exact_coins_and_value(
     token_value: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_output_state(
         world,
         &step.value,
         wallet_name,
@@ -296,9 +393,18 @@ async fn step_wallet_has_exact_coins_and_value(
         Some(&token_value),
         Some(&token_value),
         time_out_seconds,
-        WalletStateType::OnChain,
+        WalletOutputState::OnChain,
     )
     .await
+}
+
+#[when(expr = "I log wallet balances for all wallets")]
+#[then(expr = "I log wallet balances for all wallets")]
+async fn step_wallet_balance_all_wallets(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    let mut wallets = world.all_user_wallets();
+    wallets.extend(world.all_funding_wallets());
+
+    log_wallet_balances(world, &step.value, wallets).await
 }
 
 #[when(expr = "wallet {string} has all submitted transactions settled in {int} seconds")]
@@ -315,18 +421,9 @@ async fn step_wallet_has_all_submitted_transactions_settled(
     wallet_name: String,
     time_out_seconds: u64,
 ) -> StepResult {
-    let tx_hashes = world.submitted_tx_hashes_for_wallet(&wallet_name).to_vec();
-
-    wait_for_transactions_inclusion(
-        &world
-            .nodes_info
-            .get(&world.resolve_wallet(&wallet_name)?.node_name)
-            .ok_or_else(|| StepError::LogicalError {
-                message: format!("Node for wallet '{wallet_name}' not found"),
-            })?
-            .started_node
-            .client,
-        &tx_hashes,
+    wait_for_wallet_submitted_transactions_inclusion(
+        world,
+        &wallet_name,
         Duration::from_secs(time_out_seconds),
     )
     .await
@@ -364,7 +461,19 @@ async fn step_send_multiple_transactions_to_single_wallet(
 
     let receiver_wallet_pk = receiver_wallet.public_key()?;
 
-    let best_node_info = get_best_node_info(world, &sender_wallet_name).await?;
+    let mut available_utxos = WalletUtxos::new();
+    let best_node_info = wait_wallet_send_ready(
+        world,
+        &step.value,
+        &sender_wallet_name,
+        180,
+        number_of_transactions as u64 * output_value,
+        WalletSendReadiness::TotalValueOnly,
+        &mut available_utxos,
+        &HashSet::new(),
+    )
+    .await?;
+
     for _ in 0..number_of_transactions {
         let tx_hash_hex = create_and_submit_transaction(
             world,
@@ -372,6 +481,7 @@ async fn step_send_multiple_transactions_to_single_wallet(
             &sender_wallet_name,
             &[(receiver_wallet_pk, output_value)],
             Some(&best_node_info),
+            Some(&mut available_utxos),
         )
         .await
         .inspect_err(|e| {
@@ -460,12 +570,18 @@ async fn step_send_single_transaction_multiple_outputs_to_single_wallet(
     })?;
 
     let receivers = vec![(receiver_wallet_pk, output_value); number_of_outputs];
-    let tx_hash_hex =
-        create_and_submit_transaction(world, &step.value, &sender_wallet_name, &receivers, None)
-            .await
-            .inspect_err(|e| {
-                warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-            })?;
+    let tx_hash_hex = create_and_submit_transaction(
+        world,
+        &step.value,
+        &sender_wallet_name,
+        &receivers,
+        None,
+        None,
+    )
+    .await
+    .inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
 
     info!(
         target: TARGET,
@@ -531,6 +647,43 @@ async fn step_continuous_user_wallets(
 }
 
 #[when(
+    expr = "I perform continuous transactions on user wallets with {int} coin split outputs of {int} LGO, {int} transactions of {int} LGO each for {int} cycles and timeout of {int} seconds"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Cucumber step captures map directly to step function arguments."
+)]
+async fn step_continuous_user_wallets_with_timeout(
+    world: &mut CucumberWorld,
+    step: &Step,
+    coin_split_outputs: usize,
+    coin_split_value: u64,
+    transactions: usize,
+    value: u64,
+    cycles: usize,
+    timeout_seconds: u64,
+) -> StepResult {
+    timeout(
+        Duration::from_secs(timeout_seconds),
+        step_continuous_user_wallets(
+            world,
+            step,
+            coin_split_outputs,
+            coin_split_value,
+            transactions,
+            value,
+            cycles,
+        ),
+    )
+    .await
+    .map_err(|_| StepError::Timeout {
+        message: format!(
+            "continuous user wallet transactions did not finish within {timeout_seconds} seconds"
+        ),
+    })?
+}
+
+#[when(
     expr = "I perform {int} coin split transactions for each user wallet with {int} outputs of {int} LGO each"
 )]
 async fn step_coin_split_transactions_for_each_user_wallet(
@@ -562,9 +715,13 @@ async fn step_verify_each_wallet_minimum_outputs(
         &step.value,
         min_outputs,
         timeout_seconds,
-        WalletStateType::from_str(&wallet_state_type).inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-        })?,
+        parse_wallet_output_state(&wallet_state_type)
+            .inspect_err(|e| {
+                warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+            })
+            .map_err(|e| StepError::InvalidArgument {
+                message: e.to_string(),
+            })?,
     )
     .await
     .inspect_err(|e| {
@@ -581,7 +738,7 @@ async fn step_perform_stress_continuous_cycles_next_user_wallet(
     world: &mut CucumberWorld,
     step: &Step,
     cycles: usize,
-    transactions_per_wallet: usize,
+    num_transactions: usize,
     value: u64,
 ) -> StepResult {
     execute_continuous_next_wallet_user_wallet(
@@ -589,7 +746,7 @@ async fn step_perform_stress_continuous_cycles_next_user_wallet(
         &step.value,
         &ManualCommand::ContinuousNextWalletUserWallets {
             cycles,
-            transactions_per_wallet,
+            num_transactions,
             value,
         },
     )
@@ -601,38 +758,10 @@ async fn step_perform_stress_continuous_cycles_next_user_wallet(
     Ok(())
 }
 
-#[given(expr = "I update all user wallets balances")]
-#[when(expr = "I update all user wallets balances")]
-async fn step_update_all_wallets_balances(world: &mut CucumberWorld, step: &Step) -> StepResult {
-    utils::update_wallet_balance_all_user_wallets(world, &step.value, None).await?;
-    Ok(())
-}
-
-#[given(expr = "I have a faucet with URL {string} username {string} and password {string}")]
-#[when(expr = "I have a faucet with URL {string} username {string} and password {string}")]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Required by cucumber expression"
-)]
-fn step_faucet_details(
-    world: &mut CucumberWorld,
-    step: &Step,
-    base_url: String,
-    username: String,
-    password: String,
-) -> StepResult {
-    let username = resolve_literal_or_env(&username, "faucet username").inspect_err(|e| {
-        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-    })?;
-    let password = resolve_literal_or_env(&password, "faucet password").inspect_err(|e| {
-        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-    })?;
-
+#[given(expr = "I have a faucet with URL {string}")]
+#[when(expr = "I have a faucet with URL {string}")]
+fn step_faucet_details(world: &mut CucumberWorld, base_url: String) {
     world.faucet_base_url = Some(base_url);
-    world.faucet_username = Some(username);
-    world.faucet_password = Some(password);
-
-    Ok(())
 }
 
 #[given(expr = "I request {int} rounds of faucet funds for wallet {string}")]
@@ -647,18 +776,11 @@ fn step_request_faucet_funds_for_wallet(
     number_of_rounds: usize,
     wallet_name: String,
 ) -> StepResult {
-    let wallet_pk_hex = if let Ok(wallet) = world.resolve_wallet(&wallet_name) {
-        wallet.public_key_hex()
-    } else {
-        warn!(
-            target: TARGET,
-            "Step `{}` error: Wallet `{wallet_name}` not found.",
-            step.value
-        );
-        return Err(StepError::LogicalError {
-            message: format!("Wallet `{wallet_name}` not found"),
-        });
-    };
+    let wallet = world.resolve_wallet(&wallet_name).inspect_err(|error| {
+        warn!(target: TARGET, "Step `{}` error: {error}", step.value);
+    })?;
+
+    let wallet_pk_hex = wallet.public_key_hex();
 
     utils::request_faucet_funds(
         world,

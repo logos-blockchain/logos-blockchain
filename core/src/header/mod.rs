@@ -4,16 +4,16 @@ use blake2::Digest as _;
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub const BEDROCK_VERSION: u8 = 1;
 
 use crate::{
     codec::SerializeOp as _,
     crypto::Hasher,
-    mantle::{Transaction as _, TxHash, genesis_tx::GenesisTx},
+    mantle::transactions::GenesisTx,
     proofs::leader_proof::{Groth16LeaderProof, LeaderProof as _},
-    utils::{display_hex_bytes_newtype, serde_bytes_newtype},
+    utils::{display_hex_bytes_newtype, merkle, serde_bytes_newtype},
 };
 
 #[derive(Clone, Eq, PartialEq, Copy, Hash, PartialOrd, Ord)]
@@ -43,7 +43,7 @@ impl Debug for Nonce {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Copy, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Copy)]
 #[repr(u8)]
 pub enum Version {
     Bedrock = BEDROCK_VERSION,
@@ -53,6 +53,61 @@ impl Version {
     #[must_use]
     pub const fn as_byte(self) -> u8 {
         self as u8
+    }
+}
+
+impl TryFrom<u8> for Version {
+    type Error = std::io::Error;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            BEDROCK_VERSION => Ok(Self::Bedrock),
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Invalid version [{value}]"),
+            )),
+        }
+    }
+}
+
+impl TryFrom<&str> for Version {
+    type Error = std::io::Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value.to_lowercase().as_str() {
+            "bedrock" => Ok(Self::Bedrock),
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Invalid version [{value}]"),
+            )),
+        }
+    }
+}
+
+impl Serialize for Version {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if serializer.is_human_readable() {
+            serializer.serialize_str(format!("{self:?}").as_str())
+        } else {
+            serializer.serialize_u8(self.as_byte())
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Version {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        if deserializer.is_human_readable() {
+            let s = String::deserialize(deserializer)?;
+            Self::try_from(s.as_str()).map_err(serde::de::Error::custom)
+        } else {
+            Self::try_from(<u8>::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+        }
     }
 }
 
@@ -138,10 +193,10 @@ impl Header {
 
     #[must_use]
     pub fn genesis(tx: &GenesisTx) -> Self {
-        let tx_hash: TxHash = tx.hash();
+        let block_root = merkle::calculate_block_root(&[tx]);
         Self::new(
             HeaderId([0; 32]),
-            ContentId(tx_hash.into()),
+            ContentId(block_root),
             Slot::from(0u64),
             Groth16LeaderProof::genesis(),
         )
@@ -218,4 +273,303 @@ fn test_serde() {
         .unwrap(),
         HeaderId([0; 32])
     );
+}
+
+/// Block-root / `HeaderId` test-vector generator.
+///
+/// This module does not assert library behaviour: it *emits* reference test
+/// vectors for the block `block_root` computation and the resulting
+/// [`HeaderId`], so that alternative implementations (e.g. the nim
+/// implementation) can be checked for conformance against the canonical Rust
+/// encoding.
+///
+/// It emits three vectors:
+/// - **empty block**: `block_root` of a block with no transactions (`Merkle([])
+///   == [0u8; 32]`);
+/// - **one tx per op kind**: a block whose transactions each carry a single
+///   operation, one per distinct mantle [`Op`] variant; for it we print every
+///   leaf (`tx_hash`) and the resulting `block_root`;
+/// - **`HeaderId`**: a header reusing the previous `block_root`, with a fixed
+///   parent, slot and a deterministic genesis proof of leadership, for which we
+///   print the inputs and the resulting `HeaderId`.
+///
+/// `block_root = Merkle(blake2b256(b"MANTLE_TXHASH_V1" || tx_bytes) leaves)`,
+/// where the Merkle tree pads the leaf set to the next power of two with
+/// all-zero leaves and hashes inner nodes as `blake2b256(left || right)`.
+///
+/// `HeaderId (block_id) = blake2b256( b"BLOCK_ID_V1" || bedrock_version (1B)
+/// ||` `parent_block (32B) || slot_le (8B) || block_root (32B) ||
+/// leader_voucher` `(32B) || entropy_contribution (32B) || proof (128B) ||
+/// leader_key (32B) )`.
+///
+/// The test is `#[ignore]`d so it is skipped by `cargo test --all-features`.
+/// Run it on demand with:
+/// `cargo test -p logos-blockchain-core block_root_test_vectors -- --ignored
+/// --nocapture`
+#[cfg(test)]
+mod block_root_test_vectors {
+    use lb_blend_proofs::{
+        quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
+        selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection},
+    };
+    use lb_cryptarchia_engine::Epoch;
+    use lb_key_management_system_keys::keys::ZkPublicKey;
+    use lb_poseidon2::Fr;
+
+    use super::*;
+    use crate::{
+        mantle::{
+            MantleTx, Note, Op, Transaction as _,
+            channel::{SlotTimeframe, SlotTimeout},
+            ledger::{Inputs, NoteId, Outputs},
+            ops::{
+                channel::{
+                    ChannelId, Ed25519PublicKey, MsgId,
+                    channel_transfer::ChannelTransferOp,
+                    config::{ChannelConfigOp, Keys},
+                    deposit::{DepositOp, Metadata},
+                    inscribe::InscriptionOp,
+                    withdraw::ChannelWithdrawOp,
+                },
+                leader_claim::{LeaderClaimOp, VoucherCm},
+                transfer::TransferOp,
+            },
+            transactions::Ops,
+        },
+        sdp::{
+            ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locator,
+            ProviderId, ServiceType, WithdrawMessage, blend::ActivityProof,
+        },
+    };
+
+    fn ed25519_pk(seed: u8) -> Ed25519PublicKey {
+        Ed25519Key::from_bytes(&[seed; 32]).public_key()
+    }
+
+    fn zk_pk(seed: u64) -> ZkPublicKey {
+        ZkPublicKey::from(Fr::from(seed))
+    }
+
+    fn tx(op: Op) -> MantleTx {
+        MantleTx(Ops::new_unchecked(vec![op]))
+    }
+
+    /// Builds one transaction per distinct mantle operation kind, each carrying
+    /// a single operation. The instances mirror those used by the `OpId` test
+    /// vectors so the two vector sets stay consistent.
+    fn one_tx_per_op() -> Vec<(&'static str, MantleTx)> {
+        let activity = ActivityProof {
+            epoch: Epoch::new(10),
+            signing_key: ed25519_pk(1),
+            proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([2u8; PROOF_OF_QUOTA_SIZE])
+                .into(),
+            proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked(
+                [3u8; PROOF_OF_SELECTION_SIZE],
+            )
+            .into(),
+        };
+
+        vec![
+            // Transfer (0x00)
+            (
+                "Transfer",
+                tx(Op::Transfer(TransferOp::new(
+                    Inputs::new([NoteId(Fr::from(1u64)), NoteId(Fr::from(2u64))]),
+                    Outputs::new([Note::new(3, zk_pk(4)), Note::new(5, zk_pk(6))]),
+                ))),
+            ),
+            // ChannelConfig (0x10)
+            (
+                "ChannelConfig",
+                tx(Op::ChannelConfig(ChannelConfigOp {
+                    channel: ChannelId::from([7u8; 32]),
+                    keys: Keys::try_from(vec![ed25519_pk(8), ed25519_pk(9)]).unwrap(),
+                    posting_timeframe: SlotTimeframe::from(10u32),
+                    posting_timeout: SlotTimeout::from(11u32),
+                    configuration_threshold: 12,
+                    transfer_threshold: 13,
+                })),
+            ),
+            // ChannelInscribe (0x11)
+            (
+                "ChannelInscribe",
+                tx(Op::ChannelInscribe(InscriptionOp {
+                    channel_id: ChannelId::from([14u8; 32]),
+                    inscription: b"hello logos".into(),
+                    parent: MsgId::root(),
+                    signer: ed25519_pk(15),
+                })),
+            ),
+            // ChannelDeposit (0x12)
+            (
+                "ChannelDeposit",
+                tx(Op::ChannelDeposit(DepositOp {
+                    channel_id: ChannelId::from([16u8; 32]),
+                    inputs: Inputs::new([NoteId(Fr::from(17u64))]),
+                    metadata: Metadata::try_from(b"deposit-metadata".to_vec()).unwrap(),
+                })),
+            ),
+            // ChannelWithdraw (0x13)
+            (
+                "ChannelWithdraw",
+                tx(Op::ChannelWithdraw(ChannelWithdrawOp {
+                    channel_id: ChannelId::from([18u8; 32]),
+                    inputs: Inputs::new([NoteId(Fr::from(19u64))]),
+                })),
+            ),
+            // ChannelTransfer (0x14)
+            (
+                "ChannelTransfer",
+                tx(Op::ChannelTransfer(ChannelTransferOp {
+                    channel_id: ChannelId::from([20u8; 32]),
+                    inputs: Inputs::new([NoteId(Fr::from(21u64))]),
+                    outputs: Outputs::new([Note::new(22, zk_pk(23))]),
+                })),
+            ),
+            // SDPDeclare (0x20)
+            (
+                "SDPDeclare",
+                tx(Op::SDPDeclare(DeclarationMessage {
+                    service_type: ServiceType::BlendNetwork,
+                    locators: "/ip4/127.0.0.1/udp/3000/quic-v1"
+                        .parse::<Locator>()
+                        .unwrap()
+                        .into(),
+                    provider_id: ProviderId(ed25519_pk(24)),
+                    zk_id: zk_pk(25),
+                    locked_note_id: NoteId(Fr::from(26u64)),
+                })),
+            ),
+            // SDPWithdraw (0x21)
+            (
+                "SDPWithdraw",
+                tx(Op::SDPWithdraw(WithdrawMessage {
+                    declaration_id: DeclarationId([27u8; 32]),
+                    locked_note_id: NoteId(Fr::from(28u64)),
+                    nonce: 29,
+                })),
+            ),
+            // SDPActive (0x22)
+            (
+                "SDPActive",
+                tx(Op::SDPActive(ActiveMessage {
+                    declaration_id: DeclarationId([30u8; 32]),
+                    nonce: 31,
+                    metadata: ActivityMetadata::Blend(Box::new(activity)),
+                })),
+            ),
+            // LeaderClaim (0x30)
+            (
+                "LeaderClaim",
+                tx(Op::LeaderClaim(LeaderClaimOp {
+                    rewards_root: Fr::from(32u64).into(),
+                    voucher_nullifier: Fr::from(33u64).into(),
+                    pk: zk_pk(34),
+                })),
+            ),
+        ]
+    }
+
+    /// Generates (and prints) the `block_root` / `HeaderId` test vectors.
+    /// Ignored by default so it never runs under `cargo test --all-features`;
+    /// invoke explicitly with `--ignored --nocapture` to regenerate the
+    /// vectors.
+    #[test]
+    #[ignore = "generates block_root/HeaderId test vectors on demand; run with --ignored --nocapture"]
+    fn generate_block_root_test_vectors() {
+        println!();
+        println!("block_root = Merkle( blake2b256(b\"MANTLE_TXHASH_V1\" || tx_bytes) leaves )");
+        println!(
+            "block_id   = blake2b256( b\"BLOCK_ID_V1\" || bedrock_version || parent_block || \
+             slot_le || block_root || leader_voucher || entropy_contribution || proof || \
+             leader_key )"
+        );
+
+        // 1. Empty block: no transactions.
+        let empty: Vec<MantleTx> = vec![];
+        let empty_root = merkle::calculate_block_root(&empty);
+        println!("================================================================");
+        println!("vector 1  : empty block (0 transactions)");
+        println!("block_root: {}", hex::encode(empty_root));
+
+        // 2. One transaction per operation kind (one op each).
+        let txs_with_names = one_tx_per_op();
+        let txs: Vec<MantleTx> = txs_with_names.iter().map(|(_, tx)| tx.clone()).collect();
+        println!("================================================================");
+        println!(
+            "vector 2  : one transaction per op kind ({} transactions)",
+            txs.len()
+        );
+        for (i, (name, tx)) in txs_with_names.iter().enumerate() {
+            println!("leaf[{i}]   : {} (op: {})", hex::encode(tx.hash().0), name);
+        }
+        let block_root = merkle::calculate_block_root(&txs);
+        println!("block_root: {}", hex::encode(block_root));
+
+        // 3. HeaderId reusing vector 2's block_root. Every field is given a distinct
+        //    value so that a field-transposition bug in another implementation cannot
+        //    be masked by shared bytes. The proof is a synthetic (non-verifying) proof
+        //    built only to exercise the hash.
+        let parent_block = HeaderId([0x11u8; 32]);
+        let slot = Slot::from(42u64);
+        let proof = Groth16LeaderProof::from_parts(
+            lb_pol::PoLProof::from_bytes(&[0x22u8; 128]),
+            Fr::from(0x5555u64), // entropy_contribution
+            Ed25519Key::from_bytes(&[0x33u8; 32]).public_key(), // leader_key
+            VoucherCm::from(Fr::from(0x4444u64)), // leader_voucher
+        );
+        let header = Header::new(parent_block, ContentId(block_root), slot, proof);
+        let header_id = header.id();
+
+        // Self-check: recompute the preimage from the public accessors and make
+        // sure it matches `Header::id()` (the exact byte layout is documented in
+        // the module-level comment).
+        let proof = header.leader_proof();
+        let mut h = Hasher::new();
+        h.update(b"BLOCK_ID_V1");
+        h.update(Version::Bedrock.as_byte().to_le_bytes());
+        h.update(parent_block.0);
+        h.update(slot.to_le_bytes());
+        h.update(block_root);
+        h.update(proof.voucher_cm().to_bytes());
+        h.update(fr_to_bytes(&proof.entropy()));
+        h.update(proof.proof().to_bytes());
+        h.update(proof.leader_key().to_bytes());
+        let manual: [u8; 32] = h.finalize().into();
+        assert_eq!(
+            manual, header_id.0,
+            "manual preimage must match Header::id()"
+        );
+
+        println!("================================================================");
+        // Field labels match the names in the `block_id`/`Header` specification.
+        println!("vector 3  : HeaderId (block_id) reusing vector 2's block_root");
+        println!(
+            "{:20}: {:02x}",
+            "bedrock_version",
+            Version::Bedrock.as_byte()
+        );
+        println!("{:20}: {}", "parent_block", hex::encode(parent_block.0));
+        println!("{:20}: {}", "slot", u64::from(slot));
+        println!("{:20}: {}", "block_root", hex::encode(block_root));
+        // proof_of_leadership fields (here, the deterministic genesis proof).
+        println!(
+            "{:20}: {}",
+            "leader_voucher",
+            hex::encode(proof.voucher_cm().to_bytes())
+        );
+        println!(
+            "{:20}: {}",
+            "entropy_contribution",
+            hex::encode(fr_to_bytes(&proof.entropy()))
+        );
+        println!("{:20}: {}", "proof", hex::encode(proof.proof().to_bytes()));
+        println!(
+            "{:20}: {}",
+            "leader_key",
+            hex::encode(proof.leader_key().to_bytes())
+        );
+        println!("{:20}: {}", "block_id", hex::encode(header_id.0));
+        println!("================================================================");
+    }
 }

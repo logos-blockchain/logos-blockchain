@@ -1,6 +1,6 @@
 use derivative::Derivative;
 use lb_blend_proofs::selection::inputs::VerifyInputs;
-use lb_core::sdp::SessionNumber;
+use lb_cryptarchia_engine::Epoch;
 use serde::Serialize;
 use tracing::debug;
 
@@ -12,23 +12,20 @@ use crate::{
     },
 };
 
-/// An activity proof for a session, made of the blending token
+/// An activity proof for an epoch, made of the blending token
 /// that has the smallest Hamming distance satisfying the activity threshold.
 #[derive(Derivative, Serialize)]
 #[derivative(Debug)]
 pub struct ActivityProof {
-    session_number: SessionNumber,
+    epoch: Epoch,
     #[derivative(Debug = "ignore")]
     token: BlendingToken,
 }
 
 impl ActivityProof {
     #[must_use]
-    pub const fn new(session_number: SessionNumber, token: BlendingToken) -> Self {
-        Self {
-            session_number,
-            token,
-        }
+    pub const fn new(epoch: Epoch, token: BlendingToken) -> Self {
+        Self { epoch, token }
     }
 
     #[must_use]
@@ -57,14 +54,14 @@ impl ActivityProof {
         )?;
 
         Ok(Self::new(
-            proof.session,
+            proof.epoch,
             BlendingToken::new(proof.signing_key, proof_of_quota, proof_of_selection),
         ))
     }
 }
 
 /// Computes the activity threshold, which is the expected maximum Hamming
-/// distance from any blending token in a session to the next session
+/// distance from any blending token in an epoch to the next epoch
 /// randomness.
 pub fn activity_threshold(
     token_count_bit_len: u64,
@@ -86,7 +83,7 @@ pub fn activity_threshold(
 impl From<&ActivityProof> for lb_core::sdp::blend::ActivityProof {
     fn from(proof: &ActivityProof) -> Self {
         Self {
-            session: proof.session_number,
+            epoch: proof.epoch,
             signing_key: *proof.token.signing_key(),
             proof_of_quota: (*proof.token.proof_of_quota()).into(),
             proof_of_selection: (*proof.token.proof_of_selection()).into(),

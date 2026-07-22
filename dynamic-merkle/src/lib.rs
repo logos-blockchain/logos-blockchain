@@ -108,10 +108,7 @@ enum Node<Item, Hash> {
     },
 }
 
-fn hash<H: MerkleHasher>(
-    left: &Node<H::Item, H::Hash>,
-    right: &Node<H::Item, H::Hash>,
-) -> H::Hash {
+fn hash<H: MerkleHasher>(left: &Node<H::Item, H::Hash>, right: &Node<H::Item, H::Hash>) -> H::Hash {
     let left = match left {
         Node::Inner { value, .. } => *value,
         Node::Leaf { item } => item.as_ref().map_or(H::EMPTY_VALUE, H::leaf_hash),
@@ -208,8 +205,7 @@ impl<Item, Hash: Copy> Node<Item, Hash> {
                     "Cannot expand an empty subtree more than one node at a time",
                 );
                 Arc::new(Self::new_inner::<H>(
-                    Arc::new(Self::Empty { height: height - 1 })
-                        .insert_or_modify::<H, _>(index, f),
+                    Arc::new(Self::Empty { height: height - 1 }).insert_or_modify::<H, _>(index, f),
                     Arc::new(Self::Empty { height: height - 1 }),
                 ))
             }
@@ -366,8 +362,8 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
     ///
     /// # Panics
     ///
-    /// Panics if the tree is already at full capacity (`2^TREE_HEIGHT_EXCEPT_ROOT`
-    /// items).
+    /// Panics if the tree is already at full capacity
+    /// (`2^TREE_HEIGHT_EXCEPT_ROOT` items).
     pub fn insert(&self, item: H::Item) -> (Self, usize) {
         assert!(
             self.size() < self.root.capacity(),
@@ -445,9 +441,9 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
     /// Rebuilds a tree placing each `item` at its given index, filling the gaps
     /// between indices with holes.
     ///
-    /// The items must be yielded in strictly increasing index order; this is the
-    /// inverse of enumerating a tree's occupied positions and is meant for
-    /// recovering a tree from a compressed representation.
+    /// The items must be yielded in strictly increasing index order; this is
+    /// the inverse of enumerating a tree's occupied positions and is meant
+    /// for recovering a tree from a compressed representation.
     ///
     /// # Panics
     ///

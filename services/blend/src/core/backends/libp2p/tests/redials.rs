@@ -2,20 +2,18 @@ use core::time::Duration;
 use std::collections::HashSet;
 
 use lb_blend::scheduling::membership::Membership;
-use lb_core::crypto::ZkHash;
-use lb_groth16::Field as _;
 use lb_libp2p::{Protocol, SwarmEvent};
 use libp2p::{Multiaddr, PeerId};
 use test_log::test;
-use tokio::{select, time, time::sleep};
+use tokio::{
+    select,
+    time::{self, sleep, sleep_until},
+};
 
-use crate::core::backends::{
-    SessionInfo,
-    libp2p::{
-        core_swarm_test_utils::{SwarmExt as _, new_nodes_with_empty_address, update_nodes},
-        swarm::BlendSwarmMessage,
-        tests::utils::{BlendBehaviourBuilder, SwarmBuilder, TestSwarm},
-    },
+use crate::core::backends::libp2p::{
+    core_swarm_test_utils::{SwarmExt as _, new_nodes_with_empty_address, update_nodes},
+    swarm::BlendSwarmMessage,
+    tests::utils::{BlendBehaviourBuilder, SwarmBuilder, TestSwarm, build_membership},
 };
 
 #[test(tokio::test)]
@@ -231,10 +229,14 @@ async fn core_remembers_failed_peers_across_retries() {
     );
 }
 
-/// Verifies that when all peers have been tried and failed, the failed peers
-/// memory is cleared and peers are retried from scratch.
+/// Verifies that when all peers have been tried and failed in a cycle, the node
+/// does not immediately re-dial the whole membership (which would spin at
+/// event-loop speed against peers that keep rejecting us). Instead it schedules
+/// a single delayed retry from scratch; when the cooldown elapses,
+/// `check_and_dial_new_peers` re-dials the membership with a cleared
+/// failed-peers set.
 #[test(tokio::test)]
-async fn core_clears_failed_peers_memory_when_all_exhausted() {
+async fn core_schedules_delayed_retry_when_all_peers_exhausted() {
     // Create 3 membership nodes: 1 local + 2 remote unreachable.
     let (mut identities, nodes) = new_nodes_with_empty_address(3);
     let TestSwarm {
@@ -275,24 +277,23 @@ async fn core_clears_failed_peers_memory_when_all_exhausted() {
         })
         .await;
 
-    // Both peers have been tried. The memory should be cleared and a new dial
-    // should be attempted with an empty failed_peers set.
+    // Both peers have been tried this cycle. Instead of an immediate re-dial, a
+    // single delayed retry-from-scratch should be scheduled, with no dial in
+    // flight in the meantime.
     assert!(
-        !dialing_swarm.ongoing_dials().is_empty(),
-        "A new dial should be attempted after clearing failed peers memory"
+        dialing_swarm.ongoing_dials().is_empty(),
+        "No immediate re-dial should happen; the retry from scratch is delayed"
     );
-    let retried_peer = *dialing_swarm.ongoing_dials().keys().next().unwrap();
-    assert_eq!(
-        dialing_swarm.failed_peers_for(&retried_peer),
-        Some(&HashSet::new()),
-        "Failed peers memory should be cleared after all peers have been tried"
+    assert!(
+        dialing_swarm.has_pending_full_membership_retry(),
+        "A delayed retry-from-scratch should be scheduled after all peers have been tried"
     );
 }
 
-/// When a new session rotation occurs, pending backoff retries should be
+/// When a new epoch rotation occurs, pending backoff retries should be
 /// discarded along with ongoing dials.
 #[test(tokio::test)]
-async fn core_session_rotation_clears_pending_retries() {
+async fn core_epoch_rotation_clears_pending_retries() {
     let (mut identities, peer_ids) = new_nodes_with_empty_address(1);
     let TestSwarm {
         swarm: mut dialing_swarm,
@@ -315,24 +316,191 @@ async fn core_session_rotation_clears_pending_retries() {
         .await;
     assert_eq!(dialing_swarm.pending_retries_count(), 1);
 
-    // Trigger a new session via the swarm message channel.
-    let new_session_info = SessionInfo {
-        membership: Membership::new_without_local(&[]),
-        session_number: 2,
-        core_public_inputs: lb_blend::proofs::quota::inputs::prove::public::CoreInputs {
-            quota: 1,
-            zk_root: ZkHash::ZERO,
-        },
-    };
+    // Trigger a new epoch via the swarm message channel.
+    let new_epoch_info = (Membership::new_without_local(&[]), 2.into());
     swarm_message_sender
-        .send(BlendSwarmMessage::StartNewSession(new_session_info))
+        .send(BlendSwarmMessage::StartNewEpoch(new_epoch_info))
         .await
         .unwrap();
     dialing_swarm.poll_next().await;
 
-    // Session rotation should have cleared both ongoing dials and pending retries.
+    // Epoch rotation should have cleared both ongoing dials and pending retries.
     assert!(dialing_swarm.ongoing_dials().is_empty());
     assert_eq!(dialing_swarm.pending_retries_count(), 0);
+}
+
+/// Reproduces the peering-degree maintenance bug at an epoch boundary.
+///
+/// Epochs are independent: when a node enters a new epoch it rebuilds its peer
+/// set from scratch and should keep dialing until it reaches the *minimum*
+/// peering degree. Here the new epoch's membership has one reachable peer and
+/// two unreachable ones, with a minimum peering degree of 2. The reachable peer
+/// negotiates (healthy = 1), the two unreachable peers exhaust their dial
+/// attempts, and the node then stops dialing entirely — stranded one peer below
+/// the configured minimum until the *next* epoch.
+///
+/// Root cause: in `dial_random_peers_except`, the "retry everything from
+/// scratch" reset is gated on `except.len() == membership.size() - 1`, but a
+/// successfully negotiated peer is excluded via the separate `negotiated_peers`
+/// set rather than via `except`. So once any peer negotiates, `except` can only
+/// ever reach `size - 2`, the reset never fires, and the node gives up below
+/// the minimum.
+#[test(tokio::test)]
+async fn core_does_not_give_up_below_minimum_peering_degree() {
+    let min_peering_degree = 2;
+
+    // 4 membership nodes: [0] reachable listener, [1] local dialer, [2]/[3]
+    // unreachable.
+    let (mut identities, mut nodes) = new_nodes_with_empty_address(4);
+
+    // The single reachable peer: a real listening swarm.
+    let TestSwarm {
+        swarm: mut reachable_swarm,
+        ..
+    } = SwarmBuilder::new(identities.next().unwrap(), &nodes).build(|id, membership| {
+        BlendBehaviourBuilder::new(id, membership)
+            .with_peering_degree(min_peering_degree..=3)
+            .build()
+    });
+    let (reachable_node, _) = reachable_swarm
+        .listen_and_return_membership_entry(None)
+        .await;
+    update_nodes(&mut nodes, &reachable_node.id, reachable_node.address);
+
+    // Two unreachable peers: dialable memory addresses with no listener behind
+    // them, so every dial attempt fails with a transport error.
+    let unreachable_addr: Multiaddr = Protocol::Memory(0).into();
+    let (unreachable_1, unreachable_2) = (nodes[2].id, nodes[3].id);
+    update_nodes(&mut nodes, &unreachable_1, unreachable_addr.clone());
+    update_nodes(&mut nodes, &unreachable_2, unreachable_addr);
+
+    // The node under test.
+    let TestSwarm {
+        swarm: mut dialing_swarm,
+        swarm_message_sender,
+        ..
+    } = SwarmBuilder::new(identities.next().unwrap(), &nodes)
+        .with_max_dial_attempts(1.try_into().unwrap())
+        .build(|id, membership| {
+            BlendBehaviourBuilder::new(id, membership)
+                .with_peering_degree(min_peering_degree..=3)
+                .build()
+        });
+
+    // Enter a new epoch: this triggers the new-epoch peering logic, which dials
+    // peers to reach the minimum degree.
+    let new_membership = build_membership(&nodes, Some(*dialing_swarm.local_peer_id()));
+    swarm_message_sender
+        .send(BlendSwarmMessage::StartNewEpoch((new_membership, 2.into())))
+        .await
+        .unwrap();
+
+    // Drive both swarms for a fixed window: the reachable peer connects and the
+    // two unreachable peers fail. A node below the minimum peering degree keeps
+    // retrying, so the swarm never goes quiet — we therefore run until a fixed
+    // deadline (NOT until quiescence, which would never arrive) and then inspect
+    // the steady state. The deadline is computed once; recreating `sleep` each
+    // iteration would reset the timer and loop forever.
+    let deadline = time::Instant::now() + Duration::from_secs(3);
+    loop {
+        select! {
+            () = sleep_until(deadline) => break,
+            () = dialing_swarm.poll_next() => {}
+            () = reachable_swarm.poll_next() => {}
+        }
+    }
+
+    let healthy = dialing_swarm
+        .behaviour()
+        .blend
+        .with_core()
+        .num_healthy_peers();
+    let ongoing = dialing_swarm.ongoing_dials().len();
+    let pending = dialing_swarm.pending_retries_count();
+    let full_retry = dialing_swarm.has_pending_full_membership_retry();
+
+    // Sanity: the reachable peer connected, so we are genuinely one short of the
+    // minimum (not simply failing to connect to anyone).
+    assert_eq!(
+        healthy, 1,
+        "setup precondition: the single reachable peer should have negotiated"
+    );
+
+    // Regression guard: a node below the minimum peering degree must not give up
+    // — it must still be trying to reach the minimum, whether via an ongoing
+    // dial, a pending per-peer retry, or a scheduled retry-from-scratch. Before
+    // the fix it ended with none of these, stranded at degree 1 < 2 until the
+    // next epoch.
+    assert!(
+        healthy >= min_peering_degree || ongoing > 0 || pending > 0 || full_retry,
+        "node gave up below the minimum peering degree: healthy={healthy} < {min_peering_degree}, \
+         ongoing_dials={ongoing}, pending_retries={pending}, full_membership_retry={full_retry} — \
+         it will stay stranded until the next epoch"
+    );
+}
+
+/// The periodic peering-degree maintenance task must dial peers to reach the
+/// minimum degree even when nothing else triggers a dial — no `StartNewEpoch`,
+/// no dial failure, no disconnection. Here the node starts quiescent and below
+/// degree (`new_test` performs no initial dial and we send no message), so the
+/// ONLY thing that can make it connect to the reachable peer is the maintenance
+/// tick.
+#[test(tokio::test)]
+async fn core_maintenance_task_dials_to_maintain_peering_degree() {
+    let (mut identities, mut nodes) = new_nodes_with_empty_address(2);
+
+    // The reachable peer: a real listening swarm.
+    let TestSwarm {
+        swarm: mut reachable_swarm,
+        ..
+    } = SwarmBuilder::new(identities.next().unwrap(), &nodes)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
+    let (reachable_node, _) = reachable_swarm
+        .listen_and_return_membership_entry(None)
+        .await;
+    update_nodes(&mut nodes, &reachable_node.id, reachable_node.address);
+
+    // The node under test: a short maintenance interval. No initial dial is
+    // triggered (new_test does not dial, and we send no StartNewEpoch).
+    let TestSwarm {
+        swarm: mut dialing_swarm,
+        ..
+    } = SwarmBuilder::new(identities.next().unwrap(), &nodes)
+        .with_peering_degree_check_interval(time::interval(Duration::from_millis(200)))
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
+
+    // Precondition: the node is idle and below the (default) minimum degree of 1.
+    assert!(dialing_swarm.ongoing_dials().is_empty());
+    assert_eq!(
+        dialing_swarm
+            .behaviour()
+            .blend
+            .with_core()
+            .num_healthy_peers(),
+        0
+    );
+
+    // Drive both swarms until a fixed deadline. The only thing that can initiate a
+    // dial is the periodic maintenance tick; once it fires it must connect to the
+    // reachable peer.
+    let deadline = time::Instant::now() + Duration::from_secs(2);
+    loop {
+        select! {
+            () = sleep_until(deadline) => break,
+            () = dialing_swarm.poll_next() => {}
+            () = reachable_swarm.poll_next() => {}
+        }
+    }
+
+    assert!(
+        dialing_swarm
+            .behaviour()
+            .blend
+            .with_core()
+            .negotiated_peers()
+            .contains_key(&reachable_node.id),
+        "the maintenance task should have dialed and negotiated with the reachable peer"
+    );
 }
 
 /// When a retry fires but the peering degree is already satisfied (because

@@ -9,7 +9,6 @@ use crate::{ZkHash, quota::Ed25519PublicKey};
 #[derive(Clone, Copy)]
 pub struct Inputs {
     pub signing_key: Ed25519PublicKey,
-    pub session: u64,
     pub core: CoreInputs,
     pub leader: LeaderInputs,
 }
@@ -18,7 +17,6 @@ impl Debug for Inputs {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("Inputs")
             .field("signing_key", &hex::encode(self.signing_key.as_bytes()))
-            .field("session", &self.session)
             .field("core", &self.core)
             .field("leader", &self.leader)
             .finish()
@@ -32,7 +30,6 @@ impl Default for Inputs {
 
         Self {
             signing_key: Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-            session: 1,
             core: CoreInputs::default(),
             leader: LeaderInputs::default(),
         }

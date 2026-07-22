@@ -1,9 +1,11 @@
 pub mod blend;
 pub mod config;
 pub mod cryptarchia;
+pub mod keys;
+pub mod leader;
 pub mod lifecycle;
 pub(crate) mod memory;
-pub mod sdp;
+pub mod peer;
 pub mod storage;
 pub mod subscriptions;
 pub(crate) mod types;

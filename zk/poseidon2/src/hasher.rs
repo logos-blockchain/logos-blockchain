@@ -1,5 +1,5 @@
 use ark_bn254::Fr;
-use ark_ff::Field as _;
+use ark_ff::{AdditiveGroup as _, Field as _};
 
 use crate::{Digest, Poseidon2Bn254};
 

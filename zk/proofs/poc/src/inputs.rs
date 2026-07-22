@@ -27,6 +27,16 @@ impl PoCWitnessInputs {
         }
     }
 }
+impl TryFrom<PoCWitnessInputs> for lbc_poc_sys::PocWitnessInput<'_> {
+    type Error = lbp_error::Error;
+
+    fn try_from(value: PoCWitnessInputs) -> Result<Self, Self::Error> {
+        let inputs_json: PoCInputsJson = value.into();
+        let inputs_str: String = serde_json::to_string(&inputs_json)?;
+        let witness_input = lbc_poc_sys::PocWitnessInput::new(inputs_str)?;
+        Ok(witness_input)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct PoCWitnessInputsData {
@@ -84,6 +94,7 @@ pub struct PoCVerifierInputJson([Groth16InputDeser; 3]);
 
 /// Public inputs of the POC verifier circuit as returned by the prover.
 /// This inputs are the ones that need to be fed into the verifier.
+#[derive(Clone)]
 pub struct PoCVerifierInput {
     pub voucher_nullifier: Groth16Input,
     voucher_root: Groth16Input,

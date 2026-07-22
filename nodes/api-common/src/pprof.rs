@@ -8,8 +8,11 @@ use axum::{
     response::{IntoResponse as _, Response},
     routing,
 };
+use lb_log_targets::api;
 use pprof::protos::Message as _;
 use serde::Deserialize;
+
+const LOG_TARGET: &str = api::http::PPROF;
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "lowercase")]
@@ -91,7 +94,7 @@ pub async fn cpu_profile(Query(params): Query<PprofParams>) -> Response {
 
             match guard.report().build() {
                 Ok(report) => {
-                    tracing::debug!("CPU profile report built successfully");
+                    tracing::debug!(target: LOG_TARGET, "CPU profile report built successfully");
 
                     match format {
                         ProfileFormat::Svg => generate_flamegraph_svg(&report),
@@ -118,12 +121,16 @@ fn generate_flamegraph_svg(report: &pprof::Report) -> Response {
     match report.flamegraph(&mut flamegraph_data) {
         Ok(()) => {
             tracing::debug!(
+                target: LOG_TARGET,
                 "Flamegraph generated, size: {} bytes",
                 flamegraph_data.len()
             );
 
             if flamegraph_data.is_empty() {
-                tracing::warn!("Generated flamegraph is empty - no samples collected");
+                tracing::warn!(
+                    target: LOG_TARGET,
+                    "Generated flamegraph is empty - no samples collected"
+                );
 
                 (
                     StatusCode::OK,
@@ -145,7 +152,7 @@ fn generate_flamegraph_svg(report: &pprof::Report) -> Response {
             }
         }
         Err(e) => {
-            tracing::error!("Failed to generate flamegraph: {}", e);
+            tracing::error!(target: LOG_TARGET, "Failed to generate flamegraph: {}", e);
 
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -163,7 +170,11 @@ fn generate_protobuf_profile(report: &pprof::Report) -> Response {
 
             match profile.write_to_vec(&mut data) {
                 Ok(()) => {
-                    tracing::debug!("Protobuf profile generated, size: {} bytes", data.len());
+                    tracing::debug!(
+                        target: LOG_TARGET,
+                        "Protobuf profile generated, size: {} bytes",
+                        data.len()
+                    );
 
                     Response::builder()
                         .status(StatusCode::OK)
@@ -182,7 +193,11 @@ fn generate_protobuf_profile(report: &pprof::Report) -> Response {
                         })
                 }
                 Err(e) => {
-                    tracing::error!("Failed to encode protobuf profile: {}", e);
+                    tracing::error!(
+                        target: LOG_TARGET,
+                        "Failed to encode protobuf profile: {}",
+                        e
+                    );
 
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -193,7 +208,11 @@ fn generate_protobuf_profile(report: &pprof::Report) -> Response {
             }
         }
         Err(e) => {
-            tracing::error!("Failed to generate protobuf profile: {}", e);
+            tracing::error!(
+                target: LOG_TARGET,
+                "Failed to generate protobuf profile: {}",
+                e
+            );
 
             (
                 StatusCode::INTERNAL_SERVER_ERROR,

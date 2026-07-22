@@ -1,42 +1,45 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Serialize)]
-struct WireOpSer<'a, Inner>
-where
-    &'a Inner: Serialize,
-{
-    pub opcode: u8,
-    pub payload: &'a Inner,
-}
+/// Zero-sized `u8` whose only valid value on the wire is `CODE`.
+///
+/// Serializes as `CODE`; deserialization errors when the input is any other
+/// value.
+pub struct ConstU8<const CODE: u8>;
 
-#[derive(Deserialize)]
-struct WireOpDe<Inner> {
-    // #[expect(dead_code, reason = "Op codes are just used for deserialization")]
-    pub opcode: u8,
-    pub payload: Inner,
-}
-
-pub fn serialize_op_variant<const CODE: u8, Op: Serialize, S: Serializer>(
-    op: &Op,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    WireOpSer {
-        opcode: CODE,
-        payload: op,
+impl<const CODE: u8> Serialize for ConstU8<CODE> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u8(CODE)
     }
-    .serialize(serializer)
 }
 
-pub fn deserialize_op_variant<'de, const CODE: u8, Op: Deserialize<'de>, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Op, D::Error> {
-    let op = WireOpDe::<Op>::deserialize(deserializer)?;
-    if op.opcode != CODE {
-        return Err(serde::de::Error::custom(format!(
-            "Invalid opcode {} for type {}",
-            op.opcode,
-            std::any::type_name::<Op>()
-        )));
+impl<'de, const CODE: u8> Deserialize<'de> for ConstU8<CODE> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = u8::deserialize(deserializer)?;
+        if value != CODE {
+            return Err(serde::de::Error::custom(format!(
+                "Invalid opcode {value}, expected {CODE}"
+            )));
+        }
+        Ok(Self)
     }
-    Ok(op.payload)
+}
+
+/// Shared `{ opcode, payload }` wire shape used in both directions.
+#[derive(Serialize, Deserialize)]
+pub struct OpWire<const CODE: u8, Inner> {
+    opcode: ConstU8<CODE>,
+    payload: Inner,
+}
+
+impl<const CODE: u8, Inner> OpWire<CODE, Inner> {
+    pub const fn new(payload: Inner) -> Self {
+        Self {
+            opcode: ConstU8,
+            payload,
+        }
+    }
+
+    pub fn into_op(self) -> Inner {
+        self.payload
+    }
 }

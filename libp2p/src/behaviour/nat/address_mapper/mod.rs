@@ -10,6 +10,7 @@ use std::{
 };
 
 use futures::{FutureExt as _, future::BoxFuture};
+use lb_log_targets::libp2p as lb_log_targets_libp2p;
 use lb_utils::math::PositiveF64;
 use libp2p::{
     PeerId,
@@ -21,11 +22,12 @@ use libp2p::{
 };
 pub use protocols::NatMapper;
 use tokio::time::{self, Sleep};
-use tracing::{debug, info, warn};
 
 use crate::{
     behaviour::nat::address_mapper::errors::AddressMapperError, config::NatMappingSettings,
 };
+
+const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::nat::address_mapper::ROOT;
 
 type MappingFuture = BoxFuture<'static, Result<Multiaddr, AddressMapperError>>;
 
@@ -145,7 +147,12 @@ impl MappingState {
         external_address: Multiaddr,
         settings: &NatMappingSettings,
     ) -> (PollResult, State) {
-        info!(%self.local_address, %external_address, "NAT mapping established");
+        tracing::info!(
+            target: LOG_TARGET,
+            local_address = %self.local_address,
+            %external_address,
+            "NAT mapping established"
+        );
 
         let local_address = self.local_address.clone();
         let new_state = State::active(
@@ -171,7 +178,13 @@ impl MappingState {
         error: &AddressMapperError,
         settings: &NatMappingSettings,
     ) -> (PollResult, State) {
-        warn!(%self.local_address, %error, self.retry_count, "NAT mapping failed");
+        tracing::warn!(
+            target: LOG_TARGET,
+            local_address = %self.local_address,
+            %error,
+            self.retry_count,
+            "NAT mapping failed"
+        );
 
         if self.retry_count < settings.max_retries {
             (
@@ -266,7 +279,13 @@ impl State {
         is_initial: bool,
         retry_count: u32,
     ) -> Self {
-        debug!(%address, is_initial, retry_count, "Starting NAT mapping");
+        tracing::debug!(
+            target: LOG_TARGET,
+            %address,
+            is_initial,
+            retry_count,
+            "Starting NAT mapping"
+        );
 
         let local_address = address.clone();
         let future = async move { Mapper::map_address(&local_address, settings).await }.boxed();
@@ -346,7 +365,12 @@ where
                     return Ok(());
                 }
 
-                info!(old = %active_state.local_address, new = %address, "Replacing active mapping with new address");
+                tracing::info!(
+                    target: LOG_TARGET,
+                    old = %active_state.local_address,
+                    new = %address,
+                    "Replacing active mapping with new address"
+                );
                 self.state = State::mapping::<Mapper>(address, self.settings, true, 0);
 
                 Ok(())

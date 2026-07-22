@@ -1,134 +1,86 @@
-use lb_blend_proofs::{
-    quota::{PROOF_OF_QUOTA_SIZE, ProofOfQuota},
-    selection::{PROOF_OF_SELECTION_SIZE, ProofOfSelection},
+use lb_blend_proofs::{quota::ProofOfQuota, selection::ProofOfSelection};
+use lb_cryptarchia_engine::Epoch;
+use lb_key_management_system_keys::keys::Ed25519PublicKey;
+use nom::{
+    IResult,
+    error::{Error, ErrorKind},
 };
-use lb_key_management_system_keys::keys::ED25519_PUBLIC_KEY_SIZE;
-use nom::{IResult, Parser as _, bytes::complete::take, number::complete::u8 as nom_u8};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    mantle::ops::channel::Ed25519PublicKey,
-    sdp::{ACTIVE_METADATA_BLEND_TYPE, SessionNumber, parse_session_number},
-};
+use crate::mantle::nom::{NomDecode, NomEncode};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ActivityProof {
-    pub session: SessionNumber,
+    pub epoch: Epoch,
     pub signing_key: Ed25519PublicKey,
     pub proof_of_quota: ProofOfQuota,
     pub proof_of_selection: ProofOfSelection,
 }
 
-const BLEND_ACTIVE_METADATA_VERSION_BYTE: u8 = 0x01;
+const BLEND_ACTIVE_METADATA_VERSION_BYTE: u8 = 1;
 
-impl ActivityProof {
-    #[must_use]
-    pub fn to_metadata_bytes(&self) -> Vec<u8> {
-        let signing_key: [u8; _] = self.signing_key.to_bytes();
-        let proof_of_quota: [u8; _] = (&self.proof_of_quota).into();
-        let proof_of_selection: [u8; _] = (&self.proof_of_selection).into();
-
-        let total_size = 2 // type + version byte
-            + size_of::<SessionNumber>()
-            + signing_key.len()
-            + proof_of_quota.len()
-            + proof_of_selection.len();
-
-        let mut bytes = Vec::with_capacity(total_size);
-        bytes.push(ACTIVE_METADATA_BLEND_TYPE);
-        bytes.push(BLEND_ACTIVE_METADATA_VERSION_BYTE);
-        bytes.extend(&self.session.to_le_bytes());
-        bytes.extend(&signing_key);
-        bytes.extend(&proof_of_quota);
-        bytes.extend(&proof_of_selection);
+impl NomEncode for ActivityProof {
+    fn encode(&self) -> Vec<u8> {
+        let mut bytes = vec![BLEND_ACTIVE_METADATA_VERSION_BYTE];
+        bytes.extend(self.epoch.encode());
+        bytes.extend(self.signing_key.encode());
+        bytes.extend(self.proof_of_quota.encode());
+        bytes.extend(self.proof_of_selection.encode());
         bytes
     }
+}
 
-    /// Parse metadata bytes using `nom` combinators
-    pub fn from_metadata_bytes(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(parse_activity_proof(bytes)
-            .map_err(|e| format!("Failed to parse metadata: {e}"))?
-            .1)
+impl NomDecode for ActivityProof {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (remaining_bytes, proof_version) = u8::decode(bytes)?;
+        if proof_version != BLEND_ACTIVE_METADATA_VERSION_BYTE {
+            return Err(nom::Err::Error(Error::new(bytes, ErrorKind::Fail)));
+        }
+        let (bytes, epoch) = Epoch::decode(remaining_bytes)?;
+        let (bytes, signing_key) = Ed25519PublicKey::decode(bytes)?;
+        let (bytes, proof_of_quota) = ProofOfQuota::decode(bytes)?;
+        let (bytes, proof_of_selection) = ProofOfSelection::decode(bytes)?;
+        Ok((
+            bytes,
+            Self {
+                epoch,
+                signing_key,
+                proof_of_quota,
+                proof_of_selection,
+            },
+        ))
     }
 }
 
-fn parse_activity_proof(input: &[u8]) -> IResult<&[u8], ActivityProof> {
-    let (input, metadata_type) = nom_u8(input)?;
-    if metadata_type != ACTIVE_METADATA_BLEND_TYPE {
-        return Err(nom::Err::Error(nom::error::Error::new(
-            input,
-            nom::error::ErrorKind::Verify,
-        )));
-    }
-
-    let (input, version) = nom_u8(input)?;
-    if version != BLEND_ACTIVE_METADATA_VERSION_BYTE {
-        return Err(nom::Err::Error(nom::error::Error::new(
-            input,
-            nom::error::ErrorKind::Verify,
-        )));
-    }
-    let (input, session) = parse_session_number(input)?;
-
-    let (input, signing_key) = parse_const_size_bytes::<ED25519_PUBLIC_KEY_SIZE>(input)?;
-    let signing_key = Ed25519PublicKey::from_bytes(&signing_key)
-        .map_err(|_| nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Fail)))?;
-
-    let (input, proof_of_quota) = parse_const_size_bytes::<PROOF_OF_QUOTA_SIZE>(input)?;
-    let proof_of_quota = proof_of_quota
-        .try_into()
-        .map_err(|_| nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Fail)))?;
-
-    let (input, proof_of_selection) = parse_const_size_bytes::<PROOF_OF_SELECTION_SIZE>(input)?;
-    let proof_of_selection = proof_of_selection
-        .try_into()
-        .map_err(|_| nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Fail)))?;
-
-    if !input.is_empty() {
-        return Err(nom::Err::Error(nom::error::Error::new(
-            input,
-            nom::error::ErrorKind::Eof,
-        )));
-    }
-
-    Ok((
-        input,
-        ActivityProof {
-            session,
-            signing_key,
-            proof_of_quota,
-            proof_of_selection,
-        },
-    ))
-}
-
-fn parse_const_size_bytes<const N: usize>(input: &[u8]) -> IResult<&[u8], [u8; N]> {
-    let (input, data) = take(N).parse(input)?;
-    let data: [u8; N] = data
-        .try_into()
-        .map_err(|_| nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Fail)))?;
-    Ok((input, data))
-}
+// TODO: Remove once the `NomCodec` macro supports logic for custom tags.
 
 #[cfg(test)]
 mod tests {
-    use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
-    use lb_key_management_system_keys::keys::Ed25519Key;
+    use lb_blend_proofs::{
+        quota::{ProofOfQuota, VerifiedProofOfQuota},
+        selection::{ProofOfSelection, VerifiedProofOfSelection},
+    };
+    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey};
 
-    use super::*;
-    use crate::sdp::ActivityMetadata;
+    use crate::{
+        mantle::nom::{NomDecode as _, NomEncode as _},
+        sdp::{
+            ActivityMetadata,
+            blend::{ActivityProof, BLEND_ACTIVE_METADATA_VERSION_BYTE},
+        },
+    };
 
     #[test]
     fn activity_proof_roundtrip() {
         let proof = ActivityProof {
-            session: 10,
+            epoch: 10.into(),
             signing_key: new_signing_key(0),
             proof_of_quota: new_proof_of_quota_unchecked(0),
             proof_of_selection: new_proof_of_selection_unchecked(1),
         };
 
-        let bytes = proof.to_metadata_bytes();
-        let decoded = ActivityProof::from_metadata_bytes(&bytes).unwrap();
+        let bytes = proof.encode();
+        let (_, decoded) = ActivityProof::decode(&bytes).unwrap();
 
         assert_eq!(proof, decoded);
     }
@@ -136,40 +88,24 @@ mod tests {
     #[test]
     fn activity_proof_invalid_version() {
         let proof = ActivityProof {
-            session: 10,
+            epoch: 10.into(),
             signing_key: new_signing_key(0),
             proof_of_quota: new_proof_of_quota_unchecked(0),
             proof_of_selection: new_proof_of_selection_unchecked(1),
         };
-        let mut bytes = proof.to_metadata_bytes();
+        let mut bytes = proof.encode();
         bytes[0] = 0x99; // Invalid version
 
-        let result = ActivityProof::from_metadata_bytes(&bytes);
+        let result = ActivityProof::decode(&bytes);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Failed to parse"));
+        assert!(result.unwrap_err().to_string().contains("Parsing Error"));
     }
 
     #[test]
     fn activity_proof_too_short() {
         let bytes = vec![BLEND_ACTIVE_METADATA_VERSION_BYTE, 0x01, 0x02]; // Only 3 bytes
 
-        let result = ActivityProof::from_metadata_bytes(&bytes);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Eof"));
-    }
-
-    #[test]
-    fn activity_proof_too_long() {
-        let proof = ActivityProof {
-            session: 10,
-            signing_key: new_signing_key(0),
-            proof_of_quota: new_proof_of_quota_unchecked(0),
-            proof_of_selection: new_proof_of_selection_unchecked(1),
-        };
-        let mut bytes = proof.to_metadata_bytes();
-        bytes.push(0xFF); // An extra byte
-
-        let result = ActivityProof::from_metadata_bytes(&bytes);
+        let result = ActivityProof::decode(&bytes);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Eof"));
     }
@@ -177,15 +113,15 @@ mod tests {
     #[test]
     fn activity_metadata_roundtrip() {
         let proof = ActivityProof {
-            session: 10,
+            epoch: 10.into(),
             signing_key: new_signing_key(0),
             proof_of_quota: new_proof_of_quota_unchecked(0),
             proof_of_selection: new_proof_of_selection_unchecked(1),
         };
         let metadata = ActivityMetadata::Blend(Box::new(proof.clone()));
 
-        let bytes = metadata.to_metadata_bytes();
-        let decoded = ActivityMetadata::from_metadata_bytes(&bytes).unwrap();
+        let bytes = metadata.encode();
+        let (_, decoded) = ActivityMetadata::decode(&bytes).unwrap();
 
         assert_eq!(metadata, decoded);
 

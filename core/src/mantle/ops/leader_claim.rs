@@ -1,5 +1,6 @@
 use std::sync::LazyLock;
 
+use lb_core_macros::NomCodec;
 use lb_groth16::{fr_from_bytes, fr_to_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::{Digest, Fr, ZkHash};
@@ -8,11 +9,11 @@ use thiserror::Error;
 
 use crate::{
     crypto::ZkHasher,
-    events::Events,
+    events::{TxEvent, TxEventPayload},
     mantle::{
         Note, TxHash, Utxo, Value,
-        encoding::encode_leader_claim,
         ledger::{Operation, Utxos},
+        nom::NomEncode as _,
         ops::OpId,
     },
     proofs::leader_claim_proof::{
@@ -28,19 +29,19 @@ static VOUCHER_NF: LazyLock<Fr> = LazyLock::new(|| {
     fr_from_bytes(b"VOUCHER_NF").expect("BigUint should load from constant string")
 });
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize, NomCodec)]
 pub struct RewardsRoot(#[serde(with = "serde_fr")] ZkHash);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct VoucherSecret(#[serde(with = "serde_fr")] pub Fr);
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct VoucherNullifier(#[serde(with = "serde_fr")] ZkHash);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
 pub struct VoucherCm(#[serde(with = "serde_fr")] ZkHash);
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct LeaderClaimOp {
     pub rewards_root: RewardsRoot,
     pub voucher_nullifier: VoucherNullifier,
@@ -63,7 +64,7 @@ impl LeaderClaimOp {
 
 impl OpId for LeaderClaimOp {
     fn op_bytes(&self) -> Vec<u8> {
-        encode_leader_claim(self)
+        self.encode()
     }
 }
 
@@ -168,6 +169,7 @@ pub struct LeaderClaimExecutionContext {
     pub reward_amount: Value,
     pub claimable_rewards: Value,
     pub utxos: Utxos,
+    pub tx_hash: TxHash,
 }
 
 impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
@@ -190,6 +192,7 @@ impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
 
         // Check the proof of claim
         if !ctx.proof_of_claim.verify(&LeaderClaimPublic {
+            voucher_nullifier: self.voucher_nullifier.into(),
             voucher_root: ctx.claimable_vouchers_root.0,
             mantle_tx_hash: ctx.tx_hash.to_fr(),
         }) {
@@ -202,7 +205,7 @@ impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         // Add the nullifier to the nullifier set
         ctx.nullifiers = ctx.nullifiers.insert(self.voucher_nullifier);
 
@@ -212,8 +215,19 @@ impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
 
         // Remove the distributed rewards from the pool
         ctx.claimable_rewards -= ctx.reward_amount;
+        let tx_hash = ctx.tx_hash;
 
-        Ok((ctx, Events::new()))
+        Ok((
+            ctx,
+            vec![TxEvent::new(
+                tx_hash,
+                self.op_id(),
+                TxEventPayload::LeaderRewardClaimed {
+                    voucher_nullifier: self.voucher_nullifier,
+                    utxo,
+                },
+            )],
+        ))
     }
 }
 
@@ -234,7 +248,11 @@ mod tests {
         let voucher_root = RewardsRoot::from(mmr.frontier_root());
         let tx_hash = TxHash::from([11u8; 32]);
         let proof = Groth16LeaderClaimProof::prove(LeaderClaimPrivate::new(
-            LeaderClaimPublic::new(voucher_root.into(), tx_hash.to_fr()),
+            LeaderClaimPublic::new(
+                VoucherNullifier::from_secret(voucher_secret).into(),
+                voucher_root.into(),
+                tx_hash.to_fr(),
+            ),
             &voucher_path,
             voucher_secret,
         ))
@@ -253,5 +271,105 @@ mod tests {
         };
 
         assert_eq!(op.validate(&ctx), Ok(()));
+    }
+
+    #[test]
+    fn execute_emits_leader_reward_claimed_event() {
+        let voucher_secret = VoucherSecret::from(Fr::from(7u64));
+        let reward_amount = 38;
+        let pk = ZkPublicKey::zero();
+        let tx_hash = TxHash::from([11u8; 32]);
+        let op = LeaderClaimOp {
+            rewards_root: RewardsRoot::default(),
+            voucher_nullifier: VoucherNullifier::from_secret(voucher_secret),
+            pk,
+        };
+
+        let (ctx, events) = op
+            .execute(LeaderClaimExecutionContext {
+                nullifiers: rpds::HashTrieSetSync::new_sync(),
+                reward_amount,
+                claimable_rewards: 100,
+                utxos: Utxos::new(),
+                tx_hash,
+            })
+            .expect("leader claim execution should succeed");
+
+        assert!(ctx.nullifiers.contains(&op.voucher_nullifier));
+        assert_eq!(ctx.claimable_rewards, 62);
+        assert_eq!(
+            ctx.utxos.get(&op.utxo(reward_amount).id()),
+            Some(op.utxo(reward_amount))
+        );
+
+        let mut events = events.iter();
+        let Some(TxEvent {
+            tx_hash: event_tx_hash,
+            op_id,
+            payload:
+                TxEventPayload::LeaderRewardClaimed {
+                    voucher_nullifier,
+                    utxo,
+                },
+        }) = events.next()
+        else {
+            panic!("expected LeaderRewardClaimed tx event");
+        };
+        assert_eq!(*event_tx_hash, tx_hash);
+        assert_eq!(*op_id, op.op_id());
+        assert_eq!(*voucher_nullifier, op.voucher_nullifier);
+        assert_eq!(*utxo, op.utxo(reward_amount));
+        assert!(events.next().is_none());
+    }
+
+    /// Regression test for #2990 (reward double-claim).
+    ///
+    /// The op's `voucher_nullifier` is fed in as the proof's public input, so a
+    /// claim that supplies a nullifier other than the one the proof commits to
+    /// fails verification (`InvalidPoC`). This is what prevents re-claiming a
+    /// voucher under a different, unused nullifier to bypass the double-spend
+    /// set: the op's dedup key is bound to the proven voucher.
+    #[test]
+    fn validate_rejects_op_nullifier_not_matching_proof() {
+        let voucher_secret = VoucherSecret::from(Fr::from(7u64));
+        let voucher_cm = VoucherCm::from_secret(voucher_secret);
+        let (mmr, voucher_path) = MerkleMountainRange::<VoucherCm, ZkHasher>::new()
+            .push_with_paths(voucher_cm, &mut [])
+            .expect("MMR shouldn't be full");
+        let voucher_root = RewardsRoot::from(mmr.frontier_root());
+        let tx_hash = TxHash::from([11u8; 32]);
+        // Proof proves ownership of the voucher whose nullifier is
+        // `from_secret(voucher_secret)`.
+        let proof = Groth16LeaderClaimProof::prove(LeaderClaimPrivate::new(
+            LeaderClaimPublic::new(
+                VoucherNullifier::from_secret(voucher_secret).into(),
+                voucher_root.into(),
+                tx_hash.to_fr(),
+            ),
+            &voucher_path,
+            voucher_secret,
+        ))
+        .expect("proof generation should succeed");
+
+        // The claim supplies a DIFFERENT nullifier than the one the proof proves.
+        let bogus_nf = VoucherNullifier::from_secret(VoucherSecret::from(Fr::from(999u64)));
+        assert_ne!(bogus_nf, VoucherNullifier::from_secret(voucher_secret));
+        let op = LeaderClaimOp {
+            rewards_root: voucher_root,
+            voucher_nullifier: bogus_nf,
+            pk: ZkPublicKey::zero(),
+        };
+        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let ctx = LeaderClaimValidationContext {
+            nullifiers: &nullifiers,
+            claimable_vouchers_root: &voucher_root,
+            proof_of_claim: &proof,
+            tx_hash: &tx_hash,
+        };
+
+        // The proof is verified against `op.voucher_nullifier`, which does not
+        // match the proven voucher -> rejected. A voucher cannot be claimed under
+        // a substituted nullifier.
+        assert_eq!(op.validate(&ctx), Err(LeaderClaimError::InvalidPoC));
     }
 }

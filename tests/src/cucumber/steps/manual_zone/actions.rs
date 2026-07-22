@@ -1,67 +1,120 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, num::NonZero, time::Duration};
 
 use cucumber::gherkin::Step;
 use futures::future::join_all;
 use lb_common_http_client::CommonHttpClient;
-use lb_key_management_system_service::keys::ZkPublicKey;
-use lb_testing_framework::LbcManualCluster;
+use lb_core::mantle::{
+    TxHash, Utxo,
+    gas::GasCost,
+    ops::channel::{config::Keys, deposit::Metadata, inscribe::Inscription},
+};
+use lb_key_management_system_service::keys::Ed25519Key;
+use lb_testing_framework::NodeHttpClient;
 use lb_zone_sdk::{
     adapter::NodeHttpClient as ZoneNodeHttpClient,
     indexer::ZoneIndexer,
-    sequencer::{Event, PublishResult, SequencerCheckpoint, SequencerHandle, ZoneSequencer},
+    sequencer::{FundingConfig, ZoneSequencer},
 };
-use tokio::{sync::mpsc::Receiver, task::JoinHandle};
-use tracing::info;
+use tokio::{
+    sync::broadcast,
+    task::JoinHandle,
+    time::{error::Elapsed, timeout},
+};
+use tracing::warn;
 
 use super::{
     errors::{log_step_error, zone_step_error},
+    runner::{Event, PublishResult, SequencerCheckpoint, SequencerClient},
     steps::DEFAULT_ZONE_SEQUENCER,
     support::{
-        DiscardedPayloads, PublishDeadline, StartedZoneNode, ZoneAccountBalances,
-        balance_update_payload, build_zone_deposit, ensure_zone_transactions_included, keygen,
-        prepare_zone_cluster, publish_message_with_retry, sequencer_config,
-        start_balance_aware_policy, start_republish_policy, start_sequencer_event_loop,
-        start_sorted_conflict_policy, start_zone_node, submit_atomic_zone_deposit,
-        submit_zone_deposit, submit_zone_withdraw, wait_for_zone_network_ready,
+        AtomicZoneDepositRequest, CustomRepublishDeps, DiscardedPayloads, PublishDeadline,
+        ZoneAccountBalances, ZoneDeposit, build_zone_deposit, ensure_zone_transactions_included,
+        keygen, publish_atomic_zone_withdraw, publish_message_with_retry, sequencer_config,
+        sequencer_config_with_pending_submit_depth, start_balance_aware_policy,
+        start_custom_republish_policy, start_republish_lineage_policy, start_sequencer_event_loop,
+        start_sorted_conflict_policy, submit_atomic_zone_deposit, submit_zone_deposit,
+        submit_zone_withdraw,
     },
-    tables::{ConcurrentZoneMessageRow, ZoneBalanceRow, group_zone_messages_by_sequencer},
+    tables::{ConcurrentZoneMessageRow, ZoneNodeResourcesRow, group_zone_messages_by_sequencer},
 };
-use crate::cucumber::{
-    error::{StepError, StepResult},
-    steps::TARGET,
-    world::{CucumberWorld, NodeInfo},
+use crate::{
+    common::{
+        mantle_inscription::make_inscription, manual_cluster::wait_for_height,
+        wallet::WalletReservedInputs,
+    },
+    cucumber::{
+        error::{StepError, StepResult},
+        steps::{
+            TARGET,
+            manual_nodes::{
+                config_override::set_deployment_config_override,
+                utils::{
+                    NodesToStartUnordered, WalletStartInfo, start_node,
+                    start_nodes_order_respecting_dependencies,
+                },
+            },
+        },
+        wallet::sync::current_available_utxos_for_wallet,
+        world::{CucumberWorld, WalletInfo},
+    },
 };
 
 const ZONE_CHANNEL_WITHDRAW_THRESHOLD: u16 = 1;
 const ZONE_CHANNEL_DEPOSIT_THRESHOLD: u16 = 1;
+const SEQUENCER_READY_TIMEOUT: Duration = Duration::from_mins(2);
+const SEQUENCER_READY_POLL_TIMEOUT: Duration = Duration::from_secs(10);
+const SEQUENCER_READY_HEIGHT_ADVANCE_TIMEOUT: Duration = Duration::from_secs(30);
+const ZONE_SECURITY_PARAM: u32 = 5;
 
 pub(super) enum DriveMode {
-    Passive,
-    Republish,
+    Passive {
+        republish_orphans: bool,
+    },
+    RepublishLineage {
+        planned: Vec<Inscription>,
+    },
     Sorted {
         discarded: DiscardedPayloads,
     },
     BalanceAware {
         initial_balances: ZoneAccountBalances,
+        planned_payloads: Vec<Inscription>,
     },
+    CustomRepublish {
+        deps: Box<CustomRepublishDeps>,
+    },
+}
+
+impl DriveMode {
+    pub(super) const fn passive() -> Self {
+        Self::Passive {
+            republish_orphans: false,
+        }
+    }
+
+    pub(super) const fn passive_republish_orphans() -> Self {
+        Self::Passive {
+            republish_orphans: true,
+        }
+    }
 }
 
 struct PublishedZoneMessage {
     alias: String,
-    payload: Vec<u8>,
+    payload: Inscription,
     result: PublishResult,
 }
 
 struct StartedSequencerRuntime {
     task: JoinHandle<()>,
-    events: Option<Receiver<Event>>,
+    client: SequencerClient,
+    events: broadcast::Receiver<Event>,
+    checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
+    ready_rx: tokio::sync::watch::Receiver<bool>,
+    channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
+    turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
+    tx_status_rx: broadcast::Receiver<lb_zone_sdk::sequencer::TxStatusUpdate>,
     discarded_payloads: Option<DiscardedPayloads>,
-}
-
-pub(super) fn register_zone_sequencers(world: &mut CucumberWorld, aliases: Vec<String>) {
-    for alias in aliases {
-        world.zone.register_sequencer(alias, keygen());
-    }
 }
 
 pub(super) fn register_zone_sequencers_with_shared_key(
@@ -78,52 +131,97 @@ pub(super) fn register_zone_sequencers_with_shared_key(
     Ok(())
 }
 
-pub(super) async fn start_zone_cluster(world: &mut CucumberWorld, step: &Step) -> StepResult {
-    let zone_cluster = prepare_zone_cluster(world.scenario_base_dir.clone())
-        .map_err(|error| zone_step_error(step, &error))?;
+pub(super) async fn start_nodes_with_zone_resources(
+    world: &mut CucumberWorld,
+    step: &Step,
+    rows: Vec<ZoneNodeResourcesRow>,
+) -> StepResult {
+    apply_zone_timing_defaults(world, &step.value)?;
 
-    let funding_public_key = zone_cluster.funding_public_key;
-    let cluster = zone_cluster.cluster;
+    let nodes = collect_zone_nodes_to_start(&rows);
+    let nodes = start_nodes_order_respecting_dependencies(nodes).inspect_err(|error| {
+        warn!(target: TARGET, "Step `{}` error: {error}", step.value);
+    })?;
 
-    let started_zone_node = start_zone_node(&cluster, &world.scenario_base_dir)
-        .await
-        .map_err(|error| zone_step_error(step, &error))?;
+    for (node_name, wallet_start_info, mut initial_peers) in nodes {
+        initial_peers.sort();
+        initial_peers.dedup();
 
-    wait_for_zone_network_ready(&cluster)
-        .await
-        .map_err(|error| zone_step_error(step, &error))?;
+        start_node(
+            world,
+            &step.value,
+            &node_name,
+            &wallet_start_info,
+            &initial_peers,
+            false,
+        )
+        .await?;
+    }
 
-    let client = started_zone_node.started_node.client.clone();
-
-    remember_zone_cluster(world, cluster, started_zone_node, funding_public_key);
-
-    info!(target: TARGET, node_url = %client.base_url(), "Started zone cluster");
-
-    Ok(())
+    register_zone_resources(world, rows)
 }
 
-fn remember_zone_cluster(
-    world: &mut CucumberWorld,
-    cluster: LbcManualCluster,
-    started_zone_node: StartedZoneNode,
-    funding_public_key: ZkPublicKey,
-) {
-    let node_name = "NODE_1".to_owned();
-
-    world.local_cluster = Some(cluster);
-    world.nodes_info.insert(
-        node_name.clone(),
-        NodeInfo {
-            name: node_name.clone(),
-            started_node: started_zone_node.started_node,
-            run_config: None,
-            chain_info: HashMap::default(),
-            wallet_info: HashMap::default(),
-            runtime_dir: started_zone_node.runtime_dir,
-            immediate_start: false,
-        },
+fn apply_zone_timing_defaults(world: &mut CucumberWorld, step: &str) -> StepResult {
+    world.set_cryptarchia_security_param(
+        NonZero::new(ZONE_SECURITY_PARAM).expect("zone security parameter is non-zero"),
     );
-    world.zone.initialize_cluster(node_name, funding_public_key);
+    world.set_prolonged_bootstrap_period(Duration::ZERO);
+
+    set_deployment_config_override(world, step, "time.slot_duration", "seconds(1)")?;
+    set_deployment_config_override(
+        world,
+        step,
+        "cryptarchia.slot_activation_coeff.numerator",
+        "1",
+    )?;
+    set_deployment_config_override(
+        world,
+        step,
+        "cryptarchia.slot_activation_coeff.denominator",
+        "2",
+    )
+}
+
+fn collect_zone_nodes_to_start(rows: &[ZoneNodeResourcesRow]) -> NodesToStartUnordered {
+    let mut nodes = HashMap::new();
+
+    for row in rows {
+        let entry = nodes
+            .entry(row.node_name.clone())
+            .or_insert_with(|| (Vec::new(), Vec::new()));
+
+        entry.0.push(WalletStartInfo {
+            wallet_name: row.wallet_name.clone(),
+            account_index: row.account_index,
+        });
+
+        if let Some(peer) = &row.connected_to {
+            entry.1.push(peer.clone());
+        }
+    }
+
+    nodes
+}
+
+fn register_zone_resources(
+    world: &mut CucumberWorld,
+    rows: Vec<ZoneNodeResourcesRow>,
+) -> StepResult {
+    for row in rows {
+        for alias in row.sequencers {
+            if !world.zone.has_sequencer(&alias) {
+                world.zone.register_sequencer(alias.clone(), keygen());
+            }
+
+            world.zone.attach_sequencer_resources(
+                &alias,
+                row.node_name.clone(),
+                row.wallet_name.clone(),
+            )?;
+        }
+    }
+
+    Ok(())
 }
 
 pub(super) async fn submit_zone_channel_config(
@@ -135,21 +233,38 @@ pub(super) async fn submit_zone_channel_config(
     posting_timeframe: u32,
     posting_timeout: u32,
 ) -> StepResult {
-    let handle = log_step_error(step, world.zone.sequencer_handle(sequencer_alias))?;
-    let mut authorized_keys = vec![
-        world
-            .zone
-            .sequencer_signing_key(sequencer_alias)?
-            .public_key(),
-    ];
+    let handle = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?;
+    let mut ordered_aliases = vec![sequencer_alias.to_owned()];
 
     for alias in authorized_aliases {
-        authorized_keys.push(world.zone.sequencer_signing_key(&alias)?.public_key());
+        if ordered_aliases.iter().any(|existing| existing == &alias) {
+            continue;
+        }
+
+        ordered_aliases.push(alias);
     }
 
-    let (result, finalized) = handle
+    let authorized_keys = ordered_aliases
+        .into_iter()
+        .map(|alias| {
+            world
+                .zone
+                .sequencer_signing_key(&alias)
+                .map(Ed25519Key::public_key)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut checkpoint_rx = world
+        .zone
+        .checkpoint_receiver(sequencer_alias)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("Zone sequencer '{sequencer_alias}' has no checkpoint watch"),
+        })?;
+    checkpoint_rx.mark_unchanged();
+
+    let (result, post_call_checkpoint, _signed_tx) = handle
         .channel_config(
-            authorized_keys,
+            Keys::new_unchecked(authorized_keys),
             posting_timeframe.into(),
             posting_timeout.into(),
             ZONE_CHANNEL_WITHDRAW_THRESHOLD,
@@ -160,16 +275,37 @@ pub(super) async fn submit_zone_channel_config(
             message: format!("Zone channel_config failed: {error}"),
         })?;
 
-    drop(finalized);
+    // Sanity-check the inline checkpoint already mentions our tx; the
+    // event-stream watcher below also catches it once the drive task
+    // re-publishes its checkpoint after the next block.
+    let tx_hash = result.inscription_id();
+    let checkpoint = if post_call_checkpoint
+        .pending_txs
+        .iter()
+        .any(|(hash, _)| *hash == tx_hash)
+    {
+        post_call_checkpoint
+    } else {
+        timeout(
+            Duration::from_secs(30),
+            wait_for_checkpoint_with_tx(&mut checkpoint_rx, tx_hash),
+        )
+        .await
+        .map_err(|_| StepError::LogicalError {
+            message: format!(
+                "timed out waiting for sequencer '{sequencer_alias}' checkpoint to include {tx_hash:?}",
+            ),
+        })?
+        .map_err(|message| StepError::LogicalError { message })?
+    };
 
     world
         .zone
-        .set_latest_checkpoint_for(sequencer_alias, result.checkpoint.clone());
-    world.zone.remember_checkpoint(
-        format!("{transaction_alias}_CHECKPOINT"),
-        result.checkpoint.clone(),
-    );
-    world.remember_submitted_transaction(transaction_alias, result.inscription_id);
+        .set_latest_checkpoint_for(sequencer_alias, checkpoint.clone());
+    world
+        .zone
+        .remember_checkpoint(format!("{transaction_alias}_CHECKPOINT"), checkpoint);
+    world.remember_submitted_transaction(transaction_alias, tx_hash);
 
     Ok(())
 }
@@ -197,20 +333,67 @@ pub(super) fn save_zone_checkpoint(
     Ok(())
 }
 
-fn remember_published_zone_message(
+pub(super) fn remember_published_zone_message(
     world: &mut CucumberWorld,
     sequencer_alias: &str,
     message_alias: String,
-    payload: Vec<u8>,
+    payload: Inscription,
     result: &PublishResult,
 ) {
+    let checkpoint = world.zone.current_checkpoint_for(sequencer_alias).ok();
     world.zone.remember_zone_message(
         message_alias,
         payload,
-        Some(result.inscription_id),
+        Some(result.inscription_id()),
         Some(sequencer_alias),
-        Some(result.checkpoint.clone()),
+        checkpoint,
     );
+}
+
+async fn wait_for_checkpoint_with_tx(
+    rx: &mut tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
+    tx_hash: TxHash,
+) -> Result<SequencerCheckpoint, String> {
+    loop {
+        let snapshot = rx.borrow_and_update().clone();
+        if let Some(checkpoint) = snapshot
+            && checkpoint
+                .pending_txs
+                .iter()
+                .any(|(hash, _)| *hash == tx_hash)
+        {
+            return Ok(checkpoint);
+        }
+
+        rx.changed()
+            .await
+            .map_err(|error| format!("checkpoint watch closed: {error}"))?;
+    }
+}
+
+fn resolve_zone_wallet(
+    world: &CucumberWorld,
+    sequencer_alias: &str,
+) -> Result<WalletInfo, StepError> {
+    let wallet_name = world.zone.sequencer_default_wallet_name(sequencer_alias)?;
+
+    world.resolve_wallet(wallet_name)
+}
+
+fn record_zone_wallet_submission(
+    world: &CucumberWorld,
+    wallet_name: &str,
+    tx_hash: TxHash,
+    reserved_inputs: Vec<Utxo>,
+) -> StepResult {
+    world.with_wallets_mut(|wallets| {
+        wallets.record_wallet_reservation(
+            wallet_name.to_owned(),
+            tx_hash,
+            WalletReservedInputs::new(reserved_inputs, Vec::new()),
+            0,
+        );
+    })
 }
 
 pub(super) async fn submit_zone_deposit_transaction(
@@ -219,27 +402,34 @@ pub(super) async fn submit_zone_deposit_transaction(
     transaction_alias: String,
     channel_alias: String,
     amount: u64,
-    metadata: String,
+    metadata: Metadata,
 ) -> StepResult {
-    let node_url = log_step_error(step, world.zone_node_url())?;
-    let funding_public_key = log_step_error(step, world.zone.funding_public_key())?;
-    let deposit = build_zone_deposit(
-        &node_url,
+    let node_url = log_step_error(step, world.zone_node_url_for_sequencer(&channel_alias))?;
+    let wallet = log_step_error(step, resolve_zone_wallet(world, &channel_alias))?;
+    let public_key = log_step_error(step, wallet.public_key())?;
+    let available_utxos = log_step_error(
+        step,
+        current_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
+    )?;
+    let ZoneDeposit {
+        deposit,
+        reserved_inputs,
+    } = build_zone_deposit(
+        available_utxos,
         world.zone.sequencer_channel_id(&channel_alias)?,
-        funding_public_key,
         amount,
-        metadata.into_bytes(),
+        metadata,
     )
-    .await
     .map_err(|error| zone_step_error(step, &error))?;
 
-    let response = submit_zone_deposit(&node_url, &deposit, funding_public_key)
+    let response = submit_zone_deposit(&node_url, &deposit, public_key)
         .await
         .map_err(|error| zone_step_error(step, &error))?;
 
     world
         .zone
-        .remember_submitted_deposit(transaction_alias.clone(), deposit);
+        .remember_submitted_deposit(transaction_alias.clone(), deposit, amount);
+    record_zone_wallet_submission(world, &wallet.wallet_name, response, reserved_inputs)?;
     world.remember_submitted_transaction(transaction_alias, response);
 
     Ok(())
@@ -252,28 +442,36 @@ pub(super) async fn submit_atomic_zone_deposit_transaction(
     transaction_alias: String,
     message_alias: String,
     amount: u64,
-    metadata: String,
+    metadata: Metadata,
 ) -> StepResult {
-    let node_url = log_step_error(step, world.zone_node_url())?;
-    let funding_public_key = log_step_error(step, world.zone.funding_public_key())?;
-    let sequencer = log_step_error(step, world.zone.sequencer_handle(sequencer_alias))?;
-    let inscription_data = format!("Mint {amount} to Alice").into_bytes();
+    let node_url = log_step_error(step, world.zone_node_url_for_sequencer(sequencer_alias))?;
+    let wallet = log_step_error(step, resolve_zone_wallet(world, sequencer_alias))?;
+    let public_key = log_step_error(step, wallet.public_key())?;
+    let available_utxos = log_step_error(
+        step,
+        current_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
+    )?;
+    let sequencer = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?;
+    let inscription_data = make_inscription(&format!("Mint {amount} to Alice"));
 
     let submission = submit_atomic_zone_deposit(
         &node_url,
         sequencer,
-        world.zone.sequencer_channel_id(sequencer_alias)?,
-        funding_public_key,
-        amount,
-        metadata.into_bytes(),
-        inscription_data.clone(),
+        AtomicZoneDepositRequest {
+            channel_id: world.zone.sequencer_channel_id(sequencer_alias)?,
+            funding_public_key: public_key,
+            available_utxos,
+            amount,
+            metadata,
+            inscription_data: inscription_data.clone(),
+        },
     )
     .await
     .map_err(|error| zone_step_error(step, &error))?;
 
     world
         .zone
-        .remember_submitted_deposit(transaction_alias.clone(), submission.deposit);
+        .remember_submitted_deposit(transaction_alias.clone(), submission.deposit, amount);
     remember_published_zone_message(
         world,
         sequencer_alias,
@@ -281,7 +479,13 @@ pub(super) async fn submit_atomic_zone_deposit_transaction(
         inscription_data,
         &submission.publish,
     );
-    world.remember_submitted_transaction(transaction_alias, submission.publish.inscription_id);
+    record_zone_wallet_submission(
+        world,
+        &wallet.wallet_name,
+        submission.publish.inscription_id(),
+        submission.reserved_inputs,
+    )?;
+    world.remember_submitted_transaction(transaction_alias, submission.publish.inscription_id());
 
     Ok(())
 }
@@ -294,14 +498,15 @@ pub(super) async fn submit_zone_withdraw_transaction(
     message_alias: String,
     amount: u64,
 ) -> StepResult {
-    let funding_public_key = log_step_error(step, world.zone.funding_public_key())?;
-    let sequencer = log_step_error(step, world.zone.sequencer_handle(sequencer_alias))?;
-    let inscription_data = format!("Burn {amount}").into_bytes();
+    let wallet = log_step_error(step, resolve_zone_wallet(world, sequencer_alias))?;
+    let public_key = log_step_error(step, wallet.public_key())?;
+    let sequencer = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?;
+    let inscription_data = make_inscription(&format!("Burn {amount}"));
 
     let submission = submit_zone_withdraw(
         sequencer,
         world.zone.sequencer_channel_id(sequencer_alias)?,
-        funding_public_key,
+        public_key,
         amount,
         inscription_data.clone(),
     )
@@ -318,7 +523,79 @@ pub(super) async fn submit_zone_withdraw_transaction(
         inscription_data,
         &submission.publish,
     );
-    world.remember_submitted_transaction(transaction_alias, submission.publish.inscription_id);
+    world.remember_submitted_transaction(transaction_alias, submission.publish.inscription_id());
+
+    Ok(())
+}
+
+/// Action wrapper for the new `publish_atomic_withdraw` SDK API. Mirrors
+/// [`submit_zone_withdraw_transaction`] but uses the high-level fire-and-forget
+/// flow: SDK fills the withdraw nonce, locates its own accredited-key index,
+/// builds the bundled `MantleTx`, signs locally, and submits.
+///
+/// `withdraw_rows` carries one `(alias, outputs)` per `WithdrawArg`; each
+/// withdraw is remembered under its own alias so multi-withdraw bundles can
+/// be asserted per-withdraw via the indexer step. `bundle_alias` is remembered
+/// as the bundle's tx hash for `zone transaction "..." is finalized`.
+pub(super) async fn publish_atomic_zone_withdraw_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: &str,
+    bundle_alias: String,
+    message_alias: String,
+    withdraw_rows: Vec<(String, Vec<u64>)>,
+) -> StepResult {
+    let wallet = log_step_error(step, resolve_zone_wallet(world, sequencer_alias))?;
+    let public_key = log_step_error(step, wallet.public_key())?;
+    let total: u64 = withdraw_rows
+        .iter()
+        .flat_map(|(_, outputs)| outputs.iter())
+        .sum();
+    let inscription_data = make_inscription(&format!("Burn {total}"));
+    let outputs_per_arg: Vec<Vec<u64>> = withdraw_rows
+        .iter()
+        .map(|(_, outputs)| outputs.clone())
+        .collect();
+
+    let submission = {
+        let sequencer = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?.clone();
+
+        publish_atomic_zone_withdraw(
+            &sequencer,
+            public_key,
+            outputs_per_arg,
+            inscription_data.clone(),
+            PublishDeadline::from_now(Duration::from_mins(3)),
+        )
+        .await
+        .map_err(|error| zone_step_error(step, &error))?
+    };
+
+    if submission.withdraws.len() != withdraw_rows.len() {
+        return Err(zone_step_error(
+            step,
+            &super::support::ZoneTestError::SubmitWithdraw {
+                message: format!(
+                    "atomic withdraw bundle produced {} withdraw ops, expected {}",
+                    submission.withdraws.len(),
+                    withdraw_rows.len(),
+                ),
+            },
+        ));
+    }
+    for ((alias, _), withdraw_op) in withdraw_rows.iter().zip(submission.withdraws) {
+        world
+            .zone
+            .remember_submitted_withdraw(alias.clone(), withdraw_op);
+    }
+    remember_published_zone_message(
+        world,
+        sequencer_alias,
+        message_alias,
+        inscription_data,
+        &submission.publish,
+    );
+    world.remember_submitted_transaction(bundle_alias, submission.publish.inscription_id());
 
     Ok(())
 }
@@ -329,7 +606,7 @@ pub(super) fn initialize_zone_indexer(
     sequencer_alias: impl AsRef<str>,
 ) -> StepResult {
     let sequencer_alias = sequencer_alias.as_ref();
-    let node_url = log_step_error(step, world.zone_node_url())?;
+    let node_url = log_step_error(step, world.zone_node_url_for_sequencer(sequencer_alias))?;
     let indexer = ZoneIndexer::new(
         world.zone.sequencer_channel_id(sequencer_alias)?,
         ZoneNodeHttpClient::new(CommonHttpClient::new(None), node_url),
@@ -344,29 +621,29 @@ pub(super) async fn publish_zone_messages(
     world: &mut CucumberWorld,
     step: &Step,
     sequencer_alias: impl AsRef<str>,
-    rows: Vec<(String, Vec<u8>)>,
+    rows: Vec<(String, Inscription)>,
 ) -> StepResult {
     let sequencer_alias = sequencer_alias.as_ref().to_owned();
-    let node = log_step_error(step, world.zone_node_http_client())?;
+    let node = log_step_error(
+        step,
+        world.zone_node_http_client_for_sequencer(&sequencer_alias),
+    )?;
 
     let published = {
         let sequencer =
-            log_step_error(step, world.zone.sequencer_handle(&sequencer_alias))?.clone();
-        let sequencer_events =
-            log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
+            log_step_error(step, world.zone.sequencer_client(&sequencer_alias))?.clone();
 
         let publish_deadline = PublishDeadline::from_now(Duration::from_mins(3));
         let mut published = Vec::with_capacity(rows.len());
 
         for (alias, payload) in &rows {
-            let result =
-                publish_message_with_retry(&sequencer, sequencer_events, payload, publish_deadline)
-                    .await
-                    .map_err(|error| zone_step_error(step, &error))?;
+            let result = publish_message_with_retry(&sequencer, payload, publish_deadline)
+                .await
+                .map_err(|error| zone_step_error(step, &error))?;
 
             ensure_zone_transactions_included(
                 &node,
-                &[result.inscription_id],
+                &[result.inscription_id()],
                 Duration::from_mins(3),
             )
             .await
@@ -404,7 +681,7 @@ pub(super) async fn publish_zone_messages_concurrently(
     let handles = grouped
         .keys()
         .map(|sequencer_alias| {
-            log_step_error(step, world.zone.sequencer_handle(sequencer_alias))
+            log_step_error(step, world.zone.sequencer_client(sequencer_alias))
                 .map(|handle| (sequencer_alias.clone(), handle.clone()))
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -417,7 +694,7 @@ pub(super) async fn publish_zone_messages_concurrently(
 
         async move {
             for payload in payloads {
-                handle.publish_message(payload).await.map_err(|error| {
+                handle.publish(payload).await.map_err(|error| {
                     StepError::LogicalError {
                         message: format!(
                             "Zone concurrent publish failed for sequencer '{sequencer_alias}': {error}"
@@ -446,27 +723,6 @@ pub(super) async fn publish_zone_messages_concurrently(
     Ok(())
 }
 
-pub(super) async fn publish_balance_updates_concurrently(
-    world: &mut CucumberWorld,
-    step: &Step,
-    rows: Vec<ZoneBalanceRow>,
-) -> StepResult {
-    let message_rows = rows
-        .into_iter()
-        .map(|row| {
-            let payload = balance_update_payload(&row.message_alias, &row.account, row.delta);
-
-            ConcurrentZoneMessageRow {
-                sequencer_alias: row.sequencer_alias,
-                message_alias: row.message_alias,
-                payload,
-            }
-        })
-        .collect();
-
-    publish_zone_messages_concurrently(world, step, message_rows).await
-}
-
 pub(super) async fn start_named_sequencer(
     world: &mut CucumberWorld,
     step: &Step,
@@ -474,72 +730,184 @@ pub(super) async fn start_named_sequencer(
     checkpoint: Option<SequencerCheckpoint>,
     mode: DriveMode,
 ) -> StepResult {
+    start_named_sequencer_with_config(
+        world,
+        step,
+        sequencer_alias,
+        checkpoint,
+        mode,
+        sequencer_config(),
+    )
+    .await
+}
+
+pub(super) async fn start_named_sequencer_with_pending_submit_depth(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: impl AsRef<str>,
+    checkpoint: Option<SequencerCheckpoint>,
+    mode: DriveMode,
+    max_pending_publish_depth: usize,
+) -> StepResult {
+    let config = sequencer_config_with_pending_submit_depth(max_pending_publish_depth);
+
+    start_named_sequencer_with_config(world, step, sequencer_alias, checkpoint, mode, config).await
+}
+
+async fn start_named_sequencer_with_config(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: impl AsRef<str>,
+    checkpoint: Option<SequencerCheckpoint>,
+    mode: DriveMode,
+    config: lb_zone_sdk::sequencer::SequencerConfig,
+) -> StepResult {
     let sequencer_alias = sequencer_alias.as_ref().to_owned();
     let signing_key =
         log_step_error(step, world.zone.sequencer_signing_key(&sequencer_alias))?.clone();
-    let node_url = log_step_error(step, world.zone_node_url())?;
-    let (sequencer, mut handle) = ZoneSequencer::init_with_config(
+    let node_client = log_step_error(
+        step,
+        world.zone_node_http_client_for_sequencer(&sequencer_alias),
+    )?;
+    let node_url = log_step_error(step, world.zone_node_url_for_sequencer(&sequencer_alias))?;
+    // Fund sequencer transactions from the node's own funding wallet. Falls
+    // back to fee-less transactions when the node has no registered funding
+    // wallet (only viable on zero-gas-price clusters).
+    let funding = world
+        .zone
+        .sequencer_node_name(&sequencer_alias)
+        .and_then(|node_name| world.resolve_wallet(&format!("{node_name}_WALLET")))
+        .and_then(|wallet| wallet.public_key())
+        .map(|funding_pk| FundingConfig {
+            funding_pk,
+            max_tx_fee: GasCost::new(u64::MAX),
+        })
+        .ok();
+    let config = lb_zone_sdk::sequencer::SequencerConfig { funding, ..config };
+    let sequencer = ZoneSequencer::init_with_config(
         world.zone.sequencer_channel_id(&sequencer_alias)?,
         signing_key,
         ZoneNodeHttpClient::new(CommonHttpClient::new(None), node_url),
-        sequencer_config(),
+        config,
         checkpoint,
     );
 
-    let runtime = start_sequencer_runtime(sequencer, handle.clone(), mode);
+    let runtime = start_sequencer_runtime(sequencer, mode);
+    let mut ready_rx = runtime.ready_rx.clone();
 
-    handle.wait_ready().await;
+    if let Err(error) =
+        wait_for_sequencer_ready(&sequencer_alias, &node_client, &mut ready_rx).await
+    {
+        runtime.task.abort();
+        return Err(error);
+    }
 
     world.zone.set_sequencer_runtime(
         sequencer_alias,
-        handle,
+        runtime.client,
         runtime.task,
         runtime.events,
+        runtime.checkpoint_rx,
+        runtime.ready_rx,
+        runtime.channel_view_rx,
+        runtime.turn_to_write_rx,
+        runtime.tx_status_rx,
         runtime.discarded_payloads,
     );
 
     Ok(())
 }
 
-fn start_sequencer_runtime(
-    sequencer: ZoneSequencer<ZoneNodeHttpClient>,
-    handle: SequencerHandle<ZoneNodeHttpClient>,
-    mode: DriveMode,
-) -> StartedSequencerRuntime {
-    match mode {
-        DriveMode::Passive => {
-            let (task, events) = start_sequencer_event_loop(sequencer);
+async fn wait_for_sequencer_ready(
+    sequencer_alias: &str,
+    node_client: &NodeHttpClient,
+    ready_rx: &mut tokio::sync::watch::Receiver<bool>,
+) -> StepResult {
+    timeout(SEQUENCER_READY_TIMEOUT, async {
+        let mut last_height = node_client.consensus_info().await?.cryptarchia_info.height;
 
-            StartedSequencerRuntime {
-                task,
-                events: Some(events),
-                discarded_payloads: None,
+        loop {
+            let poll = timeout(SEQUENCER_READY_POLL_TIMEOUT, async {
+                loop {
+                    if ready_rx.changed().await.is_err() {
+                        return Err(());
+                    }
+                    if *ready_rx.borrow() {
+                        return Ok(());
+                    }
+                }
+            })
+            .await;
+            if matches!(poll, Ok(Ok(()))) {
+                return Ok(());
             }
+
+            let _ = wait_for_height(
+                node_client,
+                last_height.saturating_add(1),
+                SEQUENCER_READY_HEIGHT_ADVANCE_TIMEOUT,
+            )
+            .await;
+
+            last_height = node_client
+                .consensus_info()
+                .await?
+                .cryptarchia_info
+                .height
+                .max(last_height);
         }
-        DriveMode::Republish => StartedSequencerRuntime {
-            task: start_republish_policy(sequencer, handle),
-            events: None,
-            discarded_payloads: None,
-        },
-        DriveMode::Sorted { discarded } => StartedSequencerRuntime {
-            task: start_sorted_conflict_policy(sequencer, handle, Arc::clone(&discarded)),
-            events: None,
-            discarded_payloads: Some(discarded),
-        },
-        DriveMode::BalanceAware { initial_balances } => StartedSequencerRuntime {
-            task: start_balance_aware_policy(sequencer, handle, initial_balances),
-            events: None,
-            discarded_payloads: None,
-        },
+    })
+    .await
+    .map_err(|_: Elapsed| StepError::Timeout {
+        message: format!(
+            "Sequencer `{sequencer_alias}` did not become ready within {} seconds",
+            SEQUENCER_READY_TIMEOUT.as_secs()
+        ),
+    })?
+}
+
+fn from_policy_runtime(
+    rt: super::support::PolicyRuntime,
+    discarded_payloads: Option<DiscardedPayloads>,
+) -> StartedSequencerRuntime {
+    StartedSequencerRuntime {
+        task: rt.task,
+        client: rt.client,
+        events: rt.events,
+        checkpoint_rx: rt.checkpoint_rx,
+        ready_rx: rt.ready_rx,
+        channel_view_rx: rt.channel_view_rx,
+        turn_to_write_rx: rt.turn_to_write_rx,
+        tx_status_rx: rt.tx_status_rx,
+        discarded_payloads,
     }
 }
 
-pub(super) fn ensure_zone_sequencer_exists(world: &mut CucumberWorld, sequencer_alias: &str) {
-    if world.zone.sequencer_signing_key(sequencer_alias).is_ok() {
-        return;
+fn start_sequencer_runtime(
+    sequencer: ZoneSequencer<ZoneNodeHttpClient>,
+    mode: DriveMode,
+) -> StartedSequencerRuntime {
+    match mode {
+        DriveMode::Passive { republish_orphans } => from_policy_runtime(
+            start_sequencer_event_loop(sequencer, republish_orphans),
+            None,
+        ),
+        DriveMode::RepublishLineage { planned } => {
+            from_policy_runtime(start_republish_lineage_policy(sequencer, planned), None)
+        }
+        DriveMode::Sorted { discarded } => from_policy_runtime(
+            start_sorted_conflict_policy(sequencer, &discarded),
+            Some(discarded),
+        ),
+        DriveMode::BalanceAware {
+            initial_balances,
+            planned_payloads,
+        } => from_policy_runtime(
+            start_balance_aware_policy(sequencer, initial_balances, planned_payloads),
+            None,
+        ),
+        DriveMode::CustomRepublish { deps } => {
+            from_policy_runtime(start_custom_republish_policy(sequencer, *deps), None)
+        }
     }
-
-    world
-        .zone
-        .register_sequencer(sequencer_alias.to_owned(), keygen());
 }

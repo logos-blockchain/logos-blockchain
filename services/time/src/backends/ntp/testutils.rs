@@ -4,10 +4,13 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use lb_log_targets::time as log_targets_time;
 use log::info;
 use sntpc::NtpResult;
 use time::{Date, Month, OffsetDateTime, Time, error::ComponentRange};
 use tokio::net::UdpSocket;
+
+const LOG_TARGET: &str = log_targets_time::ntp::ROOT;
 
 // NTP epoch starts on Jan 1, 1900; Unix starts on Jan 1, 1970.
 static NTP_EPOCH_OFFSET: LazyLock<Duration> = LazyLock::new(|| {
@@ -108,7 +111,7 @@ impl<TimestampGenerator: TimestampGeneratorTrait + Send + Sync> FakeNTPServer<Ti
         let socket = UdpSocket::bind(self.socket_address)
             .await
             .expect("Failed to bind socket");
-        info!("NTP server listening at: {:?}", self.socket_address);
+        info!(target: LOG_TARGET, "NTP server listening at: {:?}", self.socket_address);
 
         loop {
             let mut buffer = [0u8; 48];
@@ -124,7 +127,7 @@ impl<TimestampGenerator: TimestampGeneratorTrait + Send + Sync> FakeNTPServer<Ti
                     .await
                     .expect("Failed to send data");
             } else {
-                info!("Failed to receive data");
+                info!(target: LOG_TARGET, "Failed to receive data");
             }
         }
     }
@@ -217,7 +220,7 @@ mod tests {
             .try_into()
             .expect("Failed to convert response to OffsetDateTime");
 
-        trace!("Received timestamp from NTP server: {response_datetime}");
+        trace!(target: LOG_TARGET, "Received timestamp from NTP server: {response_datetime}");
 
         server_handle.abort();
     }

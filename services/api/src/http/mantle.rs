@@ -1,5 +1,5 @@
 use core::fmt::Debug;
-use std::{collections::BTreeSet, fmt::Display, num::NonZeroUsize, ops::RangeInclusive};
+use std::{collections::HashMap, fmt::Display, num::NonZeroUsize, ops::RangeInclusive};
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt as _, future::join_all};
@@ -13,8 +13,9 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction, TxHash, channel::ChannelState, ops::channel::ChannelId},
-    sdp::Declaration,
+    sdp::{Declaration, DeclarationId},
 };
+use lb_log_targets::api;
 use lb_storage_service::{
     StorageMsg, StorageService,
     api::{
@@ -37,6 +38,8 @@ use crate::http::{
     consensus::{Cryptarchia, cryptarchia_ledger_state},
     errors::BlockSlotRangeError,
 };
+
+const LOG_TARGET: &str = api::http::MANTLE;
 
 /// A block along with the current chain state (tip and LIB) at the time it was
 /// processed. This allows clients to track the canonical chain without needing
@@ -231,7 +234,8 @@ where
         + Sync
         + Display
         + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
-        + AsServiceId<ConsensusService>,
+        + AsServiceId<ConsensusService>
+        + 'static,
 {
     let processed_blocks_stream =
         get_processed_blocks_event_stream::<Transaction, ConsensusService, RuntimeServiceId>(
@@ -333,7 +337,10 @@ where
     let mut blocks = Vec::with_capacity(header_ids.len().min(blocks_limit));
     for header_id in header_ids {
         let Some(block) = storage_adapter.get_block(&header_id).await else {
-            warn!("missing block body for indexed header {header_id}, skipping");
+            warn!(
+                target: LOG_TARGET,
+                "missing block body for indexed header {header_id}, skipping"
+            );
             continue;
         };
         blocks.push(BlockWithChainState {
@@ -415,17 +422,31 @@ where
 
     let mut blocks = Vec::with_capacity(limit.min(1024));
     let mut current_id = chain_info.tip;
+    let gated_slot_from = slot_from.max(chain_info.lib_slot.strict_add(1.into()));
+    if gated_slot_from > slot_to {
+        return Ok(Vec::new());
+    }
     let mut retried = false;
 
     loop {
+        // This function only serves the mutable window. Once we hit LIB we are below
+        // the requested mutable range and should stop without loading the body.
+        if current_id == chain_info.lib {
+            break;
+        }
+
         let Some(block) = storage_adapter.get_block(&current_id).await else {
             if retried {
                 return Err(format!(
-                    "canonical chain inconsistency: missing block for canonical header {current_id}"
+                    "canonical chain inconsistency: missing block {current_id} while traversing \
+                    mutable chain anchored at LIB {}",
+                    chain_info.lib
                 )
                 .into());
             }
 
+            // Retry once from the latest tip if the original tip is not yet available.
+            // The original LIB remains the anchor for this request.
             let refreshed_info =
                 crate::http::consensus::cryptarchia_info::<RuntimeServiceId>(handle).await?;
             current_id = refreshed_info.cryptarchia_info.tip;
@@ -438,7 +459,7 @@ where
         let slot = header.slot();
         let parent_id = header.parent_block();
 
-        if slot < slot_from {
+        if slot < gated_slot_from {
             break;
         }
 
@@ -456,8 +477,14 @@ where
             }
         }
 
+        // Defensive guard against malformed/self-parenting headers.
         if parent_id == current_id {
-            break;
+            return Err(format!(
+                "canonical chain inconsistency: block {current_id} at slot {slot:?} is its own\
+                 parent before anchored LIB {}",
+                chain_info.lib
+            )
+            .into());
         }
         current_id = parent_id;
     }
@@ -561,7 +588,7 @@ where
     let has_immutable_range = slot_from <= immutable_slot_to;
     // Mutable window starts strictly above LIB; LIB itself is served via immutable
     // index.
-    let mutable_slot_from = (chain_info.lib_slot + 1).max(slot_from);
+    let mutable_slot_from = (chain_info.lib_slot.strict_add(1.into())).max(slot_from);
     let has_mutable_range = !immutable_only && mutable_slot_from <= slot_to;
 
     let fetch_mutable = |remaining: usize, descending: bool| {
@@ -717,8 +744,11 @@ where
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId:
-        Debug + Sync + Display + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+    RuntimeServiceId: Debug
+        + Sync
+        + Display
+        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
+        + 'static,
 {
     let header_ids = get_immutable_blocks_header_ids(handle, from_slot, to_slot).await?;
 
@@ -769,8 +799,11 @@ where
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId:
-        Debug + Sync + Display + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+    RuntimeServiceId: Debug
+        + Sync
+        + Display
+        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
+        + 'static,
 {
     let relay = handle.relay().await?;
     let storage_adapter = StorageAdapter::<_, _, RuntimeServiceId>::new(relay).await;
@@ -783,7 +816,7 @@ where
 ///
 /// - `handle`: A reference to the `OverwatchHandle` to interact with the
 ///   runtime and storage service.
-/// - `tx_hashes`: The set of [`TxHash`]es to fetch.
+/// - `tx_hashes`: The ordered [`TxHash`]es to fetch.
 ///
 /// # Returns
 ///
@@ -791,7 +824,7 @@ where
 /// Returns a boxed `DynError` if any error occurs during processing.
 pub async fn get_transactions<Transaction, StorageBackend, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-    tx_hashes: BTreeSet<TxHash>,
+    tx_hashes: Vec<TxHash>,
 ) -> Result<
     impl Stream<Item = Transaction> + use<Transaction, StorageBackend, RuntimeServiceId>,
     super::DynError,
@@ -810,8 +843,11 @@ where
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId:
-        Debug + Sync + Display + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+    RuntimeServiceId: Debug
+        + Sync
+        + Display
+        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
+        + 'static,
 {
     let relay = handle.relay().await?;
     let storage_adapter = StorageAdapter::<_, _, RuntimeServiceId>::new(relay).await;
@@ -849,14 +885,15 @@ where
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    RuntimeServiceId:
-        Debug + Sync + Display + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+    RuntimeServiceId: Debug
+        + Sync
+        + Display
+        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
+        + 'static,
 {
-    let mut stream = get_transactions::<Transaction, StorageBackend, RuntimeServiceId>(
-        handle,
-        BTreeSet::from([tx_hash]),
-    )
-    .await?;
+    let mut stream =
+        get_transactions::<Transaction, StorageBackend, RuntimeServiceId>(handle, vec![tx_hash])
+            .await?;
 
     // Assume only one transaction is returned
     Ok(stream.next().await)
@@ -864,10 +901,15 @@ where
 
 pub async fn get_sdp_declarations<RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-) -> Result<Vec<Declaration>, super::DynError>
+) -> Result<HashMap<DeclarationId, Declaration>, super::DynError>
 where
-    RuntimeServiceId:
-        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + 'static,
 {
     let relay = handle.relay::<Cryptarchia<RuntimeServiceId>>().await?;
     let (sender, receiver) = oneshot::channel();
@@ -879,11 +921,30 @@ where
         .await
         .map_err(|(e, _)| e)?;
 
-    let declarations = receiver
-        .await?
-        .into_iter()
-        .map(|(_, declaration)| declaration)
-        .collect();
+    Ok(receiver.await?)
+}
 
-    Ok(declarations)
+pub async fn get_sdp_snapshot<RuntimeServiceId>(
+    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
+) -> Result<HashMap<DeclarationId, Declaration>, super::DynError>
+where
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + 'static,
+{
+    let relay = handle.relay::<Cryptarchia<RuntimeServiceId>>().await?;
+    let (sender, receiver) = oneshot::channel();
+
+    relay
+        .send(ConsensusMsg::GetSdpSnapshot {
+            reply_channel: sender,
+        })
+        .await
+        .map_err(|(e, _)| e)?;
+
+    Ok(receiver.await?)
 }

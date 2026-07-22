@@ -1,0 +1,11 @@
+services:
+
+  logos-blockchain-node:
+    build:
+      context: ..
+      dockerfile: deployment/Dockerfile
+    volumes:
+      - .:/etc/logos-blockchain
+    deploy:
+      replicas: ${DOCKER_COMPOSE_LIBP2P_REPLICAS:-1}
+    entrypoint: /etc/logos-blockchain/scripts/run_node.sh

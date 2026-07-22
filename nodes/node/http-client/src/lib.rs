@@ -1,30 +1,41 @@
-use std::{num::NonZero, sync::Arc};
+use std::sync::Arc;
 
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 pub use lb_chain_broadcast_service::BlockInfo;
 pub use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, Slot, State};
+pub use lb_core::events::{Event, Events, TxEventPayload};
 use lb_core::{
-    block::MAX_BLOCK_SIZE,
+    block::MAX_BLOCK_TRANSACTIONS_SIZE,
     header::{ContentId, HeaderId},
-    mantle::SignedMantleTx,
+    mantle::{SignedMantleTx, channel::ChannelState, ops::channel::ChannelId},
     proofs::leader_proof::Groth16LeaderProof,
     sdp::{DeclarationId, DeclarationMessage},
 };
 use lb_groth16::fr_to_bytes;
+pub use lb_http_api_common::TimeInfo;
 use lb_http_api_common::{
     MAX_BLOCKS_STREAM_BLOCKS, MAX_BLOCKS_STREAM_CHUNK_SIZE,
-    bodies::wallet::{
-        balance::WalletBalanceResponseBody,
-        transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+    bodies::{
+        blend::JoinBlendRequestBody,
+        mantle::GasPricesResponseBody,
+        wallet::{
+            balance::WalletBalanceResponseBody,
+            claimable_vouchers::WalletClaimableVouchersResponseBody,
+            fund::{WalletFundRequestBody, WalletFundResponseBody},
+            transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+        },
     },
     paths::{
-        BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CRYPTARCHIA_INFO,
-        CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX, SDP_POST_DECLARATION,
-        wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
+        BLEND_JOIN_NETWORK, BLOCK_EVENTS, BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM,
+        BLOCKS_STREAM, CHANNEL, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_CLAIM_VOUCHERS,
+        MANTLE_GAS_PRICES, MEMPOOL_ADD_TX, SDP_POST_DECLARATION, TIME_INFO,
+        wallet::{BALANCE, FUND, TRANSACTIONS_TRANSFER_FUNDS},
     },
+    queries::BlocksStreamQuery,
     settings::default_max_body_size,
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_log_targets::http_client;
 use log::warn;
 use reqwest::{Client, ClientBuilder, RequestBuilder, StatusCode, Url};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -32,6 +43,8 @@ use tokio_util::{
     codec::{FramedRead, LinesCodec},
     io::StreamReader,
 };
+
+const LOG_TARGET: &str = http_client::ROOT;
 
 /// Client-side header representation matching the server's
 /// `ApiHeaderSerializer`.
@@ -88,41 +101,6 @@ impl BasicAuthCredentials {
     }
 }
 
-#[derive(Default, Clone, Debug)]
-struct BlocksStreamQueryParams {
-    blocks_limit: Option<NonZero<usize>>,
-    slot_from: Option<u64>,
-    slot_to: Option<u64>,
-    descending: Option<bool>,
-    server_batch_size: Option<NonZero<usize>>,
-    immutable_only: Option<bool>,
-}
-
-impl BlocksStreamQueryParams {
-    fn append_to_url(&self, request_url: &mut Url) {
-        let mut query = request_url.query_pairs_mut();
-
-        if let Some(blocks_limit) = self.blocks_limit {
-            query.append_pair("blocks_limit", &blocks_limit.to_string());
-        }
-        if let Some(slot_from) = self.slot_from {
-            query.append_pair("slot_from", &slot_from.to_string());
-        }
-        if let Some(slot_to) = self.slot_to {
-            query.append_pair("slot_to", &slot_to.to_string());
-        }
-        if let Some(descending) = self.descending {
-            query.append_pair("descending", &descending.to_string());
-        }
-        if let Some(server_batch_size) = self.server_batch_size {
-            query.append_pair("server_batch_size", &server_batch_size.to_string());
-        }
-        if self.immutable_only == Some(true) {
-            query.append_pair("immutable_only", "true");
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct CommonHttpClient {
     client: Arc<Client>,
@@ -130,6 +108,10 @@ pub struct CommonHttpClient {
 }
 
 impl CommonHttpClient {
+    fn is_channel_not_found(body: &str) -> bool {
+        body.to_ascii_lowercase().contains("channel not found")
+    }
+
     #[must_use]
     pub fn new(basic_auth: Option<BasicAuthCredentials>) -> Self {
         let initial_stream_window_size: u32 =
@@ -257,6 +239,38 @@ impl CommonHttpClient {
         }
     }
 
+    /// Get the events emitted by execution of a block by its id.
+    pub async fn get_block_events(
+        &self,
+        base_url: Url,
+        id: HeaderId,
+    ) -> Result<Option<Events>, Error> {
+        let path = BLOCK_EVENTS
+            .trim_start_matches('/')
+            .replace(":id", &id.to_string());
+        let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
+
+        let mut request = self.client.get(request_url);
+        if let Some(basic_auth) = &self.basic_auth {
+            request = request.basic_auth(&basic_auth.username, basic_auth.password.as_deref());
+        }
+
+        let response = request.send().await.map_err(Error::Request)?;
+        let status = response.status();
+        let body = response.text().await.map_err(Error::Request)?;
+
+        match status {
+            StatusCode::OK => serde_json::from_str::<Events>(&body)
+                .map(Some)
+                .map_err(|e| Error::Server(format!("Failed to parse response: {e}"))),
+            StatusCode::NOT_FOUND => Ok(None),
+            StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server(body)),
+            _ => Err(Error::Server(format!(
+                "Unexpected response [{status}]: {body}",
+            ))),
+        }
+    }
+
     pub async fn post_transaction<Tx>(&self, base_url: Url, transaction: Tx) -> Result<(), Error>
     where
         Tx: Serialize + Send + Sync + 'static,
@@ -285,6 +299,69 @@ impl CommonHttpClient {
             .join(CRYPTARCHIA_INFO.trim_start_matches('/'))
             .map_err(Error::Url)?;
         self.get::<(), ChainServiceInfo>(request_url, None).await
+    }
+
+    /// Get the gas prices from the ledger state at `tip`, or at the current
+    /// tip when `tip` is `None`.
+    pub async fn gas_prices(
+        &self,
+        base_url: Url,
+        tip: Option<HeaderId>,
+    ) -> Result<GasPricesResponseBody, Error> {
+        let mut request_url = base_url
+            .join(MANTLE_GAS_PRICES.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        if let Some(t) = tip {
+            request_url
+                .query_pairs_mut()
+                .append_pair("tip", &t.to_string());
+        }
+
+        self.get::<(), GasPricesResponseBody>(request_url, None)
+            .await
+    }
+
+    /// Get time service info derived from deployment settings.
+    pub async fn time_info(&self, base_url: Url) -> Result<TimeInfo, Error> {
+        let request_url = base_url
+            .join(TIME_INFO.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.get::<(), TimeInfo>(request_url, None).await
+    }
+
+    /// Get channel state for a specific channel id.
+    pub async fn channel_state(
+        &self,
+        base_url: Url,
+        channel_id: ChannelId,
+    ) -> Result<Option<ChannelState>, Error> {
+        let path = CHANNEL
+            .trim_start_matches('/')
+            .replace(":id", &hex::encode(channel_id.as_ref()));
+        let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
+
+        let mut request = self.client.get(request_url);
+        if let Some(basic_auth) = &self.basic_auth {
+            request = request.basic_auth(&basic_auth.username, basic_auth.password.as_deref());
+        }
+
+        let response = request.send().await.map_err(Error::Request)?;
+        let status = response.status();
+        let body = response.text().await.map_err(Error::Request)?;
+
+        match status {
+            StatusCode::OK => serde_json::from_str::<ChannelState>(&body)
+                .map(Some)
+                .map_err(|e| Error::Server(format!("Failed to parse response: {e}"))),
+            StatusCode::NOT_FOUND => Ok(None),
+            StatusCode::INTERNAL_SERVER_ERROR if Self::is_channel_not_found(&body) => Ok(None),
+            StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server(body)),
+            _ if Self::is_channel_not_found(&body) => Ok(None),
+            _ => Err(Error::Server(format!(
+                "Unexpected response [{status}]: {body}",
+            ))),
+        }
     }
 
     /// Get immutable blocks in a slot range.
@@ -333,9 +410,11 @@ impl CommonHttpClient {
         }
     }
 
-    fn build_blocks_range_stream_request_url(
+    /// Build the request URL for the `get_blocks_range_stream` method with the
+    /// given parameters.
+    pub fn build_blocks_range_stream_request_url(
         base_url: &Url,
-        params: &BlocksStreamQueryParams,
+        params: &BlocksStreamQuery,
     ) -> Result<Url, Error> {
         let mut request_url = base_url
             .join(BLOCKS_RANGE_STREAM.trim_start_matches('/'))
@@ -374,10 +453,10 @@ impl CommonHttpClient {
 
     // Helper function to validate inputs for block streaming methods.
     fn verify_inputs(
-        blocks_limit: Option<NonZero<usize>>,
+        blocks_limit: Option<std::num::NonZero<usize>>,
         slot_from: Option<u64>,
         slot_to: Option<u64>,
-        server_batch_size: Option<NonZero<usize>>,
+        server_batch_size: Option<std::num::NonZero<usize>>,
     ) -> Result<(), Error> {
         if let Some(blocks) = blocks_limit
             && blocks.get() > MAX_BLOCKS_STREAM_BLOCKS
@@ -408,29 +487,18 @@ impl CommonHttpClient {
     ///
     /// `server_batch_size` lets callers request smaller chunks; the server
     /// still enforces its own upper bound.
-    #[expect(clippy::too_many_arguments, reason = "Need all args")]
     pub async fn get_blocks_range_stream(
         &self,
         base_url: Url,
-        blocks_limit: Option<NonZero<usize>>,
-        slot_from: Option<u64>,
-        slot_to: Option<u64>,
-        descending: Option<bool>,
-        server_batch_size: Option<NonZero<usize>>,
-        immutable_only: Option<bool>,
+        params: BlocksStreamQuery,
     ) -> Result<impl Stream<Item = ProcessedBlockEvent> + use<>, Error> {
-        Self::verify_inputs(blocks_limit, slot_from, slot_to, server_batch_size)?;
-
-        let params = BlocksStreamQueryParams {
-            blocks_limit,
-            slot_from,
-            slot_to,
-            descending,
-            server_batch_size,
-            immutable_only,
-        };
-
         let request_url = Self::build_blocks_range_stream_request_url(&base_url, &params)?;
+        Self::verify_inputs(
+            params.blocks_limit,
+            params.slot_from,
+            params.slot_to,
+            params.server_batch_size,
+        )?;
         let response = self.send_blocks_range_stream_request(request_url).await?;
         Ok(Self::parse_processed_blocks_range_event_stream(response))
     }
@@ -439,7 +507,7 @@ impl CommonHttpClient {
         response: reqwest::Response,
     ) -> impl Stream<Item = ProcessedBlockEvent> {
         // NDJSON event upper bound; margin above max serialized single event line
-        const MAX_NDJSON_LINE_BYTES: usize = MAX_BLOCK_SIZE * 3 / 2;
+        const MAX_NDJSON_LINE_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 3 / 2;
         const LOG_LINE_PREVIEW_CHARS: usize = 256;
 
         let byte_stream = response.bytes_stream().map_err(std::io::Error::other);
@@ -457,13 +525,16 @@ impl CommonHttpClient {
                     Ok(event) => Some(event),
                     Err(err) => {
                         let preview: String = line.chars().take(LOG_LINE_PREVIEW_CHARS).collect();
-                        warn!("blocks stream JSON decode failed: {err}; line_preview={preview:?}");
+                        warn!(
+                            target: LOG_TARGET,
+                            "blocks stream JSON decode failed: {err}; line_preview={preview:?}"
+                        );
                         None
                     }
                 }
             }
             Err(err) => {
-                warn!("blocks stream line decode failed: {err}");
+                warn!(target: LOG_TARGET, "blocks stream line decode failed: {err}");
                 None
             }
         })
@@ -491,6 +562,26 @@ impl CommonHttpClient {
             .await
     }
 
+    /// Get claimable reward vouchers tracked by the wallet.
+    pub async fn get_claimable_vouchers(
+        &self,
+        base_url: Url,
+        tip: Option<HeaderId>,
+    ) -> Result<WalletClaimableVouchersResponseBody, Error> {
+        let mut request_url = base_url
+            .join(LEADER_CLAIM_VOUCHERS.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        if let Some(t) = tip {
+            request_url
+                .query_pairs_mut()
+                .append_pair("tip", &t.to_string());
+        }
+
+        self.get::<(), WalletClaimableVouchersResponseBody>(request_url, None)
+            .await
+    }
+
     /// Post a request to transfer funds.
     pub async fn transfer_funds(
         &self,
@@ -499,6 +590,37 @@ impl CommonHttpClient {
     ) -> Result<WalletTransferFundsResponseBody, Error> {
         let request_url = base_url
             .join(TRANSACTIONS_TRANSFER_FUNDS.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
+    /// Post a request to fund a transaction from the node's wallet.
+    ///
+    /// The node adds fee inputs and change from its own wallet, signs only
+    /// the appended fee transfer, and returns the funded (still unsigned)
+    /// transaction together with the transfer proof.
+    pub async fn fund_tx(
+        &self,
+        base_url: Url,
+        body: WalletFundRequestBody,
+    ) -> Result<WalletFundResponseBody, Error> {
+        let request_url = base_url
+            .join(FUND.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
+    /// Post a request via an SDP declaration to join the blend network and
+    /// returns its declaration ID if successful.
+    pub async fn join_blend_network(
+        &self,
+        base_url: &Url,
+        body: JoinBlendRequestBody,
+    ) -> Result<DeclarationId, Error> {
+        let request_url = base_url
+            .join(BLEND_JOIN_NETWORK.trim_start_matches('/'))
             .map_err(Error::Url)?;
 
         self.post(request_url, &body).await

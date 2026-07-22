@@ -1,40 +1,67 @@
+use std::{collections::HashMap, sync::Arc};
+
 use lb_core::{
     crypto::ZkHash,
     sdp::{
-        Declaration, DeclarationId, Locator, ProviderId, ServiceParameters, ServiceType,
-        SessionNumber,
+        Declaration, DeclarationId, Declarations, Locator, ProviderId, ServiceParameters,
+        ServiceType,
     },
 };
-use lb_groth16::{Field as _, Fr};
+use lb_cryptarchia_engine::Epoch;
+use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
 use num_bigint::BigUint;
 
-use crate::{EpochState, UtxoTree, mantle::sdp::SessionState};
+use crate::{EpochState, UtxoTree};
 
-pub fn create_test_session_state(
+pub fn create_epoch_state(
     provider_ids: &[ProviderId],
     service_type: ServiceType,
-    session_n: SessionNumber,
-) -> SessionState {
-    let mut declarations = rpds::RedBlackTreeMapSync::new_sync();
-    for (i, provider_id) in provider_ids.iter().enumerate() {
-        let declaration = Declaration {
-            service_type,
-            provider_id: *provider_id,
-            locked_note_id: Fr::from(i as u64).into(),
-            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
-            zk_id: ZkPublicKey::new(BigUint::from(i as u64).into()),
-            created: 0,
-            active: 0,
-            withdrawn: None,
-            nonce: 0,
-        };
-        declarations = declarations.insert(DeclarationId([i as u8; 32]), declaration);
+    epoch: Epoch,
+    nonce: Fr,
+) -> EpochState {
+    let entries: HashMap<DeclarationId, Declaration> = provider_ids
+        .iter()
+        .enumerate()
+        .map(|(i, provider_id)| {
+            let note_id = Fr::from(i as u64).into();
+            let declaration = Declaration {
+                service_type,
+                provider_id: *provider_id,
+                locked_note_id: note_id,
+                locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+                zk_id: ZkPublicKey::new(BigUint::from(i as u64).into()),
+                created: 0.into(),
+                active: 2.into(),
+                withdraw_at: None,
+                nonce: 0,
+            };
+            (DeclarationId([i as u8; 32]), declaration)
+        })
+        .collect();
+
+    let active_declarations: Declarations = HashMap::from([(service_type, entries)]).into();
+
+    EpochState {
+        epoch,
+        nonce,
+        utxos: UtxoTree::default(),
+        total_stake: 0,
+        lottery_0: Fr::ZERO,
+        lottery_1: Fr::ZERO,
+        active_declarations: Arc::new(active_declarations),
     }
-    SessionState {
-        declarations,
-        session_n,
-    }
+}
+
+pub fn new_epoch_state_with_same_snapshot(
+    epoch: u32,
+    nonce: i32,
+    last_epoch_state: &EpochState,
+) -> EpochState {
+    let mut epoch_state = last_epoch_state.clone();
+    epoch_state.epoch = epoch.into();
+    epoch_state.nonce = ZkHash::from(nonce);
+    epoch_state
 }
 
 pub fn create_provider_id(byte: u8) -> ProviderId {
@@ -46,25 +73,7 @@ pub fn create_provider_id(byte: u8) -> ProviderId {
 
 pub fn create_service_parameters() -> ServiceParameters {
     ServiceParameters {
-        lock_period: 10,
-        inactivity_period: 1,
-        retention_period: 1,
-        timestamp: 0,
-        session_duration: 10,
-    }
-}
-
-pub fn dummy_epoch_state() -> EpochState {
-    dummy_epoch_state_with(0, 0)
-}
-
-pub fn dummy_epoch_state_with(epoch: u32, nonce: u64) -> EpochState {
-    EpochState {
-        epoch: epoch.into(),
-        nonce: ZkHash::from(BigUint::from(nonce)),
-        utxos: UtxoTree::default(),
-        total_stake: 0,
-        lottery_0: Fr::ZERO,
-        lottery_1: Fr::ZERO,
+        inactivity_period: 2.try_into().unwrap(),
+        epoch: 0.into(),
     }
 }

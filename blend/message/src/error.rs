@@ -14,6 +14,8 @@ pub enum Error {
     ProofOfQuotaVerificationFailed(quota::Error),
     #[error("Encapsulated message deserialization failed")]
     MessageDeserializationFailed,
+    #[error(transparent)]
+    WireDecode(#[from] crate::codec::WireDecodeError),
     #[error("Payload deserialization failed")]
     PayloadDeserializationFailed,
     #[error("Private header deserialization failed")]
@@ -24,10 +26,8 @@ pub enum Error {
     SignatureVerificationFailed,
     #[error("Node is not a core node")]
     NotCoreNodeReceiver,
-    #[error("Node has generated the maximum number of allowed Proof of Quota this session")]
-    NoMoreProofOfQuotas,
-    #[error("Attempted to generate a leadership proof without any secret PoL info provided.")]
-    NoLeadershipInfoProvided,
+    #[error("Node could not generate enough proof of the required type")]
+    ProofNotAvailable,
     #[error("Invalid shared secret")]
     InvalidSharedSecret,
 }

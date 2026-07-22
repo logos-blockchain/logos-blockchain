@@ -15,6 +15,10 @@ inputs:
     description: Whether to set CUCUMBER_VERBOSE_CONSOLE=true
     required: false
     default: "false"
+  max_concurrent_scenarios:
+    description: Maximum number of concurrent scenarios to run
+    required: false
+    default: "1"
 
 runs:
   using: composite
@@ -28,6 +32,7 @@ runs:
         CUCUMBER_LOG_LEVEL: debug
         CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: true
         USE_LOCAL_HOST_NTP_TIME_CONFIG: true
+        MAX_CUCUMBER_CONCURRENT_SCENARIOS: ${{ inputs.max_concurrent_scenarios }}
       with:
         command: test
         args: >-
@@ -44,6 +49,7 @@ runs:
         CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: true
         USE_LOCAL_HOST_NTP_TIME_CONFIG: true
         CUCUMBER_VERBOSE_CONSOLE: true
+        MAX_CUCUMBER_CONCURRENT_SCENARIOS: ${{ inputs.max_concurrent_scenarios }}
       with:
         command: test
         args: >-

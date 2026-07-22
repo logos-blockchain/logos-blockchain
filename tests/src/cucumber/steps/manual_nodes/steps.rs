@@ -1,4 +1,8 @@
-use std::{collections::HashMap, path::PathBuf, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    time::Duration,
+};
 
 use cucumber::{gherkin::Step, given, then, when};
 use lb_common_http_client::CommonHttpClient;
@@ -10,6 +14,7 @@ use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
 use crate::{
+    common::wallet::WalletUtxos,
     cucumber::{
         error::{StepError, StepResult},
         steps::{
@@ -21,15 +26,16 @@ use crate::{
             },
             manual_nodes::{
                 config_override::{set_deployment_config_override, set_user_config_override},
-                snapshots::{save_named_blockchain_snapshot, validate_snapshot_path_component},
+                snapshots::validate_snapshot_path_component,
                 utils::{
-                    NodesToStartUnordered, create_snapshots_all_nodes,
+                    NodesToStartUnordered, create_snapshot_all_nodes_with_wallet_state,
+                    create_snapshot_node_with_wallet_state, create_snapshots_all_nodes,
                     ensure_all_nodes_agree_on_lib,
                     ensure_fee_sponsorship_and_fork_groups_are_not_mixed,
                     get_cryptarchia_info_all_nodes, nodes_converged,
                     parse_genesis_wallet_tokens_row, parse_url, parse_wallet_resources_table_row,
                     poll_all_nodes_and_update_consensus_cache, restart_node, start_node,
-                    start_nodes_order_respecting_dependencies,
+                    start_nodes_order_respecting_dependencies, stop_node,
                     verify_genesis_wallet_resources_table_indexes,
                     verify_node_wallet_resources_table_indexes,
                     verify_reponsive_and_network_ready_with_timeout, wait_all_nodes_responive,
@@ -37,10 +43,21 @@ use crate::{
                 },
             },
             manual_transactions::utils::{
-                create_and_submit_transaction_hashes, wait_for_transactions_inclusion,
+                create_and_submit_transaction_hashes_with_utxo_cache,
+                wait_for_transactions_inclusion,
             },
         },
-        utils::{blend_core_zk_pk_from_node_yaml, resolve_literal_or_env},
+        utils::{
+            blend_core_locator_from_node_yaml, blend_core_zk_pk_from_node_yaml,
+            resolve_literal_or_env,
+        },
+        wallet::{
+            snapshot::{
+                prepare_all_wallets_snapshot, prepare_wallet_snapshot_restore_if_present,
+                save_prepared_all_wallets_snapshot,
+            },
+            sync::{WalletSendReadiness, wait_wallet_send_ready},
+        },
         world::{
             CucumberWorld, GenesisTokens, ManualClusterKind, ManualClusterSpec, NodeSnapshot,
             PublicCryptarchiaEndpointPeer,
@@ -179,6 +196,8 @@ async fn step_start_nodes_with_wallet_resources(
         )
         .await?;
     }
+
+    world.ensure_wallet_scanner_started().await?;
 
     Ok(())
 }
@@ -346,6 +365,15 @@ async fn step_restart_node(
     restart_node(world, &step.value, &node_name).await
 }
 
+#[when(expr = "I stop node {string}")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
+async fn step_stop_node(world: &mut CucumberWorld, step: &Step, node_name: String) -> StepResult {
+    stop_node(world, &step.value, &node_name).await
+}
+
 #[given(expr = "we use IBD peers")]
 #[when(expr = "we use IBD peers")]
 const fn step_we_use_ibd_peers(world: &mut CucumberWorld) {
@@ -455,13 +483,13 @@ fn step_no_blend_providers(world: &mut CucumberWorld) -> StepResult {
     rebuild_pending_local_manual_cluster(world)
 }
 
-#[given(expr = "I will create a blockchain snapshot {string} of all nodes when stopping")]
-#[when(expr = "I will create a blockchain snapshot {string} of all nodes when stopping")]
+#[given(expr = "I will create a snapshot {string} of all nodes when stopping")]
+#[when(expr = "I will create a snapshot {string} of all nodes when stopping")]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "Required by cucumber expression"
 )]
-fn step_set_blockchain_snapshot_on_stop(
+fn step_set_snapshot_all_nodes_on_stop(
     world: &mut CucumberWorld,
     snapshot_name: String,
 ) -> StepResult {
@@ -471,7 +499,9 @@ fn step_set_blockchain_snapshot_on_stop(
         });
     }
     validate_snapshot_path_component(&snapshot_name, "Snapshot name")?;
-    world.blockchain_snapshot_name_on_stop = Some(snapshot_name.trim().to_owned());
+    let snapshot_name = snapshot_name.trim().to_owned();
+    world.snapshot_save_config.node_state = Some(snapshot_name.clone());
+    world.snapshot_save_config.extensions = Some(snapshot_name);
     Ok(())
 }
 
@@ -481,7 +511,7 @@ fn step_set_blockchain_snapshot_on_stop(
     clippy::needless_pass_by_value,
     reason = "Required by cucumber expression"
 )]
-fn step_set_blockchain_snapshot_on_startup(
+fn step_set_node_snapshot_on_startup(
     world: &mut CucumberWorld,
     snapshot_name: String,
     node_name: String,
@@ -489,74 +519,36 @@ fn step_set_blockchain_snapshot_on_startup(
     validate_snapshot_path_component(&snapshot_name, "Snapshot name")?;
     validate_snapshot_path_component(&node_name, "Node name")?;
 
-    world.blockchain_snapshot_on_startup = Some(NodeSnapshot {
-        name: snapshot_name.trim().to_owned(),
+    let snapshot_name = snapshot_name.trim().to_owned();
+    world.node_snapshot_on_startup = Some(NodeSnapshot {
+        name: snapshot_name.clone(),
         node: node_name.trim().to_owned(),
     });
+    world.snapshot_restore_config.extensions = Some(snapshot_name);
+    if let Some(snapshot_name) = world.snapshot_restore_config.extensions.clone() {
+        prepare_wallet_snapshot_restore_if_present(&snapshot_name, world)?;
+    }
     Ok(())
 }
 
-#[given(expr = "I create a blockchain snapshot {string} of all nodes")]
-#[when(expr = "I create a blockchain snapshot {string} of all nodes")]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Required by cucumber expression"
-)]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require the world as the first `&mut` argument"
-)]
-fn step_create_blockchain_snapshot_all_nodes_now(
+#[given(expr = "I create a snapshot {string} of all nodes")]
+#[when(expr = "I create a snapshot {string} of all nodes")]
+async fn step_create_snapshot_all_nodes_now(
     world: &mut CucumberWorld,
     snapshot_name: String,
 ) -> StepResult {
-    if world.nodes_info.is_empty() {
-        return Err(StepError::InvalidArgument {
-            message: "cannot create snapshot: no running nodes".to_owned(),
-        });
-    }
-
-    create_snapshots_all_nodes(world, &snapshot_name)?;
-
-    Ok(())
+    create_snapshot_all_nodes_with_wallet_state(world, &snapshot_name).await
 }
 
-#[given(expr = "I create a blockchain snapshot {string} of node {string}")]
-#[when(expr = "I create a blockchain snapshot {string} of node {string}")]
-#[then(expr = "I create a blockchain snapshot {string} of node {string}")]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Required by cucumber expression"
-)]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require the world as the first `&mut` argument"
-)]
-fn step_create_blockchain_snapshot_node_now(
+#[given(expr = "I create a snapshot {string} of node {string}")]
+#[when(expr = "I create a snapshot {string} of node {string}")]
+#[then(expr = "I create a snapshot {string} of node {string}")]
+async fn step_create_snapshot_node_now(
     world: &mut CucumberWorld,
     snapshot_name: String,
     node_name: String,
 ) -> StepResult {
-    if world.nodes_info.is_empty() {
-        return Err(StepError::InvalidArgument {
-            message: "cannot create snapshot: no running nodes".to_owned(),
-        });
-    }
-
-    if let Some(info) = world.nodes_info.get(&node_name) {
-        save_named_blockchain_snapshot(&snapshot_name, &node_name, &info.runtime_dir)?;
-        info!(
-            target: TARGET,
-            "Saved blockchain snapshot `{snapshot_name}` for node {}",
-            info.runtime_dir.display()
-        );
-    } else {
-        return Err(StepError::InvalidArgument {
-            message: format!("Node {node_name} does not exist"),
-        });
-    }
-
-    Ok(())
+    create_snapshot_node_with_wallet_state(world, &snapshot_name, &node_name).await
 }
 
 #[given("I have public cryptarchia endpoint peers:")]
@@ -640,7 +632,7 @@ fn step_set_public_cryptarchia_endpoint_peers(
         }
 
         endpoint_peers.push(PublicCryptarchiaEndpointPeer {
-            url,
+            base_url: url,
             username,
             password,
         });
@@ -708,7 +700,7 @@ fn step_set_ibd_peers(world: &mut CucumberWorld, step: &Step) -> StepResult {
         });
     }
 
-    let mut peers = std::collections::HashSet::with_capacity(table.rows.len().saturating_sub(1));
+    let mut peers = HashSet::with_capacity(table.rows.len().saturating_sub(1));
     for row in table.rows.iter().skip(1) {
         let peer = row[0]
             .trim()
@@ -967,10 +959,6 @@ async fn step_all_nodes_agree_on_lib(
 
 #[when("I wait for all nodes to be synced to the chain")]
 #[then("I wait for all nodes to be synced to the chain")]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require the world as the first `&mut` argument"
-)]
 async fn step_wait_for_all_nodes_to_be_synced_to_the_chain(
     world: &mut CucumberWorld,
     step: &Step,
@@ -989,17 +977,27 @@ async fn step_query_cryptarchia_info_all_nodes(world: &mut CucumberWorld, step: 
 }
 
 #[then(expr = "I stop all nodes")]
-fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
+async fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
     let runtime_dir_by_node_name: Vec<(String, String)> = world
         .nodes_info
         .iter()
         .map(|(node_name, info)| (node_name.clone(), info.started_node.name.clone()))
         .collect();
 
+    if world.snapshot_save_config.extensions.is_some() {
+        prepare_all_wallets_snapshot(world).await?;
+    }
+
+    world.reset_wallet_scanner_after_current_iteration().await;
+    world.zone.clear();
     stop_active_manual_cluster(world)?;
 
-    if let Some(snapshot_name) = world.blockchain_snapshot_name_on_stop.as_ref() {
-        create_snapshots_all_nodes(world, snapshot_name)?;
+    if let Some(snapshot_name) = world.snapshot_save_config.node_state.take() {
+        create_snapshots_all_nodes(world, &snapshot_name)?;
+    }
+
+    if let Some(snapshot_name) = world.snapshot_save_config.extensions.take() {
+        save_prepared_all_wallets_snapshot(&snapshot_name, world)?;
     }
 
     for (node_name, _) in &runtime_dir_by_node_name {
@@ -1033,13 +1031,27 @@ async fn step_send_multiple_transactions_to_blend_core_zk_key(
         .client
         .clone();
 
+    let mut available_utxos = WalletUtxos::new();
+    let best_node_info = wait_wallet_send_ready(
+        world,
+        &step.value,
+        &sender_wallet_name,
+        180,
+        number_of_transactions as u64 * output_value,
+        WalletSendReadiness::TotalValueOnly,
+        &mut available_utxos,
+        &HashSet::new(),
+    )
+    .await?;
+
     for _ in 0..number_of_transactions {
-        let tx_hashes = create_and_submit_transaction_hashes(
+        let tx_hashes = create_and_submit_transaction_hashes_with_utxo_cache(
             world,
             &step.value,
             &sender_wallet_name,
             &[(receiver_blend_zk_pk, output_value)],
-            None,
+            Some(&best_node_info),
+            Some(&mut available_utxos),
         )
         .await
         .inspect_err(|error| {
@@ -1089,6 +1101,7 @@ async fn step_run_blend_sdp_declaration_cli(
     declarer_node_name: String,
 ) -> StepResult {
     let user_config_path = node_user_config_path(world, &declarer_node_name)?;
+    let locator = blend_core_locator_from_node_yaml(&user_config_path)?;
     let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
 
     let declarer_api_base_url = world
@@ -1150,6 +1163,8 @@ async fn step_run_blend_sdp_declaration_cli(
         .arg("post-blend-declaration")
         .arg("--user-config-path")
         .arg(user_config_path)
+        .arg("--blend-addr")
+        .arg(format!("{locator}"))
         .arg("--locked-note-id")
         .arg(locked_note_id)
         .arg("--node-address")
@@ -1166,6 +1181,76 @@ async fn step_run_blend_sdp_declaration_cli(
             ),
         });
     }
+
+    Ok(())
+}
+
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Required to be mutable by cucumber step function signature"
+)]
+#[then(expr = "I declare node {string} as blend core node via the API")]
+async fn step_run_blend_sdp_declaration_api(
+    world: &mut CucumberWorld,
+    step: &Step,
+    declarer_node_name: String,
+) -> StepResult {
+    let user_config_path = node_user_config_path(world, &declarer_node_name)?;
+    let locator = blend_core_locator_from_node_yaml(&user_config_path)?;
+    let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
+
+    let declarer_node_client = world
+        .nodes_info
+        .get(&declarer_node_name)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("Node '{declarer_node_name}' not found in world state"),
+        })?
+        .started_node
+        .client
+        .clone();
+    let declarer_api_base_url = declarer_node_client.base_url().clone();
+
+    // Wait for the funded note locked on the Blend ZK key, querying the same
+    // node API that will process the join request.
+    let note_lookup_timeout = Duration::from_secs(30);
+    let note_lookup_started = Instant::now();
+    let mut last_lookup_error: Option<String>;
+    let locked_note_id = loop {
+        let Ok(wallet_balance) = CommonHttpClient::new(None)
+            .get_wallet_balance(declarer_api_base_url.clone(), blend_zk_pk, None)
+            .await
+        else {
+            continue;
+        };
+        if let Some(note_id) = wallet_balance.notes.keys().next().copied() {
+            break note_id;
+        }
+        last_lookup_error = Some("wallet has no notes yet".to_owned());
+
+        if note_lookup_started.elapsed() >= note_lookup_timeout {
+            return Err(StepError::Timeout {
+                message: format!(
+                    "Timed out waiting for a funded note on Blend ZK key of '{declarer_node_name}' via '{}' (last error: {})",
+                    declarer_api_base_url,
+                    last_lookup_error.unwrap_or_else(|| "unknown".to_owned())
+                ),
+            });
+        }
+
+        sleep(Duration::from_millis(250)).await;
+    };
+
+    let declaration_id = declarer_node_client
+        .join_blend_network(locator, locked_note_id)
+        .await
+        .inspect_err(|error| {
+            warn!(target: TARGET, "Step `{}` error: {error}", step.value);
+        })?;
+
+    info!(
+        target: TARGET,
+        "Node '{declarer_node_name}' joined blend core via API, declaration id: {declaration_id}"
+    );
 
     Ok(())
 }
@@ -1268,7 +1353,7 @@ async fn step_verify_blend_sdp_declaration_included(
             }
         };
 
-        if declarations.iter().any(|declaration| {
+        if declarations.values().any(|declaration| {
             declaration.locked_note_id == locked_note_id && declaration.zk_id == blend_zk_pk
         }) {
             info!(

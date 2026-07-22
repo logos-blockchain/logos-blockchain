@@ -1,4 +1,4 @@
-pub mod distribution;
+pub mod genesis;
 use serde_yml::Value;
 
 /// Deep-merge `overwrite` into `input`. Mappings are merged recursively;

@@ -11,9 +11,12 @@ use lb_core::mantle::{
     MantleTx, SignedMantleTx, Transaction as _,
     ops::{
         Op, OpProof,
-        channel::{ChannelId, MsgId, inscribe::InscriptionOp},
+        channel::{
+            ChannelId, MsgId,
+            inscribe::{Inscription, InscriptionOp},
+        },
     },
-    tx::TxHash,
+    transactions::TxHash,
 };
 use lb_key_management_system_service::keys::Ed25519Key;
 use rand::{seq::SliceRandom as _, thread_rng};
@@ -388,14 +391,14 @@ fn build_inscription_transaction(
     };
     let msg_id = op.id();
 
-    let mantle_tx = MantleTx(vec![Op::ChannelInscribe(op)]);
+    let mantle_tx = MantleTx([Op::ChannelInscribe(op)].into());
     let tx_hash = mantle_tx.hash();
 
     let ed25519_signature = channel
         .signing_key
         .sign_payload(tx_hash.as_signing_bytes().as_ref());
 
-    let signed_tx = SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(ed25519_signature)])
+    let signed_tx = SignedMantleTx::new(mantle_tx, [OpProof::Ed25519Sig(ed25519_signature)].into())
         .map_err(|error| InscriptionWorkloadError::SignedTransactionBuild(error.to_string()))?;
 
     channel.next_nonce = channel.next_nonce.saturating_add(1);
@@ -403,7 +406,7 @@ fn build_inscription_transaction(
     Ok((signed_tx, msg_id, tx_hash))
 }
 
-fn build_payload(channel: &ChannelState, payload_bytes: usize) -> Vec<u8> {
+fn build_payload(channel: &ChannelState, payload_bytes: usize) -> Inscription {
     let mut payload = format!(
         "tf-inscription:{:?}:{}",
         channel.channel_id, channel.next_nonce
@@ -416,7 +419,7 @@ fn build_payload(channel: &ChannelState, payload_bytes: usize) -> Vec<u8> {
         payload.truncate(payload_bytes);
     }
 
-    payload
+    Inscription::new_unchecked(payload)
 }
 
 async fn submit_transaction_via_cluster(

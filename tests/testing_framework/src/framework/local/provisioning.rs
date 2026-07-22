@@ -3,6 +3,7 @@ use std::{
     env, fs, io,
     net::{Ipv4Addr, UdpSocket},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use async_trait::async_trait;
@@ -27,16 +28,19 @@ use lb_node::{
 use rand::Rng as _;
 use testing_framework_core::scenario::{Application, DynError, PeerSelection, StartNodeOptions};
 use testing_framework_runner_local::{
-    BinaryConfig, BinaryResolver, BuiltNodeConfig, LaunchEnvVar, LaunchFile, LocalDeployerEnv,
-    NodeConfigEntry, NodeEndpointPort, NodeEndpoints, ProcessSpawnError, env::Node,
+    BinaryProviderRef, BuildBinaryProvider, BuildCommand, BuiltNodeConfig, EnvBinaryProvider,
+    FallbackBinaryProvider, LaunchEnvVar, LaunchFile, LocalDeployerEnv, NodeConfigEntry,
+    NodeEndpointPort, NodeEndpoints, PathBinaryProvider, ProcessSpawnError, env::Node,
     process::LaunchSpec,
 };
 use tracing::debug;
 
 use crate::{
-    LOGOS_BLOCKCHAIN_LOG_LEVEL,
+    LOG_LEVEL,
+    configs::deployment::NodeBinaryProfile,
     diagnostics::{record_system_monitor_event, register_system_monitor_output_file},
     env as tf_env,
+    env::{remove_default_env, replace_default_env},
     framework::LbcEnv,
     node::{
         DeploymentPlan, NodeHttpClient, NodePlan,
@@ -154,7 +158,9 @@ impl LocalDeployerEnv for LbcEnv {
             format!("{label}:{}", dir.display()),
         );
 
-        config.user.tracing.level = configured_node_log_level();
+        if let Some(level) = configured_node_log_level() {
+            config.user.tracing.level = level;
+        }
 
         if !tf_env::debug_tracing() {
             let log_prefix = format!("{LOGS_PREFIX}-{label}");
@@ -164,11 +170,29 @@ impl LocalDeployerEnv for LbcEnv {
         config.user.state.base_folder = dir.to_path_buf();
         "db".clone_into(&mut config.user.storage.backend.folder_name);
 
+        if let config::tracing::serde::console::Layer::Console(console) =
+            &mut config.user.tracing.console
+            && let Some(recording_path) = &mut console.recording_path
+        {
+            if recording_path.is_relative() {
+                let relative_path = recording_path.clone();
+                *recording_path = dir.join(relative_path);
+            }
+            if let Some(parent) = recording_path.parent() {
+                fs::create_dir_all(parent).map_err(|source| {
+                    io::Error::other(format!(
+                        "failed to prepare Tokio console recording path `{}`: {source}",
+                        recording_path.display()
+                    ))
+                })?;
+            }
+        }
+
         let user_yaml = serde_yaml::to_string(&config.user).map_err(io::Error::other)?;
         let deployment_yaml =
             serde_yaml::to_string(&config.deployment).map_err(io::Error::other)?;
 
-        Ok(build_node_launch_spec(dir, user_yaml, deployment_yaml))
+        build_node_launch_spec(dir, user_yaml, deployment_yaml)
     }
 
     fn node_endpoints(
@@ -191,11 +215,7 @@ impl LocalDeployerEnv for LbcEnv {
     }
 
     fn node_client(endpoints: &NodeEndpoints) -> Result<Self::NodeClient, DynError> {
-        let testing_api = endpoints
-            .port(&NodeEndpointPort::TestingApi)
-            .map(|port| (endpoints.api.ip(), port).into());
-
-        Ok(NodeHttpClient::new(endpoints.api, testing_api))
+        Ok(NodeHttpClient::new(endpoints.api))
     }
 
     fn readiness_endpoint_path() -> &'static str {
@@ -230,10 +250,6 @@ fn ensure_recovery_paths(base_dir: &Path) -> io::Result<()> {
 
 fn add_endpoint_ports(endpoints: &mut NodeEndpoints, config: &RunConfig) {
     endpoints.insert_port(
-        NodeEndpointPort::TestingApi,
-        config.user.api.testing.listen_address.port(),
-    );
-    endpoints.insert_port(
         NodeEndpointPort::Network,
         config.user.network.backend.swarm.port,
     );
@@ -252,14 +268,35 @@ fn allocate_udp_port(label: &'static str) -> Result<u16, DynError> {
         })
 }
 
-fn build_node_launch_spec(dir: &Path, user_yaml: String, deployment_yaml: String) -> LaunchSpec {
+fn build_node_launch_spec(
+    dir: &Path,
+    user_yaml: String,
+    deployment_yaml: String,
+) -> Result<LaunchSpec, DynError> {
     let config_path = dir.join(USER_CONFIG_FILE);
     let deployment_path = dir.join(DEPLOYMENT_CONFIG_FILE);
     let time_backend =
         env::var("LOGOS_BLOCKCHAIN_TIME_BACKEND").unwrap_or_else(|_| "monotonic".to_owned());
+    let node_binary_profile =
+        NodeBinaryProfile::from_string(&env::var("NODE_BINARY_PROFILE").unwrap_or_default());
 
-    LaunchSpec {
-        binary: BinaryResolver::resolve_path(&node_binary_config()),
+    Ok(LaunchSpec {
+        binary: {
+            let current = if node_binary_profile == NodeBinaryProfile::TokioConsole {
+                replace_default_env("RUSTFLAGS", &rustflags_with_tokio_unstable())
+            } else {
+                None
+            };
+            let resolve_result = node_binary_provider(&node_binary_profile).resolve();
+            if node_binary_profile == NodeBinaryProfile::TokioConsole {
+                if let Some(val) = current {
+                    let _unused = replace_default_env("RUSTFLAGS", &val);
+                } else {
+                    remove_default_env("RUSTFLAGS");
+                }
+            }
+            resolve_result?
+        },
         files: vec![
             launch_file(USER_CONFIG_FILE, user_yaml.into_bytes()),
             launch_file(DEPLOYMENT_CONFIG_FILE, deployment_yaml.into_bytes()),
@@ -273,6 +310,17 @@ fn build_node_launch_spec(dir: &Path, user_yaml: String, deployment_yaml: String
             "LOGOS_BLOCKCHAIN_TIME_BACKEND",
             time_backend,
         )],
+    })
+}
+
+fn rustflags_with_tokio_unstable() -> String {
+    const TOKIO_UNSTABLE_CFG: &str = "--cfg tokio_unstable";
+
+    match env::var("RUSTFLAGS") {
+        Ok(flags) if flags.contains(TOKIO_UNSTABLE_CFG) => flags,
+        Ok(flags) if flags.trim().is_empty() => TOKIO_UNSTABLE_CFG.to_owned(),
+        Ok(flags) => format!("{flags} {TOKIO_UNSTABLE_CFG}"),
+        Err(_) => TOKIO_UNSTABLE_CFG.to_owned(),
     }
 }
 
@@ -283,12 +331,81 @@ fn launch_file(relative_path: &str, contents: Vec<u8>) -> LaunchFile {
     }
 }
 
-const fn node_binary_config() -> BinaryConfig {
-    BinaryConfig {
-        env_var: "LOGOS_BLOCKCHAIN_NODE_BIN",
-        binary_name: "logos-blockchain-node",
-        fallback_path: "target/debug/logos-blockchain-node",
+fn node_binary_provider(node_binary_profile: &NodeBinaryProfile) -> BinaryProviderRef {
+    let providers: [BinaryProviderRef; 2] = [
+        Arc::new(EnvBinaryProvider::new("LOGOS_BLOCKCHAIN_NODE_BIN")),
+        match node_binary_profile {
+            NodeBinaryProfile::Normal => default_node_binary_provider(),
+            NodeBinaryProfile::TokioConsole => tokio_console_node_binary_provider(),
+        },
+    ];
+
+    Arc::new(FallbackBinaryProvider::new(providers))
+}
+
+fn default_node_binary_provider() -> BinaryProviderRef {
+    if running_in_ci() {
+        Arc::new(PathBinaryProvider::new(release_node_binary_path()))
+    } else {
+        Arc::new(BuildBinaryProvider {
+            command: BuildCommand::new("cargo").with_args([
+                "build",
+                "--locked",
+                "--release",
+                "-p",
+                "logos-blockchain-node",
+                "--features",
+                "testing",
+            ]),
+            output_path: release_node_binary_path(),
+            working_dir: Some(workspace_root()),
+            lock_dir: Some(workspace_root().join("target").join(".tf-binaries")),
+        })
     }
+}
+
+fn release_node_binary_path() -> PathBuf {
+    workspace_root()
+        .join("target")
+        .join("release")
+        .join("logos-blockchain-node")
+}
+
+fn tokio_console_node_binary_provider() -> BinaryProviderRef {
+    if running_in_ci() {
+        Arc::new(PathBinaryProvider::new(release_node_binary_path()))
+    } else {
+        Arc::new(BuildBinaryProvider {
+            command: BuildCommand::new("cargo").with_args([
+                "build",
+                "--locked",
+                "--profile",
+                "release-profiling",
+                "-p",
+                "logos-blockchain-node",
+                "--features",
+                "testing,tokio-console",
+            ]),
+            output_path: release_profiling_node_binary_path(),
+            working_dir: Some(workspace_root()),
+            lock_dir: Some(workspace_root().join("target").join(".tf-binaries")),
+        })
+    }
+}
+
+fn release_profiling_node_binary_path() -> PathBuf {
+    workspace_root()
+        .join("target")
+        .join("release-profiling")
+        .join("logos-blockchain-node")
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn running_in_ci() -> bool {
+    env::var_os("CI").is_some() || env::var_os("GITHUB_ACTIONS").is_some()
 }
 
 fn configure_logging(base_dir: &Path, prefix: &str) -> logger::Layers {
@@ -334,11 +451,10 @@ fn configure_logging(base_dir: &Path, prefix: &str) -> logger::Layers {
     }
 }
 
-fn configured_node_log_level() -> Level {
-    env::var(LOGOS_BLOCKCHAIN_LOG_LEVEL)
+fn configured_node_log_level() -> Option<Level> {
+    env::var(LOG_LEVEL)
         .ok()
-        .and_then(|raw| raw.parse::<Level>().ok())
-        .unwrap_or(Level::INFO)
+        .map(|level| level.parse::<Level>().unwrap_or(Level::INFO))
 }
 
 fn build_dynamic_node_config(
@@ -505,21 +621,18 @@ fn finalize_dynamic_run_config(
 
 fn build_run_config(config: Config, genesis_block: &GenesisBlock) -> RunConfig {
     let deployment_config = default_e2e_deployment_settings(genesis_block);
+    let mut tracing = config.tracing_config.tracing_settings;
+    tracing.level = Level::INFO;
 
     let user_config = UserConfig {
         network: config.network_config,
         blend: config.blend_config.0,
         time: config.time_config,
         cryptarchia: build_cryptarchia_user_config(&config.consensus_config),
-        tracing: config.tracing_config.tracing_settings,
+        tracing,
         api: api::serde::Config {
             backend: api::serde::AxumBackendSettings {
                 listen_address: config.api_config.address,
-                max_concurrent_requests: 1000,
-                ..Default::default()
-            },
-            testing: api::serde::AxumBackendSettings {
-                listen_address: config.api_config.testing_http_address,
                 max_concurrent_requests: 1000,
                 ..Default::default()
             },
@@ -570,9 +683,11 @@ fn build_run_config(config: Config, genesis_block: &GenesisBlock) -> RunConfig {
 
             wallet::serde::Config {
                 known_keys,
-                voucher_master_key_id: key_id_for_preload_backend(&Key::Zk(
-                    config.consensus_config.known_key.clone(),
-                )),
+                ..wallet::serde::Config::with_required_values(wallet::serde::RequiredValues {
+                    voucher_master_key_id: key_id_for_preload_backend(&Key::Zk(
+                        config.consensus_config.known_key.clone(),
+                    )),
+                })
             }
         },
         kms: config::kms::serde::Config {
@@ -603,8 +718,12 @@ fn build_cryptarchia_user_config(
         network: NetworkConfig {
             bootstrap: network::BootstrapConfig {
                 ibd: network::IbdConfig {
-                    delay_before_new_download: Duration::from_secs(10),
                     peers: HashSet::new(),
+                    delay_before_new_download: Duration::from_secs(10),
+                    tips_fetch_max_attempts: 3,
+                    tips_fetch_min_delay: Duration::from_millis(250),
+                    tips_fetch_max_delay: Duration::from_secs(1),
+                    round_delay: Duration::from_secs(1),
                 },
             },
             network: network::NetworkConfig {
@@ -615,7 +734,9 @@ fn build_cryptarchia_user_config(
                 orphan: network::OrphanConfig {
                     max_orphan_cache_size: NonZeroUsize::new(1000)
                         .expect("max orphan cache size must be non-zero"),
+                    max_rejected_cache_size: 1000,
                 },
+                tip_poll: network::TipPollConfig::default(),
             },
         },
         service: ServiceConfig {
@@ -626,6 +747,12 @@ fn build_cryptarchia_user_config(
                     state_recording_interval: Duration::from_mins(1),
                 },
                 prolonged_bootstrap_period: consensus.prolonged_bootstrap_period,
+            },
+            sync: service::SyncConfig {
+                block_provider: service::BlockProviderConfig {
+                    batch_size: NonZeroUsize::new(1000)
+                        .expect("block_provider batch_size must be non-zero"),
+                },
             },
         },
         leader: LeaderConfig {

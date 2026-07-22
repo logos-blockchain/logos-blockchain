@@ -1,8 +1,11 @@
-use tracing::debug;
+use lb_log_targets::libp2p as lb_log_targets_libp2p;
 
 use crate::behaviour::nat::state_machine::{
     Command, CommandTx, OnEvent, State, event::Event, states::TestIfMappedPublic,
 };
+
+const LOG_TARGET: &str =
+    lb_log_targets_libp2p::behaviour::nat::state_machine::TEST_IF_MAPPED_PUBLIC;
 
 /// The `TestIfMappedPublic` state is responsible for testing if the mapped
 /// address on the NAT-box is public. If the address is confirmed as public, it
@@ -19,7 +22,8 @@ impl OnEvent for State<TestIfMappedPublic> {
     fn on_event(self: Box<Self>, event: Event, command_tx: &CommandTx) -> Box<dyn OnEvent> {
         match event {
             Event::ExternalAddressConfirmed(addr) => {
-                debug!(
+                tracing::debug!(
+                    target: LOG_TARGET,
                     "State<TestIfMappedPublic>: External address {addr} confirmed (was testing {}), promoting to MappedPublic.",
                     self.state.addr_to_test(),
                 );

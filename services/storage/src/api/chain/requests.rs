@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, HashMap},
     fmt::Display,
     num::NonZeroUsize,
     ops::RangeInclusive,
@@ -26,11 +26,13 @@ pub enum ChainApiRequest<Backend: StorageBackend> {
         header_id: HeaderId,
         response_tx: Sender<Option<<Backend as StorageChainApi>::Block>>,
     },
-    StoreBlock {
+    StoreBlockData {
         header_id: HeaderId,
         parent_id: HeaderId,
         block: <Backend as StorageChainApi>::Block,
         events: <Backend as StorageChainApi>::Events,
+        immutable_ids: BTreeMap<Slot, HeaderId>,
+        response_tx: Sender<Result<(), String>>,
     },
     RemoveBlock {
         header_id: HeaderId,
@@ -46,6 +48,7 @@ pub enum ChainApiRequest<Backend: StorageBackend> {
     },
     StoreImmutableBlockIds {
         ids: BTreeMap<Slot, HeaderId>,
+        response_tx: Sender<Result<(), String>>,
     },
     GetImmutableBlockId {
         slot: Slot,
@@ -65,7 +68,7 @@ pub enum ChainApiRequest<Backend: StorageBackend> {
         transactions: HashMap<TxHash, <Backend as StorageChainApi>::Tx>,
     },
     GetTransactions {
-        tx_hashes: BTreeSet<TxHash>,
+        tx_hashes: Vec<TxHash>,
         response_tx: Sender<Pin<Box<dyn Stream<Item = <Backend as StorageChainApi>::Tx> + Send>>>,
     },
     RemoveTransactions {
@@ -83,12 +86,25 @@ where
                 header_id,
                 response_tx,
             } => handle_get_block(backend, header_id, response_tx).await,
-            Self::StoreBlock {
+            Self::StoreBlockData {
                 header_id,
                 parent_id,
                 block,
                 events,
-            } => handle_store_block(backend, header_id, parent_id, block, events).await,
+                immutable_ids,
+                response_tx,
+            } => {
+                handle_store_block_data(
+                    backend,
+                    header_id,
+                    parent_id,
+                    block,
+                    events,
+                    immutable_ids,
+                    response_tx,
+                )
+                .await
+            }
             Self::RemoveBlock {
                 header_id,
                 response_tx,
@@ -101,9 +117,10 @@ where
                 header_id,
                 response_tx,
             } => handle_get_block_events(backend, header_id, response_tx).await,
-            Self::StoreImmutableBlockIds { ids: block_ids } => {
-                handle_store_immutable_block_ids(backend, block_ids).await
-            }
+            Self::StoreImmutableBlockIds {
+                ids: block_ids,
+                response_tx,
+            } => handle_store_immutable_block_ids(backend, block_ids, response_tx).await,
             Self::GetImmutableBlockId { slot, response_tx } => {
                 handle_get_immutable_block_id(backend, slot, response_tx).await
             }
@@ -155,17 +172,31 @@ async fn handle_get_block<Backend: StorageBackend>(
     Ok(())
 }
 
-async fn handle_store_block<Backend: StorageBackend>(
+async fn handle_store_block_data<Backend: StorageBackend>(
     backend: &mut Backend,
     header_id: HeaderId,
     parent_id: HeaderId,
     block: Backend::Block,
     events: Backend::Events,
+    immutable_ids: BTreeMap<Slot, HeaderId>,
+    response_tx: Sender<Result<(), String>>,
 ) -> Result<(), StorageServiceError> {
-    backend
-        .store_block(header_id, parent_id, block, events)
+    let result = backend
+        .store_block_data(header_id, parent_id, block, events, immutable_ids)
         .await
-        .map_err(|e| StorageServiceError::BackendError(e.into()))
+        .map_err(|e| StorageServiceError::BackendError(e.into()));
+
+    let response = result.as_ref().map_err(ToString::to_string).copied();
+
+    response_tx
+        .send(response)
+        .map_err(|_| StorageServiceError::ReplyError {
+            message: format!(
+                "Failed to send reply for store block data request by header_id: {header_id}"
+            ),
+        })?;
+
+    result
 }
 
 async fn handle_get_block_parent<Backend: StorageBackend>(
@@ -234,11 +265,22 @@ where
 async fn handle_store_immutable_block_ids<Backend: StorageBackend>(
     backend: &mut Backend,
     ids: BTreeMap<Slot, HeaderId>,
+    response_tx: Sender<Result<(), String>>,
 ) -> Result<(), StorageServiceError> {
-    backend
+    let result = backend
         .store_immutable_block_ids(ids)
         .await
-        .map_err(|e| StorageServiceError::BackendError(e.into()))
+        .map_err(|e| StorageServiceError::BackendError(e.into()));
+
+    let response = result.as_ref().map_err(ToString::to_string).copied();
+
+    response_tx
+        .send(response)
+        .map_err(|_| StorageServiceError::ReplyError {
+            message: "Failed to send reply for store immutable block ids request".to_owned(),
+        })?;
+
+    result
 }
 
 async fn handle_get_immutable_block_id<Backend: StorageBackend>(
@@ -309,18 +351,22 @@ impl<Api: StorageBackend> StorageMsg<Api> {
         }
     }
 
-    pub const fn store_block_request(
+    pub const fn store_block_data_request(
         header_id: HeaderId,
         parent_id: HeaderId,
         block: <Api as StorageChainApi>::Block,
         events: <Api as StorageChainApi>::Events,
+        immutable_ids: BTreeMap<Slot, HeaderId>,
+        response_tx: Sender<Result<(), String>>,
     ) -> Self {
         Self::Api {
-            request: StorageApiRequest::Chain(ChainApiRequest::StoreBlock {
+            request: StorageApiRequest::Chain(ChainApiRequest::StoreBlockData {
                 header_id,
                 parent_id,
                 block,
                 events,
+                immutable_ids,
+                response_tx,
             }),
         }
     }
@@ -365,9 +411,15 @@ impl<Api: StorageBackend> StorageMsg<Api> {
     }
 
     #[must_use]
-    pub const fn store_immutable_block_ids_request(ids: BTreeMap<Slot, HeaderId>) -> Self {
+    pub const fn store_immutable_block_ids_request(
+        ids: BTreeMap<Slot, HeaderId>,
+        response_tx: Sender<Result<(), String>>,
+    ) -> Self {
         Self::Api {
-            request: StorageApiRequest::Chain(ChainApiRequest::StoreImmutableBlockIds { ids }),
+            request: StorageApiRequest::Chain(ChainApiRequest::StoreImmutableBlockIds {
+                ids,
+                response_tx,
+            }),
         }
     }
 
@@ -425,7 +477,7 @@ impl<Api: StorageBackend> StorageMsg<Api> {
 
     #[must_use]
     pub const fn get_transactions_request(
-        tx_hashes: BTreeSet<TxHash>,
+        tx_hashes: Vec<TxHash>,
         response_tx: Sender<Pin<Box<dyn Stream<Item = <Api as StorageChainApi>::Tx> + Send>>>,
     ) -> Self {
         Self::Api {
@@ -457,7 +509,7 @@ async fn handle_store_transactions<Backend: StorageBackend>(
 
 async fn handle_get_transactions<Backend: StorageBackend>(
     backend: &mut Backend,
-    tx_hashes: BTreeSet<TxHash>,
+    tx_hashes: Vec<TxHash>,
     response_tx: Sender<Pin<Box<dyn Stream<Item = <Backend as StorageChainApi>::Tx> + Send>>>,
 ) -> Result<(), StorageServiceError> {
     let result = backend

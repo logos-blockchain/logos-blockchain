@@ -1,28 +1,22 @@
 pub mod api;
+pub mod cli;
 pub mod config;
 pub mod generic_services;
 pub mod panic;
-
-#[cfg(feature = "config-gen")]
-pub mod init;
 
 pub mod global_allocators;
 
 use std::panic::set_hook;
 
-use cfg_if::cfg_if;
 use color_eyre::eyre::{Result, eyre};
-pub use lb_blend_service::{
-    core::{
-        backends::libp2p::Libp2pBlendBackend as BlendBackend,
-        network::libp2p::Libp2pAdapter as BlendNetworkAdapter,
-    },
-    membership::service::Adapter as BlendMembershipAdapter,
+pub use lb_blend_service::core::{
+    backends::libp2p::Libp2pBlendBackend as BlendBackend,
+    network::libp2p::Libp2pAdapter as BlendNetworkAdapter,
 };
 pub use lb_core::{
     codec,
     header::HeaderId,
-    mantle::{SignedMantleTx, Transaction, TxHash, select::FillSize as FillSizeWithTx},
+    mantle::{SignedMantleTx, Transaction, TxHash},
 };
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 pub use lb_storage_service::backends::{
@@ -31,7 +25,6 @@ pub use lb_storage_service::backends::{
 };
 pub use lb_system_sig_service::SystemSig;
 use lb_time_service::backends::NtpTimeBackend;
-#[cfg(feature = "tracing")]
 pub use lb_tracing_service::Tracing;
 use lb_tx_service::storage::adapters::RocksStorageAdapter;
 pub use lb_tx_service::{
@@ -47,7 +40,6 @@ use overwatch::{
 };
 use tokio::runtime;
 
-pub use crate::config::{ApiArgs, Command, LogArgs, NetworkArgs, UserConfig};
 use crate::{
     api::backend::AxumBackend,
     config::{
@@ -60,10 +52,11 @@ use crate::{
     generic_services::{SdpMempoolAdapter, SdpRecoveryBackend, SdpService, SdpWalletAdapter},
     panic::log_and_exit_hook,
 };
+pub use crate::{
+    cli::Command,
+    config::{ApiArgs, LogArgs, NetworkArgs, UserConfig},
+};
 
-pub const MB16: usize = 1024 * 1024 * 16;
-
-#[cfg(feature = "tracing")]
 pub(crate) type TracingService = Tracing<RuntimeServiceId>;
 
 pub(crate) type NetworkService =
@@ -118,10 +111,6 @@ pub type StorageService = lb_storage_service::StorageService<RocksBackend, Runti
 
 pub type SystemSigService = SystemSig<RuntimeServiceId>;
 
-#[cfg(feature = "testing")]
-type TestingApiService<RuntimeServiceId> =
-    lb_api_service::ApiService<api::testing::backend::TestAxumBackend, RuntimeServiceId>;
-
 #[derive_services]
 pub struct LogosBlockchain {
     network: NetworkService,
@@ -141,10 +130,6 @@ pub struct LogosBlockchain {
     key_management: KeyManagementService,
     wallet: WalletService,
 
-    #[cfg(feature = "testing")]
-    testing_http: TestingApiService<RuntimeServiceId>,
-
-    #[cfg(feature = "tracing")]
     tracing: TracingService,
 }
 
@@ -207,7 +192,6 @@ pub fn run_node_from_config(
     }
     .into_sdp_service_settings(&config.user.state);
 
-    #[cfg(feature = "tracing")]
     let tracing_config = config::tracing::ServiceConfig {
         user: config.user.tracing,
     }
@@ -217,13 +201,7 @@ pub fn run_node_from_config(
         user: config.user.api,
     };
 
-    cfg_if! {
-        if #[cfg(feature = "testing")] {
-            let (http_config, testing_config) = api_config.into_backend_and_testing_settings();
-        } else {
-            let http_config = api_config.into_backend_settings();
-        }
-    }
+    let http_config = api_config.backend_settings();
 
     set_hook(Box::new(log_and_exit_hook));
 
@@ -246,11 +224,7 @@ pub fn run_node_from_config(
             sdp: sdp_config,
             wallet: wallet_config,
 
-            #[cfg(feature = "tracing")]
             tracing: tracing_config,
-
-            #[cfg(feature = "testing")]
-            testing_http: testing_config,
         },
         handle,
     )
@@ -267,6 +241,16 @@ pub async fn get_services_to_start(
     // on demand by the blend service.
     let blend_inner_service_ids = [RuntimeServiceId::BlendCore, RuntimeServiceId::BlendEdge];
     service_ids.retain(|value| !blend_inner_service_ids.contains(value));
+
+    // Start tracing first so the global subscriber is installed before the
+    // rest of the node services spawn their long-running tasks.
+    if let Some(index) = service_ids
+        .iter()
+        .position(|value| *value == RuntimeServiceId::Tracing)
+    {
+        let tracing = service_ids.remove(index);
+        service_ids.insert(0, tracing);
+    }
 
     Ok(service_ids)
 }

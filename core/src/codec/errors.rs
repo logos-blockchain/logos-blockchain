@@ -22,3 +22,13 @@ impl From<Error> for io::Error {
         Self::new(io::ErrorKind::InvalidData, value)
     }
 }
+
+impl From<Error> for nom::Err<nom::error::Error<&[u8]>> {
+    fn from(value: Error) -> Self {
+        let kind = match value {
+            Error::Serialize(_) => nom::error::ErrorKind::MapRes,
+            Error::Deserialize(_) => nom::error::ErrorKind::Fail,
+        };
+        nom::Err::Failure(nom::error::Error::new(&[], kind))
+    }
+}

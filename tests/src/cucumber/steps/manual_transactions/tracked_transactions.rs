@@ -11,10 +11,14 @@ use tokio::time::{sleep, timeout};
 use tracing::{info, warn};
 
 use crate::{
-    common::chain::scan_chain_until,
+    common::{chain::scan_chain_until, wallet::WalletUtxos},
     cucumber::{
         error::StepError,
-        steps::{TARGET, manual_transactions::utils::create_and_submit_transaction_hashes},
+        steps::{
+            TARGET,
+            manual_transactions::utils::create_and_submit_transaction_hashes_with_utxo_cache,
+        },
+        wallet::sync::{WalletSendReadiness, wait_wallet_send_ready},
         world::{CucumberWorld, WalletType},
     },
 };
@@ -75,12 +79,26 @@ pub async fn submit_funded_transfer_transaction(
         }
     }
 
-    let tx_hashes = create_and_submit_transaction_hashes(
+    let mut available_utxos = WalletUtxos::new();
+    let best_node_info = wait_wallet_send_ready(
+        world,
+        step,
+        &sender_wallet_name,
+        180,
+        amount,
+        WalletSendReadiness::TotalValueOnly,
+        &mut available_utxos,
+        &HashSet::new(),
+    )
+    .await?;
+
+    let tx_hashes = create_and_submit_transaction_hashes_with_utxo_cache(
         world,
         step,
         &sender_wallet_name,
         &[(receiver_wallet.public_key()?, amount)],
-        None,
+        Some(&best_node_info),
+        Some(&mut available_utxos),
     )
     .await
     .inspect_err(|e| {
@@ -179,17 +197,21 @@ async fn transaction_is_in_chain(
     .is_some()
 }
 
-fn create_invalid_transaction() -> SignedMantleTx {
+pub fn create_invalid_transaction() -> SignedMantleTx {
     let output_note = Note::new(1000, ZkPublicKey::new(1u8.into()));
-    let transfer_op = TransferOp::new(Inputs::new(vec![]), Outputs::new(vec![output_note]));
+    let transfer_op = TransferOp::new(
+        Inputs::empty(),
+        // Outputs::new([output_note]),
+        Outputs::new([output_note]),
+    );
 
-    let mantle_tx = MantleTx(vec![Op::Transfer(transfer_op)]);
+    let mantle_tx = MantleTx([Op::Transfer(transfer_op)].into());
 
     let transfer_proof = ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr())
         .expect("invalid transfer proof should still be constructible");
 
     SignedMantleTx {
-        ops_proofs: vec![OpProof::ZkSig(transfer_proof)],
+        ops_proofs: [OpProof::ZkSig(transfer_proof)].into(),
         mantle_tx,
     }
 }

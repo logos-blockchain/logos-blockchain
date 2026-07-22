@@ -40,4 +40,8 @@ impl Config {
             declaration_id: None,
         }
     }
+
+    pub const fn set_funding_pk(&mut self, pk: ZkPublicKey) {
+        self.wallet.funding_pk = pk;
+    }
 }

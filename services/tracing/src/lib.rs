@@ -6,13 +6,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use lb_log_targets::tracing as log_targets_tracing;
 use lb_tracing::{
     filter::envfilter::{EnvFilterConfig, create_envfilter_layer, default_envfilter_config},
     logging::{
         gelf::{GelfConfig, create_gelf_layer},
         local::{AppenderType, FileConfig, create_file_layer, create_writer_layer},
         loki::{LokiConfig, create_loki_layer},
-        otlp::{OtlpConfig, create_otlp_layer},
+        otlp::{OtlpLoggingConfig, create_otlp_layer},
     },
     metrics::otlp::{OtlpMetricsConfig, create_otlp_metrics_layer},
     tracing::otlp::{OtlpTracingConfig, create_otlp_tracing_layer},
@@ -28,27 +29,76 @@ use serde::{Deserialize, Serialize};
 use tracing::{Level, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
-    Layer as _, filter::LevelFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _,
+    EnvFilter, filter::LevelFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _,
 };
 
-#[cfg(feature = "profiling")]
+#[cfg(feature = "tokio-console")]
 mod console;
 
-macro_rules! push_logger_layer {
-    ($layers:expr, $env_filter:expr, $layer:expr) => {{
-        let layer = $layer;
-        if let Some(filter) = $env_filter.clone() {
-            $layers.push(Box::new(layer.with_filter(filter)));
-        } else {
-            $layers.push(Box::new(layer));
-        }
-    }};
-}
+type LoggerSubscriber =
+    tracing_subscriber::layer::Layered<LevelFilter, tracing_subscriber::Registry>;
+type FilterReloadHandle = tracing_subscriber::reload::Handle<EnvFilter, LoggerSubscriber>;
+
+const LOG_TARGET: &str = log_targets_tracing::SERVICE;
 
 pub struct Tracing<RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     logger_guards: Vec<WorkerGuard>,
+    filter_reload_handles: Vec<FilterReloadHandle>,
     _runtime_service_id: PhantomData<RuntimeServiceId>,
+}
+
+pub enum TracingMessage {
+    ReloadFilter {
+        filter: EnvFilterConfig,
+        reply_channel: tokio::sync::oneshot::Sender<Result<(), TracingFilterReloadError>>,
+    },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum TracingFilterReloadError {
+    #[error("tracing filter reload is not available because no logger sinks are configured")]
+    NoLoggerSinks,
+    #[error("invalid tracing filter config: {message}")]
+    InvalidFilter { message: String },
+    #[error("failed to reload tracing filter sink {sink_index}: {message}")]
+    SinkReload { sink_index: usize, message: String },
+}
+
+struct LoggerLayers {
+    layers: Vec<Box<dyn tracing_subscriber::Layer<LoggerSubscriber> + Send + Sync>>,
+    guards: Vec<WorkerGuard>,
+    reload_handles: Vec<FilterReloadHandle>,
+    filter: EnvFilter,
+}
+
+impl LoggerLayers {
+    fn new(filter: EnvFilter) -> Self {
+        Self {
+            layers: Vec::new(),
+            guards: Vec::new(),
+            reload_handles: Vec::new(),
+            filter,
+        }
+    }
+
+    fn add_layer<L>(&mut self, layer: L)
+    where
+        L: tracing_subscriber::Layer<LoggerSubscriber> + Send + Sync + 'static,
+    {
+        let (filter, reload_handle) = tracing_subscriber::reload::Layer::new(self.filter.clone());
+
+        self.layers.push(Box::new(layer.with_filter(filter)));
+        self.reload_handles.push(reload_handle);
+    }
+
+    fn add_guarded_layer<L>(&mut self, layer: L, guard: WorkerGuard)
+    where
+        L: tracing_subscriber::Layer<LoggerSubscriber> + Send + Sync + 'static,
+    {
+        self.add_layer(layer);
+        self.guards.push(guard);
+    }
 }
 
 /// This is a wrapper around a writer to allow cloning which is
@@ -63,7 +113,10 @@ impl Write for SharedWriter {
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| {
-                warn!("Tracing writer mutex poisoned on write, recovering");
+                warn!(
+                    target: LOG_TARGET,
+                    "Tracing writer mutex poisoned on write, recovering"
+                );
                 poisoned.into_inner()
             })
             .write(buf)
@@ -73,7 +126,10 @@ impl Write for SharedWriter {
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| {
-                warn!("Tracing writer mutex poisoned on flush, recovering");
+                warn!(
+                    target: LOG_TARGET,
+                    "Tracing writer mutex poisoned on flush, recovering"
+                );
                 poisoned.into_inner()
             })
             .flush()
@@ -108,7 +164,7 @@ pub enum LoggerLayer {
     Gelf(GelfConfig),
     File(FileConfig),
     Loki(LokiConfig),
-    Otlp(OtlpConfig),
+    Otlp(OtlpLoggingConfig),
     Stdout,
     Stderr,
     #[serde(skip)]
@@ -122,7 +178,7 @@ pub struct LoggerLayerSettings {
     pub file: Option<FileConfig>,
     pub loki: Option<LokiConfig>,
     pub gelf: Option<GelfConfig>,
-    pub otlp: Option<OtlpConfig>,
+    pub otlp: Option<OtlpLoggingConfig>,
     pub stdout: bool,
     pub stderr: bool,
 }
@@ -149,6 +205,7 @@ pub enum MetricsLayerSettings {
 pub struct TokioConsoleConfig {
     pub bind_address: String,
     pub port: u16,
+    pub recording_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -190,7 +247,7 @@ impl Default for TracingSettings {
             filter: FilterLayerSettings::None,
             metrics: MetricsLayerSettings::None,
             console: ConsoleLayerSettings::None,
-            level: Level::DEBUG,
+            level: Level::INFO,
         }
     }
 }
@@ -221,7 +278,7 @@ impl<RuntimeServiceId> ServiceData for Tracing<RuntimeServiceId> {
     type Settings = TracingSettings;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
-    type Message = ();
+    type Message = TracingMessage;
 }
 
 #[async_trait::async_trait]
@@ -242,30 +299,21 @@ where
             .notifier()
             .get_updated_settings();
 
-        let env_filter = match effective_filter_settings(&config) {
-            FilterLayerSettings::EnvFilter(config) => Some(create_envfilter_layer(&config)?),
-            FilterLayerSettings::None => None,
-        };
-
-        let mut logger_layers: Vec<Box<dyn tracing_subscriber::Layer<_> + Send + Sync>> = vec![];
-        let mut logger_guards: Vec<WorkerGuard> = vec![];
+        let mut logger_layers = LoggerLayers::new(initial_env_filter(&config)?);
 
         if let Some(file_config) = config.logger.file {
             let (layer, guard) = create_file_layer(file_config);
-            push_logger_layer!(logger_layers, env_filter, layer);
-            logger_guards.push(guard);
+            logger_layers.add_guarded_layer(layer, guard);
         }
 
         if config.logger.stdout {
             let (layer, guard) = create_writer_layer(std::io::stdout());
-            push_logger_layer!(logger_layers, env_filter, layer);
-            logger_guards.push(guard);
+            logger_layers.add_guarded_layer(layer, guard);
         }
 
         if config.logger.stderr {
             let (layer, guard) = create_writer_layer(std::io::stderr());
-            push_logger_layer!(logger_layers, env_filter, layer);
-            logger_guards.push(guard);
+            logger_layers.add_guarded_layer(layer, guard);
         }
 
         if let Some(loki_config) = config.logger.loki {
@@ -273,7 +321,7 @@ where
                 loki_config,
                 service_resources_handle.overwatch_handle.runtime(),
             )?;
-            push_logger_layer!(logger_layers, env_filter, loki_layer);
+            logger_layers.add_layer(loki_layer);
         }
 
         if let Some(gelf_config) = config.logger.gelf {
@@ -281,15 +329,17 @@ where
                 &gelf_config,
                 service_resources_handle.overwatch_handle.runtime(),
             )?;
-            push_logger_layer!(logger_layers, env_filter, gelf_layer);
+            logger_layers.add_layer(gelf_layer);
         }
 
         if let Some(otlp_config) = config.logger.otlp {
             let otlp_logging_layer = create_otlp_layer(otlp_config)?;
-            push_logger_layer!(logger_layers, env_filter, otlp_logging_layer);
+            logger_layers.add_layer(otlp_logging_layer);
         }
 
-        let mut other_layers: Vec<Box<dyn tracing_subscriber::Layer<_> + Send + Sync>> = vec![];
+        let mut other_layers: Vec<
+            Box<dyn tracing_subscriber::Layer<LoggerSubscriber> + Send + Sync>,
+        > = vec![];
 
         if let TracingLayerSettings::Otlp(config) = config.tracing {
             let tracing_layer = create_otlp_tracing_layer(config)?;
@@ -301,21 +351,47 @@ where
             other_layers.push(Box::new(metrics_layer));
         }
 
+        let LoggerLayers {
+            layers: logger_layers,
+            guards: logger_guards,
+            reload_handles: filter_reload_handles,
+            ..
+        } = logger_layers;
+
+        #[cfg(feature = "tokio-console")]
+        let console_layer = match &config.console {
+            ConsoleLayerSettings::Console(console_config) => {
+                console::create_console_layer::<LoggerSubscriber>(console_config)?
+            }
+            ConsoleLayerSettings::None => None,
+        };
+
         ONCE_INIT.call_once(move || {
             let mut layers: Vec<Box<dyn tracing_subscriber::Layer<_> + Send + Sync>> = vec![];
 
             let level_filter = {
-                #[cfg(feature = "profiling")]
-                if let ConsoleLayerSettings::Console(console_config) = &config.console
-                    && let Some(console_layer) = console::create_console_layer(console_config)
+                #[cfg(feature = "tokio-console")]
                 {
-                    layers.push(console_layer);
-                    LevelFilter::TRACE
-                } else {
+                    if let Some(console_layer) = console_layer {
+                        if let ConsoleLayerSettings::Console(console_config) = &config.console
+                            && let Some(recording_path) = &console_config.recording_path
+                        {
+                            tracing::info!(
+                                target: LOG_TARGET,
+                                "Tokio console raw recording is enabled at `{}`",
+                                recording_path.display()
+                            );
+                        }
+                        layers.push(console_layer);
+                        LevelFilter::TRACE
+                    } else {
+                        LevelFilter::from(config.level)
+                    }
+                }
+                #[cfg(not(feature = "tokio-console"))]
+                {
                     LevelFilter::from(config.level)
                 }
-                #[cfg(not(feature = "profiling"))]
-                LevelFilter::from(config.level)
             };
 
             layers.extend(other_layers);
@@ -332,6 +408,7 @@ where
         Ok(Self {
             service_resources_handle,
             logger_guards,
+            filter_reload_handles,
             _runtime_service_id: PhantomData,
         })
     }
@@ -339,26 +416,68 @@ where
     async fn run(self) -> Result<(), overwatch::DynError> {
         let Self {
             logger_guards: _logger_guard,
-            service_resources_handle,
+            mut service_resources_handle,
+            filter_reload_handles,
             ..
         } = self;
 
         service_resources_handle.status_updater.notify_ready();
         tracing::info!(
+            target: LOG_TARGET,
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
 
-        // Wait indefinitely until the service is stopped.
-        // When it's stopped, the logger guard will be dropped. That will flush all
-        // pending logs.
-        std::future::pending::<()>().await;
+        while let Some(message) = service_resources_handle.inbound_relay.recv().await {
+            match message {
+                TracingMessage::ReloadFilter {
+                    filter,
+                    reply_channel,
+                } => {
+                    let result = reload_filters(&filter_reload_handles, &filter);
+                    drop(reply_channel.send(result));
+                }
+            }
+        }
+
         Ok(())
     }
 }
 
+fn reload_filters(
+    filter_reload_handles: &[FilterReloadHandle],
+    filter: &EnvFilterConfig,
+) -> Result<(), TracingFilterReloadError> {
+    if filter_reload_handles.is_empty() {
+        return Err(TracingFilterReloadError::NoLoggerSinks);
+    }
+
+    let filter =
+        create_envfilter_layer(filter).map_err(|err| TracingFilterReloadError::InvalidFilter {
+            message: err.to_string(),
+        })?;
+
+    for (sink_index, handle) in filter_reload_handles.iter().enumerate() {
+        handle
+            .reload(filter.clone())
+            .map_err(|err| TracingFilterReloadError::SinkReload {
+                sink_index,
+                message: err.to_string(),
+            })?;
+    }
+
+    Ok(())
+}
+
+fn initial_env_filter(config: &TracingSettings) -> Result<EnvFilter, overwatch::DynError> {
+    match effective_filter_settings(config) {
+        FilterLayerSettings::EnvFilter(filter) => create_envfilter_layer(&filter),
+        FilterLayerSettings::None => EnvFilter::try_new(config.level.as_str()).map_err(Into::into),
+    }
+}
+
 /// Resolves the configured filter settings, falling back to the shared
-/// default verbose filter policy when no explicit filter was provided.
+/// default filter policy when no explicit filter was provided.
 fn effective_filter_settings(config: &TracingSettings) -> FilterLayerSettings {
     match &config.filter {
         FilterLayerSettings::EnvFilter(filter) => FilterLayerSettings::EnvFilter(filter.clone()),

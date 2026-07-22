@@ -6,58 +6,20 @@ use lb_blend_message::{
     crypto::proofs::PoQVerificationInputsMinusSigningKey, encap::ProofsVerifier,
 };
 use lb_blend_proofs::{
-    quota::{
-        self, ProofOfQuota, VerifiedProofOfQuota,
-        inputs::prove::{
-            PublicInputs, private::ProofOfLeadershipQuotaInputs, public::LeaderInputs,
-        },
-    },
+    quota::{self, ProofOfQuota, VerifiedProofOfQuota, inputs::prove::PublicInputs},
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
 use lb_core::crypto::ZkHash;
 use lb_cryptarchia_engine::Epoch;
-use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
+use lb_key_management_system_keys::keys::Ed25519PublicKey;
 
 use crate::message_blend::{
     CoreProofOfQuotaGenerator,
     provers::{
-        BlendLayerProof, ProofsGeneratorSettings, core_and_leader::CoreAndLeaderProofsGenerator,
-        leader::LeaderProofsGenerator,
+        BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
+        core_and_leader::CoreAndLeaderProofsGenerator,
     },
 };
-
-pub struct TestEpochChangeLeaderProofsGenerator(
-    pub ProofsGeneratorSettings,
-    pub ProofOfLeadershipQuotaInputs,
-);
-
-#[async_trait]
-impl LeaderProofsGenerator for TestEpochChangeLeaderProofsGenerator {
-    fn new(
-        settings: ProofsGeneratorSettings,
-        private_inputs: ProofOfLeadershipQuotaInputs,
-    ) -> Self {
-        Self(settings, private_inputs)
-    }
-
-    fn rotate_epoch(
-        &mut self,
-        new_epoch_public: LeaderInputs,
-        new_private_inputs: ProofOfLeadershipQuotaInputs,
-        _new_epoch: Epoch,
-    ) {
-        self.0.public_inputs.leader = new_epoch_public;
-        self.1 = new_private_inputs;
-    }
-
-    async fn get_next_proof(&mut self) -> BlendLayerProof {
-        BlendLayerProof {
-            proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
-            proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
-            ephemeral_signing_key: UnsecuredEd25519Key::from_bytes(&[0; _]),
-        }
-    }
-}
 
 pub struct MockCorePoQGenerator;
 
@@ -68,7 +30,7 @@ impl CoreProofOfQuotaGenerator for MockCorePoQGenerator {
         _key_index: u64,
     ) -> impl Future<Output = Result<(VerifiedProofOfQuota, ZkHash), quota::Error>> + Send + Sync
     {
-        use lb_groth16::Field as _;
+        use lb_groth16::AdditiveGroup as _;
 
         ready(Ok((
             VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
@@ -77,30 +39,25 @@ impl CoreProofOfQuotaGenerator for MockCorePoQGenerator {
     }
 }
 
-pub struct TestEpochChangeCoreAndLeaderProofsGenerator(
-    pub ProofsGeneratorSettings,
-    pub Option<ProofOfLeadershipQuotaInputs>,
-);
+pub struct TestEpochChangeCoreAndLeaderProofsGenerator(pub Option<WinningPolInfoStream>);
 
 #[async_trait]
 impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
     for TestEpochChangeCoreAndLeaderProofsGenerator
 {
-    fn new(settings: ProofsGeneratorSettings, _proof_of_quota_generator: CorePoQGenerator) -> Self {
-        Self(settings, None)
-    }
-
-    fn rotate_epoch(&mut self, new_epoch_public: LeaderInputs, _new_epoch: Epoch) {
-        self.0.public_inputs.leader = new_epoch_public;
+    fn new(
+        _settings: ProofsGeneratorSettings,
+        _proof_of_quota_generator: CorePoQGenerator,
+    ) -> Self {
+        Self(None)
     }
 
     fn set_epoch_private(
         &mut self,
-        new_epoch_private: ProofOfLeadershipQuotaInputs,
-        _new_epoch_public: LeaderInputs,
-        _new_epoch: Epoch,
+        winning_pol_info_stream: WinningPolInfoStream,
+        _target_epoch: Epoch,
     ) {
-        self.1 = Some(new_epoch_private);
+        self.0 = Some(winning_pol_info_stream);
     }
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
@@ -112,26 +69,14 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
     }
 }
 
-pub struct TestEpochChangeProofsVerifier(
-    pub PoQVerificationInputsMinusSigningKey,
-    pub Option<LeaderInputs>,
-);
+pub struct TestEpochChangeProofsVerifier;
 
 #[async_trait]
 impl ProofsVerifier for TestEpochChangeProofsVerifier {
     type Error = Infallible;
 
-    fn new(public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
-        Self(public_inputs, None)
-    }
-
-    fn start_epoch_transition(&mut self, new_pol_inputs: LeaderInputs) {
-        self.1 = Some(self.0.leader);
-        self.0.leader = new_pol_inputs;
-    }
-
-    fn complete_epoch_transition(&mut self) {
-        self.1 = None;
+    fn new(_public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
+        Self
     }
 
     fn verify_proof_of_quota(

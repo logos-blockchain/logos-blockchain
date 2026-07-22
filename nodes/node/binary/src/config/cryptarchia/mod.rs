@@ -33,10 +33,8 @@ impl ServiceConfig {
     ) -> (
         lb_chain_service::CryptarchiaSettings,
         lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
-        lb_chain_leader_service::LeaderSettings<(), Libp2pBroadcastSettings>,
+        lb_chain_leader_service::LeaderSettings<Libp2pBroadcastSettings>,
     ) {
-        let blocks_per_session = self.deployment.blocks_per_epoch();
-
         let ledger_config = lb_ledger::Config {
             consensus_config: self.deployment.consensus_config(),
             epoch_config: EpochConfig {
@@ -62,11 +60,8 @@ impl ServiceConfig {
                             (
                                 service_type,
                                 ServiceParameters {
-                                    session_duration: blocks_per_session,
                                     inactivity_period: service_params.inactivity_period,
-                                    lock_period: service_params.lock_period,
-                                    retention_period: service_params.retention_period,
-                                    timestamp: service_params.timestamp,
+                                    epoch: service_params.epoch,
                                 },
                             )
                         })
@@ -106,17 +101,25 @@ impl ServiceConfig {
                     .as_path(),
             ),
             starting_state: self.deployment.genesis_block.into(),
+            sync: lb_chain_service::SyncConfig {
+                block_provider: lb_chain_service::BlockProviderConfig {
+                    batch_size: self.user.service.sync.block_provider.batch_size,
+                },
+            },
         };
         let chain_network_settings = lb_chain_network_service::ChainNetworkSettings {
             bootstrap: lb_chain_network_service::BootstrapConfig {
                 ibd: lb_chain_network_service::IbdConfig {
-                    delay_before_new_download: self
+                    peers: self.user.network.bootstrap.ibd.peers,
+                    tips_fetch_max_attempts: self
                         .user
                         .network
                         .bootstrap
                         .ibd
-                        .delay_before_new_download,
-                    peers: self.user.network.bootstrap.ibd.peers,
+                        .tips_fetch_max_attempts,
+                    tips_fetch_min_delay: self.user.network.bootstrap.ibd.tips_fetch_min_delay,
+                    tips_fetch_max_delay: self.user.network.bootstrap.ibd.tips_fetch_max_delay,
+                    round_delay: self.user.network.bootstrap.ibd.round_delay,
                 },
             },
             network: LibP2pAdapterSettings {
@@ -135,6 +138,12 @@ impl ServiceConfig {
             sync: lb_chain_network_service::SyncConfig {
                 orphan: lb_chain_network_service::OrphanConfig {
                     max_orphan_cache_size: self.user.network.sync.orphan.max_orphan_cache_size,
+                    max_rejected_cache_size: self.user.network.sync.orphan.max_rejected_cache_size,
+                },
+                tip_poll: lb_chain_network_service::TipPollConfig {
+                    enabled: self.user.network.sync.tip_poll.enabled,
+                    lag_threshold_blocks: self.user.network.sync.tip_poll.lag_threshold_blocks,
+                    max_peers_to_sample: self.user.network.sync.tip_poll.max_peers_to_sample,
                 },
             },
         };
@@ -143,7 +152,6 @@ impl ServiceConfig {
                 topic: self.deployment.gossipsub_protocol,
             },
             config: ledger_config,
-            transaction_selector_settings: (),
             wallet_config: lb_chain_leader_service::LeaderWalletConfig {
                 funding_pk: self.user.leader.wallet.funding_pk,
                 max_tx_fee: self.user.leader.wallet.max_tx_fee,

@@ -1,9 +1,6 @@
 pub mod adapters;
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    pin::Pin,
-};
+use std::{collections::BTreeMap, pin::Pin};
 
 use futures::{Stream, future::join_all};
 use lb_core::{header::HeaderId, mantle::TxHash};
@@ -32,12 +29,13 @@ pub trait StorageAdapter<RuntimeServiceId> {
     /// The block with the given header id. If no block is found, returns None.
     async fn get_block(&self, key: &HeaderId) -> Option<Self::Block>;
 
-    async fn store_block(
+    async fn store_block_data(
         &self,
         header_id: HeaderId,
         parent_id: HeaderId,
         block: Self::Block,
         events: Self::Events,
+        immutable_ids: BTreeMap<Slot, HeaderId>,
     ) -> Result<(), overwatch::DynError>;
 
     async fn get_block_parent(&self, header_id: &HeaderId) -> Option<HeaderId>;
@@ -85,7 +83,7 @@ pub trait StorageAdapter<RuntimeServiceId> {
 
     async fn get_transactions(
         &self,
-        tx_hashes: BTreeSet<TxHash>,
+        tx_hashes: Vec<TxHash>,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Tx> + Send>>, overwatch::DynError>;
 
     async fn remove_transactions(&self, tx_hashes: &[TxHash]) -> Result<(), overwatch::DynError>;

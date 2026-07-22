@@ -2,12 +2,11 @@ use std::{hash::Hash, marker::PhantomData};
 
 use lb_blend::{
     message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
-    proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs,
     scheduling::{
         membership::Membership,
         message_blend::{
-            crypto::leader::send::SessionCryptographicProcessor,
-            provers::leader::LeaderProofsGenerator,
+            crypto::leader::send::EpochCryptographicProcessor,
+            provers::{WinningPolInfoStream, leader::LeaderProofsGenerator},
         },
     },
 };
@@ -19,9 +18,22 @@ use rand::SeedableRng as _;
 use crate::edge::{LOG_TARGET, RunningSettings as Settings, backends::BlendBackend};
 
 pub struct MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId> {
-    cryptographic_processor: SessionCryptographicProcessor<NodeId, ProofsGenerator>,
+    cryptographic_processor: EpochCryptographicProcessor<NodeId, ProofsGenerator>,
     backend: Backend,
     _phantom: PhantomData<RuntimeServiceId>,
+}
+
+impl<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
+    MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
+where
+    Backend: BlendBackend<NodeId, RuntimeServiceId>,
+    NodeId: Clone,
+    ProofsGenerator: LeaderProofsGenerator,
+{
+    #[cfg(test)]
+    pub const fn epoch(&self) -> Epoch {
+        self.cryptographic_processor.epoch()
+    }
 }
 
 impl<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
@@ -41,7 +53,7 @@ where
         settings: Settings<Backend, NodeId, RuntimeServiceId>,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
-        private_info: ProofOfLeadershipQuotaInputs,
+        winning_pol_info_stream: WinningPolInfoStream,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         epoch: Epoch,
     ) -> Result<Self, Error>
@@ -58,7 +70,7 @@ where
                 settings,
                 membership,
                 public_info,
-                private_info,
+                winning_pol_info_stream,
                 overwatch_handle,
                 epoch,
             ))
@@ -69,15 +81,15 @@ where
         settings: Settings<Backend, NodeId, RuntimeServiceId>,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
-        private_info: ProofOfLeadershipQuotaInputs,
+        winning_pol_info_stream: WinningPolInfoStream,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         epoch: Epoch,
     ) -> Self {
-        let cryptographic_processor = SessionCryptographicProcessor::new(
+        let cryptographic_processor = EpochCryptographicProcessor::new(
             settings.num_blend_layers,
             membership.clone(),
             public_info,
-            private_info,
+            winning_pol_info_stream,
             epoch,
         );
         let backend = Backend::new(

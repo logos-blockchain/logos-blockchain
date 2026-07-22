@@ -31,7 +31,8 @@ impl ServiceConfig {
                     .genesis_block
                     .genesis_tx()
                     .cryptarchia_parameter()
-                    .genesis_time,
+                    .genesis_time
+                    .into(),
             },
             epoch_config: EpochConfig {
                 epoch_period_nonce_buffer: cryptarchia_deployment

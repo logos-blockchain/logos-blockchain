@@ -1,5 +1,6 @@
 use std::net::Ipv4Addr;
 
+use lb_log_targets::libp2p as lb_log_targets_libp2p;
 use zerocopy::{FromBytes, FromZeros as _, Immutable, IntoBytes, KnownLayout, Unaligned};
 
 use super::{PCP_VERSION, PcpRequest, PcpResponse, PcpResponseHeader, ResultCode};
@@ -7,6 +8,8 @@ use crate::behaviour::nat::address_mapper::protocols::pcp_core::client::PcpError
 
 pub const OPCODE_ANNOUNCE: u8 = 0;
 pub const PCP_ANNOUNCE_SIZE: usize = 24;
+const LOG_TARGET: &str =
+    lb_log_targets_libp2p::behaviour::nat::address_mapper::protocols::pcp_core::wire::ANNOUNCE;
 
 pub type PcpAnnounceRequest = PcpRequest<AnnouncePayload>;
 
@@ -52,6 +55,7 @@ impl<'a> TryFrom<&'a [u8]> for PcpAnnounceResponse {
 
         let Ok(result_code) = ResultCode::try_from(response.header.result_code) else {
             tracing::warn!(
+                target: LOG_TARGET,
                 "Unknown PCP result code in ANNOUNCE response: {}",
                 response.header.result_code
             );

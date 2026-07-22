@@ -1,6 +1,5 @@
 mod inputs;
 mod private;
-mod proving_key;
 mod public;
 mod verification_key;
 mod witness;
@@ -8,17 +7,20 @@ mod witness;
 use std::error::Error;
 
 pub use inputs::ZkSignWitnessInputs;
-use lb_groth16::{CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser};
+use lb_circuits_prover::Prover as _;
+use lb_groth16::{
+    CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser, groth16_batch_verify,
+};
+use lb_log_targets::proofs;
 pub use private::ZkSignPrivateKeysData;
 pub use public::ZkSignVerifierInputs;
 use tracing::error;
 
-use crate::{
-    proving_key::ZKSIGN_PROVING_KEY_PATH,
-    public::{ZkSignVerifierInputsJson, ZkSignVerifierInputsJsonTryFromError},
-};
+use crate::public::{ZkSignVerifierInputsJson, ZkSignVerifierInputsJsonTryFromError};
 
 pub type ZkSignProof = CompressedGroth16Proof;
+
+const LOG_TARGET: &str = proofs::ZKSIGN;
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error, Clone)]
 pub enum ZkSignError {
@@ -54,24 +56,24 @@ pub enum ProveError {
 /// - Returns a `ProveError::Json` if there is an error during JSON
 ///   serialization or deserialization.
 pub fn prove(
-    inputs: &ZkSignWitnessInputs,
+    inputs: ZkSignWitnessInputs,
 ) -> Result<(ZkSignProof, ZkSignVerifierInputs), ProveError> {
-    let witness = witness::generate_witness(inputs).map_err(lbp_error::Error::from)?;
-    let (proof, verifier_inputs) = lb_circuits_prover::prover_from_contents(
-        ZKSIGN_PROVING_KEY_PATH.as_path(),
+    let witness = witness::generate_witness(inputs)?;
+    let result = lb_circuits_prover::Rapidsnark::prove(
+        lbc_signature_sys::artifacts::PROVING_KEY,
         witness.as_ref(),
     )
     .map_err(lbp_error::Error::from)?;
     let proof: Groth16ProofJsonDeser =
-        serde_json::from_slice(&proof).map_err(lbp_error::Error::from)?;
+        serde_json::from_str(&result.proof).map_err(lbp_error::Error::from)?;
     let verifier_inputs: ZkSignVerifierInputsJson =
-        serde_json::from_slice(&verifier_inputs).map_err(lbp_error::Error::from)?;
+        serde_json::from_str(&result.public_signals).map_err(lbp_error::Error::from)?;
     let proof: Groth16Proof = proof
         .try_into()
         .map_err(lbp_error::Error::Groth16JsonProof)?;
     Ok((
         CompressedGroth16Proof::try_from(&proof).unwrap_or_else(|e| {
-            error!("Fatal CompressedGroth16Proof::try_from: {e}");
+            error!(target: LOG_TARGET, "Fatal CompressedGroth16Proof::try_from: {e}");
             // We panic here because this should never happen, and if it does, it's a
             // critical error that we want to be immediately visible during
             // development and testing.
@@ -122,6 +124,26 @@ pub fn verify(
     .map_err(|e| VerifyError::ProofVerify(Box::new(e)))
 }
 
+pub fn batch_verify(
+    proofs_and_inputs: &[(ZkSignProof, ZkSignVerifierInputs)],
+) -> Result<bool, VerifyError> {
+    let inputs: Vec<Vec<_>> = proofs_and_inputs
+        .iter()
+        .map(|(_, pi)| pi.as_inputs().to_vec())
+        .collect();
+
+    let expanded_proofs: Vec<Groth16Proof> = proofs_and_inputs
+        .iter()
+        .map(|(p, _)| Groth16Proof::try_from(p).map_err(|_| VerifyError::Expansion))
+        .collect::<Result<Vec<_>, _>>()?; // short-circuits on first failure
+
+    Ok(groth16_batch_verify(
+        verification_key::ZKSIGN_VK.as_ref(),
+        &expanded_proofs,
+        &inputs,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use lb_groth16::Fr;
@@ -142,7 +164,10 @@ mod tests {
         let sks: ZkSignPrivateKeysData = sks.into();
         let msg_hash = Poseidon2Bn254Hasher::digest(&[BigUint::from_bytes_le(b"foo_bar").into()]);
         let input = ZkSignWitnessInputs::from_witness_data_and_message_hash(sks, msg_hash);
-        let (proof, verifier_inputs) = prove(&input).unwrap();
+        let (proof, verifier_inputs) = prove(input).unwrap();
         assert!(verify(&proof, &verifier_inputs).unwrap());
+        assert!(
+            batch_verify(&[(proof, verifier_inputs.clone()), (proof, verifier_inputs)]).unwrap()
+        );
     }
 }

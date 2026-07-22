@@ -5,9 +5,11 @@ use std::{
 };
 
 use futures::FutureExt as _;
-use tracing::{debug, info, warn};
+use lb_log_targets::libp2p as lb_log_targets_libp2p;
 
 use crate::config::GatewaySettings;
+
+const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::nat::GATEWAY_MONITOR;
 
 /// Events emitted by the gateway monitor
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,13 +71,14 @@ impl<Detector: GatewayDetector> GatewayMonitor<Detector> {
             _detector: std::marker::PhantomData,
         };
 
-        debug!(
+        tracing::debug!(
+            target: LOG_TARGET,
             "Starting gateway monitoring with {:?}s interval",
             monitor.settings.check_interval
         );
 
         if let Some(gateway) = Self::detect_gateway() {
-            info!("Initial gateway detected: {gateway}");
+            tracing::info!(target: LOG_TARGET, "Initial gateway detected: {gateway}");
             monitor.current_gateway = Some(gateway);
         }
 
@@ -98,7 +101,7 @@ impl<Detector: GatewayDetector> GatewayMonitor<Detector> {
         match Detector::detect() {
             Ok(gateway) => Some(gateway),
             Err(e) => {
-                warn!("Failed to detect gateway: {e}");
+                tracing::warn!(target: LOG_TARGET, "Failed to detect gateway: {e}");
                 None
             }
         }
@@ -109,7 +112,10 @@ impl<Detector: GatewayDetector> GatewayMonitor<Detector> {
 
         match self.current_gateway {
             Some(old_gateway) if old_gateway != new_gateway => {
-                info!("Gateway address changed from {old_gateway} to {new_gateway}");
+                tracing::info!(
+                    target: LOG_TARGET,
+                    "Gateway address changed from {old_gateway} to {new_gateway}"
+                );
 
                 self.current_gateway = Some(new_gateway);
 

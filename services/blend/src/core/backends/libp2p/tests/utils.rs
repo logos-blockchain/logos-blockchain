@@ -1,8 +1,8 @@
-use core::{num::NonZeroU64, ops::RangeInclusive, time::Duration};
+use core::{num::NonZeroU64, ops::RangeInclusive, pin::Pin, time::Duration};
 use std::iter::repeat_with;
 
 use async_trait::async_trait;
-use futures::StreamExt as _;
+use futures::{Stream, StreamExt as _, stream::pending};
 use lb_blend::{
     message::{
         crypto::key_ext::Ed25519SecretKeyExt as _,
@@ -15,6 +15,7 @@ use lb_blend::{
     },
     scheduling::membership::{Membership, Node},
 };
+use lb_chain_service::Epoch;
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use lb_libp2p::{Protocol, SwarmEvent};
 use lb_utils::blake_rng::BlakeRng;
@@ -25,14 +26,14 @@ use libp2p_swarm_test::SwarmExt as _;
 use rand::SeedableRng as _;
 use tokio::{
     sync::{broadcast, mpsc},
-    time::interval,
+    time::{Interval, interval},
 };
 use tokio_stream::wrappers::IntervalStream;
 
 use crate::{
     core::{
         backends::{
-            PublicInfo,
+            BackendEpochInfo,
             libp2p::{BlendSwarm, behaviour::BlendBehaviour, swarm::BlendSwarmMessage},
         },
         settings::StartingBlendConfig as BlendConfig,
@@ -46,7 +47,7 @@ pub struct TestSwarm {
     pub swarm: InnerSwarm,
     pub swarm_message_sender: mpsc::Sender<BlendSwarmMessage>,
     pub incoming_message_receiver:
-        broadcast::Receiver<(EncapsulatedMessageWithVerifiedSignature, u64)>,
+        broadcast::Receiver<(EncapsulatedMessageWithVerifiedSignature, Epoch)>,
 }
 
 /// Generates `count` nodes with randomly generated identities and empty
@@ -92,22 +93,32 @@ pub fn build_membership(
 
 pub struct SwarmBuilder {
     identity: Keypair,
-    public_info: PublicInfo<PeerId>,
+    public_info: BackendEpochInfo<PeerId>,
     max_dial_attempts: Option<NonZeroU64>,
+    peering_degree_check_clock: Option<Pin<Box<dyn Stream<Item = ()> + Send>>>,
 }
 
 impl SwarmBuilder {
     pub fn new(identity: Keypair, membership: &[Node<PeerId>]) -> Self {
-        let public_info = build_membership(membership, Some(identity.public().into())).into();
+        let public_info = (
+            build_membership(membership, Some(identity.public().into())),
+            1.into(),
+        );
         Self {
             identity,
             public_info,
             max_dial_attempts: None,
+            peering_degree_check_clock: None,
         }
     }
 
     pub fn with_max_dial_attempts(mut self, max_dial_attempts: NonZeroU64) -> Self {
         self.max_dial_attempts = Some(max_dial_attempts);
+        self
+    }
+
+    pub fn with_peering_degree_check_interval(mut self, interval: Interval) -> Self {
+        self.peering_degree_check_clock = Some(IntervalStream::new(interval).map(|_| ()).boxed());
         self
     }
 
@@ -132,6 +143,8 @@ impl SwarmBuilder {
             self.max_dial_attempts
                 .unwrap_or_else(|| 3u64.try_into().unwrap()),
             1usize.try_into().unwrap(),
+            self.peering_degree_check_clock
+                .unwrap_or_else(|| Box::pin(pending())),
         );
 
         TestSwarm {
@@ -146,6 +159,7 @@ pub struct BlendBehaviourBuilder {
     peer_id: PeerId,
     membership: Membership<PeerId>,
     observation_window: Option<(Duration, RangeInclusive<u64>)>,
+    peering_degree: Option<RangeInclusive<usize>>,
 }
 
 impl BlendBehaviourBuilder {
@@ -154,6 +168,7 @@ impl BlendBehaviourBuilder {
             peer_id,
             membership,
             observation_window: None,
+            peering_degree: None,
         }
     }
 
@@ -166,29 +181,37 @@ impl BlendBehaviourBuilder {
         self
     }
 
+    pub fn with_peering_degree(mut self, peering_degree: RangeInclusive<usize>) -> Self {
+        self.peering_degree = Some(peering_degree);
+        self
+    }
+
     pub fn build(self) -> BlendBehaviour<TestObservationWindowProvider> {
         let observation_window_values = self
             .observation_window
             .unwrap_or((Duration::from_secs(1), u64::MIN..=u64::MAX));
+        let peering_degree = self.peering_degree.unwrap_or(1..=100);
 
         BlendBehaviour {
             blend: NetworkBehaviour::new(
                 &Config {
                     with_core: CoreToCoreConfig {
-                        peering_degree: 1..=100,
+                        peering_degree,
                         minimum_network_size: 1.try_into().unwrap(),
+                        num_blend_layers: 3.try_into().unwrap(),
                     },
                     with_edge: CoreToEdgeConfig {
                         connection_timeout: Duration::from_secs(1),
                         max_incoming_connections: 300,
                         minimum_network_size: 1.try_into().unwrap(),
+                        num_blend_layers: 3.try_into().unwrap(),
                     },
                 },
                 TestObservationWindowProvider {
                     expected_message_range: observation_window_values.1,
                     interval: observation_window_values.0,
                 },
-                (self.membership, 1),
+                (self.membership, 1.into()),
                 self.peer_id,
                 PROTOCOL_NAME,
             ),
@@ -215,8 +238,7 @@ impl<Settings> From<&BlendConfig<Settings>> for TestObservationWindowProvider {
 }
 
 impl IntervalStreamProvider for TestObservationWindowProvider {
-    type IntervalStream =
-        Box<dyn futures::Stream<Item = RangeInclusive<u64>> + Send + Unpin + 'static>;
+    type IntervalStream = Box<dyn Stream<Item = RangeInclusive<u64>> + Send + Unpin + 'static>;
     type IntervalItem = RangeInclusive<u64>;
 
     fn interval_stream(&self) -> Self::IntervalStream {

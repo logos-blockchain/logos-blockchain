@@ -215,6 +215,10 @@ fn compute_selectors(
     result
 }
 
+/// Sorts `nodes` in place by their key and builds the membership
+/// [`MerkleTree`] over the resulting set of keys.
+///
+/// Assumes all nodes have unique keys; returns an error otherwise.
 pub fn sort_nodes_and_build_merkle_tree<Node>(
     nodes: &mut [Node],
     key: impl Fn(&Node) -> ZkPublicKey,

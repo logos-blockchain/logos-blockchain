@@ -5,6 +5,7 @@ mod deployment_artifacts;
 mod image;
 mod k8s;
 pub mod local;
+mod snapshot;
 
 use std::{
     env,
@@ -13,15 +14,17 @@ use std::{
 
 use async_trait::async_trait;
 pub use block_feed::{
-    BlockFeed, BlockFeedExtensionFactory, BlockFeedObservation, BlockFeedObserver,
-    BlockFeedSnapshot, BlockFeedWaitError, BlockRecord, NodeHeadSnapshot, ObservedBlock,
-    block_feed_source_provider, block_feed_sources, named_block_feed_sources,
+    BlockFeed, BlockFeedCollector, BlockFeedCollectorRuntime, BlockFeedExtensionFactory,
+    BlockFeedObservation, BlockFeedObserver, BlockFeedSnapshot, BlockFeedWaitError, BlockRecord,
+    BoxedBlockFeedCollector, NodeHeadSnapshot, ObservedBlock, block_feed_source_provider,
+    block_feed_sources, named_block_feed_sources,
 };
 use common_http_client::BasicAuthCredentials;
 use lb_config::kms::key_id_for_preload_backend;
 use lb_core::block::genesis::GenesisBlock;
 use lb_node::config::RunConfig;
 use reqwest::Url;
+pub use snapshot::NodeStateSnapshotStore;
 use testing_framework_core::{
     scenario::{
         Application, DynError, ExternalNodeSource, NodeAccess,
@@ -70,19 +73,15 @@ impl Application for LbcEnv {
         let endpoint = Url::parse(source.endpoint())?;
         let basic_auth = external_basic_auth(&endpoint);
 
-        Ok(NodeHttpClient::from_urls_with_basic_auth(
-            endpoint, None, basic_auth,
+        Ok(NodeHttpClient::from_url_with_basic_auth(
+            endpoint, basic_auth,
         ))
     }
 
     fn build_node_client(access: &NodeAccess) -> Result<Self::NodeClient, DynError> {
         let base_url = access.api_base_url()?;
-        let testing_url = access
-            .testing_port()
-            .map(|port| Url::parse(&format!("http://{}:{port}", access.host())))
-            .transpose()?;
 
-        Ok(NodeHttpClient::from_urls(base_url, testing_url))
+        Ok(NodeHttpClient::from_url(base_url))
     }
 
     fn node_readiness_path() -> &'static str {

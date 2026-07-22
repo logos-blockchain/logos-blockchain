@@ -11,4 +11,6 @@ pub enum Error {
     Groth16JsonInput(<Groth16Input as TryFrom<Groth16InputDeser>>::Error),
     #[error(transparent)]
     Groth16JsonProof(<Groth16Proof as TryFrom<Groth16ProofJsonDeser>>::Error),
+    #[error("Error in FFI: {0}")]
+    Ffi(#[from] lbc_types::native::Error),
 }

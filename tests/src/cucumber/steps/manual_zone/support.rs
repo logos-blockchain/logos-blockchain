@@ -6,79 +6,78 @@
 //! on.
 
 use std::{
-    collections::{HashMap, HashSet},
-    num::NonZero,
-    path::{Path, PathBuf},
+    collections::{BTreeSet, HashMap, HashSet, VecDeque},
     sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
 
 use futures::StreamExt as _;
 use lb_common_http_client::{CommonHttpClient, Slot};
-use lb_core::{
-    mantle::{
-        GenesisTx as _, MantleTx, Note, NoteId, Op, OpProof, Transaction as _, Value,
-        ledger::{Inputs, Outputs},
-        ops::{
-            channel::{ChannelId, deposit::DepositOp, withdraw::ChannelWithdrawOp},
-            transfer::TransferOp,
+use lb_core::mantle::{
+    MantleTx, Note, Op, OpProof, Transaction as _, Utxo, Value,
+    gas::GasCost,
+    ledger::{Inputs, Outputs, OutputsError},
+    ops::{
+        channel::{
+            ChannelId, MsgId,
+            deposit::{DepositOp, Metadata},
+            inscribe::{Inscription, InscriptionOp},
+            withdraw::ChannelWithdrawOp,
         },
+        transfer::TransferOp,
     },
-    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
-    sdp::{Locator, ServiceType},
+    transactions::{builder::MantleTxBuilder, tx::OpsProofs},
 };
 use lb_http_api_common::bodies::{
     channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
     wallet::{
-        balance::WalletBalanceResponseBody,
+        fund::WalletFundRequestBody,
         sign::{WalletSignTxZkRequestBody, WalletSignTxZkResponseBody},
     },
 };
-use lb_key_management_system_service::keys::{
-    Ed25519Key, ZkPublicKey, ZkSignature, secured_key::SecuredKey as _,
-};
-use lb_node::{SignedMantleTx, config::RunConfig};
-use lb_testing_framework::{
-    DeploymentBuilder, LbcEnv, LbcLocalDeployer, LbcManualCluster, NodeHttpClient, TopologyConfig,
-    internal::DeploymentPlan,
-};
-use lb_utils::math::NonNegativeRatio;
+use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, ZkSignature};
+use lb_node::SignedMantleTx;
+use lb_testing_framework::NodeHttpClient;
 use lb_zone_sdk::{
     ZoneMessage,
     adapter::NodeHttpClient as ZoneNodeHttpClient,
     indexer::ZoneIndexer,
-    sequencer::{
-        Event, InscriptionId, PublishResult, SequencerConfig, SequencerHandle, ZoneSequencer,
-    },
-    state::InscriptionInfo,
+    sequencer::{ZoneSequencer, channel_inscriptions},
 };
 use rand::{Rng as _, thread_rng};
 use reqwest::Url;
-use testing_framework_core::scenario::{DynError, StartNodeOptions, StartedNode};
 use tokio::{
     task::JoinHandle,
     time::{sleep, timeout},
 };
 use tracing::warn;
 
-use crate::{
-    common::{
-        chain::wait_for_transactions_inclusion, manual_cluster::ensure_local_node_binary_env,
-    },
-    cucumber::utils::{extract_child_dir_name, matching_child_dirs},
-    topology::configs::consensus::{ProviderInfo, create_genesis_block_with_declarations},
+use super::runner::{
+    self, ChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx, InscriptionId,
+    InscriptionInfo, PendingTx, PublishResult, SequencerChannelView, SequencerCheckpoint,
+    SequencerClient, SequencerConfig, TurnNotification, TxStatus, TxStatusUpdate, WithdrawArg,
+};
+
+/// Inscriptions in the just-finalized txs — the permanent, settled part of the
+/// channel. Once a payload finalizes it's on chain for good, so a policy pins
+/// these and never re-homes a finalized payload when it later drops off a
+/// non-canonical branch.
+fn finalized_inscriptions(finalized: &[FinalizedTx]) -> impl Iterator<Item = &InscriptionInfo> {
+    finalized
+        .iter()
+        .flat_map(|tx| tx.ops.iter())
+        .filter_map(|op| match op {
+            FinalizedOp::Inscription(info) => Some(info),
+            FinalizedOp::Deposit(_) | FinalizedOp::Withdraw(_) => None,
+        })
+}
+use crate::common::{
+    chain::wait_for_transactions_inclusion, mantle_inscription::make_inscription,
+    wallet::build_wallet_funded_transfer,
 };
 
 #[derive(Debug, thiserror::Error)]
 pub enum ZoneTestError {
-    #[error("failed to build zone deployment: {message}")]
-    BuildDeployment { message: String },
-    #[error("failed to start zone node: {message}")]
-    StartNode { message: String },
-    #[error("failed to resolve zone runtime dir: {message}")]
-    RuntimeDir { message: String },
-    #[error("zone network did not become ready: {message}")]
-    NetworkReady { message: String },
     #[error("timed out waiting for zone sequencer to accept a publish request")]
     PublishTimeout,
     #[error("zone indexer request failed: {message}")]
@@ -101,10 +100,8 @@ pub enum ZoneTestError {
     FinalizationTimeout,
     #[error("timed out waiting for zone LIB to advance")]
     LibAdvanceTimeout,
-    #[error("failed to fetch wallet balance while preparing a zone deposit: {message}")]
-    WalletBalance { message: String },
-    #[error("failed to find a funding note with value at least {min_value}")]
-    MissingFundingNote { min_value: Value },
+    #[error("timed out waiting for zone sequencer channel view condition: {message}")]
+    ChannelViewTimeout { message: String },
     #[error("failed to find a funding note with exact value {value}")]
     MissingExactFundingNote { value: Value },
     #[error("failed to submit zone deposit: {message}")]
@@ -119,19 +116,16 @@ pub enum ZoneTestError {
     SubmitWithdraw { message: String },
     #[error("timed out waiting for zone withdraw to appear in the indexer")]
     WithdrawTimeout,
-}
-
-/// Prepared deployment resources for the single-node zone test cluster.
-pub struct ZoneClusterTemplate {
-    pub cluster: LbcManualCluster,
-    pub funding_public_key: ZkPublicKey,
-}
-
-/// A started single-node zone chain plus the resolved runtime directory used
-/// for logs, recovery files, and diagnostics.
-pub struct StartedZoneNode {
-    pub started_node: StartedNode<LbcEnv>,
-    pub runtime_dir: PathBuf,
+    #[error("failed to build custom zone transaction: {message}")]
+    BuildCustomTx { message: String },
+    #[error("failed to submit custom zone transaction: {message}")]
+    SubmitCustomTx { message: String },
+    #[error("zone sequencer event stream stopped before observing the expected event")]
+    SequencerStopped,
+    #[error(transparent)]
+    BoundedError(#[from] lb_utils::bounded::BoundedError),
+    #[error(transparent)]
+    OutputsError(#[from] OutputsError),
 }
 
 /// Result of an atomic deposit scenario where a deposit and zone inscription
@@ -139,6 +133,16 @@ pub struct StartedZoneNode {
 pub struct AtomicZoneDepositSubmission {
     pub deposit: DepositOp,
     pub publish: PublishResult,
+    pub reserved_inputs: Vec<Utxo>,
+}
+
+pub struct AtomicZoneDepositRequest {
+    pub channel_id: ChannelId,
+    pub funding_public_key: ZkPublicKey,
+    pub available_utxos: Vec<Utxo>,
+    pub amount: Value,
+    pub inscription_data: Inscription,
+    pub metadata: Metadata,
 }
 
 /// Result of a withdraw scenario where the zone sequencer signs the channel
@@ -148,12 +152,12 @@ pub struct ZoneWithdrawSubmission {
     pub publish: PublishResult,
 }
 
-struct SelectedNote {
-    id: NoteId,
-    value: Value,
+pub struct ZoneDeposit {
+    pub deposit: DepositOp,
+    pub reserved_inputs: Vec<Utxo>,
 }
 
-pub type DiscardedPayloads = Arc<tokio::sync::Mutex<HashSet<Vec<u8>>>>;
+pub type DiscardedPayloads = Arc<tokio::sync::Mutex<HashSet<Inscription>>>;
 pub type ZoneAccountBalances = HashMap<String, i64>;
 
 /// Shared deadline for a publish attempt and the matching event wait so the
@@ -176,220 +180,431 @@ impl PublishDeadline {
     fn is_expired(self) -> bool {
         self.started_at.elapsed() > self.timeout
     }
+}
 
-    fn remaining(self) -> Result<Duration, ZoneTestError> {
-        self.timeout
-            .checked_sub(self.started_at.elapsed())
-            .ok_or(ZoneTestError::PublishTimeout)
+/// Bundle returned from policy starters so callers can wire the cucumber
+/// world. Wraps [`runner::Runtime`] — events and checkpoints are exposed
+/// uniformly across all policies because the policy runs inline on the
+/// drive task; the event mpsc is purely for test observation.
+pub struct PolicyRuntime {
+    pub task: JoinHandle<()>,
+    pub client: SequencerClient,
+    pub events: tokio::sync::broadcast::Receiver<Event>,
+    pub checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
+    pub ready_rx: tokio::sync::watch::Receiver<bool>,
+    pub channel_view_rx: tokio::sync::watch::Receiver<SequencerChannelView>,
+    pub turn_to_write_rx: tokio::sync::watch::Receiver<TurnNotification>,
+    pub tx_status_rx: tokio::sync::broadcast::Receiver<TxStatusUpdate>,
+}
+
+fn to_policy_runtime(rt: runner::Runtime) -> PolicyRuntime {
+    PolicyRuntime {
+        task: rt.task,
+        client: rt.client,
+        events: rt.event_rx,
+        checkpoint_rx: rt.checkpoint_rx,
+        ready_rx: rt.ready_rx,
+        channel_view_rx: rt.channel_view_rx,
+        turn_to_write_rx: rt.turn_to_write_rx,
+        tx_status_rx: rt.tx_status_rx,
     }
 }
 
-/// Builds the manual-cluster template used by zone scenarios.
-///
-/// The generated genesis state includes the node funding key and Blend
-/// declarations expected by the zone SDK tests. The caller still decides when
-/// to start the node so Cucumber can keep cluster setup and runtime startup
-/// visible as separate scenario phases.
-pub fn prepare_zone_cluster(
-    scenario_base_dir: PathBuf,
-) -> Result<ZoneClusterTemplate, ZoneTestError> {
-    ensure_local_node_binary_env();
-
-    let deployment = build_zone_deployment(scenario_base_dir)?;
-    let funding_public_key = deployment.nodes()[0]
-        .general
-        .consensus_config
-        .funding_sk
-        .as_public_key();
-
-    let cluster = LbcLocalDeployer::new().manual_cluster_from_descriptors(deployment);
-
-    Ok(ZoneClusterTemplate {
-        cluster,
-        funding_public_key,
-    })
-}
-
-/// Starts the zone node from a prepared manual cluster and resolves the actual
-/// runtime directory created by the local deployer.
-pub async fn start_zone_node(
-    cluster: &LbcManualCluster,
-    scenario_base_dir: &Path,
-) -> Result<StartedZoneNode, ZoneTestError> {
-    let node_name = "0";
-    let persist_dir = scenario_base_dir.join("node-0");
-
-    let runtime_dir_prefix = format!(
-        "{}_",
-        persist_dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("node-0")
-    );
-    let ignore_list = matching_child_dirs(&persist_dir, &runtime_dir_prefix);
-
-    let started_node = Box::pin(
-        cluster.start_node_with(
-            node_name,
-            StartNodeOptions::default()
-                .with_persist_dir(persist_dir)
-                .create_patch(fast_zone_config_patch),
-        ),
-    )
-    .await
-    .map_err(|error| ZoneTestError::StartNode {
-        message: error.to_string(),
-    })?;
-
-    let runtime_dir_name =
-        extract_child_dir_name(scenario_base_dir, &runtime_dir_prefix, &ignore_list).map_err(
-            |error| ZoneTestError::RuntimeDir {
-                message: error.to_string(),
-            },
-        )?;
-
-    Ok(StartedZoneNode {
-        started_node,
-        runtime_dir: scenario_base_dir.join(runtime_dir_name),
-    })
-}
-
-/// Waits until the local node reports that its networking layer is ready for
-/// the zone SDK to publish transactions through it.
-pub async fn wait_for_zone_network_ready(cluster: &LbcManualCluster) -> Result<(), ZoneTestError> {
-    cluster
-        .wait_network_ready()
-        .await
-        .map_err(|error| ZoneTestError::NetworkReady {
-            message: error.to_string(),
-        })
-}
-
-/// Runs the SDK sequencer event stream in the background and exposes events to
-/// test code that needs to wait for a specific publish result.
+/// Spawn a sequencer drive task with a no-op policy. Step bodies drive
+/// publishes via [`SequencerClient`]; events flow to `PolicyRuntime.events`.
+/// If `republish_orphans` is set, the [`OrphanRepublishPolicy`] runs inline
+/// inside the drive loop.
 pub fn start_sequencer_event_loop(
-    mut sequencer: ZoneSequencer<ZoneNodeHttpClient>,
-) -> (JoinHandle<()>, tokio::sync::mpsc::Receiver<Event>) {
-    let (tx, rx) = tokio::sync::mpsc::channel(256);
-
-    let handle = tokio::spawn(async move {
-        loop {
-            if let Some(event) = sequencer.next_event().await {
-                drop(tx.send(event).await);
-            }
-        }
-    });
-
-    (handle, rx)
+    sequencer: ZoneSequencer<ZoneNodeHttpClient>,
+    republish_orphans: bool,
+) -> PolicyRuntime {
+    if republish_orphans {
+        to_policy_runtime(runner::spawn(sequencer, OrphanRepublishPolicy::default()))
+    } else {
+        to_policy_runtime(runner::spawn(sequencer, runner::PassivePolicy))
+    }
 }
 
-/// Drives a competing-sequencer policy that re-publishes this sequencer's own
-/// invalidated payloads until they are either pending again or adopted on
-/// chain.
-pub fn start_republish_policy(
-    mut sequencer: ZoneSequencer<ZoneNodeHttpClient>,
-    handle: SequencerHandle<ZoneNodeHttpClient>,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut local_pending = HashSet::new();
-
-        loop {
-            match sequencer.next_event().await {
-                Some(Event::Published { info, .. }) => {
-                    local_pending.insert(info.this_msg);
-                }
-                Some(
-                    Event::TxsFinalized { inscriptions, .. }
-                    | Event::FinalizedInscriptions { inscriptions },
-                ) => {
-                    for inscription in inscriptions {
-                        local_pending.remove(&inscription.this_msg);
-                    }
-                }
-                Some(Event::ChannelUpdate { orphaned, .. }) => {
-                    for inscription in orphaned {
-                        if !local_pending.remove(&inscription.this_msg) {
-                            continue;
-                        }
-
-                        if let Err(error) = handle.publish_message(inscription.payload).await {
-                            warn!(%error, "Failed to re-publish orphaned zone payload");
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    })
+/// Drives a competing-sequencer policy that publishes `planned` once ready and
+/// re-publishes its own orphans (tracked by intent lineage) until they land —
+/// correct even when payloads repeat.
+pub fn start_republish_lineage_policy(
+    sequencer: ZoneSequencer<ZoneNodeHttpClient>,
+    planned: Vec<Inscription>,
+) -> PolicyRuntime {
+    let policy = RepublishLineagePolicy {
+        planned,
+        published_initial: false,
+        lineage: LineageTracker::default(),
+    };
+    to_policy_runtime(runner::spawn(sequencer, policy))
 }
 
 /// Drives a policy that republishes orphaned balance updates only when the
-/// local canonical view can still apply the update without going negative.
+/// local canonical view can still apply the update without going negative,
+/// and lays planned balance updates whenever it's our turn to write.
 pub fn start_balance_aware_policy(
-    mut sequencer: ZoneSequencer<ZoneNodeHttpClient>,
-    handle: SequencerHandle<ZoneNodeHttpClient>,
+    sequencer: ZoneSequencer<ZoneNodeHttpClient>,
     initial_balances: ZoneAccountBalances,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut balances = BalanceAwareState::new(initial_balances);
-
-        loop {
-            match sequencer.next_event().await {
-                Some(Event::Published { info, .. }) => {
-                    balances.record_applied_payload(&info.payload);
-                }
-                Some(Event::ChannelUpdate { orphaned, adopted }) => {
-                    balances.remove_orphaned_payloads(&orphaned);
-                    balances.record_adopted_payloads(&adopted);
-                    republish_affordable_balance_updates(&handle, &mut balances, orphaned).await;
-                }
-                _ => {}
-            }
-        }
-    })
+    planned_payloads: Vec<Inscription>,
+) -> PolicyRuntime {
+    let view_rx = sequencer.subscribe_channel_view();
+    let policy = BalanceAwarePolicy {
+        balances: BalanceAwareState::new(initial_balances),
+        planned: VecDeque::from(planned_payloads),
+        view_rx,
+    };
+    to_policy_runtime(runner::spawn(sequencer, policy))
 }
 
 /// Drives a deterministic conflict policy used by tests that expect the final
 /// zone chain to converge to sorted payload order.
 pub fn start_sorted_conflict_policy(
-    mut sequencer: ZoneSequencer<ZoneNodeHttpClient>,
-    handle: SequencerHandle<ZoneNodeHttpClient>,
-    discarded: DiscardedPayloads,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut sorted_state = SortedConflictState::new(discarded);
+    sequencer: ZoneSequencer<ZoneNodeHttpClient>,
+    discarded: &DiscardedPayloads,
+) -> PolicyRuntime {
+    let policy = SortedConflictPolicy {
+        state: SortedConflictState::new(Arc::clone(discarded)),
+    };
+    to_policy_runtime(runner::spawn(sequencer, policy))
+}
 
-        loop {
-            match sequencer.next_event().await {
-                Some(Event::Published { info, .. }) => {
-                    sorted_state.record_seen_payload(info.payload);
-                }
-                Some(Event::ChannelUpdate { orphaned, adopted }) => {
-                    sorted_state.record_adoptions(&adopted).await;
+/// Inline policy: republish orphaned inscriptions that aren't already back on
+/// the canonical chain. Plain inscriptions only — bundles are not
+/// auto-republished (callers that issue bundles re-prepare with fresh withdraw
+/// nonces themselves). Assumes unique payloads, so the payload identifies the
+/// message; for repeating payloads see [`RepublishLineagePolicy`].
+#[derive(Default)]
+struct OrphanRepublishPolicy {
+    finalized: HashSet<Inscription>,
+}
 
-                    for inscription in orphaned {
-                        if sorted_state.already_discarded(&inscription.payload).await {
-                            continue;
-                        }
-
-                        if sorted_state.preserves_order(&inscription) {
-                            if let Err(error) = handle.publish_message(inscription.payload).await {
-                                warn!(%error, "Failed to re-publish sorted zone payload");
-                            }
-                        } else {
-                            sorted_state.discard(inscription.payload).await;
-                        }
-                    }
-                }
-                _ => {}
+impl<Node> runner::Policy<Node> for OrphanRepublishPolicy
+where
+    Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
+{
+    async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
+        let Event::BlocksProcessed {
+            channel_update,
+            finalized,
+            ..
+        } = event
+        else {
+            return;
+        };
+        // Add finalized payloads to state first.
+        self.finalized
+            .extend(finalized_inscriptions(finalized).map(|i| i.payload.clone()));
+        // Skip orphans whose payload is already on chain (adopted) or finalized
+        // — republishing them would duplicate.
+        let adopted: HashSet<&Inscription> = channel_update
+            .adopted
+            .iter()
+            .filter_map(|tx| tx.inscription().map(|i| &i.payload))
+            .collect();
+        for entry in &channel_update.orphaned {
+            let ChannelUpdateTx::Inscription(info) = entry else {
+                continue;
+            };
+            if adopted.contains(&info.payload) || self.finalized.contains(&info.payload) {
+                continue;
+            }
+            if let Err(error) = sequencer.handle().publish(info.payload.clone()).await {
+                warn!(%error, "Failed to re-publish orphaned zone payload");
             }
         }
-    })
+    }
+}
+
+/// Tracks our published inscriptions by intent lineage, so republishing works
+/// even when payloads repeat (identical bytes published as distinct messages).
+///
+/// Each original publish is its own intent, rooted at its `this_msg`; every
+/// republish we issue for an orphaned member is recorded under the same root.
+/// An intent is "live" while any of its `this_msg`s is on the channel
+/// (`adopted`) or in flight as a publish/republish we issued. Identical
+/// payloads form distinct intents (distinct `this_msg`s), so each lands once,
+/// and other sequencers' inscriptions are never in our map, so we never
+/// republish theirs.
+#[derive(Default)]
+struct LineageTracker {
+    /// Every `this_msg` we've published (originals + republishes) → intent
+    /// root.
+    intent_root: HashMap<MsgId, MsgId>,
+    /// Per intent root, the `this_msg`s currently pending (in the
+    /// non-finalized channel view).
+    pending: HashMap<MsgId, HashSet<MsgId>>,
+    /// Intent roots that have finalized — permanently landed, so the intent is
+    /// considered live forever and never re-homed again.
+    finalized_roots: HashSet<MsgId>,
+}
+
+impl LineageTracker {
+    /// Record an original publish as its own intent, in flight.
+    fn record_publish(&mut self, this_msg: MsgId) {
+        self.intent_root.insert(this_msg, this_msg);
+        self.pending.entry(this_msg).or_default().insert(this_msg);
+    }
+
+    /// Record a republish of `orphan` as a new live member of its intent.
+    fn record_republish(&mut self, orphan: MsgId, republished: MsgId) {
+        let root = self.intent_root.get(&orphan).copied().unwrap_or(orphan);
+        self.intent_root.insert(republished, root);
+        self.pending.entry(root).or_default().insert(republished);
+    }
+
+    /// Fold a delta into per-intent liveness — only our `msg_id`s are relevant.
+    /// Adopted members become live; orphaned members stop being live.
+    fn observe(&mut self, channel_update: &ChannelUpdate) {
+        for info in channel_update
+            .adopted
+            .iter()
+            .filter_map(ChannelUpdateTx::inscription)
+        {
+            if let Some(&root) = self.intent_root.get(&info.this_msg) {
+                self.pending.entry(root).or_default().insert(info.this_msg);
+            }
+        }
+        for entry in &channel_update.orphaned {
+            if let ChannelUpdateTx::Inscription(info) = entry
+                && let Some(&root) = self.intent_root.get(&info.this_msg)
+                && let Some(members) = self.pending.get_mut(&root)
+            {
+                members.remove(&info.this_msg);
+            }
+        }
+    }
+
+    /// Pin the intents of any finalized `this_msg`s of ours as permanently
+    /// live — once a member finalizes the payload is on chain for good.
+    fn observe_finalized(&mut self, finalized: impl Iterator<Item = MsgId>) {
+        for this_msg in finalized {
+            if let Some(&root) = self.intent_root.get(&this_msg) {
+                self.finalized_roots.insert(root);
+            }
+        }
+    }
+
+    /// True if `this_msg` is one of ours.
+    fn is_ours(&self, this_msg: &MsgId) -> bool {
+        self.intent_root.contains_key(this_msg)
+    }
+
+    /// True if the intent of `this_msg` has finalized, or still has a live
+    /// member.
+    fn intent_live(&self, this_msg: &MsgId) -> bool {
+        let root = self.intent_root.get(this_msg).copied().unwrap_or(*this_msg);
+        self.finalized_roots.contains(&root)
+            || self
+                .pending
+                .get(&root)
+                .is_some_and(|members| !members.is_empty())
+    }
+}
+
+/// Inline republish policy for channels whose payloads can repeat. Publishes
+/// its own `planned` payloads once the sequencer is ready, then republishes any
+/// of *our* orphans whose intent has no live member, tracking msg-id lineage
+/// (the payload can't identify the message when it repeats). Owning the
+/// publishes is what gives the policy its outbox: every `this_msg` it sends is
+/// recorded.
+struct RepublishLineagePolicy {
+    planned: Vec<Inscription>,
+    published_initial: bool,
+    lineage: LineageTracker,
+}
+
+impl<Node> runner::Policy<Node> for RepublishLineagePolicy
+where
+    Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
+{
+    async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
+        match event {
+            Event::Ready if !self.published_initial => {
+                self.published_initial = true;
+                for payload in self.planned.clone() {
+                    match sequencer.handle().publish(payload).await {
+                        Ok((result, _checkpoint)) => {
+                            self.lineage
+                                .record_publish(result.tx.inscription().this_msg);
+                        }
+                        Err(error) => warn!(%error, "Failed to publish planned zone payload"),
+                    }
+                }
+            }
+            Event::BlocksProcessed {
+                channel_update,
+                finalized,
+                ..
+            } => {
+                self.lineage
+                    .observe_finalized(finalized_inscriptions(finalized).map(|i| i.this_msg));
+                self.lineage.observe(channel_update);
+                for entry in &channel_update.orphaned {
+                    let ChannelUpdateTx::Inscription(info) = entry else {
+                        continue;
+                    };
+                    if !self.lineage.is_ours(&info.this_msg)
+                        || self.lineage.intent_live(&info.this_msg)
+                    {
+                        continue;
+                    }
+                    match sequencer.handle().publish(info.payload.clone()).await {
+                        Ok((result, _checkpoint)) => {
+                            self.lineage
+                                .record_republish(info.this_msg, result.tx.inscription().this_msg);
+                        }
+                        Err(error) => warn!(%error, "Failed to re-publish orphaned zone payload"),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Inline policy: republish orphans only when the local balance view still
+/// allows it; publish planned payloads as soon as it's our turn to write.
+///
+/// The balance view is rebuilt from the full delta — every orphaned op is
+/// removed and every adopted op applied — so affordability reflects all
+/// inscriptions on the channel. Removing an orphan we never applied (never-
+/// landed pending) is a no-op, and an already-adopted op is skipped because its
+/// id is already in the applied set after `record_adopted_payloads`.
+struct BalanceAwarePolicy {
+    balances: BalanceAwareState,
+    planned: VecDeque<Inscription>,
+    view_rx: tokio::sync::watch::Receiver<SequencerChannelView>,
+}
+
+impl<Node> runner::Policy<Node> for BalanceAwarePolicy
+where
+    Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
+{
+    async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
+        if let Event::BlocksProcessed {
+            channel_update,
+            finalized,
+            ..
+        } = event
+        {
+            self.balances.record_finalized_payloads(finalized);
+            let ChannelUpdate { orphaned, adopted } = channel_update;
+            let orphaned_inscriptions: Vec<InscriptionInfo> = orphaned
+                .iter()
+                .filter_map(|o| match o {
+                    ChannelUpdateTx::Inscription(i) => Some(i.clone()),
+                    ChannelUpdateTx::AtomicWithdraw(_) | ChannelUpdateTx::Custom(_) => None,
+                })
+                .collect();
+            self.balances
+                .remove_orphaned_payloads(&orphaned_inscriptions);
+            self.balances.record_adopted_payloads(adopted);
+            for info in orphaned_inscriptions {
+                if !self.balances.should_republish(&info.payload) {
+                    continue;
+                }
+                if let Err(error) = sequencer.handle().publish(info.payload.clone()).await {
+                    warn!(%error, "Failed to re-publish balance-aware zone payload");
+                    continue;
+                }
+                self.balances.record_republished_payload(&info.payload);
+            }
+        }
+
+        if !self.view_rx.borrow().our_turn_to_write {
+            return;
+        }
+        while let Some(payload) = self.planned.pop_front() {
+            if !self.balances.should_republish(&payload) {
+                continue;
+            }
+            if let Err(error) = sequencer.handle().publish(payload.clone()).await {
+                warn!(%error, "Failed to publish planned balance-aware zone payload");
+                self.planned.push_front(payload);
+                break;
+            }
+            self.balances.record_republished_payload(&payload);
+        }
+    }
+}
+
+/// Inline policy: republish orphans only when they preserve sorted-payload
+/// order; otherwise mark them as discarded.
+///
+/// The full delta lets us rebuild the on-chain payload set each update (drop
+/// orphaned, add adopted), so the order floor we gate republishing on falls
+/// back correctly when the highest payload is orphaned.
+struct SortedConflictPolicy {
+    state: SortedConflictState,
+}
+
+impl<Node> runner::Policy<Node> for SortedConflictPolicy
+where
+    Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
+{
+    async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
+        let Event::BlocksProcessed {
+            channel_update,
+            finalized,
+            ..
+        } = event
+        else {
+            return;
+        };
+        // Pin finalized payloads first.
+        self.state.record_finalized(finalized);
+        let ChannelUpdate { orphaned, adopted } = channel_update;
+        let orphaned_inscriptions: Vec<&InscriptionInfo> = orphaned
+            .iter()
+            .filter_map(|o| match o {
+                ChannelUpdateTx::Inscription(i) => Some(i),
+                ChannelUpdateTx::AtomicWithdraw(_) | ChannelUpdateTx::Custom(_) => None,
+            })
+            .collect();
+
+        // Rebuild on-chain state from this delta before deciding anything.
+        self.state.revert_orphaned(&orphaned_inscriptions);
+        self.state.record_adoptions(adopted).await;
+
+        let readopted: HashSet<&Inscription> = adopted
+            .iter()
+            .filter_map(|tx| tx.inscription().map(|i| &i.payload))
+            .collect();
+
+        // Consider this round's fresh orphans together with everything parked,
+        // in sorted order (a `BTreeSet` iterates ascending). A payload parked
+        // under a higher floor on another branch then slots in ahead of a higher
+        // fresh orphan instead of being locked out, and the chain stays sorted.
+        // Finalized payloads are excluded — they're already permanently landed.
+        let mut candidates: BTreeSet<Inscription> = orphaned_inscriptions
+            .iter()
+            .map(|i| i.payload.clone())
+            .filter(|payload| !readopted.contains(payload) && !self.state.is_finalized(payload))
+            .collect();
+        candidates.extend(self.state.discarded_snapshot().await);
+
+        for payload in candidates {
+            if self.state.is_finalized(&payload) {
+                continue;
+            }
+            if self.state.preserves_order(&payload) {
+                if let Err(error) = sequencer.handle().publish(payload.clone()).await {
+                    warn!(%error, "Failed to re-publish sorted zone payload");
+                    continue;
+                }
+                self.state.record_published_payload(payload).await;
+            } else {
+                self.state.discard(payload).await;
+            }
+        }
+    }
 }
 
 struct BalanceAwareState {
     initial_balances: ZoneAccountBalances,
     applied: HashMap<String, HashMap<String, i64>>,
+    finalized: HashSet<String>,
 }
 
 impl BalanceAwareState {
@@ -397,10 +612,21 @@ impl BalanceAwareState {
         Self {
             initial_balances,
             applied: HashMap::new(),
+            finalized: HashSet::new(),
         }
     }
 
-    fn record_applied_payload(&mut self, payload: &[u8]) {
+    /// Pin finalized payloads.
+    fn record_finalized_payloads(&mut self, finalized: &[FinalizedTx]) {
+        for inscription in finalized_inscriptions(finalized) {
+            if let Some((uuid, _, _)) = parse_balance_payload(&inscription.payload) {
+                self.finalized.insert(uuid);
+            }
+            self.record_applied_payload(&inscription.payload);
+        }
+    }
+
+    fn record_applied_payload(&mut self, payload: &Inscription) {
         let Some((uuid, account, delta)) = parse_balance_payload(payload) else {
             return;
         };
@@ -414,31 +640,36 @@ impl BalanceAwareState {
                 continue;
             };
 
+            // A finalized delta is permanent — never drop it on an orphan.
+            if self.finalized.contains(&uuid) {
+                continue;
+            }
+
             if let Some(account_updates) = self.applied.get_mut(&account) {
                 account_updates.remove(&uuid);
             }
         }
     }
 
-    fn record_adopted_payloads(&mut self, adopted: &[InscriptionInfo]) {
-        for inscription in adopted {
-            self.record_applied_payload(&inscription.payload);
+    fn record_adopted_payloads(&mut self, adopted: &[ChannelUpdateTx]) {
+        for info in adopted.iter().filter_map(ChannelUpdateTx::inscription) {
+            self.record_applied_payload(&info.payload);
         }
     }
 
-    fn should_republish(&self, payload: &[u8]) -> bool {
+    fn should_republish(&self, payload: &Inscription) -> bool {
         let Some((uuid, account, delta)) = parse_balance_payload(payload) else {
             return false;
         };
 
-        if self.account_updates(&account).contains_key(&uuid) {
+        if self.finalized.contains(&uuid) || self.account_updates(&account).contains_key(&uuid) {
             return false;
         }
 
         self.available_balance(&account) + delta >= 0
     }
 
-    fn record_republished_payload(&mut self, payload: &[u8]) {
+    fn record_republished_payload(&mut self, payload: &Inscription) {
         self.record_applied_payload(payload);
     }
 
@@ -454,69 +685,68 @@ impl BalanceAwareState {
 
 static EMPTY_BALANCE_UPDATES: LazyLock<HashMap<String, i64>> = LazyLock::new(HashMap::new);
 
-async fn republish_affordable_balance_updates(
-    handle: &SequencerHandle<ZoneNodeHttpClient>,
-    balances: &mut BalanceAwareState,
-    orphaned: Vec<InscriptionInfo>,
-) {
-    for inscription in orphaned {
-        if !balances.should_republish(&inscription.payload) {
-            continue;
-        }
-
-        let payload = inscription.payload;
-        if let Err(error) = handle.publish_message(payload.clone()).await {
-            warn!(%error, "Failed to re-publish balance-aware zone payload");
-
-            continue;
-        }
-
-        balances.record_republished_payload(&payload);
-    }
-}
-
 struct SortedConflictState {
-    max_seen_on_chain: Option<Vec<u8>>,
+    /// The local channel view: pending (non-finalized) payloads plus the
+    /// pinned finalized base, kept as the ordering floor.
+    channel_view: BTreeSet<Inscription>,
     discarded: DiscardedPayloads,
+    finalized: HashSet<Inscription>,
 }
 
 impl SortedConflictState {
-    const fn new(discarded: DiscardedPayloads) -> Self {
+    fn new(discarded: DiscardedPayloads) -> Self {
         Self {
-            max_seen_on_chain: None,
+            channel_view: BTreeSet::new(),
             discarded,
+            finalized: HashSet::new(),
         }
     }
 
-    async fn record_adoptions(&mut self, adopted: &[InscriptionInfo]) {
-        for payload in adopted {
-            self.discarded.lock().await.remove(&payload.payload);
-            self.record_seen_payload(payload.payload.clone());
+    /// Pin finalized payloads into the channel view permanently.
+    fn record_finalized(&mut self, finalized: &[FinalizedTx]) {
+        for inscription in finalized_inscriptions(finalized) {
+            self.finalized.insert(inscription.payload.clone());
+            self.channel_view.insert(inscription.payload.clone());
         }
     }
 
-    fn record_seen_payload(&mut self, payload: Vec<u8>) {
-        if self
-            .max_seen_on_chain
-            .as_ref()
-            .is_none_or(|seen| payload > *seen)
-        {
-            self.max_seen_on_chain = Some(payload);
+    fn is_finalized(&self, payload: &Inscription) -> bool {
+        self.finalized.contains(payload)
+    }
+
+    /// Drop orphaned payloads from the channel view — the order floor falls
+    /// back to the max of whatever remains. Finalized payloads stay put.
+    fn revert_orphaned(&mut self, orphaned: &[&InscriptionInfo]) {
+        for inscription in orphaned {
+            if self.finalized.contains(&inscription.payload) {
+                continue;
+            }
+            self.channel_view.remove(&inscription.payload);
         }
     }
 
-    async fn already_discarded(&self, payload: &[u8]) -> bool {
-        self.discarded.lock().await.contains(payload)
+    async fn record_adoptions(&mut self, adopted: &[ChannelUpdateTx]) {
+        for info in adopted.iter().filter_map(ChannelUpdateTx::inscription) {
+            self.discarded.lock().await.remove(&info.payload);
+            self.channel_view.insert(info.payload.clone());
+        }
     }
 
-    fn preserves_order(&self, inscription: &InscriptionInfo) -> bool {
-        self.max_seen_on_chain
-            .as_deref()
-            .is_none_or(|seen| inscription.payload.as_slice() >= seen)
+    async fn record_published_payload(&mut self, payload: Inscription) {
+        self.discarded.lock().await.remove(&payload);
+        self.channel_view.insert(payload);
     }
 
-    async fn discard(&self, payload: Vec<u8>) {
+    fn preserves_order(&self, payload: &Inscription) -> bool {
+        self.channel_view.last().is_none_or(|max| payload >= max)
+    }
+
+    async fn discard(&self, payload: Inscription) {
         self.discarded.lock().await.insert(payload);
+    }
+
+    async fn discarded_snapshot(&self) -> Vec<Inscription> {
+        self.discarded.lock().await.iter().cloned().collect()
     }
 }
 
@@ -531,14 +761,14 @@ pub fn keygen() -> Ed25519Key {
 /// Encodes a balance-affecting zone payload used by balance-aware sequencer
 /// scenarios.
 #[must_use]
-pub fn balance_update_payload(uuid: &str, account: &str, delta: i64) -> Vec<u8> {
-    format!("{uuid}:{account}:{delta}").into_bytes()
+pub fn balance_update_payload(uuid: &str, account: &str, delta: i64) -> Inscription {
+    make_inscription(&format!("{uuid}:{account}:{delta}"))
 }
 
 /// Parses a balance-affecting payload in the same format produced by
 /// [`balance_update_payload`].
-pub fn parse_balance_payload(payload: &[u8]) -> Option<(String, String, i64)> {
-    let payload = std::str::from_utf8(payload).ok()?;
+pub fn parse_balance_payload(payload: &Inscription) -> Option<(String, String, i64)> {
+    let payload = std::str::from_utf8(payload.as_slice()).ok()?;
     let parts = payload.splitn(3, ':').collect::<Vec<_>>();
     let [uuid, account, delta] = parts.as_slice() else {
         return None;
@@ -557,55 +787,180 @@ pub fn parse_balance_payload(payload: &[u8]) -> Option<(String, String, i64)> {
 pub fn sequencer_config() -> SequencerConfig {
     SequencerConfig {
         resubmit_interval: Duration::from_secs(3),
+        min_slots_remaining_in_turn: 2,
         ..SequencerConfig::default()
     }
 }
 
-/// Publishes a zone payload and waits for the SDK to emit the matching
-/// `Published` event, retrying transient publish failures until the deadline.
+/// Uses the same retry profile while overriding pending publish submit depth.
+#[must_use]
+pub fn sequencer_config_with_pending_submit_depth(
+    max_pending_publish_depth: usize,
+) -> SequencerConfig {
+    SequencerConfig {
+        max_pending_publish_depth,
+        ..sequencer_config()
+    }
+}
+
+/// Publishes a zone payload through the runner and returns the SDK's
+/// [`PublishResult`] inline. Retries transient publish errors until the
+/// deadline elapses. No "wait for event" — the SDK accepts the publish
+/// inline (funding it via the node when configured) and the runner forwards
+/// the call through the drive task.
 pub async fn publish_message_with_retry(
-    sequencer: &SequencerHandle<ZoneNodeHttpClient>,
-    sequencer_events: &mut tokio::sync::mpsc::Receiver<Event>,
-    data: &[u8],
+    client: &SequencerClient,
+    data: &Inscription,
     deadline: PublishDeadline,
 ) -> Result<PublishResult, ZoneTestError> {
     loop {
         if deadline.is_expired() {
             return Err(ZoneTestError::PublishTimeout);
         }
-
-        match sequencer.publish_message(data.to_vec()).await {
-            Ok(()) => return wait_for_published_event(sequencer_events, data, deadline).await,
+        match client.publish(data.clone()).await {
+            Ok((result, _cp)) => return Ok(result),
             Err(error) => {
                 warn!(error = %error, "Zone sequencer publish failed, retrying");
-
                 sleep(Duration::from_millis(500)).await;
             }
         }
     }
 }
 
-async fn wait_for_published_event(
-    sequencer_events: &mut tokio::sync::mpsc::Receiver<Event>,
-    data: &[u8],
-    deadline: PublishDeadline,
-) -> Result<PublishResult, ZoneTestError> {
-    timeout(deadline.remaining()?, async {
-        while let Some(event) = sequencer_events.recv().await {
-            if let Event::Published { info, checkpoint } = event
-                && info.payload == data
-            {
-                return Ok(PublishResult {
-                    inscription_id: info.tx_hash,
-                    checkpoint,
-                });
+/// Waits until every tx in `tx_hashes` reports [`TxStatus::OnChain`] on the
+/// sequencer's status stream, collecting the tx hashes seen as
+/// [`TxStatus::PendingMempool`] along the way. Own publishes don't echo in
+/// [`ChannelUpdate::adopted`] on chain extension (the sequencer already
+/// tracks them), so the per-tx status stream is where "landed on chain, not
+/// yet finalized" is observable.
+pub async fn wait_for_on_chain_statuses_and_collect_mempool_pending(
+    statuses: &mut tokio::sync::broadcast::Receiver<TxStatusUpdate>,
+    tx_hashes: &[InscriptionId],
+    duration: Duration,
+) -> Result<HashSet<InscriptionId>, ZoneTestError> {
+    timeout(duration, async {
+        let mut on_chain: HashSet<InscriptionId> = HashSet::new();
+        let mut mempool_pending = HashSet::new();
+
+        while on_chain.len() < tx_hashes.len() {
+            let update = match statuses.recv().await {
+                Ok(update) => update,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    warn!("status subscriber lagged by {n}, recovering");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    return Err(ZoneTestError::SequencerStopped);
+                }
+            };
+            match update.status {
+                TxStatus::PendingMempool => {
+                    mempool_pending.insert(update.tx_hash);
+                }
+                TxStatus::OnChain(_) if tx_hashes.contains(&update.tx_hash) => {
+                    on_chain.insert(update.tx_hash);
+                }
+                _ => {}
             }
         }
 
-        Err(ZoneTestError::PublishTimeout)
+        Ok(mempool_pending)
     })
     .await
     .map_err(|_| ZoneTestError::PublishTimeout)?
+}
+
+pub async fn wait_for_tx_status_lifecycle(
+    tx_status_rx: &mut tokio::sync::broadcast::Receiver<TxStatusUpdate>,
+    tx_hashes: &[InscriptionId],
+    statuses: &[TxStatus],
+    duration: Duration,
+) -> Result<(), ZoneTestError> {
+    let mut remaining: HashSet<(InscriptionId, TxStatus)> = tx_hashes
+        .iter()
+        .flat_map(|tx_hash| statuses.iter().map(move |status| (*tx_hash, *status)))
+        .collect();
+
+    timeout(duration, async {
+        while !remaining.is_empty() {
+            let update = match tx_status_rx.recv().await {
+                Ok(update) => update,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    warn!("tx-status subscriber lagged by {n}, recovering");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    return Err(ZoneTestError::SequencerStopped);
+                }
+            };
+            remaining.remove(&(update.tx_hash, update.status));
+            if remaining.is_empty() {
+                return Ok(());
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| ZoneTestError::IndexerTimeout)?
+}
+
+/// Waits until the subscribed channel view satisfies the supplied predicate.
+pub async fn wait_for_channel_view(
+    view_rx: &mut tokio::sync::watch::Receiver<SequencerChannelView>,
+    duration: Duration,
+    predicate: impl Fn(&SequencerChannelView) -> bool + Send + Sync,
+) -> Result<SequencerChannelView, ZoneTestError> {
+    timeout(duration, async {
+        loop {
+            let current = view_rx.borrow().clone();
+            if predicate(&current) {
+                return Ok(current);
+            }
+
+            view_rx
+                .changed()
+                .await
+                .map_err(|error| ZoneTestError::Indexer {
+                    message: format!("channel view sender closed: {error}"),
+                })?;
+        }
+    })
+    .await
+    .map_err(|_| ZoneTestError::ChannelViewTimeout {
+        message: format!(
+            "condition not reached within {} seconds",
+            duration.as_secs()
+        ),
+    })?
+}
+
+/// Waits until the sequencer emits a turn-to-write notification.
+pub async fn wait_for_turn_to_write(
+    turn_rx: &mut tokio::sync::watch::Receiver<TurnNotification>,
+    duration: Duration,
+) -> Result<TurnNotification, ZoneTestError> {
+    timeout(duration, async {
+        loop {
+            let current = turn_rx.borrow().clone();
+            if current.our_turn_to_write {
+                return Ok(current);
+            }
+
+            turn_rx
+                .changed()
+                .await
+                .map_err(|error| ZoneTestError::Indexer {
+                    message: format!("turn-to-write sender closed: {error}"),
+                })?;
+        }
+    })
+    .await
+    .map_err(|_| ZoneTestError::ChannelViewTimeout {
+        message: format!(
+            "turn to write not reached within {} seconds",
+            duration.as_secs()
+        ),
+    })?
 }
 
 /// Collects indexed block payloads until all expected messages have appeared.
@@ -614,12 +969,12 @@ async fn wait_for_published_event(
 /// assertions decide whether ordering matters for the scenario.
 pub async fn collect_indexed_messages(
     indexer: &ZoneIndexer<ZoneNodeHttpClient>,
-    expected_messages: &[Vec<u8>],
+    expected_messages: &[Inscription],
     duration: Duration,
-) -> Result<Vec<Vec<u8>>, ZoneTestError> {
-    let expected: HashSet<Vec<u8>> = expected_messages.iter().cloned().collect();
-    let mut seen: HashSet<Vec<u8>> = HashSet::new();
-    let mut ordered: Vec<Vec<u8>> = Vec::new();
+) -> Result<Vec<Inscription>, ZoneTestError> {
+    let expected: HashSet<Inscription> = expected_messages.iter().cloned().collect();
+    let mut seen: HashSet<Inscription> = HashSet::new();
+    let mut ordered: Vec<Inscription> = Vec::new();
 
     poll_zone_indexer_until(
         indexer,
@@ -644,10 +999,10 @@ pub async fn collect_indexed_messages(
 /// sequence without duplicates.
 pub async fn collect_indexed_messages_exactly_once(
     indexer: &ZoneIndexer<ZoneNodeHttpClient>,
-    expected_messages: &[Vec<u8>],
+    expected_messages: &[Inscription],
     duration: Duration,
-) -> Result<Vec<Vec<u8>>, ZoneTestError> {
-    let expected: HashSet<Vec<u8>> = expected_messages.iter().cloned().collect();
+) -> Result<Vec<Inscription>, ZoneTestError> {
+    let expected: HashSet<Inscription> = expected_messages.iter().cloned().collect();
 
     timeout(duration, async {
         loop {
@@ -665,14 +1020,12 @@ pub async fn collect_indexed_messages_exactly_once(
                 let mut saw_message = false;
 
                 while let Some((message, slot)) = stream.next().await {
-                    let ZoneMessage::Block(block) = message else {
-                        continue;
-                    };
-
                     saw_message = true;
-                    cursor = Some((block.id, slot));
+                    cursor = Some(slot);
 
-                    if expected.contains(&block.data) {
+                    if let ZoneMessage::Block(block) = message
+                        && expected.contains(&block.data)
+                    {
                         ordered.push(block.data);
                     }
                 }
@@ -701,24 +1054,24 @@ pub async fn collect_indexed_messages_exactly_once(
 /// distinct transaction lineage.
 pub async fn wait_for_exact_indexed_payload_count(
     indexer: &ZoneIndexer<ZoneNodeHttpClient>,
-    expected_payload: &[u8],
+    expected_payload: Inscription,
     expected_count: usize,
     duration: Duration,
 ) -> Result<(), ZoneTestError> {
     timeout(duration, async {
         loop {
-            let count = count_indexed_payload(indexer, expected_payload).await?;
+            let count = count_indexed_payload(indexer, expected_payload.clone()).await?;
 
             if count >= expected_count {
                 sleep(Duration::from_secs(30)).await;
 
-                let final_count = count_indexed_payload(indexer, expected_payload).await?;
+                let final_count = count_indexed_payload(indexer, expected_payload.clone()).await?;
                 if final_count == expected_count {
                     return Ok(());
                 }
 
                 return Err(ZoneTestError::IndexedPayloadCountMismatch {
-                    payload: String::from_utf8_lossy(expected_payload).to_string(),
+                    payload: String::from_utf8_lossy(expected_payload.as_slice()).to_string(),
                     expected: expected_count,
                     actual: final_count,
                 });
@@ -733,7 +1086,7 @@ pub async fn wait_for_exact_indexed_payload_count(
 
 async fn count_indexed_payload(
     indexer: &ZoneIndexer<ZoneNodeHttpClient>,
-    expected_payload: &[u8],
+    expected_payload: Inscription,
 ) -> Result<usize, ZoneTestError> {
     let mut count = 0;
     let mut cursor = None;
@@ -751,13 +1104,11 @@ async fn count_indexed_payload(
         let mut saw_message = false;
 
         while let Some((message, slot)) = stream.next().await {
-            let ZoneMessage::Block(block) = message else {
-                continue;
-            };
-
             saw_message = true;
-            cursor = Some((block.id, slot));
-            if block.data == expected_payload {
+            cursor = Some(slot);
+            if let ZoneMessage::Block(block) = message
+                && block.data == expected_payload
+            {
                 count += 1;
             }
         }
@@ -768,10 +1119,12 @@ async fn count_indexed_payload(
     }
 }
 
-/// Waits until the zone indexer observes the expected channel deposit.
+/// Waits until the zone indexer observes the expected channel deposit,
+/// including its amount.
 pub async fn wait_for_deposit(
     indexer: &ZoneIndexer<ZoneNodeHttpClient>,
     expected: &DepositOp,
+    expected_amount: Value,
     duration: Duration,
 ) -> Result<(), ZoneTestError> {
     poll_zone_indexer_until(
@@ -781,6 +1134,7 @@ pub async fn wait_for_deposit(
         |message| match message {
             ZoneMessage::Deposit(deposit)
                 if deposit.inputs == expected.inputs
+                    && deposit.amount == expected_amount
                     && deposit.metadata() == expected.metadata.as_slice() =>
             {
                 Some(())
@@ -811,9 +1165,7 @@ async fn poll_zone_indexer_until<T>(
             futures::pin_mut!(stream);
 
             while let Some((message, slot)) = stream.next().await {
-                if let ZoneMessage::Block(block) = &message {
-                    cursor = Some((block.id, slot));
-                }
+                cursor = Some(slot);
 
                 if let Some(result) = predicate(&message) {
                     return Ok(result);
@@ -838,11 +1190,90 @@ pub async fn wait_for_withdraw(
         timeout_duration,
         || ZoneTestError::WithdrawTimeout,
         |message| match message {
-            ZoneMessage::Withdraw(withdraw) if withdraw.outputs == expected.outputs => Some(()),
+            ZoneMessage::Withdraw(withdraw) if withdraw.inputs == expected.inputs => Some(()),
             _ => None,
         },
     )
     .await
+}
+
+/// Waits until the sequencer's event stream surfaces the expected deposit
+/// in [`Event::BlocksProcessed::finalized`] (matched by `inputs`, `amount`,
+/// and `metadata`) while collecting any mempool-pending events. Drains the
+/// events channel as it goes — call this after any earlier event consumers in
+/// the scenario have moved past the relevant publish events.
+pub async fn wait_for_finalized_deposit_via_sequencer_and_collect_mempool_pending(
+    events: &mut tokio::sync::broadcast::Receiver<Event>,
+    expected: &DepositOp,
+    expected_amount: Value,
+    duration: Duration,
+) -> Result<HashSet<InscriptionId>, ZoneTestError> {
+    poll_sequencer_finalized_until_and_collect_mempool_pending(
+        events,
+        duration,
+        ZoneTestError::IndexerTimeout,
+        |op| {
+            matches!(op, FinalizedOp::Deposit(d)
+            if d.inputs == expected.inputs
+                && d.amount == expected_amount
+                && d.metadata == expected.metadata)
+        },
+    )
+    .await
+}
+
+/// Waits until the sequencer's event stream surfaces the expected withdraw
+/// (matched by `outputs`) while collecting any mempool-pending events. Drains
+/// the events channel as it goes.
+pub async fn wait_for_finalized_withdraw_via_sequencer_and_collect_mempool_pending(
+    events: &mut tokio::sync::broadcast::Receiver<Event>,
+    expected: &ChannelWithdrawOp,
+    duration: Duration,
+) -> Result<HashSet<InscriptionId>, ZoneTestError> {
+    poll_sequencer_finalized_until_and_collect_mempool_pending(
+        events,
+        duration,
+        ZoneTestError::WithdrawTimeout,
+        |op| matches!(op, FinalizedOp::Withdraw(w) if w.op.inputs == expected.inputs),
+    )
+    .await
+}
+
+async fn poll_sequencer_finalized_until_and_collect_mempool_pending(
+    events: &mut tokio::sync::broadcast::Receiver<Event>,
+    duration: Duration,
+    timeout_error: ZoneTestError,
+    mut predicate: impl FnMut(&FinalizedOp) -> bool,
+) -> Result<HashSet<InscriptionId>, ZoneTestError> {
+    timeout(duration, async {
+        let mut mempool_pending = HashSet::new();
+        loop {
+            let event = match events.recv().await {
+                Ok(event) => event,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    warn!("event subscriber lagged by {n}, recovering");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    return Err(ZoneTestError::SequencerStopped);
+                }
+            };
+            if let Event::MempoolPending(tx_hash) = event {
+                mempool_pending.insert(tx_hash);
+                continue;
+            }
+            let Event::BlocksProcessed { finalized, .. } = event else {
+                continue;
+            };
+            for tx in finalized {
+                if tx.ops.iter().any(&mut predicate) {
+                    return Ok(mempool_pending);
+                }
+            }
+        }
+    })
+    .await
+    .map_err(|_| timeout_error)?
 }
 
 /// Waits until node mempool/chain observation confirms the submitted zone
@@ -940,21 +1371,30 @@ pub async fn wait_for_lib_advance(
 
 /// Builds a regular channel deposit for an existing funding note with the
 /// exact deposit value.
-pub async fn build_zone_deposit(
-    node_url: &Url,
+pub fn build_zone_deposit(
+    available_utxos: Vec<Utxo>,
     channel_id: ChannelId,
-    funding_public_key: ZkPublicKey,
     amount: Value,
-    metadata: Vec<u8>,
-) -> Result<DepositOp, ZoneTestError> {
-    let note = get_note_with_exact_value(node_url, funding_public_key, amount).await?;
+    metadata: Metadata,
+) -> Result<ZoneDeposit, ZoneTestError> {
+    let note = available_utxos
+        .into_iter()
+        .find(|utxo| utxo.note.value == amount)
+        .ok_or(ZoneTestError::MissingExactFundingNote { value: amount })?;
 
-    Ok(DepositOp {
-        channel_id,
-        inputs: Inputs::new(vec![note.id]),
-        metadata,
+    Ok(ZoneDeposit {
+        deposit: DepositOp {
+            channel_id,
+            inputs: Inputs::new([note.id()]),
+            metadata,
+        },
+        reserved_inputs: vec![note],
     })
 }
+
+/// Generous cap on channel transaction fees at genesis gas prices; actual
+/// fees are a few hundred gas units for these small transactions.
+const MAX_ZONE_DEPOSIT_TX_FEE: u64 = 10_000;
 
 /// Submits a regular channel deposit through the node wallet API.
 pub async fn submit_zone_deposit(
@@ -967,7 +1407,7 @@ pub async fn submit_zone_deposit(
         deposit: deposit.clone(),
         change_public_key: funding_public_key,
         funding_public_keys: vec![funding_public_key],
-        max_tx_fee: 10.into(),
+        max_tx_fee: MAX_ZONE_DEPOSIT_TX_FEE.into(),
     };
 
     let request_url =
@@ -991,19 +1431,24 @@ pub async fn submit_zone_deposit(
 /// and publishes the zone inscription that consumes it.
 pub async fn submit_atomic_zone_deposit(
     node_url: &Url,
-    sequencer: &SequencerHandle<ZoneNodeHttpClient>,
-    channel_id: ChannelId,
-    funding_public_key: ZkPublicKey,
-    amount: Value,
-    metadata: Vec<u8>,
-    inscription_data: Vec<u8>,
+    client: &SequencerClient,
+    request: AtomicZoneDepositRequest,
 ) -> Result<AtomicZoneDepositSubmission, ZoneTestError> {
-    let transfer = build_atomic_deposit_transfer(node_url, funding_public_key, amount).await?;
+    let AtomicZoneDepositRequest {
+        channel_id,
+        funding_public_key,
+        available_utxos,
+        amount,
+        metadata,
+        inscription_data,
+    } = request;
+    let (transfer, reserved_inputs) =
+        build_atomic_deposit_transfer(available_utxos, funding_public_key, amount)?;
     let deposit = build_atomic_deposit_op(channel_id, metadata, &transfer)?;
 
-    let (tx, msg_id, sequencer_sig) = sequencer
+    let (tx, msg_id, sequencer_sig) = client
         .prepare_tx(
-            vec![Op::Transfer(transfer), Op::ChannelDeposit(deposit.clone())],
+            [Op::Transfer(transfer), Op::ChannelDeposit(deposit.clone())].into(),
             inscription_data,
         )
         .await
@@ -1014,17 +1459,18 @@ pub async fn submit_atomic_zone_deposit(
     let user_sig = sign_tx_zk(node_url, &tx, vec![funding_public_key]).await?;
     let signed_tx = SignedMantleTx::new(
         tx,
-        vec![
+        [
             OpProof::ZkSig(user_sig.clone()),
             OpProof::ZkSig(user_sig),
             OpProof::Ed25519Sig(sequencer_sig),
-        ],
+        ]
+        .into(),
     )
     .map_err(|error| ZoneTestError::SubmitAtomicDeposit {
         message: error.to_string(),
     })?;
 
-    let result = sequencer
+    let (result, _cp) = client
         .submit_signed_tx(signed_tx, msg_id)
         .await
         .map_err(|error| ZoneTestError::SubmitAtomicDeposit {
@@ -1034,38 +1480,263 @@ pub async fn submit_atomic_zone_deposit(
     Ok(AtomicZoneDepositSubmission {
         deposit,
         publish: result,
+        reserved_inputs,
     })
+}
+
+async fn build_funded_custom_tx(
+    node_client: &NodeHttpClient,
+    channel_id: ChannelId,
+    signing_key: &Ed25519Key,
+    funding_pk: ZkPublicKey,
+    payloads: &[Inscription],
+    mut parent: MsgId,
+) -> Result<(SignedMantleTx, MsgId), ZoneTestError> {
+    let signer = signing_key.public_key();
+    let mut tx_builder = MantleTxBuilder::new();
+    for payload in payloads {
+        let op = InscriptionOp {
+            channel_id,
+            inscription: payload.clone(),
+            parent,
+            signer,
+        };
+        parent = op.id();
+        tx_builder = tx_builder
+            .push_op(Op::ChannelInscribe(op))
+            .map_err(|error| ZoneTestError::BuildCustomTx {
+                message: format!("too many ops: {error}"),
+            })?;
+    }
+
+    let response = node_client
+        .fund_tx(WalletFundRequestBody {
+            tip: None,
+            priority_fee: 0,
+            tx_builder,
+            change_public_key: funding_pk,
+            funding_public_keys: vec![funding_pk],
+            max_tx_fee: GasCost::new(u64::MAX),
+        })
+        .await
+        .map_err(|error| ZoneTestError::SubmitCustomTx {
+            message: format!("funding failed: {error}"),
+        })?;
+
+    // Funding appends the fee transfer as the last op; every inscription is
+    // proven by the sequencer key over the funded tx hash.
+    let funded_tx = response.funded_tx;
+    let signature = signing_key.sign_payload(funded_tx.hash().as_signing_bytes().as_ref());
+    let mut ops_proofs =
+        OpsProofs::new_unchecked(vec![OpProof::Ed25519Sig(signature); payloads.len()]);
+    if let Some(proof) = response.transfer_proof {
+        ops_proofs
+            .try_push(proof)
+            .map_err(|error| ZoneTestError::BuildCustomTx {
+                message: format!("too many operation proofs: {error:?}"),
+            })?;
+    }
+    let signed_tx = SignedMantleTx::new(funded_tx, ops_proofs).map_err(|error| {
+        ZoneTestError::BuildCustomTx {
+            message: format!("assembling the signed tx failed: {error:?}"),
+        }
+    })?;
+
+    Ok((signed_tx, parent))
+}
+
+pub struct CustomRepublishDeps {
+    pub node_client: NodeHttpClient,
+    pub channel_id: ChannelId,
+    pub signing_key: Ed25519Key,
+    pub funding_pk: ZkPublicKey,
+    pub batches: VecDeque<Vec<Inscription>>,
+}
+
+pub fn start_custom_republish_policy(
+    sequencer: ZoneSequencer<ZoneNodeHttpClient>,
+    deps: CustomRepublishDeps,
+) -> PolicyRuntime {
+    let view_rx = sequencer.subscribe_channel_view();
+    let policy = CustomRepublishPolicy {
+        deps,
+        view_rx,
+        pending: HashSet::new(),
+        finalized: HashSet::new(),
+        chain_tip: None,
+        ready: false,
+    };
+    to_policy_runtime(runner::spawn(sequencer, policy))
+}
+
+/// [`OrphanRepublishPolicy`] for the custom-tx flow: orphans that are
+/// neither in `pending` nor finalized are rebuilt and re-submitted.
+struct CustomRepublishPolicy {
+    deps: CustomRepublishDeps,
+    view_rx: tokio::sync::watch::Receiver<SequencerChannelView>,
+    pending: HashSet<Inscription>,
+    finalized: HashSet<Inscription>,
+    /// Where our own submitted chain ends; reset on orphans so rebuilds
+    /// chain from the channel tip instead.
+    chain_tip: Option<MsgId>,
+    /// No submissions until ready — a fail-fast submit would leak its
+    /// funding reservation.
+    ready: bool,
+}
+
+impl CustomRepublishPolicy {
+    async fn submit<Node>(
+        &mut self,
+        sequencer: &mut ZoneSequencer<Node>,
+        payloads: Vec<Inscription>,
+    ) -> bool
+    where
+        Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
+    {
+        let parent = self
+            .chain_tip
+            .unwrap_or_else(|| self.view_rx.borrow().tip_message);
+        let built = build_funded_custom_tx(
+            &self.deps.node_client,
+            self.deps.channel_id,
+            &self.deps.signing_key,
+            self.deps.funding_pk,
+            &payloads,
+            parent,
+        )
+        .await;
+        let (signed_tx, msg_id) = match built {
+            Ok(built) => built,
+            Err(error) => {
+                warn!(%error, "Failed to build custom zone tx");
+                return false;
+            }
+        };
+        match sequencer.handle().submit_signed_tx(signed_tx, msg_id) {
+            Ok((_result, _checkpoint)) => {
+                self.pending.extend(payloads);
+                self.chain_tip = Some(msg_id);
+                true
+            }
+            Err(error) => {
+                warn!(%error, "Failed to submit custom zone tx");
+                false
+            }
+        }
+    }
+
+    fn entry_payloads(&self, entry: &ChannelUpdateTx) -> Vec<Inscription> {
+        match entry {
+            ChannelUpdateTx::Custom(tx) => channel_inscriptions(tx, self.deps.channel_id)
+                .into_iter()
+                .map(|info| info.payload)
+                .collect(),
+            typed => typed
+                .inscription()
+                .map(|info| info.payload.clone())
+                .into_iter()
+                .collect(),
+        }
+    }
+}
+
+impl<Node> runner::Policy<Node> for CustomRepublishPolicy
+where
+    Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
+{
+    async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
+        let (channel_update, finalized) = match event {
+            Event::Ready => {
+                self.ready = true;
+                (None, None)
+            }
+            Event::BlocksProcessed {
+                channel_update,
+                finalized,
+                ..
+            } => (Some(channel_update), Some(finalized)),
+            _ => return,
+        };
+
+        if let Some(finalized) = finalized {
+            self.finalized
+                .extend(finalized_inscriptions(finalized).map(|info| info.payload.clone()));
+        }
+
+        if let Some(channel_update) = channel_update {
+            let orphaned: HashSet<Inscription> = channel_update
+                .orphaned
+                .iter()
+                .flat_map(|entry| self.entry_payloads(entry))
+                .collect();
+            let adopted: Vec<Inscription> = channel_update
+                .adopted
+                .iter()
+                .flat_map(|entry| self.entry_payloads(entry))
+                .collect();
+            for payload in &orphaned {
+                self.pending.remove(payload);
+            }
+            self.pending.extend(adopted);
+
+            let republish: Vec<Inscription> = orphaned
+                .into_iter()
+                .filter(|payload| {
+                    !self.pending.contains(payload) && !self.finalized.contains(payload)
+                })
+                .collect();
+            if self.ready && !republish.is_empty() {
+                self.chain_tip = None;
+                if !self.submit(sequencer, republish.clone()).await {
+                    self.deps.batches.push_back(republish);
+                }
+            }
+        }
+
+        // One attempt per batch per event: a failed submission stops the
+        // drain and is retried on the next event.
+        while self.ready {
+            let Some(batch) = self.deps.batches.pop_front() else {
+                break;
+            };
+            if !self.submit(sequencer, batch.clone()).await {
+                self.deps.batches.push_front(batch);
+                break;
+            }
+        }
+    }
 }
 
 /// Builds the funding transfer that creates the note consumed by an atomic
 /// zone deposit.
-async fn build_atomic_deposit_transfer(
-    node_url: &Url,
+/// Generous fee margin for the atomic `[Transfer, Deposit, Inscribe]`
+/// transaction; the actual cost is a few hundred gas units at genesis prices.
+const ATOMIC_DEPOSIT_FEE_MARGIN: u64 = 2_000;
+
+fn build_atomic_deposit_transfer(
+    available_utxos: Vec<Utxo>,
     funding_public_key: ZkPublicKey,
     amount: Value,
-) -> Result<TransferOp, ZoneTestError> {
-    let funding_note = get_note_with_value(node_url, funding_public_key, amount).await?;
+) -> Result<(TransferOp, Vec<Utxo>), ZoneTestError> {
     let deposit_note = Note::new(amount, funding_public_key);
-    let change = funding_note.value.checked_sub(amount).ok_or_else(|| {
-        ZoneTestError::BuildAtomicDeposit {
-            message: format!(
-                "selected funding note value {} is below deposit amount {amount}",
-                funding_note.value
-            ),
-        }
+    let funded_transfer = build_wallet_funded_transfer(
+        available_utxos,
+        vec![deposit_note],
+        funding_public_key,
+        ATOMIC_DEPOSIT_FEE_MARGIN,
+    )
+    .map_err(|error| ZoneTestError::BuildAtomicDeposit {
+        message: error.to_string(),
     })?;
 
-    Ok(TransferOp {
-        inputs: Inputs::new(vec![funding_note.id]),
-        outputs: build_atomic_deposit_outputs(deposit_note, change, funding_public_key),
-    })
+    Ok(funded_transfer.into_parts())
 }
 
 /// Points the channel deposit at the note created by the atomic funding
 /// transfer, keeping both operations in the same transaction.
 fn build_atomic_deposit_op(
     channel_id: ChannelId,
-    metadata: Vec<u8>,
+    metadata: Metadata,
     transfer: &TransferOp,
 ) -> Result<DepositOp, ZoneTestError> {
     let deposit_note_id = transfer
@@ -1078,130 +1749,162 @@ fn build_atomic_deposit_op(
 
     Ok(DepositOp {
         channel_id,
-        inputs: Inputs::new(vec![deposit_note_id]),
+        inputs: Inputs::new([deposit_note_id]),
         metadata,
     })
 }
 
 /// Submits a channel withdraw signed by the active zone sequencer and publishes
 /// the withdraw inscription as part of the same SDK flow.
+///
+/// TODO: rebuild on `CHANNEL_TRANSFER` + `CHANNEL_WITHDRAW`. A withdraw now
+///  only releases an existing channel note to the key it already carries, so
+///  paying a recipient an arbitrary amount first requires transferring a
+///  channel note to their key. That needs channel note tracking.
 pub async fn submit_zone_withdraw(
-    sequencer: &SequencerHandle<ZoneNodeHttpClient>,
-    channel_id: ChannelId,
-    funding_public_key: ZkPublicKey,
-    amount: Value,
-    inscription_data: Vec<u8>,
+    _client: &SequencerClient,
+    _channel_id: ChannelId,
+    _funding_public_key: ZkPublicKey,
+    _amount: Value,
+    _inscription_data: Inscription,
 ) -> Result<ZoneWithdrawSubmission, ZoneTestError> {
-    let withdraw = ChannelWithdrawOp {
-        channel_id,
-        outputs: Outputs::new(vec![Note::new(amount, funding_public_key)]),
-        withdraw_nonce: 0,
-    };
-
-    let (tx, msg_id, inscription_sig) = sequencer
-        .prepare_tx(
-            vec![Op::ChannelWithdraw(withdraw.clone())],
-            inscription_data,
-        )
-        .await
-        .map_err(|error| ZoneTestError::SubmitWithdraw {
-            message: error.to_string(),
-        })?;
-
-    let withdraw_sig =
-        sequencer
-            .sign_tx(&tx)
-            .await
-            .map_err(|error| ZoneTestError::SubmitWithdraw {
-                message: error.to_string(),
-            })?;
-
-    let withdraw_proof =
-        match ChannelMultiSigProof::new(vec![IndexedSignature::new(0, withdraw_sig)]) {
-            Ok(proof) => proof,
-            Err(error) => {
-                return Err(ZoneTestError::SubmitWithdraw {
-                    message: error.to_string(),
-                });
-            }
-        };
-
-    let signed_tx = SignedMantleTx::new(
-        tx,
-        vec![
-            OpProof::ChannelMultiSigProof(withdraw_proof),
-            OpProof::Ed25519Sig(inscription_sig),
-        ],
-    )
-    .map_err(|error| ZoneTestError::SubmitWithdraw {
-        message: error.to_string(),
-    })?;
-
-    let result = sequencer
-        .submit_signed_tx(signed_tx, msg_id)
-        .await
-        .map_err(|error| ZoneTestError::SubmitWithdraw {
-            message: error.to_string(),
-        })?;
-
-    Ok(ZoneWithdrawSubmission {
-        withdraw,
-        publish: result,
+    Err(ZoneTestError::SubmitWithdraw {
+        message: "zone withdraw is unsupported until channel notes are tracked".to_owned(),
     })
 }
 
-/// Selects a wallet note large enough to fund a zone operation.
-async fn get_note_with_value(
-    node_url: &Url,
-    public_key: ZkPublicKey,
-    min_value: Value,
-) -> Result<SelectedNote, ZoneTestError> {
-    let balance = get_wallet_balance(node_url, public_key).await?;
+// pub async fn submit_zone_withdraw(
+//     client: &SequencerClient,
+//     channel_id: ChannelId,
+//     funding_public_key: ZkPublicKey,
+//     amount: Value,
+//     inscription_data: Inscription,
+// ) -> Result<ZoneWithdrawSubmission, ZoneTestError> {
+//     let withdraw = ChannelWithdrawOp {
+//         channel_id,
+//         outputs: Outputs::new([Note::new(amount, funding_public_key)]),
+//         withdraw_nonce: 0,
+//     };
+//
+//     let (tx, msg_id, inscription_sig) = client
+//         .prepare_tx(
+//             [Op::ChannelWithdraw(withdraw.clone())].into(),
+//             inscription_data,
+//         )
+//         .await
+//         .map_err(|error| ZoneTestError::SubmitWithdraw {
+//             message: error.to_string(),
+//         })?;
+//
+//     let withdraw_sig =
+//         client
+//             .sign_tx(&tx)
+//             .await
+//             .map_err(|error| ZoneTestError::SubmitWithdraw {
+//                 message: error.to_string(),
+//             })?;
+//
+//     let withdraw_proof =
+//         match ChannelMultiSigProof::try_new([IndexedSignature::new(0,
+// withdraw_sig)].into()) {             Ok(proof) => proof,
+//             Err(error) => {
+//                 return Err(ZoneTestError::SubmitWithdraw {
+//                     message: error.to_string(),
+//                 });
+//             }
+//         };
+//
+//     let signed_tx = SignedMantleTx::new(
+//         tx,
+//         vec![
+//             OpProof::ChannelMultiSigProof(withdraw_proof),
+//             OpProof::Ed25519Sig(inscription_sig),
+//         ],
+//     )
+//     .map_err(|error| ZoneTestError::SubmitWithdraw {
+//         message: error.to_string(),
+//     })?;
+//
+//     let (result, _cp) = client
+//         .submit_signed_tx(signed_tx, msg_id)
+//         .await
+//         .map_err(|error| ZoneTestError::SubmitWithdraw {
+//             message: error.to_string(),
+//         })?;
+//
+//     Ok(ZoneWithdrawSubmission {
+//         withdraw,
+//         publish: result,
+//     })
+// }
 
-    balance
-        .notes
-        .into_iter()
-        .find(|(_, value)| *value >= min_value)
-        .map(|(id, value)| SelectedNote { id, value })
-        .ok_or(ZoneTestError::MissingFundingNote { min_value })
+/// Result of publishing an atomic inscription+withdraw bundle. Carries every
+/// withdraw op produced by the SDK (one per `WithdrawArg`, in submission
+/// order) so a multi-withdraw scenario can match each by its outputs.
+pub struct ZoneAtomicWithdrawSubmission {
+    pub withdraws: Vec<ChannelWithdrawOp>,
+    pub publish: PublishResult,
 }
 
-/// Selects a wallet note that must be consumed directly by a deposit test.
-async fn get_note_with_exact_value(
-    node_url: &Url,
-    public_key: ZkPublicKey,
-    value: Value,
-) -> Result<SelectedNote, ZoneTestError> {
-    let balance = get_wallet_balance(node_url, public_key).await?;
+/// Publishes an atomic inscription+withdraw bundle through the runner.
+/// Returns every withdraw op (with the nonce filled by the SDK) from the
+/// publish call's return value, so downstream cucumber assertions can
+/// match each withdraw by its outputs.
+///
+/// `outputs_per_arg` carries one entry per `WithdrawArg`; each inner `Vec`
+/// becomes that arg's `Outputs` (one `Note::new(amount, funding_pk)` per
+/// listed amount). Exercises the SDK API at full width: multiple args, with
+/// any arg able to carry multiple output notes.
+pub async fn publish_atomic_zone_withdraw(
+    client: &SequencerClient,
+    funding_public_key: ZkPublicKey,
+    outputs_per_arg: Vec<Vec<Value>>,
+    inscription_data: Inscription,
+    _deadline: PublishDeadline,
+) -> Result<ZoneAtomicWithdrawSubmission, ZoneTestError> {
+    if outputs_per_arg.is_empty() {
+        return Err(ZoneTestError::SubmitWithdraw {
+            message: "publish_atomic_zone_withdraw requires at least one withdraw arg".to_owned(),
+        });
+    }
+    let withdraw_args: Vec<WithdrawArg> = outputs_per_arg
+        .iter()
+        .map(|amounts| {
+            Ok::<WithdrawArg, ZoneTestError>(WithdrawArg {
+                outputs: Outputs::try_new(
+                    amounts
+                        .iter()
+                        .map(|amount| Note::new(*amount, funding_public_key))
+                        .collect::<Vec<_>>(),
+                )?,
+            })
+        })
+        .collect::<Result<Vec<_>, ZoneTestError>>()?;
 
-    balance
-        .notes
-        .into_iter()
-        .find(|(_, note_value)| *note_value == value)
-        .map(|(id, value)| SelectedNote { id, value })
-        .ok_or(ZoneTestError::MissingExactFundingNote { value })
-}
-
-/// Reads wallet-visible notes for the test funding key from the node API.
-async fn get_wallet_balance(
-    node_url: &Url,
-    public_key: ZkPublicKey,
-) -> Result<WalletBalanceResponseBody, ZoneTestError> {
-    let request_url = node_url
-        .join(&format!(
-            "wallet/{}/balance",
-            hex::encode(lb_groth16::fr_to_bytes(&public_key.into()))
-        ))
-        .map_err(|error| ZoneTestError::WalletBalance {
+    let (result, _cp) = client
+        .publish_atomic_withdraw(inscription_data, withdraw_args)
+        .await
+        .map_err(|error| ZoneTestError::SubmitWithdraw {
             message: error.to_string(),
         })?;
 
-    CommonHttpClient::new(None)
-        .get::<(), WalletBalanceResponseBody>(request_url, None)
-        .await
-        .map_err(|error| ZoneTestError::WalletBalance {
-            message: error.to_string(),
-        })
+    let PendingTx::AtomicWithdraw(info) = result.tx else {
+        return Err(ZoneTestError::SubmitWithdraw {
+            message: "publish_atomic_withdraw returned a non-AtomicWithdraw publish result"
+                .to_owned(),
+        });
+    };
+    if info.withdraws.is_empty() {
+        return Err(ZoneTestError::SubmitWithdraw {
+            message: "atomic withdraw bundle had no withdraw ops".to_owned(),
+        });
+    }
+    Ok(ZoneAtomicWithdrawSubmission {
+        withdraws: info.withdraws.iter().map(|w| w.op.clone()).collect(),
+        publish: PublishResult {
+            tx: PendingTx::AtomicWithdraw(info),
+        },
+    })
 }
 
 /// Asks the node wallet service to sign a Mantle transaction for the requested
@@ -1231,109 +1934,4 @@ async fn sign_tx_zk(
         })?;
 
     Ok(response.sig)
-}
-
-/// Preserves leftover value from an atomic deposit funding note as wallet
-/// change.
-fn build_atomic_deposit_outputs(
-    deposit_note: Note,
-    change: Value,
-    funding_public_key: ZkPublicKey,
-) -> Outputs {
-    if change > 0 {
-        Outputs::new(vec![deposit_note, Note::new(change, funding_public_key)])
-    } else {
-        Outputs::new(vec![deposit_note])
-    }
-}
-
-/// Builds the single-node deployment shape used by all migrated zone tests.
-fn build_zone_deployment(scenario_base_dir: PathBuf) -> Result<DeploymentPlan, ZoneTestError> {
-    let deployment = DeploymentBuilder::new(TopologyConfig::with_node_numbers(1))
-        .scenario_base_dir(scenario_base_dir)
-        .build()
-        .map_err(|error| ZoneTestError::BuildDeployment {
-            message: error.to_string(),
-        })?;
-
-    Ok(add_exact_deposit_notes_to_funding_key(deployment, [1, 3]))
-}
-
-/// Adds small exact-value notes that make deposit assertions deterministic
-/// without setup transfers inside each scenario.
-fn add_exact_deposit_notes_to_funding_key(
-    mut deployment: DeploymentPlan,
-    note_values: impl IntoIterator<Item = Value>,
-) -> DeploymentPlan {
-    let values = note_values.into_iter().collect::<Vec<_>>();
-
-    if values.is_empty() {
-        return deployment;
-    }
-
-    let funding_public_key = deployment.nodes()[0].general.consensus_config.funding_pk;
-    let mut transfer_op = deployment
-        .config
-        .genesis_block
-        .as_ref()
-        .expect("zone deployment should include a genesis block")
-        .genesis_tx()
-        .genesis_transfer()
-        .clone();
-
-    transfer_op.outputs.as_mut().extend(
-        values
-            .into_iter()
-            .map(|value| Note::new(value, funding_public_key)),
-    );
-
-    let providers = deployment
-        .nodes()
-        .iter()
-        .take(deployment.config.blend_core_nodes)
-        .map(|node| {
-            let (blend_config, provider_sk, zk_sk) = &node.general.blend_config;
-
-            ProviderInfo {
-                service_type: ServiceType::BlendNetwork,
-                provider_sk: provider_sk.clone(),
-                zk_sk: zk_sk.clone(),
-                locator: Locator::new_unchecked(
-                    blend_config.core.backend.listening_address.clone(),
-                ),
-                note: node.general.consensus_config.blend_note.clone(),
-            }
-        })
-        .collect();
-
-    deployment.config.genesis_block = Some(create_genesis_block_with_declarations(
-        transfer_op,
-        providers,
-        deployment.config.test_context.as_deref(),
-    ));
-
-    deployment
-}
-
-/// Shrinks consensus timing for zone Cucumber scenarios while keeping the node
-/// otherwise close to the generated local deployment config.
-fn fast_zone_config_patch(mut config: RunConfig) -> Result<RunConfig, DynError> {
-    if config.user.api.backend.listen_address.port() == 0 {
-        return Err("zone test config patch requires a non-zero API port".into());
-    }
-
-    config.deployment.time.slot_duration = Duration::from_secs(1);
-    config.deployment.cryptarchia.slot_activation_coeff =
-        NonNegativeRatio::new(1, 2.try_into().unwrap());
-
-    config
-        .user
-        .cryptarchia
-        .service
-        .bootstrap
-        .prolonged_bootstrap_period = Duration::ZERO;
-
-    config.deployment.cryptarchia.security_param = NonZero::new(5).unwrap();
-
-    Ok(config)
 }

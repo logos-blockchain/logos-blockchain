@@ -16,6 +16,7 @@ workspace = true
 async-trait           = { workspace = true }
 futures               = { workspace = true }
 lb-cryptarchia-engine = { features = ["tokio"], workspace = true }
+lb-log-targets        = { workspace = true }
 lb-tracing            = { workspace = true }
 lb-utils              = { workspace = true }
 log                   = { workspace = true }
@@ -28,6 +29,9 @@ time                  = { features = ["std"], workspace = true }
 tokio                 = { workspace = true }
 tokio-stream          = { workspace = true }
 tracing               = { workspace = true }
+
+[dev-dependencies]
+tokio = { features = ["macros", "rt", "test-util", "time"], workspace = true }
 
 [features]
 ntp = ["dep:sntpc", "dep:thiserror", "tokio/net"]

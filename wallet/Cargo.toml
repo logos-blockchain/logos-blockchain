@@ -17,7 +17,9 @@ lb-core                       = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-ledger                     = { workspace = true }
+lb-log-targets                = { workspace = true }
 lb-mmr                        = { workspace = true }
+lb-utils                      = { workspace = true }
 num-bigint                    = { workspace = true }
 rpds                          = { features = ["serde"], workspace = true }
 serde                         = { features = ["derive"], workspace = true }

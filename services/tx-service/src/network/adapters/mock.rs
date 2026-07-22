@@ -1,5 +1,6 @@
 use futures::{Stream, StreamExt as _};
 use lb_core::mantle::mock::{MockTransaction, MockTxId};
+use lb_log_targets::mempool;
 use lb_network_service::{
     NetworkService,
     backends::mock::{Mock, MockBackendMessage, MockContentTopic, MockMessage, NetworkEvent},
@@ -12,6 +13,8 @@ use crate::network::NetworkAdapter;
 pub const MOCK_PUB_SUB_TOPIC: &str = "MockPubSubTopic";
 pub const MOCK_CONTENT_TOPIC: &str = "MockContentTopic";
 pub const MOCK_TX_CONTENT_TOPIC: MockContentTopic = MockContentTopic::new("Mock", 1, "Tx");
+
+const LOG_TARGET: &str = mempool::network::ROOT;
 
 pub struct MockAdapter<RuntimeServiceId> {
     network_relay: OutboundRelay<<NetworkService<Mock, RuntimeServiceId> as ServiceData>::Message>,
@@ -66,13 +69,13 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
             .send(NetworkMsg::SubscribeToPubSub { sender })
             .await
         {
-            tracing::error!(err = ?e);
+            tracing::error!(target: LOG_TARGET, err = ?e);
         }
 
         let stream = receiver.await.unwrap();
         Box::new(Box::pin(stream.filter_map(async |event| match event {
             Ok(NetworkEvent::RawMessage(message)) => {
-                tracing::debug!("Received message: {:?}", message.payload());
+                tracing::debug!(target: LOG_TARGET, "Received message: {:?}", message.payload());
                 message.content_topic().eq(&MOCK_TX_CONTENT_TOPIC).then(|| {
                     let tx = MockTransaction::new(message);
                     (tx.id(), tx)
@@ -91,7 +94,7 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
             }))
             .await
         {
-            tracing::error!("failed to send item to topic: {e}");
+            tracing::error!(target: LOG_TARGET, "failed to send item to topic: {e}");
         }
     }
 }

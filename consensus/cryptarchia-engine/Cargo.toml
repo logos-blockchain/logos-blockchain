@@ -19,6 +19,7 @@ workspace = true
 [dependencies]
 lb-pol     = { workspace = true }
 lb-utils   = { features = ["time"], workspace = true }
+rpds       = { workspace = true }
 serde      = { workspace = true }
 serde_with = { features = ["macros"], workspace = true }
 thiserror  = { workspace = true }

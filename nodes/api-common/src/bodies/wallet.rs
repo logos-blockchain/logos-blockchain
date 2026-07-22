@@ -10,8 +10,11 @@ pub mod balance {
         mantle::{NoteId, Value},
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
+    use lb_log_targets::api;
     use serde::{Deserialize, Serialize};
     use tracing::error;
+
+    const LOG_TARGET: &str = api::http::wallet::BALANCE;
 
     #[derive(Serialize, Deserialize)]
     pub struct WalletBalanceResponseBody {
@@ -24,11 +27,59 @@ pub mod balance {
     impl IntoResponse for WalletBalanceResponseBody {
         fn into_response(self) -> Response {
             let json = serde_json::to_string(&self).unwrap_or_else(|e| {
-                error!("WalletBalanceResponseBody serialization error: {e}");
+                error!(
+                    target: LOG_TARGET,
+                    "WalletBalanceResponseBody serialization error: {e}"
+                );
                 // We panic here because this should never happen, and if it does, it's a
                 // critical error that we want to be immediately visible during
                 // development and testing.
                 panic!("WalletBalanceResponseBody serialization failed: {e}")
+            });
+
+            (StatusCode::OK, json).into_response()
+        }
+    }
+}
+
+pub mod claimable_vouchers {
+    use axum::{
+        http::StatusCode,
+        response::{IntoResponse, Response},
+    };
+    use lb_core::{
+        header::HeaderId,
+        mantle::ops::leader_claim::{VoucherCm, VoucherNullifier},
+    };
+    use lb_log_targets::api;
+    use serde::{Deserialize, Serialize};
+    use tracing::error;
+
+    const LOG_TARGET: &str = api::http::wallet::CLAIMABLE_VOUCHERS;
+
+    #[derive(Serialize, Deserialize)]
+    pub struct ClaimableVoucherInfoResponseBody {
+        pub commitment: VoucherCm,
+        pub nullifier: VoucherNullifier,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletClaimableVouchersResponseBody {
+        pub tip: HeaderId,
+        pub vouchers: Vec<ClaimableVoucherInfoResponseBody>,
+    }
+
+    impl IntoResponse for WalletClaimableVouchersResponseBody {
+        fn into_response(self) -> Response {
+            let json = serde_json::to_string(&self).unwrap_or_else(|e| {
+                error!(
+                    target: LOG_TARGET,
+                    "WalletClaimableVouchersResponseBody serialization failed: {e}"
+                );
+                // We panic here because this should never happen, and if it does, it's a
+                // critical error that we want to be immediately visible during
+                // development and testing.
+                panic!("WalletClaimableVouchersResponseBody serialization failed: {e}")
             });
 
             (StatusCode::OK, json).into_response()
@@ -46,8 +97,11 @@ pub mod transfer_funds {
         mantle::{SignedMantleTx, Transaction as _, Value},
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
+    use lb_log_targets::api;
     use serde::{Deserialize, Serialize};
     use tracing::error;
+
+    const LOG_TARGET: &str = api::http::wallet::TRANSFER_FUNDS;
 
     #[derive(Serialize, Deserialize)]
     pub struct WalletTransferFundsRequestBody {
@@ -60,7 +114,7 @@ pub mod transfer_funds {
 
     #[derive(Serialize, Deserialize)]
     pub struct WalletTransferFundsResponseBody {
-        pub hash: lb_core::mantle::tx::TxHash,
+        pub hash: lb_core::mantle::transactions::TxHash,
     }
 
     impl From<SignedMantleTx> for WalletTransferFundsResponseBody {
@@ -74,7 +128,10 @@ pub mod transfer_funds {
     impl IntoResponse for WalletTransferFundsResponseBody {
         fn into_response(self) -> Response {
             let json = serde_json::to_string(&self).unwrap_or_else(|e| {
-                error!("WalletTransferFundsResponseBody serialization failed: {e}");
+                error!(
+                    target: LOG_TARGET,
+                    "WalletTransferFundsResponseBody serialization failed: {e}"
+                );
                 // We panic here because this should never happen, and if it does, it's a
                 // critical error that we want to be immediately visible during
                 // development and testing.
@@ -83,6 +140,43 @@ pub mod transfer_funds {
 
             (StatusCode::CREATED, json).into_response()
         }
+    }
+}
+
+pub mod fund {
+    use lb_core::{
+        header::HeaderId,
+        mantle::{
+            OpProof, Value,
+            gas::GasCost,
+            transactions::{MantleTx, builder::MantleTxBuilder},
+        },
+    };
+    use lb_key_management_system_keys::keys::ZkPublicKey;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletFundRequestBody {
+        pub tip: Option<HeaderId>,
+        pub tx_builder: MantleTxBuilder,
+        pub change_public_key: ZkPublicKey,
+        pub funding_public_keys: Vec<ZkPublicKey>,
+        pub max_tx_fee: GasCost,
+        #[serde(default)]
+        pub priority_fee: Value,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletFundResponseBody {
+        /// Tip the transaction was funded against.
+        pub tip: HeaderId,
+        /// The funded transaction, with the fee transfer appended as the last
+        /// op. All ops are still unsigned.
+        pub funded_tx: MantleTx,
+        /// Proof for the appended fee transfer, signed over the funded
+        /// transaction hash. `None` if funding required no transfer (zero
+        /// fee and no inputs pulled in).
+        pub transfer_proof: Option<OpProof>,
     }
 }
 

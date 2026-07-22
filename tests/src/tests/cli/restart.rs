@@ -1,11 +1,14 @@
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use lb_libp2p::{Multiaddr, Protocol};
 use lb_testing_framework::{
     DeploymentBuilder, LbcManualCluster, NodeHttpClient, TopologyConfig as TfTopologyConfig,
 };
-use logos_blockchain_tests::common::manual_cluster::{
-    build_local_manual_cluster, wait_for_height as wait_for_manual_cluster_height,
+use logos_blockchain_tests::{
+    common::manual_cluster::{
+        build_local_manual_cluster, wait_for_height as wait_for_manual_cluster_height,
+    },
+    cucumber::defaults::E2E_ARTIFACTS_DIR,
 };
 use serial_test::serial;
 use testing_framework_core::scenario::{PeerSelection, StartNodeOptions};
@@ -24,16 +27,17 @@ async fn node_restart_with_initial_peer_override() {
             TfTopologyConfig::with_node_numbers(3)
                 .with_test_context(Some("node_restart_with_initial_peer_override".to_owned())),
         ),
+        Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
     );
 
-    let cluster = base.cluster;
+    let cluster = base.cluster();
 
     let node0 = cluster
         .start_node_with(
             "0",
             StartNodeOptions::default()
                 .with_peers(PeerSelection::None)
-                .with_persist_dir(base.scenario_base_dir.join("node-0")),
+                .with_persist_dir(base.scenario_base_dir().join("node-0")),
         )
         .await
         .unwrap_or_else(|_| panic!("starting node-0 should succeed"));
@@ -43,7 +47,7 @@ async fn node_restart_with_initial_peer_override() {
             "1",
             StartNodeOptions::default()
                 .with_peers(PeerSelection::Named(vec![node0.name.clone()]))
-                .with_persist_dir(base.scenario_base_dir.join("node-1")),
+                .with_persist_dir(base.scenario_base_dir().join("node-1")),
         )
         .await
         .unwrap_or_else(|_| panic!("starting node-1 should succeed"));
@@ -53,7 +57,7 @@ async fn node_restart_with_initial_peer_override() {
             "2",
             StartNodeOptions::default()
                 .with_peers(PeerSelection::Named(vec![node0.name.clone()]))
-                .with_persist_dir(base.scenario_base_dir.join("node-2")),
+                .with_persist_dir(base.scenario_base_dir().join("node-2")),
         )
         .await
         .unwrap_or_else(|_| panic!("starting node-2 should succeed"));
@@ -83,7 +87,7 @@ async fn node_restart_with_initial_peer_override() {
         .unwrap_or_else(|_| panic!("node-0 should stop cleanly"));
 
     let restarted_node2 =
-        restart_node_and_get_client(&cluster, &node2.name, vec![node1_dial_addr]).await;
+        restart_node_and_get_client(cluster, &node2.name, vec![node1_dial_addr]).await;
 
     wait_for_manual_cluster_height(&restarted_node2, 2, Duration::from_mins(2))
         .await

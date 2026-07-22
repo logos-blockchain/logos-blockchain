@@ -1,7 +1,7 @@
 use std::{net::Ipv4Addr, num::NonZeroU16, time::Duration};
 
+use lb_log_targets::libp2p as lb_log_targets_libp2p;
 use thiserror::Error;
-use tracing::info;
 
 use super::{
     connection::{PcpConnection, generate_nonce},
@@ -13,6 +13,9 @@ use super::{
 };
 
 pub type IpPort = (Ipv4Addr, NonZeroU16);
+
+const LOG_TARGET: &str =
+    lb_log_targets_libp2p::behaviour::nat::address_mapper::protocols::pcp_core::CLIENT;
 
 #[derive(Debug, Error)]
 pub enum PcpError {
@@ -108,7 +111,7 @@ impl PcpClient {
     pub async fn probe_available(self) -> Result<ActivePcpClient, PcpError> {
         let gateway_ip = Self::get_default_gateway()?;
 
-        tracing::debug!("Probing PCP support at gateway {gateway_ip}");
+        tracing::debug!(target: LOG_TARGET, "Probing PCP support at gateway {gateway_ip}");
 
         let connection =
             PcpConnection::open(self.client_addr, gateway_ip, self.config.clone()).await?;
@@ -182,6 +185,7 @@ impl ActivePcpClient {
 
     fn log_mapping_success(mapping: &Mapping) {
         tracing::info!(
+            target: LOG_TARGET,
             "PCP mapping created: {}:{} (lifetime: {}s)",
             mapping.external_address(),
             mapping.external_port(),
@@ -195,14 +199,15 @@ impl ActivePcpClient {
     /// mapping.
     #[cfg(test)]
     pub(crate) async fn release_mapping(&self, mapping: Mapping) -> Result<(), PcpError> {
-        info!(
+        tracing::info!(
+            target: LOG_TARGET,
             "Releasing PCP mapping: {}:{}",
             mapping.external_address(),
             mapping.external_port()
         );
         self.send_delete_request(mapping).await?;
 
-        info!("PCP mapping released");
+        tracing::info!(target: LOG_TARGET, "PCP mapping released");
         Ok(())
     }
 

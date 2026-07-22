@@ -21,8 +21,12 @@ mod imp {
         lb_tracing::increase_counter_u64!(blend_mix_packets_processed_total, 1);
     }
 
-    pub fn peers_connected(count: usize) {
-        lb_tracing::metric_gauge_u64!(blend_peers_connected, count as u64);
+    pub fn core_peers_negotiated(count: usize) {
+        lb_tracing::metric_observable_gauge_u64_set!(blend_core_peers_negotiated, count as u64);
+    }
+
+    pub fn peers_negotiated_stop_reporting() {
+        lb_tracing::metric_observable_gauge_u64_clear!(blend_core_peers_negotiated);
     }
 
     pub fn outbound_publish_ok() {
@@ -59,6 +63,12 @@ mod imp {
             1,
             message_type = message_type.to_str()
         );
+    }
+
+    /// Reports incoming messages that were dropped before the event loop could
+    /// process them because the consumer lagged behind the broadcast producer.
+    pub fn inbound_messages_dropped(count: u64) {
+        lb_tracing::increase_counter_u64!(blend_inbound_messages_dropped_total, count);
     }
 }
 

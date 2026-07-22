@@ -33,6 +33,13 @@ pub trait NetworkAdapter<RuntimeServiceId> {
 
     async fn request_tip(&self, peer: Self::PeerId) -> Result<GetTipResponse, DynError>;
 
+    /// Sample up to `max_peers` currently-connected peers and request their
+    /// chain tip via `GetTip`, concurrently. The returned stream yields each
+    /// successful response as it resolves; per-peer failures are dropped.
+    ///
+    /// Used by the proactive tip-polling lag watchdog.
+    async fn sample_tips(&self, max_peers: usize) -> BoxedStream<GetTipResponse>;
+
     async fn request_blocks_from_peer(
         &self,
         peer: Self::PeerId,

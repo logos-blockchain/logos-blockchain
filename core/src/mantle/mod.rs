@@ -1,29 +1,26 @@
-use std::{hash::Hash, pin::Pin};
-
-use futures::Stream;
-use thiserror::Error;
-
 pub mod channel;
-pub mod encoding;
+mod channel_notes;
 pub mod gas;
-pub mod genesis_tx;
 pub mod ledger;
 pub mod mock;
+pub mod nom;
 pub mod ops;
-pub mod select;
-pub mod tx;
-pub mod tx_builder;
+pub mod transactions;
+
+use std::hash::Hash;
 
 pub use gas::{GasCalculator, GasConstants};
-pub use genesis_tx::CryptarchiaParameter;
 pub use ledger::{Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof};
 use ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp};
-pub use tx::{MantleTx, SignedMantleTx, TxHash, VerificationError};
+use thiserror::Error;
+pub use transactions::{CryptarchiaParameter, GenesisTime};
 
+pub use crate::mantle::transactions::{MantleTx, SignedMantleTx, TxHash, VerificationError};
 use crate::mantle::{
     gas::{Gas, GasCost, GasOverflow},
     ops::transfer::TransferOp,
+    transactions::OperationVerificationHelper,
 };
 
 pub const MAX_MANTLE_TXS: usize = 1024;
@@ -75,7 +72,7 @@ pub trait AuthenticatedMantleTx: Transaction<Hash = TxHash> + GasCalculator + St
 
     fn verify_ops_proofs_with_helper(
         &self,
-        helper: &impl tx::OperationVerificationHelper,
+        helper: &impl OperationVerificationHelper,
     ) -> Result<(), VerificationError>;
 }
 
@@ -144,7 +141,7 @@ impl<T: AuthenticatedMantleTx> AuthenticatedMantleTx for &T {
 
     fn verify_ops_proofs_with_helper(
         &self,
-        operation_verification_helper: &impl tx::OperationVerificationHelper,
+        operation_verification_helper: &impl OperationVerificationHelper,
     ) -> Result<(), VerificationError> {
         <T as AuthenticatedMantleTx>::verify_ops_proofs_with_helper(
             self,
@@ -172,16 +169,6 @@ impl<T: GenesisTx> GenesisTx for &T {
     fn mantle_tx(&self) -> &MantleTx {
         T::mantle_tx(self)
     }
-}
-
-pub trait TxSelect {
-    type Tx: Transaction;
-    type Settings: Clone;
-    fn new(settings: Self::Settings) -> Self;
-
-    fn select_tx_from<'i, S>(&self, txs: S) -> Pin<Box<dyn Stream<Item = Self::Tx> + Send + 'i>>
-    where
-        S: Stream<Item = Self::Tx> + Send + 'i;
 }
 
 #[derive(Debug, Error)]

@@ -1,24 +1,28 @@
+use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
+use lb_log_targets::mantle;
 use tracing::info;
 
 use super::{SDPActiveOp, SdpError};
 use crate::{
-    block::BlockNumber,
-    events::Events,
+    events::TxEvent,
     mantle::{
         TxHash,
         ledger::{Declarations, Operation},
     },
 };
 
+const LOG_TARGET: &str = mantle::sdp::message::ACTIVE;
+
 pub struct SDPActiveValidationContext<'a> {
     pub declarations: &'a Declarations,
     pub tx_hash: &'a TxHash,
     pub active_sig: &'a ZkSignature,
+    pub epoch: Epoch,
 }
 
 pub struct SDPActiveExecutionContext {
-    pub block_number: BlockNumber,
+    pub epoch: Epoch,
     pub declarations: Declarations,
 }
 
@@ -34,6 +38,17 @@ impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
         let Some(declaration) = ctx.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
         };
+
+        // Check the declaration hasn't been withdrawn
+        // (Return error if `scheduled_withdrawal_epoch` epoch has passed)
+        if let Some(withdraw_at) = declaration.withdraw_at
+            && withdraw_at <= ctx.epoch
+        {
+            return Err(SdpError::DeclarationWithdrawn {
+                declaration_id: self.declaration_id,
+                withdraw_at,
+            });
+        }
 
         // Check the nonce is increasing
         if self.nonce <= declaration.nonce {
@@ -55,21 +70,22 @@ impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         let declaration = ctx
             .declarations
             .get_mut(&self.declaration_id)
             .expect("The operation should have been validated");
 
-        declaration.active = ctx.block_number;
+        declaration.active = ctx.epoch;
         declaration.nonce = self.nonce;
         info!(
+            target: LOG_TARGET,
             provider_id = ?declaration.provider_id,
-            active = declaration.active,
-            nonce = declaration.nonce,
+            active = ?declaration.active,
+            nonce = ?declaration.nonce,
             "updated declaration with active message"
         );
 
-        Ok((ctx, Events::new()))
+        Ok((ctx, Vec::new()))
     }
 }

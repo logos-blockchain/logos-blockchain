@@ -8,7 +8,7 @@ use multiaddr::Multiaddr;
 use rand::{Rng, seq::IteratorRandom as _};
 use serde::{Deserialize, Serialize};
 
-/// A set of core nodes in a session.
+/// A set of core nodes in an epoch.
 #[derive(Clone, Debug)]
 pub struct Membership<NodeId> {
     /// All nodes, including local and remote.

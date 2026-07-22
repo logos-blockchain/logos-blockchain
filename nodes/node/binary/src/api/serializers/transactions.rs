@@ -1,4 +1,7 @@
-use lb_core::mantle::{MantleTx, Op, OpProof, SignedMantleTx, TxHash};
+use lb_core::mantle::{
+    MantleTx, SignedMantleTx, TxHash,
+    transactions::{Ops, tx::OpsProofs},
+};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -7,7 +10,7 @@ pub struct ApiTransactionSerializer {
     #[serde(getter = "<MantleTx as lb_core::mantle::Transaction>::hash")]
     hash: TxHash,
     #[serde(getter = "MantleTx::ops")]
-    ops: Vec<Op>,
+    ops: Ops,
 }
 
 #[derive(Serialize)]
@@ -15,7 +18,7 @@ pub struct ApiTransactionSerializer {
 pub struct ApiSignedTransactionSerializer {
     #[serde(with = "ApiTransactionSerializer")]
     mantle_tx: MantleTx,
-    ops_proofs: Vec<OpProof>,
+    ops_proofs: OpsProofs,
 }
 
 #[derive(Serialize)]

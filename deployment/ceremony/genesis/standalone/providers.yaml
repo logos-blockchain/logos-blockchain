@@ -1,0 +1,5 @@
+- provider_id: aa70aafc48536ae13168ed4845981a40cbd2dc1c38df88d04c46250e9ad65ce0
+  zk_id: 852efb444db8c3c811625850df39425f43aeffc69571192c0be9f72523256e0a
+  locators:
+    - /ip4/127.0.0.1/udp/3400/quic-v1
+  service_type: BN

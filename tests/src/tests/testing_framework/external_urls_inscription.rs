@@ -123,7 +123,7 @@ async fn external_urls_inscription_workload() -> Result<(), Box<dyn std::error::
     let deployer = LbcLocalDeployer::new();
 
     // External-only sources: no managed nodes.
-    let scenario_base_dir = unique_scenario_base_dir("tf-external-urls-inscription");
+    let scenario_base_dir = unique_scenario_base_dir("tf-external-urls-inscription", None);
     let mut builder =
         ScenarioBuilder::deployment_with(|t| t.nodes(0).scenario_base_dir(scenario_base_dir));
 

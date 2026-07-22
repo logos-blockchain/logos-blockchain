@@ -13,12 +13,10 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait  = { workspace = true }
-derivative   = { workspace = true }
-futures      = { workspace = true }
-lb-core      = { workspace = true }
-overwatch    = { workspace = true }
-serde        = { features = ["derive"], workspace = true }
-tokio        = { workspace = true }
-tokio-stream = { workspace = true }
-tracing      = { workspace = true }
+async-trait = { workspace = true }
+derivative  = { workspace = true }
+lb-core     = { workspace = true }
+overwatch   = { workspace = true }
+serde       = { features = ["derive"], workspace = true }
+tokio       = { workspace = true }
+tracing     = { workspace = true }

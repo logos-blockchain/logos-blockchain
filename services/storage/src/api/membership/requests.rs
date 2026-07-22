@@ -1,9 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
-
-use lb_core::{
-    block::BlockNumber,
-    sdp::{Locator, ProviderId, ServiceType, SessionNumber},
-};
+use lb_core::block::BlockNumber;
 use tokio::sync::oneshot::Sender;
 
 use crate::{
@@ -12,32 +7,12 @@ use crate::{
     backends::StorageBackend,
 };
 
-pub type SessionSender = Sender<Option<(SessionNumber, HashMap<ProviderId, BTreeSet<Locator>>)>>;
-
 pub enum MembershipApiRequest {
-    SaveActiveSession {
-        service_type: ServiceType,
-        session_id: SessionNumber,
-        providers: HashMap<ProviderId, BTreeSet<Locator>>,
-    },
-    LoadActiveSession {
-        service_type: ServiceType,
-        response_tx: SessionSender,
-    },
     SaveLatestBlock {
         block_number: BlockNumber,
     },
     LoadLatestBlock {
         response_tx: Sender<Option<BlockNumber>>,
-    },
-    SaveNextSession {
-        service_type: ServiceType,
-        session_id: SessionNumber,
-        providers: HashMap<ProviderId, BTreeSet<Locator>>,
-    },
-    LoadNextSession {
-        service_type: ServiceType,
-        response_tx: SessionSender,
     },
 }
 
@@ -47,62 +22,14 @@ where
 {
     async fn execute(self, backend: &mut Backend) -> Result<(), StorageServiceError> {
         match self {
-            Self::SaveActiveSession {
-                service_type,
-                session_id,
-                providers,
-            } => handle_save_active_session(backend, service_type, session_id, providers).await,
-            Self::LoadActiveSession {
-                service_type,
-                response_tx,
-            } => handle_load_active_session(backend, service_type, response_tx).await,
             Self::SaveLatestBlock { block_number } => {
                 handle_save_latest_block(backend, block_number).await
             }
             Self::LoadLatestBlock { response_tx } => {
                 handle_load_latest_block(backend, response_tx).await
             }
-            Self::SaveNextSession {
-                service_type,
-                session_id,
-                providers,
-            } => handle_save_next_session(backend, service_type, session_id, providers).await,
-            Self::LoadNextSession {
-                service_type,
-                response_tx,
-            } => handle_load_next_session(backend, service_type, response_tx).await,
         }
     }
-}
-
-async fn handle_save_active_session<Backend: StorageBackend + StorageMembershipApi>(
-    backend: &mut Backend,
-    service_type: ServiceType,
-    session_id: SessionNumber,
-    providers: HashMap<ProviderId, BTreeSet<Locator>>,
-) -> Result<(), StorageServiceError> {
-    backend
-        .save_active_session(service_type, session_id, &providers)
-        .await
-        .map_err(StorageServiceError::BackendError)
-}
-
-async fn handle_load_active_session<Backend: StorageBackend + StorageMembershipApi>(
-    backend: &mut Backend,
-    service_type: ServiceType,
-    response_tx: SessionSender,
-) -> Result<(), StorageServiceError> {
-    let result = backend
-        .load_active_session(service_type)
-        .await
-        .map_err(StorageServiceError::BackendError)?;
-
-    if response_tx.send(result).is_err() {
-        return Err(StorageServiceError::ReplyError {
-            message: "Failed to send reply for load active session request".to_owned(),
-        });
-    }
-    Ok(())
 }
 
 async fn handle_save_latest_block<Backend: StorageBackend + StorageMembershipApi>(
@@ -127,36 +54,6 @@ async fn handle_load_latest_block<Backend: StorageBackend + StorageMembershipApi
     if response_tx.send(result).is_err() {
         return Err(StorageServiceError::ReplyError {
             message: "Failed to send reply for load latest block request".to_owned(),
-        });
-    }
-    Ok(())
-}
-
-async fn handle_save_next_session<Backend: StorageBackend + StorageMembershipApi>(
-    backend: &mut Backend,
-    service_type: ServiceType,
-    session_id: SessionNumber,
-    providers: HashMap<ProviderId, BTreeSet<Locator>>,
-) -> Result<(), StorageServiceError> {
-    backend
-        .save_next_session(service_type, session_id, &providers)
-        .await
-        .map_err(StorageServiceError::BackendError)
-}
-
-async fn handle_load_next_session<Backend: StorageBackend + StorageMembershipApi>(
-    backend: &mut Backend,
-    service_type: ServiceType,
-    response_tx: SessionSender,
-) -> Result<(), StorageServiceError> {
-    let result = backend
-        .load_next_session(service_type)
-        .await
-        .map_err(StorageServiceError::BackendError)?;
-
-    if response_tx.send(result).is_err() {
-        return Err(StorageServiceError::ReplyError {
-            message: "Failed to send reply for load next session request".to_owned(),
         });
     }
     Ok(())

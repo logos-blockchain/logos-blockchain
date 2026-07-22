@@ -1,4 +1,5 @@
 use lb_blend::scheduling::membership::Membership;
+use lb_chain_service::Epoch;
 use lb_libp2p::NetworkBehaviour;
 use libp2p::{PeerId, allow_block_list::BlockedPeers};
 
@@ -21,7 +22,7 @@ where
 {
     pub fn new(
         config: &BlendConfig<Libp2pBlendBackendSettings>,
-        current_membership_info: (Membership<PeerId>, u64),
+        current_membership_info: (Membership<PeerId>, Epoch),
     ) -> Self {
         let observation_window_interval_provider =
             ObservationWindowProvider::from((config, &current_membership_info.0));
@@ -38,11 +39,13 @@ where
                         peering_degree: minimum_core_healthy_peering_degree
                             ..=maximum_core_peering_degree,
                         minimum_network_size: config.minimum_network_size.try_into().unwrap(),
+                        num_blend_layers: config.num_blend_layers,
                     },
                     with_edge: lb_blend::network::core::with_edge::behaviour::Config {
                         connection_timeout: config.backend.edge_node_connection_timeout,
                         max_incoming_connections: maximum_edge_incoming_connections,
                         minimum_network_size: config.minimum_network_size.try_into().unwrap(),
+                        num_blend_layers: config.num_blend_layers,
                     },
                 },
                 observation_window_interval_provider,

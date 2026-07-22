@@ -1,4 +1,4 @@
-use core::{convert::Infallible, task::Waker};
+use core::{convert::Infallible, num::NonZeroU64, task::Waker};
 use std::collections::VecDeque;
 
 use either::Either;
@@ -6,6 +6,7 @@ use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedSignature
 use lb_blend_scheduling::{
     deserialize_encapsulated_message, serialize_encapsulated_message_with_verified_signature,
 };
+use lb_cryptarchia_engine::Epoch;
 use libp2p::{
     PeerId,
     swarm::{ConnectionId, NotifyHandler, ToSwarm},
@@ -22,15 +23,15 @@ use crate::core::with_core::{
 /// The message cache is also updated accordingly to mark the sent message as
 /// processed if it was sent to at least one peer, or to ignore it if it has
 /// already been forwarded before.
-pub fn forward_validated_message_and_update_cache<'session, PeerConnections>(
+pub fn forward_validated_message_and_update_cache<'epoch, PeerConnections>(
     message: &EncapsulatedMessageWithVerifiedSignature,
     peer_connections: PeerConnections,
-    events_queue: &'session mut VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
-    message_cache: &'session mut MessageCache,
-    waker: Option<Waker>,
+    events_queue: &'epoch mut VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
+    message_cache: &'epoch mut MessageCache,
+    waker: &mut Option<Waker>,
 ) -> Result<(), SendError>
 where
-    PeerConnections: Iterator<Item = (&'session PeerId, &'session ConnectionId)>,
+    PeerConnections: Iterator<Item = (&'epoch PeerId, &'epoch ConnectionId)>,
 {
     if message_cache.is_message_forwarded(&message.clone().into()) {
         return Err(SendError::DuplicateMessage);
@@ -53,7 +54,7 @@ where
     });
 
     message_cache.mark_message_as_forwarded(message);
-    if let Some(waker) = waker {
+    if let Some(waker) = waker.take() {
         waker.wake();
     }
     Ok(())
@@ -73,12 +74,14 @@ pub fn handle_received_serialized_encapsulated_message_and_update_cache(
     message_cache: &mut MessageCache,
     sender: PeerId,
     events_queue: &mut VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
-    waker: Option<Waker>,
-    session_number: u64,
+    waker: &mut Option<Waker>,
+    epoch: Epoch,
+    num_blend_layers: NonZeroU64,
 ) -> Result<(), ReceiveError> {
     // Deserialize the message.
-    let deserialized_encapsulated_message = deserialize_encapsulated_message(serialized_message)
-        .map_err(|_| ReceiveError::UndeserializableMessage)?;
+    let deserialized_encapsulated_message =
+        deserialize_encapsulated_message(serialized_message, num_blend_layers)
+            .map_err(|_| ReceiveError::UndeserializableMessage)?;
 
     // Add the message to the set of exchanged message identifiers with the sender,
     // returning `Err` if the message was already sent by this peer previously.
@@ -103,9 +106,9 @@ pub fn handle_received_serialized_encapsulated_message_and_update_cache(
     events_queue.push_back(ToSwarm::GenerateEvent(Event::Message {
         message: Box::new(validated_message),
         sender,
-        session: session_number,
+        epoch,
     }));
-    if let Some(waker) = waker {
+    if let Some(waker) = waker.take() {
         waker.wake();
     }
 

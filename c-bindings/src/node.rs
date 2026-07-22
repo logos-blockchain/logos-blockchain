@@ -1,17 +1,23 @@
-use std::ffi::c_void;
+use std::{ffi::c_void, mem::ManuallyDrop};
 
 use lb_node::RuntimeServiceId;
 use overwatch::overwatch::{Overwatch, OverwatchHandle};
 use tokio::runtime::{Handle, Runtime};
 
-use crate::errors::OperationStatus;
+use crate::{
+    errors::{OperationStatus, OperationStatusCode},
+    logging,
+};
 
 // Define an opaque type for the complex Overwatch type
 type LogosBlockchainOverwatch = Overwatch<RuntimeServiceId>;
 
 #[repr(C)]
 pub struct LogosBlockchainNode {
-    // Use opaque pointer instead of the generic type
+    // Use opaque pointers instead of the generic types. cbindgen renders these
+    // as `void*`, keeping `LogosBlockchainNode` a plain opaque handle in the C
+    // API. Typed fields (e.g. `OwnedPointer<Overwatch<RuntimeServiceId>>`) leak
+    // internal Rust type names into the generated header and break the C build.
     overwatch: *mut c_void,
     // Keep simple types as-is
     runtime: *mut c_void,
@@ -49,22 +55,33 @@ impl LogosBlockchainNode {
         .handle()
     }
 
-    // Helper to safely take ownership back
+    /// Gets ownership of the inner [`LogosBlockchainOverwatch`] and [`Runtime`]
+    /// instances. Wrapping `self` in [`ManuallyDrop`] prevents `Drop` from
+    /// freeing the pointers we just moved into the returned boxes.
     #[must_use]
     pub fn into_parts(self) -> (Box<LogosBlockchainOverwatch>, Box<Runtime>) {
-        let overwatch = unsafe { Box::from_raw(self.overwatch.cast::<LogosBlockchainOverwatch>()) };
-        let runtime = unsafe { Box::from_raw(self.runtime.cast::<Runtime>()) };
+        let this = ManuallyDrop::new(self);
+        let overwatch = unsafe { Box::from_raw(this.overwatch.cast::<LogosBlockchainOverwatch>()) };
+        let runtime = unsafe { Box::from_raw(this.runtime.cast::<Runtime>()) };
         (overwatch, runtime)
     }
 
-    pub(crate) fn stop(self) -> OperationStatus {
-        let runtime_handle = self.get_runtime_handle();
-        let overwatch_handle = self.get_overwatch_handle();
-        if let Err(e) = runtime_handle.block_on(overwatch_handle.stop_all_services()) {
-            log::error!("Could not stop services: {e}");
-            return OperationStatus::StopError;
+    /// Shuts down the node and waits for all services to finish
+    ///
+    /// # Note
+    ///
+    /// Any raw pointers to [`LogosBlockchainNode`] will be invalidated after
+    /// this call.
+    pub(crate) fn shutdown(self) -> OperationStatus {
+        let (overwatch, runtime) = self.into_parts();
+        if let Err(error) = runtime.handle().block_on(overwatch.handle().shutdown()) {
+            return OperationStatus::error(
+                OperationStatusCode::ShutdownError,
+                format!("Failed to shut down node: {error}"),
+            );
         }
-        OperationStatus::Ok
+        overwatch.blocking_wait_finished();
+        OperationStatus::OK
     }
 }
 
@@ -72,10 +89,16 @@ impl LogosBlockchainNode {
 impl Drop for LogosBlockchainNode {
     fn drop(&mut self) {
         if self.overwatch.is_null() {
-            log::error!("Attempted to drop a null overwatch pointer. This is a bug");
+            logging::error!(
+                "drop",
+                "Attempted to drop a null overwatch pointer. This is a bug"
+            );
         }
         if self.runtime.is_null() {
-            log::error!("Attempted to drop a null tokio runtime pointer. This is a bug");
+            logging::error!(
+                "drop",
+                "Attempted to drop a null tokio runtime pointer. This is a bug"
+            );
         }
         drop(unsafe { Box::from_raw(self.overwatch.cast::<LogosBlockchainOverwatch>()) });
         drop(unsafe { Box::from_raw(self.runtime.cast::<Runtime>()) });

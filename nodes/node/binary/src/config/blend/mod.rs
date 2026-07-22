@@ -65,20 +65,14 @@ impl ServiceConfig {
                 minimum_network_size: self.deployment.common.minimum_network_size.into(),
                 recovery_path_prefix,
                 time: TimingSettings {
-                    epoch_transition_period_in_slots: self
+                    epoch_transition_period: self
                         .deployment
-                        .slots_per_epoch_transition_period(slots_per_block, &slot_duration),
+                        .epoch_transition(slots_per_block, &slot_duration),
                     round_duration: self.deployment.round_duration(&slot_duration),
-                    rounds_per_interval: self
-                        .deployment
-                        .rounds_per_interval(slots_per_block, &slot_duration),
                     rounds_per_observation_window: self.deployment.rounds_per_observation_window(),
-                    rounds_per_session: self
+                    rounds_per_epoch: self
                         .deployment
-                        .rounds_per_session(slots_per_epoch, &slot_duration),
-                    rounds_per_session_transition_period: self
-                        .deployment
-                        .rounds_per_session_transition_period(slots_per_block, &slot_duration),
+                        .rounds_per_epoch(slots_per_epoch, &slot_duration),
                 },
                 data_replication_factor: self.deployment.common.data_replication_factor,
             },
@@ -100,15 +94,14 @@ impl ServiceConfig {
                     minimum_messages_coefficient: self.deployment.core.minimum_messages_coefficient,
                     normalization_constant: self.deployment.core.normalization_constant,
                     protocol_name: self.deployment.common.protocol_name.clone(),
+                    peering_degree_check_interval: self
+                        .user
+                        .core
+                        .backend
+                        .peering_degree_check_interval,
                 },
                 scheduler: SchedulerSettings {
                     cover: CoverTrafficSettings {
-                        intervals_for_safety_buffer: self
-                            .deployment
-                            .core
-                            .scheduler
-                            .cover
-                            .intervals_for_safety_buffer,
                         message_frequency_per_round: self
                             .deployment
                             .core

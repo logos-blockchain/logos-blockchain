@@ -3,7 +3,7 @@ use std::{
     hash::Hash,
 };
 
-use lb_blend::scheduling::{membership::Membership, session::SessionEvent};
+use lb_blend::scheduling::{epoch::EpochEvent, membership::Membership};
 use lb_network_service::NetworkService;
 use overwatch::{
     overwatch::OverwatchHandle,
@@ -33,13 +33,13 @@ where
     Edge(EdgeMode<EdgeService, RuntimeServiceId>),
     EdgeAfterCore {
         mode: EdgeMode<EdgeService, RuntimeServiceId>,
-        // Keep the previous core mode for the session transition period.
+        // Keep the previous core mode for the epoch transition period.
         prev: CoreMode<CoreService, RuntimeServiceId>,
     },
     Broadcast(BroadcastMode<CoreService::NetworkAdapter, CoreService::NodeId, RuntimeServiceId>),
     BroadcastAfterCore {
         mode: BroadcastMode<CoreService::NetworkAdapter, CoreService::NodeId, RuntimeServiceId>,
-        // Keep the previous core mode for the session transition period.
+        // Keep the previous core mode for the epoch transition period.
         prev: CoreMode<CoreService, RuntimeServiceId>,
     },
 }
@@ -139,16 +139,16 @@ where
         }
     }
 
-    /// Handles a session event, potentially causing a mode transition.
-    pub async fn handle_session_event(
+    /// Handles an epoch event, potentially causing a mode transition.
+    pub async fn handle_epoch_event(
         self,
-        event: SessionEvent<MembershipInfo<CoreService::NodeId>>,
+        event: EpochEvent<MembershipInfo<CoreService::NodeId>>,
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
         minimal_network_size: usize,
         local_node_id: CoreService::NodeId,
     ) -> Result<Self, modes::Error> {
         match event {
-            SessionEvent::NewSession(MembershipInfo { membership, .. }) => {
+            EpochEvent::NewEpoch(MembershipInfo { membership, .. }) => {
                 self.transition(
                     Mode::choose(&membership, minimal_network_size),
                     overwatch_handle,
@@ -156,7 +156,7 @@ where
                 )
                 .await
             }
-            SessionEvent::TransitionPeriodExpired => {
+            EpochEvent::TransitionPeriodExpired => {
                 Ok(self.handle_transition_period_expired().await)
             }
         }
@@ -605,9 +605,9 @@ mod tests {
         });
     }
 
-    /// Check if the instance handles session events correctly.
+    /// Check if the instance handles epoch events correctly.
     #[test]
-    fn test_handle_session_event() {
+    fn test_handle_epoch_event() {
         let app = OverwatchRunner::<Services>::run(settings(), None).unwrap();
         app.runtime().handle().block_on(async {
             let handle = app.handle();
@@ -625,12 +625,9 @@ mod tests {
             let local_node = LOCAL_NODE_ID;
             let minimal_network_size = 1;
             let instance = instance
-                .handle_session_event(
+                .handle_epoch_event(
                     // With an empty membership smaller than the minimal size.
-                    SessionEvent::NewSession(MembershipInfo::from_membership_and_session_number(
-                        membership(&[], local_node),
-                        1,
-                    )),
+                    EpochEvent::NewEpoch(membership(&[], local_node).into()),
                     handle,
                     minimal_network_size,
                     LOCAL_NODE_ID,
@@ -641,8 +638,8 @@ mod tests {
 
             // BroadcastAfterCore -> Broadcast, after the transition period expires.
             let instance = instance
-                .handle_session_event(
-                    SessionEvent::TransitionPeriodExpired,
+                .handle_epoch_event(
+                    EpochEvent::TransitionPeriodExpired,
                     handle,
                     minimal_network_size,
                     LOCAL_NODE_ID,
@@ -653,11 +650,8 @@ mod tests {
 
             // Broadcast -> Edge
             let instance = instance
-                .handle_session_event(
-                    SessionEvent::NewSession(MembershipInfo::from_membership_and_session_number(
-                        membership(&[1], local_node),
-                        1,
-                    )),
+                .handle_epoch_event(
+                    EpochEvent::NewEpoch(membership(&[1], local_node).into()),
                     handle,
                     minimal_network_size,
                     LOCAL_NODE_ID,
@@ -668,11 +662,8 @@ mod tests {
 
             // Edge -> Edge (stay)
             let instance = instance
-                .handle_session_event(
-                    SessionEvent::NewSession(MembershipInfo::from_membership_and_session_number(
-                        membership(&[1], local_node),
-                        1,
-                    )),
+                .handle_epoch_event(
+                    EpochEvent::NewEpoch(membership(&[1], local_node).into()),
                     handle,
                     minimal_network_size,
                     LOCAL_NODE_ID,
@@ -683,11 +674,8 @@ mod tests {
 
             // Edge -> Core
             let instance = instance
-                .handle_session_event(
-                    SessionEvent::NewSession(MembershipInfo::from_membership_and_session_number(
-                        membership(&[1], 1),
-                        1,
-                    )),
+                .handle_epoch_event(
+                    EpochEvent::NewEpoch(membership(&[1], 1).into()),
                     handle,
                     minimal_network_size,
                     LOCAL_NODE_ID,

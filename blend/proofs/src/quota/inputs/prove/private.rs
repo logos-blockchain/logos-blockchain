@@ -5,7 +5,10 @@ use zeroize::ZeroizeOnDrop;
 
 use crate::{
     CorePathAndSelectors, ZkHash,
-    quota::{SelectionRandomnessSecretInput, inputs::prove::PublicInputs},
+    quota::{
+        SelectionRandomnessSecretInput,
+        inputs::prove::{PublicInputs, public::LeaderInputs},
+    },
 };
 
 /// Private inputs for all types of Proof of Quota. Spec: <https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#215261aa09df81a18576f67b910d34d4>.
@@ -48,12 +51,17 @@ impl Inputs {
     #[must_use]
     pub fn get_secret_selection_randomness_sk(
         &self,
-        PublicInputs { session, .. }: &PublicInputs,
+        PublicInputs {
+            leader: LeaderInputs {
+                pol_epoch_nonce, ..
+            },
+            ..
+        }: &PublicInputs,
     ) -> SelectionRandomnessSecretInput {
         match &self.proof_type {
             ProofType::CoreQuota(core_quota_private_inputs) => {
                 SelectionRandomnessSecretInput::Core {
-                    session_number: *session,
+                    epoch_nonce: *pol_epoch_nonce,
                     sk: core_quota_private_inputs.core_sk,
                 }
             }

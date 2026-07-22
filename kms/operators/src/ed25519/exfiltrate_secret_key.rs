@@ -3,8 +3,11 @@ use core::fmt::{self, Debug, Formatter};
 use lb_key_management_system_keys::keys::{
     Ed25519Key, UnsecuredEd25519Key, errors::KeyError, secured_key::SecureKeyOperator,
 };
+use lb_log_targets::kms;
 use tokio::sync::oneshot;
-use tracing::error;
+use tracing::debug;
+
+const LOG_TARGET: &str = kms::operators::ED25519;
 
 pub struct LeakSecretKeyOperator {
     response_channel: oneshot::Sender<UnsecuredEd25519Key>,
@@ -32,7 +35,7 @@ impl SecureKeyOperator for LeakSecretKeyOperator {
         let _ = self
             .response_channel
             .send(key.clone().into_unsecured())
-            .map_err(|_| error!("Error sending Ed25519 key to requester."));
+            .map_err(|_| debug!(target: LOG_TARGET, "Error sending Ed25519 key to requester."));
         Ok(())
     }
 }

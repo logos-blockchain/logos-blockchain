@@ -112,13 +112,6 @@ const fn apply_launch_ready_bind_addresses(config: &mut RunConfig) {
         .backend
         .listen_address
         .set_ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-
-    config
-        .user
-        .api
-        .testing
-        .listen_address
-        .set_ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
 }
 
 fn apply_runtime_networking(

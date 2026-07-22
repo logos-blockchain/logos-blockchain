@@ -6,6 +6,7 @@ pub use lb_libp2p::{
     PeerId,
     libp2p::gossipsub::{Message, TopicHash},
 };
+use lb_log_targets::network_service;
 use overwatch::overwatch::handle::OverwatchHandle;
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
@@ -22,6 +23,8 @@ pub use self::{
 };
 use super::NetworkBackend;
 use crate::message::ChainSyncEvent;
+
+const LOG_TARGET: &str = network_service::backends::libp2p::ROOT;
 
 pub struct Libp2p {
     pubsub_events_tx: Sender<Message>,
@@ -68,7 +71,10 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Libp2p {
 
     async fn process(&self, msg: Self::Message) {
         if let Err(e) = self.commands_tx.send(msg).await {
-            tracing::error!("failed to send command to logos-blockchain-libp2p: {e:?}");
+            tracing::error!(
+                target: LOG_TARGET,
+                "failed to send command to logos-blockchain-libp2p: {e:?}"
+            );
         }
     }
 

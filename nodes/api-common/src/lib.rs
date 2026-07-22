@@ -3,12 +3,21 @@ pub mod metrics;
 pub mod paths;
 #[cfg(feature = "profiling")]
 pub mod pprof;
+pub mod queries;
 pub mod settings;
 
 #[cfg(all(feature = "profiling", target_os = "windows"))]
 compile_error!(
     "The `profiling` feature is not supported on Windows since `pprof` is not available."
 );
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, utoipa::ToSchema)]
+pub struct TimeInfo {
+    pub slot_duration_ms: u64,
+    pub genesis_time_unix_ms: i64,
+    pub current_slot: u64,
+    pub current_epoch: u32,
+}
 
 /// This maximum blocks stream chunk size is a happy medium between performance
 /// and memory use

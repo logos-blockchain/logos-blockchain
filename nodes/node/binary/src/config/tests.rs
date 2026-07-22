@@ -1,13 +1,17 @@
-use std::path::Path;
+use std::{
+    net::{IpAddr, Ipv4Addr},
+    path::Path,
+};
 
-use clap::Parser as _;
 use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use tracing::Level;
 
 use crate::{
     UserConfig,
+    cli::CliArgs,
     config::{
-        CliArgs, DeploymentSettings, RequiredValues as ConfigRequiredValues, WellKnownDeployment,
+        DeploymentSettings, RequiredValues as ConfigRequiredValues,
         blend::{
             ServiceConfig as BlendServiceConfig,
             serde::{Config as BlendConfig, RequiredValues as BlendRequiredValues},
@@ -18,12 +22,18 @@ use crate::{
         },
         mempool::ServiceConfig as MempoolServiceConfig,
         parse_log_filter_layer,
-        sdp::serde::{Config as SdpConfig, RequiredValues as SdpRequiredValues},
+        sdp::{
+            ServiceConfig as SdpServiceConfig,
+            serde::{Config as SdpConfig, RequiredValues as SdpRequiredValues},
+        },
         storage::{
             ServiceConfig as StorageServiceConfig,
             serde::{Config as StorageConfig, RocksDbSettings},
         },
-        tracing::serde::filter::{EnvConfig, Layer},
+        tracing::serde::{
+            console::{Layer as ConsoleLayer, TokioConfig},
+            filter::{EnvConfig, Layer},
+        },
         wallet::{
             ServiceConfig as WalletServiceConfig,
             serde::{Config as WalletConfig, RequiredValues as WalletRequiredValues},
@@ -32,9 +42,68 @@ use crate::{
 };
 
 #[test]
+fn tokio_console_config_defaults_to_loopback_default_console_port() {
+    let config = TokioConfig::default();
+
+    assert_eq!(config.bind_address, IpAddr::V4(Ipv4Addr::LOCALHOST));
+    assert_eq!(config.port, 6_669);
+    assert_eq!(config.recording_path, None);
+}
+
+#[test]
+fn tokio_console_config_deserializes() {
+    let layer: ConsoleLayer = serde_yaml::from_str(
+        "
+            !Console
+            bind_address: 127.0.0.1
+            port: 6669
+        ",
+    )
+    .expect("tokio-console config should deserialize");
+
+    let ConsoleLayer::Console(config) = layer else {
+        panic!("expected console layer");
+    };
+
+    assert_eq!(config.bind_address, IpAddr::V4(Ipv4Addr::LOCALHOST));
+    assert_eq!(config.port, 6_669);
+    assert_eq!(config.recording_path, None);
+}
+
+#[test]
+fn tokio_console_config_deserializes_recording_path_and_converts() {
+    let layer: ConsoleLayer = serde_yaml::from_str(
+        "
+            !Console
+            bind_address: 127.0.0.1
+            port: 6669
+            recording_path: /tmp/node-tokio-console.jsonl
+        ",
+    )
+    .expect("tokio-console config should deserialize");
+
+    let ConsoleLayer::Console(config) = layer else {
+        panic!("expected console layer");
+    };
+    let tracing_config: lb_tracing_service::ConsoleLayerSettings =
+        ConsoleLayer::Console(config.clone()).into();
+    let lb_tracing_service::ConsoleLayerSettings::Console(tracing_config) = tracing_config else {
+        panic!("expected console layer");
+    };
+
+    assert_eq!(tracing_config.bind_address, "127.0.0.1");
+    assert_eq!(tracing_config.port, 6_669);
+    assert_eq!(tracing_config.recording_path, config.recording_path);
+}
+
+#[test]
 fn parse_config_path() {
+    use clap::Parser as _;
     let parsed_args = CliArgs::parse_from(["", "test_cfg.yaml"]);
-    assert_eq!(parsed_args.config_path().to_str().unwrap(), "test_cfg.yaml");
+    assert_eq!(
+        parsed_args.user_config_path().to_str().unwrap(),
+        "test_cfg.yaml"
+    );
 }
 
 #[test]
@@ -71,7 +140,7 @@ fn common_recovery_folder() {
         base_config
     };
 
-    let deployment_settings = DeploymentSettings::from(WellKnownDeployment::Devnet);
+    let deployment_settings = DeploymentSettings::default();
 
     let blend_rewards_params = deployment_settings.blend_reward_params();
 
@@ -120,6 +189,22 @@ fn common_recovery_folder() {
         mempool_service_settings
             .recovery_path
             .starts_with(Path::new(STATE_PATH).join("recovery").join("mempool"))
+    );
+
+    // The SDP service must own its recovery file under `recovery/sdp`. If it
+    // shares a path with another service (e.g. the mempool), that service
+    // overwrites the persisted `declaration_id`, so a restarted blend core node
+    // loses its declaration and silently drops out of the blend network.
+    let sdp_service_settings = SdpServiceConfig {
+        user: user_config.sdp.clone(),
+    }
+    .into_sdp_service_settings(&user_config.state);
+    assert!(
+        sdp_service_settings
+            .recovery_path
+            .starts_with(Path::new(STATE_PATH).join("recovery").join("sdp")),
+        "SDP recovery path must live under recovery/sdp, but was {:?} (collides with another service's recovery file)",
+        sdp_service_settings.recovery_path
     );
 
     let storage_service_settings = StorageServiceConfig {
@@ -173,13 +258,13 @@ fn parse_log_filter_layer_rejects_empty_directive() {
 
 #[test]
 fn parse_log_filter_layer_rejects_unknown_blend_target() {
-    let error = parse_log_filter_layer("blend::service::missing=debug")
+    let error = parse_log_filter_layer("logos_blockchain::blend::service::missing=debug")
         .expect_err("unknown blend target should fail");
 
     assert!(
         error
             .to_string()
-            .contains("unknown log filter target `blend::service::missing`")
+            .contains("unknown log filter target `logos_blockchain::blend::service::missing`")
     );
 }
 
@@ -215,14 +300,15 @@ fn env_config_deserialization_rejects_invalid_level() {
 
 #[test]
 fn env_config_deserialization_rejects_unknown_blend_target() {
-    let error =
-        serde_json::from_str::<EnvConfig>(r#"{"filters":{"blend::service::missing":"debug"}}"#)
-            .expect_err("unknown blend target should fail");
+    let error = serde_json::from_str::<EnvConfig>(
+        r#"{"filters":{"logos_blockchain::blend::service::missing":"debug"}}"#,
+    )
+    .expect_err("unknown blend target should fail");
 
     assert!(
         error
             .to_string()
-            .contains("unknown log filter target `blend::service::missing`")
+            .contains("unknown log filter target `logos_blockchain::blend::service::missing`")
     );
 }
 
@@ -242,8 +328,7 @@ fn standalone_node_config_deserializes() {
     let parsed: Result<UserConfig, serde_yaml::Error> = serde_yaml::from_slice(&bytes);
     assert!(parsed.is_ok(), "standalone node config should deserialize");
 
-    let parsed =
-        super::deserialize_config_at_path::<UserConfig>(&yaml_path, super::OnUnknownKeys::Fail);
+    let parsed = deserialize_value_at_path::<UserConfig>(&yaml_path, OnUnknownKeys::Fail);
     assert!(
         parsed.is_ok(),
         "standalone node config should deserialize via loader, got: {:?}",
@@ -263,13 +348,11 @@ fn standalone_deployment_config_deserializes() {
     let parsed: Result<DeploymentSettings, serde_yaml::Error> = serde_yaml::from_slice(&bytes);
     assert!(
         parsed.is_ok(),
-        "standalone deployment config should deserialize"
+        "standalone deployment config should deserialize ({:?})",
+        parsed.err(),
     );
 
-    let parsed = super::deserialize_config_at_path::<DeploymentSettings>(
-        &yaml_path,
-        super::OnUnknownKeys::Fail,
-    );
+    let parsed = deserialize_value_at_path::<DeploymentSettings>(&yaml_path, OnUnknownKeys::Fail);
     assert!(
         parsed.is_ok(),
         "standalone deployment config should deserialize via loader, got: {:?}",

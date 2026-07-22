@@ -48,7 +48,9 @@ impl SystemStatsLog {
             .append(true)
             .open(path)?;
         serde_json::to_writer(&mut file, record).map_err(io::Error::other)?;
-        file.write_all(b"\n")
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        Ok(())
     }
 
     fn append_csv(path: &Path, row: &CsvSampleRow) -> io::Result<()> {
@@ -61,7 +63,9 @@ impl SystemStatsLog {
             write_csv_row(&mut file, CsvSampleRow::HEADER)?;
         }
 
-        write_csv_row(&mut file, &row.values())
+        write_csv_row(&mut file, &row.values())?;
+        file.sync_all()?;
+        Ok(())
     }
 }
 

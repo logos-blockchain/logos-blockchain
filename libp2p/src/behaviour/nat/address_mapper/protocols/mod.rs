@@ -1,3 +1,4 @@
+use lb_log_targets::libp2p as lb_log_targets_libp2p;
 use multiaddr::Multiaddr;
 use upnp::UpnpProtocol;
 
@@ -13,6 +14,8 @@ mod nat_pmp;
 mod pcp;
 mod pcp_core;
 mod upnp;
+
+const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::nat::address_mapper::protocols::ROOT;
 
 #[async_trait::async_trait]
 pub trait NatMapper: Send + Sync + 'static {
@@ -32,18 +35,27 @@ impl NatMapper for ProtocolManager {
         settings: NatMappingSettings,
     ) -> Result<Multiaddr, AddressMapperError> {
         if let Ok(external_address) = PcpProtocol::map_address(address, settings).await {
-            tracing::info!("Successfully mapped {address} to {external_address} using PCP");
+            tracing::info!(
+                target: LOG_TARGET,
+                "Successfully mapped {address} to {external_address} using PCP"
+            );
             return Ok(external_address);
         }
 
         if let Ok(external_address) = NatPmp::map_address(address, settings).await {
-            tracing::info!("Successfully mapped {address} to {external_address} using NAT-PMP");
+            tracing::info!(
+                target: LOG_TARGET,
+                "Successfully mapped {address} to {external_address} using NAT-PMP"
+            );
 
             return Ok(external_address);
         }
 
         let external_address = UpnpProtocol::map_address(address, settings).await?;
-        tracing::info!("Successfully mapped {address} to {external_address} using UPnP");
+        tracing::info!(
+            target: LOG_TARGET,
+            "Successfully mapped {address} to {external_address} using UPnP"
+        );
 
         Ok(external_address)
     }

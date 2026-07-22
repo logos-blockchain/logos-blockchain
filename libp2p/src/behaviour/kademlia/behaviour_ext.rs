@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use lb_log_targets::libp2p as lb_log_targets_libp2p;
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol,
     kad::{PeerInfo, QueryId, RoutingUpdate},
@@ -8,26 +9,49 @@ use rand::RngCore;
 
 use crate::behaviour::Behaviour;
 
+const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::KADEMLIA;
+
 impl<R: Clone + Send + RngCore + 'static> Behaviour<R> {
     pub(crate) fn kademlia_add_address(&mut self, peer_id: PeerId, addr: &Multiaddr) {
         match self.kademlia.add_address(&peer_id, addr.clone()) {
             RoutingUpdate::Success => {
-                tracing::debug!("Added address {:?} to peer {:?}", addr, peer_id);
+                tracing::debug!(
+                    target: LOG_TARGET,
+                    "Added address {:?} to peer {:?}",
+                    addr,
+                    peer_id
+                );
             }
             RoutingUpdate::Pending => {
-                tracing::debug!("Pending to add address {:?} to peer {:?}", addr, peer_id);
+                tracing::debug!(
+                    target: LOG_TARGET,
+                    "Pending to add address {:?} to peer {:?}",
+                    addr,
+                    peer_id
+                );
             }
             RoutingUpdate::Failed => {
-                tracing::error!("Failed to add address {:?} to peer {:?}", addr, peer_id);
+                tracing::error!(
+                    target: LOG_TARGET,
+                    "Failed to add address {:?} to peer {:?}",
+                    addr,
+                    peer_id
+                );
             }
         }
     }
 
     pub(crate) fn kademlia_remove_address(&mut self, peer_id: PeerId, addr: &Multiaddr) {
         if self.kademlia.remove_address(&peer_id, addr).is_some() {
-            tracing::warn!("Removed address {:?} from peer {:?}", addr, peer_id);
+            tracing::warn!(
+                target: LOG_TARGET,
+                "Removed address {:?} from peer {:?}",
+                addr,
+                peer_id
+            );
         } else {
             tracing::warn!(
+                target: LOG_TARGET,
                 "Address {:?} for peer {:?} was not present in Kademlia",
                 addr,
                 peer_id

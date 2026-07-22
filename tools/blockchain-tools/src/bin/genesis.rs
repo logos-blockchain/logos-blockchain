@@ -1,3 +1,4 @@
+use core::fmt::Debug;
 use std::{
     fs,
     io::{self, Write as _},
@@ -8,14 +9,19 @@ use anyhow::{Context as _, Result, bail};
 use clap::{Parser, Subcommand};
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
+    crypto::ZkHasher,
     mantle::{
         Note,
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp},
     },
 };
-use lb_node::config::deployment::{DeploymentSettings, WellKnownDeployment};
+use lb_node::config::deployment::DeploymentSettings;
+use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 use logos_blockchain_tools::{
-    distribution::{self, ProviderInfo, StakeHolderInfo},
+    genesis::{
+        distribution::{self, Faucet, ProviderInfo, StakeHolderInfo},
+        inscription::{self, InscribeParams},
+    },
     overwrite_yaml, value_from_dotted_kv,
 };
 use serde_yml::Value;
@@ -36,6 +42,10 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Orchestrate the full genesis ceremony: inscribe, distribute, and build
+    /// the final deployment configuration.
+    Ceremony(CeremonyArgs),
+
     /// Generate a deployment config YAML from a well-known deployment or file,
     /// with optional field overrides.
     Config(ConfigArgs),
@@ -47,6 +57,43 @@ enum Commands {
     /// Calculate the distribution of notes and SDP declarations from
     /// stakeholder and provider definitions.
     Distribute(DistributeArgs),
+
+    /// Generate a genesis `InscriptionOp` using entropy sources.
+    Inscribe(InscribeArgs),
+}
+
+// ── ceremony subcommand
+// ──────────────────────────────────────────────────────────
+
+#[derive(Parser, Debug)]
+pub struct CeremonyArgs {
+    /// Genesis parameters for the `InscriptionOp`.
+    #[arg(long, value_name = "FILE")]
+    pub inscription_params: PathBuf,
+
+    /// Stakeholder definitions for note distribution.
+    #[arg(long, value_name = "FILE")]
+    pub stake_holders: PathBuf,
+
+    /// Provider definitions for SDP declarations.
+    #[arg(long, value_name = "FILE")]
+    pub providers: PathBuf,
+
+    /// Faucet definition for stake distribution.
+    #[arg(long, value_name = "FILE")]
+    pub faucet: PathBuf,
+
+    /// The path to a custom deployment config.
+    #[arg(long = "deployment", value_name = "FILE")]
+    pub custom_deployment_path: Option<PathBuf>,
+
+    /// Optional overrides for the deployment config.
+    #[arg(long = "override", value_name = "KEY=VALUE|FILE", num_args = 1)]
+    pub overrides: Vec<String>,
+
+    /// Write the final deployment config to FILE instead of stdout.
+    #[arg(long, short, value_name = "FILE")]
+    pub output: Option<PathBuf>,
 }
 
 // ── config subcommand
@@ -54,10 +101,9 @@ enum Commands {
 
 #[derive(Parser, Debug)]
 struct ConfigArgs {
-    /// Base config source: a well-known deployment name (e.g. 'devnet') or a
-    /// path to an existing YAML deployment config file.
-    #[arg(long, value_name = "NAME_OR_PATH")]
-    deployment: String,
+    /// The path to a custom deployment config.
+    #[arg(long = "deployment", value_name = "FILE")]
+    pub custom_deployment_path: Option<PathBuf>,
 
     /// Override to apply on top of the base config. Each occurrence is either
     /// a dot-notation key=value pair (e.g. `cryptarchia.security_param=60`)
@@ -130,6 +176,10 @@ struct DistributeArgs {
     #[arg(long, value_name = "FILE")]
     providers: PathBuf,
 
+    /// YAML file containing faucet info.
+    #[arg(long, value_name = "FILE")]
+    faucet: PathBuf,
+
     /// Write notes output to FILE instead of stdout.
     #[arg(long, short, value_name = "FILE")]
     notes_output: Option<PathBuf>,
@@ -139,43 +189,109 @@ struct DistributeArgs {
     declarations_output: Option<PathBuf>,
 }
 
+// ── inscribe subcommand
+// ──────────────────────────────────────────────────────────
+
+#[derive(Parser, Debug)]
+struct InscribeArgs {
+    /// YAML file containing genesis parameters (`chain_id`, `genesis_time`, and
+    /// `entropy_sources`). `entropy_sources` should be a list of hex-encoded
+    /// 32-byte strings.
+
+    #[arg(long, value_name = "FILE")]
+    params: PathBuf,
+
+    /// Write the serialized `InscriptionOp` to FILE instead of stdout.
+    #[arg(long, short, value_name = "FILE")]
+    output: Option<PathBuf>,
+}
+
 // ── entry point
 // ───────────────────────────────────────────────────────────────
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Commands::Ceremony(args) => run_ceremony(&args),
         Commands::Config(args) => run_config(&args),
         Commands::Block(args) => run_block(&args),
         Commands::Distribute(args) => run_distribute(&args),
+        Commands::Inscribe(args) => run_inscribe(&args),
     }
+}
+
+// ── ceremony implementation
+// ─────────────────────────────────────────────────────
+
+fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
+    let inscribe_params: InscribeParams = load_yaml_file(&args.inscription_params)?;
+    let inscription_op = inscription::inscribe::<ZkHasher>(
+        inscribe_params.chain_id,
+        inscribe_params.genesis_time,
+        inscribe_params.entropy_sources,
+    );
+
+    let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
+    let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
+    let faucet: Faucet = load_yaml_file(&args.faucet)?;
+    let (transfer_op, declarations) = distribution::distribute(stakeholders, providers, &faucet)
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("Failed to calculate distribution during ceremony")?;
+    let notes: Vec<Note> = transfer_op.notes().collect();
+
+    let mut config_value = load_base_config(args.custom_deployment_path.as_ref())?;
+    for raw in &args.overrides {
+        let patch = resolve_override(raw)?;
+        config_value = overwrite_yaml(config_value, patch);
+    }
+
+    if notes.is_empty() {
+        bail!("Ceremony failed: distribution resulted in zero notes");
+    }
+    if declarations.is_empty() {
+        bail!("Ceremony failed: distribution resulted in zero declarations");
+    }
+    let genesis_block = build_genesis_block(notes, inscription_op, declarations)?;
+
+    let block_value = struct_to_yaml_value(&genesis_block)?;
+    let block_patch = wrap_as_cryptarchia_genesis_block(block_value);
+    config_value = overwrite_yaml(config_value, block_patch);
+
+    let faucet_pk_value = struct_to_yaml_value(&faucet.zk_id)?;
+    let faucet_patch = wrap_as_cryptarchia_faucet_pk(faucet_pk_value);
+    let final_config = overwrite_yaml(config_value, faucet_patch);
+
+    ensure_valid_deployment_settings(&final_config)?;
+
+    write_yaml(&final_config, args.output.as_deref())
 }
 
 // ── config implementation
 // ─────────────────────────────────────────────────────
 
 fn run_config(args: &ConfigArgs) -> Result<()> {
-    let mut config = load_base_config(&args.deployment)?;
+    let mut config = load_base_config(args.custom_deployment_path.as_ref())?;
 
     for raw in &args.overrides {
         let patch = resolve_override(raw)?;
         config = overwrite_yaml(config, patch);
     }
 
+    ensure_valid_deployment_settings(&config)?;
+
     write_yaml(&config, args.output.as_deref())
 }
 
 /// Load a deployment config as a raw YAML value.
 ///
-/// `source` is first matched against the known well-known deployment names; if
-/// it does not match, it is treated as a file path.
-fn load_base_config(source: &str) -> Result<Value> {
-    if let Ok(well_known) = source.parse::<WellKnownDeployment>() {
-        let settings = DeploymentSettings::from(well_known);
-        return struct_to_yaml_value(&settings);
-    }
+/// If `path` is `None`, returns the default config as a YAML value. Otherwise,
+/// loads the YAML file at `path` and returns it as a `Value`.
+fn load_base_config(path: Option<&PathBuf>) -> Result<Value> {
+    let Some(path) = path else {
+        let default_config = DeploymentSettings::default();
+        return struct_to_yaml_value(&default_config);
+    };
 
-    let path = Path::new(source);
     let content = fs::read_to_string(path)
         .with_context(|| format!("cannot read config file '{}'", path.display()))?;
     serde_yml::from_str(&content)
@@ -245,7 +361,9 @@ fn build_genesis_block(
     // Accumulate additional notes into WithNotes state.
     let mut builder = GenesisBlockBuilder::new().add_note(first_note);
     for note in notes_iter {
-        builder = builder.add_note(note);
+        builder = builder
+            .try_add_note(note)
+            .context("failed to append note to genesis transfer")?;
     }
 
     // Transition: WithNotes → WithNotesAndInscription → WithAll.
@@ -274,24 +392,57 @@ fn wrap_as_cryptarchia_genesis_block(block_value: Value) -> Value {
     Value::Mapping(outer)
 }
 
+/// Wrap a serialised faucet public key in the mapping that corresponds to
+/// `cryptarchia.faucet_pk` in a deployment config.
+fn wrap_as_cryptarchia_faucet_pk(faucet_pk: Value) -> Value {
+    let mut inner = serde_yml::Mapping::new();
+    inner.insert(Value::String("faucet_pk".to_owned()), faucet_pk);
+
+    let mut outer = serde_yml::Mapping::new();
+    outer.insert(
+        Value::String("cryptarchia".to_owned()),
+        Value::Mapping(inner),
+    );
+
+    Value::Mapping(outer)
+}
+
 // ── distribute implementation
 // ─────────────────────────────────────────────────────
 
 fn run_distribute(args: &DistributeArgs) -> Result<()> {
     let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
     let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
+    let faucet: Faucet = load_yaml_file(&args.faucet)?;
 
-    let (utxos, declarations) = distribution::distribute(stakeholders, providers)
+    let (transfer_op, declarations) = distribution::distribute(stakeholders, providers, &faucet)
         .map_err(|e| anyhow::anyhow!(e))
         .context("Failed to calculate distribution")?;
+    let notes: Vec<Note> = transfer_op.notes().collect();
 
-    let utxos_value = struct_to_yaml_value(&utxos)?;
+    let notes_value = struct_to_yaml_value(&notes)?;
     let declarations_value = struct_to_yaml_value(&declarations)?;
 
-    write_yaml(&utxos_value, args.notes_output.as_deref())?;
+    write_yaml(&notes_value, args.notes_output.as_deref())?;
     write_yaml(&declarations_value, args.declarations_output.as_deref())?;
 
     Ok(())
+}
+
+// ── inscribe implementation
+// ─────────────────────────────────────────────────────
+
+fn run_inscribe(args: &InscribeArgs) -> Result<()> {
+    let params: InscribeParams = load_yaml_file(&args.params)?;
+
+    let op = inscription::inscribe::<ZkHasher>(
+        params.chain_id,
+        params.genesis_time,
+        params.entropy_sources,
+    );
+
+    let op_value = struct_to_yaml_value(&op)?;
+    write_yaml(&op_value, args.output.as_deref())
 }
 
 // ── shared helpers
@@ -307,21 +458,36 @@ fn run_distribute(args: &DistributeArgs) -> Result<()> {
 /// 2. Some types (e.g. `PoLProof`) call `serializer.serialize_bytes`
 ///    unconditionally; `serde_yml::to_string` rejects those with an error.
 ///
-/// Using `serde_json` as an intermediate format avoids both problems: JSON is
-/// a human-readable format (fixing pitfall 1), and its `serialize_bytes`
-/// implementation emits a JSON array of integers (fixing pitfall 2). JSON is
-/// a strict subset of YAML, so `serde_yml::from_str` can parse the resulting
-/// JSON string transparently, and YAML's human-readable deserializer correctly
-/// interprets all field formats.
+/// Using `serde_yaml::to_string` as an intermediate format avoids both
+/// problems: YAML is a human-readable format (fixing pitfall 1).
+/// Regarding (fixing pitfall 2): The error doesn't appear when using templates
+/// from the `deployment/ceremony/genesis/<env>` directories, but if it happens,
+/// settings override code should be refactored to use concrete genesis related
+/// types instead of operating at YAML level.
 fn struct_to_yaml_value<T: serde::Serialize>(value: &T) -> Result<Value> {
-    let json = serde_json::to_string(value)?;
-    serde_yml::from_str(&json).map_err(Into::into)
+    let yaml_string = serde_yml::to_string(value)?;
+    serde_yml::from_str(&yaml_string).map_err(Into::into)
 }
 
-fn load_yaml_file<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+fn ensure_valid_deployment_settings(value: &Value) -> Result<()> {
+    let yaml = serde_yml::to_string(value)?;
+    drop(
+        deserialize_value_from_reader::<DeploymentSettings, _>(
+            yaml.as_bytes(),
+            OnUnknownKeys::Fail,
+        )
+        .context("generated config is not a valid DeploymentSettings value")?,
+    );
+    Ok(())
+}
+
+fn load_yaml_file<T>(path: &Path) -> Result<T>
+where
+    T: serde::de::DeserializeOwned + Send + Sync + Debug + 'static,
+{
     let content =
         fs::read_to_string(path).with_context(|| format!("cannot read '{}'", path.display()))?;
-    serde_yml::from_str(&content)
+    deserialize_value_from_reader(content.as_bytes(), OnUnknownKeys::Fail)
         .with_context(|| format!("cannot parse YAML from '{}'", path.display()))
 }
 

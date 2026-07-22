@@ -17,20 +17,20 @@ use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
 use futures::{StreamExt as _, future::join_all};
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
-    block::{Block, Proposal},
+    block::{Block, BlockTransactions, Proposal},
     header::HeaderId,
     mantle::{AuthenticatedMantleTx, Transaction, TxHash},
-    sdp::ServiceType,
 };
 pub use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_ledger::EpochState;
 use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
-use lb_time_service::TimeService;
+use lb_time_service::{TimeService, TimeServiceMessage};
 use lb_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
 };
+use lb_utils::bounded::BoundedError;
 use network::NetworkAdapter;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -41,19 +41,26 @@ use overwatch::{
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
-use tokio::{sync::oneshot, time::sleep};
+use tokio::{
+    sync::{mpsc, oneshot},
+    task::JoinHandle,
+    time::sleep,
+};
 use tracing::{Level, debug, error, info, instrument, span, trace, warn};
 use tracing_futures::Instrument as _;
 
 pub use crate::{
     bootstrap::config::{BootstrapConfig, IbdConfig},
-    sync::config::{OrphanConfig, SyncConfig},
+    sync::config::{OrphanConfig, SyncConfig, TipPollConfig},
 };
 use crate::{
     bootstrap::ibd::InitialBlockDownload,
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
     relays::ChainNetworkRelays,
-    sync::orphan_handler::OrphanBlocksDownloader,
+    sync::{
+        orphan_handler::OrphanBlocksDownloader,
+        tip_poll::{PolledTip, TipPollParams, poll_peer_tips_if_behind},
+    },
 };
 
 const SERVICE_ID: &str = "ChainNetwork";
@@ -76,8 +83,8 @@ pub enum Error {
     Mempool(String),
     #[error("Block header id not found: {0}")]
     HeaderIdNotFound(HeaderId),
-    #[error("Service session not found: {0:?}")]
-    ServiceSessionNotFound(ServiceType),
+    #[error(transparent)]
+    BoundedError(#[from] BoundedError),
 }
 
 #[derive(Debug)]
@@ -272,7 +279,10 @@ where
             network_adapter.clone(),
         );
 
-        match initial_block_download.run(bootstrap_config.ibd).await {
+        match initial_block_download
+            .run(bootstrap_config.ibd, &sync_config.orphan)
+            .await
+        {
             Ok(_) => {
                 info!("Initial Block Download completed successfully");
                 // Notify chain-service that IBD is complete so it can start the prolonged
@@ -303,10 +313,56 @@ where
         let mut incoming_proposals = network_adapter.proposals_stream().await?;
         let mut chainsync_events = network_adapter.chainsync_events_stream().await?;
 
+        // Keep a handle to the adapter for the proactive tip-poll watchdog before
+        // the downloader takes ownership of it.
+        let tip_poll_adapter = network_adapter.clone();
+
         let mut orphan_downloader = Box::pin(OrphanBlocksDownloader::new(
             network_adapter,
             sync_config.orphan.max_orphan_cache_size,
+            sync_config.orphan.max_rejected_cache_size,
         ));
+
+        // Set up the proactive tip-poll lag watchdog: subscribe to slot ticks and
+        // derive the polling cadence / lag threshold from the active slot
+        // coefficient `f`. If it can't be derived (or polling is disabled), the
+        // watchdog stays inert and the slot-tick arm is gated off.
+        let mut slot_ticks = {
+            let (sender, receiver) = oneshot::channel();
+            relays
+                .time_relay()
+                .send(TimeServiceMessage::Subscribe { sender })
+                .await
+                .map_err(|(e, _)| {
+                    DynError::from(format!("failed to subscribe to slot ticks: {e}"))
+                })?;
+            receiver
+                .await
+                .map_err(|e| DynError::from(format!("failed to receive slot tick stream: {e}")))?
+        };
+        let tip_poll_params = if sync_config.tip_poll.enabled {
+            match TipPollParams::derive(&sync_config.tip_poll, relays.cryptarchia()).await {
+                Ok(params) => {
+                    info!(
+                        target: LOG_TARGET,
+                        cadence_slots = params.cadence_slots,
+                        lag_threshold_slots = params.lag_threshold_slots,
+                        max_peers = params.max_peers,
+                        "Tip-poll lag watchdog enabled"
+                    );
+                    Some(params)
+                }
+                Err(e) => {
+                    error!(target: LOG_TARGET, %e, "Failed to derive tip-poll params; watchdog disabled");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let (polled_tip_tx, mut polled_tip_rx) = mpsc::channel::<PolledTip>(32);
+        let mut tip_poll_task: Option<JoinHandle<()>> = None;
 
         self.notify_service_ready();
 
@@ -329,18 +385,35 @@ where
                         }
                     }
 
+                    Some(polled) = polled_tip_rx.recv() => {
+                        Self::enqueue_polled_tip(
+                            orphan_downloader.as_mut().get_mut(),
+                            polled.tip,
+                            polled.height,
+                            &polled.local,
+                        );
+                    }
+
                     Some(block) = orphan_downloader.next(), if orphan_downloader.should_poll() => {
                         let header_id = block.header().id();
-                        info!("Processing block from orphan downloader: {header_id:?}");
+                        debug!(
+                            target: LOG_TARGET,
+                            "Processing block from orphan downloader: {header_id:?}"
+                        );
 
-                        if !should_process_block(
+                        match should_process_block(
                             relays.cryptarchia(),
                             block.header().id(),
                             block.header().slot(),
                         )
                         .await
                         {
-                            continue;
+                            Ok(()) => {}
+                            Err(DoNotProcessBlock::OlderThanLib) => {
+                                orphan_downloader.insert_rejected_block(header_id);
+                                continue;
+                            }
+                            Err(DoNotProcessBlock::AlreadyApplied) => continue,
                         }
 
                         Self::log_received_block(&block);
@@ -353,9 +426,42 @@ where
                             }
                             Err(e) => {
                                 error!(target: LOG_TARGET, "Error processing orphan downloader block: {e:?}");
+                                if !is_recoverable_apply_error(&e) {
+                                    orphan_downloader.insert_rejected_block(header_id);
+                                }
                                 orphan_downloader.cancel_active_download();
                             }
                         }
+                    }
+
+                    Some(tick) = slot_ticks.next(), if tip_poll_params.is_some() => {
+                        // Don't start a new poll if the previous one is still running.
+                        if tip_poll_task.as_ref().is_some_and(|handle| !handle.is_finished()) {
+                            continue;
+                        }
+
+                        let params = *tip_poll_params
+                            .as_ref()
+                            .expect("tip_poll_params is Some, guaranteed by the select arm condition");
+
+                        // Spawn a task to not block this event loop.
+                        // The task makes `GetTip` requests handled by this event loop in peers' side.
+                        // All two nodes make `GetTip` requests simultaneously to each other,
+                        // `poll_peer_tips_if_behind` will cause deadlock unless it's spawned off.
+                        let adapter = tip_poll_adapter.clone();
+                        let cryptarchia = relays.cryptarchia().clone();
+                        let tx = polled_tip_tx.clone();
+                        tip_poll_task = Some(tokio::spawn(async move {
+                            if let Some(polled) = poll_peer_tips_if_behind(
+                                &adapter,
+                                &cryptarchia,
+                                tick,
+                                &params,
+                            )
+                            .await && let Err(e) = tx.send(polled).await {
+                                error!(target: LOG_TARGET, %e, "the polled-tip receiver has been dropped");
+                            }
+                        }));
                     }
 
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
@@ -438,9 +544,17 @@ where
         let block_slot = proposal.header().slot();
         metrics::consensus_proposals_received_total("network");
 
-        if !should_process_block(relays.cryptarchia(), block_id, block_slot).await {
-            metrics::consensus_proposals_ignored_total("already_processed", "network");
-            return;
+        match should_process_block(relays.cryptarchia(), block_id, block_slot).await {
+            Ok(()) => {}
+            Err(DoNotProcessBlock::OlderThanLib) => {
+                metrics::consensus_proposals_ignored_total("older_than_lib", "network");
+                orphan_downloader.insert_rejected_block(block_id);
+                return;
+            }
+            Err(DoNotProcessBlock::AlreadyApplied) => {
+                metrics::consensus_proposals_ignored_total("already_processed", "network");
+                return;
+            }
         }
 
         let reconstruct_started_at = Instant::now();
@@ -480,11 +594,13 @@ where
     {
         match err {
             Error::Cryptarchia(lb_chain_service::api::ApiError::ParentMissing { parent, info }) => {
-                info!(
+                debug!(
                     target: LOG_TARGET, ?block_id, ?parent,
                     "Parent block missing. Trying to enqueue block for orphan processing",
                 );
-                if let Err(e) = orphan_downloader.enqueue_orphan(block_id, info.tip, info.lib) {
+                if let Err(e) =
+                    orphan_downloader.enqueue_orphan(block_id, Some(parent), info.tip, info.lib)
+                {
                     error!(
                         target: LOG_TARGET, %e, ?block_id, ?parent,
                         "Failed to enqueue block for orphan processing",
@@ -505,6 +621,9 @@ where
                     target: LOG_TARGET, %err, ?block_id,
                     "Error processing reconstructed block",
                 );
+                if !is_recoverable_apply_error(&err) {
+                    orphan_downloader.insert_rejected_block(block_id);
+                }
             }
         }
     }
@@ -584,6 +703,32 @@ where
         );
     }
 
+    /// Hand a tip discovered by the watchdog to the orphan downloader and
+    /// record the outcome. `chosen_tip`/`chosen_height` describe the polled
+    /// tip; `local` is the local chain info it is being caught up against.
+    fn enqueue_polled_tip(
+        orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
+        chosen_tip: HeaderId,
+        chosen_height: u64,
+        local: &lb_chain_service::CryptarchiaInfo,
+    ) where
+        RuntimeServiceId: Send + Sync + 'static,
+    {
+        match orphan_downloader.enqueue_orphan(chosen_tip, None, local.tip, local.lib) {
+            Ok(()) => {
+                info!(
+                    target: LOG_TARGET,
+                    tip = ?chosen_tip, height = chosen_height, local_height = local.height,
+                    "tip poll: enqueued peer tip for catch-up"
+                );
+                metrics::tip_poll_enqueued_total();
+            }
+            Err(e) => {
+                debug!(target: LOG_TARGET, %e, tip = ?chosen_tip, "tip poll: did not enqueue polled tip");
+            }
+        }
+    }
+
     async fn handle_message(
         msg: Message<Mempool::Item>,
         relays: &ChainNetworkRelays<
@@ -620,28 +765,32 @@ async fn should_process_block<Cryptarchia, RuntimeServiceId>(
     cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     block_id: HeaderId,
     block_slot: Slot,
-) -> bool
+) -> Result<(), DoNotProcessBlock>
 where
     Cryptarchia: CryptarchiaServiceData,
     Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
     if !is_after_lib(cryptarchia, block_id, block_slot).await {
-        return false;
+        return Err(DoNotProcessBlock::OlderThanLib);
     }
 
     match cryptarchia.get_ledger_state(block_id).await {
-        Ok(Some(_)) => false,
-        Ok(None) => {
-            // block has not been processed
-            true
-        }
+        Ok(Some(_)) => Err(DoNotProcessBlock::AlreadyApplied),
+        Ok(None) => Ok(()),
         Err(err) => {
             error!(target: LOG_TARGET, err = ?err, "Failure when checking if block already processed");
             // block processing is idempotent, so we can safely re-process a block
-            true
+            Ok(())
         }
     }
+}
+
+/// Errors that indicate why a block should not be processed.
+#[derive(Debug)]
+enum DoNotProcessBlock {
+    OlderThanLib,
+    AlreadyApplied,
 }
 
 async fn is_after_lib<Cryptarchia, RuntimeServiceId>(
@@ -679,6 +828,30 @@ where
 
 fn is_at_or_before_lib(block_slot: Slot, lib_slot: Slot) -> bool {
     block_slot <= lib_slot
+}
+
+/// Apply-time errors that must NOT mark the block as rejected:
+/// - `ParentMissing` / `FutureBlock`: transient — the block may become
+///   applicable once an ancestor arrives or the local clock catches up.
+/// - `AlreadyApplied`: the block is already in the chain; re-processing is
+///   unnecessary. Rejecting would also block its valid descendants from
+///   entering the orphan pipeline.
+/// - `CommsFailure`: relay failure has nothing to do with block validity; a
+///   blanket "reject" here would poison the cache whenever chain-service is
+///   temporarily unreachable.
+///
+/// Other apply errors (e.g. validation failures surfaced as
+/// `ApiError::Unexpected`) are treated as terminal for the orphan pipeline.
+const fn is_recoverable_apply_error(err: &Error) -> bool {
+    matches!(
+        err,
+        Error::Cryptarchia(
+            lb_chain_service::api::ApiError::ParentMissing { .. }
+                | lb_chain_service::api::ApiError::FutureBlock { .. }
+                | lb_chain_service::api::ApiError::AlreadyApplied(_)
+                | lb_chain_service::api::ApiError::CommsFailure(_),
+        ),
+    )
 }
 
 /// Retry applying a block when `Cryptarchia` reports it as a `FutureBlock`.
@@ -825,7 +998,7 @@ where
         return Err(Error::MissingMempoolTransactions(missing_count));
     }
 
-    let reconstructed_transactions = mempool_response.into_found();
+    let reconstructed_transactions = BlockTransactions::try_from(mempool_response.into_found())?;
 
     let header = proposal.header().clone();
     let signature = *proposal.signature();

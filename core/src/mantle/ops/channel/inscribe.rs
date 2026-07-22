@@ -1,29 +1,36 @@
 use std::sync::Arc;
 
-use bytes::Bytes;
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::Ed25519Signature;
-use lb_utils::serde::serde_bytes_vec;
+use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Ed25519PublicKey, MsgId};
 use crate::{
+    block::MAX_BLOCK_TRANSACTIONS_SIZE,
     crypto::{Digest as _, Hasher},
-    events::Events,
+    events::TxEvent,
     mantle::{
         TxHash,
         channel::{ChannelState, Channels, Error},
-        encoding::encode_channel_inscribe,
         ledger::Operation,
+        nom::{NomCodec, NomEncode as _},
+        ops::channel::config::Keys,
     },
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+/// The maximum number of bytes that can be inscribed in a single inscription
+/// operation. This is derived from the maximum block transactions size,
+/// allowing for some overhead.
+pub const MAX_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 7 / 8;
+pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain
-    #[serde(with = "serde_bytes_vec")]
-    pub inscription: Vec<u8>,
+    #[serde(with = "lb_utils::serde::serde_bytes_slice")]
+    pub inscription: Inscription,
     /// Enforce that this inscription comes after this tx
     pub parent: MsgId,
     pub signer: Ed25519PublicKey,
@@ -33,13 +40,8 @@ impl InscriptionOp {
     #[must_use]
     pub fn id(&self) -> MsgId {
         let mut hasher = Hasher::new();
-        hasher.update(self.payload_bytes());
+        hasher.update(self.encode().as_slice());
         MsgId(hasher.finalize().into())
-    }
-
-    #[must_use]
-    fn payload_bytes(&self) -> Bytes {
-        encode_channel_inscribe(self).into()
     }
 }
 
@@ -108,7 +110,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         // if the channel doesn't exist, create it
         let channel = ctx
             .channels
@@ -116,16 +118,14 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
             .get(&self.channel_id)
             .cloned()
             .unwrap_or_else(|| ChannelState {
-                accredited_keys: vec![self.signer].into(),
+                accredited_keys: Keys::from(self.signer).into(),
                 configuration_threshold: 1,
                 tip_message: MsgId::root(),
                 tip_slot: ctx.block_slot,
                 tip_sequencer: 0,
                 tip_sequencer_starting_slot: ctx.block_slot,
                 posting_timeframe: 0.into(),
-                balance: 0,
-                withdraw_threshold: crate::mantle::channel::DEFAULT_WITHDRAW_THRESHOLD,
-                withdrawal_nonce: 0,
+                transfer_threshold: crate::mantle::channel::DEFAULT_TRANSFER_THRESHOLD,
                 posting_timeout: 0.into(),
             });
 
@@ -143,21 +143,58 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
                 ..channel
             },
         );
-        Ok((ctx, Events::new()))
+        Ok((ctx, Vec::new()))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use lb_utils::bounded::BoundedError;
+
     use super::*;
+    use crate::mantle::nom::NomDecode as _;
 
     fn sample() -> InscriptionOp {
         InscriptionOp {
             channel_id: ChannelId([0u8; 32]),
-            inscription: b"genesis".to_vec(),
+            inscription: b"genesis".into(),
             parent: MsgId([0u8; 32]),
             signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
         }
+    }
+
+    #[test]
+    fn oversized_inscription_rejected_at_construction() {
+        let oversized = vec![0u8; MAX_BYTES + 1];
+        let err = Inscription::try_from(oversized).unwrap_err();
+        assert!(
+            matches!(err, BoundedError::TooManyItems { count, max } if count == MAX_BYTES + 1 && max == MAX_BYTES)
+        );
+    }
+
+    #[test]
+    fn oversized_inscription_rejected_on_deserialize() {
+        let oversized = vec![0u8; MAX_BYTES + 1];
+        let bytes = bincode::serialize(&oversized).unwrap();
+        let err = bincode::deserialize::<Inscription>(&bytes).unwrap_err();
+        assert!(
+            format!("{err}").contains(
+                format!(
+                    "Item count {} exceeds static maximum of {MAX_BYTES}",
+                    MAX_BYTES + 1,
+                )
+                .as_str()
+            ),
+            "{err:?}",
+        );
+    }
+
+    #[test]
+    fn encode_decode_round_trip() {
+        let op = sample();
+        let encoded = op.encode();
+        let decoded = InscriptionOp::decode(&encoded).unwrap().1;
+        assert_eq!(op, decoded);
     }
 
     #[test]

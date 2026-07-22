@@ -124,10 +124,10 @@ async fn step_k8s_manual_start_nodes_with_wallet_resources(
                 message: format!(
                     "node '{node_name}' (runtime node '{runtime_node_name}') did not become ready: {e}"
                 ),
-            })?;
+        })?;
 
         let wallet_info = build_user_wallets(world, &node_name, &wallet_start_info)?;
-        insert_started_node_info(world, &node_name, started_node, wallet_info);
+        insert_started_node_info(world, &node_name, started_node, wallet_info).await?;
     }
 
     let cluster = world
@@ -142,6 +142,7 @@ async fn step_k8s_manual_start_nodes_with_wallet_resources(
         .map_err(|e| StepError::LogicalError {
             message: format!("k8s manual cluster network did not become ready: {e}"),
         })?;
+    world.ensure_wallet_scanner_started().await?;
 
     Ok(())
 }
@@ -161,7 +162,8 @@ async fn step_k8s_manual_node_has_peers(
 }
 
 #[then("I stop all k8s manual nodes")]
-fn step_k8s_manual_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
+async fn step_k8s_manual_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
+    world.reset_wallet_scanner_after_current_iteration().await;
     stop_active_manual_cluster(world)?;
     world.k8s_manual_cluster = None;
     Ok(())

@@ -18,6 +18,7 @@ lb-blend-proofs               = { workspace = true }
 lb-core                       = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { features = ["unsafe"], workspace = true }
+lb-log-targets                = { workspace = true }
 lb-poseidon2                  = { workspace = true }
 lb-utxotree                   = { workspace = true }
 tokio                         = { features = ["rt"], workspace = true }

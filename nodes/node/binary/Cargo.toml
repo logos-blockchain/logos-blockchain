@@ -14,7 +14,6 @@ workspace = true
 
 [dependencies]
 async-trait                      = { workspace = true }
-cfg-if                           = { workspace = true }
 clap                             = { features = ["derive", "env", "help", "std", "string"], workspace = true }
 color-eyre                       = { workspace = true }
 dhat                             = { optional = true, workspace = true }
@@ -32,9 +31,10 @@ lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
-lb-key-management-system-service = { workspace = true }
+lb-key-management-system-service = { features = ["unsafe"], workspace = true }
 lb-ledger                        = { workspace = true }
 lb-libp2p                        = { workspace = true }
+lb-log-targets                   = { workspace = true }
 lb-network-service               = { workspace = true }
 lb-pol                           = { workspace = true }
 lb-sdp-service                   = { workspace = true }
@@ -54,7 +54,6 @@ nutype                           = { features = ["serde"], workspace = true }
 overwatch                        = { workspace = true }
 rand                             = { workspace = true }
 serde                            = { workspace = true }
-serde_ignored                    = { workspace = true }
 serde_json                       = { workspace = true }
 serde_with                       = { workspace = true }
 serde_yaml                       = { workspace = true }
@@ -81,13 +80,25 @@ validator  = { features = ["derive"], workspace = true }
 tikv-jemallocator = { optional = true, workspace = true }
 
 [dev-dependencies]
-rand = { workspace = true }
+rand             = { workspace = true }
+serde_urlencoded = { workspace = true }
 
 [features]
-config-gen = ["lb-key-management-system-service/unsafe"]
-default    = ["config-gen", "tracing"]
-dhat-heap  = ["dep:dhat"]
-jemalloc   = ["dep:tikv-jemallocator"]
-profiling  = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]
-testing    = ["lb-key-management-system-service/unsafe"]
-tracing    = []
+default   = ["tracing"]
+dhat-heap = ["dep:dhat"]
+jemalloc  = ["dep:tikv-jemallocator"]
+# Existing broad profiling feature. Keep this as an umbrella feature for
+# backwards compatibility: HTTP pprof + tokio-console support.
+profiling                        = ["lb-http-api-common/profiling", "tokio-console"]
+testing                          = ["lb-key-management-system-service/unsafe"]
+testing-disable-proposal-publish = ["lb-chain-leader-service/testing-disable-proposal-publish"]
+
+# Tokio task/resource profiling via tokio-console.
+#
+# This feature only compiles in support. Runtime activation still requires
+# `tracing.console: !Console` in the node config.
+#
+# Builds using this feature must also be compiled with:
+#   RUSTFLAGS="--cfg tokio_unstable"
+tokio-console = ["lb-tracing-service/tokio-console", "overwatch/tokio-task-names", "tokio/tracing"]
+tracing       = []

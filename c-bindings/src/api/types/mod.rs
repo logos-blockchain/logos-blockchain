@@ -1,4 +1,5 @@
 pub mod block;
-pub mod config;
+pub mod claimable_vouchers;
 pub mod known_addresses;
 pub mod value;
+pub mod wallet_notes;

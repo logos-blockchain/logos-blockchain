@@ -1,38 +1,39 @@
-use core::{convert::Infallible, str::FromStr};
 use std::{
-    io::Read,
     net::{IpAddr, SocketAddr, ToSocketAddrs as _},
-    path::{Path, PathBuf},
+    path::PathBuf,
     time::Duration,
 };
 
-use ::tracing::warn;
-use clap::{Parser, Subcommand, ValueEnum, builder::OsStr};
+use clap::{Parser, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
 use lb_core::sdp::ProviderId;
-use lb_key_management_system_service::keys::{Key, ZkPublicKey};
+use lb_groth16::fr_from_bytes;
+use lb_key_management_system_service::{
+    backend::preload::KeyId,
+    keys::{Key, UnsecuredZkKey, ZkPublicKey},
+};
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use lb_tracing::{
     filter::envfilter::{default_envfilter_config, parse_filter_directives},
     logging::local::{AppenderType, CompressionType, RetentionType, RollingConfig, RotationType},
 };
-use serde::Deserialize;
-use tracing::serde::filter::{EnvConfig, Layer};
+use num_bigint::BigUint;
+use serde::{Deserialize, Serialize};
 
-use crate::config::tracing::serde::logger::{FileConfig, GelfConfig};
 pub use crate::config::{
-    api::serde::Config as ApiConfig,
-    blend::serde::Config as BlendConfig,
-    cryptarchia::serde::Config as CryptarchiaConfig,
-    deployment::{DeploymentSettings, WellKnownDeployment},
-    kms::serde::Config as KmsConfig,
-    network::serde::Config as NetworkConfig,
-    sdp::serde::Config as SdpConfig,
-    state::Config as StateConfig,
-    storage::serde::Config as StorageConfig,
-    time::serde::Config as TimeConfig,
-    tracing::serde::Config as TracingConfig,
-    wallet::serde::Config as WalletConfig,
+    api::serde::Config as ApiConfig, blend::serde::Config as BlendConfig,
+    cryptarchia::serde::Config as CryptarchiaConfig, deployment::DeploymentSettings,
+    kms::serde::Config as KmsConfig, network::serde::Config as NetworkConfig,
+    sdp::serde::Config as SdpConfig, state::Config as StateConfig,
+    storage::serde::Config as StorageConfig, time::serde::Config as TimeConfig,
+    tracing::serde::Config as TracingConfig, wallet::serde::Config as WalletConfig,
+};
+use crate::config::{
+    network::serde::nat,
+    tracing::serde::{
+        filter::{EnvConfig, Layer},
+        logger::{FileConfig, GelfConfig},
+    },
 };
 
 pub mod api;
@@ -52,147 +53,76 @@ pub mod wallet;
 #[cfg(test)]
 mod tests;
 
-fn long_version() -> String {
-    let head_commit_hash = env!("HEAD_COMMIT_HASH");
-    let head_tag_name = env!("HEAD_TAG_NAME");
-    let pkg_version = env!("PKG_VERSION");
-    let target = env!("TARGET");
-    let profile = env!("PROFILE");
-    let rustc_version = env!("RUSTC_VERSION");
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct UserConfig {
+    #[serde(default)]
+    pub network: NetworkConfig,
+    pub blend: BlendConfig,
+    pub cryptarchia: CryptarchiaConfig,
+    #[serde(default)]
+    pub time: TimeConfig,
+    pub sdp: SdpConfig,
+    #[serde(default)]
+    pub api: ApiConfig,
+    #[serde(default)]
+    pub storage: StorageConfig,
+    #[serde(default)]
+    pub kms: KmsConfig,
+    pub wallet: WalletConfig,
+    #[serde(default)]
+    pub tracing: TracingConfig,
+    #[serde(default)]
+    pub state: StateConfig,
+}
 
-    let commit_line = match (head_commit_hash, head_tag_name) {
-        (commit_hash, tag_name) if !commit_hash.is_empty() && !tag_name.is_empty() => {
-            format!("commit:  {commit_hash} (tag {tag_name})")
+pub struct RequiredValues {
+    pub blend: BlendConfig,
+    pub cryptarchia: CryptarchiaConfig,
+    pub sdp: SdpConfig,
+    pub wallet: WalletConfig,
+}
+
+impl UserConfig {
+    #[must_use]
+    pub fn with_required_values(required_values: RequiredValues) -> Self {
+        Self {
+            blend: required_values.blend,
+            cryptarchia: required_values.cryptarchia,
+            sdp: required_values.sdp,
+            wallet: required_values.wallet,
+
+            api: ApiConfig::default(),
+            kms: KmsConfig::default(),
+            network: NetworkConfig::default(),
+            state: StateConfig::default(),
+            storage: StorageConfig::default(),
+            time: TimeConfig::default(),
+            tracing: TracingConfig::default(),
         }
-        (commit_hash, _) if !commit_hash.is_empty() => {
-            format!("commit:  {commit_hash}")
-        }
-        _ => "commit:  unknown".to_owned(),
-    };
-
-    format!(
-        "\
-{pkg_version}
-{commit_line}
-target:  {target}
-profile: {profile}
-rustc:   {rustc_version}"
-    )
-}
-
-#[derive(Parser, Debug)]
-#[command(author, version, long_version = long_version(), about, long_about = None,
-          args_conflicts_with_subcommands = true,
-          subcommand_negates_reqs = true)]
-pub struct CliArgs {
-    #[command(subcommand)]
-    pub command: Option<Command>,
-
-    /// Path for a yaml-encoded network config file
-    config: Option<PathBuf>,
-    /// Dry-run flag. If active, the binary will try to deserialize the config
-    /// file and then exit.
-    #[clap(long = "check-config", action)]
-    check_config_only: bool,
-    /// Overrides log config.
-    #[clap(flatten)]
-    log: LogArgs,
-    /// Overrides network config.
-    #[clap(flatten)]
-    network: NetworkArgs,
-    /// Overrides blend config.
-    #[clap(flatten)]
-    blend: BlendArgs,
-    /// Overrides http config.
-    #[clap(flatten)]
-    api: ApiArgs,
-    #[clap(flatten)]
-    deployment: DeploymentArgs,
-    #[clap(flatten)]
-    state: StateArgs,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum Command {
-    /// Initialize a new user config with generated keys
-    #[cfg(feature = "config-gen")]
-    Init(InitArgs),
-    /// Publish text inscriptions as zone blocks
-    Inscribe(lb_tui_zone::InscribeArgs),
-}
-
-#[cfg(feature = "config-gen")]
-#[derive(Parser, Debug)]
-pub struct InitArgs {
-    /// Trusted peers to bootstrap from (multiaddr format).
-    /// If `--ibd` is set, peers whose multiaddrs include a `PeerId`
-    /// are also used as IBD peers.
-    #[clap(long = "initial-peers", short = 'p', num_args = 1.., value_delimiter = ',')]
-    pub initial_peers: Vec<Multiaddr>,
-
-    /// Output file path for the generated config
-    #[clap(long = "output", short = 'o', default_value = "user_config.yaml")]
-    pub output: PathBuf,
-
-    /// Network listen port
-    #[clap(long = "net-port", default_value = "3000")]
-    pub net_port: u16,
-
-    /// Blend listen port
-    #[clap(long = "blend-port", default_value = "3400")]
-    pub blend_port: u16,
-
-    /// HTTP API listen address
-    #[clap(long = "http-addr", default_value = "0.0.0.0:8080")]
-    pub http_addr: SocketAddr,
-
-    /// External address for nodes with a known public IP (disables NAT
-    /// traversal). Format: /ip4/<public-ip>/udp/<port>/quic-v1
-    #[clap(long = "external-address")]
-    pub external_address: Option<Multiaddr>,
-
-    #[clap(long = "state-path")]
-    pub state_path: Option<PathBuf>,
-
-    /// Enable Initial Block Download (IBD) using peers
-    /// passed via `--initial-peers`/`-p`.
-    #[clap(long = "ibd", default_value_t = false)]
-    pub ibd: bool,
-
-    /// Log filter directives to write into the generated config, e.g.
-    /// `warn,logos_blockchain=debug,libp2p_gossipsub::behaviour=error`.
-    #[clap(long = "log-filter")]
-    pub log_filter: Option<String>,
-
-    /// Path for the generated KMS keys YAML file.
-    /// Defaults to 'kms.yaml' in the same directory as --output.
-    #[clap(long = "kms-file")]
-    pub kms_file: Option<PathBuf>,
-}
-
-#[cfg(feature = "config-gen")]
-impl Default for InitArgs {
-    fn default() -> Self {
-        Self::parse_from::<Vec<String>, String>(vec![])
-    }
-}
-
-impl CliArgs {
-    #[must_use]
-    pub fn config_path(&self) -> &Path {
-        self.config
-            .as_deref()
-            .expect("config path is required when not using a subcommand")
     }
 
-    #[must_use]
-    pub const fn dry_run(&self) -> bool {
-        self.check_config_only
+    pub fn blend_provider_id(&self) -> Result<ProviderId, String> {
+        let key_id = &self.blend.non_ephemeral_signing_key_id;
+        let Some(key) = self.kms.backend.keys.get(key_id) else {
+            return Err(format!(
+                "Blend non-ephemeral signing key '{key_id}' not found in KMS"
+            ));
+        };
+        let Key::Ed25519(secret_key) = key else {
+            return Err("Blend non-ephemeral signing key must be Ed25519".to_owned());
+        };
+        Ok(ProviderId(secret_key.public_key()))
     }
 
-    #[must_use]
-    pub const fn deployment_type(&self) -> &DeploymentType {
-        &self.deployment.deployment_type
+    pub fn blend_zk_key(&self) -> Result<(String, ZkPublicKey), String> {
+        let key_id = &self.blend.core.zk.secret_key_kms_id;
+        let Some(key) = self.kms.backend.keys.get(key_id) else {
+            return Err(format!("Blend ZK signing key '{key_id}' not found in KMS"));
+        };
+        let Key::Zk(secret_key) = key else {
+            return Err("Blend ZK signing key must be Zk".to_owned());
+        };
+        Ok((key_id.to_owned(), secret_key.to_public_key()))
     }
 }
 
@@ -236,7 +166,7 @@ impl From<LogFileAppenderType> for OsStr {
     }
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug, Default, Clone)]
 pub struct LogArgs {
     /// Address for the Gelf backend
     #[clap(
@@ -244,7 +174,7 @@ pub struct LogArgs {
         env = "LOG_ADDR",
         required_if_eq("backend", LoggerLayerType::Gelf)
     )]
-    log_addr: Option<String>,
+    pub log_addr: Option<String>,
 
     /// Directory for the File backend
     #[clap(
@@ -252,7 +182,7 @@ pub struct LogArgs {
         env = "LOG_DIR",
         required_if_eq("backend", LoggerLayerType::File)
     )]
-    directory: Option<PathBuf>,
+    pub directory: Option<PathBuf>,
 
     /// Prefix for the File backend
     #[clap(
@@ -260,54 +190,96 @@ pub struct LogArgs {
         env = "LOG_PATH",
         required_if_eq("backend", LoggerLayerType::File)
     )]
-    prefix: Option<PathBuf>,
+    pub prefix: Option<PathBuf>,
 
     /// Backend type
     #[clap(long = "log-backend", env = "LOG_BACKEND", value_enum)]
-    backend: Option<LoggerLayerType>,
+    pub backend: Option<LoggerLayerType>,
 
     #[clap(long = "log-level", env = "LOG_LEVEL")]
-    level: Option<String>,
+    pub level: Option<String>,
 
     /// Per-target log filter directives, e.g.
     /// `libp2p_gossipsub=info,h2=warn`
     #[clap(long = "log-filter", env = "LOG_FILTER")]
-    filter: Option<String>,
+    pub filter: Option<String>,
 
     #[clap(long = "log-file-appender", env = "LOG_APPENDER")]
-    file_appender: Option<LogFileAppenderType>,
+    pub file_appender: Option<LogFileAppenderType>,
 
     #[clap(
         long = "log-max-files",
         env = "LOG_APPENDER_MAX_FILES",
         required_if_eq("file_appender", LogFileAppenderType::RollingMaxFiles)
     )]
-    max_files: Option<usize>,
+    pub max_files: Option<usize>,
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug, Default, Clone)]
 pub struct NetworkArgs {
     #[clap(long = "net-host", env = "NET_HOST")]
-    host: Option<IpAddr>,
+    pub host: Option<IpAddr>,
 
     #[clap(long = "net-port", env = "NET_PORT")]
-    port: Option<usize>,
+    pub port: Option<u16>,
 
     // TODO: Use either the raw bytes or the key type directly to delegate error handling to clap
-    #[clap(long = "net-node-key", env = "NET_NODE_KEY")]
-    node_key: Option<String>,
+    #[clap(long = "net-node-key", env = "NET_NODE_KEY", value_parser = parse_hex_ed25519_key)]
+    pub node_key: Option<SecretKey>,
 
-    #[clap(long = "net-initial-peers", env = "NET_INITIAL_PEERS", num_args = 1.., value_delimiter = ',')]
+    /// External address for nodes with a known public IP (disables NAT
+    /// traversal). Format: /ip4/<public-ip>/udp/<port>/quic-v1
+    #[clap(long = "external-address")]
+    pub external_address: Option<Multiaddr>,
+
+    #[clap(
+        long = "net-initial-peers",
+        short = 'p',
+        env = "NET_INITIAL_PEERS",
+        num_args = 1..,
+        value_delimiter = ','
+    )]
     pub initial_peers: Option<Vec<Multiaddr>>,
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug, Default, Clone)]
 pub struct BlendArgs {
     #[clap(long = "blend-addr", env = "BLEND_ADDR")]
-    blend_addr: Option<Multiaddr>,
+    pub blend_addr: Option<Multiaddr>,
+
+    #[clap(long = "blend-signing-key-id", env = "BLEND_SIGNING_KEY_ID")]
+    pub blend_signing_key_id: Option<KeyId>,
+
+    #[clap(long = "blend-secret-key-id", env = "BLEND_SECRET_KEY_ID")]
+    pub blend_secret_key_id: Option<KeyId>,
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug, Default, Clone, Copy)]
+pub struct CryptarchiaArgs {
+    #[clap(
+        long = "cryptarchia-funding-pk",
+        env = "CRYPTARCHIA_FUNDING_PK",
+        value_parser = parse_hex_public_key
+    )]
+    pub cryptarchia_funding_pk: Option<ZkPublicKey>,
+
+    /// Disable Initial Block Download (IBD) by leaving the IBD peer list
+    /// empty, regardless of any peers passed via `--net-initial-peers`/`-p`.
+    #[clap(long = "skip-ibd", default_value_t = false)]
+    pub skip_ibd: bool,
+}
+
+#[derive(Parser, Debug, Default, Clone, Copy)]
+pub struct SdpArgs {
+    #[clap(
+        long = "sdp-funding-pk",
+        env = "SDP_FUNDING_PK",
+        value_parser = parse_hex_public_key
+    )]
+    pub sdp_funding_pk: Option<ZkPublicKey>,
+}
+
+#[derive(Parser, Debug, Default, Clone)]
 pub struct ApiArgs {
     #[clap(long = "http-host", env = "HTTP_HOST")]
     pub addr: Option<SocketAddr>,
@@ -316,7 +288,7 @@ pub struct ApiArgs {
     pub cors_origins: Option<Vec<String>>,
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug, Default, Clone)]
 pub struct StateArgs {
     #[clap(long = "state-path", env = "STATE_PATH")]
     pub path: Option<PathBuf>,
@@ -324,170 +296,8 @@ pub struct StateArgs {
 
 #[derive(Parser, Debug, Clone)]
 pub struct DeploymentArgs {
-    #[clap(long = "deployment", env = "DEPLOYMENT", default_value = DeploymentType::default())]
-    deployment_type: DeploymentType,
-}
-
-impl DeploymentArgs {
-    #[must_use]
-    pub const fn deployment_type(&self) -> &DeploymentType {
-        &self.deployment_type
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum DeploymentType {
-    WellKnown(WellKnownDeployment),
-    Custom(PathBuf),
-}
-
-impl Default for DeploymentType {
-    fn default() -> Self {
-        WellKnownDeployment::default().into()
-    }
-}
-
-impl From<WellKnownDeployment> for DeploymentType {
-    fn from(deployment: WellKnownDeployment) -> Self {
-        Self::WellKnown(deployment)
-    }
-}
-
-impl From<PathBuf> for DeploymentType {
-    fn from(path: PathBuf) -> Self {
-        Self::Custom(path)
-    }
-}
-
-#[expect(clippy::fallible_impl_from, reason = "`From` impl required by clap.")]
-impl From<DeploymentType> for OsStr {
-    fn from(value: DeploymentType) -> Self {
-        match value {
-            DeploymentType::WellKnown(well_known_deployment) => {
-                well_known_deployment.to_string().into()
-            }
-            DeploymentType::Custom(path) => path.to_str().unwrap().to_owned().into(),
-        }
-    }
-}
-
-impl FromStr for DeploymentType {
-    type Err = Infallible;
-
-    // Try to parse as a well-known deployment first, otherwise treat as a path.
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(s.parse::<WellKnownDeployment>()
-            .map_or_else(|()| PathBuf::from(s).into(), Into::into))
-    }
-}
-
-#[derive(Deserialize, Debug, Clone)]
-#[cfg_attr(
-    any(feature = "testing", feature = "config-gen"),
-    derive(serde::Serialize)
-)]
-pub struct UserConfig {
-    #[serde(default)]
-    pub network: NetworkConfig,
-    pub blend: BlendConfig,
-    pub cryptarchia: CryptarchiaConfig,
-    #[serde(default)]
-    pub time: TimeConfig,
-    pub sdp: SdpConfig,
-    #[serde(default)]
-    pub api: ApiConfig,
-    #[serde(default)]
-    pub storage: StorageConfig,
-    #[serde(default)]
-    pub kms: KmsConfig,
-    pub wallet: WalletConfig,
-    #[serde(default)]
-    pub tracing: TracingConfig,
-    #[serde(default)]
-    pub state: StateConfig,
-}
-
-pub struct RequiredValues {
-    pub blend: BlendConfig,
-    pub cryptarchia: CryptarchiaConfig,
-    pub sdp: SdpConfig,
-    pub wallet: WalletConfig,
-}
-
-impl UserConfig {
-    pub fn update_from_args(mut self, args: CliArgs) -> Result<RunConfig> {
-        let CliArgs {
-            log: log_args,
-            api: api_args,
-            network: network_args,
-            blend: blend_args,
-            deployment: deployment_args,
-            state: state_args,
-            ..
-        } = args;
-        update_tracing(&mut self.tracing, log_args)?;
-        update_network(&mut self.network, network_args)?;
-        update_blend(&mut self.blend, blend_args);
-        update_api(&mut self.api, api_args);
-        update_state(&mut self.state, state_args);
-
-        let deployment_settings = match deployment_args.deployment_type() {
-            DeploymentType::WellKnown(well_known_deployment) => (*well_known_deployment).into(),
-            DeploymentType::Custom(custom_deployment_config_path) => {
-                deserialize_config_at_path::<DeploymentSettings>(
-                    custom_deployment_config_path,
-                    OnUnknownKeys::Warn,
-                )?
-            }
-        };
-
-        Ok(RunConfig {
-            deployment: deployment_settings,
-            user: self,
-        })
-    }
-
-    #[must_use]
-    pub fn with_required_values(required_values: RequiredValues) -> Self {
-        Self {
-            blend: required_values.blend,
-            cryptarchia: required_values.cryptarchia,
-            sdp: required_values.sdp,
-            wallet: required_values.wallet,
-
-            api: ApiConfig::default(),
-            kms: KmsConfig::default(),
-            network: NetworkConfig::default(),
-            state: StateConfig::default(),
-            storage: StorageConfig::default(),
-            time: TimeConfig::default(),
-            tracing: TracingConfig::default(),
-        }
-    }
-
-    pub fn blend_provider_id(&self) -> Result<ProviderId, String> {
-        let key_id = &self.blend.non_ephemeral_signing_key_id;
-        let Some(key) = self.kms.backend.keys.get(key_id) else {
-            return Err(format!(
-                "Blend non-ephemeral signing key '{key_id}' not found in KMS"
-            ));
-        };
-        let Key::Ed25519(secret_key) = key else {
-            return Err("Blend non-ephemeral signing key must be Ed25519".to_owned());
-        };
-        Ok(ProviderId(secret_key.public_key()))
-    }
-
-    pub fn blend_zk_key(&self) -> Result<(String, ZkPublicKey), String> {
-        let key_id = &self.blend.core.zk.secret_key_kms_id;
-        let Some(key) = self.kms.backend.keys.get(key_id) else {
-            return Err(format!("Blend ZK signing key '{key_id}' not found in KMS"));
-        };
-        let Key::Zk(secret_key) = key else {
-            return Err("Blend ZK signing key must be Zk".to_owned());
-        };
-        Ok((key_id.to_owned(), secret_key.to_public_key()))
-    }
+    #[clap(long = "deployment", env = "DEPLOYMENT")]
+    pub custom_deployment_path: Option<PathBuf>,
 }
 
 pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Result<()> {
@@ -554,6 +364,12 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
                 tracing.logger.stderr = true;
             }
         }
+    } else if let Some(directory) = directory
+        && let Some(file) = tracing.logger.file.as_mut()
+    {
+        // No backend switch requested: apply a standalone directory override to
+        // the existing file logger (used by `init`/c-bindings config setup).
+        file.directory = directory;
     }
 
     update_tracing_level_and_filter(tracing, level.as_deref(), filter.as_deref())?;
@@ -575,7 +391,7 @@ pub fn update_tracing_level_and_filter(
     if let Some(filter) = filter {
         tracing.filter = parse_log_filter_layer(filter)?;
     } else {
-        apply_default_debug_log_filter(tracing);
+        apply_default_log_filter(tracing);
     }
 
     Ok(())
@@ -608,7 +424,7 @@ fn parse_log_filter_layer(raw: &str) -> Result<Layer> {
 
 /// Applies the built-in verbose filter policy only when no explicit filter was
 /// configured.
-fn apply_default_debug_log_filter(tracing: &mut TracingConfig) {
+fn apply_default_log_filter(tracing: &mut TracingConfig) {
     if !matches!(tracing.filter, Layer::None) {
         return;
     }
@@ -625,6 +441,7 @@ pub fn update_network(network: &mut NetworkConfig, network_args: NetworkArgs) ->
         host,
         port,
         node_key,
+        external_address,
         initial_peers,
     } = network_args;
 
@@ -635,12 +452,15 @@ pub fn update_network(network: &mut NetworkConfig, network_args: NetworkArgs) ->
     }
 
     if let Some(port) = port {
-        network.backend.swarm.port = port as u16;
+        network.backend.swarm.port = port;
     }
 
     if let Some(node_key) = node_key {
-        let mut key_bytes = hex::decode(node_key)?;
-        network.backend.swarm.node_key = SecretKey::try_from_bytes(key_bytes.as_mut_slice())?;
+        network.backend.swarm.node_key = node_key;
+    }
+
+    if let Some(external_address) = external_address {
+        network.backend.swarm.nat = nat::Config::Static { external_address };
     }
 
     if let Some(peers) = initial_peers {
@@ -651,10 +471,46 @@ pub fn update_network(network: &mut NetworkConfig, network_args: NetworkArgs) ->
 }
 
 pub fn update_blend(blend: &mut BlendConfig, blend_args: BlendArgs) {
-    let BlendArgs { blend_addr } = blend_args;
+    let BlendArgs {
+        blend_addr,
+        blend_signing_key_id,
+        blend_secret_key_id,
+    } = blend_args;
 
     if let Some(addr) = blend_addr {
         blend.set_listening_address(addr);
+    }
+
+    if let Some(key_id) = blend_signing_key_id {
+        blend.set_non_ephemeral_signing_key_id(key_id);
+    }
+
+    if let Some(key_id) = blend_secret_key_id {
+        blend.set_secret_zk_key_id(key_id);
+    }
+}
+
+pub const fn update_cryptarchia(
+    cryptarchia: &mut CryptarchiaConfig,
+    cryptarchia_args: CryptarchiaArgs,
+) {
+    let CryptarchiaArgs {
+        cryptarchia_funding_pk: funding_pk,
+        ..
+    } = cryptarchia_args;
+
+    if let Some(pk) = funding_pk {
+        cryptarchia.set_funding_pk(pk);
+    }
+}
+
+pub const fn update_sdp(sdp: &mut SdpConfig, sdp_args: SdpArgs) {
+    let SdpArgs {
+        sdp_funding_pk: funding_pk,
+    } = sdp_args;
+
+    if let Some(pk) = funding_pk {
+        sdp.set_funding_pk(pk);
     }
 }
 
@@ -678,107 +534,6 @@ pub fn update_state(state: &mut StateConfig, args: StateArgs) {
     }
 }
 
-#[derive(thiserror::Error, Debug)]
-pub enum ConfigDeserializationError<Config> {
-    #[error("Unrecognized fields in config: {fields:?}")]
-    UnrecognizedFields { fields: Vec<String>, config: Config },
-    #[error(transparent)]
-    IoError(#[from] std::io::Error),
-    #[error(transparent)]
-    SerdeError(#[from] serde_yaml::Error),
-    #[error("YAML include error: {0}")]
-    IncludeError(String),
-}
-
-pub enum OnUnknownKeys {
-    Fail,
-    Warn,
-}
-
-impl<C> From<lb_utils::yaml::YamlIncludeError> for ConfigDeserializationError<C> {
-    fn from(e: lb_utils::yaml::YamlIncludeError) -> Self {
-        use lb_utils::yaml::YamlIncludeError as E;
-        match e {
-            E::Io(e) => Self::IoError(e),
-            E::Serde(e) => Self::SerdeError(e),
-            E::InvalidInclude(msg) => Self::IncludeError(msg),
-        }
-    }
-}
-
-pub fn deserialize_config_at_path<Config>(
-    config_path: &Path,
-    unknown_keys_strategy: OnUnknownKeys,
-) -> Result<Config, ConfigDeserializationError<Config>>
-where
-    Config: for<'de> Deserialize<'de>,
-{
-    let base_dir = config_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf();
-    let file = std::fs::File::open(config_path)?;
-    let raw: serde_yaml::Value = serde_yaml::from_reader(file)?;
-    let resolved = lb_utils::yaml::resolve_includes(raw, &base_dir)
-        .map_err(ConfigDeserializationError::from)?;
-    deserialize_from_value(resolved, unknown_keys_strategy)
-}
-
-fn deserialize_from_value<Config>(
-    value: serde_yaml::Value,
-    unknown_keys_strategy: OnUnknownKeys,
-) -> Result<Config, ConfigDeserializationError<Config>>
-where
-    Config: for<'de> Deserialize<'de>,
-{
-    use serde::de::IntoDeserializer as _;
-    let mut ignored_fields = Vec::new();
-    let config = serde_ignored::deserialize::<_, _, Config>(value.into_deserializer(), |path| {
-        ignored_fields.push(path.to_string());
-    })?;
-    apply_unknown_keys_strategy(config, ignored_fields, unknown_keys_strategy)
-}
-
-pub fn deserialize_config_from_reader<Config, Reader>(
-    reader: Reader,
-    unknown_keys_strategy: OnUnknownKeys,
-) -> Result<Config, ConfigDeserializationError<Config>>
-where
-    Config: for<'de> Deserialize<'de>,
-    Reader: Read,
-{
-    let mut ignored_fields = Vec::new();
-    let config = serde_ignored::deserialize::<_, _, Config>(
-        serde_yaml::Deserializer::from_reader(reader),
-        |path| {
-            ignored_fields.push(path.to_string());
-        },
-    )?;
-    apply_unknown_keys_strategy(config, ignored_fields, unknown_keys_strategy)
-}
-
-fn apply_unknown_keys_strategy<Config>(
-    config: Config,
-    ignored_fields: Vec<String>,
-    strategy: OnUnknownKeys,
-) -> Result<Config, ConfigDeserializationError<Config>> {
-    match (ignored_fields, strategy) {
-        (ignored_fields, _) if ignored_fields.is_empty() => Ok(config),
-        (ignored_fields, OnUnknownKeys::Warn) => {
-            warn!(
-                "The following unrecognized fields were found in the config: {ignored_fields:?}."
-            );
-            Ok(config)
-        }
-        (ignored_fields, OnUnknownKeys::Fail) => {
-            Err(ConfigDeserializationError::UnrecognizedFields {
-                fields: ignored_fields,
-                config,
-            })
-        }
-    }
-}
-
 /// Configuration for a running node. It is the combination of user-provided and
 /// deployment-specific settings.
 #[derive(Debug, Clone)]
@@ -793,4 +548,28 @@ impl From<RunConfig> for UserConfig {
     fn from(value: RunConfig) -> Self {
         value.user
     }
+}
+
+pub fn parse_hex_public_key(key: &str) -> Result<ZkPublicKey, String> {
+    let bytes = hex::decode(key).map_err(|e| format!("Failed to parse hex string: {e}"))?;
+
+    let fr =
+        fr_from_bytes(&bytes).map_err(|e| format!("Failed to deserialize Fr from bytes: {e}"))?;
+
+    Ok(ZkPublicKey::new(fr))
+}
+
+pub fn parse_hex_zk_key(s: &str) -> Result<UnsecuredZkKey, String> {
+    let bytes = hex::decode(s).map_err(|e| format!("Invalid hex string for ZK key: {e}"))?;
+
+    let big_uint = BigUint::from_bytes_le(&bytes);
+
+    Ok(UnsecuredZkKey::from(big_uint))
+}
+
+pub fn parse_hex_ed25519_key(key: &str) -> Result<SecretKey, String> {
+    let mut key_bytes = hex::decode(key).map_err(|e| format!("Failed to parse hex string: {e}"))?;
+
+    SecretKey::try_from_bytes(key_bytes.as_mut_slice())
+        .map_err(|e| format!("Failed to deserialize ed25519 key from bytes: {e}"))
 }

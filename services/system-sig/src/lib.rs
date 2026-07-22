@@ -1,5 +1,6 @@
 use std::fmt::{Debug, Display};
 
+use lb_log_targets::system_sig;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     overwatch::handle::OverwatchHandle,
@@ -8,6 +9,8 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
+
+const LOG_TARGET: &str = system_sig::ROOT;
 
 pub struct SystemSig<RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -18,7 +21,7 @@ where
     RuntimeServiceId: Debug + Display + Sync,
 {
     async fn ctrl_c_signal_received(overwatch_handle: &OverwatchHandle<RuntimeServiceId>) {
-        tracing::debug!("Ctrl-C received, requesting shutdown");
+        tracing::debug!(target: LOG_TARGET, "Ctrl-C received, requesting shutdown");
         drop(overwatch_handle.shutdown().await);
     }
 }
@@ -53,6 +56,7 @@ where
 
         service_resources_handle.status_updater.notify_ready();
         tracing::info!(
+            target: LOG_TARGET,
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );

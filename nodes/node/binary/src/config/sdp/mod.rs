@@ -15,7 +15,7 @@ impl ServiceConfig {
     pub fn into_sdp_service_settings(self, state_config: &StateConfig) -> SdpSettings {
         let recovery_path = state_config.get_path_for_recovery_state(
             PathBuf::new()
-                .join("mempool")
+                .join("sdp")
                 .join("recovery")
                 .with_extension("json")
                 .as_path(),

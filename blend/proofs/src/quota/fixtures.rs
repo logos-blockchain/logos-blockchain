@@ -34,8 +34,6 @@ pub fn valid_proof_of_core_quota_inputs(
                     .unwrap()
                     .into(),
         },
-        // Not relevant for core quota proofs
-        session: 1,
         leader: LeaderInputs {
             pol_epoch_nonce: BigUint::from(1u64).into(),
             pol_ledger_aged: BigUint::from(1u64).into(),
@@ -168,8 +166,6 @@ pub fn valid_proof_of_leadership_quota_inputs(
             lottery_0,
             lottery_1,
         },
-        // Not relevant for leadership quota proofs
-        session: 1,
         core: CoreInputs {
             zk_root: BigUint::from(1u64).into(),
             quota: 1,

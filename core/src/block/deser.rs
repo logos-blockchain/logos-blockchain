@@ -4,7 +4,7 @@ mod tests {
     use lb_key_management_system_keys::keys::Ed25519Key;
 
     use crate::{
-        block::{Block, tests::create_proof},
+        block::{Block, BlockTransactions, tests::create_proof},
         mantle::MantleTx,
     };
 
@@ -14,7 +14,7 @@ mod tests {
             [0u8; 32].into(),
             Slot::from(1u64),
             create_proof(),
-            vec![],
+            BlockTransactions::empty(),
             &signing_key,
         )
         .expect("block creation should succeed")
@@ -68,5 +68,37 @@ mod tests {
             bincode::deserialize(&bytes).expect("bincode deserialization should succeed");
         assert_eq!(block.header().id(), restored.header().id());
         assert_eq!(block.signature(), restored.signature());
+    }
+
+    #[test]
+    fn test_bincode_fixed_size_fields_have_no_length_prefix() {
+        const VERSION: usize = 1;
+        const PARENT_BLOCK: usize = 32;
+        const SLOT: usize = 8;
+        const BLOCK_ROOT: usize = 32;
+        const POL_PROOF: usize = 128;
+        const ENTROPY_CONTRIBUTION: usize = 32;
+        const LEADER_KEY: usize = 32;
+        const VOUCHER_CM: usize = 32;
+        const SIGNATURE: usize = 64;
+        const TX_COUNT: usize = 8; // u64 Vec length (genuinely variable)
+        const EXPECTED: usize = VERSION
+            + PARENT_BLOCK
+            + SLOT
+            + BLOCK_ROOT
+            + POL_PROOF
+            + ENTROPY_CONTRIBUTION
+            + LEADER_KEY
+            + VOUCHER_CM
+            + SIGNATURE
+            + TX_COUNT;
+
+        let block = make_empty_block();
+        let bytes = bincode::serialize(&block).expect("bincode serialization should succeed");
+        assert_eq!(
+            bytes.len(),
+            EXPECTED,
+            "empty block encoding must contain no length prefixes for fixed-size fields"
+        );
     }
 }

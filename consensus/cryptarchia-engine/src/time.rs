@@ -1,8 +1,8 @@
-use std::{
-    num::NonZero,
-    ops::{Add, Sub},
-    time::Duration,
+use core::{
+    cmp::Ordering,
+    fmt::{self, Display, Formatter},
 };
+use std::{num::NonZero, time::Duration};
 
 use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use time::OffsetDateTime;
@@ -40,9 +40,60 @@ impl Epoch {
         self.0
     }
 
+    /// Strict epoch addition, panicking if overflow occurred.
+    ///
+    /// # Panics
+    /// This function will always panic on overflow, regardless of whether
+    /// overflow checks are enabled.
     #[must_use]
-    pub const fn saturating_add(self, rhs: Self) -> Self {
-        Self(self.0.saturating_add(rhs.0))
+    pub const fn strict_add(self, rhs: Self) -> Self {
+        Self(self.0.strict_add(rhs.0))
+    }
+
+    /// Strict epoch subtraction, panicking if overflow occurred.
+    ///
+    /// # Panics
+    /// This function will always panic on overflow, regardless of whether
+    /// overflow checks are enabled.
+    #[must_use]
+    pub const fn strict_sub(self, rhs: Self) -> Self {
+        Self(self.0.strict_sub(rhs.0))
+    }
+}
+
+impl Display for Epoch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "Epoch({})", self.0)
+    }
+}
+
+impl PartialEq<u32> for Epoch {
+    fn eq(&self, other: &u32) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<Epoch> for u32 {
+    fn eq(&self, other: &Epoch) -> bool {
+        *self == other.0
+    }
+}
+
+impl PartialOrd<u32> for Epoch {
+    fn partial_cmp(&self, other: &u32) -> Option<Ordering> {
+        self.0.partial_cmp(other)
+    }
+}
+
+impl PartialOrd<Epoch> for u32 {
+    fn partial_cmp(&self, other: &Epoch) -> Option<Ordering> {
+        self.partial_cmp(&other.0)
+    }
+}
+
+impl AsRef<u32> for Epoch {
+    fn as_ref(&self) -> &u32 {
+        &self.0
     }
 }
 
@@ -93,25 +144,19 @@ impl Slot {
         }
     }
 
+    /// Strict slot addition, panicking if overflow occurred.
+    ///
+    /// # Panics
+    /// This function will always panic on overflow, regardless of whether
+    /// overflow checks are enabled.
+    #[must_use]
+    pub const fn strict_add(self, rhs: Self) -> Self {
+        Self(self.0.strict_add(rhs.0))
+    }
+
     #[must_use]
     pub const fn saturating_sub(self, rhs: Self) -> Self {
         Self(self.0.saturating_sub(rhs.0))
-    }
-}
-
-impl Add for Slot {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Self(self.0 + rhs.0)
-    }
-}
-
-impl Sub for Slot {
-    type Output = Self;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        self.saturating_sub(rhs)
     }
 }
 
@@ -144,22 +189,6 @@ impl From<u64> for Slot {
 impl From<Slot> for u64 {
     fn from(slot: Slot) -> Self {
         slot.0
-    }
-}
-
-impl Add<u64> for Slot {
-    type Output = Self;
-
-    fn add(self, rhs: u64) -> Self::Output {
-        Self(self.0 + rhs)
-    }
-}
-
-impl Add<u32> for Epoch {
-    type Output = Self;
-
-    fn add(self, rhs: u32) -> Self::Output {
-        Self(self.0 + rhs)
     }
 }
 
@@ -198,6 +227,11 @@ impl EpochConfig {
     #[must_use]
     pub fn starting_slot(&self, epoch: &Epoch, base_period_length: NonZero<u64>) -> Slot {
         Slot::from(u64::from(u32::from(*epoch)) * self.epoch_length(base_period_length))
+    }
+
+    #[must_use]
+    pub fn last_slot(&self, epoch: Epoch, base_period_length: NonZero<u64>) -> Slot {
+        Slot::from(u64::from(epoch.into_inner() + 1) * self.epoch_length(base_period_length) - 1)
     }
 }
 
@@ -245,8 +279,8 @@ impl SlotTimer {
     #[must_use]
     pub fn slot_interval(&self, now: OffsetDateTime) -> Interval {
         let slot_duration = self.config.slot_duration;
-        let next_slot_start =
-            self.config.genesis_time + slot_duration * u64::from(self.current_slot(now) + 1) as u32;
+        let next_slot_start = self.config.genesis_time
+            + slot_duration * u64::from(self.current_slot(now).strict_add(1.into())) as u32;
         let delay = next_slot_start - now;
         let mut interval = tokio::time::interval_at(
             tokio::time::Instant::now()

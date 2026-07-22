@@ -3,10 +3,10 @@ use std::{
     num::NonZeroU16,
 };
 
+use lb_log_targets::libp2p as lb_log_targets_libp2p;
 use libp2p::Multiaddr;
 use multiaddr::Protocol;
 use tokio::time::timeout;
-use tracing::info;
 
 use crate::{
     behaviour::nat::address_mapper::{
@@ -20,6 +20,8 @@ use crate::{
 };
 
 pub struct PcpProtocol;
+
+const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::nat::address_mapper::protocols::PCP;
 
 impl PcpProtocol {
     pub(crate) async fn map_address(
@@ -70,7 +72,8 @@ impl PcpProtocol {
             protocol,
         );
 
-        info!(
+        tracing::info!(
+            target: LOG_TARGET,
             "PCP mapping created: {address} -> {external_addr} (lifetime: {}s)",
             mapping.lifetime_seconds()
         );

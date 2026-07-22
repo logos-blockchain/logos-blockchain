@@ -1,19 +1,16 @@
-use std::{ffi::c_char, path::PathBuf};
+use std::ffi::c_char;
 
 use lb_node::{
     UserConfig,
-    config::{
-        DeploymentType, OnUnknownKeys, RunConfig,
-        deployment::{DeploymentSettings, WellKnownDeployment},
-        deserialize_config_at_path,
-    },
+    config::{RunConfig, deployment::DeploymentSettings},
     get_services_to_start, run_node_from_config,
 };
+use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use tokio::runtime::Runtime;
 
 use crate::{
-    LogosBlockchainNode,
-    errors::OperationStatus,
+    LogosBlockchainNode, OperationStatus,
+    errors::OperationStatusCode,
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer,
 };
@@ -27,9 +24,10 @@ pub type FfiInitializedLogosBlockchainNodeResult = FfiStatusResult<*mut LogosBlo
 ///
 /// - `config_path`: A pointer to a string representing the path to the
 ///   configuration file.
-/// - `deployment`: A pointer to a string representing either a well-known
-///   deployment name (e.g., "devnet") or a path to a deployment YAML file. If
-///   null, defaults to "devnet".
+/// - `custom_deployment_path`: An optional pointer to a string representing the
+///   path to the custom deployment configuration file. If null, defaults to
+///   binary default deployment (e.g., devnet for release candidates and testnet
+///   for releases).
 ///
 /// # Returns
 ///
@@ -38,9 +36,9 @@ pub type FfiInitializedLogosBlockchainNodeResult = FfiStatusResult<*mut LogosBlo
 #[unsafe(no_mangle)]
 pub extern "C" fn start_lb_node(
     config_path: *const c_char,
-    deployment: *const c_char,
+    custom_deployment_path: *const c_char,
 ) -> FfiInitializedLogosBlockchainNodeResult {
-    initialize_lb_node(config_path, deployment).map_or_else(
+    initialize_lb_node(config_path, custom_deployment_path).map_or_else(
         FfiInitializedLogosBlockchainNodeResult::err,
         FfiInitializedLogosBlockchainNodeResult::from_value,
     )
@@ -53,9 +51,10 @@ pub extern "C" fn start_lb_node(
 ///
 /// - `config_path`: A pointer to a string representing the path to the
 ///   configuration file.
-/// - `deployment`: A pointer to a string representing either a well-known
-///   deployment name (e.g., "devnet") or a path to a deployment YAML file. If
-///   null, defaults to "devnet".
+/// - `custom_deployment_path`: An optional pointer to a string representing the
+///   path to the custom deployment configuration file. If null, defaults to
+///   binary default deployment (e.g., devnet for release candidates and testnet
+///   for releases).
 ///
 /// # Returns
 ///
@@ -63,32 +62,38 @@ pub extern "C" fn start_lb_node(
 /// error code.
 fn initialize_lb_node(
     config_path: *const c_char,
-    deployment: *const c_char,
+    custom_deployment_path: *const c_char,
 ) -> StatusResult<LogosBlockchainNode> {
     let run_config = RunConfig {
-        deployment: get_deployment_config(deployment)?,
+        deployment: get_deployment_config(custom_deployment_path)?,
         user: get_user_config(config_path)?,
     };
 
     let runtime = Runtime::new().expect("Failed to create Tokio runtime");
     let app = run_node_from_config(run_config, Some(runtime.handle().clone())).map_err(|e| {
-        log::error!("Could not initialize Overwatch: {e}");
-        OperationStatus::InitializationError
+        OperationStatus::error(
+            OperationStatusCode::InitializationError,
+            format!("Could not initialize Overwatch: {e}"),
+        )
     })?;
 
     let app_handle = app.handle();
 
     runtime.block_on(async {
         let services_to_start = get_services_to_start(&app).await.map_err(|e| {
-            log::error!("Could not get services to start: {e}");
-            OperationStatus::InitializationError
+            OperationStatus::error(
+                OperationStatusCode::InitializationError,
+                format!("Could not get services to start: {e}"),
+            )
         })?;
         app_handle
             .start_service_sequence(services_to_start)
             .await
             .map_err(|e| {
-                log::error!("Could not start services: {e}");
-                OperationStatus::InitializationError
+                OperationStatus::error(
+                    OperationStatusCode::InitializationError,
+                    format!("Could not start services: {e}"),
+                )
             })?;
         Ok(())
     })?;
@@ -100,50 +105,55 @@ fn get_user_config(config_path: *const c_char) -> StatusResult<UserConfig> {
     let user_config_path = unsafe { std::ffi::CStr::from_ptr(config_path) }
         .to_str()
         .map_err(|e| {
-            log::error!("Could not convert the config path to string: {e}");
-            OperationStatus::InitializationError
+            OperationStatus::error(
+                OperationStatusCode::InitializationError,
+                format!("Could not convert the config path to string: {e}"),
+            )
         })?;
-    deserialize_config_at_path::<UserConfig>(user_config_path.as_ref(), OnUnknownKeys::Warn)
-        .map_err(|e| {
-            log::error!("Could not parse config file: {e}");
-            OperationStatus::InitializationError
-        })
+    deserialize_value_at_path::<UserConfig>(user_config_path.as_ref(), OnUnknownKeys::Fail).map_err(
+        |e| {
+            OperationStatus::error(
+                OperationStatusCode::InitializationError,
+                format!("Could not parse config file: {e}"),
+            )
+        },
+    )
 }
 
-fn get_deployment_config(deployment_arg: *const c_char) -> StatusResult<DeploymentSettings> {
-    let deployment_type: DeploymentType = if deployment_arg.is_null() {
-        WellKnownDeployment::default().into()
+fn get_deployment_config(
+    custom_deployment_path: *const c_char,
+) -> StatusResult<DeploymentSettings> {
+    if custom_deployment_path.is_null() {
+        Ok(DeploymentSettings::default())
     } else {
-        let deployment_str = unsafe { std::ffi::CStr::from_ptr(deployment_arg) }
+        let custom_deployment_path = unsafe { std::ffi::CStr::from_ptr(custom_deployment_path) }
             .to_str()
-            .map_err(|e| {
-                log::error!("Could not convert deployment to string: {e}");
-                OperationStatus::InitializationError
+            .map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::InitializationError,
+                    format!("Could not convert the custom deployment path to string: {error}"),
+                )
             })?;
-        deployment_str.parse::<WellKnownDeployment>().map_or_else(
-            |()| PathBuf::from(deployment_str).into(),
-            DeploymentType::from,
-        )
-    };
 
-    match deployment_type {
-        DeploymentType::WellKnown(well_known_deployment) => Ok(well_known_deployment.into()),
-        DeploymentType::Custom(path) => {
-            deserialize_config_at_path::<DeploymentSettings>(path.as_ref(), OnUnknownKeys::Warn)
-                .map_err(|e| {
-                    log::error!("Could not parse deployment file: {e}");
-                    OperationStatus::InitializationError
-                })
-        }
+        deserialize_value_at_path::<DeploymentSettings>(
+            custom_deployment_path.as_ref(),
+            OnUnknownKeys::Fail,
+        )
+        .map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::InitializationError,
+                format!("Could not parse deployment file: {error}"),
+            )
+        })
     }
 }
 
-/// Stops and frees the resources associated with the given Logos blockchain
-/// node.
+/// Shuts down and frees the resources associated with the given Logos
+/// blockchain node.
 ///
 /// # Arguments
 ///
-/// - `node`: A pointer to the [`LogosBlockchainNode`] instance to be stopped.
+/// - `node`: A pointer to the [`LogosBlockchainNode`] instance to be shut down.
 ///
 /// # Returns
 ///
@@ -156,17 +166,21 @@ fn get_deployment_config(deployment_arg: *const c_char) -> StatusResult<Deployme
 /// - The [`LogosBlockchainNode`] instance was created by this library
 /// - The pointer will not be used after this function returns
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn stop_node(node: *mut LogosBlockchainNode) -> OperationStatus {
-    return_error_if_null_pointer!("stop_node", node);
+pub unsafe extern "C" fn shutdown_node(node: *mut LogosBlockchainNode) -> OperationStatus {
+    return_error_if_null_pointer!(node);
     let node = unsafe { Box::from_raw(node) };
-    node.stop()
+    node.shutdown()
 }
 
 #[cfg(test)]
 mod test {
-    use std::{path::PathBuf, sync::LazyLock};
+    use std::{ffi::CString, path::PathBuf, sync::LazyLock};
 
-    use crate::api::lifecycle::{start_lb_node, stop_node};
+    use lb_node::UserConfig;
+    use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
+    use tempfile::TempDir;
+
+    use crate::api::lifecycle::{shutdown_node, start_lb_node};
 
     static REPOSITORY_ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
         let crate_dir = env!("CARGO_MANIFEST_DIR");
@@ -175,11 +189,6 @@ mod test {
             .parent()
             .expect("Failed to get the parent directory of crate.")
             .to_path_buf()
-    });
-    static CRATE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-        let dir = REPOSITORY_ROOT.join("c-bindings");
-        assert!(dir.exists());
-        dir
     });
     static NODE_DIR: LazyLock<PathBuf> = LazyLock::new(|| REPOSITORY_ROOT.join("nodes/node"));
     static STANDALONE_NODE_CONFIG_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
@@ -193,56 +202,64 @@ mod test {
         file
     });
 
-    struct NodeStateGuard {
-        location: PathBuf,
-        existed_before: bool,
+    struct TestConfigPaths {
+        _temp_dir: TempDir,
+        node_config: CString,
+        deployment_config: CString,
     }
 
-    impl NodeStateGuard {
+    impl TestConfigPaths {
         #[must_use]
-        pub fn new(location: PathBuf) -> Self {
-            let exists = location.exists();
+        fn new() -> Self {
+            let temp_dir = TempDir::new().expect("Failed to create temp dir for lifecycle test");
+            let log_dir = temp_dir.path().join("state/logs");
+            std::fs::create_dir_all(&log_dir).expect("Failed to create isolated log dir");
+
+            let node_config_path = temp_dir.path().join("standalone-node-config.yaml");
+            let deployment_config_path = temp_dir.path().join("standalone-deployment-config.yaml");
+
+            let state_dir_path = temp_dir.path().join("state");
+            let mut node_config = deserialize_value_at_path::<UserConfig>(
+                STANDALONE_NODE_CONFIG_PATH.as_path(),
+                OnUnknownKeys::Fail,
+            )
+            .expect("Standalone user config should deserialize");
+            node_config.state.base_folder = state_dir_path;
+            node_config.api.backend.listen_address = "127.0.0.1:0"
+                .parse()
+                .expect("Local address should be correct");
+
+            let node_config_yaml = serde_yaml::to_string(&node_config)
+                .expect("Standalone node config should be written to file");
+            std::fs::write(&node_config_path, node_config_yaml)
+                .expect("Failed to write isolated node config");
+            std::fs::copy(
+                STANDALONE_DEPLOYMENT_CONFIG_PATH.as_path(),
+                &deployment_config_path,
+            )
+            .expect("Failed to copy standalone deployment config");
+
+            let node_config = CString::new(node_config_path.to_string_lossy().as_bytes())
+                .expect("Node config path should not contain NUL");
+            let deployment_config =
+                CString::new(deployment_config_path.to_string_lossy().as_bytes())
+                    .expect("Deployment config path should not contain NUL");
+
             Self {
-                location,
-                existed_before: exists,
+                _temp_dir: temp_dir,
+                node_config,
+                deployment_config,
             }
-        }
-
-        #[must_use]
-        pub fn from_current_crate() -> Self {
-            let current_dir = CRATE_DIR.clone();
-            let state_dir = current_dir.join("state");
-            Self::new(state_dir)
-        }
-
-        fn cleanup(&self) {
-            if !self.existed_before {
-                drop(std::fs::remove_dir_all(&self.location));
-            }
-        }
-    }
-
-    impl Drop for NodeStateGuard {
-        fn drop(&mut self) {
-            self.cleanup();
         }
     }
 
     #[test]
     fn test_basic_lifecycle() {
-        let _guard = NodeStateGuard::from_current_crate();
+        let test_paths = TestConfigPaths::new();
 
         let start_status = start_lb_node(
-            STANDALONE_NODE_CONFIG_PATH
-                .to_str()
-                .unwrap()
-                .as_ptr()
-                .cast::<i8>(),
-            STANDALONE_DEPLOYMENT_CONFIG_PATH
-                .to_str()
-                .unwrap()
-                .as_ptr()
-                .cast::<i8>(),
+            test_paths.node_config.as_ptr(),
+            test_paths.deployment_config.as_ptr(),
         );
 
         assert!(
@@ -252,8 +269,11 @@ mod test {
         );
         let node = start_status.value;
 
-        let stop_status = unsafe { stop_node(node) };
+        let shutdown_status = unsafe { shutdown_node(node) };
 
-        assert!(stop_status.is_ok(), "Failed to stop node: {stop_status:?}");
+        assert!(
+            shutdown_status.is_ok(),
+            "Failed to shut down node: {shutdown_status:?}"
+        );
     }
 }

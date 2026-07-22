@@ -16,16 +16,16 @@ use tokio_stream::wrappers::IntervalStream;
 use tracing::trace;
 
 use crate::{
-    cover_traffic::SessionCoverTraffic,
+    cover_traffic::EpochCoverTraffic,
     message_scheduler::{
+        epoch_info::EpochInfo,
         round_info::{RoundClock, RoundInfo, RoundReleaseType},
-        session_info::SessionInfo,
     },
-    release_delayer::SessionProcessedMessageDelayer,
+    release_delayer::EpochProcessedMessageDelayer,
 };
 
+pub mod epoch_info;
 pub mod round_info;
-pub mod session_info;
 
 #[cfg(test)]
 mod tests;
@@ -39,28 +39,28 @@ pub trait ProcessedMessageScheduler<ProcessedMessage> {
     fn schedule_processed_message(&mut self, message: ProcessedMessage);
 }
 
-/// Message scheduler that is valid only for a specific session.
-pub struct SessionMessageScheduler<Rng, ProcessedMessage, DataMessage> {
+/// Message scheduler that is valid only for a specific epoch.
+pub struct EpochMessageScheduler<Rng, ProcessedMessage, DataMessage> {
     /// The module responsible for randomly generated cover messages, given the
-    /// allowed session quota and accounting for data messages generated within
-    /// the session.
-    cover_traffic: SessionCoverTraffic<Rng, RoundClock>,
+    /// allowed epoch quota and accounting for data messages generated within
+    /// the epoch.
+    cover_traffic: EpochCoverTraffic<Rng, RoundClock>,
     /// The module responsible for delaying the release of processed messages
     /// that have not been fully decapsulated.
-    release_delayer: SessionProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>,
+    release_delayer: EpochProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>,
     /// The queue of data messages that are stored in between rounds.
     data_messages: Vec<DataMessage>,
     /// The multi-consumer stream forked on each sub-stream.
     round_clock: RoundClock,
 }
 
-impl<Rng, ProcessedMessage, DataMessage> SessionMessageScheduler<Rng, ProcessedMessage, DataMessage>
+impl<Rng, ProcessedMessage, DataMessage> EpochMessageScheduler<Rng, ProcessedMessage, DataMessage>
 where
     Rng: RngCore + Clone + Unpin,
     ProcessedMessage: Debug + Unpin,
     DataMessage: Debug + Unpin,
 {
-    pub fn new(session_info: SessionInfo, rng: Rng, settings: Settings) -> Self {
+    pub fn new(epoch_info: EpochInfo, rng: Rng, settings: Settings) -> Self {
         let interval = {
             let mut interval = interval(settings.round_duration);
             interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -74,19 +74,21 @@ where
         )
         .fork();
 
-        let cover_traffic = SessionCoverTraffic::new(
+        let cover_traffic = EpochCoverTraffic::new(
             crate::cover_traffic::Settings {
-                additional_safety_intervals: settings.additional_safety_intervals,
-                expected_intervals_per_session: settings.expected_intervals_per_session,
-                rounds_per_interval: settings.rounds_per_interval,
-                message_count: session_info
-                    .core_quota
-                    .div_ceil(settings.num_blend_layers.into()),
+                rounds_per_epoch: settings.rounds_per_epoch,
+                // Floor division: each cover message consumes `num_blend_layers`
+                // proofs from a hard cap of `core_quota`. Using `div_ceil` would
+                // schedule one extra emission whenever the quota is not an exact
+                // multiple of the layer count, and that last emission would fail
+                // with `NoMoreProofOfQuotas`. Flooring keeps the scheduled count
+                // within what the quota can actually satisfy.
+                message_count: epoch_info.core_quota / u64::from(settings.num_blend_layers),
             },
             rng.clone(),
             Box::new(round_clock.clone()) as RoundClock,
         );
-        let release_delayer = SessionProcessedMessageDelayer::new(
+        let release_delayer = EpochProcessedMessageDelayer::new(
             crate::release_delayer::Settings {
                 maximum_release_delay_in_rounds: settings.maximum_release_delay_in_rounds,
             },
@@ -102,27 +104,35 @@ where
         }
     }
 
-    pub fn consume(self) -> OldSessionMessageScheduler<Rng, ProcessedMessage> {
-        OldSessionMessageScheduler(self.release_delayer)
+    pub fn consume(self) -> OldEpochMessageScheduler<Rng, ProcessedMessage> {
+        OldEpochMessageScheduler(self.release_delayer)
     }
 
-    pub fn rotate_session(
+    pub fn rotate_epoch(
         self,
-        new_session_info: SessionInfo,
+        new_epoch_info: EpochInfo,
         settings: Settings,
-    ) -> (Self, OldSessionMessageScheduler<Rng, ProcessedMessage>) {
-        (
-            Self::new(
-                new_session_info,
-                self.release_delayer.rng().clone(),
-                settings,
-            ),
-            OldSessionMessageScheduler(self.release_delayer),
-        )
+    ) -> (Self, OldEpochMessageScheduler<Rng, ProcessedMessage>) {
+        let Self {
+            release_delayer,
+            data_messages,
+            ..
+        } = self;
+        // Data messages queued in the current epoch but not yet released must be
+        // carried over to the new epoch's scheduler. Otherwise they would be
+        // silently dropped here (the `OldEpochMessageScheduler` only releases
+        // processed messages), and only re-sent on a full service restart from
+        // the recovery checkpoint. Re-queueing through `queue_data_message` also
+        // keeps the new epoch's cover-traffic accounting consistent.
+        let mut new_scheduler = Self::new(new_epoch_info, release_delayer.rng().clone(), settings);
+        for message in data_messages {
+            new_scheduler.queue_data_message(message);
+        }
+        (new_scheduler, OldEpochMessageScheduler(release_delayer))
     }
 
     /// Notify the cover message submodule that a new data message has been
-    /// generated in this session, which will reduce the number of cover
+    /// generated in this epoch, which will reduce the number of cover
     /// messages generated going forward.
     pub fn queue_data_message(&mut self, message: DataMessage) {
         self.data_messages.push(message);
@@ -130,13 +140,11 @@ where
     }
 }
 
-impl<Rng, ProcessedMessage, DataMessage>
-    SessionMessageScheduler<Rng, ProcessedMessage, DataMessage>
-{
+impl<Rng, ProcessedMessage, DataMessage> EpochMessageScheduler<Rng, ProcessedMessage, DataMessage> {
     #[cfg(test)]
     pub fn with_test_values(
-        cover_traffic: SessionCoverTraffic<Rng, RoundClock>,
-        release_delayer: SessionProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>,
+        cover_traffic: EpochCoverTraffic<Rng, RoundClock>,
+        release_delayer: EpochProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>,
         round_clock: RoundClock,
         data_messages: Vec<DataMessage>,
     ) -> Self {
@@ -151,13 +159,13 @@ impl<Rng, ProcessedMessage, DataMessage>
     #[cfg(any(test, feature = "unsafe-test-functions"))]
     pub fn release_delayer(
         &self,
-    ) -> &SessionProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage> {
+    ) -> &EpochProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage> {
         &self.release_delayer
     }
 }
 
 impl<Rng, ProcessedMessage, DataMessage> ProcessedMessageScheduler<ProcessedMessage>
-    for SessionMessageScheduler<Rng, ProcessedMessage, DataMessage>
+    for EpochMessageScheduler<Rng, ProcessedMessage, DataMessage>
 {
     fn schedule_processed_message(&mut self, message: ProcessedMessage) {
         self.release_delayer.schedule_message(message);
@@ -165,7 +173,7 @@ impl<Rng, ProcessedMessage, DataMessage> ProcessedMessageScheduler<ProcessedMess
 }
 
 impl<Rng, ProcessedMessage, DataMessage> Stream
-    for SessionMessageScheduler<Rng, ProcessedMessage, DataMessage>
+    for EpochMessageScheduler<Rng, ProcessedMessage, DataMessage>
 where
     Rng: rand::Rng + Clone + Unpin,
     ProcessedMessage: Debug + Unpin,
@@ -188,51 +196,42 @@ where
             Poll::Ready(Some(new_round)) => new_round,
         };
         trace!(target: LOG_TARGET, "New round {new_round} started.");
-        let data_messages_to_release = take(data_messages);
 
         // We poll the sub-stream and return the right result accordingly.
         let cover_traffic_output = cover_traffic.poll_next_unpin(cx);
         let release_delayer_output = release_delayer.poll_next_unpin(cx);
 
-        let round_info = match (
-            cover_traffic_output,
-            release_delayer_output,
-            data_messages_to_release,
-        ) {
+        // Determine the release type without consuming `data_messages` yet, so the
+        // early-return arms below cannot drop already-taken data messages.
+        let release_type = match (cover_traffic_output, release_delayer_output) {
+            // Bubble up `Poll::Ready(None)` if any sub-stream returns it.
+            (Poll::Ready(None), _) | (_, Poll::Ready(None)) => return Poll::Ready(None),
             // If none of the sub-streams is ready, we return `Ready` if we have data messages to
             // release at this round. Else, we return `Pending`.
-            (Poll::Pending, Poll::Pending, data_messages) => {
+            (Poll::Pending, Poll::Pending) => {
                 if data_messages.is_empty() {
                     // Awake to trigger a new round clock tick.
                     cx.waker().wake_by_ref();
                     return Poll::Pending;
                 }
-                RoundInfo {
-                    data_messages,
-                    release_type: None,
-                }
+                None
             }
-            // Bubble up `Poll::Ready(None)` if any sub-stream returns it.
-            (Poll::Ready(None), _, _) | (_, Poll::Ready(None), _) => return Poll::Ready(None),
-            // Data and cover messages, no processed messages.
-            (Poll::Ready(Some(())), Poll::Pending, data_messages) => RoundInfo {
-                data_messages,
-                release_type: Some(RoundReleaseType::OnlyCoverMessage),
-            },
-            // Data and processed messages, no cover message.
-            (Poll::Pending, Poll::Ready(Some(processed_messages)), data_messages) => RoundInfo {
-                data_messages,
-                release_type: Some(RoundReleaseType::OnlyProcessedMessages(processed_messages)),
-            },
-            // Data, cover, and processed messages.
-            (Poll::Ready(Some(())), Poll::Ready(Some(processed_messages)), data_messages) => {
-                RoundInfo {
-                    data_messages,
-                    release_type: Some(RoundReleaseType::ProcessedAndCoverMessages(
-                        processed_messages,
-                    )),
-                }
+            // Cover message, no processed messages.
+            (Poll::Ready(Some(())), Poll::Pending) => Some(RoundReleaseType::OnlyCoverMessage),
+            // Processed messages, no cover message.
+            (Poll::Pending, Poll::Ready(Some(processed_messages))) => {
+                Some(RoundReleaseType::OnlyProcessedMessages(processed_messages))
             }
+            // Cover and processed messages.
+            (Poll::Ready(Some(())), Poll::Ready(Some(processed_messages))) => Some(
+                RoundReleaseType::ProcessedAndCoverMessages(processed_messages),
+            ),
+        };
+
+        // Safe to take now: every path from here on emits the data messages.
+        let round_info = RoundInfo {
+            data_messages: take(data_messages),
+            release_type,
         };
         trace!(
             target: LOG_TARGET,
@@ -246,11 +245,9 @@ where
 
 #[derive(Debug, Clone, Copy)]
 pub struct Settings {
-    pub additional_safety_intervals: u64,
-    pub expected_intervals_per_session: NonZeroU64,
     pub maximum_release_delay_in_rounds: NonZeroU64,
     pub round_duration: Duration,
-    pub rounds_per_interval: NonZeroU64,
+    pub rounds_per_epoch: NonZeroU64,
     pub num_blend_layers: NonZeroU64,
 }
 
@@ -258,34 +255,32 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            additional_safety_intervals: 0,
-            expected_intervals_per_session: NonZeroU64::try_from(1).unwrap(),
             maximum_release_delay_in_rounds: NonZeroU64::try_from(1).unwrap(),
             round_duration: Duration::from_secs(1),
-            rounds_per_interval: NonZeroU64::try_from(1).unwrap(),
+            rounds_per_epoch: NonZeroU64::try_from(1).unwrap(),
             num_blend_layers: NonZeroU64::try_from(1).unwrap(),
         }
     }
 }
 
-/// Message scheduler that is only for an old session during session transition.
+/// Message scheduler that is only for an old epoch during epoch transition.
 ///
-/// Unlike [`SessionMessageScheduler`], this supports only scheduling processed
+/// Unlike [`EpochMessageScheduler`], this supports only scheduling processed
 /// messages. Data messages cannot be scheduled, and it does not generate cover
 /// messages.
-pub struct OldSessionMessageScheduler<Rng, ProcessedMessage>(
-    SessionProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>,
+pub struct OldEpochMessageScheduler<Rng, ProcessedMessage>(
+    EpochProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>,
 );
 
 impl<Rng, ProcessedMessage> ProcessedMessageScheduler<ProcessedMessage>
-    for OldSessionMessageScheduler<Rng, ProcessedMessage>
+    for OldEpochMessageScheduler<Rng, ProcessedMessage>
 {
     fn schedule_processed_message(&mut self, message: ProcessedMessage) {
         self.0.schedule_message(message);
     }
 }
 
-impl<Rng, ProcessedMessage> Stream for OldSessionMessageScheduler<Rng, ProcessedMessage>
+impl<Rng, ProcessedMessage> Stream for OldEpochMessageScheduler<Rng, ProcessedMessage>
 where
     Rng: rand::Rng + Unpin,
     ProcessedMessage: Unpin,
@@ -297,11 +292,11 @@ where
     }
 }
 
-impl<Rng, ProcessedMessage> OldSessionMessageScheduler<Rng, ProcessedMessage> {
+impl<Rng, ProcessedMessage> OldEpochMessageScheduler<Rng, ProcessedMessage> {
     #[cfg(any(test, feature = "unsafe-test-functions"))]
     pub fn release_delayer(
         &self,
-    ) -> &SessionProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage> {
+    ) -> &EpochProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage> {
         &self.0
     }
 }

@@ -17,6 +17,7 @@ use lb_api_service::http::{
     libp2p, mantle, mempool,
     storage::StorageAdapter,
 };
+use lb_blend_service::message::ProxyServiceMessage;
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_chain_leader_service::api::ChainLeaderServiceData;
 use lb_chain_service::{ConsensusMsg, Slot, api::CryptarchiaServiceApi};
@@ -25,30 +26,39 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx, Transaction, TxHash, gas::MainnetGasConstants, ops::channel::ChannelId,
-        tx_builder::MantleTxBuilder,
+        Op, OpProof, SignedMantleTx, Transaction, TxHash, ops::channel::ChannelId,
+        transactions::MantleTxBuilder,
     },
 };
 use lb_http_api_common::{
+    TimeInfo,
     bodies::{
+        blend::JoinBlendRequestBody,
         channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
+        mantle::GasPricesResponseBody,
         wallet::{
             balance::WalletBalanceResponseBody,
+            claimable_vouchers::{
+                ClaimableVoucherInfoResponseBody, WalletClaimableVouchersResponseBody,
+            },
             transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
         },
     },
     paths,
+    queries::BlocksStreamQuery,
 };
-use lb_libp2p::libp2p::bytes::Bytes;
-use lb_network_service::backends::libp2p::Libp2p as Libp2pNetworkBackend;
+use lb_libp2p::{Multiaddr, libp2p::bytes::Bytes};
+use lb_log_targets::node;
+use lb_network_service::{NetworkService, backends::libp2p::Libp2p as Libp2pNetworkBackend};
 use lb_sdp_service::{
     mempool::SdpMempoolAdapter, state::SdpStateStorage, wallet::SdpWalletAdapter,
 };
 use lb_storage_service::{
     StorageService, api::chain::StorageChainApi, backends::rocksdb::RocksBackend,
 };
+use lb_time_service::TimeServiceMessage;
 use lb_tx_service::{
-    TxMempoolService, backend::Mempool,
+    MempoolMsg, TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
 };
 use lb_wallet_service::api::{WalletApi, WalletServiceData};
@@ -57,18 +67,30 @@ use overwatch::{
     services::{AsServiceId, ServiceData},
 };
 use serde::{Deserialize, Serialize};
+use tokio::sync::oneshot;
 use tokio_stream::StreamExt as _;
+use tracing::debug;
 
-use crate::api::{
-    errors::{BlocksStreamHandlerError, BlocksStreamWindowError},
-    openapi::schema,
-    queries::{BlockRangeQuery, BlocksStreamQuery, BlocksStreamRequest},
-    responses::{self, overwatch::get_relay_or_500},
-    serializers::{
-        blocks::{ApiBlock, ApiProcessedBlockEvent},
-        transactions::ApiSignedTransactionRef,
+use crate::{
+    TimeService,
+    api::{
+        errors::{BlocksStreamHandlerError, BlocksStreamWindowError},
+        openapi::schema,
+        queries::{BlockRangeQuery, BlocksStreamRequest},
+        responses::{self, overwatch::get_relay_or_500},
+        serializers::{
+            blocks::{ApiBlock, ApiProcessedBlockEvent},
+            transactions::ApiSignedTransactionRef,
+        },
     },
 };
+
+const TARGET: &str = node::api::ROOT;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DialPeerRequestBody {
+    pub addr: Multiaddr,
+}
 
 #[derive(Debug)]
 struct ResolvedBlocksStreamWindow {
@@ -91,7 +113,7 @@ fn next_blocks_stream_cursor(
     } else if boundary_slot >= slot_to {
         None
     } else {
-        Some(boundary_slot + 1)
+        Some(boundary_slot.strict_add(1.into()))
     }
 }
 
@@ -104,18 +126,24 @@ fn resolve_blocks_stream_window(
     } else {
         chain_info.slot
     };
-    let slot_to = request.slot_to.map_or(max_slot_to, Slot::new);
+    let mut slot_to = request.slot_to.map_or(max_slot_to, Slot::new);
     if slot_to > max_slot_to {
+        slot_to = max_slot_to;
         let anchor = if request.immutable_only {
             "lib_slot"
         } else {
             "tip_slot"
         };
-        return Err(BlocksStreamWindowError::SlotToAboveAnchor {
-            anchor,
-            slot_to: slot_to.into_inner(),
-            max_slot_to: max_slot_to.into_inner(),
-        });
+        debug!(
+            target: TARGET,
+            "{}: clamping to {}",
+            BlocksStreamWindowError::SlotToAboveAnchor {
+                anchor,
+                slot_to: slot_to.into_inner(),
+                max_slot_to: max_slot_to.into_inner(),
+            }.to_string(),
+            max_slot_to.into_inner()
+        );
     }
 
     let slot_from = request.slot_from.map_or_else(
@@ -461,6 +489,45 @@ where
 
 #[utoipa::path(
     get,
+    path = paths::TIME_INFO,
+    responses(
+        (status = 200, description = "Query time service information", body = TimeInfo),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn time_info<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<TimeService>,
+{
+    let relay = match handle.relay::<TimeService>().await {
+        Ok(relay) => relay,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    let (sender, receiver) = oneshot::channel();
+    if let Err((error, _)) = relay.send(TimeServiceMessage::Info { sender }).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+    }
+    match receiver.await {
+        Ok(Ok(service_info)) => {
+            let api_info = TimeInfo {
+                slot_duration_ms: service_info.slot_duration_ms,
+                genesis_time_unix_ms: service_info.genesis_time_unix_ms,
+                current_slot: u64::from(service_info.current_slot),
+                current_epoch: u32::from(service_info.current_epoch),
+            };
+            (StatusCode::OK, Json(api_info)).into_response()
+        }
+        Ok(Err(error)) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+#[utoipa::path(
+    get,
     path = paths::CRYPTARCHIA_HEADERS,
     responses(
         (status = 200, description = "Query header ids", body = Vec<HeaderId>),
@@ -519,14 +586,36 @@ where
         + Sync
         + Display
         + 'static
-        + AsServiceId<
-            lb_network_service::NetworkService<
-                lb_network_service::backends::libp2p::Libp2p,
-                RuntimeServiceId,
-            >,
-        >,
+        + AsServiceId<NetworkService<Libp2pNetworkBackend, RuntimeServiceId>>,
 {
     make_request_and_return_response!(libp2p::libp2p_info::<RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    post,
+    path = paths::DIAL_PEER,
+    request_body = DialPeerRequestBody,
+    responses(
+        (status = 200, description = "Dial a network peer", body = PeerId),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn dial_peer<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(req): Json<DialPeerRequestBody>,
+) -> Response
+where
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<NetworkService<Libp2pNetworkBackend, RuntimeServiceId>>,
+{
+    make_request_and_return_response!(async move {
+        let peer_id = libp2p::connect_peer::<RuntimeServiceId>(&handle, req.addr).await?;
+        Ok::<PeerId, overwatch::DynError>(peer_id)
+    })
 }
 
 #[utoipa::path(
@@ -541,8 +630,11 @@ pub async fn blend_info<BlendService, BroadcastSettings, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
 ) -> Response
 where
-    BlendService: ServiceData<Message = lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>>
-        + 'static,
+    BlendService: ServiceData<
+            Message = ProxyServiceMessage<
+                lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>,
+            >,
+        > + 'static,
     BroadcastSettings: Send + 'static,
     RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
 {
@@ -551,6 +643,35 @@ where
         BroadcastSettings,
         RuntimeServiceId,
     >(&handle))
+}
+
+#[utoipa::path(
+    post,
+    path = paths::BLEND_JOIN_NETWORK,
+    request_body = BlendJoinNetworkRequestBody,
+    responses(
+        (status = 200, description = "Join the blend network", body = Option<lb_core::sdp::DeclarationId>),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn blend_join_network<BlendService, BroadcastSettings, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(req): Json<JoinBlendRequestBody>,
+) -> Response
+where
+    BlendService: ServiceData<
+            Message = ProxyServiceMessage<
+                lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>,
+            >,
+        > + 'static,
+    BroadcastSettings: Send + 'static,
+    RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
+{
+    make_request_and_return_response!(blend::blend_join_network::<
+        BlendService,
+        BroadcastSettings,
+        RuntimeServiceId,
+    >(&handle, req.locator, req.locked_note_id))
 }
 
 #[utoipa::path(
@@ -611,6 +732,176 @@ where
         <SignedMantleTx as Transaction>::Hash,
         RuntimeServiceId,
     >(&handle, tx, Transaction::hash))
+}
+
+#[utoipa::path(
+    get,
+    path = paths::MEMPOOL_VIEW,
+    responses(
+        (status = 200, description = "Get current tip mempool transaction hashes", body = Vec<TxHash>),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn mempool_view<StorageAdapter, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+            RuntimeServiceId,
+            Item = SignedMantleTx,
+            Key = <SignedMantleTx as Transaction>::Hash,
+        > + Send
+        + Sync
+        + Clone
+        + 'static,
+    StorageAdapter::Error: Debug,
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + AsServiceId<
+            TxMempoolService<
+                MempoolNetworkAdapter<
+                    SignedMantleTx,
+                    <SignedMantleTx as Transaction>::Hash,
+                    RuntimeServiceId,
+                >,
+                Mempool<
+                    HeaderId,
+                    SignedMantleTx,
+                    <SignedMantleTx as Transaction>::Hash,
+                    StorageAdapter,
+                    RuntimeServiceId,
+                >,
+                StorageAdapter,
+                RuntimeServiceId,
+            >,
+        >,
+{
+    make_request_and_return_response!(
+        current_tip_mempool_view::<StorageAdapter, RuntimeServiceId>(&handle)
+    )
+}
+
+async fn current_tip_mempool_view<StorageAdapter, RuntimeServiceId>(
+    handle: &OverwatchHandle<RuntimeServiceId>,
+) -> Result<Vec<TxHash>, DynError>
+where
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+            RuntimeServiceId,
+            Item = SignedMantleTx,
+            Key = <SignedMantleTx as Transaction>::Hash,
+        > + Send
+        + Sync
+        + Clone
+        + 'static,
+    StorageAdapter::Error: Debug,
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + AsServiceId<
+            TxMempoolService<
+                MempoolNetworkAdapter<
+                    SignedMantleTx,
+                    <SignedMantleTx as Transaction>::Hash,
+                    RuntimeServiceId,
+                >,
+                Mempool<
+                    HeaderId,
+                    SignedMantleTx,
+                    <SignedMantleTx as Transaction>::Hash,
+                    StorageAdapter,
+                    RuntimeServiceId,
+                >,
+                StorageAdapter,
+                RuntimeServiceId,
+            >,
+        >,
+{
+    let consensus = consensus::cryptarchia_info::<RuntimeServiceId>(handle).await?;
+
+    mempool_view_at::<StorageAdapter, RuntimeServiceId>(handle, consensus.cryptarchia_info.tip)
+        .await
+}
+
+async fn mempool_view_at<StorageAdapter, RuntimeServiceId>(
+    handle: &OverwatchHandle<RuntimeServiceId>,
+    ancestor_hint: HeaderId,
+) -> Result<Vec<TxHash>, DynError>
+where
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+            RuntimeServiceId,
+            Item = SignedMantleTx,
+            Key = <SignedMantleTx as Transaction>::Hash,
+        > + Send
+        + Sync
+        + Clone
+        + 'static,
+    StorageAdapter::Error: Debug,
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<
+            TxMempoolService<
+                MempoolNetworkAdapter<
+                    SignedMantleTx,
+                    <SignedMantleTx as Transaction>::Hash,
+                    RuntimeServiceId,
+                >,
+                Mempool<
+                    HeaderId,
+                    SignedMantleTx,
+                    <SignedMantleTx as Transaction>::Hash,
+                    StorageAdapter,
+                    RuntimeServiceId,
+                >,
+                StorageAdapter,
+                RuntimeServiceId,
+            >,
+        >,
+{
+    let relay = handle
+        .relay::<TxMempoolService<
+            MempoolNetworkAdapter<
+                SignedMantleTx,
+                <SignedMantleTx as Transaction>::Hash,
+                RuntimeServiceId,
+            >,
+            Mempool<
+                HeaderId,
+                SignedMantleTx,
+                <SignedMantleTx as Transaction>::Hash,
+                StorageAdapter,
+                RuntimeServiceId,
+            >,
+            StorageAdapter,
+            RuntimeServiceId,
+        >>()
+        .await?;
+    let (sender, receiver) = oneshot::channel();
+
+    relay
+        .send(MempoolMsg::View {
+            ancestor_hint,
+            reply_channel: sender,
+        })
+        .await
+        .map_err(|(error, _)| error)?;
+
+    let txs = receiver.await?;
+
+    Ok(
+        tokio_stream::StreamExt::map(txs, |tx: SignedMantleTx| tx.hash())
+            .collect()
+            .await,
+    )
 }
 
 #[utoipa::path(
@@ -685,8 +976,9 @@ where
             handle.relay::<WalletService>().await?,
         );
 
-        let tx_context = wallet.get_tx_context(None).await?;
-        let tx_builder = MantleTxBuilder::new(tx_context).push_op(Op::ChannelDeposit(req.deposit));
+        let tx_builder = MantleTxBuilder::new()
+            .push_op(Op::ChannelDeposit(req.deposit))
+            .map_err(|e| overwatch::DynError::from(e.to_string()))?;
         let lb_wallet_service::TipResponse {
             tip,
             response: funded_tx_builder,
@@ -696,10 +988,11 @@ where
                 tx_builder,
                 req.change_public_key,
                 req.funding_public_keys,
+                0,
             )
             .await?;
 
-        let tx_fee = funded_tx_builder.gas_cost::<MainnetGasConstants>()?;
+        let tx_fee = funded_tx_builder.tx_fee()?;
         if tx_fee > req.max_tx_fee {
             return Err(overwatch::DynError::from(format!(
                 "tx_fee({tx_fee}) exceeds max_tx_fee({})",
@@ -923,6 +1216,42 @@ where
 }
 
 #[utoipa::path(
+    get,
+    path = paths::MANTLE_SDP_DECLARATIONS,
+    responses(
+        (status = 200, description = "Get current SDP declarations keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, lb_core::sdp::Declaration>),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn get_sdp_declarations<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    make_request_and_return_response!(mantle::get_sdp_declarations::<RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    get,
+    path = paths::MANTLE_SDP_SNAPSHOT,
+    responses(
+        (status = 200, description = "Get the SDP snapshot for the current epoch keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, lb_core::sdp::Declaration>),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn get_sdp_snapshot<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    make_request_and_return_response!(mantle::get_sdp_snapshot::<RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
     post,
     path = paths::LEADER_CLAIM,
     responses(
@@ -975,7 +1304,7 @@ where
 }
 
 #[utoipa::path(
-    post,
+    get,
     path = paths::BLOCKS_DETAIL,
     responses(
         (status = 200, description = "Block found"),
@@ -1038,6 +1367,59 @@ where
     }
 }
 
+#[derive(Deserialize)]
+pub struct GasPricesQuery {
+    tip: Option<HeaderId>,
+}
+
+#[utoipa::path(
+    get,
+    path = paths::MANTLE_GAS_PRICES,
+    responses(
+        (status = 200, description = "Get the gas prices from the ledger state at the tip"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn get_gas_prices<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Query(query): Query<GasPricesQuery>,
+) -> Response
+where
+    RuntimeServiceId:
+        AsServiceId<Cryptarchia<RuntimeServiceId>> + Debug + Sync + Display + Send + 'static,
+{
+    let relay = match get_relay_or_500(&handle).await {
+        Ok(relay) => relay,
+        Err(error_response) => return error_response,
+    };
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>, RuntimeServiceId>::new(relay);
+
+    let block_id = match query.tip {
+        Some(tip) => tip,
+        None => match consensus::cryptarchia_info::<RuntimeServiceId>(&handle).await {
+            Ok(info) => info.cryptarchia_info.tip,
+            Err(error) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+            }
+        },
+    };
+
+    match chain_api.get_ledger_state(block_id).await {
+        Ok(Some(ledger_state)) => {
+            let gas_prices = ledger_state.get_gas_prices();
+            Json(GasPricesResponseBody {
+                tip: block_id,
+                execution_base_gas_price: gas_prices.execution_base_gas_price,
+                storage_gas_price: gas_prices.storage_gas_price,
+            })
+            .into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "Ledger state not found for block").into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
 #[utoipa::path(
     get,
     path = paths::BLOCKS_STREAM,
@@ -1075,7 +1457,7 @@ where
 
 #[utoipa::path(
     get,
-    path = paths::BLOCKS_STREAM,
+    path = paths::BLOCKS_RANGE_STREAM,
     params(BlocksStreamQuery),
     responses(
         (status = 200, description = "Stream of processed blocks with chain state in slot order. \
@@ -1163,7 +1545,7 @@ where
 }
 
 #[utoipa::path(
-    post,
+    get,
     path = paths::TRANSACTION,
     responses(
         (status = 200, description = "Transaction found"),
@@ -1205,9 +1587,12 @@ where
 }
 
 pub mod wallet {
-    use lb_http_api_common::bodies::wallet::sign::{
-        WalletSignTxEd25519RequestBody, WalletSignTxEd25519ResponseBody, WalletSignTxZkRequestBody,
-        WalletSignTxZkResponseBody,
+    use lb_http_api_common::bodies::wallet::{
+        fund::{WalletFundRequestBody, WalletFundResponseBody},
+        sign::{
+            WalletSignTxEd25519RequestBody, WalletSignTxEd25519ResponseBody,
+            WalletSignTxZkRequestBody, WalletSignTxZkResponseBody,
+        },
     };
     use lb_key_management_system_service::keys::ZkPublicKey;
 
@@ -1260,6 +1645,44 @@ pub mod wallet {
                 "The requested address could not be found in the wallet",
             )
                 .into_response(),
+            Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+        }
+    }
+
+    #[utoipa::path(
+    get,
+    path = paths::LEADER_CLAIM_VOUCHERS,
+    responses(
+        (status = 200, description = "Get claimable wallet vouchers"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+    )]
+    pub async fn get_claimable_vouchers<WalletService, RuntimeServiceId>(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Query(query): Query<TipQuery>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData + 'static,
+        RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
+    {
+        let wallet_relay = match get_relay_or_500::<WalletService, _>(&handle).await {
+            Ok(relay) => relay,
+            Err(error_response) => return error_response,
+        };
+        let wallet_api = WalletApi::<WalletService, RuntimeServiceId>::new(wallet_relay);
+
+        match wallet_api.get_claimable_vouchers(query.tip).await {
+            Ok(lb_wallet_service::TipResponse { tip, response }) => {
+                let vouchers = response
+                    .into_iter()
+                    .map(|voucher| ClaimableVoucherInfoResponseBody {
+                        commitment: voucher.commitment,
+                        nullifier: voucher.nullifier,
+                    })
+                    .collect();
+
+                WalletClaimableVouchersResponseBody { tip, vouchers }.into_response()
+            }
             Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
         }
     }
@@ -1474,6 +1897,106 @@ pub mod wallet {
             Ok::<_, DynError>(WalletSignTxZkResponseBody { sig })
         })
     }
+
+    #[utoipa::path(
+        post,
+        path = paths::wallet::FUND,
+        responses(
+            (status = 200, description = "Funded transaction with fee transfer proof"),
+            (status = 500, description = "Internal server error", body = String),
+        )
+    )]
+    pub async fn fund<WalletService, StorageAdapter, RuntimeServiceId>(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Json(req): Json<WalletFundRequestBody>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData,
+        StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+                RuntimeServiceId,
+                Item = SignedMantleTx,
+                Key = <SignedMantleTx as Transaction>::Hash,
+            > + Send
+            + Sync
+            + Clone
+            + 'static,
+        StorageAdapter::Error: Debug,
+        RuntimeServiceId: Debug
+            + Display
+            + Send
+            + Sync
+            + 'static
+            + AsServiceId<WalletService>
+            + AsServiceId<
+                TxMempoolService<
+                    MempoolNetworkAdapter<
+                        SignedMantleTx,
+                        <SignedMantleTx as Transaction>::Hash,
+                        RuntimeServiceId,
+                    >,
+                    Mempool<
+                        HeaderId,
+                        SignedMantleTx,
+                        <SignedMantleTx as Transaction>::Hash,
+                        StorageAdapter,
+                        RuntimeServiceId,
+                    >,
+                    StorageAdapter,
+                    RuntimeServiceId,
+                >,
+            >,
+    {
+        make_request_and_return_response!(async {
+            let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+                handle.relay::<WalletService>().await?,
+            );
+
+            let lb_wallet_service::TipResponse {
+                tip,
+                response: funded_tx_builder,
+            } = wallet
+                .fund_tx(
+                    req.tip,
+                    req.tx_builder,
+                    req.change_public_key,
+                    req.funding_public_keys,
+                    req.priority_fee,
+                )
+                .await?;
+
+            let tx_fee = funded_tx_builder.tx_fee()?;
+            if tx_fee > req.max_tx_fee {
+                return Err(overwatch::DynError::from(format!(
+                    "tx_fee({tx_fee}) exceeds max_tx_fee({})",
+                    req.max_tx_fee
+                )));
+            }
+
+            // Owners of the funding inputs, in input order — the ledger
+            // verifies the transfer proof against this exact list.
+            let funding_note_pks: Vec<ZkPublicKey> = funded_tx_builder
+                .ledger_inputs()
+                .iter()
+                .map(|utxo| utxo.note.pk)
+                .collect();
+
+            let funded_tx = funded_tx_builder.build()?;
+            let transfer_proof = if funding_note_pks.is_empty() {
+                None
+            } else {
+                let tx_hash = funded_tx.hash();
+                Some(OpProof::ZkSig(
+                    wallet.sign_tx_with_zk(tx_hash, funding_note_pks).await?,
+                ))
+            };
+
+            Ok::<_, DynError>(WalletFundResponseBody {
+                tip,
+                funded_tx,
+                transfer_proof,
+            })
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1554,31 +2077,25 @@ mod tests {
     }
 
     #[test]
-    fn rejects_slot_to_above_tip() {
-        let err = resolve_blocks_stream_window(
+    fn clamps_slot_to_above_tip() {
+        let window = resolve_blocks_stream_window(
             &request(None, Some(TIP_SLOT + 1), true, DEFAULT_LIMIT, false),
             &chain_info(),
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(matches!(
-            err,
-            BlocksStreamWindowError::SlotToAboveAnchor { .. }
-        ));
+        assert_eq!(window.slot_to, Slot::new(TIP_SLOT));
     }
 
     #[test]
-    fn rejects_slot_to_above_lib_when_immutable_only() {
-        let err = resolve_blocks_stream_window(
+    fn clamps_slot_to_above_lib_when_immutable_only() {
+        let window = resolve_blocks_stream_window(
             &request(None, Some(LIB_SLOT + 1), true, DEFAULT_LIMIT, true),
             &chain_info(),
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(matches!(
-            err,
-            BlocksStreamWindowError::SlotToAboveAnchor { .. }
-        ));
+        assert_eq!(window.slot_to, Slot::new(LIB_SLOT));
     }
 
     #[test]

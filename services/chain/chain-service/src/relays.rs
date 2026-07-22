@@ -55,6 +55,7 @@ where
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
     <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
+    RuntimeServiceId: 'static,
 {
     pub async fn new(
         broadcast_relay: BroadcastRelay,

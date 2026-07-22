@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use lb_groth16::{Field as _, Fr, fr_from_bytes_unchecked};
+use lb_groth16::{AdditiveGroup as _, Field as _, Fr, fr_from_bytes_unchecked};
 use lb_poseidon2::{Digest, Poseidon2Bn254Hasher};
 use lb_zksign::{ZkSignError, ZkSignPrivateKeysData, ZkSignWitnessInputs};
 use num_bigint::BigUint;
@@ -54,7 +54,7 @@ impl SecretKey {
         let sk_inputs = try_from_secret_keys(keys)?;
         let inputs = ZkSignWitnessInputs::from_witness_data_and_message_hash(sk_inputs, *data);
 
-        let (signature, _) = lb_zksign::prove(&inputs).expect("Signature should succeed");
+        let (signature, _) = lb_zksign::prove(inputs).expect("Signature should succeed");
         Ok(Signature::new(signature))
     }
 

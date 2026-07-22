@@ -1,9 +1,10 @@
 use core::fmt::Debug;
 use std::sync::LazyLock;
 
-use ark_ff::{Field as _, PrimeField as _};
+use ark_ff::{AdditiveGroup as _, PrimeField as _};
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_log_targets::proofs;
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
 use lb_utxotree::MerklePath;
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,8 @@ use crate::{
     },
     proofs::merkle::merkle_path_to_witness,
 };
+
+const LOG_TARGET: &str = proofs::LEADER;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Groth16LeaderProof {
@@ -53,7 +56,7 @@ impl Groth16LeaderProof {
         let start_t = std::time::Instant::now();
         let leader_key = witness.pk;
         let (proof, entropy_contribution) = Self::generate_proof(witness)?;
-        tracing::debug!("groth16 prover time: {:.2?}", start_t.elapsed(),);
+        tracing::debug!(target: LOG_TARGET, "groth16 prover time: {:.2?}", start_t.elapsed(),);
 
         Ok(Self {
             proof,
@@ -75,13 +78,35 @@ impl Groth16LeaderProof {
 
     fn generate_proof(private: LeaderPrivate) -> Result<(lb_pol::PoLProof, Fr), Error> {
         let (proof, verif_inputs) =
-            lb_pol::prove(&private.input.into()).map_err(Error::PoLProofFailed)?;
+            lb_pol::prove(private.input.into()).map_err(Error::PoLProofFailed)?;
         Ok((proof, verif_inputs.entropy_contribution.into_inner()))
     }
 
     #[must_use]
     pub const fn proof(&self) -> &lb_pol::PoLProof {
         &self.proof
+    }
+
+    /// Construct a proof directly from its parts.
+    ///
+    /// Test-only: the resulting proof is not necessarily valid; it is used to
+    /// build deterministic reference test vectors with distinct per-field
+    /// values (so a field-transposition bug in another implementation cannot be
+    /// masked by shared values).
+    #[cfg(test)]
+    #[must_use]
+    pub const fn from_parts(
+        proof: lb_pol::PoLProof,
+        entropy_contribution: Fr,
+        leader_key: Ed25519PublicKey,
+        voucher_cm: VoucherCm,
+    ) -> Self {
+        Self {
+            proof,
+            entropy_contribution,
+            leader_key,
+            voucher_cm,
+        }
     }
 }
 
@@ -116,7 +141,7 @@ impl LeaderProof for Groth16LeaderProof {
             ),
         )
         .unwrap_or_else(|e| {
-            error!("LeaderProof verification failed: {e:?}");
+            error!(target: LOG_TARGET, "LeaderProof verification failed: {e:?}");
             false
         })
     }
@@ -278,36 +303,22 @@ impl From<LeaderPrivate> for lb_pol::PolWitnessInputsData {
 }
 
 mod proof_serde {
-    use serde::{Deserialize, Deserializer, Serializer};
+    use serde::{Deserializer, Serializer};
 
+    // Hex string for human-readable formats; a fixed-size 128-byte array
+    // (no length prefix) for binary formats like bincode.
     pub fn serialize<S>(item: &lb_pol::PoLProof, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let bytes = item.to_bytes();
-        if serializer.is_human_readable() {
-            serializer.serialize_str(&hex::encode(bytes))
-        } else {
-            serializer.serialize_bytes(&bytes)
-        }
+        lb_utils::serde::serialize_bytes_array(item.to_bytes(), serializer)
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<lb_pol::PoLProof, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let proof_array: [u8; 128] = if deserializer.is_human_readable() {
-            let s = String::deserialize(deserializer)?;
-            hex::decode(s)
-                .map_err(serde::de::Error::custom)?
-                .try_into()
-                .map_err(|_| serde::de::Error::custom("Expected exactly 128 bytes"))?
-        } else {
-            let proof_bytes: Vec<u8> = Deserialize::deserialize(deserializer)?;
-            proof_bytes
-                .try_into()
-                .map_err(|_| serde::de::Error::custom("Expected exactly 128 bytes"))?
-        };
+        let proof_array = lb_utils::serde::deserialize_bytes_array::<128, D>(deserializer)?;
         Ok(lb_pol::PoLProof::from_bytes(&proof_array))
     }
 }

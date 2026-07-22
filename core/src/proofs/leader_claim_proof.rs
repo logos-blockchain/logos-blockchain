@@ -1,19 +1,42 @@
 use lb_groth16::{Fr, serde::serde_fr};
+use lb_log_targets::proofs;
 use lb_mmr::MerklePath;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
 
 use crate::{
-    mantle::ops::leader_claim::{VoucherNullifier, VoucherSecret},
+    mantle::{
+        nom::{NomDecode, NomEncode},
+        ops::leader_claim::VoucherSecret,
+    },
     proofs::merkle::mmr_path_to_witness,
 };
+
+const LOG_TARGET: &str = proofs::LEADER_CLAIM;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct Groth16LeaderClaimProof {
     #[serde(with = "proof_serde")]
     proof: lb_poc::PoCProof,
-    voucher_nf: VoucherNullifier,
+}
+
+impl NomEncode for Groth16LeaderClaimProof {
+    fn encode(&self) -> Vec<u8> {
+        self.proof.to_bytes().encode()
+    }
+}
+
+impl NomDecode for Groth16LeaderClaimProof {
+    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self> {
+        let (remaining_bytes, inner) = <[u8; _]>::decode(bytes)?;
+        Ok((
+            remaining_bytes,
+            Self {
+                proof: lb_poc::PoCProof::from_bytes(&inner),
+            },
+        ))
+    }
 }
 
 #[derive(Debug, Error)]
@@ -25,19 +48,16 @@ pub enum Error {
 impl Groth16LeaderClaimProof {
     pub fn prove(witness: LeaderClaimPrivate) -> Result<Self, Error> {
         let start_t = std::time::Instant::now();
-        let (proof, voucher_nf) = Self::generate_proof(witness)?;
-        tracing::debug!("PoC groth16 prover time: {:.2?}", start_t.elapsed());
+        let proof = Self::generate_proof(witness)?;
+        tracing::debug!(target: LOG_TARGET, "PoC groth16 prover time: {:.2?}", start_t.elapsed());
 
-        Ok(Self {
-            proof,
-            voucher_nf: voucher_nf.into(),
-        })
+        Ok(Self { proof })
     }
 
-    fn generate_proof(private: LeaderClaimPrivate) -> Result<(lb_poc::PoCProof, Fr), Error> {
-        let (proof, verif_inputs) =
-            lb_poc::prove(&private.input.into()).map_err(Error::PoCProofFailed)?;
-        Ok((proof, verif_inputs.voucher_nullifier.into_inner()))
+    fn generate_proof(private: LeaderClaimPrivate) -> Result<lb_poc::PoCProof, Error> {
+        let (proof, _verif_inputs) =
+            lb_poc::prove(private.input.into()).map_err(Error::PoCProofFailed)?;
+        Ok(proof)
     }
 
     #[must_use]
@@ -46,16 +66,14 @@ impl Groth16LeaderClaimProof {
     }
 
     #[must_use]
-    pub const fn new(proof: lb_poc::PoCProof, voucher_nf: VoucherNullifier) -> Self {
-        Self { proof, voucher_nf }
+    pub const fn new(proof: lb_poc::PoCProof) -> Self {
+        Self { proof }
     }
 }
 
 pub trait LeaderClaimProof {
     /// Verify the proof against the public inputs.
     fn verify(&self, public_inputs: &LeaderClaimPublic) -> bool;
-
-    fn voucher_nf(&self) -> &VoucherNullifier;
 }
 
 impl LeaderClaimProof for Groth16LeaderClaimProof {
@@ -63,24 +81,22 @@ impl LeaderClaimProof for Groth16LeaderClaimProof {
         lb_poc::verify(
             &self.proof,
             &lb_poc::PoCVerifierInput::new(
-                (*self.voucher_nf()).into(),
+                public_inputs.voucher_nullifier,
                 public_inputs.voucher_root,
                 public_inputs.mantle_tx_hash,
             ),
         )
         .unwrap_or_else(|e| {
-            error!("Error verifying LeaderClaimProof: {e:?}");
+            error!(target: LOG_TARGET, "Error verifying LeaderClaimProof: {e:?}");
             false
         })
-    }
-
-    fn voucher_nf(&self) -> &VoucherNullifier {
-        &self.voucher_nf
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LeaderClaimPublic {
+    #[serde(with = "serde_fr")]
+    pub voucher_nullifier: Fr,
     #[serde(with = "serde_fr")]
     pub voucher_root: Fr,
     #[serde(with = "serde_fr")]
@@ -89,8 +105,9 @@ pub struct LeaderClaimPublic {
 
 impl LeaderClaimPublic {
     #[must_use]
-    pub const fn new(voucher_root: Fr, mantle_tx_hash: Fr) -> Self {
+    pub const fn new(voucher_nullifier: Fr, voucher_root: Fr, mantle_tx_hash: Fr) -> Self {
         Self {
+            voucher_nullifier,
             voucher_root,
             mantle_tx_hash,
         }
@@ -138,23 +155,22 @@ impl From<LeaderClaimPrivate> for lb_poc::PoCWitnessInputsData {
 }
 
 mod proof_serde {
-    use serde::{Deserialize, Deserializer, Serializer};
+    use serde::{Deserializer, Serializer};
 
+    // Hex string for human-readable formats; a fixed-size 128-byte array
+    // (no length prefix) for binary formats like bincode.
     pub fn serialize<S>(item: &lb_poc::PoCProof, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.serialize_bytes(&item.to_bytes())
+        lb_utils::serde::serialize_bytes_array(item.to_bytes(), serializer)
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<lb_poc::PoCProof, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let proof_bytes: Vec<u8> = Deserialize::deserialize(deserializer)?;
-        let proof_array: [u8; 128] = proof_bytes
-            .try_into()
-            .map_err(|_| serde::de::Error::custom("Expected exactly 128 bytes"))?;
+        let proof_array = lb_utils::serde::deserialize_bytes_array::<128, D>(deserializer)?;
         Ok(lb_poc::PoCProof::from_bytes(&proof_array))
     }
 }

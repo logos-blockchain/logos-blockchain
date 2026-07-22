@@ -4,17 +4,21 @@ use std::sync::OnceLock;
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
-        CryptarchiaParameter, MantleTx, Note, NoteId, OpProof, Utxo,
-        genesis_tx::GenesisTx,
+        CryptarchiaParameter, GenesisTime, MantleTx, Note, NoteId, OpProof, Utxo,
+        nom::NomEncode as _,
         ops::{
             Op, OpId as _,
-            channel::{ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp},
+            channel::{
+                ChannelId, Ed25519PublicKey, MsgId,
+                inscribe::{Inscription, InscriptionOp},
+            },
             transfer::TransferOp,
         },
+        transactions::{GenesisTx, Ops, tx::OpsProofs},
     },
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };
-use lb_groth16::{CompressedGroth16Proof, Field as _, Fr};
+use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr};
 use lb_key_management_system_service::keys::{
     Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
 };
@@ -26,8 +30,8 @@ use crate::unique::unique_test_context;
 
 pub const SHORT_PROLONGED_BOOTSTRAP_PERIOD: Duration = Duration::from_secs(1);
 
-const EMPTY_CHANNEL_ID: [u8; 32] = [0; 32];
-const EMPTY_ED25519_PUBLIC_KEY: [u8; 32] = [0; 32];
+pub const EMPTY_CHANNEL_ID: [u8; 32] = [0; 32];
+pub const EMPTY_ED25519_PUBLIC_KEY: [u8; 32] = [0; 32];
 const EMPTY_GROTH16_PROOF_BYTES: [u8; 128] = [0u8; 128];
 
 const LEADER_KEY_PREFIX: &[u8] = b"ld";
@@ -37,7 +41,9 @@ const KEY_MATERIAL_LEN: usize = 16;
 
 const REGULAR_NOTE_VALUE: u64 = 100_000;
 const BLEND_NOTE_VALUE: u64 = 1;
-const SDP_NOTE_VALUE: u64 = 100;
+/// Funds SDP declare/activity transaction fees at non-zero gas prices; an
+/// activity transaction costs roughly 400-1000 at genesis prices.
+const SDP_NOTE_VALUE: u64 = 10_000;
 
 #[derive(Clone)]
 pub struct ProviderInfo {
@@ -81,10 +87,14 @@ pub struct ServiceNote {
     pub output_index: usize,
 }
 
-static GENESIS_TIME: OnceLock<OffsetDateTime> = OnceLock::new();
+static GENESIS_TIME: OnceLock<GenesisTime> = OnceLock::new();
 
-fn get_or_init_genesis_time() -> OffsetDateTime {
-    *GENESIS_TIME.get_or_init(OffsetDateTime::now_utc)
+fn get_or_init_genesis_time() -> GenesisTime {
+    *GENESIS_TIME.get_or_init(|| {
+        OffsetDateTime::now_utc()
+            .try_into()
+            .expect("should fit in GenesisTime")
+    })
 }
 
 pub struct BaseConsensusMaterial {
@@ -95,16 +105,18 @@ pub struct BaseConsensusMaterial {
 }
 
 fn inscription_for_current_test(test_context: Option<&str>) -> InscriptionOp {
-    let owner = unique_test_context(test_context);
-    println!("Genesis inscription: {owner}");
+    let chain_id = unique_test_context(test_context);
+    println!("Genesis inscription: {chain_id}");
     InscriptionOp {
         channel_id: ChannelId::from(EMPTY_CHANNEL_ID),
-        inscription: CryptarchiaParameter {
-            chain_id: owner,
-            genesis_time: get_or_init_genesis_time(),
-            epoch_nonce: Fr::ZERO,
-        }
-        .encode(),
+        inscription: Inscription::new_unchecked(
+            CryptarchiaParameter {
+                chain_id,
+                genesis_time: get_or_init_genesis_time(),
+                epoch_nonce: Fr::ZERO,
+            }
+            .encode(),
+        ),
         parent: MsgId::root(),
         signer: Ed25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY).unwrap(),
     }
@@ -121,7 +133,9 @@ pub fn create_genesis_block(utxos: &[Utxo], test_context: Option<&str>) -> Genes
     let genesis_builder = if let Some(note) = outputs.next() {
         let mut genesis_builder = GenesisBlockBuilder::new().add_note(note);
         for note in outputs {
-            genesis_builder = genesis_builder.add_note(note);
+            genesis_builder = genesis_builder
+                .try_add_note(note)
+                .expect("note count must fit in genesis transfer outputs");
         }
         genesis_builder
     } else {
@@ -290,15 +304,15 @@ pub fn create_genesis_block_with_declarations(
         ops.push(Op::SDPDeclare(declaration));
     }
 
-    let mantle_tx = MantleTx(ops);
+    let mantle_tx = MantleTx(Ops::new_unchecked(ops));
 
     let mantle_tx_hash = mantle_tx.hash();
-    let mut ops_proofs = vec![
+    let mut ops_proofs = OpsProofs::from([
         OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
             &EMPTY_GROTH16_PROOF_BYTES,
         ))),
         OpProof::Ed25519Sig(Ed25519Signature::zero()),
-    ];
+    ]);
 
     for provider in providers {
         let zk_sig =
@@ -307,10 +321,12 @@ pub fn create_genesis_block_with_declarations(
         let ed25519_sig = provider
             .provider_sk
             .sign_payload(mantle_tx_hash.as_signing_bytes().as_ref());
-        ops_proofs.push(OpProof::ZkAndEd25519Sigs {
-            zk_sig,
-            ed25519_sig,
-        });
+        ops_proofs
+            .try_push(OpProof::ZkAndEd25519Sigs {
+                zk_sig,
+                ed25519_sig,
+            })
+            .expect("genesis transaction proofs are bounded");
     }
 
     let signed_mantle_tx = SignedMantleTx {

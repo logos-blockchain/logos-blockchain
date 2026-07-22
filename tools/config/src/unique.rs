@@ -10,6 +10,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use lb_core::mantle::transactions::genesis_tx::ChainId;
 use lb_utils::net::{get_available_tcp_port, get_available_udp_port};
 
 const PORT_BLOCK_SIZE: u16 = 256;
@@ -32,7 +33,7 @@ fn process_start_nonce() -> &'static str {
 }
 
 #[must_use]
-pub fn unique_test_context(test_context: Option<&str>) -> String {
+pub fn unique_test_context(test_context: Option<&str>) -> ChainId {
     let current_thread = std::thread::current();
     let thread_name = current_thread.name().unwrap_or("genesis");
 
@@ -52,6 +53,8 @@ pub fn unique_test_context(test_context: Option<&str>) -> String {
         process_start_nonce(),
         hash_str(&test_entropy_raw)
     )
+    .try_into()
+    .expect("Unique test context should always be a valid ChainId")
 }
 
 #[must_use]

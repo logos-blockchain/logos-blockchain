@@ -1,7 +1,7 @@
 use std::io::Error as IoError;
 
 use hex::FromHexError;
-use lb_core::{codec::Error, mantle::tx::VerificationError};
+use lb_core::{codec::Error, mantle::transactions::VerificationError};
 use lb_testing_framework::configs::wallet::WalletConfigError;
 use lb_wallet::WalletError;
 use lb_zksign::ZkSignError;
@@ -71,6 +71,12 @@ pub enum StepError {
     IoError(#[from] IoError),
     #[error("User configuration error: {0}")]
     UserConfigError(String),
+    #[error("Wallet does not have enough funds, available={available}")]
+    FundsDeficit {
+        available: u64,
+        num_utxos_required: usize,
+        value_per_utxos_required: u64,
+    },
 }
 
 pub type StepResult = Result<(), StepError>;

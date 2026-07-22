@@ -1,19 +1,21 @@
+use lb_core_macros::NomCodec;
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    events::Events,
+    events::TxEvent,
     mantle::{
         TxHash,
-        encoding::encode_transfer_op,
+        channel::Channels,
         ledger::{self, Inputs, Operation, Outputs, Utxos},
+        nom::NomEncode as _,
         ops::OpId,
     },
     sdp::locked_notes::LockedNotes,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, NomCodec)]
 pub struct TransferOp {
     pub inputs: Inputs,
     pub outputs: Outputs,
@@ -23,6 +25,11 @@ impl TransferOp {
     #[must_use]
     pub const fn new(inputs: Inputs, outputs: Outputs) -> Self {
         Self { inputs, outputs }
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.inputs.is_empty() && self.outputs.is_empty()
     }
 
     pub fn balance(&self, utxos: &Utxos) -> Result<i128, TransferError> {
@@ -41,7 +48,7 @@ impl TransferOp {
 
 impl OpId for TransferOp {
     fn op_bytes(&self) -> Vec<u8> {
-        encode_transfer_op(self)
+        self.encode()
     }
 }
 
@@ -61,6 +68,7 @@ pub enum TransferError {
 
 pub struct TransferValidationContext<'a> {
     pub locked_notes: &'a LockedNotes,
+    pub channels: &'a Channels,
     pub utxos: &'a Utxos,
     pub tx_hash: &'a TxHash,
     pub transfer_sig: &'a ZkSignature,
@@ -79,7 +87,8 @@ impl Operation<TransferValidationContext<'_>> for TransferOp {
             return Err(TransferError::NoInputTransfer);
         }
         // Validate Inputs
-        self.inputs.validate(ctx.locked_notes, ctx.utxos)?;
+        self.inputs
+            .validate_not_in_channel(ctx.locked_notes, ctx.channels, ctx.utxos)?;
         // Validate Outputs
         self.outputs.validate()?;
         // Check the transfer Proof
@@ -93,12 +102,12 @@ impl Operation<TransferValidationContext<'_>> for TransferOp {
     fn execute(
         &self,
         mut utxos: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         // Remove inputs from the ledger
         utxos = self.inputs.execute(utxos)?;
         // Add outputs from the ledger
         utxos = self.outputs.execute(utxos, self);
-        Ok((utxos, Events::new()))
+        Ok((utxos, Vec::new()))
     }
 }
 
@@ -116,8 +125,8 @@ mod test {
         let pk1 = ZkPublicKey::from(Fr::from(BigUint::from(1u8)));
         let pk2 = ZkPublicKey::from(Fr::from(BigUint::from(2u8)));
         let transfer = TransferOp {
-            inputs: Inputs::new(vec![NoteId(BigUint::from(0u8).into())]),
-            outputs: Outputs::new(vec![
+            inputs: Inputs::new([NoteId(BigUint::from(0u8).into())]),
+            outputs: Outputs::new([
                 Note::new(100, pk0),
                 Note::new(200, pk1),
                 Note::new(300, pk2),

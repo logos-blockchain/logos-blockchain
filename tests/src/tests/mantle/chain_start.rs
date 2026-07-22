@@ -1,15 +1,22 @@
-use std::{num::NonZero, time::Duration};
+use std::{num::NonZero, path::PathBuf, time::Duration};
 
 use lb_chain_service::{ChainServiceMode, State};
 use lb_core::{
     block::genesis::GenesisBlockBuilder,
-    mantle::{GenesisTx as _, ops::channel::inscribe::InscriptionOp},
+    mantle::{
+        GenesisTime, GenesisTx as _,
+        nom::NomEncode as _,
+        ops::channel::inscribe::{Inscription, InscriptionOp},
+    },
 };
 use lb_node::config::{RunConfig, cryptarchia::deployment::EpochConfig};
 use lb_testing_framework::{DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig};
 use lb_utils::math::NonNegativeRatio;
-use logos_blockchain_tests::common::manual_cluster::{
-    ManualNodeLayout, start_local_manual_cluster_with_layout, wait_for_nodes_height,
+use logos_blockchain_tests::{
+    common::manual_cluster::{
+        ManualNodeLayout, start_local_manual_cluster_with_layout, wait_for_nodes_height,
+    },
+    cucumber::defaults::E2E_ARTIFACTS_DIR,
 };
 use testing_framework_core::scenario::DynError;
 use time::OffsetDateTime;
@@ -30,7 +37,13 @@ async fn delayed_chain_start() {
         ),
         NODE_COUNT,
         ManualNodeLayout::SelectNodeSeed(0),
-        move |config| Ok(test_config(config, genesis_time)),
+        move |config| {
+            Ok(test_config(
+                config,
+                genesis_time.try_into().expect("should fit in GenesisTime"),
+            ))
+        },
+        Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
     )
     .await;
 
@@ -82,19 +95,20 @@ where
     }
 }
 
-fn test_config(mut config: RunConfig, genesis_time: OffsetDateTime) -> RunConfig {
+fn test_config(mut config: RunConfig, genesis_time: GenesisTime) -> RunConfig {
     let genesis_tx = config.deployment.cryptarchia.genesis_block.genesis_tx();
 
     let mut cryptarchia_parameter = genesis_tx.cryptarchia_parameter();
     cryptarchia_parameter.genesis_time = genesis_time;
 
     let inscription = InscriptionOp {
-        inscription: cryptarchia_parameter.encode(),
+        inscription: Inscription::new_unchecked(cryptarchia_parameter.encode()),
         ..genesis_tx.genesis_inscription().clone()
     };
 
     config.deployment.cryptarchia.genesis_block = GenesisBlockBuilder::new()
-        .add_notes(genesis_tx.genesis_transfer().outputs.iter().copied())
+        .try_add_notes(genesis_tx.genesis_transfer().outputs.iter().copied())
+        .unwrap()
         .set_inscription(inscription)
         .build()
         .expect("Failed to build genesis block");

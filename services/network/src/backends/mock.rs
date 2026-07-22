@@ -6,6 +6,7 @@ use std::{
 };
 
 use futures::{channel::oneshot, future::BoxFuture};
+use lb_log_targets::network_service;
 use rand::{
     SeedableRng as _,
     distributions::{Distribution as _, WeightedIndex},
@@ -16,6 +17,8 @@ use tokio::sync::broadcast::{self, Sender};
 use tokio_stream::wrappers::BroadcastStream;
 
 use super::{Debug, NetworkBackend, OverwatchHandle};
+
+const LOG_TARGET: &str = network_service::backends::MOCK;
 
 const BROADCAST_CHANNEL_BUF: usize = 16;
 
@@ -190,13 +193,14 @@ impl Mock {
             {
                 Ok(_) => {
                     tracing::debug!(
+                        target: LOG_TARGET,
                         "sent message to \"{}\" to topic {}",
                         msg.payload,
                         msg.content_topic.content_topic_name
                     );
                 }
                 Err(e) => {
-                    tracing::error!("error sending message: {:?}", e);
+                    tracing::error!(target: LOG_TARGET, "error sending message: {:?}", e);
                 }
             }
         }
@@ -211,13 +215,14 @@ impl Mock {
             {
                 Ok(_) => {
                     tracing::debug!(
+                        target: LOG_TARGET,
                         "sent message \"{}\" to topic {}",
                         msg.payload,
                         msg.content_topic.content_topic_name
                     );
                 }
                 Err(e) => {
-                    tracing::error!("error sending message: {:?}", e);
+                    tracing::error!(target: LOG_TARGET, "error sending message: {:?}", e);
                 }
             }
         }
@@ -253,17 +258,17 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Mock {
     async fn process(&self, msg: Self::Message) {
         match msg {
             MockBackendMessage::BootProducer { spawner } => {
-                tracing::debug!("booting producer");
+                tracing::debug!(target: LOG_TARGET, "booting producer");
                 let this = self.clone();
                 match (spawner)(Box::pin(async move { this.run_producer_handler().await })) {
                     Ok(()) => {}
                     Err(e) => {
-                        tracing::error!("error booting producer: {:?}", e);
+                        tracing::error!(target: LOG_TARGET, "error booting producer: {:?}", e);
                     }
                 }
             }
             MockBackendMessage::Broadcast { topic, msg } => {
-                tracing::debug!("processed normal message");
+                tracing::debug!(target: LOG_TARGET, "processed normal message");
                 self.messages
                     .lock()
                     .unwrap()
@@ -273,15 +278,21 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Mock {
                 drop(self.pubsub_events_tx.send(NetworkEvent::RawMessage(msg)));
             }
             MockBackendMessage::RelaySubscribe { topic } => {
-                tracing::debug!("processed relay subscription for topic: {topic}");
+                tracing::debug!(
+                    target: LOG_TARGET,
+                    "processed relay subscription for topic: {topic}"
+                );
                 self.subscribed_topics.lock().unwrap().insert(topic);
             }
             MockBackendMessage::RelayUnSubscribe { topic } => {
-                tracing::debug!("processed relay unsubscription for topic: {topic}");
+                tracing::debug!(
+                    target: LOG_TARGET,
+                    "processed relay unsubscription for topic: {topic}"
+                );
                 self.subscribed_topics.lock().unwrap().remove(&topic);
             }
             MockBackendMessage::Query { topic, tx } => {
-                tracing::debug!("processed query");
+                tracing::debug!(target: LOG_TARGET, "processed query");
                 let msgs = self
                     .messages
                     .lock()

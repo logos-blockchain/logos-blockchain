@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 
+use lb_log_targets::utils;
 use log::error;
 use overwatch::services::state::{ServiceState, StateOperator};
 use serde::{Serialize, de::DeserializeOwned};
@@ -8,6 +9,8 @@ use crate::{
     overwatch::recovery::{RecoveryResult, errors::RecoveryError},
     traits::FromSettings,
 };
+
+const LOG_TARGET: &str = utils::RECOVERY;
 
 pub trait RecoveryBackend {
     type State: ServiceState;
@@ -56,7 +59,7 @@ where
     async fn run(&mut self, state: Self::State) {
         let save_result = self.recovery_backend.save_state(&state);
         if let Err(error) = save_result {
-            error!("{error}");
+            error!(target: LOG_TARGET, "{error}");
         }
     }
 }

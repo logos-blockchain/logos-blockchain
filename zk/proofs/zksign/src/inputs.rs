@@ -18,6 +18,17 @@ impl ZkSignWitnessInputs {
     }
 }
 
+impl TryFrom<ZkSignWitnessInputs> for lbc_signature_sys::SignatureWitnessInput<'_> {
+    type Error = lbp_error::Error;
+
+    fn try_from(value: ZkSignWitnessInputs) -> Result<Self, Self::Error> {
+        let inputs_json: ZkSignWitnessInputsJson = (&value).into();
+        let inputs_str: String = serde_json::to_string(&inputs_json)?;
+        let witness_input = lbc_signature_sys::SignatureWitnessInput::new(inputs_str)?;
+        Ok(witness_input)
+    }
+}
+
 #[derive(Serialize)]
 pub struct ZkSignWitnessInputsJson {
     msg: Groth16InputDeser,

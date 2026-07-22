@@ -15,6 +15,7 @@ mod tests {
     use std::{env::temp_dir, path::PathBuf};
 
     use async_trait::async_trait;
+    use lb_log_targets::utils;
     use overwatch::{
         DynError, OpaqueServiceResourcesHandle, derive_services,
         overwatch::OverwatchRunner,
@@ -24,6 +25,8 @@ mod tests {
 
     use super::*;
     use crate::{overwatch::recovery::backends::FileBackendSettings, traits::FromSettings as _};
+
+    const LOG_TARGET: &str = utils::RECOVERY;
 
     #[derive(Debug, Clone, Default, Serialize, Deserialize)]
     struct MyState {
@@ -82,6 +85,7 @@ mod tests {
 
             service_resources_handle.status_updater.notify_ready();
             tracing::info!(
+                target: LOG_TARGET,
                 "Service '{}' is ready.",
                 <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
             );

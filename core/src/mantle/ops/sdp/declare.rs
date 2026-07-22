@@ -1,10 +1,12 @@
+use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
 
-use super::{MAX_DECLARATION_LOCATOR, SDPDeclareOp, SdpError};
+use super::{SDPDeclareOp, SdpError};
 use crate::{
-    events::Events,
+    events::TxEvent,
     mantle::{
         Note, TxHash,
+        channel::Channels,
         ledger::{Declarations, Operation, Utxos},
     },
     sdp::{Declaration, MinStake, locked_notes::LockedNotes},
@@ -14,6 +16,7 @@ trait SDPDeclareValidationExt {
     fn validate(
         &self,
         note: Note,
+        channels: &Channels,
         declarations: &Declarations,
         locked_notes: &LockedNotes,
         min_stake: &MinStake,
@@ -22,13 +25,14 @@ trait SDPDeclareValidationExt {
     fn execute(
         &self,
         ctx: SDPDeclareExecutionContext,
-    ) -> Result<(SDPDeclareExecutionContext, Events), SdpError>;
+    ) -> Result<(SDPDeclareExecutionContext, Vec<TxEvent>), SdpError>;
 }
 
 impl SDPDeclareValidationExt for SDPDeclareOp {
     fn validate(
         &self,
         note: Note,
+        channels: &Channels,
         declarations: &Declarations,
         locked_notes: &LockedNotes,
         min_stake: &MinStake,
@@ -37,10 +41,11 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         if declarations.contains_key(&self.id()) {
             return Err(SdpError::DuplicateDeclaration(self.id()));
         }
+        validate_service_scoped_uniqueness(self, declarations)?;
 
-        // Ensure it has no more than 8 locators.
-        if self.locators.len() > MAX_DECLARATION_LOCATOR {
-            return Err(SdpError::TooMuchLocators);
+        // A channel note cannot be used as collateral for a service declaration.
+        if channels.is_channel_note(&self.locked_note_id) {
+            return Err(SdpError::ChannelNote(self.locked_note_id));
         }
 
         // Ensure value of locked note is sufficient for joining the service.
@@ -65,9 +70,9 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
     fn execute(
         &self,
         mut ctx: SDPDeclareExecutionContext,
-    ) -> Result<(SDPDeclareExecutionContext, Events), SdpError> {
+    ) -> Result<(SDPDeclareExecutionContext, Vec<TxEvent>), SdpError> {
         let declaration_id = self.id();
-        let declaration = Declaration::new(ctx.block_number, self);
+        let declaration = Declaration::new(ctx.epoch, self);
         ctx.declarations = ctx.declarations.insert(declaration_id, declaration);
         let utxo = ctx
             .utxo_tree
@@ -86,12 +91,38 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
             )
             .map_err(|_| SdpError::UnexpectedError)?;
 
-        Ok((ctx, Events::new()))
+        Ok((ctx, Vec::new()))
     }
+}
+
+/// `provider_id` and `zk_id` must each be unique within the same service.
+fn validate_service_scoped_uniqueness(
+    op: &SDPDeclareOp,
+    declarations: &Declarations,
+) -> Result<(), SdpError> {
+    declarations
+        .values()
+        .filter(|d| d.service_type == op.service_type)
+        .try_for_each(|existing| {
+            if existing.provider_id == op.provider_id {
+                Err(SdpError::DuplicateProviderId {
+                    service_type: op.service_type,
+                    provider_id: Box::new(op.provider_id),
+                })
+            } else if existing.zk_id == op.zk_id {
+                Err(SdpError::DuplicateZkId {
+                    service_type: op.service_type,
+                    zk_id: op.zk_id,
+                })
+            } else {
+                Ok(())
+            }
+        })
 }
 
 pub struct SDPDeclareValidationContext<'a> {
     pub utxo_tree: &'a Utxos,
+    pub channels: &'a Channels,
     pub locked_notes: &'a LockedNotes,
     pub tx_hash: &'a TxHash,
     pub declare_zk_sig: &'a ZkSignature,
@@ -102,6 +133,7 @@ pub struct SDPDeclareValidationContext<'a> {
 
 pub struct SDPDeclareGenesisValidationContext<'a> {
     pub utxo_tree: &'a Utxos,
+    pub channels: &'a Channels,
     pub locked_notes: &'a LockedNotes,
     pub declarations: &'a Declarations,
     pub min_stake: &'a MinStake,
@@ -109,7 +141,7 @@ pub struct SDPDeclareGenesisValidationContext<'a> {
 
 pub struct SDPDeclareExecutionContext {
     pub utxo_tree: Utxos,
-    pub block_number: u64,
+    pub epoch: Epoch,
     pub declarations: Declarations,
     pub locked_notes: LockedNotes,
     pub min_stake: MinStake,
@@ -150,6 +182,7 @@ impl Operation<SDPDeclareValidationContext<'_>> for SDPDeclareOp {
         SDPDeclareValidationExt::validate(
             self,
             note,
+            ctx.channels,
             ctx.declarations,
             ctx.locked_notes,
             ctx.min_stake,
@@ -159,7 +192,7 @@ impl Operation<SDPDeclareValidationContext<'_>> for SDPDeclareOp {
     fn execute(
         &self,
         ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         SDPDeclareValidationExt::execute(self, ctx)
     }
 }
@@ -181,6 +214,7 @@ impl Operation<SDPDeclareGenesisValidationContext<'_>> for SDPDeclareOp {
         SDPDeclareValidationExt::validate(
             self,
             note,
+            ctx.channels,
             ctx.declarations,
             ctx.locked_notes,
             ctx.min_stake,
@@ -190,7 +224,7 @@ impl Operation<SDPDeclareGenesisValidationContext<'_>> for SDPDeclareOp {
     fn execute(
         &self,
         ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         SDPDeclareValidationExt::execute(self, ctx)
     }
 }

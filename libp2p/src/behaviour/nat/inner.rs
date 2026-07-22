@@ -8,6 +8,7 @@ use futures::{
     FutureExt as _,
     future::{BoxFuture, Fuse, OptionFuture},
 };
+use lb_log_targets::libp2p as lb_log_targets_libp2p;
 use libp2p::{
     Multiaddr, PeerId, autonat,
     core::{Endpoint, transport::PortUse},
@@ -18,7 +19,6 @@ use libp2p::{
 };
 use rand::RngCore;
 use tokio::sync::mpsc::UnboundedReceiver;
-use tracing::{error, info};
 
 use crate::{
     behaviour::nat::{
@@ -33,6 +33,8 @@ use crate::{
 };
 
 type Task = BoxFuture<'static, Multiaddr>;
+
+const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::nat::INNER;
 
 pub struct InnerNatBehaviour<Rng, Mapper, Detector>
 where
@@ -235,7 +237,8 @@ where
                     old_gateway,
                     new_gateway,
                 } => {
-                    info!(
+                    tracing::info!(
+                        target: LOG_TARGET,
                         "Gateway changed from {old_gateway:?} to {new_gateway:?}, triggering address re-mapping",
                     );
 
@@ -261,7 +264,7 @@ where
                 }
                 Command::MapAddress(addr) => {
                     if let Err(e) = self.address_mapper_behaviour.try_map_address(addr) {
-                        error!("Failed to start address mapping: {e}");
+                        tracing::error!(target: LOG_TARGET, "Failed to start address mapping: {e}");
                     }
                 }
                 Command::NewExternalAddrCandidate(addr) => {
