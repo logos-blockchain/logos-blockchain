@@ -1,5 +1,5 @@
 [package]
-name = "dynamic-merkle"
+name = "logos-blockchain-dynamic-merkle"
 categories.workspace = true
 description.workspace = true
 edition.workspace = true

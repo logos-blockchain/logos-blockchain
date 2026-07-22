@@ -1835,18 +1835,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c3cf4824e2d5f025c7b531afcb2325364084a16806f6d47fbc1f5fbd9960590"
 
 [[package]]
-name = "dynamic-merkle"
-version = "0.1.2"
-dependencies = [
- "ark-ff 0.4.2",
- "logos-blockchain-poseidon2",
- "num-bigint",
- "rand 0.8.5",
- "rpds",
- "serde",
-]
-
-[[package]]
 name = "ecdsa"
 version = "0.16.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4553,6 +4541,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-dynamic-merkle"
+version = "0.1.2"
+dependencies = [
+ "ark-ff 0.4.2",
+ "logos-blockchain-poseidon2",
+ "num-bigint",
+ "rand 0.8.5",
+ "rpds",
+ "serde",
+]
+
+[[package]]
 name = "logos-blockchain-faucet"
 version = "0.1.2"
 dependencies = [
@@ -5191,7 +5191,7 @@ name = "logos-blockchain-utxotree"
 version = "0.1.2"
 dependencies = [
  "ark-ff 0.4.2",
- "logos-blockchain-groth16",
+ "logos-blockchain-dynamic-merkle",
  "logos-blockchain-poseidon2",
  "num-bigint",
  "quickcheck",

@@ -10,15 +10,15 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-ark-ff       = { workspace = true }
-lb-groth16   = { workspace = true }
-lb-poseidon2 = { workspace = true }
-num-bigint   = { workspace = true }
-rpds         = { features = ["serde"], workspace = true }
-serde        = { features = ["alloc", "derive", "rc"], workspace = true }
-thiserror    = { workspace = true }
+ark-ff            = { workspace = true }
+lb-dynamic-merkle = { workspace = true }
+lb-poseidon2      = { workspace = true }
+rpds              = { workspace = true }
+serde             = { features = ["derive"], workspace = true }
+thiserror         = { workspace = true }
 
 [dev-dependencies]
+num-bigint        = { workspace = true }
 quickcheck        = { workspace = true }
 quickcheck_macros = { workspace = true }
 rand              = { workspace = true }

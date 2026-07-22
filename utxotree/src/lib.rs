@@ -1,16 +1,44 @@
-mod merkle;
-
 #[cfg(test)]
 pub mod test_fr;
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, marker::PhantomData};
 
-use lb_poseidon2::{Digest, Fr};
+use ark_ff::Field;
 // TODO: Change `DynamicMerkleTree` back to private once we adopt MMR for vouchers in the
 // wallet service.
-pub use merkle::{DynamicMerkleTree, MerkleNode, MerklePath};
+pub use lb_dynamic_merkle::{DynamicMerkleTree, MerkleNode, MerklePath};
+use lb_dynamic_merkle::{MerkleHasher, empty_subtree_root};
+use lb_poseidon2::{Digest, Fr};
 use rpds::HashTrieMapSync;
 use thiserror::Error;
+
+/// [`MerkleHasher`] bridge adapting a `Key: AsRef<Fr>` leaf type and a
+/// [`Digest`] hasher to the generic [`DynamicMerkleTree`].
+///
+/// Leaf values are the key's field element and inner nodes are compressed with
+/// `Hash`.
+pub struct UtxoMerkleHasher<Key, Hash>(PhantomData<(Key, Hash)>);
+
+impl<Key, Hash> MerkleHasher for UtxoMerkleHasher<Key, Hash>
+where
+    Key: AsRef<Fr> + Clone,
+    Hash: Digest,
+{
+    type Item = Key;
+    type Hash = Fr;
+
+    const EMPTY_VALUE: Fr = <Fr as Field>::ZERO;
+
+    fn leaf_hash(item: &Key) -> Fr {
+        *item.as_ref()
+    }
+
+    fn compress(left: &Fr, right: &Fr) -> Fr {
+        <Hash as Digest>::compress(&[*left, *right])
+    }
+
+    empty_subtree_root!(Fr);
+}
 
 /// A store for `UTxOs` that allows for efficient insertion, removal, and
 /// retrieval of items, while efficiently maintaining a compact Merkle tree
@@ -24,9 +52,10 @@ use thiserror::Error;
 #[derive(Debug, Clone)]
 pub struct UtxoTree<Key, Item, Hash>
 where
-    Key: std::hash::Hash + Eq,
+    Key: AsRef<Fr> + Clone + std::hash::Hash + Eq,
+    Hash: Digest,
 {
-    merkle: DynamicMerkleTree<Key, Hash>,
+    merkle: DynamicMerkleTree<UtxoMerkleHasher<Key, Hash>>,
     // key -> (item, position in merkle tree)
     items: HashTrieMapSync<Key, (Item, usize)>,
 }
@@ -136,7 +165,7 @@ where
 
 impl<Key, Item, Hash> PartialEq for UtxoTree<Key, Item, Hash>
 where
-    Key: AsRef<Fr> + std::hash::Hash + Eq,
+    Key: AsRef<Fr> + Clone + std::hash::Hash + Eq,
     Item: PartialEq,
     Hash: Digest,
 {
@@ -147,7 +176,7 @@ where
 
 impl<Key, Item, Hash> Eq for UtxoTree<Key, Item, Hash>
 where
-    Key: AsRef<Fr> + std::hash::Hash + Eq,
+    Key: AsRef<Fr> + Clone + std::hash::Hash + Eq,
     Item: Eq,
     Hash: Digest,
 {
@@ -176,8 +205,15 @@ where
     Item: Clone,
 {
     fn from(compressed: CompressedUtxoTree<Key, Item>) -> Self {
+        // `items` is a `BTreeMap`, so iteration is ordered by position.
+        let merkle = DynamicMerkleTree::from_sorted_items(
+            compressed
+                .items
+                .iter()
+                .map(|(pos, (key, _))| (*pos, key.clone())),
+        );
         Self {
-            merkle: DynamicMerkleTree::from_compressed_tree(&compressed),
+            merkle,
             items: compressed
                 .items
                 .iter()

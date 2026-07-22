@@ -441,6 +441,57 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
             );
         })
     }
+
+    /// Rebuilds a tree placing each `item` at its given index, filling the gaps
+    /// between indices with holes.
+    ///
+    /// The items must be yielded in strictly increasing index order; this is the
+    /// inverse of enumerating a tree's occupied positions and is meant for
+    /// recovering a tree from a compressed representation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the indices are not strictly increasing or an index is out of
+    /// bounds.
+    #[must_use]
+    pub fn from_sorted_items(items: impl IntoIterator<Item = (usize, H::Item)>) -> Self {
+        let mut tree = Self::new();
+        let mut current_pos = 0;
+        for (pos, item) in items {
+            while current_pos < pos {
+                // Insert a hole for the missing position
+                tree = tree.insert_hole(current_pos);
+                current_pos += 1;
+            }
+
+            tree.root = tree.root.insert_at::<H>(pos, item);
+            current_pos = pos + 1;
+        }
+        tree
+    }
+
+    // This is only for maintaining holes information when recovering
+    // the tree from a compressed format, should not be used otherwise.
+    fn insert_hole(&self, index: usize) -> Self {
+        assert!(
+            index < self.root.capacity(),
+            "Index out of bounds for inserting an empty node"
+        );
+
+        let holes = self.holes.insert(index);
+        let root = self
+            .root
+            .insert_or_modify::<H, _>(index, |node| match node {
+                Node::Empty { .. } => Node::Leaf { item: None },
+                _ => panic!("Cannot insert a hole into a non-empty/non-leaf node"),
+            });
+
+        Self {
+            root,
+            holes,
+            _hasher: PhantomData,
+        }
+    }
 }
 
 impl<H: MerkleHasher> PartialEq for DynamicMerkleTree<H> {
