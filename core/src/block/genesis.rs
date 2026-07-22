@@ -13,7 +13,7 @@ use crate::{
         MantleTx, Note, Op, OpProof, SignedMantleTx,
         ledger::{BoundedOutputs, Inputs, Outputs},
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp, transfer::TransferOp},
-        transactions::{GenesisTx, Ops, VerificationError, genesis_tx},
+        transactions::{GenesisTx, Ops, VerificationError, genesis_tx, tx::OpsProofs},
     },
 };
 
@@ -66,11 +66,11 @@ where
     I: IntoIterator<Item = N>,
     N: Into<Note>,
 {
-    let notes: Vec<Note> = notes.into_iter().map(Into::into).collect();
-    if notes.is_empty() {
+    let mut notes_iter = notes.into_iter().map(Into::into).peekable();
+    if notes_iter.peek().is_none() {
         return Err(Error::EmptyNotes);
     }
-    BoundedOutputs::try_from(notes).map_err(|error| map_notes_bounded_error(&error))
+    BoundedOutputs::try_from_iter(notes_iter).map_err(|error| map_notes_bounded_error(&error))
 }
 
 fn push_note(mut notes: BoundedOutputs, note: Note) -> Result<BoundedOutputs> {
@@ -80,21 +80,17 @@ fn push_note(mut notes: BoundedOutputs, note: Note) -> Result<BoundedOutputs> {
     Ok(notes)
 }
 
-fn extend_non_empty_notes<I, N>(mut existing: BoundedOutputs, notes: I) -> Result<BoundedOutputs>
+fn extend_non_empty_notes<I, N>(existing: BoundedOutputs, notes: I) -> Result<BoundedOutputs>
 where
     I: IntoIterator<Item = N>,
     N: Into<Note>,
 {
-    let mut iter = notes.into_iter().peekable();
-    if iter.peek().is_none() {
+    let mut notes_iter = notes.into_iter().map(Into::into).peekable();
+    if notes_iter.peek().is_none() {
         return Err(Error::EmptyNotes);
     }
-    for note in iter.map(Into::into) {
-        existing
-            .try_push(note)
-            .map_err(|error| map_notes_bounded_error(&error))?;
-    }
-    Ok(existing)
+    BoundedOutputs::try_from_iter(existing.into_iter().chain(notes_iter))
+        .map_err(|error| map_notes_bounded_error(&error))
 }
 
 /// A [`Block`] whose transactions are all [`GenesisTx`] values.
@@ -1198,24 +1194,21 @@ impl GenesisBlockBuilder<WithAll> {
                 count: n,
             }));
         };
-        let signed_tx = SignedMantleTx::new_unverified(
-            MantleTx(capped_ops),
-            vec![
-                OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
-                    &[0u8; 128],
-                ))),
-                OpProof::Ed25519Sig(Ed25519Signature::zero()),
-            ]
-            .into_iter()
-            .chain(vec![
-                OpProof::ZkAndEd25519Sigs {
+        let mut ops_proofs = OpsProofs::from([
+            OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
+                &[0u8; 128],
+            ))),
+            OpProof::Ed25519Sig(Ed25519Signature::zero()),
+        ]);
+        for _ in 0..n - 2 {
+            ops_proofs
+                .try_push(OpProof::ZkAndEd25519Sigs {
                     zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
                     ed25519_sig: Ed25519Signature::zero(),
-                };
-                n - 2
-            ])
-            .collect(),
-        );
+                })
+                .expect("genesis transaction proofs are bounded");
+        }
+        let signed_tx = SignedMantleTx::new_unverified(MantleTx(capped_ops), ops_proofs);
         Ok(GenesisBlock::genesis(GenesisTx::from_tx(signed_tx)?))
     }
 }
@@ -1317,20 +1310,20 @@ mod tests {
             Op::ChannelInscribe(valid_inscription()),
         ];
         ops.extend(extra_ops);
-        let ops_proofs = ops
-            .iter()
-            .map(|op| match op {
-                Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
-                Op::Transfer(_) => OpProof::ZkSig(ZkSignature::new(
-                    CompressedGroth16Proof::from_bytes(&[0u8; 128]),
-                )),
-                Op::SDPDeclare(_) => OpProof::ZkAndEd25519Sigs {
-                    zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
-                    ed25519_sig: Ed25519Signature::zero(),
-                },
-                other => unreachable!("unexpected genesis op in tests: {}", other.as_str()),
-            })
-            .collect();
+
+        let ops_proofs = OpsProofs::try_from_iter(ops.iter().map(|op| match op {
+            Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
+            Op::Transfer(_) => OpProof::ZkSig(ZkSignature::new(
+                CompressedGroth16Proof::from_bytes(&[0u8; 128]),
+            )),
+            Op::SDPDeclare(_) => OpProof::ZkAndEd25519Sigs {
+                zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
+                ed25519_sig: Ed25519Signature::zero(),
+            },
+            other => unreachable!("unexpected genesis op in tests: {}", other.as_str()),
+        }))
+        .expect("genesis transaction proofs are bounded");
+
         SignedMantleTx::new_unverified(MantleTx(Ops::new_unchecked(ops)), ops_proofs)
     }
 

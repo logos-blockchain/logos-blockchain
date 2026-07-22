@@ -237,7 +237,7 @@ pub(crate) fn run_config_combine(args: ConfigCombineArgs) -> RunResult<()> {
         )
         .into());
     }
-    let signed_tx = SignedMantleTx::new(tx, vec![OpProof::ChannelMultiSigProof(proof)])?;
+    let signed_tx = SignedMantleTx::new(tx, [OpProof::ChannelMultiSigProof(proof)].into())?;
     let signed = SignedConfigFile {
         version: ZONE_FILE_TRANSFER_VERSION,
         kind: ZONE_SIGNED_CONFIG.to_owned(),

@@ -398,7 +398,7 @@ fn build_inscription_transaction(
         .signing_key
         .sign_payload(tx_hash.as_signing_bytes().as_ref());
 
-    let signed_tx = SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(ed25519_signature)])
+    let signed_tx = SignedMantleTx::new(mantle_tx, [OpProof::Ed25519Sig(ed25519_signature)].into())
         .map_err(|error| InscriptionWorkloadError::SignedTransactionBuild(error.to_string()))?;
 
     channel.next_nonce = channel.next_nonce.saturating_add(1);

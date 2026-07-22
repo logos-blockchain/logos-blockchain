@@ -311,7 +311,7 @@ fn build_wallet_transaction(
     )
     .map_err(|err| format!("failed to sign transaction: {err}"))?;
 
-    SignedMantleTx::new(tx, vec![OpProof::ZkSig(signature)])
+    SignedMantleTx::new(tx, [OpProof::ZkSig(signature)].into())
         .map_err(|err| format!("failed to build signed transaction: {err}").into())
 }
 

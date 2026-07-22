@@ -100,6 +100,24 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
     pub fn iter_mut(&mut self) -> IterMut<'_, T> {
         self.0.iter_mut()
     }
+
+    pub fn try_from_iter<I>(iterable: I) -> Result<Self, BoundedError>
+    where
+        I: IntoIterator<Item = T>,
+    {
+        let mut values = Vec::new();
+
+        for value in iterable {
+            if values.len() == MAX {
+                return Err(BoundedError::TooManyItems {
+                    count: MAX + 1,
+                    max: MAX,
+                });
+            }
+            values.push(value);
+        }
+        Self::try_from(values)
+    }
 }
 
 impl<T, const MIN: usize, const MAX: usize> Default for Bounded<Vec<T>, MIN, MAX> {
@@ -537,5 +555,41 @@ mod tests {
 
         assert_eq!(bv.as_slice(), &[1, 2, 3]);
         assert_eq!(bv.len(), 3);
+    }
+
+    #[test]
+    fn try_from_iter_accepts_items_within_bounds() {
+        let bounded = TestBoundedVectorMin0::try_from_iter([1, 2, 3]).unwrap();
+
+        assert_eq!(bounded.as_slice(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn try_from_iter_accepts_an_empty_iterator_when_minimum_is_zero() {
+        let bounded = TestBoundedVectorMin0::try_from_iter(std::iter::empty()).unwrap();
+
+        assert!(bounded.is_empty());
+    }
+
+    #[test]
+    fn try_from_iter_rejects_items_above_maximum() {
+        let result = TestBoundedVectorMin0::try_from_iter([1, 2, 3, 4, 5]);
+
+        assert_eq!(result, Err(BoundedError::TooManyItems { count: 5, max: 4 }));
+    }
+
+    #[test]
+    fn try_from_iter_rejects_items_below_minimum() {
+        let result = TestBoundedVectorMin2::try_from_iter([1]);
+
+        assert_eq!(result, Err(BoundedError::TooFewItems { count: 1, min: 2 }));
+    }
+
+    #[test]
+    fn try_from_iter_preserves_iterator_order() {
+        let input = (0..4).map(|value| value * 2);
+        let bounded = TestBoundedVectorMin0::try_from_iter(input).unwrap();
+
+        assert_eq!(bounded.as_slice(), &[0, 2, 4, 6]);
     }
 }

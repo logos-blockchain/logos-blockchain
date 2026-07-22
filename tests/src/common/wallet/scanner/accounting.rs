@@ -215,6 +215,7 @@ mod tests {
                 channel::{ChannelId, deposit::DepositOp},
                 transfer::TransferOp,
             },
+            transactions::tx::OpsProofs,
         },
         proofs::leader_proof::Groth16LeaderProof,
         sdp::{DeclarationMessage, Locator, ProviderId, ServiceType, WithdrawMessage},
@@ -262,7 +263,7 @@ mod tests {
                 ))]
                 .into(),
             ),
-            Vec::new(),
+            OpsProofs::empty(),
         )
     }
 
@@ -340,7 +341,7 @@ mod tests {
                 })]
                 .into(),
             ),
-            Vec::new(),
+            OpsProofs::empty(),
         );
         let mut accounting =
             ScannerAccounting::new(vec![TrackedWalletKeys::new("alice", [pk(1)])], &[owned])
@@ -367,7 +368,7 @@ mod tests {
         let declaration = sdp_declaration(locked.id());
         let declare_tx = SignedMantleTx::new_unverified(
             MantleTx([Op::SDPDeclare(declaration.clone())].into()),
-            Vec::new(),
+            OpsProofs::empty(),
         );
         let withdraw_tx = SignedMantleTx::new_unverified(
             MantleTx(
@@ -378,7 +379,7 @@ mod tests {
                 })]
                 .into(),
             ),
-            Vec::new(),
+            OpsProofs::empty(),
         );
         let mut accounting =
             ScannerAccounting::new(vec![TrackedWalletKeys::new("alice", [pk(1)])], &[locked])

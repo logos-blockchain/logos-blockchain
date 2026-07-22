@@ -17,7 +17,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, NoteId, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
-        Value,
+        Value, VerificationError,
         gas::{GasCost, GasOverflow, MainnetGasConstants},
         ledger::Inputs,
         ops::{
@@ -27,7 +27,7 @@ use lb_core::{
             },
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
-        transactions::{MantleTxBuilder, MantleTxContext, TxBuilderError},
+        transactions::{MantleTxBuilder, MantleTxContext, TxBuilderError, tx::OpsProofs},
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
 };
@@ -48,7 +48,7 @@ use lb_services_utils::{
     wait_until_services_are_ready,
 };
 use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
-use lb_utils::tokio::task::spawn_blocking;
+use lb_utils::{bounded::BoundedError, tokio::task::spawn_blocking};
 use lb_wallet::{WalletBalance, WalletBlock, WalletError};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -129,6 +129,12 @@ pub enum WalletServiceError {
 
     #[error("Failed to fetch Channel Withdraw proof for op index {0} from the TxBuilder")]
     ChannelMultiSigProofNotFound(usize),
+
+    #[error(transparent)]
+    BoundedError(#[from] BoundedError),
+
+    #[error(transparent)]
+    VerificationError(#[from] VerificationError),
 }
 
 #[derive(Debug)]
@@ -894,7 +900,7 @@ where
         let mantle_tx = tx_builder.clone().build()?;
         let tx_hash = mantle_tx.hash();
 
-        let mut ops_proofs = Vec::new();
+        let mut ops_proofs = OpsProofs::empty();
         for (i, op) in mantle_tx.ops().iter().enumerate() {
             let proof = match op {
                 Op::ChannelInscribe(inscribe_op) => {
@@ -930,11 +936,10 @@ where
                         .await?
                 }
             };
-            ops_proofs.push(proof);
+            ops_proofs.try_push(proof)?;
         }
 
-        let signed_mantle_tx = SignedMantleTx::new(mantle_tx, ops_proofs)
-            .expect("Failed to create signed transaction");
+        let signed_mantle_tx = SignedMantleTx::new(mantle_tx, ops_proofs)?;
 
         Ok(signed_mantle_tx)
     }

@@ -26,7 +26,7 @@ use lb_core::mantle::{
         },
         transfer::TransferOp,
     },
-    transactions::builder::MantleTxBuilder,
+    transactions::{builder::MantleTxBuilder, tx::OpsProofs},
 };
 use lb_http_api_common::bodies::{
     channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
@@ -1459,11 +1459,12 @@ pub async fn submit_atomic_zone_deposit(
     let user_sig = sign_tx_zk(node_url, &tx, vec![funding_public_key]).await?;
     let signed_tx = SignedMantleTx::new(
         tx,
-        vec![
+        [
             OpProof::ZkSig(user_sig.clone()),
             OpProof::ZkSig(user_sig),
             OpProof::Ed25519Sig(sequencer_sig),
-        ],
+        ]
+        .into(),
     )
     .map_err(|error| ZoneTestError::SubmitAtomicDeposit {
         message: error.to_string(),
@@ -1526,8 +1527,15 @@ async fn build_funded_custom_tx(
     // proven by the sequencer key over the funded tx hash.
     let funded_tx = response.funded_tx;
     let signature = signing_key.sign_payload(funded_tx.hash().as_signing_bytes().as_ref());
-    let mut ops_proofs = vec![OpProof::Ed25519Sig(signature); payloads.len()];
-    ops_proofs.extend(response.transfer_proof);
+    let mut ops_proofs =
+        OpsProofs::new_unchecked(vec![OpProof::Ed25519Sig(signature); payloads.len()]);
+    if let Some(proof) = response.transfer_proof {
+        ops_proofs
+            .try_push(proof)
+            .map_err(|error| ZoneTestError::BuildCustomTx {
+                message: format!("too many operation proofs: {error:?}"),
+            })?;
+    }
     let signed_tx = SignedMantleTx::new(funded_tx, ops_proofs).map_err(|error| {
         ZoneTestError::BuildCustomTx {
             message: format!("assembling the signed tx failed: {error:?}"),
