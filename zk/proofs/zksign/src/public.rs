@@ -1,4 +1,5 @@
 use lb_groth16::{AdditiveGroup as _, Fr, Groth16Input, Groth16InputDeser};
+use lb_utils::bounded::BoundedVec;
 use serde::Deserialize;
 
 #[derive(Clone, Debug)]
@@ -18,32 +19,34 @@ impl ZkSignVerifierInputs {
 
 #[derive(Deserialize)]
 #[serde(transparent)]
-pub struct ZkSignVerifierInputsJson(Vec<Groth16InputDeser>);
+pub struct ZkSignVerifierInputsJson(BoundedVec<Groth16InputDeser, 33, 33>);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ZkSignVerifierInputsJsonTryFromError {
     #[error("Error during deserialization: {0:?}")]
     Groth16DeserError(<Groth16Input as TryFrom<Groth16InputDeser>>::Error),
-    #[error("Size should be 32")]
-    SizeShould32,
-    #[error("Empty slice")]
-    EmptySlice,
 }
+
 impl TryFrom<ZkSignVerifierInputsJson> for ZkSignVerifierInputs {
     type Error = ZkSignVerifierInputsJsonTryFromError;
 
-    fn try_from(mut value: ZkSignVerifierInputsJson) -> Result<Self, Self::Error> {
-        let msg = value.0.pop().ok_or(Self::Error::EmptySlice)?;
-        Ok(Self {
-            public_keys: value
-                .0
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(Self::Error::Groth16DeserError)?
-                .try_into()
-                .unwrap_or_else(|_| panic!("Size should be 32")),
-            msg: msg.try_into().map_err(Self::Error::Groth16DeserError)?,
-        })
+    fn try_from(value: ZkSignVerifierInputsJson) -> Result<Self, Self::Error> {
+        let mut inputs = value.0.into_inner();
+
+        let msg = inputs
+            .pop()
+            .expect("ZkSignVerifierInputsJson always contains 33 inputs")
+            .try_into()
+            .map_err(Self::Error::Groth16DeserError)?;
+
+        let public_keys: [Groth16Input; 32] = inputs
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Self::Error::Groth16DeserError)?
+            .try_into()
+            .expect("removing the message leaves exactly 32 public keys");
+
+        Ok(Self { public_keys, msg })
     }
 }
