@@ -10,19 +10,20 @@ use std::{
 
 pub use error::WalletError;
 use lb_core::{
-    block::Block,
+    block::{Block, BlockTransactions},
     crypto::{Hash, ZkHasher},
     events::{Event, Events, HeaderEvent, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, GasConstants, NoteId, TxHash, Utxo, Value,
+        ledger::BoundedInputs,
         ops::{
             Op, OpId as _,
             channel::{channel_transfer::ChannelTransferOp, withdraw::ChannelWithdrawOp},
             leader_claim::{VoucherCm, VoucherNullifier},
             transfer::TransferOp,
         },
-        transactions::{MantleTxContext, builder::MantleTxBuilder},
+        transactions::{MAX_OPS_PER_TX, MantleTxContext, builder::MantleTxBuilder},
     },
     proofs::leader_proof::LeaderProof as _,
 };
@@ -31,6 +32,7 @@ use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_ledger::LedgerState;
 use lb_log_targets::wallet;
 use lb_mmr::{MerkleMountainRange, MerklePath};
+use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -49,13 +51,13 @@ pub struct WalletBlock {
     pub epoch: Epoch,
     pub voucher_cm: VoucherCm,
     pub header_ops: Vec<HeaderOp>,
-    pub txs: Vec<WalletTx>,
+    pub txs: BlockTransactions<WalletTx>,
 }
 
 /// Wallet-relevant content of one transaction, in source order.
 #[derive(Clone, Debug, Default)]
 pub struct WalletTx {
-    ops: Vec<WalletOp>,
+    ops: UpperBoundedVec<WalletOp, MAX_OPS_PER_TX>,
 }
 
 /// A wallet-relevant effect produced by the block header processing.
@@ -94,7 +96,7 @@ pub enum WalletOp {
     /// Mark the deposited notes as channel notes: they stay in the wallet
     /// and remain eligible for `PoL`, but are gated out of wallet-driven
     /// spending.
-    ChannelDeposit(Vec<NoteId>),
+    ChannelDeposit(BoundedInputs),
     /// Drop the input channel notes from the wallet and insert the output
     /// channel notes owned by known keys.
     ChannelTransfer(ChannelTransferOp),
@@ -116,7 +118,7 @@ impl WalletBlock {
             epoch,
             voucher_cm: *block.header().leader_proof().voucher_cm(),
             header_ops: header_events.iter().map(Into::into).collect(),
-            txs: transform_txs(block.transactions_iter(), tx_events).collect(),
+            txs: transform_txs(block.transactions(), tx_events),
         }
     }
 
@@ -128,7 +130,7 @@ impl WalletBlock {
             .flat_map(|tx| tx.ops.iter())
             .flat_map(|op| match op {
                 WalletOp::Transfer(transfer) => transfer.inputs.iter().copied().collect::<Vec<_>>(),
-                WalletOp::ChannelDeposit(inputs) => inputs.clone(),
+                WalletOp::ChannelDeposit(inputs) => inputs.to_vec(),
                 WalletOp::ChannelTransfer(op) => op.inputs.iter().copied().collect::<Vec<_>>(),
                 WalletOp::Lock(note_id) => vec![*note_id],
                 WalletOp::ChannelWithdraw(_) | WalletOp::LeaderClaim(_) => Vec::new(),
@@ -504,24 +506,21 @@ fn insert_utxo_if_owned<KeyId>(
     true
 }
 
-fn transform_txs<'t, Tx>(
-    txs: impl Iterator<Item = &'t Tx> + 't,
+fn transform_txs<Tx>(
+    txs: &BlockTransactions<Tx>,
     mut events_by_tx: HashMap<TxHash, HashMap<Hash, TxEventPayload>>,
-) -> impl Iterator<Item = WalletTx> + 't
+) -> BlockTransactions<WalletTx>
 where
-    Tx: AuthenticatedMantleTx + 't,
+    Tx: AuthenticatedMantleTx,
 {
-    txs.map(move |tx| {
+    txs.map_ref(move |tx| {
         let mut events_by_op = events_by_tx.remove(&tx.hash()).unwrap_or_default();
-        let ops = tx
-            .mantle_tx()
-            .ops()
-            .iter()
-            .filter_map(|op| {
-                let event = op_id(op).and_then(|id| events_by_op.remove(&id));
-                transform_op(op, event)
-            })
-            .collect();
+
+        let ops = tx.mantle_tx().ops().filter_map(|op| {
+            let event = op_id(op).and_then(|id| events_by_op.remove(&id));
+            transform_op(op, event)
+        });
+
         WalletTx { ops }
     })
 }
@@ -572,7 +571,7 @@ fn transform_op(op: &Op, event: Option<TxEventPayload>) -> Option<WalletOp> {
     match op {
         Op::Transfer(transfer) => Some(WalletOp::Transfer(transfer.clone())),
         Op::ChannelDeposit(deposit) => Some(WalletOp::ChannelDeposit(
-            deposit.inputs.iter().copied().collect(),
+            deposit.inputs.clone().into_inner(),
         )),
         Op::ChannelTransfer(op) => Some(WalletOp::ChannelTransfer(op.clone())),
         Op::ChannelWithdraw(op) => Some(WalletOp::ChannelWithdraw(op.clone())),
@@ -951,6 +950,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::too_many_lines, reason = "Test function.")]
     fn test_sync() {
         let alice = pk(1);
         let bob = pk(2);
@@ -987,12 +987,14 @@ mod tests {
             voucher_cm: v1_cm,
             // Unknown unlocked note that will be ignored.
             header_ops: vec![HeaderOp::Unlock(NoteId::from(Fr::ONE))],
-            txs: vec![WalletTx {
-                ops: vec![
+            txs: [WalletTx {
+                ops: [
                     WalletOp::Transfer(transfer1.clone()),
                     WalletOp::Lock(locked_note),
-                ],
-            }],
+                ]
+                .into(),
+            }]
+            .into(),
         };
 
         wallet.apply_block(&block_1).unwrap();
@@ -1016,13 +1018,15 @@ mod tests {
             voucher_cm: v2_cm,
             // Unlock the previously locked note
             header_ops: vec![HeaderOp::Unlock(locked_note)],
-            txs: vec![WalletTx {
-                ops: vec![
+            txs: [WalletTx {
+                ops: [
                     WalletOp::Transfer(transfer2.clone()),
                     // Unknown locked note that will be ignored
                     WalletOp::Lock(NoteId::from(Fr::ONE)),
-                ],
-            }],
+                ]
+                .into(),
+            }]
+            .into(),
         };
         wallet.apply_block(&block_2).unwrap();
         assert_locked_notes(&wallet, block_2.id, []);
@@ -1062,12 +1066,14 @@ mod tests {
             epoch: 2.into(),
             voucher_cm: v3_cm,
             header_ops: vec![],
-            txs: vec![WalletTx {
-                ops: vec![
-                    WalletOp::ChannelDeposit(vec![alice_80_nmo_utxo.id()]),
+            txs: [WalletTx {
+                ops: [
+                    WalletOp::ChannelDeposit([alice_80_nmo_utxo.id()].into()),
                     WalletOp::LeaderClaim(Utxo::new(tx_hash(9), 0, Note::new(38, alice))),
-                ],
-            }],
+                ]
+                .into(),
+            }]
+            .into(),
         };
         wallet.apply_block(&block_3).unwrap();
 
@@ -1137,12 +1143,14 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm,
             header_ops: vec![],
-            txs: vec![WalletTx {
-                ops: vec![
+            txs: [WalletTx {
+                ops: [
                     WalletOp::Transfer(transfer_a),
                     WalletOp::Transfer(transfer_b),
-                ],
-            }],
+                ]
+                .into(),
+            }]
+            .into(),
         };
         wallet.apply_block(&block).unwrap();
 
@@ -1192,14 +1200,15 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm,
             header_ops: vec![],
-            txs: vec![
+            txs: [
                 WalletTx {
-                    ops: vec![WalletOp::Transfer(transfer_a)],
+                    ops: [WalletOp::Transfer(transfer_a)].into(),
                 },
                 WalletTx {
-                    ops: vec![WalletOp::Transfer(transfer_b)],
+                    ops: [WalletOp::Transfer(transfer_b)].into(),
                 },
-            ],
+            ]
+            .into(),
         };
         wallet.apply_block(&block).unwrap();
 
@@ -1281,7 +1290,7 @@ mod tests {
                 HeaderOp::SdpReward(alice_reward),
                 HeaderOp::SdpReward(bob_reward),
             ],
-            txs: vec![],
+            txs: BlockTransactions::empty(),
         };
 
         wallet.apply_block(&block).unwrap();
@@ -1838,9 +1847,10 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm,
             header_ops: vec![],
-            txs: vec![WalletTx {
-                ops: vec![WalletOp::ChannelDeposit(vec![alice_utxo.id()])],
-            }],
+            txs: [WalletTx {
+                ops: [WalletOp::ChannelDeposit([alice_utxo.id()].into())].into(),
+            }]
+            .into(),
         };
         wallet.apply_block(&block).unwrap();
 
@@ -1902,9 +1912,10 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_1,
             header_ops: vec![],
-            txs: vec![WalletTx {
-                ops: vec![WalletOp::ChannelDeposit(vec![pk1_utxo.id()])],
-            }],
+            txs: [WalletTx {
+                ops: [WalletOp::ChannelDeposit([pk1_utxo.id()].into())].into(),
+            }]
+            .into(),
         };
         wallet.apply_block(&deposit_block).unwrap();
 
@@ -1925,9 +1936,10 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_2,
             header_ops: vec![],
-            txs: vec![WalletTx {
-                ops: vec![WalletOp::ChannelTransfer(transfer_op)],
-            }],
+            txs: [WalletTx {
+                ops: [WalletOp::ChannelTransfer(transfer_op)].into(),
+            }]
+            .into(),
         };
         wallet.apply_block(&transfer_block).unwrap();
 
@@ -1981,9 +1993,10 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_1,
             header_ops: vec![],
-            txs: vec![WalletTx {
-                ops: vec![WalletOp::ChannelDeposit(vec![alice_utxo.id()])],
-            }],
+            txs: [WalletTx {
+                ops: [WalletOp::ChannelDeposit([alice_utxo.id()].into())].into(),
+            }]
+            .into(),
         };
         wallet.apply_block(&deposit_block).unwrap();
 
@@ -2004,9 +2017,10 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_2,
             header_ops: vec![],
-            txs: vec![WalletTx {
-                ops: vec![WalletOp::ChannelTransfer(transfer_op)],
-            }],
+            txs: [WalletTx {
+                ops: [WalletOp::ChannelTransfer(transfer_op)].into(),
+            }]
+            .into(),
         };
         wallet.apply_block(&transfer_block).unwrap();
 
@@ -2044,9 +2058,10 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_1,
             header_ops: vec![],
-            txs: vec![WalletTx {
-                ops: vec![WalletOp::ChannelDeposit(vec![alice_utxo.id()])],
-            }],
+            txs: [WalletTx {
+                ops: [WalletOp::ChannelDeposit([alice_utxo.id()].into())].into(),
+            }]
+            .into(),
         };
         wallet.apply_block(&deposit_block).unwrap();
 
@@ -2066,9 +2081,10 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_2,
             header_ops: vec![],
-            txs: vec![WalletTx {
-                ops: vec![WalletOp::ChannelWithdraw(withdraw_op)],
-            }],
+            txs: [WalletTx {
+                ops: [WalletOp::ChannelWithdraw(withdraw_op)].into(),
+            }]
+            .into(),
         };
         wallet.apply_block(&withdraw_block).unwrap();
 

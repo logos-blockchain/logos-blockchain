@@ -118,6 +118,25 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
         }
         Self::try_from(values)
     }
+
+    /// Filters and maps elements while preserving the upper length bound.
+    ///
+    /// Filtering may reduce the collection below `MIN`, so the result has
+    /// only an upper bound.
+    pub fn filter_map<U, F>(&self, f: F) -> UpperBoundedVec<U, MAX>
+    where
+        F: FnMut(&T) -> Option<U>,
+    {
+        Bounded::new_unchecked(self.as_inner().iter().filter_map(f).collect())
+    }
+
+    /// Maps borrowed elements while preserving both length bounds.
+    pub fn map_ref<U, F>(&self, f: F) -> BoundedVec<U, MIN, MAX>
+    where
+        F: FnMut(&T) -> U,
+    {
+        Bounded::new_unchecked(self.as_inner().iter().map(f).collect())
+    }
 }
 
 impl<T, const MIN: usize, const MAX: usize> Default for Bounded<Vec<T>, MIN, MAX> {
@@ -261,7 +280,7 @@ pub type MaxBoundedVec<T> = UpperBoundedVec<T, { usize::MAX }>;
 
 #[cfg(test)]
 mod tests {
-    use crate::bounded::{BoundedError, BoundedVec};
+    use crate::bounded::{BoundedError, BoundedVec, UpperBoundedVec};
 
     /// Concrete instantiation used across the tests: between 2 and 4 elements.
     type TestBoundedVectorMin2 = BoundedVec<u8, 2, 4>;
@@ -591,5 +610,57 @@ mod tests {
         let bounded = TestBoundedVectorMin0::try_from_iter(input).unwrap();
 
         assert_eq!(bounded.as_slice(), &[0, 2, 4, 6]);
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct MyNewType(u32);
+
+    #[test]
+    fn filter_map_preserves_upper_bound_when_filtering_items_above_twenty() {
+        type Source1 = BoundedVec<u16, 2, 4>;
+        type Source2 = UpperBoundedVec<u16, 4>;
+        type Mapped = UpperBoundedVec<MyNewType, 4>;
+
+        let source_1 = Source1::try_from(vec![10u16, 20, 30, 40]).unwrap();
+        let source_2 = Source2::try_from(vec![10u16, 20, 30, 40]).unwrap();
+
+        // The explicit type annotation proves at compile time that filter_map
+        // preserves the upper bound while dropping the lower bound.
+
+        let mapped_1: Mapped =
+            source_1.filter_map(|value| (*value > 20).then(|| MyNewType(u32::from(*value))));
+
+        assert_eq!(Mapped::MIN, 0);
+        assert_eq!(Mapped::MAX, Source1::MAX);
+        assert_eq!(mapped_1.len(), 2);
+        assert_eq!(mapped_1.as_slice(), &[MyNewType(30), MyNewType(40)]);
+
+        let mapped_2: Mapped =
+            source_2.filter_map(|value| (*value > 20).then(|| MyNewType(u32::from(*value))));
+
+        assert_eq!(Mapped::MIN, 0);
+        assert_eq!(Mapped::MAX, Source1::MAX);
+        assert_eq!(mapped_2.len(), 2);
+        assert_eq!(mapped_2.as_slice(), &[MyNewType(30), MyNewType(40)]);
+    }
+
+    #[test]
+    fn map_ref_preserves_bounds_when_mapping_to_another_inner_type() {
+        type Source = BoundedVec<u16, 2, 4>;
+        type Mapped = BoundedVec<MyNewType, 2, 4>;
+
+        let source = Source::try_from(vec![10u16, 20, 30, 40]).unwrap();
+
+        // The explicit type annotation proves at compile time that map_ref
+        // preserves both the minimum and maximum bounds.
+        let mapped: Mapped = source.map_ref(|value| MyNewType(u32::from(*value)));
+
+        assert_eq!(Mapped::MIN, Source::MIN);
+        assert_eq!(Mapped::MAX, Source::MAX);
+        assert_eq!(mapped.len(), source.len());
+        assert_eq!(
+            mapped.as_slice(),
+            &[MyNewType(10), MyNewType(20), MyNewType(30), MyNewType(40),]
+        );
     }
 }
