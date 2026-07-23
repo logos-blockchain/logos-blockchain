@@ -75,15 +75,7 @@ async fn step_fund_payment_transaction(
         });
     }
 
-    let signed_tx =
-        SignedMantleTx::new(response.funded_tx, vec![transfer_proof]).map_err(|source| {
-            StepError::LogicalError {
-                message: format!(
-                    "Step `{}` error: assembling the funded transaction failed: {source:?}",
-                    step.value
-                ),
-            }
-        })?;
+    let signed_tx = SignedMantleTx::new(response.funded_tx, [transfer_proof].into());
     let tx_hash = signed_tx.hash();
 
     world
@@ -173,14 +165,8 @@ async fn step_fund_inscription_transaction(
     let signature = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
     let signed_tx = SignedMantleTx::new(
         response.funded_tx,
-        vec![OpProof::Ed25519Sig(signature), transfer_proof],
-    )
-    .map_err(|source| StepError::LogicalError {
-        message: format!(
-            "Step `{}` error: assembling the funded transaction failed: {source:?}",
-            step.value
-        ),
-    })?;
+        [OpProof::Ed25519Sig(signature), transfer_proof].into(),
+    );
 
     world
         .submit_transaction(&funding_wallet, &signed_tx, &client)

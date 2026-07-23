@@ -24,6 +24,7 @@ use crate::{
             sdp::SDPDeclareOp,
             transfer::TransferOp,
         },
+        transactions::states::Preverified,
     },
 };
 
@@ -38,7 +39,7 @@ pub const GENESIS_EXECUTION_GAS_PRICE: GasPrice = GasPrice::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenesisTx {
-    tx: SignedMantleTx,
+    tx: SignedMantleTx<Preverified>,
     cryptarchia_parameter: CryptarchiaParameter,
 }
 
@@ -74,8 +75,8 @@ pub enum Error {
 }
 
 impl GenesisTx {
-    pub fn from_tx(signed_mantle_tx: SignedMantleTx) -> Result<Self, Error> {
-        let mantle_tx = &signed_mantle_tx.mantle_tx;
+    pub fn from_tx(signed_mantle_tx: SignedMantleTx<Preverified>) -> Result<Self, Error> {
+        let mantle_tx = signed_mantle_tx.mantle_tx();
 
         // Genesis transactions must contain exactly one transfer as the first op,
         // one inscription as the second op, and then may contain other SDP declarations
@@ -106,19 +107,15 @@ impl GenesisTx {
         };
 
         // Validate that every operation is paired with a proof of the correct variant.
-        let ops_count = signed_mantle_tx.mantle_tx.ops().len();
-        let proofs_count = signed_mantle_tx.ops_proofs.len();
+        let ops_count = signed_mantle_tx.mantle_tx().ops().len();
+        let proofs_count = signed_mantle_tx.ops_proofs().len();
         if ops_count != proofs_count {
             return Err(Error::ProofCountMismatch {
                 ops_count,
                 proofs_count,
             });
         }
-        for (proof, op) in signed_mantle_tx
-            .ops_proofs
-            .iter()
-            .zip(signed_mantle_tx.mantle_tx.ops().iter())
-        {
+        for (op, proof) in signed_mantle_tx.ops_with_proof() {
             if !proof_matches(proof, op) {
                 return Err(Error::MismatchedProofType {
                     op: Box::new(op.clone()),
@@ -163,10 +160,12 @@ fn valid_cryptarchia_inscription(
 }
 
 impl Transaction for GenesisTx {
+    //noinspection RsTypeCheck: The type is correct, but the linter is confused by
+    // the closure.
     const HASHER: TransactionHasher<Self> = |tx| TxHash(Hasher::digest(tx.as_signing()).into());
     type Hash = TxHash;
     fn as_signing(&self) -> Vec<u8> {
-        self.tx.mantle_tx.as_signing()
+        self.tx.as_signing()
     }
 }
 
@@ -222,21 +221,17 @@ impl crate::mantle::GenesisTx for GenesisTx {
     }
 
     fn sdp_declarations(&self) -> impl Iterator<Item = (&SDPDeclareOp, &OpProof)> {
-        self.mantle_tx()
-            .ops()
-            .iter()
-            .zip(self.tx.ops_proofs.iter())
-            .filter_map(|(op, proof)| {
-                if let Op::SDPDeclare(sdp_msg) = op {
-                    Some((sdp_msg, proof))
-                } else {
-                    None
-                }
-            })
+        self.tx.ops_with_proof().filter_map(|(op, proof)| {
+            if let Op::SDPDeclare(sdp_msg) = op {
+                Some((sdp_msg, proof))
+            } else {
+                None
+            }
+        })
     }
 
     fn mantle_tx(&self) -> &MantleTx {
-        &self.tx.mantle_tx
+        self.tx.mantle_tx()
     }
 }
 
@@ -255,14 +250,7 @@ impl<'de> Deserialize<'de> for GenesisTx {
     where
         D: serde::Deserializer<'de>,
     {
-        #[derive(Deserialize)]
-        struct Helper {
-            mantle_tx: MantleTx,
-            ops_proofs: Vec<OpProof>,
-        }
-
-        let helper = Helper::deserialize(deserializer)?;
-        let tx = SignedMantleTx::new_unverified(helper.mantle_tx, helper.ops_proofs);
+        let tx = SignedMantleTx::deserialize(deserializer)?.into_trusted();
         Self::from_tx(tx).map_err(serde::de::Error::custom)
     }
 }
@@ -419,7 +407,7 @@ mod tests {
         mantle::{
             ledger::{Inputs, Note, Outputs, Utxo, Value},
             ops::channel::{Ed25519PublicKey, inscribe::Inscription},
-            transactions::Ops,
+            transactions::{Ops, tx::OpsProofs},
         },
         sdp::{Locator, ProviderId, ServiceType},
     };
@@ -482,25 +470,28 @@ mod tests {
 
     // Helper function to create a basic signed transaction
     // Genesis transactions don't need verified proofs for Blob/Inscription ops
-    fn create_tx(mut ops: Vec<Op>, mut ops_proofs: Vec<OpProof>) -> SignedMantleTx {
+    fn create_trusted_tx(
+        mut ops: Vec<Op>,
+        ops_proofs: Vec<OpProof>,
+    ) -> SignedMantleTx<Preverified> {
         let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new([create_test_note(1000)]));
         let mut new_ops = vec![Op::Transfer(transfer_op)];
         new_ops.append(&mut ops);
         let mantle_tx = MantleTx(Ops::new_unchecked(new_ops));
-        let mut new_op_proofs = vec![OpProof::ZkSig(
+        let ops_proofs = OpsProofs::try_from(ops_proofs).unwrap();
+        let mut new_op_proofs = OpsProofs::from(OpProof::ZkSig(
             ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr()).unwrap(),
-        )];
-        new_op_proofs.append(&mut ops_proofs);
-        SignedMantleTx {
-            mantle_tx,
-            ops_proofs: new_op_proofs,
+        ));
+        for proof in ops_proofs {
+            new_op_proofs.try_push(proof).unwrap();
         }
+        SignedMantleTx::new_trusted(mantle_tx, new_op_proofs)
     }
 
     #[test]
     fn test_inscription_fields() {
         // check inscription with channel id [1; 32] fails
-        let tx = create_tx(
+        let tx = create_trusted_tx(
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([1; 32]),
                 &cryptarchia_param(),
@@ -517,7 +508,7 @@ mod tests {
         ));
 
         // check inscription with non-root parent fails
-        let tx = create_tx(
+        let tx = create_trusted_tx(
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([0; 32]),
                 &cryptarchia_param(),
@@ -534,7 +525,7 @@ mod tests {
         ));
 
         // check inscription with non-zero signer fails
-        let tx = create_tx(
+        let tx = create_trusted_tx(
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([0; 32]),
                 &cryptarchia_param(),
@@ -551,7 +542,7 @@ mod tests {
         ));
 
         // check valid inscription passes
-        let tx = create_tx(
+        let tx = create_trusted_tx(
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([0; 32]),
                 &cryptarchia_param(),
@@ -597,7 +588,7 @@ mod tests {
         // Execute all test cases
         for (ops, expected_err) in test_cases {
             let ops_proofs = ops.iter().map(placeholder_proof).collect::<Vec<_>>();
-            let tx = create_tx(ops, ops_proofs);
+            let tx = create_trusted_tx(ops, ops_proofs);
             let result = GenesisTx::from_tx(tx);
             match expected_err {
                 Some(expected) => assert_eq!(result, Err(expected)),
@@ -651,7 +642,7 @@ mod tests {
         // Execute all test cases
         for (ops, expected_err) in test_cases {
             let ops_proofs = ops.iter().map(placeholder_proof).collect::<Vec<_>>();
-            let tx = create_tx(ops, ops_proofs);
+            let tx = create_trusted_tx(ops, ops_proofs);
             let result = GenesisTx::from_tx(tx);
             match expected_err {
                 Some(expected) => assert_eq!(result, Err(expected)),
@@ -673,7 +664,7 @@ mod tests {
         let sdp_op = sdp_declare_op(utxo, 0, verifying_key);
         // SDPDeclare requires a `ZkAndEd25519Sigs` proof, an `Ed25519Sig` is the
         // wrong variant and must be rejected
-        let tx = create_tx(
+        let tx = create_trusted_tx(
             vec![Op::ChannelInscribe(inscription_op), Op::SDPDeclare(sdp_op)],
             vec![
                 OpProof::Ed25519Sig(Ed25519Signature::zero()),
@@ -689,7 +680,7 @@ mod tests {
     #[test]
     fn test_genesis_tx_serde() {
         // Create a genesis transaction with inscription (no signature proof required)
-        let signed_mantle_tx = create_tx(
+        let signed_mantle_tx = create_trusted_tx(
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([0; 32]),
                 &cryptarchia_param(),
@@ -788,7 +779,7 @@ mod tests {
         use crate::mantle::GenesisTx as _;
 
         let param = cryptarchia_param();
-        let tx = create_tx(
+        let tx = create_trusted_tx(
             vec![Op::ChannelInscribe(inscription_op(
                 ChannelId::from([0; 32]),
                 &param,

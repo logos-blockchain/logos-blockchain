@@ -8,7 +8,10 @@ use std::{collections::HashSet, time::Duration};
 use hex::ToHex as _;
 use lb_core::{
     codec::SerializeOp as _,
-    mantle::{OpProof, SignedMantleTx, TxHash, Utxo},
+    mantle::{
+        SignedMantleTx, TxHash, Utxo,
+        transactions::{states::Preverified, tx::OpsProofs},
+    },
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -75,7 +78,7 @@ impl SignedUserWalletSubmission {
         self.submission.tx_hash()
     }
 
-    pub(crate) const fn signed_tx(&self) -> &SignedMantleTx {
+    pub(crate) const fn signed_tx(&self) -> &SignedMantleTx<Preverified> {
         self.submission.signed_tx()
     }
 
@@ -464,7 +467,7 @@ pub async fn submit_prepared_user_wallet_transaction(
     world: &mut CucumberWorld,
     step: &str,
     prepared: PreparedUserWalletSubmission,
-    extra_op_proofs: Vec<OpProof>,
+    extra_op_proofs: OpsProofs,
     best_node_info: Option<&BestNodeInfo>,
     in_memory_available_utxos: Option<&mut WalletUtxos>,
 ) -> Result<TxHash, StepError> {
@@ -499,7 +502,7 @@ pub async fn submit_prepared_user_wallet_transaction(
 pub(crate) fn sign_prepared_user_wallet_transaction(
     step: &str,
     prepared: PreparedUserWalletSubmission,
-    extra_op_proofs: Vec<OpProof>,
+    extra_op_proofs: OpsProofs,
 ) -> Result<SignedUserWalletSubmission, StepError> {
     let PreparedUserWalletSubmission { wallet, submission } = prepared;
     let signed_submission = submission
@@ -529,7 +532,7 @@ fn finalize_reserved_user_wallet_submission(
     sign_prepared_user_wallet_transaction(
         step,
         PreparedUserWalletSubmission { wallet, submission },
-        Vec::new(),
+        OpsProofs::empty(),
     )
 }
 
@@ -653,7 +656,7 @@ async fn submit_user_wallet_transaction(
         world,
         step,
         prepared,
-        Vec::new(),
+        OpsProofs::empty(),
         best_node_info,
         in_memory_available_utxos,
     )

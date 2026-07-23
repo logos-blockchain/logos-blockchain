@@ -1,6 +1,7 @@
 pub mod builder;
 pub mod codec;
 pub mod genesis_tx;
+pub mod states;
 pub mod tx;
 
 pub use builder::{MantleTxBuilder, TxBuilderError};

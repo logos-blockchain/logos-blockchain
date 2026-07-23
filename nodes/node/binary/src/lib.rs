@@ -13,6 +13,7 @@ pub use lb_blend_service::core::{
     backends::libp2p::Libp2pBlendBackend as BlendBackend,
     network::libp2p::Libp2pAdapter as BlendNetworkAdapter,
 };
+use lb_core::mantle::transactions::states::Preverified;
 pub use lb_core::{
     codec,
     header::HeaderId,
@@ -98,7 +99,7 @@ pub type ApiService = lb_api_service::ApiService<
     AxumBackend<
         NtpTimeBackend,
         ApiStorageAdapter<RuntimeServiceId>,
-        RocksStorageAdapter<SignedMantleTx, TxHash>,
+        RocksStorageAdapter<SignedMantleTx<Preverified>, TxHash>,
         SdpMempoolAdapter<RuntimeServiceId>,
         SdpWalletAdapter<RuntimeServiceId>,
         SdpRecoveryBackend,

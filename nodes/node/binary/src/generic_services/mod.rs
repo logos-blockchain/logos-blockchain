@@ -3,7 +3,7 @@ use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapter;
 use lb_chain_service::CryptarchiaConsensus;
 use lb_core::{
     header::HeaderId,
-    mantle::{SignedMantleTx, Transaction, TxHash},
+    mantle::{SignedMantleTx, Transaction, TxHash, transactions::states::Preverified},
 };
 use lb_key_management_system_service::backend::preload::PreloadKMSBackend;
 use lb_sdp_service::{SdpSettings, state::SdpState};
@@ -19,18 +19,24 @@ pub mod sdp;
 
 pub type TxMempoolService<RuntimeServiceId> = lb_tx_service::TxMempoolService<
     lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
-        SignedMantleTx,
-        <SignedMantleTx as Transaction>::Hash,
+        SignedMantleTx<Preverified>,
+        <SignedMantleTx<Preverified> as Transaction>::Hash,
         RuntimeServiceId,
     >,
     Mempool<
         HeaderId,
-        SignedMantleTx,
+        SignedMantleTx<Preverified>,
         TxHash,
-        RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
+        RocksStorageAdapter<
+            SignedMantleTx<Preverified>,
+            <SignedMantleTx<Preverified> as Transaction>::Hash,
+        >,
         RuntimeServiceId,
     >,
-    RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
+    RocksStorageAdapter<
+        SignedMantleTx<Preverified>,
+        <SignedMantleTx<Preverified> as Transaction>::Hash,
+    >,
     RuntimeServiceId,
 >;
 
@@ -38,25 +44,32 @@ pub type TimeService<RuntimeServiceId> =
     lb_time_service::TimeService<NtpTimeBackend, RuntimeServiceId>;
 
 pub type MempoolAdapter<RuntimeServiceId> = lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
-    SignedMantleTx,
-    <SignedMantleTx as Transaction>::Hash,
+    SignedMantleTx<Preverified>,
+    <SignedMantleTx<Preverified> as Transaction>::Hash,
     RuntimeServiceId,
 >;
 
 pub type MempoolBackend<RuntimeServiceId> = Mempool<
     HeaderId,
-    SignedMantleTx,
-    <SignedMantleTx as Transaction>::Hash,
-    RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
+    SignedMantleTx<Preverified>,
+    <SignedMantleTx<Preverified> as Transaction>::Hash,
+    RocksStorageAdapter<
+        SignedMantleTx<Preverified>,
+        <SignedMantleTx<Preverified> as Transaction>::Hash,
+    >,
     RuntimeServiceId,
 >;
 
-pub type CryptarchiaService<RuntimeServiceId> =
-    CryptarchiaConsensus<SignedMantleTx, RocksBackend, NtpTimeBackend, RuntimeServiceId>;
+pub type CryptarchiaService<RuntimeServiceId> = CryptarchiaConsensus<
+    SignedMantleTx<Preverified>,
+    RocksBackend,
+    NtpTimeBackend,
+    RuntimeServiceId,
+>;
 
 pub type ChainNetworkService<RuntimeServiceId> = lb_chain_network_service::ChainNetwork<
     CryptarchiaService<RuntimeServiceId>,
-    LibP2pAdapter<SignedMantleTx, RuntimeServiceId>,
+    LibP2pAdapter<SignedMantleTx<Preverified>, RuntimeServiceId>,
     MempoolBackend<RuntimeServiceId>,
     MempoolAdapter<RuntimeServiceId>,
     NtpTimeBackend,
@@ -69,7 +82,7 @@ pub type KeyManagementService<RuntimeServiceId> =
 pub type WalletService<Cryptarchia, RuntimeServiceId> = lb_wallet_service::WalletService<
     KeyManagementService<RuntimeServiceId>,
     Cryptarchia,
-    SignedMantleTx,
+    SignedMantleTx<Preverified>,
     RocksBackend,
     RuntimeServiceId,
 >;
@@ -88,15 +101,18 @@ pub type CryptarchiaLeaderService<Cryptarchia, ChainNetwork, Wallet, RuntimeServ
 
 pub type SdpMempoolAdapter<RuntimeServiceId> = sdp::mempool::SdpMempoolAdapter<
     lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
-        SignedMantleTx,
+        SignedMantleTx<Preverified>,
         TxHash,
         RuntimeServiceId,
     >,
     Mempool<
         HeaderId,
-        SignedMantleTx,
+        SignedMantleTx<Preverified>,
         TxHash,
-        RocksStorageAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash>,
+        RocksStorageAdapter<
+            SignedMantleTx<Preverified>,
+            <SignedMantleTx<Preverified> as Transaction>::Hash,
+        >,
         RuntimeServiceId,
     >,
     RuntimeServiceId,

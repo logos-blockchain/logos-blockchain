@@ -690,7 +690,7 @@ where
 
     fn log_received_block(block: &Block<Mempool::Item>) {
         let content_size = 0; // TODO: calculate the actual content size
-        let transactions = block.transactions().len();
+        let transactions = block.transactions_iter().len();
 
         trace!(
             counter.received_blocks = 1,
@@ -932,7 +932,7 @@ where
 
     let (tip, reorged_txs) = cryptarchia.apply_block(block.clone()).await?;
     let reorged_tx_count = reorged_txs.len();
-    let included_tx_count = block.transactions().len();
+    let included_tx_count = block.transactions_iter().len();
 
     // Remove included content from mempool if the block was applied to the honest
     // chain. Otherwise, we keep them in mempool, so they can be included to the
@@ -947,7 +947,7 @@ where
         mempool_adapter
             .remove_transactions(
                 &block
-                    .transactions()
+                    .transactions_iter()
                     .map(Transaction::hash)
                     .collect::<Vec<_>>(),
             )

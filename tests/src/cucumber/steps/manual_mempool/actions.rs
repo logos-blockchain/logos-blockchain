@@ -5,7 +5,10 @@ use std::{
     time::Duration,
 };
 
-use lb_core::mantle::{SignedMantleTx, Transaction as _, TxHash};
+use lb_core::mantle::{
+    SignedMantleTx, Transaction as _, TxHash,
+    transactions::{states::Preverified, tx::OpsProofs},
+};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_tx_service::{backend::PoolRecoveryState, tx::state::TxMempoolState};
 use tokio::time::{sleep, timeout};
@@ -41,7 +44,7 @@ pub async fn prepare_transfer_transaction(
     let prepared =
         prepare_user_wallet_transaction_submission(world, step, &sender_wallet_name, intent, None)
             .await?;
-    let signed = sign_prepared_user_wallet_transaction(step, prepared, Vec::new())?;
+    let signed = sign_prepared_user_wallet_transaction(step, prepared, OpsProofs::empty())?;
     let tx_hash = record_prepared_transaction(world, transaction_alias.clone(), &signed)?;
 
     report_prepared_transaction(
@@ -264,7 +267,7 @@ async fn submit_prepared_transaction_to_node(
     world: &CucumberWorld,
     step: &str,
     transaction_alias: &str,
-    signed_tx: &SignedMantleTx,
+    signed_tx: &SignedMantleTx<Preverified>,
     tx_hash: TxHash,
     node_name: &str,
 ) -> Result<(), StepError> {

@@ -3,7 +3,7 @@ use std::fmt::{Debug, Formatter};
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::CompressedGroth16Proof;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
-use lb_utils::bounded::BoundedError;
+use lb_utils::bounded::{BoundedError, UpperBoundedVec};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -13,7 +13,9 @@ use crate::{
         MantleTx, Note, Op, OpProof, SignedMantleTx,
         ledger::{BoundedOutputs, Inputs, Outputs},
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp, transfer::TransferOp},
-        transactions::{GenesisTx, Ops, VerificationError, genesis_tx},
+        transactions::{
+            GenesisTx, MAX_OPS_PER_TX, Ops, VerificationError, genesis_tx, tx::OpsProofs,
+        },
     },
 };
 
@@ -66,11 +68,11 @@ where
     I: IntoIterator<Item = N>,
     N: Into<Note>,
 {
-    let notes: Vec<Note> = notes.into_iter().map(Into::into).collect();
-    if notes.is_empty() {
+    let mut notes_iter = notes.into_iter().map(Into::into).peekable();
+    if notes_iter.peek().is_none() {
         return Err(Error::EmptyNotes);
     }
-    BoundedOutputs::try_from(notes).map_err(|error| map_notes_bounded_error(&error))
+    BoundedOutputs::try_from_iter(notes_iter).map_err(|error| map_notes_bounded_error(&error))
 }
 
 fn push_note(mut notes: BoundedOutputs, note: Note) -> Result<BoundedOutputs> {
@@ -80,21 +82,17 @@ fn push_note(mut notes: BoundedOutputs, note: Note) -> Result<BoundedOutputs> {
     Ok(notes)
 }
 
-fn extend_non_empty_notes<I, N>(mut existing: BoundedOutputs, notes: I) -> Result<BoundedOutputs>
+fn extend_non_empty_notes<I, N>(existing: BoundedOutputs, notes: I) -> Result<BoundedOutputs>
 where
     I: IntoIterator<Item = N>,
     N: Into<Note>,
 {
-    let mut iter = notes.into_iter().peekable();
-    if iter.peek().is_none() {
+    let mut notes_iter = notes.into_iter().map(Into::into).peekable();
+    if notes_iter.peek().is_none() {
         return Err(Error::EmptyNotes);
     }
-    for note in iter.map(Into::into) {
-        existing
-            .try_push(note)
-            .map_err(|error| map_notes_bounded_error(&error))?;
-    }
-    Ok(existing)
+    BoundedOutputs::try_from_iter(existing.into_iter().chain(notes_iter))
+        .map_err(|error| map_notes_bounded_error(&error))
 }
 
 /// A [`Block`] whose transactions are all [`GenesisTx`] values.
@@ -158,7 +156,7 @@ impl GenesisBlock {
 
     #[must_use]
     pub fn genesis_tx(&self) -> GenesisTx {
-        self.0.transactions_vec()[0].clone()
+        self.0.transactions()[0].clone()
     }
 
     #[must_use]
@@ -183,6 +181,13 @@ impl core::ops::Deref for GenesisBlock {
 // ── Typestate markers
 // ─────────────────────────────────────────────────────────
 
+/// The genesis transaction structure is always `Transfer` + `ChannelInscribe` +
+/// zero or more `SDPDeclareOp`, with maximum operations bounded in `Ops`.
+const GENESIS_REQUIRED_OPS: usize = 2;
+
+pub const MAX_GENESIS_DECLARATIONS: usize = MAX_OPS_PER_TX - GENESIS_REQUIRED_OPS; // 253
+pub type GenesisSDPDeclareOps = UpperBoundedVec<SDPDeclareOp, MAX_GENESIS_DECLARATIONS>;
+
 /// Typestate marker: builder has no input yet.
 pub struct Empty;
 
@@ -203,7 +208,7 @@ pub struct WithInscription {
 
 /// Typestate marker: builder has SDP service-declaration ops only.
 pub struct WithDeclarations {
-    sdp_declarations: Vec<SDPDeclareOp>,
+    sdp_declarations: GenesisSDPDeclareOps,
 }
 
 /// Typestate marker: builder has genesis notes and an inscription.
@@ -215,13 +220,13 @@ pub struct WithNotesAndInscription {
 /// Typestate marker: builder has genesis notes and SDP declarations.
 pub struct WithNotesAndDeclarations {
     notes: BoundedOutputs,
-    sdp_declarations: Vec<SDPDeclareOp>,
+    sdp_declarations: GenesisSDPDeclareOps,
 }
 
 /// Typestate marker: builder has a genesis inscription and SDP declarations.
 pub struct WithInscriptionAndDeclarations {
     inscription: InscriptionOp,
-    sdp_declarations: Vec<SDPDeclareOp>,
+    sdp_declarations: GenesisSDPDeclareOps,
 }
 
 #[expect(
@@ -229,12 +234,12 @@ pub struct WithInscriptionAndDeclarations {
     reason = "Necessary documentation"
 )]
 /// Typestate marker: builder holds all three pieces required to assemble a
-/// [`GenesisTx`] — notes, an inscription, and at least one SDP declaration.
+/// [`GenesisTx`] — notes, an inscription, and optional SDP declaration.
 /// This is the only state that exposes [`GenesisBlockBuilder::build`].
 pub struct WithAll {
     notes: BoundedOutputs,
     inscription: InscriptionOp,
-    sdp_declarations: Vec<SDPDeclareOp>,
+    sdp_declarations: GenesisSDPDeclareOps,
 }
 
 // ── Builder
@@ -362,7 +367,7 @@ impl GenesisBlockBuilder<Empty> {
     ) -> GenesisBlockBuilder<WithDeclarations> {
         GenesisBlockBuilder {
             state: WithDeclarations {
-                sdp_declarations: vec![declaration],
+                sdp_declarations: [declaration].into(),
             },
         }
     }
@@ -370,24 +375,21 @@ impl GenesisBlockBuilder<Empty> {
     /// Add multiple SDP service-declaration ops at once, transitioning to
     /// [`WithDeclarations`].
     ///
-    /// # Panics
+    /// # Panics and Errors
     ///
     /// Panics if `declarations` is empty.
-    #[must_use]
+    /// Returns an error if the number of declarations exceeds the maximum
+    /// allowed.
     pub fn add_declarations(
         self,
         declarations: impl IntoIterator<Item = impl Into<SDPDeclareOp>>,
-    ) -> GenesisBlockBuilder<WithDeclarations> {
-        let mut iter = declarations.into_iter().peekable();
-        assert!(
-            iter.peek().is_some(),
-            "add_declarations called with empty iterator"
-        );
-        GenesisBlockBuilder {
+    ) -> Result<GenesisBlockBuilder<WithDeclarations>> {
+        let iter = require_non_empty(declarations, "add_declarations");
+        Ok(GenesisBlockBuilder {
             state: WithDeclarations {
-                sdp_declarations: iter.map(Into::into).collect(),
+                sdp_declarations: try_collect_sdp_declarations(iter)?,
             },
-        }
+        })
     }
 }
 
@@ -448,7 +450,7 @@ impl GenesisBlockBuilder<WithNotes> {
         GenesisBlockBuilder {
             state: WithNotesAndDeclarations {
                 notes,
-                sdp_declarations: vec![declaration],
+                sdp_declarations: [declaration].into(),
             },
         }
     }
@@ -456,28 +458,24 @@ impl GenesisBlockBuilder<WithNotes> {
     /// Add multiple SDP declarations at once, transitioning to
     /// [`WithNotesAndDeclarations`].
     ///
-    /// # Panics
+    /// # Panics and Errors
     ///
     /// Panics if `declarations` is empty.
-    #[must_use]
+    /// Errors if the number of declarations exceeds the maximum allowed.
     pub fn add_declarations(
         self,
         declarations: impl IntoIterator<Item = impl Into<SDPDeclareOp>>,
-    ) -> GenesisBlockBuilder<WithNotesAndDeclarations> {
-        let mut iter = declarations.into_iter().peekable();
-        assert!(
-            iter.peek().is_some(),
-            "add_declarations called with empty iterator"
-        );
+    ) -> Result<GenesisBlockBuilder<WithNotesAndDeclarations>> {
+        let iter = require_non_empty(declarations, "add_declarations");
         let Self {
             state: WithNotes { notes },
         } = self;
-        GenesisBlockBuilder {
+        Ok(GenesisBlockBuilder {
             state: WithNotesAndDeclarations {
                 notes,
-                sdp_declarations: iter.map(Into::into).collect(),
+                sdp_declarations: try_collect_sdp_declarations(iter)?,
             },
-        }
+        })
     }
 }
 
@@ -556,7 +554,7 @@ impl GenesisBlockBuilder<WithInscription> {
         GenesisBlockBuilder {
             state: WithInscriptionAndDeclarations {
                 inscription,
-                sdp_declarations: vec![declaration],
+                sdp_declarations: [declaration].into(),
             },
         }
     }
@@ -564,28 +562,24 @@ impl GenesisBlockBuilder<WithInscription> {
     /// Add multiple SDP declarations at once, transitioning to
     /// [`WithInscriptionAndDeclarations`].
     ///
-    /// # Panics
+    /// # Panics and Errors
     ///
     /// Panics if `declarations` is empty.
-    #[must_use]
+    /// Errors if the number of declarations exceeds the maximum allowed.
     pub fn add_declarations(
         self,
         declarations: impl IntoIterator<Item = impl Into<SDPDeclareOp>>,
-    ) -> GenesisBlockBuilder<WithInscriptionAndDeclarations> {
-        let mut iter = declarations.into_iter().peekable();
-        assert!(
-            iter.peek().is_some(),
-            "add_declarations called with empty iterator"
-        );
+    ) -> Result<GenesisBlockBuilder<WithInscriptionAndDeclarations>> {
+        let iter = require_non_empty(declarations, "add_declarations");
         let Self {
             state: WithInscription { inscription },
         } = self;
-        GenesisBlockBuilder {
+        Ok(GenesisBlockBuilder {
             state: WithInscriptionAndDeclarations {
                 inscription,
-                sdp_declarations: iter.map(Into::into).collect(),
+                sdp_declarations: try_collect_sdp_declarations(iter)?,
             },
-        }
+        })
     }
 }
 
@@ -662,17 +656,14 @@ impl GenesisBlockBuilder<WithDeclarations> {
     }
 
     /// Append another SDP declaration.
-    #[must_use]
-    pub fn add_declaration(self, declaration: SDPDeclareOp) -> Self {
+    pub fn add_declaration(self, declaration: SDPDeclareOp) -> Result<Self> {
         let Self {
-            state: WithDeclarations {
-                mut sdp_declarations,
-            },
-        } = self;
-        sdp_declarations.push(declaration);
-        Self {
             state: WithDeclarations { sdp_declarations },
-        }
+        } = self;
+        let sdp_declarations = try_push_genesis_declaration(sdp_declarations, declaration)?;
+        Ok(Self {
+            state: WithDeclarations { sdp_declarations },
+        })
     }
 
     /// Append multiple SDP declarations at once.
@@ -680,25 +671,19 @@ impl GenesisBlockBuilder<WithDeclarations> {
     /// # Panics
     ///
     /// Panics if `declarations` is empty.
-    #[must_use]
     pub fn add_declarations(
         self,
         declarations: impl IntoIterator<Item = impl Into<SDPDeclareOp>>,
-    ) -> Self {
-        let mut iter = declarations.into_iter().peekable();
-        assert!(
-            iter.peek().is_some(),
-            "add_declarations called with empty iterator"
-        );
+    ) -> Result<Self> {
+        let iter = require_non_empty(declarations, "add_declarations");
         let Self {
-            state: WithDeclarations {
-                mut sdp_declarations,
-            },
-        } = self;
-        sdp_declarations.extend(iter.map(Into::into));
-        Self {
             state: WithDeclarations { sdp_declarations },
-        }
+        } = self;
+        let sdp_declarations =
+            try_extend_genesis_declarations(sdp_declarations, iter.map(Into::into))?;
+        Ok(Self {
+            state: WithDeclarations { sdp_declarations },
+        })
     }
 }
 
@@ -761,7 +746,7 @@ impl GenesisBlockBuilder<WithNotesAndInscription> {
             state: WithAll {
                 notes,
                 inscription,
-                sdp_declarations: vec![declaration],
+                sdp_declarations: [declaration].into(),
             },
         }
     }
@@ -769,29 +754,25 @@ impl GenesisBlockBuilder<WithNotesAndInscription> {
     /// Add multiple SDP declarations at once, completing all three pieces and
     /// transitioning to [`WithAll`].
     ///
-    /// # Panics
+    /// # Panics and Errors
     ///
     /// Panics if `declarations` is empty.
-    #[must_use]
+    /// Errors if the number of declarations exceeds the maximum allowed.
     pub fn add_declarations(
         self,
         declarations: impl IntoIterator<Item = impl Into<SDPDeclareOp>>,
-    ) -> GenesisBlockBuilder<WithAll> {
-        let mut iter = declarations.into_iter().peekable();
-        assert!(
-            iter.peek().is_some(),
-            "add_declarations called with empty iterator"
-        );
+    ) -> Result<GenesisBlockBuilder<WithAll>> {
+        let iter = require_non_empty(declarations, "add_declarations");
         let Self {
             state: WithNotesAndInscription { notes, inscription },
         } = self;
-        GenesisBlockBuilder {
+        Ok(GenesisBlockBuilder {
             state: WithAll {
                 notes,
                 inscription,
-                sdp_declarations: iter.map(Into::into).collect(),
+                sdp_declarations: try_collect_sdp_declarations(iter)?,
             },
-        }
+        })
     }
 
     // Build a block with empty declarations but properly set inscription and
@@ -801,11 +782,78 @@ impl GenesisBlockBuilder<WithNotesAndInscription> {
             state: WithAll {
                 notes: self.state.notes,
                 inscription: self.state.inscription,
-                sdp_declarations: vec![],
+                sdp_declarations: GenesisSDPDeclareOps::empty(),
             },
         }
         .build()
     }
+}
+
+// ── Helpers
+// ──────────────────────────────────────────────────
+
+fn require_non_empty<I>(iterable: I, context: &'static str) -> impl Iterator<Item = I::Item>
+where
+    I: IntoIterator,
+{
+    let mut iter = iterable.into_iter();
+
+    let Some(first) = iter.next() else {
+        panic!("{context} called with empty iterator");
+    };
+
+    std::iter::once(first).chain(iter)
+}
+
+fn try_collect_sdp_declarations<I, D>(declarations: I) -> Result<GenesisSDPDeclareOps>
+where
+    I: IntoIterator<Item = D>,
+    D: Into<SDPDeclareOp>,
+{
+    GenesisSDPDeclareOps::try_from_iter(declarations.into_iter().map(Into::into)).map_err(|error| {
+        match error {
+            BoundedError::TooManyItems { count, .. } => {
+                Error::InvalidGenesisTx(genesis_tx::Error::TooManyOps {
+                    count: GENESIS_REQUIRED_OPS + count,
+                })
+            }
+            BoundedError::EmptyInput | BoundedError::TooFewItems { .. } => {
+                unreachable!("GenesisSDPDeclareOps has a zero minimum bound")
+            }
+            BoundedError::IndexOutOfBounds { .. } => {
+                unreachable!("construction cannot produce an index error")
+            }
+        }
+    })
+}
+
+fn try_push_genesis_declaration(
+    mut declarations: GenesisSDPDeclareOps,
+    declaration: SDPDeclareOp,
+) -> Result<GenesisSDPDeclareOps> {
+    declarations.try_push(declaration).map_err(|_| {
+        Error::InvalidGenesisTx(genesis_tx::Error::TooManyOps {
+            count: GENESIS_REQUIRED_OPS + declarations.len() + 1,
+        })
+    })?;
+    Ok(declarations)
+}
+
+fn try_extend_genesis_declarations<I>(
+    mut declarations: GenesisSDPDeclareOps,
+    new_items: I,
+) -> Result<GenesisSDPDeclareOps>
+where
+    I: IntoIterator<Item = SDPDeclareOp>,
+{
+    for item in new_items {
+        declarations.try_push(item).map_err(|_| {
+            Error::InvalidGenesisTx(genesis_tx::Error::TooManyOps {
+                count: GENESIS_REQUIRED_OPS + declarations.len() + 1,
+            })
+        })?;
+    }
+    Ok(declarations)
 }
 
 // ── WithNotesAndDeclarations
@@ -872,8 +920,7 @@ impl GenesisBlockBuilder<WithNotesAndDeclarations> {
     }
 
     /// Append another SDP declaration.
-    #[must_use]
-    pub fn add_declaration(self, declaration: SDPDeclareOp) -> Self {
+    pub fn add_declaration(self, declaration: SDPDeclareOp) -> Result<Self> {
         let Self {
             state:
                 WithNotesAndDeclarations {
@@ -881,13 +928,13 @@ impl GenesisBlockBuilder<WithNotesAndDeclarations> {
                     mut sdp_declarations,
                 },
         } = self;
-        sdp_declarations.push(declaration);
-        Self {
+        sdp_declarations = try_push_genesis_declaration(sdp_declarations, declaration)?;
+        Ok(Self {
             state: WithNotesAndDeclarations {
                 notes,
                 sdp_declarations,
             },
-        }
+        })
     }
 
     /// Append multiple SDP declarations at once.
@@ -895,16 +942,11 @@ impl GenesisBlockBuilder<WithNotesAndDeclarations> {
     /// # Panics
     ///
     /// Panics if `declarations` is empty.
-    #[must_use]
     pub fn add_declarations(
         self,
         declarations: impl IntoIterator<Item = impl Into<SDPDeclareOp>>,
-    ) -> Self {
-        let mut iter = declarations.into_iter().peekable();
-        assert!(
-            iter.peek().is_some(),
-            "add_declarations called with empty iterator"
-        );
+    ) -> Result<Self> {
+        let iter = require_non_empty(declarations, "add_declarations");
         let Self {
             state:
                 WithNotesAndDeclarations {
@@ -912,13 +954,13 @@ impl GenesisBlockBuilder<WithNotesAndDeclarations> {
                     mut sdp_declarations,
                 },
         } = self;
-        sdp_declarations.extend(iter.map(Into::into));
-        Self {
+        sdp_declarations = try_extend_genesis_declarations(sdp_declarations, iter.map(Into::into))?;
+        Ok(Self {
             state: WithNotesAndDeclarations {
                 notes,
                 sdp_declarations,
             },
-        }
+        })
     }
 }
 
@@ -990,8 +1032,7 @@ impl GenesisBlockBuilder<WithInscriptionAndDeclarations> {
     }
 
     /// Append another SDP declaration.
-    #[must_use]
-    pub fn add_declaration(self, declaration: SDPDeclareOp) -> Self {
+    pub fn add_declaration(self, declaration: SDPDeclareOp) -> Result<Self> {
         let Self {
             state:
                 WithInscriptionAndDeclarations {
@@ -999,13 +1040,13 @@ impl GenesisBlockBuilder<WithInscriptionAndDeclarations> {
                     mut sdp_declarations,
                 },
         } = self;
-        sdp_declarations.push(declaration);
-        Self {
+        sdp_declarations = try_push_genesis_declaration(sdp_declarations, declaration)?;
+        Ok(Self {
             state: WithInscriptionAndDeclarations {
                 inscription,
                 sdp_declarations,
             },
-        }
+        })
     }
 
     /// Append multiple SDP declarations at once.
@@ -1013,30 +1054,26 @@ impl GenesisBlockBuilder<WithInscriptionAndDeclarations> {
     /// # Panics
     ///
     /// Panics if `declarations` is empty.
-    #[must_use]
     pub fn add_declarations(
         self,
         declarations: impl IntoIterator<Item = impl Into<SDPDeclareOp>>,
-    ) -> Self {
-        let mut iter = declarations.into_iter().peekable();
-        assert!(
-            iter.peek().is_some(),
-            "add_declarations called with empty iterator"
-        );
+    ) -> Result<Self> {
+        let iter = require_non_empty(declarations, "add_declarations");
         let Self {
             state:
                 WithInscriptionAndDeclarations {
                     inscription,
-                    mut sdp_declarations,
+                    sdp_declarations,
                 },
         } = self;
-        sdp_declarations.extend(iter.map(Into::into));
-        Self {
+        let sdp_declarations =
+            try_extend_genesis_declarations(sdp_declarations, iter.map(Into::into))?;
+        Ok(Self {
             state: WithInscriptionAndDeclarations {
                 inscription,
                 sdp_declarations,
             },
-        }
+        })
     }
 }
 
@@ -1108,24 +1145,23 @@ impl GenesisBlockBuilder<WithAll> {
     }
 
     /// Append another SDP declaration.
-    #[must_use]
-    pub fn add_declaration(self, declaration: SDPDeclareOp) -> Self {
+    pub fn add_declaration(self, declaration: SDPDeclareOp) -> Result<Self> {
         let Self {
             state:
                 WithAll {
                     notes,
                     inscription,
-                    mut sdp_declarations,
+                    sdp_declarations,
                 },
         } = self;
-        sdp_declarations.push(declaration);
-        Self {
+        let sdp_declarations = try_push_genesis_declaration(sdp_declarations, declaration)?;
+        Ok(Self {
             state: WithAll {
                 notes,
                 inscription,
                 sdp_declarations,
             },
-        }
+        })
     }
 
     /// Append multiple SDP declarations at once.
@@ -1133,32 +1169,28 @@ impl GenesisBlockBuilder<WithAll> {
     /// # Panics
     ///
     /// Panics if `declarations` is empty.
-    #[must_use]
     pub fn add_declarations(
         self,
         declarations: impl IntoIterator<Item = impl Into<SDPDeclareOp>>,
-    ) -> Self {
-        let mut iter = declarations.into_iter().peekable();
-        assert!(
-            iter.peek().is_some(),
-            "add_declarations called with empty iterator"
-        );
+    ) -> Result<Self> {
+        let iter = require_non_empty(declarations, "add_declarations");
         let Self {
             state:
                 WithAll {
                     notes,
                     inscription,
-                    mut sdp_declarations,
+                    sdp_declarations,
                 },
         } = self;
-        sdp_declarations.extend(iter.map(Into::into));
-        Self {
+        let sdp_declarations =
+            try_extend_genesis_declarations(sdp_declarations, iter.map(Into::into))?;
+        Ok(Self {
             state: WithAll {
                 notes,
                 inscription,
                 sdp_declarations,
             },
-        }
+        })
     }
 
     /// Assemble the accumulated pieces into a [`GenesisTx`] and wrap it in a
@@ -1198,24 +1230,21 @@ impl GenesisBlockBuilder<WithAll> {
                 count: n,
             }));
         };
-        let signed_tx = SignedMantleTx::new_unverified(
-            MantleTx(capped_ops),
-            vec![
-                OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
-                    &[0u8; 128],
-                ))),
-                OpProof::Ed25519Sig(Ed25519Signature::zero()),
-            ]
-            .into_iter()
-            .chain(vec![
-                OpProof::ZkAndEd25519Sigs {
+        let mut ops_proofs = OpsProofs::from([
+            OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
+                &[0u8; 128],
+            ))),
+            OpProof::Ed25519Sig(Ed25519Signature::zero()),
+        ]);
+        for _ in 0..n - 2 {
+            ops_proofs
+                .try_push(OpProof::ZkAndEd25519Sigs {
                     zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
                     ed25519_sig: Ed25519Signature::zero(),
-                };
-                n - 2
-            ])
-            .collect(),
-        );
+                })
+                .expect("genesis transaction proofs are bounded");
+        }
+        let signed_tx = SignedMantleTx::new_trusted(MantleTx(capped_ops), ops_proofs);
         Ok(GenesisBlock::genesis(GenesisTx::from_tx(signed_tx)?))
     }
 }
@@ -1244,10 +1273,10 @@ mod tests {
             CryptarchiaParameter, GenesisTime, GenesisTx as _, NoteId,
             nom::NomEncode as _,
             ops::channel::{ChannelId, MsgId, inscribe::Inscription},
+            transactions::states::Preverified,
         },
         sdp::{Locator, ProviderId, ServiceType},
     };
-
     // ── helpers ───────────────────────────────────────────────────────────────
 
     fn valid_inscription() -> InscriptionOp {
@@ -1303,12 +1332,12 @@ mod tests {
     fn assert_block_valid(block: &GenesisBlock) {
         assert_eq!(block.header().slot(), Slot::from(0u64));
         assert_eq!(block.header().parent(), HeaderId::from([0u8; 32]));
-        assert_eq!(block.transactions().len(), 1);
+        assert_eq!(block.transactions_iter().len(), 1);
     }
 
     // ── helpers for the with_genesis_tx path ──────────────────────────────────
 
-    fn make_signed_genesis_tx(extra_ops: Vec<Op>) -> SignedMantleTx {
+    fn make_signed_genesis_tx(extra_ops: Vec<Op>) -> SignedMantleTx<Preverified> {
         let mut ops = vec![
             Op::Transfer(TransferOp::new(
                 Inputs::empty(),
@@ -1317,21 +1346,21 @@ mod tests {
             Op::ChannelInscribe(valid_inscription()),
         ];
         ops.extend(extra_ops);
-        let ops_proofs = ops
-            .iter()
-            .map(|op| match op {
-                Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
-                Op::Transfer(_) => OpProof::ZkSig(ZkSignature::new(
-                    CompressedGroth16Proof::from_bytes(&[0u8; 128]),
-                )),
-                Op::SDPDeclare(_) => OpProof::ZkAndEd25519Sigs {
-                    zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
-                    ed25519_sig: Ed25519Signature::zero(),
-                },
-                other => unreachable!("unexpected genesis op in tests: {}", other.as_str()),
-            })
-            .collect();
-        SignedMantleTx::new_unverified(MantleTx(Ops::new_unchecked(ops)), ops_proofs)
+
+        let ops_proofs = OpsProofs::try_from_iter(ops.iter().map(|op| match op {
+            Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
+            Op::Transfer(_) => OpProof::ZkSig(ZkSignature::new(
+                CompressedGroth16Proof::from_bytes(&[0u8; 128]),
+            )),
+            Op::SDPDeclare(_) => OpProof::ZkAndEd25519Sigs {
+                zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
+                ed25519_sig: Ed25519Signature::zero(),
+            },
+            other => unreachable!("unexpected genesis op in tests: {}", other.as_str()),
+        }))
+        .expect("genesis transaction proofs are bounded");
+
+        SignedMantleTx::new_trusted(MantleTx(Ops::new_unchecked(ops)), ops_proofs)
     }
 
     fn make_genesis_tx(extra_ops: Vec<Op>) -> GenesisTx {
@@ -1462,7 +1491,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let tx = block.transactions().next().unwrap();
+        let tx = block.transactions_iter().next().unwrap();
         assert_eq!(tx.genesis_transfer().outputs.len(), 3);
     }
 
@@ -1473,11 +1502,13 @@ mod tests {
             .set_inscription(valid_inscription())
             .add_declaration(make_sdp_decl(0))
             .add_declaration(make_sdp_decl(1))
+            .unwrap()
             .add_declaration(make_sdp_decl(2))
+            .unwrap()
             .build()
             .unwrap();
 
-        let tx = block.transactions().next().unwrap();
+        let tx = block.transactions_iter().next().unwrap();
         assert_eq!(tx.sdp_declarations().count(), 3);
     }
 
@@ -1490,12 +1521,13 @@ mod tests {
             .unwrap()
             .set_inscription(valid_inscription())
             .add_declaration(make_sdp_decl(1))
+            .unwrap()
             .add_note(make_note(30))
             .unwrap()
             .build()
             .unwrap();
 
-        let tx = block.transactions().next().unwrap();
+        let tx = block.transactions_iter().next().unwrap();
         assert_eq!(tx.genesis_transfer().outputs.len(), 3);
         assert_eq!(tx.sdp_declarations().count(), 2);
     }
@@ -1550,6 +1582,90 @@ mod tests {
     // ── add_notes / add_declarations batch helpers ────────────────────────────
 
     #[test]
+    fn add_declarations_accepts_maximum_capacity() {
+        let builder = GenesisBlockBuilder::new()
+            .add_note(make_note(100))
+            .set_inscription(valid_inscription())
+            .add_declaration(make_sdp_decl(0));
+
+        // One declaration already exists, so add the remaining declarations.
+        let builder = builder
+            .add_declarations(
+                std::iter::repeat_with(|| make_sdp_decl(0)).take(MAX_GENESIS_DECLARATIONS - 1),
+            )
+            .expect("maximum declaration capacity should be accepted");
+
+        let block = builder
+            .build()
+            .expect("maximum-size genesis block should build");
+        let tx = block
+            .transactions_iter()
+            .next()
+            .expect("genesis transaction");
+
+        assert_eq!(tx.sdp_declarations().count(), MAX_GENESIS_DECLARATIONS);
+        assert_eq!(tx.mantle_tx().ops().len(), MAX_OPS_PER_TX);
+    }
+
+    #[test]
+    fn add_declarations_rejects_beyond_maximum_capacity() {
+        let builder = GenesisBlockBuilder::new()
+            .add_note(make_note(100))
+            .set_inscription(valid_inscription())
+            .add_declaration(make_sdp_decl(0))
+            .add_declarations(
+                std::iter::repeat_with(|| make_sdp_decl(0)).take(MAX_GENESIS_DECLARATIONS - 1),
+            )
+            .expect("filling declaration capacity should succeed");
+
+        let error = builder
+            .add_declaration(make_sdp_decl(0))
+            .expect_err("one declaration beyond capacity should fail");
+
+        assert!(matches!(
+            error,
+            Error::InvalidGenesisTx(genesis_tx::Error::TooManyOps { count })
+                if count == MAX_OPS_PER_TX + 1
+        ));
+    }
+
+    #[test]
+    fn too_many_sdp_declarations_returns_error() {
+        let declarations = GenesisSDPDeclareOps::empty();
+
+        let error = try_extend_genesis_declarations(
+            declarations,
+            std::iter::repeat_with(|| make_sdp_decl(0)).take(MAX_GENESIS_DECLARATIONS + 1),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::InvalidGenesisTx(genesis_tx::Error::TooManyOps { count })
+                if count == MAX_OPS_PER_TX + 1
+        ));
+    }
+
+    #[test]
+    fn initial_declarations_reject_beyond_maximum_capacity() {
+        let error = GenesisBlockBuilder::new()
+            .add_declarations(
+                std::iter::repeat_with(|| make_sdp_decl(0)).take(MAX_GENESIS_DECLARATIONS + 1),
+            )
+            .expect_err("too many initial declarations should fail");
+
+        assert!(
+            matches!(
+                error,
+                Error::InvalidGenesisTx(genesis_tx::Error::TooManyOps { count })
+                    if count == MAX_OPS_PER_TX + 1
+            ),
+            "expected TooManyOps({}), got {error:?}",
+            MAX_OPS_PER_TX + 1,
+        );
+    }
+
+    #[test]
     fn add_notes_batch_preserved() {
         let block = GenesisBlockBuilder::new()
             .add_notes([make_note(10), make_note(20), make_note(30)])
@@ -1558,7 +1674,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let tx = block.transactions().next().unwrap();
+        let tx = block.transactions_iter().next().unwrap();
         assert_eq!(tx.genesis_transfer().outputs.len(), 3);
     }
 
@@ -1568,10 +1684,11 @@ mod tests {
             .add_note(make_note(100))
             .set_inscription(valid_inscription())
             .add_declarations([make_sdp_decl(0), make_sdp_decl(1), make_sdp_decl(2)])
+            .unwrap()
             .build()
             .unwrap();
 
-        let tx = block.transactions().next().unwrap();
+        let tx = block.transactions_iter().next().unwrap();
         assert_eq!(tx.sdp_declarations().count(), 3);
     }
 
@@ -1582,10 +1699,11 @@ mod tests {
             .set_inscription(valid_inscription())
             .add_declaration(make_sdp_decl(0))
             .add_declarations([make_sdp_decl(1), make_sdp_decl(2)])
+            .unwrap()
             .build()
             .unwrap();
 
-        let tx = block.transactions().next().unwrap();
+        let tx = block.transactions_iter().next().unwrap();
         assert_eq!(tx.genesis_transfer().outputs.len(), 3);
         assert_eq!(tx.sdp_declarations().count(), 3);
     }
@@ -1634,7 +1752,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let tx = block.transactions().next().unwrap();
+        let tx = block.transactions_iter().next().unwrap();
         let ops = tx.mantle_tx().ops();
         assert!(matches!(ops[0], Op::Transfer(_)));
         assert!(matches!(ops[1], Op::ChannelInscribe(_)));
@@ -1651,7 +1769,7 @@ mod tests {
         let decoded: GenesisBlock = serde_json::from_str(&json).expect("genesis block deserialize");
 
         assert_eq!(decoded.header().slot(), Slot::genesis());
-        assert_eq!(decoded.transactions().len(), 1);
+        assert_eq!(decoded.transactions_iter().len(), 1);
         assert_eq!(decoded.header().id(), block.header().id());
     }
 
@@ -1692,5 +1810,58 @@ mod tests {
                 .contains("genesis block must contain exactly one transaction"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn genesis_declaration_helpers_preserve_items_and_enforce_bounds() {
+        let empty = try_collect_sdp_declarations(std::iter::empty::<SDPDeclareOp>())
+            .expect("empty declaration set should be valid");
+
+        assert!(empty.is_empty());
+
+        let declarations =
+            require_non_empty([make_sdp_decl(0), make_sdp_decl(1)], "test declarations");
+
+        let mut declarations =
+            try_collect_sdp_declarations(declarations).expect("initial declarations should fit");
+
+        assert_eq!(declarations.len(), 2);
+
+        declarations = try_push_genesis_declaration(declarations, make_sdp_decl(2))
+            .expect("single declaration should fit");
+
+        assert_eq!(declarations.len(), 3);
+
+        declarations =
+            try_extend_genesis_declarations(declarations, [make_sdp_decl(3), make_sdp_decl(4)])
+                .expect("multiple declarations should fit");
+
+        assert_eq!(declarations.len(), 5);
+
+        let full = try_collect_sdp_declarations(
+            std::iter::repeat_with(|| make_sdp_decl(0)).take(MAX_GENESIS_DECLARATIONS),
+        )
+        .expect("maximum declaration capacity should fit");
+
+        let error = try_push_genesis_declaration(full, make_sdp_decl(0))
+            .expect_err("pushing beyond capacity should fail");
+
+        assert!(matches!(
+            error,
+            Error::InvalidGenesisTx(genesis_tx::Error::TooManyOps { count })
+                if count == MAX_OPS_PER_TX + 1
+        ));
+
+        let error = try_extend_genesis_declarations(
+            GenesisSDPDeclareOps::empty(),
+            std::iter::repeat_with(|| make_sdp_decl(0)).take(MAX_GENESIS_DECLARATIONS + 1),
+        )
+        .expect_err("extending beyond capacity should fail");
+
+        assert!(matches!(
+            error,
+            Error::InvalidGenesisTx(genesis_tx::Error::TooManyOps { count })
+                if count == MAX_OPS_PER_TX + 1
+        ));
     }
 }

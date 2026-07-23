@@ -26,8 +26,12 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        Op, OpProof, SignedMantleTx, Transaction, TxHash, ops::channel::ChannelId,
-        transactions::MantleTxBuilder,
+        Op, OpProof, SignedMantleTx, Transaction, TxHash,
+        ops::channel::ChannelId,
+        transactions::{
+            MantleTxBuilder,
+            states::{Preverified, Unverified},
+        },
     },
 };
 use lb_http_api_common::{
@@ -79,8 +83,8 @@ use crate::{
         queries::{BlockRangeQuery, BlocksStreamRequest},
         responses::{self, overwatch::get_relay_or_500},
         serializers::{
-            blocks::{ApiBlock, ApiProcessedBlockEvent},
-            transactions::ApiSignedTransactionRef,
+            blocks::{ApiBlock, ApiBlockOwned, ApiProcessedBlockEventOwned},
+            transactions::ApiSignedTransaction,
         },
     },
 };
@@ -196,12 +200,12 @@ async fn fetch_blocks_stream_chunk<StorageBackend, RuntimeServiceId>(
     descending: bool,
     blocks_limit: NonZeroUsize,
     immutable_only: bool,
-) -> Result<Vec<ApiProcessedBlockEvent>, DynError>
+) -> Result<Vec<ApiProcessedBlockEventOwned<Unverified>>, DynError>
 where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     StorageBackend::Block: Serialize,
     <StorageBackend as StorageChainApi>::Block:
-        TryFrom<Block<SignedMantleTx>> + TryInto<Block<SignedMantleTx>>,
+        TryFrom<Block<SignedMantleTx<Unverified>>> + TryInto<Block<SignedMantleTx<Unverified>>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
@@ -225,12 +229,12 @@ where
 
     Ok(chunk
         .into_iter()
-        .map(ApiProcessedBlockEvent::from)
+        .map(ApiProcessedBlockEventOwned::from)
         .collect())
 }
 
 struct BlocksStreamState<RuntimeServiceId> {
-    buffered: std::vec::IntoIter<ApiProcessedBlockEvent>,
+    buffered: std::vec::IntoIter<ApiProcessedBlockEventOwned<Unverified>>,
     slot_from: Slot,
     slot_to: Slot,
     descending: bool,
@@ -246,7 +250,7 @@ struct BlocksStreamState<RuntimeServiceId> {
 fn build_blocks_stream<StorageBackend, RuntimeServiceId>(
     handle: OverwatchHandle<RuntimeServiceId>,
     chain_info: lb_chain_service::CryptarchiaInfo,
-    first_chunk: Vec<ApiProcessedBlockEvent>,
+    first_chunk: Vec<ApiProcessedBlockEventOwned<Unverified>>,
     slot_from: Slot,
     slot_to: Slot,
     descending: bool,
@@ -254,12 +258,12 @@ fn build_blocks_stream<StorageBackend, RuntimeServiceId>(
     remaining: usize,
     chunk_size: usize,
     immutable_only: bool,
-) -> impl futures::Stream<Item = Result<ApiProcessedBlockEvent, DynError>>
+) -> impl futures::Stream<Item = Result<ApiProcessedBlockEventOwned<Unverified>, DynError>>
 where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     StorageBackend::Block: Serialize,
     <StorageBackend as StorageChainApi>::Block:
-        TryFrom<Block<SignedMantleTx>> + TryInto<Block<SignedMantleTx>>,
+        TryFrom<Block<SignedMantleTx<Unverified>>> + TryInto<Block<SignedMantleTx<Unverified>>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
@@ -328,7 +332,7 @@ where
 
             let boundary_slot = next_chunk
                 .last()
-                .map(|event| event.block.header().slot())
+                .map(|event| event.block().header().slot())
                 .expect("non-empty chunk has a last element");
 
             state.next_cursor = next_blocks_stream_cursor(
@@ -374,8 +378,8 @@ pub async fn mantle_metrics<StorageAdapter, RuntimeServiceId>(
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedMantleTx,
-            Key = <SignedMantleTx as Transaction>::Hash,
+            Item = SignedMantleTx<Preverified>,
+            Key = <SignedMantleTx<Preverified> as Transaction>::Hash,
         > + Send
         + Sync
         + Clone
@@ -389,14 +393,14 @@ where
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
-                    SignedMantleTx,
-                    <SignedMantleTx as Transaction>::Hash,
+                    SignedMantleTx<Preverified>,
+                    <SignedMantleTx<Preverified> as Transaction>::Hash,
                     RuntimeServiceId,
                 >,
                 Mempool<
                     HeaderId,
-                    SignedMantleTx,
-                    <SignedMantleTx as Transaction>::Hash,
+                    SignedMantleTx<Preverified>,
+                    <SignedMantleTx<Preverified> as Transaction>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -421,13 +425,13 @@ where
 )]
 pub async fn mantle_status<StorageAdapter, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(items): Json<Vec<<SignedMantleTx as Transaction>::Hash>>,
+    Json(items): Json<Vec<<SignedMantleTx<Preverified> as Transaction>::Hash>>,
 ) -> Response
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedMantleTx,
-            Key = <SignedMantleTx as Transaction>::Hash,
+            Item = SignedMantleTx<Preverified>,
+            Key = <SignedMantleTx<Preverified> as Transaction>::Hash,
         > + Send
         + Sync
         + Clone
@@ -441,14 +445,14 @@ where
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
-                    SignedMantleTx,
-                    <SignedMantleTx as Transaction>::Hash,
+                    SignedMantleTx<Preverified>,
+                    <SignedMantleTx<Preverified> as Transaction>::Hash,
                     RuntimeServiceId,
                 >,
                 Mempool<
                     HeaderId,
-                    SignedMantleTx,
-                    <SignedMantleTx as Transaction>::Hash,
+                    SignedMantleTx<Preverified>,
+                    <SignedMantleTx<Preverified> as Transaction>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -684,13 +688,13 @@ where
 )]
 pub async fn add_tx<StorageAdapter, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(tx): Json<SignedMantleTx>,
+    Json(tx): Json<SignedMantleTx<Preverified>>,
 ) -> Response
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedMantleTx,
-            Key = <SignedMantleTx as Transaction>::Hash,
+            Item = SignedMantleTx<Preverified>,
+            Key = <SignedMantleTx<Preverified> as Transaction>::Hash,
         > + Send
         + Sync
         + Clone
@@ -704,14 +708,14 @@ where
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
-                    SignedMantleTx,
-                    <SignedMantleTx as Transaction>::Hash,
+                    SignedMantleTx<Preverified>,
+                    <SignedMantleTx<Preverified> as Transaction>::Hash,
                     RuntimeServiceId,
                 >,
                 Mempool<
                     HeaderId,
-                    SignedMantleTx,
-                    <SignedMantleTx as Transaction>::Hash,
+                    SignedMantleTx<Preverified>,
+                    <SignedMantleTx<Preverified> as Transaction>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -723,13 +727,13 @@ where
     make_request_and_return_response!(mempool::add_tx::<
         Libp2pNetworkBackend,
         MempoolNetworkAdapter<
-            SignedMantleTx,
-            <SignedMantleTx as Transaction>::Hash,
+            SignedMantleTx<Preverified>,
+            <SignedMantleTx<Preverified> as Transaction>::Hash,
             RuntimeServiceId,
         >,
         StorageAdapter,
-        SignedMantleTx,
-        <SignedMantleTx as Transaction>::Hash,
+        SignedMantleTx<Preverified>,
+        <SignedMantleTx<Preverified> as Transaction>::Hash,
         RuntimeServiceId,
     >(&handle, tx, Transaction::hash))
 }
@@ -748,8 +752,8 @@ pub async fn mempool_view<StorageAdapter, RuntimeServiceId>(
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedMantleTx,
-            Key = <SignedMantleTx as Transaction>::Hash,
+            Item = SignedMantleTx<Preverified>,
+            Key = <SignedMantleTx<Preverified> as Transaction>::Hash,
         > + Send
         + Sync
         + Clone
@@ -764,14 +768,14 @@ where
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
-                    SignedMantleTx,
-                    <SignedMantleTx as Transaction>::Hash,
+                    SignedMantleTx<Preverified>,
+                    <SignedMantleTx<Preverified> as Transaction>::Hash,
                     RuntimeServiceId,
                 >,
                 Mempool<
                     HeaderId,
-                    SignedMantleTx,
-                    <SignedMantleTx as Transaction>::Hash,
+                    SignedMantleTx<Preverified>,
+                    <SignedMantleTx<Preverified> as Transaction>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -791,8 +795,8 @@ async fn current_tip_mempool_view<StorageAdapter, RuntimeServiceId>(
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedMantleTx,
-            Key = <SignedMantleTx as Transaction>::Hash,
+            Item = SignedMantleTx<Preverified>,
+            Key = <SignedMantleTx<Preverified> as Transaction>::Hash,
         > + Send
         + Sync
         + Clone
@@ -807,14 +811,14 @@ where
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
-                    SignedMantleTx,
-                    <SignedMantleTx as Transaction>::Hash,
+                    SignedMantleTx<Preverified>,
+                    <SignedMantleTx<Preverified> as Transaction>::Hash,
                     RuntimeServiceId,
                 >,
                 Mempool<
                     HeaderId,
-                    SignedMantleTx,
-                    <SignedMantleTx as Transaction>::Hash,
+                    SignedMantleTx<Preverified>,
+                    <SignedMantleTx<Preverified> as Transaction>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -836,8 +840,8 @@ async fn mempool_view_at<StorageAdapter, RuntimeServiceId>(
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedMantleTx,
-            Key = <SignedMantleTx as Transaction>::Hash,
+            Item = SignedMantleTx<Preverified>,
+            Key = <SignedMantleTx<Preverified> as Transaction>::Hash,
         > + Send
         + Sync
         + Clone
@@ -851,14 +855,14 @@ where
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
-                    SignedMantleTx,
-                    <SignedMantleTx as Transaction>::Hash,
+                    SignedMantleTx<Preverified>,
+                    <SignedMantleTx<Preverified> as Transaction>::Hash,
                     RuntimeServiceId,
                 >,
                 Mempool<
                     HeaderId,
-                    SignedMantleTx,
-                    <SignedMantleTx as Transaction>::Hash,
+                    SignedMantleTx<Preverified>,
+                    <SignedMantleTx<Preverified> as Transaction>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -870,14 +874,14 @@ where
     let relay = handle
         .relay::<TxMempoolService<
             MempoolNetworkAdapter<
-                SignedMantleTx,
-                <SignedMantleTx as Transaction>::Hash,
+                SignedMantleTx<Preverified>,
+                <SignedMantleTx<Preverified> as Transaction>::Hash,
                 RuntimeServiceId,
             >,
             Mempool<
                 HeaderId,
-                SignedMantleTx,
-                <SignedMantleTx as Transaction>::Hash,
+                SignedMantleTx<Preverified>,
+                <SignedMantleTx<Preverified> as Transaction>::Hash,
                 StorageAdapter,
                 RuntimeServiceId,
             >,
@@ -898,7 +902,7 @@ where
     let txs = receiver.await?;
 
     Ok(
-        tokio_stream::StreamExt::map(txs, |tx: SignedMantleTx| tx.hash())
+        tokio_stream::StreamExt::map(txs, |tx: SignedMantleTx<Preverified>| tx.hash())
             .collect()
             .await,
     )
@@ -939,8 +943,8 @@ where
     WalletService: WalletServiceData,
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedMantleTx,
-            Key = <SignedMantleTx as Transaction>::Hash,
+            Item = SignedMantleTx<Preverified>,
+            Key = <SignedMantleTx<Preverified> as Transaction>::Hash,
         > + Send
         + Sync
         + Clone
@@ -955,14 +959,14 @@ where
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
-                    SignedMantleTx,
-                    <SignedMantleTx as Transaction>::Hash,
+                    SignedMantleTx<Preverified>,
+                    <SignedMantleTx<Preverified> as Transaction>::Hash,
                     RuntimeServiceId,
                 >,
                 Mempool<
                     HeaderId,
-                    SignedMantleTx,
-                    <SignedMantleTx as Transaction>::Hash,
+                    SignedMantleTx<Preverified>,
+                    <SignedMantleTx<Preverified> as Transaction>::Hash,
                     StorageAdapter,
                     RuntimeServiceId,
                 >,
@@ -1006,13 +1010,13 @@ where
         mempool::add_tx::<
             Libp2pNetworkBackend,
             MempoolNetworkAdapter<
-                SignedMantleTx,
-                <SignedMantleTx as Transaction>::Hash,
+                SignedMantleTx<Preverified>,
+                <SignedMantleTx<Preverified> as Transaction>::Hash,
                 RuntimeServiceId,
             >,
             StorageAdapter,
-            SignedMantleTx,
-            <SignedMantleTx as Transaction>::Hash,
+            SignedMantleTx<Preverified>,
+            <SignedMantleTx<Preverified> as Transaction>::Hash,
             RuntimeServiceId,
         >(&handle, signed_tx, Transaction::hash)
         .await?;
@@ -1286,7 +1290,7 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static, /* TODO: StorageChainApi */
     StorageBackend::Block: Serialize,
     <StorageBackend as StorageChainApi>::Block:
-        TryFrom<Block<SignedMantleTx>> + TryInto<Block<SignedMantleTx>>,
+        TryFrom<Block<SignedMantleTx<Unverified>>> + TryInto<Block<SignedMantleTx<Unverified>>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
@@ -1297,8 +1301,11 @@ where
 {
     let api_blocks =
         mantle::get_immutable_blocks(&handle, query.slot_from, query.slot_to).map(|blocks| {
-            let api_blocks = blocks?.into_iter().map(ApiBlock::from).collect::<Vec<_>>();
-            Ok::<Vec<ApiBlock>, DynError>(api_blocks)
+            let api_blocks = blocks?
+                .into_iter()
+                .map(ApiBlockOwned::from)
+                .collect::<Vec<_>>();
+            Ok::<Vec<ApiBlockOwned<Unverified>>, DynError>(api_blocks)
         });
     make_request_and_return_response!(api_blocks)
 }
@@ -1325,10 +1332,10 @@ where
         Ok(relay) => relay,
         Err(error_response) => return error_response,
     };
-    let block = HttpStorageAdapter::get_block::<SignedMantleTx>(relay, id).await;
+    let block = HttpStorageAdapter::get_block::<SignedMantleTx<Unverified>>(relay, id).await;
     match block {
         Ok(Some(block)) => {
-            let api_block = ApiBlock::from(block);
+            let api_block = ApiBlock::from(&block);
             (StatusCode::OK, Json(api_block)).into_response()
         }
         Ok(None) => (StatusCode::NOT_FOUND,).into_response(),
@@ -1435,10 +1442,10 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     StorageBackend::Block: Serialize,
     <StorageBackend as StorageChainApi>::Block:
-        TryFrom<Block<SignedMantleTx>> + TryInto<Block<SignedMantleTx>>,
+        TryFrom<Block<SignedMantleTx<Preverified>>> + TryInto<Block<SignedMantleTx<Preverified>>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    ConsensusService: ServiceData<Message = ConsensusMsg<SignedMantleTx>> + 'static,
+    ConsensusService: ServiceData<Message = ConsensusMsg<SignedMantleTx<Preverified>>> + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Display
@@ -1448,7 +1455,7 @@ where
 {
     let stream = mantle::get_new_blocks_stream::<_, _, ConsensusService, _>(&handle)
         .await
-        .map(|stream| stream.map(ApiProcessedBlockEvent::from));
+        .map(|stream| stream.map(ApiProcessedBlockEventOwned::from));
     match stream {
         Ok(stream) => responses::ndjson::from_stream(stream),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
@@ -1475,7 +1482,7 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     StorageBackend::Block: Serialize,
     <StorageBackend as StorageChainApi>::Block:
-        TryFrom<Block<SignedMantleTx>> + TryInto<Block<SignedMantleTx>>,
+        TryFrom<Block<SignedMantleTx<Unverified>>> + TryInto<Block<SignedMantleTx<Unverified>>>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
@@ -1514,7 +1521,7 @@ where
     .await?;
 
     if first_chunk.is_empty() {
-        let empty = futures::stream::empty::<ApiProcessedBlockEvent>();
+        let empty = futures::stream::empty::<ApiProcessedBlockEventOwned<Unverified>>();
         return Ok(responses::ndjson::from_stream(empty));
     }
 
@@ -1522,7 +1529,7 @@ where
     let remaining = request.blocks_limit.get().saturating_sub(consumed);
     let boundary_slot = first_chunk
         .last()
-        .map(|event| event.block.header().slot())
+        .map(|event| event.block().header().slot())
         .expect("non-empty chunk has a last element");
 
     let next_cursor =
@@ -1566,14 +1573,15 @@ where
         Ok(relay) => relay,
         Err(error_response) => return error_response,
     };
-    let Ok(transactions) = HttpStorageAdapter::get_transactions::<SignedMantleTx>(relay, id).await
+    let Ok(transactions) =
+        HttpStorageAdapter::get_transactions::<SignedMantleTx<Unverified>>(relay, id).await
     else {
         return (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response();
     };
     match transactions.as_slice() {
         [] => (StatusCode::NOT_FOUND,).into_response(),
         [transaction] => {
-            let api_transaction = ApiSignedTransactionRef::from(transaction);
+            let api_transaction = ApiSignedTransaction::from(transaction);
             (StatusCode::OK, Json(api_transaction)).into_response()
         }
         _ => {
@@ -1703,8 +1711,8 @@ pub mod wallet {
         WalletService: WalletServiceData + 'static,
         StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
                 RuntimeServiceId,
-                Item = SignedMantleTx,
-                Key = <SignedMantleTx as Transaction>::Hash,
+                Item = SignedMantleTx<Preverified>,
+                Key = <SignedMantleTx<Preverified> as Transaction>::Hash,
             > + Send
             + Sync
             + Clone
@@ -1719,14 +1727,14 @@ pub mod wallet {
             + AsServiceId<
                 TxMempoolService<
                     MempoolNetworkAdapter<
-                        SignedMantleTx,
-                        <SignedMantleTx as Transaction>::Hash,
+                        SignedMantleTx<Preverified>,
+                        <SignedMantleTx<Preverified> as Transaction>::Hash,
                         RuntimeServiceId,
                     >,
                     Mempool<
                         HeaderId,
-                        SignedMantleTx,
-                        <SignedMantleTx as Transaction>::Hash,
+                        SignedMantleTx<Preverified>,
+                        <SignedMantleTx<Preverified> as Transaction>::Hash,
                         StorageAdapter,
                         RuntimeServiceId,
                     >,
@@ -1762,13 +1770,13 @@ pub mod wallet {
                 if let Err(e) = mempool::add_tx::<
                     Libp2pNetworkBackend,
                     MempoolNetworkAdapter<
-                        SignedMantleTx,
-                        <SignedMantleTx as Transaction>::Hash,
+                        SignedMantleTx<Preverified>,
+                        <SignedMantleTx<Preverified> as Transaction>::Hash,
                         RuntimeServiceId,
                     >,
                     StorageAdapter,
-                    SignedMantleTx,
-                    <SignedMantleTx as Transaction>::Hash,
+                    SignedMantleTx<Preverified>,
+                    <SignedMantleTx<Preverified> as Transaction>::Hash,
                     RuntimeServiceId,
                 >(&handle, transaction.clone(), Transaction::hash)
                 .await
@@ -1798,8 +1806,8 @@ pub mod wallet {
         WalletService: WalletServiceData,
         StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
                 RuntimeServiceId,
-                Item = SignedMantleTx,
-                Key = <SignedMantleTx as Transaction>::Hash,
+                Item = SignedMantleTx<Preverified>,
+                Key = <SignedMantleTx<Preverified> as Transaction>::Hash,
             > + Send
             + Sync
             + Clone
@@ -1814,14 +1822,14 @@ pub mod wallet {
             + AsServiceId<
                 TxMempoolService<
                     MempoolNetworkAdapter<
-                        SignedMantleTx,
-                        <SignedMantleTx as Transaction>::Hash,
+                        SignedMantleTx<Preverified>,
+                        <SignedMantleTx<Preverified> as Transaction>::Hash,
                         RuntimeServiceId,
                     >,
                     Mempool<
                         HeaderId,
-                        SignedMantleTx,
-                        <SignedMantleTx as Transaction>::Hash,
+                        SignedMantleTx<Preverified>,
+                        <SignedMantleTx<Preverified> as Transaction>::Hash,
                         StorageAdapter,
                         RuntimeServiceId,
                     >,
@@ -1856,8 +1864,8 @@ pub mod wallet {
         WalletService: WalletServiceData,
         StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
                 RuntimeServiceId,
-                Item = SignedMantleTx,
-                Key = <SignedMantleTx as Transaction>::Hash,
+                Item = SignedMantleTx<Preverified>,
+                Key = <SignedMantleTx<Preverified> as Transaction>::Hash,
             > + Send
             + Sync
             + Clone
@@ -1872,14 +1880,14 @@ pub mod wallet {
             + AsServiceId<
                 TxMempoolService<
                     MempoolNetworkAdapter<
-                        SignedMantleTx,
-                        <SignedMantleTx as Transaction>::Hash,
+                        SignedMantleTx<Preverified>,
+                        <SignedMantleTx<Preverified> as Transaction>::Hash,
                         RuntimeServiceId,
                     >,
                     Mempool<
                         HeaderId,
-                        SignedMantleTx,
-                        <SignedMantleTx as Transaction>::Hash,
+                        SignedMantleTx<Preverified>,
+                        <SignedMantleTx<Preverified> as Transaction>::Hash,
                         StorageAdapter,
                         RuntimeServiceId,
                     >,
@@ -1914,8 +1922,8 @@ pub mod wallet {
         WalletService: WalletServiceData,
         StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
                 RuntimeServiceId,
-                Item = SignedMantleTx,
-                Key = <SignedMantleTx as Transaction>::Hash,
+                Item = SignedMantleTx<Preverified>,
+                Key = <SignedMantleTx<Preverified> as Transaction>::Hash,
             > + Send
             + Sync
             + Clone
@@ -1930,14 +1938,14 @@ pub mod wallet {
             + AsServiceId<
                 TxMempoolService<
                     MempoolNetworkAdapter<
-                        SignedMantleTx,
-                        <SignedMantleTx as Transaction>::Hash,
+                        SignedMantleTx<Preverified>,
+                        <SignedMantleTx<Preverified> as Transaction>::Hash,
                         RuntimeServiceId,
                     >,
                     Mempool<
                         HeaderId,
-                        SignedMantleTx,
-                        <SignedMantleTx as Transaction>::Hash,
+                        SignedMantleTx<Preverified>,
+                        <SignedMantleTx<Preverified> as Transaction>::Hash,
                         StorageAdapter,
                         RuntimeServiceId,
                     >,
