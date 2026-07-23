@@ -1,5 +1,6 @@
 use lb_groth16::Fr;
 use lb_utxotree::{MerkleNode, MerklePath};
+use thiserror::Error;
 
 /// Converts a [`MerklePath`] to the witness format expected by the circuit.
 pub fn merkle_path_to_witness<T: Copy>(path: &MerklePath<T>) -> (Vec<T>, Vec<bool>) {
@@ -18,15 +19,47 @@ pub fn merkle_path_to_witness<T: Copy>(path: &MerklePath<T>) -> (Vec<T>, Vec<boo
 
 /// Converts an [`lb_mmr::MerklePath`] to the witness format expected by
 /// the circuit: siblings in bottom-top order, selectors reversed.
-pub fn mmr_path_to_witness(path: &lb_mmr::MerklePath) -> (Vec<Fr>, Vec<bool>) {
-    let items = path.siblings.clone();
+pub fn mmr_path_to_witness(
+    path: &lb_mmr::MerklePath,
+) -> Result<
+    (
+        [Fr; lb_poc::VOUCHER_MERKLE_TREE_HEIGHT],
+        [bool; lb_poc::VOUCHER_MERKLE_TREE_HEIGHT],
+    ),
+    MerklePathWitnessError,
+> {
+    let actual = path.siblings().len();
+    let items = path
+        .siblings()
+        .try_into()
+        .map_err(|_| MerklePathWitnessError::InvalidLength {
+            expected: lb_poc::VOUCHER_MERKLE_TREE_HEIGHT,
+            actual,
+        })?;
+    let capacity = 1u64 << (lb_poc::VOUCHER_MERKLE_TREE_HEIGHT as u32);
+    let leaf_index = u64::try_from(path.leaf_index()).unwrap_or(u64::MAX);
+    if leaf_index >= capacity {
+        return Err(MerklePathWitnessError::LeafIndexOutOfRange {
+            leaf_index: path.leaf_index(),
+            capacity,
+        });
+    }
     // Selectors: true if sibling is on the left (i.e. leaf is a right child).
     // Circuit expects reversed order.
-    let selectors = (1..=items.len())
-        .rev()
-        .map(|height| !lb_mmr::is_left_child(path.leaf_index, height))
-        .collect();
-    (items, selectors)
+    let selectors = core::array::from_fn(|index| {
+        let height = lb_poc::VOUCHER_MERKLE_TREE_HEIGHT - index;
+        !lb_mmr::is_left_child(path.leaf_index(), height)
+    });
+    Ok((items, selectors))
+}
+
+/// An MMR path that cannot be represented by the fixed-height `PoC` circuit.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum MerklePathWitnessError {
+    #[error("invalid PoC voucher path length: expected {expected}, got {actual}")]
+    InvalidLength { expected: usize, actual: usize },
+    #[error("PoC voucher leaf index {leaf_index} is outside tree capacity {capacity}")]
+    LeafIndexOutOfRange { leaf_index: usize, capacity: u64 },
 }
 
 #[cfg(test)]
@@ -57,38 +90,91 @@ mod tests {
 
     #[test]
     fn test_mmr_path_to_witness() {
-        let path = lb_mmr::MerklePath {
-            leaf_index: 11,
-            siblings: vec![
-                Fr::from(1u64),
-                Fr::from(2u64),
-                Fr::from(3u64),
-                Fr::from(4u64),
-            ],
-        };
-        let (items, selectors) = mmr_path_to_witness(&path);
+        let path = lb_mmr::MerklePath::try_new(
+            11,
+            (1..=lb_poc::VOUCHER_MERKLE_TREE_HEIGHT)
+                .map(|index| Fr::from(index as u64))
+                .collect(),
+        )
+        .unwrap();
+        let (items, selectors) = mmr_path_to_witness(&path).unwrap();
         assert_eq!(
             items,
-            vec![
-                Fr::from(1u64),
-                Fr::from(2u64),
-                Fr::from(3u64),
-                Fr::from(4u64)
-            ]
+            core::array::from_fn(|index| Fr::from((index + 1) as u64))
         );
-        // For leaf index 11 (=1101),
-        // sibling positions are [L, R, L, L] (reverse order).
-        assert_eq!(selectors, vec![true, false, true, true]);
+        // For leaf index 11 (=1101), the selector order starts at height 32.
+        assert_eq!(selectors[28..], [true, false, true, true]);
     }
 
     #[test]
-    fn test_mmr_path_to_witness_empty() {
-        let path = lb_mmr::MerklePath {
-            leaf_index: 0,
-            siblings: vec![],
+    fn test_mmr_path_to_witness_rejects_wrong_length() {
+        let path = lb_mmr::MerklePath::try_new(
+            0,
+            vec![Fr::from(0u64); lb_poc::VOUCHER_MERKLE_TREE_HEIGHT - 1],
+        )
+        .unwrap();
+        let path: lb_mmr::MerklePath =
+            bincode::deserialize(&bincode::serialize(&path).unwrap()).unwrap();
+        assert_eq!(
+            mmr_path_to_witness(&path),
+            Err(MerklePathWitnessError::InvalidLength {
+                expected: lb_poc::VOUCHER_MERKLE_TREE_HEIGHT,
+                actual: lb_poc::VOUCHER_MERKLE_TREE_HEIGHT - 1,
+            })
+        );
+    }
+
+    #[test]
+    fn test_deserialized_mmr_path_rejects_invalid_poc_shape() {
+        use crate::{
+            mantle::ops::leader_claim::VoucherSecret,
+            proofs::leader_claim_proof::{LeaderClaimPrivate, LeaderClaimPublic},
         };
-        let (items, selectors) = mmr_path_to_witness(&path);
-        assert!(items.is_empty());
-        assert!(selectors.is_empty());
+
+        let path = lb_mmr::MerklePath::try_new(
+            0,
+            vec![Fr::from(0u64); lb_poc::VOUCHER_MERKLE_TREE_HEIGHT - 1],
+        )
+        .unwrap();
+        let path: lb_mmr::MerklePath =
+            bincode::deserialize(&bincode::serialize(&path).unwrap()).unwrap();
+        let result = LeaderClaimPrivate::try_new(
+            LeaderClaimPublic::new(Fr::from(1u64), Fr::from(2u64), Fr::from(3u64)),
+            &path,
+            VoucherSecret::from(Fr::from(4u64)),
+        );
+
+        assert!(matches!(
+            result,
+            Err(MerklePathWitnessError::InvalidLength {
+                expected: lb_poc::VOUCHER_MERKLE_TREE_HEIGHT,
+                actual,
+            }) if actual == lb_poc::VOUCHER_MERKLE_TREE_HEIGHT - 1
+        ));
+    }
+
+    #[test]
+    fn test_mmr_path_to_witness_validates_leaf_index() {
+        let siblings: Vec<Fr> =
+            std::iter::repeat_n(Fr::from(0u64), lb_poc::VOUCHER_MERKLE_TREE_HEIGHT).collect();
+        let highest_valid = lb_mmr::MerklePath::try_new(
+            (1u64 << lb_poc::VOUCHER_MERKLE_TREE_HEIGHT) as usize - 1,
+            siblings.clone(),
+        )
+        .unwrap();
+        assert!(mmr_path_to_witness(&highest_valid).is_ok());
+
+        let out_of_range = lb_mmr::MerklePath::try_new(
+            (1u64 << lb_poc::VOUCHER_MERKLE_TREE_HEIGHT) as usize,
+            siblings,
+        )
+        .unwrap();
+        assert_eq!(
+            mmr_path_to_witness(&out_of_range),
+            Err(MerklePathWitnessError::LeafIndexOutOfRange {
+                leaf_index: (1u64 << lb_poc::VOUCHER_MERKLE_TREE_HEIGHT) as usize,
+                capacity: 1u64 << lb_poc::VOUCHER_MERKLE_TREE_HEIGHT,
+            })
+        );
     }
 }

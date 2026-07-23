@@ -119,6 +119,9 @@ pub enum WalletServiceError {
     #[error("PoC generation failed: {0:?}")]
     PoCGenerationFailed(#[from] lb_core::proofs::leader_claim_proof::Error),
 
+    #[error(transparent)]
+    MerklePathWitness(#[from] lb_core::proofs::MerklePathWitnessError),
+
     #[error("No claimable voucher found")]
     NoClaimableVoucher,
 
@@ -1033,15 +1036,17 @@ where
         rewards_root: RewardsRoot,
         tx_hash: TxHash,
     ) -> Result<Groth16LeaderClaimProof, WalletServiceError> {
-        Ok(Groth16LeaderClaimProof::prove(LeaderClaimPrivate::new(
-            LeaderClaimPublic {
-                voucher_nullifier: VoucherNullifier::from_secret(voucher_secret).into(),
-                voucher_root: rewards_root.into(),
-                mantle_tx_hash: tx_hash.to_fr(),
-            },
-            path,
-            voucher_secret,
-        ))?)
+        Ok(Groth16LeaderClaimProof::prove(
+            LeaderClaimPrivate::try_new(
+                LeaderClaimPublic {
+                    voucher_nullifier: VoucherNullifier::from_secret(voucher_secret).into(),
+                    voucher_root: rewards_root.into(),
+                    mantle_tx_hash: tx_hash.to_fr(),
+                },
+                path,
+                voucher_secret,
+            )?,
+        )?)
     }
 
     async fn get_leader_aged_notes(

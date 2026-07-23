@@ -333,13 +333,12 @@ impl WalletState {
         Some(balance)
     }
 
-    #[must_use]
     pub fn apply_block<KeyId, VoucherId>(
         &self,
         known_keys: &HashMap<ZkPublicKey, KeyId>,
         known_vouchers: &Vouchers<VoucherId>,
         block: &WalletBlock,
-    ) -> Self {
+    ) -> Result<Self, WalletError> {
         let mut utxos = self.utxos.clone();
         let mut pk_index = self.pk_index.clone();
         let mut locked_notes = self.locked_notes.clone();
@@ -414,9 +413,9 @@ impl WalletState {
         }
 
         let (vouchers, voucher_paths, voucher_paths_snapshot) =
-            self.apply_voucher(known_vouchers, block);
+            self.apply_voucher(known_vouchers, block)?;
 
-        Self {
+        Ok(Self {
             utxos,
             pk_index,
             locked_notes,
@@ -425,7 +424,7 @@ impl WalletState {
             vouchers,
             voucher_paths,
             voucher_paths_snapshot,
-        }
+        })
     }
 
     /// Apply the voucher commitment from the block to the wallet state.
@@ -439,11 +438,14 @@ impl WalletState {
         &self,
         known_vouchers: &Vouchers<VoucherId>,
         block: &WalletBlock,
-    ) -> (
-        MerkleMountainRange<VoucherCm, ZkHasher>,
-        VoucherPaths,
-        VoucherPaths,
-    ) {
+    ) -> Result<
+        (
+            MerkleMountainRange<VoucherCm, ZkHasher>,
+            VoucherPaths,
+            VoucherPaths,
+        ),
+        WalletError,
+    > {
         // Snapshot voucher paths if epoch is advancing
         let snapshot = if block.epoch > self.epoch {
             self.voucher_paths.clone()
@@ -464,7 +466,10 @@ impl WalletState {
         let (vouchers, new_path) = self
             .vouchers
             .push_with_paths(block.voucher_cm, &mut paths)
-            .expect("vouchers MMR shouldn't be full");
+            .map_err(|error| match error {
+                lb_mmr::PushWithPathsError::MmrFull(_) => WalletError::VoucherMmrFull,
+                lb_mmr::PushWithPathsError::InvalidTrackedPath(error) => error.into(),
+            })?;
 
         // Rebuild the tracked voucher paths map with updated paths.
         let mut voucher_paths = rpds::HashTrieMapSync::new_sync();
@@ -477,7 +482,7 @@ impl WalletState {
             voucher_paths = voucher_paths.insert(block.voucher_cm, new_path);
         }
 
-        (vouchers, voucher_paths, snapshot)
+        Ok((vouchers, voucher_paths, snapshot))
     }
 }
 
@@ -661,7 +666,10 @@ where
     /// (e.g., restored from persisted state).
     ///
     /// Tracking of Merkle paths  for known vouchers starts from the paths
-    /// stored in the [`WalletState`].
+    /// stored in the [`WalletState`]. Persisted Merkle paths are globally
+    /// bounded during deserialization. Compatibility with the production
+    /// MMR height is validated when active paths are updated, and `PoC`
+    /// compatibility is validated during witness construction.
     pub fn from_lib_wallet_state(
         known_keys: impl IntoIterator<Item = (ZkPublicKey, KeyId)>,
         known_vouchers: Vouchers<VoucherId>,
@@ -726,7 +734,7 @@ where
             &self.known_keys,
             &self.known_vouchers,
             block,
-        );
+        )?;
         self.wallet_states.insert(block.id, block_wallet_state);
         Ok(())
     }
@@ -949,6 +957,57 @@ mod tests {
             104
         );
         assert_eq!(wallet.balance(genesis, bob).unwrap().unwrap().balance, 20);
+    }
+
+    #[test]
+    fn test_recovered_malformed_voucher_path_fails_cleanly_on_append() {
+        let genesis = HeaderId::from([0; 32]);
+        let (voucher_cm, voucher_nf) = voucher(1, 0);
+        let mut state = WalletState::from_ledger(
+            &HashMap::<ZkPublicKey, u64>::new(),
+            &LedgerState::from_utxos([], &ledger_config()),
+        );
+        state.vouchers = MerkleMountainRange::new().push(voucher_cm).unwrap();
+        state.voucher_paths = rpds::HashTrieMapSync::new_sync()
+            .insert(voucher_cm, MerklePath::try_new(0, vec![]).unwrap());
+        state.voucher_paths_snapshot = state.voucher_paths.clone();
+        let state: WalletState =
+            bincode::deserialize(&bincode::serialize(&state).unwrap()).unwrap();
+
+        let mut wallet = Wallet::<u64, TestVoucherId>::from_lib_wallet_state(
+            [],
+            Vouchers::new([(voucher_cm, voucher_nf, (1, 0))]),
+            genesis,
+            state,
+        );
+        assert_eq!(
+            wallet
+                .voucher_path_snapshot(genesis, &voucher_cm)
+                .unwrap()
+                .unwrap()
+                .siblings()
+                .len(),
+            0
+        );
+        let next_block = WalletBlock {
+            id: HeaderId::from([1; 32]),
+            parent: genesis,
+            epoch: 0.into(),
+            voucher_cm: voucher(2, 0).0,
+            header_ops: vec![],
+            txs: vec![],
+        };
+
+        assert!(matches!(
+            wallet.apply_block(&next_block),
+            Err(WalletError::InvalidVoucherPath(
+                lb_mmr::MerklePathError::InvalidSiblingCount {
+                    expected: 32,
+                    actual: 0,
+                }
+            ))
+        ));
+        assert!(!wallet.has_processed_block(next_block.id));
     }
 
     #[test]

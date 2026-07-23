@@ -6,6 +6,7 @@ use lb_core::{
         transactions::builder::TxBuilderError,
     },
 };
+use lb_mmr::MerklePathError;
 use lb_utils::bounded::BoundedError;
 use thiserror::Error;
 
@@ -25,6 +26,10 @@ pub enum WalletError {
     InputsError(#[from] InputsError),
     #[error(transparent)]
     OutputsError(#[from] OutputsError),
+    #[error(transparent)]
+    InvalidVoucherPath(#[from] MerklePathError),
+    #[error("Voucher MMR is full")]
+    VoucherMmrFull,
 }
 
 impl From<TxBuilderError> for WalletError {

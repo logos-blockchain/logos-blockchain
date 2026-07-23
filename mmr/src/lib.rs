@@ -7,11 +7,14 @@ use rpds::StackSync;
 
 mod path;
 
-pub use path::{MerklePath, is_left_child};
+pub use path::{MerklePath, MerklePathError, is_left_child};
 use path::{update_paths_above_merge, update_paths_at_merge};
 
 const EMPTY_VALUE: Fr = Fr::ZERO;
-const ACCEPTABLE_MAX_HEIGHT: u8 = 33;
+/// Largest supported MMR height, including leaves at height one.
+pub(crate) const ACCEPTABLE_MAX_HEIGHT: u8 = 33;
+/// Largest globally valid number of sibling hashes in an MMR path.
+pub(crate) const MAX_MERKLE_PATH_SIBLINGS: usize = ACCEPTABLE_MAX_HEIGHT as usize - 1;
 
 /// An append-only persistent Merkle Mountain Range (MMR), which can accept up
 /// to 2^(`MAX_HEIGHT`-1) elements (leaves).
@@ -65,10 +68,7 @@ where
 {
     #[must_use]
     pub fn new() -> Self {
-        assert!(
-            MAX_HEIGHT <= ACCEPTABLE_MAX_HEIGHT,
-            "MAX_HEIGHT must be <= {ACCEPTABLE_MAX_HEIGHT}"
-        );
+        assert_supported_max_height(MAX_HEIGHT);
         Self {
             roots: StackSync::new_sync(),
             _hash: std::marker::PhantomData,
@@ -119,17 +119,29 @@ where
         &self,
         elem: T,
         paths: &mut [MerklePath],
-    ) -> Result<(Self, MerklePath), MmrFull> {
+    ) -> Result<(Self, MerklePath), PushWithPathsError> {
+        // This assertion establishes the invariant required by the internal
+        // path construction below, independently of caller-supplied paths.
+        assert_supported_max_height(MAX_HEIGHT);
         if self.roots.peek().is_some_and(|r| r.height == MAX_HEIGHT) {
-            return Err(MmrFull);
+            return Err(PushWithPathsError::MmrFull(MmrFull));
         }
 
-        let mut new_path = MerklePath {
-            leaf_index: self.len(),
-            siblings: (1..MAX_HEIGHT)
+        for path in paths.iter() {
+            path.validate_for_height(MAX_HEIGHT)?;
+            path.validate_leaf_index(self.len())?;
+        }
+
+        // The iterator creates exactly MAX_HEIGHT - 1 siblings. Supported MMR
+        // heights therefore create between 0 and 32 siblings, so this cannot
+        // violate MerklePath's global sibling bound.
+        let mut new_path = MerklePath::try_new(
+            self.len(),
+            (1..MAX_HEIGHT)
                 .map(|h| empty_subtree_root::<Hash>(h))
                 .collect(),
-        };
+        )
+        .expect("supported MMR height must produce a globally bounded internal path");
 
         let mut last_root = Root {
             root: *elem.as_ref(),
@@ -242,14 +254,33 @@ pub(crate) fn empty_subtree_root<Hash: Digest>(height: u8) -> Fr {
     })[(height - 1) as usize]
 }
 
+fn assert_supported_max_height(max_height: u8) {
+    assert!(
+        (1..=ACCEPTABLE_MAX_HEIGHT).contains(&max_height),
+        "MAX_HEIGHT must be in 1..={ACCEPTABLE_MAX_HEIGHT}"
+    );
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error("MMR is full")]
 pub struct MmrFull;
+
+/// Failure while appending an MMR element and updating tracked paths.
+#[derive(Debug, thiserror::Error)]
+pub enum PushWithPathsError {
+    /// The MMR cannot accept another leaf.
+    #[error(transparent)]
+    MmrFull(#[from] MmrFull),
+    /// A caller-supplied tracked path is incompatible with this MMR.
+    #[error(transparent)]
+    InvalidTrackedPath(#[from] MerklePathError),
+}
 
 #[cfg(test)]
 mod test {
     use ark_ff::PrimeField as _;
     use proptest_macro::property_test;
+    use serde::{Deserialize, Serialize};
 
     use super::*;
     type ZkHasher = lb_poseidon2::Poseidon2Bn254Hasher;
@@ -338,6 +369,88 @@ mod test {
         assert_eq!(mmr.len(), 0);
         assert!(mmr.is_empty());
         assert_eq!(mmr.frontier_root(), empty_subtree_root::<ZkHasher>(3));
+    }
+
+    #[test]
+    #[should_panic(expected = "MAX_HEIGHT must be in 1..=33")]
+    fn test_zero_height_is_rejected() {
+        drop(<MerkleMountainRange<TestFr, ZkHasher, 0>>::new());
+    }
+
+    #[test]
+    fn test_merkle_path_accepts_all_globally_valid_lengths() {
+        for sibling_count in 0..=MAX_MERKLE_PATH_SIBLINGS {
+            let path = MerklePath::try_new(0, vec![Fr::ZERO; sibling_count]).unwrap();
+            assert_eq!(path.siblings().len(), sibling_count);
+        }
+    }
+
+    #[test]
+    fn test_merkle_path_rejects_too_many_siblings() {
+        let error =
+            MerklePath::try_new(0, vec![Fr::ZERO; MAX_MERKLE_PATH_SIBLINGS + 1]).unwrap_err();
+        assert!(matches!(
+            error,
+            MerklePathError::SiblingCountOutOfBounds(
+                lb_utils::bounded::BoundedError::TooManyItems { .. }
+            )
+        ));
+    }
+
+    #[test]
+    fn test_merkle_path_validates_supported_height_range() {
+        let minimum = MerklePath::try_new(0, vec![]).unwrap();
+        assert!(minimum.validate_for_height(1).is_ok());
+
+        let maximum = MerklePath::try_new(0, vec![Fr::ZERO; MAX_MERKLE_PATH_SIBLINGS]).unwrap();
+        assert!(maximum.validate_for_height(ACCEPTABLE_MAX_HEIGHT).is_ok());
+    }
+
+    #[test]
+    fn test_merkle_path_deserialization_rejects_too_many_siblings() {
+        #[derive(Serialize)]
+        struct UnboundedPath {
+            leaf_index: usize,
+            #[serde(with = "lb_groth16::serde::serde_fr_vec")]
+            siblings: Vec<Fr>,
+        }
+
+        let unbounded = UnboundedPath {
+            leaf_index: 0,
+            siblings: vec![Fr::ZERO; MAX_MERKLE_PATH_SIBLINGS + 1],
+        };
+        assert!(
+            serde_json::from_str::<MerklePath>(&serde_json::to_string(&unbounded).unwrap())
+                .is_err()
+        );
+        assert!(
+            bincode::deserialize::<MerklePath>(&bincode::serialize(&unbounded).unwrap()).is_err()
+        );
+    }
+
+    #[test]
+    fn test_merkle_path_wire_shape_is_preserved() {
+        #[derive(Serialize, Deserialize)]
+        struct LegacyPath {
+            leaf_index: usize,
+            #[serde(with = "lb_groth16::serde::serde_fr_vec")]
+            siblings: Vec<Fr>,
+        }
+
+        let legacy = LegacyPath {
+            leaf_index: 3,
+            siblings: vec![Fr::from(1u64), Fr::from(2u64)],
+        };
+        let path = MerklePath::try_new(legacy.leaf_index, legacy.siblings.clone()).unwrap();
+
+        assert_eq!(
+            serde_json::to_string(&path).unwrap(),
+            serde_json::to_string(&legacy).unwrap()
+        );
+        assert_eq!(
+            bincode::serialize(&path).unwrap(),
+            bincode::serialize(&legacy).unwrap()
+        );
     }
 
     #[test]
@@ -458,6 +571,66 @@ mod test {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_push_with_paths_rejects_wrong_sibling_count() {
+        let mmr = <MerkleMountainRange<TestFr, ZkHasher, 3>>::new();
+        let mut paths = vec![MerklePath::try_new(0, vec![Fr::ZERO]).unwrap()];
+
+        assert!(matches!(
+            mmr.push_with_paths(TestFr::from(b"a".as_ref()), &mut paths),
+            Err(PushWithPathsError::InvalidTrackedPath(
+                MerklePathError::InvalidSiblingCount {
+                    expected: 2,
+                    actual: 1
+                }
+            ))
+        ));
+    }
+
+    #[test]
+    fn test_push_with_paths_rejects_out_of_range_leaf_index() {
+        let mmr = <MerkleMountainRange<TestFr, ZkHasher, 3>>::new()
+            .push(TestFr::from(b"a".as_ref()))
+            .unwrap();
+        let mut paths = vec![MerklePath::try_new(1, vec![Fr::ZERO; 2]).unwrap()];
+
+        assert!(matches!(
+            mmr.push_with_paths(TestFr::from(b"b".as_ref()), &mut paths),
+            Err(PushWithPathsError::InvalidTrackedPath(
+                MerklePathError::LeafIndexOutOfRange {
+                    leaf_index: 1,
+                    leaf_count: 1
+                }
+            ))
+        ));
+    }
+
+    #[test]
+    fn test_push_with_paths_validates_all_paths_before_mutation() {
+        let mmr = <MerkleMountainRange<TestFr, ZkHasher, 3>>::new();
+        let (mmr, valid_path) = mmr
+            .push_with_paths(TestFr::from(b"a".as_ref()), &mut [])
+            .unwrap();
+        let original_root = mmr.frontier_root();
+        let original_len = mmr.len();
+        let invalid_path = MerklePath::try_new(0, vec![Fr::ZERO]).unwrap();
+        let mut paths = vec![valid_path, invalid_path];
+        let original_paths = paths.clone();
+
+        assert!(matches!(
+            mmr.push_with_paths(TestFr::from(b"b".as_ref()), &mut paths),
+            Err(PushWithPathsError::InvalidTrackedPath(
+                MerklePathError::InvalidSiblingCount {
+                    expected: 2,
+                    actual: 1,
+                }
+            ))
+        ));
+        assert_eq!(paths, original_paths);
+        assert_eq!(mmr.frontier_root(), original_root);
+        assert_eq!(mmr.len(), original_len);
     }
 
     #[test]
