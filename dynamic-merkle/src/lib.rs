@@ -241,6 +241,16 @@ impl<Item, Hash: Copy> Node<Item, Hash> {
         })
     }
 
+    fn update_at<H>(self: &Arc<Self>, index: usize, item: Item) -> Arc<Self>
+    where
+        H: MerkleHasher<Item = Item, Hash = Hash>,
+    {
+        self.insert_or_modify::<H, _>(index, |node| match node {
+            Self::Leaf { item: Some(_) } => Self::new(item),
+            _ => panic!("Cannot update an empty / non-leaf node"),
+        })
+    }
+
     /// Computes the Merkle path for the item at the given index.
     /// The path is ordered from leaf to root (excluded).
     /// Returns `None` if the index does not exist or has been removed.
@@ -406,6 +416,28 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
         Self {
             root,
             holes,
+            _hasher: PhantomData,
+        }
+    }
+
+    /// Replaces the item at `index`, returning the updated tree.
+    ///
+    /// Unlike [`remove`](Self::remove), the leaf is replaced with another item
+    /// instead of being emptied, so the position is neither freed nor recorded
+    /// as a hole. The original tree is left unchanged.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is out of bounds, or if the position does not hold an
+    /// item.
+    #[must_use]
+    pub fn update(&self, index: usize, item: H::Item) -> Self {
+        assert!(index < self.root.capacity(), "Index out of bounds");
+
+        let root = self.root.update_at::<H>(index, item);
+        Self {
+            root,
+            holes: self.holes.clone(),
             _hasher: PhantomData,
         }
     }

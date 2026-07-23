@@ -29,6 +29,7 @@ strip    = "none"    # Don't strip symbols to allow for better profiling results
 [workspace]
 # Make sure any excluded crates are still clipped in our CI. Also, make sure they use the same Clippy and rustc lints we specify in this file down below.
 members = [
+  "blake2btree",
   "blend/core",
   "blend/crypto",
   "blend/message",
@@ -126,6 +127,7 @@ lb-cryptarchia-engine              = { default-features = false, package = "logo
 lb-cryptarchia-sync                = { default-features = false, package = "logos-blockchain-cryptarchia-sync", path = "./consensus/cryptarchia-sync" }
 lb-demo-archiver                   = { default-features = false, package = "logos-blockchain-demo-archiver", path = "./deployment/l2-sequencer-archival-demo/archiver" }
 lb-demo-sequencer                  = { default-features = false, package = "logos-blockchain-demo-sequencer", path = "./deployment/l2-sequencer-archival-demo/sequencer" }
+lb-blake2btree                     = { default-features = false, package = "logos-blockchain-blake2btree", path = "./blake2btree" }
 lb-dynamic-merkle                  = { default-features = false, package = "logos-blockchain-dynamic-merkle", path = "./dynamic-merkle" }
 lb-faucet                          = { default-features = false, package = "logos-blockchain-faucet", path = "./deployment/faucet" }
 lb-groth16                         = { default-features = false, package = "logos-blockchain-groth16", path = "./zk/groth16" }
