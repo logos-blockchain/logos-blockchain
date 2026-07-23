@@ -5333,6 +5333,7 @@ dependencies = [
  "logos-blockchain-log-targets",
  "logos-blockchain-poseidon2",
  "logos-blockchain-proofs-error",
+ "logos-blockchain-utils",
  "num-bigint",
  "rand 0.8.6",
  "serde",
