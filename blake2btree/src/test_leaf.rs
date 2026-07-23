@@ -1,5 +1,7 @@
 use rand::RngCore;
 
+use crate::{Hash, LeafHash};
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct TestLeaf([u8; 32]);
 
@@ -18,8 +20,9 @@ impl TestLeaf {
     }
 }
 
-impl AsRef<[u8; 32]> for TestLeaf {
-    fn as_ref(&self) -> &[u8; 32] {
-        &self.0
+// The element is already a 32 bytes value, so it is used as the leaf as is.
+impl LeafHash<Self> for TestLeaf {
+    fn leaf_hash(&self, _key: &Self) -> Hash {
+        self.0
     }
 }

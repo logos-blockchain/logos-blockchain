@@ -1,7 +1,7 @@
 #[cfg(test)]
 pub mod test_leaf;
 
-use std::{collections::BTreeMap, marker::PhantomData};
+use std::collections::BTreeMap;
 
 use blake2::{Digest as _, digest::typenum::U32};
 pub use lb_dynamic_merkle::{DynamicMerkleTree, MerkleNode, MerklePath};
@@ -13,24 +13,31 @@ pub type Hasher = blake2::Blake2b<U32>;
 
 pub type Hash = [u8; 32];
 
-/// [`MerkleHasher`] bridge adapting a `Key: AsRef<Hash>` leaf type and the
-/// classic blake2b hasher to the generic [`DynamicMerkleTree`].
+/// Leaf value committing to an element of a [`Blake2bTree`].
 ///
-/// Leaf values are the key itself and inner nodes are the blake2b hash of their
-/// two children.
-pub struct Blake2bMerkleHasher<Key>(PhantomData<Key>);
+/// The leaf binds the element's identifier together with its state, so that it
+/// is meaningful on its own, independently of the position it occupies, and so
+/// that mutating an element changes the root.
+pub trait LeafHash<Key> {
+    fn leaf_hash(&self, key: &Key) -> Hash;
+}
 
-impl<Key> MerkleHasher for Blake2bMerkleHasher<Key>
-where
-    Key: AsRef<Hash> + Clone,
-{
-    type Item = Key;
+/// [`MerkleHasher`] bridge adapting the classic blake2b hasher to the generic
+/// [`DynamicMerkleTree`].
+///
+/// Leaves are the [`LeafHash`] of an element, computed by [`Blake2bTree`] when
+/// the element is stored, and inner nodes are the blake2b hash of their two
+/// children.
+pub struct Blake2bMerkleHasher;
+
+impl MerkleHasher for Blake2bMerkleHasher {
+    type Item = Hash;
     type Hash = Hash;
 
     const EMPTY_VALUE: Hash = [0u8; 32];
 
-    fn leaf_hash(item: &Key) -> Hash {
-        *item.as_ref()
+    fn leaf_hash(item: &Hash) -> Hash {
+        *item
     }
 
     fn compress(left: &Hash, right: &Hash) -> Hash {
@@ -43,12 +50,13 @@ where
     empty_subtree_root!(Hash);
 }
 
-/// A store that allows for efficient insertion, removal, and retrieval of
-/// items, while efficiently maintaining a compact Merkle tree committing to
-/// their keys.
+/// A store that allows for efficient insertion, update, removal, and retrieval
+/// of items, while efficiently maintaining a compact Merkle tree committing to
+/// them.
 ///
 /// Removed items are replaced with an empty leaf, which prevents the whole tree
 /// from being reordered, and their position is recorded for future insertions.
+/// Updating an item replaces its leaf with another one, keeping its position.
 ///
 /// Note on (de)serialization: the tree is stored in a compressed form holding
 /// only the items and their positions, and the Merkle tree is rebuilt from it
@@ -56,16 +64,16 @@ where
 #[derive(Debug, Clone)]
 pub struct Blake2bTree<Key, Item>
 where
-    Key: AsRef<Hash> + Clone + std::hash::Hash + Eq,
+    Key: Clone + std::hash::Hash + Eq,
 {
-    merkle: DynamicMerkleTree<Blake2bMerkleHasher<Key>>,
+    merkle: DynamicMerkleTree<Blake2bMerkleHasher>,
     // key -> (item, position in merkle tree)
     items: HashTrieMapSync<Key, (Item, usize)>,
 }
 
 impl<Key, Item> Default for Blake2bTree<Key, Item>
 where
-    Key: AsRef<Hash> + Clone + std::hash::Hash + Eq,
+    Key: Clone + std::hash::Hash + Eq,
 {
     fn default() -> Self {
         Self::new()
@@ -74,7 +82,7 @@ where
 
 impl<Key, Item> Blake2bTree<Key, Item>
 where
-    Key: AsRef<Hash> + Clone + std::hash::Hash + Eq,
+    Key: Clone + std::hash::Hash + Eq,
 {
     #[must_use]
     pub fn new() -> Self {
@@ -88,23 +96,10 @@ where
     pub fn size(&self) -> usize {
         self.merkle.size()
     }
-}
 
-#[derive(Error, Debug, Clone)]
-pub enum Error {
-    #[error("Item not found")]
-    NotFound,
-}
-
-impl<Key, Item> Blake2bTree<Key, Item>
-where
-    Key: AsRef<Hash> + Clone + std::hash::Hash + Eq,
-    Item: Clone,
-{
-    pub fn insert(&self, key: Key, item: Item) -> (Self, usize) {
-        let (merkle, pos) = self.merkle.insert(key.clone());
-        let items = self.items.insert(key, (item, pos));
-        (Self { merkle, items }, pos)
+    #[must_use]
+    pub fn root(&self) -> Hash {
+        self.merkle.root()
     }
 
     pub fn contains(&self, key: &Key) -> bool {
@@ -116,17 +111,44 @@ where
         &self.items
     }
 
-    /// Replaces the element stored under `old_key` with one committed to by
-    /// `new_key`, keeping the position it already occupies.
+    /// Computes the Merkle path for the key.
+    /// The path is ordered from leaf to root (excluded).
+    /// Returns `None` if the key does not exist or has been removed.
+    pub fn path(&self, key: &Key) -> Option<MerklePath<Hash>> {
+        let (_, pos) = self.items.get(key)?;
+        self.merkle.path(*pos)
+    }
+}
+
+#[derive(Error, Debug, Clone)]
+pub enum Error {
+    #[error("Item not found")]
+    NotFound,
+}
+
+impl<Key, Item> Blake2bTree<Key, Item>
+where
+    Key: Clone + std::hash::Hash + Eq,
+    Item: LeafHash<Key> + Clone,
+{
+    pub fn insert(&self, key: Key, item: Item) -> (Self, usize) {
+        let (merkle, pos) = self.merkle.insert(item.leaf_hash(&key));
+        let items = self.items.insert(key, (item, pos));
+        (Self { merkle, items }, pos)
+    }
+
+    /// Replaces the item stored under `key`, keeping the position it already
+    /// occupies.
     ///
-    /// The leaf is swapped for another one rather than being emptied, so no
-    /// hole is created and the surrounding leaves keep their positions.
-    pub fn update(&self, old_key: &Key, new_key: Key, item: Item) -> Result<Self, Error> {
-        let Some((_, pos)) = self.items.get(old_key) else {
+    /// The leaf is replaced with the one committing to the new item rather than
+    /// being emptied, so no hole is created and the surrounding leaves keep
+    /// their positions.
+    pub fn update(&self, key: &Key, item: Item) -> Result<Self, Error> {
+        let Some((_, pos)) = self.items.get(key) else {
             return Err(Error::NotFound);
         };
-        let merkle = self.merkle.update(*pos, new_key.clone());
-        let items = self.items.remove(old_key).insert(new_key, (item, *pos));
+        let merkle = self.merkle.update(*pos, item.leaf_hash(key));
+        let items = self.items.insert(key.clone(), (item, *pos));
 
         Ok(Self { merkle, items })
     }
@@ -146,19 +168,6 @@ where
     }
 
     #[must_use]
-    pub fn root(&self) -> Hash {
-        self.merkle.root()
-    }
-
-    /// Computes the Merkle path for the key.
-    /// The path is ordered from leaf to root (excluded).
-    /// Returns `None` if the key does not exist or has been removed.
-    pub fn path(&self, key: &Key) -> Option<MerklePath<Hash>> {
-        let (_, pos) = self.items.get(key)?;
-        self.merkle.path(*pos)
-    }
-
-    #[must_use]
     pub fn compressed(&self) -> CompressedBlake2bTree<Key, Item> {
         CompressedBlake2bTree {
             items: self
@@ -172,7 +181,7 @@ where
 
 impl<Key, Item> PartialEq for Blake2bTree<Key, Item>
 where
-    Key: AsRef<Hash> + Clone + std::hash::Hash + Eq,
+    Key: Clone + std::hash::Hash + Eq,
     Item: PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
@@ -182,15 +191,15 @@ where
 
 impl<Key, Item> Eq for Blake2bTree<Key, Item>
 where
-    Key: AsRef<Hash> + Clone + std::hash::Hash + Eq,
+    Key: Clone + std::hash::Hash + Eq,
     Item: Eq,
 {
 }
 
 impl<Key, Item> FromIterator<(Key, Item)> for Blake2bTree<Key, Item>
 where
-    Key: AsRef<Hash> + Clone + std::hash::Hash + Eq,
-    Item: Clone,
+    Key: Clone + std::hash::Hash + Eq,
+    Item: LeafHash<Key> + Clone,
 {
     fn from_iter<I: IntoIterator<Item = (Key, Item)>>(iter: I) -> Self {
         let mut tree = Self::new();
@@ -204,8 +213,8 @@ where
 
 impl<Key, Item> From<CompressedBlake2bTree<Key, Item>> for Blake2bTree<Key, Item>
 where
-    Key: AsRef<Hash> + Clone + std::hash::Hash + Eq,
-    Item: Clone,
+    Key: Clone + std::hash::Hash + Eq,
+    Item: LeafHash<Key> + Clone,
 {
     fn from(compressed: CompressedBlake2bTree<Key, Item>) -> Self {
         // `items` is a `BTreeMap`, so iteration is ordered by position.
@@ -213,7 +222,7 @@ where
             compressed
                 .items
                 .iter()
-                .map(|(pos, (key, _))| (*pos, key.clone())),
+                .map(|(pos, (key, item))| (*pos, item.leaf_hash(key))),
         );
         Self {
             merkle,
@@ -235,12 +244,12 @@ pub struct CompressedBlake2bTree<Key, Item> {
 mod serde {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    use super::Hash;
+    use super::LeafHash;
 
     impl<Key, Item> Serialize for super::Blake2bTree<Key, Item>
     where
-        Key: Serialize + Clone + AsRef<Hash> + std::hash::Hash + Eq,
-        Item: Serialize + Clone,
+        Key: Serialize + Clone + std::hash::Hash + Eq,
+        Item: Serialize + LeafHash<Key> + Clone,
     {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
         where
@@ -252,8 +261,8 @@ mod serde {
 
     impl<'de, Key, Item> Deserialize<'de> for super::Blake2bTree<Key, Item>
     where
-        Key: AsRef<Hash> + Clone + std::hash::Hash + Eq + Deserialize<'de>,
-        Item: Deserialize<'de> + Clone,
+        Key: Clone + std::hash::Hash + Eq + Deserialize<'de>,
+        Item: Deserialize<'de> + LeafHash<Key> + Clone,
     {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
         where
@@ -522,7 +531,7 @@ mod tests {
         assert_eq!(current_tree.size(), 3);
     }
 
-    // Leaves are never re-sorted, so the same keys inserted in a different
+    // Leaves are never re-sorted, so the same elements inserted in a different
     // order occupy different positions and commit to a different root.
     #[test]
     fn test_root_depends_on_insertion_order() {
@@ -538,30 +547,30 @@ mod tests {
         assert_ne!(tree1.root(), tree2.root());
     }
 
-    // Updating swaps the leaf for another one, so the element keeps its
-    // position and no hole is created.
+    // The leaf commits to the item, so mutating an element changes the root
+    // even though its key and position are unchanged.
     #[test]
-    fn test_update_keeps_position() {
+    fn test_update_changes_root_and_keeps_position() {
         let tree: Blake2bTree<TestLeaf, TestLeaf> = Blake2bTree::new();
 
         let mut current_tree = tree;
-        let items = (0..3).map(TestLeaf::from_usize).collect::<Vec<_>>();
-        for item in &items {
-            current_tree = current_tree.insert(*item, *item).0;
+        let keys = (0..3).map(TestLeaf::from_usize).collect::<Vec<_>>();
+        for key in &keys {
+            current_tree = current_tree.insert(*key, *key).0;
         }
         let root_before = current_tree.root();
 
-        let new_key = TestLeaf::from_usize(42);
-        let updated = current_tree.update(&items[1], new_key, new_key).unwrap();
+        let new_item = TestLeaf::from_usize(42);
+        let updated = current_tree.update(&keys[1], new_item).unwrap();
 
         assert_eq!(updated.size(), 3);
-        assert!(!updated.contains(&items[1]));
-        assert!(updated.contains(&new_key));
+        assert!(updated.contains(&keys[1]));
+        assert_eq!(updated.get(&keys[1]), Some(new_item));
         assert_ne!(updated.root(), root_before);
 
-        // The slot is unchanged, so restoring the previous key restores the
-        // previous root.
-        let restored = updated.update(&new_key, items[1], items[1]).unwrap();
+        // The position is unchanged, so restoring the previous item restores
+        // the previous root.
+        let restored = updated.update(&keys[1], keys[1]).unwrap();
         assert_eq!(restored.root(), root_before);
     }
 
@@ -571,13 +580,12 @@ mod tests {
         let tree: Blake2bTree<TestLeaf, TestLeaf> = Blake2bTree::new();
 
         let mut current_tree = tree;
-        let items = (0..3).map(TestLeaf::from_usize).collect::<Vec<_>>();
-        for item in &items {
-            current_tree = current_tree.insert(*item, *item).0;
+        let keys = (0..3).map(TestLeaf::from_usize).collect::<Vec<_>>();
+        for key in &keys {
+            current_tree = current_tree.insert(*key, *key).0;
         }
 
-        let new_key = TestLeaf::from_usize(42);
-        let updated = current_tree.update(&items[1], new_key, new_key).unwrap();
+        let updated = current_tree.update(&keys[1], TestLeaf::from_usize(42)).unwrap();
 
         let extra = TestLeaf::from_usize(43);
         let (_, pos) = updated.insert(extra, extra);
@@ -591,7 +599,7 @@ mod tests {
         let (tree, _) = tree.insert(key, key);
 
         let missing = TestLeaf::from_usize(2);
-        let result = tree.update(&missing, missing, missing);
+        let result = tree.update(&missing, missing);
         assert!(matches!(result, Err(Error::NotFound)));
     }
 
