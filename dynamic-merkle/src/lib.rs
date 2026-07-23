@@ -509,7 +509,7 @@ pub mod serde {
     use std::{marker::PhantomData, sync::Arc};
 
     use rpds::RedBlackTreeSetSync;
-    use serde::{ser::SerializeStruct as _, Deserialize, Deserializer, Serialize, Serializer};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeStruct as _};
 
     use super::MerkleHasher;
 
