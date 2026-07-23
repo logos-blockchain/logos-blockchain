@@ -135,6 +135,21 @@ pub struct LogosBlockchain {
     tracing: TracingService,
 }
 
+/// Installs the process-wide panic hook that logs the panic and then terminates
+/// the process via [`std::process::exit`].
+///
+/// This is meant for the **standalone node binary only**. It must NOT be called
+/// from the embedded C bindings (`logos_blockchain` cdylib): `set_hook` is
+/// process-global, so a panic on any thread would tear down the host process the
+/// node is embedded in. Worse, because `exit()` runs the host's C++ static
+/// destructors, it re-enters the node's own shutdown path on a thread whose
+/// thread-locals are already being destroyed, turning a recoverable panic into a
+/// double-panic `abort`. Embedded callers rely on the default panic behavior plus
+/// the FFI layer's per-call `catch_unwind` guards instead.
+pub fn install_panic_hook() {
+    set_hook(Box::new(log_and_exit_hook));
+}
+
 pub fn run_node_from_config(
     config: RunConfig,
     handle: Option<runtime::Handle>,
@@ -206,8 +221,6 @@ pub fn run_node_from_config(
     };
 
     let http_config = api_config.backend_settings();
-
-    set_hook(Box::new(log_and_exit_hook));
 
     let app = OverwatchRunner::<LogosBlockchain>::run(
         LogosBlockchainServiceSettings {

@@ -146,8 +146,10 @@ pub unsafe extern "C" fn subscribe_to_new_blocks(
     node: *const LogosBlockchainNode,
     callback_per_block: CCallback<*const c_char>,
 ) -> OperationStatus {
-    return_error_if_null_pointer!(node);
-    let node = unsafe { &*node };
-    let callback_per_block = into_boxed_callback(callback_per_block);
-    subscribe_to_new_blocks_sync(node, callback_per_block)
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(node);
+        let node = unsafe { &*node };
+        let callback_per_block = into_boxed_callback(callback_per_block);
+        subscribe_to_new_blocks_sync(node, callback_per_block)
+    })
 }

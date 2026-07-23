@@ -157,24 +157,26 @@ pub type FfiKnownAddressesResult = FfiStatusResult<KnownAddresses>;
 pub unsafe extern "C" fn get_known_addresses(
     node: *const LogosBlockchainNode,
 ) -> FfiKnownAddressesResult {
-    return_error_if_null_pointer!(node);
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(node);
 
-    let node = unsafe { &*node };
-    let addresses = unwrap_or_return_error!(get_known_addresses_sync(node));
+        let node = unsafe { &*node };
+        let addresses = unwrap_or_return_error!(get_known_addresses_sync(node));
 
-    let address_pointers: Vec<*mut u8> = addresses
-        .into_iter()
-        .map(|pk| {
-            let bytes = fr_to_bytes(pk.as_fr());
-            Box::into_raw(Box::new(bytes)).cast::<u8>()
+        let address_pointers: Vec<*mut u8> = addresses
+            .into_iter()
+            .map(|pk| {
+                let bytes = fr_to_bytes(pk.as_fr());
+                Box::into_raw(Box::new(bytes)).cast::<u8>()
+            })
+            .collect();
+        let len = address_pointers.len();
+        let addresses_ptr = Box::leak(address_pointers.into_boxed_slice()).as_mut_ptr();
+
+        FfiKnownAddressesResult::ok(KnownAddresses {
+            addresses: addresses_ptr,
+            len,
         })
-        .collect();
-    let len = address_pointers.len();
-    let addresses_ptr = Box::leak(address_pointers.into_boxed_slice()).as_mut_ptr();
-
-    FfiKnownAddressesResult::ok(KnownAddresses {
-        addresses: addresses_ptr,
-        len,
     })
 }
 
@@ -311,34 +313,36 @@ pub unsafe extern "C" fn get_claimable_vouchers(
     node: *const LogosBlockchainNode,
     optional_tip: *const HeaderId,
 ) -> FfiClaimableVouchersResult {
-    return_error_if_null_pointer!(node);
-    let node = unsafe { &*node };
-    let tip = if optional_tip.is_null() {
-        None
-    } else {
-        Some(CoreHeaderId::from(unsafe { *optional_tip }))
-    };
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(node);
+        let node = unsafe { &*node };
+        let tip = if optional_tip.is_null() {
+            None
+        } else {
+            Some(CoreHeaderId::from(unsafe { *optional_tip }))
+        };
 
-    let response = unwrap_or_return_error!(get_claimable_vouchers_sync(node, tip));
-    let vouchers: Vec<ClaimableVoucher> = response
-        .response
-        .into_iter()
-        .map(|voucher| {
-            let nullifier = voucher.nullifier.into();
-            ClaimableVoucher {
-                commitment: voucher.commitment.to_bytes(),
-                nullifier: fr_to_bytes(&nullifier),
-            }
+        let response = unwrap_or_return_error!(get_claimable_vouchers_sync(node, tip));
+        let vouchers: Vec<ClaimableVoucher> = response
+            .response
+            .into_iter()
+            .map(|voucher| {
+                let nullifier = voucher.nullifier.into();
+                ClaimableVoucher {
+                    commitment: voucher.commitment.to_bytes(),
+                    nullifier: fr_to_bytes(&nullifier),
+                }
+            })
+            .collect();
+
+        let len = vouchers.len();
+        let vouchers_ptr = Box::leak(vouchers.into_boxed_slice()).as_mut_ptr();
+
+        FfiClaimableVouchersResult::ok(ClaimableVouchers {
+            tip: response.tip.into(),
+            vouchers: vouchers_ptr,
+            len,
         })
-        .collect();
-
-    let len = vouchers.len();
-    let vouchers_ptr = Box::leak(vouchers.into_boxed_slice()).as_mut_ptr();
-
-    FfiClaimableVouchersResult::ok(ClaimableVouchers {
-        tip: response.tip.into(),
-        vouchers: vouchers_ptr,
-        len,
     })
 }
 
@@ -433,36 +437,38 @@ pub unsafe extern "C" fn get_balance(
     wallet_address: *const u8,
     optional_tip: *const HeaderId,
 ) -> FfiBalanceResult {
-    return_error_if_null_pointer!(node);
-    return_error_if_null_pointer!(wallet_address);
-    let node = unsafe { &*node };
-    let tip = if optional_tip.is_null() {
-        unwrap_or_return_error!(get_cryptarchia_info_sync(node))
-            .cryptarchia_info
-            .tip
-    } else {
-        lb_core::header::HeaderId::from(unsafe { *optional_tip })
-    };
-    let wallet_address_bytes = unsafe { std::slice::from_raw_parts(wallet_address, 32) };
-    let wallet_address = unwrap_or_return_error!(
-        fr_from_bytes(wallet_address_bytes)
-            .map(ZkPublicKey::new)
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::DynError,
-                    format!("Invalid wallet address: {error:?}"),
-                )
-            })
-    );
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(node);
+        return_error_if_null_pointer!(wallet_address);
+        let node = unsafe { &*node };
+        let tip = if optional_tip.is_null() {
+            unwrap_or_return_error!(get_cryptarchia_info_sync(node))
+                .cryptarchia_info
+                .tip
+        } else {
+            lb_core::header::HeaderId::from(unsafe { *optional_tip })
+        };
+        let wallet_address_bytes = unsafe { std::slice::from_raw_parts(wallet_address, 32) };
+        let wallet_address = unwrap_or_return_error!(
+            fr_from_bytes(wallet_address_bytes)
+                .map(ZkPublicKey::new)
+                .map_err(|error| {
+                    OperationStatus::error(
+                        OperationStatusCode::DynError,
+                        format!("Invalid wallet address: {error:?}"),
+                    )
+                })
+        );
 
-    match get_balance_sync(node, tip, wallet_address) {
-        Ok(Some(balance)) => FfiBalanceResult::ok(balance),
-        Ok(None) => FfiBalanceResult::err(OperationStatus::error(
-            OperationStatusCode::NotFound,
-            "Unknown wallet address.",
-        )),
-        Err(status) => FfiBalanceResult::err(status),
-    }
+        match get_balance_sync(node, tip, wallet_address) {
+            Ok(Some(balance)) => FfiBalanceResult::ok(balance),
+            Ok(None) => FfiBalanceResult::err(OperationStatus::error(
+                OperationStatusCode::NotFound,
+                "Unknown wallet address.",
+            )),
+            Err(status) => FfiBalanceResult::err(status),
+        }
+    })
 }
 
 /// Gets the spendable notes (UTXOs) of a wallet address.
@@ -541,51 +547,53 @@ pub unsafe extern "C" fn get_wallet_notes(
     wallet_address: *const u8,
     optional_tip: *const HeaderId,
 ) -> FfiWalletNotesResult {
-    return_error_if_null_pointer!(node);
-    return_error_if_null_pointer!(wallet_address);
-    let node = unsafe { &*node };
-    let tip = if optional_tip.is_null() {
-        unwrap_or_return_error!(get_cryptarchia_info_sync(node))
-            .cryptarchia_info
-            .tip
-    } else {
-        lb_core::header::HeaderId::from(unsafe { *optional_tip })
-    };
-    let wallet_address_bytes = unsafe { std::slice::from_raw_parts(wallet_address, 32) };
-    let wallet_address = unwrap_or_return_error!(
-        fr_from_bytes(wallet_address_bytes)
-            .map(ZkPublicKey::new)
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::DynError,
-                    format!("Invalid wallet address: {error:?}"),
-                )
-            })
-    );
-
-    match get_wallet_notes_sync(node, tip, wallet_address) {
-        Ok(Some((resolved_tip, notes))) => {
-            let notes: Vec<WalletNote> = notes
-                .into_iter()
-                .map(|(id, value)| WalletNote {
-                    id: fr_to_bytes(id.as_fr()),
-                    value,
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(node);
+        return_error_if_null_pointer!(wallet_address);
+        let node = unsafe { &*node };
+        let tip = if optional_tip.is_null() {
+            unwrap_or_return_error!(get_cryptarchia_info_sync(node))
+                .cryptarchia_info
+                .tip
+        } else {
+            lb_core::header::HeaderId::from(unsafe { *optional_tip })
+        };
+        let wallet_address_bytes = unsafe { std::slice::from_raw_parts(wallet_address, 32) };
+        let wallet_address = unwrap_or_return_error!(
+            fr_from_bytes(wallet_address_bytes)
+                .map(ZkPublicKey::new)
+                .map_err(|error| {
+                    OperationStatus::error(
+                        OperationStatusCode::DynError,
+                        format!("Invalid wallet address: {error:?}"),
+                    )
                 })
-                .collect();
-            let len = notes.len();
-            let notes_ptr = Box::leak(notes.into_boxed_slice()).as_mut_ptr();
-            FfiWalletNotesResult::ok(WalletNotes {
-                tip: resolved_tip.into(),
-                notes: notes_ptr,
-                len,
-            })
+        );
+
+        match get_wallet_notes_sync(node, tip, wallet_address) {
+            Ok(Some((resolved_tip, notes))) => {
+                let notes: Vec<WalletNote> = notes
+                    .into_iter()
+                    .map(|(id, value)| WalletNote {
+                        id: fr_to_bytes(id.as_fr()),
+                        value,
+                    })
+                    .collect();
+                let len = notes.len();
+                let notes_ptr = Box::leak(notes.into_boxed_slice()).as_mut_ptr();
+                FfiWalletNotesResult::ok(WalletNotes {
+                    tip: resolved_tip.into(),
+                    notes: notes_ptr,
+                    len,
+                })
+            }
+            Ok(None) => FfiWalletNotesResult::err(OperationStatus::error(
+                OperationStatusCode::NotFound,
+                "Unknown wallet address.",
+            )),
+            Err(status) => FfiWalletNotesResult::err(status),
         }
-        Ok(None) => FfiWalletNotesResult::err(OperationStatus::error(
-            OperationStatusCode::NotFound,
-            "Unknown wallet address.",
-        )),
-        Err(status) => FfiWalletNotesResult::err(status),
-    }
+    })
 }
 
 /// Frees the memory allocated for a [`WalletNotes`] structure.
@@ -750,57 +758,59 @@ pub unsafe extern "C" fn transfer_funds(
     node: *const LogosBlockchainNode,
     arguments: *const TransferFundsArguments,
 ) -> FfiTransferFundsResult {
-    return_error_if_null_pointer!(node);
-    return_error_if_null_pointer!(arguments);
-    let arguments = unsafe { &*arguments };
-    unwrap_or_return_error!(unsafe { arguments.validate() });
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(node);
+        return_error_if_null_pointer!(arguments);
+        let arguments = unsafe { &*arguments };
+        unwrap_or_return_error!(unsafe { arguments.validate() });
 
-    let node = unsafe { &*node };
-    let tip = if arguments.optional_tip.is_null() {
-        unwrap_or_return_error!(get_cryptarchia_info_sync(node))
-            .cryptarchia_info
-            .tip
-    } else {
-        lb_core::header::HeaderId::from(unsafe { *arguments.optional_tip })
-    };
-    let change_public_key =
-        unwrap_or_return_error!(unsafe { parse_public_key(arguments.change_public_key) });
-    let funding_public_keys = {
-        let funding_public_keys_pointers = unsafe {
-            std::slice::from_raw_parts(
-                arguments.funding_public_keys,
-                arguments.funding_public_keys_len,
+        let node = unsafe { &*node };
+        let tip = if arguments.optional_tip.is_null() {
+            unwrap_or_return_error!(get_cryptarchia_info_sync(node))
+                .cryptarchia_info
+                .tip
+        } else {
+            lb_core::header::HeaderId::from(unsafe { *arguments.optional_tip })
+        };
+        let change_public_key =
+            unwrap_or_return_error!(unsafe { parse_public_key(arguments.change_public_key) });
+        let funding_public_keys = {
+            let funding_public_keys_pointers = unsafe {
+                std::slice::from_raw_parts(
+                    arguments.funding_public_keys,
+                    arguments.funding_public_keys_len,
+                )
+            };
+            unwrap_or_return_error!(
+                funding_public_keys_pointers
+                    .iter()
+                    .map(|funding_public_key_pointer| unsafe {
+                        parse_public_key(*funding_public_key_pointer)
+                    })
+                    .collect::<StatusResult<Vec<_>>>()
             )
         };
-        unwrap_or_return_error!(
-            funding_public_keys_pointers
-                .iter()
-                .map(|funding_public_key_pointer| unsafe {
-                    parse_public_key(*funding_public_key_pointer)
-                })
-                .collect::<StatusResult<Vec<_>>>()
-        )
-    };
-    let recipient_public_key =
-        unwrap_or_return_error!(unsafe { parse_public_key(arguments.recipient_public_key) });
-    let amount = Value::from(arguments.amount);
+        let recipient_public_key =
+            unwrap_or_return_error!(unsafe { parse_public_key(arguments.recipient_public_key) });
+        let amount = Value::from(arguments.amount);
 
-    let transaction = unwrap_or_return_error!(transfer_funds_sync(
-        node,
-        tip,
-        change_public_key,
-        funding_public_keys,
-        recipient_public_key,
-        amount,
-    ));
-    let transaction_hash = transaction.hash().as_signing_bytes();
-    let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
-        return FfiTransferFundsResult::err(OperationStatus::error(
-            OperationStatusCode::RuntimeError,
-            "Failed to convert transaction hash to array.",
+        let transaction = unwrap_or_return_error!(transfer_funds_sync(
+            node,
+            tip,
+            change_public_key,
+            funding_public_keys,
+            recipient_public_key,
+            amount,
         ));
-    };
-    FfiTransferFundsResult::ok(transaction_hash_array)
+        let transaction_hash = transaction.hash().as_signing_bytes();
+        let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
+            return FfiTransferFundsResult::err(OperationStatus::error(
+                OperationStatusCode::RuntimeError,
+                "Failed to convert transaction hash to array.",
+            ));
+        };
+        FfiTransferFundsResult::ok(transaction_hash_array)
+    })
 }
 
 /// Parses a 32-byte little-endian buffer into a [`ZkPublicKey`].
@@ -1038,104 +1048,106 @@ pub unsafe extern "C" fn channel_deposit_with_notes(
     node: *const LogosBlockchainNode,
     arguments: *const ChannelDepositWithNotesArguments,
 ) -> FfiChannelDepositResult {
-    return_error_if_null_pointer!(node);
-    return_error_if_null_pointer!(arguments);
-    let arguments = unsafe { &*arguments };
-    unwrap_or_return_error!(unsafe { arguments.validate() });
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(node);
+        return_error_if_null_pointer!(arguments);
+        let arguments = unsafe { &*arguments };
+        unwrap_or_return_error!(unsafe { arguments.validate() });
 
-    let node = unsafe { &*node };
-    let tip = if arguments.optional_tip.is_null() {
-        unwrap_or_return_error!(get_cryptarchia_info_sync(node))
-            .cryptarchia_info
-            .tip
-    } else {
-        CoreHeaderId::from(unsafe { *arguments.optional_tip })
-    };
+        let node = unsafe { &*node };
+        let tip = if arguments.optional_tip.is_null() {
+            unwrap_or_return_error!(get_cryptarchia_info_sync(node))
+                .cryptarchia_info
+                .tip
+        } else {
+            CoreHeaderId::from(unsafe { *arguments.optional_tip })
+        };
 
-    let channel_id = {
-        let bytes = unsafe { std::slice::from_raw_parts(arguments.channel_id, 32) };
-        let Ok(array): Result<[u8; 32], _> = bytes.try_into() else {
+        let channel_id = {
+            let bytes = unsafe { std::slice::from_raw_parts(arguments.channel_id, 32) };
+            let Ok(array): Result<[u8; 32], _> = bytes.try_into() else {
+                return FfiChannelDepositResult::err(OperationStatus::error(
+                    OperationStatusCode::RuntimeError,
+                    "Invalid channel_id length.",
+                ));
+            };
+            ChannelId::from(array)
+        };
+
+        let input_note_ids = unsafe {
+            std::slice::from_raw_parts(arguments.input_note_ids, arguments.input_note_ids_len)
+        };
+        let mut note_ids = Vec::with_capacity(arguments.input_note_ids_len);
+        for note_id_bytes in input_note_ids {
+            let note_id =
+                unwrap_or_return_error!(fr_from_bytes(note_id_bytes).map(CoreNoteId).map_err(
+                    |error| {
+                        OperationStatus::error(
+                            OperationStatusCode::DynError,
+                            format!("Invalid note ID: {error:?}"),
+                        )
+                    }
+                ));
+            note_ids.push(note_id);
+        }
+        let inputs = unwrap_or_return_error!(Inputs::try_new(note_ids).map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Invalid deposit inputs: {error:?}"),
+            )
+        }));
+
+        let metadata_bytes = if arguments.metadata_len == 0 {
+            Vec::new()
+        } else {
+            unsafe { std::slice::from_raw_parts(arguments.metadata, arguments.metadata_len) }.to_vec()
+        };
+        let metadata = unwrap_or_return_error!(Metadata::try_from(metadata_bytes).map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Invalid metadata: {error:?}"),
+            )
+        }));
+
+        let deposit = DepositOp {
+            channel_id,
+            inputs,
+            metadata,
+        };
+
+        let change_public_key =
+            unwrap_or_return_error!(unsafe { parse_public_key(arguments.change_public_key) });
+        let funding_public_key_pointers = unsafe {
+            std::slice::from_raw_parts(
+                arguments.funding_public_keys,
+                arguments.funding_public_keys_len,
+            )
+        };
+        let funding_public_keys = unwrap_or_return_error!(
+            funding_public_key_pointers
+                .iter()
+                .map(|pointer| unsafe { parse_public_key(*pointer) })
+                .collect::<StatusResult<Vec<_>>>()
+        );
+        let max_tx_fee = GasCost::new(arguments.max_tx_fee);
+
+        let transaction = unwrap_or_return_error!(channel_deposit_with_notes_sync(
+            node,
+            tip,
+            deposit,
+            change_public_key,
+            funding_public_keys,
+            max_tx_fee,
+        ));
+        let transaction_hash = transaction.hash().as_signing_bytes();
+        let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
             return FfiChannelDepositResult::err(OperationStatus::error(
                 OperationStatusCode::RuntimeError,
-                "Invalid channel_id length.",
+                "Failed to convert transaction hash to array.",
             ));
         };
-        ChannelId::from(array)
-    };
-
-    let input_note_ids = unsafe {
-        std::slice::from_raw_parts(arguments.input_note_ids, arguments.input_note_ids_len)
-    };
-    let mut note_ids = Vec::with_capacity(arguments.input_note_ids_len);
-    for note_id_bytes in input_note_ids {
-        let note_id =
-            unwrap_or_return_error!(fr_from_bytes(note_id_bytes).map(CoreNoteId).map_err(
-                |error| {
-                    OperationStatus::error(
-                        OperationStatusCode::DynError,
-                        format!("Invalid note ID: {error:?}"),
-                    )
-                }
-            ));
-        note_ids.push(note_id);
-    }
-    let inputs = unwrap_or_return_error!(Inputs::try_new(note_ids).map_err(|error| {
-        OperationStatus::error(
-            OperationStatusCode::DynError,
-            format!("Invalid deposit inputs: {error:?}"),
-        )
-    }));
-
-    let metadata_bytes = if arguments.metadata_len == 0 {
-        Vec::new()
-    } else {
-        unsafe { std::slice::from_raw_parts(arguments.metadata, arguments.metadata_len) }.to_vec()
-    };
-    let metadata = unwrap_or_return_error!(Metadata::try_from(metadata_bytes).map_err(|error| {
-        OperationStatus::error(
-            OperationStatusCode::DynError,
-            format!("Invalid metadata: {error:?}"),
-        )
-    }));
-
-    let deposit = DepositOp {
-        channel_id,
-        inputs,
-        metadata,
-    };
-
-    let change_public_key =
-        unwrap_or_return_error!(unsafe { parse_public_key(arguments.change_public_key) });
-    let funding_public_key_pointers = unsafe {
-        std::slice::from_raw_parts(
-            arguments.funding_public_keys,
-            arguments.funding_public_keys_len,
-        )
-    };
-    let funding_public_keys = unwrap_or_return_error!(
-        funding_public_key_pointers
-            .iter()
-            .map(|pointer| unsafe { parse_public_key(*pointer) })
-            .collect::<StatusResult<Vec<_>>>()
-    );
-    let max_tx_fee = GasCost::new(arguments.max_tx_fee);
-
-    let transaction = unwrap_or_return_error!(channel_deposit_with_notes_sync(
-        node,
-        tip,
-        deposit,
-        change_public_key,
-        funding_public_keys,
-        max_tx_fee,
-    ));
-    let transaction_hash = transaction.hash().as_signing_bytes();
-    let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
-        return FfiChannelDepositResult::err(OperationStatus::error(
-            OperationStatusCode::RuntimeError,
-            "Failed to convert transaction hash to array.",
-        ));
-    };
-    FfiChannelDepositResult::ok(transaction_hash_array)
+        FfiChannelDepositResult::ok(transaction_hash_array)
+    })
 }
 
 /// Selects notes (largest-first) whose combined value covers `amount`.
@@ -1387,62 +1399,64 @@ pub unsafe extern "C" fn channel_deposit(
     node: *const LogosBlockchainNode,
     arguments: *const ChannelDepositArguments,
 ) -> FfiChannelDepositResult {
-    return_error_if_null_pointer!(node);
-    return_error_if_null_pointer!(arguments);
-    let arguments = unsafe { &*arguments };
-    unwrap_or_return_error!(unsafe { arguments.validate() });
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(node);
+        return_error_if_null_pointer!(arguments);
+        let arguments = unsafe { &*arguments };
+        unwrap_or_return_error!(unsafe { arguments.validate() });
 
-    let node = unsafe { &*node };
-    let tip = if arguments.optional_tip.is_null() {
-        unwrap_or_return_error!(get_cryptarchia_info_sync(node))
-            .cryptarchia_info
-            .tip
-    } else {
-        lb_core::header::HeaderId::from(unsafe { *arguments.optional_tip })
-    };
+        let node = unsafe { &*node };
+        let tip = if arguments.optional_tip.is_null() {
+            unwrap_or_return_error!(get_cryptarchia_info_sync(node))
+                .cryptarchia_info
+                .tip
+        } else {
+            lb_core::header::HeaderId::from(unsafe { *arguments.optional_tip })
+        };
 
-    let channel_id = {
-        let bytes = unsafe { std::slice::from_raw_parts(arguments.channel_id, 32) };
-        let Ok(array): Result<[u8; 32], _> = bytes.try_into() else {
+        let channel_id = {
+            let bytes = unsafe { std::slice::from_raw_parts(arguments.channel_id, 32) };
+            let Ok(array): Result<[u8; 32], _> = bytes.try_into() else {
+                return FfiChannelDepositResult::err(OperationStatus::error(
+                    OperationStatusCode::RuntimeError,
+                    "Invalid channel_id length.",
+                ));
+            };
+            ChannelId::from(array)
+        };
+        let funding_public_key =
+            unwrap_or_return_error!(unsafe { parse_public_key(arguments.funding_public_key) });
+        let amount = Value::from(arguments.amount);
+
+        let metadata_bytes = if arguments.metadata_len == 0 {
+            Vec::new()
+        } else {
+            unsafe { std::slice::from_raw_parts(arguments.metadata, arguments.metadata_len) }.to_vec()
+        };
+        let metadata = unwrap_or_return_error!(Metadata::try_from(metadata_bytes).map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Invalid metadata: {error:?}"),
+            )
+        }));
+
+        let transaction = unwrap_or_return_error!(channel_deposit_sync(
+            node,
+            tip,
+            channel_id,
+            funding_public_key,
+            amount,
+            metadata,
+        ));
+        let transaction_hash = transaction.hash().as_signing_bytes();
+        let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
             return FfiChannelDepositResult::err(OperationStatus::error(
                 OperationStatusCode::RuntimeError,
-                "Invalid channel_id length.",
+                "Failed to convert transaction hash to array.",
             ));
         };
-        ChannelId::from(array)
-    };
-    let funding_public_key =
-        unwrap_or_return_error!(unsafe { parse_public_key(arguments.funding_public_key) });
-    let amount = Value::from(arguments.amount);
-
-    let metadata_bytes = if arguments.metadata_len == 0 {
-        Vec::new()
-    } else {
-        unsafe { std::slice::from_raw_parts(arguments.metadata, arguments.metadata_len) }.to_vec()
-    };
-    let metadata = unwrap_or_return_error!(Metadata::try_from(metadata_bytes).map_err(|error| {
-        OperationStatus::error(
-            OperationStatusCode::DynError,
-            format!("Invalid metadata: {error:?}"),
-        )
-    }));
-
-    let transaction = unwrap_or_return_error!(channel_deposit_sync(
-        node,
-        tip,
-        channel_id,
-        funding_public_key,
-        amount,
-        metadata,
-    ));
-    let transaction_hash = transaction.hash().as_signing_bytes();
-    let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
-        return FfiChannelDepositResult::err(OperationStatus::error(
-            OperationStatusCode::RuntimeError,
-            "Failed to convert transaction hash to array.",
-        ));
-    };
-    FfiChannelDepositResult::ok(transaction_hash_array)
+        FfiChannelDepositResult::ok(transaction_hash_array)
+    })
 }
 
 /// Funds a transaction from the node's wallet.
@@ -1574,47 +1588,49 @@ pub unsafe extern "C" fn wallet_fund_tx(
     node: *const LogosBlockchainNode,
     request_json: *const c_char,
 ) -> FfiWalletFundResult {
-    return_error_if_null_pointer!(node);
-    return_error_if_null_pointer!(request_json);
-    let node = unsafe { &*node };
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(node);
+        return_error_if_null_pointer!(request_json);
+        let node = unsafe { &*node };
 
-    let request_json = match unsafe { CStr::from_ptr(request_json) }.to_str() {
-        Ok(request_json) => request_json,
-        Err(error) => {
-            return FfiWalletFundResult::err(OperationStatus::error(
-                OperationStatusCode::ValidationError,
-                format!("Request is not valid UTF-8: {error}"),
-            ));
-        }
-    };
-    let request: WalletFundRequestBody = match serde_json::from_str(request_json) {
-        Ok(request) => request,
-        Err(error) => {
-            return FfiWalletFundResult::err(OperationStatus::error(
-                OperationStatusCode::ValidationError,
-                format!("Failed to parse fund request: {error}"),
-            ));
-        }
-    };
+        let request_json = match unsafe { CStr::from_ptr(request_json) }.to_str() {
+            Ok(request_json) => request_json,
+            Err(error) => {
+                return FfiWalletFundResult::err(OperationStatus::error(
+                    OperationStatusCode::ValidationError,
+                    format!("Request is not valid UTF-8: {error}"),
+                ));
+            }
+        };
+        let request: WalletFundRequestBody = match serde_json::from_str(request_json) {
+            Ok(request) => request,
+            Err(error) => {
+                return FfiWalletFundResult::err(OperationStatus::error(
+                    OperationStatusCode::ValidationError,
+                    format!("Failed to parse fund request: {error}"),
+                ));
+            }
+        };
 
-    let response = unwrap_or_return_error!(wallet_fund_tx_sync(node, request));
+        let response = unwrap_or_return_error!(wallet_fund_tx_sync(node, request));
 
-    let response_json = match serde_json::to_string(&response) {
-        Ok(response_json) => response_json,
-        Err(error) => {
-            return FfiWalletFundResult::err(OperationStatus::error(
+        let response_json = match serde_json::to_string(&response) {
+            Ok(response_json) => response_json,
+            Err(error) => {
+                return FfiWalletFundResult::err(OperationStatus::error(
+                    OperationStatusCode::RuntimeError,
+                    format!("Failed to serialize fund response: {error}"),
+                ));
+            }
+        };
+        match CString::new(response_json) {
+            Ok(response_json) => FfiWalletFundResult::ok(response_json.into_raw()),
+            Err(error) => FfiWalletFundResult::err(OperationStatus::error(
                 OperationStatusCode::RuntimeError,
-                format!("Failed to serialize fund response: {error}"),
-            ));
+                format!("Failed to create response CString: {error}"),
+            )),
         }
-    };
-    match CString::new(response_json) {
-        Ok(response_json) => FfiWalletFundResult::ok(response_json.into_raw()),
-        Err(error) => FfiWalletFundResult::err(OperationStatus::error(
-            OperationStatusCode::RuntimeError,
-            format!("Failed to create response CString: {error}"),
-        )),
-    }
+    })
 }
 
 pub type FfiSubmitTransactionResult = FfiStatusResult<Hash>;
@@ -1646,62 +1662,64 @@ pub unsafe extern "C" fn submit_signed_transaction(
     node: *const LogosBlockchainNode,
     signed_tx_json: *const c_char,
 ) -> FfiSubmitTransactionResult {
-    return_error_if_null_pointer!(node);
-    return_error_if_null_pointer!(signed_tx_json);
-    let node = unsafe { &*node };
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(node);
+        return_error_if_null_pointer!(signed_tx_json);
+        let node = unsafe { &*node };
 
-    let preverified_tx = {
-        let signed_tx_json = match unsafe { CStr::from_ptr(signed_tx_json) }.to_str() {
-            Ok(signed_tx_json) => signed_tx_json,
-            Err(error) => {
-                return FfiSubmitTransactionResult::err(OperationStatus::error(
-                    OperationStatusCode::ValidationError,
-                    format!("Transaction is not valid UTF-8: {error}"),
-                ));
+        let preverified_tx = {
+            let signed_tx_json = match unsafe { CStr::from_ptr(signed_tx_json) }.to_str() {
+                Ok(signed_tx_json) => signed_tx_json,
+                Err(error) => {
+                    return FfiSubmitTransactionResult::err(OperationStatus::error(
+                        OperationStatusCode::ValidationError,
+                        format!("Transaction is not valid UTF-8: {error}"),
+                    ));
+                }
+            };
+            let signed_tx: SignedMantleTx<Unverified> = match serde_json::from_str(signed_tx_json) {
+                Ok(signed_tx) => signed_tx,
+                Err(error) => {
+                    return FfiSubmitTransactionResult::err(OperationStatus::error(
+                        OperationStatusCode::ValidationError,
+                        format!("Failed to parse signed transaction: {error}"),
+                    ));
+                }
+            };
+            match signed_tx.preverify() {
+                Ok(preverified_tx) => preverified_tx,
+                Err(error) => {
+                    return FfiSubmitTransactionResult::err(OperationStatus::error(
+                        OperationStatusCode::ValidationError,
+                        format!("Failed to preverify signed transaction: {error}"),
+                    ));
+                }
             }
         };
-        let signed_tx: SignedMantleTx<Unverified> = match serde_json::from_str(signed_tx_json) {
-            Ok(signed_tx) => signed_tx,
-            Err(error) => {
-                return FfiSubmitTransactionResult::err(OperationStatus::error(
-                    OperationStatusCode::ValidationError,
-                    format!("Failed to parse signed transaction: {error}"),
-                ));
-            }
-        };
-        match signed_tx.preverify() {
-            Ok(preverified_tx) => preverified_tx,
-            Err(error) => {
-                return FfiSubmitTransactionResult::err(OperationStatus::error(
-                    OperationStatusCode::ValidationError,
-                    format!("Failed to preverify signed transaction: {error}"),
-                ));
-            }
+
+        let transaction_hash = preverified_tx.hash().as_signing_bytes();
+        let runtime_handle = node.get_runtime_handle();
+        let submit_result = runtime_handle.block_on(async {
+            mempool::add_tx(
+                node.get_overwatch_handle(),
+                preverified_tx,
+                Transaction::hash,
+            )
+            .await
+        });
+        if let Err(error) = submit_result {
+            return FfiSubmitTransactionResult::err(OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Failed to add transaction to mempool: {error}"),
+            ));
         }
-    };
 
-    let transaction_hash = preverified_tx.hash().as_signing_bytes();
-    let runtime_handle = node.get_runtime_handle();
-    let submit_result = runtime_handle.block_on(async {
-        mempool::add_tx(
-            node.get_overwatch_handle(),
-            preverified_tx,
-            Transaction::hash,
-        )
-        .await
-    });
-    if let Err(error) = submit_result {
-        return FfiSubmitTransactionResult::err(OperationStatus::error(
-            OperationStatusCode::DynError,
-            format!("Failed to add transaction to mempool: {error}"),
-        ));
-    }
-
-    let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
-        return FfiSubmitTransactionResult::err(OperationStatus::error(
-            OperationStatusCode::RuntimeError,
-            "Failed to convert transaction hash to array.",
-        ));
-    };
-    FfiSubmitTransactionResult::ok(transaction_hash_array)
+        let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
+            return FfiSubmitTransactionResult::err(OperationStatus::error(
+                OperationStatusCode::RuntimeError,
+                "Failed to convert transaction hash to array.",
+            ));
+        };
+        FfiSubmitTransactionResult::ok(transaction_hash_array)
+    })
 }

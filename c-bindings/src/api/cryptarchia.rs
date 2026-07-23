@@ -133,12 +133,18 @@ pub type FfiCryptarchiaInfoResult = FfiStatusResult<*mut CryptarchiaInfo>;
 pub unsafe extern "C" fn get_cryptarchia_info(
     node: *const LogosBlockchainNode,
 ) -> FfiCryptarchiaInfoResult {
-    return_error_if_null_pointer!(node);
-    let node = unsafe { &*node };
-    let service_info = unwrap_or_return_error!(get_cryptarchia_info_sync(node));
-    let c_info = CryptarchiaInfo::from(service_info);
+    // Guard against panics unwinding across the `extern "C"` boundary: a panic in
+    // the async query (e.g. a relay/consensus path while the node is still
+    // bootstrapping) is turned into an `OperationStatus` error the caller can
+    // handle, instead of aborting the host process.
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(node);
+        let node = unsafe { &*node };
+        let service_info = unwrap_or_return_error!(get_cryptarchia_info_sync(node));
+        let c_info = CryptarchiaInfo::from(service_info);
 
-    FfiCryptarchiaInfoResult::from_value(c_info)
+        FfiCryptarchiaInfoResult::from_value(c_info)
+    })
 }
 
 /// Frees the memory allocated for a [`CryptarchiaInfo`] struct.

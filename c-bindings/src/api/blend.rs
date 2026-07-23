@@ -82,29 +82,31 @@ pub unsafe extern "C" fn blend_join_as_core_node(
     locator: *const c_char,
     locked_note_id: *const u8,
 ) -> FfiStatusResult<DeclarationId> {
-    return_error_if_null_pointer!(node);
-    return_error_if_null_pointer!(locator);
-    return_error_if_null_pointer!(locked_note_id);
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(node);
+        return_error_if_null_pointer!(locator);
+        return_error_if_null_pointer!(locked_note_id);
 
-    let locator = unwrap_or_return_error!(unsafe { parse_locator(locator) });
-    let locked_note_id = unwrap_or_return_error!(unsafe { parse_locked_note_id(locked_note_id) });
+        let locator = unwrap_or_return_error!(unsafe { parse_locator(locator) });
+        let locked_note_id = unwrap_or_return_error!(unsafe { parse_locked_note_id(locked_note_id) });
 
-    let node = unsafe { &*node };
+        let node = unsafe { &*node };
 
-    let result: StatusResult<sdp::DeclarationId> = node.get_runtime_handle().block_on(async {
-        lb_api_service::http::blend::blend_join_network::<
-            BlendService<RuntimeServiceId>,
-            BlendBroadcastSettings<RuntimeServiceId>,
-            RuntimeServiceId,
-        >(node.get_overwatch_handle(), locator, locked_note_id)
-        .await
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::RelayError,
-                format!("Failed to join blend network: {error}"),
-            )
-        })
-    });
+        let result: StatusResult<sdp::DeclarationId> = node.get_runtime_handle().block_on(async {
+            lb_api_service::http::blend::blend_join_network::<
+                BlendService<RuntimeServiceId>,
+                BlendBroadcastSettings<RuntimeServiceId>,
+                RuntimeServiceId,
+            >(node.get_overwatch_handle(), locator, locked_note_id)
+            .await
+            .map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::RelayError,
+                    format!("Failed to join blend network: {error}"),
+                )
+            })
+        });
 
-    result.map(DeclarationId::from).into()
+        result.map(DeclarationId::from).into()
+    })
 }

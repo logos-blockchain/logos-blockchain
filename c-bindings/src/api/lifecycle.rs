@@ -38,10 +38,12 @@ pub extern "C" fn start_lb_node(
     config_path: *const c_char,
     custom_deployment_path: *const c_char,
 ) -> FfiInitializedLogosBlockchainNodeResult {
-    initialize_lb_node(config_path, custom_deployment_path).map_or_else(
-        FfiInitializedLogosBlockchainNodeResult::err,
-        FfiInitializedLogosBlockchainNodeResult::from_value,
-    )
+    crate::macros::guard_ffi(|| {
+        initialize_lb_node(config_path, custom_deployment_path).map_or_else(
+            FfiInitializedLogosBlockchainNodeResult::err,
+            FfiInitializedLogosBlockchainNodeResult::from_value,
+        )
+    })
 }
 
 /// Initializes and starts a Logos blockchain node based on the provided
@@ -167,9 +169,11 @@ fn get_deployment_config(
 /// - The pointer will not be used after this function returns
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn shutdown_node(node: *mut LogosBlockchainNode) -> OperationStatus {
-    return_error_if_null_pointer!(node);
-    let node = unsafe { Box::from_raw(node) };
-    node.shutdown()
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(node);
+        let node = unsafe { Box::from_raw(node) };
+        node.shutdown()
+    })
 }
 
 #[cfg(test)]
