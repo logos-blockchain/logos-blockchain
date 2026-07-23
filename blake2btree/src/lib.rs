@@ -585,7 +585,9 @@ mod tests {
             current_tree = current_tree.insert(*key, *key).0;
         }
 
-        let updated = current_tree.update(&keys[1], TestLeaf::from_usize(42)).unwrap();
+        let updated = current_tree
+            .update(&keys[1], TestLeaf::from_usize(42))
+            .unwrap();
 
         let extra = TestLeaf::from_usize(43);
         let (_, pos) = updated.insert(extra, extra);
