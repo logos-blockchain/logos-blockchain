@@ -12,6 +12,7 @@ use crate::{
     crypto::{Digest as _, Hasher},
     events::TxEvent,
     mantle::{
+        VerificationError,
         channel::{ChannelState, Channels, Error},
         ledger::Operation,
         ops::channel::config::Keys,
@@ -42,6 +43,17 @@ impl InscriptionOp {
         let mut hasher = Hasher::new();
         hasher.update(self.encode().as_ref());
         MsgId(hasher.finalize().into())
+    }
+
+    pub fn verify_stateless(
+        &self,
+        tx_hash_bytes: &[u8],
+        proof: &Ed25519Signature,
+        op_index: usize,
+    ) -> Result<(), VerificationError> {
+        self.signer
+            .verify(tx_hash_bytes, proof)
+            .map_err(|_| VerificationError::InvalidSignature { op_index })
     }
 }
 

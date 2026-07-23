@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     events::TxEvent,
     mantle::{
+        VerificationError,
         channel::{Channels, Error},
         ledger::{Inputs, Operation, Utxos},
         ops::{OpId, channel::ChannelId},
@@ -18,6 +19,12 @@ use crate::{
 pub struct ChannelWithdrawOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
+}
+
+impl ChannelWithdrawOp {
+    pub const fn verify_stateless(&self) -> Result<(), VerificationError> {
+        Ok(())
+    }
 }
 
 impl OpId for ChannelWithdrawOp {

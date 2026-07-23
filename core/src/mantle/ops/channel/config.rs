@@ -8,6 +8,7 @@ use crate::{
     crypto::{Digest as _, Hasher},
     events::TxEvent,
     mantle::{
+        VerificationError,
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
         ledger::Operation,
         transactions::hash::TxHash,
@@ -34,6 +35,10 @@ impl ChannelConfigOp {
         let mut hasher = Hasher::new();
         hasher.update(self.encode());
         MsgId(hasher.finalize().into())
+    }
+
+    pub const fn verify_stateless(&self) -> Result<(), VerificationError> {
+        Ok(())
     }
 }
 

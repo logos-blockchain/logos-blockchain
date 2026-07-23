@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     events::{DepositRecreatedNotes, TxEvent, TxEventPayload},
     mantle::{
+        VerificationError,
         channel::{Channels, Error},
         ledger::{Inputs, InputsError, Operation, Outputs, Utxos},
         ops::{OpId, channel::ChannelId},
@@ -39,6 +40,10 @@ impl DepositOp {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Outputs::try_new(notes)?)
+    }
+
+    pub const fn verify_stateless(&self) -> Result<(), VerificationError> {
+        Ok(())
     }
 }
 

@@ -35,7 +35,6 @@ use crate::{
             states::{Preverified, Unverified, VerificationState},
         },
     },
-    proofs::leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},
 };
 
 // TODO: Increase test coverage after type state refactor.
@@ -117,34 +116,27 @@ impl SignedMantleTx<Unverified> {
         tx_hash_bytes: &Bytes,
     ) -> Result<(), VerificationError> {
         match (op, proof) {
-            (Op::ChannelInscribe(inscribe_op), OpProof::Ed25519Sig(sig)) => inscribe_op
-                .signer
-                .verify(tx_hash_bytes.as_ref(), sig)
-                .map_err(|_| VerificationError::InvalidSignature { op_index }),
-            (Op::LeaderClaim(leader_claim_op), OpProof::PoC(poc)) => {
-                let is_verified = poc.verify(&LeaderClaimPublic {
-                    voucher_nullifier: leader_claim_op.voucher_nullifier.into(),
-                    voucher_root: leader_claim_op.rewards_root.into(),
-                    mantle_tx_hash: tx_hash.to_fr(),
-                });
-
-                if is_verified {
-                    Ok(())
-                } else {
-                    Err(VerificationError::InvalidProofOfClaim { op_index })
-                }
+            (Op::ChannelInscribe(op), OpProof::Ed25519Sig(proof)) => {
+                op.verify_stateless(tx_hash_bytes.as_ref(), proof, op_index)
             }
-            #[expect(
-                clippy::unnested_or_patterns,
-                reason = "Clarity on valid op/proof pairs."
-            )]
-            (Op::ChannelConfig(_), OpProof::ChannelMultiSigProof(_))
-            | (Op::ChannelDeposit(_), OpProof::ZkSig(_))
-            | (Op::ChannelWithdraw(_), OpProof::ChannelMultiSigProof(_))
-            | (Op::SDPDeclare(_), OpProof::ZkAndEd25519Sigs { .. })
-            | (Op::SDPWithdraw(_), OpProof::ZkSig(_))
-            | (Op::SDPActive(_), OpProof::ZkSig(_))
-            | (Op::Transfer(_), OpProof::ZkSig(_)) => Ok(()),
+            (Op::LeaderClaim(op), OpProof::PoC(proof)) => {
+                op.verify_stateless(tx_hash, proof, op_index)
+            }
+            (Op::ChannelConfig(op), OpProof::ChannelMultiSigProof(_proof)) => op.verify_stateless(),
+            (Op::ChannelDeposit(op), OpProof::ZkSig(_proof)) => op.verify_stateless(),
+            (Op::ChannelWithdraw(op), OpProof::ChannelMultiSigProof(_proof)) => {
+                op.verify_stateless()
+            }
+            (
+                Op::SDPDeclare(op),
+                OpProof::ZkAndEd25519Sigs {
+                    zk_sig: _zk_sig,
+                    ed25519_sig: _ed25519_sig,
+                },
+            ) => op.verify_stateless(),
+            (Op::SDPWithdraw(op), OpProof::ZkSig(_proof)) => op.verify_stateless(),
+            (Op::SDPActive(op), OpProof::ZkSig(_proof)) => op.verify_stateless(),
+            (Op::Transfer(op), OpProof::ZkSig(_proof)) => op.verify_stateless(),
             _ => Err(VerificationError::IncorrectProofType {
                 op_type: op.as_str(),
                 op_index,

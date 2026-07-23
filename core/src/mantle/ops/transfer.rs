@@ -6,7 +6,7 @@ use thiserror::Error;
 use crate::{
     events::TxEvent,
     mantle::{
-        TxHash,
+        TxHash, VerificationError,
         channel::Channels,
         ledger::{self, Inputs, Operation, Outputs, Utxo, Utxos},
         ops::OpId,
@@ -51,6 +51,10 @@ impl TransferOp {
             .checked_sub(i128::from(output_amount))
             .ok_or(TransferError::BalanceOverflow)?;
         Ok(balance)
+    }
+
+    pub const fn verify_stateless(&self) -> Result<(), VerificationError> {
+        Ok(())
     }
 }
 

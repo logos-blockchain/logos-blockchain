@@ -23,7 +23,10 @@ use crate::{
     block::BlockNumber,
     codec::{self, DeserializeOp as _, SerializeOp as _},
     crypto::{Hash, Hasher},
-    mantle::{NoteId, ledger::Declarations as ServiceDeclarations, ops::channel::Ed25519PublicKey},
+    mantle::{
+        NoteId, VerificationError, ledger::Declarations as ServiceDeclarations,
+        ops::channel::Ed25519PublicKey,
+    },
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
@@ -504,6 +507,10 @@ impl DeclarationMessage {
 
         DeclarationId(hasher.finalize().into())
     }
+
+    pub const fn verify_stateless(&self) -> Result<(), VerificationError> {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
@@ -513,12 +520,24 @@ pub struct WithdrawMessage {
     pub locked_note_id: NoteId,
 }
 
+impl WithdrawMessage {
+    pub const fn verify_stateless(&self) -> Result<(), VerificationError> {
+        Ok(())
+    }
+}
+
 // ActiveMessage = DeclarationId Nonce Metadata — plain field-order concat.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct ActiveMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,
     pub metadata: ActivityMetadata,
+}
+
+impl ActiveMessage {
+    pub const fn verify_stateless(&self) -> Result<(), VerificationError> {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]

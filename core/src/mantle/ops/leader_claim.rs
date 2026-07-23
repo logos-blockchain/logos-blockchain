@@ -12,7 +12,7 @@ use crate::{
     crypto::{Hash, ZkHasher},
     events::{TxEvent, TxEventPayload},
     mantle::{
-        Note, Utxo, Value,
+        Note, Utxo, Value, VerificationError,
         ledger::{Operation, Utxos},
         ops::OpId,
         transactions::hash::TxHash,
@@ -73,6 +73,25 @@ impl LeaderClaimOp {
                 value: amount,
                 pk: self.pk,
             },
+        }
+    }
+
+    pub fn verify_stateless(
+        &self,
+        tx_hash: &TxHash,
+        proof: &Groth16LeaderClaimProof,
+        op_index: usize,
+    ) -> Result<(), VerificationError> {
+        let is_verified = proof.verify(&LeaderClaimPublic {
+            voucher_nullifier: self.voucher_nullifier.into(),
+            voucher_root: self.rewards_root.into(),
+            mantle_tx_hash: tx_hash.to_fr(),
+        });
+
+        if is_verified {
+            Ok(())
+        } else {
+            Err(VerificationError::InvalidProofOfClaim { op_index })
         }
     }
 }
