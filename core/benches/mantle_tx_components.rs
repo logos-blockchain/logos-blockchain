@@ -26,7 +26,10 @@ use logos_blockchain_core::{
                 inscribe::{Inscription, InscriptionOp},
             },
         },
-        transactions::codec::{decode_signed_mantle_tx, encode_signed_mantle_tx},
+        transactions::{
+            codec::{decode_signed_mantle_tx, encode_signed_mantle_tx},
+            states::Unverified,
+        },
     },
 };
 
@@ -62,15 +65,15 @@ fn make_inscription_tx(payload_size: usize) -> MantleTx {
 }
 
 // Helper fn to create a `SignedMantleTx`.
-fn make_signed_tx(payload_size: usize) -> SignedMantleTx {
+fn make_signed_tx(payload_size: usize) -> SignedMantleTx<Unverified> {
     let signing_key = Ed25519Key::from_bytes(&[1; 32]);
     let tx = make_inscription_tx(payload_size);
-    let txhash = tx.hash();
-    let op_sig = signing_key.sign_payload(&txhash.as_signing_bytes());
-    SignedMantleTx::new(tx, [OpProof::Ed25519Sig(op_sig)].into()).unwrap()
+    let tx_hash = tx.hash();
+    let op_sig = signing_key.sign_payload(&tx_hash.as_signing_bytes());
+    SignedMantleTx::new(tx, [OpProof::Ed25519Sig(op_sig)].into())
 }
 
-// `Blake2b` wrapper function usign the defined `Hasher`.
+// `Blake2b` wrapper function using the defined `Hasher`.
 fn blake2b(inputs: &[&[u8]]) -> [u8; 32] {
     let mut hasher = Hasher::new();
     for input in inputs {
@@ -151,7 +154,7 @@ fn bench_sign_c_mantle_tx_new_verify_ops_proofs_single_proof(bencher: Bencher, s
             (tx, op_sig)
         })
         .bench_values(|(tx, op_sig): (MantleTx, Ed25519Signature)| {
-            black_box(SignedMantleTx::new(tx, [OpProof::Ed25519Sig(op_sig)].into()).unwrap())
+            black_box(SignedMantleTx::new(tx, [OpProof::Ed25519Sig(op_sig)].into()).preverify())
         });
 }
 
@@ -165,12 +168,12 @@ fn bench_sign_d_fully_empty(bencher: Bencher, size: usize) {
     bencher
         .with_inputs(|| {
             let tx = make_inscription_tx(size);
-            let txhash = tx.hash();
-            (tx, txhash)
+            let tx_hash = tx.hash();
+            (tx, tx_hash)
         })
-        .bench_values(|(tx, txhash): (MantleTx, TxHash)| {
-            let op_sig = signing_key.sign_payload(&txhash.as_signing_bytes());
-            black_box(SignedMantleTx::new(tx, [OpProof::Ed25519Sig(op_sig)].into()).unwrap())
+        .bench_values(|(tx, tx_hash): (MantleTx, TxHash)| {
+            let op_sig = signing_key.sign_payload(&tx_hash.as_signing_bytes());
+            black_box(SignedMantleTx::new(tx, [OpProof::Ed25519Sig(op_sig)].into()).preverify())
         });
 }
 

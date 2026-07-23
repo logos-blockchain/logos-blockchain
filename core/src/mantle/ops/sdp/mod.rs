@@ -51,8 +51,10 @@ pub enum SdpError {
         "An unexpected error occurred during sdp declare execution, please validate the op before executing"
     )]
     UnexpectedError,
-    #[error("Sdp declaration id not found: {0:?}")]
+    #[error("Sdp declaration id could not be found: {0:?}")]
     DeclarationNotFound(DeclarationId),
+    #[error("Service type could not be found: {0:?}")]
+    ServiceNotFound(ServiceType),
     #[error(
         "Sdp declaration has been already scheduled to be withdrawn: {declaration_id:?} at epoch {withdraw_at:?}"
     )]

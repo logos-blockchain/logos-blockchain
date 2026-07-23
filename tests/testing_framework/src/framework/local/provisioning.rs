@@ -151,7 +151,6 @@ impl LocalDeployerEnv for LbcEnv {
         label: &str,
     ) -> Result<LaunchSpec, DynError> {
         let mut config = config.clone();
-        ensure_recovery_paths(dir).map_err(|source| -> DynError { source.into() })?;
 
         record_system_monitor_event(
             "node_runtime_prepared",
@@ -225,27 +224,6 @@ impl LocalDeployerEnv for LbcEnv {
     async fn wait_readiness_stable(nodes: &[Node<Self>]) -> Result<(), DynError> {
         super::readiness::wait_readiness_stable(nodes).await
     }
-}
-
-fn ensure_recovery_paths(base_dir: &Path) -> io::Result<()> {
-    let recovery_dir = base_dir.join("recovery");
-    fs::create_dir_all(&recovery_dir)?;
-
-    let mempool_path = recovery_dir.join("mempool.json");
-    if !mempool_path.exists() {
-        fs::write(&mempool_path, "{}")?;
-    }
-
-    let blend_core_path = recovery_dir.join("blend").join("core.json");
-    if let Some(parent) = blend_core_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    if !blend_core_path.exists() {
-        fs::write(&blend_core_path, "{}")?;
-    }
-
-    Ok(())
 }
 
 fn add_endpoint_ports(endpoints: &mut NodeEndpoints, config: &RunConfig) {

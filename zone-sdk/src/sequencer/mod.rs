@@ -53,8 +53,8 @@
 //! obtain a [`SequencerClient`] via [`ZoneSequencer::client`] before moving
 //! the sequencer into its drive task and clone it into the calling tasks.
 //! The client's `publish(...).await` resolves once the drive loop processes
-//! the command, with the same `(PublishResult, SequencerCheckpoint)` return
-//! as the synchronous handle.
+//! the command, with the same `PublishReceipt` return as the synchronous
+//! handle.
 //!
 //! # Restart
 //!

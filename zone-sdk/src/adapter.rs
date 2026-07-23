@@ -14,6 +14,7 @@ use lb_core::{
         Op, SignedMantleTx, Transaction as _, TxHash, Value,
         channel::ChannelState,
         ops::{OpId as _, channel::ChannelId},
+        transactions::states::{Unverified, VerificationState},
     },
 };
 use lb_http_api_common::{
@@ -71,7 +72,7 @@ pub trait Node {
         channel_id: ChannelId,
     ) -> Result<BoxStream<(ZoneMessage, Slot)>, Error>;
 
-    async fn post_transaction(&self, tx: SignedMantleTx) -> Result<(), Error>;
+    async fn post_transaction(&self, tx: SignedMantleTx<Unverified>) -> Result<(), Error>;
 
     /// Fund a transaction from the node's wallet.
     ///
@@ -223,7 +224,7 @@ impl Node for NodeHttpClient {
         Ok(Box::pin(stream::iter(all_messages)))
     }
 
-    async fn post_transaction(&self, tx: SignedMantleTx) -> Result<(), Error> {
+    async fn post_transaction(&self, tx: SignedMantleTx<Unverified>) -> Result<(), Error> {
         self.client
             .post_transaction(self.base_url.clone(), tx)
             .await
@@ -238,9 +239,12 @@ impl Node for NodeHttpClient {
 }
 
 /// Returns true if `transactions` contains any deposit op on `channel_id`.
-pub(crate) fn has_channel_deposit(transactions: &[SignedMantleTx], channel_id: ChannelId) -> bool {
+pub(crate) fn has_channel_deposit<State: VerificationState>(
+    transactions: &[SignedMantleTx<State>],
+    channel_id: ChannelId,
+) -> bool {
     transactions.iter().any(|tx| {
-        tx.mantle_tx
+        tx.mantle_tx()
             .0
             .iter()
             .any(|op| matches!(op, Op::ChannelDeposit(d) if d.channel_id == channel_id))
@@ -265,8 +269,8 @@ pub(crate) fn build_deposit_amounts(events: &Events) -> HashMap<(TxHash, Hash), 
 
 /// Walks a block's transactions and emits the [`ZoneMessage`]s relevant to
 /// `channel_id`, looking up deposit amounts from `deposit_amounts`.
-fn block_to_messages(
-    transactions: Vec<SignedMantleTx>,
+fn block_to_messages<State: VerificationState>(
+    transactions: Vec<SignedMantleTx<State>>,
     channel_id: ChannelId,
     deposit_amounts: &HashMap<(TxHash, Hash), Value>,
 ) -> Vec<ZoneMessage> {
@@ -274,7 +278,8 @@ fn block_to_messages(
         .into_iter()
         .flat_map(|tx| {
             let tx_hash = tx.hash();
-            Vec::from(tx.mantle_tx.0)
+            let (mantle_tx, _ops_proofs) = tx.into_parts();
+            Vec::from(mantle_tx.0)
                 .into_iter()
                 .filter_map(move |op| op_to_zone_message(&op, tx_hash, channel_id, deposit_amounts))
         })

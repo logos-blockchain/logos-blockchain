@@ -329,10 +329,7 @@ pub fn create_genesis_block_with_declarations(
             .expect("genesis transaction proofs are bounded");
     }
 
-    let signed_mantle_tx = SignedMantleTx {
-        mantle_tx,
-        ops_proofs,
-    };
+    let signed_mantle_tx = SignedMantleTx::new_trusted(mantle_tx, ops_proofs);
 
     // TODO: Maybe use the builder instead of trusting the signed mantle tx
     GenesisBlockBuilder::new()

@@ -41,7 +41,7 @@ let mut sequencer = ZoneSequencer::init(channel_id, signing_key, node, None);
 let (result, checkpoint) = sequencer.handle().publish(genesis_zone_block)?;
 ```
 
-`publish` returns synchronously after enqueueing the tx into the sequencer's pending set; the post hits the node the next time the drive loop polls `next_event`. The returned `(PublishResult, SequencerCheckpoint)` carries everything you need to persist this publish into your outbox alongside the resulting checkpoint.
+`publish` returns synchronously after enqueueing the tx into the sequencer's pending set; the post hits the node the next time the drive loop polls `next_event`. The returned `PublishReceipt` carries everything you need to persist this publish into your outbox alongside the resulting checkpoint.
 
 ### The bridging-related fields in channel state
 

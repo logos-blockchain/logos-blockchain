@@ -11,7 +11,6 @@ use std::{
 
 use async_trait::async_trait;
 use common_http_client::ApiBlock;
-use lb_core::mantle::AuthenticatedMantleTx as _;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::HeaderId;
 use testing_framework_core::scenario::{DynError, Expectation, RunContext};

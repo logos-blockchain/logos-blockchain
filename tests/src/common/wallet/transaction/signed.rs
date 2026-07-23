@@ -1,11 +1,11 @@
 //! Signed wallet transaction plus reservation and fee accounting metadata.
 
-use lb_core::mantle::{SignedMantleTx, TxHash};
+use lb_core::mantle::{SignedMantleTx, TxHash, transactions::states::Preverified};
 
 use crate::common::wallet::WalletReservedInputs;
 
 pub struct SignedWalletTransaction {
-    signed_tx: SignedMantleTx,
+    signed_tx: SignedMantleTx<Preverified>,
     tx_hash: TxHash,
     reserved_inputs: WalletReservedInputs,
     spent_fee: u64,
@@ -14,7 +14,7 @@ pub struct SignedWalletTransaction {
 impl SignedWalletTransaction {
     #[must_use]
     pub(super) const fn new(
-        signed_tx: SignedMantleTx,
+        signed_tx: SignedMantleTx<Preverified>,
         tx_hash: TxHash,
         reserved_inputs: WalletReservedInputs,
         spent_fee: u64,
@@ -28,7 +28,7 @@ impl SignedWalletTransaction {
     }
 
     #[must_use]
-    pub const fn signed_tx(&self) -> &SignedMantleTx {
+    pub const fn signed_tx(&self) -> &SignedMantleTx<Preverified> {
         &self.signed_tx
     }
 

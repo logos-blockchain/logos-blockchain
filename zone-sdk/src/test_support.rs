@@ -19,7 +19,7 @@ use lb_core::{
                 inscribe::{Inscription, InscriptionOp},
             },
         },
-        transactions::{Ops, tx::OpsProofs},
+        transactions::{Ops, states::Unverified, tx::OpsProofs},
     },
     proofs::leader_proof::Groth16LeaderProof,
 };
@@ -60,7 +60,7 @@ pub struct MockNode {
     /// the next `true -> false` transition, driving the reconnect path.
     pub up: Option<watch::Receiver<bool>>,
     /// Receives every `post_transaction` tx.
-    pub posted: Option<mpsc::Sender<SignedMantleTx>>,
+    pub posted: Option<mpsc::Sender<SignedMantleTx<Unverified>>>,
 }
 
 impl Default for MockNode {
@@ -82,7 +82,7 @@ impl Default for MockNode {
 
 impl MockNode {
     /// Default node plus a receiver for its posted transactions.
-    pub fn with_posted_channel() -> (Self, mpsc::Receiver<SignedMantleTx>) {
+    pub fn with_posted_channel() -> (Self, mpsc::Receiver<SignedMantleTx<Unverified>>) {
         let (tx, rx) = mpsc::channel(10);
         (
             Self {
@@ -212,7 +212,7 @@ impl adapter::Node for MockNode {
 
     async fn post_transaction(
         &self,
-        tx: SignedMantleTx,
+        tx: SignedMantleTx<Unverified>,
     ) -> Result<(), lb_common_http_client::Error> {
         if let Some(posted) = &self.posted {
             posted.send(tx).await.expect("posted receiver alive");
@@ -258,7 +258,12 @@ pub fn header_id(n: u8) -> HeaderId {
     HeaderId::from(bytes)
 }
 
-pub fn api_block(id: u8, parent: u8, slot: u64, transactions: Vec<SignedMantleTx>) -> ApiBlock {
+pub fn api_block(
+    id: u8,
+    parent: u8,
+    slot: u64,
+    transactions: Vec<SignedMantleTx<Unverified>>,
+) -> ApiBlock {
     ApiBlock {
         header: ApiHeader {
             id: header_id(id),
@@ -285,10 +290,10 @@ pub fn live_event(block: &ApiBlock) -> ProcessedBlockEvent {
 
 /// Build a `SignedMantleTx` carrying the given ops, with placeholder proofs.
 /// Suitable for tests that only care about op extraction, not verification.
-pub fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedMantleTx {
+pub fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedMantleTx<Unverified> {
     let n = ops.len();
     let mantle_tx = MantleTx(Ops::try_from(ops).expect("ops fit"));
-    SignedMantleTx::new_unverified(
+    SignedMantleTx::new(
         mantle_tx,
         OpsProofs::new_unchecked(vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n]),
     )

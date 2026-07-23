@@ -8,19 +8,17 @@ use lb_core::{
     crypto::{ZkDigest, ZkHasher},
     events::TxEvent,
     mantle::{
-        GenesisTx, NoteId, TxHash, Utxo, Value,
-        channel::Channels,
+        GenesisTx, NoteId, Utxo, Value,
         gas::{Gas, GasConstants, GasCost, GasPrice},
         ledger::Operation as _,
-        ops::transfer::{TransferOp, TransferValidationContext},
+        ops::transfer::TransferOp,
         transactions::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
     },
     proofs::leader_proof::{self, LeaderPublic},
-    sdp::{Declarations, locked_notes::LockedNotes},
+    sdp::Declarations,
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::{Fr, fr_from_bytes};
-use lb_key_management_system_keys::keys::ZkSignature;
 use lb_utxotree::MerklePath;
 
 use crate::{
@@ -167,7 +165,7 @@ impl EpochState {
 #[derive(Derivative, serde::Serialize, serde::Deserialize)]
 #[derivative(Clone, PartialEq)]
 pub struct LedgerState {
-    // All available Unspent Transtaction Outputs (UTXOs) at the current slot
+    // All available Unspent Transaction Outputs (UTXOs) at the current slot
     // TODO: move UTXOs in the mantle ledger. There is no reason to keep them here
     pub utxos: UtxoTree,
     // randomness contribution
@@ -461,23 +459,8 @@ impl LedgerState {
 
     pub fn try_apply_transfer<Id, Constants: GasConstants>(
         mut self,
-        locked_notes: &LockedNotes,
-        channels: &Channels,
         transfer_op: &TransferOp,
-        transfer_sig: &ZkSignature,
-        tx_hash: TxHash,
     ) -> Result<(Self, Balance, Vec<TxEvent>), LedgerError<Id>> {
-        //validate the transfer
-        transfer_op
-            .validate(&TransferValidationContext {
-                locked_notes,
-                channels,
-                utxos: &self.utxos,
-                tx_hash: &tx_hash,
-                transfer_sig,
-            })
-            .map_err(mantle::Error::Transfer)?;
-
         // Compute the balance
         let balance = transfer_op
             .balance(&self.utxos)
@@ -625,11 +608,7 @@ impl LedgerState {
             return Err(LedgerError::InputInGenesis(first_input));
         }
 
-        Ok(Self::from_utxos(
-            transfer_op.outputs.utxos(transfer_op),
-            config,
-            epoch_nonce,
-        ))
+        Ok(Self::from_utxos(transfer_op.utxos(), config, epoch_nonce))
     }
 
     pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, config: &Config, nonce: Fr) -> Self {
@@ -753,13 +732,16 @@ pub mod tests {
             gas::MainnetGasConstants,
             ledger::{Inputs, Outputs},
             ops::{leader_claim::VoucherCm, sdp::SDPDeclareOp},
-            transactions::GasPrices,
+            transactions::{
+                GasPrices,
+                states::{Preverified, Unverified},
+            },
         },
         sdp::{Declaration, DeclarationId, Locator, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::EpochConfig;
     use lb_groth16::AdditiveGroup as _;
-    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey};
+    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkSignature};
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
@@ -856,16 +838,15 @@ pub mod tests {
             .unwrap()
             .clone()
             .cryptarchia_ledger
-            .update_epoch_state::<HeaderId>(slot, &SdpLedger::new(0.into()), ledger.config())
-            .unwrap();
+            .update_epoch_state::<HeaderId>(slot, &SdpLedger::new(0.into()), ledger.config())?;
         let id = make_id(parent, slot, utxo);
         let proof = generate_proof(&ledger_state, &utxo, slot);
-        let (_, state, _) = ledger.prepare_update::<_, MainnetGasConstants>(
+        let (_, state, _) = ledger.prepare_update::<_, _, MainnetGasConstants>(
             id,
             parent,
             slot,
             &proof,
-            std::iter::empty::<&SignedMantleTx>(),
+            std::iter::empty::<&SignedMantleTx<Preverified>>(),
         )?;
         ledger.commit_update(id, state);
         Ok(id)
@@ -1057,11 +1038,8 @@ pub mod tests {
         utxo_proof: Utxo,
         utxo_add: Utxo,
         sdp_utxo: Utxo,
-        sdp_note_sk: ZkKey,
     ) -> (HeaderId, SDPDeclareOp, ZkKey) {
         let id = apply_and_add_utxo(ledger, parent, slot, utxo_proof, utxo_add);
-
-        let tx_hash = TxHash::from([0u8; 32]);
 
         let mut zk_key = [0u8; 16];
         thread_rng().fill_bytes(&mut zk_key);
@@ -1084,10 +1062,7 @@ pub mod tests {
             .clone()
             .try_apply_sdp_declaration(
                 &declare_op,
-                &ZkKey::multi_sign(&[sdp_note_sk, zk_key.clone()], &tx_hash.to_fr()).unwrap(),
-                &signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
                 block_ledger.cryptarchia_ledger.latest_utxos(),
-                tx_hash,
                 &config,
             )
             .unwrap()
@@ -1192,8 +1167,8 @@ pub mod tests {
     #[test]
     fn test_epoch_transition() {
         let leader_utxos = std::iter::repeat_with(utxo).take(4).collect::<Vec<_>>();
-        let (sdp_utxo_key_1, sdp_utxo_1) = utxo_with_sk();
-        let (sdp_utxo_key_2, sdp_utxo_2) = utxo_with_sk();
+        let (_sdp_utxo_key_1, sdp_utxo_1) = utxo_with_sk();
+        let (_sdp_utxo_key_2, sdp_utxo_2) = utxo_with_sk();
         let genesis_utxos = leader_utxos
             .iter()
             .copied()
@@ -1227,7 +1202,6 @@ pub mod tests {
             leader_utxos[2],
             new_utxo_1,
             sdp_utxo_1,
-            sdp_utxo_key_1,
         );
         assert_declaration_exists(&ledger, &h_3, &declare_1.id());
 
@@ -1265,7 +1239,6 @@ pub mod tests {
             leader_utxos[3],
             new_utxo_2,
             sdp_utxo_2,
-            sdp_utxo_key_2,
         );
         assert_declaration_exists(&ledger, &h_5, &declare_2.id());
         // nonce for epoch 1 should be taken at the end of slot 10,
@@ -1325,7 +1298,7 @@ pub mod tests {
     #[test]
     fn epoch_state_snapshot_excludes_inactive_declaration() {
         let leader_utxo = utxo();
-        let (sdp_utxo_key, sdp_utxo) = utxo_with_sk();
+        let (_sdp_utxo_key, sdp_utxo) = utxo_with_sk();
         let new_utxo = utxo();
         let config = config();
         let epoch_length = config.epoch_length();
@@ -1340,13 +1313,12 @@ pub mod tests {
             leader_utxo,
             new_utxo,
             sdp_utxo,
-            sdp_utxo_key,
         );
 
         // Advance to epoch 5 (one-by-one).
         // With inactivity_period=2, the declaration goes inactive at epoch 5.
         // It shouldn't be in the snapshot, but should still exist in the live SDP
-        // ledger because the user has not yet witdrawn it.
+        // ledger because the user has not yet withdrawn it.
         let mut ledger = ledger0.clone();
         let mut head = head0;
         for epoch in 1..=5u64 {
@@ -1585,7 +1557,7 @@ pub mod tests {
     fn create_tx_with_transfer(
         inputs: &[(&ZkKey, &Utxo)],
         outputs: Vec<Note>,
-    ) -> (SignedMantleTx, TransferOp, ZkSignature) {
+    ) -> (SignedMantleTx<Unverified>, TransferOp, ZkSignature) {
         let sks = inputs
             .iter()
             .map(|(sk, _)| (*sk).clone())
@@ -1597,14 +1569,8 @@ pub mod tests {
         );
         let mantle_tx = MantleTx([Op::Transfer(transfer_op.clone())].into());
         let transfer_sig = ZkKey::multi_sign(&sks, &mantle_tx.hash().to_fr()).unwrap();
-        (
-            SignedMantleTx {
-                ops_proofs: [ZkSig(transfer_sig.clone())].into(),
-                mantle_tx,
-            },
-            transfer_op,
-            transfer_sig,
-        )
+        let tx = SignedMantleTx::new(mantle_tx, [ZkSig(transfer_sig.clone())].into());
+        (tx, transfer_op, transfer_sig)
     }
 
     #[test]
@@ -1620,22 +1586,15 @@ pub mod tests {
 
         let output_note = Note::new(200, output_note_sk.to_public_key());
 
-        let locked_notes = LockedNotes::new();
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
-        let (tx, transfer_op, transfer_sig) = create_tx_with_transfer(
+        let (tx, transfer_op, _transfer_sig) = create_tx_with_transfer(
             &[(&note_sk, &input_utxo), (&note_sk, &input_utxo)],
             vec![output_note],
         );
 
         let _fees =
             AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
-        let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
-            &locked_notes,
-            &Channels::new(),
-            &transfer_op,
-            &transfer_sig,
-            tx.hash(),
-        );
+        let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(&transfer_op);
 
         assert!(result.is_err());
     }
@@ -1655,21 +1614,14 @@ pub mod tests {
         let output_note1 = Note::new(4000, output_note1_sk.to_public_key());
         let output_note2 = Note::new(3000, output_note2_sk.to_public_key());
 
-        let locked_notes = LockedNotes::new();
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
-        let (tx, transfer_op, transfer_sig) =
+        let (tx, transfer_op, _transfer_sig) =
             create_tx_with_transfer(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
 
         let _fees =
             AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
         let (new_state, balance, events) = ledger_state
-            .try_apply_transfer::<(), MainnetGasConstants>(
-                &locked_notes,
-                &Channels::new(),
-                &transfer_op,
-                &transfer_sig,
-                tx.hash(),
-            )
+            .try_apply_transfer::<(), MainnetGasConstants>(&transfer_op)
             .unwrap();
 
         assert_eq!(
@@ -1691,25 +1643,20 @@ pub mod tests {
         assert!(new_state.utxos.contains(&output_utxo2.id()));
 
         // The new outputs can be spent in future transactions
-        let (tx, transfer_op, transfer_sig) = create_tx_with_transfer(
+        let (tx, transfer_op, _transfer_sig) = create_tx_with_transfer(
             &[
                 (&output_note1_sk, &output_utxo1),
                 (&output_note2_sk, &output_utxo2),
             ],
             vec![],
         );
-        let locked_notes = LockedNotes::new();
+
         let _fees =
             AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
         let (final_state, final_balance, events) = new_state
-            .try_apply_transfer::<(), MainnetGasConstants>(
-                &locked_notes,
-                &Channels::new(),
-                &transfer_op,
-                &transfer_sig,
-                tx.hash(),
-            )
+            .try_apply_transfer::<(), MainnetGasConstants>(&transfer_op)
             .unwrap();
+
         assert_eq!(
             final_balance,
             i128::from(output_note1.value + output_note2.value)
@@ -1755,19 +1702,12 @@ pub mod tests {
             non_existent_utxo_3,
         ];
 
-        let locked_notes = LockedNotes::new();
         for non_existent_utxo in invalid_utxos {
-            let (tx, transfer_op, transfer_sig) =
+            let (_tx, transfer_op, _transfer_sig) =
                 create_tx_with_transfer(&[(&ZkKey::zero(), &non_existent_utxo)], vec![]);
             let result = ledger_state
                 .clone()
-                .try_apply_transfer::<(), MainnetGasConstants>(
-                    &locked_notes,
-                    &Channels::new(),
-                    &transfer_op,
-                    &transfer_sig,
-                    tx.hash(),
-                );
+                .try_apply_transfer::<(), MainnetGasConstants>(&transfer_op);
             assert!(matches!(result, Err(LedgerError::Mantle(_))));
         }
     }
@@ -1784,35 +1724,22 @@ pub mod tests {
 
         let output_note = Note::new(1, Fr::from(BigUint::from(2u8)).into());
 
-        let locked_notes = LockedNotes::new();
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
-        let (tx, transfer_op, transfer_sig) =
+        let (_tx, transfer_op, _transfer_sig) =
             create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![output_note, output_note]);
 
         let (_, balance, events) = ledger_state
             .clone()
-            .try_apply_transfer::<(), MainnetGasConstants>(
-                &locked_notes,
-                &Channels::new(),
-                &transfer_op,
-                &transfer_sig,
-                tx.hash(),
-            )
+            .try_apply_transfer::<(), MainnetGasConstants>(&transfer_op)
             .unwrap();
         assert_eq!(balance, -1);
         assert!(events.is_empty());
 
-        let (tx, transfer_op, transfer_sig) =
+        let (_tx, transfer_op, _transfer_sig) =
             create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![output_note]);
         assert_eq!(
             ledger_state
-                .try_apply_transfer::<(), MainnetGasConstants>(
-                    &locked_notes,
-                    &Channels::new(),
-                    &transfer_op,
-                    &transfer_sig,
-                    tx.hash()
-                )
+                .try_apply_transfer::<(), MainnetGasConstants>(&transfer_op,)
                 .unwrap()
                 .1,
             0
@@ -1829,20 +1756,13 @@ pub mod tests {
             note: input_note,
         };
 
-        let locked_notes = LockedNotes::new();
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
-        let (tx, transfer_op, transfer_sig) =
+        let (tx, transfer_op, _transfer_sig) =
             create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![]);
 
         let _fees =
             AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
-        let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
-            &locked_notes,
-            &Channels::new(),
-            &transfer_op,
-            &transfer_sig,
-            tx.hash(),
-        );
+        let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(&transfer_op);
         assert!(result.is_ok());
 
         let (new_state, balance, events) = result.unwrap();
@@ -1851,32 +1771,6 @@ pub mod tests {
 
         // Verify input was consumed
         assert!(!new_state.utxos.contains(&input_utxo.id()));
-    }
-
-    #[test]
-    fn test_output_not_zero() {
-        let input_sk = ZkKey::from(BigUint::from(1u8));
-        let input_utxo = Utxo {
-            op_id: [1u8; 32],
-            output_index: 0,
-            note: Note::new(10000, input_sk.to_public_key()),
-        };
-
-        let locked_notes = LockedNotes::new();
-        let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
-        let (tx, transfer_op, transfer_sig) = create_tx_with_transfer(
-            &[(&input_sk, &input_utxo)],
-            vec![Note::new(0, Fr::from(BigUint::from(2u8)).into())],
-        );
-
-        let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
-            &locked_notes,
-            &Channels::new(),
-            &transfer_op,
-            &transfer_sig,
-            tx.hash(),
-        );
-        assert!(matches!(result, Err(LedgerError::Mantle(_))));
     }
 
     #[test]

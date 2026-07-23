@@ -30,7 +30,7 @@ impl<CoreBackendSettings, EdgeBackendSettings>
                 CommonSettings {
                     minimum_network_size,
                     time,
-                    recovery_path_prefix,
+                    recovery_data,
                     non_ephemeral_signing_key_id,
                     num_blend_layers,
                     data_replication_factor,
@@ -45,11 +45,6 @@ impl<CoreBackendSettings, EdgeBackendSettings>
             ..
         }: Settings<CoreBackendSettings, EdgeBackendSettings>,
     ) -> Self {
-        let recovery_path = {
-            let mut path = recovery_path_prefix.join("core");
-            path.set_extension("json");
-            path
-        };
         Self {
             backend,
             scheduler,
@@ -58,7 +53,7 @@ impl<CoreBackendSettings, EdgeBackendSettings>
             non_ephemeral_signing_key_id,
             num_blend_layers,
             minimum_network_size,
-            recovery_path,
+            recovery_data,
             data_replication_factor,
             activity_threshold_sensitivity,
         }

@@ -13,7 +13,6 @@ use core::fmt::Debug;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Display,
-    path::PathBuf,
     pin::Pin,
     time::Duration,
 };
@@ -27,7 +26,7 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, GenesisTx as _, Transaction, TxHash, gas::MainnetGasConstants,
+        AuthenticatedMantleTx, GenesisTx as _, PreverifiedMantleTx, gas::MainnetGasConstants,
         transactions::GasPrices,
     },
     sdp::{Declaration, DeclarationId},
@@ -39,10 +38,15 @@ pub use lb_ledger::EpochState;
 use lb_ledger::LedgerState;
 use lb_network_service::message::ChainSyncEvent;
 use lb_services_utils::{
-    overwatch::{JsonFileBackend, RecoveryOperator, recovery::backends::FileBackendSettings},
+    overwatch::{RecoveryData, RecoveryOperator},
     wait_until_services_are_ready,
 };
-use lb_storage_service::{StorageService, api::chain::StorageChainApi, backends::StorageBackend};
+use lb_storage_service::{
+    StorageService,
+    api::chain::StorageChainApi,
+    backends::StorageBackend,
+    recovery::{StorageRecoveryBackend, StorageRecoverySettings},
+};
 use lb_time_service::TimeService;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -62,13 +66,13 @@ use tracing_futures::Instrument as _;
 
 pub use crate::{
     bootstrap::config::{BootstrapConfig, OfflineGracePeriodConfig},
+    states::CryptarchiaConsensusState,
     sync::config::{BlockProviderConfig, SyncConfig},
 };
 use crate::{
     bootstrap::state::choose_engine_state,
     notifier::ChainOnlineNotifier,
     relays::CryptarchiaConsensusRelays,
-    states::CryptarchiaConsensusState,
     storage::{StorageAdapter as _, adapters::StorageAdapter},
     sync::block_provider::BlockProvider,
 };
@@ -261,9 +265,9 @@ impl PrunedBlocksInfo {
 
 fn log_pruned_ledger_states(pruned_states_count: usize) {
     if pruned_states_count <= 1 {
-        tracing::trace!(target: LOG_TARGET, "Pruned {pruned_states_count} old forks and their ledger states.");
+        trace!(target: LOG_TARGET, "Pruned {pruned_states_count} old forks and their ledger states.");
     } else {
-        tracing::debug!(target: LOG_TARGET, "Pruned {pruned_states_count} old forks and their ledger states.");
+        debug!(target: LOG_TARGET, "Pruned {pruned_states_count} old forks and their ledger states.");
     }
 }
 
@@ -363,13 +367,13 @@ impl Cryptarchia {
     }
 
     /// Try to apply a block to the chain.
-    fn try_apply_block<Tx>(
+    fn try_apply_block<'tx, Tx>(
         &mut self,
         block: &Block<Tx>,
         current_slot: Slot,
     ) -> Result<(PrunedBlocks<HeaderId>, ReorgedBlocks<HeaderId>, Events), Error>
     where
-        Tx: AuthenticatedMantleTx<Context = GasPrices> + Clone,
+        Tx: PreverifiedMantleTx + 'tx + AuthenticatedMantleTx<Context = GasPrices> + Clone,
     {
         let header = block.header();
         let id = header.id();
@@ -391,12 +395,12 @@ impl Cryptarchia {
         // A block number of this block if it's applied to the chain.
         let (_, state, events) = self
             .ledger
-            .prepare_update::<_, MainnetGasConstants>(
+            .prepare_update::<_, _, MainnetGasConstants>(
                 id,
                 parent,
                 slot,
                 header.leader_proof(),
-                block.transactions(),
+                block.transactions_iter(),
             )
             .map_err(|err| match err {
                 lb_ledger::LedgerError::ParentNotFound(parent) => Error::ParentMissing {
@@ -444,7 +448,7 @@ impl Cryptarchia {
             if self.ledger.prune_state_at(block) {
                 pruned_states_count = pruned_states_count.saturating_add(1);
             } else {
-                tracing::error!(
+                error!(
                    target: LOG_TARGET,
                     "Failed to prune ledger state for block {:?} which should exist.",
                     block
@@ -486,9 +490,18 @@ impl Cryptarchia {
 pub struct CryptarchiaSettings {
     pub config: lb_ledger::Config,
     pub starting_state: StartingState,
-    pub recovery_file: PathBuf,
     pub bootstrap: BootstrapConfig,
     pub sync: SyncConfig,
+    #[serde(skip)]
+    pub recovery_data: RecoveryData,
+}
+
+impl StorageRecoverySettings for CryptarchiaSettings {
+    const RECOVERY_KEY_SUFFIX: &'static [u8] = b"cryptarchia";
+
+    fn recovery_data(&self) -> &RecoveryData {
+        &self.recovery_data
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -511,16 +524,10 @@ impl From<GenesisBlock> for StartingState {
     }
 }
 
-impl FileBackendSettings for CryptarchiaSettings {
-    fn recovery_file(&self) -> &PathBuf {
-        &self.recovery_file
-    }
-}
-
 #[expect(clippy::allow_attributes_without_reason)]
 pub struct CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
-    Tx: AuthenticatedMantleTx + Clone + Eq + Debug,
+    Tx: PreverifiedMantleTx + Clone + Eq + Debug,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     TimeBackend: lb_time_service::backends::TimeBackend,
@@ -534,14 +541,16 @@ where
 impl<Tx, Storage, TimeBackend, RuntimeServiceId> ServiceData
     for CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
-    Tx: AuthenticatedMantleTx + Clone + Eq + Debug,
+    Tx: PreverifiedMantleTx + Clone + Eq + Debug,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     TimeBackend: lb_time_service::backends::TimeBackend,
 {
     type Settings = CryptarchiaSettings;
     type State = CryptarchiaConsensusState;
-    type StateOperator = RecoveryOperator<JsonFileBackend<Self::State, Self::Settings>>;
+    type StateOperator = RecoveryOperator<
+        StorageRecoveryBackend<Self::State, Self::Settings, Storage, RuntimeServiceId>,
+    >;
     type Message = ConsensusMsg<Tx>;
 }
 
@@ -549,7 +558,7 @@ where
 impl<Tx, Storage, TimeBackend, RuntimeServiceId> ServiceCore<RuntimeServiceId>
     for CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
-    Tx: Transaction<Hash = TxHash>
+    Tx: PreverifiedMantleTx
         + AuthenticatedMantleTx<Context = GasPrices>
         + Debug
         + Clone
@@ -820,7 +829,7 @@ where
 impl<Tx, Storage, TimeBackend, RuntimeServiceId>
     CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
-    Tx: Transaction<Hash = TxHash>
+    Tx: PreverifiedMantleTx
         + AuthenticatedMantleTx<Context = GasPrices>
         + Debug
         + Clone
@@ -1085,7 +1094,7 @@ where
     #[instrument(
         level = "debug",
         skip(cryptarchia, block, relays, new_block_subscription_sender, lib_broadcaster),
-        fields(block_id = %block.header().id(), tx_count = block.transactions().count(), current_slot = ?current_slot)
+        fields(block_id = %block.header().id(), tx_count = block.transactions_iter().count(), current_slot = ?current_slot)
     )]
     async fn process_block(
         cryptarchia: &mut Cryptarchia,
@@ -1104,7 +1113,7 @@ where
             candidate.try_apply_block(&block, current_slot)?;
         let new_lib = candidate.lib();
 
-        let tx_count = block.transactions().count();
+        let tx_count = block.transactions_iter().count();
 
         let immutable_blocks = Self::immutable_blocks_index(
             &pruned_blocks,
@@ -1541,21 +1550,21 @@ where
         let errors: Vec<_> = block_deletion_outcomes
             .filter_map(|(block_id, outcome)| match outcome {
                 Ok(Some(_)) => {
-                    tracing::debug!(
+                    debug!(
                         target: LOG_TARGET,
                         "Block {block_id:#?} successfully deleted from storage."
                     );
                     None
                 }
                 Ok(None) => {
-                    tracing::trace!(
+                    trace!(
                         target: LOG_TARGET,
                         "Block {block_id:#?} was not found in storage."
                     );
                     None
                 }
                 Err(e) => {
-                    tracing::error!(
+                    error!(
                         target: LOG_TARGET,
                         "Error deleting block {block_id:#?} from storage: {e}."
                     );

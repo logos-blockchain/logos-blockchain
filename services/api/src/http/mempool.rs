@@ -3,6 +3,7 @@ use std::fmt::Display;
 
 use lb_core::header::HeaderId;
 use lb_network_service::backends::NetworkBackend;
+use lb_storage_service::StorageService;
 use lb_tx_service::{MempoolMsg, TxMempoolService, backend::Mempool, network::NetworkAdapter};
 use overwatch::{DynError, services::AsServiceId};
 use serde::{Serialize, de::DeserializeOwned};
@@ -34,9 +35,12 @@ where
     Item: Clone + Debug + Send + Sync + Serialize + DeserializeOwned + 'static,
     Key: Clone + Debug + Ord + Hash + Send + Sync + Serialize + DeserializeOwned + 'static,
     RuntimeServiceId: Debug
+        + Clone
         + Sync
         + Send
         + Display
+        + 'static
+        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter,
@@ -46,7 +50,14 @@ where
             >,
         >,
 {
-    let relay = handle.relay().await?;
+    let relay = handle
+        .relay::<TxMempoolService<
+            MempoolNetworkAdapter,
+            Mempool<HeaderId, Item, Key, StorageAdapter, RuntimeServiceId>,
+            StorageAdapter,
+            RuntimeServiceId,
+        >>()
+        .await?;
     let (sender, receiver) = oneshot::channel();
 
     relay

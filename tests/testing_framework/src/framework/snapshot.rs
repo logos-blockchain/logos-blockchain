@@ -2,14 +2,13 @@ use std::path::{Path, PathBuf};
 
 use testing_framework_core::scenario::{DynError, NodeStateSource, SnapshotStore};
 
-const NODE_STATE_SUBDIRS: [&str; 2] = ["db", "recovery"];
+const NODE_STATE_SUBDIRS: [&str; 1] = ["db"];
 
 /// Snapshot store for Logos node local state.
 ///
-/// Logos node state is represented by the `db` and `recovery` subdirectories
-/// under a node runtime directory. This wrapper fixes that application-specific
-/// state shape while delegating the generic snapshot layout to
-/// [`SnapshotStore`].
+/// Logos node state is represented by the `db` subdirectory under a node
+/// runtime directory. This wrapper fixes that application-specific state shape
+/// while delegating the generic snapshot layout to [`SnapshotStore`].
 #[derive(Clone, Debug)]
 pub struct NodeStateSnapshotStore {
     store: SnapshotStore,
@@ -40,15 +39,15 @@ impl NodeStateSnapshotStore {
 
     /// Resolve a node-state source to a validated startup directory.
     ///
-    /// The returned directory contains the `db` and `recovery` subdirectories
-    /// expected by a Logos node process.
+    /// The returned directory contains the `db` subdirectory expected by a
+    /// Logos node process.
     pub fn prepare_source_dir(&self, source: &NodeStateSource) -> Result<PathBuf, DynError> {
         self.store.prepare_node_dir(source, &NODE_STATE_SUBDIRS)
     }
 
     /// Restore node state from `source` into an existing runtime directory.
     ///
-    /// This clears and replaces only the `db` and `recovery` subdirectories.
+    /// This clears and replaces only the `db` subdirectory.
     pub fn restore_node(
         &self,
         source: &NodeStateSource,
