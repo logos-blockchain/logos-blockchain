@@ -311,10 +311,6 @@ fn launch_file(relative_path: &str, contents: Vec<u8>) -> LaunchFile {
 
 /// Resolves (building if necessary) the node binary for `node_binary_profile`
 /// and populates the process-local binary cache.
-///
-/// Call this before timing-sensitive setup (e.g. a genesis-time countdown)
-/// so that the later resolution triggered by actually spawning the node is a
-/// cache hit instead of paying for a `cargo build` mid-timer.
 pub fn ensure_node_binary_built(
     node_binary_profile: &NodeBinaryProfile,
 ) -> Result<PathBuf, DynError> {
