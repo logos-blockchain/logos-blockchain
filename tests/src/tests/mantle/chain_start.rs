@@ -31,8 +31,8 @@ const MODE_TIMEOUT_SECS: u64 = 60;
 
 #[tokio::test]
 async fn delayed_chain_start() {
-    // Resolve/build the node binary up front so the genesis-time countdown doesn't need to account
-    // for compilation time
+    // Resolve/build the node binary up front so the genesis-time countdown doesn't
+    // need to account for compilation time
     ensure_node_binary_built(&NodeBinaryProfile::default())
         .expect("node binary should build or resolve");
     let genesis_time = OffsetDateTime::now_utc() + Duration::from_secs(30);
