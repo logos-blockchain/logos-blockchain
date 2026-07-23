@@ -4161,7 +4161,6 @@ dependencies = [
  "rand 0.8.6",
  "serde",
  "serde_with",
- "tempfile",
  "test-log",
  "thiserror 2.0.18",
  "tokio",
@@ -4222,6 +4221,7 @@ dependencies = [
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-ledger",
  "logos-blockchain-services-utils",
+ "logos-blockchain-storage-service",
  "logos-blockchain-time-service",
  "logos-blockchain-tracing",
  "logos-blockchain-tx-service",
@@ -4252,6 +4252,7 @@ dependencies = [
  "logos-blockchain-ledger",
  "logos-blockchain-network-service",
  "logos-blockchain-services-utils",
+ "logos-blockchain-storage-service",
  "logos-blockchain-time-service",
  "logos-blockchain-tracing",
  "logos-blockchain-tx-service",
@@ -4827,6 +4828,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "axum 0.7.9",
+ "bytes",
  "clap",
  "color-eyre",
  "dhat",
@@ -4986,13 +4988,13 @@ name = "logos-blockchain-services-utils"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "futures",
  "log",
  "logos-blockchain-log-targets",
  "overwatch",
  "overwatch-derive",
  "serde",
- "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -5008,6 +5010,7 @@ dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-log-targets",
+ "logos-blockchain-services-utils",
  "logos-blockchain-tracing",
  "overwatch",
  "rocksdb",
@@ -5056,6 +5059,7 @@ dependencies = [
  "logos-blockchain-libp2p",
  "logos-blockchain-mmr",
  "logos-blockchain-node",
+ "logos-blockchain-storage-service",
  "logos-blockchain-tui-zone",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
@@ -5214,7 +5218,6 @@ dependencies = [
  "logos-blockchain-utils",
  "overwatch",
  "overwatch-derive",
- "rand 0.8.6",
  "serde",
  "serde_json",
  "tempfile",
@@ -6210,7 +6213,7 @@ dependencies = [
 [[package]]
 name = "overwatch"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/Overwatch?rev=ef70b69fb82b0b585cfef1427972c4e97ea88c84#ef70b69fb82b0b585cfef1427972c4e97ea88c84"
+source = "git+https://github.com/logos-co/Overwatch?rev=ae887f41f5a626c341179026ad7f03953ff2072e#ae887f41f5a626c341179026ad7f03953ff2072e"
 dependencies = [
  "async-trait",
  "futures",
@@ -6225,7 +6228,7 @@ dependencies = [
 [[package]]
 name = "overwatch-derive"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/Overwatch?rev=ef70b69fb82b0b585cfef1427972c4e97ea88c84#ef70b69fb82b0b585cfef1427972c4e97ea88c84"
+source = "git+https://github.com/logos-co/Overwatch?rev=ae887f41f5a626c341179026ad7f03953ff2072e#ae887f41f5a626c341179026ad7f03953ff2072e"
 dependencies = [
  "convert_case 0.8.0",
  "manyhow",

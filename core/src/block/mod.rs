@@ -242,13 +242,13 @@ impl<Tx> Block<Tx> {
     }
 
     #[must_use]
-    pub fn transactions(&self) -> impl ExactSizeIterator<Item = &Tx> + '_ {
+    pub fn transactions_iter(&self) -> impl ExactSizeIterator<Item = &Tx> + '_ {
         self.transactions.as_slice().iter()
     }
 
     #[must_use]
-    pub fn transactions_vec(&self) -> &Vec<Tx> {
-        self.transactions.as_ref()
+    pub const fn transactions(&self) -> &BlockTransactions<Tx> {
+        &self.transactions
     }
 
     #[must_use]
@@ -472,6 +472,8 @@ mod tests {
     struct TestMantleTx<const SIZE: usize>;
 
     impl<const SIZE: usize> Transaction for TestMantleTx<SIZE> {
+        //noinspection RsTypeCheck: The type is correct, but the linter is confused by
+        // the closure.
         const HASHER: TransactionHasher<Self> = |_tx| TxHash::from([0u8; 32]);
         type Hash = TxHash;
 

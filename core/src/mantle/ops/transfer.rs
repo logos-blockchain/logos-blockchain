@@ -8,7 +8,7 @@ use crate::{
     mantle::{
         TxHash,
         channel::Channels,
-        ledger::{self, Inputs, Operation, Outputs, Utxos},
+        ledger::{self, Inputs, Operation, Outputs, Utxo, Utxos},
         nom::NomEncode as _,
         ops::OpId,
     },
@@ -30,6 +30,15 @@ impl TransferOp {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.inputs.is_empty() && self.outputs.is_empty()
+    }
+
+    pub fn utxos(&self) -> impl Iterator<Item = Utxo> {
+        self.outputs.utxos(self)
+    }
+
+    #[must_use]
+    pub fn utxo_by_index(&self, index: usize) -> Option<Utxo> {
+        self.outputs.utxo_by_index(index, self)
     }
 
     pub fn balance(&self, utxos: &Utxos) -> Result<i128, TransferError> {
@@ -117,10 +126,10 @@ mod test {
     use num_bigint::BigUint;
 
     use super::*;
-    use crate::mantle::{Note, NoteId, Utxo};
+    use crate::mantle::{Note, NoteId};
 
     #[test]
-    fn test_utxo_by_index() {
+    fn test_utxos_and_utxo_by_index() {
         let pk0 = ZkPublicKey::from(Fr::from(BigUint::from(0u8)));
         let pk1 = ZkPublicKey::from(Fr::from(BigUint::from(1u8)));
         let pk2 = ZkPublicKey::from(Fr::from(BigUint::from(2u8)));
@@ -133,7 +142,7 @@ mod test {
             ]),
         };
         assert_eq!(
-            transfer.outputs.utxo_by_index(0, &transfer),
+            transfer.utxo_by_index(0),
             Some(Utxo {
                 op_id: transfer.op_id(),
                 output_index: 0,
@@ -141,7 +150,7 @@ mod test {
             })
         );
         assert_eq!(
-            transfer.outputs.utxo_by_index(1, &transfer),
+            transfer.utxo_by_index(1),
             Some(Utxo {
                 op_id: transfer.op_id(),
                 output_index: 1,
@@ -149,7 +158,7 @@ mod test {
             })
         );
         assert_eq!(
-            transfer.outputs.utxo_by_index(2, &transfer),
+            transfer.utxo_by_index(2),
             Some(Utxo {
                 op_id: transfer.op_id(),
                 output_index: 2,
@@ -157,6 +166,6 @@ mod test {
             })
         );
 
-        assert!(transfer.outputs.utxo_by_index(3, &transfer).is_none());
+        assert!(transfer.utxo_by_index(3).is_none());
     }
 }

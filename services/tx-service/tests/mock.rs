@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeMap, HashSet},
     convert::Infallible,
-    path::{Path, PathBuf},
     pin::Pin,
     sync::{Arc, Mutex, atomic::AtomicBool},
 };
@@ -21,13 +20,13 @@ use lb_network_service::{
     config::NetworkConfig,
     message::NetworkMsg,
 };
-use lb_services_utils::{
-    overwatch::{JsonFileBackend, recovery::operators::RecoveryBackend as _},
-    traits::FromSettings as _,
+use lb_services_utils::overwatch::{
+    RecoveryData, recovery::operators::RecoveryBackend as RecoveryBackendTrait,
 };
 use lb_storage_service::{
     StorageService,
     backends::rocksdb::{self, RocksBackend},
+    recovery::{StorageRecoveryBackend, load_recovery_data},
 };
 use lb_tracing_service::{Tracing, TracingSettings};
 use lb_utils::noop_service::NoService;
@@ -45,11 +44,14 @@ use overwatch::{
     services::{ServiceData, relay::OutboundRelay},
 };
 use overwatch_derive::*;
-use rand::distributions::{Alphanumeric, DistString as _};
 use tempfile::TempDir;
 
-type MockRecoveryBackend =
-    JsonFileBackend<TxMempoolState<PoolRecoveryState<MockTxId>, (), ()>, TxMempoolSettings<(), ()>>;
+type MockRecoveryBackend = StorageRecoveryBackend<
+    TxMempoolState<PoolRecoveryState<MockTxId>, (), ()>,
+    TxMempoolSettings<(), ()>,
+    RocksBackend,
+    RuntimeServiceId,
+>;
 
 type MockMempoolService = GenericTxMempoolService<
     Mempool<
@@ -74,15 +76,6 @@ struct MockPoolNode {
     no_service: NoService,
 }
 
-fn run_with_recovery_teardown(recovery_path: &Path, run: impl Fn()) {
-    run();
-    drop(std::fs::remove_file(recovery_path));
-}
-
-fn get_test_random_path() -> PathBuf {
-    PathBuf::from(Alphanumeric.sample_string(&mut rand::thread_rng(), 5)).with_extension(".json")
-}
-
 fn sample_removed_tx() -> MockTransaction<MockMessage> {
     MockTransaction::new(MockMessage {
         payload: "removed-but-fetchable".to_owned(),
@@ -93,7 +86,6 @@ fn sample_removed_tx() -> MockTransaction<MockMessage> {
 }
 
 fn mock_pool_node_settings(
-    recovery_file_path: &Path,
     predefined_messages: Vec<MockMessage>,
 ) -> (MockPoolNodeServiceSettings, TempDir) {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
@@ -118,13 +110,21 @@ fn mock_pool_node_settings(
             mockpool: TxMempoolSettings {
                 pool: (),
                 network_adapter: (),
-                recovery_path: recovery_file_path.to_path_buf(),
+                recovery_data: RecoveryData::default(),
             },
             logging: TracingSettings::default(),
             no_service: (),
         },
         temp_dir,
     )
+}
+
+fn run_with_mock_pool_node(
+    predefined_messages: Vec<MockMessage>,
+    run: impl FnOnce(MockPoolNodeServiceSettings, TempDir),
+) {
+    let (settings, temp_dir) = mock_pool_node_settings(predefined_messages);
+    run(settings, temp_dir);
 }
 
 async fn add_tx(
@@ -417,9 +417,7 @@ async fn removed_items_remain_fetchable_after_recovery() {
 
 #[test]
 fn local_submission_rejects_oversized_tx() {
-    let recovery_file_path = get_test_random_path();
-    run_with_recovery_teardown(&recovery_file_path, || {
-        let (settings, _temp_dir) = mock_pool_node_settings(&recovery_file_path, Vec::new());
+    run_with_mock_pool_node(Vec::new(), |settings, _temp_dir| {
         let app = OverwatchRunner::<MockPoolNode>::run(settings, None)
             .map_err(|e| eprintln!("Error encountered: {e}"))
             .unwrap();
@@ -470,9 +468,7 @@ fn local_submission_rejects_oversized_tx() {
 
 #[test]
 fn mempool_view_preserves_receive_order() {
-    let recovery_file_path = get_test_random_path();
-    run_with_recovery_teardown(&recovery_file_path, || {
-        let (settings, _temp_dir) = mock_pool_node_settings(&recovery_file_path, Vec::new());
+    run_with_mock_pool_node(Vec::new(), |settings, _temp_dir| {
         let app = OverwatchRunner::<MockPoolNode>::run(settings, None)
             .map_err(|e| eprintln!("Error encountered: {e}"))
             .unwrap();
@@ -529,9 +525,7 @@ fn mempool_view_preserves_receive_order() {
 
 #[test]
 fn get_transactions_by_hashes_preserves_request_order() {
-    let recovery_file_path = get_test_random_path();
-    run_with_recovery_teardown(&recovery_file_path, || {
-        let (settings, _temp_dir) = mock_pool_node_settings(&recovery_file_path, Vec::new());
+    run_with_mock_pool_node(Vec::new(), |settings, _temp_dir| {
         let app = OverwatchRunner::<MockPoolNode>::run(settings, None)
             .map_err(|e| eprintln!("Error encountered: {e}"))
             .unwrap();
@@ -593,30 +587,26 @@ fn get_transactions_by_hashes_preserves_request_order() {
 
 #[test]
 fn test_mock_mempool() {
-    let recovery_file_path = get_test_random_path();
-    run_with_recovery_teardown(&recovery_file_path, || {
-        let exist = Arc::new(AtomicBool::new(false));
-        let exist2 = Arc::clone(&exist);
+    let exist = Arc::new(AtomicBool::new(false));
+    let exist2 = Arc::clone(&exist);
 
-        let predefined_messages = vec![
-            MockMessage {
-                payload: "This is foo".to_owned(),
-                content_topic: MOCK_TX_CONTENT_TOPIC,
-                version: 0,
-                timestamp: 0,
-            },
-            MockMessage {
-                payload: "This is bar".to_owned(),
-                content_topic: MOCK_TX_CONTENT_TOPIC,
-                version: 0,
-                timestamp: 0,
-            },
-        ];
+    let predefined_messages = vec![
+        MockMessage {
+            payload: "This is foo".to_owned(),
+            content_topic: MOCK_TX_CONTENT_TOPIC,
+            version: 0,
+            timestamp: 0,
+        },
+        MockMessage {
+            payload: "This is bar".to_owned(),
+            content_topic: MOCK_TX_CONTENT_TOPIC,
+            version: 0,
+            timestamp: 0,
+        },
+    ];
 
+    run_with_mock_pool_node(predefined_messages.clone(), |settings, temp_dir| {
         let exp_txns: HashSet<MockMessage> = predefined_messages.iter().cloned().collect();
-
-        let (settings, _temp_dir) =
-            mock_pool_node_settings(&recovery_file_path, predefined_messages);
         let app = OverwatchRunner::<MockPoolNode>::run(settings, None)
             .map_err(|e| eprintln!("Error encountered: {e}"))
             .unwrap();
@@ -676,18 +666,27 @@ fn test_mock_mempool() {
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
 
-        let recovery_backend = MockRecoveryBackend::from_settings(&TxMempoolSettings {
-            pool: (),
-            network_adapter: (),
-            recovery_path: recovery_file_path.clone(),
-        });
-        let recovered_state = recovery_backend
-            .load_state()
-            .expect("Should not fail to load the state.");
-        assert_eq!(recovered_state.pool().unwrap().pending_items.len(), 2);
-        assert!(recovered_state.pool().unwrap().last_item_timestamp > 0);
-
         drop(app.runtime().handle().block_on(app.handle().shutdown()));
         app.blocking_wait_finished();
+
+        let recovery_data = load_recovery_data(rocksdb::RocksBackendSettings {
+            db_path: temp_dir.path().join("test_db"),
+            read_only: false,
+            column_family: None,
+        })
+        .expect("Should load recovery data from storage.");
+        let recovery_settings = TxMempoolSettings {
+            pool: (),
+            network_adapter: (),
+            recovery_data,
+        };
+        let recovered_state =
+            <MockRecoveryBackend as RecoveryBackendTrait<RuntimeServiceId>>::load_state(
+                &recovery_settings,
+            )
+            .expect("Should not fail to load the state.")
+            .expect("Recovery state should exist.");
+        assert_eq!(recovered_state.pool().unwrap().pending_items.len(), 2);
+        assert!(recovered_state.pool().unwrap().last_item_timestamp > 0);
     });
 }

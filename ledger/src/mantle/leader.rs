@@ -161,8 +161,8 @@ impl LeaderState {
     }
 
     /// Get the root of the voucher commitments snapshot.
-    pub(crate) const fn vouchers_snapshot_root(&self) -> RewardsRoot {
-        self.vouchers_snapshot.root
+    pub(crate) const fn vouchers_snapshot_root(&self) -> &RewardsRoot {
+        &self.vouchers_snapshot.root
     }
 
     /// Get the MMR of all voucher commitments included in the chain.
@@ -180,6 +180,11 @@ impl LeaderState {
         self.claimable_rewards
             .checked_div(n_unclaimed_vouchers)
             .unwrap_or(0)
+    }
+
+    #[must_use]
+    pub const fn epoch(&self) -> Epoch {
+        self.epoch
     }
 }
 

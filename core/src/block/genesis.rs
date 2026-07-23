@@ -156,7 +156,7 @@ impl GenesisBlock {
 
     #[must_use]
     pub fn genesis_tx(&self) -> GenesisTx {
-        self.0.transactions_vec()[0].clone()
+        self.0.transactions()[0].clone()
     }
 
     #[must_use]
@@ -1244,7 +1244,7 @@ impl GenesisBlockBuilder<WithAll> {
                 })
                 .expect("genesis transaction proofs are bounded");
         }
-        let signed_tx = SignedMantleTx::new_unverified(MantleTx(capped_ops), ops_proofs);
+        let signed_tx = SignedMantleTx::new_trusted(MantleTx(capped_ops), ops_proofs);
         Ok(GenesisBlock::genesis(GenesisTx::from_tx(signed_tx)?))
     }
 }
@@ -1273,10 +1273,10 @@ mod tests {
             CryptarchiaParameter, GenesisTime, GenesisTx as _, NoteId,
             nom::NomEncode as _,
             ops::channel::{ChannelId, MsgId, inscribe::Inscription},
+            transactions::states::Preverified,
         },
         sdp::{Locator, ProviderId, ServiceType},
     };
-
     // ── helpers ───────────────────────────────────────────────────────────────
 
     fn valid_inscription() -> InscriptionOp {
@@ -1332,12 +1332,12 @@ mod tests {
     fn assert_block_valid(block: &GenesisBlock) {
         assert_eq!(block.header().slot(), Slot::from(0u64));
         assert_eq!(block.header().parent(), HeaderId::from([0u8; 32]));
-        assert_eq!(block.transactions().len(), 1);
+        assert_eq!(block.transactions_iter().len(), 1);
     }
 
     // ── helpers for the with_genesis_tx path ──────────────────────────────────
 
-    fn make_signed_genesis_tx(extra_ops: Vec<Op>) -> SignedMantleTx {
+    fn make_signed_genesis_tx(extra_ops: Vec<Op>) -> SignedMantleTx<Preverified> {
         let mut ops = vec![
             Op::Transfer(TransferOp::new(
                 Inputs::empty(),
@@ -1360,7 +1360,7 @@ mod tests {
         }))
         .expect("genesis transaction proofs are bounded");
 
-        SignedMantleTx::new_unverified(MantleTx(Ops::new_unchecked(ops)), ops_proofs)
+        SignedMantleTx::new_trusted(MantleTx(Ops::new_unchecked(ops)), ops_proofs)
     }
 
     fn make_genesis_tx(extra_ops: Vec<Op>) -> GenesisTx {
@@ -1491,7 +1491,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let tx = block.transactions().next().unwrap();
+        let tx = block.transactions_iter().next().unwrap();
         assert_eq!(tx.genesis_transfer().outputs.len(), 3);
     }
 
@@ -1508,7 +1508,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let tx = block.transactions().next().unwrap();
+        let tx = block.transactions_iter().next().unwrap();
         assert_eq!(tx.sdp_declarations().count(), 3);
     }
 
@@ -1527,7 +1527,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let tx = block.transactions().next().unwrap();
+        let tx = block.transactions_iter().next().unwrap();
         assert_eq!(tx.genesis_transfer().outputs.len(), 3);
         assert_eq!(tx.sdp_declarations().count(), 2);
     }
@@ -1598,7 +1598,10 @@ mod tests {
         let block = builder
             .build()
             .expect("maximum-size genesis block should build");
-        let tx = block.transactions().next().expect("genesis transaction");
+        let tx = block
+            .transactions_iter()
+            .next()
+            .expect("genesis transaction");
 
         assert_eq!(tx.sdp_declarations().count(), MAX_GENESIS_DECLARATIONS);
         assert_eq!(tx.mantle_tx().ops().len(), MAX_OPS_PER_TX);
@@ -1671,7 +1674,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let tx = block.transactions().next().unwrap();
+        let tx = block.transactions_iter().next().unwrap();
         assert_eq!(tx.genesis_transfer().outputs.len(), 3);
     }
 
@@ -1685,7 +1688,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let tx = block.transactions().next().unwrap();
+        let tx = block.transactions_iter().next().unwrap();
         assert_eq!(tx.sdp_declarations().count(), 3);
     }
 
@@ -1700,7 +1703,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let tx = block.transactions().next().unwrap();
+        let tx = block.transactions_iter().next().unwrap();
         assert_eq!(tx.genesis_transfer().outputs.len(), 3);
         assert_eq!(tx.sdp_declarations().count(), 3);
     }
@@ -1749,7 +1752,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let tx = block.transactions().next().unwrap();
+        let tx = block.transactions_iter().next().unwrap();
         let ops = tx.mantle_tx().ops();
         assert!(matches!(ops[0], Op::Transfer(_)));
         assert!(matches!(ops[1], Op::ChannelInscribe(_)));
@@ -1766,7 +1769,7 @@ mod tests {
         let decoded: GenesisBlock = serde_json::from_str(&json).expect("genesis block deserialize");
 
         assert_eq!(decoded.header().slot(), Slot::genesis());
-        assert_eq!(decoded.transactions().len(), 1);
+        assert_eq!(decoded.transactions_iter().len(), 1);
         assert_eq!(decoded.header().id(), block.header().id());
     }
 

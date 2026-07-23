@@ -4,12 +4,13 @@ use lb_core::{
         Note, SignedMantleTx, TxHash, Value,
         gas::GasCost,
         ops::leader_claim::{RewardsRoot, VoucherCm},
-        transactions::{MantleTxBuilder, MantleTxContext, TxBuilderError},
+        transactions::{MantleTxBuilder, MantleTxContext, TxBuilderError, states::Preverified},
     },
 };
 use lb_key_management_system_service::keys::{
     Ed25519Key, ZkPublicKey, ZkSignature, secured_key::SecuredKey,
 };
+use lb_storage_service::backends::StorageBackend;
 use lb_wallet::WalletBalance;
 use overwatch::{
     overwatch::OverwatchHandle,
@@ -58,6 +59,8 @@ pub trait WalletServiceData:
 
 impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> WalletServiceData
     for crate::WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
+where
+    Storage: StorageBackend + Send + Sync + 'static,
 {
     type Kms = Kms;
     type Cryptarchia = Cryptarchia;
@@ -157,7 +160,7 @@ where
         reward_amount: Value,
         funding_pk: ZkPublicKey,
         max_tx_fee: GasCost,
-    ) -> Result<TipResponse<SignedMantleTx>, WalletApiError> {
+    ) -> Result<TipResponse<SignedMantleTx<Preverified>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
@@ -192,7 +195,7 @@ where
         funding_pks: Vec<ZkPublicKey>,
         recipient_pk: ZkPublicKey,
         amount: Value,
-    ) -> Result<TipResponse<SignedMantleTx>, WalletApiError> {
+    ) -> Result<TipResponse<SignedMantleTx<Preverified>>, WalletApiError> {
         let mantle_tx_builder =
             MantleTxBuilder::new().add_ledger_output(Note::new(amount, recipient_pk))?;
         let funded_tx_builder = self
@@ -205,7 +208,7 @@ where
         &self,
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
-    ) -> Result<TipResponse<SignedMantleTx>, WalletApiError> {
+    ) -> Result<TipResponse<SignedMantleTx<Preverified>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay

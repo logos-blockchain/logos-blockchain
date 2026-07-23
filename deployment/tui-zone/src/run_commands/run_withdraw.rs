@@ -205,7 +205,7 @@ pub(crate) fn run_withdraw_combine(args: WithdrawCombineArgs) -> RunResult<()> {
         })
         .collect::<RunResult<Vec<_>>>()?
         .try_into()?;
-    let signed_tx = SignedMantleTx::new(tx, op_proofs)?;
+    let signed_tx = SignedMantleTx::new(tx, op_proofs);
     let signed = SignedWithdrawFile {
         version: ZONE_FILE_TRANSFER_VERSION,
         kind: ZONE_SIGNED_TRANSACTION.to_owned(),
@@ -263,8 +263,8 @@ pub(crate) async fn run_withdraw_submit(args: WithdrawSubmitArgs) -> RunResult<(
     }
     let mut node_key = args.node_key;
     node_key.channel_id = Some(signed.channel_id.clone());
-    let tx = signed_tx.mantle_tx.clone();
-    let withdraws = tx
+    let withdraws = signed_tx
+        .mantle_tx()
         .ops()
         .iter()
         .filter_map(|op| match op {

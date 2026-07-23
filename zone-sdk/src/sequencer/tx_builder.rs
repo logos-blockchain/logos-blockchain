@@ -10,7 +10,7 @@ use lb_core::{
                 inscribe::{Inscription, InscriptionOp},
             },
         },
-        transactions::{MantleTxBuilder, Ops, TxHash, tx::OpsProofs},
+        transactions::{MantleTxBuilder, Ops, TxHash, states::Unverified, tx::OpsProofs},
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
@@ -179,7 +179,7 @@ pub(super) async fn create_inscribe_tx<Node>(
     signing_key: &Ed25519Key,
     inscription: Inscription,
     parent: MsgId,
-) -> Result<(SignedMantleTx, MsgId), Error>
+) -> Result<(SignedMantleTx<Unverified>, MsgId), Error>
 where
     Node: adapter::Node + Sync,
 {
@@ -204,10 +204,7 @@ where
         transfer_proof,
     )?;
 
-    let signed_tx = SignedMantleTx {
-        ops_proofs,
-        mantle_tx: inscribe_tx,
-    };
+    let signed_tx = SignedMantleTx::new(inscribe_tx, ops_proofs);
 
     Ok((signed_tx, msg_id))
 }
@@ -226,7 +223,7 @@ pub(super) async fn create_channel_config_tx<Node>(
     posting_timeout: SlotTimeout,
     configuration_threshold: u16,
     transfer_threshold: u16,
-) -> Result<SignedMantleTx, Error>
+) -> Result<SignedMantleTx<Unverified>, Error>
 where
     Node: adapter::Node + Sync,
 {
@@ -262,10 +259,7 @@ where
         transfer_proof,
     )?;
 
-    Ok(SignedMantleTx {
-        ops_proofs,
-        mantle_tx: config_tx,
-    })
+    Ok(SignedMantleTx::new(config_tx, ops_proofs))
 }
 
 pub(super) fn prepare_tx(

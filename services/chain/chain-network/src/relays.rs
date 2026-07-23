@@ -10,6 +10,7 @@ use lb_core::{
     mantle::{AuthenticatedMantleTx, TxHash},
 };
 use lb_network_service::{NetworkService, message::BackendNetworkMsg};
+use lb_storage_service::StorageService;
 use lb_time_service::{TimeService, TimeServiceMessage, backends::TimeBackend as TimeBackendTrait};
 use lb_tx_service::{
     MempoolMsg, TxMempoolService, backend::RecoverableMempool,
@@ -108,12 +109,19 @@ where
         TimeBackend: TimeBackendTrait,
         TimeBackend::Settings: Clone + Send + Sync,
         RuntimeServiceId: Debug
+            + Clone
             + Sync
             + Send
             + Display
             + 'static
             + AsServiceId<Cryptarchia>
             + AsServiceId<NetworkService<NetworkAdapter::Backend, RuntimeServiceId>>
+            + AsServiceId<
+                StorageService<
+                    <Mempool::Storage as MempoolStorageAdapter<RuntimeServiceId>>::Backend,
+                    RuntimeServiceId,
+                >,
+            >
             + AsServiceId<
                 TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
             >

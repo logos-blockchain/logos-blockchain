@@ -358,7 +358,7 @@ pub fn genesis_wallet_utxos(config: &TopologyConfig) -> Vec<Utxo> {
         .genesis_tx();
     let genesis_transfer = genesis_tx.genesis_transfer();
 
-    genesis_transfer.outputs.utxos(genesis_transfer).collect()
+    genesis_transfer.utxos().collect()
 }
 
 #[must_use]

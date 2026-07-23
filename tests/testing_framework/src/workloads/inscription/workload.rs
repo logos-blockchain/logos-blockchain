@@ -16,7 +16,7 @@ use lb_core::mantle::{
             inscribe::{Inscription, InscriptionOp},
         },
     },
-    transactions::TxHash,
+    transactions::{TxHash, states::Preverified},
 };
 use lb_key_management_system_service::keys::Ed25519Key;
 use rand::{seq::SliceRandom as _, thread_rng};
@@ -382,7 +382,7 @@ fn channel_id_from_signing_key(signing_key: &Ed25519Key) -> ChannelId {
 fn build_inscription_transaction(
     channel: &mut ChannelState,
     payload_bytes: usize,
-) -> Result<(SignedMantleTx, MsgId, TxHash), DynError> {
+) -> Result<(SignedMantleTx<Preverified>, MsgId, TxHash), DynError> {
     let op = InscriptionOp {
         channel_id: channel.channel_id,
         inscription: build_payload(channel, payload_bytes),
@@ -399,6 +399,7 @@ fn build_inscription_transaction(
         .sign_payload(tx_hash.as_signing_bytes().as_ref());
 
     let signed_tx = SignedMantleTx::new(mantle_tx, [OpProof::Ed25519Sig(ed25519_signature)].into())
+        .preverify()
         .map_err(|error| InscriptionWorkloadError::SignedTransactionBuild(error.to_string()))?;
 
     channel.next_nonce = channel.next_nonce.saturating_add(1);
@@ -424,7 +425,7 @@ fn build_payload(channel: &ChannelState, payload_bytes: usize) -> Inscription {
 
 async fn submit_transaction_via_cluster(
     ctx: &RunContext<impl LbcScenarioEnv>,
-    tx: Arc<SignedMantleTx>,
+    tx: Arc<SignedMantleTx<Preverified>>,
 ) -> Result<(), DynError> {
     let mut clients = ctx.node_clients().snapshot();
     if clients.is_empty() {
@@ -446,7 +447,7 @@ async fn submit_transaction_via_cluster(
 
 async fn submit_to_clients(
     clients: &mut [NodeHttpClient],
-    tx: &SignedMantleTx,
+    tx: &SignedMantleTx<Preverified>,
     attempt: usize,
 ) -> Result<(), DynError> {
     let tx_hash = tx.hash();
