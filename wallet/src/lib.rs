@@ -16,7 +16,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, GasConstants, NoteId, TxHash, Utxo, Value,
-        ledger::BoundedInputs,
+        ledger::Inputs,
         ops::{
             Op, OpId as _,
             channel::{channel_transfer::ChannelTransferOp, withdraw::ChannelWithdrawOp},
@@ -96,7 +96,7 @@ pub enum WalletOp {
     /// Mark the deposited notes as channel notes: they stay in the wallet
     /// and remain eligible for `PoL`, but are gated out of wallet-driven
     /// spending.
-    ChannelDeposit(BoundedInputs),
+    ChannelDeposit(Inputs),
     /// Drop the input channel notes from the wallet and insert the output
     /// channel notes owned by known keys.
     ChannelTransfer(ChannelTransferOp),
@@ -130,7 +130,7 @@ impl WalletBlock {
             .flat_map(|tx| tx.ops.iter())
             .flat_map(|op| match op {
                 WalletOp::Transfer(transfer) => transfer.inputs.iter().copied().collect::<Vec<_>>(),
-                WalletOp::ChannelDeposit(inputs) => inputs.to_vec(),
+                WalletOp::ChannelDeposit(inputs) => inputs.clone().into_inner().to_vec(),
                 WalletOp::ChannelTransfer(op) => op.inputs.iter().copied().collect::<Vec<_>>(),
                 WalletOp::Lock(note_id) => vec![*note_id],
                 WalletOp::ChannelWithdraw(_) | WalletOp::LeaderClaim(_) => Vec::new(),
@@ -516,7 +516,7 @@ where
     txs.map_ref(move |tx| {
         let mut events_by_op = events_by_tx.remove(&tx.hash()).unwrap_or_default();
 
-        let ops = tx.mantle_tx().ops().filter_map(|op| {
+        let ops = tx.mantle_tx().ops().filter_map_ref(|op| {
             let event = op_id(op).and_then(|id| events_by_op.remove(&id));
             transform_op(op, event)
         });
@@ -570,9 +570,7 @@ fn op_id(op: &Op) -> Option<Hash> {
 fn transform_op(op: &Op, event: Option<TxEventPayload>) -> Option<WalletOp> {
     match op {
         Op::Transfer(transfer) => Some(WalletOp::Transfer(transfer.clone())),
-        Op::ChannelDeposit(deposit) => Some(WalletOp::ChannelDeposit(
-            deposit.inputs.clone().into_inner(),
-        )),
+        Op::ChannelDeposit(deposit) => Some(WalletOp::ChannelDeposit(deposit.inputs.clone())),
         Op::ChannelTransfer(op) => Some(WalletOp::ChannelTransfer(op.clone())),
         Op::ChannelWithdraw(op) => Some(WalletOp::ChannelWithdraw(op.clone())),
         Op::SDPDeclare(declaration) => Some(WalletOp::Lock(declaration.locked_note_id)),
@@ -845,20 +843,29 @@ mod tests {
     use lb_core::{
         crypto::ZkDigest as _,
         mantle::{
-            Note,
+            MantleTx, Note, OpProof, SignedMantleTx,
             channel::Channels,
             gas::MainnetGasConstants as Gas,
-            ledger::{Inputs, Outputs},
-            ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
-            transactions::{GasPrices, MantleTxGasContext},
+            ledger::Outputs,
+            ops::channel::{
+                ChannelId, MsgId,
+                deposit::{DepositOp, Metadata},
+                inscribe::{Inscription, InscriptionOp},
+            },
+            transactions::{GasPrices, MantleTxGasContext, Ops, states::Unverified, tx::OpsProofs},
         },
+        proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
-    use lb_cryptarchia_engine::EpochConfig;
-    use lb_groth16::{Field as _, Fr};
-    use lb_key_management_system_keys::keys::Ed25519Key;
+    use lb_cryptarchia_engine::{EpochConfig, Slot};
+    use lb_groth16::{CompressedGroth16Proof, Field as _, Fr};
+    use lb_key_management_system_keys::keys::{
+        Ed25519Key, Ed25519Signature, UnsecuredZkKey, ZkSignature,
+    };
     use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards};
+    use lb_pol::LotteryConstants;
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+    use lb_utxotree::UtxoTree;
     use num_bigint::BigUint;
     use rpds::HashTrieSetSync;
 
@@ -2119,5 +2126,121 @@ mod tests {
             .unwrap_err();
         // The error detail says that the withdrawn note is now spendable.
         assert_eq!(err, WalletError::InsufficientFunds { available: 100 });
+    }
+
+    #[test]
+    fn wallet_block_transformation_preserves_bounds_and_source_order() {
+        let first_input = NoteId::from(Fr::from(1));
+        let second_input = NoteId::from(Fr::from(2));
+
+        let transfer = Op::Transfer(TransferOp::new(Inputs::empty(), Outputs::new([])));
+
+        let deposit = Op::ChannelDeposit(DepositOp {
+            channel_id: ChannelId::from([0; 32]),
+            inputs: Inputs::new([first_input, second_input]),
+            metadata: Metadata::default(),
+        });
+
+        let ignored_inscription = Op::ChannelInscribe(InscriptionOp {
+            channel_id: ChannelId::from([0; 32]),
+            inscription: Inscription::default(),
+            parent: MsgId::root(),
+            signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+        });
+
+        let source_transactions: BlockTransactions<SignedMantleTx<Unverified>> = [
+            signed_test_tx(vec![transfer, deposit]),
+            signed_test_tx(vec![ignored_inscription]),
+        ]
+        .into();
+
+        let source_block = Block::create(
+            HeaderId::from([0; 32]),
+            Slot::from(1),
+            test_leader_proof(),
+            source_transactions,
+            &Ed25519Key::from_bytes(&[0; 32]),
+        )
+        .expect("test block should be valid");
+
+        let wallet_block =
+            WalletBlock::from_block(&source_block, Epoch::new(0), &Events::default());
+
+        assert_eq!(wallet_block.txs.len(), source_block.transactions().len());
+
+        // Transaction order is preserved.
+        assert_eq!(wallet_block.txs.len(), 2);
+
+        // The first transaction keeps both wallet-relevant operations in order.
+        let first_wallet_tx = &wallet_block.txs[0];
+        assert_eq!(first_wallet_tx.ops.len(), 2);
+        assert!(matches!(first_wallet_tx.ops[0], WalletOp::Transfer(_)));
+
+        let WalletOp::ChannelDeposit(inputs) = &first_wallet_tx.ops[1] else {
+            panic!("expected channel deposit as the second wallet operation");
+        };
+
+        assert_eq!(
+            inputs.clone().into_inner().as_slice(),
+            &[first_input, second_input]
+        );
+
+        // A transaction containing only ignored operations is retained, but its
+        // wallet operation list is empty.
+        let second_wallet_tx = &wallet_block.txs[1];
+        assert!(second_wallet_tx.ops.is_empty());
+    }
+
+    fn signed_test_tx(ops: Vec<Op>) -> SignedMantleTx<Unverified> {
+        let proofs = OpsProofs::try_from_iter(ops.iter().map(|op| match op {
+            Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
+            _ => OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
+                &[0; 128],
+            ))),
+        }))
+        .expect("test proofs should fit");
+
+        SignedMantleTx::new(
+            MantleTx(Ops::try_from(ops).expect("test operations should fit")),
+            proofs,
+        )
+    }
+
+    fn test_leader_proof() -> Groth16LeaderProof {
+        let leader_sk = UnsecuredZkKey::zero();
+        let utxo = Utxo::new(tx_hash(0), 0, Note::new(1000, leader_sk.to_public_key()));
+        let utxo_tree = UtxoTree::<_, _, ZkHasher>::new().insert(utxo.id(), utxo).0;
+        let utxo_merkle_path = utxo_tree.path(&utxo.id()).unwrap();
+        let (lottery_0, lottery_1) =
+            LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
+                .compute_lottery_values(1000);
+        let public_inputs = (0..1000)
+            .map(|nonce| {
+                LeaderPublic::new(
+                    utxo_tree.root(),
+                    utxo_tree.root(),
+                    Fr::from(nonce),
+                    0,
+                    lottery_0,
+                    lottery_1,
+                )
+            })
+            .find(|inputs| {
+                inputs.check_winning(utxo.note.value, *utxo.id().as_fr(), *leader_sk.as_fr())
+            })
+            .unwrap();
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        Groth16LeaderProof::prove(
+            LeaderPrivate::new(
+                public_inputs,
+                utxo,
+                &utxo_merkle_path,
+                &utxo_merkle_path,
+                *leader_sk.as_fr(),
+                &signing_key.public_key(),
+            ),
+            VoucherCm::default(),
+        )
+        .unwrap()
     }
 }

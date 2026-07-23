@@ -123,7 +123,8 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
     ///
     /// Filtering may reduce the collection below `MIN`, so the result has
     /// only an upper bound.
-    pub fn filter_map<U, F>(&self, f: F) -> UpperBoundedVec<U, MAX>
+    #[must_use]
+    pub fn filter_map_ref<U, F>(&self, f: F) -> UpperBoundedVec<U, MAX>
     where
         F: FnMut(&T) -> Option<U>,
     {
@@ -131,6 +132,7 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
     }
 
     /// Maps borrowed elements while preserving both length bounds.
+    #[must_use]
     pub fn map_ref<U, F>(&self, f: F) -> BoundedVec<U, MIN, MAX>
     where
         F: FnMut(&T) -> U,
@@ -628,7 +630,7 @@ mod tests {
         // preserves the upper bound while dropping the lower bound.
 
         let mapped_1: Mapped =
-            source_1.filter_map(|value| (*value > 20).then(|| MyNewType(u32::from(*value))));
+            source_1.filter_map_ref(|value| (*value > 20).then(|| MyNewType(u32::from(*value))));
 
         assert_eq!(Mapped::MIN, 0);
         assert_eq!(Mapped::MAX, Source1::MAX);
@@ -636,7 +638,7 @@ mod tests {
         assert_eq!(mapped_1.as_slice(), &[MyNewType(30), MyNewType(40)]);
 
         let mapped_2: Mapped =
-            source_2.filter_map(|value| (*value > 20).then(|| MyNewType(u32::from(*value))));
+            source_2.filter_map_ref(|value| (*value > 20).then(|| MyNewType(u32::from(*value))));
 
         assert_eq!(Mapped::MIN, 0);
         assert_eq!(Mapped::MAX, Source1::MAX);
