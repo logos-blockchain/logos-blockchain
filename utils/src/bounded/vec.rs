@@ -151,6 +151,7 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
     /// This can safely use unchecked construction because `Iterator::map`
     /// preserves the number of elements, so the source `[MIN, MAX]` invariant
     /// also holds for the resulting collection.
+    #[must_use]
     pub fn map<U, F>(self, f: F) -> Bounded<Vec<U>, MIN, MAX>
     where
         F: FnMut(T) -> U,

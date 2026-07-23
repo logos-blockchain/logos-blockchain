@@ -22,7 +22,7 @@ impl<const MIN: usize, const MAX: usize> BoundedString<MIN, MAX> {
     }
 
     /// Returns true if this String has a length of zero, and false otherwise,
-    /// matching `str`/`String` semantics..
+    /// matching `str`/`String` semantics.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.as_inner().is_empty()
