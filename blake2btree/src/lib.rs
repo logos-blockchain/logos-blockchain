@@ -106,6 +106,11 @@ where
         self.items.contains_key(key)
     }
 
+    /// Borrows the item stored under `key`, without cloning it.
+    pub fn get_ref(&self, key: &Key) -> Option<&Item> {
+        self.items.get(key).map(|(item, _)| item)
+    }
+
     #[must_use]
     pub const fn items(&self) -> &HashTrieMapSync<Key, (Item, usize)> {
         &self.items
@@ -616,6 +621,8 @@ mod tests {
         assert!(!tree.contains(&TestLeaf::from_usize(2)));
         assert_eq!(tree.get(&key), Some(item));
         assert_eq!(tree.get(&TestLeaf::from_usize(2)), None);
+        assert_eq!(tree.get_ref(&key), Some(&item));
+        assert_eq!(tree.get_ref(&TestLeaf::from_usize(2)), None);
     }
 
     #[test]
