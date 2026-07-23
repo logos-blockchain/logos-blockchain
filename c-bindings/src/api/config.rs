@@ -169,8 +169,10 @@ pub fn generate_config_sync(args: EmbeddedInitArgs) -> OperationStatus {
 #[must_use]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn generate_user_config(args: GenerateConfigArgs) -> OperationStatus {
-    let init_args = EmbeddedInitArgs::from(args);
-    generate_config_sync(init_args)
+    crate::macros::guard_ffi(|| {
+        let init_args = EmbeddedInitArgs::from(args);
+        generate_config_sync(init_args)
+    })
 }
 
 /// Updates an existing user config file with keys from a keystore file,
@@ -196,22 +198,24 @@ pub unsafe extern "C" fn update_user_config(
     user_config_path: *const c_char,
     keystore_path: *const c_char,
 ) -> OperationStatus {
-    return_error_if_null_pointer!(user_config_path);
-    return_error_if_null_pointer!(keystore_path);
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(user_config_path);
+        return_error_if_null_pointer!(keystore_path);
 
-    let args = UpdateArgs::new(
-        unsafe { cstr_to_path(user_config_path) },
-        unsafe { cstr_to_path(keystore_path) },
-        true,
-    );
+        let args = UpdateArgs::new(
+            unsafe { cstr_to_path(user_config_path) },
+            unsafe { cstr_to_path(keystore_path) },
+            true,
+        );
 
-    match lb_node::cli::config::update::run(args) {
-        Ok(()) => OperationStatus::OK,
-        Err(error) => OperationStatus::error(
-            OperationStatusCode::ConfigurationError,
-            format!("Error updating config: {error:?}"),
-        ),
-    }
+        match lb_node::cli::config::update::run(args) {
+            Ok(()) => OperationStatus::OK,
+            Err(error) => OperationStatus::error(
+                OperationStatusCode::ConfigurationError,
+                format!("Error updating config: {error:?}"),
+            ),
+        }
+    })
 }
 
 /// Generates a new user config file from an existing keystore file,
@@ -237,20 +241,22 @@ pub unsafe extern "C" fn migrate_user_config(
     output_path: *const c_char,
     keystore_path: *const c_char,
 ) -> OperationStatus {
-    return_error_if_null_pointer!(output_path);
-    return_error_if_null_pointer!(keystore_path);
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(output_path);
+        return_error_if_null_pointer!(keystore_path);
 
-    let args = MigrateArgs::new(unsafe { cstr_to_path(output_path) }, unsafe {
-        cstr_to_path(keystore_path)
-    });
+        let args = MigrateArgs::new(unsafe { cstr_to_path(output_path) }, unsafe {
+            cstr_to_path(keystore_path)
+        });
 
-    match lb_node::cli::config::migrate::run(args) {
-        Ok(()) => OperationStatus::OK,
-        Err(error) => OperationStatus::error(
-            OperationStatusCode::ConfigurationError,
-            format!("Error migrating config: {error:?}"),
-        ),
-    }
+        match lb_node::cli::config::migrate::run(args) {
+            Ok(()) => OperationStatus::OK,
+            Err(error) => OperationStatus::error(
+                OperationStatusCode::ConfigurationError,
+                format!("Error migrating config: {error:?}"),
+            ),
+        }
+    })
 }
 
 /// Migrates a 0.1.2 config file to a new user config and keystore, equivalent
@@ -279,23 +285,25 @@ pub unsafe extern "C" fn migrate_user_config_0_1_2(
     old_config_path: *const c_char,
     keystore_path: *const c_char,
 ) -> OperationStatus {
-    return_error_if_null_pointer!(new_config_path);
-    return_error_if_null_pointer!(old_config_path);
-    return_error_if_null_pointer!(keystore_path);
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(new_config_path);
+        return_error_if_null_pointer!(old_config_path);
+        return_error_if_null_pointer!(keystore_path);
 
-    let args = lb_node::cli::config::migrate_0_1_2::MigrateArgs::new(
-        unsafe { cstr_to_path(new_config_path) },
-        unsafe { cstr_to_path(old_config_path) },
-        unsafe { cstr_to_path(keystore_path) },
-    );
+        let args = lb_node::cli::config::migrate_0_1_2::MigrateArgs::new(
+            unsafe { cstr_to_path(new_config_path) },
+            unsafe { cstr_to_path(old_config_path) },
+            unsafe { cstr_to_path(keystore_path) },
+        );
 
-    match lb_node::cli::config::migrate_0_1_2::run(args) {
-        Ok(()) => OperationStatus::OK,
-        Err(error) => OperationStatus::error(
-            OperationStatusCode::ConfigurationError,
-            format!("Error migrating config: {error:?}"),
-        ),
-    }
+        match lb_node::cli::config::migrate_0_1_2::run(args) {
+            Ok(()) => OperationStatus::OK,
+            Err(error) => OperationStatus::error(
+                OperationStatusCode::ConfigurationError,
+                format!("Error migrating config: {error:?}"),
+            ),
+        }
+    })
 }
 
 /// Generates `participation_data.yaml` from a user config and keystore,
@@ -325,39 +333,41 @@ pub unsafe extern "C" fn participate(
     output_dir: *const c_char,
     external_address: *const c_char,
 ) -> OperationStatus {
-    return_error_if_null_pointer!(config_path);
-    return_error_if_null_pointer!(keystore_path);
-    return_error_if_null_pointer!(output_dir);
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(config_path);
+        return_error_if_null_pointer!(keystore_path);
+        return_error_if_null_pointer!(output_dir);
 
-    let external_address = if external_address.is_null() {
-        None
-    } else {
-        let address = unsafe { CStr::from_ptr(external_address) }.to_string_lossy();
-        match address.parse::<Ipv4Addr>() {
-            Ok(address) => Some(address),
-            Err(error) => {
-                return OperationStatus::error(
-                    OperationStatusCode::ValidationError,
-                    format!("Invalid external address '{address}': {error}"),
-                );
+        let external_address = if external_address.is_null() {
+            None
+        } else {
+            let address = unsafe { CStr::from_ptr(external_address) }.to_string_lossy();
+            match address.parse::<Ipv4Addr>() {
+                Ok(address) => Some(address),
+                Err(error) => {
+                    return OperationStatus::error(
+                        OperationStatusCode::ValidationError,
+                        format!("Invalid external address '{address}': {error}"),
+                    );
+                }
             }
+        };
+
+        let args = ParticipateArgs {
+            config: unsafe { cstr_to_path(config_path) },
+            keystore: unsafe { cstr_to_path(keystore_path) },
+            output: unsafe { cstr_to_path(output_dir) },
+            external_address,
+        };
+
+        match lb_node::cli::participate::run(&args) {
+            Ok(()) => OperationStatus::OK,
+            Err(error) => OperationStatus::error(
+                OperationStatusCode::ConfigurationError,
+                format!("Error generating participation data: {error:?}"),
+            ),
         }
-    };
-
-    let args = ParticipateArgs {
-        config: unsafe { cstr_to_path(config_path) },
-        keystore: unsafe { cstr_to_path(keystore_path) },
-        output: unsafe { cstr_to_path(output_dir) },
-        external_address,
-    };
-
-    match lb_node::cli::participate::run(&args) {
-        Ok(()) => OperationStatus::OK,
-        Err(error) => OperationStatus::error(
-            OperationStatusCode::ConfigurationError,
-            format!("Error generating participation data: {error:?}"),
-        ),
-    }
+    })
 }
 
 #[cfg(test)]

@@ -82,19 +82,21 @@ pub type FfiLeaderClaimResult = FfiStatusResult<TxHash>;
 /// [`LogosBlockchainNode`] instance.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn leader_claim(node: *const LogosBlockchainNode) -> FfiLeaderClaimResult {
-    return_error_if_null_pointer!(node);
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(node);
 
-    let node = unsafe { &*node };
-    let tx_hash = unwrap_or_return_error!(leader_claim_sync(node));
+        let node = unsafe { &*node };
+        let tx_hash = unwrap_or_return_error!(leader_claim_sync(node));
 
-    let Ok(tx_hash_array): Result<Hash, _> =
-        tx_hash.as_signing_bytes().iter().as_slice().try_into()
-    else {
-        return FfiLeaderClaimResult::err(OperationStatus::error(
-            OperationStatusCode::RuntimeError,
-            "Failed to convert transaction hash to array.",
-        ));
-    };
+        let Ok(tx_hash_array): Result<Hash, _> =
+            tx_hash.as_signing_bytes().iter().as_slice().try_into()
+        else {
+            return FfiLeaderClaimResult::err(OperationStatus::error(
+                OperationStatusCode::RuntimeError,
+                "Failed to convert transaction hash to array.",
+            ));
+        };
 
-    FfiLeaderClaimResult::ok(tx_hash_array)
+        FfiLeaderClaimResult::ok(tx_hash_array)
+    })
 }

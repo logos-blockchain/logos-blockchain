@@ -107,13 +107,15 @@ pub unsafe extern "C" fn get_block(
     node: *const LogosBlockchainNode,
     header_id: *const HeaderId,
 ) -> FfiGetBlockResult {
-    return_error_if_null_pointer!(node);
-    return_error_if_null_pointer!(header_id);
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(node);
+        return_error_if_null_pointer!(header_id);
 
-    let header_id = unsafe { *header_id };
-    let node = unsafe { &*node };
-    let json_cstring = unwrap_or_return_error!(get_block_sync(node, header_id));
-    FfiGetBlockResult::ok(json_cstring.into_raw())
+        let header_id = unsafe { *header_id };
+        let node = unsafe { &*node };
+        let json_cstring = unwrap_or_return_error!(get_block_sync(node, header_id));
+        FfiGetBlockResult::ok(json_cstring.into_raw())
+    })
 }
 
 /// Gets a transaction by its hash as a JSON string.
@@ -210,13 +212,15 @@ pub unsafe extern "C" fn get_transaction(
     node: *const LogosBlockchainNode,
     tx_hash: *const TxHash,
 ) -> FfiGetTransactionResult {
-    return_error_if_null_pointer!(node);
-    return_error_if_null_pointer!(tx_hash);
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(node);
+        return_error_if_null_pointer!(tx_hash);
 
-    let node = unsafe { &*node };
-    let tx_hash = unsafe { into_tx_hash(tx_hash) };
-    let json_cstring = unwrap_or_return_error!(get_transaction_sync(node, tx_hash));
-    FfiGetTransactionResult::ok(json_cstring.into_raw())
+        let node = unsafe { &*node };
+        let tx_hash = unsafe { into_tx_hash(tx_hash) };
+        let json_cstring = unwrap_or_return_error!(get_transaction_sync(node, tx_hash));
+        FfiGetTransactionResult::ok(json_cstring.into_raw())
+    })
 }
 
 /// Gets blocks in a slot range as a JSON array string.
@@ -306,22 +310,24 @@ pub unsafe extern "C" fn get_blocks(
     from_slot: u64,
     to_slot: u64,
 ) -> FfiGetBlocksResult {
-    return_error_if_null_pointer!(node);
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(node);
 
-    let Ok(from_slot) = usize::try_from(from_slot) else {
-        return FfiGetBlocksResult::err(OperationStatus::error(
-            OperationStatusCode::ValidationError,
-            "from_slot overflow.",
-        ));
-    };
-    let Ok(to_slot) = usize::try_from(to_slot) else {
-        return FfiGetBlocksResult::err(OperationStatus::error(
-            OperationStatusCode::ValidationError,
-            "to_slot overflow.",
-        ));
-    };
+        let Ok(from_slot) = usize::try_from(from_slot) else {
+            return FfiGetBlocksResult::err(OperationStatus::error(
+                OperationStatusCode::ValidationError,
+                "from_slot overflow.",
+            ));
+        };
+        let Ok(to_slot) = usize::try_from(to_slot) else {
+            return FfiGetBlocksResult::err(OperationStatus::error(
+                OperationStatusCode::ValidationError,
+                "to_slot overflow.",
+            ));
+        };
 
-    let node = unsafe { &*node };
-    let json_cstring = unwrap_or_return_error!(get_blocks_sync(node, from_slot, to_slot));
-    FfiGetBlocksResult::ok(json_cstring.into_raw())
+        let node = unsafe { &*node };
+        let json_cstring = unwrap_or_return_error!(get_blocks_sync(node, from_slot, to_slot));
+        FfiGetBlocksResult::ok(json_cstring.into_raw())
+    })
 }

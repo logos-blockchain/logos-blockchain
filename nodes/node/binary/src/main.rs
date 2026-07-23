@@ -90,6 +90,10 @@ async fn main() -> Result<()> {
         build_run_config(user_config, cli_args)?
     };
 
+    // Standalone daemon: on panic, log and exit the process. The embedded C
+    // bindings deliberately do NOT install this hook (see `install_panic_hook`).
+    logos_blockchain_node::install_panic_hook();
+
     let app = run_node_from_config(run_config, None)
         .map_err(|e| eyre!("{e}"))
         .inspect_err(|e| {

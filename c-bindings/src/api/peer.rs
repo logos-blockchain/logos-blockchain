@@ -34,25 +34,27 @@ pub type FfiGetPeerIdResult = FfiStatusResult<*mut c_char>;
 #[must_use]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_peer_id(config_path: *const c_char) -> FfiGetPeerIdResult {
-    return_error_if_null_pointer!(config_path);
+    crate::macros::guard_ffi(|| {
+        return_error_if_null_pointer!(config_path);
 
-    let config_path = unsafe { cstr_to_path(config_path) };
+        let config_path = unsafe { cstr_to_path(config_path) };
 
-    let peer_id = match lb_node::cli::get_peer_id::peer_id_from_config(&config_path) {
-        Ok(peer_id) => peer_id,
-        Err(error) => {
-            return FfiGetPeerIdResult::err(OperationStatus::error(
-                OperationStatusCode::ConfigurationError,
-                format!("Error deriving peer id: {error:?}"),
-            ));
+        let peer_id = match lb_node::cli::get_peer_id::peer_id_from_config(&config_path) {
+            Ok(peer_id) => peer_id,
+            Err(error) => {
+                return FfiGetPeerIdResult::err(OperationStatus::error(
+                    OperationStatusCode::ConfigurationError,
+                    format!("Error deriving peer id: {error:?}"),
+                ));
+            }
+        };
+
+        match CString::new(peer_id.to_string()) {
+            Ok(peer_id) => FfiGetPeerIdResult::ok(peer_id.into_raw()),
+            Err(error) => FfiGetPeerIdResult::err(OperationStatus::error(
+                OperationStatusCode::RuntimeError,
+                format!("Failed to create CString: {error}"),
+            )),
         }
-    };
-
-    match CString::new(peer_id.to_string()) {
-        Ok(peer_id) => FfiGetPeerIdResult::ok(peer_id.into_raw()),
-        Err(error) => FfiGetPeerIdResult::err(OperationStatus::error(
-            OperationStatusCode::RuntimeError,
-            format!("Failed to create CString: {error}"),
-        )),
-    }
+    })
 }
