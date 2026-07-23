@@ -12,7 +12,7 @@ use crate::{
     LogosBlockchainNode, OperationStatus,
     callbacks::{BoxedCallback, CCallback, into_boxed_callback},
     errors::OperationStatusCode,
-    return_error_if_null_pointer,
+    logging, return_error_if_null_pointer,
 };
 
 /// Serializes `value` as JSON and invokes `on_event` with a pointer to the
@@ -30,7 +30,6 @@ fn emit_json<T: Serialize>(value: &T, on_event: &mut BoxedCallback<*const c_char
 pub fn subscribe_to_new_blocks_sync(
     node: &LogosBlockchainNode,
     mut on_event: BoxedCallback<*const c_char>,
-    mut on_end: BoxedCallback<OperationStatus>,
 ) -> OperationStatus {
     let runtime_handler = node.get_runtime_handle();
     let overwatch = node.get_overwatch_handle();
@@ -56,7 +55,7 @@ pub fn subscribe_to_new_blocks_sync(
             while let Some(event) = stream.next().await {
                 emit_json(&ApiProcessedBlockEventOwned::from(event), &mut on_event);
             }
-            on_end(OperationStatus::OK);
+            on_event(std::ptr::null());
         });
         OperationStatus::OK
     })
@@ -72,20 +71,17 @@ pub fn subscribe_to_new_blocks_sync(
 /// # Arguments
 ///
 /// - `node`: A non-null pointer to a running [`LogosBlockchainNode`] instance.
-/// - `callback_per_event`: Called with a pointer to a NUL-terminated JSON
-///   event. The pointer is only valid for the duration of the call — copy the
-///   data if it is needed longer. Declared unsafe extern "C"; must be
-///   thread-safe.
-/// - `on_stream_end`: Called exactly once when the event stream ends (e.g. on
-///   node shutdown), after which no further events are delivered. Re-subscribe
-///   to keep receiving events. If the passed status carries a non-null
-///   `message`, the callee must free it with
-///   [`free_cstring`](super::free_cstring).
+/// - `callback_per_event`: Called with a pointer to a NUL-terminated JSON event
+///   per new block. The pointer is only valid for the duration of the call —
+///   copy the data if it is needed longer. When the stream ends (e.g. on node
+///   shutdown) the callback is called exactly once with NULL, after which no
+///   further events are delivered; re-subscribe to keep receiving events.
+///   Declared unsafe extern "C"; must be thread-safe.
 ///
 /// # Returns
 ///
 /// An [`OperationStatus`] indicating whether the subscription was established.
-/// On error, `on_stream_end` is never called.
+/// On error, the callback is never called.
 ///
 /// # Safety
 ///
@@ -94,22 +90,16 @@ pub fn subscribe_to_new_blocks_sync(
 pub unsafe extern "C" fn subscribe_to_new_blocks(
     node: *const LogosBlockchainNode,
     callback_per_event: CCallback<*const c_char>,
-    on_stream_end: CCallback<OperationStatus>,
 ) -> OperationStatus {
     return_error_if_null_pointer!(node);
     let node = unsafe { &*node };
-    subscribe_to_new_blocks_sync(
-        node,
-        into_boxed_callback(callback_per_event),
-        into_boxed_callback(on_stream_end),
-    )
+    subscribe_to_new_blocks_sync(node, into_boxed_callback(callback_per_event))
 }
 
 #[must_use]
 pub fn subscribe_to_lib_blocks_sync(
     node: &LogosBlockchainNode,
     mut on_event: BoxedCallback<*const c_char>,
-    mut on_end: BoxedCallback<OperationStatus>,
 ) -> OperationStatus {
     let runtime_handler = node.get_runtime_handle();
     let overwatch = node.get_overwatch_handle();
@@ -131,15 +121,15 @@ pub fn subscribe_to_lib_blocks_sync(
                         emit_json(&block_info, &mut on_event);
                     }
                     Err(e) => {
-                        on_end(OperationStatus::error(
-                            OperationStatusCode::ServiceError,
-                            format!("LIB block stream failed: {e}"),
-                        ));
-                        return;
+                        logging::error!(
+                            "subscribe_to_lib_blocks_sync",
+                            "LIB block stream failed: {e}"
+                        );
+                        break;
                     }
                 }
             }
-            on_end(OperationStatus::OK);
+            on_event(std::ptr::null());
         });
         OperationStatus::OK
     })
@@ -154,19 +144,17 @@ pub fn subscribe_to_lib_blocks_sync(
 /// # Arguments
 ///
 /// - `node`: A non-null pointer to a running [`LogosBlockchainNode`] instance.
-/// - `callback_per_event`: Called with a pointer to a NUL-terminated JSON
-///   event. The pointer is only valid for the duration of the call — copy the
-///   data if it is needed longer. Declared unsafe extern "C"; must be
-///   thread-safe.
-/// - `on_stream_end`: Called exactly once when the stream ends or fails, after
-///   which no further events are delivered. Re-subscribe to keep receiving
-///   events. If the passed status carries a non-null `message`, the callee must
-///   free it with [`free_cstring`](super::free_cstring).
+/// - `callback_per_event`: Called with a pointer to a NUL-terminated JSON event
+///   per finalized block. The pointer is only valid for the duration of the
+///   call — copy the data if it is needed longer. When the stream ends or fails
+///   the callback is called exactly once with NULL, after which no further
+///   events are delivered; re-subscribe to keep receiving events. Declared
+///   unsafe extern "C"; must be thread-safe.
 ///
 /// # Returns
 ///
 /// An [`OperationStatus`] indicating whether the subscription was established.
-/// On error, `on_stream_end` is never called.
+/// On error, the callback is never called.
 ///
 /// # Safety
 ///
@@ -175,13 +163,8 @@ pub fn subscribe_to_lib_blocks_sync(
 pub unsafe extern "C" fn subscribe_to_lib_blocks(
     node: *const LogosBlockchainNode,
     callback_per_event: CCallback<*const c_char>,
-    on_stream_end: CCallback<OperationStatus>,
 ) -> OperationStatus {
     return_error_if_null_pointer!(node);
     let node = unsafe { &*node };
-    subscribe_to_lib_blocks_sync(
-        node,
-        into_boxed_callback(callback_per_event),
-        into_boxed_callback(on_stream_end),
-    )
+    subscribe_to_lib_blocks_sync(node, into_boxed_callback(callback_per_event))
 }
