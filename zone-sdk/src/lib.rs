@@ -67,10 +67,13 @@ mod test_support;
 
 pub use lb_common_http_client::{CommonHttpClient, Slot};
 pub use lb_core::mantle::ops::channel::Ed25519PublicKey;
-use lb_core::mantle::{
-    Value,
-    ledger::Inputs,
-    ops::channel::{MsgId, deposit::Metadata, inscribe::Inscription},
+use lb_core::{
+    crypto::Hash,
+    mantle::{
+        TxHash, Value,
+        ledger::Inputs,
+        ops::channel::{MsgId, deposit::Metadata, inscribe::Inscription},
+    },
 };
 
 /// A message from a zone channel, included/finalized in Bedrock
@@ -96,8 +99,12 @@ pub struct ZoneBlock {
 /// A deposit from a zone channel, included/finalized in Bedrock
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Deposit {
-    /// Notes consumed by the deposit. Acts as the natural unique key (notes
-    /// are spent-once at the UTXO layer).
+    /// The transaction hash containing this deposit op.
+    pub tx_hash: TxHash,
+    /// The `op_id` of the deposit op: its stable identity within the tx,
+    /// matching `DepositInfo::op_id` on the sequencer side.
+    pub op_id: Hash,
+    /// Notes consumed by the deposit (spent-once at the UTXO layer).
     pub inputs: Inputs,
     /// Total value deposited, sourced from the block's events.
     pub amount: Value,
@@ -108,6 +115,10 @@ pub struct Deposit {
 /// An withdrawal from a zone channel, included/finalized in Bedrock
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Withdraw {
+    /// The transaction hash containing this withdraw op.
+    pub tx_hash: TxHash,
+    /// The `op_id` of the withdraw op: its stable identity within the tx.
+    pub op_id: Hash,
     /// The channel notes released by the withdrawal
     pub inputs: Inputs,
 }

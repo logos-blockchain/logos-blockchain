@@ -12,7 +12,10 @@ use lb_core::{
     block::Block,
     events::Events,
     header::HeaderId,
-    mantle::{SignedMantleTx, Transaction, TxHash, channel::ChannelState, ops::channel::ChannelId},
+    mantle::{
+        SignedMantleTx, Transaction, TxHash, channel::ChannelState, ops::channel::ChannelId,
+        transactions::states::Preverified,
+    },
     sdp::{Declaration, DeclarationId},
 };
 use lb_log_targets::api;
@@ -56,11 +59,15 @@ pub struct BlockWithChainState<Tx> {
 }
 
 pub type MempoolService<StorageAdapter, RuntimeServiceId> = TxMempoolService<
-    MempoolNetworkAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash, RuntimeServiceId>,
+    MempoolNetworkAdapter<
+        SignedMantleTx<Preverified>,
+        <SignedMantleTx<Preverified> as Transaction>::Hash,
+        RuntimeServiceId,
+    >,
     Mempool<
         HeaderId,
-        SignedMantleTx,
-        <SignedMantleTx as Transaction>::Hash,
+        SignedMantleTx<Preverified>,
+        <SignedMantleTx<Preverified> as Transaction>::Hash,
         StorageAdapter,
         RuntimeServiceId,
     >,
@@ -103,18 +110,23 @@ pub async fn mantle_mempool_metrics<StorageAdapter, RuntimeServiceId>(
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Key = <SignedMantleTx as Transaction>::Hash,
-            Item = SignedMantleTx,
+            Key = <SignedMantleTx<Preverified> as Transaction>::Hash,
+            Item = SignedMantleTx<Preverified>,
         > + Clone
         + 'static,
     StorageAdapter::Error: Debug,
     RuntimeServiceId: Debug
+        + Clone
         + Sync
         + Send
         + Display
+        + 'static
+        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
         + AsServiceId<MempoolService<StorageAdapter, RuntimeServiceId>>,
 {
-    let relay = handle.relay().await?;
+    let relay = handle
+        .relay::<MempoolService<StorageAdapter, RuntimeServiceId>>()
+        .await?;
     let (sender, receiver) = oneshot::channel();
     relay
         .send(MempoolMsg::Metrics {
@@ -128,23 +140,28 @@ where
 
 pub async fn mantle_mempool_status<StorageAdapter, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-    items: Vec<<SignedMantleTx as Transaction>::Hash>,
+    items: Vec<<SignedMantleTx<Preverified> as Transaction>::Hash>,
 ) -> Result<Vec<Status>, super::DynError>
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Key = <SignedMantleTx as Transaction>::Hash,
-            Item = SignedMantleTx,
+            Key = <SignedMantleTx<Preverified> as Transaction>::Hash,
+            Item = SignedMantleTx<Preverified>,
         > + Clone
         + 'static,
     StorageAdapter::Error: Debug,
     RuntimeServiceId: Debug
+        + Clone
         + Sync
         + Send
         + Display
+        + 'static
+        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
         + AsServiceId<MempoolService<StorageAdapter, RuntimeServiceId>>,
 {
-    let relay = handle.relay().await?;
+    let relay = handle
+        .relay::<MempoolService<StorageAdapter, RuntimeServiceId>>()
+        .await?;
     let (sender, receiver) = oneshot::channel();
     relay
         .send(MempoolMsg::Status {

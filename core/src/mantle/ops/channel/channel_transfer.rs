@@ -5,7 +5,7 @@ use crate::{
     mantle::{
         TxHash,
         channel::{Channels, Error},
-        ledger::{Inputs, Operation, Outputs, Utxos},
+        ledger::{Inputs, Operation, Outputs, Utxo, Utxos},
         nom::{NomCodec, NomEncode as _},
         ops::{OpId, channel::ChannelId},
     },
@@ -19,6 +19,12 @@ pub struct ChannelTransferOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
     pub outputs: Outputs,
+}
+
+impl ChannelTransferOp {
+    pub fn utxos(&self) -> impl Iterator<Item = Utxo> {
+        self.outputs.utxos(self)
+    }
 }
 
 impl OpId for ChannelTransferOp {
@@ -116,7 +122,7 @@ impl Operation<ChannelTransferValidationContext<'_>> for ChannelTransferOp {
 
         // Add the outputs to the ledger and register them as channel notes.
         ctx.utxos = self.outputs.execute(ctx.utxos, self);
-        for utxo in self.outputs.utxos(self) {
+        for utxo in self.utxos() {
             ctx.channels = ctx
                 .channels
                 .register_channel_note(&utxo.id(), &self.channel_id)?;

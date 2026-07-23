@@ -9,13 +9,12 @@ use lb_core::{
     block::BlockNumber,
     events::{HeaderEvent, TxEvent},
     mantle::{
-        NoteId, OpProof, TxHash, Utxo, Value,
+        NoteId, OpProof, Utxo, Value,
         channel::Channels,
         ledger::Operation,
         ops::sdp::{
-            SDPActiveExecutionContext, SDPActiveOp, SDPActiveValidationContext,
-            SDPDeclareExecutionContext, SDPDeclareOp, SDPDeclareValidationContext,
-            SDPWithdrawExecutionContext, SDPWithdrawOp, SDPWithdrawValidationContext,
+            SDPActiveExecutionContext, SDPActiveOp, SDPDeclareExecutionContext, SDPDeclareOp,
+            SDPDeclareValidationContext, SDPWithdrawExecutionContext, SDPWithdrawOp,
             declare::SDPDeclareGenesisValidationContext,
         },
     },
@@ -26,7 +25,6 @@ use lb_core::{
     },
 };
 use lb_cryptarchia_engine::Epoch;
-use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use rewards::{Error as RewardsError, Rewards};
 use tracing::debug;
 
@@ -120,8 +118,6 @@ pub struct ServiceRewardsParameters {
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum Error {
-    // #[error("Invalid Sdp state transition: {0:?}")]
-    // SdpStateError(#[from] DeclarationStateError),
     #[error("Sdp declaration id not found: {0:?}")]
     DeclarationNotFound(DeclarationId),
     #[error("Locked period did not pass yet")]
@@ -408,6 +404,8 @@ impl SdpLedger {
         };
 
         // Validate SDP Declare
+        // TODO: Genesis has a different verification flow than `SignedMantleTx`.
+        // Refactor into a   type state.
         op.validate(&SDPDeclareGenesisValidationContext {
             utxo_tree,
             channels,
@@ -434,37 +432,16 @@ impl SdpLedger {
         Ok((self, events))
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "The declaration is validated against several independent pieces of ledger state."
-    )]
     pub fn try_apply_sdp_declaration(
         mut self,
         utxo_tree: &UtxoTree,
-        channels: &Channels,
         op: &SDPDeclareOp,
-        zk_sig: &ZkSignature,
-        ed25519_sig: &Ed25519Signature,
-        tx_hash: TxHash,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let Some(service_state) = self.services.get_mut(&op.service_type) else {
             return Err(Error::ServiceNotFound(op.service_type));
         };
 
-        // Validate SDP Declare
-        op.validate(&SDPDeclareValidationContext {
-            utxo_tree,
-            channels,
-            locked_notes: &self.locked_notes,
-            tx_hash: &tx_hash,
-            declare_zk_sig: zk_sig,
-            declare_eddsa_sig: ed25519_sig,
-            declarations: service_state.declarations(),
-            min_stake: &config.min_stake,
-        })?;
-
-        // Execute SDP Declare
         let (result, events) = <SDPDeclareOp as Operation<SDPDeclareValidationContext>>::execute(
             op,
             SDPDeclareExecutionContext {
@@ -484,8 +461,6 @@ impl SdpLedger {
     pub fn apply_active_msg(
         mut self,
         op: &SDPActiveOp,
-        zksig: &ZkSignature,
-        tx_hash: TxHash,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let (service, _) = self.get_service(&op.declaration_id, config)?;
@@ -493,15 +468,6 @@ impl SdpLedger {
             return Err(Error::ServiceNotFound(service));
         };
 
-        //Validate SDP Active
-        op.validate(&SDPActiveValidationContext {
-            declarations: service_state.declarations(),
-            tx_hash: &tx_hash,
-            active_sig: zksig,
-            epoch: self.epoch,
-        })?;
-
-        // Execute SDP Active
         let (result, events) = op.execute(SDPActiveExecutionContext {
             epoch: self.epoch,
             declarations: service_state.declarations_clone(),
@@ -522,8 +488,6 @@ impl SdpLedger {
     pub fn apply_withdrawn_msg(
         mut self,
         op: &SDPWithdrawOp,
-        zksig: &ZkSignature,
-        tx_hash: TxHash,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let (service, _) = self.get_service(&op.declaration_id, config)?;
@@ -531,16 +495,6 @@ impl SdpLedger {
             return Err(Error::ServiceNotFound(service));
         };
 
-        // Validate SDP Withdraw
-        op.validate(&SDPWithdrawValidationContext {
-            declarations: service_state.declarations(),
-            epoch: self.epoch,
-            locked_notes: &self.locked_notes,
-            tx_hash: &tx_hash,
-            sdp_withdraw_sig: zksig,
-        })?;
-
-        // Execute SDP Withdraw
         let (result, events) = op.execute(SDPWithdrawExecutionContext {
             declarations: service_state.declarations_clone(),
             locked_notes: self.locked_notes.clone(),
@@ -625,6 +579,24 @@ impl SdpLedger {
         })
     }
 
+    /// Get the declarations for a given service type.
+    #[must_use]
+    pub fn get_declarations_by_service(&self, service_type: ServiceType) -> Option<&Declarations> {
+        self.services.get(&service_type).map(Service::declarations)
+    }
+
+    /// Get the service type and declarations for a given declaration ID.
+    #[must_use]
+    pub fn get_declarations_by_id(&self, declaration_id: &DeclarationId) -> Option<&Declarations> {
+        self.services.iter().find_map(|(_, service)| {
+            let declarations = service.declarations();
+            declarations
+                .contains_key(declaration_id)
+                .then_some(declarations)
+        })
+    }
+
+    /// Get the service type and parameters for a given declaration ID.
     fn get_service<'a>(
         &self,
         declaration_id: &DeclarationId,
@@ -633,20 +605,16 @@ impl SdpLedger {
         let service = self
             .services
             .iter()
-            .find(|(_, state)| state.contains(declaration_id))
-            .map(|(service, _)| *service)
+            .find_map(|(service_type, service)| {
+                service.contains(declaration_id).then_some(*service_type)
+            })
             .ok_or(Error::DeclarationNotFound(*declaration_id))?;
 
-        let params = config
+        config
             .service_params
             .get(&service)
-            .ok_or(Error::ServiceParamsNotFound(service))?;
-        Ok((service, params))
-    }
-
-    #[cfg(test)]
-    fn get_declarations(&self, service_type: ServiceType) -> Option<&Declarations> {
-        self.services.get(&service_type).map(Service::declarations)
+            .map(|params| (service, params))
+            .ok_or(Error::ServiceParamsNotFound(service))
     }
 }
 
@@ -660,7 +628,7 @@ mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
     use lb_core::{
-        mantle::{ledger::Utxos, ops::sdp::SdpError},
+        mantle::ledger::Utxos,
         sdp::{Locator, SNAPSHOT_FINALIZATION_DELAY},
     };
     use lb_groth16::{AdditiveGroup as _, Fr};
@@ -709,61 +677,6 @@ mod tests {
             (utxo_tree, _) = utxo_tree.insert(utxo.id(), utxo);
         }
         utxo_tree
-    }
-
-    fn apply_declare_with_dummies(
-        utxos: &Utxos,
-        sdp_ledger: SdpLedger,
-        op: &SDPDeclareOp,
-        zk_sk: &ZkKey,
-        signing_key: &Ed25519Key,
-        config: &Config,
-    ) -> Result<SdpLedger, Error> {
-        let (note_sk, _) = utxo_with_sk();
-        let tx_hash = TxHash([0u8; 32]);
-        let zk_sig = ZkKey::multi_sign(&[note_sk, zk_sk.clone()], &tx_hash.to_fr()).unwrap();
-
-        let ed25519_sig = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
-
-        sdp_ledger
-            .try_apply_sdp_declaration(
-                utxos,
-                &Channels::new(),
-                op,
-                &zk_sig,
-                &ed25519_sig,
-                tx_hash,
-                config,
-            )
-            .map(|(sdp_ledger, _)| sdp_ledger)
-    }
-
-    fn apply_active_with_dummies(
-        sdp_ledger: SdpLedger,
-        op: &SDPActiveOp,
-        zk_sk: ZkKey,
-        config: &Config,
-    ) -> Result<SdpLedger, Error> {
-        let tx_hash = TxHash([2u8; 32]);
-        let zk_sig = ZkKey::multi_sign(&[zk_sk], &tx_hash.to_fr()).unwrap();
-        sdp_ledger
-            .apply_active_msg(op, &zk_sig, tx_hash, config)
-            .map(|(sdp_ledger, _)| sdp_ledger)
-    }
-
-    fn apply_withdraw_with_dummies(
-        sdp_ledger: SdpLedger,
-        op: &SDPWithdrawOp,
-        note_sk: ZkKey,
-        zk_key: ZkKey,
-        config: &Config,
-    ) -> Result<SdpLedger, Error> {
-        let tx_hash = TxHash([1u8; 32]);
-        let zk_sig = ZkKey::multi_sign(&[note_sk, zk_key], &tx_hash.to_fr()).unwrap();
-
-        sdp_ledger
-            .apply_withdrawn_msg(op, &zk_sig, tx_hash, config)
-            .map(|(sdp_ledger, _)| sdp_ledger)
     }
 
     const NONCE: Fr = Fr::ZERO;
@@ -852,15 +765,10 @@ mod tests {
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id = declare_op.id();
-        let ledger = apply_declare_with_dummies(
-            &utxo_tree(vec![utxo]),
-            ledger,
-            declare_op,
-            &zk_key,
-            &signing_key,
-            &config,
-        )
-        .unwrap();
+        let ledger = ledger
+            .try_apply_sdp_declaration(&utxo_tree(vec![utxo]), declare_op, &config)
+            .map(|(sdp_ledger, _)| sdp_ledger)
+            .unwrap();
 
         // Advance to epoch 6 without an activity message. The declaration is
         // inactive past epoch 5 (active=3, inactivity=2 -> 3+2 < 6).
@@ -910,15 +818,10 @@ mod tests {
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id = declare_op.id();
-        let ledger = apply_declare_with_dummies(
-            &utxo_tree(vec![utxo]),
-            ledger,
-            declare_op,
-            &zk_key,
-            &signing_key,
-            &config,
-        )
-        .unwrap();
+        let ledger = ledger
+            .try_apply_sdp_declaration(&utxo_tree(vec![utxo]), declare_op, &config)
+            .map(|(sdp_ledger, _)| sdp_ledger)
+            .unwrap();
 
         // `active` is initialized to created + 2.
         let declaration = ledger.get_declaration(&declaration_id).unwrap();
@@ -956,7 +859,7 @@ mod tests {
             .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
             .unwrap();
 
-        let (utxo_sk, utxo) = utxo_with_sk();
+        let (_utxo_sk, utxo) = utxo_with_sk();
         let note_id = utxo.id();
         let signing_key = create_signing_key();
         let zk_key = create_zk_key(1);
@@ -968,15 +871,10 @@ mod tests {
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id = declare_op.id();
-        let ledger = apply_declare_with_dummies(
-            &utxo_tree(vec![utxo]),
-            ledger,
-            declare_op,
-            &zk_key,
-            &signing_key,
-            &config,
-        )
-        .unwrap();
+        let ledger = ledger
+            .try_apply_sdp_declaration(&utxo_tree(vec![utxo]), declare_op, &config)
+            .map(|(sdp_ledger, _)| sdp_ledger)
+            .unwrap();
 
         // Withdraw at epoch 1: `withdrawn = 1 + SNAPSHOT_FINALIZATION_DELAY = 3`.
         let withdraw_op = &SDPWithdrawOp {
@@ -984,8 +882,10 @@ mod tests {
             nonce: 1,
             locked_note_id: note_id,
         };
-        let ledger =
-            apply_withdraw_with_dummies(ledger, withdraw_op, utxo_sk, zk_key, &config).unwrap();
+        let ledger = ledger
+            .apply_withdrawn_msg(withdraw_op, &config)
+            .map(|(sdp_ledger, _)| sdp_ledger)
+            .unwrap();
         let withdraw_at = ledger
             .get_declaration(&declaration_id)
             .unwrap()
@@ -1046,20 +946,16 @@ mod tests {
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id = declare_op.id();
-        let mut ledger = apply_declare_with_dummies(
-            &utxo_tree(vec![utxo]),
-            ledger,
-            declare_op,
-            &zk_key,
-            &signing_key,
-            &config,
-        )
-        .unwrap();
-        let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
+        ledger = ledger
+            .try_apply_sdp_declaration(&utxo_tree(vec![utxo]), declare_op, &config)
+            .map(|(sdp_ledger, _)| sdp_ledger)
+            .unwrap();
+        let declarations = ledger
+            .get_declarations_by_service(ServiceType::BlendNetwork)
+            .unwrap();
         assert!(declarations.contains_key(&declaration_id));
 
-        // Move forward to the epoch 4 where the provider can submit an activity
-        // message.
+        // Move forward to epoch 4 where the provider can submit an activity message.
         // (The provider is expected to provide the service from epoch 3)
         let epoch2 = next_epoch_state(2.into(), &ledger, &config);
         (ledger, _) = ledger.try_apply_header(&config, &epoch1, &epoch2).unwrap();
@@ -1068,7 +964,9 @@ mod tests {
         let epoch4 = next_epoch_state(4.into(), &ledger, &config);
         (ledger, _) = ledger.try_apply_header(&config, &epoch3, &epoch4).unwrap();
         // Check that the declaration is still present.
-        let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
+        let declarations = ledger
+            .get_declarations_by_service(ServiceType::BlendNetwork)
+            .unwrap();
         assert_eq!(
             declarations.get(&declaration_id).unwrap().active,
             Epoch::new(3)
@@ -1085,14 +983,19 @@ mod tests {
                 &config.service_rewards_params.blend,
             ))),
         };
-        let mut ledger = apply_active_with_dummies(ledger, &active_op, zk_key, &config).unwrap();
-        let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
+        ledger = ledger
+            .apply_active_msg(&active_op, &config)
+            .map(|(sdp_ledger, _)| sdp_ledger)
+            .unwrap();
+        let declarations = ledger
+            .get_declarations_by_service(ServiceType::BlendNetwork)
+            .unwrap();
         assert_eq!(
             declarations.get(&declaration_id).unwrap().active,
             Epoch::new(4) // epoch when the activity message is submitted/accepted
         );
 
-        // Move forward to the epoch 7 where declaration will become inactive
+        // Move forward to epoch 7 where declaration will become inactive
         // (active=4, inactivity=2 -> 4+2 < 7).
         let epoch5 = next_epoch_state(5.into(), &ledger, &config);
         (ledger, _) = ledger.try_apply_header(&config, &epoch4, &epoch5).unwrap();
@@ -1100,9 +1003,11 @@ mod tests {
         (ledger, _) = ledger.try_apply_header(&config, &epoch5, &epoch6).unwrap();
         let epoch7 = next_epoch_state(7.into(), &ledger, &config);
         (ledger, _) = ledger.try_apply_header(&config, &epoch6, &epoch7).unwrap();
-        // Nevertheless, the declaration should be still present because no withdraw
+        // Nevertheless, the declaration should be still present because no withdrawal
         // message was submitted.
-        let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
+        let declarations = ledger
+            .get_declarations_by_service(ServiceType::BlendNetwork)
+            .unwrap();
         assert_eq!(
             declarations.get(&declaration_id).unwrap().active,
             Epoch::new(4) // not changed
@@ -1146,15 +1051,10 @@ mod tests {
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id = declare_op.id();
-        let mut ledger = apply_declare_with_dummies(
-            &utxo_tree(vec![utxo]),
-            ledger,
-            declare_op,
-            &zk_key,
-            &signing_key,
-            &config,
-        )
-        .unwrap();
+        ledger = ledger
+            .try_apply_sdp_declaration(&utxo_tree(vec![utxo]), declare_op, &config)
+            .map(|(sdp_ledger, _)| sdp_ledger)
+            .unwrap();
 
         // Advance to epoch 3.
         let epoch2 = next_epoch_state(2.into(), &ledger, &config);
@@ -1181,8 +1081,10 @@ mod tests {
                 &config.service_rewards_params.blend,
             ))),
         };
-        let ledger =
-            apply_active_with_dummies(ledger, &active_op, zk_key.clone(), &config).unwrap();
+        let ledger = ledger
+            .apply_active_msg(&active_op, &config)
+            .map(|(sdp_ledger, _)| sdp_ledger)
+            .unwrap();
 
         // Advance to epoch 5: SDP rewards are distributed
         let epoch5 = next_epoch_state(5.into(), &ledger, &config);
@@ -1225,121 +1127,6 @@ mod tests {
         }
     }
 
-    /// Two declarations in the same service sharing the same `provider_id`
-    /// (different `zk_id` and locators) must be rejected by the SDP
-    /// per-service uniqueness check.
-    #[test]
-    fn rejects_duplicate_provider_id_within_service() {
-        let config = setup(ServiceParameters {
-            inactivity_period: 20.try_into().unwrap(),
-            epoch: 0.into(),
-        });
-        let sdp_ledger = dummy_sdp_ledger(0.into(), &config);
-
-        let signing_key = create_signing_key();
-        let (_sk_a, utxo_a) = utxo_with_sk();
-        let (_sk_b, utxo_b) = utxo_with_sk();
-
-        let declare_a = SDPDeclareOp {
-            service_type: ServiceType::BlendNetwork,
-            locked_note_id: utxo_a.id(),
-            zk_id: create_zk_key(1).to_public_key(),
-            provider_id: ProviderId(signing_key.public_key()),
-            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
-        };
-        let declare_b = SDPDeclareOp {
-            service_type: ServiceType::BlendNetwork,
-            locked_note_id: utxo_b.id(),
-            zk_id: create_zk_key(2).to_public_key(),
-            provider_id: ProviderId(signing_key.public_key()),
-            locators: "/ip4/2.2.2.2/udp/0".parse::<Locator>().unwrap().into(),
-        };
-
-        let utxos = utxo_tree(vec![utxo_a, utxo_b]);
-        let sdp_ledger = apply_declare_with_dummies(
-            &utxos,
-            sdp_ledger,
-            &declare_a,
-            &create_zk_key(1),
-            &signing_key,
-            &config,
-        )
-        .unwrap();
-
-        let result = apply_declare_with_dummies(
-            &utxos,
-            sdp_ledger,
-            &declare_b,
-            &create_zk_key(2),
-            &signing_key,
-            &config,
-        );
-        assert!(
-            matches!(
-                result,
-                Err(Error::SdpOp(SdpError::DuplicateProviderId { .. }))
-            ),
-            "expected DuplicateProviderId, got {result:?}"
-        );
-    }
-
-    /// Two declarations in the same service sharing the same `zk_id`
-    /// (different `provider_id` and locators) must be rejected by the SDP
-    /// per-service uniqueness check.
-    #[test]
-    fn rejects_duplicate_zk_id_within_service() {
-        let config = setup(ServiceParameters {
-            inactivity_period: 20.try_into().unwrap(),
-            epoch: 0.into(),
-        });
-        let sdp_ledger = dummy_sdp_ledger(0.into(), &config);
-
-        let signing_key_a = Ed25519Key::from_bytes(&[1; 32]);
-        let signing_key_b = Ed25519Key::from_bytes(&[2; 32]);
-        let zk_key = create_zk_key(1);
-        let (_sk_a, utxo_a) = utxo_with_sk();
-        let (_sk_b, utxo_b) = utxo_with_sk();
-
-        let declare_a = SDPDeclareOp {
-            service_type: ServiceType::BlendNetwork,
-            locked_note_id: utxo_a.id(),
-            zk_id: zk_key.to_public_key(),
-            provider_id: ProviderId(signing_key_a.public_key()),
-            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
-        };
-        let declare_b = SDPDeclareOp {
-            service_type: ServiceType::BlendNetwork,
-            locked_note_id: utxo_b.id(),
-            zk_id: zk_key.to_public_key(),
-            provider_id: ProviderId(signing_key_b.public_key()),
-            locators: "/ip4/2.2.2.2/udp/0".parse::<Locator>().unwrap().into(),
-        };
-
-        let utxos = utxo_tree(vec![utxo_a, utxo_b]);
-        let sdp_ledger = apply_declare_with_dummies(
-            &utxos,
-            sdp_ledger,
-            &declare_a,
-            &zk_key,
-            &signing_key_a,
-            &config,
-        )
-        .unwrap();
-
-        let result = apply_declare_with_dummies(
-            &utxos,
-            sdp_ledger,
-            &declare_b,
-            &zk_key,
-            &signing_key_b,
-            &config,
-        );
-        assert!(
-            matches!(result, Err(Error::SdpOp(SdpError::DuplicateZkId { .. }))),
-            "expected DuplicateZkId, got {result:?}"
-        );
-    }
-
     /// Once a Blend declaration is withdrawn/removed at its `withdraw_at`
     /// epoch, its `provider_id` and `zk_id` become reusable
     /// — a fresh declaration reusing both must be accepted.
@@ -1352,7 +1139,7 @@ mod tests {
 
         let signing_key = create_signing_key();
         let zk_key = create_zk_key(1);
-        let (utxo_sk_a, utxo_a) = utxo_with_sk();
+        let (_utxo_sk_a, utxo_a) = utxo_with_sk();
         let (_utxo_sk_b, utxo_b) = utxo_with_sk();
 
         let declare_a = SDPDeclareOp {
@@ -1368,30 +1155,20 @@ mod tests {
         let sdp_ledger = dummy_sdp_ledger(0.into(), &config);
         let utxos = utxo_tree(vec![utxo_a, utxo_b]);
 
-        let sdp_ledger = apply_declare_with_dummies(
-            &utxos,
-            sdp_ledger,
-            &declare_a,
-            &zk_key,
-            &signing_key,
-            &config,
-        )
-        .unwrap();
+        let sdp_ledger = sdp_ledger
+            .try_apply_sdp_declaration(&utxos, &declare_a, &config)
+            .map(|(sdp_ledger, _)| sdp_ledger)
+            .unwrap();
 
         // Withdraw A.
-        let withdraw_op = &SDPWithdrawOp {
+        let withdraw_op = SDPWithdrawOp {
             declaration_id: declaration_id_a,
             nonce: 1,
             locked_note_id: utxo_a.id(),
         };
-        let sdp_ledger = apply_withdraw_with_dummies(
-            sdp_ledger,
-            withdraw_op,
-            utxo_sk_a,
-            zk_key.clone(),
-            &config,
-        )
-        .unwrap();
+        let (sdp_ledger, _events) = sdp_ledger
+            .apply_withdrawn_msg(&withdraw_op, &config)
+            .unwrap();
 
         let withdraw_epoch = sdp_ledger
             .get_declaration(&declaration_id_a)
@@ -1423,18 +1200,11 @@ mod tests {
             provider_id: ProviderId(signing_key.public_key()),
             locators: "/ip4/2.2.2.2/udp/0".parse::<Locator>().unwrap().into(),
         };
-        assert!(
-            apply_declare_with_dummies(
-                &utxos,
-                sdp_ledger,
-                &declare_b,
-                &zk_key,
-                &signing_key,
-                &config,
-            )
-            .is_ok(),
-            "declaration reusing A's provider_id and zk_id must be accepted after A is removed"
-        );
+        sdp_ledger
+            .try_apply_sdp_declaration(&utxos, &declare_b, &config)
+            .expect(
+                "Declaration reusing A's provider_id and zk_id must be accepted after A is removed",
+            );
     }
 
     #[test]
@@ -1445,7 +1215,7 @@ mod tests {
         });
 
         let service_a = ServiceType::BlendNetwork;
-        let (utxo_sk, utxo) = utxo_with_sk();
+        let (_utxo_sk, utxo) = utxo_with_sk();
         let note_id = utxo.id();
         let signing_key = create_signing_key();
         let zk_key = create_zk_key(1);
@@ -1464,15 +1234,10 @@ mod tests {
         let sdp_ledger = dummy_sdp_ledger(0.into(), &config);
 
         let utxo_tree = utxo_tree(vec![utxo]);
-        let sdp_ledger = apply_declare_with_dummies(
-            &utxo_tree,
-            sdp_ledger,
-            declare_op,
-            &zk_key,
-            &signing_key,
-            &config,
-        )
-        .unwrap();
+        let sdp_ledger = sdp_ledger
+            .try_apply_sdp_declaration(&utxo_tree, declare_op, &config)
+            .map(|(sdp_ledger, _)| sdp_ledger)
+            .unwrap();
 
         // Verify declaration is present
         assert!(sdp_ledger.get_declaration(&declaration_id).is_some());
@@ -1483,8 +1248,10 @@ mod tests {
             nonce: 1,
             locked_note_id: note_id,
         };
-        let sdp_ledger =
-            apply_withdraw_with_dummies(sdp_ledger, withdraw_op, utxo_sk, zk_key, &config).unwrap();
+        let sdp_ledger = sdp_ledger
+            .apply_withdrawn_msg(withdraw_op, &config)
+            .map(|(sdp_ledger, _)| sdp_ledger)
+            .unwrap();
 
         let withdraw_epoch = sdp_ledger
             .get_declaration(&declaration_id)

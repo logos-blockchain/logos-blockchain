@@ -21,7 +21,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, SignedMantleTx, StorageSize, Transaction, TxHash,
-        gas::MainnetGasConstants,
+        gas::MainnetGasConstants, transactions::states::Preverified,
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
 };
@@ -29,6 +29,7 @@ use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
 use lb_ledger::LedgerState;
 use lb_services_utils::wait_until_services_are_ready;
+use lb_storage_service::StorageService;
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
 use lb_tx_service::{
     TxMempoolService,
@@ -257,7 +258,7 @@ where
         + Send
         + 'static,
     BlendService::BroadcastSettings: Clone + Send + Sync,
-    Mempool: MemPool<Item = SignedMantleTx>
+    Mempool: MemPool<Item = SignedMantleTx<Preverified>>
         + RecoverableMempool<BlockId = HeaderId, Key = TxHash>
         + Send
         + Sync
@@ -287,12 +288,19 @@ where
     ChainNetwork: ChainNetworkServiceData<Tx = Mempool::Item>,
     Wallet: lb_wallet_service::api::WalletServiceData + 'static,
     RuntimeServiceId: Debug
+        + Clone
         + Send
         + Sync
         + Display
         + 'static
         + AsServiceId<Self>
         + AsServiceId<BlendService>
+        + AsServiceId<
+            StorageService<
+                <Mempool::Storage as MempoolStorageAdapter<RuntimeServiceId>>::Backend,
+                RuntimeServiceId,
+            >,
+        >
         + AsServiceId<
             TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
         >
@@ -536,7 +544,7 @@ where
         + Send
         + 'static,
     BlendService::BroadcastSettings: Clone + Send + Sync,
-    Mempool: MemPool<Item = SignedMantleTx>
+    Mempool: MemPool<Item = SignedMantleTx<Preverified>>
         + RecoverableMempool<BlockId = HeaderId, Key = TxHash>
         + Send
         + Sync
@@ -621,9 +629,9 @@ where
             for tx in pending {
                 match ledger_state
                     .clone()
-                    .try_apply_contents::<HeaderId, MainnetGasConstants>(
+                    .try_apply_contents::<_, HeaderId, MainnetGasConstants>(
                         ledger_config,
-                        iter::once(tx.clone()),
+                        iter::once(&tx),
                     ) {
                     Ok((new_state, _events)) => {
                         ledger_state = new_state;
@@ -665,7 +673,7 @@ where
         info!(
             "proposed block {:?} with {} transactions ({} removed)",
             block.header().id(),
-            block.transactions().len(),
+            block.transactions_iter().len(),
             invalid_tx_hashes.len()
         );
 
@@ -764,7 +772,7 @@ where
         let signed_tx = wallet
             .build_leader_claim_tx(
                 tip,
-                ledger_state.mantle_ledger().vouchers_snapshot_root(),
+                *ledger_state.mantle_ledger().vouchers_snapshot_root(),
                 reward_amount,
                 config.funding_pk,
                 config.max_tx_fee,

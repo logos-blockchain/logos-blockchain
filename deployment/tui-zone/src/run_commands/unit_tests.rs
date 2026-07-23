@@ -15,7 +15,7 @@ mod tests {
             inscribe::{Inscription, InscriptionOp},
             withdraw::ChannelWithdrawOp,
         },
-        transactions::{Ops, codec::encode_signed_mantle_tx},
+        transactions::{Ops, codec::encode_signed_mantle_tx, tx::OpsProofs},
     };
     use lb_groth16::{Fr, fr_to_bytes};
     use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key, ZkKey};
@@ -121,7 +121,7 @@ mod tests {
         ensure_tx_hash(&hex::encode(tx.hash().as_ref()), tx.hash()).unwrap();
         assert!(ensure_tx_hash(&hex::encode([1u8; 32]), tx.hash()).is_err());
 
-        let signed_tx = SignedMantleTx::new(tx, Vec::new()).unwrap();
+        let signed_tx = SignedMantleTx::new(tx, OpsProofs::empty());
         let signed_encoded = hex::encode(encode_signed_mantle_tx(&signed_tx));
         assert_eq!(
             decode_signed_mantle_tx_hex(&signed_encoded).unwrap(),
@@ -162,7 +162,7 @@ mod tests {
             build_deposit_transfer(vec![test_utxo(4, 0), test_utxo(10, 1)], public_key, 7).unwrap();
 
         assert_eq!(selected, vec![test_utxo(10, 1)]);
-        let outputs = transfer.outputs.utxos(&transfer).collect::<Vec<_>>();
+        let outputs = transfer.utxos().collect::<Vec<_>>();
         assert_eq!(outputs.len(), 2);
         assert_eq!(outputs[0].note.value, 7);
         assert_eq!(outputs[1].note.value, 3);

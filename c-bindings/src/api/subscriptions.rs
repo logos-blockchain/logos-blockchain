@@ -1,9 +1,10 @@
 use std::ffi::{CString, c_char};
 
 use futures::StreamExt as _;
+use lb_core::mantle::transactions::states::Preverified;
 use lb_node::{
     RocksBackend, RuntimeServiceId, SignedMantleTx,
-    api::serializers::blocks::ApiProcessedBlockEvent, generic_services::CryptarchiaService,
+    api::serializers::blocks::ApiProcessedBlockEventOwned, generic_services::CryptarchiaService,
 };
 use serde::Serialize;
 
@@ -35,7 +36,7 @@ pub fn subscribe_to_new_blocks_sync(
     let overwatch = node.get_overwatch_handle();
     runtime_handler.block_on(async move {
         let stream = match lb_api_service::http::mantle::get_new_blocks_stream::<
-            SignedMantleTx,
+            SignedMantleTx<Preverified>,
             RocksBackend,
             CryptarchiaService<RuntimeServiceId>,
             RuntimeServiceId,
@@ -53,7 +54,7 @@ pub fn subscribe_to_new_blocks_sync(
         runtime_handler.spawn(async move {
             let mut stream = Box::pin(stream);
             while let Some(event) = stream.next().await {
-                emit_json(&ApiProcessedBlockEvent::from(event), &mut on_event);
+                emit_json(&ApiProcessedBlockEventOwned::from(event), &mut on_event);
             }
             on_end(OperationStatus::OK);
         });

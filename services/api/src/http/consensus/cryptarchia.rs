@@ -2,7 +2,10 @@ use std::fmt::{Debug, Display};
 
 use futures::{StreamExt as _, TryStreamExt as _};
 use lb_chain_service::{ChainServiceInfo, ConsensusMsg, CryptarchiaConsensus};
-use lb_core::{header::HeaderId, mantle::SignedMantleTx};
+use lb_core::{
+    header::HeaderId,
+    mantle::{SignedMantleTx, transactions::states::Preverified},
+};
 use lb_ledger::LedgerState;
 use lb_storage_service::backends::rocksdb::RocksBackend;
 use lb_time_service::backends::ntp::NtpTimeBackend;
@@ -11,8 +14,12 @@ use tokio::sync::oneshot;
 
 use crate::http::DynError;
 
-pub type Cryptarchia<RuntimeServiceId> =
-    CryptarchiaConsensus<SignedMantleTx, RocksBackend, NtpTimeBackend, RuntimeServiceId>;
+pub type Cryptarchia<RuntimeServiceId> = CryptarchiaConsensus<
+    SignedMantleTx<Preverified>,
+    RocksBackend,
+    NtpTimeBackend,
+    RuntimeServiceId,
+>;
 
 pub async fn cryptarchia_info<RuntimeServiceId>(
     handle: &OverwatchHandle<RuntimeServiceId>,

@@ -1,8 +1,8 @@
 //! Funded wallet transaction before final signing.
 
 use lb_core::mantle::{
-    OpProof, TxHash,
-    transactions::{MantleTxBuilder, MantleTxContext},
+    TxHash,
+    transactions::{MantleTxBuilder, MantleTxContext, tx::OpsProofs},
 };
 
 use super::{
@@ -15,7 +15,7 @@ pub struct PreparedWalletTransaction {
     funded_builder: MantleTxBuilder,
     context: MantleTxContext,
     tx_hash: TxHash,
-    transfer_proofs: Vec<OpProof>,
+    transfer_proofs: OpsProofs,
     reserved_inputs: WalletReservedInputs,
 }
 
@@ -25,7 +25,7 @@ impl PreparedWalletTransaction {
         funded_builder: MantleTxBuilder,
         context: MantleTxContext,
         tx_hash: TxHash,
-        transfer_proofs: Vec<OpProof>,
+        transfer_proofs: OpsProofs,
         reserved_inputs: WalletReservedInputs,
     ) -> Self {
         Self {
@@ -44,7 +44,7 @@ impl PreparedWalletTransaction {
 
     pub fn sign_with_leading_proofs(
         self,
-        leading_op_proofs: Vec<OpProof>,
+        leading_op_proofs: OpsProofs,
     ) -> Result<SignedWalletTransaction, WalletTransactionError> {
         let Self {
             funded_builder,

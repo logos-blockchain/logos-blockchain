@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use lb_core::mantle::{NoteId, SignedMantleTx, Utxo, ops::Op};
+use lb_core::mantle::{NoteId, SignedMantleTx, Utxo, ops::Op, transactions::states::Unverified};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use thiserror::Error;
 
@@ -92,10 +92,10 @@ impl WalletChainState {
         }
     }
 
-    pub fn apply_transaction(&mut self, tx: &SignedMantleTx) -> ObservedWalletChanges {
+    pub fn apply_transaction(&mut self, tx: &SignedMantleTx<Unverified>) -> ObservedWalletChanges {
         let mut changes = ObservedWalletChanges::default();
 
-        for op in tx.mantle_tx.ops() {
+        for op in tx.mantle_tx().ops() {
             self.apply_op(op, &mut changes);
         }
 
@@ -128,10 +128,7 @@ impl WalletChainState {
                     transfer.inputs.iter().copied(),
                     &mut changes.observed_spends,
                 );
-                self.apply_owned_outputs(
-                    transfer.outputs.utxos(transfer),
-                    &mut changes.observed_outputs,
-                );
+                self.apply_owned_outputs(transfer.utxos(), &mut changes.observed_outputs);
             }
             Op::ChannelDeposit(deposit) => {
                 self.apply_spent_note_ids(
@@ -269,6 +266,7 @@ mod tests {
         MantleTx, Note,
         ledger::Inputs,
         ops::channel::{ChannelId, deposit::DepositOp},
+        transactions::tx::OpsProofs,
     };
 
     use super::*;
@@ -319,7 +317,7 @@ mod tests {
         .expect("tracked wallet keys should be valid");
         chain_state.seed_genesis_utxos(&[deposited]);
 
-        let tx = SignedMantleTx::new_unverified(
+        let tx = SignedMantleTx::new(
             MantleTx(
                 [Op::ChannelDeposit(DepositOp {
                     channel_id: ChannelId::from([0; 32]),
@@ -328,7 +326,7 @@ mod tests {
                 })]
                 .into(),
             ),
-            Vec::new(),
+            OpsProofs::empty(),
         );
 
         let update = chain_state.apply_transaction(&tx);

@@ -11,6 +11,7 @@ use lb_core::{
     mantle::{
         Note, SignedMantleTx, Utxo,
         ops::leader_claim::{VoucherCm, VoucherSecret},
+        transactions::states::Preverified,
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic, check_winning},
     sdp::ServiceParameters,
@@ -114,13 +115,12 @@ async fn get_block_ids() {
     let (storage_tx, storage_rx) = mpsc::channel(10);
     let _storage_svc = spawn_storage_service(storage_rx);
     let (time_tx, _time_rx) = mpsc::channel(10);
-    let relays =
-        CryptarchiaConsensusRelays::<SignedMantleTx, RocksBackend, TestRuntimeServiceId>::new(
-            OutboundRelay::new(broadcast_tx),
-            OutboundRelay::new(storage_tx),
-            OutboundRelay::new(time_tx),
-        )
-        .await;
+    let relays = CryptarchiaConsensusRelays::<_, RocksBackend, TestRuntimeServiceId>::new(
+        OutboundRelay::new(broadcast_tx),
+        OutboundRelay::new(storage_tx),
+        OutboundRelay::new(time_tx),
+    )
+    .await;
     let (state_tx, _state_rx) = watch::channel(None);
     let state_updater = StateUpdater::new(Arc::new(state_tx));
     let (new_block_tx, _new_block_rx) = broadcast::channel(10);
@@ -245,13 +245,12 @@ async fn recovery_blocks_fall_back_to_lib_when_tip_missing_from_storage() {
     let (storage_tx, storage_rx) = mpsc::channel(10);
     let _storage_svc = spawn_storage_service(storage_rx);
     let (time_tx, _time_rx) = mpsc::channel(10);
-    let relays =
-        CryptarchiaConsensusRelays::<SignedMantleTx, RocksBackend, TestRuntimeServiceId>::new(
-            OutboundRelay::new(broadcast_tx),
-            OutboundRelay::new(storage_tx),
-            OutboundRelay::new(time_tx),
-        )
-        .await;
+    let relays = CryptarchiaConsensusRelays::<_, RocksBackend, TestRuntimeServiceId>::new(
+        OutboundRelay::new(broadcast_tx),
+        OutboundRelay::new(storage_tx),
+        OutboundRelay::new(time_tx),
+    )
+    .await;
 
     let lib = [0; 32].into();
     let missing_tip = [1; 32].into();
@@ -278,13 +277,16 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     // request fails.
     drop(storage_rx);
     let (time_tx, _time_rx) = mpsc::channel(10);
-    let relays =
-        CryptarchiaConsensusRelays::<SignedMantleTx, RocksBackend, TestRuntimeServiceId>::new(
-            OutboundRelay::new(broadcast_tx),
-            OutboundRelay::new(storage_tx),
-            OutboundRelay::new(time_tx),
-        )
-        .await;
+    let relays = CryptarchiaConsensusRelays::<
+        SignedMantleTx<Preverified>,
+        RocksBackend,
+        TestRuntimeServiceId,
+    >::new(
+        OutboundRelay::new(broadcast_tx),
+        OutboundRelay::new(storage_tx),
+        OutboundRelay::new(time_tx),
+    )
+    .await;
     let (new_block_tx, mut new_block_rx) = broadcast::channel(10);
     let (lib_tx, mut lib_rx) = broadcast::channel(10);
 
@@ -317,7 +319,7 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     assert!(lib_rx.try_recv().is_err());
 }
 
-fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedMantleTx>) {
+fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedMantleTx<Preverified>>) {
     let k = 3.try_into().unwrap();
     let config = ledger_config(k);
     let genesis_id = [0; 32].into();
@@ -390,7 +392,7 @@ pub fn try_build_block(
     utxo: Utxo,
     key: &ZkKey,
     start_slot: Slot,
-) -> Option<Block<SignedMantleTx>> {
+) -> Option<Block<SignedMantleTx<Preverified>>> {
     let start_slot: u64 = start_slot.into();
     for slot in start_slot..=(start_slot + 1000) {
         let epoch_state = cryptarchia.epoch_state_for_slot(slot.into()).unwrap();
@@ -476,8 +478,10 @@ pub fn spawn_storage_service(
 
 pub struct TestRuntimeServiceId;
 
-impl AsServiceId<CryptarchiaConsensus<SignedMantleTx, RocksBackend, SystemTimeBackend, Self>>
-    for TestRuntimeServiceId
+impl
+    AsServiceId<
+        CryptarchiaConsensus<SignedMantleTx<Preverified>, RocksBackend, SystemTimeBackend, Self>,
+    > for TestRuntimeServiceId
 {
     const SERVICE_ID: Self = Self;
 }

@@ -39,6 +39,8 @@ impl<M: Serialize + DeserializeOwned + Clone> MockTransaction<M> {
 }
 
 impl<M: Serialize + DeserializeOwned + Clone> Transaction for MockTransaction<M> {
+    //noinspection RsTypeCheck: The type is correct, but the linter is confused by
+    // the closure.
     const HASHER: TransactionHasher<Self> = Self::id;
     type Hash = MockTxId;
 

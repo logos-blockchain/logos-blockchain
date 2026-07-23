@@ -163,7 +163,7 @@ pub fn peer_id_from_node_yaml(path: &Path) -> Result<PeerId, StepError> {
     Ok(PeerId::from(keypair.public()))
 }
 
-fn user_config_from_node_yaml(path: &Path) -> Result<UserConfig, StepError> {
+pub(crate) fn user_config_from_node_yaml(path: &Path) -> Result<UserConfig, StepError> {
     let config: UserConfig = {
         let text = fs::read_to_string(path).map_err(|e| StepError::LogicalError {
             message: format!("Failed to read '{}': {e}", path.display()),
