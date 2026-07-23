@@ -50,9 +50,26 @@ pub struct Proposal {
     pub signature: Ed25519Signature,
 }
 
+/// References to transactions that are included in a block proposal.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct References {
-    pub mempool_transactions: Vec<TxHash>,
+    /// Bounded hashes of the transactions that are included in the block
+    /// proposal.
+    pub mempool_transactions: BoundedVec<TxHash, 0, MAX_BLOCK_TRANSACTIONS>,
+}
+
+impl References {
+    /// Constructs a `References` instance from a list of transactions,
+    /// extracting their hashes.
+    #[must_use]
+    pub fn from_block_transactions<Tx>(transactions: BlockTransactions<Tx>) -> Self
+    where
+        Tx: Transaction<Hash = TxHash>,
+    {
+        Self {
+            mempool_transactions: transactions.map(|transaction| Transaction::hash(&transaction)),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -89,11 +106,6 @@ impl Proposal {
     #[must_use]
     pub const fn header(&self) -> &Header {
         &self.header
-    }
-
-    #[must_use]
-    pub const fn references(&self) -> &References {
-        &self.references
     }
 
     #[must_use]
@@ -261,19 +273,14 @@ impl<Tx> Block<Tx> {
         &self.signature
     }
 
+    #[must_use]
     pub fn to_proposal(self) -> Proposal
     where
         Tx: Transaction<Hash = TxHash>,
     {
-        let mempool_transactions: Vec<TxHash> =
-            self.transactions.iter().map(Transaction::hash).collect();
-        let references = References {
-            mempool_transactions,
-        };
-
         Proposal {
             header: self.header,
-            references,
+            references: References::from_block_transactions(self.transactions),
             signature: self.signature,
         }
     }
