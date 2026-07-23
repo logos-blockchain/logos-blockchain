@@ -20,13 +20,10 @@ use lb_core::{
 use lb_log_targets::mempool;
 use lb_network_service::{NetworkService, message::BackendNetworkMsg};
 use lb_services_utils::{
-    overwatch::{
-        JsonFileBackend, RecoveryOperator,
-        recovery::operators::RecoveryBackend as RecoveryBackendTrait,
-    },
+    overwatch::{RecoveryOperator, recovery::operators::RecoveryBackend as RecoveryBackendTrait},
     wait_until_services_are_ready,
 };
-use lb_storage_service::StorageService;
+use lb_storage_service::{StorageService, recovery::StorageRecoveryBackend};
 use overwatch::{
     OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
@@ -65,18 +62,20 @@ type TxMempoolRecoverySettings<Pool, NetworkAdapter, RuntimeServiceId> = TxMempo
     <NetworkAdapter as NetworkAdapterTrait<RuntimeServiceId>>::Settings,
 >;
 
-type TxMempoolRecoveryBackend<Pool, NetworkAdapter, RuntimeServiceId> = JsonFileBackend<
-    TxMempoolRecoveryState<Pool, NetworkAdapter, RuntimeServiceId>,
-    TxMempoolRecoverySettings<Pool, NetworkAdapter, RuntimeServiceId>,
->;
+type TxMempoolRecoveryBackend<Pool, NetworkAdapter, StorageAdapter, RuntimeServiceId> =
+    StorageRecoveryBackend<
+        TxMempoolRecoveryState<Pool, NetworkAdapter, RuntimeServiceId>,
+        TxMempoolRecoverySettings<Pool, NetworkAdapter, RuntimeServiceId>,
+        <StorageAdapter as MempoolStorageAdapter<RuntimeServiceId>>::Backend,
+        RuntimeServiceId,
+    >;
 
-/// A tx mempool service that uses a [`JsonFileBackend`] as a recovery
-/// mechanism.
+/// A tx mempool service that stores recovery state in its storage backend.
 pub type TxMempoolService<MempoolNetworkAdapter, Pool, StorageAdapter, RuntimeServiceId> =
     GenericTxMempoolService<
         Pool,
         MempoolNetworkAdapter,
-        TxMempoolRecoveryBackend<Pool, MempoolNetworkAdapter, RuntimeServiceId>,
+        TxMempoolRecoveryBackend<Pool, MempoolNetworkAdapter, StorageAdapter, RuntimeServiceId>,
         StorageAdapter,
         RuntimeServiceId,
     >;

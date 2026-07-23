@@ -1,7 +1,7 @@
 pub mod api;
 mod states;
 
-use std::{collections::HashMap, num::NonZeroU64, path::PathBuf, time::Duration};
+use std::{collections::HashMap, num::NonZeroU64, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -46,10 +46,12 @@ use lb_ledger::LedgerState;
 use lb_log_targets::wallet;
 use lb_mmr::MerklePath;
 use lb_services_utils::{
-    overwatch::{JsonFileBackend, RecoveryOperator, recovery::backends::FileBackendSettings},
+    overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings},
     wait_until_services_are_ready,
 };
-use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
+use lb_storage_service::{
+    api::chain::StorageChainApi, backends::StorageBackend, recovery::StorageRecoveryBackend,
+};
 use lb_utils::bounded::BoundedError;
 use lb_wallet::{WalletBalance, WalletBlock, WalletError};
 use overwatch::{
@@ -254,7 +256,8 @@ impl WalletMsg {
 pub struct WalletServiceSettings {
     pub known_keys: HashMap<KeyId, ZkPublicKey>,
     pub voucher_master_key_id: KeyId,
-    pub recovery_path: PathBuf,
+    #[serde(skip)]
+    pub recovery_data: RecoveryData,
     /// How much LIB progress a pending note reservation survives before being
     /// evicted. Notes funded into in-flight transactions are excluded from
     /// funding until they are observed spent in a block or this many immutable
@@ -268,13 +271,18 @@ pub const fn default_pending_note_expiry_blocks() -> u64 {
     10
 }
 
-impl FileBackendSettings for WalletServiceSettings {
-    fn recovery_file(&self) -> &PathBuf {
-        &self.recovery_path
+impl StorageRecoverySettings for WalletServiceSettings {
+    const RECOVERY_KEY_SUFFIX: &'static [u8] = b"wallet";
+
+    fn recovery_data(&self) -> &RecoveryData {
+        &self.recovery_data
     }
 }
 
-pub struct WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> {
+pub struct WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
+where
+    Storage: StorageBackend + Send + Sync + 'static,
+{
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     initial_state: RecoveryState,
     _marker: std::marker::PhantomData<(Kms, Cryptarchia, Tx, Storage)>,
@@ -282,10 +290,14 @@ pub struct WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> {
 
 impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> ServiceData
     for WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
+where
+    Storage: StorageBackend + Send + Sync + 'static,
 {
     type Settings = WalletServiceSettings;
     type State = RecoveryState;
-    type StateOperator = RecoveryOperator<JsonFileBackend<Self::State, Self::Settings>>;
+    type StateOperator = RecoveryOperator<
+        StorageRecoveryBackend<Self::State, Self::Settings, Storage, RuntimeServiceId>,
+    >;
     type Message = WalletMsg;
 }
 

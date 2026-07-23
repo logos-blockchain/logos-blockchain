@@ -1,8 +1,8 @@
-use std::{num::NonZeroU64, path::PathBuf};
+use std::num::NonZeroU64;
 
 use lb_core::blend::core_quota;
 use lb_key_management_system_service::{backend::preload::KeyId, keys::UnsecuredEd25519Key};
-use lb_services_utils::overwatch::recovery::backends::FileBackendSettings;
+use lb_services_utils::overwatch::{RecoveryData, StorageRecoverySettings};
 use lb_utils::math::NonNegativeF64;
 use serde::{Deserialize, Serialize};
 
@@ -17,7 +17,7 @@ pub struct StartingBlendConfig<BackendSettings> {
     pub non_ephemeral_signing_key_id: KeyId,
     pub num_blend_layers: NonZeroU64,
     pub minimum_network_size: NonZeroU64,
-    pub recovery_path: PathBuf,
+    pub recovery_data: RecoveryData,
     /// `R_c`: replication factor for data messages.
     pub data_replication_factor: u64,
     pub activity_threshold_sensitivity: u64,
@@ -34,7 +34,6 @@ pub struct RunningBlendConfig<BackendSettings> {
     pub non_ephemeral_signing_key: UnsecuredEd25519Key,
     pub num_blend_layers: NonZeroU64,
     pub minimum_network_size: NonZeroU64,
-    pub recovery_path: PathBuf,
     pub data_replication_factor: u64,
     pub activity_threshold_sensitivity: u64,
 }
@@ -68,9 +67,11 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
     }
 }
 
-impl<BackendSettings> FileBackendSettings for StartingBlendConfig<BackendSettings> {
-    fn recovery_file(&self) -> &PathBuf {
-        &self.recovery_path
+impl<BackendSettings> StorageRecoverySettings for StartingBlendConfig<BackendSettings> {
+    const RECOVERY_KEY_SUFFIX: &'static [u8] = b"blend/core";
+
+    fn recovery_data(&self) -> &RecoveryData {
+        &self.recovery_data
     }
 }
 

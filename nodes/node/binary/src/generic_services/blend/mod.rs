@@ -10,12 +10,25 @@ use lb_blend::{
 };
 use lb_blend_service::{RealProofsVerifier, core::kms::PreloadKMSBackendCorePoQGenerator};
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
+use lb_storage_service::{backends::rocksdb::RocksBackend, recovery::StorageRecoveryBackend};
 use lb_time_service::backends::NtpTimeBackend;
 use libp2p::PeerId;
 
 use crate::generic_services::{CryptarchiaService, SdpService, blend::pol::PolInfoProvider};
 
 pub(crate) mod pol;
+
+pub type BlendCoreRecoveryBackend<RuntimeServiceId> = StorageRecoveryBackend<
+    lb_blend_service::core::CoreServiceState<
+        lb_blend_service::core::backends::libp2p::Libp2pBlendBackendSettings,
+        <lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId> as lb_blend_service::core::network::NetworkAdapter<RuntimeServiceId>>::BroadcastSettings,
+    >,
+    lb_blend_service::core::settings::StartingBlendConfig<
+        lb_blend_service::core::backends::libp2p::Libp2pBlendBackendSettings,
+    >,
+    RocksBackend,
+    RuntimeServiceId,
+>;
 
 pub type BlendCoreService<RuntimeServiceId> = lb_blend_service::core::BlendService<
     lb_blend_service::core::backends::libp2p::Libp2pBlendBackend,
@@ -27,6 +40,7 @@ pub type BlendCoreService<RuntimeServiceId> = lb_blend_service::core::BlendServi
     NtpTimeBackend,
     CryptarchiaService<RuntimeServiceId>,
     PolInfoProvider,
+    BlendCoreRecoveryBackend<RuntimeServiceId>,
     RuntimeServiceId,
 >;
 

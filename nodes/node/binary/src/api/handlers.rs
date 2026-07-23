@@ -386,10 +386,12 @@ where
         + 'static,
     StorageAdapter::Error: Debug,
     RuntimeServiceId: Debug
+        + Clone
         + Send
         + Sync
         + Display
         + 'static
+        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
@@ -438,10 +440,12 @@ where
         + 'static,
     StorageAdapter::Error: Debug,
     RuntimeServiceId: Debug
+        + Clone
         + Send
         + Sync
         + Display
         + 'static
+        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
@@ -701,10 +705,12 @@ where
         + 'static,
     StorageAdapter::Error: Debug,
     RuntimeServiceId: Debug
+        + Clone
         + Sync
         + Send
         + Display
         + 'static
+        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
@@ -760,10 +766,12 @@ where
         + 'static,
     StorageAdapter::Error: Debug,
     RuntimeServiceId: Debug
+        + Clone
         + Send
         + Sync
         + Display
         + 'static
+        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
         + AsServiceId<Cryptarchia<RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<
@@ -803,10 +811,12 @@ where
         + 'static,
     StorageAdapter::Error: Debug,
     RuntimeServiceId: Debug
+        + Clone
         + Send
         + Sync
         + Display
         + 'static
+        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
         + AsServiceId<Cryptarchia<RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<
@@ -848,10 +858,12 @@ where
         + 'static,
     StorageAdapter::Error: Debug,
     RuntimeServiceId: Debug
+        + Clone
         + Send
         + Sync
         + Display
         + 'static
+        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
         + AsServiceId<
             TxMempoolService<
                 MempoolNetworkAdapter<
@@ -951,10 +963,12 @@ where
         + 'static,
     StorageAdapter::Error: Debug,
     RuntimeServiceId: Debug
+        + Clone
         + Display
         + Send
         + Sync
         + 'static
+        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
         + AsServiceId<WalletService>
         + AsServiceId<
             TxMempoolService<
@@ -1719,10 +1733,12 @@ pub mod wallet {
             + 'static,
         StorageAdapter::Error: Debug,
         RuntimeServiceId: Debug
+            + Clone
             + Send
             + Sync
             + Display
             + 'static
+            + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
             + AsServiceId<WalletService>
             + AsServiceId<
                 TxMempoolService<
@@ -1814,10 +1830,12 @@ pub mod wallet {
             + 'static,
         StorageAdapter::Error: Debug,
         RuntimeServiceId: Debug
+            + Clone
             + Display
             + Send
             + Sync
             + 'static
+            + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
             + AsServiceId<WalletService>
             + AsServiceId<
                 TxMempoolService<
@@ -1872,10 +1890,12 @@ pub mod wallet {
             + 'static,
         StorageAdapter::Error: Debug,
         RuntimeServiceId: Debug
+            + Clone
             + Display
             + Send
             + Sync
             + 'static
+            + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
             + AsServiceId<WalletService>
             + AsServiceId<
                 TxMempoolService<
@@ -1930,10 +1950,12 @@ pub mod wallet {
             + 'static,
         StorageAdapter::Error: Debug,
         RuntimeServiceId: Debug
+            + Clone
             + Display
             + Send
             + Sync
             + 'static
+            + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
             + AsServiceId<WalletService>
             + AsServiceId<
                 TxMempoolService<
