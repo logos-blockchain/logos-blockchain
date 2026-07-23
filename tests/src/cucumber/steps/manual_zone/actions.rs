@@ -262,7 +262,7 @@ pub(super) async fn submit_zone_channel_config(
         })?;
     checkpoint_rx.mark_unchanged();
 
-    let (result, post_call_checkpoint, _signed_tx) = handle
+    let ((result, post_call_checkpoint), _signed_tx) = handle
         .channel_config(
             Keys::new_unchecked(authorized_keys),
             posting_timeframe.into(),

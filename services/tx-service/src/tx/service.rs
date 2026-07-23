@@ -20,13 +20,10 @@ use lb_core::{
 use lb_log_targets::mempool;
 use lb_network_service::{NetworkService, message::BackendNetworkMsg};
 use lb_services_utils::{
-    overwatch::{
-        JsonFileBackend, RecoveryOperator,
-        recovery::operators::RecoveryBackend as RecoveryBackendTrait,
-    },
+    overwatch::{RecoveryOperator, recovery::operators::RecoveryBackend as RecoveryBackendTrait},
     wait_until_services_are_ready,
 };
-use lb_storage_service::StorageService;
+use lb_storage_service::{StorageService, recovery::StorageRecoveryBackend};
 use lb_utils::tokio::task::spawn;
 use overwatch::{
     OpaqueServiceResourcesHandle,
@@ -66,18 +63,20 @@ type TxMempoolRecoverySettings<Pool, NetworkAdapter, RuntimeServiceId> = TxMempo
     <NetworkAdapter as NetworkAdapterTrait<RuntimeServiceId>>::Settings,
 >;
 
-type TxMempoolRecoveryBackend<Pool, NetworkAdapter, RuntimeServiceId> = JsonFileBackend<
-    TxMempoolRecoveryState<Pool, NetworkAdapter, RuntimeServiceId>,
-    TxMempoolRecoverySettings<Pool, NetworkAdapter, RuntimeServiceId>,
->;
+type TxMempoolRecoveryBackend<Pool, NetworkAdapter, StorageAdapter, RuntimeServiceId> =
+    StorageRecoveryBackend<
+        TxMempoolRecoveryState<Pool, NetworkAdapter, RuntimeServiceId>,
+        TxMempoolRecoverySettings<Pool, NetworkAdapter, RuntimeServiceId>,
+        <StorageAdapter as MempoolStorageAdapter<RuntimeServiceId>>::Backend,
+        RuntimeServiceId,
+    >;
 
-/// A tx mempool service that uses a [`JsonFileBackend`] as a recovery
-/// mechanism.
+/// A tx mempool service that stores recovery state in its storage backend.
 pub type TxMempoolService<MempoolNetworkAdapter, Pool, StorageAdapter, RuntimeServiceId> =
     GenericTxMempoolService<
         Pool,
         MempoolNetworkAdapter,
-        TxMempoolRecoveryBackend<Pool, MempoolNetworkAdapter, RuntimeServiceId>,
+        TxMempoolRecoveryBackend<Pool, MempoolNetworkAdapter, StorageAdapter, RuntimeServiceId>,
         StorageAdapter,
         RuntimeServiceId,
     >;
@@ -96,7 +95,7 @@ pub struct GenericTxMempoolService<
     <Pool as MemPoolTrait>::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId> + Send + Sync,
     NetworkAdapter::Settings: Clone,
-    RecoveryBackend: RecoveryBackendTrait + Send + Sync,
+    RecoveryBackend: RecoveryBackendTrait<RuntimeServiceId> + Send + Sync,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     initial_state: <Self as ServiceData>::State,
@@ -111,7 +110,7 @@ where
     <Pool as MemPoolTrait>::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId> + Send + Sync,
     NetworkAdapter::Settings: Clone,
-    RecoveryBackend: RecoveryBackendTrait + Send + Sync,
+    RecoveryBackend: RecoveryBackendTrait<RuntimeServiceId> + Send + Sync,
 {
     pub const fn new(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -139,7 +138,7 @@ where
     <Pool as MemPoolTrait>::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId> + Send + Sync,
     NetworkAdapter::Settings: Clone,
-    RecoveryBackend: RecoveryBackendTrait + Send + Sync,
+    RecoveryBackend: RecoveryBackendTrait<RuntimeServiceId> + Send + Sync,
 {
     type Settings = TxMempoolSettings<<Pool as MemPoolTrait>::Settings, NetworkAdapter::Settings>;
     type State = TxMempoolState<
@@ -170,7 +169,7 @@ where
     NetworkAdapter:
         NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item, Key = Pool::Key> + Send + Sync,
     NetworkAdapter::Settings: Clone + Send + Sync + 'static,
-    RecoveryBackend: RecoveryBackendTrait + Send + Sync,
+    RecoveryBackend: RecoveryBackendTrait<RuntimeServiceId> + Send + Sync,
     RuntimeServiceId: Display
         + Debug
         + Sync
@@ -270,7 +269,7 @@ where
     Pool::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item> + Send + Sync,
     NetworkAdapter::Settings: Clone + Send + 'static,
-    RecoveryBackend: RecoveryBackendTrait + Send + Sync,
+    RecoveryBackend: RecoveryBackendTrait<RuntimeServiceId> + Send + Sync,
     RuntimeServiceId: 'static,
 {
     async fn run_event_loop(

@@ -6,6 +6,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{AuthenticatedMantleTx, TxHash},
 };
+use lb_storage_service::StorageService;
 use lb_time_service::{TimeService, TimeServiceMessage, backends::TimeBackend as TimeBackendTrait};
 use lb_tx_service::{
     MempoolMsg, TxMempoolService, backend::RecoverableMempool,
@@ -88,11 +89,18 @@ where
         TimeBackend: TimeBackendTrait,
         TimeBackend::Settings: Clone + Send + Sync + 'static,
         RuntimeServiceId: Debug
+            + Clone
             + Sync
             + Send
             + Display
             + 'static
             + AsServiceId<BlendService>
+            + AsServiceId<
+                StorageService<
+                    <Mempool::Storage as MempoolStorageAdapter<RuntimeServiceId>>::Backend,
+                    RuntimeServiceId,
+                >,
+            >
             + AsServiceId<
                 TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
             >

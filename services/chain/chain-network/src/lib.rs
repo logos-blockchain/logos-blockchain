@@ -25,6 +25,7 @@ pub use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_ledger::EpochState;
 use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
+use lb_storage_service::StorageService;
 use lb_time_service::{TimeService, TimeServiceMessage};
 use lb_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
@@ -208,6 +209,7 @@ where
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
     RuntimeServiceId: Debug
+        + Clone
         + Send
         + Sync
         + Display
@@ -215,6 +217,12 @@ where
         + AsServiceId<Self>
         + AsServiceId<Cryptarchia>
         + AsServiceId<NetworkService<NetAdapter::Backend, RuntimeServiceId>>
+        + AsServiceId<
+            StorageService<
+                <Mempool::Storage as MempoolStorageAdapter<RuntimeServiceId>>::Backend,
+                RuntimeServiceId,
+            >,
+        >
         + AsServiceId<
             TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
         >
@@ -690,7 +698,7 @@ where
 
     fn log_received_block(block: &Block<Mempool::Item>) {
         let content_size = 0; // TODO: calculate the actual content size
-        let transactions = block.transactions().len();
+        let transactions = block.transactions_iter().len();
 
         trace!(
             counter.received_blocks = 1,
@@ -932,7 +940,7 @@ where
 
     let (tip, reorged_txs) = cryptarchia.apply_block(block.clone()).await?;
     let reorged_tx_count = reorged_txs.len();
-    let included_tx_count = block.transactions().len();
+    let included_tx_count = block.transactions_iter().len();
 
     // Remove included content from mempool if the block was applied to the honest
     // chain. Otherwise, we keep them in mempool, so they can be included to the
@@ -947,7 +955,7 @@ where
         mempool_adapter
             .remove_transactions(
                 &block
-                    .transactions()
+                    .transactions_iter()
                     .map(Transaction::hash)
                     .collect::<Vec<_>>(),
             )

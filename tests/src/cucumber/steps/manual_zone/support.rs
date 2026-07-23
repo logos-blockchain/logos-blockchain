@@ -26,7 +26,7 @@ use lb_core::mantle::{
         },
         transfer::TransferOp,
     },
-    transactions::{builder::MantleTxBuilder, tx::OpsProofs},
+    transactions::{builder::MantleTxBuilder, states::Unverified, tx::OpsProofs},
 };
 use lb_http_api_common::bodies::{
     channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
@@ -1322,7 +1322,7 @@ pub async fn wait_for_transactions_finalized(
                 })?
             {
                 for tx in &block.transactions {
-                    let hash = tx.mantle_tx.hash();
+                    let hash = tx.mantle_tx().hash();
                     if expected.contains(&hash) {
                         found.insert(hash);
                     }
@@ -1465,10 +1465,7 @@ pub async fn submit_atomic_zone_deposit(
             OpProof::Ed25519Sig(sequencer_sig),
         ]
         .into(),
-    )
-    .map_err(|error| ZoneTestError::SubmitAtomicDeposit {
-        message: error.to_string(),
-    })?;
+    );
 
     let (result, _cp) = client
         .submit_signed_tx(signed_tx, msg_id)
@@ -1491,7 +1488,7 @@ async fn build_funded_custom_tx(
     funding_pk: ZkPublicKey,
     payloads: &[Inscription],
     mut parent: MsgId,
-) -> Result<(SignedMantleTx, MsgId), ZoneTestError> {
+) -> Result<(SignedMantleTx<Unverified>, MsgId), ZoneTestError> {
     let signer = signing_key.public_key();
     let mut tx_builder = MantleTxBuilder::new();
     for payload in payloads {
@@ -1536,11 +1533,7 @@ async fn build_funded_custom_tx(
                 message: format!("too many operation proofs: {error:?}"),
             })?;
     }
-    let signed_tx = SignedMantleTx::new(funded_tx, ops_proofs).map_err(|error| {
-        ZoneTestError::BuildCustomTx {
-            message: format!("assembling the signed tx failed: {error:?}"),
-        }
-    })?;
+    let signed_tx = SignedMantleTx::new(funded_tx, ops_proofs);
 
     Ok((signed_tx, parent))
 }

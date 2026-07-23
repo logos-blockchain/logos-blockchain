@@ -59,7 +59,7 @@ use lb_log_targets::blend;
 use lb_network_service::NetworkService;
 use lb_sdp_service::SdpMessage;
 use lb_services_utils::{
-    overwatch::{JsonFileBackend, RecoveryOperator},
+    overwatch::{RecoveryOperator, recovery::operators::RecoveryBackend as RecoveryBackendTrait},
     wait_until_services_are_ready,
 };
 use lb_time_service::TimeService;
@@ -130,10 +130,16 @@ pub struct BlendService<
     TimeBackend,
     ChainService,
     PolInfoProvider,
+    StateStorage,
     RuntimeServiceId,
 > where
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
     Network: NetworkAdapter<RuntimeServiceId>,
+    StateStorage: RecoveryBackendTrait<
+            RuntimeServiceId,
+            State = RecoveryServiceState<Backend::Settings, Network::BroadcastSettings>,
+        > + Send
+        + Sync,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     last_saved_state: Option<ServiceState<Backend::Settings, Network::BroadcastSettings>>,
@@ -144,6 +150,7 @@ pub struct BlendService<
         TimeBackend,
         ChainService,
         PolInfoProvider,
+        StateStorage,
     )>,
 }
 
@@ -157,6 +164,7 @@ impl<
     TimeBackend,
     ChainService,
     PolInfoProvider,
+    StateStorage,
     RuntimeServiceId,
 > ServiceData
     for BlendService<
@@ -169,20 +177,21 @@ impl<
         TimeBackend,
         ChainService,
         PolInfoProvider,
+        StateStorage,
         RuntimeServiceId,
     >
 where
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
     Network: NetworkAdapter<RuntimeServiceId>,
+    StateStorage: RecoveryBackendTrait<
+            RuntimeServiceId,
+            State = RecoveryServiceState<Backend::Settings, Network::BroadcastSettings>,
+        > + Send
+        + Sync,
 {
     type Settings = StartingBlendConfig<Backend::Settings>;
     type State = RecoveryServiceState<Backend::Settings, Network::BroadcastSettings>;
-    type StateOperator = RecoveryOperator<
-        JsonFileBackend<
-            RecoveryServiceState<Backend::Settings, Network::BroadcastSettings>,
-            StartingBlendConfig<Backend::Settings>,
-        >,
-    >;
+    type StateOperator = RecoveryOperator<StateStorage>;
     type Message = ServiceMessage<Network::BroadcastSettings, NodeId>;
 }
 
@@ -197,6 +206,7 @@ impl<
     TimeBackend,
     ChainService,
     PolInfoProvider,
+    StateStorage,
     RuntimeServiceId,
 > ServiceCore<RuntimeServiceId>
     for BlendService<
@@ -209,6 +219,7 @@ impl<
         TimeBackend,
         ChainService,
         PolInfoProvider,
+        StateStorage,
         RuntimeServiceId,
     >
 where
@@ -222,6 +233,11 @@ where
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
     ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
+    StateStorage: RecoveryBackendTrait<
+            RuntimeServiceId,
+            State = RecoveryServiceState<Backend::Settings, Network::BroadcastSettings>,
+        > + Send
+        + Sync,
     RuntimeServiceId: AsServiceId<NetworkService<Network::Backend, RuntimeServiceId>>
         + AsServiceId<SdpService>
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
@@ -353,7 +369,6 @@ where
             non_ephemeral_signing_key,
             num_blend_layers: blend_config.num_blend_layers,
             minimum_network_size: blend_config.minimum_network_size,
-            recovery_path: blend_config.recovery_path.clone(),
             scheduler: blend_config.scheduler,
             time: blend_config.time,
             zk: blend_config.zk,

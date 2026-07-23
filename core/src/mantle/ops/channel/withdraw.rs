@@ -47,7 +47,7 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
     type Error = Error;
 
     fn validate(&self, ctx: &WithdrawValidationContext<'_>) -> Result<(), Self::Error> {
-        // Check that the channel exist
+        // Check that the channel exists
         let channel =
             ctx.channels
                 .channels

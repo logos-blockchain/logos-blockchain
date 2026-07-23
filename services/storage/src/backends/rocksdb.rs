@@ -1,4 +1,4 @@
-use std::{num::NonZeroUsize, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -55,6 +55,26 @@ impl RocksBackend {
             rocks: Arc::clone(&self.rocks),
             executor: Box::new(executor),
         }
+    }
+
+    pub(crate) fn load_prefix_entries(
+        &self,
+        prefix: &[u8],
+    ) -> Result<HashMap<Vec<u8>, Bytes>, Error> {
+        let mut entries = HashMap::new();
+        let iterator = self
+            .rocks
+            .iterator(IteratorMode::From(prefix, Direction::Forward));
+
+        for item in iterator {
+            let (key, value) = item?;
+            if !key.starts_with(prefix) {
+                break;
+            }
+            entries.insert(key.to_vec(), Bytes::from(value.to_vec()));
+        }
+
+        Ok(entries)
     }
 }
 
@@ -282,6 +302,44 @@ mod test {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn loads_prefix_entries() {
+        let directory = TempDir::new().unwrap();
+        let settings = RocksBackendSettings {
+            db_path: directory.path().into(),
+            read_only: false,
+            column_family: None,
+        };
+
+        let writer = RocksBackend::new(settings.clone()).unwrap();
+        writer
+            .txn(|database| {
+                database.put(b"recovery/one", b"one")?;
+                database.put(b"recovery/two", b"two")?;
+                database.put(b"unrelated", b"value")?;
+                Ok(None)
+            })
+            .execute()
+            .unwrap();
+        drop(writer);
+
+        let backend = RocksBackend::new(settings).unwrap();
+        let database = Arc::downgrade(&backend.rocks);
+        let entries = backend.load_prefix_entries(b"recovery/").unwrap();
+        drop(backend);
+
+        assert_eq!(
+            entries.get(b"recovery/one".as_slice()),
+            Some(&Bytes::from_static(b"one"))
+        );
+        assert!(database.upgrade().is_none());
+        assert_eq!(
+            entries.get(b"recovery/two".as_slice()),
+            Some(&Bytes::from_static(b"two"))
+        );
+        assert_eq!(entries.get(b"unrelated".as_slice()), None);
+    }
 
     #[tokio::test]
     async fn test_store_load_remove() -> Result<(), <RocksBackend as StorageBackend>::Error> {

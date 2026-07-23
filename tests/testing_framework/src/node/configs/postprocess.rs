@@ -73,7 +73,7 @@ pub fn apply_wallet_genesis_overrides(
     }
 
     let mut transfer_op = genesis_block
-        .transactions()
+        .transactions_iter()
         .next()
         .expect("Genesis block should have a genesis tx")
         .genesis_transfer()

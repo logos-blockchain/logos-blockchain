@@ -3,20 +3,59 @@ use lb_chain_service::Slot;
 use lb_core::{
     block::Block,
     header::{ContentId, Header, HeaderId},
-    mantle::SignedMantleTx,
+    mantle::{SignedMantleTx, transactions::states::VerificationState},
     proofs::leader_proof::Groth16LeaderProof,
 };
 use serde::Serialize;
 
+use crate::api::serializers::transactions::ApiSignedTransaction;
+
 #[derive(Serialize)]
-#[serde(remote = "Block<SignedMantleTx>")]
-pub struct ApiBlockSerializer {
-    #[serde(getter = "Block::header")]
+pub struct ApiBlock<'block> {
     #[serde(with = "ApiHeaderSerializer")]
-    header: Header,
-    #[serde(getter = "Block::transactions_vec")]
-    #[serde(with = "crate::api::serializers::transactions::signed_api_transaction_vec")]
-    transactions: Vec<SignedMantleTx>,
+    header: &'block Header,
+    transactions: Vec<ApiSignedTransaction<'block>>,
+}
+
+impl<'block> ApiBlock<'block> {
+    pub fn serialize<State: VerificationState, Serializer>(
+        block: &'block Block<SignedMantleTx<State>>,
+        serializer: Serializer,
+    ) -> Result<Serializer::Ok, Serializer::Error>
+    where
+        Serializer: serde::Serializer,
+    {
+        Self::from(block).serialize(serializer)
+    }
+}
+
+impl<'block, State: VerificationState> From<&'block Block<SignedMantleTx<State>>>
+    for ApiBlock<'block>
+{
+    fn from(value: &'block Block<SignedMantleTx<State>>) -> Self {
+        let transactions = value
+            .transactions()
+            .iter()
+            .map(ApiSignedTransaction::from)
+            .collect();
+        Self {
+            header: value.header(),
+            transactions,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub struct ApiBlockOwned<State: VerificationState> {
+    #[serde(with = "ApiBlock")]
+    block: Block<SignedMantleTx<State>>,
+}
+
+impl<State: VerificationState> From<Block<SignedMantleTx<State>>> for ApiBlockOwned<State> {
+    fn from(value: Block<SignedMantleTx<State>>) -> Self {
+        Self { block: value }
+    }
 }
 
 #[derive(Serialize)]
@@ -34,15 +73,6 @@ pub struct ApiHeaderSerializer {
     proof_of_leadership: Groth16LeaderProof,
 }
 
-#[derive(Serialize)]
-pub struct ApiBlock(#[serde(with = "ApiBlockSerializer")] Block<SignedMantleTx>);
-
-impl From<Block<SignedMantleTx>> for ApiBlock {
-    fn from(value: Block<SignedMantleTx>) -> Self {
-        Self(value)
-    }
-}
-
 /// API response type for processed block events.
 /// Includes the full block along with the current chain state (tip and LIB).
 ///
@@ -51,26 +81,64 @@ impl From<Block<SignedMantleTx>> for ApiBlock {
 /// represent a newly processed block. Clients should handle events
 /// idempotently.
 #[derive(Serialize)]
-pub struct ApiProcessedBlockEvent {
+pub struct ApiProcessedBlockEvent<'block, State: VerificationState> {
     /// The processed block.
-    #[serde(with = "ApiBlockSerializer")]
-    pub block: Block<SignedMantleTx>,
+    #[serde(with = "ApiBlock")]
+    pub block: &'block Block<SignedMantleTx<State>>,
     /// The current canonical tip after processing this block.
-    pub tip: HeaderId,
-    pub tip_slot: Slot,
+    pub tip: &'block HeaderId,
+    pub tip_slot: &'block Slot,
     /// The current Last Irreversible Block after processing this block.
-    pub lib: HeaderId,
-    pub lib_slot: Slot,
+    pub lib: &'block HeaderId,
+    pub lib_slot: &'block Slot,
 }
 
-impl From<BlockWithChainState<SignedMantleTx>> for ApiProcessedBlockEvent {
-    fn from(value: BlockWithChainState<SignedMantleTx>) -> Self {
+impl<'block, State: VerificationState> ApiProcessedBlockEvent<'block, State> {
+    pub fn serialize<Serializer>(
+        value: &'block BlockWithChainState<SignedMantleTx<State>>,
+        serializer: Serializer,
+    ) -> Result<Serializer::Ok, Serializer::Error>
+    where
+        Serializer: serde::Serializer,
+    {
+        Self::from(value).serialize(serializer)
+    }
+}
+
+impl<'block, State: VerificationState> From<&'block BlockWithChainState<SignedMantleTx<State>>>
+    for ApiProcessedBlockEvent<'block, State>
+{
+    fn from(value: &'block BlockWithChainState<SignedMantleTx<State>>) -> Self {
         Self {
-            block: value.block,
-            tip: value.tip,
-            tip_slot: value.tip_slot,
-            lib: value.lib,
-            lib_slot: value.lib_slot,
+            block: &value.block,
+            tip: &value.tip,
+            tip_slot: &value.tip_slot,
+            lib: &value.lib,
+            lib_slot: &value.lib_slot,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub struct ApiProcessedBlockEventOwned<State: VerificationState> {
+    #[serde(with = "ApiProcessedBlockEvent")]
+    block_with_chain_state: BlockWithChainState<SignedMantleTx<State>>,
+}
+
+impl<State: VerificationState> ApiProcessedBlockEventOwned<State> {
+    #[must_use]
+    pub const fn block(&self) -> &Block<SignedMantleTx<State>> {
+        &self.block_with_chain_state.block
+    }
+}
+
+impl<State: VerificationState> From<BlockWithChainState<SignedMantleTx<State>>>
+    for ApiProcessedBlockEventOwned<State>
+{
+    fn from(value: BlockWithChainState<SignedMantleTx<State>>) -> Self {
+        Self {
+            block_with_chain_state: value,
         }
     }
 }

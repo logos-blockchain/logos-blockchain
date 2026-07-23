@@ -31,7 +31,6 @@ lb-storage-service = { workspace = true }
 lb-tracing         = { workspace = true }
 lb-utils           = { features = ["tokio"], workspace = true }
 overwatch          = { workspace = true }
-rand               = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { optional = true, workspace = true }
 thiserror          = { workspace = true }

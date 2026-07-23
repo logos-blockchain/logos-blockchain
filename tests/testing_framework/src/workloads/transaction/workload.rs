@@ -12,7 +12,7 @@ use lb_core::mantle::{
     GasCalculator as _, GenesisTx as _, Note, OpProof, SignedMantleTx, Transaction as _, Utxo,
     gas::MainnetGasConstants,
     ops::OpId as _,
-    transactions::{GasPrices, MantleTxBuilder, MantleTxGasContext},
+    transactions::{GasPrices, MantleTxBuilder, MantleTxGasContext, states::Preverified},
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use rand::{seq::SliceRandom as _, thread_rng};
@@ -109,7 +109,7 @@ where
             .ok_or(TxWorkloadError::MissingReferenceNode)?;
         let utxo_map = wallet_utxo_map(
             genesis_block
-                .transactions()
+                .transactions_iter()
                 .next()
                 .expect("Genesis block should contain a genesis tx"),
         );
@@ -217,7 +217,7 @@ const SUBMIT_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 async fn submit_transaction_via_cluster(
     ctx: &RunContext<impl LbcScenarioEnv>,
-    tx: Arc<SignedMantleTx>,
+    tx: Arc<SignedMantleTx<Preverified>>,
 ) -> Result<(), DynError> {
     let tx_hash = tx.hash();
     debug!(?tx_hash, "submitting transaction via cluster (nodes first)");
@@ -246,7 +246,7 @@ const fn has_submission_retry(attempt: usize) -> bool {
 
 async fn submit_to_clients(
     clients: &mut [NodeHttpClient],
-    tx: &SignedMantleTx,
+    tx: &SignedMantleTx<Preverified>,
     attempt: usize,
 ) -> Result<(), DynError> {
     let tx_hash = tx.hash();
@@ -276,7 +276,7 @@ fn cluster_client_exhausted_error() -> DynError {
 fn build_wallet_transaction(
     input: &WalletInput,
     gas_context: &MantleTxGasContext,
-) -> Result<SignedMantleTx, DynError> {
+) -> Result<SignedMantleTx<Preverified>, DynError> {
     let receiver = input.account.public_key();
 
     let provisional_tx = MantleTxBuilder::new()
@@ -312,6 +312,7 @@ fn build_wallet_transaction(
     .map_err(|err| format!("failed to sign transaction: {err}"))?;
 
     SignedMantleTx::new(tx, [OpProof::ZkSig(signature)].into())
+        .preverify()
         .map_err(|err| format!("failed to build signed transaction: {err}").into())
 }
 

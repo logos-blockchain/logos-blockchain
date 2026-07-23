@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use lb_blend_service::{
     core::{
         backends::libp2p::Libp2pBlendBackendSettings as Libp2pCoreBlendBackendSettings,
@@ -16,11 +14,11 @@ use lb_blend_service::{
         CommonSettings, CoreSettings, EdgeSettings, Settings as BlendSettings, TimingSettings,
     },
 };
+use lb_services_utils::overwatch::RecoveryData;
 
 use crate::config::{
     blend::{deployment::Settings as DeploymentSettings, serde::Config},
     cryptarchia::deployment::Settings as CryptarchiaDeploymentSettings,
-    state::Config as StateConfig,
     time::deployment::Settings as TimeDeploymentSettings,
 };
 
@@ -41,7 +39,7 @@ impl ServiceConfig {
     #[must_use]
     pub fn into_blend_services_settings(
         self,
-        state_config: &StateConfig,
+        recovery_data: RecoveryData,
         time_deployment: &TimeDeploymentSettings,
         cryptarchia_deployment: &CryptarchiaDeploymentSettings,
     ) -> (
@@ -49,8 +47,6 @@ impl ServiceConfig {
         BlendCoreSettings<Libp2pCoreBlendBackendSettings>,
         BlendEdgeSettings<Libp2pEdgeBlendBackendSettings>,
     ) {
-        let recovery_path_prefix = state_config.get_path_for_recovery_state(Path::new("blend"));
-
         let slots_per_epoch = cryptarchia_deployment.slots_per_epoch();
         let slots_per_block = cryptarchia_deployment.average_slots_per_block();
         let slot_duration = time_deployment.slot_duration;
@@ -63,7 +59,7 @@ impl ServiceConfig {
                 non_ephemeral_signing_key_id: self.user.non_ephemeral_signing_key_id,
                 num_blend_layers: self.deployment.common.num_blend_layers,
                 minimum_network_size: self.deployment.common.minimum_network_size.into(),
-                recovery_path_prefix,
+                recovery_data,
                 time: TimingSettings {
                     epoch_transition_period: self
                         .deployment

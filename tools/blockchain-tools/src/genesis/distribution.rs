@@ -35,7 +35,6 @@ pub struct Faucet {
 
 pub struct GenesisTransferOp {
     transfer_op: TransferOp,
-    outputs: Outputs,
 }
 
 impl GenesisTransferOp {
@@ -48,25 +47,22 @@ impl GenesisTransferOp {
 
         let outputs = Outputs::try_new(notes)
             .expect("genesis distribution outputs must fit transfer output bounds");
-        let transfer_op = TransferOp::new(Inputs::empty(), outputs.clone());
+        let transfer_op = TransferOp::new(Inputs::empty(), outputs);
 
-        Self {
-            transfer_op,
-            outputs,
-        }
+        Self { transfer_op }
     }
 
     pub fn notes(&self) -> impl Iterator<Item = Note> {
-        self.outputs.utxos(&self.transfer_op).map(|u| u.note)
+        self.transfer_op.utxos().map(|u| u.note)
     }
 
     pub fn utxos(&self) -> impl Iterator<Item = Utxo> {
-        self.outputs.utxos(&self.transfer_op)
+        self.transfer_op.utxos()
     }
 
     #[must_use]
     pub fn utxo_by_index(&self, index: usize) -> Option<Utxo> {
-        self.outputs.utxo_by_index(index, &self.transfer_op)
+        self.transfer_op.utxo_by_index(index)
     }
 }
 
