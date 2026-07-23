@@ -130,7 +130,7 @@ impl WalletBlock {
             .flat_map(|tx| tx.ops.iter())
             .flat_map(|op| match op {
                 WalletOp::Transfer(transfer) => transfer.inputs.iter().copied().collect::<Vec<_>>(),
-                WalletOp::ChannelDeposit(inputs) => inputs.clone().into_inner().to_vec(),
+                WalletOp::ChannelDeposit(inputs) => inputs.iter().copied().collect::<Vec<_>>(),
                 WalletOp::ChannelTransfer(op) => op.inputs.iter().copied().collect::<Vec<_>>(),
                 WalletOp::Lock(note_id) => vec![*note_id],
                 WalletOp::ChannelWithdraw(_) | WalletOp::LeaderClaim(_) => Vec::new(),
