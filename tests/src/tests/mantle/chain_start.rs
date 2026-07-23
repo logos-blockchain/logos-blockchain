@@ -11,7 +11,10 @@ use lb_core::{
     },
 };
 use lb_node::config::{RunConfig, cryptarchia::deployment::EpochConfig};
-use lb_testing_framework::{DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig};
+use lb_testing_framework::{
+    DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig,
+    configs::deployment::NodeBinaryProfile, ensure_node_binary_built,
+};
 use lb_utils::math::NonNegativeRatio;
 use logos_blockchain_tests::{
     common::manual_cluster::{
@@ -28,6 +31,10 @@ const MODE_TIMEOUT_SECS: u64 = 60;
 
 #[tokio::test]
 async fn delayed_chain_start() {
+    // Resolve/build the node binary up front so the genesis-time countdown doesn't need to account
+    // for compilation time
+    ensure_node_binary_built(&NodeBinaryProfile::default())
+        .expect("node binary should build or resolve");
     let genesis_time = OffsetDateTime::now_utc() + Duration::from_secs(30);
     let (_base, nodes) = start_local_manual_cluster_with_layout(
         "delayed-chain-start",
