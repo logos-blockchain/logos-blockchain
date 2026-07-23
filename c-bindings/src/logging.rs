@@ -28,12 +28,5 @@ macro_rules! error {
     };
 }
 
-macro_rules! warning {
-    ($scope:expr, $($arg:tt)*) => {
-        $crate::logging::log!(WARN, $scope, $($arg)*)
-    };
-}
-
 pub(crate) use error;
 pub(crate) use log;
-pub(crate) use warning;
