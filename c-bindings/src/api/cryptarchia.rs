@@ -14,14 +14,8 @@ pub enum State {
 }
 
 impl State {
-    const fn new(
-        state: lb_chain_service::State,
-        phase: lb_chain_service::ChainServicePhase,
-    ) -> Self {
-        if matches!(
-            phase,
-            lb_chain_service::ChainServicePhase::AwaitingGenesisTime
-        ) {
+    const fn new(state: lb_chain_service::State, phase: lb_chain_service::PhaseTag) -> Self {
+        if matches!(phase, lb_chain_service::PhaseTag::AwaitingGenesisTime) {
             return Self::NotStarted;
         }
 

@@ -33,16 +33,18 @@ use lb_storage_service::{
 };
 use lb_time_service::backends::SystemTimeBackend;
 use lb_utils::math::NonNegativeRatio;
-use overwatch::services::{AsServiceId, relay::OutboundRelay, state::StateUpdater};
+use overwatch::services::{AsServiceId, relay::OutboundRelay};
 use rand::{RngCore as _, thread_rng};
 use tempfile::TempDir;
 use tokio::{
-    sync::{broadcast, mpsc, watch},
+    sync::{broadcast, mpsc},
     task::JoinHandle,
 };
 
 use crate::{
-    Cryptarchia, CryptarchiaConsensus, Error, Runtime, relays::CryptarchiaConsensusRelays,
+    Cryptarchia, CryptarchiaConsensus, Error,
+    relays::CryptarchiaConsensusRelays,
+    service::{get_block_ids, process_block},
 };
 
 #[test]
@@ -111,7 +113,7 @@ fn cryptarchia_switch_to_online() {
     clippy::too_many_lines,
     reason = "better to have one comprehensive test"
 )]
-async fn get_block_ids() {
+async fn get_block_ids_from_memory_and_storage() {
     // Init dummy relays for chain service
     let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
     let (storage_tx, storage_rx) = mpsc::channel(10);
@@ -123,8 +125,6 @@ async fn get_block_ids() {
         OutboundRelay::new(time_tx),
     )
     .await;
-    let (state_tx, _state_rx) = watch::channel(None);
-    let state_updater = StateUpdater::new(Arc::new(state_tx));
     let (new_block_tx, _new_block_rx) = broadcast::channel(10);
     let (lib_tx, _lib_rx) = broadcast::channel(10);
 
@@ -148,15 +148,13 @@ async fn get_block_ids() {
     let mut block_ids = vec![genesis_id];
     for _ in 0..2 {
         let block = try_build_block(&cryptarchia, cryptarchia.tip(), utxo, &zk_key, slot).unwrap();
-        Runtime::<_, RocksBackend, TestRuntimeServiceId>::process_block_and_update_state(
+        process_block(
             &mut cryptarchia,
             block.clone(),
             block.header().slot(),
-            &HashSet::new(),
             &relays,
             &new_block_tx,
             &lib_tx,
-            &state_updater,
         )
         .await
         .unwrap();
@@ -165,10 +163,10 @@ async fn get_block_ids() {
     }
 
     // get_block_ids when all blocks are in memory.
-    let mut stream = Runtime::get_block_ids(
+    let mut stream = get_block_ids(
+        &cryptarchia,
         block_ids[2],
         block_ids[0],
-        &cryptarchia,
         relays.storage_adapter().clone(),
     );
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[2]);
@@ -177,10 +175,10 @@ async fn get_block_ids() {
     assert!(stream.next().await.is_none());
 
     // Hitting genesis before reaching `to_ancestor`
-    let mut stream = Runtime::get_block_ids(
+    let mut stream = get_block_ids(
+        &cryptarchia,
         block_ids[2],
         [99; 32].into(), // unknown block ID
-        &cryptarchia,
         relays.storage_adapter().clone(),
     );
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[2]);
@@ -195,15 +193,13 @@ async fn get_block_ids() {
     // Now G, b1 are in storage, and b2~5 are in memory.
     for _ in 0..3 {
         let block = try_build_block(&cryptarchia, cryptarchia.tip(), utxo, &zk_key, slot).unwrap();
-        Runtime::<_, RocksBackend, TestRuntimeServiceId>::process_block_and_update_state(
+        process_block(
             &mut cryptarchia,
             block.clone(),
             block.header().slot(),
-            &HashSet::new(),
             &relays,
             &new_block_tx,
             &lib_tx,
-            &state_updater,
         )
         .await
         .unwrap();
@@ -212,10 +208,10 @@ async fn get_block_ids() {
     }
 
     // All blocks are loaded from memory + storage.
-    let mut stream = Runtime::get_block_ids(
+    let mut stream = get_block_ids(
+        &cryptarchia,
         block_ids[5],
         block_ids[0],
-        &cryptarchia,
         relays.storage_adapter().clone(),
     );
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[5]);
@@ -227,10 +223,10 @@ async fn get_block_ids() {
     assert!(stream.next().await.is_none());
 
     // Hitting genesis in storage before reaching `to_ancestor`
-    let mut stream = Runtime::get_block_ids(
+    let mut stream = get_block_ids(
+        &cryptarchia,
         block_ids[1],
         [99; 32].into(), // unknown block ID
-        &cryptarchia,
         relays.storage_adapter().clone(),
     );
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[1]);
@@ -261,13 +257,15 @@ async fn recovery_blocks_fall_back_to_lib_when_tip_missing_from_storage() {
     let lib = [0; 32].into();
     let missing_tip = [1; 32].into();
 
-    let recovery_blocks =
-        Runtime::<_, RocksBackend, TestRuntimeServiceId>::load_recovery_blocks_or_fall_back_to_lib(
-            missing_tip,
-            lib,
-            relays.storage_adapter().clone(),
-        )
-        .await;
+    let recovery_blocks = CryptarchiaConsensus::<
+        _,
+        RocksBackend,
+        SystemTimeBackend,
+        TestRuntimeServiceId,
+    >::load_recovery_blocks_or_fall_back_to_lib(
+        missing_tip, lib, relays.storage_adapter().clone()
+    )
+    .await;
 
     assert!(recovery_blocks.fell_back_to_lib);
     assert!(recovery_blocks.blocks.is_empty());
@@ -298,7 +296,7 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     let initial_info = cryptarchia.info();
     let block_slot = block.header().slot();
 
-    let result = Runtime::<_, RocksBackend, TestRuntimeServiceId>::process_block(
+    let result = process_block(
         &mut cryptarchia,
         block,
         block_slot,

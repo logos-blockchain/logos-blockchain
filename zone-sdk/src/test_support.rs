@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use futures::StreamExt as _;
 use lb_common_http_client::{
-    ApiBlock, ApiHeader, BlockInfo, ChainServiceInfo, ChainServicePhase, CryptarchiaInfo, Events,
+    ApiBlock, ApiHeader, BlockInfo, ChainServiceInfo, CryptarchiaInfo, Events, PhaseTag,
     ProcessedBlockEvent, Slot, State, TimeInfo,
 };
 use lb_core::{
@@ -106,7 +106,7 @@ impl adapter::Node for MockNode {
                 height: 0,
                 state: State::Online,
             },
-            phase: ChainServicePhase::Following,
+            phase: PhaseTag::Following,
         })
     }
 
