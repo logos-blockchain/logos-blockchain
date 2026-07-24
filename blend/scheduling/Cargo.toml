@@ -42,4 +42,5 @@ libp2p           = { workspace = true }
 test-log         = { features = ["trace"], workspace = true }
 
 [features]
+tokio-task-names      = ["lb-utils/tokio-task-names"]
 unsafe-test-functions = []

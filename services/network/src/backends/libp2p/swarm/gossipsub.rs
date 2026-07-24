@@ -1,5 +1,6 @@
 use lb_libp2p::{behaviour::gossipsub::swarm_ext::topic_hash, gossipsub};
 use lb_log_targets::network_service;
+use lb_utils::tokio::task::spawn;
 use rand::RngCore;
 
 use crate::backends::libp2p::{
@@ -88,7 +89,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 );
 
                 let commands_tx = self.commands_tx.clone();
-                tokio::spawn(async move {
+                spawn("logos/network/gossipsub-retry", async move {
                     tokio::time::sleep(wait).await;
                     let Some(new_retry_count) = retry_count.checked_add(1) else {
                         tracing::error!(target: LOG_TARGET, "retry count overflow.");
