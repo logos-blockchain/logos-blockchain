@@ -70,10 +70,10 @@ impl References {
     #[must_use]
     pub(crate) fn from_block_transactions<Tx>(transactions: BlockTransactions<Tx>) -> Self
     where
-        Tx: Transaction<Hash = TxHash>,
+        Tx: Hashable<Hash = TxHash>,
     {
         Self {
-            mempool_transactions: transactions.map(|transaction| Transaction::hash(&transaction)),
+            mempool_transactions: transactions.map(|transaction| Tx::hash(&transaction)),
         }
     }
 }
@@ -414,8 +414,8 @@ mod tests {
         index: u8,
     }
 
-    impl Transaction for IndexedTestMantleTx {
-        const HASHER: TransactionHasher<Self> = |transaction| TxHash::from([transaction.index; 32]);
+    impl Hashable for IndexedTestMantleTx {
+        const HASHER: hashable::Hasher<Self> = |transaction| TxHash::from([transaction.index; 32]);
         type Hash = TxHash;
 
         fn as_signing(&self) -> Vec<u8> {
@@ -518,7 +518,7 @@ mod tests {
             IndexedTestMantleTx { index: 3 },
         ])
         .unwrap();
-        let expected_hashes: Vec<_> = transactions.iter().map(Transaction::hash).collect();
+        let expected_hashes: Vec<_> = transactions.iter().map(IndexedTestMantleTx::hash).collect();
 
         let proposal = Block::create(
             parent_block,
