@@ -7,6 +7,7 @@ pub use lb_libp2p::{
     libp2p::gossipsub::{Message, TopicHash},
 };
 use lb_log_targets::network_service;
+use lb_utils::tokio::task::spawn_on;
 use overwatch::overwatch::handle::OverwatchHandle;
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
@@ -58,9 +59,13 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Libp2p {
             rng,
         );
 
-        overwatch_handle.runtime().spawn(async move {
-            swarm_handler.run(initial_peers).await;
-        });
+        spawn_on(
+            overwatch_handle.runtime(),
+            "logos/network/libp2p-swarm",
+            async move {
+                swarm_handler.run(initial_peers).await;
+            },
+        );
 
         Self {
             pubsub_events_tx,

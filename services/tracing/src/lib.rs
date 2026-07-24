@@ -286,6 +286,7 @@ impl<RuntimeServiceId> ServiceCore<RuntimeServiceId> for Tracing<RuntimeServiceI
 where
     RuntimeServiceId: AsServiceId<Self> + Display + Send,
 {
+    #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
         _initial_state: Self::State,
@@ -369,6 +370,8 @@ where
         ONCE_INIT.call_once(move || {
             let mut layers: Vec<Box<dyn tracing_subscriber::Layer<_> + Send + Sync>> = vec![];
 
+            #[cfg(feature = "tokio-console")]
+            let mut display_tokio_console_msg = None;
             let level_filter = {
                 #[cfg(feature = "tokio-console")]
                 {
@@ -376,11 +379,10 @@ where
                         if let ConsoleLayerSettings::Console(console_config) = &config.console
                             && let Some(recording_path) = &console_config.recording_path
                         {
-                            tracing::info!(
-                                target: LOG_TARGET,
+                            display_tokio_console_msg = Some(format!(
                                 "Tokio console raw recording is enabled at `{}`",
                                 recording_path.display()
-                            );
+                            ));
                         }
                         layers.push(console_layer);
                         LevelFilter::TRACE
@@ -403,6 +405,11 @@ where
                 .with(level_filter)
                 .with(layers)
                 .init();
+
+            #[cfg(feature = "tokio-console")]
+            if let Some(msg) = display_tokio_console_msg {
+                tracing::info!(target: LOG_TARGET, "{msg}");
+            }
         });
 
         Ok(Self {

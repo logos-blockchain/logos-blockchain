@@ -20,9 +20,11 @@ lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { features = ["unsafe"], workspace = true }
 lb-log-targets                = { workspace = true }
 lb-poseidon2                  = { workspace = true }
+lb-utils                      = { features = ["tokio"], workspace = true }
 lb-utxotree                   = { workspace = true }
 tokio                         = { features = ["rt"], workspace = true }
 tracing                       = { workspace = true }
 
 [features]
-unsafe = []
+tokio-task-names = ["lb-utils/tokio-task-names"]
+unsafe           = []
