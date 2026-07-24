@@ -17,7 +17,7 @@ const LOG_TARGET: &str = node::api::TRACING;
     path = paths::admin::TRACING_FILTER,
     responses(
         (status = 200, description = "Tracing filter reloaded"),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = crate::api::errors::ErrorBody),
     )
 )]
 pub async fn reload_tracing_filter<RuntimeServiceId>(

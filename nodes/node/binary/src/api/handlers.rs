@@ -358,7 +358,7 @@ macro_rules! make_request_and_return_response {
     path = paths::MANTLE_METRICS,
     responses(
         (status = 200, description = "Get the mempool metrics of the cl service", body = inline(schema::MempoolMetrics)),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn mantle_metrics<StorageAdapter, RuntimeServiceId>(
@@ -409,7 +409,7 @@ where
     path = paths::MANTLE_STATUS,
     responses(
         (status = 200, description = "Query the mempool status of the cl service", body = Vec<<T as Transaction>::Hash>),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn mantle_status<StorageAdapter, RuntimeServiceId>(
@@ -467,7 +467,7 @@ pub struct CryptarchiaInfoQuery {
     path = paths::CRYPTARCHIA_INFO,
     responses(
         (status = 200, description = "Query consensus information", body = lb_consensus::CryptarchiaInfo),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn cryptarchia_info<RuntimeServiceId>(
@@ -485,7 +485,7 @@ where
     path = paths::TIME_INFO,
     responses(
         (status = 200, description = "Query time service information", body = TimeInfo),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn time_info<RuntimeServiceId>(
@@ -524,7 +524,7 @@ where
     path = paths::CRYPTARCHIA_HEADERS,
     responses(
         (status = 200, description = "Query header ids", body = Vec<HeaderId>),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn cryptarchia_headers<RuntimeServiceId>(
@@ -546,7 +546,7 @@ where
     path = paths::CRYPTARCHIA_LIB_STREAM,
     responses(
         (status = 200, description = "Request a stream for lib blocks"),
-        (status = 500, description = "Internal server error", body = StreamBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn cryptarchia_lib_stream<RuntimeServiceId>(
@@ -568,7 +568,7 @@ where
     path = paths::NETWORK_INFO,
     responses(
         (status = 200, description = "Query the network information", body = lb_network_service::backends::libp2p::Libp2pInfo),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn libp2p_info<RuntimeServiceId>(
@@ -590,7 +590,7 @@ where
     request_body = DialPeerRequestBody,
     responses(
         (status = 200, description = "Dial a network peer", body = PeerId),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn dial_peer<RuntimeServiceId>(
@@ -616,7 +616,7 @@ where
     path = paths::BLEND_NETWORK_INFO,
     responses(
         (status = 200, description = "Query the blend network information", body = Option<lb_blend_service::message::NetworkInfo<PeerId>>),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn blend_info<BlendService, BroadcastSettings, RuntimeServiceId>(
@@ -644,7 +644,7 @@ where
     request_body = BlendJoinNetworkRequestBody,
     responses(
         (status = 200, description = "Join the blend network", body = Option<lb_core::sdp::DeclarationId>),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn blend_join_network<BlendService, BroadcastSettings, RuntimeServiceId>(
@@ -672,7 +672,7 @@ where
     path = paths::MEMPOOL_ADD_TX,
     responses(
         (status = 200, description = "Add transaction to the mempool"),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn add_tx<StorageAdapter, RuntimeServiceId>(
@@ -732,7 +732,7 @@ where
     path = paths::MEMPOOL_VIEW,
     responses(
         (status = 200, description = "Get current tip mempool transaction hashes", body = Vec<TxHash>),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn mempool_view<StorageAdapter, RuntimeServiceId>(
@@ -902,7 +902,7 @@ where
     path = paths::CHANNEL,
     responses(
         (status = 200, description = "Channel state"),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn channel<RuntimeServiceId>(
@@ -921,7 +921,7 @@ where
     path = paths::CHANNEL_DEPOSIT,
     responses(
         (status = 200, description = "Submit a channel deposit"),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn channel_deposit<WalletService, StorageAdapter, RuntimeServiceId>(
@@ -1019,7 +1019,7 @@ where
     path = paths::SDP_POST_DECLARATION,
     responses(
         (status = 200, description = "Post declaration to SDP service", body = lb_core::sdp::DeclarationId),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn post_declaration<
@@ -1067,7 +1067,7 @@ where
     path = paths::SDP_POST_ACTIVITY,
     responses(
         (status = 200, description = "Post activity to SDP service"),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn post_activity<
@@ -1115,7 +1115,7 @@ where
     path = paths::SDP_POST_WITHDRAWAL,
     responses(
         (status = 200, description = "Post withdrawal to SDP service"),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn post_withdrawal<
@@ -1163,7 +1163,7 @@ where
     path = paths::SDP_POST_SET_DECLARATION_ID,
     responses(
         (status = 200, description = "Post declaration to SDP service to be set as current", body = lb_core::sdp::DeclarationId),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn post_set_declaration_id<
@@ -1213,7 +1213,7 @@ where
     path = paths::MANTLE_SDP_DECLARATIONS,
     responses(
         (status = 200, description = "Get current SDP declarations keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, lb_core::sdp::Declaration>),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn get_sdp_declarations<RuntimeServiceId>(
@@ -1231,7 +1231,7 @@ where
     path = paths::MANTLE_SDP_SNAPSHOT,
     responses(
         (status = 200, description = "Get the SDP snapshot for the current epoch keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, lb_core::sdp::Declaration>),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn get_sdp_snapshot<RuntimeServiceId>(
@@ -1249,7 +1249,7 @@ where
     path = paths::LEADER_CLAIM,
     responses(
         (status = 200, description = "Leader claim transaction submitted", body = lb_api_service::http::consensus::leader::LeaderClaimResponseBody),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn leader_claim<ChainLeader, RuntimeServiceId>(
@@ -1268,7 +1268,7 @@ where
     params(BlockRangeQuery),
     responses(
         (status = 200, description = "Get blocks"),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn immutable_blocks<StorageBackend, RuntimeServiceId>(
@@ -1304,8 +1304,8 @@ where
     path = paths::BLOCKS_DETAIL,
     responses(
         (status = 200, description = "Block found"),
-        (status = 404, description = "Block not found"),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 404, description = "Block not found", body = ErrorBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn block<HttpStorageAdapter, RuntimeServiceId>(
@@ -1337,8 +1337,8 @@ where
     path = paths::BLOCK_EVENTS,
     responses(
         (status = 200, description = "Block events", body = Events),
-        (status = 404, description = "Block not found"),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 404, description = "Block not found", body = ErrorBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn block_events<RuntimeServiceId>(
@@ -1373,7 +1373,7 @@ pub struct GasPricesQuery {
     path = paths::MANTLE_GAS_PRICES,
     responses(
         (status = 200, description = "Get the gas prices from the ledger state at the tip"),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn get_gas_prices<RuntimeServiceId>(
@@ -1421,7 +1421,7 @@ where
     path = paths::BLOCKS_STREAM,
     responses(
         (status = 200, description = "Stream of processed blocks with chain state"),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn blocks_stream<StorageBackend, ConsensusService, RuntimeServiceId>(
@@ -1459,8 +1459,8 @@ where
         (status = 200, description = "Stream of processed blocks with chain state in slot order. \
             When immutable_only=true and slot_to is omitted, the stream anchors at LIB slot by \
             default."),
-        (status = 400, description = "Invalid request parameters", body = String),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 400, description = "Invalid request parameters", body = ErrorBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn blocks_range_stream<StorageBackend, RuntimeServiceId>(
@@ -1545,8 +1545,8 @@ where
     path = paths::TRANSACTION,
     responses(
         (status = 200, description = "Transaction found"),
-        (status = 404, description = "Transaction not found"),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 404, description = "Transaction not found", body = ErrorBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn transaction<HttpStorageAdapter, RuntimeServiceId>(
@@ -1573,13 +1573,11 @@ where
             let api_transaction = ApiSignedTransaction::from(transaction);
             (StatusCode::OK, Json(api_transaction)).into_response()
         }
-        _ => {
-            let error_body = serde_json::json!({
-                "error": "Multiple transactions found",
-                "len": transactions.len()
-            });
-            ApiError::internal_json(error_body).into_response()
-        }
+        _ => ApiError::internal_message(format!(
+            "Multiple transactions found ({})",
+            transactions.len()
+        ))
+        .into_response(),
     }
 }
 
@@ -1605,7 +1603,7 @@ pub mod wallet {
     path = paths::wallet::BALANCE,
     responses(
         (status = 200, description = "Get wallet balance"),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
     )]
     pub async fn get_balance<WalletService, RuntimeServiceId>(
@@ -1650,7 +1648,7 @@ pub mod wallet {
     path = paths::LEADER_CLAIM_VOUCHERS,
     responses(
         (status = 200, description = "Get claimable wallet vouchers"),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
     )]
     pub async fn get_claimable_vouchers<WalletService, RuntimeServiceId>(
@@ -1688,7 +1686,7 @@ pub mod wallet {
     path = paths::wallet::TRANSACTIONS_TRANSFER_FUNDS,
     responses(
         (status = 200, description = "Make transfer"),
-        (status = 500, description = "Internal server error", body = String),
+        (status = 500, description = "Internal server error", body = ErrorBody),
     )
     )]
     pub async fn post_transactions_transfer_funds<WalletService, StorageAdapter, RuntimeServiceId>(
@@ -1783,7 +1781,7 @@ pub mod wallet {
         path = paths::wallet::SIGN_TX_ED25519,
         responses(
             (status = 200, description = "Signed transaction"),
-            (status = 500, description = "Internal server error", body = String),
+            (status = 500, description = "Internal server error", body = ErrorBody),
         )
     )]
     pub async fn sign_tx_ed25519<WalletService, StorageAdapter, RuntimeServiceId>(
@@ -1841,7 +1839,7 @@ pub mod wallet {
         path = paths::wallet::SIGN_TX_ZK,
         responses(
             (status = 200, description = "Signed transaction"),
-            (status = 500, description = "Internal server error", body = String),
+            (status = 500, description = "Internal server error", body = ErrorBody),
         )
     )]
     pub async fn sign_tx_zk<WalletService, StorageAdapter, RuntimeServiceId>(
@@ -1899,7 +1897,7 @@ pub mod wallet {
         path = paths::wallet::FUND,
         responses(
             (status = 200, description = "Funded transaction with fee transfer proof"),
-            (status = 500, description = "Internal server error", body = String),
+            (status = 500, description = "Internal server error", body = ErrorBody),
         )
     )]
     pub async fn fund<WalletService, StorageAdapter, RuntimeServiceId>(
