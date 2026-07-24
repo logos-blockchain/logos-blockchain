@@ -1,0 +1,23 @@
+[package]
+categories.workspace  = true
+description.workspace = true
+edition.workspace     = true
+keywords.workspace    = true
+license.workspace     = true
+name                  = "logos-blockchain-dynamic-merkle"
+readme.workspace      = true
+repository.workspace  = true
+version.workspace     = true
+
+[dependencies]
+rpds  = { features = ["serde"], workspace = true }
+serde = { features = ["alloc", "derive", "rc"], workspace = true }
+
+[dev-dependencies]
+ark-ff       = { workspace = true }
+lb-poseidon2 = { workspace = true }
+num-bigint   = { workspace = true }
+rand         = { workspace = true }
+
+[lints]
+workspace = true
