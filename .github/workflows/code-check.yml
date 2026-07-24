@@ -83,7 +83,7 @@ jobs:
         continue-on-error: true
       - name: Run cargo-machete
         run: cargo machete --with-metadata
-  
+
   lints:
     name: Check Rust lints
     strategy:

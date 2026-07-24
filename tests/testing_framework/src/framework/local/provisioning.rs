@@ -309,6 +309,16 @@ fn launch_file(relative_path: &str, contents: Vec<u8>) -> LaunchFile {
     }
 }
 
+/// Resolves (building if necessary) the node binary for `node_binary_profile`
+/// and populates the process-local binary cache.
+pub fn ensure_node_binary_built(
+    node_binary_profile: &NodeBinaryProfile,
+) -> Result<PathBuf, DynError> {
+    node_binary_provider(node_binary_profile)
+        .resolve()
+        .map_err(Into::into)
+}
+
 fn node_binary_provider(node_binary_profile: &NodeBinaryProfile) -> BinaryProviderRef {
     let providers: [BinaryProviderRef; 2] = [
         Arc::new(EnvBinaryProvider::new("LOGOS_BLOCKCHAIN_NODE_BIN")),
