@@ -12,7 +12,7 @@ use crate::{
     crypto::{Hash, ZkHasher},
     events::{TxEvent, TxEventPayload},
     mantle::{
-        Note, Utxo, Value, VerificationError,
+        Note, Utxo, Value,
         ledger::{Operation, Utxos},
         ops::OpId,
         transactions::hash::TxHash,
@@ -80,8 +80,7 @@ impl LeaderClaimOp {
         &self,
         tx_hash: &TxHash,
         proof: &Groth16LeaderClaimProof,
-        op_index: usize,
-    ) -> Result<(), VerificationError> {
+    ) -> Result<(), LeaderClaimError> {
         let is_verified = proof.verify(&LeaderClaimPublic {
             voucher_nullifier: self.voucher_nullifier.into(),
             voucher_root: self.rewards_root.into(),
@@ -91,7 +90,7 @@ impl LeaderClaimOp {
         if is_verified {
             Ok(())
         } else {
-            Err(VerificationError::InvalidProofOfClaim { op_index })
+            Err(LeaderClaimError::InvalidPoC)
         }
     }
 }
@@ -194,8 +193,8 @@ pub enum LeaderClaimError {
 pub struct LeaderClaimValidationContext<'a> {
     pub nullifiers: &'a VoucherNullifiers,
     pub claimable_vouchers_root: &'a RewardsRoot,
-    pub proof_of_claim: &'a Groth16LeaderClaimProof,
-    pub tx_hash: &'a TxHash,
+    pub proof: &'a Groth16LeaderClaimProof,
+    pub tx_hash_fr: &'a Fr,
 }
 
 pub struct LeaderClaimExecutionContext {
@@ -225,10 +224,10 @@ impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
         }
 
         // Check the proof of claim
-        if !ctx.proof_of_claim.verify(&LeaderClaimPublic {
+        if !ctx.proof.verify(&LeaderClaimPublic {
             voucher_nullifier: self.voucher_nullifier.into(),
             voucher_root: ctx.claimable_vouchers_root.0,
-            mantle_tx_hash: ctx.tx_hash.to_fr(),
+            mantle_tx_hash: *ctx.tx_hash_fr,
         }) {
             return Err(LeaderClaimError::InvalidPoC);
         }
@@ -303,8 +302,8 @@ mod tests {
         let ctx = LeaderClaimValidationContext {
             nullifiers: &nullifiers,
             claimable_vouchers_root: &voucher_root,
-            proof_of_claim: &proof,
-            tx_hash: &tx_hash,
+            proof: &proof,
+            tx_hash_fr: &tx_hash.to_fr(),
         };
 
         assert_eq!(op.validate(&ctx), Ok(()));
@@ -403,8 +402,8 @@ mod tests {
         let ctx = LeaderClaimValidationContext {
             nullifiers: &nullifiers,
             claimable_vouchers_root: &voucher_root,
-            proof_of_claim: &proof,
-            tx_hash: &tx_hash,
+            proof: &proof,
+            tx_hash_fr: &tx_hash.to_fr(),
         };
 
         // The proof is verified against `op.voucher_nullifier`, which does not

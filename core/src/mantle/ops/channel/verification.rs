@@ -13,7 +13,7 @@ pub fn verify_channel_multi_sig(
     channel_id: &ChannelId,
     proof: &ChannelMultiSigProof,
     tx_hash_bytes: &Bytes,
-    helper: &impl OperationVerificationHelper,
+    helper: &dyn OperationVerificationHelper,
     op_index: usize,
 ) -> Result<(), VerificationError> {
     let transfer_threshold = helper.get_channel_transfer_threshold(channel_id)?;
@@ -80,5 +80,121 @@ pub mod test_utils {
             .try_into()
             .unwrap();
         ChannelMultiSigProof::try_new(signatures).unwrap()
+    }
+}
+
+// `verify_channel_multi_sig` is the owner of the distinction between these
+// failure modes; callers (e.g. `ChannelWithdrawOp::validate`) currently
+// collapse them into a single `Error::InvalidSignature` (see the "Pattern is
+// recursive" FIXMEs in withdraw.rs/channel_transfer.rs), so this is the only
+// place that can still assert the precise reason a proof was rejected.
+//
+// `ChannelMultiSigProofDuplicateIndices` has no test here:
+// `ChannelMultiSigProof` enforces strictly-increasing indices at construction
+// (`try_new`), so a proof with duplicate indices cannot exist to be passed in —
+// that branch is unreachable dead code.
+#[cfg(test)]
+mod tests {
+    use lb_key_management_system_keys::keys::Ed25519Key;
+
+    use super::{test_utils::create_channel_multi_sig_proof, verify_channel_multi_sig};
+    use crate::mantle::{
+        VerificationError,
+        channel::Channels,
+        ops::channel::ChannelId,
+        transactions::{
+            TxHash, signed_mantle_tx::test_utils::make_channel_state,
+            verification_helper::test_utils::TestOperationVerificationHelper,
+        },
+    };
+
+    #[test]
+    fn rejects_missing_channel() {
+        let channel_id = ChannelId::from([1u8; 32]);
+        let tx_hash = TxHash::from([9u8; 32]);
+        let tx_hash_bytes = tx_hash.as_signing_bytes();
+        let key0 = Ed25519Key::from_bytes(&[0; 32]);
+        let proof = create_channel_multi_sig_proof(&tx_hash, &[&key0]);
+
+        let helper = TestOperationVerificationHelper::new(Channels::new(), []);
+
+        let result = verify_channel_multi_sig(&channel_id, &proof, &tx_hash_bytes, &helper, 0);
+
+        assert_eq!(
+            result,
+            Err(VerificationError::ChannelNotFound { channel_id })
+        );
+    }
+
+    #[test]
+    fn rejects_not_enough_signatures() {
+        let channel_id = ChannelId::from([2u8; 32]);
+        let tx_hash = TxHash::from([9u8; 32]);
+        let tx_hash_bytes = tx_hash.as_signing_bytes();
+        let key0 = Ed25519Key::from_bytes(&[0; 32]);
+        let proof = create_channel_multi_sig_proof(&tx_hash, &[&key0]);
+
+        let channels = Channels::new().set_channel_state(&channel_id, make_channel_state(2, None));
+        let helper =
+            TestOperationVerificationHelper::new(channels, [((channel_id, 0), key0.public_key())]);
+
+        let result = verify_channel_multi_sig(&channel_id, &proof, &tx_hash_bytes, &helper, 0);
+
+        assert_eq!(
+            result,
+            Err(VerificationError::ChannelMultiSigProofNotEnoughSignatures {
+                op_index: 0,
+                actual: 1,
+                required: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_missing_key() {
+        let channel_id = ChannelId::from([3u8; 32]);
+        let tx_hash = TxHash::from([9u8; 32]);
+        let tx_hash_bytes = tx_hash.as_signing_bytes();
+        let key0 = Ed25519Key::from_bytes(&[0; 32]);
+        let proof = create_channel_multi_sig_proof(&tx_hash, &[&key0]);
+
+        let channels = Channels::new().set_channel_state(&channel_id, make_channel_state(1, None));
+        let helper = TestOperationVerificationHelper::new(channels, []);
+
+        let result = verify_channel_multi_sig(&channel_id, &proof, &tx_hash_bytes, &helper, 0);
+
+        assert_eq!(
+            result,
+            Err(VerificationError::KeyNotFound {
+                channel_id,
+                key_index: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_signature() {
+        let channel_id = ChannelId::from([4u8; 32]);
+        let tx_hash = TxHash::from([9u8; 32]);
+        let tx_hash_bytes = tx_hash.as_signing_bytes();
+        let expected_key = Ed25519Key::from_bytes(&[0; 32]);
+        let wrong_key = Ed25519Key::from_bytes(&[9; 32]);
+        let proof = create_channel_multi_sig_proof(&tx_hash, &[&wrong_key]);
+
+        let channels = Channels::new().set_channel_state(&channel_id, make_channel_state(1, None));
+        let helper = TestOperationVerificationHelper::new(
+            channels,
+            [((channel_id, 0), expected_key.public_key())],
+        );
+
+        let result = verify_channel_multi_sig(&channel_id, &proof, &tx_hash_bytes, &helper, 0);
+
+        assert_eq!(
+            result,
+            Err(VerificationError::ChannelMultiSigProofInvalidSignature {
+                op_index: 0,
+                signature_index: 0,
+            })
+        );
     }
 }

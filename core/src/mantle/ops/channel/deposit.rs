@@ -1,4 +1,5 @@
 use lb_codec::{BinaryCodec, BinaryEncode as _};
+use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
@@ -6,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use crate::{
     events::{DepositRecreatedNotes, TxEvent, TxEventPayload},
     mantle::{
-        VerificationError,
         channel::{Channels, Error},
         ledger::{Inputs, InputsError, Operation, Outputs, Utxos},
         ops::{OpId, channel::ChannelId},
@@ -42,7 +42,7 @@ impl DepositOp {
         Ok(Outputs::try_new(notes)?)
     }
 
-    pub const fn verify_stateless(&self) -> Result<(), VerificationError> {
+    pub const fn verify_stateless(&self) -> Result<(), Error> {
         Ok(())
     }
 }
@@ -57,8 +57,8 @@ pub struct DepositValidationContext<'a> {
     pub channels: &'a Channels,
     pub locked_notes: &'a LockedNotes,
     pub utxos: &'a Utxos,
-    pub tx_hash: &'a TxHash,
-    pub deposit_sig: &'a ZkSignature,
+    pub tx_hash_fr: &'a Fr,
+    pub proof: &'a ZkSignature,
 }
 
 pub struct DepositExecutionContext {
@@ -87,8 +87,8 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
             .validate_not_in_channel(ctx.locked_notes, ctx.channels, ctx.utxos)?;
 
         // Check the signature
-        let pks = self.inputs.get_pk(ctx.utxos)?;
-        if !ZkPublicKey::verify_multi(&pks, &ctx.tx_hash.to_fr(), ctx.deposit_sig) {
+        let public_keys = self.inputs.get_pk(ctx.utxos)?;
+        if !ZkPublicKey::verify_multi(&public_keys, ctx.tx_hash_fr, ctx.proof) {
             return Err(Error::InvalidSignature);
         }
 

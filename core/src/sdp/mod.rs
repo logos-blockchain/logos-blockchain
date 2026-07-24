@@ -13,7 +13,7 @@ use lb_blake2btree::LeafHash;
 use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
-use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey};
 use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec};
 use multiaddr::{Multiaddr, Protocol};
 use serde::{Deserialize, Serialize};
@@ -24,8 +24,9 @@ use crate::{
     codec::{self, DeserializeOp as _, SerializeOp as _},
     crypto::{Hash, Hasher},
     mantle::{
-        NoteId, VerificationError, ledger::Declarations as ServiceDeclarations,
-        ops::channel::Ed25519PublicKey,
+        NoteId, TxHash,
+        ledger::Declarations as ServiceDeclarations,
+        ops::{channel::Ed25519PublicKey, sdp::SdpError},
     },
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
@@ -508,7 +509,17 @@ impl DeclarationMessage {
         DeclarationId(hasher.finalize().into())
     }
 
-    pub const fn verify_stateless(&self) -> Result<(), VerificationError> {
+    pub fn verify_stateless(
+        &self,
+        tx_hash: &TxHash,
+        proof_eddsa_signature: &Ed25519Signature,
+    ) -> Result<(), SdpError> {
+        // Ensure ownership over the `provider_id`
+        self.provider_id
+            .0
+            .verify(tx_hash.as_signing_bytes().as_ref(), proof_eddsa_signature)
+            .map_err(|_| SdpError::InvalidEddsaSignature)?;
+
         Ok(())
     }
 }
@@ -521,7 +532,7 @@ pub struct WithdrawMessage {
 }
 
 impl WithdrawMessage {
-    pub const fn verify_stateless(&self) -> Result<(), VerificationError> {
+    pub const fn verify_stateless(&self) -> Result<(), SdpError> {
         Ok(())
     }
 }
@@ -535,7 +546,7 @@ pub struct ActiveMessage {
 }
 
 impl ActiveMessage {
-    pub const fn verify_stateless(&self) -> Result<(), VerificationError> {
+    pub const fn verify_stateless(&self) -> Result<(), SdpError> {
         Ok(())
     }
 }

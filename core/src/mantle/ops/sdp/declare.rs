@@ -1,4 +1,5 @@
 use lb_cryptarchia_engine::Epoch;
+use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
 
 use super::{SDPDeclareOp, SdpError};
@@ -8,7 +9,6 @@ use crate::{
         Note,
         channel::Channels,
         ledger::{Declarations, Operation, Utxos},
-        transactions::hash::TxHash,
     },
     sdp::{Declaration, MinStake, locked_notes::LockedNotes},
 };
@@ -127,9 +127,9 @@ pub struct SDPDeclareValidationContext<'a> {
     pub utxo_tree: &'a Utxos,
     pub channels: &'a Channels,
     pub locked_notes: &'a LockedNotes,
-    pub tx_hash: &'a TxHash,
-    pub declare_zk_sig: &'a ZkSignature,
-    pub declare_eddsa_sig: &'a Ed25519Signature,
+    pub tx_hash_fr: &'a Fr,
+    pub proof_zk_signature: &'a ZkSignature,
+    pub proof_ed25519_signature: &'a Ed25519Signature,
     pub declarations: &'a Declarations,
     pub min_stake: &'a MinStake,
 }
@@ -167,20 +167,11 @@ impl Operation<SDPDeclareValidationContext<'_>> for SDPDeclareOp {
         let note = utxo.note;
         if !ZkPublicKey::verify_multi(
             &[note.pk, self.zk_id],
-            &ctx.tx_hash.to_fr(),
-            ctx.declare_zk_sig,
+            ctx.tx_hash_fr,
+            ctx.proof_zk_signature,
         ) {
             return Err(SdpError::InvalidZkSignature);
         }
-
-        // Ensure ownership over the `provider_id`
-        self.provider_id
-            .0
-            .verify(
-                ctx.tx_hash.as_signing_bytes().as_ref(),
-                ctx.declare_eddsa_sig,
-            )
-            .map_err(|_| SdpError::InvalidEddsaSignature)?;
 
         SDPDeclareValidationExt::validate(
             self,

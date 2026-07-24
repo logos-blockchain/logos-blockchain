@@ -1,4 +1,5 @@
 use lb_cryptarchia_engine::Epoch;
+use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use lb_log_targets::mantle;
 use tracing::debug;
@@ -6,10 +7,7 @@ use tracing::debug;
 use super::{SDPWithdrawOp, SdpError};
 use crate::{
     events::TxEvent,
-    mantle::{
-        ledger::{Declarations, Operation},
-        transactions::hash::TxHash,
-    },
+    mantle::ledger::{Declarations, Operation},
     sdp::{self, locked_notes::LockedNotes},
 };
 
@@ -19,8 +17,8 @@ pub struct SDPWithdrawValidationContext<'a> {
     pub declarations: &'a Declarations,
     pub epoch: Epoch,
     pub locked_notes: &'a LockedNotes,
-    pub tx_hash: &'a TxHash,
-    pub sdp_withdraw_sig: &'a ZkSignature,
+    pub tx_hash_fr: &'a Fr,
+    pub proof: &'a ZkSignature,
 }
 
 pub struct SDPWithdrawExecutionContext {
@@ -76,11 +74,7 @@ impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
             .locked_notes
             .get(&self.locked_note_id)
             .expect("The Operation has been checked above");
-        if !ZkPublicKey::verify_multi(
-            &[note.pk, declaration.zk_id],
-            &ctx.tx_hash.to_fr(),
-            ctx.sdp_withdraw_sig,
-        ) {
+        if !ZkPublicKey::verify_multi(&[note.pk, declaration.zk_id], ctx.tx_hash_fr, ctx.proof) {
             return Err(SdpError::InvalidZkSignature);
         }
 

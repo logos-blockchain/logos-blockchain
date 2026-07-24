@@ -12,11 +12,9 @@ use crate::{
     crypto::{Digest as _, Hasher},
     events::TxEvent,
     mantle::{
-        VerificationError,
         channel::{ChannelState, Channels, Error},
         ledger::Operation,
         ops::channel::config::Keys,
-        transactions::hash::TxHash,
     },
 };
 
@@ -49,18 +47,18 @@ impl InscriptionOp {
         &self,
         tx_hash_bytes: &[u8],
         proof: &Ed25519Signature,
-        op_index: usize,
-    ) -> Result<(), VerificationError> {
+    ) -> Result<(), Error> {
+        // Check the signature
         self.signer
             .verify(tx_hash_bytes, proof)
-            .map_err(|_| VerificationError::InvalidSignature { op_index })
+            .map_err(|_error| Error::InvalidSignature)?;
+
+        Ok(())
     }
 }
 
 pub struct InscriptionValidationContext<'a> {
     pub channels: &'a Channels,
-    pub tx_hash: &'a TxHash,
-    pub inscribe_sig: &'a Ed25519Signature,
     pub block_slot: Slot,
 }
 
@@ -105,15 +103,6 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
                 parent: self.parent.into(),
                 actual: MsgId::root().into(),
             });
-        }
-
-        // Check the signature
-        if self
-            .signer
-            .verify(ctx.tx_hash.as_signing_bytes().as_ref(), ctx.inscribe_sig)
-            .is_err()
-        {
-            return Err(Error::InvalidSignature);
         }
 
         Ok(())

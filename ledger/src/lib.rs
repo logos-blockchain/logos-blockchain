@@ -1378,12 +1378,9 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err,
-            LedgerError::VerificationError(
-                VerificationError::ChannelMultiSigProofInvalidSignature {
-                    op_index: 0,
-                    signature_index: 0,
-                }
-            )
+            LedgerError::VerificationError(VerificationError::ChannelVerificationError(
+                mantle::channel::Error::InvalidSignature
+            ))
         );
 
         // The rejected withdraw left the note owned by the channel
@@ -1927,15 +1924,16 @@ mod tests {
         assert_eq!(utxo.note.value, 100);
 
         // Try to claim the reward using the same nullifier.
+        let tx_hash = TxHash::from([0u8; 32]);
         let err = op
             .validate(&LeaderClaimValidationContext {
                 nullifiers: leaders.nullifiers(),
                 claimable_vouchers_root: leaders.vouchers_snapshot_root(),
                 // Use a dummy proof since duplication is detected before proof verification
-                proof_of_claim: &Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(
+                proof: &Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(
                     &[0u8; 128],
                 )),
-                tx_hash: &TxHash::from([0u8; 32]),
+                tx_hash_fr: &tx_hash.to_fr(),
             })
             .unwrap_err();
         assert_eq!(err, LeaderClaimError::DuplicatedVoucherNullifier);

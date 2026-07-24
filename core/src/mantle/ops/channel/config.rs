@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use lb_codec::{BinaryCodec, BinaryEncode as _};
 use lb_cryptarchia_engine::Slot;
 use lb_utils::bounded::NonEmptyBoundedVec;
@@ -8,10 +9,8 @@ use crate::{
     crypto::{Digest as _, Hasher},
     events::TxEvent,
     mantle::{
-        VerificationError,
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
         ledger::Operation,
-        transactions::hash::TxHash,
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
@@ -37,15 +36,20 @@ impl ChannelConfigOp {
         MsgId(hasher.finalize().into())
     }
 
-    pub const fn verify_stateless(&self) -> Result<(), VerificationError> {
+    pub const fn verify_stateless(&self) -> Result<(), Error> {
+        // Check config is well-formed
+        if self.configuration_threshold == 0 || self.transfer_threshold == 0 || self.keys.is_empty()
+        {
+            return Err(Error::InvalidChannelConfig);
+        }
         Ok(())
     }
 }
 
 pub struct ChannelConfigValidationContext<'a> {
     pub channels: &'a Channels,
-    pub tx_hash: &'a TxHash,
-    pub config_sigs: &'a ChannelMultiSigProof,
+    pub tx_hash_bytes: &'a Bytes,
+    pub proof: &'a ChannelMultiSigProof,
 }
 
 pub struct ChannelConfigExecutionContext {
@@ -64,34 +68,28 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
         // Check that the indexes are unique and there is the same number of proof and
         // index. This is enforced by the proof structure that enforces it.
 
-        // Check config wellformness
-        if self.configuration_threshold == 0 || self.transfer_threshold == 0 || self.keys.is_empty()
-        {
-            return Err(Error::InvalidChannelConfig);
-        }
-
         if let Some(channel) = ctx.channels.channel_state(&self.channel) {
             // Check there is enough signatures
-            let signatures = ctx.config_sigs.signatures();
+            let signatures = ctx.proof.signatures();
             if signatures.len() != channel.configuration_threshold as usize {
                 return Err(Error::ThresholdUnmet {
                     channel_id: self.channel,
                     threshold: channel.configuration_threshold,
-                    actual: ctx.config_sigs.signatures().len(),
+                    actual: ctx.proof.signatures().len(),
                 });
             }
 
             // Check the signatures
-            for sig in signatures {
+            for signature in signatures {
                 if channel
                     .accredited_keys
-                    .get(sig.channel_key_index as usize)
+                    .get(signature.channel_key_index as usize)
                     .ok_or_else(|| Error::InvalidSignatureIndex {
                         channel_id: self.channel,
                         sequencers: channel.accredited_keys.len(),
-                        index: sig.channel_key_index,
+                        index: signature.channel_key_index,
                     })?
-                    .verify(ctx.tx_hash.as_signing_bytes().as_ref(), &sig.signature)
+                    .verify(ctx.tx_hash_bytes, &signature.signature)
                     .is_err()
                 {
                     return Err(Error::InvalidSignature);
