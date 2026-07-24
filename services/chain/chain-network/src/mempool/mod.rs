@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use lb_core::mantle::TxHash;
+use lb_core::mantle::transactions::hash::TxHash;
 use lb_tx_service::TransactionsByHashesResponse;
 
 pub mod adapter;

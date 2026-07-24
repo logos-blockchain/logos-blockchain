@@ -11,11 +11,11 @@ use crate::{
     crypto::{Digest as _, Hasher},
     events::TxEvent,
     mantle::{
-        TxHash,
         channel::{ChannelState, Channels, Error},
         ledger::Operation,
         nom::{NomCodec, NomEncode as _},
         ops::channel::config::Keys,
+        transactions::hash::TxHash,
     },
 };
 

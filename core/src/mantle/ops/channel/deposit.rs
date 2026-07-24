@@ -5,11 +5,11 @@ use serde::{Deserialize, Serialize};
 use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
-        TxHash,
         channel::{Channels, Error},
         ledger::{Inputs, Operation, Utxos},
         nom::{NomCodec, NomEncode as _},
         ops::{OpId, channel::ChannelId},
+        transactions::hash::TxHash,
     },
     sdp::locked_notes::LockedNotes,
 };

@@ -8,7 +8,9 @@ use overwatch::services::{ServiceData, relay::OutboundRelay};
 use thiserror::Error;
 use tokio::sync::{broadcast, oneshot};
 
-use crate::{ChainServiceInfo, ConsensusMsg, CryptarchiaInfo, LibUpdate, ProcessedBlockEvent};
+use crate::{
+    ChainServiceInfo, ConsensusMsg, CryptarchiaInfo, LibUpdate, ProcessedBlockEvent, Query,
+};
 
 pub trait CryptarchiaServiceData:
     ServiceData<Message = ConsensusMsg<Self::Tx>> + Send + 'static
@@ -81,7 +83,7 @@ where
         let (reply_channel, rx) = oneshot::channel();
 
         self.relay
-            .send(ConsensusMsg::Info { reply_channel })
+            .send(Query::Info { reply_channel }.into())
             .await
             .map_err(|(relay_error, _)| {
                 ApiError::CommsFailure(format!("{relay_error} while sending GetInfo"))
@@ -99,7 +101,7 @@ where
         let (sender, receiver) = oneshot::channel();
 
         self.relay
-            .send(ConsensusMsg::NewBlockSubscribe { sender })
+            .send(Query::NewBlockSubscribe { sender }.into())
             .await
             .map_err(|(relay_error, _)| {
                 ApiError::CommsFailure(format!("{relay_error} while sending NewBlockSubscribe"))
@@ -115,7 +117,7 @@ where
         let (sender, receiver) = oneshot::channel();
 
         self.relay
-            .send(ConsensusMsg::LibSubscribe { sender })
+            .send(Query::LibSubscribe { sender }.into())
             .await
             .map_err(|(relay_error, _)| {
                 ApiError::CommsFailure(format!("{relay_error} while sending LibSubscribe"))
@@ -139,11 +141,14 @@ where
         let (reply_channel, rx) = oneshot::channel();
 
         self.relay
-            .send(ConsensusMsg::GetHeaders {
-                from_descendant: Some(from_descendant),
-                to_ancestor: Some(to_ancestor),
-                reply_channel,
-            })
+            .send(
+                Query::GetHeaders {
+                    from_descendant: Some(from_descendant),
+                    to_ancestor: Some(to_ancestor),
+                    reply_channel,
+                }
+                .into(),
+            )
             .await
             .map_err(|(relay_error, _)| {
                 ApiError::CommsFailure(format!("{relay_error} while sending GetHeaders"))
@@ -166,10 +171,13 @@ where
         let (reply_channel, rx) = oneshot::channel();
 
         self.relay
-            .send(ConsensusMsg::GetLedgerState {
-                block_id,
-                reply_channel,
-            })
+            .send(
+                Query::GetLedgerState {
+                    block_id,
+                    reply_channel,
+                }
+                .into(),
+            )
             .await
             .map_err(|(relay_error, _)| {
                 ApiError::CommsFailure(format!("{relay_error} while sending GetLedgerState"))
@@ -188,10 +196,13 @@ where
         let (reply_channel, rx) = oneshot::channel();
 
         self.relay
-            .send(ConsensusMsg::GetEpochState {
-                slot,
-                reply_channel,
-            })
+            .send(
+                Query::GetEpochState {
+                    slot,
+                    reply_channel,
+                }
+                .into(),
+            )
             .await
             .map_err(|(relay_error, _)| {
                 ApiError::CommsFailure(format!("{relay_error} while sending GetEpochState"))
@@ -215,7 +226,7 @@ where
         let (reply_channel, rx) = oneshot::channel();
 
         self.relay
-            .send(ConsensusMsg::GetEpochConfig { reply_channel })
+            .send(Query::GetEpochConfig { reply_channel }.into())
             .await
             .map_err(|(relay_error, _)| {
                 ApiError::CommsFailure(format!("{relay_error} while sending GetEpochConfig"))
@@ -230,7 +241,7 @@ where
         let (reply_channel, rx) = oneshot::channel();
 
         self.relay
-            .send(ConsensusMsg::GetBlockEvents { id, reply_channel })
+            .send(Query::GetBlockEvents { id, reply_channel }.into())
             .await
             .map_err(|(relay_error, _)| {
                 ApiError::CommsFailure(format!("{relay_error} while sending GetBlockEvents"))
@@ -309,12 +320,12 @@ where
     }
 
     /// Wait until the chain becomes the Online mode.
-    /// For details, see [`ConsensusMsg::SubscribeChainOnline`].
+    /// For details, see [`Query::SubscribeChainOnline`].
     pub async fn wait_until_chain_becomes_online(&self) -> Result<(), ApiError> {
         let (sender, receiver) = oneshot::channel();
 
         self.relay
-            .send(ConsensusMsg::SubscribeChainOnline { sender })
+            .send(Query::SubscribeChainOnline { sender }.into())
             .await
             .map_err(|(relay_error, _)| {
                 ApiError::CommsFailure(format!("{relay_error} while sending SubscribeChainOnline"))

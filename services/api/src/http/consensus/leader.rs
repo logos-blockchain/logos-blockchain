@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Display};
 
 use lb_chain_leader_service::api::{ChainLeaderSerivceApi, ChainLeaderServiceData};
-use lb_core::mantle::TxHash;
+use lb_core::mantle::transactions::hash::TxHash;
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
 use serde::{Deserialize, Serialize};
 

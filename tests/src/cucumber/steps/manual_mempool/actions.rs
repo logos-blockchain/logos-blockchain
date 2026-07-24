@@ -3,8 +3,9 @@ use std::{collections::BTreeSet, time::Duration};
 use lb_core::{
     codec::DeserializeOp as _,
     mantle::{
-        SignedMantleTx, Transaction as _, TxHash,
-        transactions::{states::Preverified, tx::OpsProofs},
+        SignedMantleTx, TxHash,
+        traits::Hashable as _,
+        transactions::{OpsProofs, states::Preverified},
     },
 };
 use lb_key_management_system_service::keys::ZkPublicKey;

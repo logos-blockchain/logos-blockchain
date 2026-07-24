@@ -6,7 +6,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use lb_core::mantle::{
-    MantleTx, Note, SignedMantleTx, TxHash, Utxo, Value,
+    Note, SignedMantleTx, Utxo, Value,
     channel::ChannelState,
     ledger::{Inputs, Outputs},
     nom::NomDecode as _,
@@ -17,7 +17,9 @@ use lb_core::mantle::{
         },
         transfer::TransferOp,
     },
-    transactions::{codec::decode_signed_mantle_tx, states::Unverified},
+    transactions::{
+        codec::decode_signed_mantle_tx, hash::TxHash, mantle_tx::MantleTx, states::Unverified,
+    },
 };
 use lb_key_management_system_service::keys::{
     ED25519_SECRET_KEY_SIZE, Ed25519Key, Ed25519PublicKey, ZkPublicKey,

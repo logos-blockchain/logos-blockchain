@@ -4,11 +4,11 @@ use nom::IResult;
 
 use crate::{
     mantle::{
-        MantleTx, Op, SignedMantleTx,
+        Op, SignedMantleTx,
         nom::{NomDecode as _, NomEncode as _},
         ops::codec::{decode_ops_proofs, encode_ops_proofs},
         transactions::{
-            MantleTxGasContext,
+            mantle_tx::{MantleTx, MantleTxGasContext},
             states::{Unverified, VerificationState},
         },
     },
@@ -103,7 +103,7 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
-            Note, NoteId, OpProof, Transaction as _, Utxo,
+            Note, NoteId, OpProof, Utxo,
             ledger::{BoundedInputs, BoundedOutputs, Inputs, Outputs},
             ops::{
                 channel::{
@@ -116,7 +116,8 @@ mod tests {
                 sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
                 transfer::TransferOp,
             },
-            transactions::{GasPrices, Ops, tx::OpsProofs},
+            traits::Hashable as _,
+            transactions::{GasPrices, Ops, OpsProofs},
         },
         proofs::{
             channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
