@@ -1,5 +1,7 @@
 on:
   pull_request:
+  merge_group:
+    types: [ checks_requested ]
   push:
     branches: [ master ]
 
@@ -118,7 +120,12 @@ jobs:
 
   tests:
     name: Run test suite
-    if: ${{ !startsWith(github.event.pull_request.title, '[WIP]') && !contains(github.event.label.name,  'DO NOT MERGE') }}
+    if: >-
+      ${{
+        github.event_name == 'pull_request' &&
+        !startsWith(github.event.pull_request.title, '[WIP]') &&
+        !contains(github.event.pull_request.labels.*.name, 'DO NOT MERGE')
+      }}
     strategy:
       fail-fast: false # all OSes should be tested even if one fails (default: true)
       matrix:
@@ -143,11 +150,11 @@ jobs:
         with:
           command: run
           args: >-
-            --locked -p logos-blockchain-node --features testing 
+            --locked -p logos-blockchain-node --features testing
             -- nodes/node/standalone-node-config.yaml --check-config --deployment nodes/node/standalone-deployment-config.yaml
 
       - name: Install cargo-nextest
-        if: ${{ !cancelled()}}
+        if: ${{ !cancelled() }}
         uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # Version 2.79.11
         with:
           tool: cargo-nextest
@@ -176,3 +183,33 @@ jobs:
           name: integration-test-artifacts-${{ runner.os }}-${{ github.sha }}
           include-hidden-files: true
           path: tests/.run_*
+
+  # Stable required check for nextest unit tests.
+  #
+  # On pull requests and pushes to master, this job succeeds only when both
+  # self-hosted nextest unit tests matrix jobs succeeded.
+  #
+  # On merge_group, the real nextest unit tests matrix is skipped and this lightweight
+  # check succeeds because nextest unit tests was already required before queue admission.
+  nextest-unit-tests-result:
+    name: Nextest unit tests result
+    needs: tests
+    if: ${{ always() && github.event_name != 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check nextest unit tests result
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TESTS_RESULT: ${{ needs.tests.result }}
+        run: |
+          if [ "$EVENT_NAME" = "merge_group" ]; then
+            echo "Nextest unit tests already passed before merge-queue admission"
+            exit 0
+          fi
+
+          if [ "$TESTS_RESULT" = "success" ]; then
+            exit 0
+          fi
+
+          echo "Nextest unit tests did not pass: $TESTS_RESULT"
+          exit 1
