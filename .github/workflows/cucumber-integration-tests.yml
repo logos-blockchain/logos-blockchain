@@ -21,6 +21,13 @@ jobs:
       actions: write
       checks: write
 
+    # Each OS reports its own result so `cucumber-result` below can require
+    # that at least one OS passed. A failed run never reaches the reporting
+    # step, leaving its output empty.
+    outputs:
+      self-hosted-linux: ${{ steps.report.outputs.self-hosted-linux }}
+      self-hosted-macos: ${{ steps.report.outputs.self-hosted-macos }}
+
     strategy:
       # All OSes should be tested even if one fails (default: true)
       fail-fast: false
@@ -191,3 +198,28 @@ jobs:
       - name: Clean up cucumber artifacts
         if: success() || failure()
         run: rm -rf ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts
+
+      # Runs only if every step above succeeded (default `if: success()`),
+      # marking this OS as passed for the `cucumber-result` job.
+      - name: Report success
+        id: report
+        run: echo "${{ matrix.platform.label }}=success" >> "$GITHUB_OUTPUT"
+
+  # The merge queue requires this check instead of the two OS runs above:
+  # it passes as long as at least one OS passed, so a single flaky OS run
+  # does not eject the PR from the queue. Both OS runs still execute and
+  # stay visible in the workflow summary.
+  cucumber-result:
+    name: Cucumber result
+    needs: tests
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check that at least one OS passed
+        run: |
+          if [ "${{ needs.tests.outputs.self-hosted-linux }}" = "success" ] || \
+             [ "${{ needs.tests.outputs.self-hosted-macos }}" = "success" ]; then
+            exit 0
+          fi
+          echo "Both OS runs failed"
+          exit 1
