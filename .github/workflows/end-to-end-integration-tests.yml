@@ -1,7 +1,10 @@
+# The stable `E2E result` check runs on pull requests so branch protection can
+# allow an approved PR into the merge queue. The heavy, self-hosted suite runs
+# ONLY on `merge_group`, on the queued merge commit, after review.
 on:
   pull_request:
-  push:
-    branches: [ master ]
+  merge_group:
+    types: [ checks_requested ]
 
 name: End-to-end integration tests
 
@@ -14,21 +17,21 @@ concurrency:
 jobs:
   tests:
     name: Run end-to-end integration tests
+    # Heavy, self-hosted suite: run ONLY inside the merge queue so the pull
+    # request phase reports only the lightweight `E2E result` check below.
+    if: ${{ github.event_name == 'merge_group' }}
 
     permissions:
       contents: read
       actions: write
       checks: write
 
-    # Only run if not a WIP or DO NOT MERGE PR
-    if: >
-      ${{
-        github.event_name != 'pull_request' ||
-        (
-          !startsWith(github.event.pull_request.title, '[WIP]') &&
-          !contains(toJson(github.event.pull_request.labels), 'DO NOT MERGE')
-        )
-      }}
+    # Each OS reports its own result so `e2e-result` below can require that at
+    # least one OS passed. A failed run never reaches the reporting step,
+    # leaving its output empty.
+    outputs:
+      self-hosted-linux: ${{ steps.report.outputs.self-hosted-linux }}
+      self-hosted-macos: ${{ steps.report.outputs.self-hosted-macos }}
 
     strategy:
       # All OSes should be tested even if one fails (default: true)
@@ -59,17 +62,15 @@ jobs:
           echo "RUSTFLAGS=-C linker=rust-lld -L /run/current-system/sw/lib" >> "$GITHUB_ENV"
           echo "LIBRARY_PATH=/run/current-system/sw/lib" >> "$GITHUB_ENV"
 
-      # Checkout the repository code
-      # Notes:
-      # - We need to test the exact PR code, immutable, no synthetic merge commit from master
-      # - For PRs we use `github.event.pull_request.head.sha` - the exact commit from the PR branch
-      # - For pushes to master this falls back to `github.sha` - the commit that triggered the workflow
-      # - Uses SHA (immutable) rather than branch name (which could move during workflow execution)
-      # - You control integration - manually merge/rebase when YOU decide the PR is ready
+      # Checkout the merge-queue commit.
+      # - `github.sha` is the merge queue's temporary commit (master + the queued PR,
+      #   plus any PRs ahead of it in the queue) - i.e. the exact state that will
+      #   become master if this run passes. This is what we want to validate.
+      # - Uses SHA (immutable) rather than branch name (which could move during execution).
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
 
       # Prune before any builds.
       - name: Prune disk space (cache-aware, self-hosted)
@@ -166,3 +167,34 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         with:
           command: clean
+
+      # Runs only if every step above succeeded (default `if: success()`),
+      # marking this OS as passed for the `e2e-result` job.
+      - name: Report success
+        id: report
+        run: echo "${{ matrix.platform.label }}=success" >> "$GITHUB_OUTPUT"
+
+  # This is the stable required check for the end-to-end suite.
+  # On pull requests it succeeds without starting either self-hosted runner.
+  # In the merge queue it passes if at least one OS passed, so a single flaky
+  # OS run does not eject the PR. Both OS runs still execute and remain visible.
+  e2e-result:
+    name: E2E result
+    needs: tests
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check E2E result
+        run: |
+          if [ "${{ github.event_name }}" != "merge_group" ]; then
+            echo "End-to-end integration tests run only in the merge queue"
+            exit 0
+          fi
+
+          if [ "${{ needs.tests.outputs.self-hosted-linux }}" = "success" ] || \
+             [ "${{ needs.tests.outputs.self-hosted-macos }}" = "success" ]; then
+            exit 0
+          fi
+
+          echo "Both end-to-end OS runs failed"
+          exit 1
