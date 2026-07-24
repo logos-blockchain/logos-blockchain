@@ -5,11 +5,12 @@ use crate::{
     codec::{DeserializeOp as _, SerializeOp as _},
     crypto::Hash,
     mantle::{
-        NoteId, TxHash, Utxo, Value,
+        NoteId, Utxo, Value,
         ops::{
             channel::{ChannelId, deposit::Metadata},
             leader_claim::VoucherNullifier,
         },
+        transactions::hash::TxHash,
     },
     sdp::{DeclarationId, ServiceType},
 };

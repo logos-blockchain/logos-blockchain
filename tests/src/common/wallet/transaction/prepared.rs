@@ -2,7 +2,7 @@
 
 use lb_core::mantle::{
     TxHash,
-    transactions::{MantleTxBuilder, MantleTxContext, tx::OpsProofs},
+    transactions::{MantleTxBuilder, MantleTxContext, OpsProofs},
 };
 
 use super::{

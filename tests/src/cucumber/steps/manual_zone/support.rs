@@ -14,7 +14,7 @@ use std::{
 use futures::StreamExt as _;
 use lb_common_http_client::{CommonHttpClient, Slot};
 use lb_core::mantle::{
-    MantleTx, Note, Op, OpProof, Transaction as _, Utxo, Value,
+    MantleTx, Note, Op, OpProof, Utxo, Value,
     gas::GasCost,
     ledger::{Inputs, Outputs, OutputsError},
     ops::{
@@ -26,7 +26,8 @@ use lb_core::mantle::{
         },
         transfer::TransferOp,
     },
-    transactions::{builder::MantleTxBuilder, states::Unverified, tx::OpsProofs},
+    traits::Hashable as _,
+    transactions::{OpsProofs, builder::MantleTxBuilder, states::Unverified},
 };
 use lb_http_api_common::bodies::{
     channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},

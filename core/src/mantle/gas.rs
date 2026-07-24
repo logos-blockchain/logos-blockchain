@@ -115,11 +115,14 @@ pub trait GasCalculator {
         &self,
         context: &Self::Context,
     ) -> Result<GasCost, GasOverflow>;
+
     fn storage_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow>;
+
     fn execution_gas_consumption<Constants: GasConstants>(
         &self,
         context: &Self::Context,
     ) -> Result<Gas, GasOverflow>;
+
     fn storage_gas_consumption(&self, context: &Self::Context) -> Result<Gas, GasOverflow>;
 }
 

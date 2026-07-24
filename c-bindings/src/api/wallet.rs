@@ -8,7 +8,7 @@ use lb_api_service::http::mempool;
 use lb_core::{
     header::HeaderId as CoreHeaderId,
     mantle::{
-        MantleTx, Note, NoteId as CoreNoteId, Op, OpProof, SignedMantleTx, Transaction,
+        MantleTx, Note, NoteId as CoreNoteId, Op, OpProof, SignedMantleTx,
         gas::GasCost,
         ledger::{Inputs, Outputs},
         ops::{
@@ -18,6 +18,7 @@ use lb_core::{
             },
             transfer::TransferOp,
         },
+        traits::Hashable,
         transactions::{
             MantleTxBuilder,
             states::{Preverified, Unverified},
@@ -715,7 +716,7 @@ pub(crate) fn transfer_funds_sync(
                 )
             })?;
 
-        if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Transaction::hash).await {
+        if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Hashable::hash).await {
             return Err(OperationStatus::error(
                 OperationStatusCode::DynError,
                 format!("Failed to add transaction to mempool: {error}"),
@@ -1002,7 +1003,7 @@ pub(crate) fn channel_deposit_with_notes_sync(
             })?
             .response;
 
-        if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Transaction::hash).await {
+        if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Hashable::hash).await {
             return Err(OperationStatus::error(
                 OperationStatusCode::DynError,
                 format!("Failed to add transaction to mempool: {error}"),
@@ -1353,7 +1354,7 @@ pub(crate) fn channel_deposit_sync(
         })?;
 
         // 6. Submit to the mempool.
-        if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Transaction::hash).await {
+        if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Hashable::hash).await {
             return Err(OperationStatus::error(
                 OperationStatusCode::DynError,
                 format!("Failed to add transaction to mempool: {error}"),
@@ -1623,7 +1624,7 @@ pub type FfiSubmitTransactionResult = FfiStatusResult<Hash>;
 ///
 /// Mirrors the node's `POST /mempool/add/tx` HTTP handler. The transaction is
 /// a JSON string with the exact same schema as the HTTP request body — for
-/// example a transaction funded via [`wallet_fund_tx`] and completed with the
+/// example, a transaction funded via [`wallet_fund_tx`] and completed with the
 /// caller's op proofs.
 ///
 /// # Arguments
@@ -1683,12 +1684,7 @@ pub unsafe extern "C" fn submit_signed_transaction(
     let transaction_hash = preverified_tx.hash().as_signing_bytes();
     let runtime_handle = node.get_runtime_handle();
     let submit_result = runtime_handle.block_on(async {
-        mempool::add_tx(
-            node.get_overwatch_handle(),
-            preverified_tx,
-            Transaction::hash,
-        )
-        .await
+        mempool::add_tx(node.get_overwatch_handle(), preverified_tx, Hashable::hash).await
     });
     if let Err(error) = submit_result {
         return FfiSubmitTransactionResult::err(OperationStatus::error(

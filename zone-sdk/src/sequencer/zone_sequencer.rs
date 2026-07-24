@@ -11,10 +11,11 @@ use lb_common_http_client::{ProcessedBlockEvent, Slot};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        MantleTx, Op, SignedMantleTx, Transaction as _,
+        Op, SignedMantleTx,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         ops::channel::{ChannelId, MsgId, config::Keys, inscribe::Inscription},
-        transactions::{Ops, TxHash, states::Unverified},
+        traits::Hashable as _,
+        transactions::{Ops, hash::TxHash, mantle_tx::MantleTx, states::Unverified},
     },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};

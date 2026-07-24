@@ -14,7 +14,7 @@ use lb_core::{
             },
             transfer::TransferOp,
         },
-        transactions::{GenesisTx, Ops, tx::OpsProofs},
+        transactions::{GenesisTx, Ops, OpsProofs},
     },
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };
@@ -22,7 +22,7 @@ use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr};
 use lb_key_management_system_service::keys::{
     Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
 };
-use lb_node::{SignedMantleTx, Transaction as _};
+use lb_node::{Hashable as _, SignedMantleTx};
 use num_bigint::BigUint;
 use time::OffsetDateTime;
 

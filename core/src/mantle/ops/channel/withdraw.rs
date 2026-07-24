@@ -3,11 +3,11 @@ use serde::{Deserialize, Serialize};
 use crate::{
     events::TxEvent,
     mantle::{
-        TxHash,
         channel::{Channels, Error},
         ledger::{Inputs, Operation, Utxos},
         nom::{NomCodec, NomEncode as _},
         ops::{OpId, channel::ChannelId},
+        transactions::TxHash,
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
     sdp::locked_notes::LockedNotes,

@@ -15,7 +15,7 @@ use std::{
 use futures::StreamExt as _;
 use lb_core::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
-    mantle::{StorageSize, Transaction},
+    mantle::traits::{Hashable, StorageSize},
 };
 use lb_log_targets::mempool;
 use lb_network_service::{NetworkService, message::BackendNetworkMsg};
@@ -163,7 +163,7 @@ where
     Pool: MemPoolTrait<Storage = StorageAdapter> + RecoverableMempool + Send + Sync,
     StorageAdapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     <Pool as RecoverableMempool>::RecoveryState: Debug + Send + Sync,
-    Pool::Item: Transaction<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
+    Pool::Item: Hashable<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
     Pool::Settings: Clone + Sync + Send,
     NetworkAdapter:
         NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item, Key = Pool::Key> + Send + Sync,
@@ -264,7 +264,7 @@ impl<Pool, NetworkAdapter, RecoveryBackend, StorageAdapter, RuntimeServiceId>
 where
     Pool: MemPoolTrait<Storage = StorageAdapter> + RecoverableMempool + Send + Sync,
     StorageAdapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    Pool::Item: Transaction<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
+    Pool::Item: Hashable<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
     Pool::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item> + Send + Sync,
     NetworkAdapter::Settings: Clone + Send + 'static,
@@ -459,7 +459,7 @@ where
         })?;
 
         let mut fetched_by_hash = items_stream
-            .map(|tx| (Transaction::hash(&tx), tx))
+            .map(|tx| (Hashable::hash(&tx), tx))
             .collect::<BTreeMap<_, _>>()
             .await;
 

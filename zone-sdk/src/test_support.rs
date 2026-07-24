@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use futures::StreamExt as _;
 use lb_common_http_client::{
-    ApiBlock, ApiHeader, BlockInfo, ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, Events,
+    ApiBlock, ApiHeader, BlockInfo, ChainServiceInfo, CryptarchiaInfo, Events, PhaseTag,
     ProcessedBlockEvent, Slot, State, TimeInfo,
 };
 use lb_core::{
@@ -19,7 +19,7 @@ use lb_core::{
                 inscribe::{Inscription, InscriptionOp},
             },
         },
-        transactions::{Ops, states::Unverified, tx::OpsProofs},
+        transactions::{Ops, OpsProofs, states::Unverified},
     },
     proofs::leader_proof::Groth16LeaderProof,
 };
@@ -104,8 +104,9 @@ impl adapter::Node for MockNode {
                 tip: self.tip,
                 slot: self.lib_slot,
                 height: 0,
+                state: State::Online,
             },
-            mode: ChainServiceMode::Started(State::Online),
+            phase: PhaseTag::Following,
         })
     }
 

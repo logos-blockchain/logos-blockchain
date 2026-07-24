@@ -9,9 +9,10 @@ use std::{
 
 use async_trait::async_trait;
 use lb_core::mantle::{
-    GasCalculator as _, GenesisTx as _, Note, OpProof, SignedMantleTx, Transaction as _, Utxo,
+    GasCalculator as _, Note, OpProof, SignedMantleTx, Utxo,
     gas::MainnetGasConstants,
     ops::OpId as _,
+    traits::{GenesisTx as _, Hashable as _},
     transactions::{GasPrices, MantleTxBuilder, MantleTxGasContext, states::Preverified},
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};

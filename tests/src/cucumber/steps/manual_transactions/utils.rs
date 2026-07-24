@@ -1,6 +1,6 @@
 use std::{collections::HashSet, num::NonZero};
 
-use lb_core::mantle::{NoteId, TxHash};
+use lb_core::mantle::{NoteId, transactions::hash::TxHash};
 use tracing::warn;
 
 pub use crate::cucumber::wallet::{

@@ -257,7 +257,7 @@ mod tests {
                     withdraw::{ChannelWithdrawOp, WithdrawExecutionContext},
                 },
             },
-            transactions::{GasPrices, MantleTxGasContext},
+            transactions::{GasPrices, mantle_tx::MantleTxGasContext},
         },
     };
 

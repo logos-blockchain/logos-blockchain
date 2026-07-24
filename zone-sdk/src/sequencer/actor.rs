@@ -595,7 +595,7 @@ mod tests {
     use lb_core::{
         header::HeaderId,
         mantle::{
-            MantleTx, Note, Op, SignedMantleTx, Transaction as _, Utxo,
+            MantleTx, Note, Op, SignedMantleTx, Utxo,
             ledger::Inputs,
             ops::{
                 OpProof,
@@ -606,7 +606,8 @@ mod tests {
                     withdraw::ChannelWithdrawOp,
                 },
             },
-            transactions::{Ops, tx::OpsProofs},
+            traits::Hashable as _,
+            transactions::{Ops, OpsProofs},
         },
     };
     use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
