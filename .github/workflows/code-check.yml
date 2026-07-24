@@ -1,10 +1,5 @@
-# Cheap checks (formatting, lints, dependency policies) run on `pull_request` for
-# early developer feedback and on `push: master` to keep the shared caches warm.
-# They also run on `merge_group` so they can gate merges via the merge queue.
-# The heavy `tests` job (self-hosted) runs ONLY on `merge_group` - see its `if`.
 on:
   pull_request:
-  merge_group:
   push:
     branches: [ master ]
 
@@ -88,7 +83,7 @@ jobs:
         continue-on-error: true
       - name: Run cargo-machete
         run: cargo machete --with-metadata
-  
+
   lints:
     name: Check Rust lints
     strategy:
@@ -123,9 +118,7 @@ jobs:
 
   tests:
     name: Run test suite
-    # Heavy, self-hosted suite: run ONLY inside the merge queue so it executes once,
-    # after the PR is approved and queued - never on unreviewed pushes or stale rebases.
-    if: ${{ github.event_name == 'merge_group' }}
+    if: ${{ !startsWith(github.event.pull_request.title, '[WIP]') && !contains(github.event.label.name,  'DO NOT MERGE') }}
     strategy:
       fail-fast: false # all OSes should be tested even if one fails (default: true)
       matrix:

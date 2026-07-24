@@ -1,8 +1,10 @@
-# Heavy, self-hosted suite: runs ONLY inside the merge queue. A PR reaches the
-# queue only after it satisfies branch protection (required approvals), so this
-# expensive CI executes once, on the queued merge commit, after review.
+# The stable `Cucumber result` check runs on pull requests so branch protection
+# can allow an approved PR into the merge queue. The heavy, self-hosted suite
+# runs ONLY on `merge_group`, on the queued merge commit, after review.
 on:
+  pull_request:
   merge_group:
+    types: [ checks_requested ]
 
 name: Cucumber integration tests
 
@@ -15,6 +17,9 @@ concurrency:
 jobs:
   tests:
     name: Run cucumber integration tests
+    # Heavy, self-hosted suite: run ONLY inside the merge queue so the pull
+    # request phase reports only the lightweight `Cucumber result` check below.
+    if: ${{ github.event_name == 'merge_group' }}
 
     permissions:
       contents: read
@@ -205,21 +210,27 @@ jobs:
         id: report
         run: echo "${{ matrix.platform.label }}=success" >> "$GITHUB_OUTPUT"
 
-  # The merge queue requires this check instead of the two OS runs above:
-  # it passes as long as at least one OS passed, so a single flaky OS run
-  # does not eject the PR from the queue. Both OS runs still execute and
-  # stay visible in the workflow summary.
+  # This is the stable required check for the Cucumber suite.
+  # On pull requests it succeeds without starting either self-hosted runner.
+  # In the merge queue it passes if at least one OS passed, so a single flaky
+  # OS run does not eject the PR. Both OS runs still execute and remain visible.
   cucumber-result:
     name: Cucumber result
     needs: tests
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Check that at least one OS passed
+      - name: Check Cucumber result
         run: |
+          if [ "${{ github.event_name }}" != "merge_group" ]; then
+            echo "Cucumber runs only in the merge queue"
+            exit 0
+          fi
+
           if [ "${{ needs.tests.outputs.self-hosted-linux }}" = "success" ] || \
              [ "${{ needs.tests.outputs.self-hosted-macos }}" = "success" ]; then
             exit 0
           fi
-          echo "Both OS runs failed"
+
+          echo "Both Cucumber OS runs failed"
           exit 1
