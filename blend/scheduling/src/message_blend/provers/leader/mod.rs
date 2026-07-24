@@ -16,8 +16,8 @@ use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use lb_log_targets::blend;
-use lb_utils::tokio::stream::Buffered;
-use tokio::{task::spawn_blocking, time::Instant};
+use lb_utils::tokio::{stream::Buffered, task::spawn_blocking};
+use tokio::time::Instant;
 
 use crate::message_blend::{
     buffer_size,
@@ -108,7 +108,7 @@ fn create_proof_stream(
                 // Without this, `spawn_blocking` would only be called when `FuturesOrdered`
                 // first polls the future — which only happens when the consumer polls the
                 // stream — causing avoidable latency when the consumer is idle.
-                let task = spawn_blocking(move || {
+                let task = spawn_blocking("logos/blend/leader-poq-blocking", move || {
                     let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
                     let (proof_of_quota, secret_selection_randomness) = VerifiedProofOfQuota::new(
                         &PublicInputs {

@@ -19,6 +19,7 @@ use lb_key_management_system_service::{
 };
 use lb_ledger::{EpochState, UtxoTree};
 use lb_time_service::{EpochSlotTickStream, SlotTick, TimeServiceMessage};
+use lb_utils::tokio::task::spawn_blocking;
 use lb_wallet_service::{
     UtxoWithKeyId,
     api::{WalletApi, WalletApiError, WalletServiceData},
@@ -117,7 +118,7 @@ where
                 }
             };
 
-            let res = tokio::task::spawn_blocking(move || {
+            let res = spawn_blocking("logos/chain/leader-proof-blocking", move || {
                 Groth16LeaderProof::prove(private_inputs, voucher_cm)
             })
             .await;
