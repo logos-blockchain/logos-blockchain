@@ -18,14 +18,15 @@ pub enum State {
     NotStarted = 0x2,
 }
 
-impl From<lb_chain_service::ChainServiceMode> for State {
-    fn from(value: lb_chain_service::ChainServiceMode) -> Self {
-        match value {
-            lb_chain_service::ChainServiceMode::AwaitingStart => Self::NotStarted,
-            lb_chain_service::ChainServiceMode::Started(inner_state) => match inner_state {
-                lb_chain_service::State::Bootstrapping => Self::Bootstrapping,
-                lb_chain_service::State::Online => Self::Online,
-            },
+impl State {
+    const fn new(state: lb_chain_service::State, phase: lb_chain_service::PhaseTag) -> Self {
+        if matches!(phase, lb_chain_service::PhaseTag::AwaitingGenesisTime) {
+            return Self::NotStarted;
+        }
+
+        match state {
+            lb_chain_service::State::Bootstrapping => Self::Bootstrapping,
+            lb_chain_service::State::Online => Self::Online,
         }
     }
 }
@@ -75,7 +76,7 @@ impl From<lb_chain_service::ChainServiceInfo> for CryptarchiaInfo {
             tip: value.cryptarchia_info.tip.into(),
             slot: u64::from(value.cryptarchia_info.slot),
             height: value.cryptarchia_info.height,
-            mode: State::from(value.mode),
+            mode: State::new(value.cryptarchia_info.state, value.phase),
         }
     }
 }

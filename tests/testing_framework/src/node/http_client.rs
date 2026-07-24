@@ -8,7 +8,10 @@ use lb_blend_service::message::NetworkInfo as BlendNetworkInfo;
 use lb_chain_service::ChainServiceInfo;
 use lb_core::{
     header::HeaderId,
-    mantle::{NoteId, SignedMantleTx, TxHash, transactions::states::VerificationState},
+    mantle::{
+        NoteId, SignedMantleTx,
+        transactions::{hash::TxHash, states::VerificationState},
+    },
     sdp::{Declaration, DeclarationId, Locator},
 };
 use lb_http_api_common::{

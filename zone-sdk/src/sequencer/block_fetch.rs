@@ -5,13 +5,14 @@ use lb_core::{
     crypto::Hash,
     header::HeaderId,
     mantle::{
-        SignedMantleTx, Transaction as _, Value,
+        SignedMantleTx, Value,
         ops::{
             Op, OpId as _,
             channel::{ChannelId, MsgId, inscribe::Inscription},
         },
+        traits::Hashable as _,
         transactions::{
-            TxHash,
+            hash::TxHash,
             states::{Unverified, VerificationState},
         },
     },

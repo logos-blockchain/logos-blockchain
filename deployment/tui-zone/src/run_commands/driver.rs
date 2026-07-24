@@ -1,9 +1,10 @@
 use std::time::Duration;
 
 use lb_core::mantle::{
-    TxHash, Value,
+    Value,
     ledger::Inputs,
     ops::channel::{ChannelId, deposit::Metadata, withdraw::ChannelWithdrawOp},
+    transactions::hash::TxHash,
 };
 use lb_zone_sdk::{
     adapter::NodeHttpClient,

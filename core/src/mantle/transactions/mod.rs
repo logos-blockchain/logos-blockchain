@@ -1,21 +1,27 @@
 pub mod builder;
 pub mod codec;
+pub mod errors;
+pub mod gas;
 pub mod genesis_tx;
+pub mod hash;
+pub mod mantle_tx;
+pub mod signed_mantle_tx;
 pub mod states;
-pub mod tx;
+pub mod verification_helper;
+pub mod verified_ops;
 
 pub use builder::{MantleTxBuilder, TxBuilderError};
-pub use genesis_tx::{
-    CryptarchiaParameter, GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GenesisTime,
-    GenesisTx,
-};
+pub use errors::VerificationError;
+pub use gas::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GasPrices};
+pub use genesis_tx::{CryptarchiaParameter, GenesisTime, GenesisTx};
+pub use hash::TxHash;
 use lb_utils::bounded::UpperBoundedVec;
-pub use tx::{
-    GasPrices, MantleTx, MantleTxContext, MantleTxGasContext, OperationVerificationHelper,
-    SignedMantleTx, TxHash, VerificationError,
-};
+pub use mantle_tx::{MantleTx, MantleTxContext, MantleTxGasContext};
+pub use signed_mantle_tx::SignedMantleTx;
+pub use verification_helper::OperationVerificationHelper;
+pub use verified_ops::VerifiedOps;
 
-use crate::mantle::Op;
+use crate::mantle::{Op, OpProof};
 
 // ==============================================================================
 // Memory Safety Limits
@@ -29,3 +35,4 @@ use crate::mantle::Op;
 // allow 4MiB.
 pub const MAX_OPS_PER_TX: usize = u8::MAX as usize;
 pub type Ops = UpperBoundedVec<Op, MAX_OPS_PER_TX>;
+pub type OpsProofs = UpperBoundedVec<OpProof, MAX_OPS_PER_TX>;

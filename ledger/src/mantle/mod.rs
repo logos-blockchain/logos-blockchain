@@ -7,7 +7,7 @@ use lb_core::{
     crypto::ZkHasher,
     events::TxEvent,
     mantle::{
-        GenesisTx, NoteId, Value,
+        NoteId, Value,
         ledger::Operation as _,
         ops::{
             channel::{
@@ -18,6 +18,7 @@ use lb_core::{
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferError,
         },
+        traits::GenesisTx,
     },
     sdp::locked_notes::LockedNotes,
 };

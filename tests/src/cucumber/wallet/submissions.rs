@@ -10,7 +10,7 @@ use lb_core::{
     codec::SerializeOp as _,
     mantle::{
         SignedMantleTx, TxHash, Utxo,
-        transactions::{states::Preverified, tx::OpsProofs},
+        transactions::{OpsProofs, states::Preverified},
     },
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;

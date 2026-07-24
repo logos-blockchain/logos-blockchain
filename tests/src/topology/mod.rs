@@ -10,7 +10,7 @@ pub use lb_config as configs;
 use lb_config::kms::key_id_for_preload_backend;
 use lb_core::{
     block::genesis::GenesisBlock,
-    mantle::{GenesisTx as _, Note, NoteId},
+    mantle::{traits::GenesisTx as _, Note, NoteId},
     sdp::{Locator, ServiceType},
 };
 use lb_key_management_system_service::keys::ZkKey;
