@@ -2,12 +2,13 @@ use std::path::PathBuf;
 
 use lb_core::{
     mantle::{
-        Op, OpProof, SignedMantleTx, Transaction as _,
+        Op, OpProof, SignedMantleTx,
         nom::NomEncode as _,
         ops::channel::{
             ChannelId, ChannelKeyIndex,
             config::{ChannelConfigOp, Keys},
         },
+        traits::Hashable as _,
         transactions::codec::encode_signed_mantle_tx,
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},

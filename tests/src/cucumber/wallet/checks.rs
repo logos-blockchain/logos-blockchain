@@ -1,6 +1,6 @@
 use std::{collections::HashSet, fmt::Display, hash::BuildHasher, time::Duration};
 
-use lb_core::mantle::TxHash;
+use lb_core::mantle::transactions::hash::TxHash;
 use thiserror::Error;
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};

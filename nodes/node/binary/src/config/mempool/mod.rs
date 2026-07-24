@@ -1,5 +1,7 @@
 use lb_core::mantle::{
-    SignedMantleTx, Transaction as _, TxHash, transactions::states::Preverified,
+    SignedMantleTx,
+    traits::Hashable as _,
+    transactions::{hash::TxHash, states::Preverified},
 };
 use lb_services_utils::overwatch::RecoveryData;
 use lb_tx_service::{

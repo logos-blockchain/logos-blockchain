@@ -10,11 +10,12 @@ use crate::{
     block::{Block, BlockTransactions},
     header::Header,
     mantle::{
-        MantleTx, Note, Op, OpProof, SignedMantleTx,
+        Note, Op, OpProof, SignedMantleTx,
         ledger::{BoundedOutputs, Inputs, Outputs},
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp, transfer::TransferOp},
         transactions::{
-            GenesisTx, MAX_OPS_PER_TX, Ops, VerificationError, genesis_tx, tx::OpsProofs,
+            GenesisTx, MAX_OPS_PER_TX, Ops, OpsProofs, VerificationError, genesis_tx,
+            mantle_tx::MantleTx,
         },
     },
 };
@@ -1270,9 +1271,10 @@ mod tests {
     use crate::{
         header::HeaderId,
         mantle::{
-            CryptarchiaParameter, GenesisTime, GenesisTx as _, NoteId,
+            CryptarchiaParameter, GenesisTime, NoteId,
             nom::NomEncode as _,
             ops::channel::{ChannelId, MsgId, inscribe::Inscription},
+            traits::genesis::GenesisTx as _,
             transactions::states::Preverified,
         },
         sdp::{Locator, ProviderId, ServiceType},

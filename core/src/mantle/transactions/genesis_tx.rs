@@ -10,12 +10,11 @@ use nom::{
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use super::{SignedMantleTx, TxHash};
 use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
-        MantleTx, OpProof, Transaction, TransactionHasher,
-        gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
+        OpProof, SignedMantleTx,
+        gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow},
         nom::{NomDecode, NomEncode},
         ops::{
             Op,
@@ -24,18 +23,10 @@ use crate::{
             sdp::SDPDeclareOp,
             transfer::TransferOp,
         },
-        transactions::states::Preverified,
+        traits::{GenesisTx as GenesisTxTrait, Hashable, hashable},
+        transactions::{hash::TxHash, mantle_tx::MantleTx, states::Preverified},
     },
 };
-
-/// Initial storage gas price at genesis
-///
-/// [Spec](https://www.notion.so/nomos-tech/v1-1-Storage-Markets-Specification-326261aa09df804ab483f573f522baf5?source=copy_link#326261aa09df804280b1fd5da1120a14):
-/// `P_STR(0)` = 1 LGO/gas
-pub const GENESIS_STORAGE_GAS_PRICE: GasPrice = GasPrice::new(1);
-
-/// Initial execution gas price at genesis
-pub const GENESIS_EXECUTION_GAS_PRICE: GasPrice = GasPrice::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenesisTx {
@@ -159,11 +150,12 @@ fn valid_cryptarchia_inscription(
     )
 }
 
-impl Transaction for GenesisTx {
+impl Hashable for GenesisTx {
     //noinspection RsTypeCheck: The type is correct, but the linter is confused by
     // the closure.
-    const HASHER: TransactionHasher<Self> = |tx| TxHash(Hasher::digest(tx.as_signing()).into());
+    const HASHER: hashable::Hasher<Self> = |tx| TxHash(Hasher::digest(tx.as_signing()).into());
     type Hash = TxHash;
+
     fn as_signing(&self) -> Vec<u8> {
         self.tx.as_signing()
     }
@@ -199,7 +191,7 @@ impl GasCalculator for GenesisTx {
     }
 }
 
-impl crate::mantle::GenesisTx for GenesisTx {
+impl GenesisTxTrait for GenesisTx {
     fn genesis_transfer(&self) -> &TransferOp {
         // Safe to unwrap because we validated this in from_tx
         match &self.mantle_tx().ops()[0] {
@@ -407,7 +399,7 @@ mod tests {
         mantle::{
             ledger::{Inputs, Note, Outputs, Utxo, Value},
             ops::channel::{Ed25519PublicKey, inscribe::Inscription},
-            transactions::{Ops, tx::OpsProofs},
+            transactions::{Ops, OpsProofs},
         },
         sdp::{Locator, ProviderId, ServiceType},
     };
@@ -776,8 +768,6 @@ mod tests {
 
     #[test]
     fn test_genesis_tx_cryptarchia_parameter() {
-        use crate::mantle::GenesisTx as _;
-
         let param = cryptarchia_param();
         let tx = create_trusted_tx(
             vec![Op::ChannelInscribe(inscription_op(

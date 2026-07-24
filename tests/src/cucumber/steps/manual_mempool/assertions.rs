@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use lb_core::mantle::TxHash;
+use lb_core::mantle::transactions::hash::TxHash;
 use tokio::time::{sleep, timeout};
 
 use crate::{

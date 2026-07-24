@@ -16,8 +16,7 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, NoteId, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
-        Value, VerificationError,
+        NoteId, Op, OpProof, SignedMantleTx, TxHash, Utxo, Value, VerificationError,
         gas::{GasCost, GasOverflow, MainnetGasConstants},
         ledger::Inputs,
         ops::{
@@ -27,8 +26,9 @@ use lb_core::{
             },
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
+        traits::{Hashable as _, MantleTxWithProofs},
         transactions::{
-            MantleTxBuilder, MantleTxContext, TxBuilderError, states::Preverified, tx::OpsProofs,
+            MantleTxBuilder, MantleTxContext, OpsProofs, TxBuilderError, states::Preverified,
         },
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
@@ -52,7 +52,7 @@ use lb_services_utils::{
 use lb_storage_service::{
     api::chain::StorageChainApi, backends::StorageBackend, recovery::StorageRecoveryBackend,
 };
-use lb_utils::bounded::BoundedError;
+use lb_utils::{bounded::BoundedError, tokio::task::spawn_blocking};
 use lb_wallet::{WalletBalance, WalletBlock, WalletError};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -306,7 +306,7 @@ impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> ServiceCore<RuntimeService
     for WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
 where
     Kms: KmsServiceData<Backend = KmsBackend> + Send + Sync,
-    Tx: AuthenticatedMantleTx + Send + Sync + Clone + Eq + Serialize + DeserializeOwned + 'static,
+    Tx: MantleTxWithProofs + Send + Sync + Clone + Eq + Serialize + DeserializeOwned + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx>,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
@@ -463,7 +463,7 @@ impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
     WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
 where
     Kms: KmsServiceData<Backend = KmsBackend>,
-    Tx: AuthenticatedMantleTx + Send + Sync + Clone + Eq + Serialize + DeserializeOwned + 'static,
+    Tx: MantleTxWithProofs + Send + Sync + Clone + Eq + Serialize + DeserializeOwned + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx> + Send + 'static,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
@@ -882,7 +882,7 @@ where
         let rewards_root = leader_claim_op.rewards_root;
 
         // TODO: This should happen in KMS
-        let poc = tokio::task::spawn_blocking(move || {
+        let poc = spawn_blocking("logos/wallet/leader-claim-proof-blocking", move || {
             Self::generate_poc(voucher_secret, &path, rewards_root, tx_hash)
         })
         .await??;

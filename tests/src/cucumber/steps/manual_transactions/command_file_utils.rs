@@ -44,7 +44,7 @@ use std::{
     time::Duration,
 };
 
-use lb_core::mantle::{NoteId, TxHash, Utxo};
+use lb_core::mantle::{NoteId, Utxo, transactions::hash::TxHash};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_tui_zone::run_commands::{ZONE_FILE_TRANSFER_VERSION, ZONE_WALLET_FUNDS_EXPORT};
 use lb_wallet::WalletError;

@@ -85,7 +85,7 @@ Feature: Manual control of transactions
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
-    When all nodes have at least 2 blocks and converged to within 1 blocks in 300 seconds
+    When all nodes have at least 2 blocks and converged to within 0 blocks in 300 seconds
     When I perform manual control of transactions for all wallets no time-out
     Then I stop all nodes
 

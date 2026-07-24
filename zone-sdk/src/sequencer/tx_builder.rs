@@ -1,6 +1,6 @@
 use lb_core::{
     mantle::{
-        MantleTx, SignedMantleTx, Transaction as _, Value,
+        SignedMantleTx, TxHash, Value,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         ops::{
             Op, OpProof,
@@ -10,7 +10,8 @@ use lb_core::{
                 inscribe::{Inscription, InscriptionOp},
             },
         },
-        transactions::{MantleTxBuilder, Ops, TxHash, states::Unverified, tx::OpsProofs},
+        traits::Hashable as _,
+        transactions::{MantleTxBuilder, Ops, OpsProofs, mantle_tx::MantleTx, states::Unverified},
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
