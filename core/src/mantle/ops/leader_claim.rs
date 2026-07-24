@@ -15,7 +15,7 @@ use crate::{
         Note, Utxo, Value,
         ledger::{Operation, Utxos},
         ops::OpId,
-        transactions::hash::TxHash,
+        transactions::hash::{TxHash, TxHashView},
     },
     proofs::leader_claim_proof::{
         Groth16LeaderClaimProof, LeaderClaimProof as _, LeaderClaimPublic,
@@ -78,13 +78,13 @@ impl LeaderClaimOp {
 
     pub fn verify_stateless(
         &self,
-        tx_hash: &TxHash,
+        tx_hash_view: &TxHashView,
         proof: &Groth16LeaderClaimProof,
     ) -> Result<(), LeaderClaimError> {
         let is_verified = proof.verify(&LeaderClaimPublic {
             voucher_nullifier: self.voucher_nullifier.into(),
             voucher_root: self.rewards_root.into(),
-            mantle_tx_hash: tx_hash.to_fr(),
+            mantle_tx_hash: *tx_hash_view.as_fr(),
         });
 
         if is_verified {
@@ -194,7 +194,7 @@ pub struct LeaderClaimValidationContext<'a> {
     pub nullifiers: &'a VoucherNullifiers,
     pub claimable_vouchers_root: &'a RewardsRoot,
     pub proof: &'a Groth16LeaderClaimProof,
-    pub tx_hash_fr: &'a Fr,
+    pub tx_hash_view: &'a TxHashView,
 }
 
 pub struct LeaderClaimExecutionContext {
@@ -227,7 +227,7 @@ impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
         if !ctx.proof.verify(&LeaderClaimPublic {
             voucher_nullifier: self.voucher_nullifier.into(),
             voucher_root: ctx.claimable_vouchers_root.0,
-            mantle_tx_hash: *ctx.tx_hash_fr,
+            mantle_tx_hash: *ctx.tx_hash_view.as_fr(),
         }) {
             return Err(LeaderClaimError::InvalidPoC);
         }
@@ -299,11 +299,12 @@ mod tests {
             pk: ZkPublicKey::zero(),
         };
         let nullifiers = VoucherNullifiers::new();
+        let tx_hash_view = TxHashView::from(tx_hash);
         let ctx = LeaderClaimValidationContext {
             nullifiers: &nullifiers,
             claimable_vouchers_root: &voucher_root,
             proof: &proof,
-            tx_hash_fr: &tx_hash.to_fr(),
+            tx_hash_view: &tx_hash_view,
         };
 
         assert_eq!(op.validate(&ctx), Ok(()));
@@ -399,11 +400,12 @@ mod tests {
             pk: ZkPublicKey::zero(),
         };
         let nullifiers = VoucherNullifiers::new();
+        let tx_hash_view = TxHashView::from(tx_hash);
         let ctx = LeaderClaimValidationContext {
             nullifiers: &nullifiers,
             claimable_vouchers_root: &voucher_root,
             proof: &proof,
-            tx_hash_fr: &tx_hash.to_fr(),
+            tx_hash_view: &tx_hash_view,
         };
 
         // The proof is verified against `op.voucher_nullifier`, which does not

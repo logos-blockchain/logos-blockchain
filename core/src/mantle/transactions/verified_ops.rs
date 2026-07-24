@@ -1,18 +1,13 @@
-use bytes::Bytes;
-use lb_groth16::Fr;
-
 use crate::mantle::{
-    Op, OpProof, SignedMantleTx, TxHash, VerificationError,
+    Op, OpProof, SignedMantleTx, VerificationError,
     traits::Hashable as _,
-    transactions::{OperationVerificationHelper, states::Preverified},
+    transactions::{OperationVerificationHelper, hash::TxHashView, states::Preverified},
 };
 
 pub struct VerifiedOps<'tx> {
     ops: &'tx [Op],
     proofs: &'tx [OpProof],
-    tx_hash: TxHash,
-    tx_hash_fr: Fr,
-    tx_hash_bytes: Bytes,
+    tx_hash_view: TxHashView,
     index: usize,
 }
 
@@ -22,12 +17,11 @@ impl<'tx> VerifiedOps<'tx> {
         let ops = transaction.mantle_tx.ops();
         let proofs = transaction.ops_proofs();
         let tx_hash = transaction.hash();
+        let tx_hash_view = TxHashView::from(tx_hash);
         Self {
             ops,
             proofs,
-            tx_hash,
-            tx_hash_fr: tx_hash.to_fr(),
-            tx_hash_bytes: tx_hash.as_signing_bytes(),
+            tx_hash_view,
             index: 0,
         }
     }
@@ -60,8 +54,7 @@ impl<'tx> VerifiedOps<'tx> {
             index,
             op,
             proof,
-            &self.tx_hash_fr,
-            &self.tx_hash_bytes,
+            &self.tx_hash_view,
             helper,
         ) {
             return Some(Err(error));
@@ -71,13 +64,8 @@ impl<'tx> VerifiedOps<'tx> {
     }
 
     #[must_use]
-    pub const fn tx_hash(&self) -> &TxHash {
-        &self.tx_hash
-    }
-
-    #[must_use]
-    pub const fn tx_hash_bytes(&self) -> &Bytes {
-        &self.tx_hash_bytes
+    pub const fn tx_hash_view(&self) -> &TxHashView {
+        &self.tx_hash_view
     }
 }
 

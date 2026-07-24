@@ -1,7 +1,5 @@
 use std::marker::PhantomData;
 
-use bytes::Bytes;
-use lb_groth16::Fr;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
@@ -31,7 +29,7 @@ use crate::{
         transactions::{
             GasPrices, OperationVerificationHelper, OpsProofs, VerifiedOps,
             codec::{decode_signed_mantle_tx, encode_signed_mantle_tx},
-            hash::TxHash,
+            hash::{TxHash, TxHashView},
             states::{Preverified, Unverified, VerificationState},
         },
     },
@@ -112,13 +110,12 @@ impl SignedMantleTx<Unverified> {
         op_index: usize,
         op: &Op,
         proof: &OpProof,
-        tx_hash: &TxHash,
-        tx_hash_bytes: &Bytes,
+        tx_hash_view: &TxHashView,
     ) -> Result<(), VerificationError> {
         // TODO: Add more info to errors (e.g. op_index)
         match (op, proof) {
             (Op::ChannelInscribe(op), OpProof::Ed25519Sig(proof)) => op
-                .verify_stateless(tx_hash_bytes.as_ref(), proof)
+                .verify_stateless(tx_hash_view, proof)
                 .map_err(VerificationError::ChannelVerificationError),
             (Op::ChannelConfig(op), OpProof::ChannelMultiSigProof(_proof)) => op
                 .verify_stateless()
@@ -139,7 +136,7 @@ impl SignedMantleTx<Unverified> {
                     ed25519_sig: proof_ed25519_signature,
                 },
             ) => op
-                .verify_stateless(tx_hash, proof_ed25519_signature)
+                .verify_stateless(tx_hash_view, proof_ed25519_signature)
                 .map_err(VerificationError::SDPVerificationError),
             (Op::SDPWithdraw(op), OpProof::ZkSig(_proof)) => op
                 .verify_stateless()
@@ -148,7 +145,7 @@ impl SignedMantleTx<Unverified> {
                 .verify_stateless()
                 .map_err(VerificationError::SDPVerificationError),
             (Op::LeaderClaim(op), OpProof::PoC(proof)) => op
-                .verify_stateless(tx_hash, proof)
+                .verify_stateless(tx_hash_view, proof)
                 .map_err(VerificationError::LeaderClaimVerificationError),
             (Op::Transfer(op), OpProof::ZkSig(_proof)) => op
                 .verify_stateless()
@@ -162,9 +159,9 @@ impl SignedMantleTx<Unverified> {
 
     fn verify_stateless_ops(&self) -> Result<(), VerificationError> {
         let tx_hash = self.hash();
-        let tx_hash_bytes = tx_hash.as_signing_bytes();
+        let tx_hash_view = TxHashView::new(tx_hash);
         for (op_index, (op, proof)) in self.ops_with_proof().enumerate() {
-            Self::verify_stateless_op(op_index, op, proof, &tx_hash, &tx_hash_bytes)?;
+            Self::verify_stateless_op(op_index, op, proof, &tx_hash_view)?;
         }
         Ok(())
     }
@@ -227,8 +224,7 @@ impl SignedMantleTx<Preverified> {
         op_index: usize,
         op: &Op,
         proof: &OpProof,
-        tx_hash_fr: &Fr,
-        tx_hash_bytes: &Bytes,
+        tx_hash_view: &TxHashView,
         helper: &impl OperationVerificationHelper,
     ) -> Result<(), VerificationError> {
         match (op, proof) {
@@ -243,7 +239,7 @@ impl SignedMantleTx<Preverified> {
             (Op::ChannelConfig(op), OpProof::ChannelMultiSigProof(proof)) => {
                 let channel_config_context = ChannelConfigValidationContext {
                     channels: helper.get_channels(),
-                    tx_hash_bytes,
+                    tx_hash_view,
                     proof,
                 };
                 op.validate(&channel_config_context)
@@ -254,7 +250,7 @@ impl SignedMantleTx<Preverified> {
                     channels: helper.get_channels(),
                     locked_notes: helper.get_locked_notes(),
                     utxos: helper.get_utxos(),
-                    tx_hash_fr,
+                    tx_hash_view,
                     proof,
                 };
                 op.validate(&channel_deposit_context)
@@ -265,7 +261,7 @@ impl SignedMantleTx<Preverified> {
                     channels: helper.get_channels(),
                     locked_notes: helper.get_locked_notes(),
                     utxos: helper.get_utxos(),
-                    tx_hash_bytes,
+                    tx_hash_view,
                     proof,
                     helper,
                     op_index,
@@ -279,7 +275,7 @@ impl SignedMantleTx<Preverified> {
                     locked_notes: helper.get_locked_notes(),
                     channels: helper.get_channels(),
                     utxos: helper.get_utxos(),
-                    tx_hash_bytes,
+                    tx_hash_view,
                     proof,
                     op_index,
                     helper,
@@ -298,7 +294,7 @@ impl SignedMantleTx<Preverified> {
                     utxo_tree: helper.get_utxos(),
                     channels: helper.get_channels(),
                     locked_notes: helper.get_locked_notes(),
-                    tx_hash_fr,
+                    tx_hash_view,
                     proof_zk_signature,
                     proof_ed25519_signature,
                     declarations: helper.get_declarations_by_service(op.service_type)?,
@@ -312,7 +308,7 @@ impl SignedMantleTx<Preverified> {
                     declarations: helper.get_declarations_by_id(&op.declaration_id)?,
                     epoch: helper.get_epoch(),
                     locked_notes: helper.get_locked_notes(),
-                    tx_hash_fr,
+                    tx_hash_view,
                     proof,
                 };
                 op.validate(&context)
@@ -321,7 +317,7 @@ impl SignedMantleTx<Preverified> {
             (Op::SDPActive(op), OpProof::ZkSig(proof)) => {
                 let context = SDPActiveValidationContext {
                     declarations: helper.get_declarations_by_id(&op.declaration_id)?,
-                    tx_hash_fr,
+                    tx_hash_view,
                     proof,
                     epoch: helper.get_epoch(),
                 };
@@ -333,7 +329,7 @@ impl SignedMantleTx<Preverified> {
                     nullifiers: helper.get_nullifiers(),
                     claimable_vouchers_root: helper.get_claimable_vouchers_root(),
                     proof,
-                    tx_hash_fr,
+                    tx_hash_view,
                 };
                 op.validate(&context)
                     .map_err(VerificationError::LeaderClaimVerificationError)
@@ -343,7 +339,7 @@ impl SignedMantleTx<Preverified> {
                     locked_notes: helper.get_locked_notes(),
                     channels: helper.get_channels(),
                     utxos: helper.get_utxos(),
-                    tx_hash_fr,
+                    tx_hash_view,
                     proof,
                 };
                 op.validate(&context)
@@ -623,6 +619,7 @@ pub mod test_utils {
 
 #[cfg(test)]
 mod tests {
+    use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use num_bigint::BigUint;
 

@@ -1,4 +1,3 @@
-use bytes::Bytes;
 use lb_codec::{BinaryCodec, BinaryEncode as _};
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +11,7 @@ use crate::{
             OpId,
             channel::{ChannelId, verification::verify_channel_multi_sig},
         },
-        transactions::OperationVerificationHelper,
+        transactions::{OperationVerificationHelper, hash::TxHashView},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
     sdp::locked_notes::LockedNotes,
@@ -49,7 +48,7 @@ pub struct ChannelTransferValidationContext<'a> {
     pub channels: &'a Channels,
     pub locked_notes: &'a LockedNotes,
     pub utxos: &'a Utxos,
-    pub tx_hash_bytes: &'a Bytes,
+    pub tx_hash_view: &'a TxHashView,
     pub proof: &'a ChannelMultiSigProof,
     pub op_index: usize,
     pub helper: &'a dyn OperationVerificationHelper,
@@ -72,7 +71,7 @@ impl Operation<ChannelTransferValidationContext<'_>> for ChannelTransferOp {
         verify_channel_multi_sig(
             &self.channel_id,
             ctx.proof,
-            ctx.tx_hash_bytes,
+            ctx.tx_hash_view.as_bytes(),
             ctx.helper,
             ctx.op_index,
         )
@@ -117,7 +116,7 @@ impl Operation<ChannelTransferValidationContext<'_>> for ChannelTransferOp {
                 .accredited_keys
                 .get(sig.channel_key_index as usize)
                 .ok_or(Error::InvalidSignature)?
-                .verify(ctx.tx_hash_bytes, &sig.signature)
+                .verify(ctx.tx_hash_view.as_bytes(), &sig.signature)
                 .is_err()
             {
                 return Err(Error::InvalidSignature);

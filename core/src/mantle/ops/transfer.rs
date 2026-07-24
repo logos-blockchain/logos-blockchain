@@ -1,5 +1,4 @@
 use lb_codec::{BinaryCodec, BinaryEncode as _};
-use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -10,6 +9,7 @@ use crate::{
         channel::Channels,
         ledger::{self, Inputs, Operation, Outputs, Utxo, Utxos},
         ops::OpId,
+        transactions::hash::TxHashView,
     },
     sdp::locked_notes::LockedNotes,
 };
@@ -90,7 +90,7 @@ pub struct TransferValidationContext<'a> {
     pub locked_notes: &'a LockedNotes,
     pub channels: &'a Channels,
     pub utxos: &'a Utxos,
-    pub tx_hash_fr: &'a Fr,
+    pub tx_hash_view: &'a TxHashView,
     pub proof: &'a ZkSignature,
 }
 
@@ -108,7 +108,7 @@ impl Operation<TransferValidationContext<'_>> for TransferOp {
 
         // Check the transfer Proof
         let pks = self.inputs.get_pk(ctx.utxos)?;
-        if !ZkPublicKey::verify_multi(&pks, ctx.tx_hash_fr, ctx.proof) {
+        if !ZkPublicKey::verify_multi(&pks, ctx.tx_hash_view.as_fr(), ctx.proof) {
             return Err(TransferError::InvalidProof);
         }
 
@@ -129,6 +129,7 @@ impl Operation<TransferValidationContext<'_>> for TransferOp {
 
 #[cfg(test)]
 mod test {
+    use lb_groth16::Fr;
     use num_bigint::BigUint;
 
     use super::*;

@@ -1,5 +1,4 @@
 use lb_codec::{BinaryCodec, BinaryEncode as _};
-use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
@@ -10,7 +9,7 @@ use crate::{
         channel::{Channels, Error},
         ledger::{Inputs, InputsError, Operation, Outputs, Utxos},
         ops::{OpId, channel::ChannelId},
-        transactions::hash::TxHash,
+        transactions::hash::{TxHash, TxHashView},
     },
     sdp::locked_notes::LockedNotes,
 };
@@ -57,7 +56,7 @@ pub struct DepositValidationContext<'a> {
     pub channels: &'a Channels,
     pub locked_notes: &'a LockedNotes,
     pub utxos: &'a Utxos,
-    pub tx_hash_fr: &'a Fr,
+    pub tx_hash_view: &'a TxHashView,
     pub proof: &'a ZkSignature,
 }
 
@@ -88,7 +87,7 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
 
         // Check the signature
         let public_keys = self.inputs.get_pk(ctx.utxos)?;
-        if !ZkPublicKey::verify_multi(&public_keys, ctx.tx_hash_fr, ctx.proof) {
+        if !ZkPublicKey::verify_multi(&public_keys, ctx.tx_hash_view.as_fr(), ctx.proof) {
             return Err(Error::InvalidSignature);
         }
 

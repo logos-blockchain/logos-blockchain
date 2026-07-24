@@ -707,7 +707,7 @@ impl LedgerState {
             (self, balance, tx_events) = self.try_apply_op::<_, Constants>(
                 op,
                 config,
-                verified_ops.tx_hash(),
+                verified_ops.tx_hash_view().tx_hash(),
                 balance,
                 tx_events,
             )?;
@@ -742,6 +742,7 @@ mod tests {
             traits::Hashable as _,
             transactions::{
                 Ops, OpsProofs,
+                hash::TxHashView,
                 states::{Preverified, Unverified},
             },
         },
@@ -1925,6 +1926,7 @@ mod tests {
 
         // Try to claim the reward using the same nullifier.
         let tx_hash = TxHash::from([0u8; 32]);
+        let tx_hash_view = TxHashView::from(tx_hash);
         let err = op
             .validate(&LeaderClaimValidationContext {
                 nullifiers: leaders.nullifiers(),
@@ -1933,7 +1935,7 @@ mod tests {
                 proof: &Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(
                     &[0u8; 128],
                 )),
-                tx_hash_fr: &tx_hash.to_fr(),
+                tx_hash_view: &tx_hash_view,
             })
             .unwrap_err();
         assert_eq!(err, LeaderClaimError::DuplicatedVoucherNullifier);

@@ -15,6 +15,7 @@ use crate::{
         channel::{ChannelState, Channels, Error},
         ledger::Operation,
         ops::channel::config::Keys,
+        transactions::hash::TxHashView,
     },
 };
 
@@ -45,12 +46,12 @@ impl InscriptionOp {
 
     pub fn verify_stateless(
         &self,
-        tx_hash_bytes: &[u8],
+        tx_hash_view: &TxHashView,
         proof: &Ed25519Signature,
     ) -> Result<(), Error> {
         // Check the signature
         self.signer
-            .verify(tx_hash_bytes, proof)
+            .verify(tx_hash_view.as_bytes(), proof)
             .map_err(|_error| Error::InvalidSignature)?;
 
         Ok(())

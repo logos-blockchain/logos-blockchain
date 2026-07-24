@@ -40,7 +40,7 @@ pub fn verify_channel_multi_sig(
     for (i, signature) in signatures.iter().enumerate() {
         let public_key =
             helper.get_key_from_channel_at_index(channel_id, &signature.channel_key_index)?;
-        if let Err(_error) = public_key.verify(tx_hash_bytes.as_ref(), &signature.signature) {
+        if let Err(_error) = public_key.verify(tx_hash_bytes, &signature.signature) {
             return Err(VerificationError::ChannelMultiSigProofInvalidSignature {
                 op_index,
                 signature_index: i,

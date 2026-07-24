@@ -1,5 +1,4 @@
 use lb_cryptarchia_engine::Epoch;
-use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use lb_log_targets::mantle;
 use tracing::info;
@@ -7,14 +6,17 @@ use tracing::info;
 use super::{SDPActiveOp, SdpError};
 use crate::{
     events::TxEvent,
-    mantle::ledger::{Declarations, Operation},
+    mantle::{
+        ledger::{Declarations, Operation},
+        transactions::hash::TxHashView,
+    },
 };
 
 const LOG_TARGET: &str = mantle::sdp::message::ACTIVE;
 
 pub struct SDPActiveValidationContext<'a> {
     pub declarations: &'a Declarations,
-    pub tx_hash_fr: &'a Fr,
+    pub tx_hash_view: &'a TxHashView,
     pub proof: &'a ZkSignature,
     pub epoch: Epoch,
 }
@@ -57,7 +59,7 @@ impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
         }
 
         // Check the signature over the `zk_id`
-        if !ZkPublicKey::verify_multi(&[declaration.zk_id], ctx.tx_hash_fr, ctx.proof) {
+        if !ZkPublicKey::verify_multi(&[declaration.zk_id], ctx.tx_hash_view.as_fr(), ctx.proof) {
             return Err(SdpError::InvalidZkSignature);
         }
 

@@ -24,9 +24,10 @@ use crate::{
     codec::{self, DeserializeOp as _, SerializeOp as _},
     crypto::{Hash, Hasher},
     mantle::{
-        NoteId, TxHash,
+        NoteId,
         ledger::Declarations as ServiceDeclarations,
         ops::{channel::Ed25519PublicKey, sdp::SdpError},
+        transactions::hash::TxHashView,
     },
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
@@ -511,13 +512,13 @@ impl DeclarationMessage {
 
     pub fn verify_stateless(
         &self,
-        tx_hash: &TxHash,
+        tx_hash_view: &TxHashView,
         proof_eddsa_signature: &Ed25519Signature,
     ) -> Result<(), SdpError> {
         // Ensure ownership over the `provider_id`
         self.provider_id
             .0
-            .verify(tx_hash.as_signing_bytes().as_ref(), proof_eddsa_signature)
+            .verify(tx_hash_view.as_bytes(), proof_eddsa_signature)
             .map_err(|_| SdpError::InvalidEddsaSignature)?;
 
         Ok(())

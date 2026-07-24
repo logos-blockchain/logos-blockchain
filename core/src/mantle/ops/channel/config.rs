@@ -1,4 +1,3 @@
-use bytes::Bytes;
 use lb_codec::{BinaryCodec, BinaryEncode as _};
 use lb_cryptarchia_engine::Slot;
 use lb_utils::bounded::NonEmptyBoundedVec;
@@ -11,6 +10,7 @@ use crate::{
     mantle::{
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
         ledger::Operation,
+        transactions::hash::TxHashView,
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
@@ -48,7 +48,7 @@ impl ChannelConfigOp {
 
 pub struct ChannelConfigValidationContext<'a> {
     pub channels: &'a Channels,
-    pub tx_hash_bytes: &'a Bytes,
+    pub tx_hash_view: &'a TxHashView,
     pub proof: &'a ChannelMultiSigProof,
 }
 
@@ -89,7 +89,7 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
                         sequencers: channel.accredited_keys.len(),
                         index: signature.channel_key_index,
                     })?
-                    .verify(ctx.tx_hash_bytes, &signature.signature)
+                    .verify(ctx.tx_hash_view.as_bytes(), &signature.signature)
                     .is_err()
                 {
                     return Err(Error::InvalidSignature);

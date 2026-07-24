@@ -1,5 +1,4 @@
 use lb_cryptarchia_engine::Epoch;
-use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
 
 use super::{SDPDeclareOp, SdpError};
@@ -9,6 +8,7 @@ use crate::{
         Note,
         channel::Channels,
         ledger::{Declarations, Operation, Utxos},
+        transactions::hash::TxHashView,
     },
     sdp::{Declaration, MinStake, locked_notes::LockedNotes},
 };
@@ -127,7 +127,7 @@ pub struct SDPDeclareValidationContext<'a> {
     pub utxo_tree: &'a Utxos,
     pub channels: &'a Channels,
     pub locked_notes: &'a LockedNotes,
-    pub tx_hash_fr: &'a Fr,
+    pub tx_hash_view: &'a TxHashView,
     pub proof_zk_signature: &'a ZkSignature,
     pub proof_ed25519_signature: &'a Ed25519Signature,
     pub declarations: &'a Declarations,
@@ -167,7 +167,7 @@ impl Operation<SDPDeclareValidationContext<'_>> for SDPDeclareOp {
         let note = utxo.note;
         if !ZkPublicKey::verify_multi(
             &[note.pk, self.zk_id],
-            ctx.tx_hash_fr,
+            ctx.tx_hash_view.as_fr(),
             ctx.proof_zk_signature,
         ) {
             return Err(SdpError::InvalidZkSignature);
