@@ -9,7 +9,7 @@ use lb_core::{
     events::TxEvent,
     mantle::{
         NoteId, Utxo, Value,
-        gas::{Gas, GasConstants, GasCost, GasPrice},
+        gas::{Gas, GasConstants, GasCost, GasOverflow, GasPrice},
         ledger::Operation as _,
         ops::transfer::TransferOp,
         traits::GenesisTx,
@@ -413,6 +413,18 @@ impl LedgerState {
         }
     }
 
+    /// Accumulates the storage gas consumed by an applied block into the
+    /// current epoch's counter, which drives the storage price update at the
+    /// next epoch rotation.
+    pub fn add_storage_gas_consumed(self, storage_gas: Gas) -> Result<Self, GasOverflow> {
+        Ok(Self {
+            storage_gas_consumed_in_epoch: self
+                .storage_gas_consumed_in_epoch
+                .checked_add(storage_gas)?,
+            ..self
+        })
+    }
+
     fn try_apply_proof<LeaderProof, Id>(
         self,
         slot: Slot,
@@ -566,6 +578,12 @@ impl LedgerState {
     #[must_use]
     pub const fn storage_gas_price(&self) -> &GasPrice {
         &self.storage_gas_price
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) const fn storage_gas_consumed_in_epoch(&self) -> Gas {
+        self.storage_gas_consumed_in_epoch
     }
 
     #[must_use]
@@ -2005,5 +2023,31 @@ pub mod tests {
             (ledger.execution_base_fee, ledger.average_execution_gas),
             (30_289.into(), 1_720_000.into())
         );
+    }
+
+    #[test]
+    fn test_accumulated_storage_gas_drives_next_epoch_price() {
+        let config = config();
+        let mut ledger = genesis_state(&[utxo()]);
+
+        // Seed a known storage-market state, then accumulate the storage gas
+        // that applied transactions consume during the epoch.
+        ledger.storage_gas_price = 113.into();
+        ledger.storage_gas_ema = 300.into();
+        let ledger = ledger.add_storage_gas_consumed(600.into()).unwrap();
+
+        // Cross a single epoch boundary so the storage price is recomputed.
+        let slot: Slot = (config.epoch_length() + 1).into();
+        assert_eq!(config.epoch(slot), 1);
+        let rotated = ledger
+            .update_epoch_state::<HeaderId>(slot, &SdpLedger::new(0.into()), &config)
+            .unwrap();
+
+        // The accumulated 600 must reach the price update: with a starting price
+        // of 113 and EMA 300 that yields (127, 450).
+        assert_eq!(rotated.storage_gas_price, 127.into());
+        assert_eq!(rotated.storage_gas_ema, 450.into());
+        // The counter resets for the new epoch.
+        assert_eq!(rotated.storage_gas_consumed_in_epoch, 0.into());
     }
 }
