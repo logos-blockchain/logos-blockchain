@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use lb_core::{
     block::genesis::GenesisBlock,
-    mantle::{GenesisTx as _, Note},
+    mantle::{Note, traits::GenesisTx as _},
     sdp::{Locator, ServiceType},
 };
 use lb_key_management_system_service::keys::{Key, ZkKey};

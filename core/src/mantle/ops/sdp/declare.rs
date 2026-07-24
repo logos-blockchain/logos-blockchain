@@ -5,9 +5,10 @@ use super::{SDPDeclareOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        Note, TxHash,
+        Note,
         channel::Channels,
         ledger::{Declarations, Operation, Utxos},
+        transactions::hash::TxHash,
     },
     sdp::{Declaration, MinStake, locked_notes::LockedNotes},
 };

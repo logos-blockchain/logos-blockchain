@@ -3,10 +3,10 @@
 use std::collections::HashMap;
 
 use lb_core::mantle::{
-    AuthenticatedMantleTx as _, MantleTx, NoteId, Op, OpProof, SignedMantleTx, Transaction as _,
-    TxHash,
+    GasCalculator as _, MantleTx, NoteId, Op, OpProof, SignedMantleTx, TxHash,
     gas::MainnetGasConstants,
-    transactions::{MantleTxBuilder, MantleTxContext, tx::OpsProofs},
+    traits::Hashable as _,
+    transactions::{MantleTxBuilder, MantleTxContext, OpsProofs},
 };
 use lb_key_management_system_service::keys::ZkKey;
 
@@ -32,7 +32,7 @@ pub(super) fn sign_prepared_wallet_transaction(
 
     let signed_tx = SignedMantleTx::new(mantle_tx, op_proofs).preverify()?;
     let spent_fee = signed_tx
-        .total_gas_cost::<MainnetGasConstants>(gas_prices)?
+        .total_gas_cost::<MainnetGasConstants>(&gas_prices)?
         .into_inner();
 
     Ok(SignedWalletTransaction::new(

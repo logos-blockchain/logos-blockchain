@@ -1,8 +1,8 @@
 use lb_core::mantle::{
-    MantleTx, SignedMantleTx,
+    SignedMantleTx,
     channel::{SlotTimeframe, SlotTimeout},
     ops::channel::{MsgId, config::Keys, inscribe::Inscription},
-    transactions::{Ops, states::Unverified},
+    transactions::{Ops, mantle_tx::MantleTx, states::Unverified},
 };
 use lb_key_management_system_service::keys::Ed25519Signature;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};

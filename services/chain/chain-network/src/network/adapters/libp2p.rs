@@ -6,7 +6,7 @@ use lb_core::{
     block::{Block, Proposal},
     codec::DeserializeOp as _,
     header::HeaderId,
-    mantle::AuthenticatedMantleTx,
+    mantle::traits::MantleTxWithProofs,
 };
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_network_service::{
@@ -25,7 +25,6 @@ use rand::{seq::IteratorRandom as _, thread_rng};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
 use tokio_stream::{StreamExt as _, wrappers::errors::BroadcastStreamRecvError};
-use tracing::debug;
 
 use crate::{
     metrics,
@@ -93,14 +92,7 @@ where
         additional_blocks: HashSet<HeaderId>,
     ) -> Result<BlockDownloadStream<Tx>, DynError>
     where
-        Tx: AuthenticatedMantleTx
-            + Serialize
-            + DeserializeOwned
-            + Clone
-            + Eq
-            + Send
-            + Sync
-            + 'static,
+        Tx: MantleTxWithProofs + Serialize + DeserializeOwned + Clone + Eq + Send + Sync + 'static,
     {
         let mut stream = self
             .request_blocks_from_peer(
@@ -175,7 +167,7 @@ where
 #[async_trait::async_trait]
 impl<Tx, RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for LibP2pAdapter<Tx, RuntimeServiceId>
 where
-    Tx: AuthenticatedMantleTx + Serialize + DeserializeOwned + Clone + Eq + Send + Sync + 'static,
+    Tx: MantleTxWithProofs + Serialize + DeserializeOwned + Clone + Eq + Send + Sync + 'static,
 {
     type Backend = Libp2p;
     type Settings = LibP2pAdapterSettings;
@@ -289,7 +281,7 @@ where
             .choose_multiple(&mut thread_rng(), max_peers);
 
         if sampled.is_empty() {
-            debug!("tip poll: no connected peers to sample");
+            tracing::debug!("tip poll: no connected peers to sample");
             return Box::new(stream::empty::<GetTipResponse>());
         }
         let result_stream = FuturesStreamExt::filter_map(
@@ -306,13 +298,15 @@ where
                     )))
                     .await
                 {
-                    debug!("tip poll: failed to send GetTip to peer {peer:?}: {e}");
+                    tracing::debug!("tip poll: failed to send GetTip to peer {peer:?}: {e}");
                     None
                 } else {
                     match receiver.await.ok() {
                         None => None,
                         Some(Err(e)) => {
-                            debug!("tip poll: failed to send GetTip to peer {peer:?}: {e}");
+                            tracing::debug!(
+                                "tip poll: failed to send GetTip to peer {peer:?}: {e}"
+                            );
                             None
                         }
                         Some(Ok(tip)) => Some(tip),
@@ -415,7 +409,7 @@ where
                         )
                         .await?;
 
-                    debug!("received a stream of orphan parents from peer: {peer}");
+                    tracing::debug!("received a stream of orphan parents from peer: {peer}");
 
                     Ok(stream)
                 }

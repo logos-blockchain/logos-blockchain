@@ -1,6 +1,6 @@
 use lb_core::{
     header::HeaderId,
-    mantle::{TxHash, gas::GasCost, ops::channel::deposit::DepositOp},
+    mantle::{gas::GasCost, ops::channel::deposit::DepositOp, transactions::hash::TxHash},
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};

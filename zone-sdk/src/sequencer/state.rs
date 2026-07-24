@@ -3,12 +3,13 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        SignedMantleTx, Transaction as _,
+        SignedMantleTx,
         ops::{
             Op,
             channel::{ChannelId, MsgId, inscribe::Inscription},
         },
-        transactions::{TxHash, states::Unverified},
+        traits::Hashable as _,
+        transactions::{hash::TxHash, states::Unverified},
     },
 };
 use rpds::HashTrieSetSync;
@@ -973,8 +974,8 @@ impl TxState {
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
-        MantleTx, Op::ChannelInscribe, Transaction as _, ops::channel::inscribe::InscriptionOp,
-        transactions::tx::OpsProofs,
+        MantleTx, Op::ChannelInscribe, ops::channel::inscribe::InscriptionOp,
+        traits::Hashable as _, transactions::OpsProofs,
     };
     use lb_key_management_system_service::keys::Ed25519PublicKey;
 

@@ -4,12 +4,13 @@
 
 use cucumber::{gherkin::Step, when};
 use lb_core::mantle::{
-    Note, Op, OpProof, SignedMantleTx, Transaction as _,
+    Note, Op, OpProof, SignedMantleTx,
     gas::GasCost,
     ops::channel::{
         ChannelId, MsgId,
         inscribe::{Inscription, InscriptionOp},
     },
+    traits::Hashable as _,
     transactions::builder::MantleTxBuilder,
 };
 use lb_http_api_common::bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody};

@@ -2,11 +2,7 @@ use std::fmt::{Debug, Display};
 
 use bytes::Bytes;
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService};
-use lb_core::{
-    block::Block,
-    events::Events,
-    mantle::{AuthenticatedMantleTx, PreverifiedMantleTx},
-};
+use lb_core::{block::Block, events::Events, mantle::traits::PreverifiedMantleTx};
 use lb_storage_service::{
     StorageMsg, StorageService, api::chain::StorageChainApi, backends::StorageBackend,
 };
@@ -41,7 +37,6 @@ where
 impl<Tx, Storage, RuntimeServiceId> CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>
 where
     Tx: PreverifiedMantleTx
-        + AuthenticatedMantleTx
         + Debug
         + Clone
         + Eq

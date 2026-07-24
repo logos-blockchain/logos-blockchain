@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Display};
 
 use futures::{StreamExt as _, TryStreamExt as _};
-use lb_chain_service::{ChainServiceInfo, ConsensusMsg, CryptarchiaConsensus};
+use lb_chain_service::{ChainServiceInfo, CryptarchiaConsensus, Query};
 use lb_core::{
     header::HeaderId,
     mantle::{SignedMantleTx, transactions::states::Preverified},
@@ -31,9 +31,12 @@ where
     let relay = handle.relay().await?;
     let (sender, receiver) = oneshot::channel();
     relay
-        .send(ConsensusMsg::Info {
-            reply_channel: sender,
-        })
+        .send(
+            Query::Info {
+                reply_channel: sender,
+            }
+            .into(),
+        )
         .await
         .map_err(|(e, _)| e)?;
 
@@ -54,11 +57,14 @@ where
     let relay = handle.relay().await?;
     let (sender, receiver) = oneshot::channel();
     relay
-        .send(ConsensusMsg::GetHeaders {
-            from_descendant,
-            to_ancestor,
-            reply_channel: sender,
-        })
+        .send(
+            Query::GetHeaders {
+                from_descendant,
+                to_ancestor,
+                reply_channel: sender,
+            }
+            .into(),
+        )
         .await
         .map_err(|(e, _)| e)?;
 
@@ -80,10 +86,13 @@ where
     let relay = handle.relay().await?;
     let (sender, receiver) = oneshot::channel();
     relay
-        .send(ConsensusMsg::GetLedgerState {
-            block_id: cryptarchia_info.tip,
-            reply_channel: sender,
-        })
+        .send(
+            Query::GetLedgerState {
+                block_id: cryptarchia_info.tip,
+                reply_channel: sender,
+            }
+            .into(),
+        )
         .await
         .map_err(|(e, _)| e)?;
 

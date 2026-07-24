@@ -1,464 +1,52 @@
-use std::{
-    collections::{HashMap, HashSet},
-    marker::PhantomData,
-    sync::LazyLock,
-};
+use std::marker::PhantomData;
 
-use ark_ff::PrimeField as _;
 use bytes::Bytes;
-use lb_core_macros::NomCodec;
-use lb_cryptarchia_engine::{Epoch, Slot};
-use lb_groth16::Fr;
-use lb_key_management_system_keys::keys::Ed25519PublicKey;
-use lb_utils::bounded::UpperBoundedVec;
 use nom::{Parser as _, combinator::all_consuming};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
-    crypto::{Digest as _, Hash, Hasher},
+    crypto::{Digest as _, Hasher},
     mantle::{
-        AuthenticatedMantleTx, PreverifiedMantleTx, StorageSize, Transaction, TransactionHasher,
-        Value,
-        channel::Channels,
-        gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
-        ledger::{Declarations, Operation as _, Utxos},
-        nom::{NomDecode as _, NomEncode as _},
+        MantleTx, Value, VerificationError,
+        gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow},
+        ledger::Operation as _,
         ops::{
             Op, OpProof,
             channel::{
-                ChannelId, ChannelKeyIndex, channel_transfer::ChannelTransferValidationContext,
+                channel_transfer::ChannelTransferValidationContext,
                 config::ChannelConfigValidationContext, deposit::DepositValidationContext,
-                inscribe::InscriptionValidationContext, withdraw::WithdrawValidationContext,
+                inscribe::InscriptionValidationContext, verification::verify_channel_multi_sig,
+                withdraw::WithdrawValidationContext,
             },
-            leader_claim::{LeaderClaimValidationContext, RewardsRoot, VoucherNullifier},
+            leader_claim::LeaderClaimValidationContext,
             sdp::{
                 SDPActiveValidationContext, SDPDeclareValidationContext,
                 SDPWithdrawValidationContext,
             },
-            transfer::{TransferOp, TransferValidationContext},
+            transfer::TransferValidationContext,
+        },
+        traits::{
+            Hashable, MantleTxWithProofs, PreverifiedMantleTx, StorageSize, hashable,
+            mantle_tx::OpWithProof,
         },
         transactions::{
-            MAX_OPS_PER_TX, Ops,
-            codec::{
-                decode_signed_mantle_tx, encode_signed_mantle_tx, predict_signed_mantle_tx_size,
-            },
-            genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
+            GasPrices, OperationVerificationHelper, OpsProofs, VerifiedOps,
+            codec::{decode_signed_mantle_tx, encode_signed_mantle_tx},
+            hash::TxHash,
             states::{Preverified, Unverified, VerificationState},
         },
     },
-    proofs::{
-        channel_multi_sig_proof::ChannelMultiSigProof,
-        leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},
-    },
-    sdp::{DeclarationId, MinStake, ServiceType, locked_notes::LockedNotes},
-    utils::serde_bytes_newtype,
+    proofs::leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},
 };
-
-/// The hash of a transaction
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord)]
-pub struct TxHash(pub Hash);
-serde_bytes_newtype!(TxHash, 32);
-
-impl From<Hash> for TxHash {
-    fn from(hash: Hash) -> Self {
-        Self(hash)
-    }
-}
-
-impl From<TxHash> for Hash {
-    fn from(hash: TxHash) -> Self {
-        hash.0
-    }
-}
-
-impl AsRef<Hash> for TxHash {
-    fn as_ref(&self) -> &Hash {
-        &self.0
-    }
-}
-
-impl From<TxHash> for Bytes {
-    fn from(tx_hash: TxHash) -> Self {
-        Self::copy_from_slice(&tx_hash.0)
-    }
-}
-
-impl TxHash {
-    /// For testing purposes
-    #[cfg(test)]
-    pub fn random(mut rng: impl rand::RngCore) -> Self {
-        let mut bytes = [0u8; 32];
-        rng.fill_bytes(&mut bytes);
-        Self(bytes)
-    }
-
-    #[must_use]
-    pub fn as_signing_bytes(&self) -> Bytes {
-        Bytes::from(self.0.to_vec())
-    }
-
-    #[must_use]
-    pub fn to_fr(&self) -> Fr {
-        Fr::from_le_bytes_mod_order(&self.0)
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-struct MantleTxDeSerImpl {
-    pub ops: Ops,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct MantleTxContext {
-    pub gas_context: MantleTxGasContext,
-    pub leader_reward_amount: Value,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct MantleTxGasContext {
-    transfer_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
-    configuration_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
-    gas_prices: GasPrices,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct GasPrices {
-    pub execution_base_gas_price: GasPrice,
-    pub storage_gas_price: GasPrice,
-}
-
-impl GasPrices {
-    #[must_use]
-    pub fn new(execution: u64, storage: u64) -> Self {
-        Self {
-            execution_base_gas_price: execution.into(),
-            storage_gas_price: storage.into(),
-        }
-    }
-}
-
-impl Default for GasPrices {
-    fn default() -> Self {
-        Self {
-            execution_base_gas_price: GENESIS_EXECUTION_GAS_PRICE,
-            storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
-        }
-    }
-}
-
-impl MantleTxGasContext {
-    #[must_use]
-    pub const fn new(
-        transfer_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
-        configuration_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
-        gas_prices: GasPrices,
-    ) -> Self {
-        Self {
-            transfer_thresholds,
-            configuration_thresholds,
-            gas_prices,
-        }
-    }
-
-    #[must_use]
-    pub fn transfer_threshold(&self, channel_id: &ChannelId) -> Option<ChannelKeyIndex> {
-        self.transfer_thresholds.get(channel_id).copied()
-    }
-
-    #[must_use]
-    pub fn configuration_threshold(&self, channel_id: &ChannelId) -> Option<ChannelKeyIndex> {
-        self.configuration_thresholds.get(channel_id).copied()
-    }
-
-    #[must_use]
-    pub fn from_channels(value: &Channels, base_prices: GasPrices) -> Self {
-        let transfer_thresholds = value
-            .channels
-            .iter()
-            .map(|(channel_id, channel)| (*channel_id, channel.transfer_threshold))
-            .collect();
-        let configuration_thresholds = value
-            .channels
-            .iter()
-            .map(|(channel_id, channel)| (*channel_id, channel.configuration_threshold))
-            .collect();
-        Self::new(transfer_thresholds, configuration_thresholds, base_prices)
-    }
-
-    #[must_use]
-    pub fn get_gas_prices(&self) -> GasPrices {
-        self.gas_prices.clone()
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, NomCodec)]
-pub struct MantleTx(pub Ops);
-
-impl StorageSize for MantleTx {
-    fn storage_size(&self) -> usize {
-        self.encode().len()
-    }
-}
-
-impl From<MantleTxDeSerImpl> for MantleTx {
-    fn from(MantleTxDeSerImpl { ops }: MantleTxDeSerImpl) -> Self {
-        Self(ops)
-    }
-}
-
-impl From<MantleTx> for MantleTxDeSerImpl {
-    fn from(MantleTx(ops): MantleTx) -> Self {
-        Self { ops }
-    }
-}
-
-impl Serialize for MantleTx {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        if serializer.is_human_readable() {
-            let tx_deser: MantleTxDeSerImpl = self.clone().into();
-            tx_deser.serialize(serializer)
-        } else {
-            let bytes = self.encode();
-            serializer.serialize_bytes(&bytes)
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for MantleTx {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        if deserializer.is_human_readable() {
-            <MantleTxDeSerImpl as Deserialize>::deserialize(deserializer).map(Into::into)
-        } else {
-            let bytes: Vec<u8> = <Vec<u8>>::deserialize(deserializer)?;
-            Self::decode(&bytes)
-                .map(|(_, tx)| tx)
-                .map_err(serde::de::Error::custom)
-        }
-    }
-}
-
-impl GasCalculator for MantleTx {
-    type Context = MantleTxGasContext;
-
-    fn total_gas_cost<Constants: GasConstants>(
-        &self,
-        context: &Self::Context,
-    ) -> Result<GasCost, GasOverflow> {
-        let execution_gas = self.execution_gas_consumption::<Constants>(context);
-        let execution_gas_cost =
-            GasCost::calculate(execution_gas?, context.gas_prices.execution_base_gas_price)?;
-        let storage_gas_cost = self.storage_gas_cost(context)?;
-
-        execution_gas_cost.checked_add(storage_gas_cost)
-    }
-
-    fn storage_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow> {
-        GasCost::calculate(
-            self.storage_gas_consumption(context)?,
-            context.gas_prices.storage_gas_price,
-        )
-    }
-
-    fn execution_gas_consumption<Constants: GasConstants>(
-        &self,
-        context: &Self::Context,
-    ) -> Result<Gas, GasOverflow> {
-        self.ops()
-            .iter()
-            .map(|op| contextual_op_execution_gas::<Constants>(op, context))
-            .try_fold(Gas::from(0), |total, gas| total.checked_add(gas?))
-    }
-
-    fn storage_gas_consumption(&self, context: &Self::Context) -> Result<Gas, GasOverflow> {
-        Ok(self.signed_serialized_size(context).into())
-    }
-}
-
-fn contextual_op_execution_gas<Constants: GasConstants>(
-    op: &Op,
-    context: &MantleTxGasContext,
-) -> Result<Gas, GasOverflow> {
-    let multiplier = match op {
-        // Existing channels require the current configuration threshold. A new
-        // channel is created just-in-time and does not verify any signatures.
-        Op::ChannelConfig(operation) => context
-            .configuration_threshold(&operation.channel)
-            .unwrap_or(0),
-        Op::ChannelWithdraw(operation) => context
-            .transfer_threshold(&operation.channel_id)
-            .unwrap_or(0),
-        Op::ChannelTransfer(operation) => context
-            .transfer_threshold(&operation.channel_id)
-            .unwrap_or(0),
-        _ => return Ok(op.execution_gas::<Constants>()),
-    };
-
-    op.execution_gas::<Constants>()
-        .checked_mul(Value::from(multiplier))
-}
-
-impl MantleTx {
-    #[must_use]
-    pub fn signed_serialized_size(&self, context: &<Self as GasCalculator>::Context) -> u64 {
-        predict_signed_mantle_tx_size(self, context) as u64
-    }
-
-    #[must_use]
-    pub fn transfers(&self) -> Vec<TransferOp> {
-        let mut transfers: Vec<TransferOp> = vec![];
-        for op in self.ops() {
-            if let Op::Transfer(transfer_op) = op {
-                transfers.push(transfer_op.clone());
-            }
-        }
-        transfers
-    }
-
-    #[must_use]
-    pub const fn ops(&self) -> &Ops {
-        &self.0
-    }
-}
-
-static MANTLE_TXHASH_V1_BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| b"MANTLE_TXHASH_V1".to_vec());
-
-impl Transaction for MantleTx {
-    //noinspection RsTypeCheck: The type is correct, but the linter is confused by
-    // the closure.
-    const HASHER: TransactionHasher<Self> = |tx| {
-        let bytes: [u8; 32] = Hasher::digest(tx.as_signing()).into();
-        TxHash::from(bytes)
-    };
-    type Hash = TxHash;
-
-    fn as_signing(&self) -> Vec<u8> {
-        // constant and structure as defined in the Mantle specification:
-        // https://www.notion.so/nomos-tech/v1-3-Mantle-Specification-31e261aa09df818f9327ee87e5a6d433#31e261aa09df80aea7cff4eb98d61b6e
-        let mut buffer = MANTLE_TXHASH_V1_BYTES.to_vec();
-        buffer.extend(self.encode());
-        buffer
-    }
-}
-
-impl<State: VerificationState> From<SignedMantleTx<State>> for MantleTx {
-    fn from(signed_tx: SignedMantleTx<State>) -> Self {
-        signed_tx.mantle_tx
-    }
-}
-
-pub type OpsProofs = UpperBoundedVec<OpProof, MAX_OPS_PER_TX>;
 
 // TODO: Increase test coverage after type state refactor.
 //   The current tests behave just like the old code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedMantleTx<State: VerificationState> {
-    mantle_tx: MantleTx,
+    pub(crate) mantle_tx: MantleTx,
     // TODO: make this more efficient
     ops_proofs: OpsProofs,
     state: PhantomData<State>,
-}
-
-#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
-pub enum VerificationError {
-    #[error("Invalid signature for operation at index {op_index}")]
-    InvalidSignature { op_index: usize },
-    #[error("Invalid proof of claim for operation at index {op_index}")]
-    InvalidProofOfClaim { op_index: usize },
-    #[error("Missing required proof for {op_type} operation at index {op_index}")]
-    MissingProof {
-        op_type: &'static str,
-        op_index: usize,
-    },
-    #[error("Incorrect proof type for {op_type} operation at index {op_index}")]
-    IncorrectProofType {
-        op_type: &'static str,
-        op_index: usize,
-    },
-    #[error(
-        "The number of proofs ({proofs_count}) does not match the number of operations ({ops_count})"
-    )]
-    ProofCountMismatch {
-        ops_count: usize,
-        proofs_count: usize,
-    },
-    #[error("Channel {channel_id} could not be found")]
-    ChannelNotFound { channel_id: ChannelId },
-    #[error("Key {key_index} could not be found in channel {channel_id}")]
-    KeyNotFound {
-        channel_id: ChannelId,
-        key_index: ChannelKeyIndex,
-    },
-    #[error(
-        "Not enough signatures in ChannelMultiSigProof at index {op_index}: got {actual}, required {required}"
-    )]
-    ChannelMultiSigProofNotEnoughSignatures {
-        op_index: usize,
-        actual: usize,
-        required: ChannelKeyIndex,
-    },
-    #[error("Duplicate signature indices in ChannelMultiSigProof at index {op_index}")]
-    ChannelMultiSigProofDuplicateIndices { op_index: usize },
-    #[error(
-        "Invalid signature in ChannelMultiSigProof at index {op_index} for signature index {signature_index}"
-    )]
-    ChannelMultiSigProofInvalidSignature {
-        op_index: usize,
-        signature_index: usize,
-    },
-
-    #[error("Channel verification error: {0}")]
-    ChannelVerificationError(crate::mantle::channel::Error),
-    #[error("Transfer verification error: {0}")]
-    TransferVerificationError(crate::mantle::ops::transfer::TransferError),
-    #[error("SDP verification error: {0}")]
-    SDPVerificationError(crate::mantle::ops::sdp::SdpError),
-    #[error("LeaderClaim verification error: {0}")]
-    LeaderClaimVerificationError(crate::mantle::ops::leader_claim::LeaderClaimError),
-}
-
-pub trait OperationVerificationHelper {
-    fn get_channels(&self) -> &Channels;
-
-    fn get_locked_notes(&self) -> &LockedNotes;
-
-    fn get_utxos(&self) -> &Utxos;
-
-    fn get_declarations_by_service(
-        &self,
-        service: ServiceType,
-    ) -> Result<&Declarations, VerificationError>;
-
-    fn get_declarations_by_id(
-        &self,
-        id: &DeclarationId,
-    ) -> Result<&Declarations, VerificationError>;
-
-    fn get_min_stake(&self) -> &MinStake;
-
-    fn get_epoch(&self) -> Epoch;
-
-    fn get_block_slot(&self) -> Slot;
-
-    fn get_nullifiers(&self) -> &rpds::HashTrieSetSync<VoucherNullifier>;
-
-    fn get_claimable_vouchers_root(&self) -> &RewardsRoot;
-
-    fn get_channel_transfer_threshold(
-        &self,
-        channel_id: &ChannelId,
-    ) -> Result<ChannelKeyIndex, VerificationError>;
-
-    fn get_key_from_channel_at_index(
-        &self,
-        channel_id: &ChannelId,
-        key_index: &ChannelKeyIndex,
-    ) -> Result<Ed25519PublicKey, VerificationError>;
 }
 
 impl<State: VerificationState> SignedMantleTx<State> {
@@ -806,130 +394,10 @@ impl SignedMantleTx<Preverified> {
     }
 }
 
-pub struct VerifiedOps<'tx> {
-    ops: &'tx [Op],
-    proofs: &'tx [OpProof],
-    tx_hash: TxHash,
-    tx_hash_bytes: Bytes,
-    index: usize,
-}
-
-impl<'tx> VerifiedOps<'tx> {
-    #[must_use]
-    pub fn new(transaction: &'tx SignedMantleTx<Preverified>) -> Self {
-        let ops = transaction.mantle_tx.ops();
-        let proofs = transaction.ops_proofs();
-        let tx_hash = transaction.hash();
-        Self {
-            ops,
-            proofs,
-            tx_hash,
-            tx_hash_bytes: tx_hash.as_signing_bytes(),
-            index: 0,
-        }
-    }
-
-    /// Yields the next operation, in order, if it passes verification.
-    ///
-    /// # Returns
-    ///
-    /// - `Some(Ok(op))` if the next operation is successfully verified.
-    /// - `Some(Err(error))` if the next operation fails verification.
-    /// - `None` if there are no more operations to verify.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`VerificationError`] if the operation at the current index
-    /// fails verification. On error, the cursor is not advanced. In the
-    /// current implementation, the callers are expected to abort since only
-    /// linear verification is supported.
-    pub fn next(
-        &mut self,
-        helper: &impl OperationVerificationHelper,
-    ) -> Option<Result<&'tx Op, VerificationError>> {
-        let index = self.index;
-        let op = self.ops.get(index)?;
-        let proof = self
-            .proofs
-            .get(index)
-            .expect("SignedMantleTx<Preverified> invariant: ops and proofs have the same length");
-        if let Err(error) = SignedMantleTx::<Preverified>::verify_stateful_op(
-            index,
-            op,
-            proof,
-            &self.tx_hash,
-            &self.tx_hash_bytes,
-            helper,
-        ) {
-            return Some(Err(error));
-        }
-        self.index += 1;
-        Some(Ok(op))
-    }
-
-    #[must_use]
-    pub const fn tx_hash(&self) -> &TxHash {
-        &self.tx_hash
-    }
-
-    #[must_use]
-    pub const fn tx_hash_bytes(&self) -> &Bytes {
-        &self.tx_hash_bytes
-    }
-}
-
-impl<'tx> From<&'tx SignedMantleTx<Preverified>> for VerifiedOps<'tx> {
-    fn from(transaction: &'tx SignedMantleTx<Preverified>) -> Self {
-        VerifiedOps::new(transaction)
-    }
-}
-
-fn verify_channel_multi_sig(
-    channel_id: &ChannelId,
-    proof: &ChannelMultiSigProof,
-    tx_hash_bytes: &Bytes,
-    helper: &impl OperationVerificationHelper,
-    op_index: usize,
-) -> Result<(), VerificationError> {
-    let transfer_threshold = helper.get_channel_transfer_threshold(channel_id)?;
-
-    let signatures = proof.signatures();
-    let signatures_len = signatures.len();
-    if signatures_len != transfer_threshold as usize {
-        return Err(VerificationError::ChannelMultiSigProofNotEnoughSignatures {
-            op_index,
-            actual: signatures_len,
-            required: transfer_threshold,
-        });
-    }
-
-    let indices_set = signatures
-        .iter()
-        .map(|signature| signature.channel_key_index)
-        .collect::<HashSet<_>>();
-    let indices_set_len = indices_set.len();
-    if indices_set_len != signatures_len {
-        return Err(VerificationError::ChannelMultiSigProofDuplicateIndices { op_index });
-    }
-
-    for (i, signature) in signatures.iter().enumerate() {
-        let public_key =
-            helper.get_key_from_channel_at_index(channel_id, &signature.channel_key_index)?;
-        if let Err(_error) = public_key.verify(tx_hash_bytes.as_ref(), &signature.signature) {
-            return Err(VerificationError::ChannelMultiSigProofInvalidSignature {
-                op_index,
-                signature_index: i,
-            });
-        }
-    }
-
-    Ok(())
-}
-
-impl<State: VerificationState> Transaction for SignedMantleTx<State> {
+impl<State: VerificationState> Hashable for SignedMantleTx<State> {
     //noinspection RsTypeCheck: The type is correct, but the linter is confused by
     // the closure.
-    const HASHER: TransactionHasher<Self> = |tx| {
+    const HASHER: hashable::Hasher<Self> = |tx| {
         let bytes: [u8; 32] = Hasher::digest(tx.as_signing()).into();
         TxHash::from(bytes)
     };
@@ -940,49 +408,13 @@ impl<State: VerificationState> Transaction for SignedMantleTx<State> {
     }
 }
 
-impl<State: VerificationState> AuthenticatedMantleTx for SignedMantleTx<State> {
-    type Context = GasPrices;
-
+impl<State: VerificationState> MantleTxWithProofs for SignedMantleTx<State> {
     fn mantle_tx(&self) -> &MantleTx {
         &self.mantle_tx
     }
 
-    fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)> {
+    fn ops_with_proof(&self) -> impl Iterator<Item = OpWithProof<'_>> {
         self.ops_with_proof()
-    }
-
-    fn total_gas_cost<Constants: GasConstants>(
-        &self,
-        context: <Self as AuthenticatedMantleTx>::Context,
-    ) -> Result<GasCost, GasOverflow> {
-        GasCalculator::total_gas_cost::<Constants>(&self, &context)
-    }
-
-    fn storage_gas_cost(
-        &self,
-        context: <Self as AuthenticatedMantleTx>::Context,
-    ) -> Result<GasCost, GasOverflow> {
-        GasCalculator::storage_gas_cost(&self, &context)
-    }
-
-    fn execution_gas_consumption<Constants: GasConstants>(
-        &self,
-        context: <Self as AuthenticatedMantleTx>::Context,
-    ) -> Result<Gas, GasOverflow> {
-        GasCalculator::execution_gas_consumption::<Constants>(&self, &context)
-    }
-
-    fn storage_gas_consumption(
-        &self,
-        context: <Self as AuthenticatedMantleTx>::Context,
-    ) -> Result<Gas, GasOverflow> {
-        GasCalculator::storage_gas_consumption(&self, &context)
-    }
-}
-
-impl PreverifiedMantleTx for SignedMantleTx<Preverified> {
-    fn verified_ops(&self) -> VerifiedOps<'_> {
-        self.verified_ops()
     }
 }
 
@@ -1046,6 +478,12 @@ fn signed_op_execution_gas<Constants: GasConstants>(
 impl<State: VerificationState> StorageSize for SignedMantleTx<State> {
     fn storage_size(&self) -> usize {
         self.gas_storage_size() as usize
+    }
+}
+
+impl PreverifiedMantleTx for SignedMantleTx<Preverified> {
+    fn verified_ops(&self) -> VerifiedOps<'_> {
+        self.verified_ops()
     }
 }
 
@@ -1122,39 +560,32 @@ impl<'de> Deserialize<'de> for SignedMantleTx<Preverified> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod test_utils {
     use std::sync::Arc;
 
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
-    use num_bigint::BigUint;
-    use rpds::HashTrieSetSync;
+    use lb_cryptarchia_engine::Slot;
+    use lb_groth16::Fr;
+    use lb_key_management_system_keys::keys::Ed25519Key;
 
-    use super::*;
-    use crate::{
-        mantle::{
-            Note, NoteId, Utxo,
-            channel::{ChannelState, SlotTimeframe, SlotTimeout},
-            gas::MainnetGasConstants,
-            ledger::{Inputs, Outputs, OutputsError},
-            ops::{
-                channel::{
-                    MsgId,
-                    config::{ChannelConfigOp, Keys},
-                    deposit::DepositOp,
-                    inscribe::InscriptionOp,
-                    withdraw::ChannelWithdrawOp,
-                },
-                transfer::TransferError,
-            },
+    use crate::mantle::{
+        MantleTx, NoteId, Op, OpProof, SignedMantleTx,
+        channel::{ChannelState, SlotTimeframe, SlotTimeout},
+        ledger::Inputs,
+        ops::channel::{
+            ChannelId, ChannelKeyIndex, MsgId, config::Keys, inscribe::InscriptionOp,
+            verification::test_utils::create_channel_multi_sig_proof, withdraw::ChannelWithdrawOp,
         },
-        proofs::channel_multi_sig_proof::{IndexedSignature, IndexedSignatures},
+        traits::Hashable as _,
+        transactions::{Ops, states::Preverified},
     };
 
-    fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {
+    #[must_use]
+    pub fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {
         MantleTx(Ops::new_unchecked(ops))
     }
 
-    fn create_test_inscribe_op(signing_key: &Ed25519Key) -> InscriptionOp {
+    #[must_use]
+    pub fn create_test_inscribe_op(signing_key: &Ed25519Key) -> InscriptionOp {
         InscriptionOp {
             channel_id: [0; 32].into(),
             inscription: [1, 2, 3].into(),
@@ -1163,145 +594,10 @@ mod tests {
         }
     }
 
-    struct TestOperationVerificationHelper {
-        channels: Channels,
-        keys: HashMap<(ChannelId, ChannelKeyIndex), Ed25519PublicKey>,
-        locked_notes: LockedNotes,
-        utxos: Utxos,
-        declarations: Declarations,
-        min_stake: MinStake,
-        epoch: Epoch,
-        block_slot: Slot,
-        nullifiers: HashTrieSetSync<VoucherNullifier>,
-        claimable_vouchers_root: RewardsRoot,
-    }
-
-    impl TestOperationVerificationHelper {
-        fn new(
-            channels: Channels,
-            keys: impl IntoIterator<Item = ((ChannelId, ChannelKeyIndex), Ed25519PublicKey)>,
-        ) -> Self {
-            Self {
-                channels,
-                keys: keys.into_iter().collect(),
-                locked_notes: LockedNotes::new(),
-                utxos: Utxos::new(),
-                declarations: Declarations::new_sync(),
-                min_stake: MinStake {
-                    threshold: 0,
-                    timestamp: 0,
-                },
-                epoch: Epoch::from(0u32),
-                block_slot: Slot::from(0u64),
-                nullifiers: HashTrieSetSync::new_sync(),
-                claimable_vouchers_root: RewardsRoot::default(),
-            }
-        }
-
-        fn with_utxos(mut self, utxos: impl IntoIterator<Item = Utxo>) -> Self {
-            for utxo in utxos {
-                self.utxos = self.utxos.insert(utxo.id(), utxo).0;
-            }
-            self
-        }
-    }
-
-    impl OperationVerificationHelper for TestOperationVerificationHelper {
-        fn get_channels(&self) -> &Channels {
-            &self.channels
-        }
-
-        fn get_locked_notes(&self) -> &LockedNotes {
-            &self.locked_notes
-        }
-
-        fn get_utxos(&self) -> &Utxos {
-            &self.utxos
-        }
-
-        fn get_declarations_by_service(
-            &self,
-            _service: ServiceType,
-        ) -> Result<&Declarations, VerificationError> {
-            Ok(&self.declarations)
-        }
-
-        fn get_declarations_by_id(
-            &self,
-            _id: &DeclarationId,
-        ) -> Result<&Declarations, VerificationError> {
-            Ok(&self.declarations)
-        }
-
-        fn get_min_stake(&self) -> &MinStake {
-            &self.min_stake
-        }
-
-        fn get_epoch(&self) -> Epoch {
-            self.epoch
-        }
-
-        fn get_block_slot(&self) -> Slot {
-            self.block_slot
-        }
-
-        fn get_nullifiers(&self) -> &HashTrieSetSync<VoucherNullifier> {
-            &self.nullifiers
-        }
-
-        fn get_claimable_vouchers_root(&self) -> &RewardsRoot {
-            &self.claimable_vouchers_root
-        }
-
-        fn get_channel_transfer_threshold(
-            &self,
-            channel_id: &ChannelId,
-        ) -> Result<ChannelKeyIndex, VerificationError> {
-            self.channels
-                .channels
-                .get(channel_id)
-                .ok_or(VerificationError::ChannelNotFound {
-                    channel_id: *channel_id,
-                })
-                .map(|channel| channel.transfer_threshold)
-        }
-
-        fn get_key_from_channel_at_index(
-            &self,
-            channel_id: &ChannelId,
-            key_index: &ChannelKeyIndex,
-        ) -> Result<Ed25519PublicKey, VerificationError> {
-            self.keys.get(&(*channel_id, *key_index)).copied().ok_or(
-                VerificationError::KeyNotFound {
-                    channel_id: *channel_id,
-                    key_index: *key_index,
-                },
-            )
-        }
-    }
-
-    fn create_channel_multi_sig_proof(
-        tx_hash: &TxHash,
-        signing_keys: &[&Ed25519Key],
-    ) -> ChannelMultiSigProof {
-        let signatures: IndexedSignatures = signing_keys
-            .iter()
-            .enumerate()
-            .map(|(index, key)| {
-                IndexedSignature::new(
-                    index as ChannelKeyIndex,
-                    key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
-                )
-            })
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-        ChannelMultiSigProof::try_new(signatures).unwrap()
-    }
-
     // TODO: The generated channels are bare. We should add more realistic channel
     // states for testing.
-    fn make_channel_state(
+    #[must_use]
+    pub fn make_channel_state(
         transfer_threshold: ChannelKeyIndex,
         accredited_keys: Option<Keys>,
     ) -> ChannelState {
@@ -1324,7 +620,8 @@ mod tests {
         }
     }
 
-    fn create_withdraw_tx(
+    #[must_use]
+    pub fn create_withdraw_tx(
         channel_id: ChannelId,
         signing_keys: &[&Ed25519Key],
         inputs: Option<Inputs>,
@@ -1348,6 +645,27 @@ mod tests {
         );
         tx
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_groth16::Fr;
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+
+    use super::*;
+    use crate::mantle::{
+        NoteId,
+        gas::MainnetGasConstants,
+        ledger::Inputs,
+        ops::channel::{
+            ChannelId, config::ChannelConfigOp, deposit::DepositOp,
+            verification::test_utils::create_channel_multi_sig_proof, withdraw::ChannelWithdrawOp,
+        },
+        transactions::{
+            MantleTxGasContext,
+            signed_mantle_tx::test_utils::{create_test_inscribe_op, create_test_mantle_tx},
+        },
+    };
 
     fn create_config_op(channel: ChannelId, signing_key: &Ed25519Key) -> ChannelConfigOp {
         ChannelConfigOp {
@@ -1706,181 +1024,5 @@ mod tests {
                 proofs_count: 2
             })
         ));
-    }
-
-    #[test]
-    fn helper_backed_verification_accepts_valid_channel_withdraw() {
-        let channel_id = ChannelId::from([8u8; 32]);
-        let key0 = Ed25519Key::from_bytes(&[8; 32]);
-        let key1 = Ed25519Key::from_bytes(&[9; 32]);
-        let keys = Keys::new_unchecked(vec![key0.public_key(), key1.public_key()]);
-
-        let input_sk = ZkKey::from(BigUint::from(1u8));
-        let utxo = Utxo {
-            op_id: [1u8; 32],
-            output_index: 0,
-            note: Note::new(10, input_sk.to_public_key()),
-        };
-        let note_id = utxo.id();
-        let withdraw_inputs = Inputs::from([note_id]);
-
-        let signed_tx = create_withdraw_tx(channel_id, &[&key0, &key1], Some(withdraw_inputs));
-
-        let channels = {
-            let mut channels = Channels::new();
-            let channel_state = make_channel_state(2, Some(keys));
-            channels.channels.insert_mut(channel_id, channel_state);
-            channels
-                .register_channel_note(&note_id, &channel_id)
-                .expect("Note should be registered.")
-        };
-
-        let helper = TestOperationVerificationHelper::new(
-            channels,
-            [
-                ((channel_id, 0), key0.public_key()),
-                ((channel_id, 1), key1.public_key()),
-            ],
-        )
-        .with_utxos(vec![utxo]);
-
-        signed_tx
-            .verified_ops()
-            .next(&helper)
-            .expect("Cursor should yield the WithdrawOp")
-            .expect("WithdrawOp should verify");
-    }
-
-    #[test]
-    fn helper_backed_verification_rejects_zero_value_transfer_output() {
-        let input_sk = ZkKey::from(BigUint::from(1u8));
-        let input_utxo = Utxo {
-            op_id: [1u8; 32],
-            output_index: 0,
-            note: Note::new(10000, input_sk.to_public_key()),
-        };
-
-        let signed_tx = {
-            let transfer_op = TransferOp::new(
-                Inputs::new([input_utxo.id()]),
-                Outputs::new([Note::new(0, Fr::from(BigUint::from(2u8)).into())]),
-            );
-            let mantle_tx = create_test_mantle_tx(vec![Op::Transfer(transfer_op)]);
-            let transfer_sig = ZkKey::multi_sign(&[input_sk], &mantle_tx.hash().to_fr())
-                .expect("Signing should succeed");
-            SignedMantleTx::new(mantle_tx, [OpProof::ZkSig(transfer_sig)].into())
-                .preverify()
-                .expect("Transfer transaction should preverify")
-        };
-
-        let helper =
-            TestOperationVerificationHelper::new(Channels::new(), []).with_utxos([input_utxo]);
-
-        let verification_result = signed_tx
-            .verified_ops()
-            .next(&helper)
-            .expect("Cursor should yield the TransferOp");
-        assert_eq!(
-            verification_result,
-            Err(VerificationError::TransferVerificationError(
-                TransferError::Outputs(OutputsError::ZeroValueNote)
-            ))
-        );
-    }
-
-    #[test]
-    fn helper_backed_verification_rejects_missing_channel() {
-        let channel_id = ChannelId::from([10u8; 32]);
-        let key0 = Ed25519Key::from_bytes(&[0; 32]);
-        let signed_tx = create_withdraw_tx(channel_id, &[&key0], None);
-
-        let channels = Channels::new();
-        let helper = TestOperationVerificationHelper::new(channels, []);
-
-        let verification_result = signed_tx.verified_ops().next(&helper).unwrap();
-        assert_eq!(
-            verification_result,
-            Err(VerificationError::ChannelNotFound { channel_id })
-        );
-    }
-
-    #[test]
-    fn helper_backed_verification_rejects_missing_key() {
-        let channel_id = ChannelId::from([10u8; 32]);
-        let key0 = Ed25519Key::from_bytes(&[0; 32]);
-        let key1 = Ed25519Key::from_bytes(&[1; 32]);
-        let signed_tx = create_withdraw_tx(channel_id, &[&key0, &key1], None);
-
-        let channels = {
-            let mut channels = Channels::new();
-            let channel_state = make_channel_state(2, None);
-            channels.channels.insert_mut(channel_id, channel_state);
-            channels
-        };
-        let helper =
-            TestOperationVerificationHelper::new(channels, [((channel_id, 0), key0.public_key())]);
-
-        let verification_result = signed_tx.verified_ops().next(&helper).unwrap();
-        assert_eq!(
-            verification_result,
-            Err(VerificationError::KeyNotFound {
-                channel_id,
-                key_index: 1
-            })
-        );
-    }
-
-    #[test]
-    fn helper_backed_verification_rejects_not_enough_signatures() {
-        let channel_id = ChannelId::from([10u8; 32]);
-        let key0 = Ed25519Key::from_bytes(&[0; 32]);
-        let signed_tx = create_withdraw_tx(channel_id, &[&key0], None);
-
-        let channels = {
-            let mut channels = Channels::new();
-            let channel_state = make_channel_state(2, None);
-            channels.channels.insert_mut(channel_id, channel_state);
-            channels
-        };
-        let helper =
-            TestOperationVerificationHelper::new(channels, [((channel_id, 0), key0.public_key())]);
-
-        let verification_result = signed_tx.verified_ops().next(&helper).unwrap();
-        assert_eq!(
-            verification_result,
-            Err(VerificationError::ChannelMultiSigProofNotEnoughSignatures {
-                op_index: 0,
-                actual: 1,
-                required: 2
-            })
-        );
-    }
-
-    #[test]
-    fn helper_backed_verification_rejects_invalid_signature() {
-        let channel_id = ChannelId::from([10u8; 32]);
-        let expected_key = Ed25519Key::from_bytes(&[0; 32]);
-        let wrong_key = Ed25519Key::from_bytes(&[9; 32]);
-        let signed_tx = create_withdraw_tx(channel_id, &[&wrong_key], None);
-
-        let channels = {
-            let mut channels = Channels::new();
-            let channel_state = make_channel_state(1, None);
-            channels.channels.insert_mut(channel_id, channel_state);
-            channels
-        };
-        let helper = TestOperationVerificationHelper::new(
-            channels,
-            [((channel_id, 0), expected_key.public_key())],
-        );
-
-        let verification_result = signed_tx.verified_ops().next(&helper).unwrap();
-        assert_eq!(
-            verification_result,
-            Err(VerificationError::ChannelMultiSigProofInvalidSignature {
-                op_index: 0,
-                signature_index: 0
-            })
-        );
     }
 }

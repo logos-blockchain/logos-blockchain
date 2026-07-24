@@ -8,7 +8,10 @@ use futures::{StreamExt as _, TryStreamExt as _};
 use lb_core::{
     block::Block,
     header::HeaderId,
-    mantle::{StorageSize, Transaction, TxHash},
+    mantle::{
+        TxHash,
+        traits::{Hashable, StorageSize},
+    },
 };
 use lb_storage_service::{StorageMsg, StorageService, backends::rocksdb::RocksBackend};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
@@ -36,7 +39,7 @@ where
             + DeserializeOwned
             + Clone
             + Eq
-            + Transaction<Hash = TxHash>
+            + Hashable<Hash = TxHash>
             + StorageSize
             + 'static,
     {
