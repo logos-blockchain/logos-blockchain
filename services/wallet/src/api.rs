@@ -1,10 +1,12 @@
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Note, SignedMantleTx, TxHash, Value,
+        Note, SignedMantleTx, Value,
         gas::GasCost,
         ops::leader_claim::{RewardsRoot, VoucherCm},
-        transactions::{MantleTxBuilder, MantleTxContext, TxBuilderError, states::Preverified},
+        transactions::{
+            MantleTxBuilder, MantleTxContext, TxBuilderError, hash::TxHash, states::Preverified,
+        },
     },
 };
 use lb_key_management_system_service::keys::{

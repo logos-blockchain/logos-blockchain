@@ -3,7 +3,7 @@ pub mod adapters;
 use std::{collections::BTreeMap, pin::Pin};
 
 use futures::{Stream, future::join_all};
-use lb_core::{header::HeaderId, mantle::TxHash};
+use lb_core::{header::HeaderId, mantle::transactions::hash::TxHash};
 use lb_cryptarchia_engine::Slot;
 use lb_storage_service::{StorageService, backends::StorageBackend};
 use overwatch::services::{ServiceData, relay::OutboundRelay};

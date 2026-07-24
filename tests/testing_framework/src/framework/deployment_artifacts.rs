@@ -3,7 +3,7 @@ use cfgsync_adapter::MaterializedArtifacts;
 use cfgsync_artifacts::ArtifactFile;
 use lb_core::{
     block::genesis::GenesisBlock,
-    mantle::GenesisTx as _,
+    mantle::traits::GenesisTx as _,
     sdp::{Locator, ServiceType},
 };
 use lb_libp2p::{Multiaddr, Protocol};

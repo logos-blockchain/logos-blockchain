@@ -9,7 +9,7 @@ use crate::{
     mantle::{
         Op, OpProof,
         nom::{NomDecode as _, NomEncode as _},
-        transactions::tx::OpsProofs,
+        transactions::OpsProofs,
     },
     proofs::{
         channel_multi_sig_proof::ChannelMultiSigProof, leader_claim_proof::Groth16LeaderClaimProof,

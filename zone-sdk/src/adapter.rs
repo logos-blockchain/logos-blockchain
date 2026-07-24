@@ -11,10 +11,14 @@ use lb_core::{
     events::TxEvent,
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx, Transaction as _, TxHash, Value,
+        Op, SignedMantleTx, Value,
         channel::ChannelState,
         ops::{OpId as _, channel::ChannelId},
-        transactions::states::{Unverified, VerificationState},
+        traits::Hashable as _,
+        transactions::{
+            hash::TxHash,
+            states::{Unverified, VerificationState},
+        },
     },
 };
 use lb_http_api_common::{

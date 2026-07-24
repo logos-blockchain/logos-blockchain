@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
-    NoteId, SignedMantleTx, Transaction as _, TxHash, Utxo, ops::Op,
+    NoteId, SignedMantleTx, TxHash, Utxo, ops::Op, traits::Hashable as _,
     transactions::states::Unverified,
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -211,14 +211,15 @@ mod tests {
     use lb_core::{
         header::{ContentId, HeaderId},
         mantle::{
-            MantleTx, Note, SignedMantleTx, Transaction as _, Utxo,
+            MantleTx, Note, SignedMantleTx, Utxo,
             ledger::{Inputs, Outputs},
             ops::{
                 Op,
                 channel::{ChannelId, deposit::DepositOp},
                 transfer::TransferOp,
             },
-            transactions::{states::Unverified, tx::OpsProofs},
+            traits::Hashable as _,
+            transactions::{OpsProofs, states::Unverified},
         },
         proofs::leader_proof::Groth16LeaderProof,
         sdp::{DeclarationMessage, Locator, ProviderId, ServiceType, WithdrawMessage},

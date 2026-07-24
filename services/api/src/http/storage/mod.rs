@@ -1,7 +1,10 @@
 use lb_core::{
     block::Block,
     header::HeaderId,
-    mantle::{StorageSize, Transaction, TxHash},
+    mantle::{
+        TxHash,
+        traits::{Hashable, StorageSize},
+    },
 };
 use lb_storage_service::{StorageService, backends::rocksdb::RocksBackend};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
@@ -22,7 +25,7 @@ pub trait StorageAdapter<RuntimeServiceId> {
             + DeserializeOwned
             + Clone
             + Eq
-            + Transaction<Hash = TxHash>
+            + Hashable<Hash = TxHash>
             + StorageSize
             + 'static;
 

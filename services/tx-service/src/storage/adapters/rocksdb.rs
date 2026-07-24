@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt as _};
 use lb_core::{
     codec::{DeserializeOp as _, SerializeOp as _},
-    mantle::TxHash,
+    mantle::transactions::hash::TxHash,
 };
 use lb_storage_service::{StorageMsg, StorageService, backends::rocksdb::RocksBackend};
 use overwatch::services::{ServiceData, relay::OutboundRelay};

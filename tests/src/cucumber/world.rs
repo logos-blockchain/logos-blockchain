@@ -15,11 +15,14 @@ use lb_core::{
     codec::DeserializeOp as _,
     header::HeaderId,
     mantle::{
-        SignedMantleTx, TxHash, Utxo, Value,
+        SignedMantleTx, Utxo, Value,
         ops::channel::{
             ChannelId, deposit::DepositOp, inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
-        transactions::states::{Preverified, VerificationState},
+        transactions::{
+            hash::TxHash,
+            states::{Preverified, VerificationState},
+        },
     },
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;

@@ -17,7 +17,7 @@ use std::sync::LazyLock;
 use blend::GeneralBlendConfig;
 use lb_core::{
     block::genesis::GenesisBlock,
-    mantle::GenesisTx as _,
+    mantle::traits::GenesisTx as _,
     sdp::{Locator, ServiceType},
 };
 use lb_node::config::KmsConfig;

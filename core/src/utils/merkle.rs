@@ -1,6 +1,6 @@
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
-    mantle::{Transaction, TxHash},
+    mantle::{traits::Hashable, transactions::hash::TxHash},
 };
 
 pub fn node(left: impl AsRef<[u8]>, right: impl AsRef<[u8]>) -> [u8; 32] {
@@ -11,12 +11,12 @@ pub fn node(left: impl AsRef<[u8]>, right: impl AsRef<[u8]>) -> [u8; 32] {
 }
 
 // Calculates a 32-byte Merkle root of transactions
-pub fn calculate_block_root<T: Transaction<Hash = TxHash>>(transactions: &[T]) -> Hash {
-    let mut leaves: Vec<_> = transactions.iter().map(Transaction::hash).collect();
+pub fn calculate_block_root<T: Hashable<Hash = TxHash>>(transactions: &[T]) -> Hash {
+    let mut leaves: Vec<_> = transactions.iter().map(Hashable::hash).collect();
 
     let target_size = leaves.len().max(1).next_power_of_two();
 
-    let zero_leaf: <T as Transaction>::Hash = [0u8; 32].into();
+    let zero_leaf: <T as Hashable>::Hash = [0u8; 32].into();
     leaves.resize(target_size, zero_leaf);
 
     while leaves.len() > 1 {
@@ -35,9 +35,10 @@ mod tests {
 
     use super::*;
     use crate::mantle::{
-        MantleTx, Note, Op,
+        Note, Op,
         ledger::{Inputs, Outputs},
         ops::transfer::TransferOp,
+        transactions::mantle_tx::MantleTx,
     };
 
     fn create_random_tx(seed: u32) -> MantleTx {
