@@ -7,10 +7,10 @@ use crate::{
     crypto::{Digest as _, Hasher},
     events::TxEvent,
     mantle::{
-        TxHash,
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
         ledger::Operation,
         nom::{NomCodec, NomEncode as _},
+        transactions::hash::TxHash,
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };

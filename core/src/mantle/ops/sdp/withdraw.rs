@@ -7,8 +7,8 @@ use super::{SDPWithdrawOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        TxHash,
         ledger::{Declarations, Operation},
+        transactions::hash::TxHash,
     },
     sdp::{self, locked_notes::LockedNotes},
 };

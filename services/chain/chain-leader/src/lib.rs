@@ -20,8 +20,10 @@ use lb_core::{
     block::{Block, BlockTransactions, Error as BlockError, MAX_BLOCK_TRANSACTIONS_SIZE},
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, SignedMantleTx, StorageSize, Transaction, TxHash,
-        gas::MainnetGasConstants, transactions::states::Preverified,
+        SignedMantleTx,
+        gas::MainnetGasConstants,
+        traits::{Hashable, MantleTxWithProofs, StorageSize},
+        transactions::{hash::TxHash, states::Preverified},
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
 };
@@ -170,7 +172,7 @@ pub struct CryptarchiaLeader<
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Settings: Clone,
     Mempool::Item: Clone + Eq + Debug + 'static,
-    Mempool::Item: AuthenticatedMantleTx,
+    Mempool::Item: MantleTxWithProofs,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
@@ -209,7 +211,7 @@ where
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::Settings: Clone,
-    Mempool::Item: AuthenticatedMantleTx + Clone + Eq + Debug,
+    Mempool::Item: MantleTxWithProofs + Clone + Eq + Debug,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
@@ -266,7 +268,7 @@ where
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Settings: Clone + Send + Sync + 'static,
-    Mempool::Item: Transaction<Hash = Mempool::Key>
+    Mempool::Item: Hashable<Hash = Mempool::Key>
         + Debug
         + Clone
         + Eq
@@ -276,7 +278,7 @@ where
         + Sync
         + Unpin
         + 'static,
-    Mempool::Item: AuthenticatedMantleTx,
+    Mempool::Item: MantleTxWithProofs,
     MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>
         + Send
         + Sync
@@ -551,7 +553,7 @@ where
         + 'static,
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Settings: Clone + Send + Sync + 'static,
-    Mempool::Item: AuthenticatedMantleTx<Hash = Mempool::Key>
+    Mempool::Item: MantleTxWithProofs<Hash = Mempool::Key>
         + Debug
         + Clone
         + Eq
@@ -654,7 +656,7 @@ where
 
         // Transactions that never became applicable are genuinely invalid against
         // this block's ledger state and can be evicted from the mempool.
-        let invalid_tx_hashes: Vec<_> = pending.iter().map(Transaction::hash).collect();
+        let invalid_tx_hashes: Vec<_> = pending.iter().map(Hashable::hash).collect();
 
         if !invalid_tx_hashes.is_empty()
             && let Err(e) = relays

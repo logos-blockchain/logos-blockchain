@@ -12,7 +12,7 @@ use std::{
 use lb_chain_service::Epoch;
 use lb_common_http_client::Error;
 use lb_core::{
-    mantle::{NoteId, OpProof, Transaction as _, Utxo, ops::Op},
+    mantle::{NoteId, OpProof, Utxo, ops::Op, traits::Hashable as _},
     sdp::{
         Declaration, DeclarationId, DeclarationMessage, Locator, ProviderId, ServiceType,
         WithdrawMessage,

@@ -14,7 +14,7 @@ use crate::{
             channel::{ChannelId, withdraw::ChannelWithdrawOp},
             transfer::TransferOp,
         },
-        transactions::{MantleTx, MantleTxContext},
+        transactions::mantle_tx::{MantleTx, MantleTxContext},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };

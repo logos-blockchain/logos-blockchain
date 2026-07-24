@@ -1,4 +1,4 @@
-use lb_core::mantle::GenesisTx as _;
+use lb_core::mantle::traits::GenesisTx as _;
 use lb_cryptarchia_engine::{EpochConfig, time::SlotConfig};
 use lb_time_service::{
     TimeServiceSettings,

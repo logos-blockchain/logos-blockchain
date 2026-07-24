@@ -319,7 +319,7 @@ mod block_root_test_vectors {
     use super::*;
     use crate::{
         mantle::{
-            MantleTx, Note, Op, Transaction as _,
+            MantleTx, Note, Op,
             channel::{SlotTimeframe, SlotTimeout},
             ledger::{Inputs, NoteId, Outputs},
             ops::{
@@ -334,6 +334,7 @@ mod block_root_test_vectors {
                 leader_claim::{LeaderClaimOp, VoucherCm},
                 transfer::TransferOp,
             },
+            traits::Hashable as _,
             transactions::Ops,
         },
         sdp::{

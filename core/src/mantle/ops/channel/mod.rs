@@ -2,6 +2,7 @@ pub mod channel_transfer;
 pub mod config;
 pub mod deposit;
 pub mod inscribe;
+pub mod verification;
 pub mod withdraw;
 
 use std::fmt::{Display, Formatter};

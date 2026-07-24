@@ -16,8 +16,7 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, NoteId, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
-        Value, VerificationError,
+        NoteId, Op, OpProof, SignedMantleTx, TxHash, Utxo, Value, VerificationError,
         gas::{GasCost, GasOverflow, MainnetGasConstants},
         ledger::Inputs,
         ops::{
@@ -27,8 +26,9 @@ use lb_core::{
             },
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
+        traits::{Hashable as _, MantleTxWithProofs},
         transactions::{
-            MantleTxBuilder, MantleTxContext, TxBuilderError, states::Preverified, tx::OpsProofs,
+            MantleTxBuilder, MantleTxContext, OpsProofs, TxBuilderError, states::Preverified,
         },
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
@@ -306,7 +306,7 @@ impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> ServiceCore<RuntimeService
     for WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
 where
     Kms: KmsServiceData<Backend = KmsBackend> + Send + Sync,
-    Tx: AuthenticatedMantleTx + Send + Sync + Clone + Eq + Serialize + DeserializeOwned + 'static,
+    Tx: MantleTxWithProofs + Send + Sync + Clone + Eq + Serialize + DeserializeOwned + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx>,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
@@ -463,7 +463,7 @@ impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
     WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
 where
     Kms: KmsServiceData<Backend = KmsBackend>,
-    Tx: AuthenticatedMantleTx + Send + Sync + Clone + Eq + Serialize + DeserializeOwned + 'static,
+    Tx: MantleTxWithProofs + Send + Sync + Clone + Eq + Serialize + DeserializeOwned + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx> + Send + 'static,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,

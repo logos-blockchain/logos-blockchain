@@ -5,7 +5,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         gas::GasPrice,
-        transactions::genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
+        transactions::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
     },
 };
 use tracing::info;
