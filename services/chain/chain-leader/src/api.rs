@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use lb_core::mantle::TxHash;
+use lb_core::mantle::transactions::hash::TxHash;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use tokio::sync::oneshot;
 

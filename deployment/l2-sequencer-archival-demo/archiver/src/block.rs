@@ -5,9 +5,10 @@ use lb_common_http_client::CommonHttpClient;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx, Transaction as _, TxHash,
+        Op, SignedMantleTx,
         ops::channel::{ChannelId, inscribe::InscriptionOp},
-        transactions::states::Unverified,
+        traits::Hashable as _,
+        transactions::{hash::TxHash, states::Unverified},
     },
 };
 use lb_demo_sequencer::{BlockData, db::AccountDb};

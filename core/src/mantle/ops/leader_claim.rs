@@ -11,10 +11,11 @@ use crate::{
     crypto::ZkHasher,
     events::{TxEvent, TxEventPayload},
     mantle::{
-        Note, TxHash, Utxo, Value,
+        Note, Utxo, Value,
         ledger::{Operation, Utxos},
         nom::NomEncode as _,
         ops::OpId,
+        transactions::hash::TxHash,
     },
     proofs::leader_claim_proof::{
         Groth16LeaderClaimProof, LeaderClaimProof as _, LeaderClaimPublic,

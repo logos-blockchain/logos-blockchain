@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use lb_core::mantle::{
-    OpProof, TxHash,
+    OpProof,
     ops::{
         Op,
         channel::{
@@ -11,7 +11,7 @@ use lb_core::mantle::{
     },
     transactions::{
         GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GasPrices, MantleTxBuilder,
-        MantleTxContext, MantleTxGasContext,
+        MantleTxContext, MantleTxGasContext, hash::TxHash,
     },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};

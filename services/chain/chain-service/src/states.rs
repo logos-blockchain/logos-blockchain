@@ -1,6 +1,6 @@
 use std::{collections::HashSet, time::SystemTime};
 
-use lb_core::{header::HeaderId, mantle::GenesisTx as _};
+use lb_core::{header::HeaderId, mantle::traits::GenesisTx as _};
 use lb_ledger::LedgerState;
 use overwatch::{DynError, services::state::ServiceState};
 use serde::{Deserialize, Serialize};

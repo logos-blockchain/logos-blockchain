@@ -7,8 +7,8 @@ use super::{SDPActiveOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        TxHash,
         ledger::{Declarations, Operation},
+        transactions::hash::TxHash,
     },
 };
 

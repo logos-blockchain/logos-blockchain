@@ -1,13 +1,13 @@
 use lb_core::mantle::{
     MantleTx, SignedMantleTx, TxHash,
-    transactions::{Ops, states::VerificationState, tx::OpsProofs},
+    transactions::{Ops, OpsProofs, states::VerificationState},
 };
 use serde::Serialize;
 
 #[derive(Serialize)]
 #[serde(remote = "MantleTx")]
 pub struct ApiTransactionSerializer {
-    #[serde(getter = "<MantleTx as lb_core::mantle::Transaction>::hash")]
+    #[serde(getter = "<MantleTx as lb_core::mantle::traits::Hashable>::hash")]
     hash: TxHash,
     #[serde(getter = "MantleTx::ops")]
     ops: Ops,
