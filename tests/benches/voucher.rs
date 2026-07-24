@@ -20,7 +20,7 @@ use lb_core::{
 };
 use lb_groth16::Fr;
 use lb_mmr::MerkleMountainRange;
-use lb_utxotree::DynamicMerkleTree;
+use lb_utxotree::{DynamicMerkleTree, UtxoMerkleHasher};
 
 const SAMPLE_COUNT: u32 = 3;
 
@@ -57,7 +57,7 @@ fn tree_11th_epoch(bencher: Bencher) {
 }
 
 type Mmr = MerkleMountainRange<VoucherCm, ZkHasher>;
-type Tree = DynamicMerkleTree<VoucherCm, ZkHasher>;
+type Tree = DynamicMerkleTree<UtxoMerkleHasher<VoucherCm, ZkHasher>>;
 
 fn voucher(i: u64) -> VoucherCm {
     VoucherCm::from_secret(VoucherSecret::from(Fr::from(i)))
