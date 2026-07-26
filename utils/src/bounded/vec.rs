@@ -25,22 +25,28 @@ impl<T> BoundedLen for Vec<T> {
 pub type BoundedVec<T, const MIN: usize, const MAX: usize> = Bounded<Vec<T>, MIN, MAX>;
 
 impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
+    /// Constructs an empty vector.
+    ///
+    /// This is only valid when `MIN` is zero; it panics if `MIN` is non-zero.
     #[must_use]
     pub const fn empty() -> Self {
         const { assert!(MIN == 0, "Cannot construct empty BoundedVec when MIN > 0") }
         Self::new_unchecked(Vec::new())
     }
 
+    /// Returns the number of elements in the vector.
     #[must_use]
     pub const fn len(&self) -> usize {
         self.as_inner().len()
     }
 
+    /// Returns `true` if the vector contains no elements.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.as_inner().is_empty()
     }
 
+    /// Returns the first element, or `None` if the vector is empty.
     #[must_use]
     // TODO: This function should not return an `Option` when `MIN >= 1`, but at the
     // moment this is not possible in the current Rust version.
@@ -48,15 +54,21 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
         self.as_inner().first()
     }
 
+    /// Returns an iterator over the elements of the vector.
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.as_inner().iter()
     }
 
+    /// Returns the elements as a slice.
     #[must_use]
     pub fn as_slice(&self) -> &[T] {
         self.as_inner()
     }
 
+    /// Appends an element if doing so does not exceed `MAX`.
+    ///
+    /// Returns [`BoundedError::TooManyItems`] when the vector is already at
+    /// its maximum length.
     pub fn try_push(&mut self, item: T) -> Result<(), BoundedError> {
         if self.len() >= MAX {
             return Err(BoundedError::TooManyItems {
@@ -68,6 +80,10 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
         Ok(())
     }
 
+    /// Removes and returns the last element if the minimum length is kept.
+    ///
+    /// Returns `Ok(None)` when the vector is empty or already at its minimum
+    /// length.
     pub fn try_pop(&mut self) -> Result<Option<T>, BoundedError> {
         if self.is_empty() || self.len() - 1 < MIN {
             return Ok(None);
@@ -76,6 +92,12 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
         self.try_remove(self.len() - 1).map(Some)
     }
 
+    /// Removes and returns the element at `index` if the minimum length is
+    /// kept.
+    ///
+    /// Returns [`BoundedError::IndexOutOfBounds`] for an invalid index and
+    /// [`BoundedError::TooFewItems`] when removing the element would violate
+    /// `MIN`.
     pub fn try_remove(&mut self, index: usize) -> Result<T, BoundedError> {
         // This check also guards against an empty vec, `index >= 0` and `self.len() =
         // 0` will return and error
@@ -97,10 +119,15 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
         Ok(self.0.remove(index))
     }
 
+    /// Returns a mutable iterator over the elements of the vector.
     pub fn iter_mut(&mut self) -> IterMut<'_, T> {
         self.0.iter_mut()
     }
 
+    /// Constructs a bounded vector from an iterable of elements.
+    ///
+    /// Returns an error if the iterable contains fewer than `MIN` or more than
+    /// `MAX` elements. Iteration stops as soon as the maximum is exceeded.
     pub fn try_from_iter<I>(iterable: I) -> Result<Self, BoundedError>
     where
         I: IntoIterator<Item = T>,
@@ -271,13 +298,13 @@ impl<T, const MIN: usize, const MAX: usize> IntoIterator for Bounded<Vec<T>, MIN
     }
 }
 
-// `[0, MAX]` elements.
+/// A bounded vector containing between zero and `MAX` elements.
 pub type UpperBoundedVec<T, const MAX: usize> = BoundedVec<T, 0, MAX>;
-// `[MIN, usize::MAX]` elements.
+/// A bounded vector containing at least `MIN` elements.
 pub type LowerBoundedVec<T, const MIN: usize> = BoundedVec<T, MIN, { usize::MAX }>;
-// `[1, MAX]` elements.
+/// A non-empty bounded vector containing at most `MAX` elements.
 pub type NonEmptyBoundedVec<T, const MAX: usize> = BoundedVec<T, 1, MAX>;
-// `[0, usize::MAX]` elements.
+/// A vector with no practical length bound.
 pub type MaxBoundedVec<T> = UpperBoundedVec<T, { usize::MAX }>;
 
 #[cfg(test)]
@@ -618,7 +645,27 @@ mod tests {
     struct MyNewType(u32);
 
     #[test]
-    fn filter_map_preserves_upper_bound_when_filtering_items_above_twenty() {
+    fn map_preserves_bounds_when_mapping_to_another_inner_type() {
+        type Source = BoundedVec<u16, 2, 4>;
+        type Mapped = BoundedVec<MyNewType, 2, 4>;
+
+        let source = Source::try_from(vec![10u16, 20, 30, 40]).unwrap();
+
+        // The explicit type annotation proves at compile time that map preserves
+        // the source bounds while changing the inner type.
+        let mapped: Mapped = source.map_ref(|&value| MyNewType(u32::from(value)));
+
+        assert_eq!(Mapped::MIN, Source::MIN);
+        assert_eq!(Mapped::MAX, Source::MAX);
+        assert_eq!(mapped.len(), 4);
+        assert_eq!(
+            mapped.as_slice(),
+            &[MyNewType(10), MyNewType(20), MyNewType(30), MyNewType(40),]
+        );
+    }
+
+    #[test]
+    fn filter_map_preserves_upper_bound_when_filtering_items() {
         type Source1 = BoundedVec<u16, 2, 4>;
         type Source2 = UpperBoundedVec<u16, 4>;
         type Mapped = UpperBoundedVec<MyNewType, 4>;
