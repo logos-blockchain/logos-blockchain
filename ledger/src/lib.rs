@@ -72,7 +72,7 @@ const LEADER_REWARD_SHARE_DENOMINATOR: u128 = 10;
 const BLEND_REWARD_SHARE_NUMERATOR: u128 = 6;
 
 const BLEND_REWARD_SHARE_DENOMINATOR: u128 = 10;
-const EXECUTION_GAS_LIMIT: Gas = Gas::new(3_193_360);
+const EXECUTION_GAS_LIMIT: Gas = Gas::new(3_193_460);
 
 // While individual notes are constrained to be `u64`, intermediate calculations
 // may overflow, so we use `i128` to avoid that and to easily represent negative
