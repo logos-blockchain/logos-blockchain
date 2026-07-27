@@ -129,7 +129,7 @@ impl Operation<TransferValidationContext<'_>> for TransferOp {
 
 #[cfg(test)]
 mod test {
-    use lb_groth16::Fr;
+    use lb_poseidon2::Fr;
     use num_bigint::BigUint;
 
     use super::*;

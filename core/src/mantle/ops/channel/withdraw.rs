@@ -66,7 +66,7 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
             ctx.helper,
             ctx.op_index,
         )
-        .map_err(|_error| Error::InvalidSignature)?; // FIXME: Pattern is recursive
+        .map_err(|_error| Error::InvalidSignature)?; // FIXME: Discards error details
 
         // Check that the channel exists
         let channel =

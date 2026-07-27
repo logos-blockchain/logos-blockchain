@@ -75,7 +75,7 @@ impl Operation<ChannelTransferValidationContext<'_>> for ChannelTransferOp {
             ctx.helper,
             ctx.op_index,
         )
-        .map_err(|_error| Error::InvalidSignature)?; // FIXME: Pattern is recursive
+        .map_err(|_error| Error::InvalidSignature)?; // FIXME: Discards error details
 
         // Check that the channel exist
         let channel =
