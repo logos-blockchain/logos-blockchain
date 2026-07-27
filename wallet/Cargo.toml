@@ -30,7 +30,9 @@ tracing                       = { workspace = true }
 bincode               = { workspace = true }
 lb-cryptarchia-engine = { workspace = true }
 lb-groth16            = { workspace = true }
+lb-pol                = { workspace = true }
 lb-utils              = { workspace = true }
+lb-utxotree           = { workspace = true }
 
 [features]
 default = []
