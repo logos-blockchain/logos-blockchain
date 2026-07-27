@@ -4006,6 +4006,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-blake2btree"
+version = "0.0.0"
+dependencies = [
+ "blake2",
+ "logos-blockchain-dynamic-merkle",
+ "logos-blockchain-merkle-tree",
+ "quickcheck",
+ "quickcheck_macros",
+ "rand 0.8.6",
+ "serde",
+]
+
+[[package]]
 name = "logos-blockchain-blend"
 version = "0.0.0"
 dependencies = [
@@ -4789,11 +4802,7 @@ dependencies = [
 name = "logos-blockchain-merkle-tree"
 version = "0.0.0"
 dependencies = [
- "blake2",
  "logos-blockchain-dynamic-merkle",
- "quickcheck",
- "quickcheck_macros",
- "rand 0.8.6",
  "rpds",
  "serde",
  "thiserror 2.0.18",
@@ -5279,6 +5288,7 @@ version = "0.0.0"
 dependencies = [
  "ark-ff",
  "logos-blockchain-dynamic-merkle",
+ "logos-blockchain-merkle-tree",
  "logos-blockchain-poseidon2",
  "num-bigint",
  "quickcheck",
@@ -5286,7 +5296,6 @@ dependencies = [
  "rand 0.8.6",
  "rpds",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
