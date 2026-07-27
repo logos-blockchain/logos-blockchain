@@ -257,7 +257,9 @@ pub(crate) fn has_channel_deposit<State: VerificationState>(
 
 /// Builds a `(tx_hash, op_id) -> (amount, created notes)` lookup from a
 /// block's events, keeping only deposit events.
-pub(crate) fn build_deposit_events(events: &Events) -> HashMap<(TxHash, Hash), (Value, Vec<NoteId>)> {
+pub(crate) fn build_deposit_events(
+    events: &Events,
+) -> HashMap<(TxHash, Hash), (Value, Vec<NoteId>)> {
     events
         .iter()
         .filter_map(|event| match event {
