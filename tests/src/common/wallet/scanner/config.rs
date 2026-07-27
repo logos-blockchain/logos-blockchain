@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use lb_core::{header::HeaderId, mantle::Utxo};
 use lb_testing_framework::NodeHttpClient;
 
-use super::state::SharedWalletScannerState;
+use super::state::{ScannerStateCheckpoint, SharedWalletScannerState};
 use crate::{
     common::wallet::{TrackedWalletKeys, WalletUtxos},
     cucumber::{
@@ -57,6 +57,9 @@ pub enum ScannerSeed {
         source_node_names: Vec<String>,
         /// Number of trailing slots to verify before tailing from the seed tip.
         rescan_blocks: u64,
+        /// Older checkpoints to fall back to when the seed tip is not found on
+        /// the restored chain, newest first.
+        fallback_checkpoints: Vec<ScannerStateCheckpoint>,
     },
 }
 
@@ -71,6 +74,7 @@ impl ScannerSeed {
             slot,
             source_node_names,
             rescan_blocks,
+            fallback_checkpoints,
         } = self
         else {
             return Self::Genesis;
@@ -80,10 +84,24 @@ impl ScannerSeed {
             .iter()
             .map(|wallet| wallet.wallet_id().clone())
             .collect::<std::collections::HashSet<_>>();
-        let wallet_utxos = wallet_utxos
+
+        let filter_utxos = |utxos: &WalletUtxos| {
+            utxos
+                .iter()
+                .filter(|(wallet_id, _)| wallet_ids.contains(*wallet_id))
+                .map(|(wallet_id, utxos)| (wallet_id.clone(), utxos.clone()))
+                .collect::<WalletUtxos>()
+        };
+
+        let wallet_utxos = filter_utxos(wallet_utxos);
+        let fallback_checkpoints = fallback_checkpoints
             .iter()
-            .filter(|(wallet_id, _)| wallet_ids.contains(*wallet_id))
-            .map(|(wallet_id, utxos)| (wallet_id.clone(), utxos.clone()))
+            .map(|checkpoint| ScannerStateCheckpoint {
+                wallet_utxos: filter_utxos(&checkpoint.wallet_utxos),
+                tip: checkpoint.tip,
+                height: checkpoint.height,
+                slot: checkpoint.slot,
+            })
             .collect();
 
         Self::Snapshot {
@@ -93,6 +111,7 @@ impl ScannerSeed {
             slot: *slot,
             source_node_names: source_node_names.clone(),
             rescan_blocks: (*rescan_blocks).min(MAX_SCANNER_SNAPSHOT_RESCAN_BLOCKS),
+            fallback_checkpoints,
         }
     }
 }
