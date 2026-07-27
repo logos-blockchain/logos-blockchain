@@ -5,8 +5,27 @@ use std::{
 
 use lb_core::header::HeaderId;
 
+use crate::common::wallet::WalletUtxos;
+
 /// Shared scanner status snapshot across scanner tasks and cucumber waits.
 pub type SharedWalletScannerState = Arc<Mutex<WalletScannerState>>;
+
+#[derive(Debug, Clone)]
+/// One scanner-applied chain position with the wallet UTXOs observed at it.
+///
+/// Published by scanner tasks so snapshot-on-stop can persist a short recovery
+/// history instead of only the newest applied tip, which may be reorged out
+/// between snapshot capture and node shutdown.
+pub struct ScannerStateCheckpoint {
+    /// Scanner-applied block tip at this checkpoint.
+    pub tip: HeaderId,
+    /// Scanner-applied synthetic height at this checkpoint.
+    pub height: u64,
+    /// Scanner-applied consensus slot at this checkpoint.
+    pub slot: u64,
+    /// Wallet UTXOs as observed through this checkpoint's tip.
+    pub wallet_utxos: WalletUtxos,
+}
 
 #[derive(Debug, Default)]
 /// Status for all wallet scanner fork groups.
@@ -44,6 +63,8 @@ pub struct ForkGroupScannerState {
     pub observed_tx_hashes: usize,
     /// Number of wallets tracked by this group.
     pub wallet_count: usize,
+    /// Recent scanner-applied checkpoints, newest first.
+    pub recent_checkpoints: Vec<ScannerStateCheckpoint>,
 }
 
 impl ForkGroupScannerState {
@@ -64,6 +85,7 @@ impl ForkGroupScannerState {
             last_error: None,
             observed_tx_hashes: 0,
             wallet_count,
+            recent_checkpoints: Vec::new(),
         }
     }
 }

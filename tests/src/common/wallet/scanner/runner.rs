@@ -16,7 +16,7 @@ use super::{
     accounting::ScannerAccounting,
     block_source::stream_blocks_range,
     config::{ForkGroupScannerConfig, ScannerSeed},
-    state::{ScannerStatus, SharedWalletScannerState},
+    state::{ScannerStateCheckpoint, ScannerStatus, SharedWalletScannerState},
 };
 use crate::{
     common::wallet::{
@@ -33,6 +33,7 @@ const TARGET: &str = "cucumber_wallet";
 const MIN_SCANNER_CHECKPOINTS: usize = 8;
 const MAX_SCANNER_CHECKPOINTS: usize = 128;
 const SCANNER_ROLLBACK_BLOCKS: u64 = 5;
+const PUBLISHED_SCANNER_CHECKPOINTS: usize = 8;
 
 #[derive(Clone)]
 struct ScannerCheckpoint {
@@ -73,12 +74,14 @@ struct ScannerInitialState {
     applied_tip: Option<HeaderId>,
     applied_slot: Option<u64>,
     source_node_names: Vec<String>,
+    seed_fallbacks: VecDeque<ScannerStateCheckpoint>,
 }
 
 #[derive(Debug)]
 enum ScannerIterationError {
     Step(StepError),
     Continuity(StepError),
+    SeedTipNotFound(StepError),
 }
 
 impl From<StepError> for ScannerIterationError {
@@ -216,6 +219,7 @@ fn initialize_scanner_from_seed(
                 applied_tip: None,
                 applied_slot: None,
                 source_node_names: Vec::new(),
+                seed_fallbacks: VecDeque::new(),
             })
         }
         ScannerSeed::Snapshot {
@@ -224,6 +228,7 @@ fn initialize_scanner_from_seed(
             height,
             slot,
             source_node_names,
+            fallback_checkpoints,
             ..
         } => {
             let accounting = ScannerAccounting::from_wallet_utxos(
@@ -239,6 +244,11 @@ fn initialize_scanner_from_seed(
                 applied_tip: Some(*tip),
                 applied_slot: Some(*slot),
                 source_node_names: source_node_names.clone(),
+                seed_fallbacks: fallback_checkpoints
+                    .iter()
+                    .filter(|checkpoint| checkpoint.tip != *tip)
+                    .cloned()
+                    .collect(),
             })
         }
     }
@@ -298,7 +308,12 @@ async fn run_group_scanner(config: ForkGroupScannerConfig, shutdown_requested: A
     let mut applied_tip = initial_state.applied_tip;
     let mut applied_slot = initial_state.applied_slot;
     let source_node_names = initial_state.source_node_names;
+    let mut seed_fallbacks = initial_state.seed_fallbacks;
     let mut snapshot_rescan = snapshot_rescan_from_seed(&config.seed);
+    let seed_rescan_blocks = match &config.seed {
+        ScannerSeed::Snapshot { rescan_blocks, .. } => *rescan_blocks,
+        ScannerSeed::Genesis => 0,
+    };
     let mut checkpoints = VecDeque::new();
     let mut last_msg = String::new();
     if let Some(applied_tip) = applied_tip
@@ -323,7 +338,7 @@ async fn run_group_scanner(config: ForkGroupScannerConfig, shutdown_requested: A
             applied_height,
             applied_tip,
             applied_slot,
-            source_node_names,
+            source_node_names.clone(),
         ),
     );
 
@@ -354,6 +369,43 @@ async fn run_group_scanner(config: ForkGroupScannerConfig, shutdown_requested: A
                 group.status = ScannerStatus::Error;
                 group.last_error = Some(scanner_iteration_error_message(&error));
             });
+            let error = if let ScannerIterationError::SeedTipNotFound(step_error) = error {
+                let reseeded = reseed_from_fallback_checkpoint(
+                    &config,
+                    &mut seed_fallbacks,
+                    seed_rescan_blocks,
+                    &source_node_names,
+                    &mut accounting,
+                    &mut applied_height,
+                    &mut applied_tip,
+                    &mut applied_slot,
+                    &mut checkpoints,
+                    &mut snapshot_rescan,
+                )
+                .unwrap_or_else(|reseed_error| {
+                    warn!(
+                        target: TARGET,
+                        "wallet scanner group '{}' fallback checkpoint reseed failed: {reseed_error}",
+                        display_group_key(&config.group_id),
+                    );
+                    false
+                });
+                if reseeded {
+                    if sleep_or_shutdown(
+                        &shutdown_requested,
+                        config.poll_interval,
+                        &config.group_id,
+                    )
+                    .await
+                    {
+                        return;
+                    }
+                    continue;
+                }
+                ScannerIterationError::Continuity(step_error)
+            } else {
+                error
+            };
             if matches!(error, ScannerIterationError::Continuity(_)) {
                 if let Some(checkpoint) = rollback_checkpoint(&checkpoints, applied_height)
                     .filter(|checkpoint| checkpoint.applied_height < applied_height)
@@ -440,6 +492,87 @@ fn check_shutdown(shutdown_requested: &Arc<AtomicBool>, group_id: &str) -> bool 
         return true;
     }
     false
+}
+
+/// Re-seed the scanner from the next restored fallback checkpoint.
+///
+/// Returns `Ok(true)` when a fallback was applied, `Ok(false)` when no
+/// fallback checkpoints remain.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Re-seeding owns the same explicit mutable scanner-loop state as reset."
+)]
+fn reseed_from_fallback_checkpoint(
+    config: &ForkGroupScannerConfig,
+    seed_fallbacks: &mut VecDeque<ScannerStateCheckpoint>,
+    seed_rescan_blocks: u64,
+    source_node_names: &[String],
+    accounting: &mut ScannerAccounting,
+    applied_height: &mut u64,
+    applied_tip: &mut Option<HeaderId>,
+    applied_slot: &mut Option<u64>,
+    checkpoints: &mut VecDeque<ScannerCheckpoint>,
+    snapshot_rescan: &mut Option<SnapshotRescan>,
+) -> Result<bool, StepError> {
+    let Some(checkpoint) = seed_fallbacks.pop_front() else {
+        return Ok(false);
+    };
+
+    warn!(
+        target: TARGET,
+        "wallet scanner group '{}' seed tip not found on restored chain; falling back to \
+        snapshot checkpoint {} at height {} slot {}",
+        display_group_key(&config.group_id),
+        checkpoint.tip,
+        checkpoint.height,
+        checkpoint.slot,
+    );
+
+    *accounting = ScannerAccounting::from_wallet_utxos(
+        config.wallet_keys.clone(),
+        checkpoint.wallet_utxos,
+    )
+    .map_err(|error| StepError::LogicalError {
+        message: format!(
+            "wallet scanner accounting re-initialization from fallback checkpoint failed: {error}"
+        ),
+    })?;
+    *applied_height = checkpoint.height;
+    *applied_tip = Some(checkpoint.tip);
+    *applied_slot = Some(checkpoint.slot);
+    *snapshot_rescan = (seed_rescan_blocks > 0).then_some(SnapshotRescan {
+        tip: checkpoint.tip,
+        slot: checkpoint.slot,
+        blocks: seed_rescan_blocks,
+    });
+    checkpoints.clear();
+    push_checkpoint(
+        checkpoints,
+        ScannerCheckpoint::new(
+            accounting,
+            *applied_height,
+            *applied_tip,
+            *applied_slot,
+            source_node_names.to_vec(),
+        ),
+    );
+    if !source_node_names.is_empty()
+        && let Err(error) = publish_wallet_state(
+            &config.wallets,
+            source_node_names,
+            *applied_height,
+            checkpoint.tip.to_string(),
+            accounting.wallet_utxos(),
+        )
+    {
+        warn!(
+            target: TARGET,
+            "wallet scanner group '{}' failed to publish fallback checkpoint state: {error}",
+            display_group_key(&config.group_id),
+        );
+    }
+
+    Ok(true)
 }
 
 fn reset_scanner_to_genesis(
@@ -661,6 +794,7 @@ async fn scan_group_once(
 
     publish_new_observed_transaction_hashes(config, accounting, &observed_tx_hashes_before);
 
+    let recent_checkpoints = recent_state_checkpoints(checkpoints);
     update_group_state(&config.scanner_state, &config.group_id, |group| {
         group.applied_height = *applied_height;
         group.applied_slot = *applied_slot;
@@ -669,6 +803,7 @@ async fn scan_group_once(
         group.wallet_count = accounting.tracked_wallet_count();
         group.status = ScannerStatus::Tailing;
         group.last_error = None;
+        group.recent_checkpoints = recent_checkpoints;
     });
 
     if applied_block_count > 0 {
@@ -786,16 +921,18 @@ async fn verify_snapshot_rescan(
     })?;
 
     if !found_seed_tip {
-        return Err(ScannerIterationError::Step(StepError::LogicalError {
-            message: format!(
-                "wallet scanner snapshot trailing rescan for group '{}' did not find seed tip {} \
-                 in slot range {}..={}",
-                display_group_key(&config.group_id),
-                rescan.tip,
-                slot_from,
-                rescan.slot,
-            ),
-        }));
+        return Err(ScannerIterationError::SeedTipNotFound(
+            StepError::LogicalError {
+                message: format!(
+                    "wallet scanner snapshot trailing rescan for group '{}' did not find seed tip \
+                     {} in slot range {}..={}",
+                    display_group_key(&config.group_id),
+                    rescan.tip,
+                    slot_from,
+                    rescan.slot,
+                ),
+            },
+        ));
     }
 
     info!(
@@ -810,6 +947,30 @@ async fn verify_snapshot_rescan(
     );
 
     Ok(())
+}
+
+/// Convert the newest in-memory scanner checkpoints into shareable state.
+///
+/// Newest first, capped at [`PUBLISHED_SCANNER_CHECKPOINTS`]. Checkpoints
+/// without a concrete tip and slot (the genesis placeholder) are skipped.
+fn recent_state_checkpoints(
+    checkpoints: &VecDeque<ScannerCheckpoint>,
+) -> Vec<ScannerStateCheckpoint> {
+    checkpoints
+        .iter()
+        .rev()
+        .filter_map(|checkpoint| {
+            let tip = checkpoint.applied_tip?;
+            let slot = checkpoint.applied_slot?;
+            Some(ScannerStateCheckpoint {
+                tip,
+                height: checkpoint.applied_height,
+                slot,
+                wallet_utxos: checkpoint.accounting.wallet_utxos(),
+            })
+        })
+        .take(PUBLISHED_SCANNER_CHECKPOINTS)
+        .collect()
 }
 
 fn push_checkpoint(checkpoints: &mut VecDeque<ScannerCheckpoint>, checkpoint: ScannerCheckpoint) {
@@ -857,9 +1018,9 @@ fn rollback_checkpoint(
 
 fn scanner_iteration_error_message(error: &ScannerIterationError) -> String {
     match error {
-        ScannerIterationError::Step(error) | ScannerIterationError::Continuity(error) => {
-            error.to_string()
-        }
+        ScannerIterationError::Step(error)
+        | ScannerIterationError::Continuity(error)
+        | ScannerIterationError::SeedTipNotFound(error) => error.to_string(),
     }
 }
 
