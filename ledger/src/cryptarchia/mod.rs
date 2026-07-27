@@ -404,7 +404,7 @@ impl LedgerState {
             * (EXECUTION_MARKET_BASE_FEE_NUMERATOR
                 + u128::from(new_average_execution_gas.into_inner()));
         let new_base_fee =
-            ((fee_numerator / EXECUTION_MARKET_BASE_FEE_DENOMINATOR) as Value).into();
+            (fee_numerator.div_ceil(EXECUTION_MARKET_BASE_FEE_DENOMINATOR) as Value).into();
 
         Self {
             average_execution_gas: new_average_execution_gas,
@@ -710,15 +710,15 @@ fn update_storage_market(
     }
     let comparator = STORAGE_MARKET_CLAMP_DENOMINATOR * total_storage_gas;
     let new_price = if comparator <= STORAGE_MARKET_CLAMP_DOWN_NUMERATOR * new_ema_unsigned {
-        ((previous_price * STORAGE_MARKET_CLAMP_DOWN_NUMERATOR / STORAGE_MARKET_CLAMP_DENOMINATOR)
-            as Value)
+        ((previous_price * STORAGE_MARKET_CLAMP_DOWN_NUMERATOR)
+            .div_ceil(STORAGE_MARKET_CLAMP_DENOMINATOR) as Value)
             .into()
     } else if comparator >= STORAGE_MARKET_CLAMP_UP_NUMERATOR * new_ema_unsigned {
-        ((previous_price * STORAGE_MARKET_CLAMP_UP_NUMERATOR / STORAGE_MARKET_CLAMP_DENOMINATOR)
-            as Value)
+        ((previous_price * STORAGE_MARKET_CLAMP_UP_NUMERATOR)
+            .div_ceil(STORAGE_MARKET_CLAMP_DENOMINATOR) as Value)
             .into()
     } else {
-        ((previous_price * total_storage_gas / new_ema_unsigned) as Value).into()
+        ((previous_price * total_storage_gas).div_ceil(new_ema_unsigned) as Value).into()
     };
 
     (new_price, new_ema)
@@ -1899,72 +1899,162 @@ pub mod tests {
         )
     }
 
+    /// If the network is constantly full, execution gas must get more
+    /// expensive.
+    #[test]
+    fn execution_price_rises_under_sustained_maximum_load() {
+        let mut state = genesis_state(&[utxo()]);
+        let genesis_price = state.execution_base_fee().into_inner();
+
+        for _ in 0..10_000 {
+            state = state.update_execution_market(crate::EXECUTION_GAS_LIMIT);
+        }
+
+        assert!(
+            state.execution_base_fee().into_inner() > genesis_price,
+            "the execution base fee never rose above {genesis_price} under sustained \
+             blocks at the gas limit; the market cannot price demand from its genesis \
+             state"
+        );
+    }
+
+    /// After a quiet stretch, returning demand must be able to push the
+    /// execution price back up.
+    #[test]
+    fn execution_price_recovers_when_demand_returns_after_quiet_blocks() {
+        let mut state = genesis_state(&[utxo()]);
+
+        for _ in 0..100 {
+            state = state.update_execution_market(0.into());
+        }
+
+        let quiet_price = state.execution_base_fee().into_inner();
+
+        for _ in 0..10_000 {
+            state = state.update_execution_market(crate::EXECUTION_GAS_LIMIT);
+        }
+
+        assert!(
+            state.execution_base_fee().into_inner() > quiet_price,
+            "the execution base fee is stuck at {quiet_price} after quiet blocks and does \
+             not respond to returning demand; the market is dead from this state on"
+        );
+    }
+
+    /// If storage is constantly in heavy use, storage gas must get more
+    /// expensive.
+    #[test]
+    fn storage_price_rises_under_sustained_heavy_usage() {
+        let genesis_price = GENESIS_STORAGE_GAS_PRICE.into_inner();
+        let mut price = GENESIS_STORAGE_GAS_PRICE;
+        let mut ema: Gas = 0.into();
+        let heavy_usage: Gas = 1_000_000.into();
+
+        for _ in 0..1_000 {
+            (price, ema) = update_storage_market(price, heavy_usage, ema);
+        }
+
+        assert!(
+            price.into_inner() > genesis_price,
+            "the storage gas price never rose above {genesis_price} under sustained \
+             heavy usage; the market cannot price demand from its genesis state"
+        );
+    }
+
+    /// After quiet epochs, returning usage must be able to push the storage
+    /// price back up.
+    #[test]
+    fn storage_price_recovers_when_usage_returns_after_quiet_epochs() {
+        let mut price = GENESIS_STORAGE_GAS_PRICE;
+        let mut ema: Gas = 0.into();
+        let heavy_usage: Gas = 1_000_000.into();
+
+        for _ in 0..4 {
+            (price, ema) = update_storage_market(price, heavy_usage, ema);
+        }
+        for _ in 0..4 {
+            (price, ema) = update_storage_market(price, 0.into(), ema);
+        }
+
+        let quiet_price = price.into_inner();
+
+        for _ in 0..1_000 {
+            (price, ema) = update_storage_market(price, heavy_usage, ema);
+        }
+
+        assert!(
+            price.into_inner() > quiet_price,
+            "the storage gas price is stuck at {quiet_price} after quiet epochs and does \
+             not respond to returning usage; the market is dead from this state on"
+        );
+    }
+
     #[test]
     fn test_storage_market_update() {
         // empty epoch
         assert_eq!(
-            (437.into(), 340.into()),
+            (438.into(), 340.into()),
             update_storage_market(500.into(), 0.into(), 681.into())
         );
 
         // Some random values
-        // 1) raw = 113 * 1.125 = 127.125 -> 127
+        // 1) raw = 113 * 1.125 = 127.125 -> 128
         assert_eq!(
-            (127.into(), 450.into()),
+            (128.into(), 450.into()),
             update_storage_market(113.into(), 600.into(), 300.into())
         );
 
-        // 2) raw = 113 * 0.875 = 98.875 -> 98
+        // 2) raw = 113 * 0.875 = 98.875 -> 99
         assert_eq!(
-            (98.into(), 500.into()),
+            (99.into(), 500.into()),
             update_storage_market(113.into(), 200.into(), 800.into())
         );
 
-        // 3) raw = 221 * 1.125 = 248.625 -> 248
+        // 3) raw = 221 * 1.125 = 248.625 -> 249
         assert_eq!(
-            (248.into(), 550.into()),
+            (249.into(), 550.into()),
             update_storage_market(221.into(), 900.into(), 200.into())
         );
 
-        // 4) raw = 221 * 0.875 = 193.375 -> 193
+        // 4) raw = 221 * 0.875 = 193.375 -> 194
         assert_eq!(
-            (193.into(), 500.into()),
+            (194.into(), 500.into()),
             update_storage_market(221.into(), 100.into(), 900.into())
         );
 
-        // 5) raw = 345 * 1.125 = 388.125 -> 388
+        // 5) raw = 345 * 1.125 = 388.125 -> 389
         assert_eq!(
-            (388.into(), 165.into()),
+            (389.into(), 165.into()),
             update_storage_market(345.into(), 250.into(), 80.into())
         );
 
-        // 6) raw = 345 * 0.875 = 301.875 -> 301
+        // 6) raw = 345 * 0.875 = 301.875 -> 302
         assert_eq!(
-            (301.into(), 400.into()),
+            (302.into(), 400.into()),
             update_storage_market(345.into(), 50.into(), 750.into())
         );
 
-        // 7) raw = 517 * 1.125 = 581.625 -> 581
+        // 7) raw = 517 * 1.125 = 581.625 -> 582
         assert_eq!(
-            (581.into(), 160.into()),
+            (582.into(), 160.into()),
             update_storage_market(517.into(), 220.into(), 100.into())
         );
 
-        // 8) raw = 517 * 0.875 = 452.375 -> 452
+        // 8) raw = 517 * 0.875 = 452.375 -> 453
         assert_eq!(
-            (452.into(), 485.into()),
+            (453.into(), 485.into()),
             update_storage_market(517.into(), 120.into(), 850.into())
         );
 
-        // 9) raw = 999 * 1.125 = 1123.875 -> 1123
+        // 9) raw = 999 * 1.125 = 1123.875 -> 1124
         assert_eq!(
-            (1123.into(), 650.into()),
+            (1124.into(), 650.into()),
             update_storage_market(999.into(), 1000.into(), 300.into())
         );
 
-        // 10) raw = 999 * 0.875 = 874.125 -> 874
+        // 10) raw = 999 * 0.875 = 874.125 -> 875
         assert_eq!(
-            (874.into(), 650.into()),
+            (875.into(), 650.into()),
             update_storage_market(999.into(), 300.into(), 1000.into())
         );
     }
@@ -1975,53 +2065,53 @@ pub mod tests {
         let mut ledger = LedgerState::from_utxos([], &config(), Fr::ZERO);
 
         // 1) G_avg = (1_700_000 + 9*1_596_730)/10 = 1_607_057
-        // price = 10_000 * (11_177_110 + 1_607_057) / 12_773_840 = 10_008
+        // price = ceil(10_000 * (11_177_110 + 1_607_057) / 12_773_840) = 10_009
         ledger.execution_base_fee = 10_000.into();
         ledger.average_execution_gas = 1_596_730.into();
         ledger = ledger.update_execution_market(1_700_000.into());
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (10_008.into(), 1_607_057.into())
+            (10_009.into(), 1_607_057.into())
         );
 
         // 2) G_avg = (1_400_000 + 9*1_596_730)/10 = 1_577_057
-        // price = 10_000 * (11_177_110 + 1_577_057) / 12_773_840 = 9_984
+        // price = ceil(10_000 * (11_177_110 + 1_577_057) / 12_773_840) = 9_985
         ledger.execution_base_fee = 10_000.into();
         ledger.average_execution_gas = 1_596_730.into();
         ledger = ledger.update_execution_market(1_400_000.into());
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (9_984.into(), 1_577_057.into())
+            (9_985.into(), 1_577_057.into())
         );
 
         // 3) G_avg = (2_500_000 + 9*1_000_000)/10 = 1_150_000
-        // price = 20_000 * (11_177_110 + 1_150_000) / 12_773_840 = 19_300
+        // price = ceil(20_000 * (11_177_110 + 1_150_000) / 12_773_840) = 19_301
         ledger.execution_base_fee = 20_000.into();
         ledger.average_execution_gas = 1_000_000.into();
         ledger = ledger.update_execution_market(2_500_000.into());
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (19_300.into(), 1_150_000.into())
+            (19_301.into(), 1_150_000.into())
         );
 
         // 4) G_avg = (500_000 + 9*2_000_000)/10 = 1_850_000
-        // price = 15_000 * (11_177_110 + 1_850_000) / 12_773_840 = 15_297
+        // price = ceil(15_000 * (11_177_110 + 1_850_000) / 12_773_840) = 15_298
         ledger.execution_base_fee = 15_000.into();
         ledger.average_execution_gas = 2_000_000.into();
         ledger = ledger.update_execution_market(500_000.into());
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (15_297.into(), 1_850_000.into())
+            (15_298.into(), 1_850_000.into())
         );
 
         // 5) G_avg = (1_000_000 + 9*1_800_000)/10 = 1_720_000
-        // price = 30_000 * (11_177_110 + 1_720_000) / 12_773_840 = 30_289
+        // price = ceil(30_000 * (11_177_110 + 1_720_000) / 12_773_840) = 30_290
         ledger.execution_base_fee = 30_000.into();
         ledger.average_execution_gas = 1_800_000.into();
         ledger = ledger.update_execution_market(1_000_000.into());
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (30_289.into(), 1_720_000.into())
+            (30_290.into(), 1_720_000.into())
         );
     }
 
@@ -2044,8 +2134,8 @@ pub mod tests {
             .unwrap();
 
         // The accumulated 600 must reach the price update: with a starting price
-        // of 113 and EMA 300 that yields (127, 450).
-        assert_eq!(rotated.storage_gas_price, 127.into());
+        // of 113 and EMA 300 that yields (128, 450) after ceiling division.
+        assert_eq!(rotated.storage_gas_price, 128.into());
         assert_eq!(rotated.storage_gas_ema, 450.into());
         // The counter resets for the new epoch.
         assert_eq!(rotated.storage_gas_consumed_in_epoch, 0.into());
