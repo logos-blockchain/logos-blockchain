@@ -33,4 +33,5 @@ serde                         = { features = ["std"], workspace = true }
 serde_yaml                    = { workspace = true }
 
 [features]
-unsafe = ["lb-key-management-system-keys/unsafe", "lb-key-management-system-operators/unsafe"]
+tokio-task-names = ["lb-key-management-system-operators/tokio-task-names"]
+unsafe           = ["lb-key-management-system-keys/unsafe", "lb-key-management-system-operators/unsafe"]

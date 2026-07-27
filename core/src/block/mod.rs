@@ -53,9 +53,29 @@ pub struct Proposal {
     pub signature: Ed25519Signature,
 }
 
+/// Transaction hashes referenced by a block proposal.
+pub type BlockTransactionReferences = BoundedVec<TxHash, 0, MAX_BLOCK_TRANSACTIONS>;
+
+/// References to transactions that are included in a block proposal.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct References {
-    pub mempool_transactions: Vec<TxHash>,
+    /// Bounded hashes of the transactions that are included in the block
+    /// proposal.
+    pub mempool_transactions: BlockTransactionReferences,
+}
+
+impl References {
+    /// Constructs a `References` instance from a list of transactions,
+    /// extracting their hashes.
+    #[must_use]
+    pub(crate) fn from_block_transactions<Tx>(transactions: &BlockTransactions<Tx>) -> Self
+    where
+        Tx: Hashable<Hash = TxHash>,
+    {
+        Self {
+            mempool_transactions: transactions.map_ref(|transaction| Tx::hash(transaction)),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -273,19 +293,14 @@ impl<Tx> Block<Tx> {
         &self.signature
     }
 
+    #[must_use]
     pub fn to_proposal(self) -> Proposal
     where
         Tx: Hashable<Hash = TxHash>,
     {
-        let mempool_transactions: Vec<TxHash> =
-            self.transactions.iter().map(Hashable::hash).collect();
-        let references = References {
-            mempool_transactions,
-        };
-
         Proposal {
             header: self.header,
-            references,
+            references: References::from_block_transactions(&self.transactions),
             signature: self.signature,
         }
     }
@@ -403,6 +418,26 @@ mod tests {
             .collect()
     }
 
+    #[derive(Clone, Copy, Debug)]
+    struct IndexedTestMantleTx {
+        index: u8,
+    }
+
+    impl Hashable for IndexedTestMantleTx {
+        const HASHER: hashable::Hasher<Self> = |transaction| TxHash::from([transaction.index; 32]);
+        type Hash = TxHash;
+
+        fn as_signing(&self) -> Vec<u8> {
+            vec![self.index]
+        }
+    }
+
+    impl StorageSize for IndexedTestMantleTx {
+        fn storage_size(&self) -> usize {
+            1
+        }
+    }
+
     #[test]
     fn test_block_signature_validation() {
         let parent_block = [0u8; 32].into();
@@ -480,6 +515,94 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn proposal_references_preserve_transaction_hashes_and_order() {
+        let parent_block = [0u8; 32].into();
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let transactions = BlockTransactions::<IndexedTestMantleTx>::try_from(vec![
+            IndexedTestMantleTx { index: 1 },
+            IndexedTestMantleTx { index: 2 },
+            IndexedTestMantleTx { index: 3 },
+        ])
+        .unwrap();
+        let expected_hashes: Vec<_> = transactions.iter().map(IndexedTestMantleTx::hash).collect();
+
+        let proposal = Block::create(
+            parent_block,
+            Slot::from(42u64),
+            create_proof(),
+            transactions,
+            &signing_key,
+        )
+        .unwrap()
+        .to_proposal();
+
+        assert_eq!(proposal.mempool_transactions(), expected_hashes.as_slice());
+    }
+
+    #[test]
+    fn proposal_accepts_maximum_transaction_references() {
+        let parent_block = [0u8; 32].into();
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let block = Block::create(
+            parent_block,
+            Slot::from(42u64),
+            create_proof(),
+            BlockTransactions::<MantleTx>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap(),
+            &signing_key,
+        )
+        .unwrap();
+
+        let proposal = block.to_proposal();
+
+        assert_eq!(
+            proposal.mempool_transactions().len(),
+            MAX_BLOCK_TRANSACTIONS
+        );
+    }
+
+    #[test]
+    fn proposal_deserialization_rejects_excess_transaction_references() {
+        #[derive(Serialize)]
+        struct LegacyReferences {
+            mempool_transactions: Vec<TxHash>,
+        }
+
+        #[derive(Serialize)]
+        struct LegacyProposal {
+            header: Header,
+            references: LegacyReferences,
+            signature: Ed25519Signature,
+        }
+
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let proposal = Block::create(
+            [0u8; 32].into(),
+            Slot::from(42u64),
+            create_proof(),
+            BlockTransactions::<MantleTx>::empty(),
+            &signing_key,
+        )
+        .unwrap()
+        .to_proposal();
+        let legacy = LegacyProposal {
+            header: proposal.header.clone(),
+            references: LegacyReferences {
+                mempool_transactions: vec![TxHash::from([0u8; 32]); MAX_BLOCK_TRANSACTIONS + 1],
+            },
+            signature: *proposal.signature(),
+        };
+        let bytes = bincode::serialize(&legacy).unwrap();
+
+        let error = <Proposal as crate::codec::DeserializeOp>::from_bytes(&bytes)
+            .expect_err("proposal with too many transaction references must be rejected");
+
+        assert!(
+            error.to_string().contains("exceeds static maximum"),
+            "unexpected deserialization error: {error}"
+        );
     }
 
     #[derive(Clone, Copy, Debug)]

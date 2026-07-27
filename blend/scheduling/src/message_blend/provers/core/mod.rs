@@ -9,8 +9,8 @@ use lb_blend_proofs::{quota::inputs::prove::PublicInputs, selection::VerifiedPro
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use lb_log_targets::blend;
-use lb_utils::tokio::stream::Buffered;
-use tokio::{task::spawn, time::Instant};
+use lb_utils::tokio::{stream::Buffered, task::spawn};
+use tokio::time::Instant;
 
 use crate::message_blend::{
     CoreProofOfQuotaGenerator, buffer_size,
@@ -102,7 +102,7 @@ where
             // Without this, `generate_poq` would only begin when `FuturesOrdered` first
             // polls the future — which only happens when the consumer polls the stream —
             // causing avoidable latency when the consumer is idle.
-            let task = spawn(async move {
+            let task = spawn("logos/blend/core-proof-generator", async move {
                 let (proof_of_quota, secret_selection_randomness) = proof_of_quota_generator
                     .generate_poq(
                         &PublicInputs {

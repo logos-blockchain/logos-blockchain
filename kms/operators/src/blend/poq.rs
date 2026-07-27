@@ -13,7 +13,8 @@ use lb_key_management_system_keys::keys::{
     secured_key::{SecureKeyOperator, SecuredKey},
 };
 use lb_log_targets::kms;
-use tokio::{sync::oneshot, task::spawn_blocking};
+use lb_utils::tokio::task::spawn_blocking;
+use tokio::sync::oneshot;
 use tracing::trace;
 
 const LOG_TARGET: &str = kms::operators::BLEND_POQ;
@@ -64,10 +65,11 @@ impl SecureKeyOperator for PoQOperator {
         let public_inputs = self.public_inputs;
         // spawn a blocking task as this computation is heavy atm because it needs of an
         // external binary.
-        let poq_result =
-            spawn_blocking(move || VerifiedProofOfQuota::new(&public_inputs, private_inputs))
-                .await
-                .map_err(Self::Error::FailedOperatorCall)?;
+        let poq_result = spawn_blocking("logos/blend/core-poq-blocking", move || {
+            VerifiedProofOfQuota::new(&public_inputs, private_inputs)
+        })
+        .await
+        .map_err(Self::Error::FailedOperatorCall)?;
         drop(self.response_channel.send(poq_result).inspect_err(|_| {
             trace!(target: LOG_TARGET, "Error sending generated proof of quota, most likely due to an epoch rotation that discarded the receiver side of the channel.");
         }));
