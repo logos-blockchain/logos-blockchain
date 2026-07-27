@@ -23,6 +23,8 @@ impl<const MIN: usize, const MAX: usize> BoundedMultiaddr<MIN, MAX> {
         self.as_inner().len()
     }
 
+    /// Returns true if the length of this multiaddress is 0, matching
+    /// `Multiaddr` semantics.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.as_inner().is_empty()

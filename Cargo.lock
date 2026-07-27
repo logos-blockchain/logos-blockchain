@@ -4568,6 +4568,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-dynamic-merkle"
+version = "0.0.0"
+dependencies = [
+ "ark-ff",
+ "logos-blockchain-poseidon2",
+ "num-bigint",
+ "rand 0.8.6",
+ "rpds",
+ "serde",
+]
+
+[[package]]
 name = "logos-blockchain-faucet"
 version = "0.0.0"
 dependencies = [
@@ -4675,6 +4687,7 @@ dependencies = [
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-log-targets",
  "logos-blockchain-poseidon2",
+ "logos-blockchain-utils",
  "logos-blockchain-utxotree",
  "tokio",
  "tracing",
@@ -5000,6 +5013,7 @@ dependencies = [
  "logos-blockchain-log-targets",
  "logos-blockchain-services-utils",
  "logos-blockchain-tracing",
+ "logos-blockchain-utils",
  "overwatch",
  "rocksdb",
  "serde",
@@ -5250,7 +5264,7 @@ name = "logos-blockchain-utxotree"
 version = "0.0.0"
 dependencies = [
  "ark-ff",
- "logos-blockchain-groth16",
+ "logos-blockchain-dynamic-merkle",
  "logos-blockchain-poseidon2",
  "num-bigint",
  "quickcheck",
@@ -5272,7 +5286,9 @@ dependencies = [
  "logos-blockchain-ledger",
  "logos-blockchain-log-targets",
  "logos-blockchain-mmr",
+ "logos-blockchain-pol",
  "logos-blockchain-utils",
+ "logos-blockchain-utxotree",
  "num-bigint",
  "rpds",
  "serde",
