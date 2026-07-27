@@ -5,7 +5,7 @@ use lb_core::{
     crypto::Hash,
     header::HeaderId,
     mantle::{
-        SignedMantleTx, Value,
+        NoteId, SignedMantleTx, Value,
         ops::{
             Op, OpId as _,
             channel::{ChannelId, MsgId, inscribe::Inscription},
@@ -27,7 +27,7 @@ use super::{
         InscriptionInfo, PendingTx, WithdrawInfo,
     },
 };
-use crate::{adapter, adapter::build_deposit_amounts};
+use crate::{adapter, adapter::build_deposit_events};
 
 /// Result of processing a block event.
 pub(super) struct BlockEventResult {
@@ -343,14 +343,14 @@ where
 
         // Fetch + validate deposit events for this block BEFORE mutating
         // state — on error we leave state untouched so the caller can retry.
-        let deposit_amounts =
-            fetch_block_deposit_amounts(node, block.header.id, &block.transactions, channel_id)
+        let deposit_events =
+            fetch_block_deposit_events(node, block.header.id, &block.transactions, channel_id)
                 .await?;
         let block_items = extract_finalized_items(
             &block.transactions,
             channel_id,
             block.header.slot,
-            &deposit_amounts,
+            &deposit_events,
         );
 
         result.our_tx_hashes.extend(our_txs.iter().copied());
@@ -381,12 +381,12 @@ where
 /// some deposit op) we log at error level and return [`Error::Network`]. The
 /// caller's contract is "either retry, or abandon this block" — never
 /// silently emit a partial result, because that drops real deposits.
-async fn fetch_block_deposit_amounts<Node>(
+async fn fetch_block_deposit_events<Node>(
     node: &Node,
     block_id: HeaderId,
     transactions: &[SignedMantleTx<Unverified>],
     channel_id: ChannelId,
-) -> Result<HashMap<(TxHash, Hash), Value>, Error>
+) -> Result<HashMap<(TxHash, Hash), (Value, Vec<NoteId>)>, Error>
 where
     Node: adapter::Node + Sync,
 {
@@ -426,9 +426,9 @@ where
         }
     };
 
-    let amounts = build_deposit_amounts(&events);
+    let deposit_events = build_deposit_events(&events);
     for key in &expected {
-        if !amounts.contains_key(key) {
+        if !deposit_events.contains_key(key) {
             error!(
                 target: TARGET,
                 ?block_id,
@@ -443,7 +443,7 @@ where
             )));
         }
     }
-    Ok(amounts)
+    Ok(deposit_events)
 }
 
 /// Walks `transactions` and groups channel-relevant ops per Mantle tx,
@@ -465,7 +465,7 @@ fn extract_finalized_items(
     transactions: &[SignedMantleTx<Unverified>],
     channel_id: ChannelId,
     l1_slot: Slot,
-    deposit_amounts: &HashMap<(TxHash, Hash), Value>,
+    deposit_events: &HashMap<(TxHash, Hash), (Value, Vec<NoteId>)>,
 ) -> Vec<FinalizedTx> {
     let mut items: Vec<FinalizedTx> = Vec::new();
     let mut last_in_block: Option<MsgId> = None;
@@ -510,16 +510,17 @@ fn extract_finalized_items(
                     // channel-deposit op in the block has a matching event
                     // entry before returning, so the lookup is infallible
                     // here. A miss would be a caller-side bug.
-                    let &amount = deposit_amounts.get(&(tx_hash, op_id)).expect(
-                        "deposit_amounts must contain every channel deposit op - \
-                         fetch_block_deposit_amounts invariant",
+                    let (amount, notes) = deposit_events.get(&(tx_hash, op_id)).expect(
+                        "deposit_events must contain every channel deposit op - \
+                         fetch_block_deposit_events invariant",
                     );
                     ops.push(FinalizedOp::Deposit(DepositInfo {
                         tx_hash,
                         op_id,
                         channel_id,
                         inputs: deposit.inputs.clone(),
-                        amount,
+                        notes: notes.clone(),
+                        amount: *amount,
                         metadata: deposit.metadata.clone(),
                     }));
                 }
@@ -773,7 +774,7 @@ fn touches_channel_tip<State: VerificationState>(
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
-        MantleTx, NoteId,
+        MantleTx,
         channel::{SlotTimeframe, SlotTimeout},
         ledger::Inputs,
         ops::{
@@ -805,9 +806,9 @@ mod tests {
     fn extract_deposits_for_test(
         transactions: &[SignedMantleTx<Unverified>],
         channel_id: ChannelId,
-        amounts: &HashMap<(TxHash, Hash), u64>,
+        deposit_events: &HashMap<(TxHash, Hash), (u64, Vec<NoteId>)>,
     ) -> Vec<DepositInfo> {
-        extract_finalized_items(transactions, channel_id, Slot::from(0), amounts)
+        extract_finalized_items(transactions, channel_id, Slot::from(0), deposit_events)
             .into_iter()
             .flat_map(|t| t.ops.into_iter())
             .filter_map(|op| match op {
@@ -833,7 +834,7 @@ mod tests {
         let tx_hash = tx.mantle_tx().hash();
 
         let mut amounts = HashMap::new();
-        amounts.insert((tx_hash, our_op_id), 1234u64);
+        amounts.insert((tx_hash, our_op_id), (1234u64, Vec::new()));
 
         let deposits = extract_deposits_for_test(std::slice::from_ref(&tx), channel_id, &amounts);
         assert_eq!(
@@ -887,9 +888,9 @@ mod tests {
         let hash_b = tx_b.mantle_tx().hash();
 
         let mut amounts = HashMap::new();
-        amounts.insert((hash_a, id1), 10);
-        amounts.insert((hash_a, id2), 20);
-        amounts.insert((hash_b, id3), 30);
+        amounts.insert((hash_a, id1), (10, Vec::new()));
+        amounts.insert((hash_a, id2), (20, Vec::new()));
+        amounts.insert((hash_b, id3), (30, Vec::new()));
 
         let deposits = extract_deposits_for_test(&[tx_a, tx_b], channel_id, &amounts);
         let metadata_in_order: Vec<&[u8]> =
@@ -923,7 +924,7 @@ mod tests {
         let tx_hash = tx.mantle_tx().hash();
 
         let mut amounts = HashMap::new();
-        amounts.insert((tx_hash, dep_op_id), 500u64);
+        amounts.insert((tx_hash, dep_op_id), (500u64, Vec::new()));
 
         let items = extract_finalized_items(
             std::slice::from_ref(&tx),

@@ -581,6 +581,7 @@ impl LedgerState {
                     })
                     .map_err(mantle::Error::Channel)?;
                 self.mantle_ledger = self.mantle_ledger.update_channels(result.channels);
+                self.cryptarchia_ledger = self.cryptarchia_ledger.update_utxos(result.utxos);
                 tx_events.extend(events);
             }
             Op::ChannelWithdraw(op) => {
@@ -1127,14 +1128,23 @@ mod tests {
         let result =
             ledger_state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &tx);
         let (new_state, balance, events) = result.unwrap();
-        // The deposited note is now owned by the channel but stays in the ledger.
+        // The deposited note is consumed and re-created as a channel note under
+        // a new NoteId.
+        let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
+        assert!(!new_state.latest_utxos().contains(&utxo.id()));
         assert!(
-            new_state
+            !new_state
                 .mantle_ledger()
                 .channels()
                 .is_channel_note(&utxo.id())
         );
-        assert!(new_state.latest_utxos().contains(&utxo.id()));
+        assert!(new_state.latest_utxos().contains(&deposited));
+        assert!(
+            new_state
+                .mantle_ledger()
+                .channels()
+                .is_channel_note(&deposited)
+        );
         assert_eq!(balance, Balance::from(0));
 
         assert_eq!(events.len(), 1);
@@ -1146,6 +1156,7 @@ mod tests {
                     channel_id: event_channel_id,
                     amount,
                     metadata,
+                    notes,
                 },
         }) = events.iter().find(|event| {
             matches!(
@@ -1164,6 +1175,7 @@ mod tests {
         assert_eq!(*event_channel_id, deposit.channel_id);
         assert_eq!(*amount, utxo.note.value);
         assert_eq!(*metadata, deposit.metadata);
+        assert_eq!(notes, &vec![deposited]);
     }
 
     #[test]
@@ -1188,6 +1200,7 @@ mod tests {
             inputs: Inputs::new([utxo.id()]),
             metadata: [5, 6, 7, 8].into(),
         };
+        let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
         let tx = create_multi_signed_tx(deposit_ops, vec![&Key::Zk(sk)]);
         ledger_state = ledger_state
@@ -1199,13 +1212,14 @@ mod tests {
             ledger_state
                 .mantle_ledger
                 .channels()
-                .is_channel_note(&utxo.id())
+                .is_channel_note(&deposited)
         );
 
-        // Withdraw the channel note, releasing it back to a regular note
+        // Withdraw the channel note, releasing it back to a regular note. It
+        // keeps the NoteId the deposit gave it.
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: Inputs::new([deposited]),
         };
         let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw)].into());
         let withdraw_tx_hash = withdraw_tx.hash();
@@ -1234,10 +1248,73 @@ mod tests {
             !new_state
                 .mantle_ledger()
                 .channels()
-                .is_channel_note(&utxo.id())
+                .is_channel_note(&deposited)
         );
-        assert!(new_state.latest_utxos().contains(&utxo.id()));
+        assert!(new_state.latest_utxos().contains(&deposited));
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_channel_deposit_is_not_replayable_after_withdraw() {
+        let test_config = config();
+        let (sk, utxo) = utxo_with_sk();
+        let mut ledger_state = LedgerState::from_utxos([utxo], &test_config);
+        let (signing_key, verifying_key) = create_test_keys();
+        let channel_id = ChannelId::from([9; 32]);
+
+        ledger_state = create_channel(
+            ledger_state,
+            &test_config,
+            channel_id,
+            &signing_key,
+            verifying_key,
+        );
+
+        let deposit = DepositOp {
+            channel_id,
+            inputs: Inputs::new([utxo.id()]),
+            metadata: [5, 6, 7, 8].into(),
+        };
+        let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
+        let deposit_tx =
+            create_multi_signed_tx(vec![Op::ChannelDeposit(deposit)], vec![&Key::Zk(sk)]);
+        ledger_state = ledger_state
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &deposit_tx)
+            .unwrap()
+            .0;
+
+        // Withdraw releases the channel note under the NoteId the deposit gave
+        // it, so the original input never comes back to the ledger.
+        let withdraw_tx = MantleTx(
+            [Op::ChannelWithdraw(ChannelWithdrawOp {
+                channel_id,
+                inputs: Inputs::new([deposited]),
+            })]
+            .into(),
+        );
+        let withdraw_proof = ChannelMultiSigProof::try_new(
+            [IndexedSignature::new(
+                0,
+                signing_key.sign_payload(withdraw_tx.hash().as_signing_bytes().as_ref()),
+            )]
+            .into(),
+        )
+        .unwrap();
+        let signed_withdraw = create_multi_signed_tx(
+            withdraw_tx.0.to_vec(),
+            vec![&Key::MultiSequencer(withdraw_proof)],
+        );
+        ledger_state = ledger_state
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &signed_withdraw)
+            .unwrap()
+            .0;
+
+        assert!(!ledger_state.latest_utxos().contains(&utxo.id()));
+
+        // Replaying the signed deposit fails: its input no longer exists.
+        let result = ledger_state
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &deposit_tx);
+        assert!(result.is_err());
     }
 
     #[test]

@@ -131,6 +131,10 @@ impl WalletChainState {
                 self.apply_owned_outputs(transfer.utxos(), &mut changes.observed_outputs);
             }
             Op::ChannelDeposit(deposit) => {
+                // The deposit consumes its inputs and re-creates them as
+                // channel notes under a new NoteId. The re-created notes are
+                // channel-owned, which the wallet doesn't track, so only the
+                // spend is observed.
                 self.apply_spent_note_ids(
                     deposit.inputs.iter().copied(),
                     &mut changes.observed_spends,

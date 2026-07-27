@@ -70,7 +70,7 @@ pub use lb_core::mantle::ops::channel::Ed25519PublicKey;
 use lb_core::{
     crypto::Hash,
     mantle::{
-        TxHash, Value,
+        NoteId, TxHash, Value,
         ledger::Inputs,
         ops::channel::{MsgId, deposit::Metadata, inscribe::Inscription},
     },
@@ -106,6 +106,10 @@ pub struct Deposit {
     pub op_id: Hash,
     /// Notes consumed by the deposit (spent-once at the UTXO layer).
     pub inputs: Inputs,
+    /// The channel notes the deposit re-created its inputs as, sourced from
+    /// the block's events. These carry new `NoteId`s and are what the channel
+    /// now owns.
+    pub notes: Vec<NoteId>,
     /// Total value deposited, sourced from the block's events.
     pub amount: Value,
     /// Opaque metadata associated with this deposit

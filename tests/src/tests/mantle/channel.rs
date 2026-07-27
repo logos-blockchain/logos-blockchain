@@ -167,7 +167,7 @@ async fn channel_deposit() {
     .expect("timed out waiting for the deposit tx to be included in a block");
 
     let events = fetch_block_events(&validator.client, deposit_block_id).await;
-    let (channel_id, amount, metadata) = events
+    let (channel_id, amount, metadata, notes) = events
         .iter()
         .find_map(|event| match event {
             Event::Tx(TxEvent {
@@ -177,15 +177,21 @@ async fn channel_deposit() {
                         channel_id,
                         amount,
                         metadata,
+                        notes,
                     },
                 ..
-            }) if tx_hash == &deposit_tx_hash => Some((*channel_id, *amount, metadata.clone())),
+            }) if tx_hash == &deposit_tx_hash => {
+                Some((*channel_id, *amount, metadata.clone(), notes.clone()))
+            }
             _ => None,
         })
         .expect("block events should include the deposit event");
     assert_eq!(channel_id, deposit_op.channel_id);
     assert_eq!(amount, deposit_amount);
     assert_eq!(metadata, deposit_op.metadata);
+    // The deposit consumes its inputs and re-creates them as channel notes,
+    // one per input.
+    assert_eq!(notes.len(), deposit_op.inputs.len());
 
     let balance_after = get_wallet_balance(&validator.client, funding_pk).await;
     let spent = balance_before - balance_after;

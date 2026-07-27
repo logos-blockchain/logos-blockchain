@@ -103,6 +103,9 @@ pub enum TxEventPayload {
         channel_id: ChannelId,
         amount: Value,
         metadata: Metadata,
+        /// The channel notes the deposit re-created its inputs as. They carry
+        /// new `NoteId`s, so a channel cannot derive them from the payload.
+        notes: Vec<NoteId>,
     },
     /// A leader claim operation created the reward note for its beneficiary.
     LeaderRewardClaimed {
