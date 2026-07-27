@@ -1339,24 +1339,25 @@ mod tests {
             inputs: Inputs::new([utxo.id()]),
             metadata: Metadata::empty(),
         };
+        let deposited = Utxo::new(deposit.op_id(), 0, utxo.note).id();
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
         let tx = create_multi_signed_tx(deposit_ops, vec![&Key::Zk(sk)]);
         ledger_state = ledger_state
             .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &tx)
             .unwrap()
             .0;
-        // The deposit made the note a channel note
+        // The deposit re-created the note as a channel note
         assert!(
             ledger_state
                 .mantle_ledger()
                 .channels()
-                .is_channel_note(&utxo.id())
+                .is_channel_note(&deposited)
         );
 
         // Try to withdraw the channel note, but with an invalid proof
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: Inputs::new([deposited]),
         };
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
         let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw)].into());
@@ -1394,7 +1395,7 @@ mod tests {
             ledger_state
                 .mantle_ledger()
                 .channels()
-                .is_channel_note(&utxo.id())
+                .is_channel_note(&deposited)
         );
     }
 

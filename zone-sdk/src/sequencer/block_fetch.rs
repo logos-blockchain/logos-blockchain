@@ -506,7 +506,7 @@ fn extract_finalized_items(
                 }
                 Op::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
                     let op_id = deposit.op_id();
-                    // `fetch_block_deposit_amounts` validates that every
+                    // `fetch_block_deposit_events` validates that every
                     // channel-deposit op in the block has a matching event
                     // entry before returning, so the lookup is infallible
                     // here. A miss would be a caller-side bug.
@@ -852,11 +852,11 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "fetch_block_deposit_amounts invariant")]
-    fn extract_finalized_items_panics_if_deposit_amounts_incomplete() {
-        // The walker contract: `deposit_amounts` must contain an entry for
+    #[should_panic(expected = "fetch_block_deposit_events invariant")]
+    fn extract_finalized_items_panics_if_deposit_events_incomplete() {
+        // The walker contract: `deposit_events` must contain an entry for
         // every channel-deposit op in the input transactions. This is
-        // enforced upstream by `fetch_block_deposit_amounts`, which validates
+        // enforced upstream by `fetch_block_deposit_events`, which validates
         // completeness and errors out before the walker is ever called with a
         // gap. A panic here surfaces the bug immediately if a future caller
         // violates that invariant — silent skip would drop a real deposit.

@@ -272,7 +272,7 @@ pub(crate) fn build_deposit_events(events: &Events) -> HashMap<(TxHash, Hash), (
 }
 
 /// Walks a block's transactions and emits the [`ZoneMessage`]s relevant to
-/// `channel_id`, looking up deposit amounts from `deposit_amounts`.
+/// `channel_id`, looking up deposit amounts and notes from `deposit_events`.
 fn block_to_messages<State: VerificationState>(
     transactions: Vec<SignedMantleTx<State>>,
     channel_id: ChannelId,
