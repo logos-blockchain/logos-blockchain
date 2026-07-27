@@ -13,26 +13,20 @@ use lb_merkle_tree::{CompressedMerkleTree, LeafExtractor, MerkleTree};
 use lb_poseidon2::{Digest, Fr};
 use rpds::HashTrieMapSync;
 
-/// [`MerkleHasher`] bridge adapting a `Key: AsRef<Fr>` leaf type and a
-/// [`Digest`] hasher to the generic [`DynamicMerkleTree`].
+/// [`MerkleHasher`] bridge compressing field-element (`Fr`) nodes with a
+/// [`Digest`] hasher.
 ///
-/// Leaf values are the key's field element and inner nodes are compressed with
-/// `Hash`.
-pub struct UtxoMerkleHasher<Key, Hash>(PhantomData<(Key, Hash)>);
+/// The leaf hashes themselves (the key's field element) are produced by
+/// [`UtxoLeaf`]; this hasher only knows how to combine two children.
+pub struct UtxoMerkleHasher<Hash>(PhantomData<Hash>);
 
-impl<Key, Hash> MerkleHasher for UtxoMerkleHasher<Key, Hash>
+impl<Hash> MerkleHasher for UtxoMerkleHasher<Hash>
 where
-    Key: AsRef<Fr> + Clone,
     Hash: Digest,
 {
-    type Item = Key;
     type Hash = Fr;
 
     const EMPTY_VALUE: Fr = <Fr as AdditiveGroup>::ZERO;
-
-    fn leaf_hash(item: &Key) -> Fr {
-        *item.as_ref()
-    }
 
     fn compress(left: &Fr, right: &Fr) -> Fr {
         <Hash as Digest>::compress(&[*left, *right])
@@ -50,13 +44,13 @@ pub struct UtxoLeaf<Hash>(PhantomData<Hash>);
 
 impl<Key, Item, Hash> LeafExtractor<Key, Item> for UtxoLeaf<Hash>
 where
-    Key: AsRef<Fr> + Clone,
+    Key: AsRef<Fr>,
     Hash: Digest,
 {
-    type Hasher = UtxoMerkleHasher<Key, Hash>;
+    type Hasher = UtxoMerkleHasher<Hash>;
 
-    fn leaf(key: &Key, _item: &Item) -> Key {
-        key.clone()
+    fn leaf(key: &Key, _item: &Item) -> Fr {
+        *key.as_ref()
     }
 }
 

@@ -16,8 +16,8 @@ pub trait LeafExtractor<Key, Item> {
     /// The hashing backend of the underlying [`DynamicMerkleTree`].
     type Hasher: MerkleHasher;
 
-    /// Builds the leaf payload stored for `(key, item)`.
-    fn leaf(key: &Key, item: &Item) -> <Self::Hasher as MerkleHasher>::Item;
+    /// Builds the leaf hash stored for `(key, item)`.
+    fn leaf(key: &Key, item: &Item) -> <Self::Hasher as MerkleHasher>::Hash;
 }
 
 /// A store that allows for efficient insertion, update, removal, and retrieval

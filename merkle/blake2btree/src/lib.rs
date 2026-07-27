@@ -23,20 +23,15 @@ pub trait LeafHash<Key> {
 /// [`MerkleHasher`] bridge adapting the classic blake2b hasher to the generic
 /// [`DynamicMerkleTree`].
 ///
-/// Leaves are the [`LeafHash`] of an element, computed by [`Blake2bTree`] when
-/// the element is stored, and inner nodes are the blake2b hash of their two
-/// children.
+/// Leaves are the [`LeafHash`] of an element, computed by [`Blake2bTree`] via
+/// [`Blake2bLeaf`] when the element is stored, and inner nodes are the blake2b
+/// hash of their two children.
 pub struct Blake2bMerkleHasher;
 
 impl MerkleHasher for Blake2bMerkleHasher {
-    type Item = Hash;
     type Hash = Hash;
 
     const EMPTY_VALUE: Hash = [0u8; 32];
-
-    fn leaf_hash(item: &Hash) -> Hash {
-        *item
-    }
 
     fn compress(left: &Hash, right: &Hash) -> Hash {
         let mut hasher = Hasher::new();
