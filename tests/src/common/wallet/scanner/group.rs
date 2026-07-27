@@ -8,7 +8,7 @@ use lb_testing_framework::NodeHttpClient;
 
 use super::{
     config::{ForkGroupScannerConfig, ScannerSeed, SharedBestNodeSelector},
-    state::{ForkGroupScannerState, SharedWalletScannerState},
+    state::{ForkGroupScannerState, ScannerStateCheckpoint, SharedWalletScannerState},
 };
 use crate::{
     common::wallet::TrackedWalletKeys,
@@ -228,6 +228,7 @@ fn scanner_seed_for_group(
             slot,
             source_node_names,
             rescan_blocks,
+            fallback_checkpoints,
         } = seed
         else {
             continue;
@@ -240,6 +241,7 @@ fn scanner_seed_for_group(
             slot,
             source_node_names: Vec::new(),
             rescan_blocks,
+            fallback_checkpoints: Vec::new(),
         });
 
         let ScannerSeed::Snapshot {
@@ -249,6 +251,7 @@ fn scanner_seed_for_group(
             slot: merged_slot,
             source_node_names: merged_source_node_names,
             rescan_blocks: merged_rescan_blocks,
+            fallback_checkpoints: merged_fallback_checkpoints,
         } = seed
         else {
             unreachable!("merged seed is always a snapshot");
@@ -266,7 +269,104 @@ fn scanner_seed_for_group(
         merged_wallet_utxos.extend(wallet_utxos);
         merged_source_node_names.extend(source_node_names);
         *merged_rescan_blocks = (*merged_rescan_blocks).max(rescan_blocks);
+        reassemble_fallback_checkpoints(merged_fallback_checkpoints, fallback_checkpoints)?;
     }
 
     Ok(merged_seed.unwrap_or(ScannerSeed::Genesis))
+}
+
+/// Reassemble the group-wide fallback checkpoint list from per-node slices.
+///
+/// The snapshot format stores one wallet-UTXO slice per node, all cut from the
+/// same scanner checkpoint list, so every slice must agree on (tip, height,
+/// slot) per entry; reassembly is a disjoint union of the wallet tables, not a
+/// reconciliation. A shorter list is allowed and extends the reassembled one.
+fn reassemble_fallback_checkpoints(
+    merged: &mut Vec<ScannerStateCheckpoint>,
+    incoming: Vec<ScannerStateCheckpoint>,
+) -> Result<(), StepError> {
+    for (index, checkpoint) in incoming.into_iter().enumerate() {
+        match merged.get_mut(index) {
+            None => merged.push(checkpoint),
+            Some(existing) => {
+                if existing.tip != checkpoint.tip
+                    || existing.height != checkpoint.height
+                    || existing.slot != checkpoint.slot
+                {
+                    return Err(StepError::LogicalError {
+                        message: format!(
+                            "wallet scanner snapshot fallback checkpoints for group diverge at \
+                             index {index}: first={}/{}/{} next={}/{}/{}",
+                            existing.tip,
+                            existing.height,
+                            existing.slot,
+                            checkpoint.tip,
+                            checkpoint.height,
+                            checkpoint.slot,
+                        ),
+                    });
+                }
+                existing.wallet_utxos.extend(checkpoint.wallet_utxos);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_core::header::HeaderId;
+
+    use super::*;
+    use crate::common::wallet::WalletId;
+
+    fn checkpoint(tip_byte: u8, height: u64, slot: u64, wallet: &str) -> ScannerStateCheckpoint {
+        ScannerStateCheckpoint {
+            wallet_utxos: std::iter::once((WalletId::new(wallet), Vec::new())).collect(),
+            tip: HeaderId::from([tip_byte; 32]),
+            height,
+            slot,
+        }
+    }
+
+    #[test]
+    fn reassemble_fallback_checkpoints_unions_wallet_utxos_per_position() {
+        let mut merged = vec![checkpoint(1, 5, 50, "wallet-a")];
+
+        reassemble_fallback_checkpoints(&mut merged, vec![checkpoint(1, 5, 50, "wallet-b")])
+            .expect("same chain positions must merge");
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].wallet_utxos.len(), 2);
+    }
+
+    #[test]
+    fn reassemble_fallback_checkpoints_extends_with_longer_list() {
+        let mut merged = vec![checkpoint(1, 5, 50, "wallet-a")];
+
+        reassemble_fallback_checkpoints(
+            &mut merged,
+            vec![
+                checkpoint(1, 5, 50, "wallet-b"),
+                checkpoint(2, 4, 49, "wallet-b"),
+            ],
+        )
+        .expect("longer list must extend the merged list");
+
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[1].tip, HeaderId::from([2; 32]));
+    }
+
+    #[test]
+    fn reassemble_fallback_checkpoints_rejects_diverging_positions() {
+        let mut merged = vec![checkpoint(1, 5, 50, "wallet-a")];
+
+        let result =
+            reassemble_fallback_checkpoints(&mut merged, vec![checkpoint(2, 5, 50, "wallet-b")]);
+
+        assert!(
+            result.is_err(),
+            "diverging checkpoint tips must be rejected"
+        );
+    }
 }

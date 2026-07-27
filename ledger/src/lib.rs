@@ -357,6 +357,21 @@ impl LedgerState {
         }
     }
 
+    /// Accumulates the storage gas consumed by the block into the current
+    /// epoch's counter, which drives the storage price update at the next
+    /// epoch rotation.
+    fn add_storage_gas_consumed<Id>(
+        self,
+        block_storage_gas_consumed: Gas,
+    ) -> Result<Self, LedgerError<Id>> {
+        Ok(Self {
+            cryptarchia_ledger: self
+                .cryptarchia_ledger
+                .add_storage_gas_consumed(block_storage_gas_consumed)?,
+            ..self
+        })
+    }
+
     /// Apply the contents of an update to the ledger state.
     pub fn try_apply_contents<'tx, Tx, Id, Constants: GasConstants>(
         mut self,
@@ -367,6 +382,7 @@ impl LedgerState {
         Tx: PreverifiedMantleTx<Context = GasPrices> + 'tx,
     {
         let mut total_block_execution_gas: Gas = 0.into();
+        let mut total_block_storage_gas: Gas = 0.into();
         let mut total_fee_burned: GasCost = 0.into();
         let mut total_fee_tip: GasCost = 0.into();
         let mut tx_events = Vec::new();
@@ -409,6 +425,8 @@ impl LedgerState {
             total_fee_tip = total_fee_tip.checked_add(tx_fee_tip)?;
             total_block_execution_gas = total_block_execution_gas
                 .checked_add(tx.execution_gas_consumption::<Constants>(&gas_prices)?)?;
+            total_block_storage_gas =
+                total_block_storage_gas.checked_add(tx.storage_gas_consumption(&gas_prices)?)?;
 
             // Check that the block is not exceeding the Gas limit
             if total_block_execution_gas > EXECUTION_GAS_LIMIT {
@@ -422,6 +440,9 @@ impl LedgerState {
         self = self.compute_block_rewards(total_fee_burned, total_fee_tip)?;
         // Update Execution market state
         self = self.update_execution_market(total_block_execution_gas);
+        // Accumulate storage gas consumed so the storage market can update the
+        // price at the next epoch rotation.
+        self = self.add_storage_gas_consumed(total_block_storage_gas)?;
         Ok((self, tx_events))
     }
 
@@ -1729,6 +1750,39 @@ mod tests {
                 .get_pending_rewards()
         );
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_apply_contents_accumulates_storage_gas() {
+        let utxo = utxo();
+        let config = config();
+        let mut ledger = LedgerState::from_utxos([utxo], &config);
+        update_ledger_prices(&mut ledger, 1, 1);
+
+        // No outputs: the whole input covers the gas cost and the remainder is
+        // tipped. We only assert on the storage counter, not the tip, so the
+        // exact balance is irrelevant.
+        let sk = ZkKey::from(BigUint::from(0u8));
+        let tx = create_tx(vec![utxo.id()], vec![], std::slice::from_ref(&sk))
+            .preverify()
+            .unwrap();
+
+        // The tx must consume a non-zero amount of storage gas for the check to
+        // be meaningful.
+        let storage_gas = tx
+            .storage_gas_consumption(&ledger.get_gas_prices())
+            .unwrap();
+        assert!(storage_gas.into_inner() > 0);
+
+        let (applied, _) = ledger
+            .try_apply_contents::<_, HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx))
+            .unwrap();
+
+        // Storage gas consumed by the tx should be accumulated in the ledger
+        assert_eq!(
+            applied.cryptarchia_ledger.storage_gas_consumed_in_epoch(),
+            storage_gas
+        );
     }
 
     #[test]

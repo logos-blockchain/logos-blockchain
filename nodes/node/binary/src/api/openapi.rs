@@ -35,7 +35,7 @@ use utoipa::OpenApi;
         crate::api::handlers::wallet::fund,
         crate::api::tracing::reload_tracing_filter,
     ),
-    components(schemas(schema::Status, schema::MempoolMetrics)),
+    components(schemas(schema::Status, schema::MempoolMetrics, crate::api::errors::ErrorBody)),
     tags()
 )]
 pub struct ApiDoc;

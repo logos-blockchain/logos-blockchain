@@ -13,7 +13,10 @@ use testing_framework_core::scenario::{DynError, SnapshotArtifact, SnapshotStore
 use crate::{
     common::wallet::{
         TrackedWallets, TrackedWalletsState, WalletId, WalletUtxos,
-        scanner::config::{DEFAULT_SCANNER_SNAPSHOT_RESCAN_BLOCKS, ScannerSeed},
+        scanner::{
+            config::{DEFAULT_SCANNER_SNAPSHOT_RESCAN_BLOCKS, ScannerSeed},
+            state::ScannerStateCheckpoint,
+        },
     },
     cucumber::{
         defaults::snapshots_root_dir,
@@ -44,6 +47,18 @@ struct WalletNodeSnapshot {
     height: u64,
     #[serde(default)]
     slot: Option<u64>,
+    tracked_wallets: TrackedWalletsState,
+    /// Older scanner checkpoints, newest first, used as fallback seed
+    /// positions when the snapshot tip is not found on the restored chain.
+    #[serde(default)]
+    checkpoints: Vec<WalletSnapshotCheckpoint>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct WalletSnapshotCheckpoint {
+    tip: String,
+    height: u64,
+    slot: u64,
     tracked_wallets: TrackedWalletsState,
 }
 
@@ -97,6 +112,18 @@ impl WalletSnapshot {
                 ),
             })?;
             let tip = tip.to_string();
+            let checkpoints = group
+                .recent_checkpoints
+                .iter()
+                .map(|checkpoint| WalletSnapshotCheckpoint {
+                    tip: checkpoint.tip.to_string(),
+                    height: checkpoint.height,
+                    slot: checkpoint.slot,
+                    tracked_wallets: TrackedWalletsState::from_wallet_utxos(
+                        checkpoint.wallet_utxos.clone(),
+                    ),
+                })
+                .collect::<Vec<_>>();
             let group_nodes = scanner_group_node_names(world, &group.group_id);
             for node_name in group_nodes {
                 let mut node_snapshot = WalletNodeSnapshot {
@@ -104,6 +131,7 @@ impl WalletSnapshot {
                     height: group.applied_height,
                     slot: Some(slot),
                     tracked_wallets: scanner_wallets.clone(),
+                    checkpoints: checkpoints.clone(),
                 };
                 filter_node_snapshot_wallets(world, &node_name, &mut node_snapshot)?;
                 states_by_node.insert(node_name, node_snapshot);
@@ -166,6 +194,24 @@ impl WalletSnapshot {
             Some(slot) => slot,
             None => fetch_tip_slot(client, &tip).await?,
         };
+        let fallback_checkpoints = node_snapshot
+            .checkpoints
+            .iter()
+            .filter(|checkpoint| checkpoint.tip != node_snapshot.tip)
+            .map(|checkpoint| {
+                Ok(ScannerStateCheckpoint {
+                    wallet_utxos: checkpoint
+                        .tracked_wallets
+                        .to_wallet_utxos()
+                        .into_iter()
+                        .filter(|(wallet_id, _)| runtime_wallet_ids.contains(wallet_id))
+                        .collect(),
+                    tip: parse_header_id(&checkpoint.tip)?,
+                    height: checkpoint.height,
+                    slot: checkpoint.slot,
+                })
+            })
+            .collect::<Result<Vec<_>, StepError>>()?;
 
         world.with_wallets_mut(|wallets| {
             wallets.record_header_height(
@@ -190,6 +236,7 @@ impl WalletSnapshot {
                 slot,
                 source_node_names: vec![runtime_node_name.to_owned()],
                 rescan_blocks: DEFAULT_SCANNER_SNAPSHOT_RESCAN_BLOCKS,
+                fallback_checkpoints,
             },
         );
 
@@ -341,6 +388,9 @@ fn filter_node_snapshot_wallets(
     node_snapshot.tracked_wallets = node_snapshot
         .tracked_wallets
         .filtered_to_wallets(&wallet_ids);
+    for checkpoint in &mut node_snapshot.checkpoints {
+        checkpoint.tracked_wallets = checkpoint.tracked_wallets.filtered_to_wallets(&wallet_ids);
+    }
     Ok(())
 }
 
