@@ -1,6 +1,6 @@
 use multiaddr::Multiaddr;
 
-use crate::bounded::{Bounded, BoundedError, BoundedLen};
+use crate::bounded::{Bounded, BoundedError, BoundedLen, BoundedVec};
 
 impl BoundedLen for Multiaddr {
     fn bounded_len(&self) -> usize {
@@ -28,6 +28,11 @@ impl<const MIN: usize, const MAX: usize> BoundedMultiaddr<MIN, MAX> {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.as_inner().is_empty()
+    }
+
+    #[must_use]
+    pub fn to_vec(&self) -> BoundedVec<u8, MIN, MAX> {
+        BoundedVec::new_unchecked(self.as_inner().to_vec())
     }
 }
 
