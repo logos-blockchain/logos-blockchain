@@ -346,6 +346,7 @@ pub fn funding_config(args: &NodeKeyArgs) -> RunResult<Option<FundingConfig>> {
     Ok(Some(FundingConfig {
         funding_pk: decode_zk_public_key_hex(funding_pk_hex)?,
         max_tx_fee: args.max_tx_fee.into(),
+        priority_fee: args.priority_fee,
     }))
 }
 
