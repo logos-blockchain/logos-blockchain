@@ -240,7 +240,6 @@ multiaddr                          = { default-features = false, version = "0.18
 natpmp                             = { default-features = false, version = "0.5" }
 netdev                             = { default-features = false, version = "0.31" }
 nistrs                             = { default-features = false, version = "0.1.2" }
-nom                                = { default-features = false, version = "8" }
 num-bigint                         = { default-features = false, version = "0.4" }
 num-traits                         = { default-features = false, version = "0.2.19" }
 num_enum                           = { default-features = false, version = "0.7.4" }

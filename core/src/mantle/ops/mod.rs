@@ -193,7 +193,7 @@ impl WireDecode for Op {
 
 // We just check that the enum discriminant tag is encoded correctly, so a
 // single fixture is fine here.
-// TODO: Remove once the `NomCodec` macro supports enums.
+// TODO: Remove once the `WireCodec` macro supports enums.
 
 impl Op {
     #[must_use]

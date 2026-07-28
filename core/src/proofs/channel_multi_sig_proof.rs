@@ -253,14 +253,15 @@ mod tests {
         assert_eq!(round_tripped, ok);
     }
 
-    /// The nom decoder must uphold the same well-formedness invariant as `new`:
+    /// The decoder must uphold the same well-formedness invariant as `new`:
     /// a wire-encoded vector with a repeated index is not strictly increasing,
-    /// so `decode` must fail (the `try_new` inside `decode` maps to a nom
+    /// a wire-encoded vector with a repeated index is not strictly increasing,
+    /// so `decode` must fail (the `try_new` inside `decode` maps to a wire
     /// error).
     #[test]
     fn decode_rejects_repeated_index() {
         // Encode a raw vector (bypassing `ChannelMultiSigProof`) with the same
-        // index twice, then decode it back through the proof's nom path.
+        // index twice, then decode it back through the proof's wire path.
         let raw: IndexedSignatures = [
             IndexedSignature::new(0, sig(1)),
             IndexedSignature::new(0, sig(2)),
@@ -275,7 +276,7 @@ mod tests {
 
     /// Companion to the above: a wire-encoded vector whose indices are unique
     /// but out of order (descending) is also not strictly increasing, so the
-    /// nom decoder must reject it.
+    /// wire decoder must reject it.
     #[test]
     fn decode_rejects_out_of_order_indices() {
         let raw: IndexedSignatures = [
