@@ -186,6 +186,9 @@ pub trait GasConstants {
 
     /// Consume a reward ticket.
     const LEADER_CLAIM: Gas;
+
+    /// Claim a `PoW` reward
+    const CLAIM_POW_REWARD: Gas;
 }
 
 pub struct MainnetGasConstants;
@@ -201,4 +204,6 @@ impl GasConstants for MainnetGasConstants {
     const SDP_WITHDRAW: Gas = Gas(590);
     const SDP_ACTIVE: Gas = Gas(590);
     const LEADER_CLAIM: Gas = Gas(580);
+    // TODO: Fix this value once decided
+    const CLAIM_POW_REWARD: Gas = Gas(1);
 }

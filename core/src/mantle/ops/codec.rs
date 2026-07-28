@@ -60,6 +60,7 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> Result<(&'a [u8], OpProof), 
             ChannelMultiSigProof::decode(input)
                 .map(|(rest, proof)| (rest, OpProof::ChannelMultiSigProof(proof)))
         }
+        Op::ClaimPowReward(_) => Ok((input, OpProof::None)),
     }
 }
 
@@ -75,6 +76,7 @@ fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
             }
             OpProof::ZkSig(sig) => sig.encode_to_vec(),
             OpProof::PoC(poc) => poc.encode_to_vec(),
+            OpProof::None => Vec::with_capacity(0),
         }
     } else {
         panic!("Mismatch between proof type and operation type");

@@ -93,6 +93,7 @@ pub fn minimum_signed_mantle_tx_size(tx: &RawMantleTx, context: &MantleTxGasCont
 
             // ZkSigProof = ZkSignature = Groth16
             Op::ChannelDeposit(_) => COMPRESSED_PROOF_SIZE,
+            Op::ClaimPowReward(_) => 0, // no proof
         })
         .sum::<usize>();
 

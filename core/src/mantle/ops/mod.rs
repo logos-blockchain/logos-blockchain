@@ -6,6 +6,7 @@ pub mod transfer;
 pub(crate) mod internal;
 
 pub(crate) mod codec;
+pub mod pow;
 mod serde_;
 pub mod signed_op;
 
@@ -31,6 +32,7 @@ use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::ops::{
         internal::{OpDe, OpSer},
+        pow::ClaimPowRewardOp,
         transfer::TransferOp,
     },
     proofs::{
@@ -60,6 +62,7 @@ const SDP_DECLARE: u8 = 0x20;
 const SDP_WITHDRAW: u8 = 0x21;
 const SDP_ACTIVE: u8 = 0x22;
 const LEADER_CLAIM: u8 = 0x30;
+const CLAIM_POW_REWARD: u8 = 0x40;
 
 /// Core set of supported Mantle operations.
 ///
@@ -82,6 +85,7 @@ pub enum Op {
     SDPActive(SDPActiveOp),
     LeaderClaim(LeaderClaimOp),
     Transfer(TransferOp),
+    ClaimPowReward(ClaimPowRewardOp),
 }
 
 /// Delegates serialization through the [`OpInternal`] representation.
@@ -135,6 +139,7 @@ impl BinaryEncode for Op {
             Self::SDPActive(op) => op.encoded_length(),
             Self::LeaderClaim(op) => op.encoded_length(),
             Self::Transfer(op) => op.encoded_length(),
+            Self::ClaimPoWReward(op) => op.encoded_legth(),
         };
         self.code().encoded_length().checked_add(payload).unwrap()
     }
@@ -152,6 +157,7 @@ impl BinaryEncode for Op {
             Self::SDPActive(op) => op.encode_into(out),
             Self::LeaderClaim(op) => op.encode_into(out),
             Self::Transfer(op) => op.encode_into(out),
+            Self::ClaimPoWReward(op) => op.encode_into(out),
         }
     }
 }
@@ -190,6 +196,9 @@ impl BinaryDecode for Op {
                 LeaderClaimOp::decode(input, &()).map(|(rest, op)| (rest, Self::LeaderClaim(op)))
             }
             TRANSFER => TransferOp::decode(input, &()).map(|(rest, op)| (rest, Self::Transfer(op))),
+            CLAIM_POW_REWARD => {
+                ClaimPowRewardOp::decode(input, &()).map(|(rest, op)| (rest, Self::ClaimPowReward(op)))
+            }
             other => Err(DecodeError::unknown_discriminant::<Self>(u64::from(other))),
         }
     }
@@ -213,6 +222,7 @@ impl Op {
             Self::SDPActive(_) => "SDPActive",
             Self::LeaderClaim(_) => "LeaderClaim",
             Self::Transfer(_) => "Transfer",
+            Self::ClaimPowReward(_) => "ClaimPowReward",
         }
     }
 
@@ -229,6 +239,7 @@ impl Op {
             Self::SDPActive(_) => Constants::SDP_ACTIVE,
             Self::LeaderClaim(_) => Constants::LEADER_CLAIM,
             Self::Transfer(_) => Constants::TRANSFER,
+            Self::ClaimPowReward(_) => Constants::CLAIM_POW_REWARD,
         }
     }
 
@@ -244,6 +255,7 @@ impl Op {
             Self::SDPActive(_) => SDP_ACTIVE,
             Self::LeaderClaim(_) => LEADER_CLAIM,
             Self::Transfer(_) => TRANSFER,
+            Self::ClaimPowReward(_) => CLAIM_POW_REWARD,
         }
     }
 }
@@ -261,6 +273,7 @@ pub enum OpProof {
     ZkAndEd25519Sigs(ZkAndEd25519Proof),
     PoC(Groth16LeaderClaimProof),
     ChannelMultiSigProof(ChannelMultiSigProof),
+    None,
 }
 
 /// Mantle reference test-vector generators.

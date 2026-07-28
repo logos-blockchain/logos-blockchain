@@ -63,6 +63,13 @@ pub fn fr_from_bytes(fr: &[u8]) -> Result<Fr, impl Error + use<>> {
     Ok(n.into())
 }
 
+#[must_use]
+pub fn fr_from_mod_bytes(bytes: &[u8]) -> Fr {
+    let n = BigUint::from_bytes_le(bytes);
+    let n: BigUint = n % BigUint::from(<Fr as PrimeField>::MODULUS);
+    n.into()
+}
+
 /// To be used only in cases where a random or pseudo-random `Fr` value is
 /// needed.
 #[must_use]
