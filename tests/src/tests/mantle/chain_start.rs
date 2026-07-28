@@ -5,7 +5,6 @@ use lb_core::{
     block::genesis::GenesisBlockBuilder,
     mantle::{
         GenesisTime,
-        nom::NomEncode as _,
         ops::channel::inscribe::{Inscription, InscriptionOp},
         traits::GenesisTx as _,
     },
@@ -16,6 +15,7 @@ use lb_testing_framework::{
     configs::deployment::NodeBinaryProfile, ensure_node_binary_built,
 };
 use lb_utils::math::NonNegativeRatio;
+use lb_wire::WireEncode as _;
 use logos_blockchain_tests::{
     common::manual_cluster::{
         ManualNodeLayout, start_local_manual_cluster_with_layout, wait_for_nodes_height,
@@ -110,7 +110,7 @@ fn test_config(mut config: RunConfig, genesis_time: GenesisTime) -> RunConfig {
     cryptarchia_parameter.genesis_time = genesis_time;
 
     let inscription = InscriptionOp {
-        inscription: Inscription::new_unchecked(cryptarchia_parameter.encode()),
+        inscription: Inscription::new_unchecked(cryptarchia_parameter.encode_to_vec()),
         ..genesis_tx.genesis_inscription().clone()
     };
 

@@ -28,6 +28,7 @@ hex                              = { workspace = true }
 lb-core                          = { workspace = true }
 lb-groth16                       = { workspace = true }
 lb-key-management-system-service = { workspace = true }
+lb-wire                          = { workspace = true }
 lb-zone-sdk                      = { workspace = true }
 rand                             = { workspace = true }
 reqwest                          = { workspace = true }
