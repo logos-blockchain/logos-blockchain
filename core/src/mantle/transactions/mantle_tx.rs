@@ -227,7 +227,7 @@ impl MantleTxGasContext {
     #[must_use]
     pub fn from_channels(channels: &Channels, base_prices: GasPrices) -> Self {
         let (transfer_thresholds, configuration_thresholds) = channels
-            .iter()
+            .into_iter()
             .map(|(channel_id, channel)| {
                 (
                     (*channel_id, channel.transfer_threshold),

@@ -426,7 +426,7 @@ mod tests {
         }
         let (current_tree, _) = current_tree.remove(&keys[1]).unwrap();
 
-        let items = current_tree.iter().collect::<Vec<_>>();
+        let items = current_tree.into_iter().collect::<Vec<_>>();
 
         assert_eq!(items.len(), 2);
         assert!(items.contains(&(&keys[0], &keys[0])));

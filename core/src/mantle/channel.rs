@@ -156,6 +156,15 @@ impl Default for Channels {
     }
 }
 
+impl<'a> IntoIterator for &'a Channels {
+    type Item = (&'a ChannelId, &'a ChannelState);
+    type IntoIter = <&'a Blake2bTree<ChannelId, ChannelState> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.channels.into_iter()
+    }
+}
+
 impl Channels {
     pub fn from_genesis(op: &InscriptionOp) -> Result<(Self, Vec<TxEvent>), Error> {
         let (ctx, events) = op.execute(InscriptionExecutionContext {
@@ -183,8 +192,9 @@ impl Channels {
         self.channels.contains(channel_id)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&ChannelId, &ChannelState)> {
-        self.channels.iter()
+    #[must_use]
+    pub fn iter(&self) -> <&Self as IntoIterator>::IntoIter {
+        self.into_iter()
     }
 
     /// Creates `channel_id` with `channel`, or replaces its state if it already

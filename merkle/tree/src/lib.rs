@@ -124,8 +124,9 @@ where
     }
 
     /// Iterates over the stored `(key, item)` pairs, in no particular order
-    pub fn iter(&self) -> impl Iterator<Item = (&Key, &Item)> {
-        self.items.iter().map(|(key, (item, _))| (key, item))
+    #[must_use]
+    pub fn iter(&self) -> <&Self as IntoIterator>::IntoIter {
+        self.into_iter()
     }
 
     /// Computes the Merkle path for the key.
@@ -134,6 +135,23 @@ where
     pub fn path(&self, key: &Key) -> Option<MerklePath<<Leaf::Hasher as MerkleHasher>::Hash>> {
         let (_, pos) = self.items.get(key)?;
         self.merkle.path(*pos)
+    }
+}
+
+impl<'a, Key, Item, Leaf> IntoIterator for &'a MerkleTree<Key, Item, Leaf>
+where
+    Key: Clone + std::hash::Hash + Eq,
+    Leaf: LeafExtractor<Key, Item>,
+{
+    type Item = (&'a Key, &'a Item);
+    type IntoIter = std::iter::Map<
+        <&'a HashTrieMapSync<Key, (Item, usize)> as IntoIterator>::IntoIter,
+        fn((&'a Key, &'a (Item, usize))) -> (&'a Key, &'a Item),
+    >;
+
+    /// Iterates over the stored `(key, item)` pairs, in no particular order
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.iter().map(|(key, (item, _))| (key, item))
     }
 }
 
