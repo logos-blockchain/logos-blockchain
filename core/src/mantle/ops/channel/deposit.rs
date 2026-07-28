@@ -6,7 +6,7 @@ use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
         channel::{Channels, Error},
-        ledger::{Inputs, InputsError, Operation, Outputs, Utxos},
+        ledger::{BoundedInputs, Inputs, InputsError, Operation, Outputs, Utxos},
         nom::{NomCodec, NomEncode as _},
         ops::{OpId, channel::ChannelId},
         transactions::hash::TxHash,
@@ -104,12 +104,13 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
         // Add the re-created notes to the ledger and register them as channel
         // notes.
         ctx.utxos = outputs.execute(ctx.utxos, self);
-        let mut note_ids = Vec::with_capacity(outputs.len());
+        // One note per input, so the deposit inputs bound also holds here.
+        let mut note_ids = BoundedInputs::default();
         for utxo in outputs.utxos(self) {
             ctx.channels = ctx
                 .channels
                 .register_channel_note(&utxo.id(), &self.channel_id)?;
-            note_ids.push(utxo.id());
+            note_ids.try_push(utxo.id()).map_err(InputsError::from)?;
         }
 
         let events = std::iter::once(TxEvent::new(

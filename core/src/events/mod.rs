@@ -6,6 +6,7 @@ use crate::{
     crypto::Hash,
     mantle::{
         NoteId, Utxo, Value,
+        ledger::BoundedInputs,
         ops::{
             channel::{ChannelId, deposit::Metadata},
             leader_claim::VoucherNullifier,
@@ -105,7 +106,7 @@ pub enum TxEventPayload {
         metadata: Metadata,
         /// The channel notes the deposit re-created its inputs as. They carry
         /// new `NoteId`s, so a channel cannot derive them from the payload.
-        notes: Vec<NoteId>,
+        notes: BoundedInputs,
     },
     /// A leader claim operation created the reward note for its beneficiary.
     LeaderRewardClaimed {

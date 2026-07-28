@@ -295,7 +295,7 @@ mod tests {
             tx_hash: TxHash::from(tx_hash),
             op_id,
             inputs: Inputs::new([NoteId::from(Fr::from(u32::from(seed)))]),
-            notes: vec![NoteId::from(Fr::from(u32::from(seed)))],
+            notes: [NoteId::from(Fr::from(u32::from(seed)))].into(),
             amount: 0,
             metadata: [seed].into(),
         })

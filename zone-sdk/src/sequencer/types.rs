@@ -5,10 +5,10 @@ use lb_core::{
     crypto::Hash,
     header::HeaderId,
     mantle::{
-        NoteId, SignedMantleTx, Value,
+        SignedMantleTx, Value,
         channel::ChannelState,
         gas::GasCost,
-        ledger::{Inputs, Outputs},
+        ledger::{BoundedInputs, Inputs, Outputs},
         ops::channel::{
             ChannelId, MsgId, deposit::Metadata, inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
@@ -432,7 +432,7 @@ pub struct DepositInfo {
     /// The channel notes the deposit re-created its inputs as, sourced from
     /// the block's events. These carry new `NoteId`s and are what the channel
     /// now owns.
-    pub notes: Vec<NoteId>,
+    pub notes: BoundedInputs,
     /// Total value deposited, sourced from the block's events.
     pub amount: Value,
     /// Opaque metadata associated with this deposit.

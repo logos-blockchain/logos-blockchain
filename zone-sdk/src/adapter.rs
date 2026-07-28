@@ -11,8 +11,9 @@ use lb_core::{
     events::TxEvent,
     header::HeaderId,
     mantle::{
-        NoteId, Op, SignedMantleTx, Value,
+        Op, SignedMantleTx, Value,
         channel::ChannelState,
+        ledger::BoundedInputs,
         ops::{OpId as _, channel::ChannelId},
         traits::Hashable as _,
         transactions::{
@@ -259,7 +260,7 @@ pub(crate) fn has_channel_deposit<State: VerificationState>(
 /// block's events, keeping only deposit events.
 pub(crate) fn build_deposit_events(
     events: &Events,
-) -> HashMap<(TxHash, Hash), (Value, Vec<NoteId>)> {
+) -> HashMap<(TxHash, Hash), (Value, BoundedInputs)> {
     events
         .iter()
         .filter_map(|event| match event {
@@ -278,7 +279,7 @@ pub(crate) fn build_deposit_events(
 fn block_to_messages<State: VerificationState>(
     transactions: Vec<SignedMantleTx<State>>,
     channel_id: ChannelId,
-    deposit_events: &HashMap<(TxHash, Hash), (Value, Vec<NoteId>)>,
+    deposit_events: &HashMap<(TxHash, Hash), (Value, BoundedInputs)>,
 ) -> Vec<ZoneMessage> {
     transactions
         .into_iter()
@@ -301,7 +302,7 @@ fn op_to_zone_message(
     op: &Op,
     tx_hash: TxHash,
     channel_id: ChannelId,
-    deposit_events: &HashMap<(TxHash, Hash), (Value, Vec<NoteId>)>,
+    deposit_events: &HashMap<(TxHash, Hash), (Value, BoundedInputs)>,
 ) -> Option<ZoneMessage> {
     match op {
         Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
@@ -345,6 +346,7 @@ fn op_to_zone_message(
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
+        NoteId,
         ledger::Inputs,
         ops::channel::{
             deposit::{DepositOp, Metadata},
@@ -405,8 +407,14 @@ mod tests {
         // Both deposits get an event, so channel filtering is proven to be
         // the reason the foreign one is dropped — not a missing amount.
         let deposit_events = HashMap::from([
-            ((tx_a_hash, our_deposit.op_id()), (1234, Vec::new())),
-            ((tx_a_hash, foreign_deposit.op_id()), (999, Vec::new())),
+            (
+                (tx_a_hash, our_deposit.op_id()),
+                (1234, BoundedInputs::default()),
+            ),
+            (
+                (tx_a_hash, foreign_deposit.op_id()),
+                (999, BoundedInputs::default()),
+            ),
         ]);
 
         let messages = block_to_messages(vec![tx_a, tx_b], channel_id, &deposit_events);

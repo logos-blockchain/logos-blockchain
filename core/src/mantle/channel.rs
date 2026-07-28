@@ -428,7 +428,7 @@ mod tests {
         assert_eq!(*event_channel_id, deposit_op.channel_id);
         assert_eq!(*amount, utxo.note.value);
         assert_eq!(*metadata, deposit_op.metadata);
-        assert_eq!(notes, &vec![deposited]);
+        assert_eq!(notes.as_slice(), &[deposited]);
     }
 
     #[test]
