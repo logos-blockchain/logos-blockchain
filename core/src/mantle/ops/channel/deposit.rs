@@ -3,10 +3,10 @@ use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    events::{TxEvent, TxEventPayload},
+    events::{DepositRecreatedNotes, TxEvent, TxEventPayload},
     mantle::{
         channel::{Channels, Error},
-        ledger::{BoundedInputs, Inputs, InputsError, Operation, Outputs, Utxos},
+        ledger::{Inputs, InputsError, Operation, Outputs, Utxos},
         nom::{NomCodec, NomEncode as _},
         ops::{OpId, channel::ChannelId},
         transactions::hash::TxHash,
@@ -104,8 +104,7 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
         // Add the re-created notes to the ledger and register them as channel
         // notes.
         ctx.utxos = outputs.execute(ctx.utxos, self);
-        // One note per input, so the deposit inputs bound also holds here.
-        let mut note_ids = BoundedInputs::default();
+        let mut note_ids = DepositRecreatedNotes::default();
         for utxo in outputs.utxos(self) {
             ctx.channels = ctx
                 .channels

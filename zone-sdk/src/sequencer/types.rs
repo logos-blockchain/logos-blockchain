@@ -3,12 +3,13 @@ use std::time::Duration;
 use lb_common_http_client::Slot;
 use lb_core::{
     crypto::Hash,
+    events::DepositRecreatedNotes,
     header::HeaderId,
     mantle::{
         SignedMantleTx, Value,
         channel::ChannelState,
         gas::GasCost,
-        ledger::{BoundedInputs, Inputs, Outputs},
+        ledger::{Inputs, Outputs},
         ops::channel::{
             ChannelId, MsgId, deposit::Metadata, inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
@@ -440,7 +441,7 @@ pub struct DepositInfo {
     /// The channel notes the deposit re-created its inputs as, sourced from
     /// the block's events. These carry new `NoteId`s and are what the channel
     /// now owns.
-    pub notes: BoundedInputs,
+    pub notes: DepositRecreatedNotes,
     /// Total value deposited, sourced from the block's events.
     pub amount: Value,
     /// Opaque metadata associated with this deposit.
