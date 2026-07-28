@@ -1289,7 +1289,7 @@ where
     ) -> Result<SignedMantleTx<Preverified>, WalletServiceError> {
         let context = ledger.tx_context();
         let net_balance = funded_tx_builder.net_balance();
-        let gas_cost = funded_tx_builder.gas_cost::<MainnetGasConstants>(&context)?;
+        let gas_cost = funded_tx_builder.minimum_gas_cost::<MainnetGasConstants>(&context)?;
         debug!(
             target: LOG_TARGET,
             net_balance,

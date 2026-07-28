@@ -33,8 +33,16 @@ pub fn encode_signed_mantle_tx<State: VerificationState>(tx: &SignedMantleTx<Sta
     bytes
 }
 
+/// Predicts the minimum encoded size of the transaction once signed.
+///
+/// Proof sizes are fixed per op type or dictated by the channel thresholds
+/// the ledger enforces, so the prediction is exact — except for a
+/// `ChannelConfig` op creating a new channel. In this case, the ledger skips
+/// proof verifications, so this function assumes 0 proofs.
+/// Attaching more proofs than predicted is allowed, but if the tx is funded
+/// based on the predicted size, it may end up paying insufficient fees.
 #[must_use]
-pub fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGasContext) -> usize {
+pub fn minimum_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGasContext) -> usize {
     let mantle_tx_size = tx.encode().len();
 
     let ops_proofs_size = tx
@@ -44,10 +52,13 @@ pub fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGasContext
             // Ed25519SigProof = Ed25519Signature
             Op::ChannelInscribe(_) => ED25519_SIGNATURE_SIZE,
 
-            // ChannelMultiSigProof — for an existing channel, threshold sigs;
-            // for a new channel (just-in-time created here), no sigs required.
-            // TODO: underpredicts if there is a non-empty proof for a new
-            // channel. Tighten before enabling non-zero storage gas prices.
+            // ChannelMultiSigProof
+            //
+            // For existing channels, the ledger enforces exactly
+            // `configuration_threshold` proofs.
+            //
+            // On the other hand, for new channels, the ledger skips proof verifications.
+            // So, this function predicts the tx size assuming that 0 proofs will be added for this operation.
             Op::ChannelConfig(operation) => {
                 let threshold = context
                     .configuration_threshold(&operation.channel)
@@ -307,7 +318,7 @@ mod tests {
                 let gas_context =
                     MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
                 let predicted_size =
-                    predict_signed_mantle_tx_size(signed_tx.mantle_tx(), &gas_context);
+                    minimum_signed_mantle_tx_size(signed_tx.mantle_tx(), &gas_context);
                 assert_eq!(
                     predicted_size,
                     encoded.len(),
@@ -391,14 +402,14 @@ mod tests {
     }
 
     #[test]
-    fn test_predict_signed_mantle_tx_size_empty_tx() {
+    fn test_minimum_signed_mantle_tx_size_empty_tx() {
         // Create an empty MantleTx
         let mantle_tx = MantleTx(Ops::new_unchecked(vec![]));
 
         // Predict size
         let gas_context =
             MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
-        let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &gas_context);
+        let predicted_size = minimum_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
         // Create a signed tx and encode it to get actual size
         let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
@@ -409,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn test_predict_signed_mantle_tx_size_with_inscribe() {
+    fn test_minimum_signed_mantle_tx_size_with_inscribe() {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let inscribe_op = InscriptionOp {
             channel_id: ChannelId::from([0xAA; 32]),
@@ -423,7 +434,7 @@ mod tests {
         // Predict size
         let gas_context =
             MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
-        let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &gas_context);
+        let predicted_size = minimum_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
         // Create a signed tx and encode it to get actual size
         let tx_hash = mantle_tx.hash();
@@ -436,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn test_predict_signed_mantle_tx_size_with_set_keys() {
+    fn test_minimum_signed_mantle_tx_size_with_set_keys() {
         let signing_key1 = Ed25519Key::from_bytes(&[1; 32]);
         let signing_key2 = Ed25519Key::from_bytes(&[2; 32]);
         let signing_key3 = Ed25519Key::from_bytes(&[3; 32]);
@@ -460,7 +471,7 @@ mod tests {
         // Predict size
         let gas_context =
             MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
-        let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &gas_context);
+        let predicted_size = minimum_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
         // Create a signed tx and encode it to get the actual size.
         // New channel → empty proof (no signatures required for just-in-time create).
@@ -476,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    fn test_predict_signed_mantle_tx_size_with_sdp_declare() {
+    fn test_minimum_signed_mantle_tx_size_with_sdp_declare() {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let zk_sk = ZkKey::zero();
         let locator1: Multiaddr = "/ip4/127.0.0.1/tcp/8080".parse().unwrap();
@@ -509,7 +520,7 @@ mod tests {
         // Predict size
         let gas_context =
             MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
-        let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &gas_context);
+        let predicted_size = minimum_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
         // Create a signed tx and encode it to get actual size
         let tx_hash = mantle_tx.hash();
@@ -528,7 +539,7 @@ mod tests {
     }
 
     #[test]
-    fn test_predict_signed_mantle_tx_size_with_sdp_withdraw() {
+    fn test_minimum_signed_mantle_tx_size_with_sdp_withdraw() {
         let locked_note_id = NoteId(BigUint::from(123u64).into());
 
         let sdp_withdraw_op = SDPWithdrawOp {
@@ -544,7 +555,7 @@ mod tests {
         // Predict size
         let gas_context =
             MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
-        let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &gas_context);
+        let predicted_size = minimum_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
         // Create a signed tx and encode it to get actual size
         let signed_tx = SignedMantleTx::new(
@@ -561,7 +572,7 @@ mod tests {
     }
 
     #[test]
-    fn test_predict_signed_mantle_tx_size_with_sdp_active() {
+    fn test_minimum_signed_mantle_tx_size_with_sdp_active() {
         let signing_key = Ed25519Key::from_bytes(&[1u8; 32]);
         let blend_proof = ActivityProof {
             epoch: 42.into(),
@@ -582,7 +593,7 @@ mod tests {
 
         let gas_context =
             MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
-        let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &gas_context);
+        let predicted_size = minimum_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
         let tx_hash = mantle_tx.hash();
         let signed_tx = SignedMantleTx::new(
@@ -600,7 +611,7 @@ mod tests {
     }
 
     #[test]
-    fn test_predict_signed_mantle_tx_size_with_multiple_ops() {
+    fn test_minimum_signed_mantle_tx_size_with_multiple_ops() {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
 
         let inscribe_op = InscriptionOp {
@@ -641,7 +652,7 @@ mod tests {
         // Predict size
         let gas_context =
             MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
-        let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &gas_context);
+        let predicted_size = minimum_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
         let tx_hash = mantle_tx.hash();
         let op_sig = signing_key.sign_payload(&tx_hash.as_signing_bytes());
@@ -664,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn test_predict_signed_mantle_tx_size_with_ledger_inputs_outputs() {
+    fn test_minimum_signed_mantle_tx_size_with_ledger_inputs_outputs() {
         let pk1 = ZkPublicKey::from(BigUint::from(100u64));
         let pk2 = ZkPublicKey::from(BigUint::from(200u64));
 
@@ -685,7 +696,7 @@ mod tests {
         // Predict size
         let gas_context =
             MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
-        let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &gas_context);
+        let predicted_size = minimum_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
         // Create a signed tx and encode it to get actual size
         let signed_tx = SignedMantleTx::new(
@@ -699,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn test_predict_signed_mantle_tx_size_complex_scenario() {
+    fn test_minimum_signed_mantle_tx_size_complex_scenario() {
         let signing_key1 = Ed25519Key::from_bytes(&[1; 32]);
         let signing_key2 = Ed25519Key::from_bytes(&[2; 32]);
 
@@ -749,7 +760,7 @@ mod tests {
         // Predict size
         let gas_context =
             MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
-        let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &gas_context);
+        let predicted_size = minimum_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
         // Create a signed tx and encode it to get the actual size.
         // ChannelConfig creates the channel here, so its proof has no signatures.
@@ -776,7 +787,7 @@ mod tests {
     }
 
     #[test]
-    fn test_predict_signed_mantle_tx_size_with_leader_claim() {
+    fn test_minimum_signed_mantle_tx_size_with_leader_claim() {
         let leader_claim_op = LeaderClaimOp {
             rewards_root: RewardsRoot::default(),
             voucher_nullifier: VoucherNullifier::default(),
@@ -787,7 +798,7 @@ mod tests {
 
         let empty_gas_context =
             MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
-        let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &empty_gas_context);
+        let predicted_size = minimum_signed_mantle_tx_size(&mantle_tx, &empty_gas_context);
 
         let poc_proof =
             Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));

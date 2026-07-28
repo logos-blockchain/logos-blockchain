@@ -181,7 +181,7 @@ jobs:
   e2e-result:
     name: E2E result
     needs: tests
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Check E2E result

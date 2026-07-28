@@ -135,6 +135,14 @@ pub struct FundingConfig {
     pub funding_pk: ZkPublicKey,
     /// Hard cap on the fee of a single transaction.
     pub max_tx_fee: GasCost,
+    /// Execution tip paid on top of the mandatory fee when funding a
+    /// transaction. [`Self::max_tx_fee`] caps the total.
+    pub priority_fee: Value,
+}
+
+impl FundingConfig {
+    /// Default execution tip.
+    pub const DEFAULT_PRIORITY_FEE: Value = 200;
 }
 
 /// Configuration for the zone sequencer.

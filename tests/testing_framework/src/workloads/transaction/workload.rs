@@ -9,7 +9,7 @@ use std::{
 
 use async_trait::async_trait;
 use lb_core::mantle::{
-    GasCalculator as _, Note, OpProof, SignedMantleTx, Utxo,
+    Note, OpProof, SignedMantleTx, Utxo,
     gas::MainnetGasConstants,
     ops::OpId as _,
     traits::{GenesisTx as _, Hashable as _},
@@ -289,7 +289,7 @@ fn build_wallet_transaction(
         .map_err(|err| format!("failed to build provisional tx: {err}"))?;
 
     let fee = provisional_tx
-        .total_gas_cost::<MainnetGasConstants>(gas_context)?
+        .minimum_total_gas_cost::<MainnetGasConstants>(gas_context)?
         .into_inner();
     let output_value = input.utxo.note.value.checked_sub(fee).ok_or_else(|| {
         format!(

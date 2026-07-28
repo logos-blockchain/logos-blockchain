@@ -715,9 +715,9 @@ mod tests {
             GasPrices::new(1, 0),
         );
 
-        let gas =
-            GasCalculator::execution_gas_consumption::<MainnetGasConstants>(&mantle_tx, &context)
-                .unwrap();
+        let gas = mantle_tx
+            .minimum_execution_gas_consumption::<MainnetGasConstants>(&context)
+            .unwrap();
 
         let expected_config_gas = u64::from(config_threshold) * 56;
         let expected_deposit_gas = 590;

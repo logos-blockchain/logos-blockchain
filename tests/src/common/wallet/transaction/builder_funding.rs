@@ -325,7 +325,7 @@ fn funding_delta_for_chunked_builder(
 ) -> Result<i128, WalletError> {
     let gas_cost = u128::from(
         tx_builder
-            .gas_cost::<MainnetGasConstants>(context)?
+            .minimum_gas_cost::<MainnetGasConstants>(context)?
             .into_inner(),
     );
     Ok(i128::try_from(input_sum)

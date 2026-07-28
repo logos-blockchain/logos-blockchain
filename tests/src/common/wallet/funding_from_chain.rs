@@ -81,7 +81,7 @@ pub async fn funded_signed_tx(
     let funded_builder = fund_builder_from_wallet_source(&funding_source, &tx_builder, &tx_context)
         .expect("funding transaction should succeed");
     let fee = funded_builder
-        .gas_cost::<MainnetGasConstants>(&tx_context)
+        .minimum_gas_cost::<MainnetGasConstants>(&tx_context)
         .expect("funded tx gas cost should calculate")
         .into_inner();
 

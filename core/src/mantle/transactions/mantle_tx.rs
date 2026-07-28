@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
-        GasCalculator, GasConstants, Op, SignedMantleTx, TxHash, Value,
+        GasConstants, Op, SignedMantleTx, TxHash, Value,
         channel::Channels,
         gas::{Gas, GasCost, GasOverflow},
         nom::{NomDecode as _, NomEncode as _},
@@ -16,7 +16,7 @@ use crate::{
         },
         traits::{Hashable, StorageSize, hashable},
         transactions::{
-            GasPrices, Ops, codec::predict_signed_mantle_tx_size, states::VerificationState,
+            GasPrices, Ops, codec::minimum_signed_mantle_tx_size, states::VerificationState,
         },
     },
 };
@@ -27,9 +27,51 @@ static MANTLE_TX_HASH_V1_BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| b"MANTLE_TX
 pub struct MantleTx(pub Ops);
 
 impl MantleTx {
+    /// Predicts the minimum total gas cost of the transaction once signed.
+    ///
+    /// See [`minimum_signed_mantle_tx_size`] for why this doesn't implement
+    /// [`crate::mantle::GasCalculator`] which calculates an exact gas cost.
+    pub fn minimum_total_gas_cost<Constants: GasConstants>(
+        &self,
+        context: &MantleTxGasContext,
+    ) -> Result<GasCost, GasOverflow> {
+        let execution_gas = self.minimum_execution_gas_consumption::<Constants>(context)?;
+        let execution_gas_cost =
+            GasCost::calculate(execution_gas, context.gas_prices.execution_base_gas_price)?;
+        let storage_gas_cost = self.minimum_storage_gas_cost(context)?;
+
+        execution_gas_cost.checked_add(storage_gas_cost)
+    }
+
+    /// Predicts the minimum execution gas the transaction will consume once
+    /// signed.
+    pub fn minimum_execution_gas_consumption<Constants: GasConstants>(
+        &self,
+        context: &MantleTxGasContext,
+    ) -> Result<Gas, GasOverflow> {
+        self.ops()
+            .iter()
+            .map(|op| contextual_op_execution_gas::<Constants>(op, context))
+            .try_fold(Gas::from(0), |total, gas| total.checked_add(gas?))
+    }
+
+    /// Predicts the minimum storage gas cost of the transaction once signed.
+    /// See [`minimum_signed_mantle_tx_size`] for why this is a
+    /// minimum, not an exact value.
+    fn minimum_storage_gas_cost(
+        &self,
+        context: &MantleTxGasContext,
+    ) -> Result<GasCost, GasOverflow> {
+        GasCost::calculate(
+            self.minimum_signed_serialized_size(context).into(),
+            context.gas_prices.storage_gas_price,
+        )
+    }
+
+    /// Predicts the minimum serialized size of the transaction once signed.
     #[must_use]
-    pub fn signed_serialized_size(&self, context: &<Self as GasCalculator>::Context) -> u64 {
-        predict_signed_mantle_tx_size(self, context) as u64
+    fn minimum_signed_serialized_size(&self, context: &MantleTxGasContext) -> u64 {
+        minimum_signed_mantle_tx_size(self, context) as u64
     }
 
     #[must_use]
@@ -73,50 +115,13 @@ impl StorageSize for MantleTx {
     }
 }
 
-impl GasCalculator for MantleTx {
-    type Context = MantleTxGasContext;
-
-    fn total_gas_cost<Constants: GasConstants>(
-        &self,
-        context: &Self::Context,
-    ) -> Result<GasCost, GasOverflow> {
-        let execution_gas = self.execution_gas_consumption::<Constants>(context);
-        let execution_gas_cost =
-            GasCost::calculate(execution_gas?, context.gas_prices.execution_base_gas_price)?;
-        let storage_gas_cost = self.storage_gas_cost(context)?;
-
-        execution_gas_cost.checked_add(storage_gas_cost)
-    }
-
-    fn storage_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow> {
-        GasCost::calculate(
-            self.storage_gas_consumption(context)?,
-            context.gas_prices.storage_gas_price,
-        )
-    }
-
-    fn execution_gas_consumption<Constants: GasConstants>(
-        &self,
-        context: &Self::Context,
-    ) -> Result<Gas, GasOverflow> {
-        self.ops()
-            .iter()
-            .map(|op| contextual_op_execution_gas::<Constants>(op, context))
-            .try_fold(Gas::from(0), |total, gas| total.checked_add(gas?))
-    }
-
-    fn storage_gas_consumption(&self, context: &Self::Context) -> Result<Gas, GasOverflow> {
-        Ok(self.signed_serialized_size(context).into())
-    }
-}
-
 fn contextual_op_execution_gas<Constants: GasConstants>(
     op: &Op,
     context: &MantleTxGasContext,
 ) -> Result<Gas, GasOverflow> {
     let multiplier = match op {
-        // Existing channels require the current configuration threshold. A new
-        // channel is created just-in-time and does not verify any signatures.
+        // Existing channels require the `configuration_threshold` proofs.
+        // For new channels, the ledger skips proof verification. So, use 0.
         Op::ChannelConfig(operation) => context
             .configuration_threshold(&operation.channel)
             .unwrap_or(0),
