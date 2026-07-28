@@ -217,7 +217,7 @@ jobs:
   cucumber-result:
     name: Cucumber result
     needs: tests
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Check Cucumber result
