@@ -4006,6 +4006,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-blake2btree"
+version = "0.0.0"
+dependencies = [
+ "blake2",
+ "logos-blockchain-dynamic-merkle",
+ "logos-blockchain-merkle-tree",
+ "quickcheck",
+ "quickcheck_macros",
+ "rand 0.8.6",
+ "serde",
+]
+
+[[package]]
 name = "logos-blockchain-blend"
 version = "0.0.0"
 dependencies = [
@@ -4173,6 +4186,7 @@ name = "logos-blockchain-c"
 version = "0.0.0"
 dependencies = [
  "cbindgen",
+ "futures",
  "logos-blockchain-api-service",
  "logos-blockchain-chain-leader-service",
  "logos-blockchain-chain-service",
@@ -4181,6 +4195,7 @@ dependencies = [
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-node",
+ "logos-blockchain-time-service",
  "logos-blockchain-utils",
  "logos-blockchain-wallet-service",
  "multiaddr",
@@ -4786,6 +4801,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-merkle-tree"
+version = "0.0.0"
+dependencies = [
+ "logos-blockchain-dynamic-merkle",
+ "rpds",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "logos-blockchain-mmr"
 version = "0.0.0"
 dependencies = [
@@ -5268,6 +5293,7 @@ version = "0.0.0"
 dependencies = [
  "ark-ff",
  "logos-blockchain-dynamic-merkle",
+ "logos-blockchain-merkle-tree",
  "logos-blockchain-poseidon2",
  "num-bigint",
  "quickcheck",
@@ -5275,7 +5301,6 @@ dependencies = [
  "rand 0.8.6",
  "rpds",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -5351,10 +5376,10 @@ dependencies = [
  "logos-blockchain-log-targets",
  "logos-blockchain-poseidon2",
  "logos-blockchain-proofs-error",
- "logos-blockchain-utils",
  "num-bigint",
  "rand 0.8.6",
  "serde",
+ "serde-big-array",
  "serde_json",
  "thiserror 2.0.18",
  "tracing",
@@ -7617,6 +7642,15 @@ checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
  "serde_core",
  "serde_derive",
+]
+
+[[package]]
+name = "serde-big-array"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11fc7cc2c76d73e0f27ee52abbd64eec84d46f370c88371120433196934e4b7f"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

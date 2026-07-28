@@ -6,7 +6,7 @@ use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
         channel::{Channels, Error},
-        ledger::{Inputs, Operation, Utxos},
+        ledger::{Inputs, InputsError, Operation, Outputs, Utxos},
         nom::{NomCodec, NomEncode as _},
         ops::{OpId, channel::ChannelId},
         transactions::hash::TxHash,
@@ -22,6 +22,24 @@ pub struct DepositOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
     pub metadata: Metadata,
+}
+
+impl DepositOp {
+    // The notes re-created in the channel
+    pub fn outputs(&self, utxos: &Utxos) -> Result<Outputs, Error> {
+        let notes = self
+            .inputs
+            .iter()
+            .map(|note_id| {
+                utxos
+                    .get(note_id)
+                    .map(|utxo| utxo.note)
+                    .ok_or(InputsError::InexistingNote(*note_id))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Outputs::try_new(notes)?)
+    }
 }
 
 impl OpId for DepositOp {
@@ -78,13 +96,20 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
     ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         // Get the amount deposited for the event payload
         let amount_deposited = self.inputs.amount(&ctx.utxos)?;
+        let outputs = self.outputs(&ctx.utxos)?;
 
-        // Mark the inputs as channel notes owned by the channel. The notes keep
-        // their NoteId, value and ZkPublicKey and stay in the ledger.
-        for note_id in self.inputs.iter() {
+        // Remove the inputs from the ledger.
+        ctx.utxos = self.inputs.execute(ctx.utxos)?;
+
+        // Add the re-created notes to the ledger and register them as channel
+        // notes.
+        ctx.utxos = outputs.execute(ctx.utxos, self);
+        let mut note_ids = Vec::with_capacity(outputs.len());
+        for utxo in outputs.utxos(self) {
             ctx.channels = ctx
                 .channels
-                .register_channel_note(note_id, &self.channel_id)?;
+                .register_channel_note(&utxo.id(), &self.channel_id)?;
+            note_ids.push(utxo.id());
         }
 
         let events = std::iter::once(TxEvent::new(
@@ -94,6 +119,7 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
                 channel_id: self.channel_id,
                 amount: amount_deposited,
                 metadata: self.metadata.clone(),
+                notes: note_ids,
             },
         ))
         .collect();

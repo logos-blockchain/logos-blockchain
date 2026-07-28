@@ -16,10 +16,12 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         GasConstants, NoteId, TxHash, Utxo, Value,
-        ledger::Inputs,
         ops::{
             Op, OpId as _,
-            channel::{channel_transfer::ChannelTransferOp, withdraw::ChannelWithdrawOp},
+            channel::{
+                channel_transfer::ChannelTransferOp, deposit::DepositOp,
+                withdraw::ChannelWithdrawOp,
+            },
             leader_claim::{VoucherCm, VoucherNullifier},
             transfer::TransferOp,
         },
@@ -94,10 +96,10 @@ pub enum WalletOp {
     Lock(NoteId),
     /// Create the reward note.
     LeaderClaim(Utxo),
-    /// Mark the deposited notes as channel notes: they stay in the wallet
-    /// and remain eligible for `PoL`, but are gated out of wallet-driven
-    /// spending.
-    ChannelDeposit(Inputs),
+    /// Drop the deposited notes from the wallet and insert the channel notes
+    /// they are re-created as. The re-created notes keep the same key, so they
+    /// remain eligible for `PoL`, but are gated out of wallet-driven spending.
+    ChannelDeposit(DepositOp),
     /// Drop the input channel notes from the wallet and insert the output
     /// channel notes owned by known keys.
     ChannelTransfer(ChannelTransferOp),
@@ -131,7 +133,7 @@ impl WalletBlock {
             .flat_map(|tx| tx.ops.iter())
             .flat_map(|op| match op {
                 WalletOp::Transfer(transfer) => transfer.inputs.iter().copied().collect::<Vec<_>>(),
-                WalletOp::ChannelDeposit(inputs) => inputs.iter().copied().collect::<Vec<_>>(),
+                WalletOp::ChannelDeposit(op) => op.inputs.iter().copied().collect::<Vec<_>>(),
                 WalletOp::ChannelTransfer(op) => op.inputs.iter().copied().collect::<Vec<_>>(),
                 WalletOp::Lock(note_id) => vec![*note_id],
                 WalletOp::ChannelWithdraw(_) | WalletOp::LeaderClaim(_) => Vec::new(),
@@ -375,12 +377,18 @@ impl WalletState {
                             insert_utxo_if_owned(utxo, known_keys, &mut utxos, &mut pk_index);
                         }
                     }
-                    WalletOp::ChannelDeposit(inputs) => {
-                        // Mark the input notes as channel notes since they shouldn't be spent by
-                        // wallet. They keep staying in `utxos`, so they're still eligible for PoL.
-                        for input_id in inputs {
-                            if utxos.contains_key(input_id) {
-                                channel_notes.insert_mut(*input_id);
+                    WalletOp::ChannelDeposit(op) => {
+                        // The deposit consumes its inputs and re-creates them as channel notes
+                        // under a new NoteId, so drop the inputs and insert the re-created notes.
+                        // They keep the same key, so they're still eligible for PoL.
+                        for (output_index, input) in op.inputs.iter().enumerate() {
+                            let note = utxos.get(input).map(|utxo| utxo.note);
+                            remove_spent_utxo(input, &mut utxos, &mut pk_index);
+
+                            let Some(note) = note else { continue };
+                            let utxo = Utxo::new(op.op_id(), output_index, note);
+                            if insert_utxo_if_owned(utxo, known_keys, &mut utxos, &mut pk_index) {
+                                channel_notes.insert_mut(utxo.id());
                             }
                         }
                     }
@@ -576,7 +584,7 @@ fn op_id(op: &Op) -> Option<Hash> {
 fn transform_op(op: &Op, event: Option<TxEventPayload>) -> Option<WalletOp> {
     match op {
         Op::Transfer(transfer) => Some(WalletOp::Transfer(transfer.clone())),
-        Op::ChannelDeposit(deposit) => Some(WalletOp::ChannelDeposit(deposit.inputs.clone())),
+        Op::ChannelDeposit(deposit) => Some(WalletOp::ChannelDeposit(deposit.clone())),
         Op::ChannelTransfer(op) => Some(WalletOp::ChannelTransfer(op.clone())),
         Op::ChannelWithdraw(op) => Some(WalletOp::ChannelWithdraw(op.clone())),
         Op::SDPDeclare(declaration) => Some(WalletOp::Lock(declaration.locked_note_id)),
@@ -855,10 +863,10 @@ mod tests {
             MantleTx, Note, OpProof, SignedMantleTx,
             channel::Channels,
             gas::MainnetGasConstants as Gas,
-            ledger::Outputs,
+            ledger::{Inputs, Outputs},
             ops::channel::{
                 ChannelId, MsgId,
-                deposit::{DepositOp, Metadata},
+                deposit::Metadata,
                 inscribe::{Inscription, InscriptionOp},
             },
             transactions::{GasPrices, MantleTxGasContext, Ops, OpsProofs, states::Unverified},
@@ -1127,6 +1135,13 @@ mod tests {
         // - voucher v3 is not ours -> should not be tracked
         let alice_80_nmo_utxo = transfer2.outputs.utxo_by_index(1, &transfer2).unwrap();
 
+        let deposit = DepositOp {
+            channel_id: ChannelId::from([0u8; 32]),
+            inputs: [alice_80_nmo_utxo.id()].into(),
+            metadata: Metadata::empty(),
+        };
+        let deposited = Utxo::new(deposit.op_id(), 0, alice_80_nmo_utxo.note);
+
         let block_3 = WalletBlock {
             id: HeaderId::from([3; 32]),
             parent: block_2.id,
@@ -1135,7 +1150,7 @@ mod tests {
             header_ops: vec![],
             txs: [WalletTx {
                 ops: [
-                    WalletOp::ChannelDeposit([alice_80_nmo_utxo.id()].into()),
+                    WalletOp::ChannelDeposit(deposit),
                     WalletOp::LeaderClaim(Utxo::new(tx_hash(9), 0, Note::new(38, alice))),
                 ]
                 .into(),
@@ -1153,11 +1168,13 @@ mod tests {
             wallet.balance(block_3.id, bob).unwrap().unwrap().balance,
             20
         );
-        // The deposit marks the 80 NMO note as a channel note; the note
-        // itself stays in the wallet so it remains eligible for PoL.
+        // The deposit consumes the 80 NMO note and re-creates it as a channel
+        // note under a new NoteId, still owned by Alice so it stays eligible
+        // for PoL.
         let state = wallet.wallet_state_at(block_3.id).unwrap();
-        assert!(state.utxos.contains_key(&alice_80_nmo_utxo.id()));
-        assert!(state.channel_notes.contains(&alice_80_nmo_utxo.id()));
+        assert!(!state.utxos.contains_key(&alice_80_nmo_utxo.id()));
+        assert!(state.utxos.contains_key(&deposited.id()));
+        assert!(state.channel_notes.contains(&deposited.id()));
 
         // v1 is still claimable
         assert_snapshotted_voucher(&wallet, block_3.id, &v1_cm);
@@ -1908,6 +1925,12 @@ mod tests {
         assert_eq!(state.balance(alice).unwrap().balance, 100);
 
         // Deposit the note into a channel.
+        let deposit = DepositOp {
+            channel_id: ChannelId::from([0u8; 32]),
+            inputs: [alice_utxo.id()].into(),
+            metadata: Metadata::empty(),
+        };
+        let deposited = Utxo::new(deposit.op_id(), 0, alice_utxo.note);
         let block = WalletBlock {
             id: HeaderId::from([1; 32]),
             parent: genesis,
@@ -1915,17 +1938,18 @@ mod tests {
             voucher_cm: v_cm,
             header_ops: vec![],
             txs: [WalletTx {
-                ops: [WalletOp::ChannelDeposit([alice_utxo.id()].into())].into(),
+                ops: [WalletOp::ChannelDeposit(deposit)].into(),
             }]
             .into(),
         };
         wallet.apply_block(&block).unwrap();
 
-        // The note is still in the wallet (still eligible for PoL) but
-        // marked as a channel note, so it drops out of the balance.
+        // The re-created note is still in the wallet (still eligible for PoL)
+        // but marked as a channel note, so it drops out of the balance.
         let state = wallet.wallet_state_at(block.id).unwrap();
-        assert!(state.utxos.contains_key(&alice_utxo.id()));
-        assert!(state.channel_notes.contains(&alice_utxo.id()));
+        assert!(!state.utxos.contains_key(&alice_utxo.id()));
+        assert!(state.utxos.contains_key(&deposited.id()));
+        assert!(state.channel_notes.contains(&deposited.id()));
         assert_eq!(state.balance(alice).unwrap().balance, 0);
 
         // `fund_tx` must also exclude the channel note: with no other
@@ -1973,6 +1997,12 @@ mod tests {
             genesis,
             &genesis_ledger,
         );
+        let deposit = DepositOp {
+            channel_id,
+            inputs: [pk1_utxo.id()].into(),
+            metadata: Metadata::empty(),
+        };
+        let pk1_channel_note = Utxo::new(deposit.op_id(), 0, pk1_utxo.note);
         let deposit_block = WalletBlock {
             id: HeaderId::from([1; 32]),
             parent: genesis,
@@ -1980,7 +2010,7 @@ mod tests {
             voucher_cm: v_cm_1,
             header_ops: vec![],
             txs: [WalletTx {
-                ops: [WalletOp::ChannelDeposit([pk1_utxo.id()].into())].into(),
+                ops: [WalletOp::ChannelDeposit(deposit)].into(),
             }]
             .into(),
         };
@@ -1989,7 +2019,7 @@ mod tests {
         // Transfer the channel note to `pk2`.
         let transfer_op = ChannelTransferOp {
             channel_id,
-            inputs: Inputs::new([pk1_utxo.id()]),
+            inputs: Inputs::new([pk1_channel_note.id()]),
             outputs: Outputs::new([Note::new(100, pk2)]),
         };
         let pk2_output_id = transfer_op
@@ -2011,14 +2041,14 @@ mod tests {
         wallet.apply_block(&transfer_block).unwrap();
 
         let state = wallet.wallet_state_at(transfer_block.id).unwrap();
-        // The original note has been gone from the wallet.
-        assert!(!state.utxos.contains_key(&pk1_utxo.id()));
-        assert!(!state.channel_notes.contains(&pk1_utxo.id()));
+        // The `pk1` channel note has been gone from the wallet.
+        assert!(!state.utxos.contains_key(&pk1_channel_note.id()));
+        assert!(!state.channel_notes.contains(&pk1_channel_note.id()));
         assert!(
             state
                 .pk_index
                 .get(&pk1)
-                .is_none_or(|set| !set.contains(&pk1_utxo.id()))
+                .is_none_or(|set| !set.contains(&pk1_channel_note.id()))
         );
         // The `pk2` note has been added to the wallet, as a channel note.
         assert!(state.utxos.contains_key(&pk2_output_id));
@@ -2054,6 +2084,12 @@ mod tests {
             genesis,
             &genesis_ledger,
         );
+        let deposit = DepositOp {
+            channel_id,
+            inputs: [alice_utxo.id()].into(),
+            metadata: Metadata::empty(),
+        };
+        let alice_channel_note = Utxo::new(deposit.op_id(), 0, alice_utxo.note);
         let deposit_block = WalletBlock {
             id: HeaderId::from([1; 32]),
             parent: genesis,
@@ -2061,7 +2097,7 @@ mod tests {
             voucher_cm: v_cm_1,
             header_ops: vec![],
             txs: [WalletTx {
-                ops: [WalletOp::ChannelDeposit([alice_utxo.id()].into())].into(),
+                ops: [WalletOp::ChannelDeposit(deposit)].into(),
             }]
             .into(),
         };
@@ -2070,7 +2106,7 @@ mod tests {
         // Transfer Alice -> an unknown-to-wallet pk.
         let transfer_op = ChannelTransferOp {
             channel_id,
-            inputs: Inputs::new([alice_utxo.id()]),
+            inputs: Inputs::new([alice_channel_note.id()]),
             outputs: Outputs::new([Note::new(100, stranger)]),
         };
         let stranger_output_id = transfer_op
@@ -2092,9 +2128,9 @@ mod tests {
         wallet.apply_block(&transfer_block).unwrap();
 
         let state = wallet.wallet_state_at(transfer_block.id).unwrap();
-        // Alice's note is gone.
-        assert!(!state.utxos.contains_key(&alice_utxo.id()));
-        assert!(!state.channel_notes.contains(&alice_utxo.id()));
+        // Alice's channel note is gone.
+        assert!(!state.utxos.contains_key(&alice_channel_note.id()));
+        assert!(!state.channel_notes.contains(&alice_channel_note.id()));
         // Stranger's new note is not tracked.
         assert!(!state.utxos.contains_key(&stranger_output_id));
         assert!(!state.channel_notes.contains(&stranger_output_id));
@@ -2119,6 +2155,12 @@ mod tests {
             genesis,
             &genesis_ledger,
         );
+        let deposit = DepositOp {
+            channel_id,
+            inputs: [alice_utxo.id()].into(),
+            metadata: Metadata::empty(),
+        };
+        let alice_channel_note = Utxo::new(deposit.op_id(), 0, alice_utxo.note);
         let deposit_block = WalletBlock {
             id: HeaderId::from([1; 32]),
             parent: genesis,
@@ -2126,7 +2168,7 @@ mod tests {
             voucher_cm: v_cm_1,
             header_ops: vec![],
             txs: [WalletTx {
-                ops: [WalletOp::ChannelDeposit([alice_utxo.id()].into())].into(),
+                ops: [WalletOp::ChannelDeposit(deposit)].into(),
             }]
             .into(),
         };
@@ -2134,13 +2176,14 @@ mod tests {
 
         // Sanity: after deposit the note is channel-marked, so balance is 0.
         let state = wallet.wallet_state_at(deposit_block.id).unwrap();
-        assert!(state.channel_notes.contains(&alice_utxo.id()));
+        assert!(state.channel_notes.contains(&alice_channel_note.id()));
         assert_eq!(state.balance(alice).unwrap().balance, 0);
 
-        // Withdraw releases the channel note back to spendable.
+        // Withdraw releases the channel note back to spendable. It keeps the
+        // NoteId it got when the deposit re-created it.
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([alice_utxo.id()]),
+            inputs: Inputs::new([alice_channel_note.id()]),
         };
         let withdraw_block = WalletBlock {
             id: HeaderId::from([2; 32]),
@@ -2156,13 +2199,13 @@ mod tests {
         wallet.apply_block(&withdraw_block).unwrap();
 
         let state = wallet.wallet_state_at(withdraw_block.id).unwrap();
-        assert!(state.utxos.contains_key(&alice_utxo.id()));
-        assert!(!state.channel_notes.contains(&alice_utxo.id()));
+        assert!(state.utxos.contains_key(&alice_channel_note.id()));
+        assert!(!state.channel_notes.contains(&alice_channel_note.id()));
         assert!(
             state
                 .pk_index
                 .get(&alice)
-                .is_some_and(|set| set.contains(&alice_utxo.id()))
+                .is_some_and(|set| set.contains(&alice_channel_note.id()))
         );
         assert_eq!(state.balance(alice).unwrap().balance, 100);
 
@@ -2236,12 +2279,12 @@ mod tests {
         assert_eq!(first_wallet_tx.ops.len(), 2);
         assert!(matches!(first_wallet_tx.ops[0], WalletOp::Transfer(_)));
 
-        let WalletOp::ChannelDeposit(inputs) = &first_wallet_tx.ops[1] else {
+        let WalletOp::ChannelDeposit(op) = &first_wallet_tx.ops[1] else {
             panic!("expected channel deposit as the second wallet operation");
         };
 
         assert_eq!(
-            inputs.clone().into_inner().as_slice(),
+            op.inputs.clone().into_inner().as_slice(),
             &[first_input, second_input]
         );
 

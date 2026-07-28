@@ -78,6 +78,22 @@ pub type MempoolService<StorageAdapter, RuntimeServiceId> = TxMempoolService<
     RuntimeServiceId,
 >;
 
+pub async fn channel_state<RuntimeServiceId>(
+    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
+    id: ChannelId,
+) -> Result<Option<ChannelState>, super::DynError>
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    let ledger_state = cryptarchia_ledger_state(handle).await?;
+    Ok(ledger_state
+        .mantle_ledger()
+        .channels()
+        .channel_state(&id)
+        .cloned())
+}
+
 pub async fn channel<RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
     id: ChannelId,
@@ -86,12 +102,8 @@ where
     RuntimeServiceId:
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
-    let ledger_state = cryptarchia_ledger_state(handle).await?;
-    ledger_state
-        .mantle_ledger()
-        .channels()
-        .channel_state(&id)
-        .cloned()
+    channel_state(handle, id)
+        .await?
         .ok_or_else(|| "channel not found".into())
 }
 

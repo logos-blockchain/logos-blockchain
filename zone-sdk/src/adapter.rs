@@ -11,7 +11,7 @@ use lb_core::{
     events::TxEvent,
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx, Value,
+        NoteId, Op, SignedMantleTx, Value,
         channel::ChannelState,
         ops::{OpId as _, channel::ChannelId},
         traits::Hashable as _,
@@ -176,18 +176,18 @@ impl Node for NodeHttpClient {
             return Ok(Box::pin(stream::empty()));
         };
 
-        let deposit_amounts = if has_channel_deposit(&block.transactions, channel_id) {
+        let deposit_events = if has_channel_deposit(&block.transactions, channel_id) {
             let events = self
                 .client
                 .get_block_events(self.base_url.clone(), id)
                 .await?
                 .unwrap_or_default();
-            build_deposit_amounts(&events)
+            build_deposit_events(&events)
         } else {
             HashMap::new()
         };
 
-        let messages = block_to_messages(block.transactions, channel_id, &deposit_amounts);
+        let messages = block_to_messages(block.transactions, channel_id, &deposit_events);
         Ok(Box::pin(stream::iter(messages)))
     }
 
@@ -209,18 +209,18 @@ impl Node for NodeHttpClient {
         let mut all_messages = Vec::new();
         for block in blocks {
             let slot = block.header.slot;
-            let deposit_amounts = if has_channel_deposit(&block.transactions, channel_id) {
+            let deposit_events = if has_channel_deposit(&block.transactions, channel_id) {
                 let events = self
                     .client
                     .get_block_events(self.base_url.clone(), block.header.id)
                     .await?
                     .unwrap_or_default();
-                build_deposit_amounts(&events)
+                build_deposit_events(&events)
             } else {
                 HashMap::new()
             };
 
-            for message in block_to_messages(block.transactions, channel_id, &deposit_amounts) {
+            for message in block_to_messages(block.transactions, channel_id, &deposit_events) {
                 all_messages.push((message, slot));
             }
         }
@@ -255,28 +255,30 @@ pub(crate) fn has_channel_deposit<State: VerificationState>(
     })
 }
 
-/// Builds a `(tx_hash, op_id) -> amount` lookup from a block's events,
-/// keeping only deposit events.
-pub(crate) fn build_deposit_amounts(events: &Events) -> HashMap<(TxHash, Hash), Value> {
+/// Builds a `(tx_hash, op_id) -> (amount, created notes)` lookup from a
+/// block's events, keeping only deposit events.
+pub(crate) fn build_deposit_events(
+    events: &Events,
+) -> HashMap<(TxHash, Hash), (Value, Vec<NoteId>)> {
     events
         .iter()
         .filter_map(|event| match event {
             Event::Tx(TxEvent {
                 tx_hash,
                 op_id,
-                payload: TxEventPayload::Deposit { amount, .. },
-            }) => Some(((*tx_hash, *op_id), *amount)),
+                payload: TxEventPayload::Deposit { amount, notes, .. },
+            }) => Some(((*tx_hash, *op_id), (*amount, notes.clone()))),
             Event::Tx { .. } | Event::Header(_) => None,
         })
         .collect()
 }
 
 /// Walks a block's transactions and emits the [`ZoneMessage`]s relevant to
-/// `channel_id`, looking up deposit amounts from `deposit_amounts`.
+/// `channel_id`, looking up deposit amounts and notes from `deposit_events`.
 fn block_to_messages<State: VerificationState>(
     transactions: Vec<SignedMantleTx<State>>,
     channel_id: ChannelId,
-    deposit_amounts: &HashMap<(TxHash, Hash), Value>,
+    deposit_events: &HashMap<(TxHash, Hash), (Value, Vec<NoteId>)>,
 ) -> Vec<ZoneMessage> {
     transactions
         .into_iter()
@@ -285,7 +287,7 @@ fn block_to_messages<State: VerificationState>(
             let (mantle_tx, _ops_proofs) = tx.into_parts();
             Vec::from(mantle_tx.0)
                 .into_iter()
-                .filter_map(move |op| op_to_zone_message(&op, tx_hash, channel_id, deposit_amounts))
+                .filter_map(move |op| op_to_zone_message(&op, tx_hash, channel_id, deposit_events))
         })
         .collect()
 }
@@ -299,7 +301,7 @@ fn op_to_zone_message(
     op: &Op,
     tx_hash: TxHash,
     channel_id: ChannelId,
-    deposit_amounts: &HashMap<(TxHash, Hash), Value>,
+    deposit_events: &HashMap<(TxHash, Hash), (Value, Vec<NoteId>)>,
 ) -> Option<ZoneMessage> {
     match op {
         Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
@@ -310,12 +312,13 @@ fn op_to_zone_message(
         }
         Op::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
             let op_id = deposit.op_id();
-            if let Some(&amount) = deposit_amounts.get(&(tx_hash, op_id)) {
+            if let Some((amount, notes)) = deposit_events.get(&(tx_hash, op_id)) {
                 Some(ZoneMessage::Deposit(Deposit {
                     tx_hash,
                     op_id,
                     inputs: deposit.inputs.clone(),
-                    amount,
+                    notes: notes.clone(),
+                    amount: *amount,
                     metadata: deposit.metadata.clone(),
                 }))
             } else {
@@ -342,7 +345,6 @@ fn op_to_zone_message(
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
-        NoteId,
         ledger::Inputs,
         ops::channel::{
             deposit::{DepositOp, Metadata},
@@ -402,12 +404,12 @@ mod tests {
 
         // Both deposits get an event, so channel filtering is proven to be
         // the reason the foreign one is dropped — not a missing amount.
-        let deposit_amounts = HashMap::from([
-            ((tx_a_hash, our_deposit.op_id()), 1234),
-            ((tx_a_hash, foreign_deposit.op_id()), 999),
+        let deposit_events = HashMap::from([
+            ((tx_a_hash, our_deposit.op_id()), (1234, Vec::new())),
+            ((tx_a_hash, foreign_deposit.op_id()), (999, Vec::new())),
         ]);
 
-        let messages = block_to_messages(vec![tx_a, tx_b], channel_id, &deposit_amounts);
+        let messages = block_to_messages(vec![tx_a, tx_b], channel_id, &deposit_events);
 
         assert_eq!(
             messages.len(),

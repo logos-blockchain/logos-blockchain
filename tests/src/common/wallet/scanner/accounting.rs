@@ -150,6 +150,10 @@ impl ScannerAccounting {
                     }
                 }
                 Op::ChannelDeposit(deposit) => {
+                    // The deposit consumes its inputs and re-creates them as
+                    // channel notes under a new NoteId. The re-created notes
+                    // are channel-owned, which the wallet doesn't track, so
+                    // only the spend is observed.
                     for note_id in deposit.inputs.iter().copied() {
                         self.remove_spent_note(note_id);
                     }

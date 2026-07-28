@@ -1,37 +1,32 @@
 #[cfg(test)]
 pub mod test_fr;
 
-use std::{collections::BTreeMap, marker::PhantomData};
+use std::{fmt, marker::PhantomData};
 
 use ark_ff::AdditiveGroup;
 // TODO: Change `DynamicMerkleTree` back to private once we adopt MMR for vouchers in the
 // wallet service.
 pub use lb_dynamic_merkle::{DynamicMerkleTree, MerkleNode, MerklePath};
 use lb_dynamic_merkle::{MerkleHasher, empty_subtree_root};
+pub use lb_merkle_tree::Error;
+use lb_merkle_tree::{CompressedMerkleTree, LeafExtractor, MerkleTree};
 use lb_poseidon2::{Digest, Fr};
 use rpds::HashTrieMapSync;
-use thiserror::Error;
 
-/// [`MerkleHasher`] bridge adapting a `Key: AsRef<Fr>` leaf type and a
-/// [`Digest`] hasher to the generic [`DynamicMerkleTree`].
+/// [`MerkleHasher`] bridge compressing field-element (`Fr`) nodes with a
+/// [`Digest`] hasher.
 ///
-/// Leaf values are the key's field element and inner nodes are compressed with
-/// `Hash`.
-pub struct UtxoMerkleHasher<Key, Hash>(PhantomData<(Key, Hash)>);
+/// The leaf hashes themselves (the key's field element) are produced by
+/// [`UtxoLeaf`]; this hasher only knows how to combine two children.
+pub struct UtxoMerkleHasher<Hash>(PhantomData<Hash>);
 
-impl<Key, Hash> MerkleHasher for UtxoMerkleHasher<Key, Hash>
+impl<Hash> MerkleHasher for UtxoMerkleHasher<Hash>
 where
-    Key: AsRef<Fr> + Clone,
     Hash: Digest,
 {
-    type Item = Key;
     type Hash = Fr;
 
     const EMPTY_VALUE: Fr = <Fr as AdditiveGroup>::ZERO;
-
-    fn leaf_hash(item: &Key) -> Fr {
-        *item.as_ref()
-    }
 
     fn compress(left: &Fr, right: &Fr) -> Fr {
         <Hash as Digest>::compress(&[*left, *right])
@@ -40,24 +35,63 @@ where
     empty_subtree_root!(Fr);
 }
 
+/// [`LeafExtractor`] using the key's field element as the Merkle leaf, hashing
+/// inner nodes with `Hash`.
+///
+/// The stored item does not take part in the commitment: the leaf is the key
+/// alone, which is what Proof of Leadership (`PoL`) proofs commit to.
+pub struct UtxoLeaf<Hash>(PhantomData<Hash>);
+
+impl<Key, Item, Hash> LeafExtractor<Key, Item> for UtxoLeaf<Hash>
+where
+    Key: AsRef<Fr>,
+    Hash: Digest,
+{
+    type Hasher = UtxoMerkleHasher<Hash>;
+
+    fn leaf(key: &Key, _item: &Item) -> Fr {
+        *key.as_ref()
+    }
+}
+
+type Inner<Key, Item, Hash> = MerkleTree<Key, Item, UtxoLeaf<Hash>>;
+
 /// A store for `UTxOs` that allows for efficient insertion, removal, and
 /// retrieval of items, while efficiently maintaining a compact Merkle tree
 /// for Proof of Leadership (`PoL`) generation.
+///
+/// It is a thin wrapper around the generic [`MerkleTree`] specialised with
+/// [`UtxoLeaf`], which commits to the key alone.
 ///
 /// Note on (de)serialization: serde will not preserve structural sharing since
 /// it does not know which nodes are shared. This is ok if you only
 /// (de)serialize one version of the tree, but if you dump multiple expect to
 /// find multiple copes of the same nodes in the deserialized output. If you
 /// need to preserve structural sharing, you should use a custom serialization.
-#[derive(Debug, Clone)]
-pub struct UtxoTree<Key, Item, Hash>
+pub struct UtxoTree<Key, Item, Hash>(Inner<Key, Item, Hash>)
+where
+    Key: AsRef<Fr> + Clone + std::hash::Hash + Eq,
+    Hash: Digest;
+
+impl<Key, Item, Hash> Clone for UtxoTree<Key, Item, Hash>
 where
     Key: AsRef<Fr> + Clone + std::hash::Hash + Eq,
     Hash: Digest,
 {
-    merkle: DynamicMerkleTree<UtxoMerkleHasher<Key, Hash>>,
-    // key -> (item, position in merkle tree)
-    items: HashTrieMapSync<Key, (Item, usize)>,
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<Key, Item, Hash> fmt::Debug for UtxoTree<Key, Item, Hash>
+where
+    Key: AsRef<Fr> + Clone + std::hash::Hash + Eq + fmt::Debug,
+    Item: fmt::Debug,
+    Hash: Digest,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("UtxoTree").field(&self.0).finish()
+    }
 }
 
 impl<Key, Item, Hash> Default for UtxoTree<Key, Item, Hash>
@@ -77,22 +111,38 @@ where
 {
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            merkle: DynamicMerkleTree::new(),
-            items: HashTrieMapSync::new_sync(),
-        }
+        Self(MerkleTree::new())
     }
 
     #[must_use]
     pub fn size(&self) -> usize {
-        self.merkle.size()
+        self.0.size()
     }
-}
 
-#[derive(Error, Debug, Clone)]
-pub enum Error {
-    #[error("Item not found")]
-    NotFound,
+    #[must_use]
+    pub fn root(&self) -> Fr {
+        self.0.root()
+    }
+
+    pub fn contains(&self, key: &Key) -> bool {
+        self.0.contains(key)
+    }
+
+    #[must_use]
+    pub const fn utxos(&self) -> &HashTrieMapSync<Key, (Item, usize)> {
+        self.0.items()
+    }
+
+    pub fn witness(&self, key: &Key) -> Option<()> {
+        self.0.contains(key).then_some(())
+    }
+
+    /// Computes the Merkle path for the key.
+    /// The path is ordered from leaf to root (excluded).
+    /// Returns `None` if the key does not exist or has been removed.
+    pub fn path(&self, key: &Key) -> Option<MerklePath<Fr>> {
+        self.0.path(key)
+    }
 }
 
 impl<Key, Item, Hash> UtxoTree<Key, Item, Hash>
@@ -102,64 +152,22 @@ where
     Item: Clone,
 {
     pub fn insert(&self, key: Key, item: Item) -> (Self, usize) {
-        let (merkle, pos) = self.merkle.insert(key.clone());
-        let items = self.items.insert(key, (item, pos));
-        (Self { merkle, items }, pos)
-    }
-
-    pub fn contains(&self, key: &Key) -> bool {
-        self.items.contains_key(key)
-    }
-
-    #[must_use]
-    pub const fn utxos(&self) -> &HashTrieMapSync<Key, (Item, usize)> {
-        &self.items
+        let (inner, pos) = self.0.insert(key, item);
+        (Self(inner), pos)
     }
 
     pub fn remove(&self, key: &Key) -> Result<(Self, Item), Error> {
-        let Some((item, pos)) = self.items.get(key) else {
-            return Err(Error::NotFound);
-        };
-        let items = self.items.remove(key);
-        let merkle = self.merkle.remove(*pos);
-
-        Ok((Self { merkle, items }, item.clone()))
+        let (inner, item) = self.0.remove(key)?;
+        Ok((Self(inner), item))
     }
 
     pub fn get(&self, key: &Key) -> Option<Item> {
-        self.items.get(key).map(|(item, _)| item.clone())
+        self.0.get(key)
     }
 
     #[must_use]
-    pub fn root(&self) -> Fr {
-        self.merkle.root()
-    }
-
-    pub fn witness(&self, key: &Key) -> Option<()> {
-        self.items.contains_key(key).then_some(())
-    }
-
-    /// Computes the Merkle path for the key.
-    /// The path is ordered from leaf to root (excluded).
-    /// Returns `None` if the key does not exist or has been removed.
-    pub fn path(&self, key: &Key) -> Option<MerklePath<Fr>> {
-        let (_, pos) = self.items.get(key)?;
-        self.merkle.path(*pos)
-    }
-
-    #[must_use]
-    pub fn compressed(&self) -> CompressedUtxoTree<Key, Item>
-    where
-        Key: Clone,
-        Item: Clone,
-    {
-        CompressedUtxoTree {
-            items: self
-                .items
-                .iter()
-                .map(|(k, (v, pos))| (*pos, (k.clone(), v.clone())))
-                .collect(),
-        }
+    pub fn compressed(&self) -> CompressedUtxoTree<Key, Item> {
+        CompressedUtxoTree(self.0.compressed())
     }
 }
 
@@ -170,7 +178,7 @@ where
     Hash: Digest,
 {
     fn eq(&self, other: &Self) -> bool {
-        self.items == other.items && self.merkle == other.merkle
+        self.0 == other.0
     }
 }
 
@@ -189,12 +197,7 @@ where
     Item: Clone,
 {
     fn from_iter<I: IntoIterator<Item = (Key, Item)>>(iter: I) -> Self {
-        let mut tree = Self::new();
-        for (key, item) in iter {
-            let (new_tree, _) = tree.insert(key, item);
-            tree = new_tree;
-        }
-        tree
+        Self(iter.into_iter().collect())
     }
 }
 
@@ -205,29 +208,15 @@ where
     Item: Clone,
 {
     fn from(compressed: CompressedUtxoTree<Key, Item>) -> Self {
-        // `items` is a `BTreeMap`, so iteration is ordered by position.
-        let merkle = DynamicMerkleTree::from_sorted_items(
-            compressed
-                .items
-                .iter()
-                .map(|(pos, (key, _))| (*pos, key.clone())),
-        );
-        Self {
-            merkle,
-            items: compressed
-                .items
-                .iter()
-                .map(|(pos, (key, item))| (key.clone(), (item.clone(), *pos)))
-                .collect(),
-        }
+        Self(compressed.0.into())
     }
 }
 
+/// Compressed form of a [`UtxoTree`], holding only the items and their
+/// positions.
 #[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(transparent)]
-pub struct CompressedUtxoTree<Key, Item> {
-    items: BTreeMap<usize, (Key, Item)>,
-}
+pub struct CompressedUtxoTree<Key, Item>(CompressedMerkleTree<Key, Item>);
 
 mod serde {
     use lb_poseidon2::{Digest, Fr};

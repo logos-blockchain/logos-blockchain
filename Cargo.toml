@@ -44,12 +44,15 @@ members = [
   "deployment/l2-sequencer-archival-demo/archiver",
   "deployment/l2-sequencer-archival-demo/sequencer",
   "deployment/tui-zone",
-  "dynamic-merkle",
   "kms/keys",
   "kms/macros",
   "kms/operators",
   "ledger",
   "libp2p",
+  "merkle/blake2btree",
+  "merkle/dynamic-merkle",
+  "merkle/tree",
+  "merkle/utxotree",
   "mmr",
   "nodes/api-common",
   "nodes/node/binary",
@@ -79,7 +82,6 @@ members = [
   "tracing/targets",
   "tracing/targets/macros",
   "utils",
-  "utxotree",
   "wallet",
   "wallet-http-client",
   "zk/circuits/prover",
@@ -104,6 +106,7 @@ common-http-client                 = { default-features = false, package = "logo
 hasher                             = { default-features = false, version = "0.1.4" }
 jf-poseidon2                       = { default-features = false, git = "https://github.com/EspressoSystems/jellyfish.git", rev = "8d80230358e900f8d63765a937f63f4978ca1daa" }
 lb-api-service                     = { default-features = false, package = "logos-blockchain-api-service", path = "./services/api" }
+lb-blake2btree                     = { default-features = false, package = "logos-blockchain-blake2btree", path = "merkle/blake2btree" }
 lb-blend                           = { default-features = false, package = "logos-blockchain-blend", path = "./blend/core" }
 lb-blend-crypto                    = { default-features = false, package = "logos-blockchain-blend-crypto", path = "./blend/crypto" }
 lb-blend-message                   = { default-features = false, package = "logos-blockchain-blend-message", path = "./blend/message" }
@@ -126,7 +129,7 @@ lb-cryptarchia-engine              = { default-features = false, package = "logo
 lb-cryptarchia-sync                = { default-features = false, package = "logos-blockchain-cryptarchia-sync", path = "./consensus/cryptarchia-sync" }
 lb-demo-archiver                   = { default-features = false, package = "logos-blockchain-demo-archiver", path = "./deployment/l2-sequencer-archival-demo/archiver" }
 lb-demo-sequencer                  = { default-features = false, package = "logos-blockchain-demo-sequencer", path = "./deployment/l2-sequencer-archival-demo/sequencer" }
-lb-dynamic-merkle                  = { default-features = false, package = "logos-blockchain-dynamic-merkle", path = "./dynamic-merkle" }
+lb-dynamic-merkle                  = { default-features = false, package = "logos-blockchain-dynamic-merkle", path = "merkle/dynamic-merkle" }
 lb-faucet                          = { default-features = false, package = "logos-blockchain-faucet", path = "./deployment/faucet" }
 lb-groth16                         = { default-features = false, package = "logos-blockchain-groth16", path = "./zk/groth16" }
 lb-http-api-common                 = { default-features = false, package = "logos-blockchain-http-api-common", path = "./nodes/api-common" }
@@ -138,6 +141,7 @@ lb-ledger                          = { default-features = false, package = "logo
 lb-libp2p                          = { default-features = false, package = "logos-blockchain-libp2p", path = "./libp2p" }
 lb-log-targets                     = { default-features = false, package = "logos-blockchain-log-targets", path = "./tracing/targets" }
 lb-log-targets-macros              = { default-features = false, package = "logos-blockchain-log-targets-macros", path = "./tracing/targets/macros" }
+lb-merkle-tree                     = { default-features = false, package = "logos-blockchain-merkle-tree", path = "merkle/tree" }
 lb-mmr                             = { default-features = false, package = "logos-blockchain-mmr", path = "./mmr" }
 lb-network-service                 = { default-features = false, package = "logos-blockchain-network-service", path = "./services/network" }
 lb-node                            = { default-features = false, package = "logos-blockchain-node", path = "./nodes/node/binary" }
@@ -158,7 +162,7 @@ lb-tracing-service                 = { default-features = false, package = "logo
 lb-tui-zone                        = { default-features = false, package = "logos-blockchain-tui-zone", path = "./deployment/tui-zone" }
 lb-tx-service                      = { default-features = false, package = "logos-blockchain-tx-service", path = "./services/tx-service" }
 lb-utils                           = { default-features = false, package = "logos-blockchain-utils", path = "./utils" }
-lb-utxotree                        = { default-features = false, package = "logos-blockchain-utxotree", path = "./utxotree" }
+lb-utxotree                        = { default-features = false, package = "logos-blockchain-utxotree", path = "merkle/utxotree" }
 lb-wallet                          = { default-features = false, package = "logos-blockchain-wallet", path = "./wallet" }
 lb-wallet-http-client              = { default-features = false, package = "logos-blockchain-wallet-http-client", path = "./wallet-http-client" }
 lb-wallet-service                  = { default-features = false, package = "logos-blockchain-wallet-service", path = "./services/wallet" }

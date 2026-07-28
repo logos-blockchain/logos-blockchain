@@ -392,8 +392,13 @@ mod tests {
             })
             .expect("execution should succeed");
 
-        // The note is now owned by the channel but stays in the ledger.
-        assert!(updated.channels.is_channel_note_of(&note_id, &channel_id));
+        // The deposited note is consumed and re-created as a channel note
+        // under a new NoteId.
+        let deposited = Utxo::new(deposit_op.op_id(), 0, utxo.note).id();
+        assert!(!updated.utxos.contains(&note_id));
+        assert!(!updated.channels.is_channel_note(&note_id));
+        assert!(updated.utxos.contains(&deposited));
+        assert!(updated.channels.is_channel_note_of(&deposited, &channel_id));
 
         assert_eq!(events.len(), 1);
         let Some(TxEvent {
@@ -404,6 +409,7 @@ mod tests {
                     channel_id: event_channel_id,
                     amount,
                     metadata,
+                    notes,
                 },
         }) = events.iter().find(|event| {
             matches!(
@@ -422,6 +428,48 @@ mod tests {
         assert_eq!(*event_channel_id, deposit_op.channel_id);
         assert_eq!(*amount, utxo.note.value);
         assert_eq!(*metadata, deposit_op.metadata);
+        assert_eq!(notes, &vec![deposited]);
+    }
+
+    #[test]
+    fn deposit_derives_one_channel_note_per_input() {
+        let channel_id = ChannelId::from([0u8; 32]);
+
+        let (_, first) = utxo(6u64);
+        let (_, second) = utxo(7u64);
+
+        let deposit_op = DepositOp {
+            channel_id,
+            inputs: [first.id(), second.id()].into(),
+            metadata: Metadata::empty(),
+        };
+
+        let (updated, _) = deposit_op
+            .execute(DepositExecutionContext {
+                channels: Channels::new(),
+                utxos: utxo_tree(vec![first, second]),
+                tx_hash: [0; 32].into(),
+            })
+            .expect("execution should succeed");
+
+        // Each input is re-created at its own output index, so the two notes
+        // get distinct identifiers even though they share an OpId.
+        let first_deposited = Utxo::new(deposit_op.op_id(), 0, first.note).id();
+        let second_deposited = Utxo::new(deposit_op.op_id(), 1, second.note).id();
+        assert_ne!(first_deposited, second_deposited);
+
+        assert!(!updated.utxos.contains(&first.id()));
+        assert!(!updated.utxos.contains(&second.id()));
+        assert!(
+            updated
+                .channels
+                .is_channel_note_of(&first_deposited, &channel_id)
+        );
+        assert!(
+            updated
+                .channels
+                .is_channel_note_of(&second_deposited, &channel_id)
+        );
     }
 
     #[test]

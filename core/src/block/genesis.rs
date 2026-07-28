@@ -129,11 +129,16 @@ impl<'de> Deserialize<'de> for GenesisBlock {
             ));
         }
 
-        Ok(Self(Block {
+        let block = Block {
             header: raw.header,
             signature: raw.signature,
             transactions: raw.transactions,
-        }))
+        };
+        block
+            .validate_block_root()
+            .map_err(serde::de::Error::custom)?;
+
+        Ok(Self(block))
     }
 }
 
@@ -1865,5 +1870,22 @@ mod tests {
             Error::InvalidGenesisTx(genesis_tx::Error::TooManyOps { count })
                 if count == MAX_OPS_PER_TX + 1
         ));
+    }
+
+    #[test]
+    fn genesis_block_deserialize_rejects_block_root_mismatch() {
+        let block = GenesisBlockBuilder::new()
+            .with_genesis_tx(make_genesis_tx(vec![]))
+            .build();
+
+        let mut value = serde_json::to_value(&block).expect("to_value should work");
+        value["header"]["block_root"] = serde_json::json!("00".repeat(32));
+
+        let err = serde_json::from_value::<GenesisBlock>(value).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Block root mismatch: calculated content does not match header"),
+            "unexpected error: {err}"
+        );
     }
 }

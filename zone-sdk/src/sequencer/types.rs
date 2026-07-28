@@ -5,7 +5,7 @@ use lb_core::{
     crypto::Hash,
     header::HeaderId,
     mantle::{
-        SignedMantleTx, Value,
+        NoteId, SignedMantleTx, Value,
         channel::ChannelState,
         gas::GasCost,
         ledger::{Inputs, Outputs},
@@ -429,6 +429,10 @@ pub struct DepositInfo {
     pub channel_id: ChannelId,
     /// Notes consumed by the deposit (spent-once at the UTXO layer).
     pub inputs: Inputs,
+    /// The channel notes the deposit re-created its inputs as, sourced from
+    /// the block's events. These carry new `NoteId`s and are what the channel
+    /// now owns.
+    pub notes: Vec<NoteId>,
     /// Total value deposited, sourced from the block's events.
     pub amount: Value,
     /// Opaque metadata associated with this deposit.

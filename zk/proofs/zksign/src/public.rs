@@ -1,6 +1,6 @@
 use lb_groth16::{AdditiveGroup as _, Fr, Groth16Input, Groth16InputDeser};
-use lb_utils::bounded::BoundedVec;
 use serde::Deserialize;
+use serde_big_array::BigArray;
 
 #[derive(Clone, Debug)]
 pub struct ZkSignVerifierInputs {
@@ -19,7 +19,7 @@ impl ZkSignVerifierInputs {
 
 #[derive(Deserialize)]
 #[serde(transparent)]
-pub struct ZkSignVerifierInputsJson(BoundedVec<Groth16InputDeser, 33, 33>);
+pub struct ZkSignVerifierInputsJson(#[serde(with = "BigArray")] [Groth16InputDeser; 33]);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ZkSignVerifierInputsJsonTryFromError {
@@ -31,21 +31,19 @@ impl TryFrom<ZkSignVerifierInputsJson> for ZkSignVerifierInputs {
     type Error = ZkSignVerifierInputsJsonTryFromError;
 
     fn try_from(value: ZkSignVerifierInputsJson) -> Result<Self, Self::Error> {
-        let mut inputs = value.0.into_inner();
+        let [public_key_inputs @ .., msg_input] = value.0;
 
-        let msg = inputs
-            .pop()
-            .expect("ZkSignVerifierInputsJson always contains 33 inputs")
-            .try_into()
-            .map_err(Self::Error::Groth16DeserError)?;
-
-        let public_keys: [Groth16Input; 32] = inputs
+        let public_keys: [Groth16Input; 32] = public_key_inputs
             .into_iter()
             .map(TryInto::try_into)
             .collect::<Result<Vec<_>, _>>()
             .map_err(Self::Error::Groth16DeserError)?
             .try_into()
-            .expect("removing the message leaves exactly 32 public keys");
+            .expect("public_key_inputs always contains exactly 32 inputs");
+
+        let msg = msg_input
+            .try_into()
+            .map_err(Self::Error::Groth16DeserError)?;
 
         Ok(Self { public_keys, msg })
     }
