@@ -83,7 +83,7 @@ jobs:
 
       # Build release binaries for the cucumber tests.
       - name: Build binaries for cucumber tests
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && steps.verify_local_ntp.conclusion == 'success' }}
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: build
@@ -98,7 +98,7 @@ jobs:
 
       # Feature: Smoke (@smoke_ci)
       - name: Run cucumber suite - smoke
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
         uses: ./.github/actions/run-cucumber-suite
         with:
@@ -109,7 +109,7 @@ jobs:
 
       # Feature: Cryptarchia (@cryptarchia_ci)
       - name: Run cucumber suite - cryptarchia
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
         uses: ./.github/actions/run-cucumber-suite
         with:
@@ -120,7 +120,7 @@ jobs:
 
       # Feature: Blend (@blend_ci)
       - name: Run cucumber suite - blend
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
         uses: ./.github/actions/run-cucumber-suite
         with:
@@ -131,8 +131,8 @@ jobs:
 
       # Feature: Transactions (@transactions_ci)
       - name: Run cucumber suite - transactions
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
-        timeout-minutes: 60
+        if: ${{ success() && steps.verify_local_ntp.conclusion == 'success' }}
+        timeout-minutes: 120
         uses: ./.github/actions/run-cucumber-suite
         with:
           suite_tag: "@transactions_ci"
@@ -143,7 +143,7 @@ jobs:
 
       # Feature: Mempool (@mempool_ci)
       - name: Run cucumber suite - mempool
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
         uses: ./.github/actions/run-cucumber-suite
         with:
@@ -154,7 +154,7 @@ jobs:
 
       # Feature: Zone SDK (@zone_ci)
       - name: Run cucumber suite - zone
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
         uses: ./.github/actions/run-cucumber-suite
         with:
@@ -165,7 +165,7 @@ jobs:
 
       # Feature: CLI utility binary (@cli_ci)
       - name: Run cucumber suite - CLI utilities
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
         uses: ./.github/actions/run-cucumber-suite
         with:
@@ -176,7 +176,7 @@ jobs:
 
       # Always upload JUnit test results for reporting, even if tests fail
       - name: Upload cucumber JUnit results
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && steps.verify_local_ntp.conclusion == 'success' }}
         continue-on-error: true
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # v4.6.2
         with:
@@ -186,7 +186,7 @@ jobs:
 
       # Always publish a test report for visibility, do not fail workflow if this step fails
       - name: Publish cucumber test report
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && steps.verify_local_ntp.conclusion == 'success' }}
         continue-on-error: true
         uses: dorny/test-reporter@v1
         with:
