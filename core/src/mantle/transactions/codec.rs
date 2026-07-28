@@ -1,11 +1,10 @@
 use lb_groth16::COMPRESSED_PROOF_SIZE;
 use lb_key_management_system_keys::keys::ED25519_SIGNATURE_SIZE;
-use nom::IResult;
+use lb_wire::{DecodeError, WireDecodeExt as _, WireEncode as _};
 
 use crate::{
     mantle::{
         Op, SignedMantleTx,
-        nom::{NomDecode as _, NomEncode as _},
         ops::codec::{decode_ops_proofs, encode_ops_proofs},
         transactions::{
             mantle_tx::{MantleTx, MantleTxGasContext},
@@ -15,7 +14,9 @@ use crate::{
     proofs::channel_multi_sig_proof::codec::calculate_channel_multi_sig_proof_byte_size,
 };
 
-pub fn decode_signed_mantle_tx(input: &[u8]) -> IResult<&[u8], SignedMantleTx<Unverified>> {
+pub fn decode_signed_mantle_tx(
+    input: &[u8],
+) -> Result<(&[u8], SignedMantleTx<Unverified>), DecodeError> {
     // SignedMantleTx = MantleTx OpsProofs
     let (input, mantle_tx) = MantleTx::decode(input)?;
     let (input, ops_proofs) = decode_ops_proofs(input, mantle_tx.ops())?;
@@ -108,7 +109,6 @@ mod tests {
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey};
     use lb_utils::bounded::BoundedError;
     use multiaddr::Multiaddr;
-    use nom::error::{Error, ErrorKind};
     use num_bigint::BigUint;
 
     use super::*;
@@ -894,12 +894,10 @@ mod tests {
         assert!(result.is_err(), "Should reject oversized inscription");
 
         // Verify it fails with the right error kind
-        match result {
-            Err(nom::Err::Error(e)) => {
-                assert_eq!(e.code, ErrorKind::TooLarge);
-            }
-            _ => panic!("Expected TooLarge error"),
-        }
+        assert!(
+            matches!(result, Err(DecodeError::LengthOutOfBounds { .. })),
+            "Expected LengthOutOfBounds error",
+        );
     }
 
     #[test]
@@ -935,8 +933,11 @@ mod tests {
 
         // Should not fail with TooLarge error (will fail with incomplete data)
         let result = Ops::decode(&valid_input);
-        if let Err(nom::Err::Error(e)) = result {
-            assert_ne!(e.code, ErrorKind::TooLarge, "Should not reject at u8::MAX]");
+        if let Err(err) = result {
+            assert!(
+                !matches!(err, DecodeError::LengthOutOfBounds { .. }),
+                "Should not reject at u8::MAX]",
+            );
         }
     }
 
@@ -987,13 +988,8 @@ mod tests {
         }
         .encode();
 
-        assert_eq!(
-            ChannelConfigOp::decode(&encoded_config_op).unwrap_err(),
-            nom::Err::Error(Error {
-                input: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0][..],
-                code: ErrorKind::LengthValue,
-            }),
-        );
+        let err = ChannelConfigOp::decode(&encoded_config_op).unwrap_err();
+        assert!(matches!(err, DecodeError::LengthOutOfBounds { len: 0, .. }));
     }
 
     #[test]
@@ -1058,15 +1054,10 @@ mod tests {
         // ... rest of SDPDeclare fields ...
 
         let result = SDPDeclareOp::decode(&malicious_input);
-        if let Err(nom::Err::Error(ref e)) = result {
-            assert_eq!(
-                e.code,
-                ErrorKind::TooLarge,
-                "Should reject at `MAX_LOCATOR_BYTE_SIZE + 1`"
-            );
-        } else {
-            panic!("Should reject oversized locator");
-        }
+        assert!(
+            matches!(result, Err(DecodeError::LengthOutOfBounds { .. })),
+            "Should reject at `MAX_LOCATOR_BYTE_SIZE + 1`",
+        );
     }
 
     #[test]
@@ -1089,11 +1080,10 @@ mod tests {
         // ... rest of SDPDeclare fields ...
 
         let result = SDPDeclareOp::decode(&malicious_input);
-        if let Err(nom::Err::Error(ref e)) = result {
-            assert_ne!(
-                e.code,
-                ErrorKind::LengthValue,
-                "Should not reject at `MAX_LOCATOR_BYTE_SIZE`"
+        if let Err(ref err) = result {
+            assert!(
+                !matches!(err, DecodeError::LengthOutOfBounds { .. }),
+                "Should not reject at `MAX_LOCATOR_BYTE_SIZE`",
             );
         }
         assert!(result.is_err(), "Should reject invalid declaration");
@@ -1115,10 +1105,10 @@ mod tests {
         let encoded = op.encode();
         let result = SDPDeclareOp::decode(&encoded);
 
-        match result {
-            Err(nom::Err::Error(e)) => assert_eq!(e.code, ErrorKind::MapRes),
-            _ => panic!("Expected Verify error for invalid locator"),
-        }
+        assert!(
+            matches!(result, Err(DecodeError::InvalidValue { .. })),
+            "Expected an invalid-value error for invalid locator",
+        );
     }
 
     #[test]

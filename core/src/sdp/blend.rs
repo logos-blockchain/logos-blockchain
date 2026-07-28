@@ -1,13 +1,8 @@
 use lb_blend_proofs::{quota::ProofOfQuota, selection::ProofOfSelection};
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
-use nom::{
-    IResult,
-    error::{Error, ErrorKind},
-};
+use lb_wire::{DecodeError, WireDecode, WireEncode};
 use serde::{Deserialize, Serialize};
-
-use crate::mantle::nom::{NomDecode, NomEncode};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ActivityProof {
@@ -19,29 +14,45 @@ pub struct ActivityProof {
 
 const BLEND_ACTIVE_METADATA_VERSION_BYTE: u8 = 1;
 
-impl NomEncode for ActivityProof {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = vec![BLEND_ACTIVE_METADATA_VERSION_BYTE];
-        bytes.extend(self.epoch.encode());
-        bytes.extend(self.signing_key.encode());
-        bytes.extend(self.proof_of_quota.encode());
-        bytes.extend(self.proof_of_selection.encode());
-        bytes
+impl WireEncode for ActivityProof {
+    fn encoded_length(&self) -> usize {
+        BLEND_ACTIVE_METADATA_VERSION_BYTE
+            .encoded_length()
+            .checked_add(self.epoch.encoded_length())
+            .and_then(|len| len.checked_add(self.signing_key.encoded_length()))
+            .and_then(|len| len.checked_add(self.proof_of_quota.encoded_length()))
+            .and_then(|len| len.checked_add(self.proof_of_selection.encoded_length()))
+            .unwrap()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        BLEND_ACTIVE_METADATA_VERSION_BYTE.encode_into(out);
+        self.epoch.encode_into(out);
+        self.signing_key.encode_into(out);
+        self.proof_of_quota.encode_into(out);
+        self.proof_of_selection.encode_into(out);
     }
 }
 
-impl NomDecode for ActivityProof {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (remaining_bytes, proof_version) = u8::decode(bytes)?;
+impl WireDecode for ActivityProof {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, proof_version) = u8::decode(input, &())?;
         if proof_version != BLEND_ACTIVE_METADATA_VERSION_BYTE {
-            return Err(nom::Err::Error(Error::new(bytes, ErrorKind::Fail)));
+            return Err(DecodeError::invalid_value::<Self>(
+                "Unsupported activity proof version",
+            ));
         }
-        let (bytes, epoch) = Epoch::decode(remaining_bytes)?;
-        let (bytes, signing_key) = Ed25519PublicKey::decode(bytes)?;
-        let (bytes, proof_of_quota) = ProofOfQuota::decode(bytes)?;
-        let (bytes, proof_of_selection) = ProofOfSelection::decode(bytes)?;
+        let (input, epoch) = Epoch::decode(input, &())?;
+        let (input, signing_key) = Ed25519PublicKey::decode(input, &())?;
+        let (input, proof_of_quota) = ProofOfQuota::decode(input, &())?;
+        let (input, proof_of_selection) = ProofOfSelection::decode(input, &())?;
         Ok((
-            bytes,
+            input,
             Self {
                 epoch,
                 signing_key,
@@ -52,8 +63,6 @@ impl NomDecode for ActivityProof {
     }
 }
 
-// TODO: Remove once the `NomCodec` macro supports logic for custom tags.
-
 #[cfg(test)]
 mod tests {
     use lb_blend_proofs::{
@@ -61,29 +70,9 @@ mod tests {
         selection::{ProofOfSelection, VerifiedProofOfSelection},
     };
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey};
+    use lb_wire::{DecodeError, WireDecodeExt as _, WireEncode as _};
 
-    use crate::{
-        mantle::nom::{NomDecode as _, NomEncode as _},
-        sdp::{
-            ActivityMetadata,
-            blend::{ActivityProof, BLEND_ACTIVE_METADATA_VERSION_BYTE},
-        },
-    };
-
-    #[test]
-    fn activity_proof_roundtrip() {
-        let proof = ActivityProof {
-            epoch: 10.into(),
-            signing_key: new_signing_key(0),
-            proof_of_quota: new_proof_of_quota_unchecked(0),
-            proof_of_selection: new_proof_of_selection_unchecked(1),
-        };
-
-        let bytes = proof.encode();
-        let (_, decoded) = ActivityProof::decode(&bytes).unwrap();
-
-        assert_eq!(proof, decoded);
-    }
+    use crate::sdp::blend::{ActivityProof, BLEND_ACTIVE_METADATA_VERSION_BYTE};
 
     #[test]
     fn activity_proof_invalid_version() {
@@ -93,40 +82,19 @@ mod tests {
             proof_of_quota: new_proof_of_quota_unchecked(0),
             proof_of_selection: new_proof_of_selection_unchecked(1),
         };
-        let mut bytes = proof.encode();
+        let mut bytes = proof.encode_to_vec();
         bytes[0] = 0x99; // Invalid version
 
-        let result = ActivityProof::decode(&bytes);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Parsing Error"));
+        let err = ActivityProof::decode(&bytes).unwrap_err();
+        assert!(matches!(err, DecodeError::InvalidValue { .. }));
     }
 
     #[test]
     fn activity_proof_too_short() {
         let bytes = vec![BLEND_ACTIVE_METADATA_VERSION_BYTE, 0x01, 0x02]; // Only 3 bytes
 
-        let result = ActivityProof::decode(&bytes);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Eof"));
-    }
-
-    #[test]
-    fn activity_metadata_roundtrip() {
-        let proof = ActivityProof {
-            epoch: 10.into(),
-            signing_key: new_signing_key(0),
-            proof_of_quota: new_proof_of_quota_unchecked(0),
-            proof_of_selection: new_proof_of_selection_unchecked(1),
-        };
-        let metadata = ActivityMetadata::Blend(Box::new(proof.clone()));
-
-        let bytes = metadata.encode();
-        let (_, decoded) = ActivityMetadata::decode(&bytes).unwrap();
-
-        assert_eq!(metadata, decoded);
-
-        let ActivityMetadata::Blend(decoded_proof) = decoded;
-        assert_eq!(proof, *decoded_proof);
+        let err = ActivityProof::decode(&bytes).unwrap_err();
+        assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
     }
 
     fn new_signing_key(byte: u8) -> Ed25519PublicKey {

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::LazyLock};
 
-use lb_core_macros::NomCodec;
+use lb_wire::{WireCodec, WireDecodeExt as _, WireEncode as _};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
@@ -9,7 +9,6 @@ use crate::{
         GasConstants, Op, SignedMantleTx, TxHash, Value,
         channel::Channels,
         gas::{Gas, GasCost, GasOverflow},
-        nom::{NomDecode as _, NomEncode as _},
         ops::{
             channel::{ChannelId, ChannelKeyIndex},
             transfer::TransferOp,
@@ -23,7 +22,7 @@ use crate::{
 
 static MANTLE_TX_HASH_V1_BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| b"MANTLE_TXHASH_V1".to_vec());
 
-#[derive(Clone, Debug, PartialEq, Eq, NomCodec)]
+#[derive(Clone, Debug, PartialEq, Eq, WireCodec)]
 pub struct MantleTx(pub Ops);
 
 impl MantleTx {

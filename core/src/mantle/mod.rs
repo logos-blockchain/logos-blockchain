@@ -1,12 +1,13 @@
 pub mod channel;
-mod channel_notes;
 pub mod gas;
 pub mod ledger;
 pub mod mock;
-pub mod nom;
 pub mod ops;
 pub mod traits;
 pub mod transactions;
+
+mod channel_notes;
+mod fixtures;
 
 pub use gas::{GasCalculator, GasConstants};
 pub use ledger::{Note, NoteId, Utxo, Value};

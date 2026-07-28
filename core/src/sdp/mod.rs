@@ -12,12 +12,9 @@ use bytes::Bytes;
 use lb_blake2btree::LeafHash;
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec, UpperBoundedVec};
+use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec};
+use lb_wire::{DecodeError, WireCodec, WireDecode, WireEncode};
 use multiaddr::{Multiaddr, Protocol};
-use nom::{
-    IResult,
-    error::{Error, ErrorKind},
-};
 use serde::{Deserialize, Serialize};
 use strum::{EnumCount, EnumIter};
 
@@ -25,12 +22,7 @@ use crate::{
     block::BlockNumber,
     codec::{self, DeserializeOp as _, SerializeOp as _},
     crypto::{Hash, Hasher},
-    mantle::{
-        NoteId,
-        ledger::Declarations as ServiceDeclarations,
-        nom::{NomCodec, NomDecode, NomEncode},
-        ops::channel::Ed25519PublicKey,
-    },
+    mantle::{NoteId, ledger::Declarations as ServiceDeclarations, ops::channel::Ed25519PublicKey},
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
@@ -104,6 +96,7 @@ pub struct InactivityPeriodTooSmall {
 
 pub const MAX_LOCATOR_BYTE_SIZE: usize = 329;
 
+type BoundedMultiaddrBytes = BoundedVec<u8, 0, MAX_LOCATOR_BYTE_SIZE>;
 /// A [`Multiaddr`] whose byte length is bounded to `[0,
 /// MAX_LOCATOR_BYTE_SIZE]`.
 ///
@@ -224,23 +217,27 @@ impl Display for Locator {
     }
 }
 
-impl NomEncode for Locator {
-    fn encode(&self) -> Vec<u8> {
-        let bounded_bytes = UpperBoundedVec::<u8, MAX_LOCATOR_BYTE_SIZE>::new_unchecked(
-            <Self as AsRef<[u8]>>::as_ref(self).to_owned(),
-        );
-        bounded_bytes.encode()
+impl WireEncode for Locator {
+    fn encoded_length(&self) -> usize {
+        self.0.to_vec().encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.0.to_vec().encode_into(out);
     }
 }
 
-impl NomDecode for Locator {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (remaining_bytes, value) = UpperBoundedVec::<u8, MAX_LOCATOR_BYTE_SIZE>::decode(bytes)?;
-        Ok((
-            remaining_bytes,
-            Self::try_from(value)
-                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
-        ))
+impl WireDecode for Locator {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, value) = BoundedMultiaddrBytes::decode(input, &())?;
+        let locator = Self::try_from(value)
+            .map_err(|_| DecodeError::invalid_value::<Self>("Invalid locator bytes"))?;
+        Ok((rest, locator))
     }
 }
 
@@ -277,24 +274,29 @@ impl AsRef<u8> for ServiceType {
     }
 }
 
-impl NomEncode for ServiceType {
-    fn encode(&self) -> Vec<u8> {
-        <Self as AsRef<u8>>::as_ref(self).encode()
+impl WireEncode for ServiceType {
+    fn encoded_length(&self) -> usize {
+        <Self as AsRef<u8>>::as_ref(self).encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        <Self as AsRef<u8>>::as_ref(self).encode_into(out);
     }
 }
 
-impl NomDecode for ServiceType {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (remaining_bytes, value) = u8::decode(bytes)?;
-        Ok((
-            remaining_bytes,
-            Self::try_from(value)
-                .map_err(|()| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
-        ))
+impl WireDecode for ServiceType {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, value) = u8::decode(input, &())?;
+        let service = Self::try_from(value)
+            .map_err(|()| DecodeError::invalid_value::<Self>("unknown service type"))?;
+        Ok((rest, service))
     }
 }
-
-// TODO: Remove once the `NomCodec` macro supports logic for custom tags.
 
 #[cfg(test)]
 mod service_type_tests {
@@ -315,7 +317,7 @@ mod service_type_tests {
 
 pub type Nonce = u64;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
 pub struct ProviderId(pub Ed25519PublicKey);
 
 #[derive(Debug)]
@@ -349,7 +351,7 @@ impl Ord for ProviderId {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, NomCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, WireCodec)]
 pub struct DeclarationId(pub [u8; 32]);
 serde_bytes_newtype!(DeclarationId, 32);
 display_hex_bytes_newtype!(DeclarationId);
@@ -476,7 +478,7 @@ impl TryFrom<Declarations> for Bytes {
 pub const MAX_DECLARATION_LOCATOR_COUNT: usize = 8;
 pub type Locators = NonEmptyBoundedVec<Locator, MAX_DECLARATION_LOCATOR_COUNT>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
 pub struct DeclarationMessage {
     pub service_type: ServiceType,
     pub locators: Locators,
@@ -509,7 +511,7 @@ impl DeclarationMessage {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
 pub struct WithdrawMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,
@@ -517,7 +519,7 @@ pub struct WithdrawMessage {
 }
 
 // ActiveMessage = DeclarationId Nonce Metadata — plain field-order concat.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
 pub struct ActiveMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,
@@ -531,33 +533,42 @@ pub enum ActivityMetadata {
 
 const ACTIVE_METADATA_BLEND_TYPE: u8 = 1;
 
-impl NomEncode for ActivityMetadata {
-    fn encode(&self) -> Vec<u8> {
+impl WireEncode for ActivityMetadata {
+    fn encoded_length(&self) -> usize {
         match self {
-            Self::Blend(blend_activity_proof) => {
-                let mut bytes = vec![ACTIVE_METADATA_BLEND_TYPE];
-                bytes.extend(blend_activity_proof.encode());
-                bytes
+            Self::Blend(proof) => {
+                ACTIVE_METADATA_BLEND_TYPE.encoded_length() + proof.encoded_length()
+            }
+        }
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        match self {
+            Self::Blend(proof) => {
+                ACTIVE_METADATA_BLEND_TYPE.encode_into(out);
+                proof.encode_into(out);
             }
         }
     }
 }
 
-impl NomDecode for ActivityMetadata {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (remaining_bytes, metadata_type) = u8::decode(bytes)?;
+impl WireDecode for ActivityMetadata {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, metadata_type) = u8::decode(input, &())?;
         match metadata_type {
             ACTIVE_METADATA_BLEND_TYPE => {
-                let (bytes, blend_activity_proof) = blend::ActivityProof::decode(remaining_bytes)?;
-                Ok((bytes, Self::Blend(Box::new(blend_activity_proof))))
+                let (input, proof) = blend::ActivityProof::decode(input, &())?;
+                Ok((input, Self::Blend(Box::new(proof))))
             }
-            _ => Err(nom::Err::Error(Error::new(bytes, ErrorKind::Fail))),
+            other => Err(DecodeError::unknown_discriminant::<Self>(u64::from(other))),
         }
     }
 }
-
-// TODO: Remove once the `NomCodec` macro supports logic for custom tags and
-// enums.
 
 #[cfg(test)]
 mod tests {

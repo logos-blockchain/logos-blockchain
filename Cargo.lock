@@ -4467,7 +4467,6 @@ dependencies = [
  "hex",
  "logos-blockchain-blake2btree",
  "logos-blockchain-blend-proofs",
- "logos-blockchain-core-macros",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
@@ -4478,9 +4477,8 @@ dependencies = [
  "logos-blockchain-poseidon2",
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
- "logos-blockchain-zksign",
+ "logos-blockchain-wire",
  "multiaddr",
- "nom 8.0.0",
  "num-bigint",
  "rand 0.8.6",
  "rpds",
@@ -4494,21 +4492,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "logos-blockchain-core-macros"
-version = "0.0.0"
-dependencies = [
- "hex",
- "proc-macro2",
- "quote",
- "syn 2.0.118",
-]
-
-[[package]]
 name = "logos-blockchain-cryptarchia-engine"
 version = "0.0.0"
 dependencies = [
  "logos-blockchain-pol",
  "logos-blockchain-utils",
+ "logos-blockchain-wire",
  "rpds",
  "serde",
  "serde_with",

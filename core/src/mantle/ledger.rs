@@ -8,6 +8,7 @@ use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
 use lb_utils::bounded::{BoundedError, UpperBoundedVec};
 use lb_utxotree::UtxoTree;
+use lb_wire::WireCodec;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -17,7 +18,6 @@ use crate::{
     events::TxEvent,
     mantle::{
         channel::Channels,
-        nom::NomCodec,
         ops::{OpId, channel::ChannelId},
     },
     sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
@@ -92,7 +92,7 @@ pub enum LedgerError {
     Outputs(#[from] OutputsError),
 }
 
-#[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize, WireCodec)]
 pub struct Outputs(BoundedOutputs);
 
 impl Outputs {
@@ -211,7 +211,7 @@ impl<'output> IntoIterator for &'output Outputs {
     }
 }
 
-#[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
 pub struct Inputs(BoundedInputs);
 
 impl Inputs {
@@ -394,7 +394,7 @@ impl<'input> IntoIterator for &'input Inputs {
 }
 
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, NomCodec,
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, WireCodec,
 )]
 #[serde(transparent)]
 pub struct NoteId(#[serde(with = "serde_fr")] pub Fr);
@@ -423,7 +423,7 @@ impl From<Fr> for NoteId {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, NomCodec)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, WireCodec)]
 pub struct Note {
     pub value: Value,
     pub pk: ZkPublicKey,

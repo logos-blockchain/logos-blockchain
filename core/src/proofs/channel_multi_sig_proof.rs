@@ -1,21 +1,14 @@
 use std::cmp::Ordering;
 
-use lb_core_macros::NomCodec;
 use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_utils::bounded::UpperBoundedVec;
-use nom::{
-    Err,
-    error::{Error as NomError, ErrorKind},
-};
+use lb_wire::{DecodeError, WireCodec, WireDecode, WireEncode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::mantle::{
-    nom::{NomDecode, NomEncode},
-    ops::channel::ChannelKeyIndex,
-};
+use crate::mantle::ops::channel::ChannelKeyIndex;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, WireCodec)]
 pub struct IndexedSignature {
     pub signature: Ed25519Signature,
     pub channel_key_index: ChannelKeyIndex, /* Using ChannelKeyIndex ensures indices are
@@ -80,18 +73,27 @@ pub struct ChannelMultiSigProof {
     signatures: IndexedSignatures,
 }
 
-impl NomEncode for ChannelMultiSigProof {
-    fn encode(&self) -> Vec<u8> {
-        self.signatures.encode()
+impl WireEncode for ChannelMultiSigProof {
+    fn encoded_length(&self) -> usize {
+        self.signatures.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.signatures.encode_into(out);
     }
 }
 
-impl NomDecode for ChannelMultiSigProof {
-    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self> {
-        let (remaining_bytes, inner) = IndexedSignatures::decode(bytes)?;
+impl WireDecode for ChannelMultiSigProof {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, inner) = IndexedSignatures::decode(input, &())?;
         let proof = Self::try_new(inner)
-            .map_err(|_| Err::Error(NomError::new(bytes, ErrorKind::MapRes)))?;
-        Ok((remaining_bytes, proof))
+            .map_err(|_| DecodeError::invalid_value::<Self>("Invalid channel multi-sig proof"))?;
+        Ok((rest, proof))
     }
 }
 
@@ -266,7 +268,7 @@ mod tests {
         .into();
         let bytes = raw.encode();
         assert!(
-            ChannelMultiSigProof::decode(&bytes).is_err(),
+            ChannelMultiSigProof::decode(&bytes, &()).is_err(),
             "decoding a proof with a repeated index must fail"
         );
     }
@@ -283,7 +285,7 @@ mod tests {
         .into();
         let bytes = raw.encode();
         assert!(
-            ChannelMultiSigProof::decode(&bytes).is_err(),
+            ChannelMultiSigProof::decode(&bytes, &()).is_err(),
             "decoding a proof with out-of-order indices must fail"
         );
     }
