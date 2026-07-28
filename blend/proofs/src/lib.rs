@@ -5,6 +5,8 @@ use lb_poseidon2::Digest;
 pub mod quota;
 pub mod selection;
 
+mod fixtures;
+
 trait ZkHashExt {
     fn hash(&self) -> ZkHash;
 }

@@ -11,6 +11,7 @@ use lb_blend_message::{
     },
 };
 use lb_key_management_system_keys::keys::X25519PrivateKey;
+use lb_wire::{WireDecode as _, WireEncode as _};
 
 pub mod core_and_leader;
 pub use self::core_and_leader::{
@@ -38,19 +39,19 @@ pub struct EpochCryptographicProcessorSettings {
 pub fn serialize_encapsulated_message_with_verified_public_header(
     message: &EncapsulatedMessageWithVerifiedPublicHeader,
 ) -> Vec<u8> {
-    message.encode()
+    message.encode_to_vec()
 }
 
 #[must_use]
 pub fn serialize_encapsulated_message_with_verified_signature(
     message: &EncapsulatedMessageWithVerifiedSignature,
 ) -> Vec<u8> {
-    message.encode()
+    message.encode_to_vec()
 }
 
 pub fn deserialize_encapsulated_message(
     message: &[u8],
-    num_blend_layers: NonZeroU64,
+    num_blend_layers: &NonZeroU64,
 ) -> Result<EncapsulatedMessage, Error> {
     let (remaining, deserialized_message) = EncapsulatedMessage::decode(message, num_blend_layers)?;
     if !remaining.is_empty() {

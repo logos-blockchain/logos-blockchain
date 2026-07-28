@@ -3,6 +3,7 @@ use std::sync::LazyLock;
 
 use lb_blend_crypto::pseudo_random_sized_bytes;
 use lb_groth16::{fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes};
+use lb_wire::{DecodeError, WireDecode, WireEncode};
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -126,6 +127,30 @@ impl TryFrom<[u8; PROOF_OF_SELECTION_SIZE]> for ProofOfSelection {
     }
 }
 
+impl WireEncode for ProofOfSelection {
+    fn encoded_length(&self) -> usize {
+        PROOF_OF_SELECTION_SIZE
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&<[u8; _]>::from(self));
+    }
+}
+
+impl WireDecode for ProofOfSelection {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, value) = <[u8; _]>::decode(input, &())?;
+        let proof = Self::try_from(value)
+            .map_err(|_| DecodeError::invalid_value::<Self>("not a valid proof of selection"))?;
+        Ok((rest, proof))
+    }
+}
+
 /// A verified Proof of Selection.
 #[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct VerifiedProofOfSelection(ProofOfSelection);
@@ -177,6 +202,16 @@ impl AsRef<ProofOfSelection> for VerifiedProofOfSelection {
 impl PartialEq<ProofOfSelection> for VerifiedProofOfSelection {
     fn eq(&self, other: &ProofOfSelection) -> bool {
         self.0 == *other
+    }
+}
+
+impl WireEncode for VerifiedProofOfSelection {
+    fn encoded_length(&self) -> usize {
+        self.0.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.0.encode_into(out);
     }
 }
 

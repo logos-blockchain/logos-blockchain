@@ -2,6 +2,8 @@ use generic_array::{
     GenericArray,
     typenum::{U32, U64},
 };
+use lb_groth16::COMPRESSED_PROOF_SIZE;
+use lb_wire::{DecodeError, WireDecode, WireEncode};
 use lb_zksign::ZkSignProof;
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +31,31 @@ impl Signature {
     #[must_use]
     pub const fn as_proof(&self) -> &ZkSignProof {
         &self.0
+    }
+}
+
+impl WireEncode for Signature {
+    fn encoded_length(&self) -> usize {
+        // The compressed Groth16 proof is a fixed-size blob; return the constant
+        // rather than serializing the proof just to measure it (the trait
+        // contract requires `encoded_length` to neither allocate nor encode).
+        COMPRESSED_PROOF_SIZE
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.as_proof().to_bytes());
+    }
+}
+
+impl WireDecode for Signature {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, inner) = <[u8; _]>::decode(input, &())?;
+        Ok((rest, Self::new(ZkSignProof::from_bytes(&inner))))
     }
 }
 

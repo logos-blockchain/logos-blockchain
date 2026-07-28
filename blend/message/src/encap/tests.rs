@@ -8,6 +8,7 @@ use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
 use lb_key_management_system_keys::keys::{
     Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key, X25519PrivateKey,
 };
+use lb_wire::{WireDecode as _, WireEncode as _};
 
 use crate::{
     Error, PayloadType,
@@ -16,7 +17,6 @@ use crate::{
         ProofsVerifier,
         decapsulated::DecapsulationOutput,
         encapsulated::{EncapsulatedMessage, EncapsulatedPart},
-        expected_serialized_len,
         validated::{
             EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
             RequiredProofOfSelectionVerificationInputs,
@@ -409,8 +409,8 @@ fn serialized_size_constants_match_wire_format() {
     for num_layers in 1..=4u64 {
         let message = EncapsulatedMessage::from(sample_message(num_layers as usize));
 
-        let actual_len = message.encode().len() as u64;
-        let expected_len = expected_serialized_len(num_layers.try_into().unwrap()) as u64;
+        let actual_len = message.encode().len();
+        let expected_len = message.encoded_length();
 
         assert_eq!(
             expected_len, actual_len,
@@ -428,7 +428,7 @@ fn encode_decode_round_trip() {
 
         let encoded = message.encode();
         let (remaining, decoded) =
-            EncapsulatedMessage::decode(&encoded, num_layers.try_into().unwrap()).unwrap();
+            EncapsulatedMessage::decode(&encoded, &num_layers.try_into().unwrap()).unwrap();
 
         assert!(
             remaining.is_empty(),
