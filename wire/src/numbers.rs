@@ -1,6 +1,6 @@
-use lb_groth16::{fr_from_bytes, fr_to_bytes, Fr};
+use lb_groth16::{Fr, fr_from_bytes, fr_to_bytes};
 
-use crate::{take, wire_fixtures, DecodeError, WireDecode, WireEncode};
+use crate::{DecodeError, WireDecode, WireEncode, take, wire_fixtures};
 
 /// `WireEncode`/`WireDecode` for a little-endian fixed-width integer.
 macro_rules! impl_le_integer {

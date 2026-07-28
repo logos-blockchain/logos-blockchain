@@ -1,4 +1,4 @@
-use crate::{wire_fixtures, DecodeError, WireDecode, WireEncode};
+use crate::{DecodeError, WireDecode, WireEncode, wire_fixtures};
 
 // A single byte: `0` for `false`, `1` for `true`; any other value is rejected.
 impl WireEncode for bool {
