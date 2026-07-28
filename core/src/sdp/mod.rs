@@ -510,7 +510,7 @@ impl DeclarationMessage {
         DeclarationId(hasher.finalize().into())
     }
 
-    pub fn verify_stateless(
+    pub fn preverify(
         &self,
         tx_hash_view: &TxHashView,
         proof_eddsa_signature: &Ed25519Signature,
@@ -532,24 +532,12 @@ pub struct WithdrawMessage {
     pub locked_note_id: NoteId,
 }
 
-impl WithdrawMessage {
-    pub const fn verify_stateless(&self) -> Result<(), SdpError> {
-        Ok(())
-    }
-}
-
 // ActiveMessage = DeclarationId Nonce Metadata — plain field-order concat.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct ActiveMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,
     pub metadata: ActivityMetadata,
-}
-
-impl ActiveMessage {
-    pub const fn verify_stateless(&self) -> Result<(), SdpError> {
-        Ok(())
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]

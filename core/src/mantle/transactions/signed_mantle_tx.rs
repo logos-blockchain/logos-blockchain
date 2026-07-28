@@ -106,9 +106,9 @@ impl SignedMantleTx<Unverified> {
         })
     }
 
-    // TODO: Might drop proofs after verification. This TODO is carried over from
-    // the original code.
-    fn verify_stateless_op(
+    // TODO: Might drop proofs after verification.
+    //  This is carried over from the original code.
+    fn preverify_op(
         op_index: usize,
         op: &Op,
         proof: &OpProof,
@@ -174,11 +174,11 @@ impl SignedMantleTx<Unverified> {
         }
     }
 
-    fn verify_stateless_ops(&self) -> Result<(), VerificationError> {
+    fn preverify_ops(&self) -> Result<(), VerificationError> {
         let tx_hash = self.hash();
         let tx_hash_view = TxHashView::new(tx_hash);
         for (op_index, (op, proof)) in self.ops_with_proof().enumerate() {
-            Self::verify_stateless_op(op_index, op, proof, &tx_hash_view)?;
+            Self::preverify_op(op_index, op, proof, &tx_hash_view)?;
         }
         Ok(())
     }
@@ -199,7 +199,7 @@ impl SignedMantleTx<Unverified> {
     ///   and [`LeaderClaimOp`](crate::mantle::ops::leader_claim::LeaderClaimOp) have valid signatures/proofs.
     pub fn preverify(self) -> Result<SignedMantleTx<Preverified>, VerificationError> {
         self.ensure_one_proof_per_op()?;
-        self.verify_stateless_ops()?;
+        self.preverify_ops()?;
         Ok(self.into_preverified())
     }
 

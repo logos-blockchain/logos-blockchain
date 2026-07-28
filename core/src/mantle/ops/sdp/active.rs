@@ -42,7 +42,7 @@ impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
         &self,
         _context: &Self::PreverificationContext<'_>,
     ) -> Result<(), Self::VerificationError> {
-        self.verify_stateless()
+        Ok(())
     }
 
     fn verify(&self, ctx: &SDPActiveValidationContext<'_>) -> Result<(), Self::ExecutionError> {

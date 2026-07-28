@@ -45,7 +45,7 @@ impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
         &self,
         _context: &Self::PreverificationContext<'_>,
     ) -> Result<(), Self::VerificationError> {
-        self.verify_stateless()
+        Ok(())
     }
 
     fn verify(&self, ctx: &SDPWithdrawValidationContext<'_>) -> Result<(), Self::ExecutionError> {

@@ -35,15 +35,6 @@ impl ChannelConfigOp {
         hasher.update(self.encode());
         MsgId(hasher.finalize().into())
     }
-
-    pub const fn verify_stateless(&self) -> Result<(), Error> {
-        // Check config is well-formed
-        if self.configuration_threshold == 0 || self.transfer_threshold == 0 || self.keys.is_empty()
-        {
-            return Err(Error::InvalidChannelConfig);
-        }
-        Ok(())
-    }
 }
 
 pub struct ChannelConfigValidationContext<'a> {
@@ -73,7 +64,13 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
         &self,
         _context: &Self::PreverificationContext<'_>,
     ) -> Result<(), Self::VerificationError> {
-        self.verify_stateless()
+        // Check config is well-formed
+        if self.configuration_threshold == 0 || self.transfer_threshold == 0 || self.keys.is_empty()
+        {
+            return Err(Error::InvalidChannelConfig);
+        }
+
+        Ok(())
     }
 
     fn verify(&self, ctx: &ChannelConfigValidationContext<'_>) -> Result<(), Self::ExecutionError> {

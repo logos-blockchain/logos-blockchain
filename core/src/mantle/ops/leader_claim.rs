@@ -75,24 +75,6 @@ impl LeaderClaimOp {
             },
         }
     }
-
-    pub fn verify_stateless(
-        &self,
-        tx_hash_view: &TxHashView,
-        proof: &Groth16LeaderClaimProof,
-    ) -> Result<(), LeaderClaimError> {
-        let is_verified = proof.verify(&LeaderClaimPublic {
-            voucher_nullifier: self.voucher_nullifier.into(),
-            voucher_root: self.rewards_root.into(),
-            mantle_tx_hash: *tx_hash_view.as_fr(),
-        });
-
-        if is_verified {
-            Ok(())
-        } else {
-            Err(LeaderClaimError::InvalidPoC)
-        }
-    }
 }
 
 impl OpId for LeaderClaimOp {
@@ -224,12 +206,19 @@ impl Operation<LeaderClaimVerificationContext<'_>> for LeaderClaimOp {
 
     fn preverify(
         &self,
-        preverification_context: &Self::PreverificationContext<'_>,
+        context: &Self::PreverificationContext<'_>,
     ) -> Result<(), Self::VerificationError> {
-        self.verify_stateless(
-            preverification_context.tx_hash_view,
-            preverification_context.proof,
-        )
+        let is_verified = context.proof.verify(&LeaderClaimPublic {
+            voucher_nullifier: self.voucher_nullifier.into(),
+            voucher_root: self.rewards_root.into(),
+            mantle_tx_hash: *context.tx_hash_view.as_fr(),
+        });
+
+        if is_verified {
+            Ok(())
+        } else {
+            Err(LeaderClaimError::InvalidPoC)
+        }
     }
 
     fn verify(&self, ctx: &LeaderClaimVerificationContext<'_>) -> Result<(), Self::ExecutionError> {

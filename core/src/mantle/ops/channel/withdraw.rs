@@ -24,12 +24,6 @@ pub struct ChannelWithdrawOp {
     pub inputs: Inputs,
 }
 
-impl ChannelWithdrawOp {
-    pub const fn verify_stateless(&self) -> Result<(), Error> {
-        Ok(())
-    }
-}
-
 impl OpId for ChannelWithdrawOp {
     fn op_bytes(&self) -> Vec<u8> {
         self.encode_to_vec()
@@ -67,7 +61,7 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
         &self,
         _context: &Self::PreverificationContext<'_>,
     ) -> Result<(), Self::VerificationError> {
-        self.verify_stateless()
+        Ok(())
     }
 
     fn verify(&self, ctx: &WithdrawValidationContext<'_>) -> Result<(), Self::ExecutionError> {

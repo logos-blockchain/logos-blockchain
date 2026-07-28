@@ -40,10 +40,6 @@ impl DepositOp {
 
         Ok(Outputs::try_new(notes)?)
     }
-
-    pub const fn verify_stateless(&self) -> Result<(), Error> {
-        Ok(())
-    }
 }
 
 impl OpId for DepositOp {
@@ -82,7 +78,7 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
         &self,
         _context: &Self::PreverificationContext<'_>,
     ) -> Result<(), Self::VerificationError> {
-        self.verify_stateless()
+        Ok(())
     }
 
     fn verify(&self, ctx: &DepositValidationContext<'_>) -> Result<(), Self::ExecutionError> {

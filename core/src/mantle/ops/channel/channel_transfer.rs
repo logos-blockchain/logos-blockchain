@@ -29,13 +29,6 @@ impl ChannelTransferOp {
     pub fn utxos(&self) -> impl Iterator<Item = Utxo> {
         self.outputs.utxos(self)
     }
-
-    pub fn verify_stateless(&self) -> Result<(), Error> {
-        // Check that the outputs are valid
-        self.outputs.validate()?;
-
-        Ok(())
-    }
 }
 
 impl OpId for ChannelTransferOp {
@@ -76,7 +69,10 @@ impl Operation<ChannelTransferValidationContext<'_>> for ChannelTransferOp {
         &self,
         _context: &Self::PreverificationContext<'_>,
     ) -> Result<(), Self::VerificationError> {
-        self.verify_stateless()
+        // Check that the outputs are valid
+        self.outputs.validate()?;
+
+        Ok(())
     }
 
     fn verify(

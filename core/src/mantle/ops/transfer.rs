@@ -52,18 +52,6 @@ impl TransferOp {
             .ok_or(TransferError::BalanceOverflow)?;
         Ok(balance)
     }
-
-    pub fn verify_stateless(&self) -> Result<(), TransferError> {
-        // Ensure the inputs is non-empty
-        if self.inputs.is_empty() {
-            return Err(TransferError::NoInputTransfer);
-        }
-
-        // Validate Outputs
-        self.outputs.validate()?;
-
-        Ok(())
-    }
 }
 
 impl OpId for TransferOp {
@@ -110,7 +98,15 @@ impl Operation<TransferValidationContext<'_>> for TransferOp {
         &self,
         _context: &Self::PreverificationContext<'_>,
     ) -> Result<(), Self::VerificationError> {
-        self.verify_stateless()
+        // Ensure the inputs is non-empty
+        if self.inputs.is_empty() {
+            return Err(TransferError::NoInputTransfer);
+        }
+
+        // Validate Outputs
+        self.outputs.validate()?;
+
+        Ok(())
     }
 
     fn verify(&self, ctx: &TransferValidationContext<'_>) -> Result<(), Self::ExecutionError> {

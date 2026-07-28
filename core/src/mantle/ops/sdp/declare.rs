@@ -171,7 +171,7 @@ impl Operation<SDPDeclareVerificationContext<'_>> for SDPDeclareOp {
         &self,
         context: &Self::PreverificationContext<'_>,
     ) -> Result<(), Self::VerificationError> {
-        self.verify_stateless(context.tx_hash_view, context.proof_ed25519)
+        self.preverify(context.tx_hash_view, context.proof_ed25519)
     }
 
     fn verify(&self, ctx: &SDPDeclareVerificationContext<'_>) -> Result<(), Self::ExecutionError> {
@@ -224,7 +224,7 @@ impl Operation<SDPDeclareGenesisValidationContext<'_>> for SDPDeclareOp {
         &self,
         context: &Self::PreverificationContext<'_>,
     ) -> Result<(), Self::VerificationError> {
-        self.verify_stateless(context.tx_hash_view, context.proof_ed25519)
+        self.preverify(context.tx_hash_view, context.proof_ed25519)
     }
 
     fn verify(

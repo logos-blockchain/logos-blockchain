@@ -43,19 +43,6 @@ impl InscriptionOp {
         hasher.update(self.encode().as_ref());
         MsgId(hasher.finalize().into())
     }
-
-    pub fn verify_stateless(
-        &self,
-        tx_hash_view: &TxHashView,
-        proof: &Ed25519Signature,
-    ) -> Result<(), Error> {
-        // Check the signature
-        self.signer
-            .verify(tx_hash_view.as_bytes(), proof)
-            .map_err(|_error| Error::InvalidSignature)?;
-
-        Ok(())
-    }
 }
 
 pub struct InscriptionPreverificationContext<'a> {
@@ -89,7 +76,12 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
         &self,
         context: &Self::PreverificationContext<'_>,
     ) -> Result<(), Self::VerificationError> {
-        self.verify_stateless(context.tx_hash_view, context.proof)
+        // Check the signature
+        self.signer
+            .verify(context.tx_hash_view.as_bytes(), context.proof)
+            .map_err(|_error| Error::InvalidSignature)?;
+
+        Ok(())
     }
 
     fn verify(&self, ctx: &InscriptionValidationContext<'_>) -> Result<(), Self::ExecutionError> {
