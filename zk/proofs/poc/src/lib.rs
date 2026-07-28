@@ -43,7 +43,7 @@ use lb_groth16::{
 };
 use lb_log_targets::proofs;
 use tracing::error;
-pub use wallet_inputs::{PoCWalletInputs, PoCWalletInputsData, VOUCHER_MERKLE_TREE_HEIGHT};
+pub use wallet_inputs::{PoCWalletInputs, PoCWalletInputsData, VOUCHER_MERKLE_PATH_LEN};
 
 pub use crate::inputs::{PoCVerifierInput, PoCVerifierInputJson};
 

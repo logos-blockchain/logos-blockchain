@@ -29,7 +29,7 @@ pub(crate) const MAX_MERKLE_PATH_SIBLINGS: usize = ACCEPTABLE_MAX_HEIGHT as usiz
 /// (de)serialize one version of the tree, but if you dump multiple expect to
 /// find multiple copes of the same nodes in the deserialized output. If you
 /// need to preserve structural sharing, you should use a custom serialization.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct MerkleMountainRange<T, Hash, const MAX_HEIGHT: u8 = ACCEPTABLE_MAX_HEIGHT> {
     roots: StackSync<Root>,
     #[serde(skip)]
@@ -43,6 +43,49 @@ impl<T, Hash, const MAX_HEIGHT: u8> PartialEq for MerkleMountainRange<T, Hash, M
 }
 
 impl<T, Hash, const MAX_HEIGHT: u8> Eq for MerkleMountainRange<T, Hash, MAX_HEIGHT> {}
+
+#[derive(serde::Deserialize)]
+#[serde(rename = "MerkleMountainRange")]
+struct MerkleMountainRangeSerde {
+    roots: StackSync<Root>,
+}
+
+impl<'de, T, Hash, const MAX_HEIGHT: u8> serde::Deserialize<'de>
+    for MerkleMountainRange<T, Hash, MAX_HEIGHT>
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        validate_supported_max_height(MAX_HEIGHT).map_err(serde::de::Error::custom)?;
+
+        let MerkleMountainRangeSerde { roots } =
+            <MerkleMountainRangeSerde as serde::Deserialize>::deserialize(deserializer)?;
+
+        Ok(Self {
+            roots,
+            _hash: std::marker::PhantomData,
+        })
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("unsupported MMR height {actual}; expected a height in 1..={maximum}")]
+struct UnsupportedMmrHeight {
+    actual: u8,
+    maximum: u8,
+}
+
+fn validate_supported_max_height(max_height: u8) -> Result<(), UnsupportedMmrHeight> {
+    if !(1..=ACCEPTABLE_MAX_HEIGHT).contains(&max_height) {
+        return Err(UnsupportedMmrHeight {
+            actual: max_height,
+            maximum: ACCEPTABLE_MAX_HEIGHT,
+        });
+    }
+
+    Ok(())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Root {
@@ -68,7 +111,7 @@ where
 {
     #[must_use]
     pub fn new() -> Self {
-        assert_supported_max_height(MAX_HEIGHT);
+        assert_acceptable_height(MAX_HEIGHT);
         Self {
             roots: StackSync::new_sync(),
             _hash: std::marker::PhantomData,
@@ -120,9 +163,6 @@ where
         elem: T,
         paths: &mut [MerklePath],
     ) -> Result<(Self, MerklePath), PushWithPathsError> {
-        // This assertion establishes the invariant required by the internal
-        // path construction below, independently of caller-supplied paths.
-        assert_supported_max_height(MAX_HEIGHT);
         if self.roots.peek().is_some_and(|r| r.height == MAX_HEIGHT) {
             return Err(PushWithPathsError::MmrFull(MmrFull));
         }
@@ -241,10 +281,7 @@ where
 pub(crate) fn empty_subtree_root<Hash: Digest>(height: u8) -> Fr {
     static PRECOMPUTED_EMPTY_ROOTS: OnceLock<[Fr; ACCEPTABLE_MAX_HEIGHT as usize]> =
         OnceLock::new();
-    assert!(
-        (1..=ACCEPTABLE_MAX_HEIGHT).contains(&height),
-        "Height:{height} must be in 1..={ACCEPTABLE_MAX_HEIGHT}"
-    );
+    assert_acceptable_height(height);
     PRECOMPUTED_EMPTY_ROOTS.get_or_init(|| {
         let mut hashes = [EMPTY_VALUE; ACCEPTABLE_MAX_HEIGHT as usize];
         for i in 1..ACCEPTABLE_MAX_HEIGHT as usize {
@@ -254,11 +291,9 @@ pub(crate) fn empty_subtree_root<Hash: Digest>(height: u8) -> Fr {
     })[(height - 1) as usize]
 }
 
-fn assert_supported_max_height(max_height: u8) {
-    assert!(
-        (1..=ACCEPTABLE_MAX_HEIGHT).contains(&max_height),
-        "MAX_HEIGHT must be in 1..={ACCEPTABLE_MAX_HEIGHT}"
-    );
+#[track_caller]
+fn assert_acceptable_height(max_height: u8) {
+    validate_supported_max_height(max_height).unwrap_or_else(|error| panic!("{error}"));
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -372,7 +407,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "MAX_HEIGHT must be in 1..=33")]
+    #[should_panic(expected = "unsupported MMR height 0; expected a height in 1..=33")]
     fn test_zero_height_is_rejected() {
         drop(<MerkleMountainRange<TestFr, ZkHasher, 0>>::new());
     }
@@ -690,5 +725,17 @@ mod test {
             mmr_b = new_b;
             assert_eq!(mmr_a.frontier_root(), mmr_b.frontier_root());
         }
+    }
+
+    #[test]
+    fn test_deserialization_rejects_unsupported_mmr_height() {
+        type ValidMmr = MerkleMountainRange<TestFr, ZkHasher, 1>;
+        type ZeroHeightMmr = MerkleMountainRange<TestFr, ZkHasher, 0>;
+        type OversizedMmr = MerkleMountainRange<TestFr, ZkHasher, { ACCEPTABLE_MAX_HEIGHT + 1 }>;
+
+        let encoded = bincode::serialize(&ValidMmr::new()).unwrap();
+
+        assert!(bincode::deserialize::<ZeroHeightMmr>(&encoded).is_err());
+        assert!(bincode::deserialize::<OversizedMmr>(&encoded).is_err());
     }
 }

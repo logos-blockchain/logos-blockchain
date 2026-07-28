@@ -2,7 +2,7 @@ use lb_poseidon2::{Digest, Fr};
 use lb_utils::bounded::{BoundedError, UpperBoundedVec};
 use serde::{Deserialize, Serialize};
 
-use crate::{MAX_MERKLE_PATH_SIBLINGS, Root, assert_supported_max_height, empty_subtree_root};
+use crate::{MAX_MERKLE_PATH_SIBLINGS, Root, assert_acceptable_height, empty_subtree_root};
 
 /// Sibling hashes in a [`MerklePath`].
 type MerklePathSiblings = UpperBoundedVec<Fr, MAX_MERKLE_PATH_SIBLINGS>;
@@ -37,7 +37,7 @@ impl MerklePath {
 
     /// Validate that this path has the sibling count required by an MMR height.
     pub(crate) fn validate_for_height(&self, max_height: u8) -> Result<(), MerklePathError> {
-        assert_supported_max_height(max_height);
+        assert_acceptable_height(max_height);
 
         let expected = usize::from(max_height - 1);
         let actual = self.siblings.len();
