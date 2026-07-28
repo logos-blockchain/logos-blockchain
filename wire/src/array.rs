@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::{sealed, WireDecode, WireEncode, WireExamples, WireFixture, WireFixtures};
+use crate::{WireDecode, WireEncode, WireExamples, WireFixture, WireFixtures, sealed};
 
 // Fixed-size array: `N` elements concatenated with NO length prefix — `N` lives
 // in the type, not on the wire.

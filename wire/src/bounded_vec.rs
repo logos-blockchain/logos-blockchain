@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use lb_utils::bounded::BoundedVec;
 
-use crate::{sealed, DecodeError, WireDecode, WireEncode, WireExamples, WireFixture, WireFixtures};
+use crate::{DecodeError, WireDecode, WireEncode, WireExamples, WireFixture, WireFixtures, sealed};
 
 #[derive(Debug, Clone, Copy)]
 enum NOfBytes {
