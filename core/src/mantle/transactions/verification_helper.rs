@@ -171,8 +171,7 @@ pub mod test_utils {
             channel_id: &ChannelId,
         ) -> Result<ChannelKeyIndex, VerificationError> {
             self.channels
-                .channels
-                .get(channel_id)
+                .channel_state(channel_id)
                 .ok_or(VerificationError::ChannelNotFound {
                     channel_id: *channel_id,
                 })
