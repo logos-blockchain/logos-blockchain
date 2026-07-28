@@ -184,10 +184,7 @@ impl Channels {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&ChannelId, &ChannelState)> {
-        self.channels
-            .items()
-            .iter()
-            .map(|(channel_id, (channel, _))| (channel_id, channel))
+        self.channels.iter()
     }
 
     /// Creates `channel_id` with `channel`, or replaces its state if it already
