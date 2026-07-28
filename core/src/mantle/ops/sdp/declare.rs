@@ -124,8 +124,8 @@ fn validate_service_scoped_uniqueness(
 }
 
 pub struct SDPDeclarePreverificationContext<'a> {
-    tx_hash_view: &'a TxHashView,
-    proof: &'a Ed25519Signature,
+    pub tx_hash_view: &'a TxHashView,
+    pub proof_ed25519: &'a Ed25519Signature,
 }
 
 pub struct SDPDeclareVerificationContext<'a> {
@@ -171,7 +171,7 @@ impl Operation<SDPDeclareVerificationContext<'_>> for SDPDeclareOp {
         &self,
         context: &Self::PreverificationContext<'_>,
     ) -> Result<(), Self::VerificationError> {
-        self.verify_stateless(context.tx_hash_view, context.proof)
+        self.verify_stateless(context.tx_hash_view, context.proof_ed25519)
     }
 
     fn verify(&self, ctx: &SDPDeclareVerificationContext<'_>) -> Result<(), Self::ExecutionError> {
@@ -224,7 +224,7 @@ impl Operation<SDPDeclareGenesisValidationContext<'_>> for SDPDeclareOp {
         &self,
         context: &Self::PreverificationContext<'_>,
     ) -> Result<(), Self::VerificationError> {
-        self.verify_stateless(context.tx_hash_view, context.proof)
+        self.verify_stateless(context.tx_hash_view, context.proof_ed25519)
     }
 
     fn verify(

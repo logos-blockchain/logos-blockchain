@@ -191,8 +191,8 @@ pub enum LeaderClaimError {
 }
 
 pub struct LeaderClaimPreverificationContext<'a> {
-    tx_hash_view: &'a TxHashView,
-    proof: &'a Groth16LeaderClaimProof,
+    pub tx_hash_view: &'a TxHashView,
+    pub proof: &'a Groth16LeaderClaimProof,
 }
 
 pub struct LeaderClaimVerificationContext<'a> {

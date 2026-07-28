@@ -59,8 +59,8 @@ impl InscriptionOp {
 }
 
 pub struct InscriptionPreverificationContext<'a> {
-    tx_hash_view: &'a TxHashView,
-    proof: &'a Ed25519Signature,
+    pub tx_hash_view: &'a TxHashView,
+    pub proof: &'a Ed25519Signature,
 }
 
 pub struct InscriptionValidationContext<'a> {
