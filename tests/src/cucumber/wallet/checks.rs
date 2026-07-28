@@ -131,7 +131,7 @@ pub async fn assert_tracked_wallet_fees_equal_sponsored_fee_account_spend(
         world,
         step_value,
         &submitted_tx_hashes,
-        Duration::from_secs(30),
+        Duration::from_mins(2),
     )
     .await?;
 

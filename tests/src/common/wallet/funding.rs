@@ -28,11 +28,6 @@ impl WalletFundingResources {
     }
 
     #[must_use]
-    pub fn from_sender(account: WalletAccount, available_utxos: Vec<Utxo>) -> Self {
-        Self::new(WalletFundingSource::new(account, available_utxos))
-    }
-
-    #[must_use]
     pub const fn fee_sponsored(
         sender: WalletFundingSource,
         fee_sponsor: WalletFundingSource,
@@ -44,25 +39,8 @@ impl WalletFundingResources {
     }
 
     #[must_use]
-    pub fn with_fee_sponsor(self, fee_sponsor: WalletFundingSource) -> Self {
-        Self {
-            sender: self.sender,
-            fee_sponsor: Some(fee_sponsor),
-        }
-    }
-
-    #[must_use]
     pub const fn sender(&self) -> &WalletFundingSource {
         &self.sender
-    }
-
-    #[must_use]
-    pub const fn policy(&self) -> WalletFundingPolicy {
-        if self.fee_sponsor.is_some() {
-            WalletFundingPolicy::FeeSponsored
-        } else {
-            WalletFundingPolicy::SenderPays
-        }
     }
 
     #[must_use]
@@ -204,11 +182,6 @@ pub struct WalletFundedTransfer {
 
 impl WalletFundedTransfer {
     #[must_use]
-    pub const fn transfer(&self) -> &TransferOp {
-        &self.transfer
-    }
-
-    #[must_use]
     pub fn into_parts(self) -> (TransferOp, Vec<Utxo>) {
         (self.transfer, self.selected_inputs)
     }
@@ -339,11 +312,6 @@ impl WalletReservedInputs {
         (self.sender, self.fee_sponsor)
     }
 
-    pub fn extend(&mut self, other: Self) {
-        self.sender.extend(other.sender);
-        self.fee_sponsor.extend(other.fee_sponsor);
-    }
-
     #[must_use]
     pub fn input_note_ids_list(&self) -> Vec<NoteId> {
         let mut input_notes = self.sender.iter().map(Utxo::id).collect::<Vec<_>>();
@@ -369,23 +337,11 @@ mod tests {
     }
 
     #[test]
-    fn funding_resources_default_to_sender_pays_policy() {
-        let resources = WalletFundingResources::from_sender(account(0), vec![utxo(10, 0)]);
-
-        assert!(matches!(
-            resources.policy(),
-            WalletFundingPolicy::SenderPays
-        ));
-        assert!(resources.fee_sponsor().is_none());
-    }
-
-    #[test]
     fn funding_resources_can_use_explicit_fee_sponsor_policy() {
         let sender = WalletFundingSource::new(account(0), vec![utxo(10, 0)]);
         let fee_sponsor = WalletFundingSource::new(account(1), vec![utxo(20, 1)]);
         let resources = WalletFundingResources::fee_sponsored(sender, fee_sponsor);
 
-        assert_eq!(resources.policy(), WalletFundingPolicy::FeeSponsored);
         assert_eq!(
             resources
                 .fee_sponsor()

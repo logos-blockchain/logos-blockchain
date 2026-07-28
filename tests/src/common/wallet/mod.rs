@@ -10,10 +10,7 @@ mod funding_from_chain;
 
 pub use chain::{
     source::{NodeHttpWalletChainSource, WalletChainSource},
-    state::{
-        TrackedWalletKeys, TrackedWalletKeysError, WalletObservedOutput, WalletObservedSpend,
-        WalletUtxos,
-    },
+    state::{TrackedWalletKeys, TrackedWalletKeysError, WalletUtxos},
     tracked_keys::{TrackedWalletKeysBySource, TrackedWalletKeysForSource},
 };
 pub use funding::{
@@ -23,10 +20,7 @@ pub use funding::{
 pub(crate) use funding::{
     WalletFundingOutcome, WalletFundingPlan, WalletFundingUtxos, WalletSelectedInputs,
 };
-pub use funding_from_chain::{
-    DirectWalletSourceError, WalletFundingSourceFromChainError, current_wallet_funding_source,
-    funded_signed_tx, wallet_funding_source_from_chain, wallet_utxos_from_chain,
-};
+pub use funding_from_chain::funded_signed_tx;
 pub use ids::{WalletChainSourceId, WalletId, wallet_id_for_chain_source};
 pub use tracked::{
     RecordedWalletSubmission, TrackedWallets, TrackedWalletsState, WalletDiagnostics,
