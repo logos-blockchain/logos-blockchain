@@ -15,7 +15,7 @@ pub enum Error {
     #[error("Encapsulated message deserialization failed")]
     MessageDeserializationFailed,
     #[error(transparent)]
-    WireDecode(#[from] crate::codec::WireDecodeError),
+    WireDecode(#[from] lb_wire::DecodeError),
     #[error("Payload deserialization failed")]
     PayloadDeserializationFailed,
     #[error("Private header deserialization failed")]

@@ -2,13 +2,10 @@ use lb_blend_proofs::quota::{self, PROOF_OF_QUOTA_SIZE, ProofOfQuota, VerifiedPr
 use lb_key_management_system_keys::keys::{
     ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature,
 };
+use lb_wire::{DecodeError, WireDecode, WireEncode};
 use serde::{Deserialize, Deserializer, Serialize, de};
 
-use crate::{
-    Error, MessageIdentifier,
-    codec::{WireDecode, WireDecodeError, WireEncode},
-    encap::ProofsVerifier,
-};
+use crate::{Error, MessageIdentifier, encap::ProofsVerifier};
 
 const LATEST_BLEND_MESSAGE_VERSION: u8 = 1;
 
@@ -114,6 +111,10 @@ impl PublicHeader {
 }
 
 impl WireEncode for PublicHeader {
+    fn encoded_length(&self) -> usize {
+        PUBLIC_HEADER_ENCODED_SIZE
+    }
+
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.version.encode_into(out);
         self.signing_pubkey.encode_into(out);
@@ -125,14 +126,19 @@ impl WireEncode for PublicHeader {
 impl WireDecode for PublicHeader {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
-        let (input, version) = u8::decode(input, ())?;
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, version) = u8::decode(input, &())?;
         if version != LATEST_BLEND_MESSAGE_VERSION {
-            return Err(WireDecodeError::UnsupportedVersion);
+            return Err(DecodeError::invalid_value::<Self>(
+                "unsupported message version",
+            ));
         }
-        let (input, signing_pubkey) = Ed25519PublicKey::decode(input, ())?;
-        let (input, proof_of_quota) = ProofOfQuota::decode(input, ())?;
-        let (input, signature) = Ed25519Signature::decode(input, ())?;
+        let (input, signing_pubkey) = Ed25519PublicKey::decode(input, &())?;
+        let (input, proof_of_quota) = ProofOfQuota::decode(input, &())?;
+        let (input, signature) = Ed25519Signature::decode(input, &())?;
         Ok((
             input,
             Self {
@@ -224,6 +230,10 @@ impl PublicHeaderWithVerifiedSignature {
 // `WireEncode` for them means a verified message can be serialized directly,
 // with no conversion/copy through `PublicHeader`.
 impl WireEncode for PublicHeaderWithVerifiedSignature {
+    fn encoded_length(&self) -> usize {
+        PUBLIC_HEADER_ENCODED_SIZE
+    }
+
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.version.encode_into(out);
         self.signing_pubkey.encode_into(out);
@@ -331,6 +341,10 @@ impl VerifiedPublicHeader {
 }
 
 impl WireEncode for VerifiedPublicHeader {
+    fn encoded_length(&self) -> usize {
+        PUBLIC_HEADER_ENCODED_SIZE
+    }
+
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.version.encode_into(out);
         self.signing_pubkey.encode_into(out);

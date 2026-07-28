@@ -67,7 +67,7 @@ pub trait WireEncode: WireExamples {
 
     /// Encode into a freshly allocated `Vec<u8>` — the ergonomic bridge for the
     /// many call sites that feed encoded bytes into a `Vec<u8>` sink.
-    fn encode_to_vec(&self) -> Vec<u8> {
+    fn  encode_to_vec(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.encoded_length());
         self.encode_into(&mut out);
         out

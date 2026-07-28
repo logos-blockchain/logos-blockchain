@@ -6,6 +6,7 @@ use ed25519_dalek::{PUBLIC_KEY_LENGTH, VerifyingKey};
 use generic_array::{ArrayLength, GenericArray};
 use lb_groth16::{Bn254, CompressSize, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes};
 use lb_poq::{PoQProof, PoQVerifierInput, PoQWitnessInputs, ProveError, prove, verify};
+use lb_wire::{DecodeError, WireDecode, WireEncode};
 use thiserror::Error;
 
 use crate::{
@@ -119,6 +120,30 @@ impl TryFrom<[u8; PROOF_OF_QUOTA_SIZE]> for ProofOfQuota {
     }
 }
 
+impl WireEncode for ProofOfQuota {
+    fn encoded_length(&self) -> usize {
+        PROOF_OF_QUOTA_SIZE
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&<[u8; _]>::from(self));
+    }
+}
+
+impl WireDecode for ProofOfQuota {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, value) = <[u8; _]>::decode(input, &())?;
+        let proof = Self::try_from(value)
+            .map_err(|_| DecodeError::invalid_value::<Self>("not a valid proof of quota"))?;
+        Ok((rest, proof))
+    }
+}
+
 /// A verified Proof of Quota.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct VerifiedProofOfQuota(ProofOfQuota);
@@ -204,6 +229,16 @@ impl AsRef<ProofOfQuota> for VerifiedProofOfQuota {
 impl PartialEq<ProofOfQuota> for VerifiedProofOfQuota {
     fn eq(&self, other: &ProofOfQuota) -> bool {
         self.0 == *other
+    }
+}
+
+impl WireEncode for VerifiedProofOfQuota {
+    fn encoded_length(&self) -> usize {
+        self.0.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.0.encode_into(out);
     }
 }
 

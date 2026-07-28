@@ -1,10 +1,8 @@
+use lb_wire::{DecodeError, WireDecode, WireEncode, take};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
-use crate::{
-    Error,
-    codec::{WireDecode, WireDecodeError, WireEncode},
-};
+use crate::Error;
 
 pub const MAX_PAYLOAD_BODY_SIZE: usize = 34 * 1024;
 
@@ -28,6 +26,10 @@ impl TryFrom<u8> for PayloadType {
 }
 
 impl WireEncode for PayloadType {
+    fn encoded_length(&self) -> usize {
+        size_of::<u8>()
+    }
+
     fn encode_into(&self, out: &mut Vec<u8>) {
         (*self as u8).encode_into(out);
     }
@@ -36,10 +38,13 @@ impl WireEncode for PayloadType {
 impl WireDecode for PayloadType {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
-        let (remaining, discriminant) = u8::decode(input, ())?;
-        let payload_type =
-            Self::try_from(discriminant).map_err(|()| WireDecodeError::InvalidPayloadType)?;
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (remaining, discriminant) = u8::decode(input, &())?;
+        let payload_type = Self::try_from(discriminant)
+            .map_err(|()| DecodeError::unknown_discriminant::<Self>(u64::from(discriminant)))?;
         Ok((remaining, payload_type))
     }
 }
@@ -49,7 +54,7 @@ impl WireDecode for PayloadType {
 /// `actual_len` is the length of the real (unpadded) content and is the single
 /// source of truth for it — the payload no longer stores it a second time.
 #[serde_as]
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaddedPayloadBody {
     /// The real content length; `padded[..actual_len]` is the body.
     actual_len: u16,
@@ -91,6 +96,13 @@ impl TryFrom<&[u8]> for PaddedPayloadBody {
 }
 
 impl WireEncode for PaddedPayloadBody {
+    fn encoded_length(&self) -> usize {
+        self.actual_len
+            .encoded_length()
+            .checked_add(MAX_PAYLOAD_BODY_SIZE)
+            .unwrap()
+    }
+
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.actual_len.encode_into(out);
         out.extend_from_slice(&self.padded[..]);
@@ -100,14 +112,17 @@ impl WireEncode for PaddedPayloadBody {
 impl WireDecode for PaddedPayloadBody {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
-        let (input, actual_len) = u16::decode(input, ())?;
-        let (body_bytes, remaining) = input.split_at(MAX_PAYLOAD_BODY_SIZE);
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, actual_len) = u16::decode(input, &())?;
+        let (body_bytes, remaining) = take::<Self>(input, MAX_PAYLOAD_BODY_SIZE)?;
         let padded: Box<[u8; MAX_PAYLOAD_BODY_SIZE]> = body_bytes
             .to_vec()
             .into_boxed_slice()
             .try_into()
-            .expect("split_at guarantees the length");
+            .expect("Take guarantees the length");
         Ok((remaining, Self { actual_len, padded }))
     }
 }
@@ -121,7 +136,7 @@ pub const PAYLOAD_ENCODED_SIZE: usize =
 
 /// A payload that is fully decapsulated.
 /// This must be encapsulated when being sent to the blend network.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Payload {
     payload_type: PayloadType,
     body: PaddedPayloadBody,
@@ -152,6 +167,10 @@ impl Payload {
 }
 
 impl WireEncode for Payload {
+    fn encoded_length(&self) -> usize {
+        PAYLOAD_ENCODED_SIZE
+    }
+
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.payload_type.encode_into(out);
         self.body.encode_into(out);
@@ -161,9 +180,12 @@ impl WireEncode for Payload {
 impl WireDecode for Payload {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
-        let (input, payload_type) = PayloadType::decode(input, ())?;
-        let (input, body) = PaddedPayloadBody::decode(input, ())?;
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, payload_type) = PayloadType::decode(input, &())?;
+        let (input, body) = PaddedPayloadBody::decode(input, &())?;
         Ok((input, Self { payload_type, body }))
     }
 }
