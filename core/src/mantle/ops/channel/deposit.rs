@@ -67,13 +67,25 @@ pub struct DepositExecutionContext {
 }
 
 impl Operation<DepositValidationContext<'_>> for DepositOp {
+    type PreverificationContext<'a>
+        = ()
+    where
+        Self: 'a;
     type ExecutionContext<'a>
         = DepositExecutionContext
     where
         Self: 'a;
-    type Error = Error;
+    type VerificationError = Error;
+    type ExecutionError = Error;
 
-    fn validate(&self, ctx: &DepositValidationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        _context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::VerificationError> {
+        self.verify_stateless()
+    }
+
+    fn verify(&self, ctx: &DepositValidationContext<'_>) -> Result<(), Self::ExecutionError> {
         // Check that the channel exist
         if !ctx.channels.contains_channel(&self.channel_id) {
             return Err(Error::ChannelNotFound {
@@ -97,7 +109,7 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
         // Get the amount deposited for the event payload
         let amount_deposited = self.inputs.amount(&ctx.utxos)?;
         let outputs = self.outputs(&ctx.utxos)?;

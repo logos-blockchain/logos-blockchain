@@ -30,13 +30,25 @@ pub struct SDPWithdrawExecutionContext {
 }
 
 impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
+    type PreverificationContext<'a>
+        = ()
+    where
+        Self: 'a;
     type ExecutionContext<'a>
         = SDPWithdrawExecutionContext
     where
         Self: 'a;
-    type Error = SdpError;
+    type VerificationError = SdpError;
+    type ExecutionError = SdpError;
 
-    fn validate(&self, ctx: &SDPWithdrawValidationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        _context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::VerificationError> {
+        self.verify_stateless()
+    }
+
+    fn verify(&self, ctx: &SDPWithdrawValidationContext<'_>) -> Result<(), Self::ExecutionError> {
         // Check that the declaration exists
         let Some(declaration) = ctx.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
@@ -98,7 +110,7 @@ impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
         let mut declaration = ctx
             .declarations
             .get(&self.declaration_id)

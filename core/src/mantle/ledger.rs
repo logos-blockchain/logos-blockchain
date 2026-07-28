@@ -39,16 +39,29 @@ pub type BoundedUtxos = UpperBoundedVec<Utxo, MAX_TRANSACTION_INPUTS>;
 pub type BoundedInputs = UpperBoundedVec<NoteId, MAX_TRANSACTION_INPUTS>;
 pub type BoundedOutputs = UpperBoundedVec<Note, MAX_TRANSACTION_OUTPUTS>;
 
-pub trait Operation<ValidationContext> {
+// TODO: Specific proof type check?
+pub trait Operation<VerificationContext> {
+    type PreverificationContext<'a>
+    where
+        Self: 'a;
     type ExecutionContext<'a>
     where
         Self: 'a;
-    type Error;
-    fn validate(&self, ctx: &ValidationContext) -> Result<(), Self::Error>;
+
+    type VerificationError;
+    type ExecutionError;
+
+    fn preverify(
+        &self,
+        context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::VerificationError>;
+
+    fn verify(&self, context: &VerificationContext) -> Result<(), Self::VerificationError>;
+
     fn execute(
         &self,
-        ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error>;
+        context: Self::ExecutionContext<'_>,
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError>;
 }
 
 pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;

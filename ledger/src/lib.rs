@@ -735,7 +735,7 @@ mod tests {
                     inscribe::InscriptionOp,
                     withdraw::ChannelWithdrawOp,
                 },
-                leader_claim::{LeaderClaimError, LeaderClaimOp, LeaderClaimValidationContext},
+                leader_claim::{LeaderClaimError, LeaderClaimOp, LeaderClaimVerificationContext},
                 sdp::SDPActiveOp,
                 transfer::TransferOp,
             },
@@ -1928,7 +1928,7 @@ mod tests {
         let tx_hash = TxHash::from([0u8; 32]);
         let tx_hash_view = TxHashView::from(tx_hash);
         let err = op
-            .validate(&LeaderClaimValidationContext {
+            .verify(&LeaderClaimVerificationContext {
                 nullifiers: leaders.nullifiers(),
                 claimable_vouchers_root: leaders.vouchers_snapshot_root(),
                 // Use a dummy proof since duplication is detected before proof verification

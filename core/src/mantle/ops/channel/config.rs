@@ -58,13 +58,25 @@ pub struct ChannelConfigExecutionContext {
 }
 
 impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
+    type PreverificationContext<'a>
+        = ()
+    where
+        Self: 'a;
     type ExecutionContext<'a>
         = ChannelConfigExecutionContext
     where
         Self: 'a;
-    type Error = Error;
+    type VerificationError = Error;
+    type ExecutionError = Error;
 
-    fn validate(&self, ctx: &ChannelConfigValidationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        _context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::VerificationError> {
+        self.verify_stateless()
+    }
+
+    fn verify(&self, ctx: &ChannelConfigValidationContext<'_>) -> Result<(), Self::ExecutionError> {
         // Check that the indexes are unique and there is the same number of proof and
         // index. This is enforced by the proof structure that enforces it.
 
@@ -103,7 +115,7 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
         let channel = ChannelState {
             accredited_keys: self.keys.clone().into(),
             configuration_threshold: self.configuration_threshold,

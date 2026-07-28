@@ -61,13 +61,28 @@ pub struct ChannelTransferExecutionContext {
 }
 
 impl Operation<ChannelTransferValidationContext<'_>> for ChannelTransferOp {
+    type PreverificationContext<'a>
+        = ()
+    where
+        Self: 'a;
     type ExecutionContext<'a>
         = ChannelTransferExecutionContext
     where
         Self: 'a;
-    type Error = Error;
+    type VerificationError = Error;
+    type ExecutionError = Error;
 
-    fn validate(&self, ctx: &ChannelTransferValidationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        _context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::VerificationError> {
+        self.verify_stateless()
+    }
+
+    fn verify(
+        &self,
+        ctx: &ChannelTransferValidationContext<'_>,
+    ) -> Result<(), Self::ExecutionError> {
         verify_channel_multi_sig(
             &self.channel_id,
             ctx.proof,
@@ -129,7 +144,7 @@ impl Operation<ChannelTransferValidationContext<'_>> for ChannelTransferOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
         // Remove the inputs from the ledger and from the channel.
         ctx.utxos = self.inputs.execute(ctx.utxos)?;
         for note_id in self.inputs.iter() {

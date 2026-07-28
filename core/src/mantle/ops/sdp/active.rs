@@ -27,13 +27,25 @@ pub struct SDPActiveExecutionContext {
 }
 
 impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
+    type PreverificationContext<'a>
+        = ()
+    where
+        Self: 'a;
     type ExecutionContext<'a>
         = SDPActiveExecutionContext
     where
         Self: 'a;
-    type Error = SdpError;
+    type VerificationError = SdpError;
+    type ExecutionError = SdpError;
 
-    fn validate(&self, ctx: &SDPActiveValidationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        _context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::VerificationError> {
+        self.verify_stateless()
+    }
+
+    fn verify(&self, ctx: &SDPActiveValidationContext<'_>) -> Result<(), Self::ExecutionError> {
         // Check the declaration exists
         let Some(declaration) = ctx.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
@@ -70,7 +82,7 @@ impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
         let mut declaration = ctx
             .declarations
             .get(&self.declaration_id)

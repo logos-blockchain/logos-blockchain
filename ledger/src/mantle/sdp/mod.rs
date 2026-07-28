@@ -14,7 +14,7 @@ use lb_core::{
         ledger::{Declarations, Operation},
         ops::sdp::{
             SDPActiveExecutionContext, SDPActiveOp, SDPDeclareExecutionContext, SDPDeclareOp,
-            SDPDeclareValidationContext, SDPWithdrawExecutionContext, SDPWithdrawOp,
+            SDPDeclareVerificationContext, SDPWithdrawExecutionContext, SDPWithdrawOp,
             declare::SDPDeclareGenesisValidationContext,
         },
     },
@@ -400,7 +400,7 @@ impl SdpLedger {
         // Validate SDP Declare
         // TODO: Genesis has a different verification flow than `SignedMantleTx`.
         // Refactor into a   type state.
-        op.validate(&SDPDeclareGenesisValidationContext {
+        op.verify(&SDPDeclareGenesisValidationContext {
             utxo_tree,
             channels,
             locked_notes: &self.locked_notes,
@@ -436,7 +436,7 @@ impl SdpLedger {
             return Err(Error::ServiceNotFound(op.service_type));
         };
 
-        let (result, events) = <SDPDeclareOp as Operation<SDPDeclareValidationContext>>::execute(
+        let (result, events) = <SDPDeclareOp as Operation<SDPDeclareVerificationContext>>::execute(
             op,
             SDPDeclareExecutionContext {
                 utxo_tree: utxo_tree.clone(),
