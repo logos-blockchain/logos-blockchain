@@ -83,16 +83,11 @@ pub mod test_utils {
     }
 }
 
-// `verify_channel_multi_sig` is the owner of the distinction between these
-// failure modes; callers (e.g. `ChannelWithdrawOp::validate`) currently
-// collapse them into a single `Error::InvalidSignature` (see the "Pattern is
-// recursive" FIXMEs in withdraw.rs/channel_transfer.rs), so this is the only
-// place that can still assert the precise reason a proof was rejected.
-//
-// `ChannelMultiSigProofDuplicateIndices` has no test here:
-// `ChannelMultiSigProof` enforces strictly-increasing indices at construction
-// (`try_new`), so a proof with duplicate indices cannot exist to be passed in —
-// that branch is unreachable dead code.
+// `verify_channel_multi_sig` is the responsible of the distinction between
+// `NotEnoughSignatures`, `DuplicateIndices`, and `InvalidSignature` errors.
+// Callers (e.g. `ChannelWithdrawOp::validate`) currently collapse all three
+// into `Error::InvalidSignature`, so this is the only place that can still
+// assert the precise reason a proof was rejected.
 #[cfg(test)]
 mod tests {
     use lb_key_management_system_keys::keys::Ed25519Key;
