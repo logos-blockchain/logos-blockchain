@@ -5,7 +5,7 @@ use std::pin::Pin;
 
 use futures::Stream;
 use lb_core::mantle::transactions::hash::PrefixedKey;
-pub use pool::{Mempool, PoolRecoveryState};
+pub use pool::{DEFAULT_TX_TTL, Mempool, MempoolSettings, PoolRecoveryState};
 use serde::{Deserialize, Serialize};
 
 #[derive(thiserror::Error, Debug)]
