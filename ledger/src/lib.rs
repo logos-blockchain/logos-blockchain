@@ -660,6 +660,9 @@ impl LedgerState {
                     .ok_or(LedgerError::BalanceOverflow)?;
                 tx_events.extend(events);
             }
+            Op::ClaimPowReward(_) => {
+                todo!("ClaimPowReward operation execution is not implemented yet");
+            }
         }
 
         Ok((self, balance, tx_events))

@@ -956,6 +956,7 @@ where
                     Self::sign_transfer(tx_hash, transfer_op.inputs.clone(), kms, &tip_leader)
                         .await?
                 }
+                Op::ClaimPowReward(_) => OpProof::None,
             };
             ops_proofs.try_push(proof)?;
         }

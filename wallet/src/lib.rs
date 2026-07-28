@@ -596,6 +596,10 @@ fn transform_op(op: &Op, event: Option<TxEventPayload>) -> Option<WalletOp> {
                 panic!("event for LeaderClaim op must be LeaderRewardClaimed")
             }
         },
+        Op::ClaimPowReward(_) => {
+            // TODO: something to track here?
+            None
+        }
         // `Op::SDPWithdraw` is ignored here — the note will be unlocked
         // after the delay and the corresponding event will be handled by
         // [`HeaderOp::from`].
