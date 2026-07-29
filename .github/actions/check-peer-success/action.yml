@@ -1,0 +1,64 @@
+name: Check peer success
+description: Stop this lane cooperatively when its peer has fully passed
+
+inputs:
+  github-token:
+    description: Token used to inspect jobs in the current workflow run
+    required: true
+  current-label:
+    description: Label identifying the current matrix lane
+    required: true
+  peer-label:
+    description: Label identifying the other matrix lane
+    required: true
+  job-name-prefix:
+    description: Job name before the matrix label
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Check whether peer lane passed
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # Version 7
+      env:
+        CURRENT_LABEL: ${{ inputs.current-label }}
+        PEER_LABEL: ${{ inputs.peer-label }}
+        JOB_NAME_PREFIX: ${{ inputs.job-name-prefix }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const currentLabel = process.env.CURRENT_LABEL;
+          const peerLabel = process.env.PEER_LABEL;
+          const peerName = `${process.env.JOB_NAME_PREFIX} (${peerLabel})`;
+
+          try {
+            const response = await github.rest.actions.listJobsForWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+              filter: 'latest',
+              per_page: 100,
+            });
+
+            const peer = response.data.jobs.find(job => job.name === peerName);
+
+            const peerReportedSuccess =
+              peer?.status === 'completed' &&
+              peer?.conclusion === 'success' &&
+              peer.steps?.some(step =>
+                step.name === 'Report success' &&
+                step.conclusion === 'success'
+              );
+
+            if (peerReportedSuccess) {
+              core.notice(
+                `${peerName} passed; skipping the remaining work on ${currentLabel}`
+              );
+              core.exportVariable('PEER_SUCCEEDED', 'true');
+            }
+          } catch (error) {
+            // Coordination failure must not fail the test lane.
+            core.warning(
+              `Could not check peer job; continuing this lane: ${error.message}`
+            );
+          }

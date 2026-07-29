@@ -1,0 +1,165 @@
+name: Check any lane result
+description: Pass when any configured matrix lane reports full success
+
+inputs:
+  github-token:
+    description: Token used to inspect jobs in the current workflow run
+    required: true
+  result-name:
+    description: Human-readable suite name used in logs and errors
+    required: true
+  job-name-prefix:
+    description: Matrix job name before the lane label
+    required: true
+  lane-labels-json:
+    description: JSON array containing all acceptable lane labels
+    required: false
+    default: '["self-hosted-linux", "self-hosted-macos"]'
+  success-step-name:
+    description: Step that proves the lane ran fully and passed
+    required: false
+    default: Report success
+  poll-interval-seconds:
+    description: Delay between workflow-job API requests
+    required: false
+    default: "30"
+
+runs:
+  using: composite
+  steps:
+    - name: Wait for any lane to pass
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # Version 7
+      env:
+        RESULT_NAME: ${{ inputs.result-name }}
+        JOB_NAME_PREFIX: ${{ inputs.job-name-prefix }}
+        LANE_LABELS_JSON: ${{ inputs.lane-labels-json }}
+        SUCCESS_STEP_NAME: ${{ inputs.success-step-name }}
+        POLL_INTERVAL_SECONDS: ${{ inputs.poll-interval-seconds }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const resultName = process.env.RESULT_NAME;
+          const jobNamePrefix = process.env.JOB_NAME_PREFIX;
+          const successStepName = process.env.SUCCESS_STEP_NAME;
+
+          let laneLabels;
+          try {
+            laneLabels = JSON.parse(process.env.LANE_LABELS_JSON);
+          } catch (error) {
+            core.setFailed(`Invalid lane-labels-json: ${error.message}`);
+            return;
+          }
+
+          if (!Array.isArray(laneLabels) || laneLabels.length === 0) {
+            core.setFailed('lane-labels-json must contain at least one lane label');
+            return;
+          }
+
+          const pollIntervalSeconds = Number.parseInt(
+            process.env.POLL_INTERVAL_SECONDS,
+            10
+          );
+
+          if (
+            !Number.isFinite(pollIntervalSeconds) ||
+            pollIntervalSeconds < 5
+          ) {
+            core.setFailed('poll-interval-seconds must be at least 5');
+            return;
+          }
+
+          const laneNames = laneLabels.map(
+            label => `${jobNamePrefix} (${label})`
+          );
+
+          const laneReportedSuccess = lane =>
+            lane.status === 'completed' &&
+            lane.conclusion === 'success' &&
+            lane.steps?.some(step =>
+              step.name === successStepName &&
+              step.conclusion === 'success'
+            );
+
+          let previousState = '';
+
+          while (true) {
+            try {
+              const response =
+                await github.rest.actions.listJobsForWorkflowRun({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: context.runId,
+                  filter: 'latest',
+                  per_page: 100,
+                });
+
+              const lanes = laneNames
+                .map(name =>
+                  response.data.jobs.find(job => job.name === name)
+                )
+                .filter(Boolean);
+
+              const winner = lanes.find(laneReportedSuccess);
+
+              if (winner) {
+                core.notice(
+                  `${winner.name} passed; ${resultName} result is successful`
+                );
+                return;
+              }
+
+              if (
+                lanes.length === laneNames.length &&
+                lanes.every(lane => lane.status === 'completed')
+              ) {
+                const results = lanes
+                  .map(lane => {
+                    const reportedSuccess = lane.steps?.some(step =>
+                      step.name === successStepName &&
+                      step.conclusion === 'success'
+                    );
+
+                    return (
+                      `${lane.name}: conclusion=${lane.conclusion}, ` +
+                      `${successStepName}=${reportedSuccess ? 'success' : 'not-reported'}`
+                    );
+                  })
+                  .join(', ');
+
+                core.setFailed(
+                  `None of the ${resultName} lanes passed. ${results}`
+                );
+                return;
+              }
+
+              const state = laneNames
+                .map(name => {
+                  const lane = lanes.find(candidate => candidate.name === name);
+
+                  return (
+                    `${name}: ` +
+                    `${lane?.status ?? 'not-created'}/` +
+                    `${lane?.conclusion ?? '-'}`
+                  );
+                })
+                .join(', ');
+
+              if (state !== previousState) {
+                core.info(
+                  `Waiting for a ${resultName} lane to pass. ${state}`
+                );
+                previousState = state;
+              }
+            } catch (error) {
+              // A transient API failure should not immediately fail the
+              // required result. Retry until a lane passes, all lanes finish,
+              // or the calling job reaches its timeout.
+              core.warning(
+                `Could not inspect ${resultName} jobs; retrying: ${error.message}`
+              );
+            }
+
+            await new Promise(resolve =>
+              setTimeout(resolve, pollIntervalSeconds * 1_000)
+            );
+          }
