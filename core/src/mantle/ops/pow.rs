@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use ark_ff::Zero as _;
 use lb_core_macros::NomCodec;
 use lb_cryptarchia_engine::Epoch;
@@ -67,6 +69,10 @@ pub enum ClaimPowRewardError {
     InvalidPoWRewardTicket,
     #[error("Ticket was already claimed")]
     DoubleClaimed,
+    #[error("Out of window height ({height})")]
+    OutOfWindowHeight { height: u64 },
+    #[error("Missing block ({block_id:?})")]
+    MissingBlock { block_id: Hash },
 }
 
 pub struct ClaimPoWRewardValidationContext<'a> {
@@ -79,6 +85,7 @@ pub struct ClaimPoWRewardValidationContext<'a> {
     pub epoch_reward_pool: PowReward,
     pub current_epoch_nonce: Epoch,
     pub previous_epoch_nonce: Epoch,
+    pub blocks_height: HashMap<Hash, u64>,
 }
 
 impl ClaimPoWRewardValidationContext<'_> {
@@ -98,13 +105,26 @@ impl ClaimPoWRewardValidationContext<'_> {
     }
 
     /// On-chain `block_hash` window check
-    #[must_use]
-    pub fn accept_claim<const WINDOW: u64>(&self, block_height: u64) -> bool {
+    pub fn accept_claim<const WINDOW: u64>(
+        &self,
+        block_id: Hash,
+    ) -> Result<(), ClaimPowRewardError> {
+        let Some(&block_height) = self.blocks_height.get(&block_id) else {
+            return Err(ClaimPowRewardError::MissingBlock { block_id });
+        };
+
         let check_height: i128 = i128::from(self.current_block_height) - i128::from(block_height);
         if check_height.is_negative() {
-            return false;
+            return Err(ClaimPowRewardError::OutOfWindowHeight {
+                height: block_height,
+            });
         }
-        0 <= check_height && check_height <= i128::from(WINDOW)
+        if !(0 <= check_height && check_height <= i128::from(WINDOW)) {
+            return Err(ClaimPowRewardError::OutOfWindowHeight {
+                height: block_height,
+            });
+        }
+        Ok(())
     }
 
     /// Epoch nonce must match the current epoch or the previous epoch nonce
@@ -162,8 +182,8 @@ impl Operation<ClaimPoWRewardValidationContext<'_>> for ClaimPowRewardOp {
 
     fn validate(&self, ctx: &ClaimPoWRewardValidationContext<'_>) -> Result<(), Self::Error> {
         ctx.pow_reward_enabled()?;
-        // TODO: add accept claim when decide how to pull the block from current hash
-        // ctx.accept_claim(self.block_hash.height)
+        // TODO Plug constant window
+        ctx.accept_claim::<100>(self.block_hash)?;
         ctx.validate_current_epoch_nonce(self.epoch_nonce)?;
         let puzzle_ticket = self.get_puzzle_ticket();
         ctx.validate_difficulty_reward(puzzle_ticket)?;
