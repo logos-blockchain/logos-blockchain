@@ -54,7 +54,7 @@ wire_fixtures!(
     Self {
         channel_id: ChannelId::from([0u8; 32]),
         inputs: Inputs::empty(),
-    } => "00000000000000000000000000000000000000000000000000000000000000000000000000",
+    } => "000000000000000000000000000000000000000000000000000000000000000000",
 );
 
 // We just check that the enum discriminant tag is encoded correctly, so a
