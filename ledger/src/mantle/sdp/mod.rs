@@ -220,38 +220,34 @@ impl<R: Rewards> ServiceState<R> {
     ) -> Vec<HeaderEvent> {
         let mut events = Vec::new();
 
-        // Collect IDs to remove first, and remove them in a second pass:
-        // we can't remove entries while iterating over them.
-        let to_remove: Vec<DeclarationId> = self
-            .declarations
-            .iter()
-            .filter_map(|(id, declaration)| {
-                if epoch < declaration.withdraw_at? {
-                    return None;
-                }
-                if locked_notes
-                    .is_locked_for_service(&declaration.locked_note_id, &declaration.service_type)
-                {
-                    locked_notes
-                        .unlock(declaration.service_type, &declaration.locked_note_id)
-                        .expect("unlocking note from withdrawn declaration must be successful if it hasn't been unlocked yet");
-                    events.push(
-                        HeaderEvent::SdpNoteUnlocked {
-                            note_id: declaration.locked_note_id,
-                            service_type: declaration.service_type,
-                            declaration_id: *id,
-                        }
-                    );
-                }
-                Some(*id)
-            })
-            .collect();
-        for id in &to_remove {
-            (self.declarations, _) = self
-                .declarations
+        // The removals go to a clone, so the tree can be iterated at the same time.
+        let mut declarations = self.declarations.clone();
+        for (id, declaration) in self.declarations.iter() {
+            let Some(withdraw_at) = declaration.withdraw_at else {
+                continue;
+            };
+            if epoch < withdraw_at {
+                continue;
+            }
+            if locked_notes
+                .is_locked_for_service(&declaration.locked_note_id, &declaration.service_type)
+            {
+                locked_notes
+                    .unlock(declaration.service_type, &declaration.locked_note_id)
+                    .expect("unlocking note from withdrawn declaration must be successful if it hasn't been unlocked yet");
+                events.push(
+                    HeaderEvent::SdpNoteUnlocked {
+                        note_id: declaration.locked_note_id,
+                        service_type: declaration.service_type,
+                        declaration_id: *id,
+                    }
+                );
+            }
+            (declarations, _) = declarations
                 .remove(id)
                 .expect("the declaration is in the tree");
         }
+        self.declarations = declarations;
 
         events
     }
