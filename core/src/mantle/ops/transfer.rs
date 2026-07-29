@@ -7,7 +7,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         channel::Channels,
-        ledger::{self, Inputs, Operation, Outputs, Utxo, Utxos},
+        ledger::{self, Inputs, Operation, Outputs, Utxo, Utxos, verification_mode},
         ops::OpId,
         transactions::hash::TxHashView,
     },
@@ -82,15 +82,10 @@ pub struct TransferValidationContext<'a> {
     pub proof: &'a ZkSignature,
 }
 
-impl Operation<TransferValidationContext<'_>> for TransferOp {
-    type PreverificationContext<'a>
-        = ()
-    where
-        Self: 'a;
-    type ExecutionContext<'a>
-        = Utxos
-    where
-        Self: 'a;
+impl Operation<verification_mode::StandardMode> for TransferOp {
+    type PreverificationContext<'a> = ();
+    type VerificationContext<'a> = TransferValidationContext<'a>;
+    type ExecutionContext<'a> = Utxos;
     type VerificationError = TransferError;
     type ExecutionError = TransferError;
 
@@ -109,7 +104,7 @@ impl Operation<TransferValidationContext<'_>> for TransferOp {
         Ok(())
     }
 
-    fn verify(&self, ctx: &TransferValidationContext<'_>) -> Result<(), Self::ExecutionError> {
+    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::ExecutionError> {
         // Validate Inputs
         self.inputs
             .validate_not_in_channel(ctx.locked_notes, ctx.channels, ctx.utxos)?;

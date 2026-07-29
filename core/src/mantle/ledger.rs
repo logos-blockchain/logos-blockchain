@@ -39,11 +39,20 @@ pub type BoundedUtxos = UpperBoundedVec<Utxo, MAX_TRANSACTION_INPUTS>;
 pub type BoundedInputs = UpperBoundedVec<NoteId, MAX_TRANSACTION_INPUTS>;
 pub type BoundedOutputs = UpperBoundedVec<Note, MAX_TRANSACTION_OUTPUTS>;
 
+pub mod verification_mode {
+    pub trait VerificationMode {}
+
+    pub struct GenesisMode;
+    impl VerificationMode for GenesisMode {}
+
+    pub struct StandardMode;
+    impl VerificationMode for StandardMode {}
+}
+
 // TODO: Specific proof type check?
-pub trait Operation<VerificationContext> {
-    type PreverificationContext<'a>
-    where
-        Self: 'a;
+pub trait Operation<Mode: verification_mode::VerificationMode> {
+    type PreverificationContext<'a>;
+    type VerificationContext<'a>;
     type ExecutionContext<'a>
     where
         Self: 'a;
@@ -56,7 +65,10 @@ pub trait Operation<VerificationContext> {
         context: &Self::PreverificationContext<'_>,
     ) -> Result<(), Self::VerificationError>;
 
-    fn verify(&self, context: &VerificationContext) -> Result<(), Self::VerificationError>;
+    fn verify(
+        &self,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::VerificationError>;
 
     fn execute(
         &self,

@@ -13,7 +13,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         channel::{ChannelState, Channels, Error},
-        ledger::Operation,
+        ledger::{Operation, verification_mode},
         ops::channel::config::Keys,
         transactions::hash::TxHashView,
     },
@@ -60,15 +60,10 @@ pub struct InscriptionExecutionContext {
     pub block_slot: Slot,
 }
 
-impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
-    type PreverificationContext<'a>
-        = InscriptionPreverificationContext<'a>
-    where
-        Self: 'a;
-    type ExecutionContext<'a>
-        = InscriptionExecutionContext
-    where
-        Self: 'a;
+impl Operation<verification_mode::StandardMode> for InscriptionOp {
+    type PreverificationContext<'a> = InscriptionPreverificationContext<'a>;
+    type VerificationContext<'a> = InscriptionValidationContext<'a>;
+    type ExecutionContext<'a> = InscriptionExecutionContext;
     type VerificationError = Error;
     type ExecutionError = Error;
 
@@ -84,7 +79,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
         Ok(())
     }
 
-    fn verify(&self, ctx: &InscriptionValidationContext<'_>) -> Result<(), Self::ExecutionError> {
+    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::VerificationError> {
         // Check if the channel exist otherwise the inscription is valid only if and
         // only if parent == ZERO
         if let Some(channel) = ctx.channels.channel_state(&self.channel_id) {

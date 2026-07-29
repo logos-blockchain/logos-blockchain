@@ -9,7 +9,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
-        ledger::Operation,
+        ledger::{Operation, verification_mode},
         transactions::hash::TxHashView,
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
@@ -48,15 +48,10 @@ pub struct ChannelConfigExecutionContext {
     pub block_slot: Slot,
 }
 
-impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
-    type PreverificationContext<'a>
-        = ()
-    where
-        Self: 'a;
-    type ExecutionContext<'a>
-        = ChannelConfigExecutionContext
-    where
-        Self: 'a;
+impl Operation<verification_mode::StandardMode> for ChannelConfigOp {
+    type PreverificationContext<'a> = ();
+    type VerificationContext<'a> = ChannelConfigValidationContext<'a>;
+    type ExecutionContext<'a> = ChannelConfigExecutionContext;
     type VerificationError = Error;
     type ExecutionError = Error;
 
@@ -73,7 +68,7 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
         Ok(())
     }
 
-    fn verify(&self, ctx: &ChannelConfigValidationContext<'_>) -> Result<(), Self::ExecutionError> {
+    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::ExecutionError> {
         // Check that the indexes are unique and there is the same number of proof and
         // index. This is enforced by the proof structure that enforces it.
 

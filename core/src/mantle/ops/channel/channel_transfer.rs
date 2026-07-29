@@ -6,7 +6,7 @@ use crate::{
     mantle::{
         TxHash,
         channel::{Channels, Error},
-        ledger::{Inputs, Operation, Outputs, Utxo, Utxos},
+        ledger::{Inputs, Operation, Outputs, Utxo, Utxos, verification_mode},
         ops::{
             OpId,
             channel::{ChannelId, verification::verify_channel_multi_sig},
@@ -53,15 +53,10 @@ pub struct ChannelTransferExecutionContext {
     pub tx_hash: TxHash,
 }
 
-impl Operation<ChannelTransferValidationContext<'_>> for ChannelTransferOp {
-    type PreverificationContext<'a>
-        = ()
-    where
-        Self: 'a;
-    type ExecutionContext<'a>
-        = ChannelTransferExecutionContext
-    where
-        Self: 'a;
+impl Operation<verification_mode::StandardMode> for ChannelTransferOp {
+    type PreverificationContext<'a> = ();
+    type VerificationContext<'a> = ChannelTransferValidationContext<'a>;
+    type ExecutionContext<'a> = ChannelTransferExecutionContext;
     type VerificationError = Error;
     type ExecutionError = Error;
 
@@ -75,10 +70,7 @@ impl Operation<ChannelTransferValidationContext<'_>> for ChannelTransferOp {
         Ok(())
     }
 
-    fn verify(
-        &self,
-        ctx: &ChannelTransferValidationContext<'_>,
-    ) -> Result<(), Self::ExecutionError> {
+    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::ExecutionError> {
         verify_channel_multi_sig(
             &self.channel_id,
             ctx.proof,

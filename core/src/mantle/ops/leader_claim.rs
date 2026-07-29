@@ -13,7 +13,7 @@ use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
         Note, Utxo, Value,
-        ledger::{Operation, Utxos},
+        ledger::{Operation, Utxos, verification_mode},
         ops::OpId,
         transactions::hash::{TxHash, TxHashView},
     },
@@ -192,15 +192,10 @@ pub struct LeaderClaimExecutionContext {
     pub tx_hash: TxHash,
 }
 
-impl Operation<LeaderClaimVerificationContext<'_>> for LeaderClaimOp {
-    type PreverificationContext<'a>
-        = LeaderClaimPreverificationContext<'a>
-    where
-        Self: 'a;
-    type ExecutionContext<'a>
-        = LeaderClaimExecutionContext
-    where
-        Self: 'a;
+impl Operation<verification_mode::StandardMode> for LeaderClaimOp {
+    type PreverificationContext<'a> = LeaderClaimPreverificationContext<'a>;
+    type VerificationContext<'a> = LeaderClaimVerificationContext<'a>;
+    type ExecutionContext<'a> = LeaderClaimExecutionContext;
     type VerificationError = LeaderClaimError;
     type ExecutionError = LeaderClaimError;
 
@@ -221,7 +216,7 @@ impl Operation<LeaderClaimVerificationContext<'_>> for LeaderClaimOp {
         }
     }
 
-    fn verify(&self, ctx: &LeaderClaimVerificationContext<'_>) -> Result<(), Self::ExecutionError> {
+    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::ExecutionError> {
         // Check that the nullifier isn't in the set
         if ctx.nullifiers.contains(&self.voucher_nullifier) {
             return Err(LeaderClaimError::DuplicatedVoucherNullifier);

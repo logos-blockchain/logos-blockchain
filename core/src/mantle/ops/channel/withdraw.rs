@@ -6,7 +6,7 @@ use crate::{
     mantle::{
         TxHash,
         channel::{Channels, Error},
-        ledger::{Inputs, Operation, Utxos},
+        ledger::{Inputs, Operation, Utxos, verification_mode},
         ops::{
             OpId,
             channel::{ChannelId, verification::verify_channel_multi_sig},
@@ -45,15 +45,10 @@ pub struct WithdrawExecutionContext {
     pub tx_hash: TxHash,
 }
 
-impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
-    type PreverificationContext<'a>
-        = ()
-    where
-        Self: 'a;
-    type ExecutionContext<'a>
-        = WithdrawExecutionContext
-    where
-        Self: 'a;
+impl Operation<verification_mode::StandardMode> for ChannelWithdrawOp {
+    type PreverificationContext<'a> = ();
+    type VerificationContext<'a> = WithdrawValidationContext<'a>;
+    type ExecutionContext<'a> = WithdrawExecutionContext;
     type VerificationError = Error;
     type ExecutionError = Error;
 
@@ -64,7 +59,7 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
         Ok(())
     }
 
-    fn verify(&self, ctx: &WithdrawValidationContext<'_>) -> Result<(), Self::ExecutionError> {
+    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::ExecutionError> {
         verify_channel_multi_sig(
             &self.channel_id,
             ctx.proof,

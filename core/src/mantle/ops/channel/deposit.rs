@@ -7,7 +7,7 @@ use crate::{
     events::{DepositRecreatedNotes, TxEvent, TxEventPayload},
     mantle::{
         channel::{Channels, Error},
-        ledger::{Inputs, InputsError, Operation, Outputs, Utxos},
+        ledger::{Inputs, InputsError, Operation, Outputs, Utxos, verification_mode},
         ops::{OpId, channel::ChannelId},
         transactions::hash::{TxHash, TxHashView},
     },
@@ -62,15 +62,10 @@ pub struct DepositExecutionContext {
     pub tx_hash: TxHash,
 }
 
-impl Operation<DepositValidationContext<'_>> for DepositOp {
-    type PreverificationContext<'a>
-        = ()
-    where
-        Self: 'a;
-    type ExecutionContext<'a>
-        = DepositExecutionContext
-    where
-        Self: 'a;
+impl Operation<verification_mode::StandardMode> for DepositOp {
+    type PreverificationContext<'a> = ();
+    type VerificationContext<'a> = DepositValidationContext<'a>;
+    type ExecutionContext<'a> = DepositExecutionContext;
     type VerificationError = Error;
     type ExecutionError = Error;
 
@@ -81,7 +76,7 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
         Ok(())
     }
 
-    fn verify(&self, ctx: &DepositValidationContext<'_>) -> Result<(), Self::ExecutionError> {
+    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::ExecutionError> {
         // Check that the channel exist
         if !ctx.channels.contains_channel(&self.channel_id) {
             return Err(Error::ChannelNotFound {

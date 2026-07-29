@@ -7,7 +7,7 @@ use super::{SDPActiveOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        ledger::{Declarations, Operation},
+        ledger::{Declarations, Operation, verification_mode},
         transactions::hash::TxHashView,
     },
 };
@@ -26,15 +26,10 @@ pub struct SDPActiveExecutionContext {
     pub declarations: Declarations,
 }
 
-impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
-    type PreverificationContext<'a>
-        = ()
-    where
-        Self: 'a;
-    type ExecutionContext<'a>
-        = SDPActiveExecutionContext
-    where
-        Self: 'a;
+impl Operation<verification_mode::StandardMode> for SDPActiveOp {
+    type PreverificationContext<'a> = ();
+    type VerificationContext<'a> = SDPActiveValidationContext<'a>;
+    type ExecutionContext<'a> = SDPActiveExecutionContext;
     type VerificationError = SdpError;
     type ExecutionError = SdpError;
 
@@ -45,7 +40,7 @@ impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
         Ok(())
     }
 
-    fn verify(&self, ctx: &SDPActiveValidationContext<'_>) -> Result<(), Self::ExecutionError> {
+    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::ExecutionError> {
         // Check the declaration exists
         let Some(declaration) = ctx.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));

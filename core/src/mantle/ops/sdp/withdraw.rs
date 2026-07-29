@@ -7,7 +7,7 @@ use super::{SDPWithdrawOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        ledger::{Declarations, Operation},
+        ledger::{Declarations, Operation, verification_mode},
         transactions::hash::TxHashView,
     },
     sdp::{self, locked_notes::LockedNotes},
@@ -29,15 +29,10 @@ pub struct SDPWithdrawExecutionContext {
     pub epoch: Epoch,
 }
 
-impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
-    type PreverificationContext<'a>
-        = ()
-    where
-        Self: 'a;
-    type ExecutionContext<'a>
-        = SDPWithdrawExecutionContext
-    where
-        Self: 'a;
+impl Operation<verification_mode::StandardMode> for SDPWithdrawOp {
+    type PreverificationContext<'a> = ();
+    type VerificationContext<'a> = SDPWithdrawValidationContext<'a>;
+    type ExecutionContext<'a> = SDPWithdrawExecutionContext;
     type VerificationError = SdpError;
     type ExecutionError = SdpError;
 
@@ -48,7 +43,7 @@ impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
         Ok(())
     }
 
-    fn verify(&self, ctx: &SDPWithdrawValidationContext<'_>) -> Result<(), Self::ExecutionError> {
+    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::ExecutionError> {
         // Check that the declaration exists
         let Some(declaration) = ctx.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
