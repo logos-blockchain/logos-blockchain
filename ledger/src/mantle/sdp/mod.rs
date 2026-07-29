@@ -220,7 +220,7 @@ impl<R: Rewards> ServiceState<R> {
     ) -> Vec<HeaderEvent> {
         let mut events = Vec::new();
 
-        // The removals go to a clone, so the tree can be iterated at the same time.
+        // The removals go to a clone.
         let mut declarations = self.declarations.clone();
         for (id, declaration) in self.declarations.iter() {
             let Some(withdraw_at) = declaration.withdraw_at else {
@@ -235,13 +235,11 @@ impl<R: Rewards> ServiceState<R> {
                 locked_notes
                     .unlock(declaration.service_type, &declaration.locked_note_id)
                     .expect("unlocking note from withdrawn declaration must be successful if it hasn't been unlocked yet");
-                events.push(
-                    HeaderEvent::SdpNoteUnlocked {
-                        note_id: declaration.locked_note_id,
-                        service_type: declaration.service_type,
-                        declaration_id: *id,
-                    }
-                );
+                events.push(HeaderEvent::SdpNoteUnlocked {
+                    note_id: declaration.locked_note_id,
+                    service_type: declaration.service_type,
+                    declaration_id: *id,
+                });
             }
             (declarations, _) = declarations
                 .remove(id)
