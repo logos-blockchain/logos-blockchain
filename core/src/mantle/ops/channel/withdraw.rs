@@ -50,8 +50,7 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
         // Check that the channel exists
         let channel =
             ctx.channels
-                .channels
-                .get(&self.channel_id)
+                .channel_state(&self.channel_id)
                 .ok_or(Error::ChannelNotFound {
                     channel_id: self.channel_id,
                 })?;

@@ -3,7 +3,7 @@ use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    events::{TxEvent, TxEventPayload},
+    events::{DepositRecreatedNotes, TxEvent, TxEventPayload},
     mantle::{
         channel::{Channels, Error},
         ledger::{Inputs, InputsError, Operation, Outputs, Utxos},
@@ -71,7 +71,7 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
 
     fn validate(&self, ctx: &DepositValidationContext<'_>) -> Result<(), Self::Error> {
         // Check that the channel exist
-        if !ctx.channels.channels.contains_key(&self.channel_id) {
+        if !ctx.channels.contains_channel(&self.channel_id) {
             return Err(Error::ChannelNotFound {
                 channel_id: self.channel_id,
             });
@@ -104,12 +104,12 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
         // Add the re-created notes to the ledger and register them as channel
         // notes.
         ctx.utxos = outputs.execute(ctx.utxos, self);
-        let mut note_ids = Vec::with_capacity(outputs.len());
+        let mut note_ids = DepositRecreatedNotes::default();
         for utxo in outputs.utxos(self) {
             ctx.channels = ctx
                 .channels
                 .register_channel_note(&utxo.id(), &self.channel_id)?;
-            note_ids.push(utxo.id());
+            note_ids.try_push(utxo.id()).map_err(InputsError::from)?;
         }
 
         let events = std::iter::once(TxEvent::new(

@@ -67,7 +67,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
     fn validate(&self, ctx: &InscriptionValidationContext<'_>) -> Result<(), Self::Error> {
         // Check if the channel exist otherwise the inscription is valid only if and
         // only if parent == ZERO
-        if let Some(channel) = ctx.channels.channels.get(&self.channel_id).cloned() {
+        if let Some(channel) = ctx.channels.channel_state(&self.channel_id) {
             // Check the parent corresponds to the payload
             if self.parent != channel.tip_message {
                 return Err(Error::InvalidParent {
@@ -114,8 +114,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
         // if the channel doesn't exist, create it
         let channel = ctx
             .channels
-            .channels
-            .get(&self.channel_id)
+            .channel_state(&self.channel_id)
             .cloned()
             .unwrap_or_else(|| ChannelState {
                 accredited_keys: Keys::from(self.signer).into(),
@@ -132,17 +131,15 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
         // Update the channel sequencer, its starting slot, the tip message and the tip
         // slot
         let (new_sequencer, new_starting_slot) = channel.round_robin(ctx.block_slot);
-        ctx.channels.channels = ctx.channels.channels.insert(
-            self.channel_id,
-            ChannelState {
-                tip_message: self.id(),
-                accredited_keys: Arc::clone(&channel.accredited_keys),
-                tip_sequencer: new_sequencer,
-                tip_sequencer_starting_slot: new_starting_slot,
-                tip_slot: ctx.block_slot,
-                ..channel
-            },
-        );
+        let updated = ChannelState {
+            tip_message: self.id(),
+            accredited_keys: Arc::clone(&channel.accredited_keys),
+            tip_sequencer: new_sequencer,
+            tip_sequencer_starting_slot: new_starting_slot,
+            tip_slot: ctx.block_slot,
+            ..channel
+        };
+        ctx.channels = ctx.channels.set_channel_state(&self.channel_id, updated);
         Ok((ctx, Vec::new()))
     }
 }

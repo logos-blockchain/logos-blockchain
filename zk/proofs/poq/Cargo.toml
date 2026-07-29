@@ -31,5 +31,9 @@ lb-utils = { workspace = true }
 harness = false
 name    = "prove"
 
+[[bench]]
+harness = false
+name    = "verify"
+
 [lints]
 workspace = true

@@ -88,7 +88,7 @@ jobs:
 
       # Build the testing-featured node binary required by mantle_sdp.
       - name: Build testing binary for mantle_sdp
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && steps.verify_local_ntp.conclusion == 'success' }}
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: build
@@ -99,7 +99,7 @@ jobs:
       # Run the isolated SDP ops target that requires the testing-featured node binary.
       - name: End-to-end integration tests - mantle_sdp
         id: mantle_sdp_end_to_end
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 90
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         env:
@@ -110,7 +110,7 @@ jobs:
 
       # Build the testing-featured node binary required by tip_poll_self_heal.
       - name: Build testing binary for tip_poll_self_heal
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && steps.verify_local_ntp.conclusion == 'success' }}
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: build
@@ -121,7 +121,7 @@ jobs:
       # Run the isolated tip-poll self-heal test that requires the testing-featured node binary.
       - name: End-to-end integration tests - tip_poll_self_heal
         id: tip_poll_self_heal_end_to_end
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 90
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         env:
@@ -132,7 +132,7 @@ jobs:
 
       # Build release binaries for the remaining end-to-end tests.
       - name: Build binaries for remaining end-to-end tests
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && steps.verify_local_ntp.conclusion == 'success' }}
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: build
@@ -143,7 +143,7 @@ jobs:
       # Run the remaining end-to-end integration tests using cargo-nextest for better performance and reliability
       - name: End-to-end integration tests
         id: end_to_end
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 90
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         env:

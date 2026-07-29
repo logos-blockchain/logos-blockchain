@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use lb_common_http_client::{ProcessedBlockEvent, Slot};
 use lb_core::{
     crypto::Hash,
+    events::DepositRecreatedNotes,
     header::HeaderId,
     mantle::{
-        NoteId, SignedMantleTx, Value,
+        SignedMantleTx, Value,
         ops::{
             Op, OpId as _,
             channel::{ChannelId, MsgId, inscribe::Inscription},
@@ -386,7 +387,7 @@ async fn fetch_block_deposit_events<Node>(
     block_id: HeaderId,
     transactions: &[SignedMantleTx<Unverified>],
     channel_id: ChannelId,
-) -> Result<HashMap<(TxHash, Hash), (Value, Vec<NoteId>)>, Error>
+) -> Result<HashMap<(TxHash, Hash), (Value, DepositRecreatedNotes)>, Error>
 where
     Node: adapter::Node + Sync,
 {
@@ -465,7 +466,7 @@ fn extract_finalized_items(
     transactions: &[SignedMantleTx<Unverified>],
     channel_id: ChannelId,
     l1_slot: Slot,
-    deposit_events: &HashMap<(TxHash, Hash), (Value, Vec<NoteId>)>,
+    deposit_events: &HashMap<(TxHash, Hash), (Value, DepositRecreatedNotes)>,
 ) -> Vec<FinalizedTx> {
     let mut items: Vec<FinalizedTx> = Vec::new();
     let mut last_in_block: Option<MsgId> = None;
@@ -774,7 +775,7 @@ fn touches_channel_tip<State: VerificationState>(
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
-        MantleTx,
+        MantleTx, NoteId,
         channel::{SlotTimeframe, SlotTimeout},
         ledger::Inputs,
         ops::{
@@ -806,7 +807,7 @@ mod tests {
     fn extract_deposits_for_test(
         transactions: &[SignedMantleTx<Unverified>],
         channel_id: ChannelId,
-        deposit_events: &HashMap<(TxHash, Hash), (u64, Vec<NoteId>)>,
+        deposit_events: &HashMap<(TxHash, Hash), (u64, DepositRecreatedNotes)>,
     ) -> Vec<DepositInfo> {
         extract_finalized_items(transactions, channel_id, Slot::from(0), deposit_events)
             .into_iter()
@@ -834,7 +835,10 @@ mod tests {
         let tx_hash = tx.mantle_tx().hash();
 
         let mut amounts = HashMap::new();
-        amounts.insert((tx_hash, our_op_id), (1234u64, Vec::new()));
+        amounts.insert(
+            (tx_hash, our_op_id),
+            (1234u64, DepositRecreatedNotes::default()),
+        );
 
         let deposits = extract_deposits_for_test(std::slice::from_ref(&tx), channel_id, &amounts);
         assert_eq!(
@@ -888,9 +892,9 @@ mod tests {
         let hash_b = tx_b.mantle_tx().hash();
 
         let mut amounts = HashMap::new();
-        amounts.insert((hash_a, id1), (10, Vec::new()));
-        amounts.insert((hash_a, id2), (20, Vec::new()));
-        amounts.insert((hash_b, id3), (30, Vec::new()));
+        amounts.insert((hash_a, id1), (10, DepositRecreatedNotes::default()));
+        amounts.insert((hash_a, id2), (20, DepositRecreatedNotes::default()));
+        amounts.insert((hash_b, id3), (30, DepositRecreatedNotes::default()));
 
         let deposits = extract_deposits_for_test(&[tx_a, tx_b], channel_id, &amounts);
         let metadata_in_order: Vec<&[u8]> =
@@ -924,7 +928,10 @@ mod tests {
         let tx_hash = tx.mantle_tx().hash();
 
         let mut amounts = HashMap::new();
-        amounts.insert((tx_hash, dep_op_id), (500u64, Vec::new()));
+        amounts.insert(
+            (tx_hash, dep_op_id),
+            (500u64, DepositRecreatedNotes::default()),
+        );
 
         let items = extract_finalized_items(
             std::slice::from_ref(&tx),
