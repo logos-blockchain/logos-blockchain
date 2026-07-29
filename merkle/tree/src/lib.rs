@@ -123,6 +123,11 @@ where
         &self.items
     }
 
+    /// Iterates over the stored `(key, item)` pairs, in no particular order
+    pub fn iter(&self) -> impl Iterator<Item = (&Key, &Item)> {
+        self.items.iter().map(|(key, (item, _))| (key, item))
+    }
+
     /// Computes the Merkle path for the key.
     /// The path is ordered from leaf to root (excluded).
     /// Returns `None` if the key does not exist or has been removed.

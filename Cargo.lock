@@ -4462,6 +4462,7 @@ dependencies = [
  "divan",
  "hasher",
  "hex",
+ "logos-blockchain-blake2btree",
  "logos-blockchain-blend-proofs",
  "logos-blockchain-core-macros",
  "logos-blockchain-cryptarchia-engine",
