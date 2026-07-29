@@ -21,10 +21,7 @@ use lb_core::{
         },
     },
 };
-use lb_http_api_common::{
-    bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
-    queries::BlocksStreamQuery,
-};
+use lb_http_api_common::bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody};
 use lb_log_targets::zone_sdk;
 use reqwest::Url;
 use tracing::warn;
@@ -36,6 +33,26 @@ const TARGET: &str = zone_sdk::ADAPTER;
 /// A boxed, pinned, Send stream.
 pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
 
+/// Backend interface of the SDK — every chain access goes through this trait.
+///
+/// [`NodeHttpClient`] implements it over the node's HTTP API. Custom backends
+/// (e.g. an embedded node reached over a different transport) implement this
+/// trait externally and are passed to the generic entry points
+/// [`ZoneSequencer::init`](crate::sequencer::ZoneSequencer::init) and
+/// [`ZoneIndexer::new`](crate::indexer::ZoneIndexer::new) — no registration
+/// beyond the `impl` is needed.
+///
+/// Only the primitive methods — each a single node API call — must be
+/// implemented. The `zone_messages_*` methods are compositions of those
+/// primitives and come with default implementations; override them only to
+/// serve the same message vocabulary more efficiently.
+///
+/// Those entry points additionally require `Clone + Send + Sync + 'static`
+/// (sequencer) and `Clone + Sync` (indexer) on the implementation.
+///
+/// Every foreign type appearing in these signatures is re-exported in
+/// [`crate::node_types`], so an implementation only needs to depend on this
+/// crate.
 #[async_trait]
 pub trait Node {
     async fn consensus_info(&self) -> Result<ChainServiceInfo, Error>;
@@ -45,11 +62,6 @@ pub trait Node {
     async fn channel_state(&self, channel_id: ChannelId) -> Result<Option<ChannelState>, Error>;
 
     async fn block_stream(&self) -> Result<BoxStream<ProcessedBlockEvent>, Error>;
-
-    async fn blocks_range_stream(
-        &self,
-        params: BlocksStreamQuery,
-    ) -> Result<BoxStream<ProcessedBlockEvent>, Error>;
 
     async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, Error>;
 
@@ -63,19 +75,6 @@ pub trait Node {
         slot_to: Slot,
     ) -> Result<Vec<ApiBlock>, Error>;
 
-    async fn zone_messages_in_block(
-        &self,
-        id: HeaderId,
-        channel_id: ChannelId,
-    ) -> Result<BoxStream<ZoneMessage>, Error>;
-
-    async fn zone_messages_in_blocks(
-        &self,
-        slot_from: Slot,
-        slot_to: Slot,
-        channel_id: ChannelId,
-    ) -> Result<BoxStream<(ZoneMessage, Slot)>, Error>;
-
     async fn post_transaction(&self, tx: SignedMantleTx<Unverified>) -> Result<(), Error>;
 
     /// Fund a transaction from the node's wallet.
@@ -87,6 +86,60 @@ pub trait Node {
         &self,
         request: WalletFundRequestBody,
     ) -> Result<WalletFundResponseBody, Error>;
+
+    /// The [`ZoneMessage`]s of `channel_id` carried by block `id`, composed
+    /// from [`block`](Node::block) and [`block_events`](Node::block_events).
+    async fn zone_messages_in_block(
+        &self,
+        id: HeaderId,
+        channel_id: ChannelId,
+    ) -> Result<BoxStream<ZoneMessage>, Error> {
+        let Some(block) = self.block(id).await? else {
+            return Ok(Box::pin(stream::empty()));
+        };
+
+        let deposit_events = if has_channel_deposit(&block.transactions, channel_id) {
+            let events = self.block_events(id).await?.unwrap_or_default();
+            build_deposit_events(&events)
+        } else {
+            HashMap::new()
+        };
+
+        let messages = block_to_messages(block.transactions, channel_id, &deposit_events);
+        Ok(Box::pin(stream::iter(messages)))
+    }
+
+    /// The [`ZoneMessage`]s of `channel_id` in the immutable slot range,
+    /// composed from [`immutable_blocks`](Node::immutable_blocks) and
+    /// [`block_events`](Node::block_events).
+    async fn zone_messages_in_blocks(
+        &self,
+        slot_from: Slot,
+        slot_to: Slot,
+        channel_id: ChannelId,
+    ) -> Result<BoxStream<(ZoneMessage, Slot)>, Error> {
+        let blocks = self.immutable_blocks(slot_from, slot_to).await?;
+
+        let mut all_messages = Vec::new();
+        for block in blocks {
+            let slot = block.header.slot;
+            let deposit_events = if has_channel_deposit(&block.transactions, channel_id) {
+                let events = self
+                    .block_events(block.header.id)
+                    .await?
+                    .unwrap_or_default();
+                build_deposit_events(&events)
+            } else {
+                HashMap::new()
+            };
+
+            for message in block_to_messages(block.transactions, channel_id, &deposit_events) {
+                all_messages.push((message, slot));
+            }
+        }
+
+        Ok(Box::pin(stream::iter(all_messages)))
+    }
 }
 
 #[derive(Clone)]
@@ -123,17 +176,6 @@ impl Node for NodeHttpClient {
         Ok(Box::pin(stream))
     }
 
-    async fn blocks_range_stream(
-        &self,
-        params: BlocksStreamQuery,
-    ) -> Result<BoxStream<ProcessedBlockEvent>, Error> {
-        let stream = self
-            .client
-            .get_blocks_range_stream(self.base_url.clone(), params)
-            .await?;
-        Ok(Box::pin(stream))
-    }
-
     async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, Error> {
         let stream = self.client.get_lib_stream(self.base_url.clone()).await?;
         Ok(Box::pin(stream))
@@ -161,71 +203,6 @@ impl Node for NodeHttpClient {
                 slot_to.into_inner(),
             )
             .await
-    }
-
-    async fn zone_messages_in_block(
-        &self,
-        id: HeaderId,
-        channel_id: ChannelId,
-    ) -> Result<BoxStream<ZoneMessage>, Error> {
-        let Some(block) = self
-            .client
-            .get_block_by_id(self.base_url.clone(), id)
-            .await?
-        else {
-            return Ok(Box::pin(stream::empty()));
-        };
-
-        let deposit_events = if has_channel_deposit(&block.transactions, channel_id) {
-            let events = self
-                .client
-                .get_block_events(self.base_url.clone(), id)
-                .await?
-                .unwrap_or_default();
-            build_deposit_events(&events)
-        } else {
-            HashMap::new()
-        };
-
-        let messages = block_to_messages(block.transactions, channel_id, &deposit_events);
-        Ok(Box::pin(stream::iter(messages)))
-    }
-
-    async fn zone_messages_in_blocks(
-        &self,
-        slot_from: Slot,
-        slot_to: Slot,
-        channel_id: ChannelId,
-    ) -> Result<BoxStream<(ZoneMessage, Slot)>, Error> {
-        let blocks = self
-            .client
-            .get_immutable_blocks(
-                self.base_url.clone(),
-                slot_from.into_inner(),
-                slot_to.into_inner(),
-            )
-            .await?;
-
-        let mut all_messages = Vec::new();
-        for block in blocks {
-            let slot = block.header.slot;
-            let deposit_events = if has_channel_deposit(&block.transactions, channel_id) {
-                let events = self
-                    .client
-                    .get_block_events(self.base_url.clone(), block.header.id)
-                    .await?
-                    .unwrap_or_default();
-                build_deposit_events(&events)
-            } else {
-                HashMap::new()
-            };
-
-            for message in block_to_messages(block.transactions, channel_id, &deposit_events) {
-                all_messages.push((message, slot));
-            }
-        }
-
-        Ok(Box::pin(stream::iter(all_messages)))
     }
 
     async fn post_transaction(&self, tx: SignedMantleTx<Unverified>) -> Result<(), Error> {
@@ -452,6 +429,25 @@ mod tests {
             }
             other => panic!("expected Withdraw, got {other:?}"),
         }
+    }
+
+    /// Pins the public backend contract: an external [`Node`] implementation
+    /// (here [`MockNode`], which is not [`NodeHttpClient`]) satisfies the
+    /// bounds of both generic entry points. If a bound is ever added to the
+    /// constructors, this stops compiling and the trait docs must be updated
+    /// alongside it.
+    #[tokio::test]
+    async fn external_backend_plugs_into_sequencer_and_indexer() {
+        use lb_key_management_system_service::keys::Ed25519Key;
+
+        use crate::{indexer::ZoneIndexer, sequencer::ZoneSequencer, test_support::MockNode};
+
+        let channel_id = ChannelId::from([0; 32]);
+        let node = MockNode::default();
+
+        let _indexer = ZoneIndexer::new(channel_id, node.clone());
+        let _sequencer =
+            ZoneSequencer::init(channel_id, Ed25519Key::from_bytes(&[0; 32]), node, None);
     }
 
     /// A deposit whose amount is absent from the block's events is dropped
