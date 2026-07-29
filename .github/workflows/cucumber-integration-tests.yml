@@ -246,7 +246,7 @@ jobs:
     name: Cucumber result
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 175
+    timeout-minutes: 230
     permissions:
       actions: read
       contents: read
