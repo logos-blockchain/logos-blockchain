@@ -205,7 +205,7 @@ pub struct RecoveryState {
     next_new_voucher_index: VoucherIndex,
     vouchers: Vouchers<VoucherId>,
     /// [`WalletState`] at the last known LIB.
-    /// `None` on fresh start; populated after the first LIB update.
+    /// `None` until the first recovery state update.
     lib_wallet_state: Option<(HeaderId, WalletState)>,
     /// Voucher reservations for claim transactions that were built/submitted
     /// but have not reached LIB yet. Stale reservations are bounded by
