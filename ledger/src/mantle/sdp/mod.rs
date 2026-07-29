@@ -222,7 +222,7 @@ impl<R: Rewards> ServiceState<R> {
 
         // The removals go to a clone.
         let mut declarations = self.declarations.clone();
-        for (id, declaration) in self.declarations.iter() {
+        for (id, declaration) in &self.declarations {
             let Some(withdraw_at) = declaration.withdraw_at else {
                 continue;
             };
@@ -554,7 +554,7 @@ impl SdpLedger {
                 // live tree, so the surviving ones keep the position they occupy
                 // there and the root doesn't depend on the iteration order.
                 let mut snapshot = service.declarations().clone();
-                for (declaration_id, declaration) in service.declarations().iter() {
+                for (declaration_id, declaration) in service.declarations() {
                     if !is_active(declaration, epoch, *params) {
                         (snapshot, _) = snapshot
                             .remove(declaration_id)
