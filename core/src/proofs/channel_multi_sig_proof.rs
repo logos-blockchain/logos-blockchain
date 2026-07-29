@@ -255,7 +255,6 @@ mod tests {
 
     /// The decoder must uphold the same well-formedness invariant as `new`:
     /// a wire-encoded vector with a repeated index is not strictly increasing,
-    /// a wire-encoded vector with a repeated index is not strictly increasing,
     /// so `decode` must fail (the `try_new` inside `decode` maps to a wire
     /// error).
     #[test]

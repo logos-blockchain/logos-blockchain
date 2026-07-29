@@ -936,7 +936,7 @@ mod tests {
         if let Err(err) = result {
             assert!(
                 !matches!(err, DecodeError::LengthOutOfBounds { .. }),
-                "Should not reject at u8::MAX]",
+                "Should not reject at u8::MAX",
             );
         }
     }

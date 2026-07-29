@@ -20,11 +20,8 @@ pub fn decode_ops_proofs<'a>(
         proofs.push(proof);
         remaining = new_remaining;
     }
-    let ops_proofs = OpsProofs::try_from(proofs).map_err(|_| DecodeError::LengthOutOfBounds {
-        type_name: "OpsProofs",
-        len: ops.len(),
-        min: OpsProofs::MIN,
-        max: OpsProofs::MAX,
+    let ops_proofs = OpsProofs::try_from(proofs).map_err(|_| {
+        DecodeError::length_out_of_bounds::<OpsProofs>(ops.len(), OpsProofs::MIN, OpsProofs::MAX)
     })?;
 
     Ok((remaining, ops_proofs))

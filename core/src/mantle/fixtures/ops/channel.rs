@@ -4,11 +4,12 @@ use lb_wire::wire_fixtures;
 use crate::{
     mantle::{
         channel::{SlotTimeframe, SlotTimeout},
-        ledger::Inputs,
+        ledger::{Inputs, Outputs},
         ops::{
             Op,
             channel::{
                 ChannelId, MsgId,
+                channel_transfer::ChannelTransferOp,
                 config::ChannelConfigOp,
                 deposit::{DepositOp, Metadata},
                 inscribe::InscriptionOp,
@@ -55,6 +56,14 @@ wire_fixtures!(
         channel_id: ChannelId::from([0u8; 32]),
         inputs: Inputs::empty(),
     } => "000000000000000000000000000000000000000000000000000000000000000000",
+);
+wire_fixtures!(
+    ChannelTransferOp,
+    Self {
+        channel_id: ChannelId::from([0u8; 32]),
+        inputs: Inputs::empty(),
+        outputs: Outputs::empty(),
+    } => "00000000000000000000000000000000000000000000000000000000000000000000",
 );
 
 // We just check that the enum discriminant tag is encoded correctly, so a

@@ -110,8 +110,8 @@ fn bench_blake2b_poseidon2_hash(bencher: Bencher, size: usize) {
         .bench_values(|tx: MantleTx| {
             // Encoding is included here to compare fairly with the Poseidon2 hash function,
             // which includes it.
-            let encoded = tx.encode_to_vec();
-            let digest = blake2b(&[encoded.as_slice()]);
+            let encoded = tx.encode();
+            let digest = blake2b(&[encoded.as_ref()]);
             let frs: Vec<Fr> = digest
                 .chunks(GROTH16_SAFE_BYTES_SIZE)
                 .map(fr_from_bytes_unchecked)
