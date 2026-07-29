@@ -5,10 +5,11 @@ use core::{
     fmt::{self, Display, Formatter},
     str::FromStr,
 };
-use std::{collections::HashMap, hash::Hash};
+use std::collections::HashMap;
 
 use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
+use lb_blake2btree::LeafHash;
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec, UpperBoundedVec};
@@ -23,8 +24,10 @@ use strum::{EnumCount, EnumIter};
 use crate::{
     block::BlockNumber,
     codec::{self, DeserializeOp as _, SerializeOp as _},
+    crypto::{Hash, Hasher},
     mantle::{
         NoteId,
+        ledger::Declarations as ServiceDeclarations,
         nom::{NomCodec, NomDecode, NomEncode},
         ops::channel::Ed25519PublicKey,
     },
@@ -396,37 +399,60 @@ impl Declaration {
             nonce: 0,
         }
     }
+
+    // A `withdraw_at` that is not set is encoded as zero, over the width its
+    // value would take.
+    fn sdp_declaration_info_hash(&self) -> Hash {
+        let mut h = Hasher::new();
+        h.update(b"DECLARATION_INFO_HASH_V1");
+        h.update([*<ServiceType as AsRef<u8>>::as_ref(&self.service_type)]);
+        for locator in &self.locators {
+            h.update(locator.0.as_ref());
+        }
+        h.update(self.provider_id.0);
+        for number in self.zk_id.as_fr().0.0 {
+            h.update(number.to_le_bytes());
+        }
+        h.update(self.locked_note_id.as_bytes());
+        h.update(self.created.into_inner().to_le_bytes());
+        h.update(self.active.into_inner().to_le_bytes());
+        h.update(self.withdraw_at.map_or(0, Epoch::into_inner).to_le_bytes());
+        h.update(self.nonce.to_le_bytes());
+        h.finalize().into()
+    }
+}
+
+impl LeafHash<DeclarationId> for Declaration {
+    fn leaf_hash(&self, declaration_id: &DeclarationId) -> Hash {
+        let mut h = Hasher::new();
+        h.update(declaration_id.0);
+        h.update(self.sdp_declaration_info_hash());
+        h.finalize().into()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct Declarations(HashMap<ServiceType, HashMap<DeclarationId, Declaration>>);
+pub struct Declarations(HashMap<ServiceType, ServiceDeclarations>);
 
 impl Declarations {
-    pub fn iter(
-        &self,
-    ) -> impl Iterator<Item = (&ServiceType, &HashMap<DeclarationId, Declaration>)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&ServiceType, &ServiceDeclarations)> {
         self.0.iter()
     }
 
     #[must_use]
-    pub fn for_service(
-        &self,
-        service_type: &ServiceType,
-    ) -> Option<&HashMap<DeclarationId, Declaration>> {
+    pub fn for_service(&self, service_type: &ServiceType) -> Option<&ServiceDeclarations> {
         self.0.get(service_type)
     }
 }
 
-impl From<HashMap<ServiceType, HashMap<DeclarationId, Declaration>>> for Declarations {
-    fn from(value: HashMap<ServiceType, HashMap<DeclarationId, Declaration>>) -> Self {
+impl From<HashMap<ServiceType, ServiceDeclarations>> for Declarations {
+    fn from(value: HashMap<ServiceType, ServiceDeclarations>) -> Self {
         Self(value)
     }
 }
 
-impl FromIterator<(ServiceType, HashMap<DeclarationId, Declaration>)> for Declarations {
-    fn from_iter<I: IntoIterator<Item = (ServiceType, HashMap<DeclarationId, Declaration>)>>(
-        iter: I,
-    ) -> Self {
+impl FromIterator<(ServiceType, ServiceDeclarations)> for Declarations {
+    fn from_iter<I: IntoIterator<Item = (ServiceType, ServiceDeclarations)>>(iter: I) -> Self {
         Self(iter.into_iter().collect())
     }
 }
@@ -535,12 +561,19 @@ impl NomDecode for ActivityMetadata {
 
 #[cfg(test)]
 mod tests {
+    use lb_blake2btree::LeafHash as _;
     use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
     use multiaddr::Multiaddr;
 
-    use crate::sdp::{Declaration, DeclarationMessage, Locator, Locators, ServiceType};
+    use crate::{
+        crypto::{Digest as _, Hash, Hasher},
+        sdp::{
+            Declaration, DeclarationId, DeclarationMessage, Locator, Locators, ServiceDeclarations,
+            ServiceType,
+        },
+    };
 
     #[test]
     fn locator_rejects_multiaddr_with_peer_id() {
@@ -627,5 +660,177 @@ mod tests {
         assert_eq!(declaration.active, Epoch::new(12)); // created + SNAPSHOT_FINALIZATION_DELAY
         assert_eq!(declaration.withdraw_at, None);
         assert_eq!(declaration.nonce, 0);
+    }
+
+    // Leaf commitment
+    fn leaf_declaration() -> Declaration {
+        Declaration {
+            service_type: ServiceType::BlendNetwork,
+            provider_id: Ed25519Key::from_bytes(&[1; _]).public_key().into(),
+            locked_note_id: Fr::from(2u64).into(),
+            locators: vec!["/ip4/1.1.1.1/udp/3000/quic-v1".parse().unwrap()]
+                .try_into()
+                .unwrap(),
+            zk_id: ZkPublicKey::new(Fr::from(3u64)),
+            created: Epoch::new(4),
+            active: Epoch::new(5),
+            withdraw_at: Some(Epoch::new(6)),
+            nonce: 7,
+        }
+    }
+
+    // The encoding is spelled out field by field, so any change to `leaf_hash`
+    // has to be mirrored here and in the specification.
+    #[test]
+    fn declaration_leaf_matches_the_specified_encoding() {
+        let declaration_id = DeclarationId([0u8; 32]);
+        let declaration = leaf_declaration();
+
+        let mut info = Vec::new();
+        info.extend_from_slice(b"DECLARATION_INFO_HASH_V1");
+        info.push(0u8); // ServiceType::BlendNetwork
+        for locator in &declaration.locators {
+            info.extend_from_slice(locator.as_ref());
+        }
+        info.extend_from_slice(declaration.provider_id.0.as_bytes());
+        for number in declaration.zk_id.as_fr().0.0 {
+            info.extend_from_slice(&number.to_le_bytes());
+        }
+        info.extend_from_slice(&declaration.locked_note_id.as_bytes());
+        info.extend_from_slice(&4u32.to_le_bytes());
+        info.extend_from_slice(&5u32.to_le_bytes());
+        info.extend_from_slice(&6u32.to_le_bytes());
+        info.extend_from_slice(&7u64.to_le_bytes());
+        let info_hash: Hash = Hasher::digest(&info).into();
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&declaration_id.0);
+        bytes.extend_from_slice(&info_hash);
+
+        let expected: Hash = Hasher::digest(&bytes).into();
+        assert_eq!(declaration.leaf_hash(&declaration_id), expected);
+    }
+
+    // A `withdraw_at` that is not set is encoded as zero, like a withdrawal
+    // scheduled for epoch 0.
+    #[test]
+    fn declaration_leaf_encodes_an_unset_withdrawal_as_zero() {
+        let declaration_id = DeclarationId([0u8; 32]);
+        let unset = Declaration {
+            withdraw_at: None,
+            ..leaf_declaration()
+        };
+        let epoch_zero = Declaration {
+            withdraw_at: Some(Epoch::new(0)),
+            ..leaf_declaration()
+        };
+
+        assert_eq!(
+            unset.leaf_hash(&declaration_id),
+            epoch_zero.leaf_hash(&declaration_id)
+        );
+    }
+
+    #[test]
+    fn declaration_leaf_binds_the_declaration_id() {
+        let declaration = leaf_declaration();
+
+        assert_ne!(
+            declaration.leaf_hash(&DeclarationId([0u8; 32])),
+            declaration.leaf_hash(&DeclarationId([1u8; 32]))
+        );
+    }
+
+    #[test]
+    fn declaration_leaf_binds_every_field() {
+        let declaration_id = DeclarationId([0u8; 32]);
+        let declaration = leaf_declaration();
+        let leaf = declaration.leaf_hash(&declaration_id);
+
+        let mutations = [
+            Declaration {
+                locators: vec!["/ip4/2.2.2.2/udp/3000/quic-v1".parse().unwrap()]
+                    .try_into()
+                    .unwrap(),
+                ..declaration.clone()
+            },
+            Declaration {
+                provider_id: Ed25519Key::from_bytes(&[9; _]).public_key().into(),
+                ..declaration.clone()
+            },
+            Declaration {
+                zk_id: ZkPublicKey::new(Fr::from(9u64)),
+                ..declaration.clone()
+            },
+            Declaration {
+                locked_note_id: Fr::from(9u64).into(),
+                ..declaration.clone()
+            },
+            Declaration {
+                created: Epoch::new(9),
+                ..declaration.clone()
+            },
+            Declaration {
+                active: Epoch::new(9),
+                ..declaration.clone()
+            },
+            Declaration {
+                withdraw_at: None,
+                ..declaration.clone()
+            },
+            Declaration {
+                nonce: 9,
+                ..declaration
+            },
+        ];
+
+        for mutated in mutations {
+            assert_ne!(mutated.leaf_hash(&declaration_id), leaf);
+        }
+    }
+
+    #[test]
+    fn declarations_root_tracks_insertions_and_updates() {
+        let declaration_id = DeclarationId([0u8; 32]);
+        let declarations = ServiceDeclarations::new();
+        let empty_root = declarations.root();
+
+        let (declarations, _) = declarations.insert(declaration_id, leaf_declaration());
+        let root = declarations.root();
+        assert_ne!(root, empty_root);
+
+        let declarations = declarations
+            .update(
+                &declaration_id,
+                Declaration {
+                    nonce: 8,
+                    ..leaf_declaration()
+                },
+            )
+            .unwrap();
+        assert_ne!(declarations.root(), root);
+
+        // The declaration is updated in place, so restoring it restores the root
+        // instead of committing to a second leaf.
+        let declarations = declarations
+            .update(&declaration_id, leaf_declaration())
+            .unwrap();
+        assert_eq!(declarations.root(), root);
+    }
+
+    // This is why the epoch snapshot drops the inactive declarations from a
+    // clone of the live tree instead of rebuilding one from the survivors.
+    #[test]
+    fn removing_a_declaration_leaves_the_others_in_place() {
+        let first = DeclarationId([0u8; 32]);
+        let second = DeclarationId([1u8; 32]);
+
+        let (declarations, _) = ServiceDeclarations::new().insert(first, leaf_declaration());
+        let (declarations, _) = declarations.insert(second, leaf_declaration());
+        let (declarations, _) = declarations.remove(&first).unwrap();
+
+        let (rebuilt, _) = ServiceDeclarations::new().insert(second, leaf_declaration());
+
+        assert_ne!(declarations.root(), rebuilt.root());
     }
 }

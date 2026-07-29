@@ -34,7 +34,7 @@ where
         .active_declarations
         .for_service(&ServiceType::BlendNetwork)
         .iter()
-        .flat_map(|declarations| declarations.values())
+        .flat_map(|declarations| declarations.iter().map(|(_, declaration)| declaration))
         .filter_map(|declaration| {
             let provider_info = ProviderInfo {
                 locators: declaration.locators.clone(),

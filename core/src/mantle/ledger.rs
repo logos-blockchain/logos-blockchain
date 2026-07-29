@@ -2,6 +2,7 @@ use std::{collections::HashSet, slice::IterMut, sync::LazyLock};
 
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
+use lb_blake2btree::Blake2bTree;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
@@ -51,7 +52,7 @@ pub trait Operation<ValidationContext> {
 }
 
 pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;
-pub type Declarations = rpds::RedBlackTreeMapSync<DeclarationId, Declaration>;
+pub type Declarations = Blake2bTree<DeclarationId, Declaration>;
 
 pub type Value = u64;
 
