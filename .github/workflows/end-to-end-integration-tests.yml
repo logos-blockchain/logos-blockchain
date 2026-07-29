@@ -203,36 +203,36 @@ jobs:
   # It fails once both lanes have completed without reporting success.
   #
   # On pull requests it succeeds immediately without starting self-hosted jobs.
-e2e-result:
-  name: E2E result
-  if: ${{ !cancelled() }}
-  runs-on: ubuntu-latest
-  timeout-minutes: 175
-  permissions:
-    actions: read
-    contents: read
-  steps:
-    # On pull requests, report the required check without running or checking
-    # either self-hosted lane.
-    - name: Report pull-request result
-      if: ${{ github.event_name != 'merge_group' }}
-      run: echo "End-to-end integration tests run only in the merge queue"
+  e2e-result:
+    name: E2E result
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 175
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      # On pull requests, report the required check without running or checking
+      # either self-hosted lane.
+      - name: Report pull-request result
+        if: ${{ github.event_name != 'merge_group' }}
+        run: echo "End-to-end integration tests run only in the merge queue"
 
-    # A local composite action must be checked out before it can be invoked.
-    # Only the required action directory is fetched.
-    - name: Checkout result action
-      if: ${{ github.event_name == 'merge_group' }}
-      uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # Version 4.2.2
-      with:
-        ref: ${{ github.sha }}
-        sparse-checkout: .github/actions/check-any-lane-result
-        sparse-checkout-cone-mode: false
+      # A local composite action must be checked out before it can be invoked.
+      # Only the required action directory is fetched.
+      - name: Checkout result action
+        if: ${{ github.event_name == 'merge_group' }}
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # Version 4.2.2
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: .github/actions/check-any-lane-result
+          sparse-checkout-cone-mode: false
 
-    - name: Check E2E result
-      if: ${{ github.event_name == 'merge_group' }}
-      uses: ./.github/actions/check-any-lane-result
-      with:
-        github-token: ${{ secrets.GITHUB_TOKEN }}
-        result-name: E2E
-        job-name-prefix: Run end-to-end integration tests
-        lane-labels-json: '["self-hosted-linux", "self-hosted-macos"]'
+      - name: Check E2E result
+        if: ${{ github.event_name == 'merge_group' }}
+        uses: ./.github/actions/check-any-lane-result
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          result-name: E2E
+          job-name-prefix: Run end-to-end integration tests
+          lane-labels-json: '["self-hosted-linux", "self-hosted-macos"]'
