@@ -5,7 +5,7 @@ use core::{
     fmt::{self, Display, Formatter},
     str::FromStr,
 };
-use std::{collections::HashMap, hash::Hash};
+use std::collections::HashMap;
 
 use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
@@ -24,7 +24,7 @@ use strum::EnumIter;
 use crate::{
     block::BlockNumber,
     codec::{self, DeserializeOp as _, SerializeOp as _},
-    crypto::Hasher,
+    crypto::{Hash, Hasher},
     mantle::{
         NoteId,
         ledger::Declarations as ServiceDeclarations,
@@ -402,7 +402,7 @@ impl Declaration {
 
     // A `withdraw_at` that is not set is encoded as zero, over the width its
     // value would take.
-    fn info_hash(&self) -> crate::crypto::Hash {
+    fn sdp_declaration_info_hash(&self) -> Hash {
         let mut h = Hasher::new();
         h.update(b"DECLARATION_INFO_HASH_V1");
         h.update([*<ServiceType as AsRef<u8>>::as_ref(&self.service_type)]);
@@ -423,10 +423,10 @@ impl Declaration {
 }
 
 impl LeafHash<DeclarationId> for Declaration {
-    fn leaf_hash(&self, declaration_id: &DeclarationId) -> crate::crypto::Hash {
+    fn leaf_hash(&self, declaration_id: &DeclarationId) -> Hash {
         let mut h = Hasher::new();
         h.update(declaration_id.0);
-        h.update(self.info_hash());
+        h.update(self.sdp_declaration_info_hash());
         h.finalize().into()
     }
 }
