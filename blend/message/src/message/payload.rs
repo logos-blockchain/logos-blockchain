@@ -1,3 +1,4 @@
+use lb_blend_crypto::fill_random_bytes;
 use lb_codec::{BinaryDecode, BinaryEncode, DecodeError, take};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -49,10 +50,14 @@ impl BinaryDecode for PayloadType {
     }
 }
 
-/// The decapsulated payload body, padded to a fixed size.
+/// The decapsulated payload body, padded to a fixed size with random bytes.
 ///
 /// `actual_len` is the length of the real (unpadded) content and is the single
 /// source of truth for it — the payload no longer stores it a second time.
+/// Everything past it is padding, and per the Payload Formatting spec
+/// (<https://github.com/logos-co/logos-lips/blob/master/docs/blockchain/raw/payload-formatting.md#body>)
+/// it must be random rather than a fixed filler, so that the body never carries
+/// a region of plaintext known to an observer.
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaddedPayloadBody {
@@ -90,6 +95,10 @@ impl TryFrom<&[u8]> for PaddedPayloadBody {
             .try_into()
             .expect("body must be created with the correct size");
         padded[..value.len()].copy_from_slice(value);
+        // The tail is padding, and it must be random: a fixed filler would make the
+        // body partially known plaintext, and the layered stream cipher would then
+        // expose the corresponding keystream to anyone who learns the plaintext.
+        fill_random_bytes(&mut padded[value.len()..]);
 
         Ok(Self { actual_len, padded })
     }

@@ -12,6 +12,7 @@ use lb_key_management_system_keys::keys::{
 
 use crate::{
     Error, PaddedPayloadBody, PayloadType,
+    codec::WireEncode as _,
     crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
     encap::{
         ProofsVerifier,
@@ -115,12 +116,8 @@ fn encapsulate_and_decapsulate() {
 
     let (inputs, blend_node_enc_keys) = generate_inputs(2);
     let msg = EncapsulatedMessage::from(
-        try_new_fully_encapsulated(
-            &inputs,
-            PayloadType::Data,
-            PAYLOAD_BODY.try_into().unwrap(),
-        )
-        .unwrap(),
+        try_new_fully_encapsulated(&inputs, PayloadType::Data, PAYLOAD_BODY.try_into().unwrap())
+            .unwrap(),
     );
 
     // NOTE: We expect that the decapsulations can be done
@@ -229,12 +226,8 @@ fn invalid_public_header_proof_of_quota() {
 
     let (inputs, _) = generate_inputs(2);
     let msg = EncapsulatedMessage::from(
-        try_new_fully_encapsulated(
-            &inputs,
-            PayloadType::Data,
-            PAYLOAD_BODY.try_into().unwrap(),
-        )
-        .unwrap(),
+        try_new_fully_encapsulated(&inputs, PayloadType::Data, PAYLOAD_BODY.try_into().unwrap())
+            .unwrap(),
     );
 
     let public_header_verification_result = msg.verify_public_header(&verifier);
@@ -255,12 +248,8 @@ fn invalid_blend_header_proof_of_selection() {
 
     let (inputs, blend_node_enc_keys) = generate_inputs(2);
     let msg = EncapsulatedMessage::from(
-        try_new_fully_encapsulated(
-            &inputs,
-            PayloadType::Data,
-            PAYLOAD_BODY.try_into().unwrap(),
-        )
-        .unwrap(),
+        try_new_fully_encapsulated(&inputs, PayloadType::Data, PAYLOAD_BODY.try_into().unwrap())
+            .unwrap(),
     );
     let validated_message = msg.verify_public_header(&verifier).unwrap();
 
@@ -303,12 +292,8 @@ fn encapsulate_and_decapsulate_via_two_step_verification() {
 
     let (inputs, blend_node_enc_keys) = generate_inputs(2);
     let msg = EncapsulatedMessage::from(
-        try_new_fully_encapsulated(
-            &inputs,
-            PayloadType::Data,
-            PAYLOAD_BODY.try_into().unwrap(),
-        )
-        .unwrap(),
+        try_new_fully_encapsulated(&inputs, PayloadType::Data, PAYLOAD_BODY.try_into().unwrap())
+            .unwrap(),
     );
 
     // Step 1: verify signature (forwarding would happen here)
@@ -433,15 +418,60 @@ fn encapsulate_and_decapsulate_fewer_layers_than_maximum() {
                     ..
                 } => {
                     assert_eq!(hop, 0, "only the innermost layer should complete");
-                    assert_eq!(
-                        fully_decapsulated_message.payload_type(),
-                        PayloadType::Data
-                    );
+                    assert_eq!(fully_decapsulated_message.payload_type(), PayloadType::Data);
                     assert_eq!(fully_decapsulated_message.payload_body(), PAYLOAD_BODY);
                 }
             }
         }
     }
+}
+
+#[test]
+fn payload_body_is_padded_with_random_data() {
+    // The padding past `body_length` must be random, not a fixed filler, so two
+    // payloads with the same content differ past the content.
+    const BODY: &[u8] = b"hello";
+    let pad_of = |body: &[u8]| {
+        let mut encoded = Vec::new();
+        PaddedPayloadBody::try_from(body)
+            .unwrap()
+            .encode_into(&mut encoded);
+        // Skip the `u16` length prefix and the body itself.
+        encoded.split_off(size_of::<u16>() + body.len())
+    };
+
+    let (first, second) = (pad_of(BODY), pad_of(BODY));
+    assert_eq!(first.len(), MAX_PAYLOAD_BODY_SIZE - BODY.len());
+    assert_ne!(first, second);
+    assert!(
+        first.iter().any(|&byte| byte != 0),
+        "padding must not be a fixed filler"
+    );
+}
+
+#[test]
+fn payload_body_round_trips_through_encapsulation() {
+    // Random padding must not disturb the body itself: what comes out of a full
+    // decapsulation is exactly what went in, with no padding bleeding into it.
+    const BODY: &[u8] = b"hello";
+    let verifier = NeverFailingProofsVerifier;
+
+    let (inputs, blend_node_enc_keys) = generate_inputs(1);
+    let DecapsulationOutput::Completed {
+        fully_decapsulated_message,
+        ..
+    } = try_new_fully_encapsulated(&inputs, PayloadType::Data, BODY.try_into().unwrap())
+        .unwrap()
+        .decapsulate(
+            blend_node_enc_keys.first().unwrap(),
+            &RequiredProofOfSelectionVerificationInputs::default(),
+            &verifier,
+        )
+        .unwrap()
+    else {
+        panic!("Expected a completed message");
+    };
+    assert_eq!(fully_decapsulated_message.payload_body(), BODY);
 }
 
 #[test]
