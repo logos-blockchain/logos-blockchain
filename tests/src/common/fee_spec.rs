@@ -5,12 +5,21 @@
 //! from node code), so the conformance scenario notices if the node's
 //! pricing math changes. The rest are plain helpers for building and
 //! checking fee-paying transactions.
+//!
+//! Source specifications, pinned to the revision these helpers implement:
+//! - [Execution Market]
+//! - [Storage Markets]
+//! - [Gas Cost Determination]
+//!
+//! [Execution Market]: https://github.com/logos-co/logos-lips/blob/38916aa474164ac4acd81e62d19715e17626be17/docs/blockchain/raw/execution-market.md
+//! [Storage Markets]: https://github.com/logos-co/logos-lips/blob/38916aa474164ac4acd81e62d19715e17626be17/docs/blockchain/raw/storage-markets.md
+//! [Gas Cost Determination]: https://github.com/logos-co/logos-lips/blob/38916aa474164ac4acd81e62d19715e17626be17/docs/blockchain/raw/analysis-gas-cost-determination.md
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
-    GasCalculator as _, Note, Op, SignedMantleTx, Utxo,
+    Note, Op, SignedMantleTx, Utxo,
     gas::MainnetGasConstants,
     traits::Hashable as _,
     transactions::{
@@ -23,19 +32,17 @@ use lb_testing_framework::configs::wallet::WalletAccount;
 
 use crate::common::wallet::transfer_proofs_for_funded_wallet_tx;
 
-/// [1.0.0] Execution Market: base fee starts at 1.
+/// Execution Market v1.1.0: base fee starts at 1.
 pub const SPEC_GENESIS_EXECUTION_PRICE: u128 = 1;
-/// [1.0.0] Storage Market: storage price starts at 1.
-pub const SPEC_GENESIS_STORAGE_PRICE: u64 = 1;
-/// [1.0.0] Execution Market: EMA keeps 9/10 of history per block.
+/// Execution Market v1.1.0: EMA keeps 9/10 of history per block.
 pub const SPEC_EMA_PREV_WEIGHT: u128 = 9;
-/// [1.0.0] Execution Market: EMA denominator.
+/// Execution Market v1.1.0: EMA denominator.
 pub const SPEC_EMA_DENOMINATOR: u128 = 10;
-/// [1.0.0] Execution Market: `7 * G_target`, with `G_target = 1_596_730`.
+/// Execution Market v1.1.0: `7 * G_target`, with `G_target = 1_596_730`.
 pub const SPEC_BASE_FEE_NUMERATOR: u128 = 11_177_110;
-/// [1.0.0] Execution Market: `8 * G_target`.
+/// Execution Market v1.1.0: `8 * G_target`.
 pub const SPEC_BASE_FEE_DENOMINATOR: u128 = 12_773_840;
-/// [1.4.1] Gas Cost Determination: a transfer costs 590 gas.
+/// Gas Cost Determination v1.5.1: a transfer costs 590 gas.
 pub const SPEC_TRANSFER_GAS: u64 = 590;
 
 /// The spec's execution price update, written out from the spec document.
@@ -124,6 +131,8 @@ pub fn self_transfer_paying_fee_at(
     prices: &GasPrices,
     tip: i128,
 ) -> SignedMantleTx<Preverified> {
+    const MAX_FEE_CONVERGENCE_ATTEMPTS: usize = 32;
+
     let utxo = genesis_utxos
         .iter()
         .find(|utxo| utxo.note.pk == account.public_key())
@@ -161,14 +170,29 @@ pub fn self_transfer_paying_fee_at(
     // The fee depends on the encoded size, which depends on the output value,
     // which depends on the fee - so recompute until the fee stops changing.
     let mut fee = fee_for_output(utxo.note.value);
-    loop {
+    let mut seen_fees = HashSet::new();
+    let mut converged = false;
+
+    for _ in 0..MAX_FEE_CONVERGENCE_ATTEMPTS {
+        assert!(
+            seen_fees.insert(fee),
+            "fee calculation oscillated at repeated fee {fee}"
+        );
+
         let recomputed = fee_for_output(output_for_fee(fee));
 
         if recomputed == fee {
+            converged = true;
             break;
         }
         fee = recomputed;
     }
+
+    assert!(
+        converged,
+        "fee calculation did not converge after {MAX_FEE_CONVERGENCE_ATTEMPTS} attempts; last \
+         fee was {fee}"
+    );
 
     let builder = builder_with_output(output_for_fee(fee));
 
@@ -187,19 +211,6 @@ pub fn self_transfer_paying_fee_at(
     SignedMantleTx::new(mantle_tx, proofs)
         .preverify()
         .expect("signed transaction should be valid")
-}
-
-/// The mandatory fee of a transaction at the given prices: execution gas *
-/// base price + encoded signed size * storage price ([1.5.0] Mantle).
-///
-/// # Panics
-///
-/// Panics on gas overflow, which small test transactions cannot hit.
-#[must_use]
-pub fn fee_of<State: VerificationState>(tx: &SignedMantleTx<State>, prices: &GasPrices) -> u64 {
-    tx.total_gas_cost::<MainnetGasConstants>(prices)
-        .expect("gas cost should calculate")
-        .into_inner()
 }
 
 /// The storage fee is charged on a predicted size; it has to match the real
@@ -254,21 +265,4 @@ pub fn net_balance_against<State: VerificationState>(
         }
     }
     Ok(input_sum - output_sum)
-}
-
-/// The transfer input notes of a transaction, for checking that two
-/// transactions spent different notes.
-#[must_use]
-pub fn transfer_inputs<State: VerificationState>(
-    tx: &SignedMantleTx<State>,
-) -> Vec<lb_core::mantle::NoteId> {
-    tx.mantle_tx()
-        .ops()
-        .iter()
-        .filter_map(|op| match op {
-            Op::Transfer(transfer) => Some(transfer.inputs.iter().copied()),
-            _ => None,
-        })
-        .flatten()
-        .collect()
 }

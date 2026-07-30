@@ -11,7 +11,13 @@ use lb_core::mantle::{
 
 use crate::cucumber::{
     error::{StepError, StepResult},
-    steps::fees::{actions, assertions},
+    steps::{
+        fees::{actions, assertions},
+        parse_steps::{
+            invalid_table_row, parse_list_cell, parse_required_string_cell, parse_table_rows,
+            parse_u64_cell,
+        },
+    },
     world::CucumberWorld,
 };
 
@@ -216,6 +222,19 @@ fn step_execution_prices_follow_spec_reference(
     assertions::execution_prices_follow_spec_reference(world, step)
 }
 
+#[then(expr = "recorded gas prices cross a {int}-slot epoch boundary")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "cucumber step entrypoints must take `&mut World`"
+)]
+fn step_gas_prices_cross_epoch_boundary(
+    world: &mut CucumberWorld,
+    step: &Step,
+    slots_per_epoch: u64,
+) -> StepResult {
+    assertions::gas_prices_cross_epoch_boundary(world, step, slots_per_epoch)
+}
+
 #[then(expr = "recorded storage gas prices respond to network usage")]
 #[expect(
     clippy::needless_pass_by_ref_mut,
@@ -225,50 +244,36 @@ fn step_storage_prices_respond_to_usage(world: &mut CucumberWorld, step: &Step) 
     assertions::storage_prices_respond_to_usage(world, step)
 }
 
-#[when(
-    expr = "I concurrently fund transfers of {int} LGO from wallets {string} and {string} to \
-            wallets {string} and {string} via node {string} as {string} and {string}"
-)]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "cucumber step signatures mirror the step expression's captures"
-)]
-async fn step_concurrently_fund_transfers(
-    world: &mut CucumberWorld,
-    step: &Step,
-    amount: u64,
-    funder_a_name: String,
-    funder_b_name: String,
-    recipient_a_name: String,
-    recipient_b_name: String,
-    node_name: String,
-    alias_a: String,
-    alias_b: String,
-) -> StepResult {
-    actions::concurrently_fund_transfers(
-        world,
-        step,
-        amount,
-        [&funder_a_name, &funder_b_name],
-        [&recipient_a_name, &recipient_b_name],
-        &node_name,
-        [alias_a, alias_b],
-    )
-    .await
-}
+#[when(expr = "I concurrently fund the following transfers:")]
+async fn step_concurrently_fund_transfers(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    const HEADERS: &[&str] = &[
+        "amount",
+        "funding_wallets",
+        "recipient_wallet",
+        "node",
+        "alias",
+    ];
 
-#[then(expr = "transactions {string} and {string} spent disjoint ledger inputs on node {string}")]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "cucumber step entrypoints must take `&mut World`"
-)]
-async fn step_transactions_spent_disjoint_inputs(
-    world: &mut CucumberWorld,
-    step: &Step,
-    alias_a: String,
-    alias_b: String,
-    node_name: String,
-) -> StepResult {
-    assertions::transactions_spent_disjoint_inputs(world, step, &alias_a, &alias_b, &node_name)
-        .await
+    let requests = parse_table_rows(step, HEADERS, "Concurrent transfer", |row| match row {
+        [amount, funding_wallets, recipient_wallet, node, alias] => {
+            Ok(actions::ConcurrentTransferRequest {
+                amount: parse_u64_cell(amount, "amount")?,
+                funding_wallets: parse_list_cell(
+                    funding_wallets,
+                    "funding_wallets",
+                    "Concurrent transfer",
+                )?,
+                recipient_wallet: parse_required_string_cell(
+                    recipient_wallet,
+                    "recipient_wallet",
+                    "Concurrent transfer",
+                )?,
+                node: parse_required_string_cell(node, "node", "Concurrent transfer")?,
+                alias: parse_required_string_cell(alias, "alias", "Concurrent transfer")?,
+            })
+        }
+        _ => invalid_table_row("Concurrent transfer", HEADERS, row.len()),
+    })?;
+
+    actions::concurrently_fund_transfers(world, step, requests).await
 }

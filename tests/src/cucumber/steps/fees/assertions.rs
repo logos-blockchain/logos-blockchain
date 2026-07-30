@@ -4,11 +4,7 @@
 use std::time::Duration;
 
 use cucumber::gherkin::Step;
-use lb_core::{
-    header::HeaderId,
-    mantle::{NoteId, TxHash, gas::GasPrice, traits::Hashable as _},
-};
-use lb_testing_framework::NodeHttpClient;
+use lb_core::{header::HeaderId, mantle::gas::GasPrice};
 use tracing::info;
 
 use crate::{
@@ -163,6 +159,45 @@ pub fn execution_prices_follow_spec_reference(world: &CucumberWorld, step: &Step
     Ok(())
 }
 
+/// Checks the recorded slot range crosses at least one configured epoch
+/// boundary.
+pub fn gas_prices_cross_epoch_boundary(
+    world: &CucumberWorld,
+    step: &Step,
+    slots_per_epoch: u64,
+) -> StepResult {
+    if slots_per_epoch == 0 {
+        return Err(StepError::InvalidArgument {
+            message: "slots per epoch must be greater than 0".to_owned(),
+        });
+    }
+
+    let records = recorded_gas_prices(world, step)?;
+    let first_slot = records[0].slot;
+    let last_slot = records[records.len() - 1].slot;
+    let first_epoch = first_slot / slots_per_epoch;
+    let last_epoch = last_slot / slots_per_epoch;
+
+    if first_epoch == last_epoch {
+        return Err(StepError::StepFail {
+            message: format!(
+                "Step `{}` error: recorded slots {first_slot}..={last_slot} stayed within epoch \
+                 {first_epoch}; expected to cross a boundary with {slots_per_epoch} slots per \
+                 epoch",
+                step.value,
+            ),
+        });
+    }
+
+    info!(
+        target: TARGET,
+        "Recorded gas prices crossed from epoch {first_epoch} to {last_epoch} over slots \
+         {first_slot}..={last_slot}",
+    );
+
+    Ok(())
+}
+
 /// With traffic on chain, the storage price must move at an epoch boundary.
 ///
 /// Per the [1.0.0] Storage Market spec, usage recorded during an epoch
@@ -172,15 +207,14 @@ pub fn storage_prices_respond_to_usage(world: &CucumberWorld, step: &Step) -> St
     let records = recorded_gas_prices(world, step)?;
 
     let first_price = records[0].storage_price;
-    if records
+    if !records
         .iter()
-        .all(|record| record.storage_price == first_price)
+        .any(|record| record.storage_price > first_price)
     {
         return Err(StepError::StepFail {
             message: format!(
-                "Step `{}` error: the storage gas price stayed at {first_price} for all {} \
-                 recorded blocks despite storage usage and epoch boundaries; the storage \
-                 market is disconnected from usage",
+                "Step `{}` error: the storage gas price never rose above {first_price} over {} \
+                 recorded blocks despite storage usage and epoch boundaries",
                 step.value,
                 records.len(),
             ),
@@ -189,105 +223,10 @@ pub fn storage_prices_respond_to_usage(world: &CucumberWorld, step: &Step) -> St
 
     info!(
         target: TARGET,
-        "Storage gas price responded to usage over {} blocks", records.len(),
+        "Storage gas price rose in response to usage over {} blocks", records.len(),
     );
 
     Ok(())
-}
-
-/// Checks two included transactions spent no common ledger input.
-pub async fn transactions_spent_disjoint_inputs(
-    world: &CucumberWorld,
-    step: &Step,
-    alias_a: &str,
-    alias_b: &str,
-    node_name: &str,
-) -> StepResult {
-    let hash_a = world.resolve_submitted_transaction(alias_a)?;
-    let hash_b = world.resolve_submitted_transaction(alias_b)?;
-    let client = world.resolve_node_http_client(node_name)?;
-
-    let (inputs_a, inputs_b) =
-        on_chain_transfer_inputs(&client, world.genesis_block_id, hash_a, hash_b)
-            .await
-            .map_err(|message| StepError::StepFail {
-                message: format!(
-                    "Step `{}` error: transactions `{alias_a}` and `{alias_b}`: {message}",
-                    step.value
-                ),
-            })?;
-
-    if inputs_a.iter().any(|input| inputs_b.contains(input)) {
-        return Err(StepError::StepFail {
-            message: format!(
-                "Step `{}` error: transactions `{alias_a}` and `{alias_b}` spent \
-                 overlapping notes; the pending-note reservation failed",
-                step.value
-            ),
-        });
-    }
-
-    info!(
-        target: TARGET,
-        "Transactions `{alias_a}` and `{alias_b}` spent disjoint ledger inputs",
-    );
-
-    Ok(())
-}
-
-/// Walks the chain back from the tip and returns the transfer inputs of the
-/// two transactions.
-async fn on_chain_transfer_inputs(
-    client: &NodeHttpClient,
-    genesis_id: Option<HeaderId>,
-    hash_a: TxHash,
-    hash_b: TxHash,
-) -> Result<(Vec<NoteId>, Vec<NoteId>), String> {
-    let tip = client
-        .consensus_info()
-        .await
-        .map_err(|source| format!("consensus info request failed: {source}"))?
-        .cryptarchia_info
-        .tip;
-
-    let mut inputs_a = None;
-    let mut inputs_b = None;
-
-    let mut cursor = tip;
-    for _ in 0..1_000 {
-        if Some(cursor) == genesis_id {
-            break;
-        }
-
-        let Some(block) = client
-            .block(&cursor)
-            .await
-            .map_err(|source| format!("block fetch failed: {source}"))?
-        else {
-            break;
-        };
-
-        for tx in &block.transactions {
-            let hash = tx.hash();
-            if hash == hash_a {
-                inputs_a = Some(fee_spec::transfer_inputs(tx));
-            }
-            if hash == hash_b {
-                inputs_b = Some(fee_spec::transfer_inputs(tx));
-            }
-        }
-
-        if inputs_a.is_some() && inputs_b.is_some() {
-            break;
-        }
-
-        cursor = block.header.parent_block;
-    }
-
-    match (inputs_a, inputs_b) {
-        (Some(a), Some(b)) => Ok((a, b)),
-        _ => Err("not both found on chain".to_owned()),
-    }
 }
 
 fn recorded_gas_prices<'world>(

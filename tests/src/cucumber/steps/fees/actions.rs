@@ -1,16 +1,19 @@
 //! Actions behind the fee-market steps: building and submitting fee-paying
 //! transactions and recording per-block gas prices.
 
-use std::time::Duration;
+use std::{collections::HashSet, num::NonZero, time::Duration};
 
 use cucumber::gherkin::Step;
-use futures::StreamExt as _;
+use futures::{StreamExt as _, future::join_all};
 use lb_common_http_client::ApiBlock;
 use lb_core::{
     header::HeaderId,
     mantle::{traits::Hashable as _, transactions::GasPrices},
 };
-use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
+use lb_http_api_common::{
+    bodies::wallet::transfer_funds::WalletTransferFundsRequestBody,
+    queries::{BlockFilter, BlockSortOrder, BlocksStreamQuery},
+};
 use lb_testing_framework::{NodeHttpClient, configs::wallet::WalletAccount};
 use tokio::time::timeout;
 use tracing::info;
@@ -117,8 +120,10 @@ pub async fn record_per_block_gas_prices(
     Ok(())
 }
 
-/// Records the gas prices after every block, from genesis until `slots`
-/// slots have passed from the first streamed block.
+/// Records gas prices from genesis until `slots` have passed from the first
+/// streamed block. The historical prefix comes from a range request after the
+/// live feed is subscribed, avoiding a gap between history and future events.
+/// Missed ancestors backfill any later gaps in the feed.
 async fn record_gas_prices(
     client: &NodeHttpClient,
     genesis_id: HeaderId,
@@ -132,14 +137,20 @@ async fn record_gas_prices(
     let mut records = Vec::new();
     let mut last_recorded = genesis_id;
     let mut stop_at_slot: Option<u64> = None;
+    let mut initial_history_loaded = false;
 
     while let Some(event) = block_stream.next().await {
         let slot = u64::from(event.block.header.slot);
         let stop_at = *stop_at_slot.get_or_insert(slot + slots);
 
-        for block in
+        let blocks = if initial_history_loaded {
             block_and_missed_ancestors(client, event.block, last_recorded, genesis_id).await?
-        {
+        } else {
+            initial_history_loaded = true;
+            initial_history_and_first_block(client, event.block, genesis_id).await?
+        };
+
+        for block in blocks {
             last_recorded = block.header.id;
             records.push(price_record_for(client, &block).await?);
         }
@@ -150,6 +161,51 @@ async fn record_gas_prices(
     }
 
     Err("blocks stream ended before the requested slots were observed".to_owned())
+}
+
+/// Loads the canonical chain from genesis through the first live block's
+/// parent, then appends that live block after verifying both sources connect.
+async fn initial_history_and_first_block(
+    client: &NodeHttpClient,
+    first_live_block: ApiBlock,
+    genesis_id: HeaderId,
+) -> Result<Vec<ApiBlock>, String> {
+    let first_live_slot = u64::from(first_live_block.header.slot);
+    let mut history = if first_live_block.header.parent_block == genesis_id {
+        Vec::new()
+    } else {
+        let mut stream = client
+            .blocks_range_stream(BlocksStreamQuery {
+                slot_from: Some(0),
+                slot_to: Some(first_live_slot.saturating_sub(1)),
+                order: Some(BlockSortOrder::Ascending),
+                blocks_limit: None,
+                server_batch_size: NonZero::new(1_000),
+                block_filter: Some(BlockFilter::MutableAndImmutable),
+            })
+            .await
+            .map_err(|source| format!("blocks range request failed: {source}"))?;
+
+        let mut history = Vec::new();
+        while let Some(event) = stream.next().await {
+            if event.block.header.id != genesis_id {
+                history.push(event.block);
+            }
+        }
+        history
+    };
+
+    let history_tip = history.last().map_or(genesis_id, |block| block.header.id);
+    if history_tip != first_live_block.header.parent_block {
+        return Err(format!(
+            "blocks range ended at {history_tip}, but the first live block points to {}; the \
+             chain reorganized while connecting history to the live feed",
+            first_live_block.header.parent_block,
+        ));
+    }
+
+    history.push(first_live_block);
+    Ok(history)
 }
 
 /// The streamed block plus any ancestors the stream subscription missed,
@@ -207,73 +263,101 @@ async fn price_record_for(
     })
 }
 
-/// Fires two wallet transfer requests at the same time, funded from the same
-/// key set, and records both transactions under their aliases.
+pub struct ConcurrentTransferRequest {
+    pub amount: u64,
+    pub funding_wallets: Vec<String>,
+    pub recipient_wallet: String,
+    pub node: String,
+    pub alias: String,
+}
+
+/// Fires wallet transfer requests at the same time and records each transaction
+/// under its alias.
 pub async fn concurrently_fund_transfers(
     world: &mut CucumberWorld,
     step: &Step,
-    amount: u64,
-    funder_names: [&str; 2],
-    recipient_names: [&str; 2],
-    node_name: &str,
-    aliases: [String; 2],
+    requests: Vec<ConcurrentTransferRequest>,
 ) -> StepResult {
-    let funder_a = user_wallet_account(world, step, funder_names[0])?;
-    let funder_b = user_wallet_account(world, step, funder_names[1])?;
-    let recipient_a = user_wallet_account(world, step, recipient_names[0])?;
-    let recipient_b = user_wallet_account(world, step, recipient_names[1])?;
-    let client = world.resolve_node_http_client(node_name)?;
-
-    let funding_public_keys = vec![funder_a.public_key(), funder_b.public_key()];
-    let request_for = |recipient: &WalletAccount| WalletTransferFundsRequestBody {
-        tip: None,
-        change_public_key: funder_a.public_key(),
-        funding_public_keys: funding_public_keys.clone(),
-        recipient_public_key: recipient.public_key(),
-        amount,
-    };
-
-    let (response_a, response_b) = tokio::join!(
-        client.transfer_funds(request_for(&recipient_a)),
-        client.transfer_funds(request_for(&recipient_b)),
-    );
-
-    let hash_a = response_a
-        .map_err(|source| StepError::StepFail {
-            message: format!(
-                "Step `{}` error: first concurrent transfer request failed: {source}",
-                step.value
-            ),
-        })?
-        .hash;
-
-    let hash_b = response_b
-        .map_err(|source| StepError::StepFail {
-            message: format!(
-                "Step `{}` error: second concurrent transfer request failed: {source}",
-                step.value
-            ),
-        })?
-        .hash;
-
-    if hash_a == hash_b {
-        return Err(StepError::StepFail {
-            message: format!(
-                "Step `{}` error: the wallet built the same transaction for both requests",
-                step.value
-            ),
+    if requests.len() < 2 {
+        return Err(StepError::InvalidArgument {
+            message: "concurrent transfers require at least two requests".to_owned(),
         });
     }
 
-    let [alias_a, alias_b] = aliases;
+    let mut aliases = HashSet::with_capacity(requests.len());
+    let mut prepared = Vec::with_capacity(requests.len());
+
+    for request in requests {
+        if !aliases.insert(request.alias.clone()) {
+            return Err(StepError::InvalidArgument {
+                message: format!("duplicate concurrent transfer alias `{}`", request.alias),
+            });
+        }
+
+        let funding_accounts = request
+            .funding_wallets
+            .iter()
+            .map(|wallet| user_wallet_account(world, step, wallet))
+            .collect::<Result<Vec<_>, _>>()?;
+        let recipient = user_wallet_account(world, step, &request.recipient_wallet)?;
+        let client = world.resolve_node_http_client(&request.node)?;
+
+        let funding_public_keys = funding_accounts
+            .iter()
+            .map(WalletAccount::public_key)
+            .collect::<Vec<_>>();
+        let transfer = WalletTransferFundsRequestBody {
+            tip: None,
+            change_public_key: funding_public_keys[0],
+            funding_public_keys,
+            recipient_public_key: recipient.public_key(),
+            amount: request.amount,
+        };
+
+        prepared.push((request.alias, client, transfer));
+    }
+
+    let responses = join_all(
+        prepared
+            .into_iter()
+            .map(async |(alias, client, request)| (alias, client.transfer_funds(request).await)),
+    )
+    .await;
+
+    let mut hashes = HashSet::with_capacity(responses.len());
+    let mut submitted = Vec::with_capacity(responses.len());
+
+    for (alias, response) in responses {
+        let hash = response
+            .map_err(|source| StepError::StepFail {
+                message: format!(
+                    "Step `{}` error: concurrent transfer `{alias}` failed: {source}",
+                    step.value
+                ),
+            })?
+            .hash;
+
+        if !hashes.insert(hash) {
+            return Err(StepError::StepFail {
+                message: format!(
+                    "Step `{}` error: the wallet built the same transaction for multiple \
+                     concurrent requests",
+                    step.value
+                ),
+            });
+        }
+
+        submitted.push((alias, hash));
+    }
 
     info!(
         target: TARGET,
-        "Concurrently funded transfers `{alias_a}` ({hash_a:?}) and `{alias_b}` ({hash_b:?})",
+        "Concurrently funded {} transfers", submitted.len(),
     );
 
-    world.remember_submitted_transaction(alias_a, hash_a);
-    world.remember_submitted_transaction(alias_b, hash_b);
+    for (alias, hash) in submitted {
+        world.remember_submitted_transaction(alias, hash);
+    }
 
     Ok(())
 }
