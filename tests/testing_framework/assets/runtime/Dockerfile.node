@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # check=skip=SecretsUsedInArgOrEnv
 
-FROM rust:1.96.0-slim-bookworm AS cfgsync-builder
+FROM rust:1.97.1-slim-bookworm AS cfgsync-builder
 
 WORKDIR /logos-blockchain-testing
 COPY --from=logos_blockchain_testing . /logos-blockchain-testing
@@ -14,7 +14,7 @@ RUN cargo build --locked --release \
     -p cfgsync-runtime \
     --bin cfgsync-client
 
-FROM rust:1.96.0-slim-bookworm AS builder
+FROM rust:1.97.1-slim-bookworm AS builder
 
 WORKDIR /workspace
 COPY . .

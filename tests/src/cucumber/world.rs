@@ -986,6 +986,9 @@ pub struct CucumberWorld {
     pub zone: ZoneState,
     /// Manual: Per-node Tokio console profiling requested by Cucumber steps.
     pub tokio_console_profile: TokioConsoleProfile,
+    /// Manual: Per-block gas prices recorded by the fee-market steps,
+    /// verified against the fee-market spec reference.
+    pub recorded_gas_prices: Vec<crate::common::fee_spec::GasPriceRecord>,
 }
 
 impl Drop for CucumberWorld {
@@ -1181,6 +1184,7 @@ impl Debug for CucumberWorld {
                 &node_snapshot_on_startup_display(self.node_snapshot_on_startup.as_ref()),
             )
             .field("tokio_console_profile", &self.tokio_console_profile)
+            .field("recorded_gas_prices_len", &self.recorded_gas_prices.len())
             .finish()
     }
 }

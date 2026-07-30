@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ZkHash, quota::Ed25519PublicKey};
 
-/// Public inputs for all types of Proof of Quota. Spec: <https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#25a261aa09df80ce943dce35dd5403ac>.
+/// Public inputs for all types of Proof of Quota. Spec: <https://lip.logos.co/blockchain/raw/proof-of-quota.html#public-values>.
 #[derive(Clone, Copy)]
 pub struct Inputs {
     pub signing_key: Ed25519PublicKey,

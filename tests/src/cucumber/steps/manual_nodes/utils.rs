@@ -1454,8 +1454,7 @@ async fn fetch_and_update_chain_info(
                 .get_mut(&started_node_name)
                 .ok_or(StepError::LogicalError {
                     message: format!(
-                        "Started node '{}' not found in chain info map",
-                        &started_node_name
+                        "Started node '{started_node_name}' not found in chain info map",
                     ),
                 })?;
         let chain_info = node_info.chain_info();

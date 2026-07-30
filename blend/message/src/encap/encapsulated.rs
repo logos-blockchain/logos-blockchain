@@ -7,6 +7,7 @@ use lb_blend_proofs::{
     quota::{self, VerifiedProofOfQuota},
     selection::{self, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
+use lb_codec::{BinaryDecode, BinaryEncode, DecodeError, take};
 use lb_key_management_system_keys::keys::{
     Ed25519PublicKey, Ed25519Signature, SharedKey, UnsecuredEd25519Key,
 };
@@ -15,7 +16,6 @@ use serde_with::serde_as;
 
 use crate::{
     Error, PayloadType,
-    codec::{WireDecode, WireDecodeError, WireEncode},
     crypto::{domains, key_ext::SharedKeyExt as _},
     encap::{
         ProofsVerifier,
@@ -64,43 +64,6 @@ impl EncapsulatedMessage {
         (self.public_header, self.encapsulated_part)
     }
 
-    #[cfg(test)]
-    // Encoding (and sending) of unverified messages should not be done outside of
-    // tests, so this function is only available in tests.
-    #[must_use]
-    pub fn encode(&self) -> Vec<u8> {
-        let expected_encoded_len =
-            crate::encap::expected_serialized_len(self.encapsulation_layers());
-        let mut out = Vec::with_capacity(expected_encoded_len);
-        self.public_header.encode_into(&mut out);
-        self.encapsulated_part.encode_into(&mut out);
-        debug_assert!(
-            out.len() == expected_encoded_len,
-            "Message should encode to the expected length but it did not."
-        );
-        out
-    }
-
-    #[cfg(test)]
-    fn encapsulation_layers(&self) -> NonZeroU64 {
-        self.encapsulated_part.encapsulation_layers()
-    }
-
-    /// Decode a message from the front of `bytes`, returning it and the
-    /// unconsumed remainder.
-    ///
-    /// This does not check `bytes`'s length nor that it is fully consumed — the
-    /// caller `bytes` is exactly a well-formed `num_layers`-layer message and
-    /// checks the remainder.
-    pub fn decode(bytes: &[u8], num_layers: NonZeroU64) -> Result<(&[u8], Self), Error> {
-        let (remaining, public_header) = PublicHeader::decode(bytes, ())?;
-        let (remaining, encapsulated_part) = EncapsulatedPart::decode(remaining, num_layers)?;
-        Ok((
-            remaining,
-            Self::from_components(public_header, encapsulated_part),
-        ))
-    }
-
     /// Verify the message public header signature.
     pub fn verify_header_signature(
         self,
@@ -124,13 +87,13 @@ impl EncapsulatedMessage {
     where
         Verifier: ProofsVerifier,
     {
-        // Verify signature according to the Blend spec: <https://www.notion.so/nomos-tech/Blend-Protocol-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df81859cebf5e3d2a5cd8f>.
+        // Verify signature according to the Blend spec: <https://lip.logos.co/blockchain/raw/blend-protocol.html#processing>.
         self.public_header.verify_signature(&signing_body(
             &self.encapsulated_part.private_header,
             &self.encapsulated_part.payload,
         ))?;
         let (_, signing_key, proof_of_quota, signature) = self.public_header.into_components();
-        // Verify the Proof of Quota according to the Blend spec: <https://www.notion.so/nomos-tech/Blend-Protocol-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df81b593ddce00cffd24a8>.
+        // Verify the Proof of Quota according to the Blend spec: <https://lip.logos.co/blockchain/raw/blend-protocol.html#processing>.
         let verified_proof_of_quota = verifier
             .verify_proof_of_quota(proof_of_quota, &signing_key)
             .map_err(|_| Error::ProofOfQuotaVerificationFailed(quota::Error::InvalidProof))?;
@@ -153,6 +116,42 @@ impl EncapsulatedMessage {
     #[must_use]
     pub const fn public_header_mut(&mut self) -> &mut PublicHeader {
         &mut self.public_header
+    }
+}
+
+// Encoding (and sending) of unverified messages should not be done outside of
+// tests, so this impl is only available in tests.
+#[cfg(test)]
+impl BinaryEncode for EncapsulatedMessage {
+    fn encoded_length(&self) -> usize {
+        self.public_header
+            .encoded_length()
+            .checked_add(self.encapsulated_part.encoded_length())
+            .unwrap()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.public_header.encode_into(out);
+        self.encapsulated_part.encode_into(out);
+    }
+}
+
+impl BinaryDecode for EncapsulatedMessage {
+    type Context = NonZeroU64;
+
+    fn decode<'input>(
+        input: &'input [u8],
+        context: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, public_header) = PublicHeader::decode(input, &())?;
+        let (input, encapsulated_part) = EncapsulatedPart::decode(input, context)?;
+        Ok((
+            input,
+            Self {
+                public_header,
+                encapsulated_part,
+            },
+        ))
     }
 }
 
@@ -183,7 +182,7 @@ impl EncapsulatedPart {
     /// encapsulations.
     ///
     /// It returns an error if the slice of inputs is empty.
-    pub(super) fn try_initialize(
+    pub(crate) fn try_initialize(
         inputs: &[EncapsulationInput],
         payload_type: PayloadType,
         payload_body: PaddedPayloadBody,
@@ -195,7 +194,7 @@ impl EncapsulatedPart {
     }
 
     /// Add a layer of encapsulation.
-    pub(super) fn encapsulate(
+    pub(crate) fn encapsulate(
         self,
         shared_key: &SharedKey,
         signing_key: &UnsecuredEd25519Key,
@@ -284,28 +283,34 @@ impl EncapsulatedPart {
     }
 
     /// Signs the encapsulated part using the provided key.
-    pub(super) fn sign(&self, key: &UnsecuredEd25519Key) -> Ed25519Signature {
+    pub(crate) fn sign(&self, key: &UnsecuredEd25519Key) -> Ed25519Signature {
         key.sign_payload(&signing_body(&self.private_header, &self.payload))
-    }
-
-    pub(super) fn encapsulation_layers(&self) -> NonZeroU64 {
-        self.private_header.encapsulation_layers()
     }
 }
 
-impl WireEncode for EncapsulatedPart {
+impl BinaryEncode for EncapsulatedPart {
+    fn encoded_length(&self) -> usize {
+        self.private_header
+            .encoded_length()
+            .checked_add(self.payload.encoded_length())
+            .unwrap()
+    }
+
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.private_header.encode_into(out);
         self.payload.encode_into(out);
     }
 }
 
-impl WireDecode for EncapsulatedPart {
+impl BinaryDecode for EncapsulatedPart {
     type Context = NonZeroU64;
 
-    fn decode(input: &[u8], context: Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
+    fn decode<'input>(
+        input: &'input [u8],
+        context: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
         let (input, private_header) = EncapsulatedPrivateHeader::decode(input, context)?;
-        let (input, payload) = EncapsulatedPayload::decode(input, ())?;
+        let (input, payload) = EncapsulatedPayload::decode(input, &())?;
         Ok((
             input,
             Self {
@@ -370,7 +375,7 @@ fn signing_body(
 // TODO: Consider having `InitializedPrivateHeader`
 // that just finished the initialization step and doesn't have `decapsulate` method.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub(super) struct EncapsulatedPrivateHeader(Box<[EncapsulatedBlendingHeader]>);
+pub(crate) struct EncapsulatedPrivateHeader(Box<[EncapsulatedBlendingHeader]>);
 
 impl EncapsulatedPrivateHeader {
     #[cfg(test)]
@@ -381,7 +386,7 @@ impl EncapsulatedPrivateHeader {
     /// Initializes the private header as preparation for actual encapsulations.
     ///
     /// It returns an error if the slice of inputs is empty.
-    fn try_initialize(inputs: &[EncapsulationInput]) -> Result<Self, Error> {
+    pub(crate) fn try_initialize(inputs: &[EncapsulationInput]) -> Result<Self, Error> {
         if inputs.is_empty() {
             return Err(Error::EmptyEncapsulationInputs);
         }
@@ -493,7 +498,7 @@ impl EncapsulatedPrivateHeader {
             signature,
             signing_pubkey,
         } = self.first().try_deserialize()?;
-        // Verify PoSel according to the Blend spec: <https://www.notion.so/nomos-tech/Blend-Protocol-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df81dd8cbedc8af4649a6a>.
+        // Verify PoSel according to the Blend spec: <https://lip.logos.co/blockchain/raw/blend-protocol.html#processing>.
         let verified_proof_of_selection = verifier
             .verify_proof_of_selection(proof_of_selection, posel_verification_input)
             .map_err(|_| {
@@ -562,14 +567,13 @@ impl EncapsulatedPrivateHeader {
             .iter()
             .flat_map(EncapsulatedBlendingHeader::iter_bytes)
     }
-
-    pub(super) fn encapsulation_layers(&self) -> NonZeroU64 {
-        NonZeroU64::new(self.0.len() as u64)
-            .expect("An encapsulated part always has at least one blending header.")
-    }
 }
 
-impl WireEncode for EncapsulatedPrivateHeader {
+impl BinaryEncode for EncapsulatedPrivateHeader {
+    fn encoded_length(&self) -> usize {
+        self.0.iter().map(BinaryEncode::encoded_length).sum()
+    }
+
     fn encode_into(&self, out: &mut Vec<u8>) {
         for layer in &self.0 {
             layer.encode_into(out);
@@ -577,13 +581,16 @@ impl WireEncode for EncapsulatedPrivateHeader {
     }
 }
 
-impl WireDecode for EncapsulatedPrivateHeader {
+impl BinaryDecode for EncapsulatedPrivateHeader {
     type Context = NonZeroU64;
 
-    fn decode(mut input: &[u8], context: Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
+    fn decode<'input>(
+        mut input: &'input [u8],
+        context: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
         let mut layers = Vec::with_capacity(context.get() as usize);
         for _ in 0..context.get() {
-            let (remaining, layer) = EncapsulatedBlendingHeader::decode(input, ())?;
+            let (remaining, layer) = EncapsulatedBlendingHeader::decode(input, &())?;
             layers.push(layer);
             input = remaining;
         }
@@ -598,14 +605,14 @@ impl WireDecode for EncapsulatedPrivateHeader {
 /// [`EncapsulatedPrivateHeader`] is one contiguous allocation.
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-struct EncapsulatedBlendingHeader(
+pub(crate) struct EncapsulatedBlendingHeader(
     #[serde_as(as = "serde_with::Bytes")] [u8; BLENDING_HEADER_ENCODED_SIZE],
 );
 
 impl EncapsulatedBlendingHeader {
     /// Build a [`EncapsulatedBlendingHeader`] by serializing a
     /// [`BlendingHeader`] without any encapsulation.
-    fn initialize(header: &BlendingHeader) -> Self {
+    pub(crate) fn initialize(header: &BlendingHeader) -> Self {
         let mut bytes = Vec::with_capacity(BLENDING_HEADER_ENCODED_SIZE);
         header.encode_into(&mut bytes);
         Self(
@@ -619,7 +626,7 @@ impl EncapsulatedBlendingHeader {
     /// If there is no encapsulation left, and if the bytes are valid,
     /// the deserialization will succeed.
     fn try_deserialize(&self) -> Result<BlendingHeader, Error> {
-        let (_remaining, header) = BlendingHeader::decode(&self.0, ())
+        let (_remaining, header) = BlendingHeader::decode(&self.0, &())
             .map_err(|_| Error::PrivateHeaderDeserializationFailed)?;
         Ok(header)
     }
@@ -643,20 +650,27 @@ impl EncapsulatedBlendingHeader {
 // the identity and decoding takes a fixed-size slice of the layer/payload size.
 // No length checks: the network-side size gate guarantees the input is large
 // enough (`split_at`/`try_into` therefore never fail).
-impl WireEncode for EncapsulatedBlendingHeader {
+impl BinaryEncode for EncapsulatedBlendingHeader {
+    fn encoded_length(&self) -> usize {
+        BLENDING_HEADER_ENCODED_SIZE
+    }
+
     fn encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.0);
     }
 }
 
-impl WireDecode for EncapsulatedBlendingHeader {
+impl BinaryDecode for EncapsulatedBlendingHeader {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
-        let (bytes, remaining) = input.split_at(BLENDING_HEADER_ENCODED_SIZE);
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (bytes, remaining) = take::<Self>(input, BLENDING_HEADER_ENCODED_SIZE)?;
         Ok((
             remaining,
-            Self(bytes.try_into().expect("split_at guarantees the length")),
+            Self(bytes.try_into().expect("Take guarantees the length")),
         ))
     }
 }
@@ -668,12 +682,14 @@ impl WireDecode for EncapsulatedBlendingHeader {
 /// [`EncapsulatedPart`]/[`EncapsulatedMessage`].
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-struct EncapsulatedPayload(#[serde_as(as = "serde_with::Bytes")] Box<[u8; PAYLOAD_ENCODED_SIZE]>);
+pub(crate) struct EncapsulatedPayload(
+    #[serde_as(as = "serde_with::Bytes")] Box<[u8; PAYLOAD_ENCODED_SIZE]>,
+);
 
 impl EncapsulatedPayload {
     /// Build a [`EncapsulatedPayload`] by serializing a [`Payload`]
     /// without any encapsulation.
-    fn initialize(payload: &Payload) -> Self {
+    pub(crate) fn initialize(payload: &Payload) -> Self {
         let mut bytes = Vec::with_capacity(PAYLOAD_ENCODED_SIZE);
         payload.encode_into(&mut bytes);
         Self(
@@ -689,7 +705,7 @@ impl EncapsulatedPayload {
     /// the deserialization will succeed.
     fn try_deserialize(&self) -> Result<Payload, Error> {
         let (_remaining, payload) =
-            Payload::decode(&self.0[..], ()).map_err(|_| Error::PayloadDeserializationFailed)?;
+            Payload::decode(&self.0[..], &()).map_err(|_| Error::PayloadDeserializationFailed)?;
         Ok(payload)
     }
 
@@ -710,22 +726,29 @@ impl EncapsulatedPayload {
     }
 }
 
-impl WireEncode for EncapsulatedPayload {
+impl BinaryEncode for EncapsulatedPayload {
+    fn encoded_length(&self) -> usize {
+        PAYLOAD_ENCODED_SIZE
+    }
+
     fn encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.0[..]);
     }
 }
 
-impl WireDecode for EncapsulatedPayload {
+impl BinaryDecode for EncapsulatedPayload {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
-        let (bytes, remaining) = input.split_at(PAYLOAD_ENCODED_SIZE);
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (bytes, remaining) = take::<Self>(input, PAYLOAD_ENCODED_SIZE)?;
         let boxed = bytes
             .to_vec()
             .into_boxed_slice()
             .try_into()
-            .expect("split_at guarantees the length");
+            .expect("Take guarantees the length");
         Ok((remaining, Self(boxed)))
     }
 }

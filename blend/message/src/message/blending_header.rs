@@ -3,20 +3,18 @@ use lb_blend_proofs::{
     quota::{PROOF_OF_QUOTA_SIZE, ProofOfQuota, VerifiedProofOfQuota},
     selection::{PROOF_OF_SELECTION_SIZE, ProofOfSelection, VerifiedProofOfSelection},
 };
+use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_key_management_system_keys::keys::{
     ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature,
     UnsecuredEd25519Key,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    codec::{WireDecode, WireDecodeError, WireEncode},
-    crypto::domains,
-};
+use crate::crypto::domains;
 
 /// A blending header that is fully decapsulated.
 /// This must be encapsulated when being sent to the blend network.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlendingHeader {
     pub signing_pubkey: Ed25519PublicKey,
     pub proof_of_quota: ProofOfQuota,
@@ -78,7 +76,11 @@ pub const BLENDING_HEADER_ENCODED_SIZE: usize = ED25519_PUBLIC_KEY_SIZE
     .checked_add(size_of::<bool>())
     .unwrap();
 
-impl WireEncode for BlendingHeader {
+impl BinaryEncode for BlendingHeader {
+    fn encoded_length(&self) -> usize {
+        BLENDING_HEADER_ENCODED_SIZE
+    }
+
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.signing_pubkey.encode_into(out);
         self.proof_of_quota.encode_into(out);
@@ -88,15 +90,18 @@ impl WireEncode for BlendingHeader {
     }
 }
 
-impl WireDecode for BlendingHeader {
+impl BinaryDecode for BlendingHeader {
     type Context = ();
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
-        let (input, signing_pubkey) = Ed25519PublicKey::decode(input, ())?;
-        let (input, proof_of_quota) = ProofOfQuota::decode(input, ())?;
-        let (input, signature) = Ed25519Signature::decode(input, ())?;
-        let (input, proof_of_selection) = ProofOfSelection::decode(input, ())?;
-        let (input, is_last) = bool::decode(input, ())?;
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, signing_pubkey) = Ed25519PublicKey::decode(input, &())?;
+        let (input, proof_of_quota) = ProofOfQuota::decode(input, &())?;
+        let (input, signature) = Ed25519Signature::decode(input, &())?;
+        let (input, proof_of_selection) = ProofOfSelection::decode(input, &())?;
+        let (input, is_last) = bool::decode(input, &())?;
 
         Ok((
             input,

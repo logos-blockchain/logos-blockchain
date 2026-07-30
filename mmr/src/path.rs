@@ -1,7 +1,11 @@
 use lb_poseidon2::{Digest, Fr};
+use lb_utils::bounded::{BoundedError, UpperBoundedVec};
 use serde::{Deserialize, Serialize};
 
-use crate::{Root, empty_subtree_root};
+use crate::{MAX_MERKLE_PATH_SIBLINGS, Root, assert_acceptable_height, empty_subtree_root};
+
+/// Sibling hashes in a [`MerklePath`].
+type MerklePathSiblings = UpperBoundedVec<Fr, MAX_MERKLE_PATH_SIBLINGS>;
 
 /// A merkle inclusion proof for a leaf in an MMR.
 ///
@@ -11,17 +15,54 @@ use crate::{Root, empty_subtree_root};
 ///
 /// Paths are created via [`crate::MerkleMountainRange::push_with_paths`] and
 /// kept up-to-date by passing them to subsequent `push_with_paths` calls.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MerklePath {
     /// The 0-indexed leaf position in the tree.
-    pub leaf_index: usize,
+    leaf_index: usize,
     /// Sibling hashes from height 1 (bottom) up to height `MAX_HEIGHT - 1`.
     /// `siblings[h - 1]` is the root of the sibling subtree at height `h`.
-    #[serde(with = "lb_groth16::serde::serde_fr_vec")]
-    pub siblings: Vec<Fr>,
+    #[serde(with = "serde_siblings")]
+    siblings: MerklePathSiblings,
 }
 
 impl MerklePath {
+    /// Construct a path whose sibling count is globally safe for supported
+    /// MMRs.
+    pub fn try_new(leaf_index: usize, siblings: Vec<Fr>) -> Result<Self, MerklePathError> {
+        Ok(Self {
+            leaf_index,
+            siblings: siblings.try_into()?,
+        })
+    }
+
+    /// Validate that this path has the sibling count required by an MMR height.
+    pub(crate) fn validate_for_height(&self, max_height: u8) -> Result<(), MerklePathError> {
+        assert_acceptable_height(max_height);
+
+        let expected = usize::from(max_height - 1);
+        let actual = self.siblings.len();
+        if actual != expected {
+            return Err(MerklePathError::InvalidSiblingCount { expected, actual });
+        }
+
+        Ok(())
+    }
+
+    /// Validate that this path refers to an existing leaf.
+    pub(crate) const fn validate_leaf_index(
+        &self,
+        leaf_count: usize,
+    ) -> Result<(), MerklePathError> {
+        if self.leaf_index >= leaf_count {
+            return Err(MerklePathError::LeafIndexOutOfRange {
+                leaf_index: self.leaf_index,
+                leaf_count,
+            });
+        }
+
+        Ok(())
+    }
+
     /// Compute the merkle root from a leaf hash and this proof.
     #[must_use]
     pub fn root<Hash: Digest>(&self, leaf: Fr) -> Fr {
@@ -47,6 +88,50 @@ impl MerklePath {
     #[must_use]
     pub const fn leaf_index(&self) -> usize {
         self.leaf_index
+    }
+
+    /// Sibling hashes from height 1 (bottom) to the MMR's maximum height.
+    #[must_use]
+    pub fn siblings(&self) -> &[Fr] {
+        self.siblings.as_slice()
+    }
+}
+
+/// A malformed or incompatible MMR path.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum MerklePathError {
+    #[error(transparent)]
+    SiblingCountOutOfBounds(#[from] BoundedError),
+    #[error("invalid sibling count: expected {expected}, got {actual}")]
+    InvalidSiblingCount { expected: usize, actual: usize },
+    #[error("leaf index {leaf_index} is outside MMR with {leaf_count} leaves")]
+    LeafIndexOutOfRange {
+        leaf_index: usize,
+        leaf_count: usize,
+    },
+}
+
+mod serde_siblings {
+    use lb_groth16::{Fr, serde::serde_fr_vec};
+    use lb_utils::bounded::UpperBoundedVec;
+    use serde::{Deserializer, Serializer};
+
+    use super::{MAX_MERKLE_PATH_SIBLINGS, MerklePathSiblings};
+
+    pub fn serialize<S>(siblings: &MerklePathSiblings, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serde_fr_vec::serialize(siblings.as_slice(), serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<MerklePathSiblings, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let siblings: Vec<Fr> = serde_fr_vec::deserialize(deserializer)?;
+        UpperBoundedVec::<Fr, MAX_MERKLE_PATH_SIBLINGS>::try_from(siblings)
+            .map_err(serde::de::Error::custom)
     }
 }
 

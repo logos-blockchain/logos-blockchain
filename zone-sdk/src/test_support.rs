@@ -23,10 +23,7 @@ use lb_core::{
     },
     proofs::leader_proof::Groth16LeaderProof,
 };
-use lb_http_api_common::{
-    bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
-    queries::BlocksStreamQuery,
-};
+use lb_http_api_common::bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody};
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use tokio::sync::{mpsc, watch};
 
@@ -151,13 +148,6 @@ impl adapter::Node for MockNode {
             return Ok(Box::pin(events.chain(until_down)));
         }
         Ok(Box::pin(events.chain(futures::stream::pending())))
-    }
-
-    async fn blocks_range_stream(
-        &self,
-        _params: BlocksStreamQuery,
-    ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
-        Ok(Box::pin(futures::stream::empty()))
     }
 
     async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, lb_common_http_client::Error> {

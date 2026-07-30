@@ -291,7 +291,7 @@ impl LedgerState {
 
     /// total estimated stake and on the average of fees consumed per block over
     /// the last `BLOCK_REWARD_WINDOW_SIZE` blocks. See the block rewards
-    /// specification: <https://www.notion.so/nomos-tech/v1-1-Block-Rewards-Specification-326261aa09df80579edddaf092057b3d>
+    /// specification: <https://lip.logos.co/blockchain/raw/block-rewards.html>
     fn compute_block_rewards(
         mut self,
         total_fee_burned: GasCost,
@@ -347,7 +347,7 @@ impl LedgerState {
     /// consumption are updated based on the total execution gas consumed in the
     /// block and the smoothed average consumption. This function updates the
     /// `average_execution_gas` and the `execution_base_fee` stored in the
-    /// cryptarchia ledger. See the specification <https://www.notion.so/nomos-tech/v1-2-Execution-Market-Specification-326261aa09df8022b1cfcfe968bdb5e1>
+    /// cryptarchia ledger. See the specification <https://lip.logos.co/blockchain/raw/execution-market.html>
     fn update_execution_market(self, block_execution_gas_consumed: Gas) -> Self {
         Self {
             cryptarchia_ledger: self

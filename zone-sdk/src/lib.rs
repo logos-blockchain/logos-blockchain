@@ -65,6 +65,36 @@ pub mod sequencer;
 #[cfg(test)]
 mod test_support;
 
+/// Types appearing in the [`adapter::Node`] trait's method signatures and in
+/// [`ZoneMessage`], re-exported from the crates that define them.
+///
+/// An external backend implementation only needs to depend on this crate:
+/// everything required to write an `impl Node` — request/response bodies,
+/// stream item types, ids, and the error type — is importable from here. The
+/// stream alias is [`adapter::BoxStream`]; the message types themselves
+/// ([`ZoneMessage`], [`ZoneBlock`], [`Deposit`], [`Withdraw`]) live at the
+/// crate root.
+pub mod node_types {
+    pub use lb_common_http_client::{
+        ApiBlock, BlockInfo, ChainServiceInfo, Error, Events, ProcessedBlockEvent, Slot, TimeInfo,
+    };
+    pub use lb_core::{
+        crypto::Hash,
+        events::DepositRecreatedNotes,
+        header::HeaderId,
+        mantle::{
+            SignedMantleTx, TxHash, Value,
+            channel::ChannelState,
+            ledger::Inputs,
+            ops::channel::{ChannelId, MsgId, deposit::Metadata, inscribe::Inscription},
+            transactions::states::Unverified,
+        },
+    };
+    pub use lb_http_api_common::bodies::wallet::fund::{
+        WalletFundRequestBody, WalletFundResponseBody,
+    };
+}
+
 pub use lb_common_http_client::{CommonHttpClient, Slot};
 pub use lb_core::mantle::ops::channel::Ed25519PublicKey;
 use lb_core::{

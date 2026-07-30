@@ -1,6 +1,8 @@
 pub mod config;
 pub mod time;
 
+mod fixtures;
+
 use core::{fmt::Debug, hash::Hash};
 use std::{
     collections::{BTreeMap, HashSet},

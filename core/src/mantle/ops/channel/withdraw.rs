@@ -1,3 +1,4 @@
+use lb_codec::{BinaryCodec, BinaryEncode as _};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -5,7 +6,6 @@ use crate::{
     mantle::{
         channel::{Channels, Error},
         ledger::{Inputs, Operation, Utxos},
-        nom::{NomCodec, NomEncode as _},
         ops::{OpId, channel::ChannelId},
         transactions::TxHash,
     },
@@ -14,7 +14,7 @@ use crate::{
 };
 
 // ChannelWithdraw = ChannelId Inputs — plain field-order concat.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
 pub struct ChannelWithdrawOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
@@ -22,7 +22,7 @@ pub struct ChannelWithdrawOp {
 
 impl OpId for ChannelWithdrawOp {
     fn op_bytes(&self) -> Vec<u8> {
-        self.encode()
+        self.encode_to_vec()
     }
 }
 

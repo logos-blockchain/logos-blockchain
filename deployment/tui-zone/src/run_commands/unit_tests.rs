@@ -6,10 +6,10 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
+    use lb_codec::BinaryEncode as _;
     use lb_core::mantle::{
         MantleTx, Note, NoteId, Op, SignedMantleTx, Utxo, Value,
         ledger::Inputs,
-        nom::NomEncode as _,
         ops::channel::{
             ChannelId, MsgId,
             inscribe::{Inscription, InscriptionOp},
