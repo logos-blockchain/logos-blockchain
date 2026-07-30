@@ -37,6 +37,10 @@ use crate::{
     metrics,
 };
 
+/// Return a leadership proof and signing key if the current slot is a winning
+/// one for any of the eligible UTXOs, for use in a block proposal.
+///
+/// If the slot is not a winning one, it returns `Ok(None)`.
 #[expect(
     clippy::cognitive_complexity,
     reason = "TODO: address this in a dedicated refactor"
@@ -53,7 +57,6 @@ where
     Wallet: WalletServiceData,
     RuntimeServiceId: Debug + Display + Sync + AsServiceId<Wallet>,
 {
-    let mut non_winning_utxos = 0usize;
     for UtxoWithKeyId { utxo, key_id } in utxos {
         let public_inputs = public_inputs_for_slot(epoch_state, slot, latest_tree);
         let winning = match kms
@@ -139,16 +142,14 @@ where
                 }
             }
         } else {
-            non_winning_utxos += 1;
+            tracing::trace!(
+                "Not a leader for slot {:?}, {:?}/{:?}",
+                slot,
+                utxo.note.value,
+                epoch_state.total_stake()
+            );
         }
     }
-
-    tracing::trace!(
-        target: LOG_TARGET,
-        "Leadership scan completed - slot: {}, eligible: {}, non winning: {non_winning_utxos}",
-        slot.into_inner(),
-        utxos.len(),
-    );
 
     Ok(None)
 }
