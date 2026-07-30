@@ -102,21 +102,6 @@ impl TryFrom<&[u8]> for PaddedPayloadBody {
     }
 }
 
-impl PaddedPayloadBody {
-    /// Build a body padded with `padding` repeated, rather than with the random
-    /// bytes [`TryFrom`] applies.
-    ///
-    /// Wire fixtures pin exact encoded bytes, which random padding can never
-    /// reproduce. This exists for them alone — anything that goes on the wire
-    /// must be built through [`TryFrom`], since the spec requires the padding
-    /// to be random.
-    pub(crate) fn with_fixed_padding(body: &[u8], padding: u8) -> Result<Self, Error> {
-        let mut this = Self::try_from(body)?;
-        this.padded[body.len()..].fill(padding);
-        Ok(this)
-    }
-}
-
 impl BinaryEncode for PaddedPayloadBody {
     fn encoded_length(&self) -> usize {
         self.actual_len

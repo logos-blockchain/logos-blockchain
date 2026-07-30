@@ -22,35 +22,37 @@ use crate::{
     input::EncapsulationInput,
     message::{
         blending_header::BlendingHeader,
-        payload::Payload,
+        payload::{MAX_PAYLOAD_BODY_SIZE, Payload},
         public_header::{PublicHeader, PublicHeaderWithVerifiedSignature, VerifiedPublicHeader},
     },
 };
 
 // -- Payload ---------------------------------------------------------------
 
-/// Padding byte for the fixture payload bodies.
+/// Build a fixture body of exactly [`MAX_PAYLOAD_BODY_SIZE`] bytes: `prefix`,
+/// then `0xAA` to the end.
 ///
-/// Real bodies are padded with random bytes, which no golden fixture could pin,
-/// so the fixtures substitute a fixed filler. It is deliberately not `0x00`:
-/// the bytes past the body are still part of the wire format, and a distinctive
-/// value keeps them visible in the hex rather than blending into a run of
-/// zeros.
-const PAYLOAD_PADDING: u8 = 0xAA;
+/// A shorter body would be padded out with random bytes, which no golden
+/// fixture can pin. One that already fills the buffer leaves nothing to pad, so
+/// the encoding is deterministic.
+fn full_length_body(prefix: &[u8]) -> PaddedPayloadBody {
+    let mut body = prefix.to_vec();
+    body.resize(MAX_PAYLOAD_BODY_SIZE, 0xAA);
+    PaddedPayloadBody::try_from(body).expect("body is exactly the maximum size")
+}
 
 codec_fixtures!(PayloadType, Self::Cover => "00", Self::Data => "01");
 
 codec_fixtures!(
     PaddedPayloadBody,
-    Self::with_fixed_padding(&[1u8, 2, 3], PAYLOAD_PADDING).unwrap()
-        => include_str!("padded_payload_body.hex")
+    full_length_body(&[1u8, 2, 3]) => include_str!("padded_payload_body.hex")
 );
 
 codec_fixtures!(
     Payload,
     Self::new(
         PayloadType::Data,
-        PaddedPayloadBody::with_fixed_padding(&[4u8, 5, 6], PAYLOAD_PADDING).unwrap(),
+        full_length_body(&[4u8, 5, 6]),
     ) => include_str!("payload.hex")
 );
 
@@ -58,7 +60,7 @@ codec_fixtures!(
     EncapsulatedPayload,
     Self::initialize(&Payload::new(
         PayloadType::Data,
-        PaddedPayloadBody::with_fixed_padding(&[7u8, 8, 9], PAYLOAD_PADDING).unwrap(),
+        full_length_body(&[7u8, 8, 9]),
     )) => include_str!("encapsulated_payload.hex")
 );
 
@@ -147,11 +149,7 @@ fn wire_fixture_message() -> EncapsulatedMessageWithVerifiedPublicHeader {
     )
     .expect("well-known encapsulation input is valid")];
 
-    let payload_body = PaddedPayloadBody::with_fixed_padding(
-        b"well-known blend message payload".as_ref(),
-        PAYLOAD_PADDING,
-    )
-    .expect("payload body fits");
+    let payload_body = full_length_body(b"well-known blend message payload");
 
     let (part, signing_key, proof_of_quota) = inputs.iter().enumerate().fold(
         (
