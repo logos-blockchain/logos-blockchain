@@ -43,7 +43,7 @@ pub enum Error {
     InvalidProof,
 }
 
-/// A Proof of Quota as described in the Blend v1 spec: <https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#26a261aa09df80f4b119f900fbb36f3f>.
+/// A Proof of Quota as described in the Blend spec: <https://lip.logos.co/blockchain/raw/blend-protocol.html#proof-of-quota>.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ProofOfQuota {
     #[serde(with = "lb_groth16::serde::serde_fr")]
@@ -222,7 +222,7 @@ static DOMAIN_SEPARATION_TAG_FR: LazyLock<ZkHash> = LazyLock::new(|| {
     fr_from_bytes(&DOMAIN_SEPARATION_TAG[..])
         .expect("DST for secret selection randomness calculation must be correct.")
 });
-// As per Proof of Quota v1 spec: <https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#215261aa09df81adb8ccd1448c9afd68>.
+// As per Proof of Quota spec: <https://lip.logos.co/blockchain/raw/proof-of-quota.html>.
 fn generate_secret_selection_randomness(
     input: &SelectionRandomnessSecretInput,
     key_index: u64,

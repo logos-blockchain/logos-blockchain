@@ -37,7 +37,6 @@ lb-zksign                     = { workspace = true }
 multiaddr                     = { workspace = true }
 nom                           = { features = ["alloc"], workspace = true }
 num-bigint                    = { workspace = true }
-rpds                          = { workspace = true }
 serde                         = { features = ["derive"], workspace = true }
 strum                         = { features = ["derive"], workspace = true }
 thiserror                     = { workspace = true }

@@ -124,13 +124,13 @@ impl EncapsulatedMessage {
     where
         Verifier: ProofsVerifier,
     {
-        // Verify signature according to the Blend spec: <https://www.notion.so/nomos-tech/Blend-Protocol-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df81859cebf5e3d2a5cd8f>.
+        // Verify signature according to the Blend spec: <https://lip.logos.co/blockchain/raw/blend-protocol.html#processing>.
         self.public_header.verify_signature(&signing_body(
             &self.encapsulated_part.private_header,
             &self.encapsulated_part.payload,
         ))?;
         let (_, signing_key, proof_of_quota, signature) = self.public_header.into_components();
-        // Verify the Proof of Quota according to the Blend spec: <https://www.notion.so/nomos-tech/Blend-Protocol-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df81b593ddce00cffd24a8>.
+        // Verify the Proof of Quota according to the Blend spec: <https://lip.logos.co/blockchain/raw/blend-protocol.html#processing>.
         let verified_proof_of_quota = verifier
             .verify_proof_of_quota(proof_of_quota, &signing_key)
             .map_err(|_| Error::ProofOfQuotaVerificationFailed(quota::Error::InvalidProof))?;
@@ -493,7 +493,7 @@ impl EncapsulatedPrivateHeader {
             signature,
             signing_pubkey,
         } = self.first().try_deserialize()?;
-        // Verify PoSel according to the Blend spec: <https://www.notion.so/nomos-tech/Blend-Protocol-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df81dd8cbedc8af4649a6a>.
+        // Verify PoSel according to the Blend spec: <https://lip.logos.co/blockchain/raw/blend-protocol.html#processing>.
         let verified_proof_of_selection = verifier
             .verify_proof_of_selection(proof_of_selection, posel_verification_input)
             .map_err(|_| {

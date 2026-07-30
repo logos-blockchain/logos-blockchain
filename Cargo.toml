@@ -401,6 +401,8 @@ error_impl_error                   = { level = "allow" }
 impl_trait_in_params               = { level = "allow" }
 indexing_slicing                   = { level = "allow" }
 infinite_loop                      = { level = "allow" }
+inline_modules                     = { level = "allow" }
+inline_trait_bounds                = { level = "allow" }
 integer_division                   = { level = "allow" }
 large_stack_frames                 = { level = "allow" }
 missing_assert_message             = { level = "allow" }

@@ -125,7 +125,7 @@ fn encapsulate_and_decapsulate() {
 
     // NOTE: We expect that the decapsulations can be done
     // in the "reverse" order of blend_node_enc_keys.
-    // (following the notion in the spec)
+    // (following the spec)
 
     // We can decapsulate with the correct private key.
     let DecapsulationOutput::Incompleted {

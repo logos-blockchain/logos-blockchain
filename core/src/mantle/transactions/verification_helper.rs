@@ -8,7 +8,7 @@ use crate::{
         ledger::{Declarations, Utxos},
         ops::{
             channel::{ChannelId, ChannelKeyIndex},
-            leader_claim::{RewardsRoot, VoucherNullifier},
+            leader_claim::{RewardsRoot, VoucherNullifiers},
         },
     },
     sdp::{DeclarationId, MinStake, ServiceType, locked_notes::LockedNotes},
@@ -37,7 +37,7 @@ pub trait OperationVerificationHelper {
 
     fn get_block_slot(&self) -> Slot;
 
-    fn get_nullifiers(&self) -> &rpds::HashTrieSetSync<VoucherNullifier>;
+    fn get_nullifiers(&self) -> &VoucherNullifiers;
 
     fn get_claimable_vouchers_root(&self) -> &RewardsRoot;
 
@@ -58,7 +58,6 @@ pub mod test_utils {
     use std::collections::HashMap;
 
     use lb_cryptarchia_engine::{Epoch, Slot};
-    use rpds::HashTrieSetSync;
 
     use crate::{
         mantle::{
@@ -67,7 +66,7 @@ pub mod test_utils {
             ledger::{Declarations, Utxos},
             ops::{
                 channel::{ChannelId, ChannelKeyIndex, Ed25519PublicKey},
-                leader_claim::{RewardsRoot, VoucherNullifier},
+                leader_claim::{RewardsRoot, VoucherNullifiers},
             },
             transactions::OperationVerificationHelper,
         },
@@ -83,7 +82,7 @@ pub mod test_utils {
         min_stake: MinStake,
         epoch: Epoch,
         block_slot: Slot,
-        nullifiers: HashTrieSetSync<VoucherNullifier>,
+        nullifiers: VoucherNullifiers,
         claimable_vouchers_root: RewardsRoot,
     }
 
@@ -105,7 +104,7 @@ pub mod test_utils {
                 },
                 epoch: Epoch::from(0u32),
                 block_slot: Slot::from(0u64),
-                nullifiers: HashTrieSetSync::new_sync(),
+                nullifiers: VoucherNullifiers::new(),
                 claimable_vouchers_root: RewardsRoot::default(),
             }
         }
@@ -158,7 +157,7 @@ pub mod test_utils {
             self.block_slot
         }
 
-        fn get_nullifiers(&self) -> &HashTrieSetSync<VoucherNullifier> {
+        fn get_nullifiers(&self) -> &VoucherNullifiers {
             &self.nullifiers
         }
 

@@ -177,7 +177,6 @@ impl CurrentEpochTracker {
         }
     }
 
-    #[expect(single_use_lifetimes, reason = "lifetime is required")]
     fn providers_and_zk_root<'d>(
         declarations: impl Iterator<Item = &'d Declaration>,
     ) -> (HashTrieMapSync<ProviderId, (ZkPublicKey, u64)>, ZkHash) {

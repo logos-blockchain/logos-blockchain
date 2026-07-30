@@ -6,7 +6,7 @@ use crate::mantle::{
 };
 
 /// A genesis transaction as specified in the
-/// [Spec](https://www.notion.so/nomos-tech/v1-1-Bedrock-Genesis-Block-32e261aa09df80689540ec445172b00d).
+/// [Spec](https://lip.logos.co/blockchain/raw/bedrock-genesis-block.html).
 pub trait GenesisTx: Hashable<Hash = TxHash> {
     fn genesis_transfer(&self) -> &TransferOp;
     fn genesis_inscription(&self) -> &InscriptionOp;

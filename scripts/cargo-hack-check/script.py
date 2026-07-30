@@ -35,7 +35,7 @@ WORKSPACE_CARGO_LOCK = WORKSPACE_ROOT / "Cargo.lock"
 CACHE_DIRECTORY = WORKSPACE_ROOT / ".cache/cargo-hack-check"
 COMPUTE_CREATE_HASH_SCRIPT = CURRENT_FILE_DIRECTORY / "compute_crate_hash.sh"
 TAG = "[Cargo Hack Powerset]"
-STRICT_WARNING_FLAG = "-D warnings"
+STRICT_WARNING_FLAG = "deny"
 
 
 ###############
@@ -65,9 +65,9 @@ def normalize_path_to_workspace_root(str_path: str) -> Path:
 
 def build_cargo_environment() -> Dict[str, str]:
     env = os.environ.copy()
-    rustflags = env.get("RUSTFLAGS", "").strip()
+    rustflags = env.get("CARGO_BUILD_WARNINGS", "").strip()
     if STRICT_WARNING_FLAG not in rustflags:
-        env["RUSTFLAGS"] = f"{rustflags} {STRICT_WARNING_FLAG}".strip()
+        env["CARGO_BUILD_WARNINGS"] = f"{rustflags} {STRICT_WARNING_FLAG}".strip()
     return env
 
 

@@ -11,6 +11,7 @@ use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
 use lb_blake2btree::LeafHash;
 use lb_cryptarchia_engine::Epoch;
+use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec, UpperBoundedVec};
 use multiaddr::{Multiaddr, Protocol};
@@ -408,10 +409,8 @@ impl Declaration {
         h.update([*<ServiceType as AsRef<u8>>::as_ref(&self.service_type)]);
         h.update(self.locators.encode());
         h.update(self.provider_id.0);
-        for number in self.zk_id.as_fr().0.0 {
-            h.update(number.to_le_bytes());
-        }
-        h.update(self.locked_note_id.as_bytes());
+        h.update(fr_to_bytes(self.zk_id.as_fr()));
+        h.update(fr_to_bytes(self.locked_note_id.as_fr()));
         h.update(self.created.into_inner().to_le_bytes());
         h.update(self.active.into_inner().to_le_bytes());
         h.update(self.withdraw_at.map_or(0, Epoch::into_inner).to_le_bytes());
@@ -492,13 +491,11 @@ impl DeclarationMessage {
         };
 
         // From the
-        // [spec](https://www.notion.so/nomos-tech/Service-Declaration-Protocol-Specification-1fd261aa09df819ca9f8eb2bdfd4ec1dw):
+        // [spec](https://lip.logos.co/blockchain/raw/bedrock-service-declaration-protocol.html#declaration-storage):
         // declaration_id = Hash(service||provider_id||zk_id||locators)
         hasher.update(service.as_bytes());
         hasher.update(self.provider_id.0);
-        for number in self.zk_id.as_fr().0.0 {
-            hasher.update(number.to_le_bytes());
-        }
+        hasher.update(fr_to_bytes(self.zk_id.as_fr()));
         // The locators go in through the wire encoding, which prefixes the list
         // with its count and every locator with its byte length.
         hasher.update(self.locators.encode());
@@ -561,7 +558,7 @@ impl NomDecode for ActivityMetadata {
 mod tests {
     use lb_blake2btree::LeafHash as _;
     use lb_cryptarchia_engine::Epoch;
-    use lb_groth16::{AdditiveGroup as _, Fr};
+    use lb_groth16::{AdditiveGroup as _, Fr, fr_to_bytes};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
     use multiaddr::Multiaddr;
 
@@ -726,10 +723,8 @@ mod tests {
             info.extend_from_slice(locator_bytes);
         }
         info.extend_from_slice(declaration.provider_id.0.as_bytes());
-        for number in declaration.zk_id.as_fr().0.0 {
-            info.extend_from_slice(&number.to_le_bytes());
-        }
-        info.extend_from_slice(&declaration.locked_note_id.as_bytes());
+        info.extend_from_slice(&fr_to_bytes(declaration.zk_id.as_fr()));
+        info.extend_from_slice(&fr_to_bytes(declaration.locked_note_id.as_fr()));
         info.extend_from_slice(&4u32.to_le_bytes());
         info.extend_from_slice(&5u32.to_le_bytes());
         info.extend_from_slice(&6u32.to_le_bytes());
