@@ -8,14 +8,14 @@ use std::{
 
 use async_trait::async_trait;
 use futures::Stream;
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use lb_core::mantle::transactions::hash::PrefixedKey;
 use lb_log_targets::mempool;
 use serde::{Deserialize, Serialize};
 
 use super::Status;
 use crate::{
-    backend::{MemPool, MempoolError, RecoverableMempool},
+    backend::{MemPool, MempoolError, RecoverableMempool, evictor::Evictor},
     metrics,
     storage::MempoolStorageAdapter,
 };
@@ -66,8 +66,7 @@ pub struct Mempool<BlockId, Item, Key, Storage, RuntimeServiceId>
 where
     Key: PrefixedKey,
 {
-    settings: MempoolSettings,
-    pending_items: IndexMap<Key, u64>,
+    pending_items: IndexSet<Key>,
     /// Secondary index over [`Self::pending_items`], keyed by the hash prefix a
     /// block proposal would use to refer to a transaction.
     ///
@@ -78,6 +77,7 @@ where
     by_prefix: HashMap<Key::Prefix, Vec<Key>>,
     removed_items: BTreeMap<Key, u64>,
     last_item_timestamp: u64,
+    evictor: Evictor<Key>,
     storage_adapter: Storage,
     _phantom: std::marker::PhantomData<(BlockId, Item, RuntimeServiceId)>,
 }
@@ -91,13 +91,12 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Mempool")
-            .field("settings", &self.settings)
             .field("pending_items", &self.pending_items)
             .field("by_prefix", &self.by_prefix)
             .field("removed_items", &self.removed_items)
             .field("last_item_timestamp", &self.last_item_timestamp)
             .field("storage_adapter", &"<StorageAdapter>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -128,11 +127,11 @@ where
 
     fn new(settings: Self::Settings, storage: Self::Storage) -> Self {
         Self {
-            settings,
-            pending_items: IndexMap::new(),
+            pending_items: IndexSet::new(),
             by_prefix: HashMap::new(),
             removed_items: BTreeMap::new(),
             last_item_timestamp: 0,
+            evictor: Evictor::new(&settings),
             storage_adapter: storage,
             _phantom: std::marker::PhantomData,
         }
@@ -145,7 +144,7 @@ where
     ) -> Result<(), MempoolError> {
         self.prune_removed_items().await;
 
-        if self.pending_items.contains_key(&key) {
+        if self.pending_items.contains(&key) {
             return Err(MempoolError::ExistingItem);
         }
 
@@ -158,7 +157,8 @@ where
 
         self.removed_items.remove(&key);
         self.index_by_prefix(&key);
-        self.pending_items.insert(key, timestamp);
+        self.evictor.on_add(key.clone(), timestamp);
+        self.pending_items.insert(key);
         self.last_item_timestamp = timestamp;
         tracing::debug!(
             target: LOG_TARGET,
@@ -177,7 +177,7 @@ where
         &self,
         _ancestor_hint: BlockId,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, MempoolError> {
-        self.get_items_by_keys(self.pending_items.keys().cloned())
+        self.get_items_by_keys(self.pending_items.iter().cloned())
             .await
     }
 
@@ -207,19 +207,18 @@ where
     async fn remove(&mut self, keys: &[Self::Key]) {
         self.prune_removed_items().await;
 
-        let removed_count = keys.len();
         let removed_at = current_timestamp_millis();
 
-        for key in keys {
-            self.pending_items.shift_remove(key);
-            self.unindex_by_prefix(key);
-            self.removed_items.insert(key.clone(), removed_at);
-        }
-        log_removed_items(removed_count, self.pending_items.len());
+        self.retire(keys.iter().cloned(), removed_at, "removed");
 
-        metrics::mempool_transactions_removed(removed_count);
-
-        self.evict_expired_items(removed_at);
+        // `remove` is called once per applied canonical block, so it doubles
+        // as the periodic trigger for eviction — without it the pool has no
+        // clock.
+        self.retire(
+            self.evictor.select_evictions(removed_at),
+            removed_at,
+            "evicted",
+        );
 
         metrics::mempool_transactions_pending(self.pending_items.len());
     }
@@ -236,7 +235,7 @@ where
         items
             .iter()
             .map(|key| {
-                if self.pending_items.contains_key(key) {
+                if self.pending_items.contains(key) {
                     Status::Pending
                 } else {
                     Status::Unknown
@@ -270,7 +269,7 @@ where
 
     fn save(&self) -> Self::RecoveryState {
         PoolRecoveryState {
-            pending_items: self.pending_items.clone(),
+            pending_items: self.evictor.save(),
             removed_items: self.removed_items.clone(),
             last_item_timestamp: self.last_item_timestamp,
         }
@@ -292,11 +291,11 @@ where
         }
 
         Self {
-            settings,
-            pending_items: state.pending_items,
+            pending_items: state.pending_items.keys().cloned().collect(),
             by_prefix,
             removed_items: state.removed_items,
             last_item_timestamp: state.last_item_timestamp,
+            evictor: Evictor::recover(&settings, state.pending_items),
             storage_adapter: storage,
             _phantom: std::marker::PhantomData,
         }
@@ -342,37 +341,20 @@ where
         }
     }
 
-    fn evict_expired_items(&mut self, now: u64) {
-        let Some(tx_ttl) = self.settings.tx_ttl else {
-            return;
-        };
-        let ttl_millis = tx_ttl.as_millis() as u64;
-
-        let expired_keys = self
-            .pending_items
-            .iter()
-            .filter(|(_, inserted_at)| now.saturating_sub(**inserted_at) >= ttl_millis)
-            .map(|(key, _)| key.clone())
-            .collect::<Vec<_>>();
-
-        if expired_keys.is_empty() {
-            return;
+    /// The single exit for pending items: every removal — included in a
+    /// block or evicted — goes through here so the evictor stays in sync.
+    fn retire(&mut self, keys: impl IntoIterator<Item = Key>, at: u64, cause: &str) {
+        let mut count = 0usize;
+        for key in keys {
+            self.pending_items.shift_remove(&key);
+            self.unindex_by_prefix(&key);
+            self.evictor.on_remove(&key);
+            self.removed_items.insert(key, at);
+            count += 1;
         }
 
-        for key in &expired_keys {
-            self.pending_items.shift_remove(key);
-            self.unindex_by_prefix(key);
-            self.removed_items.insert(key.clone(), now);
-        }
-
-        tracing::debug!(
-            target: LOG_TARGET,
-            "Evicted {} expired items from mempool; pending_items={}",
-            expired_keys.len(),
-            self.pending_items.len()
-        );
-
-        metrics::mempool_transactions_removed(expired_keys.len());
+        log_retired_items(count, cause, self.pending_items.len());
+        metrics::mempool_transactions_removed(count);
     }
 
     async fn prune_removed_items(&mut self) {
@@ -408,16 +390,16 @@ fn current_timestamp_millis() -> u64 {
         .as_millis() as u64
 }
 
-fn log_removed_items(removed_count: usize, pending_items: usize) {
-    if removed_count == 0 {
+fn log_retired_items(count: usize, cause: &str, pending_items: usize) {
+    if count == 0 {
         tracing::trace!(
             target: LOG_TARGET,
-            "Removed {removed_count} items from mempool; pending_items={pending_items}"
+            "{cause}: 0 items from mempool; pending_items={pending_items}"
         );
     } else {
         tracing::debug!(
             target: LOG_TARGET,
-            "Removed {removed_count} items from mempool; pending_items={pending_items}"
+            "{cause}: {count} items from mempool; pending_items={pending_items}"
         );
     }
 }

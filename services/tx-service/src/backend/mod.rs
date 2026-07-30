@@ -1,3 +1,5 @@
+pub mod evictor;
+pub mod policy;
 pub mod pool;
 
 use core::hash::Hash;
