@@ -4816,12 +4816,15 @@ name = "logos-blockchain-mmr"
 version = "0.0.0"
 dependencies = [
  "ark-ff",
+ "bincode",
  "logos-blockchain-groth16",
  "logos-blockchain-poseidon2",
+ "logos-blockchain-utils",
  "proptest",
  "proptest-macro",
  "rpds",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 
@@ -5305,6 +5308,7 @@ dependencies = [
 name = "logos-blockchain-wallet"
 version = "0.0.0"
 dependencies = [
+ "bincode",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",

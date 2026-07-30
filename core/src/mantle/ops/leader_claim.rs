@@ -248,15 +248,18 @@ mod tests {
             .expect("MMR shouldn't be full");
         let voucher_root = RewardsRoot::from(mmr.frontier_root());
         let tx_hash = TxHash::from([11u8; 32]);
-        let proof = Groth16LeaderClaimProof::prove(LeaderClaimPrivate::new(
-            LeaderClaimPublic::new(
-                VoucherNullifier::from_secret(voucher_secret).into(),
-                voucher_root.into(),
-                tx_hash.to_fr(),
-            ),
-            &voucher_path,
-            voucher_secret,
-        ))
+        let proof = Groth16LeaderClaimProof::prove(
+            LeaderClaimPrivate::try_new(
+                LeaderClaimPublic::new(
+                    VoucherNullifier::from_secret(voucher_secret).into(),
+                    voucher_root.into(),
+                    tx_hash.to_fr(),
+                ),
+                &voucher_path,
+                voucher_secret,
+            )
+            .expect("voucher path should match the PoC circuit height"),
+        )
         .expect("proof generation should succeed");
         let op = LeaderClaimOp {
             rewards_root: voucher_root,
@@ -341,15 +344,18 @@ mod tests {
         let tx_hash = TxHash::from([11u8; 32]);
         // Proof proves ownership of the voucher whose nullifier is
         // `from_secret(voucher_secret)`.
-        let proof = Groth16LeaderClaimProof::prove(LeaderClaimPrivate::new(
-            LeaderClaimPublic::new(
-                VoucherNullifier::from_secret(voucher_secret).into(),
-                voucher_root.into(),
-                tx_hash.to_fr(),
-            ),
-            &voucher_path,
-            voucher_secret,
-        ))
+        let proof = Groth16LeaderClaimProof::prove(
+            LeaderClaimPrivate::try_new(
+                LeaderClaimPublic::new(
+                    VoucherNullifier::from_secret(voucher_secret).into(),
+                    voucher_root.into(),
+                    tx_hash.to_fr(),
+                ),
+                &voucher_path,
+                voucher_secret,
+            )
+            .expect("voucher path should match the PoC circuit height"),
+        )
         .expect("proof generation should succeed");
 
         // The claim supplies a DIFFERENT nullifier than the one the proof proves.
