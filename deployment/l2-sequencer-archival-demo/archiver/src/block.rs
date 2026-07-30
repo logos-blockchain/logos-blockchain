@@ -63,7 +63,7 @@ impl BlockStream {
 
                         println!("  {} Block at height {} ({})","🔗".blue(),
                             height.bright_white().bold(),
-                            &hex::encode(header_id.as_ref()
+                            hex::encode(header_id.as_ref()
                         ).dimmed());
 
                         let block = http_client.get_block_by_id(endpoint_url.clone(), header_id).await.unwrap().unwrap();
