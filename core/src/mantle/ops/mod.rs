@@ -14,8 +14,8 @@ use channel::{
     channel_transfer::ChannelTransferOp, config::ChannelConfigOp, deposit::DepositOp,
     inscribe::InscriptionOp, withdraw::ChannelWithdrawOp,
 };
+use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
-use lb_codec::{DecodeError, BinaryDecode, BinaryEncode};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{
@@ -173,6 +173,8 @@ impl BinaryDecode for Op {
             }
             CHANNEL_WITHDRAW => ChannelWithdrawOp::decode(input, &())
                 .map(|(rest, op)| (rest, Self::ChannelWithdraw(op))),
+            CHANNEL_TRANSFER => ChannelTransferOp::decode(input, &())
+                .map(|(rest, op)| (rest, Self::ChannelTransfer(op))),
             SDP_DECLARE => {
                 SDPDeclareOp::decode(input, &()).map(|(rest, op)| (rest, Self::SDPDeclare(op)))
             }
