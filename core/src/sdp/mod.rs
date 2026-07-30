@@ -498,9 +498,7 @@ impl DeclarationMessage {
         // declaration_id = Hash(service||provider_id||zk_id||locators)
         hasher.update(service.as_bytes());
         hasher.update(self.provider_id.0);
-        for number in self.zk_id.as_fr().0.0 {
-            hasher.update(number.to_le_bytes());
-        }
+        hasher.update(fr_to_bytes(self.zk_id.as_fr()));
         for locator in &self.locators {
             hasher.update(locator.0.as_ref());
         }
