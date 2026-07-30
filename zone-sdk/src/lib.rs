@@ -10,9 +10,10 @@
 //! channel's accredited keys. Inscription posting is gated on holding the
 //! round-robin turn, so such a sequencer never publishes or reposts anything —
 //! while still delivering finalized txs, channel updates and the
-//! non-finalized channel view through its events. A cold-started instance
-//! replays the finalized history from genesis (backfill) before emitting
-//! [`sequencer::Event::Ready`].
+//! non-finalized channel view through its events. Before emitting
+//! [`sequencer::Event::Ready`], the instance backfills the finalized history
+//! it has not seen yet: from genesis on a cold start, or from the restored
+//! [`sequencer::SequencerCheckpoint`]'s slot when resuming.
 //!
 //! The sequencer talks to a Logos node through the [`adapter`] module's
 //! [`adapter::Node`] trait; an HTTP implementation is provided as
