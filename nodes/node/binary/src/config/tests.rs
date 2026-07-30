@@ -158,20 +158,21 @@ fn build_run_config_from_env_applies_environment_overrides() {
 
     // SAFETY: The test is serialized via `#[serial]`, and the variables are
     // removed again before any assertion runs, so no other thread observes them.
-    unsafe {
-        std::env::set_var("HTTP_HOST", http_host);
-        std::env::set_var("STATE_PATH", state_path);
-        std::env::set_var("LOG_LEVEL", "debug");
-    }
+    unsafe { std::env::set_var("HTTP_HOST", http_host) };
+    // SAFETY: see above.
+    unsafe { std::env::set_var("STATE_PATH", state_path) };
+    // SAFETY: see above.
+    unsafe { std::env::set_var("LOG_LEVEL", "debug") };
 
     let run_config = build_run_config_from_env(minimal_user_config());
 
     // Clean up before asserting so a failing assertion can't leak env state.
-    unsafe {
-        std::env::remove_var("HTTP_HOST");
-        std::env::remove_var("STATE_PATH");
-        std::env::remove_var("LOG_LEVEL");
-    }
+    // SAFETY: see above.
+    unsafe { std::env::remove_var("HTTP_HOST") };
+    // SAFETY: see above.
+    unsafe { std::env::remove_var("STATE_PATH") };
+    // SAFETY: see above.
+    unsafe { std::env::remove_var("LOG_LEVEL") };
 
     let run_config = run_config.expect("env overrides should build a valid RunConfig");
 

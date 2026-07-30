@@ -311,18 +311,14 @@ mod test {
 
         // SAFETY: serialized via `#[serial]`; removed before any assertion so no
         // other test observes it.
-        unsafe {
-            std::env::set_var("HTTP_HOST", "not-a-socket-address");
-        }
+        unsafe { std::env::set_var("HTTP_HOST", "not-a-socket-address") };
 
         let start_status = start_lb_node(
             test_paths.node_config.as_ptr(),
             test_paths.deployment_config.as_ptr(),
         );
 
-        unsafe {
-            std::env::remove_var("HTTP_HOST");
-        }
+        unsafe { std::env::remove_var("HTTP_HOST") };
 
         assert!(
             !start_status.is_ok(),
