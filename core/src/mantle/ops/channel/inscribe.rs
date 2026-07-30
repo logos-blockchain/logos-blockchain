@@ -3,7 +3,7 @@ use std::sync::Arc;
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_utils::bounded::UpperBoundedVec;
-use lb_wire::{WireCodec, WireEncode as _};
+use lb_codec::{BinaryCodec, BinaryEncode as _};
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Ed25519PublicKey, MsgId};
@@ -25,7 +25,7 @@ use crate::{
 pub const MAX_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 7 / 8;
 pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain

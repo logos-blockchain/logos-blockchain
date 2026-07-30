@@ -1,15 +1,15 @@
 use std::borrow::Cow;
 
-use crate::{WireDecode, WireEncode, WireExamples, WireFixture, WireFixtures, sealed};
+use crate::{BinaryDecode, BinaryEncode, CodecExamples, CodecFixture, CodecFixtures, sealed};
 
 // Fixed-size array: `N` elements concatenated with NO length prefix — `N` lives
-// in the type, not on the wire.
-impl<T, const N: usize> WireEncode for [T; N]
+// in the type, not in its encoding.
+impl<T, const N: usize> BinaryEncode for [T; N]
 where
-    T: WireEncode,
+    T: BinaryEncode,
 {
     fn encoded_length(&self) -> usize {
-        self.iter().map(WireEncode::encoded_length).sum()
+        self.iter().map(BinaryEncode::encoded_length).sum()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
@@ -19,9 +19,9 @@ where
     }
 }
 
-impl<T, const N: usize> WireDecode for [T; N]
+impl<T, const N: usize> BinaryDecode for [T; N]
 where
-    T: WireDecode,
+    T: BinaryDecode,
 {
     type Context = T::Context;
 
@@ -43,27 +43,27 @@ where
     }
 }
 
-impl<T, const N: usize> sealed::Sealed for [T; N] where T: WireExamples {}
+impl<T, const N: usize> sealed::Sealed for [T; N] where T: CodecExamples {}
 
 // Like the `BoundedVec` blanket but with no length prefix — `N` lives in the
-// type. `N` elements built from `T`'s fixture; bound stays at `T: WireExamples`
-// (no `Clone`) so the supertrait requirement goes through.
-impl<T, const N: usize> WireExamples for [T; N]
+// type. `N` elements built from `T`'s fixture; bound stays at `T:
+// CodecExamples` (no `Clone`) so the supertrait requirement goes through.
+impl<T, const N: usize> CodecExamples for [T; N]
 where
-    T: WireExamples,
+    T: CodecExamples,
 {
-    fn fixtures() -> WireFixtures<Self> {
+    fn fixtures() -> CodecFixtures<Self> {
         let mut bytes = Vec::new();
         let value = core::array::from_fn(|_| {
             let item = T::fixtures()
                 .into_iter()
                 .next()
-                .expect("`WireExamples::fixtures` is non-empty");
+                .expect("`CodecExamples::fixtures` is non-empty");
             bytes.extend_from_slice(item.bytes.as_ref());
             item.value
         });
 
-        [WireFixture {
+        [CodecFixture {
             value,
             bytes: Cow::Owned(bytes),
         }]

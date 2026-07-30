@@ -1,7 +1,7 @@
 use lb_groth16::{COMPRESSED_PROOF_SIZE, Fr, serde::serde_fr};
 use lb_log_targets::proofs;
 use lb_mmr::MerklePath;
-use lb_wire::{DecodeError, WireDecode, WireEncode};
+use lb_codec::{DecodeError, BinaryDecode, BinaryEncode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
@@ -19,7 +19,7 @@ pub struct Groth16LeaderClaimProof {
     proof: lb_poc::PoCProof,
 }
 
-impl WireEncode for Groth16LeaderClaimProof {
+impl BinaryEncode for Groth16LeaderClaimProof {
     fn encoded_length(&self) -> usize {
         COMPRESSED_PROOF_SIZE
     }
@@ -29,7 +29,7 @@ impl WireEncode for Groth16LeaderClaimProof {
     }
 }
 
-impl WireDecode for Groth16LeaderClaimProof {
+impl BinaryDecode for Groth16LeaderClaimProof {
     type Context = ();
 
     fn decode<'input>(

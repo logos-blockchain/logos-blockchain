@@ -1,8 +1,8 @@
 use core::hash::{Hash, Hasher};
 
 use ed25519_dalek::SIGNATURE_LENGTH;
+use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_utils::serde::{deserialize_bytes_array, serialize_bytes_array};
-use lb_wire::{DecodeError, WireDecode, WireEncode};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub const SIGNATURE_SIZE: usize = SIGNATURE_LENGTH;
@@ -72,7 +72,7 @@ impl From<[u8; SIGNATURE_SIZE]> for Signature {
     }
 }
 
-impl WireEncode for Signature {
+impl BinaryEncode for Signature {
     fn encoded_length(&self) -> usize {
         SIGNATURE_SIZE
     }
@@ -82,7 +82,7 @@ impl WireEncode for Signature {
     }
 }
 
-impl WireDecode for Signature {
+impl BinaryDecode for Signature {
     type Context = ();
 
     fn decode<'input>(

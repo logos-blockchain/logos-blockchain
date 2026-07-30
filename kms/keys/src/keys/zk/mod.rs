@@ -1,8 +1,8 @@
 use core::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 
+use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::Fr;
-use lb_wire::{DecodeError, WireDecode, WireEncode};
 use lb_zksign::ZkSignError;
 use num_bigint::BigUint;
 use serde::Deserialize;
@@ -107,7 +107,7 @@ impl From<UnsecuredZkKey> for ZkKey {
     }
 }
 
-impl WireEncode for PublicKey {
+impl BinaryEncode for PublicKey {
     fn encoded_length(&self) -> usize {
         self.as_fr().encoded_length()
     }
@@ -117,7 +117,7 @@ impl WireEncode for PublicKey {
     }
 }
 
-impl WireDecode for PublicKey {
+impl BinaryDecode for PublicKey {
     type Context = ();
 
     fn decode<'input>(

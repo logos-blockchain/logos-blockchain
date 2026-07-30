@@ -1,5 +1,5 @@
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
-use lb_wire::{DecodeError, WireDecodeExt as _, WireEncode as _};
+use lb_codec::{DecodeError, BinaryDecodeExt as _, BinaryEncode as _};
 
 use crate::{
     mantle::{Op, OpProof, transactions::OpsProofs},

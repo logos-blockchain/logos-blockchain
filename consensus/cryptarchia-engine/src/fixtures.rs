@@ -1,5 +1,5 @@
-use lb_wire::wire_fixtures;
+use lb_codec::codec_fixtures;
 
 use crate::Epoch;
 
-wire_fixtures!(Epoch, Self::new(1) => "01000000");
+codec_fixtures!(Epoch, Self::new(1) => "01000000");

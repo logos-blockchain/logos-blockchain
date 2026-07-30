@@ -25,10 +25,10 @@ bincode                          = { workspace = true }
 chrono                           = { features = ["alloc"], workspace = true }
 clap                             = { features = ["derive", "env", "error-context", "help", "std", "suggestions", "usage"], workspace = true }
 hex                              = { workspace = true }
+lb-codec                         = { workspace = true }
 lb-core                          = { workspace = true }
 lb-groth16                       = { workspace = true }
 lb-key-management-system-service = { workspace = true }
-lb-wire                          = { workspace = true }
 lb-zone-sdk                      = { workspace = true }
 rand                             = { workspace = true }
 reqwest                          = { workspace = true }

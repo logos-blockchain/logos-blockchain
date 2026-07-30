@@ -9,7 +9,7 @@ use lb_core::{
 };
 use lb_groth16::{FrBytes, fr_from_bytes};
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
-use lb_wire::WireEncode as _;
+use lb_codec::BinaryEncode as _;
 use serde_with::{hex::Hex, serde_as};
 use time::OffsetDateTime;
 

@@ -4,7 +4,7 @@ use lb_blake2btree::{Blake2bTree, LeafHash};
 use lb_groth16::{fr_from_bytes, fr_to_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::{Digest, Fr, ZkHash};
-use lb_wire::{WireCodec, WireEncode as _};
+use lb_codec::{BinaryCodec, BinaryEncode as _};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -30,13 +30,13 @@ static VOUCHER_NF: LazyLock<Fr> = LazyLock::new(|| {
     fr_from_bytes(b"VOUCHER_NF").expect("BigUint should load from constant string")
 });
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize, WireCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize, BinaryCodec)]
 pub struct RewardsRoot(#[serde(with = "serde_fr")] ZkHash);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct VoucherSecret(#[serde(with = "serde_fr")] pub Fr);
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct VoucherNullifier(#[serde(with = "serde_fr")] ZkHash);
 
 // The nullifier is the whole state, so the set holds nothing besides it and the
@@ -56,7 +56,7 @@ pub type VoucherNullifiers = Blake2bTree<VoucherNullifier, ()>;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
 pub struct VoucherCm(#[serde(with = "serde_fr")] ZkHash);
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct LeaderClaimOp {
     pub rewards_root: RewardsRoot,
     pub voucher_nullifier: VoucherNullifier,

@@ -1,6 +1,6 @@
 use std::{any::type_name, borrow::Cow};
 
-/// A failure while decoding a value from its wire bytes.
+/// A failure while decoding a value from its bytes.
 ///
 /// The structured variants cover the common cases; [`DecodeError::Custom`] is
 /// the escape hatch for anything else.

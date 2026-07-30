@@ -1,20 +1,21 @@
-//! Smoke test for `#[derive(WireCodec)]`, kept in-crate so the `::lb_wire::`
-//! paths the derive emits resolve via `extern crate self as lb_wire`.
+//! Smoke test for `#[derive(BinaryCodec)]`, kept in-crate so the
+//! `::lb_codec::` paths the derive emits resolve via `extern crate self as
+//! lb_codec`.
 
-use crate::{WireCodec, WireDecodeExt as _, WireEncode as _, wire_fixtures};
+use crate::{BinaryCodec, BinaryDecodeExt as _, BinaryEncode as _, codec_fixtures};
 
-#[derive(Debug, PartialEq, Eq, WireCodec)]
+#[derive(Debug, PartialEq, Eq, BinaryCodec)]
 struct Named {
     a: u8,
     b: u16,
 }
 
-wire_fixtures!(Named, Self { a: 0x07, b: 0x0201 } => "070102");
+codec_fixtures!(Named, Self { a: 0x07, b: 0x0201 } => "070102");
 
-#[derive(Debug, PartialEq, Eq, WireCodec)]
+#[derive(Debug, PartialEq, Eq, BinaryCodec)]
 struct Tuple(u8, u32);
 
-wire_fixtures!(Tuple, Self(0xAB, 0x0403_0201) => "ab01020304");
+codec_fixtures!(Tuple, Self(0xAB, 0x0403_0201) => "ab01020304");
 
 #[test]
 fn derived_named_struct_round_trips() {

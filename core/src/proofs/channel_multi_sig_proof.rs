@@ -2,13 +2,13 @@ use std::cmp::Ordering;
 
 use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_utils::bounded::UpperBoundedVec;
-use lb_wire::{DecodeError, WireCodec, WireDecode, WireEncode};
+use lb_codec::{DecodeError, BinaryCodec, BinaryDecode, BinaryEncode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::mantle::ops::channel::ChannelKeyIndex;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, WireCodec)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
 pub struct IndexedSignature {
     pub signature: Ed25519Signature,
     pub channel_key_index: ChannelKeyIndex, /* Using ChannelKeyIndex ensures indices are
@@ -73,7 +73,7 @@ pub struct ChannelMultiSigProof {
     signatures: IndexedSignatures,
 }
 
-impl WireEncode for ChannelMultiSigProof {
+impl BinaryEncode for ChannelMultiSigProof {
     fn encoded_length(&self) -> usize {
         self.signatures.encoded_length()
     }
@@ -83,7 +83,7 @@ impl WireEncode for ChannelMultiSigProof {
     }
 }
 
-impl WireDecode for ChannelMultiSigProof {
+impl BinaryDecode for ChannelMultiSigProof {
     type Context = ();
 
     fn decode<'input>(

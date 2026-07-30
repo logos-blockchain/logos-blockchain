@@ -4053,13 +4053,13 @@ dependencies = [
  "itertools 0.14.0",
  "logos-blockchain-blend-crypto",
  "logos-blockchain-blend-proofs",
+ "logos-blockchain-codec",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-log-targets",
  "logos-blockchain-utils",
- "logos-blockchain-wire",
  "serde",
  "serde_with",
  "test-log",
@@ -4103,6 +4103,7 @@ dependencies = [
  "generic-array 1.4.3",
  "hex",
  "logos-blockchain-blend-crypto",
+ "logos-blockchain-codec",
  "logos-blockchain-core",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
@@ -4110,7 +4111,6 @@ dependencies = [
  "logos-blockchain-poq",
  "logos-blockchain-poseidon2",
  "logos-blockchain-utils",
- "logos-blockchain-wire",
  "num-bigint",
  "serde",
  "thiserror 2.0.18",
@@ -4129,13 +4129,13 @@ dependencies = [
  "libp2p",
  "logos-blockchain-blend-message",
  "logos-blockchain-blend-proofs",
+ "logos-blockchain-codec",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-log-targets",
  "logos-blockchain-utils",
- "logos-blockchain-wire",
  "multiaddr",
  "rand 0.8.6",
  "serde",
@@ -4414,6 +4414,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-codec"
+version = "0.0.0"
+dependencies = [
+ "hex",
+ "logos-blockchain-codec-macros",
+ "logos-blockchain-groth16",
+ "logos-blockchain-utils",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "logos-blockchain-codec-macros"
+version = "0.0.0"
+dependencies = [
+ "hex",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
 name = "logos-blockchain-common-http-client"
 version = "0.0.0"
 dependencies = [
@@ -4440,6 +4461,7 @@ name = "logos-blockchain-config"
 version = "0.0.0"
 dependencies = [
  "hex",
+ "logos-blockchain-codec",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
@@ -4448,7 +4470,6 @@ dependencies = [
  "logos-blockchain-node",
  "logos-blockchain-tracing",
  "logos-blockchain-utils",
- "logos-blockchain-wire",
  "num-bigint",
  "rand 0.8.6",
  "time",
@@ -4468,6 +4489,7 @@ dependencies = [
  "hex",
  "logos-blockchain-blake2btree",
  "logos-blockchain-blend-proofs",
+ "logos-blockchain-codec",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
@@ -4478,7 +4500,6 @@ dependencies = [
  "logos-blockchain-poseidon2",
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
- "logos-blockchain-wire",
  "multiaddr",
  "num-bigint",
  "rand 0.8.6",
@@ -4495,9 +4516,9 @@ dependencies = [
 name = "logos-blockchain-cryptarchia-engine"
 version = "0.0.0"
 dependencies = [
+ "logos-blockchain-codec",
  "logos-blockchain-pol",
  "logos-blockchain-utils",
- "logos-blockchain-wire",
  "rpds",
  "serde",
  "serde_with",
@@ -4655,12 +4676,12 @@ dependencies = [
  "ed25519-dalek",
  "generic-array 1.4.3",
  "hex",
+ "logos-blockchain-codec",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-macros",
  "logos-blockchain-log-targets",
  "logos-blockchain-poseidon2",
  "logos-blockchain-utils",
- "logos-blockchain-wire",
  "logos-blockchain-zksign",
  "num-bigint",
  "rand 0.8.6",
@@ -5073,6 +5094,7 @@ dependencies = [
  "libp2p",
  "logos-blockchain-api-service",
  "logos-blockchain-chain-service",
+ "logos-blockchain-codec",
  "logos-blockchain-common-http-client",
  "logos-blockchain-config",
  "logos-blockchain-core",
@@ -5089,7 +5111,6 @@ dependencies = [
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
  "logos-blockchain-wallet",
- "logos-blockchain-wire",
  "logos-blockchain-zksign",
  "logos-blockchain-zone-sdk",
  "num-bigint",
@@ -5141,6 +5162,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "logos-blockchain-codec",
  "logos-blockchain-common-http-client",
  "logos-blockchain-config",
  "logos-blockchain-core",
@@ -5149,7 +5171,6 @@ dependencies = [
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-node",
  "logos-blockchain-utils",
- "logos-blockchain-wire",
  "num-bigint",
  "serde",
  "serde_with",
@@ -5211,10 +5232,10 @@ dependencies = [
  "chrono",
  "clap",
  "hex",
+ "logos-blockchain-codec",
  "logos-blockchain-core",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-service",
- "logos-blockchain-wire",
  "logos-blockchain-zone-sdk",
  "rand 0.8.6",
  "reqwest",
@@ -5359,27 +5380,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "logos-blockchain-wire"
-version = "0.0.0"
-dependencies = [
- "hex",
- "logos-blockchain-groth16",
- "logos-blockchain-utils",
- "logos-blockchain-wire-macros",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "logos-blockchain-wire-macros"
-version = "0.0.0"
-dependencies = [
- "hex",
- "proc-macro2",
- "quote",
- "syn 2.0.118",
 ]
 
 [[package]]

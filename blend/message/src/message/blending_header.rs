@@ -7,7 +7,7 @@ use lb_key_management_system_keys::keys::{
     ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature,
     UnsecuredEd25519Key,
 };
-use lb_wire::{DecodeError, WireDecode, WireEncode};
+use lb_codec::{DecodeError, BinaryDecode, BinaryEncode};
 use serde::{Deserialize, Serialize};
 
 use crate::crypto::domains;
@@ -76,7 +76,7 @@ pub const BLENDING_HEADER_ENCODED_SIZE: usize = ED25519_PUBLIC_KEY_SIZE
     .checked_add(size_of::<bool>())
     .unwrap();
 
-impl WireEncode for BlendingHeader {
+impl BinaryEncode for BlendingHeader {
     fn encoded_length(&self) -> usize {
         BLENDING_HEADER_ENCODED_SIZE
     }
@@ -90,7 +90,7 @@ impl WireEncode for BlendingHeader {
     }
 }
 
-impl WireDecode for BlendingHeader {
+impl BinaryDecode for BlendingHeader {
     type Context = ();
 
     fn decode<'input>(

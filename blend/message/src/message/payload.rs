@@ -1,4 +1,4 @@
-use lb_wire::{DecodeError, WireDecode, WireEncode, take};
+use lb_codec::{DecodeError, BinaryDecode, BinaryEncode, take};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
@@ -25,7 +25,7 @@ impl TryFrom<u8> for PayloadType {
     }
 }
 
-impl WireEncode for PayloadType {
+impl BinaryEncode for PayloadType {
     fn encoded_length(&self) -> usize {
         size_of::<u8>()
     }
@@ -35,7 +35,7 @@ impl WireEncode for PayloadType {
     }
 }
 
-impl WireDecode for PayloadType {
+impl BinaryDecode for PayloadType {
     type Context = ();
 
     fn decode<'input>(
@@ -95,7 +95,7 @@ impl TryFrom<&[u8]> for PaddedPayloadBody {
     }
 }
 
-impl WireEncode for PaddedPayloadBody {
+impl BinaryEncode for PaddedPayloadBody {
     fn encoded_length(&self) -> usize {
         self.actual_len
             .encoded_length()
@@ -109,7 +109,7 @@ impl WireEncode for PaddedPayloadBody {
     }
 }
 
-impl WireDecode for PaddedPayloadBody {
+impl BinaryDecode for PaddedPayloadBody {
     type Context = ();
 
     fn decode<'input>(
@@ -166,7 +166,7 @@ impl Payload {
     }
 }
 
-impl WireEncode for Payload {
+impl BinaryEncode for Payload {
     fn encoded_length(&self) -> usize {
         PAYLOAD_ENCODED_SIZE
     }
@@ -177,7 +177,7 @@ impl WireEncode for Payload {
     }
 }
 
-impl WireDecode for Payload {
+impl BinaryDecode for Payload {
     type Context = ();
 
     fn decode<'input>(

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use lb_blake2btree::{Blake2bTree, LeafHash};
 use lb_cryptarchia_engine::Slot;
-use lb_wire::WireCodec;
+use lb_codec::BinaryCodec;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -20,7 +20,7 @@ use crate::{
     },
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, WireCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, BinaryCodec)]
 pub struct SlotTimeframe(u32);
 
 impl From<u32> for SlotTimeframe {
@@ -35,7 +35,7 @@ impl From<SlotTimeframe> for u32 {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, WireCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, BinaryCodec)]
 pub struct SlotTimeout(u32);
 
 impl From<u32> for SlotTimeout {

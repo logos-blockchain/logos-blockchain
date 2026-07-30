@@ -1,7 +1,7 @@
 use lb_blend_proofs::{quota::ProofOfQuota, selection::ProofOfSelection};
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
-use lb_wire::{DecodeError, WireDecode, WireEncode};
+use lb_codec::{DecodeError, BinaryDecode, BinaryEncode};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -14,7 +14,7 @@ pub struct ActivityProof {
 
 const BLEND_ACTIVE_METADATA_VERSION_BYTE: u8 = 1;
 
-impl WireEncode for ActivityProof {
+impl BinaryEncode for ActivityProof {
     fn encoded_length(&self) -> usize {
         BLEND_ACTIVE_METADATA_VERSION_BYTE
             .encoded_length()
@@ -34,7 +34,7 @@ impl WireEncode for ActivityProof {
     }
 }
 
-impl WireDecode for ActivityProof {
+impl BinaryDecode for ActivityProof {
     type Context = ();
 
     fn decode<'input>(
@@ -70,7 +70,7 @@ mod tests {
         selection::{ProofOfSelection, VerifiedProofOfSelection},
     };
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey};
-    use lb_wire::{DecodeError, WireDecodeExt as _, WireEncode as _};
+    use lb_codec::{DecodeError, BinaryDecodeExt as _, BinaryEncode as _};
 
     use crate::sdp::blend::{ActivityProof, BLEND_ACTIVE_METADATA_VERSION_BYTE};
 

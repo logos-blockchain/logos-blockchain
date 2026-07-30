@@ -2,26 +2,26 @@ use std::borrow::Cow;
 
 use lb_utils::bounded::LowerBoundedVec;
 
-use crate::{WireDecode, WireEncode};
+use crate::{BinaryDecode, BinaryEncode};
 
-/// Carries the mandatory [`WireFixtures`] for a codec. The non-empty return
+/// Carries the mandatory [`CodecFixtures`] for a codec. The non-empty return
 /// type means a codec cannot exist without at least one fixture.
 ///
 /// Sealed via [`crate::sealed::Sealed`], so the only ways to satisfy it are
-/// `#[derive(WireCodec)]` and `wire_fixtures!`, both of which demand a fixture.
-/// It is a supertrait of both codec traits, so `impl WireEncode for Foo`
-/// without a fixture is a compilation error.
-pub trait WireExamples: crate::sealed::Sealed + Sized {
+/// `#[derive(BinaryCodec)]` and `codec_fixtures!`, both of which demand a
+/// fixture. It is a supertrait of both codec traits, so `impl BinaryEncode for
+/// Foo` without a fixture is a compilation error.
+pub trait CodecExamples: crate::sealed::Sealed + Sized {
     #[must_use]
-    fn fixtures() -> WireFixtures<Self>;
+    fn fixtures() -> CodecFixtures<Self>;
 }
 
-/// A single golden vector: a value and its exact wire bytes.
+/// A single golden vector: a value and its exact encoded bytes.
 ///
 /// `bytes` is a [`Cow`] so leaf fixtures can borrow a `&'static` slice (emitted
 /// by the macros) while generic blanket impls build theirs from the element's
 /// fixtures ([`Cow::Owned`]).
-pub struct WireFixture<T> {
+pub struct CodecFixture<T> {
     pub value: T,
     pub bytes: Cow<'static, [u8]>,
 }
@@ -29,12 +29,12 @@ pub struct WireFixture<T> {
 /// A codec's well-known fixtures: at least one `(value, bytes)` pair, up to as
 /// many as needed. The `1`-lower-bounded type is what makes "a codec cannot
 /// exist without a fixture" part of the contract.
-pub type WireFixtures<T> = LowerBoundedVec<WireFixture<T>, 1>;
+pub type CodecFixtures<T> = LowerBoundedVec<CodecFixture<T>, 1>;
 
 /// Decode a well-known fixture's hex string to bytes, ignoring ASCII whitespace
 /// (so an `include_str!`-ed `.hex` file may contain newlines). Panics on
 /// invalid hex — fixtures are authored test vectors, so bad hex is a bug, not a
-/// runtime condition. Emitted by `wire_fixtures!` for its non-literal
+/// runtime condition. Emitted by `codec_fixtures!` for its non-literal
 /// (`include_str!`) byte form.
 #[doc(hidden)]
 #[must_use]
@@ -43,27 +43,28 @@ pub fn decode_fixture_hex(hex_str: &str) -> Vec<u8> {
     hex::decode(compact).expect("well-known fixture is valid hex")
 }
 
-/// Drives every fixture of a `Context = ()` codec through the wire-format
+/// Drives every fixture of a `Context = ()` codec through the encoding
 /// invariants. Called by the round-trip test the macros generate.
 ///
 /// `#[doc(hidden)] pub` (not `#[cfg(test)]`) because the generated test lives
-/// in *downstream* crates and calls this against `lb-wire`'s non-test build.
+/// in *downstream* crates and calls this against `lb-codec`'s non-test
+/// build.
 #[doc(hidden)]
-pub fn assert_wire_fixtures<T>()
+pub fn assert_codec_fixtures<T>()
 where
-    T: WireEncode + WireDecode<Context = ()> + PartialEq + core::fmt::Debug,
+    T: BinaryEncode + BinaryDecode<Context = ()> + PartialEq + core::fmt::Debug,
 {
-    assert_wire_fixtures_with::<T, _>(|| ());
+    assert_codec_fixtures_with::<T, _>(|| ());
 }
 
-/// Like [`assert_wire_fixtures`], but for encode-only codecs (types that
-/// implement [`WireEncode`] but not [`WireDecode`], e.g. post-verification
+/// Like [`assert_codec_fixtures`], but for encode-only codecs (types that
+/// implement [`BinaryEncode`] but not [`BinaryDecode`], e.g. post-verification
 /// wrappers). Checks the golden bytes and `encoded_length`; there is no decode
 /// or round-trip leg.
 #[doc(hidden)]
-pub fn assert_wire_fixtures_encode_only<T>()
+pub fn assert_codec_fixtures_encode_only<T>()
 where
-    T: WireEncode + core::fmt::Debug,
+    T: BinaryEncode + core::fmt::Debug,
 {
     let type_name = core::any::type_name::<T>();
 
@@ -85,24 +86,24 @@ where
     }
 }
 
-/// Like [`assert_wire_fixtures`], but for decode-only codecs (types that
-/// implement [`WireDecode`] but not [`WireEncode`], e.g. messages that are only
-/// ever received from a peer). Decodes the well-known bytes and checks the
+/// Like [`assert_codec_fixtures`], but for decode-only codecs (types that
+/// implement [`BinaryDecode`] but not [`BinaryEncode`], e.g. messages that are
+/// only ever received from a peer). Decodes the well-known bytes and checks the
 /// value equals the fixture's reference value, with nothing left over.
 #[doc(hidden)]
-pub fn assert_wire_fixtures_decode_only<T>()
+pub fn assert_codec_fixtures_decode_only<T>()
 where
-    T: WireDecode<Context = ()> + PartialEq + core::fmt::Debug,
+    T: BinaryDecode<Context = ()> + PartialEq + core::fmt::Debug,
 {
-    assert_wire_fixtures_decode_only_with::<T, _>(|| ());
+    assert_codec_fixtures_decode_only_with::<T, _>(|| ());
 }
 
-/// Like [`assert_wire_fixtures_decode_only`], but for decode-only codecs whose
-/// `Context` is not `()`.
+/// Like [`assert_codec_fixtures_decode_only`], but for decode-only codecs
+/// whose `Context` is not `()`.
 #[doc(hidden)]
-pub fn assert_wire_fixtures_decode_only_with<T, ContextBuilder>(make_context: ContextBuilder)
+pub fn assert_codec_fixtures_decode_only_with<T, ContextBuilder>(make_context: ContextBuilder)
 where
-    T: WireDecode + PartialEq + core::fmt::Debug,
+    T: BinaryDecode + PartialEq + core::fmt::Debug,
     ContextBuilder: Fn() -> T::Context,
 {
     let type_name = core::any::type_name::<T>();
@@ -130,12 +131,12 @@ where
     }
 }
 
-/// Like [`assert_wire_fixtures`], but for codecs whose `Context` is not `()`:
-/// `make_context` produces a fresh context per decode.
+/// Like [`assert_codec_fixtures`], but for codecs whose `Context` is not
+/// `()`: `make_context` produces a fresh context per decode.
 #[doc(hidden)]
-pub fn assert_wire_fixtures_with<T, ContextBuilder>(make_context: ContextBuilder)
+pub fn assert_codec_fixtures_with<T, ContextBuilder>(make_context: ContextBuilder)
 where
-    T: WireEncode + WireDecode + PartialEq + core::fmt::Debug,
+    T: BinaryEncode + BinaryDecode + PartialEq + core::fmt::Debug,
     ContextBuilder: Fn() -> T::Context,
 {
     let type_name = core::any::type_name::<T>();

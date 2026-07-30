@@ -2,7 +2,7 @@ use lb_blend_proofs::quota::{self, PROOF_OF_QUOTA_SIZE, ProofOfQuota, VerifiedPr
 use lb_key_management_system_keys::keys::{
     ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature,
 };
-use lb_wire::{DecodeError, WireDecode, WireEncode};
+use lb_codec::{DecodeError, BinaryDecode, BinaryEncode};
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{Error, MessageIdentifier, encap::ProofsVerifier};
@@ -110,7 +110,7 @@ impl PublicHeader {
     }
 }
 
-impl WireEncode for PublicHeader {
+impl BinaryEncode for PublicHeader {
     fn encoded_length(&self) -> usize {
         PUBLIC_HEADER_ENCODED_SIZE
     }
@@ -123,7 +123,7 @@ impl WireEncode for PublicHeader {
     }
 }
 
-impl WireDecode for PublicHeader {
+impl BinaryDecode for PublicHeader {
     type Context = ();
 
     fn decode<'input>(
@@ -227,9 +227,9 @@ impl PublicHeaderWithVerifiedSignature {
 // The verified public-header variants are never decoded from the wire (a peer's
 // bytes always decode into an unverified `PublicHeader`); they only need to
 // encode, and all three variants produce identical bytes. Implementing only
-// `WireEncode` for them means a verified message can be serialized directly,
+// `BinaryEncode` for them means a verified message can be serialized directly,
 // with no conversion/copy through `PublicHeader`.
-impl WireEncode for PublicHeaderWithVerifiedSignature {
+impl BinaryEncode for PublicHeaderWithVerifiedSignature {
     fn encoded_length(&self) -> usize {
         PUBLIC_HEADER_ENCODED_SIZE
     }
@@ -340,7 +340,7 @@ impl VerifiedPublicHeader {
     }
 }
 
-impl WireEncode for VerifiedPublicHeader {
+impl BinaryEncode for VerifiedPublicHeader {
     fn encoded_length(&self) -> usize {
         PUBLIC_HEADER_ENCODED_SIZE
     }

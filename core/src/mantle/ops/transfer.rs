@@ -1,5 +1,5 @@
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
-use lb_wire::{WireCodec, WireEncode as _};
+use lb_codec::{BinaryCodec, BinaryEncode as _};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -14,7 +14,7 @@ use crate::{
     sdp::locked_notes::LockedNotes,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, WireCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
 pub struct TransferOp {
     pub inputs: Inputs,
     pub outputs: Outputs,

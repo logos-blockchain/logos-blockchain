@@ -7,13 +7,13 @@ pub mod withdraw;
 
 use std::fmt::{Display, Formatter};
 
-use lb_wire::WireCodec;
+use lb_codec::BinaryCodec;
 
 use crate::utils::serde_bytes_newtype;
 
 pub type ChannelKeyIndex = u16;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, WireCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, BinaryCodec)]
 pub struct ChannelId([u8; 32]);
 serde_bytes_newtype!(ChannelId, 32);
 
@@ -25,7 +25,7 @@ impl Display for ChannelId {
 }
 
 /// The id of the previous message in the channel
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, WireCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, BinaryCodec)]
 pub struct MsgId([u8; 32]);
 serde_bytes_newtype!(MsgId, 32);
 

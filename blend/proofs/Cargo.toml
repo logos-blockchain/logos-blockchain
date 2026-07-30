@@ -17,12 +17,12 @@ ed25519-dalek   = { workspace = true }
 generic-array   = { workspace = true }
 hex             = { workspace = true }
 lb-blend-crypto = { workspace = true }
+lb-codec        = { workspace = true }
 lb-groth16      = { workspace = true }
 lb-pol          = { workspace = true }
 lb-poq          = { workspace = true }
 lb-poseidon2    = { workspace = true }
 lb-utils        = { workspace = true }
-lb-wire         = { workspace = true }
 num-bigint      = { workspace = true }
 serde           = { workspace = true }
 thiserror       = { workspace = true }

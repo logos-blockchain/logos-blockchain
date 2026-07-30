@@ -14,7 +14,7 @@ use divan::{Bencher, black_box};
 use lb_groth16::{Fr, GROTH16_SAFE_BYTES_SIZE, fr_from_bytes_unchecked};
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey};
 use lb_poseidon2::Digest;
-use lb_wire::WireEncode as _;
+use lb_codec::BinaryEncode as _;
 use logos_blockchain_core::{
     crypto::{Hasher, ZkHasher},
     mantle::{

@@ -5,7 +5,7 @@ use lb_blend_proofs::{
     selection::inputs::VerifyInputs,
 };
 use lb_key_management_system_keys::keys::{UnsecuredEd25519Key, X25519PrivateKey};
-use lb_wire::WireEncode;
+use lb_codec::BinaryEncode;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -88,7 +88,7 @@ impl EncapsulatedMessageWithVerifiedSignature {
     }
 }
 
-impl WireEncode for EncapsulatedMessageWithVerifiedSignature {
+impl BinaryEncode for EncapsulatedMessageWithVerifiedSignature {
     fn encoded_length(&self) -> usize {
         self.public_header_with_verified_signature
             .encoded_length()
@@ -294,7 +294,7 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
     }
 }
 
-impl WireEncode for EncapsulatedMessageWithVerifiedPublicHeader {
+impl BinaryEncode for EncapsulatedMessageWithVerifiedPublicHeader {
     fn encoded_length(&self) -> usize {
         self.validated_public_header
             .encoded_length()

@@ -2,7 +2,7 @@ use core::fmt::{self, Display, Formatter};
 
 use lb_groth16::Fr;
 use lb_utils::bounded::{BoundedString, BoundedVec};
-use lb_wire::{DecodeError, WireCodec, WireDecode, WireEncode};
+use lb_codec::{DecodeError, BinaryCodec, BinaryDecode, BinaryEncode};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -328,7 +328,7 @@ impl<const MIN: usize, const MAX: usize> TryFrom<BoundedVec<u8, MIN, MAX>> for C
     }
 }
 
-impl WireEncode for ChainId {
+impl BinaryEncode for ChainId {
     fn encoded_length(&self) -> usize {
         self.0.to_vec().encoded_length()
     }
@@ -338,7 +338,7 @@ impl WireEncode for ChainId {
     }
 }
 
-impl WireDecode for ChainId {
+impl BinaryDecode for ChainId {
     type Context = ();
 
     fn decode<'input>(
@@ -354,7 +354,7 @@ impl WireDecode for ChainId {
 
 /// Time at which the chain should start. u32 suffices: we only need the
 /// positive half of the i64 Unix timestamp.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, WireCodec)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, BinaryCodec)]
 pub struct GenesisTime(u32);
 
 impl GenesisTime {
@@ -381,7 +381,7 @@ impl TryFrom<OffsetDateTime> for GenesisTime {
 }
 
 /// Cryptarchia parameters encoded as an inscription in the genesis block.
-#[derive(Debug, Clone, PartialEq, Eq, WireCodec)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
 pub struct CryptarchiaParameter {
     pub chain_id: ChainId,
     pub genesis_time: GenesisTime,

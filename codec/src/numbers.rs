@@ -1,11 +1,10 @@
 use lb_groth16::{Fr, fr_from_bytes, fr_to_bytes};
 
-use crate::{DecodeError, WireDecode, WireEncode, take, wire_fixtures};
-
-/// `WireEncode`/`WireDecode` for a little-endian fixed-width integer.
+use crate::{BinaryDecode, BinaryEncode, DecodeError, codec_fixtures, take};
+/// `BinaryEncode`/`BinaryDecode` for a little-endian fixed-width integer.
 macro_rules! impl_le_integer {
     ($ty:ty) => {
-        impl WireEncode for $ty {
+        impl BinaryEncode for $ty {
             fn encoded_length(&self) -> usize {
                 ::core::mem::size_of::<$ty>()
             }
@@ -15,7 +14,7 @@ macro_rules! impl_le_integer {
             }
         }
 
-        impl WireDecode for $ty {
+        impl BinaryDecode for $ty {
             type Context = ();
 
             fn decode<'input>(
@@ -36,13 +35,13 @@ impl_le_integer!(u16);
 impl_le_integer!(u32);
 impl_le_integer!(u64);
 
-wire_fixtures!(u8, 0x07u8 => "07", 0u8 => "00");
-wire_fixtures!(u16, 1u16 => "0100", 0x0201u16 => "0102");
-wire_fixtures!(u32, 1u32 => "01000000", 0x0403_0201u32 => "01020304");
-wire_fixtures!(u64, 1u64 => "0100000000000000", 0x0807_0605_0403_0201u64 => "0102030405060708");
+codec_fixtures!(u8, 0x07u8 => "07", 0u8 => "00");
+codec_fixtures!(u16, 1u16 => "0100", 0x0201u16 => "0102");
+codec_fixtures!(u32, 1u32 => "01000000", 0x0403_0201u32 => "01020304");
+codec_fixtures!(u64, 1u64 => "0100000000000000", 0x0807_0605_0403_0201u64 => "0102030405060708");
 
 // A BLS scalar, encoded as its 32-byte little-endian representation.
-impl WireEncode for Fr {
+impl BinaryEncode for Fr {
     fn encoded_length(&self) -> usize {
         32
     }
@@ -52,7 +51,7 @@ impl WireEncode for Fr {
     }
 }
 
-impl WireDecode for Fr {
+impl BinaryDecode for Fr {
     type Context = ();
 
     fn decode<'input>(
@@ -67,7 +66,7 @@ impl WireDecode for Fr {
     }
 }
 
-wire_fixtures!(
+codec_fixtures!(
     Fr,
     Self::from(1u64) => "0100000000000000000000000000000000000000000000000000000000000000"
 );

@@ -22,7 +22,7 @@ use lb_key_management_system_service::keys::{
     Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
 };
 use lb_node::{Hashable as _, SignedMantleTx};
-use lb_wire::WireEncode as _;
+use lb_codec::BinaryEncode as _;
 use num_bigint::BigUint;
 use time::OffsetDateTime;
 

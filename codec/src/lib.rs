@@ -1,21 +1,18 @@
-//! The unified wire codec for Logos blockchain components.
+//! The unified binary codec for Logos blockchain components.
 //!
-//! One encode trait ([`WireEncode`]) and one decode trait ([`WireDecode`]) that
-//! every on-the-wire type implements, replacing the previously separate
-//! `WireEncode`/`WireDecode` (Mantle) and `WireEncode`/`WireDecode` (Blend)
-//! families. Primitives, fixed-size arrays and `BoundedVec` get default impls
-//! here.
+//! One encode trait ([`BinaryEncode`]) and one decode trait ([`BinaryDecode`])
+//! that every type with a custom encoding scheme implements.
 //!
 //! Every codec must also ship at least one **well-known fixture** (a value and
-//! its exact wire bytes). This is enforced at compile time: both codec traits
-//! require [`WireExamples`], whose only sanctioned implementation path is
-//! [`wire_fixtures!`] / `#[derive(WireCodec)]`, so a codec without a fixture is
-//! a compilation error.
+//! its exact encoded bytes). This is enforced at compile time: both codec
+//! traits require [`CodecExamples`], whose only sanctioned implementation
+//! path is [`codec_fixtures!`] / `#[derive(BinaryCodec)]`, so a codec
+//! without a fixture is a compilation error.
 
-// The derive and `wire_fixtures!` expansions refer to this crate as
-// `::lb_wire`, so the crate must be able to name itself that way when it uses
-// them for its own primitives.
-extern crate self as lb_wire;
+// The derive and `codec_fixtures!` expansions refer to this crate as
+// `::lb_codec`, so the crate must be able to name itself that way when it
+// uses them for its own primitives.
+extern crate self as lb_codec;
 
 mod array;
 mod boolean;
@@ -29,16 +26,16 @@ mod tests;
 
 pub use error::DecodeError;
 pub use fixtures::{
-    WireExamples, WireFixture, WireFixtures, assert_wire_fixtures,
-    assert_wire_fixtures_decode_only, assert_wire_fixtures_decode_only_with,
-    assert_wire_fixtures_encode_only, assert_wire_fixtures_with, decode_fixture_hex,
+    CodecExamples, CodecFixture, CodecFixtures, assert_codec_fixtures,
+    assert_codec_fixtures_decode_only, assert_codec_fixtures_decode_only_with,
+    assert_codec_fixtures_encode_only, assert_codec_fixtures_with, decode_fixture_hex,
 };
-pub use lb_wire_macros::{WireCodec, wire_fixtures};
+pub use lb_codec_macros::{BinaryCodec, codec_fixtures};
 
-/// Sealed marker that gates [`WireExamples`] to the blessed macro path.
+/// Sealed marker that gates [`CodecExamples`] to the blessed macro path.
 ///
-/// `#[doc(hidden)] pub` (rather than `pub(crate)`) so the `wire_fixtures!` /
-/// `#[derive(WireCodec)]` expansions can implement it from any downstream
+/// `#[doc(hidden)] pub` (rather than `pub(crate)`) so the `codec_fixtures!`
+/// / `#[derive(BinaryCodec)]` expansions can implement it from any downstream
 /// crate; undocumented, so the macros remain the only sanctioned way to satisfy
 /// it.
 #[doc(hidden)]
@@ -46,16 +43,16 @@ pub mod sealed {
     pub trait Sealed {}
 }
 
-/// Append a value's wire bytes to a caller-owned buffer.
+/// Append a value's encoded bytes to a caller-owned buffer.
 ///
-/// Requires [`WireExamples`]: a type cannot be a wire codec without also
+/// Requires [`CodecExamples`]: a type cannot be a binary codec without also
 /// pinning a well-known fixture.
-pub trait WireEncode: WireExamples {
+pub trait BinaryEncode: CodecExamples {
     /// The exact number of bytes [`encode_into`](Self::encode_into) will
     /// append, computed without encoding or allocating.
     fn encoded_length(&self) -> usize;
 
-    /// Append this value's wire bytes to `out`. The single required
+    /// Append this value's encoded bytes to `out`. The single required
     /// serialization primitive; composites chain their children's
     /// `encode_into`.
     fn encode_into(&self, out: &mut Vec<u8>);
@@ -77,10 +74,11 @@ pub trait WireEncode: WireExamples {
 /// Decode a value from the front of `input`, returning it and the unconsumed
 /// remainder (`(rest, value)`, as in `nom`).
 ///
-/// `Context` carries anything the decoder needs that is not on the wire (e.g. a
-/// layer count); it is `()` for self-describing components. Requires
-/// [`WireExamples`] for the same reason as [`WireEncode`].
-pub trait WireDecode: WireExamples + Sized {
+/// `Context` carries anything the decoder needs that is not in the encoded
+/// bytes (e.g. a layer count); it is `()` for self-describing components.
+/// Requires Requires [`CodecExamples`] for the same reason as
+/// [`BinaryEncode`].
+pub trait BinaryDecode: CodecExamples + Sized {
     type Context;
 
     fn decode<'input>(
@@ -91,13 +89,13 @@ pub trait WireDecode: WireExamples + Sized {
 
 /// Ergonomic decode for the common `Context = ()` case:
 /// `T::decode(bytes)` instead of `T::decode(bytes, ())`.
-pub trait WireDecodeExt: WireDecode<Context = ()> {
+pub trait BinaryDecodeExt: BinaryDecode<Context = ()> {
     fn decode(input: &[u8]) -> Result<(&[u8], Self), DecodeError> {
-        <Self as WireDecode>::decode(input, &())
+        <Self as BinaryDecode>::decode(input, &())
     }
 }
 
-impl<T> WireDecodeExt for T where T: WireDecode<Context = ()> {}
+impl<T> BinaryDecodeExt for T where T: BinaryDecode<Context = ()> {}
 
 /// Split `n` bytes off the front of `input`, returning `(head, rest)`, or fail
 /// with [`DecodeError::UnexpectedEnd`] naming `T`.

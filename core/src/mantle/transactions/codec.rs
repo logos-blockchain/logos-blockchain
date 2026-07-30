@@ -1,6 +1,6 @@
 use lb_groth16::COMPRESSED_PROOF_SIZE;
 use lb_key_management_system_keys::keys::ED25519_SIGNATURE_SIZE;
-use lb_wire::{DecodeError, WireDecodeExt as _, WireEncode as _};
+use lb_codec::{DecodeError, BinaryDecodeExt as _, BinaryEncode as _};
 
 use crate::{
     mantle::{

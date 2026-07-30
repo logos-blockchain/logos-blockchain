@@ -15,7 +15,7 @@ use channel::{
     inscribe::InscriptionOp, withdraw::ChannelWithdrawOp,
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
-use lb_wire::{DecodeError, WireDecode, WireEncode};
+use lb_codec::{DecodeError, BinaryDecode, BinaryEncode};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{
@@ -120,7 +120,7 @@ impl<'de> Deserialize<'de> for Op {
 }
 
 // Op = Opcode OpPayload
-impl WireEncode for Op {
+impl BinaryEncode for Op {
     fn encoded_length(&self) -> usize {
         let payload = match self {
             Self::ChannelInscribe(op) => op.encoded_length(),
@@ -154,7 +154,7 @@ impl WireEncode for Op {
     }
 }
 
-impl WireDecode for Op {
+impl BinaryDecode for Op {
     type Context = ();
 
     fn decode<'input>(
@@ -193,7 +193,7 @@ impl WireDecode for Op {
 
 // We just check that the enum discriminant tag is encoded correctly, so a
 // single fixture is fine here.
-// TODO: Remove once the `WireCodec` macro supports enums.
+// TODO: Remove once the `BinaryCodec` macro supports enums.
 
 impl Op {
     #[must_use]

@@ -6,7 +6,7 @@ use ed25519_dalek::{PUBLIC_KEY_LENGTH, VerifyingKey};
 use generic_array::{ArrayLength, GenericArray};
 use lb_groth16::{Bn254, CompressSize, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes};
 use lb_poq::{PoQProof, PoQVerifierInput, PoQWitnessInputs, ProveError, prove, verify};
-use lb_wire::{DecodeError, WireDecode, WireEncode};
+use lb_codec::{DecodeError, BinaryDecode, BinaryEncode};
 use thiserror::Error;
 
 use crate::{
@@ -120,7 +120,7 @@ impl TryFrom<[u8; PROOF_OF_QUOTA_SIZE]> for ProofOfQuota {
     }
 }
 
-impl WireEncode for ProofOfQuota {
+impl BinaryEncode for ProofOfQuota {
     fn encoded_length(&self) -> usize {
         PROOF_OF_QUOTA_SIZE
     }
@@ -130,7 +130,7 @@ impl WireEncode for ProofOfQuota {
     }
 }
 
-impl WireDecode for ProofOfQuota {
+impl BinaryDecode for ProofOfQuota {
     type Context = ();
 
     fn decode<'input>(
@@ -232,7 +232,7 @@ impl PartialEq<ProofOfQuota> for VerifiedProofOfQuota {
     }
 }
 
-impl WireEncode for VerifiedProofOfQuota {
+impl BinaryEncode for VerifiedProofOfQuota {
     fn encoded_length(&self) -> usize {
         self.0.encoded_length()
     }

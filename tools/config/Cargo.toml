@@ -18,6 +18,7 @@ testing = ["lb-node/testing"]
 
 [dependencies]
 hex                              = { workspace = true }
+lb-codec                         = { workspace = true }
 lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { workspace = true }
 lb-groth16                       = { workspace = true }
@@ -26,7 +27,6 @@ lb-libp2p                        = { workspace = true }
 lb-node                          = { workspace = true }
 lb-tracing                       = { workspace = true }
 lb-utils                         = { workspace = true }
-lb-wire                          = { workspace = true }
 num-bigint                       = { workspace = true }
 rand                             = { workspace = true }
 time                             = { workspace = true }

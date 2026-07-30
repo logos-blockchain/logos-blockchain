@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 
 use bytes::Bytes;
 use ed25519_dalek::SigningKey;
-use lb_wire::{DecodeError, WireDecode, WireEncode};
+use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use rand_core::CryptoRngCore;
 use serde::Deserialize;
 use zeroize::ZeroizeOnDrop;
@@ -101,7 +101,7 @@ impl From<UnsecuredEd25519Key> for Ed25519Key {
     }
 }
 
-impl WireEncode for PublicKey {
+impl BinaryEncode for PublicKey {
     fn encoded_length(&self) -> usize {
         ED25519_PUBLIC_KEY_SIZE
     }
@@ -111,7 +111,7 @@ impl WireEncode for PublicKey {
     }
 }
 
-impl WireDecode for PublicKey {
+impl BinaryDecode for PublicKey {
     type Context = ();
 
     fn decode<'input>(

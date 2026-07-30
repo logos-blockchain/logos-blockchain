@@ -14,7 +14,7 @@ use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec};
-use lb_wire::{DecodeError, WireCodec, WireDecode, WireEncode};
+use lb_codec::{BinaryCodec, DecodeError, BinaryDecode, BinaryEncode};
 use multiaddr::{Multiaddr, Protocol};
 use serde::{Deserialize, Serialize};
 use strum::{EnumCount, EnumIter};
@@ -218,7 +218,7 @@ impl Display for Locator {
     }
 }
 
-impl WireEncode for Locator {
+impl BinaryEncode for Locator {
     fn encoded_length(&self) -> usize {
         self.0.to_vec().encoded_length()
     }
@@ -228,7 +228,7 @@ impl WireEncode for Locator {
     }
 }
 
-impl WireDecode for Locator {
+impl BinaryDecode for Locator {
     type Context = ();
 
     fn decode<'input>(
@@ -275,7 +275,7 @@ impl AsRef<u8> for ServiceType {
     }
 }
 
-impl WireEncode for ServiceType {
+impl BinaryEncode for ServiceType {
     fn encoded_length(&self) -> usize {
         <Self as AsRef<u8>>::as_ref(self).encoded_length()
     }
@@ -285,7 +285,7 @@ impl WireEncode for ServiceType {
     }
 }
 
-impl WireDecode for ServiceType {
+impl BinaryDecode for ServiceType {
     type Context = ();
 
     fn decode<'input>(
@@ -318,7 +318,7 @@ mod service_type_tests {
 
 pub type Nonce = u64;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct ProviderId(pub Ed25519PublicKey);
 
 #[derive(Debug)]
@@ -352,7 +352,7 @@ impl Ord for ProviderId {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, WireCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, BinaryCodec)]
 pub struct DeclarationId(pub [u8; 32]);
 serde_bytes_newtype!(DeclarationId, 32);
 display_hex_bytes_newtype!(DeclarationId);
@@ -477,7 +477,7 @@ impl TryFrom<Declarations> for Bytes {
 pub const MAX_DECLARATION_LOCATOR_COUNT: usize = 8;
 pub type Locators = NonEmptyBoundedVec<Locator, MAX_DECLARATION_LOCATOR_COUNT>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct DeclarationMessage {
     pub service_type: ServiceType,
     pub locators: Locators,
@@ -510,7 +510,7 @@ impl DeclarationMessage {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct WithdrawMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,
@@ -518,7 +518,7 @@ pub struct WithdrawMessage {
 }
 
 // ActiveMessage = DeclarationId Nonce Metadata — plain field-order concat.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct ActiveMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,
@@ -532,7 +532,7 @@ pub enum ActivityMetadata {
 
 const ACTIVE_METADATA_BLEND_TYPE: u8 = 1;
 
-impl WireEncode for ActivityMetadata {
+impl BinaryEncode for ActivityMetadata {
     fn encoded_length(&self) -> usize {
         match self {
             Self::Blend(proof) => {
@@ -551,7 +551,7 @@ impl WireEncode for ActivityMetadata {
     }
 }
 
-impl WireDecode for ActivityMetadata {
+impl BinaryDecode for ActivityMetadata {
     type Context = ();
 
     fn decode<'input>(

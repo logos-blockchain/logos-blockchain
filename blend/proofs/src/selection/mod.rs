@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 
 use lb_blend_crypto::pseudo_random_sized_bytes;
 use lb_groth16::{fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes};
-use lb_wire::{DecodeError, WireDecode, WireEncode};
+use lb_codec::{DecodeError, BinaryDecode, BinaryEncode};
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -127,7 +127,7 @@ impl TryFrom<[u8; PROOF_OF_SELECTION_SIZE]> for ProofOfSelection {
     }
 }
 
-impl WireEncode for ProofOfSelection {
+impl BinaryEncode for ProofOfSelection {
     fn encoded_length(&self) -> usize {
         PROOF_OF_SELECTION_SIZE
     }
@@ -137,7 +137,7 @@ impl WireEncode for ProofOfSelection {
     }
 }
 
-impl WireDecode for ProofOfSelection {
+impl BinaryDecode for ProofOfSelection {
     type Context = ();
 
     fn decode<'input>(
@@ -205,7 +205,7 @@ impl PartialEq<ProofOfSelection> for VerifiedProofOfSelection {
     }
 }
 
-impl WireEncode for VerifiedProofOfSelection {
+impl BinaryEncode for VerifiedProofOfSelection {
     fn encoded_length(&self) -> usize {
         self.0.encoded_length()
     }

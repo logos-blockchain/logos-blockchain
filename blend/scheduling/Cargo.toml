@@ -20,13 +20,13 @@ futures                       = { workspace = true }
 hex                           = { workspace = true }
 lb-blend-message              = { workspace = true }
 lb-blend-proofs               = { workspace = true }
+lb-codec                      = { workspace = true }
 lb-core                       = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-log-targets                = { workspace = true }
 lb-utils                      = { features = ["rng", "tokio"], workspace = true }
-lb-wire                       = { workspace = true }
 multiaddr                     = { workspace = true }
 rand                          = { features = ["alloc"], workspace = true }
 serde                         = { workspace = true }

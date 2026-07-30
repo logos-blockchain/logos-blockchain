@@ -2,7 +2,9 @@ use std::borrow::Cow;
 
 use lb_utils::bounded::BoundedVec;
 
-use crate::{DecodeError, WireDecode, WireEncode, WireExamples, WireFixture, WireFixtures, sealed};
+use crate::{
+    BinaryDecode, BinaryEncode, CodecExamples, CodecFixture, CodecFixtures, DecodeError, sealed,
+};
 
 #[derive(Debug, Clone, Copy)]
 enum NOfBytes {
@@ -72,13 +74,13 @@ fn decode_length_prefix<const MAX_LENGTH: usize>(
     }
 }
 
-impl<T, const MIN: usize, const MAX: usize> WireEncode for BoundedVec<T, MIN, MAX>
+impl<T, const MIN: usize, const MAX: usize> BinaryEncode for BoundedVec<T, MIN, MAX>
 where
-    T: WireEncode,
+    T: BinaryEncode,
 {
     fn encoded_length(&self) -> usize {
         length_prefix_len::<MAX>()
-            .checked_add(self.iter().map(WireEncode::encoded_length).sum::<usize>())
+            .checked_add(self.iter().map(BinaryEncode::encoded_length).sum::<usize>())
             .expect("Encoded length overflow")
     }
 
@@ -90,9 +92,9 @@ where
     }
 }
 
-impl<T, const MIN: usize, const MAX: usize> WireDecode for BoundedVec<T, MIN, MAX>
+impl<T, const MIN: usize, const MAX: usize> BinaryDecode for BoundedVec<T, MIN, MAX>
 where
-    T: WireDecode,
+    T: BinaryDecode,
 {
     type Context = T::Context;
 
@@ -119,7 +121,7 @@ where
 }
 
 impl<T, const MIN: usize, const MAX: usize> sealed::Sealed for BoundedVec<T, MIN, MAX> where
-    T: WireExamples
+    T: CodecExamples
 {
 }
 
@@ -130,11 +132,11 @@ impl<T, const MIN: usize, const MAX: usize> sealed::Sealed for BoundedVec<T, MIN
 //
 // `MIN` may be 0 (`UpperBoundedVec`), so we force at least one element;
 // otherwise the fixture would be empty and never touch `T`'s codec.
-impl<T, const MIN: usize, const MAX: usize> WireExamples for BoundedVec<T, MIN, MAX>
+impl<T, const MIN: usize, const MAX: usize> CodecExamples for BoundedVec<T, MIN, MAX>
 where
-    T: WireExamples,
+    T: CodecExamples,
 {
-    fn fixtures() -> WireFixtures<Self> {
+    fn fixtures() -> CodecFixtures<Self> {
         let count = MIN.max(1);
 
         let mut values = Vec::with_capacity(count);
@@ -144,12 +146,12 @@ where
             let item = T::fixtures()
                 .into_iter()
                 .next()
-                .expect("`WireExamples::fixtures` is non-empty");
+                .expect("`CodecExamples::fixtures` is non-empty");
             bytes.extend_from_slice(item.bytes.as_ref());
             values.push(item.value);
         }
 
-        [WireFixture {
+        [CodecFixture {
             value: Self::new_unchecked(values),
             bytes: Cow::Owned(bytes),
         }]
@@ -161,7 +163,7 @@ where
 mod tests {
     use lb_utils::bounded::BoundedVec;
 
-    use crate::{DecodeError, WireDecodeExt as _, WireEncode as _};
+    use crate::{BinaryDecodeExt as _, BinaryEncode as _, DecodeError};
 
     /// Bound used across the tests: between 2 and 4 elements.
     const MIN: usize = 2;

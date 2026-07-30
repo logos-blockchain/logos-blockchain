@@ -1,6 +1,6 @@
 use lb_cryptarchia_engine::Slot;
 use lb_utils::bounded::NonEmptyBoundedVec;
-use lb_wire::{WireCodec, WireEncode as _};
+use lb_codec::{BinaryCodec, BinaryEncode as _};
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Ed25519PublicKey, MsgId};
@@ -18,7 +18,7 @@ use crate::{
 pub const CHANNEL_MAX_KEYS: usize = u16::MAX as usize;
 pub type Keys = NonEmptyBoundedVec<Ed25519PublicKey, CHANNEL_MAX_KEYS>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct ChannelConfigOp {
     pub channel: ChannelId,
     pub keys: Keys,

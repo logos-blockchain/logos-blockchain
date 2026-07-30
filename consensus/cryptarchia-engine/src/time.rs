@@ -4,8 +4,8 @@ use core::{
 };
 use std::{num::NonZero, time::Duration};
 
+use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
-use lb_wire::{DecodeError, WireDecode, WireEncode};
 use time::OffsetDateTime;
 #[cfg(feature = "tokio")]
 use tokio::time::{Interval, MissedTickBehavior};
@@ -98,7 +98,7 @@ impl AsRef<u32> for Epoch {
     }
 }
 
-impl WireEncode for Epoch {
+impl BinaryEncode for Epoch {
     fn encoded_length(&self) -> usize {
         self.as_ref().encoded_length()
     }
@@ -108,7 +108,7 @@ impl WireEncode for Epoch {
     }
 }
 
-impl WireDecode for Epoch {
+impl BinaryDecode for Epoch {
     type Context = ();
 
     fn decode<'input>(

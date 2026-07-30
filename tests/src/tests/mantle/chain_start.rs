@@ -15,7 +15,7 @@ use lb_testing_framework::{
     configs::deployment::NodeBinaryProfile, ensure_node_binary_built,
 };
 use lb_utils::math::NonNegativeRatio;
-use lb_wire::WireEncode as _;
+use lb_codec::BinaryEncode as _;
 use logos_blockchain_tests::{
     common::manual_cluster::{
         ManualNodeLayout, start_local_manual_cluster_with_layout, wait_for_nodes_height,

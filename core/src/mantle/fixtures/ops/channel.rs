@@ -1,5 +1,5 @@
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature};
-use lb_wire::wire_fixtures;
+use lb_codec::codec_fixtures;
 
 use crate::{
     mantle::{
@@ -20,9 +20,9 @@ use crate::{
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 
-wire_fixtures!(ChannelId, Self::from([0u8; 32]) => "0000000000000000000000000000000000000000000000000000000000000000");
-wire_fixtures!(MsgId, Self::from([0u8; 32]) => "0000000000000000000000000000000000000000000000000000000000000000");
-wire_fixtures!(
+codec_fixtures!(ChannelId, Self::from([0u8; 32]) => "0000000000000000000000000000000000000000000000000000000000000000");
+codec_fixtures!(MsgId, Self::from([0u8; 32]) => "0000000000000000000000000000000000000000000000000000000000000000");
+codec_fixtures!(
     ChannelConfigOp,
     Self {
         channel: ChannelId::from([0u8; 32]),
@@ -33,7 +33,7 @@ wire_fixtures!(
         transfer_threshold: 0u16,
     } => "000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
 );
-wire_fixtures!(
+codec_fixtures!(
     DepositOp,
     Self {
         channel_id: ChannelId::from([0u8; 32]),
@@ -41,7 +41,7 @@ wire_fixtures!(
         metadata: Metadata::empty(),
     } => "00000000000000000000000000000000000000000000000000000000000000000000000000",
 );
-wire_fixtures!(
+codec_fixtures!(
     InscriptionOp,
     Self {
         channel_id: ChannelId::from([0u8; 32]),
@@ -50,14 +50,14 @@ wire_fixtures!(
         signer: Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap(),
     } => "00000000000000000000000000000000000000000000000000000000000000000700000067656e6573697300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
 );
-wire_fixtures!(
+codec_fixtures!(
     ChannelWithdrawOp,
     Self {
         channel_id: ChannelId::from([0u8; 32]),
         inputs: Inputs::empty(),
     } => "000000000000000000000000000000000000000000000000000000000000000000",
 );
-wire_fixtures!(
+codec_fixtures!(
     ChannelTransferOp,
     Self {
         channel_id: ChannelId::from([0u8; 32]),
@@ -68,7 +68,7 @@ wire_fixtures!(
 
 // We just check that the enum discriminant tag is encoded correctly, so a
 // single fixture is fine here.
-wire_fixtures!(
+codec_fixtures!(
     Op,
     Self::ChannelInscribe(
         InscriptionOp::fixtures()
@@ -79,7 +79,7 @@ wire_fixtures!(
     ) => "1100000000000000000000000000000000000000000000000000000000000000000700000067656e6573697300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 );
 
-wire_fixtures!(
+codec_fixtures!(
     IndexedSignature,
     Self {
         channel_key_index: 1,
@@ -87,7 +87,7 @@ wire_fixtures!(
     } => "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100"
 );
 
-wire_fixtures!(ChannelMultiSigProof,
+codec_fixtures!(ChannelMultiSigProof,
     Self::try_new([].into()).unwrap() => "0000",
     Self::try_new([IndexedSignature::new(0, Ed25519Signature::from_bytes(&[0u8; _]))].into()).unwrap() => "0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 );

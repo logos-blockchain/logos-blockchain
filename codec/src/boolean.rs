@@ -1,7 +1,7 @@
-use crate::{DecodeError, WireDecode, WireEncode, wire_fixtures};
+use crate::{BinaryDecode, BinaryEncode, DecodeError, codec_fixtures};
 
 // A single byte: `0` for `false`, `1` for `true`; any other value is rejected.
-impl WireEncode for bool {
+impl BinaryEncode for bool {
     fn encoded_length(&self) -> usize {
         1
     }
@@ -11,7 +11,7 @@ impl WireEncode for bool {
     }
 }
 
-impl WireDecode for bool {
+impl BinaryDecode for bool {
     type Context = ();
 
     fn decode<'input>(
@@ -29,4 +29,4 @@ impl WireDecode for bool {
     }
 }
 
-wire_fixtures!(bool, false => "00", true => "01");
+codec_fixtures!(bool, false => "00", true => "01");

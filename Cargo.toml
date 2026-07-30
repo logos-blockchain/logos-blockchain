@@ -36,6 +36,8 @@ members = [
   "blend/proofs",
   "blend/scheduling",
   "c-bindings",
+  "codec",
+  "codec/macros",
   "consensus/cryptarchia-engine",
   "consensus/cryptarchia-sync",
   "core",
@@ -83,8 +85,6 @@ members = [
   "utils",
   "wallet",
   "wallet-http-client",
-  "wire",
-  "wire/macros",
   "zk/circuits/prover",
   "zk/circuits/verifier",
   "zk/groth16",
@@ -122,6 +122,8 @@ lb-chain-service                   = { default-features = false, package = "logo
 lb-chain-service-common            = { default-features = false, package = "logos-blockchain-chain-service-common", path = "./services/chain/chain-common" }
 lb-circuits-prover                 = { default-features = false, package = "logos-blockchain-circuits-prover", path = "./zk/circuits/prover" }
 lb-circuits-verifier               = { default-features = false, package = "logos-blockchain-circuits-verifier", path = "./zk/circuits/verifier" }
+lb-codec                           = { default-features = false, package = "logos-blockchain-codec", path = "./codec" }
+lb-codec-macros                    = { default-features = false, package = "logos-blockchain-codec-macros", path = "./codec/macros" }
 lb-common-http-client              = { default-features = false, package = "logos-blockchain-common-http-client", path = "./nodes/node/http-client" }
 lb-config                          = { default-features = false, package = "logos-blockchain-config", path = "./tools/config" }
 lb-core                            = { default-features = false, package = "logos-blockchain-core", path = "./core" }
@@ -166,8 +168,6 @@ lb-utxotree                        = { default-features = false, package = "logo
 lb-wallet                          = { default-features = false, package = "logos-blockchain-wallet", path = "./wallet" }
 lb-wallet-http-client              = { default-features = false, package = "logos-blockchain-wallet-http-client", path = "./wallet-http-client" }
 lb-wallet-service                  = { default-features = false, package = "logos-blockchain-wallet-service", path = "./services/wallet" }
-lb-wire                            = { default-features = false, package = "logos-blockchain-wire", path = "./wire" }
-lb-wire-macros                     = { default-features = false, package = "logos-blockchain-wire-macros", path = "./wire/macros" }
 lb-zksign                          = { default-features = false, package = "logos-blockchain-zksign", path = "./zk/proofs/zksign" }
 lb-zone-sdk                        = { default-features = false, package = "logos-blockchain-zone-sdk", path = "./zone-sdk" }
 # When bumping any lbc-* tag, also update the logos-blockchain-circuits flake input tag in flake.nix

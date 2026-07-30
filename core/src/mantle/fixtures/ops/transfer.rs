@@ -1,9 +1,9 @@
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
-use lb_wire::wire_fixtures;
+use lb_codec::codec_fixtures;
 
 use crate::mantle::{Note, NoteId, ops::transfer::TransferOp};
 
-wire_fixtures!(
+codec_fixtures!(
     TransferOp,
     Self { inputs: [].into(), outputs: [].into() } => "0000",
     Self { inputs: [NoteId::from(Fr::ONE)].into(), outputs: [].into() } => "01010000000000000000000000000000000000000000000000000000000000000000",

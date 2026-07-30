@@ -10,7 +10,7 @@ use lb_blend_proofs::{
 use lb_key_management_system_keys::keys::{
     Ed25519PublicKey, Ed25519Signature, SharedKey, UnsecuredEd25519Key,
 };
-use lb_wire::{DecodeError, WireDecode, WireEncode, take};
+use lb_codec::{DecodeError, BinaryDecode, BinaryEncode, take};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
@@ -122,7 +122,7 @@ impl EncapsulatedMessage {
 // Encoding (and sending) of unverified messages should not be done outside of
 // tests, so this impl is only available in tests.
 #[cfg(test)]
-impl WireEncode for EncapsulatedMessage {
+impl BinaryEncode for EncapsulatedMessage {
     fn encoded_length(&self) -> usize {
         self.public_header
             .encoded_length()
@@ -136,7 +136,7 @@ impl WireEncode for EncapsulatedMessage {
     }
 }
 
-impl WireDecode for EncapsulatedMessage {
+impl BinaryDecode for EncapsulatedMessage {
     type Context = NonZeroU64;
 
     fn decode<'input>(
@@ -288,7 +288,7 @@ impl EncapsulatedPart {
     }
 }
 
-impl WireEncode for EncapsulatedPart {
+impl BinaryEncode for EncapsulatedPart {
     fn encoded_length(&self) -> usize {
         self.private_header
             .encoded_length()
@@ -302,7 +302,7 @@ impl WireEncode for EncapsulatedPart {
     }
 }
 
-impl WireDecode for EncapsulatedPart {
+impl BinaryDecode for EncapsulatedPart {
     type Context = NonZeroU64;
 
     fn decode<'input>(
@@ -569,9 +569,9 @@ impl EncapsulatedPrivateHeader {
     }
 }
 
-impl WireEncode for EncapsulatedPrivateHeader {
+impl BinaryEncode for EncapsulatedPrivateHeader {
     fn encoded_length(&self) -> usize {
-        self.0.iter().map(WireEncode::encoded_length).sum()
+        self.0.iter().map(BinaryEncode::encoded_length).sum()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
@@ -581,7 +581,7 @@ impl WireEncode for EncapsulatedPrivateHeader {
     }
 }
 
-impl WireDecode for EncapsulatedPrivateHeader {
+impl BinaryDecode for EncapsulatedPrivateHeader {
     type Context = NonZeroU64;
 
     fn decode<'input>(
@@ -650,7 +650,7 @@ impl EncapsulatedBlendingHeader {
 // the identity and decoding takes a fixed-size slice of the layer/payload size.
 // No length checks: the network-side size gate guarantees the input is large
 // enough (`split_at`/`try_into` therefore never fail).
-impl WireEncode for EncapsulatedBlendingHeader {
+impl BinaryEncode for EncapsulatedBlendingHeader {
     fn encoded_length(&self) -> usize {
         BLENDING_HEADER_ENCODED_SIZE
     }
@@ -660,7 +660,7 @@ impl WireEncode for EncapsulatedBlendingHeader {
     }
 }
 
-impl WireDecode for EncapsulatedBlendingHeader {
+impl BinaryDecode for EncapsulatedBlendingHeader {
     type Context = ();
 
     fn decode<'input>(
@@ -726,7 +726,7 @@ impl EncapsulatedPayload {
     }
 }
 
-impl WireEncode for EncapsulatedPayload {
+impl BinaryEncode for EncapsulatedPayload {
     fn encoded_length(&self) -> usize {
         PAYLOAD_ENCODED_SIZE
     }
@@ -736,7 +736,7 @@ impl WireEncode for EncapsulatedPayload {
     }
 }
 
-impl WireDecode for EncapsulatedPayload {
+impl BinaryDecode for EncapsulatedPayload {
     type Context = ();
 
     fn decode<'input>(

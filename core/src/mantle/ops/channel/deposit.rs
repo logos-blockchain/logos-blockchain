@@ -1,6 +1,6 @@
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use lb_utils::bounded::UpperBoundedVec;
-use lb_wire::{WireCodec, WireEncode as _};
+use lb_codec::{BinaryCodec, BinaryEncode as _};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -17,7 +17,7 @@ use crate::{
 pub const MAX_METADATA_SIZE: usize = u32::MAX as usize;
 pub type Metadata = UpperBoundedVec<u8, { MAX_METADATA_SIZE }>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct DepositOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,

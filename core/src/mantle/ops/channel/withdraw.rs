@@ -1,4 +1,4 @@
-use lb_wire::{WireCodec, WireEncode as _};
+use lb_codec::{BinaryCodec, BinaryEncode as _};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
 };
 
 // ChannelWithdraw = ChannelId Inputs — plain field-order concat.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, WireCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
 pub struct ChannelWithdrawOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::LazyLock};
 
-use lb_wire::{WireCodec, WireDecodeExt as _, WireEncode as _};
+use lb_codec::{BinaryCodec, BinaryDecodeExt as _, BinaryEncode as _};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
@@ -22,7 +22,7 @@ use crate::{
 
 static MANTLE_TX_HASH_V1_BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| b"MANTLE_TXHASH_V1".to_vec());
 
-#[derive(Clone, Debug, PartialEq, Eq, WireCodec)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 pub struct MantleTx(pub Ops);
 
 impl MantleTx {
