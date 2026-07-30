@@ -11,6 +11,7 @@ use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
 use lb_blake2btree::LeafHash;
 use lb_cryptarchia_engine::Epoch;
+use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec, UpperBoundedVec};
 use multiaddr::{Multiaddr, Protocol};
@@ -494,7 +495,7 @@ impl DeclarationMessage {
         };
 
         // From the
-        // [spec](https://www.notion.so/nomos-tech/Service-Declaration-Protocol-Specification-1fd261aa09df819ca9f8eb2bdfd4ec1dw):
+        // [spec](https://lip.logos.co/blockchain/raw/bedrock-service-declaration-protocol.html#declaration-storage):
         // declaration_id = Hash(service||provider_id||zk_id||locators)
         hasher.update(service.as_bytes());
         hasher.update(self.provider_id.0);

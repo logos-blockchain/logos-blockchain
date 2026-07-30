@@ -102,7 +102,7 @@ impl Hashable for MantleTx {
 
     fn as_signing(&self) -> Vec<u8> {
         // constant and structure as defined in the Mantle specification:
-        // https://www.notion.so/nomos-tech/v1-3-Mantle-Specification-31e261aa09df818f9327ee87e5a6d433#31e261aa09df80aea7cff4eb98d61b6e
+        // https://lip.logos.co/blockchain/raw/bedrock-v1.1-mantle-specification.html
         let mut buffer = MANTLE_TX_HASH_V1_BYTES.to_vec();
         buffer.extend(self.encode());
         buffer

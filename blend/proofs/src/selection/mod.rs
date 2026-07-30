@@ -39,7 +39,7 @@ pub enum Error {
     EmptyMembershipSet,
 }
 
-/// A Proof of Selection as described in the Blend v1 spec: <https://www.notion.so/nomos-tech/Blend-Protocol-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df81d6bb3febd62b598138>.
+/// A Proof of Selection as described in the Blend spec: <https://lip.logos.co/blockchain/raw/blend-protocol.html#proof-of-selection>.
 #[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ProofOfSelection {
     #[serde(with = "lb_groth16::serde::serde_fr")]
@@ -53,7 +53,7 @@ impl ProofOfSelection {
         if membership_size == 0 {
             return Err(Error::EmptyMembershipSet);
         }
-        // Condition 1: https://www.notion.so/nomos-tech/Blend-Protocol-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df819991e6f9455ff7ec92
+        // Condition 1: https://lip.logos.co/blockchain/raw/blend-protocol.html#proof-of-selection
         let selection_randomness_bytes = fr_to_bytes(&self.selection_randomness);
         let pseudo_random_output: u64 = {
             let pseudo_random_output_bytes =
@@ -90,7 +90,7 @@ impl ProofOfSelection {
             });
         }
 
-        // Condition 2: https://www.notion.so/nomos-tech/Blend-Protocol-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df814da8e8ec1f1fcf4fe6
+        // Condition 2: https://lip.logos.co/blockchain/raw/blend-protocol.html#proof-of-selection
         let calculated_key_nullifier =
             derive_key_nullifier_from_secret_selection_randomness(self.selection_randomness);
         if calculated_key_nullifier != *key_nullifier {
@@ -186,7 +186,7 @@ static KEY_NULLIFIER_DERIVATION_DOMAIN_SEPARATION_TAG_FR: LazyLock<ZkHash> = Laz
         "DST for key nullifier derivation from secret selection randomness must be correct.",
     )
 });
-// As per Proof of Quota v1 spec: <https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#215261aa09df81adb8ccd1448c9afd68>.
+// As per Proof of Quota spec: <https://lip.logos.co/blockchain/raw/proof-of-quota.html#constraints>.
 #[must_use]
 pub fn derive_key_nullifier_from_secret_selection_randomness(
     secret_selection_randomness: ZkHash,

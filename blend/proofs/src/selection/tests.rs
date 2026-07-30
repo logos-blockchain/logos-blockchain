@@ -13,7 +13,7 @@ use crate::{
 
 #[test]
 fn secret_selection_randomness_to_key_nullifier_dst_encoding() {
-    // Blend spec: <https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#26c261aa09df802f9dbcd0780dc7ac6e>
+    // PoQ spec: <https://lip.logos.co/blockchain/raw/proof-of-quota.html>
 
     assert_eq!(
         *KEY_NULLIFIER_DERIVATION_DOMAIN_SEPARATION_TAG_FR,

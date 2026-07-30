@@ -18,7 +18,7 @@ use crate::{
 
 #[test]
 fn secret_selection_randomness_dst_encoding() {
-    // Blend spec: <https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#25e261aa09df802d87edfc54d1d60b80>
+    // Blend spec: <https://lip.logos.co/blockchain/raw/proof-of-quota.html>
     assert_eq!(
         *DOMAIN_SEPARATION_TAG_FR,
         fr_from_bytes_unchecked(
