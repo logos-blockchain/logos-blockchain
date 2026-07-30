@@ -1,4 +1,4 @@
-use core::convert::Infallible;
+use core::{convert::Infallible, num::NonZeroU64};
 
 use lb_blend_proofs::{
     quota::{ProofOfQuota, VerifiedProofOfQuota},
@@ -11,7 +11,7 @@ use lb_key_management_system_keys::keys::{
 };
 
 use crate::{
-    Error, PayloadType,
+    Error, PaddedPayloadBody, PayloadType,
     crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
     encap::{
         ProofsVerifier,
@@ -115,7 +115,7 @@ fn encapsulate_and_decapsulate() {
 
     let (inputs, blend_node_enc_keys) = generate_inputs(2);
     let msg = EncapsulatedMessage::from(
-        EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+        try_new_fully_encapsulated(
             &inputs,
             PayloadType::Data,
             PAYLOAD_BODY.try_into().unwrap(),
@@ -184,7 +184,7 @@ fn encapsulate_and_decapsulate() {
 #[should_panic(expected = "Payload too large")]
 fn payload_too_long() {
     let (inputs, _) = generate_inputs(1);
-    drop(EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+    drop(try_new_fully_encapsulated(
         &inputs,
         PayloadType::Data,
         vec![0u8; MAX_PAYLOAD_BODY_SIZE + 1]
@@ -201,7 +201,7 @@ fn invalid_public_header_signature() {
     let msg_with_invalid_signature = {
         let (inputs, _) = generate_inputs(2);
         let mut msg = EncapsulatedMessage::from(
-            EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+            try_new_fully_encapsulated(
                 &inputs,
                 PayloadType::Data,
                 PAYLOAD_BODY.try_into().unwrap(),
@@ -229,7 +229,7 @@ fn invalid_public_header_proof_of_quota() {
 
     let (inputs, _) = generate_inputs(2);
     let msg = EncapsulatedMessage::from(
-        EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+        try_new_fully_encapsulated(
             &inputs,
             PayloadType::Data,
             PAYLOAD_BODY.try_into().unwrap(),
@@ -255,7 +255,7 @@ fn invalid_blend_header_proof_of_selection() {
 
     let (inputs, blend_node_enc_keys) = generate_inputs(2);
     let msg = EncapsulatedMessage::from(
-        EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+        try_new_fully_encapsulated(
             &inputs,
             PayloadType::Data,
             PAYLOAD_BODY.try_into().unwrap(),
@@ -280,7 +280,7 @@ fn invalid_blend_header_proof_of_selection() {
 #[test]
 fn serde_encapsulated_and_verified() {
     let (inputs, _) = generate_inputs(3);
-    let msg = EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+    let msg = try_new_fully_encapsulated(
         &inputs,
         PayloadType::Data,
         b"".as_slice().try_into().unwrap(),
@@ -303,7 +303,7 @@ fn encapsulate_and_decapsulate_via_two_step_verification() {
 
     let (inputs, blend_node_enc_keys) = generate_inputs(2);
     let msg = EncapsulatedMessage::from(
-        EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+        try_new_fully_encapsulated(
             &inputs,
             PayloadType::Data,
             PAYLOAD_BODY.try_into().unwrap(),
@@ -355,13 +355,114 @@ fn encapsulate_and_decapsulate_via_two_step_verification() {
 #[test]
 fn empty_inputs_returns_error() {
     assert!(matches!(
-        EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+        try_new_fully_encapsulated(
             &[],
             PayloadType::Data,
             b"hello".as_slice().try_into().unwrap(),
         ),
         Err(Error::EmptyEncapsulationInputs)
     ));
+}
+
+#[test]
+fn more_inputs_than_layers_returns_error() {
+    let (inputs, _) = generate_inputs(4);
+    assert!(matches!(
+        EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+            &inputs,
+            PayloadType::Data,
+            b"hello".as_slice().try_into().unwrap(),
+            NonZeroU64::new(3).unwrap(),
+        ),
+        Err(Error::EncapsulationCountExceeded)
+    ));
+}
+
+#[test]
+fn encapsulate_and_decapsulate_fewer_layers_than_maximum() {
+    // A message encapsulated `h` times still carries `ß_max` blending headers;
+    // the unused ones hold random filler. Decapsulating it `h` times must yield
+    // the original payload, i.e. the filler must not disturb the shift-and-
+    // reconstruct invariant that the per-layer signatures depend on.
+    const PAYLOAD_BODY: &[u8] = b"hello";
+    const MAX_LAYERS: u64 = 4;
+    let verifier = NeverFailingProofsVerifier;
+
+    for used_layers in 1..=MAX_LAYERS as usize {
+        let (inputs, blend_node_enc_keys) = generate_inputs(used_layers);
+        let mut msg = EncapsulatedMessage::from(
+            EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+                &inputs,
+                PayloadType::Data,
+                PAYLOAD_BODY.try_into().unwrap(),
+                NonZeroU64::new(MAX_LAYERS).unwrap(),
+            )
+            .unwrap(),
+        );
+
+        // Regardless of `used_layers`, the message is the size of a `MAX_LAYERS`
+        // one — the encapsulation count never reaches the wire.
+        assert_eq!(
+            msg.encode().len(),
+            expected_serialized_len(NonZeroU64::new(MAX_LAYERS).unwrap()),
+            "message with {used_layers} used layer(s) has the wrong size"
+        );
+
+        // Decapsulate in the reverse order of `blend_node_enc_keys`.
+        for (hop, key) in blend_node_enc_keys.iter().enumerate().rev() {
+            let output = msg
+                .clone()
+                .verify_public_header(&verifier)
+                .unwrap()
+                .decapsulate(
+                    key,
+                    &RequiredProofOfSelectionVerificationInputs::default(),
+                    &verifier,
+                )
+                .unwrap();
+            match output {
+                DecapsulationOutput::Incompleted {
+                    remaining_encapsulated_message,
+                    ..
+                } => {
+                    assert_ne!(hop, 0, "the innermost layer should complete the message");
+                    msg = *remaining_encapsulated_message;
+                }
+                DecapsulationOutput::Completed {
+                    fully_decapsulated_message,
+                    ..
+                } => {
+                    assert_eq!(hop, 0, "only the innermost layer should complete");
+                    assert_eq!(
+                        fully_decapsulated_message.payload_type(),
+                        PayloadType::Data
+                    );
+                    assert_eq!(fully_decapsulated_message.payload_body(), PAYLOAD_BODY);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn filler_layers_are_not_reconstructable() {
+    // Two messages built from the very same inputs must differ in their filler
+    // layers: those come from fresh entropy, not from the shared keys, so no
+    // observer (nor the sender, after the fact) can regenerate them.
+    let (inputs, _) = generate_inputs(1);
+    let encode = || {
+        EncapsulatedMessage::from(
+            EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+                &inputs,
+                PayloadType::Data,
+                b"hello".as_slice().try_into().unwrap(),
+                NonZeroU64::new(3).unwrap(),
+            )
+            .unwrap(),
+        )
+        .encode()
+    };
+    assert_ne!(encode(), encode());
 }
 
 #[test]
@@ -372,6 +473,8 @@ fn decapsulate_empty_private_headers_returns_error() {
             &[],
             PayloadType::Data,
             b"hello".as_slice().try_into().unwrap(),
+            // ...and no filler layers either, so the private header is empty.
+            0,
         );
         let verified_public_header = VerifiedPublicHeader::new(
             VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
@@ -391,7 +494,7 @@ fn decapsulate_empty_private_headers_returns_error() {
 
 fn sample_message(num_layers: usize) -> EncapsulatedMessageWithVerifiedPublicHeader {
     let (inputs, _) = generate_inputs(num_layers);
-    EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+    try_new_fully_encapsulated(
         &inputs,
         PayloadType::Data,
         b"payload".as_slice().try_into().unwrap(),
@@ -459,6 +562,21 @@ fn wire_bytes_identical_across_message_types() {
 // the responsibility of the network-side size gate (it compares the received
 // length against `EncapsulatedMessage::expected_serialized_len`), covered by
 // the `blend-network` tests. `decode` itself assumes a correctly-sized input.
+
+/// Encapsulate with `ß_max` equal to the number of inputs, i.e. the message
+/// uses up every layer it carries and has no random filler.
+fn try_new_fully_encapsulated(
+    inputs: &[EncapsulationInput],
+    payload_type: PayloadType,
+    payload_body: PaddedPayloadBody,
+) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
+    EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+        inputs,
+        payload_type,
+        payload_body,
+        NonZeroU64::new(inputs.len() as u64).unwrap_or(NonZeroU64::MIN),
+    )
+}
 
 fn generate_inputs(cnt: usize) -> (Vec<EncapsulationInput>, Vec<X25519PrivateKey>) {
     let recipient_signing_keys =

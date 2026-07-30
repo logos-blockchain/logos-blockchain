@@ -35,11 +35,13 @@ impl EncapsulatedMessageWithVerifiedSignature {
         inputs: &[EncapsulationInput],
         payload_type: PayloadType,
         payload_body: PaddedPayloadBody,
+        total_layers: NonZeroU64,
     ) -> Result<Self, Error> {
         Ok(EncapsulatedMessageWithVerifiedPublicHeader::try_new(
             inputs,
             payload_type,
             payload_body,
+            total_layers,
         )?
         .into())
     }
@@ -139,17 +141,25 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
         )
     }
 
+    /// Encapsulate `payload_body` once per entry in `inputs`.
+    ///
+    /// `total_layers` is `ß_max`, the fixed number of blending headers every
+    /// message carries. `inputs` may be shorter than that: the unused leading
+    /// layers are filled with random bytes, keeping the encapsulation count off
+    /// the wire. It returns an error if `inputs` is empty or longer than
+    /// `total_layers`.
     pub fn try_new(
         inputs: &[EncapsulationInput],
         payload_type: PayloadType,
         payload_body: PaddedPayloadBody,
+        total_layers: NonZeroU64,
     ) -> Result<Self, Error> {
         // Create the encapsulated part.
         let (part, signing_key, proof_of_quota) = inputs.iter().enumerate().fold(
             (
                 // Start with an initialized encapsulated part,
                 // a random signing key, and proof of quota.
-                EncapsulatedPart::try_initialize(inputs, payload_type, payload_body)?,
+                EncapsulatedPart::try_initialize(inputs, payload_type, payload_body, total_layers)?,
                 UnsecuredEd25519Key::generate_with_blake_rng(),
                 VerifiedProofOfQuota::from_bytes_unchecked(random_sized_bytes()),
             ),

@@ -517,6 +517,7 @@ mod tests {
             &inputs,
             PayloadType::Cover,
             b"".as_slice().try_into().unwrap(),
+            NonZeroU64::new(3).unwrap(),
         )
         .unwrap()
     }

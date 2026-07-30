@@ -2,7 +2,7 @@ use core::num::NonZeroU64;
 
 use derivative::Derivative;
 use itertools::Itertools as _;
-use lb_blend_crypto::{ZkHash, cipher::Cipher};
+use lb_blend_crypto::{ZkHash, cipher::Cipher, pseudo_random_sized_bytes, random_sized_bytes};
 use lb_blend_proofs::{
     quota::{self, VerifiedProofOfQuota},
     selection::{self, VerifiedProofOfSelection, inputs::VerifyInputs},
@@ -34,6 +34,10 @@ use crate::{
 };
 
 pub type MessageIdentifier = ZkHash;
+
+/// Size of the entropy seed used to derive the filler bytes of an unused
+/// blending header. See [`EncapsulatedBlendingHeader::random`].
+const RANDOM_HEADER_SEED_SIZE: usize = 32;
 
 /// An unverified encapsulated message that is received from a peer.
 #[derive(Derivative, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -171,9 +175,10 @@ impl EncapsulatedPart {
         inputs: &[EncapsulationInput],
         payload_type: PayloadType,
         payload_body: PaddedPayloadBody,
+        total_layers: usize,
     ) -> Self {
         Self {
-            private_header: EncapsulatedPrivateHeader::new_unchecked(inputs),
+            private_header: EncapsulatedPrivateHeader::new_unchecked(inputs, total_layers),
             payload: EncapsulatedPayload::initialize(&Payload::new(payload_type, payload_body)),
         }
     }
@@ -181,14 +186,19 @@ impl EncapsulatedPart {
     /// Initializes the encapsulated part as preparation for actual
     /// encapsulations.
     ///
-    /// It returns an error if the slice of inputs is empty.
-    pub(crate) fn try_initialize(
+    /// `total_layers` is `ß_max`, the layer count every message on the wire
+    /// carries regardless of how many times it is actually encapsulated.
+    ///
+    /// It returns an error if the slice of inputs is empty or holds more than
+    /// `total_layers` inputs.
+    pub(super) fn try_initialize(
         inputs: &[EncapsulationInput],
         payload_type: PayloadType,
         payload_body: PaddedPayloadBody,
+        total_layers: NonZeroU64,
     ) -> Result<Self, Error> {
         Ok(Self {
-            private_header: EncapsulatedPrivateHeader::try_initialize(inputs)?,
+            private_header: EncapsulatedPrivateHeader::try_initialize(inputs, total_layers)?,
             payload: EncapsulatedPayload::initialize(&Payload::new(payload_type, payload_body)),
         })
     }
@@ -379,52 +389,77 @@ pub(crate) struct EncapsulatedPrivateHeader(Box<[EncapsulatedBlendingHeader]>);
 
 impl EncapsulatedPrivateHeader {
     #[cfg(test)]
-    pub fn new_unchecked(inputs: &[EncapsulationInput]) -> Self {
-        Self::from_inputs(inputs)
+    pub fn new_unchecked(inputs: &[EncapsulationInput], total_layers: usize) -> Self {
+        Self::from_inputs(inputs, total_layers)
     }
 
     /// Initializes the private header as preparation for actual encapsulations.
     ///
-    /// It returns an error if the slice of inputs is empty.
-    pub(crate) fn try_initialize(inputs: &[EncapsulationInput]) -> Result<Self, Error> {
+    /// It returns an error if the slice of inputs is empty or holds more than
+    /// `total_layers` inputs.
+    fn try_initialize(
+        inputs: &[EncapsulationInput],
+        total_layers: NonZeroU64,
+    ) -> Result<Self, Error> {
         if inputs.is_empty() {
             return Err(Error::EmptyEncapsulationInputs);
         }
+        if inputs.len() as u64 > total_layers.get() {
+            return Err(Error::EncapsulationCountExceeded);
+        }
 
-        Ok(Self::from_inputs(inputs))
+        Ok(Self::from_inputs(inputs, total_layers.get() as usize))
     }
 
-    // Randomize the private header in the reconstructable way,
-    // so that the corresponding signatures can be verified later.
-    // Plus, encapsulate the last `inputs.len()` blending headers.
+    // Randomize the private header, then fill the last `inputs.len()` blending
+    // headers in the reconstructable way, so that the corresponding signatures can
+    // be verified later. Plus, encapsulate those last `inputs.len()` headers.
     //
-    // Example: for 2 inputs,
-    // BlendingHeaders[0]: Enc(inputs[1], Enc(inputs[0], RND(inputs[1])))
-    // BlendingHeaders[1]:               Enc(inputs[0], RND(inputs[0]))
+    // The private header always holds `total_layers` (`ß_max`) blending headers,
+    // however many times the message is actually encapsulated. When the sender
+    // encapsulates fewer times, the leading `ß_max - inputs.len()` headers are
+    // filled with non-reconstructable random bytes, so the encapsulation count
+    // leaks neither through the message size (constant) nor through the header
+    // contents. This follows steps 2-4 of the Message Initialization section of the
+    // spec: <https://github.com/logos-co/logos-lips/blob/master/docs/blockchain/raw/message-encapsulation.md>.
+    //
+    // Example: for `total_layers` 3 and 2 inputs,
+    // BlendingHeaders[0]: RANDOM
+    // BlendingHeaders[1]: Enc(inputs[1], Enc(inputs[0], RND(inputs[1])))
+    // BlendingHeaders[2]:               Enc(inputs[0], RND(inputs[0]))
     //
     // Notation:
+    // - RANDOM: Pseudo-random bytes generated from fresh entropy, reconstructable
+    //   by nobody
     // - RND(seed): Pseudo-random bytes generated from `seed` with the `HEADER` DST
     // - Enc(key, data): Encrypt `data` by XOR-ing with RND(key)
-    fn from_inputs(inputs: &[EncapsulationInput]) -> Self {
+    fn from_inputs(inputs: &[EncapsulationInput], total_layers: usize) -> Self {
+        let unused_layers = total_layers.saturating_sub(inputs.len());
         Self(
-            inputs
-                .iter()
-                .map(EncapsulationInput::ephemeral_encryption_key)
-                .rev()
-                .map(|rng_key| {
-                    let mut header = EncapsulatedBlendingHeader::initialize(
-                        &BlendingHeader::pseudo_random(rng_key.as_slice()),
-                    );
+            core::iter::repeat_with(EncapsulatedBlendingHeader::random)
+                .take(unused_layers)
+                .chain(
                     inputs
                         .iter()
-                        .take_while_inclusive(|&input| input.ephemeral_encryption_key() != rng_key)
-                        .for_each(|input| {
-                            let mut header_cipher =
-                                input.ephemeral_encryption_key().cipher(domains::HEADER);
-                            header.encapsulate(&mut header_cipher);
-                        });
-                    header
-                })
+                        .map(EncapsulationInput::ephemeral_encryption_key)
+                        .rev()
+                        .map(|rng_key| {
+                            let mut header = EncapsulatedBlendingHeader::initialize(
+                                &BlendingHeader::pseudo_random(rng_key.as_slice()),
+                            );
+                            inputs
+                                .iter()
+                                .take_while_inclusive(|&input| {
+                                    input.ephemeral_encryption_key() != rng_key
+                                })
+                                .for_each(|input| {
+                                    let mut header_cipher =
+                                        input.ephemeral_encryption_key().cipher(domains::HEADER);
+                                    header.encapsulate(&mut header_cipher);
+                                });
+                            header
+                        }),
+                )
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         )
@@ -620,6 +655,21 @@ impl EncapsulatedBlendingHeader {
                 .try_into()
                 .expect("A BlendingHeader always encodes to BLENDING_HEADER_ENCODED_SIZE bytes."),
         )
+    }
+
+    /// Build a filler [`EncapsulatedBlendingHeader`] out of fresh entropy.
+    ///
+    /// Used for the `ß_max - h` layers of a message that is encapsulated fewer
+    /// than `ß_max` times. Unlike the reconstructable filler of the last `h`
+    /// layers, these bytes are derived from local entropy rather than from a
+    /// shared key, so no party — not even the sender, after the fact — can
+    /// reproduce them. They are never decrypted into a [`BlendingHeader`], they
+    /// only ride along so that the layer count is not observable.
+    fn random() -> Self {
+        Self(pseudo_random_sized_bytes::<BLENDING_HEADER_ENCODED_SIZE>(
+            domains::RANDOM,
+            &random_sized_bytes::<RANDOM_HEADER_SEED_SIZE>(),
+        ))
     }
 
     /// Try to deserialize into a [`BlendingHeader`].
