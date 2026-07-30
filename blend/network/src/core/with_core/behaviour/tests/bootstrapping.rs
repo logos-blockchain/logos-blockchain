@@ -278,7 +278,7 @@ async fn incoming_attempt_with_duplicate_connection() {
                     }
                     // Listener swarm should not know about this
                     SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id, _)) => {
-                        assert!(peer_id != *dialer_swarm.local_peer_id());
+                        assert_ne!(peer_id, *dialer_swarm.local_peer_id());
                     }
                     _ => {}
                 }
@@ -286,7 +286,7 @@ async fn incoming_attempt_with_duplicate_connection() {
             // Neither should the dialer
             dialer_swarm_event = dialer_swarm.select_next_some() => {
                 if let SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id, _)) = dialer_swarm_event {
-                    assert!(peer_id != *dialer_swarm.local_peer_id());
+                    assert_ne!(peer_id, *dialer_swarm.local_peer_id());
                 }
             }
         }
@@ -438,7 +438,7 @@ async fn outgoing_attempt_with_duplicate_connection() {
                     }
                     // Listener swarm should not know about this
                     SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id, _)) => {
-                        assert!(peer_id != *dialer_swarm.local_peer_id());
+                        assert_ne!(peer_id, *dialer_swarm.local_peer_id());
                     }
                     _ => {}
                 }
@@ -446,7 +446,7 @@ async fn outgoing_attempt_with_duplicate_connection() {
             // Neither should the dialer
             dialer_swarm_event = dialer_swarm.select_next_some() => {
                 if let SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id, _)) = dialer_swarm_event {
-                    assert!(peer_id != *dialer_swarm.local_peer_id());
+                    assert_ne!(peer_id, *dialer_swarm.local_peer_id());
                 }
             }
         }
@@ -622,26 +622,26 @@ async fn concurrent_reverse_connections_between_peers() {
         .unwrap();
     // If swarm 1 ID is lower, it must have closed its outgoing connection, so swarm
     // 2 will be the dialer, or viceversa.
-    assert!(
-        swarm_2_details_for_swarm_1.role
-            == if is_swarm_1_id_smaller {
-                Endpoint::Dialer
-            } else {
-                Endpoint::Listener
-            }
+    assert_eq!(
+        swarm_2_details_for_swarm_1.role,
+        if is_swarm_1_id_smaller {
+            Endpoint::Dialer
+        } else {
+            Endpoint::Listener
+        }
     );
     let swarm_1_details_for_swarm_2 = swarm_2
         .behaviour()
         .negotiated_peers
         .get(swarm_1.local_peer_id())
         .unwrap();
-    assert!(
-        swarm_1_details_for_swarm_2.role
-            == if is_swarm_1_id_smaller {
-                Endpoint::Listener
-            } else {
-                Endpoint::Dialer
-            }
+    assert_eq!(
+        swarm_1_details_for_swarm_2.role,
+        if is_swarm_1_id_smaller {
+            Endpoint::Listener
+        } else {
+            Endpoint::Dialer
+        }
     );
 }
 
