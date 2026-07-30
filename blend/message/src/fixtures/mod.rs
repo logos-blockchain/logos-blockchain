@@ -1,14 +1,15 @@
 use lb_blend_proofs::{
-    quota::{VerifiedProofOfQuota, PROOF_OF_QUOTA_SIZE},
-    selection::{VerifiedProofOfSelection, PROOF_OF_SELECTION_SIZE},
+    quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
+    selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection},
 };
 use lb_codec::codec_fixtures;
 use lb_key_management_system_keys::keys::{
-    Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key, ED25519_PUBLIC_KEY_SIZE,
-    ED25519_SIGNATURE_SIZE,
+    ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature,
+    UnsecuredEd25519Key,
 };
 
 use crate::{
+    PaddedPayloadBody, PayloadType,
     encap::{
         encapsulated::{
             EncapsulatedBlendingHeader, EncapsulatedMessage, EncapsulatedPart, EncapsulatedPayload,
@@ -24,7 +25,6 @@ use crate::{
         payload::Payload,
         public_header::{PublicHeader, PublicHeaderWithVerifiedSignature, VerifiedPublicHeader},
     },
-    PaddedPayloadBody, PayloadType,
 };
 
 // -- Payload ---------------------------------------------------------------

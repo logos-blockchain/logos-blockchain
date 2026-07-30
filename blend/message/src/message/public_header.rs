@@ -1,8 +1,8 @@
 use lb_blend_proofs::quota::{self, PROOF_OF_QUOTA_SIZE, ProofOfQuota, VerifiedProofOfQuota};
+use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_key_management_system_keys::keys::{
     ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature,
 };
-use lb_codec::{DecodeError, BinaryDecode, BinaryEncode};
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{Error, MessageIdentifier, encap::ProofsVerifier};

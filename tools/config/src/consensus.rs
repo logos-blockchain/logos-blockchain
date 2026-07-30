@@ -1,6 +1,7 @@
 use core::time::Duration;
 use std::sync::OnceLock;
 
+use lb_codec::BinaryEncode as _;
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
@@ -22,7 +23,6 @@ use lb_key_management_system_service::keys::{
     Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
 };
 use lb_node::{Hashable as _, SignedMantleTx};
-use lb_codec::BinaryEncode as _;
 use num_bigint::BigUint;
 use time::OffsetDateTime;
 

@@ -25,8 +25,9 @@ use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
 use syn::{
+    Data, DeriveInput, Expr, Fields, Ident, LitStr, Token, Type,
     parse::{Parse, ParseStream},
-    parse_macro_input, Data, DeriveInput, Expr, Fields, Ident, LitStr, Token, Type,
+    parse_macro_input,
 };
 
 /// Derive `BinaryEncode` + `BinaryDecode` for a named or tuple struct with an
@@ -359,7 +360,7 @@ impl Parse for CodecFixtureInput {
                 break;
             }
             input.parse::<Token![,]>()?; // separator (a trailing comma ends the
-                                         // loop)
+            // loop)
         }
 
         if fixtures.is_empty() {

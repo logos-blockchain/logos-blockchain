@@ -1,4 +1,4 @@
-use lb_codec::{DecodeError, BinaryDecode, BinaryEncode, take};
+use lb_codec::{BinaryDecode, BinaryEncode, DecodeError, take};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 

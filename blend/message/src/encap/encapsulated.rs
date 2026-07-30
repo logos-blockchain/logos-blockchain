@@ -7,10 +7,10 @@ use lb_blend_proofs::{
     quota::{self, VerifiedProofOfQuota},
     selection::{self, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
+use lb_codec::{BinaryDecode, BinaryEncode, DecodeError, take};
 use lb_key_management_system_keys::keys::{
     Ed25519PublicKey, Ed25519Signature, SharedKey, UnsecuredEd25519Key,
 };
-use lb_codec::{DecodeError, BinaryDecode, BinaryEncode, take};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 

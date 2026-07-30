@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use lb_blake2btree::{Blake2bTree, LeafHash};
-use lb_cryptarchia_engine::Slot;
 use lb_codec::BinaryCodec;
+use lb_cryptarchia_engine::Slot;
 use serde::{Deserialize, Serialize};
 
 use crate::{

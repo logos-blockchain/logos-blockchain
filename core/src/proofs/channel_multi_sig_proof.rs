@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
 
+use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_utils::bounded::UpperBoundedVec;
-use lb_codec::{DecodeError, BinaryCodec, BinaryDecode, BinaryEncode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

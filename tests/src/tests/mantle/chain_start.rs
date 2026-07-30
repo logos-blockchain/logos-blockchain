@@ -1,6 +1,7 @@
 use std::{num::NonZero, path::PathBuf, time::Duration};
 
 use lb_chain_service::PhaseTag;
+use lb_codec::BinaryEncode as _;
 use lb_core::{
     block::genesis::GenesisBlockBuilder,
     mantle::{
@@ -15,7 +16,6 @@ use lb_testing_framework::{
     configs::deployment::NodeBinaryProfile, ensure_node_binary_built,
 };
 use lb_utils::math::NonNegativeRatio;
-use lb_codec::BinaryEncode as _;
 use logos_blockchain_tests::{
     common::manual_cluster::{
         ManualNodeLayout, start_local_manual_cluster_with_layout, wait_for_nodes_height,

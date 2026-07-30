@@ -4,8 +4,8 @@ use lb_blend_proofs::{
     quota::{self, VerifiedProofOfQuota},
     selection::inputs::VerifyInputs,
 };
-use lb_key_management_system_keys::keys::{UnsecuredEd25519Key, X25519PrivateKey};
 use lb_codec::BinaryEncode;
+use lb_key_management_system_keys::keys::{UnsecuredEd25519Key, X25519PrivateKey};
 use serde::{Deserialize, Serialize};
 
 use crate::{

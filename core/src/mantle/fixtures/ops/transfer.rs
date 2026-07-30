@@ -1,5 +1,5 @@
-use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
 use lb_codec::codec_fixtures;
+use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
 
 use crate::mantle::{Note, NoteId, ops::transfer::TransferOp};
 

@@ -1,6 +1,6 @@
+use lb_codec::codec_fixtures;
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
 use lb_poc::PoCProof;
-use lb_codec::codec_fixtures;
 
 use crate::{
     mantle::ops::leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},

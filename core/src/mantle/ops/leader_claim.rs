@@ -1,10 +1,10 @@
 use std::sync::LazyLock;
 
 use lb_blake2btree::{Blake2bTree, LeafHash};
+use lb_codec::{BinaryCodec, BinaryEncode as _};
 use lb_groth16::{fr_from_bytes, fr_to_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::{Digest, Fr, ZkHash};
-use lb_codec::{BinaryCodec, BinaryEncode as _};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

@@ -1,7 +1,7 @@
+use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::{COMPRESSED_PROOF_SIZE, Fr, serde::serde_fr};
 use lb_log_targets::proofs;
 use lb_mmr::MerklePath;
-use lb_codec::{DecodeError, BinaryDecode, BinaryEncode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;

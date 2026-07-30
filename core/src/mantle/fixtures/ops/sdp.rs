@@ -1,8 +1,8 @@
 use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
+use lb_codec::codec_fixtures;
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
-use lb_codec::codec_fixtures;
 
 use crate::sdp::{
     ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locator, ProviderId,

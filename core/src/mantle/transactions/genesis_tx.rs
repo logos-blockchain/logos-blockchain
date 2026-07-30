@@ -1,8 +1,8 @@
 use core::fmt::{self, Display, Formatter};
 
+use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::Fr;
 use lb_utils::bounded::{BoundedString, BoundedVec};
-use lb_codec::{DecodeError, BinaryCodec, BinaryDecode, BinaryEncode};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 

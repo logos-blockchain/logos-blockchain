@@ -10,8 +10,8 @@ use lb_blend_message::{
         },
     },
 };
-use lb_key_management_system_keys::keys::X25519PrivateKey;
 use lb_codec::{BinaryDecode as _, BinaryEncode as _};
+use lb_key_management_system_keys::keys::X25519PrivateKey;
 
 pub mod core_and_leader;
 pub use self::core_and_leader::{

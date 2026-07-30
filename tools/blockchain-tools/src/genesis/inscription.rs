@@ -1,3 +1,4 @@
+use lb_codec::BinaryEncode as _;
 use lb_config::consensus::{EMPTY_CHANNEL_ID, EMPTY_ED25519_PUBLIC_KEY};
 use lb_core::{
     crypto::ZkDigest,
@@ -9,7 +10,6 @@ use lb_core::{
 };
 use lb_groth16::{FrBytes, fr_from_bytes};
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
-use lb_codec::BinaryEncode as _;
 use serde_with::{hex::Hex, serde_as};
 use time::OffsetDateTime;
 

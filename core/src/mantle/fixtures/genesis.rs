@@ -1,6 +1,6 @@
 use ark_ff::AdditiveGroup as _;
-use lb_groth16::Fr;
 use lb_codec::codec_fixtures;
+use lb_groth16::Fr;
 
 use crate::mantle::transactions::genesis_tx::{ChainId, CryptarchiaParameter, GenesisTime};
 

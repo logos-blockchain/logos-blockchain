@@ -3,11 +3,11 @@ use lb_blend_proofs::{
     quota::{PROOF_OF_QUOTA_SIZE, ProofOfQuota, VerifiedProofOfQuota},
     selection::{PROOF_OF_SELECTION_SIZE, ProofOfSelection, VerifiedProofOfSelection},
 };
+use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_key_management_system_keys::keys::{
     ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature,
     UnsecuredEd25519Key,
 };
-use lb_codec::{DecodeError, BinaryDecode, BinaryEncode};
 use serde::{Deserialize, Serialize};
 
 use crate::crypto::domains;
