@@ -27,6 +27,7 @@ thiserror                     = { workspace = true }
 tracing                       = { workspace = true }
 
 [dev-dependencies]
+bincode               = { workspace = true }
 lb-cryptarchia-engine = { workspace = true }
 lb-groth16            = { workspace = true }
 lb-pol                = { workspace = true }

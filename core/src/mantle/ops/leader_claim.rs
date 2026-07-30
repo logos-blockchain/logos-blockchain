@@ -1,5 +1,6 @@
 use std::sync::LazyLock;
 
+use lb_blake2btree::{Blake2bTree, LeafHash};
 use lb_core_macros::NomCodec;
 use lb_groth16::{fr_from_bytes, fr_to_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -8,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    crypto::ZkHasher,
+    crypto::{Hash, ZkHasher},
     events::{TxEvent, TxEventPayload},
     mantle::{
         Note, Utxo, Value,
@@ -38,6 +39,20 @@ pub struct VoucherSecret(#[serde(with = "serde_fr")] pub Fr);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct VoucherNullifier(#[serde(with = "serde_fr")] ZkHash);
+
+// The nullifier is the whole state, so the set holds nothing besides it and the
+// leaf is the nullifier value.
+impl LeafHash<VoucherNullifier> for () {
+    fn leaf_hash(&self, nullifier: &VoucherNullifier) -> Hash {
+        fr_to_bytes(&nullifier.0)
+    }
+}
+
+/// Nullifiers of the vouchers claimed since genesis.
+///
+/// The set is append-only: a nullifier is recorded when its voucher is claimed
+/// and never removed, so the leaves stay in the order they appeared on chain.
+pub type VoucherNullifiers = Blake2bTree<VoucherNullifier, ()>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
 pub struct VoucherCm(#[serde(with = "serde_fr")] ZkHash);
@@ -159,14 +174,14 @@ pub enum LeaderClaimError {
 }
 
 pub struct LeaderClaimValidationContext<'a> {
-    pub nullifiers: &'a rpds::HashTrieSetSync<VoucherNullifier>,
+    pub nullifiers: &'a VoucherNullifiers,
     pub claimable_vouchers_root: &'a RewardsRoot,
     pub proof_of_claim: &'a Groth16LeaderClaimProof,
     pub tx_hash: &'a TxHash,
 }
 
 pub struct LeaderClaimExecutionContext {
-    pub nullifiers: rpds::HashTrieSetSync<VoucherNullifier>,
+    pub nullifiers: VoucherNullifiers,
     pub reward_amount: Value,
     pub claimable_rewards: Value,
     pub utxos: Utxos,
@@ -208,7 +223,7 @@ impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
         mut ctx: Self::ExecutionContext<'_>,
     ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         // Add the nullifier to the nullifier set
-        ctx.nullifiers = ctx.nullifiers.insert(self.voucher_nullifier);
+        ctx.nullifiers = ctx.nullifiers.insert(self.voucher_nullifier, ()).0;
 
         // Distribute the reward
         let utxo = self.utxo(ctx.reward_amount);
@@ -248,22 +263,25 @@ mod tests {
             .expect("MMR shouldn't be full");
         let voucher_root = RewardsRoot::from(mmr.frontier_root());
         let tx_hash = TxHash::from([11u8; 32]);
-        let proof = Groth16LeaderClaimProof::prove(LeaderClaimPrivate::new(
-            LeaderClaimPublic::new(
-                VoucherNullifier::from_secret(voucher_secret).into(),
-                voucher_root.into(),
-                tx_hash.to_fr(),
-            ),
-            &voucher_path,
-            voucher_secret,
-        ))
+        let proof = Groth16LeaderClaimProof::prove(
+            LeaderClaimPrivate::try_new(
+                LeaderClaimPublic::new(
+                    VoucherNullifier::from_secret(voucher_secret).into(),
+                    voucher_root.into(),
+                    tx_hash.to_fr(),
+                ),
+                &voucher_path,
+                voucher_secret,
+            )
+            .expect("voucher path should match the PoC circuit height"),
+        )
         .expect("proof generation should succeed");
         let op = LeaderClaimOp {
             rewards_root: voucher_root,
             voucher_nullifier: VoucherNullifier::from_secret(voucher_secret),
             pk: ZkPublicKey::zero(),
         };
-        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let nullifiers = VoucherNullifiers::new();
         let ctx = LeaderClaimValidationContext {
             nullifiers: &nullifiers,
             claimable_vouchers_root: &voucher_root,
@@ -288,7 +306,7 @@ mod tests {
 
         let (ctx, events) = op
             .execute(LeaderClaimExecutionContext {
-                nullifiers: rpds::HashTrieSetSync::new_sync(),
+                nullifiers: VoucherNullifiers::new(),
                 reward_amount,
                 claimable_rewards: 100,
                 utxos: Utxos::new(),
@@ -341,15 +359,18 @@ mod tests {
         let tx_hash = TxHash::from([11u8; 32]);
         // Proof proves ownership of the voucher whose nullifier is
         // `from_secret(voucher_secret)`.
-        let proof = Groth16LeaderClaimProof::prove(LeaderClaimPrivate::new(
-            LeaderClaimPublic::new(
-                VoucherNullifier::from_secret(voucher_secret).into(),
-                voucher_root.into(),
-                tx_hash.to_fr(),
-            ),
-            &voucher_path,
-            voucher_secret,
-        ))
+        let proof = Groth16LeaderClaimProof::prove(
+            LeaderClaimPrivate::try_new(
+                LeaderClaimPublic::new(
+                    VoucherNullifier::from_secret(voucher_secret).into(),
+                    voucher_root.into(),
+                    tx_hash.to_fr(),
+                ),
+                &voucher_path,
+                voucher_secret,
+            )
+            .expect("voucher path should match the PoC circuit height"),
+        )
         .expect("proof generation should succeed");
 
         // The claim supplies a DIFFERENT nullifier than the one the proof proves.
@@ -360,7 +381,7 @@ mod tests {
             voucher_nullifier: bogus_nf,
             pk: ZkPublicKey::zero(),
         };
-        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let nullifiers = VoucherNullifiers::new();
         let ctx = LeaderClaimValidationContext {
             nullifiers: &nullifiers,
             claimable_vouchers_root: &voucher_root,
@@ -372,5 +393,44 @@ mod tests {
         // match the proven voucher -> rejected. A voucher cannot be claimed under
         // a substituted nullifier.
         assert_eq!(op.validate(&ctx), Err(LeaderClaimError::InvalidPoC));
+    }
+
+    fn nullifier(secret: u64) -> VoucherNullifier {
+        VoucherNullifier::from_secret(VoucherSecret::from(Fr::from(secret)))
+    }
+
+    // The leaf is the nullifier value itself, so it has to stay the plain
+    // encoding, without any hashing on top.
+    #[test]
+    fn nullifier_leaf_is_the_nullifier_value() {
+        let nullifier = nullifier(7);
+
+        assert_eq!(().leaf_hash(&nullifier), fr_to_bytes(&nullifier.0));
+    }
+
+    #[test]
+    fn nullifiers_root_tracks_insertions() {
+        let nullifiers = VoucherNullifiers::new();
+        let empty_root = nullifiers.root();
+
+        let (nullifiers, _) = nullifiers.insert(nullifier(7), ());
+        let one_root = nullifiers.root();
+        assert_ne!(one_root, empty_root);
+
+        let (nullifiers, _) = nullifiers.insert(nullifier(8), ());
+        assert_ne!(nullifiers.root(), one_root);
+    }
+
+    // The set is append-only and its leaves keep the order they appeared on
+    // chain, so the same nullifiers claimed in another order commit differently.
+    #[test]
+    fn nullifiers_root_follows_the_claim_order() {
+        let (claimed_in_order, _) = VoucherNullifiers::new().insert(nullifier(7), ());
+        let (claimed_in_order, _) = claimed_in_order.insert(nullifier(8), ());
+
+        let (claimed_reversed, _) = VoucherNullifiers::new().insert(nullifier(8), ());
+        let (claimed_reversed, _) = claimed_reversed.insert(nullifier(7), ());
+
+        assert_ne!(claimed_in_order.root(), claimed_reversed.root());
     }
 }

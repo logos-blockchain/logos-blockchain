@@ -1,13 +1,13 @@
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr, Groth16Input, Groth16InputDeser};
 use serde::Serialize;
 
-pub const VOUCHER_MERKLE_TREE_HEIGHT: usize = 32;
-pub type VoucherPathAndSelector = [(Fr, bool); VOUCHER_MERKLE_TREE_HEIGHT];
+pub const VOUCHER_MERKLE_PATH_LEN: usize = 32;
+pub type VoucherPathAndSelector = [(Fr, bool); VOUCHER_MERKLE_PATH_LEN];
 
 #[derive(Clone)]
 pub struct PoCWalletInputs {
     secret_voucher: Groth16Input,
-    voucher_merkle_path_and_selectors: [(Groth16Input, Groth16Input); VOUCHER_MERKLE_TREE_HEIGHT],
+    voucher_merkle_path_and_selectors: [(Groth16Input, Groth16Input); VOUCHER_MERKLE_PATH_LEN],
 }
 
 #[derive(Clone, Debug)]
@@ -19,8 +19,8 @@ pub struct PoCWalletInputsData {
 #[derive(Serialize)]
 pub struct PoCWalletInputsJson {
     secret_voucher: Groth16InputDeser,
-    voucher_merkle_path: [Groth16InputDeser; VOUCHER_MERKLE_TREE_HEIGHT],
-    voucher_merkle_path_selectors: [Groth16InputDeser; VOUCHER_MERKLE_TREE_HEIGHT],
+    voucher_merkle_path: [Groth16InputDeser; VOUCHER_MERKLE_PATH_LEN],
+    voucher_merkle_path_selectors: [Groth16InputDeser; VOUCHER_MERKLE_PATH_LEN],
 }
 impl From<&PoCWalletInputs> for PoCWalletInputsJson {
     fn from(

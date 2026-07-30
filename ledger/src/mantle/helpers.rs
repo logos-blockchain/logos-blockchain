@@ -4,7 +4,7 @@ use lb_core::{
         ledger::{Declarations, Utxos},
         ops::{
             channel::{ChannelId, ChannelKeyIndex},
-            leader_claim::{RewardsRoot, VoucherNullifier},
+            leader_claim::{RewardsRoot, VoucherNullifiers},
             sdp::SdpError,
         },
         transactions::{OperationVerificationHelper, VerificationError},
@@ -13,7 +13,6 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
-use rpds::HashTrieSetSync;
 
 use crate::mantle::LedgerState;
 
@@ -87,7 +86,7 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
         self.cryptarchia_ledger.slot
     }
 
-    fn get_nullifiers(&self) -> &HashTrieSetSync<VoucherNullifier> {
+    fn get_nullifiers(&self) -> &VoucherNullifiers {
         self.ledger_state.leaders.nullifiers()
     }
 

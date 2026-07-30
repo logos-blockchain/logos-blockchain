@@ -1,10 +1,10 @@
 use std::cmp::Ordering;
 
 use lb_core::{
-    crypto::ZkHasher,
+    crypto::{Hash, ZkHasher},
     mantle::{
         Value,
-        ops::leader_claim::{RewardsRoot, VoucherCm, VoucherNullifier},
+        ops::leader_claim::{RewardsRoot, VoucherCm, VoucherNullifiers},
     },
 };
 use lb_cryptarchia_engine::Epoch;
@@ -22,7 +22,7 @@ pub struct LeaderState {
     /// A snapshot of voucher commitments, updated once at each epoch start.
     vouchers_snapshot: VouchersSnapshot,
     /// Nullifiers of vouchers that have been claimed since genesis
-    nfs: rpds::HashTrieSetSync<VoucherNullifier>,
+    nfs: VoucherNullifiers,
     /// Rewards to be distributed.
     /// At the start of each epoch this is increased by the amount of rewards
     /// that have been collected in the previous epoch.
@@ -72,7 +72,7 @@ impl LeaderState {
                 root: RewardsRoot::default(),
                 count: 0,
             },
-            nfs: rpds::HashTrieSetSync::new_sync(),
+            nfs: VoucherNullifiers::new(),
             pending_rewards: 0,
             claimable_rewards: 0,
             vouchers: MerkleMountainRange::new(),
@@ -80,17 +80,22 @@ impl LeaderState {
     }
 
     #[must_use]
-    pub const fn nullifiers(&self) -> &rpds::HashTrieSetSync<VoucherNullifier> {
+    pub const fn nullifiers(&self) -> &VoucherNullifiers {
         &self.nfs
     }
 
     #[must_use]
-    pub fn nullifiers_cloned(&self) -> rpds::HashTrieSetSync<VoucherNullifier> {
+    pub fn nullifiers_cloned(&self) -> VoucherNullifiers {
         self.nfs.clone()
     }
 
-    pub fn update_nullifiers(&mut self, nullifiers: rpds::HashTrieSetSync<VoucherNullifier>) {
+    pub fn update_nullifiers(&mut self, nullifiers: VoucherNullifiers) {
         self.nfs = nullifiers;
+    }
+
+    #[must_use]
+    pub fn nullifiers_root(&self) -> Hash {
+        self.nfs.root()
     }
 
     pub const fn update_rewards(&mut self, claimable_rewards: Value) {

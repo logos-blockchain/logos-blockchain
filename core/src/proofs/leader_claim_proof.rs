@@ -10,7 +10,7 @@ use crate::{
         nom::{NomDecode, NomEncode},
         ops::leader_claim::VoucherSecret,
     },
-    proofs::merkle::mmr_path_to_witness,
+    proofs::merkle::{MerklePathWitnessError, mmr_path_to_witness},
 };
 
 const LOG_TARGET: &str = proofs::LEADER_CLAIM;
@@ -120,18 +120,17 @@ pub struct LeaderClaimPrivate {
 }
 
 impl LeaderClaimPrivate {
-    #[must_use]
-    pub fn new(
+    pub fn try_new(
         public: LeaderClaimPublic,
         voucher_path: &MerklePath,
         secret_voucher: VoucherSecret,
-    ) -> Self {
+    ) -> Result<Self, MerklePathWitnessError> {
         let chain = lb_poc::PoCChainInputsData {
             voucher_root: public.voucher_root,
             mantle_tx_hash: public.mantle_tx_hash,
         };
         let (voucher_merkle_path, voucher_merkle_path_selectors) =
-            mmr_path_to_witness(voucher_path);
+            mmr_path_to_witness(voucher_path)?;
         let wallet = lb_poc::PoCWalletInputsData {
             secret_voucher: secret_voucher.into(),
             voucher_merkle_path_and_selectors: core::array::from_fn(|i| {
@@ -139,7 +138,7 @@ impl LeaderClaimPrivate {
             }),
         };
         let input = lb_poc::PoCWitnessInputsData::from_chain_and_wallet_data(chain, wallet);
-        Self { input }
+        Ok(Self { input })
     }
 
     #[must_use]
