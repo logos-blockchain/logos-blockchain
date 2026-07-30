@@ -357,7 +357,7 @@ fn more_inputs_than_layers_returns_error() {
             &inputs,
             PayloadType::Data,
             b"hello".as_slice().try_into().unwrap(),
-            NonZeroU64::new(3).unwrap(),
+            3
         ),
         Err(Error::EncapsulationCountExceeded)
     ));
@@ -370,17 +370,17 @@ fn encapsulate_and_decapsulate_fewer_layers_than_maximum() {
     // the original payload, i.e. the filler must not disturb the shift-and-
     // reconstruct invariant that the per-layer signatures depend on.
     const PAYLOAD_BODY: &[u8] = b"hello";
-    const MAX_LAYERS: u64 = 4;
+    const MAX_LAYERS: usize = 4;
     let verifier = NeverFailingProofsVerifier;
 
-    for used_layers in 1..=MAX_LAYERS as usize {
+    for used_layers in 1..=MAX_LAYERS {
         let (inputs, blend_node_enc_keys) = generate_inputs(used_layers);
         let mut msg = EncapsulatedMessage::from(
             EncapsulatedMessageWithVerifiedPublicHeader::try_new(
                 &inputs,
                 PayloadType::Data,
                 PAYLOAD_BODY.try_into().unwrap(),
-                NonZeroU64::new(MAX_LAYERS).unwrap(),
+                MAX_LAYERS,
             )
             .unwrap(),
         );
@@ -389,7 +389,7 @@ fn encapsulate_and_decapsulate_fewer_layers_than_maximum() {
         // one — the encapsulation count never reaches the wire.
         assert_eq!(
             msg.encode().len(),
-            expected_serialized_len(NonZeroU64::new(MAX_LAYERS).unwrap()),
+            expected_serialized_len(NonZeroU64::new(MAX_LAYERS as u64).unwrap()),
             "message with {used_layers} used layer(s) has the wrong size"
         );
 
@@ -486,7 +486,7 @@ fn filler_layers_are_not_reconstructable() {
                 &inputs,
                 PayloadType::Data,
                 b"hello".as_slice().try_into().unwrap(),
-                NonZeroU64::new(3).unwrap(),
+                3,
             )
             .unwrap(),
         )
@@ -504,7 +504,7 @@ fn decapsulate_empty_private_headers_returns_error() {
             PayloadType::Data,
             b"hello".as_slice().try_into().unwrap(),
             // ...and no filler layers either, so the private header is empty.
-            0.try_into().unwrap(),
+            0,
         );
         let verified_public_header = VerifiedPublicHeader::new(
             VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
@@ -604,7 +604,7 @@ fn try_new_fully_encapsulated(
         inputs,
         payload_type,
         payload_body,
-        NonZeroU64::new(inputs.len() as u64).unwrap(),
+        inputs.len(),
     )
 }
 

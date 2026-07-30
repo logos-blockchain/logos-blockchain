@@ -171,7 +171,7 @@ impl EncapsulatedPart {
         inputs: &[EncapsulationInput],
         payload_type: PayloadType,
         payload_body: PaddedPayloadBody,
-        num_layers: NonZeroU64,
+        num_layers: usize,
     ) -> Self {
         Self {
             private_header: EncapsulatedPrivateHeader::new_unchecked(inputs, num_layers),
@@ -191,7 +191,7 @@ impl EncapsulatedPart {
         inputs: &[EncapsulationInput],
         payload_type: PayloadType,
         payload_body: PaddedPayloadBody,
-        num_layers: NonZeroU64,
+        num_layers: usize,
     ) -> Result<Self, Error> {
         Ok(Self {
             private_header: EncapsulatedPrivateHeader::try_initialize(inputs, num_layers)?,
@@ -385,7 +385,7 @@ pub(crate) struct EncapsulatedPrivateHeader(Box<[EncapsulatedBlendingHeader]>);
 
 impl EncapsulatedPrivateHeader {
     #[cfg(test)]
-    pub fn new_unchecked(inputs: &[EncapsulationInput], num_layers: NonZeroU64) -> Self {
+    pub fn new_unchecked(inputs: &[EncapsulationInput], num_layers: usize) -> Self {
         Self::from_inputs(inputs, num_layers)
     }
 
@@ -393,14 +393,11 @@ impl EncapsulatedPrivateHeader {
     ///
     /// It returns an error if the slice of inputs is empty or holds more than
     /// `num_layers` inputs.
-    fn try_initialize(
-        inputs: &[EncapsulationInput],
-        num_layers: NonZeroU64,
-    ) -> Result<Self, Error> {
+    fn try_initialize(inputs: &[EncapsulationInput], num_layers: usize) -> Result<Self, Error> {
         if inputs.is_empty() {
             return Err(Error::EmptyEncapsulationInputs);
         }
-        if inputs.len() > num_layers.get() as usize {
+        if inputs.len() > num_layers {
             return Err(Error::EncapsulationCountExceeded);
         }
 
@@ -429,11 +426,11 @@ impl EncapsulatedPrivateHeader {
     //   by nobody
     // - RND(seed): Pseudo-random bytes generated from `seed` with the `HEADER` DST
     // - Enc(key, data): Encrypt `data` by XOR-ing with RND(key)
-    fn from_inputs(inputs: &[EncapsulationInput], num_layers: NonZeroU64) -> Self {
-        let unused_layers = num_layers.get().saturating_sub(inputs.len() as u64);
+    fn from_inputs(inputs: &[EncapsulationInput], num_layers: usize) -> Self {
+        let unused_layers = num_layers.saturating_sub(inputs.len());
         Self(
             core::iter::repeat_with(EncapsulatedBlendingHeader::random)
-                .take(unused_layers as usize)
+                .take(unused_layers)
                 .chain(
                     inputs
                         .iter()

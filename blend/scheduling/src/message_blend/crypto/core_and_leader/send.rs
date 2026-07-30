@@ -198,7 +198,7 @@ where
             &inputs,
             payload_type,
             validated_payload,
-            self.num_blend_layers,
+            self.num_blend_layers.get() as usize,
         )
         .expect("Number of encapsulation inputs is in `1..=num_blend_layers`."))
     }

@@ -35,7 +35,7 @@ impl EncapsulatedMessageWithVerifiedSignature {
         inputs: &[EncapsulationInput],
         payload_type: PayloadType,
         payload_body: PaddedPayloadBody,
-        encapsulation_layers: NonZeroU64,
+        encapsulation_layers: usize,
     ) -> Result<Self, Error> {
         Ok(EncapsulatedMessageWithVerifiedPublicHeader::try_new(
             inputs,
@@ -147,12 +147,12 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
     /// every message carries. `inputs` may be shorter than that: the unused
     /// leading layers are filled with random bytes, keeping the
     /// encapsulation count off the wire. It returns an error if `inputs` is
-    /// empty or longer than `total_layers`.
+    /// empty or longer than `encapsulation_layers`.
     pub fn try_new(
         inputs: &[EncapsulationInput],
         payload_type: PayloadType,
         payload_body: PaddedPayloadBody,
-        encapsulation_layers: NonZeroU64,
+        encapsulation_layers: usize,
     ) -> Result<Self, Error> {
         // Create the encapsulated part.
         let (part, signing_key, proof_of_quota) = inputs.iter().enumerate().fold(
