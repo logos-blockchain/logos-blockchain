@@ -27,7 +27,7 @@ use crate::{
         error::StepError,
         fee_reserve::DEFAULT_STORAGE_GAS_PRICE,
         steps::{TARGET, manual_transactions::tracked_transactions::create_invalid_transaction},
-        utils::user_config_from_node_yaml,
+        utils::{tx_hash_to_hex, user_config_from_node_yaml},
         wallet::submissions::{
             SignedUserWalletSubmission, prepare_user_wallet_transaction_submission,
             record_signed_user_wallet_submission, sign_prepared_user_wallet_transaction,
@@ -109,15 +109,15 @@ pub async fn try_submit_invalid_transaction(
         Ok(()) => {
             info!(
                 target: TARGET,
-                "Submitted invalid transaction `{transaction_alias}` ({:?}) to `{node_name}`",
-                tx_hash
+                "Submitted invalid transaction `{transaction_alias}` ({}) to `{node_name}`",
+                tx_hash_to_hex(&tx_hash)
             );
         }
         Err(error) => {
             info!(
                 target: TARGET,
-                "Invalid transaction `{transaction_alias}` ({:?}) was rejected by `{node_name}`: {error}",
-                tx_hash
+                "Invalid transaction `{transaction_alias}` ({}) was rejected by `{node_name}`: {error}",
+                tx_hash_to_hex(&tx_hash)
             );
         }
     }
@@ -143,7 +143,8 @@ pub async fn wait_for_mempool_recovery_flush(
     if !pending_hashes.contains(&tx_hash) {
         return Err(StepError::LogicalError {
             message: format!(
-                "Transaction `{transaction_alias}` ({tx_hash:?}) is not pending in node `{node_name}` mempool"
+                "Transaction `{transaction_alias}` ({}) is not pending in node `{node_name}` mempool",
+                tx_hash_to_hex(&tx_hash)
             ),
         });
     }
@@ -186,14 +187,16 @@ async fn wait_for_transaction_in_recovery_data(
     })
     .await;
 
-    wait_result.unwrap_or_else(
-        |_| Err(StepError::Timeout {
+    wait_result.unwrap_or_else(|_| {
+        Err(StepError::Timeout {
             message: format!(
-                "Timed out waiting for node `{node_name}` to flush transaction `{transaction_alias}` ({tx_hash:?}) to '{}'",
+                "Timed out waiting for node `{node_name}` to flush transaction \
+                `{transaction_alias}` ({}) to '{}'",
+                tx_hash_to_hex(&tx_hash),
                 storage_settings.db_path.display()
             ),
-        }),
-    )
+        })
+    })
 }
 
 fn recovery_storage_settings(node_info: &NodeInfo) -> Result<RocksBackendSettings, StepError> {
@@ -301,8 +304,8 @@ async fn submit_prepared_transaction_to_node(
 
     info!(
         target: TARGET,
-        "Submitted prepared transaction `{transaction_alias}` ({:?}) to `{node_name}`",
-        tx_hash
+        "Submitted prepared transaction `{transaction_alias}` ({}) to `{node_name}`",
+        tx_hash_to_hex(&tx_hash)
     );
 
     Ok(())
@@ -316,7 +319,7 @@ fn report_prepared_transaction(
 ) {
     info!(
         target: TARGET,
-        "Prepared transfer transaction `{transaction_alias}` ({:?}) from `{sender_wallet_name}` to `{receiver_wallet_name}`",
-        tx_hash
+        "Prepared transfer transaction `{transaction_alias}` ({}) from `{sender_wallet_name}` to `{receiver_wallet_name}`",
+        tx_hash_to_hex(&tx_hash)
     );
 }
