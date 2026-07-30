@@ -1,5 +1,6 @@
 use std::{collections::HashMap, error::Error, path::PathBuf, sync::Arc, time::Duration};
 
+use lb_config::kms::key_id_for_preload_backend;
 use lb_core::block::genesis::GenesisBlock;
 use lb_node::config::RunConfig;
 use rand::{Rng, SeedableRng as _};
@@ -251,7 +252,7 @@ impl DeploymentBuilder {
         let ids = generate_node_ids(node_count, self.seed.as_ref());
 
         let blend_ports = allocate_blend_ports(node_count)?;
-        let (node_configs, genesis_block) = create_node_configs_from_ids(
+        let (mut node_configs, genesis_block) = create_node_configs_from_ids(
             &ids,
             &blend_ports,
             self.config.blend_core_nodes,
@@ -268,10 +269,11 @@ impl DeploymentBuilder {
             .collect::<Vec<_>>();
 
         let genesis_block = postprocess::apply_wallet_genesis_overrides(
-            &node_configs,
+            &mut node_configs,
             &genesis_block,
             self.config.blend_core_nodes,
             &wallet_accounts,
+            key_id_for_preload_backend,
             self.config.test_context.as_deref(),
         );
 

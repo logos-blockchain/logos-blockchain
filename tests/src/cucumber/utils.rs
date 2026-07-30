@@ -17,7 +17,7 @@ use tracing::{info, warn};
 use crate::cucumber::{
     TARGET,
     error::{StepError, StepResult},
-    world::{DeployerKind, NetworkKind, TopologySpec},
+    world::{DeployerKind, NetworkKind, NodeWalletKey, NodeWalletKeyRole, TopologySpec},
 };
 
 type ScenarioBuilderWith = ScenarioBuilder;
@@ -179,86 +179,82 @@ pub(crate) fn user_config_from_node_yaml(path: &Path) -> Result<UserConfig, Step
     Ok(config)
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct NodeWalletKey {
-    pub wallet_pk: String,
-    pub known_key_ids: Vec<String>,
-    pub is_sdp_funding: bool,
-    pub sdp_declaration_id: Option<String>,
-    pub is_voucher_master: bool,
-}
-
 /// Reads and classifies the node-owned wallet keys in deterministic order.
 ///
 /// Every public key is returned once even if more than one configured key id
-/// points to it. SDP funding and voucher-master roles are retained as metadata
-/// on that single key.
+/// points to it.
 pub fn node_wallet_keys_from_node_yaml(path: &Path) -> Result<Vec<NodeWalletKey>, StepError> {
     let config = user_config_from_node_yaml(path)?;
+    let cryptarchia_funding_pk = config.cryptarchia.leader.wallet.funding_pk;
     let sdp_funding_pk = config.sdp.wallet.funding_pk;
     let voucher_master_key_id = config.wallet.voucher_master_key_id.clone();
-    let sdp_declaration_id = config.sdp.declaration_id.map(|id| id.to_string());
+    let blend_zk_key_id = config.blend.core.zk.secret_key_kms_id.clone();
     let mut keys_by_public_key = BTreeMap::<String, NodeWalletKey>::new();
 
     for (key_id, public_key) in &config.wallet.known_keys {
         let wallet_pk = public_key.to_bytes()?.encode_hex::<String>();
-        let entry = keys_by_public_key
-            .entry(wallet_pk.clone())
-            .or_insert_with(|| NodeWalletKey {
-                wallet_pk,
-                known_key_ids: Vec::new(),
-                is_sdp_funding: *public_key == sdp_funding_pk,
-                sdp_declaration_id: None,
-                is_voucher_master: false,
-            });
-        entry.known_key_ids.push(key_id.clone());
-        entry.is_voucher_master |= key_id == &voucher_master_key_id;
-    }
+        let role = if *public_key == cryptarchia_funding_pk || *public_key == sdp_funding_pk {
+            NodeWalletKeyRole::Funding
+        } else if key_id == &voucher_master_key_id {
+            NodeWalletKeyRole::VoucherMaster
+        } else if key_id == &blend_zk_key_id {
+            NodeWalletKeyRole::BlendZk
+        } else {
+            NodeWalletKeyRole::General
+        };
 
-    let mut node_wallet_keys = keys_by_public_key
-        .into_values()
-        .map(|mut key| {
-            key.known_key_ids.sort();
-            if key.is_sdp_funding {
-                key.sdp_declaration_id.clone_from(&sdp_declaration_id);
+        match keys_by_public_key.entry(wallet_pk.clone()) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(NodeWalletKey { wallet_pk, role });
             }
-            key
-        })
-        .collect::<Vec<_>>();
-
-    if !node_wallet_keys.iter().any(|key| key.is_sdp_funding) {
-        return Err(StepError::LogicalError {
-            message: format!(
-                "Configured SDP funding public key is absent from wallet.known_keys in '{}'",
-                path.display(),
-            ),
-        });
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let existing = entry.get_mut();
+                if existing.role == role || role == NodeWalletKeyRole::General {
+                    continue;
+                }
+                if existing.role == NodeWalletKeyRole::General {
+                    existing.role = role;
+                    continue;
+                }
+                return Err(StepError::LogicalError {
+                    message: format!(
+                        "Node wallet public key '{}' has conflicting roles {:?} and {role:?} in '{}'",
+                        existing.wallet_pk,
+                        existing.role,
+                        path.display(),
+                    ),
+                });
+            }
+        }
     }
-    if !node_wallet_keys.iter().any(|key| key.is_voucher_master) {
-        return Err(StepError::LogicalError {
-            message: format!(
-                "Configured voucher master key id '{}' is absent from wallet.known_keys in '{}'",
-                voucher_master_key_id,
-                path.display(),
-            ),
-        });
+
+    let mut node_wallet_keys = keys_by_public_key.into_values().collect::<Vec<_>>();
+    for role in [
+        NodeWalletKeyRole::Funding,
+        NodeWalletKeyRole::VoucherMaster,
+        NodeWalletKeyRole::BlendZk,
+    ] {
+        let count = node_wallet_keys
+            .iter()
+            .filter(|key| key.role == role)
+            .count();
+        if count != 1 {
+            return Err(StepError::LogicalError {
+                message: format!(
+                    "Expected exactly one {role:?} node wallet key in '{}', found {count}",
+                    path.display(),
+                ),
+            });
+        }
     }
 
     node_wallet_keys.sort_by(|left, right| {
-        node_wallet_key_priority(left)
-            .cmp(&node_wallet_key_priority(right))
+        left.role
+            .priority()
+            .cmp(&right.role.priority())
             .then_with(|| left.wallet_pk.cmp(&right.wallet_pk))
     });
     Ok(node_wallet_keys)
-}
-
-const fn node_wallet_key_priority(key: &NodeWalletKey) -> u8 {
-    match (key.is_sdp_funding, key.is_voucher_master) {
-        (true, true) => 0,
-        (true, false) => 1,
-        (false, true) => 2,
-        (false, false) => 3,
-    }
 }
 
 /// Reads a node YAML user config file and extracts the configured Blend core

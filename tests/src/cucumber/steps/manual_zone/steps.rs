@@ -373,7 +373,7 @@ async fn step_publish_custom_txs_concurrently_with_policy(
             .zone
             .sequencer_node_name(&row.sequencer_alias)?
             .to_owned();
-        let funding_pk = world.sdp_funding_wallet(&node_name)?.public_key()?;
+        let funding_pk = world.funding_wallet(&node_name)?.public_key()?;
         let deps = CustomRepublishDeps {
             node_client,
             channel_id: world.zone.sequencer_channel_id(&row.sequencer_alias)?,

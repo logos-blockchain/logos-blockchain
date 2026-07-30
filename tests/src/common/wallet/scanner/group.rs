@@ -64,7 +64,7 @@ pub fn build_fork_group_scanner_configs(
     }
 
     for wallet in world.wallet_info.values() {
-        if wallet.is_funding_wallet() {
+        if !wallet.is_scanner_tracked_wallet() {
             continue;
         }
         let group_id = if world.node_groups.is_empty() {

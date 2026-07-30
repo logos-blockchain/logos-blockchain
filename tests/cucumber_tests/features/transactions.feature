@@ -15,10 +15,10 @@ Feature: Transactions
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When I log wallet balances for all wallets
     # Funding wallets have allocated funds at scenario start, so we can send transactions to user wallets
-    When wallet "NODE_1_WALLET_KNOWN_KEY_SDP_FUNDING" has 10000 or more LGO in 10 seconds
-    When wallet "NODE_2_WALLET_KNOWN_KEY_SDP_FUNDING" has 10000 or more LGO in 10 seconds
-    And I send 1 transactions of 1000 LGO each from wallet "NODE_1_WALLET_KNOWN_KEY_SDP_FUNDING" to wallet "WALLET_1A"
-    And I send 1 transactions of 1000 LGO each from wallet "NODE_2_WALLET_KNOWN_KEY_SDP_FUNDING" to wallet "WALLET_2A"
+    When wallet "NODE_1_WALLET_FUNDING" has 10000 or more LGO in 10 seconds
+    When wallet "NODE_2_WALLET_FUNDING" has 10000 or more LGO in 10 seconds
+    And I send 1 transactions of 1000 LGO each from wallet "NODE_1_WALLET_FUNDING" to wallet "WALLET_1A"
+    And I send 1 transactions of 1000 LGO each from wallet "NODE_2_WALLET_FUNDING" to wallet "WALLET_2A"
     # Now we can split the funds in the user wallets
     When wallet "WALLET_1A" has 1000 or more LGO in 120 seconds
     And wallet "WALLET_2A" has 1000 or more LGO in 120 seconds
@@ -26,10 +26,10 @@ Feature: Transactions
     When wallet "WALLET_1A" has 8 or more outputs in 120 seconds
     And wallet "WALLET_2A" has 8 or more outputs in 120 seconds
     # Now we can send multiple outputs back to the funding wallets
-    When I send 5 transactions of 100 LGO each from wallet "WALLET_1A" to wallet "NODE_1_WALLET_KNOWN_KEY_SDP_FUNDING"
-    And I send 5 transactions of 100 LGO each from wallet "WALLET_2A" to wallet "NODE_2_WALLET_KNOWN_KEY_SDP_FUNDING"
-    Then wallet "NODE_1_WALLET_KNOWN_KEY_SDP_FUNDING" has 6 or more outputs in 120 seconds
-    And wallet "NODE_2_WALLET_KNOWN_KEY_SDP_FUNDING" has 6 or more outputs in 120 seconds
+    When I send 5 transactions of 100 LGO each from wallet "WALLET_1A" to wallet "NODE_1_WALLET_FUNDING"
+    And I send 5 transactions of 100 LGO each from wallet "WALLET_2A" to wallet "NODE_2_WALLET_FUNDING"
+    Then wallet "NODE_1_WALLET_FUNDING" has 6 or more outputs in 120 seconds
+    And wallet "NODE_2_WALLET_FUNDING" has 6 or more outputs in 120 seconds
     Then I stop all nodes
 
   @transactions_ci
@@ -54,10 +54,10 @@ Feature: Transactions
     When wallet "WALLET_1A" has 500 or more outputs in 120 seconds
     When I log wallet balances for all wallets
     # Now we can drain all user wallets to node wallets again
-    When I drain wallet "WALLET_1A" into "NODE_1_WALLET_KNOWN_KEY_SDP_FUNDING"
-    When wallet "NODE_1_WALLET_KNOWN_KEY_SDP_FUNDING" has 20000 or more LGO in 120 seconds
+    When I drain wallet "WALLET_1A" into "NODE_1_WALLET_FUNDING"
+    When wallet "NODE_1_WALLET_FUNDING" has 20000 or more LGO in 120 seconds
     When I log wallet balances for all wallets
-    When I drain wallet "WALLET_1A" into "NODE_1_WALLET_KNOWN_KEY_SDP_FUNDING"
+    When I drain wallet "WALLET_1A" into "NODE_1_WALLET_FUNDING"
     When I log wallet balances for all wallets
     Then I stop all nodes
 

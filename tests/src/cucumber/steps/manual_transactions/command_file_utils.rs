@@ -573,7 +573,7 @@ pub async fn log_wallet_balances(
     };
 
     for wallet in &wallets {
-        if wallet.is_funding_wallet() {
+        if wallet.is_node_wallet() {
             log_node_wallet_balance(world, wallet).await?;
             continue;
         }
@@ -907,7 +907,7 @@ fn request_faucet_funds_all_funding_wallets(
     let all_wallets_pk_hex = world
         .wallet_info
         .values()
-        .filter(|w| w.is_funding_wallet())
+        .filter(|wallet| wallet.is_node_funding_wallet())
         .map(WalletInfo::public_key_hex)
         .collect::<Vec<_>>();
     utils::request_faucet_funds(world, step, number_of_rounds, &all_wallets_pk_hex)

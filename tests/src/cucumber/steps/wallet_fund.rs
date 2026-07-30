@@ -39,7 +39,7 @@ async fn step_fund_payment_transaction(
     transaction_alias: String,
 ) -> StepResult {
     let receiver_pk = world.resolve_wallet(&receiver_wallet_name)?.public_key()?;
-    let funding_wallet = world.sdp_funding_wallet(&node_name)?;
+    let funding_wallet = world.funding_wallet(&node_name)?;
     let funding_pk = funding_wallet.public_key()?;
     let client = world.resolve_node_http_client(&node_name)?;
 
@@ -104,7 +104,7 @@ async fn step_fund_inscription_transaction(
     node_name: String,
     transaction_alias: String,
 ) -> StepResult {
-    let funding_wallet = world.sdp_funding_wallet(&node_name)?;
+    let funding_wallet = world.funding_wallet(&node_name)?;
     let funding_pk = funding_wallet.public_key()?;
     let client = world.resolve_node_http_client(&node_name)?;
 

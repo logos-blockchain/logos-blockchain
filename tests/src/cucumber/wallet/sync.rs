@@ -64,7 +64,7 @@ pub async fn current_wallet_output_balance(
     wallet: &WalletInfo,
     wallet_state_type: WalletOutputState,
 ) -> Result<WalletBalance, StepError> {
-    if wallet.is_funding_wallet() {
+    if wallet.is_node_wallet() {
         let node =
             world
                 .nodes_info

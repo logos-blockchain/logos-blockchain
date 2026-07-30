@@ -40,13 +40,14 @@ use crate::cucumber::{
         tokio_console::profile::TokioConsoleProfileNode,
     },
     utils::{
-        NodeWalletKey, display_last_path_components, extract_child_dir_name, matching_child_dirs,
+        display_last_path_components, extract_child_dir_name, matching_child_dirs,
         node_wallet_keys_from_node_yaml, peer_id_from_node_yaml, track_progress, truncate_hash,
     },
     wallet::snapshot::{create_and_save_all_wallets_snapshot, restore_wallet_snapshot_if_present},
     world::{
         ChainInfoMap, ConfigOverride, CucumberWorld, ManualNodeConfigOverrides, NodeInfo,
-        PublicCryptarchiaEndpointPeer, WalletInfo, WalletInfoMap, WalletType,
+        NodeWalletKey, NodeWalletKeyRole, PublicCryptarchiaEndpointPeer, WalletInfo, WalletInfoMap,
+        WalletType,
     },
 };
 
@@ -1339,22 +1340,36 @@ fn compile_wallet_in_map(
     let node_wallet_keys =
         node_wallet_keys_from_node_yaml(&node_runtime_dir.join(USER_CONFIG_FILE))?;
     let user_wallets_by_pk = world
-        .wallet_info
+        .wallet_accounts
         .values()
-        .chain(wallet_info.values())
-        .filter(|wallet| wallet.is_user_wallet())
-        .map(|wallet| (wallet.public_key_hex(), wallet.wallet_name.clone()))
+        .map(|account| (account.public_key_hex(), account.label.clone()))
+        .chain(
+            world
+                .fee_state
+                .wallet_account
+                .iter()
+                .map(|account| (account.public_key_hex(), account.label.clone())),
+        )
         .collect::<HashMap<_, _>>();
     let mut generic_key_index = 0usize;
 
     for node_wallet_key in node_wallet_keys {
         if let Some(user_wallet_name) = user_wallets_by_pk.get(&node_wallet_key.wallet_pk) {
-            return Err(StepError::LogicalError {
-                message: format!(
-                    "User wallet `{user_wallet_name}` public key is also configured as a node-owned \
-                     wallet key on `{node_name}`"
-                ),
-            });
+            if node_wallet_key.role != NodeWalletKeyRole::General {
+                return Err(StepError::LogicalError {
+                    message: format!(
+                        "Scenario wallet `{user_wallet_name}` public key conflicts with the \
+                         {role:?} key owned by `{node_name}`",
+                        role = node_wallet_key.role,
+                    ),
+                });
+            }
+            info!(
+                target: TARGET,
+                "Scenario wallet `{user_wallet_name}` is registered with `{node_name}`; \
+                 excluding its public key from node-wallet aliases"
+            );
+            continue;
         }
 
         let wallet_name = node_wallet_name(node_name, &node_wallet_key, &mut generic_key_index);
@@ -1364,11 +1379,7 @@ fn compile_wallet_in_map(
                 wallet_name,
                 node_name: node_name.to_owned(),
                 wallet_type: WalletType::Funding {
-                    wallet_pk: node_wallet_key.wallet_pk,
-                    known_key_ids: node_wallet_key.known_key_ids,
-                    is_sdp_funding: node_wallet_key.is_sdp_funding,
-                    sdp_declaration_id: node_wallet_key.sdp_declaration_id,
-                    is_voucher_master: node_wallet_key.is_voucher_master,
+                    key: node_wallet_key,
                 },
             },
         );
@@ -1378,15 +1389,16 @@ fn compile_wallet_in_map(
 }
 
 fn node_wallet_name(node_name: &str, key: &NodeWalletKey, generic_key_index: &mut usize) -> String {
-    let role = match (key.is_sdp_funding, key.is_voucher_master) {
-        (true, _) => "SDP_FUNDING".to_owned(),
-        (false, true) => "VOUCHER_MASTER".to_owned(),
-        (false, false) => {
+    let role = match key.role {
+        NodeWalletKeyRole::Funding => "FUNDING".to_owned(),
+        NodeWalletKeyRole::VoucherMaster => "VOUCHER_MASTER".to_owned(),
+        NodeWalletKeyRole::BlendZk => "BLEND_ZK".to_owned(),
+        NodeWalletKeyRole::General => {
             *generic_key_index += 1;
-            (*generic_key_index).to_string()
+            format!("GENERAL_{}", *generic_key_index)
         }
     };
-    format!("{node_name}_WALLET_KNOWN_KEY_{role}")
+    format!("{node_name}_WALLET_{role}")
 }
 
 fn tips_aligned_at_min_difference(
@@ -1898,15 +1910,12 @@ pub(crate) async fn get_cryptarchia_info_all_nodes(world: &CucumberWorld, step: 
 
 #[cfg(test)]
 mod wallet_name_tests {
-    use super::{NodeWalletKey, node_wallet_name};
+    use super::{NodeWalletKey, NodeWalletKeyRole, node_wallet_name};
 
-    fn node_wallet_key(is_sdp_funding: bool, is_voucher_master: bool) -> NodeWalletKey {
+    fn node_wallet_key(role: NodeWalletKeyRole) -> NodeWalletKey {
         NodeWalletKey {
             wallet_pk: "00".repeat(32),
-            known_key_ids: vec!["key-id".to_owned()],
-            is_sdp_funding,
-            sdp_declaration_id: is_sdp_funding.then(|| "declaration-id".to_owned()),
-            is_voucher_master,
+            role,
         }
     }
 
@@ -1917,48 +1926,57 @@ mod wallet_name_tests {
         assert_eq!(
             node_wallet_name(
                 "NODE_1",
-                &node_wallet_key(true, false),
+                &node_wallet_key(NodeWalletKeyRole::Funding),
                 &mut generic_key_index
             ),
-            "NODE_1_WALLET_KNOWN_KEY_SDP_FUNDING"
+            "NODE_1_WALLET_FUNDING"
         );
         assert_eq!(
             node_wallet_name(
                 "NODE_1",
-                &node_wallet_key(false, true),
+                &node_wallet_key(NodeWalletKeyRole::VoucherMaster),
                 &mut generic_key_index
             ),
-            "NODE_1_WALLET_KNOWN_KEY_VOUCHER_MASTER"
+            "NODE_1_WALLET_VOUCHER_MASTER"
         );
         assert_eq!(
             node_wallet_name(
                 "NODE_1",
-                &node_wallet_key(false, false),
+                &node_wallet_key(NodeWalletKeyRole::BlendZk),
                 &mut generic_key_index
             ),
-            "NODE_1_WALLET_KNOWN_KEY_1"
+            "NODE_1_WALLET_BLEND_ZK"
         );
         assert_eq!(
             node_wallet_name(
                 "NODE_1",
-                &node_wallet_key(false, false),
+                &node_wallet_key(NodeWalletKeyRole::General),
                 &mut generic_key_index
             ),
-            "NODE_1_WALLET_KNOWN_KEY_2"
+            "NODE_1_WALLET_GENERAL_1"
+        );
+        assert_eq!(
+            node_wallet_name(
+                "NODE_1",
+                &node_wallet_key(NodeWalletKeyRole::General),
+                &mut generic_key_index
+            ),
+            "NODE_1_WALLET_GENERAL_2"
         );
     }
 
     #[test]
-    fn sdp_name_takes_precedence_when_roles_share_one_key() {
+    fn semantic_wallet_names_do_not_consume_general_indexes() {
         let mut generic_key_index = 0;
 
         assert_eq!(
             node_wallet_name(
                 "NODE_1",
-                &node_wallet_key(true, true),
+                &node_wallet_key(NodeWalletKeyRole::Funding),
                 &mut generic_key_index
             ),
-            "NODE_1_WALLET_KNOWN_KEY_SDP_FUNDING"
+            "NODE_1_WALLET_FUNDING"
         );
+        assert_eq!(generic_key_index, 0);
     }
 }

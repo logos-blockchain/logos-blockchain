@@ -536,16 +536,27 @@ fn plan_local_node_config(
         peer_ports,
     )?;
 
-    let config = create_node_config_for_node(
-        id,
-        network_port,
-        initial_peers,
-        blend_port,
-        base_consensus,
-        base_time,
-        descriptors.config.test_context.as_deref(),
-    )
-    .map_err(|source| -> DynError { source.into() })?;
+    let config = {
+        let mut config = create_node_config_for_node(
+            id,
+            network_port,
+            initial_peers,
+            blend_port,
+            base_consensus,
+            base_time,
+            descriptors.config.test_context.as_deref(),
+        )
+        .map_err(|source| -> DynError { source.into() })?;
+
+        let keys = &mut config.kms_config.backend.keys;
+        for account in &descriptors.config().wallet_config.accounts {
+            let key = account.secret_key.clone().into();
+            let key_id = key_id_for_preload_backend(&key);
+            keys.entry(key_id).or_insert(key);
+        }
+
+        config
+    };
 
     Ok(PlannedLocalNodeConfig {
         config,

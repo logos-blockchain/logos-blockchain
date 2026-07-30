@@ -355,7 +355,7 @@ pub async fn submit_node_wallet_transfer(
     change_public_key: ZkPublicKey,
 ) -> Result<TxHash, StepError> {
     let wallet = world.resolve_wallet(sender_wallet_name)?;
-    if !wallet.is_funding_wallet() {
+    if !wallet.is_node_wallet() {
         return Err(StepError::InvalidArgument {
             message: format!("Wallet `{sender_wallet_name}` must be a node wallet"),
         });

@@ -114,7 +114,7 @@ async fn step_topup_node_funding_wallet(
     node_name: String,
     transaction_alias: String,
 ) -> StepResult {
-    let funding_wallet = world.sdp_funding_wallet(&node_name).inspect_err(|e| {
+    let funding_wallet = world.funding_wallet(&node_name).inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step.value);
     })?;
     let funding_pk = funding_wallet.public_key().inspect_err(|e| {
@@ -878,7 +878,7 @@ fn step_request_faucet_funds_for_all_funding_wallets(
     let all_wallets_pk_hex = world
         .wallet_info
         .values()
-        .filter(|w| w.is_funding_wallet())
+        .filter(|wallet| wallet.is_node_funding_wallet())
         .map(WalletInfo::public_key_hex)
         .collect::<Vec<_>>();
 
