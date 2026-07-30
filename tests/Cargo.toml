@@ -48,6 +48,7 @@ lb-tui-zone                      = { workspace = true }
 lb-tx-service                    = { workspace = true }
 lb-utils                         = { workspace = true }
 lb-wallet                        = { workspace = true }
+lb-wire                          = { workspace = true }
 lb-zksign                        = { workspace = true }
 lb-zone-sdk                      = { workspace = true }
 libp2p                           = { workspace = true }

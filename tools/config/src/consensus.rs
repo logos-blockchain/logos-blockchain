@@ -5,7 +5,6 @@ use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
         CryptarchiaParameter, GenesisTime, MantleTx, Note, NoteId, OpProof, Utxo,
-        nom::NomEncode as _,
         ops::{
             Op, OpId as _,
             channel::{
@@ -23,6 +22,7 @@ use lb_key_management_system_service::keys::{
     Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
 };
 use lb_node::{Hashable as _, SignedMantleTx};
+use lb_wire::WireEncode as _;
 use num_bigint::BigUint;
 use time::OffsetDateTime;
 
@@ -115,7 +115,7 @@ fn inscription_for_current_test(test_context: Option<&str>) -> InscriptionOp {
                 genesis_time: get_or_init_genesis_time(),
                 epoch_nonce: Fr::ZERO,
             }
-            .encode(),
+            .encode_to_vec(),
         ),
         parent: MsgId::root(),
         signer: Ed25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY).unwrap(),

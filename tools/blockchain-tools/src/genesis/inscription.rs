@@ -3,13 +3,13 @@ use lb_core::{
     crypto::ZkDigest,
     mantle::{
         CryptarchiaParameter, GenesisTime,
-        nom::NomEncode as _,
         ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
         transactions::genesis_tx::ChainId,
     },
 };
 use lb_groth16::{FrBytes, fr_from_bytes};
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
+use lb_wire::WireEncode as _;
 use serde_with::{hex::Hex, serde_as};
 use time::OffsetDateTime;
 
@@ -53,7 +53,7 @@ pub fn inscribe<D: ZkDigest>(
     InscriptionOp {
         channel_id: ChannelId::from(EMPTY_CHANNEL_ID),
         inscription: params
-            .encode()
+            .encode_to_vec()
             .try_into()
             .expect("CryptarchiaParameter encoding exceeded MAX_BYTES"),
         parent: MsgId::root(),

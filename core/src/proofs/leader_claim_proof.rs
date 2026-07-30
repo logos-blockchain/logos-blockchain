@@ -1,15 +1,13 @@
-use lb_groth16::{Fr, serde::serde_fr};
+use lb_groth16::{COMPRESSED_PROOF_SIZE, Fr, serde::serde_fr};
 use lb_log_targets::proofs;
 use lb_mmr::MerklePath;
+use lb_wire::{DecodeError, WireDecode, WireEncode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
 
 use crate::{
-    mantle::{
-        nom::{NomDecode, NomEncode},
-        ops::leader_claim::VoucherSecret,
-    },
+    mantle::ops::leader_claim::VoucherSecret,
     proofs::merkle::{MerklePathWitnessError, mmr_path_to_witness},
 };
 
@@ -21,17 +19,26 @@ pub struct Groth16LeaderClaimProof {
     proof: lb_poc::PoCProof,
 }
 
-impl NomEncode for Groth16LeaderClaimProof {
-    fn encode(&self) -> Vec<u8> {
-        self.proof.to_bytes().encode()
+impl WireEncode for Groth16LeaderClaimProof {
+    fn encoded_length(&self) -> usize {
+        COMPRESSED_PROOF_SIZE
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.proof.to_bytes());
     }
 }
 
-impl NomDecode for Groth16LeaderClaimProof {
-    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self> {
-        let (remaining_bytes, inner) = <[u8; _]>::decode(bytes)?;
+impl WireDecode for Groth16LeaderClaimProof {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, inner) = <[u8; _]>::decode(input, &())?;
         Ok((
-            remaining_bytes,
+            rest,
             Self {
                 proof: lb_poc::PoCProof::from_bytes(&inner),
             },

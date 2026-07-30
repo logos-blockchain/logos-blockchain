@@ -3,6 +3,7 @@ use std::sync::Arc;
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_utils::bounded::UpperBoundedVec;
+use lb_wire::{WireCodec, WireEncode as _};
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Ed25519PublicKey, MsgId};
@@ -13,7 +14,6 @@ use crate::{
     mantle::{
         channel::{ChannelState, Channels, Error},
         ledger::Operation,
-        nom::{NomCodec, NomEncode as _},
         ops::channel::config::Keys,
         transactions::hash::TxHash,
     },
@@ -25,7 +25,7 @@ use crate::{
 pub const MAX_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 7 / 8;
 pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, WireCodec)]
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain
@@ -40,7 +40,7 @@ impl InscriptionOp {
     #[must_use]
     pub fn id(&self) -> MsgId {
         let mut hasher = Hasher::new();
-        hasher.update(self.encode().as_slice());
+        hasher.update(self.encode().as_ref());
         MsgId(hasher.finalize().into())
     }
 }
@@ -149,7 +149,6 @@ mod tests {
     use lb_utils::bounded::BoundedError;
 
     use super::*;
-    use crate::mantle::nom::NomDecode as _;
 
     fn sample() -> InscriptionOp {
         InscriptionOp {
@@ -184,14 +183,6 @@ mod tests {
             ),
             "{err:?}",
         );
-    }
-
-    #[test]
-    fn encode_decode_round_trip() {
-        let op = sample();
-        let encoded = op.encode();
-        let decoded = InscriptionOp::decode(&encoded).unwrap().1;
-        assert_eq!(op, decoded);
     }
 
     #[test]

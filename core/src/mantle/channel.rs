@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use lb_blake2btree::{Blake2bTree, LeafHash};
 use lb_cryptarchia_engine::Slot;
+use lb_wire::WireCodec;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -11,7 +12,6 @@ use crate::{
         NoteId,
         channel_notes::{self, ChannelNotes},
         ledger::{self, Operation as _},
-        nom::NomCodec,
         ops::channel::{
             ChannelId, ChannelKeyIndex, MsgId,
             config::Keys,
@@ -20,7 +20,7 @@ use crate::{
     },
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, WireCodec)]
 pub struct SlotTimeframe(u32);
 
 impl From<u32> for SlotTimeframe {
@@ -35,7 +35,7 @@ impl From<SlotTimeframe> for u32 {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, WireCodec)]
 pub struct SlotTimeout(u32);
 
 impl From<u32> for SlotTimeout {
@@ -494,7 +494,7 @@ mod tests {
         assert_eq!(*event_channel_id, deposit_op.channel_id);
         assert_eq!(*amount, utxo.note.value);
         assert_eq!(*metadata, deposit_op.metadata);
-        assert_eq!(notes.as_slice(), &[deposited]);
+        assert_eq!(notes.clone().into_inner(), vec![deposited]);
     }
 
     #[test]

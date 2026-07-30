@@ -1270,6 +1270,7 @@ impl GenesisBlockBuilder<WithGenesisTx> {
 mod tests {
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
+    use lb_wire::WireEncode as _;
     use num_bigint::BigUint;
 
     use super::*;
@@ -1277,7 +1278,6 @@ mod tests {
         header::HeaderId,
         mantle::{
             CryptarchiaParameter, GenesisTime, NoteId,
-            nom::NomEncode as _,
             ops::channel::{ChannelId, MsgId, inscribe::Inscription},
             traits::genesis::GenesisTx as _,
             transactions::states::Preverified,
@@ -1295,7 +1295,7 @@ mod tests {
                     genesis_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
                 }
-                .encode(),
+                .encode_to_vec(),
             ),
             parent: MsgId::root(),
             signer: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
@@ -1311,7 +1311,7 @@ mod tests {
                     genesis_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
                 }
-                .encode(),
+                .encode_to_vec(),
             ),
             parent: MsgId::root(),
             signer: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),

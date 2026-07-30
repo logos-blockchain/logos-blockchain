@@ -14,11 +14,11 @@ use divan::{Bencher, black_box};
 use lb_groth16::{Fr, GROTH16_SAFE_BYTES_SIZE, fr_from_bytes_unchecked};
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey};
 use lb_poseidon2::Digest;
+use lb_wire::WireEncode as _;
 use logos_blockchain_core::{
     crypto::{Hasher, ZkHasher},
     mantle::{
         SignedMantleTx,
-        nom::NomEncode as _,
         ops::{
             Op, OpProof,
             channel::{
@@ -111,7 +111,7 @@ fn bench_blake2b_poseidon2_hash(bencher: Bencher, size: usize) {
             // Encoding is included here to compare fairly with the Poseidon2 hash function,
             // which includes it.
             let encoded = tx.encode();
-            let digest = blake2b(&[encoded.as_slice()]);
+            let digest = blake2b(&[encoded.as_ref()]);
             let frs: Vec<Fr> = digest
                 .chunks(GROTH16_SAFE_BYTES_SIZE)
                 .map(fr_from_bytes_unchecked)

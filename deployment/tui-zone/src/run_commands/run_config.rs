@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use lb_core::{
     mantle::{
         Op, OpProof, SignedMantleTx,
-        nom::NomEncode as _,
         ops::channel::{
             ChannelId, ChannelKeyIndex,
             config::{ChannelConfigOp, Keys},
@@ -14,6 +13,7 @@ use lb_core::{
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 use lb_key_management_system_service::keys::{Ed25519PublicKey, Ed25519Signature};
+use lb_wire::WireEncode as _;
 
 use crate::{
     cli::{

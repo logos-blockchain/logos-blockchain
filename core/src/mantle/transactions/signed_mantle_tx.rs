@@ -1,7 +1,6 @@
 use std::marker::PhantomData;
 
 use bytes::Bytes;
-use nom::{Parser as _, combinator::all_consuming};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
@@ -538,10 +537,15 @@ impl<'de> Deserialize<'de> for SignedMantleTx<Unverified> {
             OwnedSignedMantleTxSerde::deserialize(deserializer).map(Self::from)
         } else {
             let bytes: Vec<u8> = Deserialize::deserialize(deserializer)?;
-            all_consuming(decode_signed_mantle_tx)
-                .parse(bytes.as_slice())
-                .map(|(_, tx)| tx)
-                .map_err(serde::de::Error::custom)
+            let (remaining, tx) =
+                decode_signed_mantle_tx(bytes.as_slice()).map_err(serde::de::Error::custom)?;
+            if remaining.is_empty() {
+                Ok(tx)
+            } else {
+                Err(serde::de::Error::custom(
+                    "Invalid length: not all bytes were consumed",
+                ))
+            }
         }
     }
 }
