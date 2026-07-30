@@ -1,4 +1,4 @@
-use core::{convert::Infallible, num::NonZeroU64};
+use core::convert::Infallible;
 
 use lb_blend_proofs::{
     quota::{ProofOfQuota, VerifiedProofOfQuota},
@@ -12,7 +12,6 @@ use lb_key_management_system_keys::keys::{
 
 use crate::{
     Error, PaddedPayloadBody, PayloadType,
-    codec::WireEncode as _,
     crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
     encap::{
         ProofsVerifier,
@@ -389,7 +388,7 @@ fn encapsulate_and_decapsulate_fewer_layers_than_maximum() {
         // one — the encapsulation count never reaches the wire.
         assert_eq!(
             msg.encode().len(),
-            expected_serialized_len(NonZeroU64::new(MAX_LAYERS as u64).unwrap()),
+            msg.encoded_length(),
             "message with {used_layers} used layer(s) has the wrong size"
         );
 

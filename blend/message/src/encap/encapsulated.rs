@@ -187,7 +187,7 @@ impl EncapsulatedPart {
     ///
     /// It returns an error if the slice of inputs is empty or holds more than
     /// `num_layers` inputs.
-    pub(super) fn try_initialize(
+    pub(crate) fn try_initialize(
         inputs: &[EncapsulationInput],
         payload_type: PayloadType,
         payload_body: PaddedPayloadBody,
@@ -393,7 +393,10 @@ impl EncapsulatedPrivateHeader {
     ///
     /// It returns an error if the slice of inputs is empty or holds more than
     /// `num_layers` inputs.
-    fn try_initialize(inputs: &[EncapsulationInput], num_layers: usize) -> Result<Self, Error> {
+    pub(crate) fn try_initialize(
+        inputs: &[EncapsulationInput],
+        num_layers: usize,
+    ) -> Result<Self, Error> {
         if inputs.is_empty() {
             return Err(Error::EmptyEncapsulationInputs);
         }
