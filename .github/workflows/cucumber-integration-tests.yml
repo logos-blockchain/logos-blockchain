@@ -161,6 +161,20 @@ jobs:
 
       - *check_peer_success
 
+      # Feature: Fees (@fees_ci)
+      - name: Run cucumber suite - fees
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
+        with:
+          suite_tag: "@fees_ci"
+          suite_name: fees
+          artifact_subdir: Fees
+          verbose_console: "true"
+          max_concurrent_scenarios: "1"
+
+      - *check_peer_success
+
       # Feature: Mempool (@mempool_ci)
       - name: Run cucumber suite - mempool
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
