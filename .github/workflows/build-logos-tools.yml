@@ -7,6 +7,10 @@ on:
         description: "Docker image tag to use"
         required: true
         default: "devnet"
+      custom_version:
+        description: "Optional version tag"
+        required: false
+        type: string
 
 env:
   REGISTRY: ghcr.io
@@ -36,8 +40,10 @@ jobs:
       - name: Print run info
         run: |
           echo "Building Logos tools image for ${{ matrix.platform }} with tag: ${{ inputs.tag }}"
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            echo "Tagging with git version tag: ${{ env.VERSION_TAG }}"
+          if [ -n "${{ inputs.custom_version }}" ]; then
+            echo "Applying custom version tag: ${{ inputs.custom_version }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "Applying git version tag: ${{ env.VERSION_TAG }}"
           fi
 
       - name: Prepare platform pair
@@ -130,7 +136,9 @@ jobs:
         run: |
           TAGS="-t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }}"
 
-          if [ "${{ github.ref_type }}" = "tag" ]; then
+          if [ -n "${{ inputs.custom_version }}" ]; then
+            TAGS="$TAGS -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.custom_version }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
             TAGS="$TAGS -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION_TAG }}"
           fi
 
