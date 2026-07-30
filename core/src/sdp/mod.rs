@@ -510,7 +510,7 @@ impl DeclarationMessage {
         DeclarationId(hasher.finalize().into())
     }
 
-    fn preverify(
+    pub(crate) fn preverify(
         &self,
         tx_hash_view: &TxHashView,
         proof_eddsa_signature: &Ed25519Signature,
