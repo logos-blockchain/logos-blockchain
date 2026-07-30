@@ -406,9 +406,7 @@ impl Declaration {
         let mut h = Hasher::new();
         h.update(b"DECLARATION_INFO_HASH_V1");
         h.update([*<ServiceType as AsRef<u8>>::as_ref(&self.service_type)]);
-        for locator in &self.locators {
-            h.update(locator.0.as_ref());
-        }
+        h.update(self.locators.encode());
         h.update(self.provider_id.0);
         for number in self.zk_id.as_fr().0.0 {
             h.update(number.to_le_bytes());
@@ -501,9 +499,9 @@ impl DeclarationMessage {
         for number in self.zk_id.as_fr().0.0 {
             hasher.update(number.to_le_bytes());
         }
-        for locator in &self.locators {
-            hasher.update(locator.0.as_ref());
-        }
+        // The locators go in through the wire encoding, which prefixes the list
+        // with its count and every locator with its byte length.
+        hasher.update(self.locators.encode());
 
         DeclarationId(hasher.finalize().into())
     }
@@ -662,6 +660,38 @@ mod tests {
         assert_eq!(declaration.nonce, 0);
     }
 
+    fn declaration_message(locators: Vec<Locator>) -> DeclarationMessage {
+        DeclarationMessage {
+            service_type: ServiceType::BlendNetwork,
+            locators: locators.try_into().unwrap(),
+            provider_id: Ed25519Key::from_bytes(&[1; _]).public_key().into(),
+            zk_id: ZkPublicKey::new(Fr::from(3u64)),
+            locked_note_id: Fr::from(2u64).into(),
+        }
+    }
+
+    // The byte form of a multiaddr is self-describing, so `[A/B]` and `[A, B]`
+    // concatenate to the same bytes. The id has to tell them apart anyway.
+    #[test]
+    fn declaration_id_binds_the_locator_split() {
+        let concatenated = |message: &DeclarationMessage| {
+            message
+                .locators
+                .iter()
+                .flat_map(|locator| <Locator as AsRef<[u8]>>::as_ref(locator).to_vec())
+                .collect::<Vec<u8>>()
+        };
+
+        let joined = declaration_message(vec!["/ip4/203.0.113.10/tcp/4001".parse().unwrap()]);
+        let split = declaration_message(vec![
+            "/ip4/203.0.113.10".parse().unwrap(),
+            "/tcp/4001".parse().unwrap(),
+        ]);
+
+        assert_eq!(concatenated(&joined), concatenated(&split));
+        assert_ne!(joined.id(), split.id());
+    }
+
     // Leaf commitment
     fn leaf_declaration() -> Declaration {
         Declaration {
@@ -689,8 +719,11 @@ mod tests {
         let mut info = Vec::new();
         info.extend_from_slice(b"DECLARATION_INFO_HASH_V1");
         info.push(0u8); // ServiceType::BlendNetwork
+        info.push(u8::try_from(declaration.locators.len()).unwrap());
         for locator in &declaration.locators {
-            info.extend_from_slice(locator.as_ref());
+            let locator_bytes: &[u8] = locator.as_ref();
+            info.extend_from_slice(&u16::try_from(locator_bytes.len()).unwrap().to_le_bytes());
+            info.extend_from_slice(locator_bytes);
         }
         info.extend_from_slice(declaration.provider_id.0.as_bytes());
         for number in declaration.zk_id.as_fr().0.0 {
