@@ -1,29 +1,38 @@
 use lb_core::mantle::{
-    MantleTx, SignedMantleTx, TxHash,
-    transactions::{Ops, OpsProofs, states::VerificationState},
+    SignedMantleTx, TxHash,
+    traits::Hashable,
+    transactions::{Ops, OpsProofs, mantle_tx::MantleTx, states::VerificationState},
 };
 use serde::Serialize;
 
 #[derive(Serialize)]
-#[serde(remote = "MantleTx")]
-pub struct ApiTransactionSerializer {
-    #[serde(getter = "<MantleTx as lb_core::mantle::traits::Hashable>::hash")]
+pub struct ApiTransactionSerializer<'tx> {
     hash: TxHash,
-    #[serde(getter = "MantleTx::ops")]
-    ops: Ops,
+    ops: &'tx Ops,
+}
+
+impl<'tx, T> From<&'tx T> for ApiTransactionSerializer<'tx>
+where
+    T: MantleTx + Hashable<Hash = TxHash>,
+{
+    fn from(tx: &'tx T) -> Self {
+        Self {
+            hash: tx.hash(),
+            ops: tx.ops(),
+        }
+    }
 }
 
 #[derive(Serialize)]
 pub struct ApiSignedTransaction<'tx> {
-    #[serde(with = "ApiTransactionSerializer")]
-    mantle_tx: &'tx MantleTx,
+    mantle_tx: ApiTransactionSerializer<'tx>,
     ops_proofs: &'tx OpsProofs,
 }
 
 impl<'tx, State: VerificationState> From<&'tx SignedMantleTx<State>> for ApiSignedTransaction<'tx> {
     fn from(value: &'tx SignedMantleTx<State>) -> Self {
         Self {
-            mantle_tx: value.mantle_tx(),
+            mantle_tx: value.mantle_tx().into(),
             ops_proofs: value.ops_proofs(),
         }
     }

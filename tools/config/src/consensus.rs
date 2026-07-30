@@ -5,7 +5,7 @@ use lb_codec::BinaryEncode as _;
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
-        CryptarchiaParameter, GenesisTime, MantleTx, Note, NoteId, OpProof, Utxo,
+        CryptarchiaParameter, GenesisTime, Note, NoteId, OpProof, RawMantleTx, Utxo,
         ops::{
             Op, OpId as _,
             channel::{
@@ -304,7 +304,7 @@ pub fn create_genesis_block_with_declarations(
         ops.push(Op::SDPDeclare(declaration));
     }
 
-    let mantle_tx = MantleTx(Ops::new_unchecked(ops));
+    let mantle_tx = RawMantleTx(Ops::new_unchecked(ops));
 
     let mantle_tx_hash = mantle_tx.hash();
     let mut ops_proofs = OpsProofs::from([

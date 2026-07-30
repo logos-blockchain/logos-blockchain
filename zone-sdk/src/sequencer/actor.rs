@@ -595,7 +595,7 @@ mod tests {
     use lb_core::{
         header::HeaderId,
         mantle::{
-            MantleTx, Note, Op, SignedMantleTx, Utxo,
+            Note, Op, RawMantleTx, SignedMantleTx, Utxo,
             ledger::Inputs,
             ops::{
                 OpProof,
@@ -607,7 +607,7 @@ mod tests {
                 },
             },
             traits::Hashable as _,
-            transactions::{Ops, OpsProofs},
+            transactions::{Ops, OpsProofs, mantle_tx::MantleTx as _},
         },
     };
     use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
@@ -801,7 +801,7 @@ mod tests {
             parent: MsgId::root(),
             signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
         };
-        let mantle_tx = MantleTx(
+        let mantle_tx = RawMantleTx(
             Ops::try_from(vec![
                 Op::ChannelWithdraw(withdraw_op.clone()),
                 Op::ChannelInscribe(inscribe_op),
@@ -839,7 +839,7 @@ mod tests {
             parent: MsgId::root(),
             signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
         };
-        let mantle_tx = MantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
+        let mantle_tx = RawMantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
         let tx_hash = mantle_tx.hash();
         let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
 
@@ -864,7 +864,7 @@ mod tests {
             parent: MsgId::root(),
             signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
         };
-        let mantle_tx = MantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
+        let mantle_tx = RawMantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
         let tx_hash = mantle_tx.hash();
         let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
 

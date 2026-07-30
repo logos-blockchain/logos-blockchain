@@ -723,7 +723,7 @@ mod tests {
     use lb_core::{
         events::TxEventPayload,
         mantle::{
-            GasCalculator as _, MantleTx, Note, OpProof, SignedMantleTx,
+            GasCalculator as _, Note, OpProof, RawMantleTx, SignedMantleTx,
             gas::MainnetGasConstants,
             ledger::{Inputs, Outputs, Utxos},
             ops::{
@@ -743,6 +743,7 @@ mod tests {
             transactions::{
                 Ops, OpsProofs,
                 hash::TxHashView,
+                mantle_tx::MantleTx as _,
                 states::{Preverified, Unverified},
             },
         },
@@ -781,7 +782,7 @@ mod tests {
             Inputs::try_new(inputs).expect("Invalid inputs size"),
             Outputs::try_new(outputs).expect("Invalid outputs size"),
         );
-        let mantle_tx = MantleTx([Op::Transfer(transfer_op)].into());
+        let mantle_tx = RawMantleTx([Op::Transfer(transfer_op)].into());
         let ops_proofs = [OpProof::ZkSig(
             ZkKey::multi_sign(sks, &mantle_tx.hash().to_fr()).unwrap(),
         )]
@@ -856,7 +857,7 @@ mod tests {
         ops: Vec<Op>,
         signing_keys: Vec<&Key>,
     ) -> SignedMantleTx<Preverified> {
-        let mantle_tx = MantleTx(Ops::new_unchecked(ops.clone()));
+        let mantle_tx = RawMantleTx(Ops::new_unchecked(ops.clone()));
 
         let tx_hash = mantle_tx.hash();
         let ops_proofs = signing_keys
@@ -1054,7 +1055,7 @@ mod tests {
             transfer_threshold: 1,
         };
 
-        let config_tx = MantleTx([Op::ChannelConfig(config_op.clone())].into());
+        let config_tx = RawMantleTx([Op::ChannelConfig(config_op.clone())].into());
         let config_tx_hash = config_tx.hash();
         let config_proof = ChannelMultiSigProof::try_new(
             [IndexedSignature::new(
@@ -1218,7 +1219,7 @@ mod tests {
             channel_id,
             inputs: Inputs::new([deposited]),
         };
-        let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw)].into());
+        let withdraw_tx = RawMantleTx([Op::ChannelWithdraw(withdraw)].into());
         let withdraw_tx_hash = withdraw_tx.hash();
         let withdraw_proof = ChannelMultiSigProof::try_new(
             [IndexedSignature::new(
@@ -1282,7 +1283,7 @@ mod tests {
 
         // Withdraw releases the channel note under the NoteId the deposit gave
         // it, so the original input never comes back to the ledger.
-        let withdraw_tx = MantleTx(
+        let withdraw_tx = RawMantleTx(
             [Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id,
                 inputs: Inputs::new([deposited]),
@@ -1357,7 +1358,7 @@ mod tests {
             inputs: Inputs::new([deposited]),
         };
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
-        let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw)].into());
+        let withdraw_tx = RawMantleTx([Op::ChannelWithdraw(withdraw)].into());
         let withdraw_tx_hash = withdraw_tx.hash();
         let invalid_proof = ChannelMultiSigProof::try_new(
             [IndexedSignature::new(
@@ -1569,7 +1570,7 @@ mod tests {
             Op::ChannelConfig(config_op),
             Op::ChannelInscribe(inscribe_op3.clone()),
         ];
-        let config_tx = MantleTx(Ops::new_unchecked(ops.clone()));
+        let config_tx = RawMantleTx(Ops::new_unchecked(ops.clone()));
         let config_tx_hash = config_tx.hash();
         let config_proof = ChannelMultiSigProof::try_new(
             [IndexedSignature::new(

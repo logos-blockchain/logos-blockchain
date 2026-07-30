@@ -9,7 +9,7 @@ use lb_core::{
             channel::{ChannelId, MsgId, inscribe::Inscription},
         },
         traits::Hashable as _,
-        transactions::{hash::TxHash, states::Unverified},
+        transactions::{hash::TxHash, mantle_tx::MantleTx as _, states::Unverified},
     },
 };
 use rpds::HashTrieSetSync;
@@ -1041,7 +1041,7 @@ impl TxState {
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
-        MantleTx, Op::ChannelInscribe, ops::channel::inscribe::InscriptionOp,
+        Op::ChannelInscribe, RawMantleTx, ops::channel::inscribe::InscriptionOp,
         traits::Hashable as _, transactions::OpsProofs,
     };
     use lb_key_management_system_service::keys::Ed25519PublicKey;
@@ -1050,7 +1050,7 @@ mod tests {
     use crate::test_support::header_id;
 
     fn make_dummy_tx(data: u8) -> SignedMantleTx<Unverified> {
-        let mantle_tx = MantleTx(
+        let mantle_tx = RawMantleTx(
             [ChannelInscribe(InscriptionOp {
                 channel_id: [0u8; 32].into(),
                 inscription: [data].into(),

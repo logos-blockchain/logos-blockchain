@@ -2,7 +2,7 @@ use lb_core::mantle::{
     SignedMantleTx,
     channel::{SlotTimeframe, SlotTimeout},
     ops::channel::{MsgId, config::Keys, inscribe::Inscription},
-    transactions::{Ops, mantle_tx::MantleTx, states::Unverified},
+    transactions::{Ops, mantle_tx::RawMantleTx, states::Unverified},
 };
 use lb_key_management_system_service::keys::Ed25519Signature;
 
@@ -80,24 +80,25 @@ where
         self.sequencer.do_publish(data).await
     }
 
-    /// Build a [`MantleTx`] for the given ops and an inscription message,
+    /// Build a [`RawMantleTx`] for the given ops and an inscription message,
     /// without submitting it.
     ///
-    /// The returned [`MantleTx`] should be signed by all parties and submitted
-    /// via [`Self::submit_signed_tx`]. Does not mutate sequencer state.
+    /// The returned [`RawMantleTx`] should be signed by all parties and
+    /// submitted via [`Self::submit_signed_tx`]. Does not mutate sequencer
+    /// state.
     pub fn prepare_tx(
         &mut self,
         ops: Ops,
         data: Inscription,
-    ) -> Result<(MantleTx, MsgId, Ed25519Signature), Error> {
+    ) -> Result<(RawMantleTx, MsgId, Ed25519Signature), Error> {
         self.sequencer.do_prepare_tx(ops, data)
     }
 
-    /// Sign a [`MantleTx`] using the sequencer's key.
+    /// Sign a [`RawMantleTx`] using the sequencer's key.
     ///
     /// Useful when signing tx built by other sequencers (e.g. withdraw). Does
     /// not mutate sequencer state.
-    pub fn sign_tx(&mut self, tx: &MantleTx) -> Result<Ed25519Signature, Error> {
+    pub fn sign_tx(&mut self, tx: &RawMantleTx) -> Result<Ed25519Signature, Error> {
         self.sequencer.do_sign_tx(tx)
     }
 
