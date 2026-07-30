@@ -1,13 +1,20 @@
 //! Logos blockchain zone SDK.
 //!
-//! A Rust client for working with a Logos channel. Two subsystems:
+//! A Rust client for working with a Logos channel, built around the
+//! [`sequencer`] subsystem: drive your own sequencer that publishes
+//! inscriptions to a channel, tracks pending/finalized state, and surfaces
+//! chain events.
 //!
-//! - [`sequencer`] — drive your own sequencer that publishes inscriptions to a
-//!   channel, tracks pending/finalized state, and surfaces chain events.
-//! - [`indexer`] — read-only stream of finalized channel messages, for
-//!   consumers that only need to observe.
+//! There is no separate read-only client: to only observe a channel, run a
+//! [`sequencer::ZoneSequencer`] with a signing key that is **not** in the
+//! channel's accredited keys. Inscription posting is gated on holding the
+//! round-robin turn, so such a sequencer never publishes or reposts anything —
+//! while still delivering finalized txs, channel updates and the
+//! non-finalized channel view through its events. A cold-started instance
+//! replays the finalized history from genesis (backfill) before emitting
+//! [`sequencer::Event::Ready`].
 //!
-//! Both subsystems talk to a Logos node through the [`adapter`] module's
+//! The sequencer talks to a Logos node through the [`adapter`] module's
 //! [`adapter::Node`] trait; an HTTP implementation is provided as
 //! [`adapter::NodeHttpClient`].
 //!
@@ -60,7 +67,6 @@
 //! See the [`sequencer`] module for the full event vocabulary.
 
 pub mod adapter;
-pub mod indexer;
 pub mod sequencer;
 #[cfg(test)]
 mod test_support;
