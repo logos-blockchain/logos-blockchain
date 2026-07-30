@@ -1,8 +1,7 @@
 use std::ffi::c_char;
 
 use lb_node::{
-    UserConfig,
-    config::{RunConfig, deployment::DeploymentSettings},
+    UserConfig, cli::build_run_config_from_env, config::deployment::DeploymentSettings,
     get_services_to_start, run_node_from_config,
 };
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
@@ -25,9 +24,15 @@ pub type FfiInitializedLogosBlockchainNodeResult = FfiStatusResult<*mut LogosBlo
 /// - `config_path`: A pointer to a string representing the path to the
 ///   configuration file.
 /// - `custom_deployment_path`: An optional pointer to a string representing the
-///   path to the custom deployment configuration file. If null, defaults to
-///   binary default deployment (e.g., devnet for release candidates and testnet
-///   for releases).
+///   path to the custom deployment configuration file. If null, the
+///   `DEPLOYMENT` environment variable is consulted, otherwise the binary
+///   default deployment is used (e.g., devnet for release candidates and
+///   testnet for releases).
+///
+/// Environment-variable overrides (e.g. `HTTP_HOST`, `NET_PORT`, `LOG_LEVEL`,
+/// `STATE_PATH`) are applied on top of the YAML config, matching the behaviour
+/// of the standalone node binary. An explicit `custom_deployment_path` takes
+/// precedence over the `DEPLOYMENT` environment variable.
 ///
 /// # Returns
 ///
@@ -52,9 +57,15 @@ pub extern "C" fn start_lb_node(
 /// - `config_path`: A pointer to a string representing the path to the
 ///   configuration file.
 /// - `custom_deployment_path`: An optional pointer to a string representing the
-///   path to the custom deployment configuration file. If null, defaults to
-///   binary default deployment (e.g., devnet for release candidates and testnet
-///   for releases).
+///   path to the custom deployment configuration file. If null, the
+///   `DEPLOYMENT` environment variable is consulted, otherwise the binary
+///   default deployment is used (e.g., devnet for release candidates and
+///   testnet for releases).
+///
+/// Environment-variable overrides (e.g. `HTTP_HOST`, `NET_PORT`, `LOG_LEVEL`,
+/// `STATE_PATH`) are applied on top of the YAML config, matching the behaviour
+/// of the standalone node binary. An explicit `custom_deployment_path` takes
+/// precedence over the `DEPLOYMENT` environment variable.
 ///
 /// # Returns
 ///
@@ -64,10 +75,22 @@ fn initialize_lb_node(
     config_path: *const c_char,
     custom_deployment_path: *const c_char,
 ) -> StatusResult<LogosBlockchainNode> {
-    let run_config = RunConfig {
-        deployment: get_deployment_config(custom_deployment_path)?,
-        user: get_user_config(config_path)?,
-    };
+    let user_config = get_user_config(config_path)?;
+
+    // Apply environment-variable overrides on top of the YAML config, matching
+    // the binary's behaviour. This also honours the `DEPLOYMENT` env var.
+    let mut run_config = build_run_config_from_env(user_config).map_err(|e| {
+        OperationStatus::error(
+            OperationStatusCode::InitializationError,
+            format!("Could not apply environment overrides: {e}"),
+        )
+    })?;
+
+    // An explicitly provided deployment path takes precedence over the
+    // `DEPLOYMENT` env var applied above.
+    if !custom_deployment_path.is_null() {
+        run_config.deployment = get_deployment_config(custom_deployment_path)?;
+    }
 
     let runtime = Runtime::new().expect("Failed to create Tokio runtime");
     let app = run_node_from_config(run_config, Some(runtime.handle().clone())).map_err(|e| {
@@ -178,6 +201,7 @@ mod test {
 
     use lb_node::UserConfig;
     use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
+    use serial_test::serial;
     use tempfile::TempDir;
 
     use crate::api::lifecycle::{shutdown_node, start_lb_node};
@@ -254,6 +278,7 @@ mod test {
     }
 
     #[test]
+    #[serial]
     fn test_basic_lifecycle() {
         let test_paths = TestConfigPaths::new();
 
@@ -274,6 +299,35 @@ mod test {
         assert!(
             shutdown_status.is_ok(),
             "Failed to shut down node: {shutdown_status:?}"
+        );
+    }
+
+    /// Confirms env-variable overrides are wired into the FFI start path: an
+    /// invalid `HTTP_HOST` must be parsed (and rejected) rather than ignored.
+    #[test]
+    #[serial]
+    fn start_applies_environment_overrides() {
+        let test_paths = TestConfigPaths::new();
+
+        // SAFETY: serialized via `#[serial]`; removed before any assertion so no
+        // other test observes it.
+        unsafe {
+            std::env::set_var("HTTP_HOST", "not-a-socket-address");
+        }
+
+        let start_status = start_lb_node(
+            test_paths.node_config.as_ptr(),
+            test_paths.deployment_config.as_ptr(),
+        );
+
+        unsafe {
+            std::env::remove_var("HTTP_HOST");
+        }
+
+        assert!(
+            !start_status.is_ok(),
+            "An invalid HTTP_HOST env override should fail node start, proving env \
+             overrides are applied"
         );
     }
 }
