@@ -504,7 +504,7 @@ fn decapsulate_empty_private_headers_returns_error() {
             PayloadType::Data,
             b"hello".as_slice().try_into().unwrap(),
             // ...and no filler layers either, so the private header is empty.
-            0,
+            0.try_into().unwrap(),
         );
         let verified_public_header = VerifiedPublicHeader::new(
             VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
@@ -604,7 +604,7 @@ fn try_new_fully_encapsulated(
         inputs,
         payload_type,
         payload_body,
-        NonZeroU64::new(inputs.len() as u64).unwrap_or(NonZeroU64::MIN),
+        NonZeroU64::new(inputs.len() as u64).unwrap(),
     )
 }
 

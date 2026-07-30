@@ -35,10 +35,6 @@ use crate::{
 
 pub type MessageIdentifier = ZkHash;
 
-/// Size of the entropy seed used to derive the filler bytes of an unused
-/// blending header. See [`EncapsulatedBlendingHeader::random`].
-const RANDOM_HEADER_SEED_SIZE: usize = 32;
-
 /// An unverified encapsulated message that is received from a peer.
 #[derive(Derivative, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[derivative(Debug)]
@@ -175,10 +171,10 @@ impl EncapsulatedPart {
         inputs: &[EncapsulationInput],
         payload_type: PayloadType,
         payload_body: PaddedPayloadBody,
-        total_layers: usize,
+        num_layers: NonZeroU64,
     ) -> Self {
         Self {
-            private_header: EncapsulatedPrivateHeader::new_unchecked(inputs, total_layers),
+            private_header: EncapsulatedPrivateHeader::new_unchecked(inputs, num_layers),
             payload: EncapsulatedPayload::initialize(&Payload::new(payload_type, payload_body)),
         }
     }
@@ -186,19 +182,19 @@ impl EncapsulatedPart {
     /// Initializes the encapsulated part as preparation for actual
     /// encapsulations.
     ///
-    /// `total_layers` is `ß_max`, the layer count every message on the wire
+    /// `num_layers` is `ß_max`, the layer count every message on the wire
     /// carries regardless of how many times it is actually encapsulated.
     ///
     /// It returns an error if the slice of inputs is empty or holds more than
-    /// `total_layers` inputs.
+    /// `num_layers` inputs.
     pub(super) fn try_initialize(
         inputs: &[EncapsulationInput],
         payload_type: PayloadType,
         payload_body: PaddedPayloadBody,
-        total_layers: NonZeroU64,
+        num_layers: NonZeroU64,
     ) -> Result<Self, Error> {
         Ok(Self {
-            private_header: EncapsulatedPrivateHeader::try_initialize(inputs, total_layers)?,
+            private_header: EncapsulatedPrivateHeader::try_initialize(inputs, num_layers)?,
             payload: EncapsulatedPayload::initialize(&Payload::new(payload_type, payload_body)),
         })
     }
@@ -389,33 +385,33 @@ pub(crate) struct EncapsulatedPrivateHeader(Box<[EncapsulatedBlendingHeader]>);
 
 impl EncapsulatedPrivateHeader {
     #[cfg(test)]
-    pub fn new_unchecked(inputs: &[EncapsulationInput], total_layers: usize) -> Self {
-        Self::from_inputs(inputs, total_layers)
+    pub fn new_unchecked(inputs: &[EncapsulationInput], num_layers: NonZeroU64) -> Self {
+        Self::from_inputs(inputs, num_layers)
     }
 
     /// Initializes the private header as preparation for actual encapsulations.
     ///
     /// It returns an error if the slice of inputs is empty or holds more than
-    /// `total_layers` inputs.
+    /// `num_layers` inputs.
     fn try_initialize(
         inputs: &[EncapsulationInput],
-        total_layers: NonZeroU64,
+        num_layers: NonZeroU64,
     ) -> Result<Self, Error> {
         if inputs.is_empty() {
             return Err(Error::EmptyEncapsulationInputs);
         }
-        if inputs.len() as u64 > total_layers.get() {
+        if inputs.len() > num_layers.get() as usize {
             return Err(Error::EncapsulationCountExceeded);
         }
 
-        Ok(Self::from_inputs(inputs, total_layers.get() as usize))
+        Ok(Self::from_inputs(inputs, num_layers))
     }
 
     // Randomize the private header, then fill the last `inputs.len()` blending
     // headers in the reconstructable way, so that the corresponding signatures can
     // be verified later. Plus, encapsulate those last `inputs.len()` headers.
     //
-    // The private header always holds `total_layers` (`ß_max`) blending headers,
+    // The private header always holds `num_layers` (`ß_max`) blending headers,
     // however many times the message is actually encapsulated. When the sender
     // encapsulates fewer times, the leading `ß_max - inputs.len()` headers are
     // filled with non-reconstructable random bytes, so the encapsulation count
@@ -423,7 +419,7 @@ impl EncapsulatedPrivateHeader {
     // contents. This follows steps 2-4 of the Message Initialization section of the
     // spec: <https://github.com/logos-co/logos-lips/blob/master/docs/blockchain/raw/message-encapsulation.md>.
     //
-    // Example: for `total_layers` 3 and 2 inputs,
+    // Example: for `num_layers` 3 and 2 inputs,
     // BlendingHeaders[0]: RANDOM
     // BlendingHeaders[1]: Enc(inputs[1], Enc(inputs[0], RND(inputs[1])))
     // BlendingHeaders[2]:               Enc(inputs[0], RND(inputs[0]))
@@ -433,11 +429,11 @@ impl EncapsulatedPrivateHeader {
     //   by nobody
     // - RND(seed): Pseudo-random bytes generated from `seed` with the `HEADER` DST
     // - Enc(key, data): Encrypt `data` by XOR-ing with RND(key)
-    fn from_inputs(inputs: &[EncapsulationInput], total_layers: usize) -> Self {
-        let unused_layers = total_layers.saturating_sub(inputs.len());
+    fn from_inputs(inputs: &[EncapsulationInput], num_layers: NonZeroU64) -> Self {
+        let unused_layers = num_layers.get().saturating_sub(inputs.len() as u64);
         Self(
             core::iter::repeat_with(EncapsulatedBlendingHeader::random)
-                .take(unused_layers)
+                .take(unused_layers as usize)
                 .chain(
                     inputs
                         .iter()
@@ -667,8 +663,8 @@ impl EncapsulatedBlendingHeader {
     /// only ride along so that the layer count is not observable.
     fn random() -> Self {
         Self(pseudo_random_sized_bytes::<BLENDING_HEADER_ENCODED_SIZE>(
-            domains::RANDOM,
-            &random_sized_bytes::<RANDOM_HEADER_SEED_SIZE>(),
+            domains::RANDOM_FILLER_HEADER,
+            &random_sized_bytes::<32>(),
         ))
     }
 

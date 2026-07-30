@@ -15,10 +15,6 @@ pub fn random_sized_bytes<const SIZE: usize>() -> [u8; SIZE] {
     buf
 }
 
-/// Fills `buf` with random bytes using [`BlakeRng`] seeded from system entropy.
-///
-/// The runtime-sized counterpart of [`random_sized_bytes`], for buffers too
-/// large to want a second copy of on the stack.
 pub fn fill_random_bytes(buf: &mut [u8]) {
     BlakeRng::from_entropy().fill_bytes(buf);
 }
