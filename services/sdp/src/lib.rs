@@ -7,11 +7,9 @@ pub mod wallet;
 use std::{
     collections::BTreeSet,
     fmt::{Debug, Display},
-    pin::Pin,
 };
 
 use async_trait::async_trait;
-use futures::Stream;
 use lb_chain_service::{
     ChainServiceInfo,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
@@ -65,8 +63,6 @@ pub struct BlockEvent {
     pub block_number: BlockNumber,
     pub updates: Vec<BlockEventUpdate>,
 }
-
-pub type BlockUpdateStream = Pin<Box<dyn Stream<Item = BlockEvent> + Send + Sync + Unpin>>;
 
 #[derive(Debug, Error)]
 pub enum SdpError {

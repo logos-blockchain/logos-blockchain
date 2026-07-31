@@ -156,24 +156,6 @@ impl TrackedWallets {
         self.chain_state_cache = WalletChainStateCache::default();
     }
 
-    /// Export wallet state observed from `node_name` at `header_id`.
-    #[must_use]
-    pub fn export_state_for_node_at_header(
-        &self,
-        node_name: &str,
-        header_id: &str,
-    ) -> Option<(String, u64, TrackedWalletsState)> {
-        self.chain_state_cache
-            .wallet_utxos_for_node_at_header(node_name, header_id)
-            .map(|(header_id, height, wallet_utxos)| {
-                (
-                    header_id,
-                    height,
-                    TrackedWalletsState::from_wallet_utxos(wallet_utxos),
-                )
-            })
-    }
-
     pub(crate) fn record_observed_wallets_utxos(
         &mut self,
         header_id: String,

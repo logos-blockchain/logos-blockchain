@@ -452,21 +452,6 @@ impl<Api: StorageBackend> StorageMsg<Api> {
     }
 
     #[must_use]
-    pub const fn scan_immutable_block_ids_request_reverse(
-        slot_range: RangeInclusive<Slot>,
-        limit: NonZeroUsize,
-        response_tx: Sender<Vec<HeaderId>>,
-    ) -> Self {
-        Self::Api {
-            request: StorageApiRequest::Chain(ChainApiRequest::ScanImmutableBlockIdsReverse {
-                slot_range,
-                limit,
-                response_tx,
-            }),
-        }
-    }
-
-    #[must_use]
     pub const fn store_transactions_request(
         transactions: HashMap<TxHash, <Api as StorageChainApi>::Tx>,
     ) -> Self {

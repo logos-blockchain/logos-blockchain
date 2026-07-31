@@ -10,10 +10,7 @@ use lb_cryptarchia_engine::Epoch;
 use crate::{
     membership::Membership,
     message_blend::{
-        crypto::{
-            EncapsulatedMessageWithVerifiedPublicHeader,
-            serialize_encapsulated_message_with_verified_public_header,
-        },
+        crypto::EncapsulatedMessageWithVerifiedPublicHeader,
         provers::{ProofsGeneratorSettings, WinningPolInfoStream, leader::LeaderProofsGenerator},
     },
 };
@@ -134,14 +131,5 @@ where
             self.num_blend_layers.get() as usize,
         )
         .expect("Number of encapsulation inputs is in `1..=num_blend_layers`."))
-    }
-
-    pub async fn encapsulate_and_serialize_data_payload(
-        &mut self,
-        payload: &[u8],
-    ) -> Result<Vec<u8>, Error> {
-        Ok(serialize_encapsulated_message_with_verified_public_header(
-            &self.encapsulate_data_payload(payload).await?,
-        ))
     }
 }

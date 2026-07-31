@@ -190,12 +190,6 @@ impl DeploymentBuilder {
     }
 
     #[must_use]
-    pub fn with_node_config_override(mut self, index: usize, config: RunConfig) -> Self {
-        self.config.node_config_overrides.insert(index, config);
-        self
-    }
-
-    #[must_use]
     pub const fn with_node_count(mut self, nodes: usize) -> Self {
         self.config.n_nodes = nodes;
         self

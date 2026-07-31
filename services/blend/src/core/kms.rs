@@ -31,11 +31,6 @@ pub trait KmsPoQAdapter<RuntimeServiceId> {
     ) -> Self::CorePoQGenerator;
 }
 
-pub type PreloadKmsServiceKeyId<RuntimeServiceId> = <KmsServiceApi<
-    PreloadKmsService<RuntimeServiceId>,
-    RuntimeServiceId,
-> as KmsPoQAdapter<RuntimeServiceId>>::KeyId;
-
 #[async_trait]
 impl<RuntimeServiceId> KmsPoQAdapter<RuntimeServiceId>
     for KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>

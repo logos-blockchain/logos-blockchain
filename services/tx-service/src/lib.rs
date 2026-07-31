@@ -3,7 +3,6 @@ mod metrics;
 pub mod network;
 pub mod storage;
 pub mod tx;
-pub mod verify;
 
 use std::{
     collections::BTreeSet,

@@ -19,15 +19,6 @@ pub fn env_opt_u64(key: &str) -> Option<u64> {
     env_opt::<u64>(key).filter(|value| *value > 0)
 }
 
-/// Parse positive environment variable as `u32`.
-///
-/// Returns `None` when missing, invalid, zero, or out of `u32` range.
-#[must_use]
-pub fn env_opt_u32(key: &str) -> Option<u32> {
-    let value = env_opt_u64(key)?;
-    u32::try_from(value).ok()
-}
-
 /// Parse positive environment variable as `u64` with fallback default.
 #[must_use]
 pub fn env_u64(key: &str, default: u64) -> u64 {

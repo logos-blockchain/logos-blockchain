@@ -273,10 +273,6 @@ where
         self.branches.get(id)
     }
 
-    pub fn get_length_for_header(&self, header_id: &Id) -> Option<u64> {
-        self.get(header_id).map(|branch| branch.length)
-    }
-
     /// The parent of `branch`, or `None` if `branch` is the oldest block in the
     /// tree, whose parent is either itself (genesis) or outside the tree
     /// (pruned).

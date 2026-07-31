@@ -140,11 +140,6 @@ impl EpochState {
     }
 
     #[must_use]
-    pub const fn lottery_values(&self) -> (Fr, Fr) {
-        (self.lottery_0, self.lottery_1)
-    }
-
-    #[must_use]
     pub fn utxo_merkle_root(&self) -> Fr {
         self.utxos.root()
     }

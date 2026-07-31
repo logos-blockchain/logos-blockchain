@@ -17,5 +17,3 @@ pub use transactions::{
 };
 
 pub use crate::mantle::transactions::VerificationError;
-
-pub const MAX_MANTLE_TXS: usize = 1024;

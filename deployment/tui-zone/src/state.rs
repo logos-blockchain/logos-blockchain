@@ -103,13 +103,6 @@ impl ZoneState for InMemoryZoneState {
     }
 }
 
-/// Load the persisted sequencer checkpoint shared by all TUI zone commands.
-pub fn load_persisted_checkpoint(
-    channel_id: &ChannelId,
-) -> Result<Option<SequencerCheckpoint>, Box<dyn Error + Send + Sync>> {
-    load_or_discard_persisted_checkpoint_for_channel(channel_id, true)
-}
-
 /// Load the persisted sequencer checkpoint after validating the target channel.
 pub fn load_or_discard_persisted_checkpoint_for_channel(
     channel_id: &ChannelId,

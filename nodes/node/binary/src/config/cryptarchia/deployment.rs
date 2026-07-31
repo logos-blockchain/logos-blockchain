@@ -38,11 +38,6 @@ impl Settings {
     }
 
     #[must_use]
-    pub fn blocks_per_epoch(&self) -> u64 {
-        (self.slots_per_epoch() as f64 / self.average_slots_per_block() as f64).floor() as u64
-    }
-
-    #[must_use]
     pub const fn average_slots_per_block(&self) -> u64 {
         average_slots_for_blocks(
             NonZero::<u32>::new(1).expect("must be non-zero"),

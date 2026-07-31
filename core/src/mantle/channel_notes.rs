@@ -47,6 +47,7 @@ impl ChannelNotes {
         }
     }
 
+    #[cfg(test)]
     #[must_use]
     pub fn root(&self) -> Hash {
         self.channel_notes.root()
@@ -55,12 +56,6 @@ impl ChannelNotes {
     #[must_use]
     pub fn contains(&self, id: &NoteId) -> bool {
         self.channel_notes.contains(id)
-    }
-
-    /// Returns the channel owning `id`, if it is a channel note.
-    #[must_use]
-    pub fn get(&self, id: &NoteId) -> Option<ChannelId> {
-        self.channel_notes.get(id)
     }
 
     pub fn into_channel(mut self, note_id: &NoteId, channel_id: &ChannelId) -> Result<Self, Error> {

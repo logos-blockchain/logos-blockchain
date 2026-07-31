@@ -219,21 +219,10 @@ impl Channels {
         self.channels.root()
     }
 
-    #[must_use]
-    pub fn channel_notes_root(&self) -> Hash {
-        self.channel_notes.root()
-    }
-
     /// Returns `true` if `note_id` is owned by any channel.
     #[must_use]
     pub fn is_channel_note(&self, note_id: &NoteId) -> bool {
         self.channel_notes.contains(note_id)
-    }
-
-    /// Returns the channel owning `note_id`, if it is a channel note.
-    #[must_use]
-    pub fn get_channel(&self, note_id: &NoteId) -> Option<ChannelId> {
-        self.channel_notes.get(note_id)
     }
 
     /// Returns `true` if `note_id` is a channel note owned by `channel_id`.

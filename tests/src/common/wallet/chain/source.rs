@@ -25,20 +25,6 @@ pub struct NodeHttpWalletChainSource {
 }
 
 impl NodeHttpWalletChainSource {
-    pub async fn from_client(
-        source_node_name: impl Into<String>,
-        client: NodeHttpClient,
-    ) -> Result<Self, HttpClientError> {
-        let consensus = client.consensus_info().await?;
-
-        Ok(Self {
-            source_node_name: source_node_name.into(),
-            client,
-            fallback: None,
-            tip: consensus.cryptarchia_info.tip,
-        })
-    }
-
     #[must_use]
     pub const fn from_tip(source_node_name: String, client: NodeHttpClient, tip: HeaderId) -> Self {
         Self {
@@ -49,11 +35,6 @@ impl NodeHttpWalletChainSource {
         }
     }
 
-    #[must_use]
-    pub fn with_fallback(mut self, fallback: Option<(String, NodeHttpClient)>) -> Self {
-        self.fallback = fallback;
-        self
-    }
 }
 
 impl WalletChainSource for NodeHttpWalletChainSource {

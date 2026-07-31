@@ -7,11 +7,10 @@ use std::{
 
 use lb_core::mantle::{Utxo, traits::GenesisTx as _};
 use lb_key_management_system_service::keys::ZkPublicKey;
-use lb_libp2p::Multiaddr;
-use lb_node::{UserConfig, config::RunConfig};
+use lb_node::config::RunConfig;
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, LbcLocalDeployer, LbcManualCluster, NodeHttpClient, TopologyConfig,
-    USER_CONFIG_FILE, configs::wallet::WalletConfig, internal::DeploymentPlan, is_truthy_env,
+    configs::wallet::WalletConfig, internal::DeploymentPlan, is_truthy_env,
     record_system_monitor_event, register_system_monitor_output_file,
     unregister_system_monitor_output_file,
 };
@@ -42,10 +41,6 @@ impl LocalManualClusterHarnessBase {
 
     pub const fn cluster(&self) -> &LbcManualCluster {
         &self.cluster
-    }
-
-    pub const fn cluster_mut(&mut self) -> &mut LbcManualCluster {
-        &mut self.cluster
     }
 }
 
@@ -443,19 +438,6 @@ pub fn read_manual_node_logs(base_dir: &Path, runtime_node_name: &str) -> String
         .collect()
 }
 
-pub fn override_node_initial_peers(
-    base_dir: &Path,
-    runtime_node_name: &str,
-    initial_peers: Vec<Multiaddr>,
-) {
-    let runtime_dir = runtime_dir_for_node(base_dir, runtime_node_name);
-    let mut user_config = read_user_config(&runtime_dir);
-
-    user_config.network.backend.initial_peers = initial_peers;
-
-    write_user_config(&runtime_dir, &user_config);
-}
-
 fn runtime_dirs_for_node(base_dir: &Path, runtime_node_name: &str) -> Vec<PathBuf> {
     let runtime_dir_prefix = format!("{runtime_node_name}_");
 
@@ -501,41 +483,4 @@ fn is_log_file_for_node(path: &Path, log_file_prefix: &str) -> bool {
 fn read_log_file(path: &Path) -> String {
     fs::read_to_string(path)
         .unwrap_or_else(|source| panic!("failed to read log file {}: {source}", path.display()))
-}
-
-fn runtime_dir_for_node(base_dir: &Path, runtime_node_name: &str) -> PathBuf {
-    let runtime_dir_prefix = format!("{runtime_node_name}_");
-
-    read_dir_paths(base_dir)
-        .into_iter()
-        .find(|path| is_runtime_dir_for_node(path, &runtime_dir_prefix))
-        .unwrap_or_else(|| {
-            panic!(
-                "failed to locate runtime dir for node `{runtime_node_name}` under {}",
-                base_dir.display()
-            )
-        })
-}
-
-fn read_user_config(persist_dir: &Path) -> UserConfig {
-    let path = persist_dir.join(USER_CONFIG_FILE);
-    let text = fs::read_to_string(&path)
-        .unwrap_or_else(|source| panic!("failed to read node config {}: {source}", path.display()));
-
-    serde_yaml::from_str(&text)
-        .unwrap_or_else(|source| panic!("failed to parse node config {}: {source}", path.display()))
-}
-
-fn write_user_config(persist_dir: &Path, config: &UserConfig) {
-    let path = persist_dir.join(USER_CONFIG_FILE);
-    let yaml = serde_yaml::to_string(config).unwrap_or_else(|source| {
-        panic!(
-            "failed to serialize node config {}: {source}",
-            path.display()
-        )
-    });
-
-    fs::write(&path, yaml).unwrap_or_else(|source| {
-        panic!("failed to write node config {}: {source}", path.display())
-    });
 }
