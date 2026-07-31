@@ -22,7 +22,7 @@ const-hex                     = { features = ["alloc"], workspace = true }
 hex                           = { features = ["alloc"], workspace = true }
 lb-blake2btree                = { workspace = true }
 lb-blend-proofs               = { workspace = true }
-lb-core-macros                = { workspace = true }
+lb-codec                      = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
@@ -33,9 +33,7 @@ lb-pol                        = { workspace = true }
 lb-poseidon2                  = { workspace = true }
 lb-utils                      = { workspace = true }
 lb-utxotree                   = { workspace = true }
-lb-zksign                     = { workspace = true }
 multiaddr                     = { workspace = true }
-nom                           = { features = ["alloc"], workspace = true }
 num-bigint                    = { workspace = true }
 serde                         = { features = ["derive"], workspace = true }
 strum                         = { features = ["derive"], workspace = true }

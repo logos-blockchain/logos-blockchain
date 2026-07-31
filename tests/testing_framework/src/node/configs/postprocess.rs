@@ -29,6 +29,7 @@ pub fn leader_stake_amount(total_wallet_funds: u64, n_participants: usize) -> u6
     scaled.max(100_000)
 }
 
+#[must_use]
 pub fn apply_wallet_genesis_overrides(
     general_configs: &mut [Config],
     genesis_block: &GenesisBlock,
@@ -93,7 +94,7 @@ pub fn apply_wallet_genesis_overrides(
     let genesis_block =
         create_genesis_block_with_declarations(transfer_op, providers, test_context);
 
-    for general in general_configs.iter_mut() {
+    for general in general_configs {
         for (secret_key, _) in wallet_accounts {
             let key = Key::Zk(secret_key.clone());
             let key_id = key_id_for_preload_backend(&key);

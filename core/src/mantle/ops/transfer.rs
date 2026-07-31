@@ -1,4 +1,4 @@
-use lb_core_macros::NomCodec;
+use lb_codec::{BinaryCodec, BinaryEncode as _};
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -9,13 +9,12 @@ use crate::{
         TxHash,
         channel::Channels,
         ledger::{self, Inputs, Operation, Outputs, Utxo, Utxos},
-        nom::NomEncode as _,
         ops::OpId,
     },
     sdp::locked_notes::LockedNotes,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
 pub struct TransferOp {
     pub inputs: Inputs,
     pub outputs: Outputs,
@@ -57,7 +56,7 @@ impl TransferOp {
 
 impl OpId for TransferOp {
     fn op_bytes(&self) -> Vec<u8> {
-        self.encode()
+        self.encode_to_vec()
     }
 }
 

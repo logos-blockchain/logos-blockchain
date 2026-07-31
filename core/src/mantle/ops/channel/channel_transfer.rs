@@ -1,3 +1,4 @@
+use lb_codec::{BinaryCodec, BinaryEncode as _};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -6,7 +7,6 @@ use crate::{
         TxHash,
         channel::{Channels, Error},
         ledger::{Inputs, Operation, Outputs, Utxo, Utxos},
-        nom::{NomCodec, NomEncode as _},
         ops::{OpId, channel::ChannelId},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
@@ -14,7 +14,7 @@ use crate::{
 };
 
 // ChannelTransfer = ChannelId Inputs Outputs — plain field-order concat.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
 pub struct ChannelTransferOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
@@ -29,7 +29,7 @@ impl ChannelTransferOp {
 
 impl OpId for ChannelTransferOp {
     fn op_bytes(&self) -> Vec<u8> {
-        self.encode()
+        self.encode_to_vec()
     }
 }
 

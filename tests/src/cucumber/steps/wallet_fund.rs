@@ -39,7 +39,7 @@ async fn step_fund_payment_transaction(
     transaction_alias: String,
 ) -> StepResult {
     let receiver_pk = world.resolve_wallet(&receiver_wallet_name)?.public_key()?;
-    let funding_wallet = world.resolve_wallet(&format!("{node_name}_WALLET"))?;
+    let funding_wallet = world.funding_wallet(&node_name)?;
     let funding_pk = funding_wallet.public_key()?;
     let client = world.resolve_node_http_client(&node_name)?;
 
@@ -93,18 +93,21 @@ async fn step_fund_payment_transaction(
 }
 
 /// Fund an inscription-only transaction: at non-zero gas prices the node
-/// appends a fee transfer paid from its wallet and returns the transfer
-/// proof. The caller signs the channel op over the FUNDED hash and
+/// appends a fee transfer paid from the selected wallet and returns the
+/// transfer proof. The caller signs the channel op over the FUNDED hash and
 /// assembles the proofs in op order — the split-signing flow a zone
 /// sequencer uses.
-#[when(expr = "I fund an inscription transaction on node {string} as {string}")]
+#[when(
+    expr = "I fund an inscription transaction from wallet {string} via node {string} as {string}"
+)]
 async fn step_fund_inscription_transaction(
     world: &mut CucumberWorld,
     step: &Step,
+    funding_wallet_name: String,
     node_name: String,
     transaction_alias: String,
 ) -> StepResult {
-    let funding_wallet = world.resolve_wallet(&format!("{node_name}_WALLET"))?;
+    let funding_wallet = world.funding_wallet(&node_name)?;
     let funding_pk = funding_wallet.public_key()?;
     let client = world.resolve_node_http_client(&node_name)?;
 
@@ -176,7 +179,8 @@ async fn step_fund_inscription_transaction(
 
     info!(
         target: TARGET,
-        "Submitted funded inscription `{transaction_alias}` via node `{node_name}` fund endpoint"
+        "Submitted inscription `{transaction_alias}` funded by wallet `{funding_wallet_name}` via \
+         node `{node_name}` fund endpoint"
     );
 
     Ok(())

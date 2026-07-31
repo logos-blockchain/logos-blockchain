@@ -3,6 +3,7 @@ use std::hash::{Hash, Hasher};
 
 use bytes::Bytes;
 use ed25519_dalek::SigningKey;
+use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use rand_core::CryptoRngCore;
 use serde::Deserialize;
 use zeroize::ZeroizeOnDrop;
@@ -97,6 +98,30 @@ impl Debug for Ed25519Key {
 impl From<UnsecuredEd25519Key> for Ed25519Key {
     fn from(value: UnsecuredEd25519Key) -> Self {
         Self(value)
+    }
+}
+
+impl BinaryEncode for PublicKey {
+    fn encoded_length(&self) -> usize {
+        ED25519_PUBLIC_KEY_SIZE
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.to_bytes());
+    }
+}
+
+impl BinaryDecode for PublicKey {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, inner) = <[u8; _]>::decode(input, &())?;
+        let key = Self::from_bytes(&inner)
+            .map_err(|_| DecodeError::invalid_value::<Self>("not a valid Ed25519 public key"))?;
+        Ok((rest, key))
     }
 }
 

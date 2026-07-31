@@ -21,6 +21,9 @@ use libp2p::{
 
 pub const PROTOCOL_NAME: StreamProtocol = StreamProtocol::new("/blend/swarm/test");
 
+/// `ß_max` used by the test messages.
+const NUM_BLEND_LAYERS: u64 = 3;
+
 #[derive(Debug)]
 pub struct TestEncapsulatedMessage(EncapsulatedMessageWithVerifiedPublicHeader);
 
@@ -31,6 +34,7 @@ impl TestEncapsulatedMessage {
                 &generate_valid_inputs(),
                 PayloadType::Data,
                 payload.try_into().unwrap(),
+                NUM_BLEND_LAYERS.try_into().unwrap(),
             )
             .unwrap(),
         )
@@ -57,7 +61,7 @@ impl DerefMut for TestEncapsulatedMessage {
 
 fn generate_valid_inputs() -> Vec<EncapsulationInput> {
     repeat_with(UnsecuredEd25519Key::generate_with_blake_rng)
-        .take(3)
+        .take(NUM_BLEND_LAYERS as usize)
         .map(|recipient_signing_key| {
             let recipient_signing_pubkey = recipient_signing_key.public_key();
             EncapsulationInput::try_new(

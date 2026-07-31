@@ -5,11 +5,11 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
+use lb_codec::BinaryDecodeExt as _;
 use lb_core::mantle::{
     Note, SignedMantleTx, Utxo, Value,
     channel::ChannelState,
     ledger::{Inputs, Outputs},
-    nom::NomDecode as _,
     ops::{
         channel::{
             ChannelId, MsgId,

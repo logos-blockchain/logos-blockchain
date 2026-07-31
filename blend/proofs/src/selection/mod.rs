@@ -2,6 +2,7 @@ use core::fmt::Debug;
 use std::sync::LazyLock;
 
 use lb_blend_crypto::pseudo_random_sized_bytes;
+use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::{fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes};
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
@@ -39,7 +40,7 @@ pub enum Error {
     EmptyMembershipSet,
 }
 
-/// A Proof of Selection as described in the Blend v1 spec: <https://www.notion.so/nomos-tech/Blend-Protocol-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df81d6bb3febd62b598138>.
+/// A Proof of Selection as described in the Blend spec: <https://lip.logos.co/blockchain/raw/blend-protocol.html#proof-of-selection>.
 #[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ProofOfSelection {
     #[serde(with = "lb_groth16::serde::serde_fr")]
@@ -53,7 +54,7 @@ impl ProofOfSelection {
         if membership_size == 0 {
             return Err(Error::EmptyMembershipSet);
         }
-        // Condition 1: https://www.notion.so/nomos-tech/Blend-Protocol-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df819991e6f9455ff7ec92
+        // Condition 1: https://lip.logos.co/blockchain/raw/blend-protocol.html#proof-of-selection
         let selection_randomness_bytes = fr_to_bytes(&self.selection_randomness);
         let pseudo_random_output: u64 = {
             let pseudo_random_output_bytes =
@@ -90,7 +91,7 @@ impl ProofOfSelection {
             });
         }
 
-        // Condition 2: https://www.notion.so/nomos-tech/Blend-Protocol-215261aa09df81ae8857d71066a80084?source=copy_link#215261aa09df814da8e8ec1f1fcf4fe6
+        // Condition 2: https://lip.logos.co/blockchain/raw/blend-protocol.html#proof-of-selection
         let calculated_key_nullifier =
             derive_key_nullifier_from_secret_selection_randomness(self.selection_randomness);
         if calculated_key_nullifier != *key_nullifier {
@@ -123,6 +124,30 @@ impl TryFrom<[u8; PROOF_OF_SELECTION_SIZE]> for ProofOfSelection {
         Ok(Self {
             selection_randomness: fr_from_bytes(&value).map_err(Box::new)?,
         })
+    }
+}
+
+impl BinaryEncode for ProofOfSelection {
+    fn encoded_length(&self) -> usize {
+        PROOF_OF_SELECTION_SIZE
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&<[u8; _]>::from(self));
+    }
+}
+
+impl BinaryDecode for ProofOfSelection {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, value) = <[u8; _]>::decode(input, &())?;
+        let proof = Self::try_from(value)
+            .map_err(|_| DecodeError::invalid_value::<Self>("not a valid proof of selection"))?;
+        Ok((rest, proof))
     }
 }
 
@@ -180,13 +205,23 @@ impl PartialEq<ProofOfSelection> for VerifiedProofOfSelection {
     }
 }
 
+impl BinaryEncode for VerifiedProofOfSelection {
+    fn encoded_length(&self) -> usize {
+        self.0.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.0.encode_into(out);
+    }
+}
+
 const KEY_NULLIFIER_DERIVATION_DOMAIN_SEPARATION_TAG: [u8; 16] = *b"KEY_NULLIFIER_V1";
 static KEY_NULLIFIER_DERIVATION_DOMAIN_SEPARATION_TAG_FR: LazyLock<ZkHash> = LazyLock::new(|| {
     fr_from_bytes(&KEY_NULLIFIER_DERIVATION_DOMAIN_SEPARATION_TAG[..]).expect(
         "DST for key nullifier derivation from secret selection randomness must be correct.",
     )
 });
-// As per Proof of Quota v1 spec: <https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#215261aa09df81adb8ccd1448c9afd68>.
+// As per Proof of Quota spec: <https://lip.logos.co/blockchain/raw/proof-of-quota.html#constraints>.
 #[must_use]
 pub fn derive_key_nullifier_from_secret_selection_randomness(
     secret_selection_randomness: ZkHash,

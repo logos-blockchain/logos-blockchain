@@ -17,7 +17,7 @@
 Logos Blockchain is a core component of the [Logos][logos-website] technology stack.
 It combines zero-knowledge proofs, a mix network for anonymity, and a modular service architecture to provide a foundation for sovereign digital communities.
 
-This node represents the reference implementation of the Logos Blockchain specifications defined in the [Logos specifications space][notion-specs].
+This node represents the reference implementation of the Logos Blockchain specifications defined in the [Logos specifications space][specs].
 
 ## Quick Start
 
@@ -372,7 +372,7 @@ Dual-licensed under your choice of:
 - [Twitter / X][logos-x]
 - [logos.co][logos-website]
 
-[notion-specs]: https://www.notion.so/nomos-tech/Research-Specifications-1fd261aa09df814da916ecefa410571f
+[specs]: https://lip.logos.co/blockchain/index.html
 [overwatch-github]: https://github.com/logos-co/Overwatch
 [graphviz-online]: https://dreampuf.github.io/GraphvizOnline/
 [github-releases-page]: https://github.com/logos-blockchain/logos-blockchain/releases

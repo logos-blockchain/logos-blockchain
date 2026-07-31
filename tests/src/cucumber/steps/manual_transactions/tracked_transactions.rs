@@ -62,13 +62,10 @@ pub async fn submit_funded_transfer_transaction(
     sender_wallet_name: String,
     receiver_wallet_name: String,
 ) -> Result<(), StepError> {
-    let wallets = world
-        .resolve_wallets(&[sender_wallet_name.clone(), receiver_wallet_name.clone()])
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{step}` error: {e}");
-        })?;
-    let sender_wallet = wallets[0].clone();
-    let receiver_wallet = wallets[1].clone();
+    let sender_wallet = world.resolve_wallet(&sender_wallet_name).inspect_err(|e| {
+        warn!(target: TARGET, "Step `{step}` error: {e}");
+    })?;
+    let receiver = world.resolve_recipient(&receiver_wallet_name)?;
 
     match &sender_wallet.wallet_type {
         WalletType::User { .. } => {}
@@ -98,7 +95,7 @@ pub async fn submit_funded_transfer_transaction(
         world,
         step,
         &sender_wallet_name,
-        &[(receiver_wallet.public_key()?, amount)],
+        &[(receiver.public_key, amount)],
         Some(&best_node_info),
         Some(&mut available_utxos),
     )
@@ -119,7 +116,8 @@ pub async fn submit_funded_transfer_transaction(
 
     info!(
         target: TARGET,
-        "Submitted funded transfer transaction `{transaction_alias}` from `{sender_wallet_name}` to `{receiver_wallet_name}`"
+        "Submitted funded transfer transaction `{transaction_alias}` from `{sender_wallet_name}` to `{}`",
+        receiver.label
     );
 
     Ok(())

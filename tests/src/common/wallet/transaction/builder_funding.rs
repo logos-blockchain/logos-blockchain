@@ -17,7 +17,7 @@ use rpds::{HashTrieMapSync, HashTrieSetSync};
 use super::intent::WalletTransactionIntent;
 use crate::common::wallet::{
     WalletFundingOutcome, WalletFundingPlan, WalletFundingResources, WalletFundingSource,
-    WalletFundingUtxos, WalletSelectedInputs,
+    WalletFundingUtxos, WalletInputSelectionStrategy, WalletSelectedInputs,
 };
 
 pub fn fund_builder_from_wallet_source(
@@ -73,7 +73,13 @@ pub(super) fn fund_wallet_transaction(
 
     let funded_builder = match fee_sponsor {
         None => {
-            fund_unsponsored_wallet_transaction(&tx_builder, sender.into_funding_utxos(), &context)?
+            let (sender, input_selection_strategy) = sender.into_funding_parts();
+            fund_unsponsored_wallet_transaction(
+                &tx_builder,
+                sender,
+                input_selection_strategy,
+                &context,
+            )?
         }
         Some(fee_sponsor) => fund_sponsored_wallet_transaction(
             tx_builder,
@@ -90,16 +96,24 @@ pub(super) fn fund_wallet_transaction(
 fn fund_unsponsored_wallet_transaction(
     tx_builder: &MantleTxBuilder,
     sender: WalletFundingUtxos,
+    input_selection_strategy: WalletInputSelectionStrategy,
     context: &MantleTxContext,
 ) -> Result<MantleTxBuilder, WalletError> {
     let sender_change_pk = sender.change_pk();
+    let available_utxos = sender.into_available_utxos();
+    let funding_plan = match input_selection_strategy {
+        WalletInputSelectionStrategy::LargestFirst => {
+            WalletFundingPlan::largest_first(available_utxos, Vec::new())
+        }
+        WalletInputSelectionStrategy::SmallestFirst => {
+            WalletFundingPlan::smallest_first(available_utxos, Vec::new())
+        }
+        WalletInputSelectionStrategy::AllProvided => {
+            WalletFundingPlan::all_provided(available_utxos)
+        }
+    };
 
-    fund_builder_from_plan(
-        tx_builder,
-        sender_change_pk,
-        &WalletFundingPlan::largest_first(sender.into_available_utxos(), Vec::new()),
-        context,
-    )
+    fund_builder_from_plan(tx_builder, sender_change_pk, &funding_plan, context)
 }
 
 fn fund_sponsored_wallet_transaction(
@@ -158,6 +172,25 @@ fn fund_builder_from_plan(
     })
 }
 
+/// Add wallet funding inputs using the same transfer layout used during
+/// transaction preparation.
+///
+/// Input sets exceeding the ZK signing limit are split across transfer
+/// operations, leaving the final chunk on the pending transfer operation.
+pub fn extend_wallet_funding_inputs(
+    tx_builder: &MantleTxBuilder,
+    funding_utxos: &[Utxo],
+) -> Result<MantleTxBuilder, WalletError> {
+    if funding_utxos.len() <= super::signing::ZKSIGN_MAX_INPUTS {
+        return tx_builder
+            .clone()
+            .extend_ledger_inputs(funding_utxos.iter().copied())
+            .map_err(Into::into);
+    }
+
+    with_transfer_input_chunks(tx_builder, funding_utxos)
+}
+
 fn evaluate_funding_inputs(
     tx_builder: &MantleTxBuilder,
     selected_inputs: &[Utxo],
@@ -186,9 +219,7 @@ fn evaluate_standard_funding_inputs(
     change_pk: ZkPublicKey,
     context: &MantleTxContext,
 ) -> Result<WalletFundingOutcome<MantleTxBuilder>, WalletError> {
-    let funded_builder = tx_builder
-        .clone()
-        .extend_ledger_inputs(selected_inputs.iter().copied())?;
+    let funded_builder = extend_wallet_funding_inputs(tx_builder, selected_inputs)?;
 
     match funded_builder
         .funding_delta::<MainnetGasConstants>(context)?
@@ -223,7 +254,7 @@ fn build_chunked_funded_tx(
         .sum::<u128>();
     let output_sum = pending_transfer_output_sum(tx_builder);
 
-    let chunked_builder = with_transfer_input_chunks(tx_builder, funding_utxos)?;
+    let chunked_builder = extend_wallet_funding_inputs(tx_builder, funding_utxos)?;
     let funding_delta =
         funding_delta_for_chunked_builder(&chunked_builder, input_sum, output_sum, context)?;
 
@@ -385,6 +416,7 @@ mod tests {
         let funded_builder = fund_unsponsored_wallet_transaction(
             &tx_builder,
             funding_source.into_funding_utxos(),
+            WalletInputSelectionStrategy::LargestFirst,
             &context,
         )
         .expect("zero-cost wallet transaction should still select a funding input");

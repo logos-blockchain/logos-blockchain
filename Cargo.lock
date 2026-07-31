@@ -4053,6 +4053,7 @@ dependencies = [
  "itertools 0.14.0",
  "logos-blockchain-blend-crypto",
  "logos-blockchain-blend-proofs",
+ "logos-blockchain-codec",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
@@ -4102,6 +4103,7 @@ dependencies = [
  "generic-array 1.4.3",
  "hex",
  "logos-blockchain-blend-crypto",
+ "logos-blockchain-codec",
  "logos-blockchain-core",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
@@ -4127,6 +4129,7 @@ dependencies = [
  "libp2p",
  "logos-blockchain-blend-message",
  "logos-blockchain-blend-proofs",
+ "logos-blockchain-codec",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
@@ -4412,6 +4415,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-codec"
+version = "0.0.0"
+dependencies = [
+ "hex",
+ "logos-blockchain-codec-macros",
+ "logos-blockchain-groth16",
+ "logos-blockchain-utils",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "logos-blockchain-codec-macros"
+version = "0.0.0"
+dependencies = [
+ "hex",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
 name = "logos-blockchain-common-http-client"
 version = "0.0.0"
 dependencies = [
@@ -4438,6 +4462,7 @@ name = "logos-blockchain-config"
 version = "0.0.0"
 dependencies = [
  "hex",
+ "logos-blockchain-codec",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
@@ -4465,7 +4490,7 @@ dependencies = [
  "hex",
  "logos-blockchain-blake2btree",
  "logos-blockchain-blend-proofs",
- "logos-blockchain-core-macros",
+ "logos-blockchain-codec",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
@@ -4476,9 +4501,7 @@ dependencies = [
  "logos-blockchain-poseidon2",
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
- "logos-blockchain-zksign",
  "multiaddr",
- "nom 8.0.0",
  "num-bigint",
  "rand 0.8.6",
  "serde",
@@ -4491,19 +4514,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "logos-blockchain-core-macros"
-version = "0.0.0"
-dependencies = [
- "hex",
- "proc-macro2",
- "quote",
- "syn 2.0.118",
-]
-
-[[package]]
 name = "logos-blockchain-cryptarchia-engine"
 version = "0.0.0"
 dependencies = [
+ "logos-blockchain-codec",
  "logos-blockchain-pol",
  "logos-blockchain-utils",
  "rpds",
@@ -4663,6 +4677,7 @@ dependencies = [
  "ed25519-dalek",
  "generic-array 1.4.3",
  "hex",
+ "logos-blockchain-codec",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-macros",
  "logos-blockchain-log-targets",
@@ -5081,6 +5096,7 @@ dependencies = [
  "libp2p",
  "logos-blockchain-api-service",
  "logos-blockchain-chain-service",
+ "logos-blockchain-codec",
  "logos-blockchain-common-http-client",
  "logos-blockchain-config",
  "logos-blockchain-core",
@@ -5148,6 +5164,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "logos-blockchain-codec",
  "logos-blockchain-common-http-client",
  "logos-blockchain-config",
  "logos-blockchain-core",
@@ -5217,6 +5234,7 @@ dependencies = [
  "chrono",
  "clap",
  "hex",
+ "logos-blockchain-codec",
  "logos-blockchain-core",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-service",

@@ -1,11 +1,11 @@
 use std::{num::NonZero, path::PathBuf, time::Duration};
 
 use lb_chain_service::PhaseTag;
+use lb_codec::BinaryEncode as _;
 use lb_core::{
     block::genesis::GenesisBlockBuilder,
     mantle::{
         GenesisTime,
-        nom::NomEncode as _,
         ops::channel::inscribe::{Inscription, InscriptionOp},
         traits::GenesisTx as _,
     },
@@ -110,7 +110,7 @@ fn test_config(mut config: RunConfig, genesis_time: GenesisTime) -> RunConfig {
     cryptarchia_parameter.genesis_time = genesis_time;
 
     let inscription = InscriptionOp {
-        inscription: Inscription::new_unchecked(cryptarchia_parameter.encode()),
+        inscription: Inscription::new_unchecked(cryptarchia_parameter.encode_to_vec()),
         ..genesis_tx.genesis_inscription().clone()
     };
 

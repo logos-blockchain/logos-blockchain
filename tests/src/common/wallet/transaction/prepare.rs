@@ -55,7 +55,7 @@ pub fn prepare_wallet_transaction_work_item(
     intent: WalletTransactionIntent,
     resources: WalletFundingResources,
 ) -> Result<PreparedWalletTransactionWorkItem, WalletTransactionError> {
-    let sender_pk = resources.sender().public_key();
+    let sender_pk = resources.sender().owner_public_key();
     let fee_sponsor_pk = resources.fee_sponsor().map(WalletFundingSource::public_key);
     let transfer_signers = transfer_signers_for_funding(&resources);
     let input_utxos_by_note_id = input_utxos_by_note_id(&resources);

@@ -22,6 +22,9 @@ use libp2p_swarm_test::SwarmExt as _;
 
 pub const PROTOCOL_NAME: StreamProtocol = StreamProtocol::new("/blend/core-behaviour/test");
 
+/// `ß_max` used by the test messages, matching the `BehaviourBuilder` default.
+const NUM_BLEND_LAYERS: u64 = 3;
+
 pub struct TestSwarm<Behaviour>(Swarm<Behaviour>)
 where
     Behaviour: NetworkBehaviour;
@@ -102,6 +105,7 @@ impl TestEncapsulatedMessage {
                 &generate_valid_inputs(0.into()),
                 PayloadType::Data,
                 payload.try_into().unwrap(),
+                NUM_BLEND_LAYERS.try_into().unwrap(),
             )
             .unwrap(),
         )
@@ -137,6 +141,7 @@ impl TestEncapsulatedMessageWithEpoch {
                 &generate_valid_inputs(epoch),
                 PayloadType::Data,
                 payload.try_into().unwrap(),
+                NUM_BLEND_LAYERS.try_into().unwrap(),
             )
             .unwrap(),
         )
@@ -153,7 +158,7 @@ impl Deref for TestEncapsulatedMessageWithEpoch {
 
 fn generate_valid_inputs(epoch: Epoch) -> Vec<EncapsulationInput> {
     repeat_with(UnsecuredEd25519Key::generate_with_blake_rng)
-        .take(3)
+        .take(NUM_BLEND_LAYERS as usize)
         .map(|recipient_signing_key| {
             let proofs = epoch_based_mock_blend_proof(epoch);
             EncapsulationInput::try_new(

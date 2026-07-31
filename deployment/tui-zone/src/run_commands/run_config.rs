@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
+use lb_codec::BinaryEncode as _;
 use lb_core::{
     mantle::{
         Op, OpProof, SignedMantleTx,
-        nom::NomEncode as _,
         ops::channel::{
             ChannelId, ChannelKeyIndex,
             config::{ChannelConfigOp, Keys},

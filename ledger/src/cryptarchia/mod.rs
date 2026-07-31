@@ -489,7 +489,7 @@ impl LedgerState {
 
     fn update_nonce(self, contrib: &Fr, slot: Slot) -> Self {
         // constants and structure as defined in the Mantle spec:
-        // https://www.notion.so/Cryptarchia-v1-Protocol-Specification-21c261aa09df810cb85eff1c76e5798c
+        // https://lip.logos.co/blockchain/raw/cryptarchia-v1-protocol.html
         static EPOCH_NONCE_V1: LazyLock<Fr> =
             LazyLock::new(|| fr_from_bytes(b"EPOCH_NONCE_V1").unwrap());
         let mut hasher = ZkHasher::new();
@@ -688,7 +688,7 @@ impl LedgerState {
 
 // This function upgrade the storage Gas price when a new epoch starts assuming
 // the structure contains how much storage gas was consumed in the previous
-// epoch according to <https://www.notion.so/nomos-tech/v1-1-Storage-Markets-Specification-326261aa09df804ab483f573f522baf5>
+// epoch according to <https://lip.logos.co/blockchain/raw/storage-markets.html>
 fn update_storage_market(
     storage_gas_price: GasPrice,
     storage_gas_consumed_in_epoch: Gas,

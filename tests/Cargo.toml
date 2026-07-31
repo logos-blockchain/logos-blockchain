@@ -32,6 +32,7 @@ futures-util                     = { workspace = true }
 hex                              = { workspace = true }
 lb-api-service                   = { workspace = true }
 lb-chain-service                 = { workspace = true }
+lb-codec                         = { workspace = true }
 lb-common-http-client            = { workspace = true }
 lb-config                        = { workspace = true }
 lb-core                          = { workspace = true }

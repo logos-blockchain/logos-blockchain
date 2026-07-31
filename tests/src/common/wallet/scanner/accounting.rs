@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry};
 
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
@@ -53,7 +53,7 @@ impl ScannerAccounting {
     fn empty(
         tracked_wallets: Vec<TrackedWalletKeys>,
     ) -> Result<Self, crate::common::wallet::TrackedWalletKeysError> {
-        let mut public_key_to_wallet = HashMap::new();
+        let mut public_key_to_wallet: HashMap<ZkPublicKey, WalletId> = HashMap::new();
         let mut wallet_utxos = BTreeMap::new();
 
         for tracked_wallet in &tracked_wallets {
@@ -65,14 +65,20 @@ impl ScannerAccounting {
         for tracked_wallet in &tracked_wallets {
             let wallet_id = tracked_wallet.wallet_id().clone();
             for pk in tracked_wallet.wallet_pks() {
-                if let Some(existing_wallet) = public_key_to_wallet.insert(pk, wallet_id.clone()) {
-                    return Err(
-                        crate::common::wallet::TrackedWalletKeysError::DuplicatePublicKey {
-                            public_key: pk,
-                            first_wallet: existing_wallet,
-                            second_wallet: wallet_id,
-                        },
-                    );
+                match public_key_to_wallet.entry(pk) {
+                    Entry::Occupied(entry) if entry.get() != &wallet_id => {
+                        return Err(
+                            crate::common::wallet::TrackedWalletKeysError::DuplicatePublicKey {
+                                public_key: pk,
+                                first_wallet: entry.get().clone(),
+                                second_wallet: wallet_id,
+                            },
+                        );
+                    }
+                    Entry::Occupied(_) => {}
+                    Entry::Vacant(entry) => {
+                        entry.insert(wallet_id.clone());
+                    }
                 }
             }
         }

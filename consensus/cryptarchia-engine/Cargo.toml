@@ -17,6 +17,7 @@ ignored = ["logos-blockchain-utils"]
 workspace = true
 
 [dependencies]
+lb-codec   = { workspace = true }
 lb-pol     = { workspace = true }
 lb-utils   = { features = ["time"], workspace = true }
 rpds       = { workspace = true }
