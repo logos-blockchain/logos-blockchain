@@ -4047,6 +4047,7 @@ dependencies = [
 name = "logos-blockchain-blend-message"
 version = "0.0.0"
 dependencies = [
+ "bincode",
  "blake2",
  "derivative",
  "hex",
