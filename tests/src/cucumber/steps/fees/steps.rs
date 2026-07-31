@@ -175,6 +175,64 @@ async fn step_submit_underfunded_self_transfer(
     .await
 }
 
+#[when(
+    expr = "I prepare a self-transfer with a {int} LGO tip from wallet {string} via node \
+            {string} as {string}"
+)]
+async fn step_prepare_self_transfer_with_tip(
+    world: &mut CucumberWorld,
+    step: &Step,
+    tip: u64,
+    wallet_name: String,
+    node_name: String,
+    transaction_alias: String,
+) -> StepResult {
+    actions::prepare_self_transfer_with_tip(
+        world,
+        step,
+        &wallet_name,
+        &node_name,
+        transaction_alias,
+        i128::from(tip),
+    )
+    .await
+}
+
+#[when(expr = "I submit prepared transaction {string} via node {string}")]
+async fn step_submit_prepared_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    transaction_alias: String,
+    node_name: String,
+) -> StepResult {
+    actions::submit_prepared_transaction(world, step, &node_name, &transaction_alias).await
+}
+
+#[then(
+    expr = "transaction {string} prepared with a {int} LGO tip remains funded with a smaller \
+            tip at current prices on node {string}"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "cucumber step entrypoints must take `&mut World`"
+)]
+async fn step_prepared_transaction_tip_absorbed_fee_increase(
+    world: &mut CucumberWorld,
+    step: &Step,
+    transaction_alias: String,
+    original_tip: u64,
+    node_name: String,
+) -> StepResult {
+    assertions::prepared_transaction_tip_absorbed_fee_increase(
+        world,
+        step,
+        &transaction_alias,
+        original_tip,
+        &node_name,
+    )
+    .await
+}
+
 #[then(
     expr = "wallet {string} is debited exactly the fee of transaction {string} in {int} seconds"
 )]

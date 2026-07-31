@@ -124,6 +124,45 @@ pub async fn wallet_debited_exactly_fee(
     })
 }
 
+/// Checks that a prepared transaction remains funded with a smaller tip.
+///
+/// This proves that a fee increase consumed some of its original headroom
+/// without invalidating it.
+pub async fn prepared_transaction_tip_absorbed_fee_increase(
+    world: &CucumberWorld,
+    step: &Step,
+    transaction_alias: &str,
+    original_tip: u64,
+    node_name: &str,
+) -> StepResult {
+    let signed_tx = world.resolve_prepared_transaction(transaction_alias)?;
+    let client = world.resolve_node_http_client(node_name)?;
+    let prices = actions::live_gas_prices(&client, step).await?;
+    let remaining_tip = fee_spec::fee_surplus_at(&world.genesis_block_utxos, &signed_tx, &prices)
+        .map_err(|message| StepError::StepFail {
+        message: format!("Step `{}` error: {message}", step.value),
+    })?;
+
+    if !(0 < remaining_tip && remaining_tip < i128::from(original_tip)) {
+        return Err(StepError::StepFail {
+            message: format!(
+                "Step `{}` error: transaction `{transaction_alias}` was prepared with tip \
+                 {original_tip}, but its effective tip at current prices is {remaining_tip}; \
+                 expected the fee increase to consume part, but not all, of the original tip",
+                step.value
+            ),
+        });
+    }
+
+    info!(
+        target: TARGET,
+        "Transaction `{transaction_alias}` remains funded after its effective tip fell from \
+         {original_tip} to {remaining_tip}",
+    );
+
+    Ok(())
+}
+
 /// Replays the recorded prices through the spec's price calculation and
 /// checks the node reported the same price after every block.
 pub fn execution_prices_follow_spec_reference(world: &CucumberWorld, step: &Step) -> StepResult {

@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
     Note, Op, SignedMantleTx, Utxo,
-    gas::MainnetGasConstants,
+    gas::{GasCalculator as _, MainnetGasConstants},
     traits::Hashable as _,
     transactions::{
         GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext,
@@ -265,4 +265,26 @@ pub fn net_balance_against<State: VerificationState>(
         }
     }
     Ok(input_sum - output_sum)
+}
+
+/// Surplus balance left after charging a transaction at `prices`.
+///
+/// A non-negative value means the transaction remains funded; the surplus is
+/// its effective tip at those prices.
+///
+/// # Errors
+///
+/// Returns an error when the transaction's balance or gas cost cannot be
+/// calculated.
+pub fn fee_surplus_at<State: VerificationState>(
+    genesis_utxos: &[Utxo],
+    tx: &SignedMantleTx<State>,
+    prices: &GasPrices,
+) -> Result<i128, String> {
+    let paid = net_balance_against(genesis_utxos, tx)?;
+    let required = tx
+        .total_gas_cost::<MainnetGasConstants>(prices)
+        .map_err(|source| format!("transaction gas cost calculation failed: {source}"))?;
+
+    Ok(i128::from(paid) - i128::from(required.into_inner()))
 }
