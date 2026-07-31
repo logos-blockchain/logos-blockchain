@@ -25,11 +25,33 @@ use crate::{
 pub const MAX_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 7 / 8;
 pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
 
+mod serde_inscription {
+    use serde::{Deserializer, Serializer};
+
+    use super::{Inscription, MAX_BYTES};
+
+    pub fn serialize<S>(inscription: &Inscription, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        lb_utils::serde::serde_bytes_slice::serialize(inscription, serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Inscription, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        lb_utils::serde::serde_bytes_slice::deserialize_bounded::<Inscription, MAX_BYTES, D>(
+            deserializer,
+        )
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain
-    #[serde(with = "lb_utils::serde::serde_bytes_slice")]
+    #[serde(with = "serde_inscription")]
     pub inscription: Inscription,
     /// Enforce that this inscription comes after this tx
     pub parent: MsgId,

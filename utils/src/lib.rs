@@ -160,8 +160,12 @@ pub mod serde {
 
     pub mod serde_bytes_slice {
         use core::fmt::Display;
+        use std::borrow::Cow;
 
-        use serde::{Deserialize as _, Deserializer, Serializer, de::Error};
+        use serde::{
+            Deserialize as _, Deserializer, Serializer,
+            de::{Error, SeqAccess, Visitor},
+        };
 
         pub fn serialize<Bytes: AsRef<[u8]>, S: Serializer>(
             bytes: &Bytes,
@@ -187,6 +191,90 @@ pub mod serde {
             } else {
                 let res = Vec::<u8>::deserialize(deserializer).map(T::try_from)?;
                 res.map_err(Error::custom)
+            }
+        }
+
+        pub fn deserialize_bounded<'de, T, const MAX: usize, D>(
+            deserializer: D,
+        ) -> Result<T, D::Error>
+        where
+            T: TryFrom<Vec<u8>>,
+            T::Error: Display,
+            D: Deserializer<'de>,
+        {
+            let bytes = if deserializer.is_human_readable() {
+                let encoded = Cow::<str>::deserialize(deserializer)?;
+                let max_encoded_len = MAX.saturating_mul(2);
+                if encoded.len() > max_encoded_len {
+                    return Err(Error::custom(format_args!(
+                        "encoded byte string exceeds maximum length of {max_encoded_len} characters"
+                    )));
+                }
+                const_hex::decode(encoded.as_ref())
+                    .map_err(|error| Error::custom(error.to_string()))?
+            } else {
+                deserializer.deserialize_byte_buf(BoundedBytesVisitor::<MAX>)?
+            };
+
+            T::try_from(bytes).map_err(Error::custom)
+        }
+
+        struct BoundedBytesVisitor<const MAX: usize>;
+
+        impl<'de, const MAX: usize> Visitor<'de> for BoundedBytesVisitor<MAX> {
+            type Value = Vec<u8>;
+
+            fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                write!(formatter, "a byte sequence of at most {MAX} bytes")
+            }
+
+            fn visit_bytes<E>(self, bytes: &[u8]) -> Result<Self::Value, E>
+            where
+                E: Error,
+            {
+                if bytes.len() > MAX {
+                    return Err(E::custom(format_args!(
+                        "byte sequence contains {} items, maximum is {MAX}",
+                        bytes.len()
+                    )));
+                }
+                Ok(bytes.to_vec())
+            }
+
+            fn visit_borrowed_bytes<E>(self, bytes: &'de [u8]) -> Result<Self::Value, E>
+            where
+                E: Error,
+            {
+                self.visit_bytes(bytes)
+            }
+
+            fn visit_byte_buf<E>(self, bytes: Vec<u8>) -> Result<Self::Value, E>
+            where
+                E: Error,
+            {
+                if bytes.len() > MAX {
+                    return Err(E::custom(format_args!(
+                        "byte sequence contains {} items, maximum is {MAX}",
+                        bytes.len()
+                    )));
+                }
+                Ok(bytes)
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut bytes = Vec::with_capacity(sequence.size_hint().unwrap_or(0).min(MAX));
+                while let Some(byte) = sequence.next_element()? {
+                    if bytes.len() == MAX {
+                        return Err(A::Error::custom(format_args!(
+                            "byte sequence contains more than {MAX} items"
+                        )));
+                    }
+                    bytes.push(byte);
+                }
+                Ok(bytes)
             }
         }
     }

@@ -479,7 +479,7 @@ mod tests {
         let compressed = original_tree.compressed();
 
         // Recover the tree from compressed format
-        let recovered_tree: Blake2bTree<_, _> = compressed.into();
+        let recovered_tree: Blake2bTree<_, _> = compressed.try_into().unwrap();
 
         recovered_tree == original_tree && recovered_tree.root() == original_tree.root()
     }

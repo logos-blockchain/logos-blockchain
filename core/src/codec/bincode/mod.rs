@@ -32,7 +32,7 @@ pub static OPTIONS: LazyLock<BincodeOptions> = LazyLock::new(|| {
 use bytes::Bytes;
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::codec::{Error as WireError, Result};
+use crate::codec::{Error as WireError, MAX_DESERIALIZATION_BYTES, Result};
 
 /// Serialize an object directly into bytes
 pub fn serialize<T: Serialize>(item: &T) -> Result<Bytes> {
@@ -51,7 +51,31 @@ pub fn serialized_size<T: Serialize>(item: &T) -> Result<u64> {
 
 /// Deserialize an object directly from bytes
 pub fn deserialize<T: DeserializeOwned>(data: &[u8]) -> Result<T> {
+    deserialize_with_limit(data, MAX_DESERIALIZATION_BYTES)
+}
+
+fn deserialize_with_limit<T: DeserializeOwned>(data: &[u8], max: u64) -> Result<T> {
+    if data.len() as u64 > max {
+        return Err(WireError::InputTooLarge {
+            size: data.len(),
+            max,
+        });
+    }
     OPTIONS
         .deserialize(data)
         .map_err(|e| WireError::Deserialize(Box::new(e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_input_above_recovery_limit() {
+        let error = deserialize_with_limit::<String>(b"input", 4).unwrap_err();
+        assert!(matches!(
+            error,
+            WireError::InputTooLarge { size: 5, max: 4 }
+        ));
+    }
 }

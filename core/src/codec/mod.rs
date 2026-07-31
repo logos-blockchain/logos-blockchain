@@ -4,6 +4,14 @@
 pub(crate) mod bincode;
 pub mod errors;
 
+/// Maximum serialized input accepted by the binary deserialization boundary.
+///
+/// This is an operational recovery ceiling rather than a protocol limit. It
+/// is deliberately high enough for resource-rich nodes to restore large
+/// persisted states while ensuring that binary deserialization is not
+/// unbounded.
+pub const MAX_DESERIALIZATION_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+
 use bytes::Bytes;
 pub use errors::Error;
 use serde::{Serialize, de::DeserializeOwned};
