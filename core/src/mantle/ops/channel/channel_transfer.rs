@@ -6,7 +6,10 @@ use crate::{
     mantle::{
         TxHash,
         channel::{Channels, Error},
-        ledger::{Inputs, Operation, Outputs, Utxo, Utxos, verification_mode},
+        ledger::{
+            ExecutableOperation, Inputs, Outputs, Utxo, Utxos, VerifiableOperation,
+            verification_mode,
+        },
         ops::{
             OpId,
             channel::{ChannelId, verification::verify_channel_multi_sig},
@@ -53,24 +56,19 @@ pub struct ChannelTransferExecutionContext {
     pub tx_hash: TxHash,
 }
 
-impl Operation<verification_mode::StandardMode> for ChannelTransferOp {
+impl VerifiableOperation<verification_mode::StandardMode> for ChannelTransferOp {
     type PreverificationContext<'a> = ();
     type VerificationContext<'a> = ChannelTransferValidationContext<'a>;
-    type ExecutionContext<'a> = ChannelTransferExecutionContext;
-    type VerificationError = Error;
-    type ExecutionError = Error;
+    type Error = Error;
 
-    fn preverify(
-        &self,
-        _context: &Self::PreverificationContext<'_>,
-    ) -> Result<(), Self::VerificationError> {
+    fn preverify(&self, _context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
         // Check that the outputs are valid
         self.outputs.validate()?;
 
         Ok(())
     }
 
-    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::ExecutionError> {
+    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
         verify_channel_multi_sig(
             &self.channel_id,
             ctx.proof,
@@ -128,11 +126,16 @@ impl Operation<verification_mode::StandardMode> for ChannelTransferOp {
 
         Ok(())
     }
+}
+
+impl ExecutableOperation for ChannelTransferOp {
+    type Context<'a> = ChannelTransferExecutionContext;
+    type Error = Error;
 
     fn execute(
         &self,
-        mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
+        mut ctx: Self::Context<'_>,
+    ) -> Result<(Self::Context<'_>, Vec<TxEvent>), Self::Error> {
         // Remove the inputs from the ledger and from the channel.
         ctx.utxos = self.inputs.execute(ctx.utxos)?;
         for note_id in self.inputs.iter() {

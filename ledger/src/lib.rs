@@ -17,7 +17,7 @@ use lb_core::{
     mantle::{
         NoteId, Op, Utxo, Value, VerificationError,
         gas::{Gas, GasConstants, GasCost, GasOverflow},
-        ledger::Operation as _,
+        ledger::{ExecutableOperation as _, VerifiableOperation as _},
         ops::{
             channel::{
                 channel_transfer::ChannelTransferExecutionContext,

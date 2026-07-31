@@ -7,7 +7,7 @@ use super::{SDPActiveOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        ledger::{Declarations, Operation, verification_mode},
+        ledger::{Declarations, ExecutableOperation, VerifiableOperation, verification_mode},
         transactions::hash::TxHashView,
     },
 };
@@ -26,21 +26,16 @@ pub struct SDPActiveExecutionContext {
     pub declarations: Declarations,
 }
 
-impl Operation<verification_mode::StandardMode> for SDPActiveOp {
+impl VerifiableOperation<verification_mode::StandardMode> for SDPActiveOp {
     type PreverificationContext<'a> = ();
     type VerificationContext<'a> = SDPActiveValidationContext<'a>;
-    type ExecutionContext<'a> = SDPActiveExecutionContext;
-    type VerificationError = SdpError;
-    type ExecutionError = SdpError;
+    type Error = SdpError;
 
-    fn preverify(
-        &self,
-        _context: &Self::PreverificationContext<'_>,
-    ) -> Result<(), Self::VerificationError> {
+    fn preverify(&self, _context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
         Ok(())
     }
 
-    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::ExecutionError> {
+    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
         // Check the declaration exists
         let Some(declaration) = ctx.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
@@ -72,12 +67,17 @@ impl Operation<verification_mode::StandardMode> for SDPActiveOp {
 
         Ok(())
     }
+}
+
+impl ExecutableOperation for SDPActiveOp {
+    type Context<'a> = SDPActiveExecutionContext;
+    type Error = SdpError;
 
     // TODO: check service specific logic
     fn execute(
         &self,
-        mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
+        mut ctx: Self::Context<'_>,
+    ) -> Result<(Self::Context<'_>, Vec<TxEvent>), Self::Error> {
         let mut declaration = ctx
             .declarations
             .get(&self.declaration_id)

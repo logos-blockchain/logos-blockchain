@@ -13,7 +13,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         channel::{ChannelState, Channels, Error},
-        ledger::{Operation, verification_mode},
+        ledger::{ExecutableOperation, VerifiableOperation, verification_mode},
         ops::channel::config::Keys,
         transactions::hash::TxHashView,
     },
@@ -60,17 +60,12 @@ pub struct InscriptionExecutionContext {
     pub block_slot: Slot,
 }
 
-impl Operation<verification_mode::StandardMode> for InscriptionOp {
+impl VerifiableOperation<verification_mode::StandardMode> for InscriptionOp {
     type PreverificationContext<'a> = InscriptionPreverificationContext<'a>;
     type VerificationContext<'a> = InscriptionValidationContext<'a>;
-    type ExecutionContext<'a> = InscriptionExecutionContext;
-    type VerificationError = Error;
-    type ExecutionError = Error;
+    type Error = Error;
 
-    fn preverify(
-        &self,
-        context: &Self::PreverificationContext<'_>,
-    ) -> Result<(), Self::VerificationError> {
+    fn preverify(&self, context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
         // Check the signature
         self.signer
             .verify(context.tx_hash_view.as_bytes(), context.proof)
@@ -79,7 +74,7 @@ impl Operation<verification_mode::StandardMode> for InscriptionOp {
         Ok(())
     }
 
-    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::VerificationError> {
+    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
         // Check if the channel exist otherwise the inscription is valid only if and
         // only if parent == ZERO
         if let Some(channel) = ctx.channels.channel_state(&self.channel_id) {
@@ -112,11 +107,16 @@ impl Operation<verification_mode::StandardMode> for InscriptionOp {
 
         Ok(())
     }
+}
+
+impl ExecutableOperation for InscriptionOp {
+    type Context<'a> = InscriptionExecutionContext;
+    type Error = Error;
 
     fn execute(
         &self,
-        mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
+        mut ctx: Self::Context<'_>,
+    ) -> Result<(Self::Context<'_>, Vec<TxEvent>), Self::Error> {
         // if the channel doesn't exist, create it
         let channel = ctx
             .channels

@@ -11,7 +11,7 @@ use crate::{
     mantle::{
         NoteId,
         channel_notes::{self, ChannelNotes},
-        ledger::{self, Operation as _},
+        ledger::{self, ExecutableOperation as _},
         ops::channel::{
             ChannelId, ChannelKeyIndex, MsgId,
             config::Keys,

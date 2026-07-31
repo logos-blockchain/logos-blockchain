@@ -50,30 +50,35 @@ pub mod verification_mode {
 }
 
 // TODO: Specific proof type check?
-pub trait Operation<Mode: verification_mode::VerificationMode> {
+pub trait VerifiableOperation<Mode: verification_mode::VerificationMode> {
     type PreverificationContext<'a>;
     type VerificationContext<'a>;
-    type ExecutionContext<'a>
+    type Error;
+
+    fn preverify(&self, context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error>;
+
+    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error>;
+}
+
+pub trait ExecutableOperation {
+    type Context<'a>
     where
         Self: 'a;
-
-    type VerificationError;
-    type ExecutionError;
-
-    fn preverify(
-        &self,
-        context: &Self::PreverificationContext<'_>,
-    ) -> Result<(), Self::VerificationError>;
-
-    fn verify(
-        &self,
-        context: &Self::VerificationContext<'_>,
-    ) -> Result<(), Self::VerificationError>;
+    type Error;
 
     fn execute(
         &self,
-        context: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError>;
+        context: Self::Context<'_>,
+    ) -> Result<(Self::Context<'_>, Vec<TxEvent>), Self::Error>;
+}
+
+pub trait Operation<Mode: verification_mode::VerificationMode>:
+    VerifiableOperation<Mode> + ExecutableOperation
+{
+}
+impl<T: VerifiableOperation<Mode> + ExecutableOperation, Mode: verification_mode::VerificationMode>
+    Operation<Mode> for T
+{
 }
 
 pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;

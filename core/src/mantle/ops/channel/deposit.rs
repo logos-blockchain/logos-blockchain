@@ -7,7 +7,10 @@ use crate::{
     events::{DepositRecreatedNotes, TxEvent, TxEventPayload},
     mantle::{
         channel::{Channels, Error},
-        ledger::{Inputs, InputsError, Operation, Outputs, Utxos, verification_mode},
+        ledger::{
+            ExecutableOperation, Inputs, InputsError, Outputs, Utxos, VerifiableOperation,
+            verification_mode,
+        },
         ops::{OpId, channel::ChannelId},
         transactions::hash::{TxHash, TxHashView},
     },
@@ -62,21 +65,16 @@ pub struct DepositExecutionContext {
     pub tx_hash: TxHash,
 }
 
-impl Operation<verification_mode::StandardMode> for DepositOp {
+impl VerifiableOperation<verification_mode::StandardMode> for DepositOp {
     type PreverificationContext<'a> = ();
     type VerificationContext<'a> = DepositValidationContext<'a>;
-    type ExecutionContext<'a> = DepositExecutionContext;
-    type VerificationError = Error;
-    type ExecutionError = Error;
+    type Error = Error;
 
-    fn preverify(
-        &self,
-        _context: &Self::PreverificationContext<'_>,
-    ) -> Result<(), Self::VerificationError> {
+    fn preverify(&self, _context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
         Ok(())
     }
 
-    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::ExecutionError> {
+    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
         // Check that the channel exist
         if !ctx.channels.contains_channel(&self.channel_id) {
             return Err(Error::ChannelNotFound {
@@ -96,11 +94,16 @@ impl Operation<verification_mode::StandardMode> for DepositOp {
 
         Ok(())
     }
+}
+
+impl ExecutableOperation for DepositOp {
+    type Context<'a> = DepositExecutionContext;
+    type Error = Error;
 
     fn execute(
         &self,
-        mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
+        mut ctx: Self::Context<'_>,
+    ) -> Result<(Self::Context<'_>, Vec<TxEvent>), Self::Error> {
         // Get the amount deposited for the event payload
         let amount_deposited = self.inputs.amount(&ctx.utxos)?;
         let outputs = self.outputs(&ctx.utxos)?;

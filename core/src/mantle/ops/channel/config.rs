@@ -9,7 +9,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
-        ledger::{Operation, verification_mode},
+        ledger::{ExecutableOperation, VerifiableOperation, verification_mode},
         transactions::hash::TxHashView,
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
@@ -48,17 +48,12 @@ pub struct ChannelConfigExecutionContext {
     pub block_slot: Slot,
 }
 
-impl Operation<verification_mode::StandardMode> for ChannelConfigOp {
+impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
     type PreverificationContext<'a> = ();
     type VerificationContext<'a> = ChannelConfigValidationContext<'a>;
-    type ExecutionContext<'a> = ChannelConfigExecutionContext;
-    type VerificationError = Error;
-    type ExecutionError = Error;
+    type Error = Error;
 
-    fn preverify(
-        &self,
-        _context: &Self::PreverificationContext<'_>,
-    ) -> Result<(), Self::VerificationError> {
+    fn preverify(&self, _context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
         // Check config is well-formed
         if self.configuration_threshold == 0 || self.transfer_threshold == 0 || self.keys.is_empty()
         {
@@ -68,7 +63,7 @@ impl Operation<verification_mode::StandardMode> for ChannelConfigOp {
         Ok(())
     }
 
-    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::ExecutionError> {
+    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
         // Check that the indexes are unique and there is the same number of proof and
         // index. This is enforced by the proof structure that enforces it.
 
@@ -103,11 +98,16 @@ impl Operation<verification_mode::StandardMode> for ChannelConfigOp {
 
         Ok(())
     }
+}
+
+impl ExecutableOperation for ChannelConfigOp {
+    type Context<'a> = ChannelConfigExecutionContext;
+    type Error = Error;
 
     fn execute(
         &self,
-        mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
+        mut ctx: Self::Context<'_>,
+    ) -> Result<(Self::Context<'_>, Vec<TxEvent>), Self::Error> {
         let channel = ChannelState {
             accredited_keys: self.keys.clone().into(),
             configuration_threshold: self.configuration_threshold,

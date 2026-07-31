@@ -10,7 +10,7 @@ use lb_core::{
     mantle::{
         NoteId, Utxo, Value,
         gas::{Gas, GasConstants, GasCost, GasOverflow, GasPrice},
-        ledger::Operation as _,
+        ledger::ExecutableOperation as _,
         ops::transfer::TransferOp,
         traits::GenesisTx,
         transactions::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},

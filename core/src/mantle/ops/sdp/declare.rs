@@ -7,7 +7,9 @@ use crate::{
     mantle::{
         Note,
         channel::Channels,
-        ledger::{Declarations, Operation, Utxos, verification_mode},
+        ledger::{
+            Declarations, ExecutableOperation, Utxos, VerifiableOperation, verification_mode,
+        },
         transactions::hash::TxHashView,
     },
     sdp::{Declaration, MinStake, locked_notes::LockedNotes},
@@ -155,21 +157,16 @@ pub struct SDPDeclareExecutionContext {
     pub min_stake: MinStake,
 }
 
-impl Operation<verification_mode::StandardMode> for SDPDeclareOp {
+impl VerifiableOperation<verification_mode::StandardMode> for SDPDeclareOp {
     type PreverificationContext<'a> = SDPDeclarePreverificationContext<'a>;
     type VerificationContext<'a> = SDPDeclareVerificationContext<'a>;
-    type ExecutionContext<'a> = SDPDeclareExecutionContext;
-    type VerificationError = SdpError;
-    type ExecutionError = SdpError;
+    type Error = SdpError;
 
-    fn preverify(
-        &self,
-        context: &Self::PreverificationContext<'_>,
-    ) -> Result<(), Self::VerificationError> {
+    fn preverify(&self, context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
         self.preverify(context.tx_hash_view, context.proof_ed25519)
     }
 
-    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::ExecutionError> {
+    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
         // Check that the note exist
         let Some((utxo, _)) = ctx.utxo_tree.utxos().get(&self.locked_note_id) else {
             return Err(SdpError::InexistingNote(self.locked_note_id));
@@ -194,30 +191,18 @@ impl Operation<verification_mode::StandardMode> for SDPDeclareOp {
             ctx.min_stake,
         )
     }
-
-    fn execute(
-        &self,
-        ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
-        SDPDeclareValidationExt::execute(self, ctx)
-    }
 }
 
-impl Operation<verification_mode::GenesisMode> for SDPDeclareOp {
+impl VerifiableOperation<verification_mode::GenesisMode> for SDPDeclareOp {
     type PreverificationContext<'a> = SDPDeclarePreverificationContext<'a>;
     type VerificationContext<'a> = SDPDeclareGenesisValidationContext<'a>;
-    type ExecutionContext<'a> = SDPDeclareExecutionContext;
-    type VerificationError = SdpError;
-    type ExecutionError = SdpError;
+    type Error = SdpError;
 
-    fn preverify(
-        &self,
-        context: &Self::PreverificationContext<'_>,
-    ) -> Result<(), Self::VerificationError> {
+    fn preverify(&self, context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
         self.preverify(context.tx_hash_view, context.proof_ed25519)
     }
 
-    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::ExecutionError> {
+    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
         // Check that the note exist
         let Some((utxo, _)) = ctx.utxo_tree.utxos().get(&self.locked_note_id) else {
             return Err(SdpError::InexistingNote(self.locked_note_id));
@@ -233,11 +218,16 @@ impl Operation<verification_mode::GenesisMode> for SDPDeclareOp {
             ctx.min_stake,
         )
     }
+}
+
+impl ExecutableOperation for SDPDeclareOp {
+    type Context<'a> = SDPDeclareExecutionContext;
+    type Error = SdpError;
 
     fn execute(
         &self,
-        ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
+        ctx: Self::Context<'_>,
+    ) -> Result<(Self::Context<'_>, Vec<TxEvent>), Self::Error> {
         SDPDeclareValidationExt::execute(self, ctx)
     }
 }

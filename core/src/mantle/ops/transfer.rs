@@ -7,7 +7,10 @@ use crate::{
     events::TxEvent,
     mantle::{
         channel::Channels,
-        ledger::{self, Inputs, Operation, Outputs, Utxo, Utxos, verification_mode},
+        ledger::{
+            self, ExecutableOperation, Inputs, Outputs, Utxo, Utxos, VerifiableOperation,
+            verification_mode,
+        },
         ops::OpId,
         transactions::hash::TxHashView,
     },
@@ -82,17 +85,12 @@ pub struct TransferValidationContext<'a> {
     pub proof: &'a ZkSignature,
 }
 
-impl Operation<verification_mode::StandardMode> for TransferOp {
+impl VerifiableOperation<verification_mode::StandardMode> for TransferOp {
     type PreverificationContext<'a> = ();
     type VerificationContext<'a> = TransferValidationContext<'a>;
-    type ExecutionContext<'a> = Utxos;
-    type VerificationError = TransferError;
-    type ExecutionError = TransferError;
+    type Error = TransferError;
 
-    fn preverify(
-        &self,
-        _context: &Self::PreverificationContext<'_>,
-    ) -> Result<(), Self::VerificationError> {
+    fn preverify(&self, _context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
         // Ensure the inputs is non-empty
         if self.inputs.is_empty() {
             return Err(TransferError::NoInputTransfer);
@@ -104,7 +102,7 @@ impl Operation<verification_mode::StandardMode> for TransferOp {
         Ok(())
     }
 
-    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::ExecutionError> {
+    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
         // Validate Inputs
         self.inputs
             .validate_not_in_channel(ctx.locked_notes, ctx.channels, ctx.utxos)?;
@@ -117,11 +115,16 @@ impl Operation<verification_mode::StandardMode> for TransferOp {
 
         Ok(())
     }
+}
+
+impl ExecutableOperation for TransferOp {
+    type Context<'a> = Utxos;
+    type Error = TransferError;
 
     fn execute(
         &self,
-        mut utxos: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
+        mut utxos: Self::Context<'_>,
+    ) -> Result<(Self::Context<'_>, Vec<TxEvent>), Self::Error> {
         // Remove inputs from the ledger
         utxos = self.inputs.execute(utxos)?;
         // Add outputs from the ledger

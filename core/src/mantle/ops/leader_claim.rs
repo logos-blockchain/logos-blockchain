@@ -13,7 +13,7 @@ use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
         Note, Utxo, Value,
-        ledger::{Operation, Utxos, verification_mode},
+        ledger::{ExecutableOperation, Utxos, VerifiableOperation, verification_mode},
         ops::OpId,
         transactions::hash::{TxHash, TxHashView},
     },
@@ -192,17 +192,12 @@ pub struct LeaderClaimExecutionContext {
     pub tx_hash: TxHash,
 }
 
-impl Operation<verification_mode::StandardMode> for LeaderClaimOp {
+impl VerifiableOperation<verification_mode::StandardMode> for LeaderClaimOp {
     type PreverificationContext<'a> = LeaderClaimPreverificationContext<'a>;
     type VerificationContext<'a> = LeaderClaimVerificationContext<'a>;
-    type ExecutionContext<'a> = LeaderClaimExecutionContext;
-    type VerificationError = LeaderClaimError;
-    type ExecutionError = LeaderClaimError;
+    type Error = LeaderClaimError;
 
-    fn preverify(
-        &self,
-        context: &Self::PreverificationContext<'_>,
-    ) -> Result<(), Self::VerificationError> {
+    fn preverify(&self, context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
         let is_verified = context.proof.verify(&LeaderClaimPublic {
             voucher_nullifier: self.voucher_nullifier.into(),
             voucher_root: self.rewards_root.into(),
@@ -216,7 +211,7 @@ impl Operation<verification_mode::StandardMode> for LeaderClaimOp {
         }
     }
 
-    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::ExecutionError> {
+    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
         // Check that the nullifier isn't in the set
         if ctx.nullifiers.contains(&self.voucher_nullifier) {
             return Err(LeaderClaimError::DuplicatedVoucherNullifier);
@@ -238,11 +233,16 @@ impl Operation<verification_mode::StandardMode> for LeaderClaimOp {
 
         Ok(())
     }
+}
+
+impl ExecutableOperation for LeaderClaimOp {
+    type Context<'a> = LeaderClaimExecutionContext;
+    type Error = LeaderClaimError;
 
     fn execute(
         &self,
-        mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
+        mut ctx: Self::Context<'_>,
+    ) -> Result<(Self::Context<'_>, Vec<TxEvent>), Self::Error> {
         // Add the nullifier to the nullifier set
         ctx.nullifiers = ctx.nullifiers.insert(self.voucher_nullifier, ()).0;
 

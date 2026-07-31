@@ -6,7 +6,7 @@ use crate::{
     mantle::{
         TxHash,
         channel::{Channels, Error},
-        ledger::{Inputs, Operation, Utxos, verification_mode},
+        ledger::{ExecutableOperation, Inputs, Utxos, VerifiableOperation, verification_mode},
         ops::{
             OpId,
             channel::{ChannelId, verification::verify_channel_multi_sig},
@@ -45,21 +45,16 @@ pub struct WithdrawExecutionContext {
     pub tx_hash: TxHash,
 }
 
-impl Operation<verification_mode::StandardMode> for ChannelWithdrawOp {
+impl VerifiableOperation<verification_mode::StandardMode> for ChannelWithdrawOp {
     type PreverificationContext<'a> = ();
     type VerificationContext<'a> = WithdrawValidationContext<'a>;
-    type ExecutionContext<'a> = WithdrawExecutionContext;
-    type VerificationError = Error;
-    type ExecutionError = Error;
+    type Error = Error;
 
-    fn preverify(
-        &self,
-        _context: &Self::PreverificationContext<'_>,
-    ) -> Result<(), Self::VerificationError> {
+    fn preverify(&self, _context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
         Ok(())
     }
 
-    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::ExecutionError> {
+    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
         verify_channel_multi_sig(
             &self.channel_id,
             ctx.proof,
@@ -110,11 +105,16 @@ impl Operation<verification_mode::StandardMode> for ChannelWithdrawOp {
 
         Ok(())
     }
+}
+
+impl ExecutableOperation for ChannelWithdrawOp {
+    type Context<'a> = WithdrawExecutionContext;
+    type Error = Error;
 
     fn execute(
         &self,
-        mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
+        mut ctx: Self::Context<'_>,
+    ) -> Result<(Self::Context<'_>, Vec<TxEvent>), Self::Error> {
         // Release the inputs from the channel. The notes keep their NoteId,
         // value and ZkPublicKey and stay in the ledger as regular notes.
         for note_id in self.inputs.iter() {
