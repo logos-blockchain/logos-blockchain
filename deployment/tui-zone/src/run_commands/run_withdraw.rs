@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use lb_core::{
     mantle::{
-        Op, OpProof, SignedMantleTx, Transaction as _,
+        Op, OpProof, SignedMantleTx,
         ops::channel::{ChannelId, ChannelKeyIndex},
+        traits::Hashable as _,
         transactions::codec::encode_signed_mantle_tx,
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
@@ -203,8 +204,9 @@ pub(crate) fn run_withdraw_combine(args: WithdrawCombineArgs) -> RunResult<()> {
             Op::ChannelInscribe(_) => Ok(OpProof::Ed25519Sig(inscription_signature)),
             other => Err(format!("unexpected op in withdraw intent: {other:?}").into()),
         })
-        .collect::<RunResult<Vec<_>>>()?;
-    let signed_tx = SignedMantleTx::new(tx, op_proofs)?;
+        .collect::<RunResult<Vec<_>>>()?
+        .try_into()?;
+    let signed_tx = SignedMantleTx::new(tx, op_proofs);
     let signed = SignedWithdrawFile {
         version: ZONE_FILE_TRANSFER_VERSION,
         kind: ZONE_SIGNED_TRANSACTION.to_owned(),
@@ -262,8 +264,8 @@ pub(crate) async fn run_withdraw_submit(args: WithdrawSubmitArgs) -> RunResult<(
     }
     let mut node_key = args.node_key;
     node_key.channel_id = Some(signed.channel_id.clone());
-    let tx = signed_tx.mantle_tx.clone();
-    let withdraws = tx
+    let withdraws = signed_tx
+        .mantle_tx()
         .ops()
         .iter()
         .filter_map(|op| match op {

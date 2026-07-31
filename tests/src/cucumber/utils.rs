@@ -1,11 +1,13 @@
 use std::{
+    collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
     time::Duration,
 };
 
 use hex::ToHex as _;
-use lb_core::{codec::SerializeOp as _, sdp::Locator};
+use lb_core::{codec::SerializeOp as _, mantle::TxHash, sdp::Locator};
+use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{PeerId, identity, identity::ed25519};
 use lb_node::UserConfig;
 use lb_testing_framework::{CoreBuilderExt as _, ScenarioBuilder};
@@ -15,7 +17,7 @@ use tracing::{info, warn};
 use crate::cucumber::{
     TARGET,
     error::{StepError, StepResult},
-    world::{DeployerKind, NetworkKind, TopologySpec},
+    world::{DeployerKind, NetworkKind, NodeWalletKey, NodeWalletKeyRole, TopologySpec},
 };
 
 type ScenarioBuilderWith = ScenarioBuilder;
@@ -163,7 +165,7 @@ pub fn peer_id_from_node_yaml(path: &Path) -> Result<PeerId, StepError> {
     Ok(PeerId::from(keypair.public()))
 }
 
-fn user_config_from_node_yaml(path: &Path) -> Result<UserConfig, StepError> {
+pub(crate) fn user_config_from_node_yaml(path: &Path) -> Result<UserConfig, StepError> {
     let config: UserConfig = {
         let text = fs::read_to_string(path).map_err(|e| StepError::LogicalError {
             message: format!("Failed to read '{}': {e}", path.display()),
@@ -177,11 +179,82 @@ fn user_config_from_node_yaml(path: &Path) -> Result<UserConfig, StepError> {
     Ok(config)
 }
 
-/// Reads a node YAML user config file and extracts the configured SDP funding
-/// wallet public key.
-pub fn funding_wallet_pk_from_node_yaml(path: &Path) -> Result<String, StepError> {
+/// Reads and classifies the node-owned wallet keys in deterministic order.
+///
+/// Every public key is returned once even if more than one configured key id
+/// points to it.
+pub fn node_wallet_keys_from_node_yaml(path: &Path) -> Result<Vec<NodeWalletKey>, StepError> {
     let config = user_config_from_node_yaml(path)?;
-    Ok(config.sdp.wallet.funding_pk.to_bytes()?.encode_hex())
+    let cryptarchia_funding_pk = config.cryptarchia.leader.wallet.funding_pk;
+    let sdp_funding_pk = config.sdp.wallet.funding_pk;
+    let voucher_master_key_id = config.wallet.voucher_master_key_id.clone();
+    let blend_zk_key_id = config.blend.core.zk.secret_key_kms_id.clone();
+    let mut keys_by_public_key = BTreeMap::<String, NodeWalletKey>::new();
+
+    for (key_id, public_key) in &config.wallet.known_keys {
+        let wallet_pk = public_key.to_bytes()?.encode_hex::<String>();
+        let role = if *public_key == cryptarchia_funding_pk || *public_key == sdp_funding_pk {
+            NodeWalletKeyRole::Funding
+        } else if key_id == &voucher_master_key_id {
+            NodeWalletKeyRole::VoucherMaster
+        } else if key_id == &blend_zk_key_id {
+            NodeWalletKeyRole::BlendZk
+        } else {
+            NodeWalletKeyRole::General
+        };
+
+        match keys_by_public_key.entry(wallet_pk.clone()) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(NodeWalletKey { wallet_pk, role });
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let existing = entry.get_mut();
+                if existing.role == role || role == NodeWalletKeyRole::General {
+                    continue;
+                }
+                if existing.role == NodeWalletKeyRole::General {
+                    existing.role = role;
+                    continue;
+                }
+                return Err(StepError::LogicalError {
+                    message: format!(
+                        "Node wallet public key '{}' has conflicting roles {:?} and {role:?} in '{}'",
+                        existing.wallet_pk,
+                        existing.role,
+                        path.display(),
+                    ),
+                });
+            }
+        }
+    }
+
+    let mut node_wallet_keys = keys_by_public_key.into_values().collect::<Vec<_>>();
+    for role in [
+        NodeWalletKeyRole::Funding,
+        NodeWalletKeyRole::VoucherMaster,
+        NodeWalletKeyRole::BlendZk,
+    ] {
+        let count = node_wallet_keys
+            .iter()
+            .filter(|key| key.role == role)
+            .count();
+        if count != 1 {
+            return Err(StepError::LogicalError {
+                message: format!(
+                    "Expected exactly one {role:?} node wallet key in '{}', found {count}",
+                    path.display(),
+                ),
+            });
+        }
+    }
+
+    node_wallet_keys.sort_by(|left, right| {
+        left.role
+            .priority()
+            .cmp(&right.role.priority())
+            .then_with(|| left.wallet_pk.cmp(&right.wallet_pk))
+    });
+    Ok(node_wallet_keys)
 }
 
 /// Reads a node YAML user config file and extracts the configured Blend core
@@ -321,4 +394,24 @@ pub fn display_last_path_components(path: &Path, levels: usize) -> String {
 
     let start = components.len().saturating_sub(levels);
     components[start..].join("/")
+}
+
+/// Returns a lowercase hex string representation of the given transaction hash.
+#[must_use]
+pub fn tx_hash_to_hex(tx_hash: &TxHash) -> String {
+    tx_hash
+        .to_bytes()
+        .unwrap()
+        .to_ascii_lowercase()
+        .encode_hex::<String>()
+}
+
+/// Returns a lowercase hex string representation of the given public key.
+#[must_use]
+pub fn pk_to_hex(tx_hash: &ZkPublicKey) -> String {
+    tx_hash
+        .to_bytes()
+        .unwrap()
+        .to_ascii_lowercase()
+        .encode_hex::<String>()
 }

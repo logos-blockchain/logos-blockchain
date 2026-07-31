@@ -1,3 +1,4 @@
+use lb_codec::{BinaryCodec, BinaryEncode as _};
 use lb_cryptarchia_engine::Slot;
 use lb_utils::bounded::NonEmptyBoundedVec;
 use serde::{Deserialize, Serialize};
@@ -7,10 +8,9 @@ use crate::{
     crypto::{Digest as _, Hasher},
     events::TxEvent,
     mantle::{
-        TxHash,
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
         ledger::Operation,
-        nom::{NomCodec, NomEncode as _},
+        transactions::hash::TxHash,
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
@@ -18,7 +18,7 @@ use crate::{
 pub const CHANNEL_MAX_KEYS: usize = u16::MAX as usize;
 pub type Keys = NonEmptyBoundedVec<Ed25519PublicKey, CHANNEL_MAX_KEYS>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct ChannelConfigOp {
     pub channel: ChannelId,
     pub keys: Keys,
@@ -65,7 +65,7 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
             return Err(Error::InvalidChannelConfig);
         }
 
-        if let Some(channel) = ctx.channels.channels.get(&self.channel).cloned() {
+        if let Some(channel) = ctx.channels.channel_state(&self.channel) {
             // Check there is enough signatures
             let signatures = ctx.config_sigs.signatures();
             if signatures.len() != channel.configuration_threshold as usize {
@@ -101,33 +101,20 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
         &self,
         mut ctx: Self::ExecutionContext<'_>,
     ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
+        let channel = ChannelState {
+            accredited_keys: self.keys.clone().into(),
+            configuration_threshold: self.configuration_threshold,
+            tip_message: self.id(),
+            tip_slot: ctx.block_slot,
+            tip_sequencer: 0,
+            tip_sequencer_starting_slot: ctx.block_slot,
+            posting_timeframe: self.posting_timeframe.clone(),
+            transfer_threshold: self.transfer_threshold,
+            posting_timeout: self.posting_timeout.clone(),
+        };
+
         // if the channel doesn't exist, create it otherwise just update the config
-        if let Some(channel) = ctx.channels.channels.get_mut(&self.channel) {
-            channel.accredited_keys = self.keys.clone().into();
-            channel.configuration_threshold = self.configuration_threshold;
-            channel.tip_sequencer = 0;
-            channel.tip_sequencer_starting_slot = ctx.block_slot;
-            channel.posting_timeframe = self.posting_timeframe.clone();
-            channel.posting_timeout = self.posting_timeout.clone();
-            channel.transfer_threshold = self.transfer_threshold;
-            channel.tip_slot = ctx.block_slot;
-            channel.tip_message = self.id();
-        } else {
-            ctx.channels.channels = ctx.channels.channels.insert(
-                self.channel,
-                ChannelState {
-                    accredited_keys: self.keys.clone().into(),
-                    configuration_threshold: self.configuration_threshold,
-                    tip_message: self.id(),
-                    tip_slot: ctx.block_slot,
-                    tip_sequencer: 0,
-                    tip_sequencer_starting_slot: ctx.block_slot,
-                    posting_timeframe: self.posting_timeframe.clone(),
-                    transfer_threshold: self.transfer_threshold,
-                    posting_timeout: self.posting_timeout.clone(),
-                },
-            );
-        }
+        ctx.channels = ctx.channels.set_channel_state(&self.channel, channel);
         Ok((ctx, Vec::new()))
     }
 }

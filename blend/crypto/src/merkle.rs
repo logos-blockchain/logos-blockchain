@@ -45,7 +45,7 @@ impl rs_merkle_tree::hasher::Hasher for InnerTreeZkHasher {
 /// A membership-specific Merkle tree that indices information about core nodes'
 /// ZK keys.
 ///
-/// It is a fixed-height tree, with the height expected by the [`PoQ` specification](https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#215261aa09df81ec850ad7965bf6e76b).
+/// It is a fixed-height tree, with the height expected by the [`PoQ` specification](https://lip.logos.co/blockchain/raw/blend-protocol.html#proof-of-quota).
 /// It is a wrapped around an instance of an [`rs_merkle_tree`], configured with
 /// our [`lb_core::crypto::ZkHasher`] and additional information to make it
 /// suitable for `PoQ` usage.
@@ -74,7 +74,7 @@ impl Debug for MerkleTree {
 impl MerkleTree {
     /// Create a new merkle tree with the provided keys.
     ///
-    /// Keys are internally sorted by their numeric value, as described in the [`PoQ` specification](https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#215261aa09df81ec850ad7965bf6e76b).
+    /// Keys are internally sorted by their numeric value, as described in the [`PoQ` specification](https://lip.logos.co/blockchain/raw/blend-protocol.html#proof-of-quota).
     pub fn new(mut keys: Vec<ZkPublicKey>) -> Result<Self, Error> {
         // Sort the input keys by their decimal representation, relying on `Fr`'s
         // implementation of `PartialOrd`.
@@ -82,7 +82,7 @@ impl MerkleTree {
         Self::new_from_ordered(keys)
     }
 
-    /// Create a new merkle tree with the provided, already-sorted keys, as described in the [`PoQ` specification](https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#215261aa09df81ec850ad7965bf6e76b).
+    /// Create a new merkle tree with the provided, already-sorted keys, as described in the [`PoQ` specification](https://lip.logos.co/blockchain/raw/blend-protocol.html#proof-of-quota).
     ///
     /// If the input vector is empty or if it is larger than the maximum number
     /// of leaves supported by this fixed-height Merkle tree, it returns an

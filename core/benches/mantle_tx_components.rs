@@ -11,14 +11,14 @@
 
 use blake2::Digest as _;
 use divan::{Bencher, black_box};
+use lb_codec::BinaryEncode as _;
 use lb_groth16::{Fr, GROTH16_SAFE_BYTES_SIZE, fr_from_bytes_unchecked};
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey};
 use lb_poseidon2::Digest;
 use logos_blockchain_core::{
     crypto::{Hasher, ZkHasher},
     mantle::{
-        MantleTx, SignedMantleTx, Transaction as _, TxHash,
-        nom::NomEncode as _,
+        SignedMantleTx,
         ops::{
             Op, OpProof,
             channel::{
@@ -26,7 +26,13 @@ use logos_blockchain_core::{
                 inscribe::{Inscription, InscriptionOp},
             },
         },
-        transactions::codec::{decode_signed_mantle_tx, encode_signed_mantle_tx},
+        traits::Hashable as _,
+        transactions::{
+            codec::{decode_signed_mantle_tx, encode_signed_mantle_tx},
+            hash::TxHash,
+            mantle_tx::MantleTx,
+            states::Unverified,
+        },
     },
 };
 
@@ -62,15 +68,15 @@ fn make_inscription_tx(payload_size: usize) -> MantleTx {
 }
 
 // Helper fn to create a `SignedMantleTx`.
-fn make_signed_tx(payload_size: usize) -> SignedMantleTx {
+fn make_signed_tx(payload_size: usize) -> SignedMantleTx<Unverified> {
     let signing_key = Ed25519Key::from_bytes(&[1; 32]);
     let tx = make_inscription_tx(payload_size);
-    let txhash = tx.hash();
-    let op_sig = signing_key.sign_payload(&txhash.as_signing_bytes());
-    SignedMantleTx::new(tx, vec![OpProof::Ed25519Sig(op_sig)]).unwrap()
+    let tx_hash = tx.hash();
+    let op_sig = signing_key.sign_payload(&tx_hash.as_signing_bytes());
+    SignedMantleTx::new(tx, [OpProof::Ed25519Sig(op_sig)].into())
 }
 
-// `Blake2b` wrapper function usign the defined `Hasher`.
+// `Blake2b` wrapper function using the defined `Hasher`.
 fn blake2b(inputs: &[&[u8]]) -> [u8; 32] {
     let mut hasher = Hasher::new();
     for input in inputs {
@@ -105,7 +111,7 @@ fn bench_blake2b_poseidon2_hash(bencher: Bencher, size: usize) {
             // Encoding is included here to compare fairly with the Poseidon2 hash function,
             // which includes it.
             let encoded = tx.encode();
-            let digest = blake2b(&[encoded.as_slice()]);
+            let digest = blake2b(&[encoded.as_ref()]);
             let frs: Vec<Fr> = digest
                 .chunks(GROTH16_SAFE_BYTES_SIZE)
                 .map(fr_from_bytes_unchecked)
@@ -151,7 +157,7 @@ fn bench_sign_c_mantle_tx_new_verify_ops_proofs_single_proof(bencher: Bencher, s
             (tx, op_sig)
         })
         .bench_values(|(tx, op_sig): (MantleTx, Ed25519Signature)| {
-            black_box(SignedMantleTx::new(tx, vec![OpProof::Ed25519Sig(op_sig)]).unwrap())
+            black_box(SignedMantleTx::new(tx, [OpProof::Ed25519Sig(op_sig)].into()).preverify())
         });
 }
 
@@ -165,12 +171,12 @@ fn bench_sign_d_fully_empty(bencher: Bencher, size: usize) {
     bencher
         .with_inputs(|| {
             let tx = make_inscription_tx(size);
-            let txhash = tx.hash();
-            (tx, txhash)
+            let tx_hash = tx.hash();
+            (tx, tx_hash)
         })
-        .bench_values(|(tx, txhash): (MantleTx, TxHash)| {
-            let op_sig = signing_key.sign_payload(&txhash.as_signing_bytes());
-            black_box(SignedMantleTx::new(tx, vec![OpProof::Ed25519Sig(op_sig)]).unwrap())
+        .bench_values(|(tx, tx_hash): (MantleTx, TxHash)| {
+            let op_sig = signing_key.sign_payload(&tx_hash.as_signing_bytes());
+            black_box(SignedMantleTx::new(tx, [OpProof::Ed25519Sig(op_sig)].into()).preverify())
         });
 }
 

@@ -3,16 +3,18 @@ use std::time::Duration;
 use lb_common_http_client::Slot;
 use lb_core::{
     crypto::Hash,
+    events::DepositRecreatedNotes,
     header::HeaderId,
     mantle::{
-        SignedMantleTx, Transaction as _, Value,
+        SignedMantleTx, Value,
         channel::ChannelState,
         gas::GasCost,
         ledger::{Inputs, Outputs},
         ops::channel::{
             ChannelId, MsgId, deposit::Metadata, inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
-        transactions::TxHash,
+        traits::Hashable as _,
+        transactions::{TxHash, states::Unverified},
     },
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -31,7 +33,7 @@ pub struct SequencerCheckpoint {
     /// Last message ID for chain continuity.
     pub last_msg_id: MsgId,
     /// Pending transactions to restore.
-    pub pending_txs: Vec<(TxHash, SignedMantleTx)>,
+    pub pending_txs: Vec<(TxHash, SignedMantleTx<Unverified>)>,
     /// Last known LIB.
     pub lib: HeaderId,
     /// Last known LIB slot (for backfill range queries).
@@ -97,7 +99,7 @@ pub enum ChannelUpdateTx {
     AtomicWithdraw(AtomicWithdrawInfo),
     /// A tx shape the SDK cannot produce (bundled deposits, multi-inscribe,
     /// other custom-built txs), reported whole as a unit.
-    Custom(SignedMantleTx),
+    Custom(SignedMantleTx<Unverified>),
 }
 
 impl ChannelUpdateTx {
@@ -106,7 +108,7 @@ impl ChannelUpdateTx {
         match self {
             Self::Inscription(i) => i.tx_hash,
             Self::AtomicWithdraw(a) => a.tx_hash,
-            Self::Custom(tx) => tx.mantle_tx.hash(),
+            Self::Custom(tx) => tx.mantle_tx().hash(),
         }
     }
 
@@ -134,6 +136,14 @@ pub struct FundingConfig {
     pub funding_pk: ZkPublicKey,
     /// Hard cap on the fee of a single transaction.
     pub max_tx_fee: GasCost,
+    /// Execution tip paid on top of the mandatory fee when funding a
+    /// transaction. [`Self::max_tx_fee`] caps the total.
+    pub priority_fee: Value,
+}
+
+impl FundingConfig {
+    /// Default execution tip.
+    pub const DEFAULT_PRIORITY_FEE: Value = 200;
 }
 
 /// Configuration for the zone sequencer.
@@ -428,6 +438,10 @@ pub struct DepositInfo {
     pub channel_id: ChannelId,
     /// Notes consumed by the deposit (spent-once at the UTXO layer).
     pub inputs: Inputs,
+    /// The channel notes the deposit re-created its inputs as, sourced from
+    /// the block's events. These carry new `NoteId`s and are what the channel
+    /// now owns.
+    pub notes: DepositRecreatedNotes,
     /// Total value deposited, sourced from the block's events.
     pub amount: Value,
     /// Opaque metadata associated with this deposit.
@@ -481,6 +495,9 @@ impl PendingTx {
 pub struct FinalizedTx {
     /// Transaction hash of the Mantle tx.
     pub tx_hash: TxHash,
+    /// L1 slot of the block this tx finalized in. Every op in one Mantle tx
+    /// shares the block, hence the slot, so it is stamped per-tx.
+    pub l1_slot: Slot,
     /// Channel-relevant ops in on-chain execution order. A tx with a
     /// deposit and an inscription emits both, deposit-first.
     pub ops: Vec<FinalizedOp>,

@@ -19,18 +19,22 @@ use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     block::{Block, BlockTransactions, Proposal},
     header::HeaderId,
-    mantle::{AuthenticatedMantleTx, Transaction, TxHash},
+    mantle::{
+        traits::{Hashable, MantleTxWithProofs},
+        transactions::hash::TxHash,
+    },
 };
 pub use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_ledger::EpochState;
 use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
+use lb_storage_service::StorageService;
 use lb_time_service::{TimeService, TimeServiceMessage};
 use lb_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
 };
-use lb_utils::bounded::BoundedError;
+use lb_utils::{bounded::BoundedError, tokio::task::spawn};
 use network::NetworkAdapter;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -124,7 +128,7 @@ pub struct ChainNetwork<
     Mempool::Settings: Clone,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::Item: Clone + Eq + Debug + 'static,
-    Mempool::Item: AuthenticatedMantleTx,
+    Mempool::Item: MantleTxWithProofs,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
     MempoolNetAdapter::Settings: Send + Sync,
@@ -152,7 +156,7 @@ where
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    Mempool::Item: AuthenticatedMantleTx + Clone + Eq + Debug,
+    Mempool::Item: MantleTxWithProofs + Clone + Eq + Debug,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
     MempoolNetAdapter::Settings: Send + Sync,
@@ -189,8 +193,8 @@ where
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone + Send + Sync + 'static,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    Mempool::Item: Transaction<Hash = Mempool::Key>
-        + AuthenticatedMantleTx
+    Mempool::Item: Hashable<Hash = Mempool::Key>
+        + MantleTxWithProofs
         + Debug
         + Clone
         + Eq
@@ -208,6 +212,7 @@ where
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
     RuntimeServiceId: Debug
+        + Clone
         + Send
         + Sync
         + Display
@@ -215,6 +220,12 @@ where
         + AsServiceId<Self>
         + AsServiceId<Cryptarchia>
         + AsServiceId<NetworkService<NetAdapter::Backend, RuntimeServiceId>>
+        + AsServiceId<
+            StorageService<
+                <Mempool::Storage as MempoolStorageAdapter<RuntimeServiceId>>::Backend,
+                RuntimeServiceId,
+            >,
+        >
         + AsServiceId<
             TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
         >
@@ -451,7 +462,7 @@ where
                         let adapter = tip_poll_adapter.clone();
                         let cryptarchia = relays.cryptarchia().clone();
                         let tx = polled_tip_tx.clone();
-                        tip_poll_task = Some(tokio::spawn(async move {
+                        tip_poll_task = Some(spawn("logos/chain/tip-poll", async move {
                             if let Some(polled) = poll_peer_tips_if_behind(
                                 &adapter,
                                 &cryptarchia,
@@ -499,8 +510,8 @@ where
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone + Send + Sync + 'static,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    Mempool::Item: Transaction<Hash = Mempool::Key>
-        + AuthenticatedMantleTx
+    Mempool::Item: Hashable<Hash = Mempool::Key>
+        + MantleTxWithProofs
         + Debug
         + Clone
         + Eq
@@ -690,7 +701,7 @@ where
 
     fn log_received_block(block: &Block<Mempool::Item>) {
         let content_size = 0; // TODO: calculate the actual content size
-        let transactions = block.transactions().len();
+        let transactions = block.transactions_iter().len();
 
         trace!(
             counter.received_blocks = 1,
@@ -768,7 +779,7 @@ async fn should_process_block<Cryptarchia, RuntimeServiceId>(
 ) -> Result<(), DoNotProcessBlock>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: MantleTxWithProofs + Debug + Clone + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
     if !is_after_lib(cryptarchia, block_id, block_slot).await {
@@ -800,7 +811,7 @@ async fn is_after_lib<Cryptarchia, RuntimeServiceId>(
 ) -> bool
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: MantleTxWithProofs + Debug + Clone + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
     match cryptarchia.info().await {
@@ -923,7 +934,7 @@ async fn apply_block_and_reconcile_mempool<Cryptarchia, Mempool, RuntimeServiceI
 ) -> Result<(), Error>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: MantleTxWithProofs + Debug + Clone + Send + Sync,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
     RuntimeServiceId: Send + Sync,
@@ -932,7 +943,7 @@ where
 
     let (tip, reorged_txs) = cryptarchia.apply_block(block.clone()).await?;
     let reorged_tx_count = reorged_txs.len();
-    let included_tx_count = block.transactions().len();
+    let included_tx_count = block.transactions_iter().len();
 
     // Remove included content from mempool if the block was applied to the honest
     // chain. Otherwise, we keep them in mempool, so they can be included to the
@@ -947,8 +958,8 @@ where
         mempool_adapter
             .remove_transactions(
                 &block
-                    .transactions()
-                    .map(Transaction::hash)
+                    .transactions_iter()
+                    .map(Hashable::hash)
                     .collect::<Vec<_>>(),
             )
             .await
@@ -982,7 +993,7 @@ async fn reconstruct_block_from_proposal<Item>(
     mempool: &MempoolAdapter<Item>,
 ) -> Result<Block<Item>, Error>
 where
-    Item: AuthenticatedMantleTx<Hash = TxHash> + Clone + Send + Sync + 'static,
+    Item: MantleTxWithProofs<Hash = TxHash> + Clone + Send + Sync + 'static,
 {
     let mempool_hashes: Vec<TxHash> = proposal.mempool_transactions().to_vec();
     let mempool_response = mempool

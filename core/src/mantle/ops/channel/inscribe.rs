@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use lb_codec::{BinaryCodec, BinaryEncode as _};
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_utils::bounded::UpperBoundedVec;
@@ -11,11 +12,10 @@ use crate::{
     crypto::{Digest as _, Hasher},
     events::TxEvent,
     mantle::{
-        TxHash,
         channel::{ChannelState, Channels, Error},
         ledger::Operation,
-        nom::{NomCodec, NomEncode as _},
         ops::channel::config::Keys,
+        transactions::hash::TxHash,
     },
 };
 
@@ -25,7 +25,7 @@ use crate::{
 pub const MAX_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 7 / 8;
 pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain
@@ -40,7 +40,7 @@ impl InscriptionOp {
     #[must_use]
     pub fn id(&self) -> MsgId {
         let mut hasher = Hasher::new();
-        hasher.update(self.encode().as_slice());
+        hasher.update(self.encode().as_ref());
         MsgId(hasher.finalize().into())
     }
 }
@@ -67,7 +67,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
     fn validate(&self, ctx: &InscriptionValidationContext<'_>) -> Result<(), Self::Error> {
         // Check if the channel exist otherwise the inscription is valid only if and
         // only if parent == ZERO
-        if let Some(channel) = ctx.channels.channels.get(&self.channel_id).cloned() {
+        if let Some(channel) = ctx.channels.channel_state(&self.channel_id) {
             // Check the parent corresponds to the payload
             if self.parent != channel.tip_message {
                 return Err(Error::InvalidParent {
@@ -114,8 +114,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
         // if the channel doesn't exist, create it
         let channel = ctx
             .channels
-            .channels
-            .get(&self.channel_id)
+            .channel_state(&self.channel_id)
             .cloned()
             .unwrap_or_else(|| ChannelState {
                 accredited_keys: Keys::from(self.signer).into(),
@@ -132,17 +131,15 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
         // Update the channel sequencer, its starting slot, the tip message and the tip
         // slot
         let (new_sequencer, new_starting_slot) = channel.round_robin(ctx.block_slot);
-        ctx.channels.channels = ctx.channels.channels.insert(
-            self.channel_id,
-            ChannelState {
-                tip_message: self.id(),
-                accredited_keys: Arc::clone(&channel.accredited_keys),
-                tip_sequencer: new_sequencer,
-                tip_sequencer_starting_slot: new_starting_slot,
-                tip_slot: ctx.block_slot,
-                ..channel
-            },
-        );
+        let updated = ChannelState {
+            tip_message: self.id(),
+            accredited_keys: Arc::clone(&channel.accredited_keys),
+            tip_sequencer: new_sequencer,
+            tip_sequencer_starting_slot: new_starting_slot,
+            tip_slot: ctx.block_slot,
+            ..channel
+        };
+        ctx.channels = ctx.channels.set_channel_state(&self.channel_id, updated);
         Ok((ctx, Vec::new()))
     }
 }
@@ -152,7 +149,6 @@ mod tests {
     use lb_utils::bounded::BoundedError;
 
     use super::*;
-    use crate::mantle::nom::NomDecode as _;
 
     fn sample() -> InscriptionOp {
         InscriptionOp {
@@ -187,14 +183,6 @@ mod tests {
             ),
             "{err:?}",
         );
-    }
-
-    #[test]
-    fn encode_decode_round_trip() {
-        let op = sample();
-        let encoded = op.encode();
-        let decoded = InscriptionOp::decode(&encoded).unwrap().1;
-        assert_eq!(op, decoded);
     }
 
     #[test]

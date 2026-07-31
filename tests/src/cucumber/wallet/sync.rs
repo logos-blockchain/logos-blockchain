@@ -24,7 +24,11 @@ use crate::{
     },
 };
 
-const CURRENT_WALLET_STATE_CATCH_UP_TIMEOUT: Duration = Duration::from_secs(30);
+/// We need to allow sufficient time for wallet scanner catch up, as node sync
+/// may be in turmpoil and the wallet scsanner will only go ahead if the
+/// majority nodes are synced. This is prevelant in large local-run or
+/// devent-linked scenarios and will not impact CI.
+const CURRENT_WALLET_STATE_CATCH_UP_TIMEOUT: Duration = Duration::from_mins(5);
 
 /// Return currently available UTXOs for all user wallets.
 ///
@@ -40,17 +44,6 @@ pub async fn current_available_utxos_for_user_wallets(
     add_scenario_fee_wallet_keys(world, &mut wallet_keys);
 
     current_available_utxos_for_wallet_keys_with_requirements(world, &wallet_keys).await
-}
-
-/// Return currently available UTXOs for funding wallets.
-///
-/// Funding wallets use the same tracked-wallet state as user wallets, but are
-/// selected from the funding-wallet namespace.
-pub async fn current_available_utxos_for_funding_wallets(
-    world: &mut CucumberWorld,
-    step: &str,
-) -> Result<WalletUtxos, StepError> {
-    current_available_utxos_for_named_wallets(world, step, world.all_funding_wallets()).await
 }
 
 /// Return currently available UTXOs for one named wallet.
@@ -71,6 +64,29 @@ pub async fn current_wallet_output_balance(
     wallet: &WalletInfo,
     wallet_state_type: WalletOutputState,
 ) -> Result<WalletBalance, StepError> {
+    if wallet.is_node_wallet() {
+        let node =
+            world
+                .nodes_info
+                .get(&wallet.node_name)
+                .ok_or_else(|| StepError::LogicalError {
+                    message: format!(
+                        "Node '{}' for wallet '{}' not found",
+                        wallet.node_name, wallet.wallet_name
+                    ),
+                })?;
+        let client = node.started_node.client.clone();
+        let balance_response = client.wallet_balance(wallet.public_key()?, None).await;
+
+        return Ok(match balance_response {
+            Ok(balance) if wallet_state_type == WalletOutputState::OnChain => WalletBalance {
+                output_count: balance.notes.len(),
+                value: balance.balance,
+            },
+            Ok(_) | Err(_) => WalletBalance::default(),
+        });
+    }
+
     current_wallet_state_for_wallet(world, wallet)
         .await
         .map(|observation| observation.balance(wallet_state_type))
@@ -109,16 +125,6 @@ pub async fn current_wallet_available_state(
 ) -> Result<WalletStateView, StepError> {
     let wallet = world.resolve_wallet(wallet_name)?;
     current_wallet_state_for_wallet(world, &wallet).await
-}
-
-async fn current_available_utxos_for_named_wallets(
-    world: &mut CucumberWorld,
-    step: &str,
-    wallets: Vec<WalletInfo>,
-) -> Result<WalletUtxos, StepError> {
-    let wallet_keys = build_tracked_wallet_keys(world, step, &wallets)?;
-
-    current_available_utxos_for_wallet_keys_with_requirements(world, &wallet_keys).await
 }
 
 async fn current_available_utxos_for_wallet_keys_with_requirements(

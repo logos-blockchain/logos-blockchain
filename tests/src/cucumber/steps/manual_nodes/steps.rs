@@ -1089,6 +1089,58 @@ fn blend_zk_pk_for_node(world: &CucumberWorld, node_name: &str) -> Result<ZkPubl
     Ok(blend_zk_pk)
 }
 
+/// Wait for the node-local wallet API to expose a funded note for a Blend key.
+///
+/// Blend ZK keys are read from node configuration and are not scenario wallets,
+/// so the wallet scanner does not currently track them. Keep this exception
+/// node-local because the returned note is immediately consumed by that node's
+/// SDP declaration endpoint.
+async fn wait_for_blend_funded_note(
+    world: &CucumberWorld,
+    node_name: &str,
+    blend_zk_pk: ZkPublicKey,
+) -> Result<lb_core::mantle::NoteId, StepError> {
+    let base_url = world
+        .nodes_info
+        .get(node_name)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("Node '{node_name}' not found in world state"),
+        })?
+        .started_node
+        .client
+        .base_url()
+        .clone();
+    let timeout = Duration::from_secs(30);
+    let started = Instant::now();
+    let client = CommonHttpClient::new(None);
+
+    loop {
+        let last_error = match client
+            .get_wallet_balance(base_url.clone(), blend_zk_pk, None)
+            .await
+        {
+            Ok(wallet_balance) => {
+                if let Some(note_id) = wallet_balance.notes.keys().next().copied() {
+                    return Ok(note_id);
+                }
+                "wallet has no notes yet".to_owned()
+            }
+            Err(error) => error.to_string(),
+        };
+
+        if started.elapsed() >= timeout {
+            return Err(StepError::Timeout {
+                message: format!(
+                    "Timed out waiting for a funded note on Blend ZK key of '{node_name}' via \
+                     '{base_url}' (last error: {last_error})"
+                ),
+            });
+        }
+
+        sleep(Duration::from_millis(250)).await;
+    }
+}
+
 #[expect(
     clippy::needless_pass_by_ref_mut,
     reason = "Required to be mutable by cucumber step function signature"
@@ -1103,6 +1155,13 @@ async fn step_run_blend_sdp_declaration_cli(
     let user_config_path = node_user_config_path(world, &declarer_node_name)?;
     let locator = blend_core_locator_from_node_yaml(&user_config_path)?;
     let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
+    let locked_note_id =
+        wait_for_blend_funded_note(world, &declarer_node_name, blend_zk_pk).await?;
+    let locked_note_id_json =
+        serde_json::to_string(&locked_note_id).map_err(|error| StepError::LogicalError {
+            message: format!("Failed to serialize locked note ID: {error}"),
+        })?;
+    let locked_note_id_hex = locked_note_id_json.trim_matches('"').to_owned();
 
     let declarer_api_base_url = world
         .nodes_info
@@ -1114,41 +1173,6 @@ async fn step_run_blend_sdp_declaration_cli(
         .client
         .base_url()
         .clone();
-
-    // Query notes from the declarer node API so wallet ownership lookups use
-    // the same node config as the key source.
-    let note_lookup_timeout = Duration::from_secs(30);
-    let note_lookup_started = Instant::now();
-    let mut last_lookup_error: Option<String>;
-    let locked_note_id = loop {
-        let Ok(wallet_balance) = CommonHttpClient::new(None)
-            .get_wallet_balance(declarer_api_base_url.clone(), blend_zk_pk, None)
-            .await
-        else {
-            continue;
-        };
-        if let Some(note_id) = wallet_balance.notes.keys().next().copied() {
-            let locked_note_id_json =
-                serde_json::to_string(&note_id).map_err(|error| StepError::LogicalError {
-                    message: format!("Failed to serialize locked note ID: {error}"),
-                })?;
-            let locked_note_id_hex = locked_note_id_json.trim_matches('"').to_owned();
-            break locked_note_id_hex;
-        }
-        last_lookup_error = Some("wallet has no notes yet".to_owned());
-
-        if note_lookup_started.elapsed() >= note_lookup_timeout {
-            return Err(StepError::Timeout {
-                message: format!(
-                    "Timed out waiting for a funded note on Blend ZK key of '{declarer_node_name}' via '{}' (last error: {})",
-                    declarer_api_base_url,
-                    last_lookup_error.unwrap_or_else(|| "unknown".to_owned())
-                ),
-            });
-        }
-
-        sleep(Duration::from_millis(250)).await;
-    };
 
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let output = tokio::process::Command::new("cargo")
@@ -1166,7 +1190,7 @@ async fn step_run_blend_sdp_declaration_cli(
         .arg("--blend-addr")
         .arg(format!("{locator}"))
         .arg("--locked-note-id")
-        .arg(locked_note_id)
+        .arg(locked_note_id_hex)
         .arg("--node-address")
         .arg(declarer_api_base_url.to_string())
         .output()
@@ -1198,6 +1222,8 @@ async fn step_run_blend_sdp_declaration_api(
     let user_config_path = node_user_config_path(world, &declarer_node_name)?;
     let locator = blend_core_locator_from_node_yaml(&user_config_path)?;
     let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
+    let locked_note_id =
+        wait_for_blend_funded_note(world, &declarer_node_name, blend_zk_pk).await?;
 
     let declarer_node_client = world
         .nodes_info
@@ -1208,37 +1234,6 @@ async fn step_run_blend_sdp_declaration_api(
         .started_node
         .client
         .clone();
-    let declarer_api_base_url = declarer_node_client.base_url().clone();
-
-    // Wait for the funded note locked on the Blend ZK key, querying the same
-    // node API that will process the join request.
-    let note_lookup_timeout = Duration::from_secs(30);
-    let note_lookup_started = Instant::now();
-    let mut last_lookup_error: Option<String>;
-    let locked_note_id = loop {
-        let Ok(wallet_balance) = CommonHttpClient::new(None)
-            .get_wallet_balance(declarer_api_base_url.clone(), blend_zk_pk, None)
-            .await
-        else {
-            continue;
-        };
-        if let Some(note_id) = wallet_balance.notes.keys().next().copied() {
-            break note_id;
-        }
-        last_lookup_error = Some("wallet has no notes yet".to_owned());
-
-        if note_lookup_started.elapsed() >= note_lookup_timeout {
-            return Err(StepError::Timeout {
-                message: format!(
-                    "Timed out waiting for a funded note on Blend ZK key of '{declarer_node_name}' via '{}' (last error: {})",
-                    declarer_api_base_url,
-                    last_lookup_error.unwrap_or_else(|| "unknown".to_owned())
-                ),
-            });
-        }
-
-        sleep(Duration::from_millis(250)).await;
-    };
 
     let declaration_id = declarer_node_client
         .join_blend_network(locator, locked_note_id)
@@ -1282,45 +1277,8 @@ async fn step_verify_blend_sdp_declaration_included(
     api_node_name: String,
 ) -> StepResult {
     let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
-
-    let declarer_api_base_url = world
-        .nodes_info
-        .get(&declarer_node_name)
-        .ok_or_else(|| StepError::LogicalError {
-            message: format!("Node '{declarer_node_name}' not found in world state"),
-        })?
-        .started_node
-        .client
-        .base_url()
-        .clone();
-
-    let note_lookup_timeout = Duration::from_secs(30);
-    let note_lookup_started = Instant::now();
-    let mut last_lookup_error: Option<String>;
-    let locked_note_id = loop {
-        let Ok(wallet_balance) = CommonHttpClient::new(None)
-            .get_wallet_balance(declarer_api_base_url.clone(), blend_zk_pk, None)
-            .await
-        else {
-            continue;
-        };
-        if let Some(note_id) = wallet_balance.notes.keys().next().copied() {
-            break note_id;
-        }
-        last_lookup_error = Some("wallet has no notes yet".to_owned());
-
-        if note_lookup_started.elapsed() >= note_lookup_timeout {
-            return Err(StepError::Timeout {
-                message: format!(
-                    "Timed out waiting for a funded note on Blend ZK key of '{declarer_node_name}' via '{}' (last error: {})",
-                    declarer_api_base_url,
-                    last_lookup_error.unwrap_or_else(|| "unknown".to_owned())
-                ),
-            });
-        }
-
-        sleep(Duration::from_millis(250)).await;
-    };
+    let locked_note_id =
+        wait_for_blend_funded_note(world, &declarer_node_name, blend_zk_pk).await?;
 
     let step_timeout = Duration::from_secs(30);
     let start_time = Instant::now();

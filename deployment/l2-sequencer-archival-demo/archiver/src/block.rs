@@ -5,8 +5,10 @@ use lb_common_http_client::CommonHttpClient;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx, Transaction as _, TxHash,
+        Op, SignedMantleTx,
         ops::channel::{ChannelId, inscribe::InscriptionOp},
+        traits::Hashable as _,
+        transactions::{hash::TxHash, states::Unverified},
     },
 };
 use lb_demo_sequencer::{BlockData, db::AccountDb};
@@ -61,7 +63,7 @@ impl BlockStream {
 
                         println!("  {} Block at height {} ({})","🔗".blue(),
                             height.bright_white().bold(),
-                            &hex::encode(header_id.as_ref()
+                            hex::encode(header_id.as_ref()
                         ).dimmed());
 
                         let block = http_client.get_block_by_id(endpoint_url.clone(), header_id).await.unwrap().unwrap();
@@ -82,14 +84,14 @@ impl BlockStream {
 }
 
 fn extract_l2_blocks(
-    block_txs: impl Iterator<Item = SignedMantleTx>,
+    block_txs: impl Iterator<Item = SignedMantleTx<Unverified>>,
     decoded_channel_id: &ChannelId,
     token_name: &str,
 ) -> Vec<(BlockData, TxHash)> {
     let block_channel_ops: Vec<(BlockData, TxHash)> = block_txs
         .flat_map(|tx| {
-            let tx_hash = tx.mantle_tx.hash();
-            tx.mantle_tx
+            let tx_hash = tx.mantle_tx().hash();
+            tx.mantle_tx()
                 .0
                 .iter()
                 .filter_map(|op| match op {

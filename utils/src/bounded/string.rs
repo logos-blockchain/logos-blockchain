@@ -1,4 +1,4 @@
-use crate::bounded::{Bounded, BoundedError, BoundedLen};
+use crate::bounded::{Bounded, BoundedError, BoundedLen, BoundedVec};
 
 impl BoundedLen for String {
     fn bounded_len(&self) -> usize {
@@ -21,14 +21,22 @@ impl<const MIN: usize, const MAX: usize> BoundedString<MIN, MAX> {
         self.as_inner().len()
     }
 
+    /// Returns true if this String has a length of zero, and false otherwise,
+    /// matching `str`/`String` semantics.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.as_inner().is_empty()
     }
 
+    /// Borrow the wrapped value.
     #[must_use]
     pub fn as_str(&self) -> &str {
         self.as_inner()
+    }
+
+    #[must_use]
+    pub fn to_vec(&self) -> BoundedVec<u8, MIN, MAX> {
+        BoundedVec::new_unchecked(self.as_inner().as_bytes().to_vec())
     }
 }
 

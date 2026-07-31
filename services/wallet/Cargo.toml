@@ -29,6 +29,7 @@ lb-log-targets                   = { workspace = true }
 lb-mmr                           = { workspace = true }
 lb-services-utils                = { workspace = true }
 lb-storage-service               = { workspace = true }
+lb-utils                         = { features = ["tokio"], workspace = true }
 lb-wallet                        = { workspace = true }
 overwatch                        = { workspace = true }
 
@@ -41,3 +42,6 @@ ignored = [
   # Required by `wait_until_services_are_ready` macro.
   "futures",
 ]
+
+[features]
+tokio-task-names = ["lb-utils/tokio-task-names"]

@@ -80,6 +80,7 @@ validator  = { features = ["derive"], workspace = true }
 tikv-jemallocator = { optional = true, workspace = true }
 
 [dev-dependencies]
+bytes            = { workspace = true }
 rand             = { workspace = true }
 serde_urlencoded = { workspace = true }
 
@@ -100,5 +101,19 @@ testing-disable-proposal-publish = ["lb-chain-leader-service/testing-disable-pro
 #
 # Builds using this feature must also be compiled with:
 #   RUSTFLAGS="--cfg tokio_unstable"
-tokio-console = ["lb-tracing-service/tokio-console", "overwatch/tokio-task-names", "tokio/tracing"]
-tracing       = []
+tokio-console = [
+  "lb-blend-service/tokio-task-names",
+  "lb-blend/tokio-task-names",
+  "lb-chain-leader-service/tokio-task-names",
+  "lb-chain-network-service/tokio-task-names",
+  "lb-key-management-system-service/tokio-task-names",
+  "lb-network-service/tokio-task-names",
+  "lb-storage-service/tokio-task-names",
+  "lb-tracing-service/tokio-console",
+  "lb-tx-service/tokio-task-names",
+  "lb-utils/tokio-task-names",
+  "lb-wallet-service/tokio-task-names",
+  "overwatch/tokio-task-names",
+  "tokio/tracing",
+]
+tracing = []

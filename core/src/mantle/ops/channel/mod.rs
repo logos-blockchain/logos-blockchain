@@ -2,15 +2,18 @@ pub mod channel_transfer;
 pub mod config;
 pub mod deposit;
 pub mod inscribe;
+pub mod verification;
 pub mod withdraw;
 
 use std::fmt::{Display, Formatter};
 
-use crate::{mantle::nom::NomCodec, utils::serde_bytes_newtype};
+use lb_codec::BinaryCodec;
+
+use crate::utils::serde_bytes_newtype;
 
 pub type ChannelKeyIndex = u16;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, NomCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, BinaryCodec)]
 pub struct ChannelId([u8; 32]);
 serde_bytes_newtype!(ChannelId, 32);
 
@@ -22,7 +25,7 @@ impl Display for ChannelId {
 }
 
 /// The id of the previous message in the channel
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, NomCodec)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, BinaryCodec)]
 pub struct MsgId([u8; 32]);
 serde_bytes_newtype!(MsgId, 32);
 

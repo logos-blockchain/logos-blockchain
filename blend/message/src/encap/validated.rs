@@ -1,23 +1,20 @@
-use core::num::NonZeroU64;
-
 use derivative::Derivative;
 use lb_blend_crypto::random_sized_bytes;
 use lb_blend_proofs::{
     quota::{self, VerifiedProofOfQuota},
     selection::inputs::VerifyInputs,
 };
+use lb_codec::BinaryEncode;
 use lb_key_management_system_keys::keys::{UnsecuredEd25519Key, X25519PrivateKey};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     Error, MessageIdentifier, PaddedPayloadBody, PayloadType,
-    codec::WireEncode as _,
     crypto::key_ext::Ed25519SecretKeyExt as _,
     encap::{
         ProofsVerifier,
         decapsulated::{DecapsulatedMessage, DecapsulationOutput, PartDecapsulationOutput},
         encapsulated::{EncapsulatedMessage, EncapsulatedPart},
-        expected_serialized_len,
     },
     input::EncapsulationInput,
     message::public_header::{PublicHeaderWithVerifiedSignature, VerifiedPublicHeader},
@@ -38,11 +35,13 @@ impl EncapsulatedMessageWithVerifiedSignature {
         inputs: &[EncapsulationInput],
         payload_type: PayloadType,
         payload_body: PaddedPayloadBody,
+        encapsulation_layers: usize,
     ) -> Result<Self, Error> {
         Ok(EncapsulatedMessageWithVerifiedPublicHeader::try_new(
             inputs,
             payload_type,
             payload_body,
+            encapsulation_layers,
         )?
         .into())
     }
@@ -85,28 +84,23 @@ impl EncapsulatedMessageWithVerifiedSignature {
         self.public_header_with_verified_signature.id()
     }
 
-    #[must_use]
-    pub fn encode(&self) -> Vec<u8> {
-        let expected_encoded_len = expected_serialized_len(self.encapsulation_layers());
-        let mut out = Vec::with_capacity(expected_encoded_len);
-        self.public_header_with_verified_signature
-            .encode_into(&mut out);
-        self.encapsulated_part.encode_into(&mut out);
-        debug_assert!(
-            out.len() == expected_encoded_len,
-            "Message should encode to the expected length but it did not."
-        );
-        out
-    }
-
-    #[must_use]
-    fn encapsulation_layers(&self) -> NonZeroU64 {
-        self.encapsulated_part.encapsulation_layers()
-    }
-
     #[cfg(any(feature = "unsafe-test-functions", test))]
     pub const fn public_header_mut(&mut self) -> &mut PublicHeaderWithVerifiedSignature {
         &mut self.public_header_with_verified_signature
+    }
+}
+
+impl BinaryEncode for EncapsulatedMessageWithVerifiedSignature {
+    fn encoded_length(&self) -> usize {
+        self.public_header_with_verified_signature
+            .encoded_length()
+            .checked_add(self.encapsulated_part.encoded_length())
+            .unwrap()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.public_header_with_verified_signature.encode_into(out);
+        self.encapsulated_part.encode_into(out);
     }
 }
 
@@ -147,17 +141,30 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
         )
     }
 
+    /// Encapsulate `payload_body` once per entry in `inputs`.
+    ///
+    /// `encapsulation_layers` is `ß_max`, the fixed number of blending headers
+    /// every message carries. `inputs` may be shorter than that: the unused
+    /// leading layers are filled with random bytes, keeping the
+    /// encapsulation count off the wire. It returns an error if `inputs` is
+    /// empty or longer than `encapsulation_layers`.
     pub fn try_new(
         inputs: &[EncapsulationInput],
         payload_type: PayloadType,
         payload_body: PaddedPayloadBody,
+        encapsulation_layers: usize,
     ) -> Result<Self, Error> {
         // Create the encapsulated part.
         let (part, signing_key, proof_of_quota) = inputs.iter().enumerate().fold(
             (
                 // Start with an initialized encapsulated part,
                 // a random signing key, and proof of quota.
-                EncapsulatedPart::try_initialize(inputs, payload_type, payload_body)?,
+                EncapsulatedPart::try_initialize(
+                    inputs,
+                    payload_type,
+                    payload_body,
+                    encapsulation_layers,
+                )?,
                 UnsecuredEd25519Key::generate_with_blake_rng(),
                 VerifiedProofOfQuota::from_bytes_unchecked(random_sized_bytes()),
             ),
@@ -300,23 +307,19 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
     pub const fn public_header_mut(&mut self) -> &mut VerifiedPublicHeader {
         &mut self.validated_public_header
     }
+}
 
-    #[must_use]
-    pub fn encode(&self) -> Vec<u8> {
-        let expected_encoded_len = expected_serialized_len(self.encapsulation_layers());
-        let mut out = Vec::with_capacity(expected_encoded_len);
-        self.validated_public_header.encode_into(&mut out);
-        self.encapsulated_part.encode_into(&mut out);
-        debug_assert!(
-            out.len() == expected_encoded_len,
-            "Message should encode to the expected length but it did not."
-        );
-        out
+impl BinaryEncode for EncapsulatedMessageWithVerifiedPublicHeader {
+    fn encoded_length(&self) -> usize {
+        self.validated_public_header
+            .encoded_length()
+            .checked_add(self.encapsulated_part.encoded_length())
+            .unwrap()
     }
 
-    #[must_use]
-    fn encapsulation_layers(&self) -> NonZeroU64 {
-        self.encapsulated_part.encapsulation_layers()
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.validated_public_header.encode_into(out);
+        self.encapsulated_part.encode_into(out);
     }
 }
 

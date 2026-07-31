@@ -11,6 +11,7 @@ use lb_core::{
     mantle::{
         Note, SignedMantleTx, Utxo,
         ops::leader_claim::{VoucherCm, VoucherSecret},
+        transactions::states::Preverified,
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic, check_winning},
     sdp::ServiceParameters,
@@ -32,15 +33,19 @@ use lb_storage_service::{
 };
 use lb_time_service::backends::SystemTimeBackend;
 use lb_utils::math::NonNegativeRatio;
-use overwatch::services::{AsServiceId, relay::OutboundRelay, state::StateUpdater};
+use overwatch::services::{AsServiceId, relay::OutboundRelay};
 use rand::{RngCore as _, thread_rng};
 use tempfile::TempDir;
 use tokio::{
-    sync::{broadcast, mpsc, watch},
+    sync::{broadcast, mpsc},
     task::JoinHandle,
 };
 
-use crate::{Cryptarchia, CryptarchiaConsensus, Error, relays::CryptarchiaConsensusRelays};
+use crate::{
+    Cryptarchia, CryptarchiaConsensus, Error,
+    relays::CryptarchiaConsensusRelays,
+    service::{get_block_ids, process_block},
+};
 
 #[test]
 fn cryptarchia_switch_to_online() {
@@ -108,21 +113,18 @@ fn cryptarchia_switch_to_online() {
     clippy::too_many_lines,
     reason = "better to have one comprehensive test"
 )]
-async fn get_block_ids() {
+async fn get_block_ids_from_memory_and_storage() {
     // Init dummy relays for chain service
     let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
     let (storage_tx, storage_rx) = mpsc::channel(10);
     let _storage_svc = spawn_storage_service(storage_rx);
     let (time_tx, _time_rx) = mpsc::channel(10);
-    let relays =
-        CryptarchiaConsensusRelays::<SignedMantleTx, RocksBackend, TestRuntimeServiceId>::new(
-            OutboundRelay::new(broadcast_tx),
-            OutboundRelay::new(storage_tx),
-            OutboundRelay::new(time_tx),
-        )
-        .await;
-    let (state_tx, _state_rx) = watch::channel(None);
-    let state_updater = StateUpdater::new(Arc::new(state_tx));
+    let relays = CryptarchiaConsensusRelays::<_, RocksBackend, TestRuntimeServiceId>::new(
+        OutboundRelay::new(broadcast_tx),
+        OutboundRelay::new(storage_tx),
+        OutboundRelay::new(time_tx),
+    )
+    .await;
     let (new_block_tx, _new_block_rx) = broadcast::channel(10);
     let (lib_tx, _lib_rx) = broadcast::channel(10);
 
@@ -146,15 +148,13 @@ async fn get_block_ids() {
     let mut block_ids = vec![genesis_id];
     for _ in 0..2 {
         let block = try_build_block(&cryptarchia, cryptarchia.tip(), utxo, &zk_key, slot).unwrap();
-        CryptarchiaConsensus::<_, RocksBackend, SystemTimeBackend, TestRuntimeServiceId>::process_block_and_update_state(
+        process_block(
             &mut cryptarchia,
             block.clone(),
             block.header().slot(),
-            &HashSet::new(),
             &relays,
             &new_block_tx,
             &lib_tx,
-            &state_updater,
         )
         .await
         .unwrap();
@@ -163,10 +163,10 @@ async fn get_block_ids() {
     }
 
     // get_block_ids when all blocks are in memory.
-    let mut stream = CryptarchiaConsensus::get_block_ids(
+    let mut stream = get_block_ids(
+        &cryptarchia,
         block_ids[2],
         block_ids[0],
-        &cryptarchia,
         relays.storage_adapter().clone(),
     );
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[2]);
@@ -175,10 +175,10 @@ async fn get_block_ids() {
     assert!(stream.next().await.is_none());
 
     // Hitting genesis before reaching `to_ancestor`
-    let mut stream = CryptarchiaConsensus::get_block_ids(
+    let mut stream = get_block_ids(
+        &cryptarchia,
         block_ids[2],
         [99; 32].into(), // unknown block ID
-        &cryptarchia,
         relays.storage_adapter().clone(),
     );
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[2]);
@@ -193,15 +193,13 @@ async fn get_block_ids() {
     // Now G, b1 are in storage, and b2~5 are in memory.
     for _ in 0..3 {
         let block = try_build_block(&cryptarchia, cryptarchia.tip(), utxo, &zk_key, slot).unwrap();
-        CryptarchiaConsensus::<_, RocksBackend, SystemTimeBackend, TestRuntimeServiceId>::process_block_and_update_state(
+        process_block(
             &mut cryptarchia,
             block.clone(),
             block.header().slot(),
-            &HashSet::new(),
             &relays,
             &new_block_tx,
             &lib_tx,
-            &state_updater,
         )
         .await
         .unwrap();
@@ -210,10 +208,10 @@ async fn get_block_ids() {
     }
 
     // All blocks are loaded from memory + storage.
-    let mut stream = CryptarchiaConsensus::get_block_ids(
+    let mut stream = get_block_ids(
+        &cryptarchia,
         block_ids[5],
         block_ids[0],
-        &cryptarchia,
         relays.storage_adapter().clone(),
     );
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[5]);
@@ -225,10 +223,10 @@ async fn get_block_ids() {
     assert!(stream.next().await.is_none());
 
     // Hitting genesis in storage before reaching `to_ancestor`
-    let mut stream = CryptarchiaConsensus::get_block_ids(
+    let mut stream = get_block_ids(
+        &cryptarchia,
         block_ids[1],
         [99; 32].into(), // unknown block ID
-        &cryptarchia,
         relays.storage_adapter().clone(),
     );
     assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[1]);
@@ -245,13 +243,16 @@ async fn recovery_blocks_fall_back_to_lib_when_tip_missing_from_storage() {
     let (storage_tx, storage_rx) = mpsc::channel(10);
     let _storage_svc = spawn_storage_service(storage_rx);
     let (time_tx, _time_rx) = mpsc::channel(10);
-    let relays =
-        CryptarchiaConsensusRelays::<SignedMantleTx, RocksBackend, TestRuntimeServiceId>::new(
-            OutboundRelay::new(broadcast_tx),
-            OutboundRelay::new(storage_tx),
-            OutboundRelay::new(time_tx),
-        )
-        .await;
+    let relays = CryptarchiaConsensusRelays::<
+        SignedMantleTx<Preverified>,
+        RocksBackend,
+        TestRuntimeServiceId,
+    >::new(
+        OutboundRelay::new(broadcast_tx),
+        OutboundRelay::new(storage_tx),
+        OutboundRelay::new(time_tx),
+    )
+    .await;
 
     let lib = [0; 32].into();
     let missing_tip = [1; 32].into();
@@ -278,13 +279,16 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     // request fails.
     drop(storage_rx);
     let (time_tx, _time_rx) = mpsc::channel(10);
-    let relays =
-        CryptarchiaConsensusRelays::<SignedMantleTx, RocksBackend, TestRuntimeServiceId>::new(
-            OutboundRelay::new(broadcast_tx),
-            OutboundRelay::new(storage_tx),
-            OutboundRelay::new(time_tx),
-        )
-        .await;
+    let relays = CryptarchiaConsensusRelays::<
+        SignedMantleTx<Preverified>,
+        RocksBackend,
+        TestRuntimeServiceId,
+    >::new(
+        OutboundRelay::new(broadcast_tx),
+        OutboundRelay::new(storage_tx),
+        OutboundRelay::new(time_tx),
+    )
+    .await;
     let (new_block_tx, mut new_block_rx) = broadcast::channel(10);
     let (lib_tx, mut lib_rx) = broadcast::channel(10);
 
@@ -292,12 +296,7 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     let initial_info = cryptarchia.info();
     let block_slot = block.header().slot();
 
-    let result = CryptarchiaConsensus::<
-        _,
-        RocksBackend,
-        SystemTimeBackend,
-        TestRuntimeServiceId,
-    >::process_block(
+    let result = process_block(
         &mut cryptarchia,
         block,
         block_slot,
@@ -317,7 +316,7 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     assert!(lib_rx.try_recv().is_err());
 }
 
-fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedMantleTx>) {
+fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedMantleTx<Preverified>>) {
     let k = 3.try_into().unwrap();
     let config = ledger_config(k);
     let genesis_id = [0; 32].into();
@@ -390,7 +389,7 @@ pub fn try_build_block(
     utxo: Utxo,
     key: &ZkKey,
     start_slot: Slot,
-) -> Option<Block<SignedMantleTx>> {
+) -> Option<Block<SignedMantleTx<Preverified>>> {
     let start_slot: u64 = start_slot.into();
     for slot in start_slot..=(start_slot + 1000) {
         let epoch_state = cryptarchia.epoch_state_for_slot(slot.into()).unwrap();
@@ -476,8 +475,10 @@ pub fn spawn_storage_service(
 
 pub struct TestRuntimeServiceId;
 
-impl AsServiceId<CryptarchiaConsensus<SignedMantleTx, RocksBackend, SystemTimeBackend, Self>>
-    for TestRuntimeServiceId
+impl
+    AsServiceId<
+        CryptarchiaConsensus<SignedMantleTx<Preverified>, RocksBackend, SystemTimeBackend, Self>,
+    > for TestRuntimeServiceId
 {
     const SERVICE_ID: Self = Self;
 }

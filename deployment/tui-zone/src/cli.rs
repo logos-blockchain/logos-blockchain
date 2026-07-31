@@ -104,6 +104,15 @@ pub struct NodeKeyArgs {
     /// `--funding-pk`.
     #[arg(long, default_value_t = 1_000_000, env = "MAX_TX_FEE")]
     pub max_tx_fee: u64,
+
+    /// Execution tip paid on top of the mandatory fee when funding via
+    /// `--funding-pk`; capped by `--max-tx-fee`.
+    #[arg(
+        long,
+        default_value_t = lb_zone_sdk::sequencer::FundingConfig::DEFAULT_PRIORITY_FEE,
+        env = "PRIORITY_FEE"
+    )]
+    pub priority_fee: u64,
 }
 
 #[derive(Args, Debug)]

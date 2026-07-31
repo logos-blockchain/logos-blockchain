@@ -8,7 +8,10 @@ use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{
     codec::SerializeOp as _,
-    mantle::{StorageSize, Transaction, TransactionHasher, TxHash},
+    mantle::{
+        traits::{Hashable, Hasher, StorageSize},
+        transactions::hash::TxHash,
+    },
 };
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
@@ -38,8 +41,10 @@ impl<M: Serialize + DeserializeOwned + Clone> MockTransaction<M> {
     }
 }
 
-impl<M: Serialize + DeserializeOwned + Clone> Transaction for MockTransaction<M> {
-    const HASHER: TransactionHasher<Self> = Self::id;
+impl<M: Serialize + DeserializeOwned + Clone> Hashable for MockTransaction<M> {
+    //noinspection RsTypeCheck: The type is correct, but the linter is confused by
+    // the closure.
+    const HASHER: Hasher<Self> = Self::id;
     type Hash = MockTxId;
 
     fn as_signing(&self) -> Vec<u8> {

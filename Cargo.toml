@@ -36,10 +36,11 @@ members = [
   "blend/proofs",
   "blend/scheduling",
   "c-bindings",
+  "codec",
+  "codec/macros",
   "consensus/cryptarchia-engine",
   "consensus/cryptarchia-sync",
   "core",
-  "core/macros",
   "deployment/faucet",
   "deployment/l2-sequencer-archival-demo/archiver",
   "deployment/l2-sequencer-archival-demo/sequencer",
@@ -49,6 +50,10 @@ members = [
   "kms/operators",
   "ledger",
   "libp2p",
+  "merkle/blake2btree",
+  "merkle/dynamic-merkle",
+  "merkle/tree",
+  "merkle/utxotree",
   "mmr",
   "nodes/api-common",
   "nodes/node/binary",
@@ -78,7 +83,6 @@ members = [
   "tracing/targets",
   "tracing/targets/macros",
   "utils",
-  "utxotree",
   "wallet",
   "wallet-http-client",
   "zk/circuits/prover",
@@ -103,6 +107,7 @@ common-http-client                 = { default-features = false, package = "logo
 hasher                             = { default-features = false, version = "0.1.4" }
 jf-poseidon2                       = { default-features = false, git = "https://github.com/EspressoSystems/jellyfish.git", rev = "8d80230358e900f8d63765a937f63f4978ca1daa" }
 lb-api-service                     = { default-features = false, package = "logos-blockchain-api-service", path = "./services/api" }
+lb-blake2btree                     = { default-features = false, package = "logos-blockchain-blake2btree", path = "merkle/blake2btree" }
 lb-blend                           = { default-features = false, package = "logos-blockchain-blend", path = "./blend/core" }
 lb-blend-crypto                    = { default-features = false, package = "logos-blockchain-blend-crypto", path = "./blend/crypto" }
 lb-blend-message                   = { default-features = false, package = "logos-blockchain-blend-message", path = "./blend/message" }
@@ -117,14 +122,16 @@ lb-chain-service                   = { default-features = false, package = "logo
 lb-chain-service-common            = { default-features = false, package = "logos-blockchain-chain-service-common", path = "./services/chain/chain-common" }
 lb-circuits-prover                 = { default-features = false, package = "logos-blockchain-circuits-prover", path = "./zk/circuits/prover" }
 lb-circuits-verifier               = { default-features = false, package = "logos-blockchain-circuits-verifier", path = "./zk/circuits/verifier" }
+lb-codec                           = { default-features = false, package = "logos-blockchain-codec", path = "./codec" }
+lb-codec-macros                    = { default-features = false, package = "logos-blockchain-codec-macros", path = "./codec/macros" }
 lb-common-http-client              = { default-features = false, package = "logos-blockchain-common-http-client", path = "./nodes/node/http-client" }
 lb-config                          = { default-features = false, package = "logos-blockchain-config", path = "./tools/config" }
 lb-core                            = { default-features = false, package = "logos-blockchain-core", path = "./core" }
-lb-core-macros                     = { default-features = false, package = "logos-blockchain-core-macros", path = "./core/macros" }
 lb-cryptarchia-engine              = { default-features = false, package = "logos-blockchain-cryptarchia-engine", path = "./consensus/cryptarchia-engine" }
 lb-cryptarchia-sync                = { default-features = false, package = "logos-blockchain-cryptarchia-sync", path = "./consensus/cryptarchia-sync" }
 lb-demo-archiver                   = { default-features = false, package = "logos-blockchain-demo-archiver", path = "./deployment/l2-sequencer-archival-demo/archiver" }
 lb-demo-sequencer                  = { default-features = false, package = "logos-blockchain-demo-sequencer", path = "./deployment/l2-sequencer-archival-demo/sequencer" }
+lb-dynamic-merkle                  = { default-features = false, package = "logos-blockchain-dynamic-merkle", path = "merkle/dynamic-merkle" }
 lb-faucet                          = { default-features = false, package = "logos-blockchain-faucet", path = "./deployment/faucet" }
 lb-groth16                         = { default-features = false, package = "logos-blockchain-groth16", path = "./zk/groth16" }
 lb-http-api-common                 = { default-features = false, package = "logos-blockchain-http-api-common", path = "./nodes/api-common" }
@@ -136,6 +143,7 @@ lb-ledger                          = { default-features = false, package = "logo
 lb-libp2p                          = { default-features = false, package = "logos-blockchain-libp2p", path = "./libp2p" }
 lb-log-targets                     = { default-features = false, package = "logos-blockchain-log-targets", path = "./tracing/targets" }
 lb-log-targets-macros              = { default-features = false, package = "logos-blockchain-log-targets-macros", path = "./tracing/targets/macros" }
+lb-merkle-tree                     = { default-features = false, package = "logos-blockchain-merkle-tree", path = "merkle/tree" }
 lb-mmr                             = { default-features = false, package = "logos-blockchain-mmr", path = "./mmr" }
 lb-network-service                 = { default-features = false, package = "logos-blockchain-network-service", path = "./services/network" }
 lb-node                            = { default-features = false, package = "logos-blockchain-node", path = "./nodes/node/binary" }
@@ -156,14 +164,12 @@ lb-tracing-service                 = { default-features = false, package = "logo
 lb-tui-zone                        = { default-features = false, package = "logos-blockchain-tui-zone", path = "./deployment/tui-zone" }
 lb-tx-service                      = { default-features = false, package = "logos-blockchain-tx-service", path = "./services/tx-service" }
 lb-utils                           = { default-features = false, package = "logos-blockchain-utils", path = "./utils" }
-lb-utxotree                        = { default-features = false, package = "logos-blockchain-utxotree", path = "./utxotree" }
+lb-utxotree                        = { default-features = false, package = "logos-blockchain-utxotree", path = "merkle/utxotree" }
 lb-wallet                          = { default-features = false, package = "logos-blockchain-wallet", path = "./wallet" }
 lb-wallet-http-client              = { default-features = false, package = "logos-blockchain-wallet-http-client", path = "./wallet-http-client" }
 lb-wallet-service                  = { default-features = false, package = "logos-blockchain-wallet-service", path = "./services/wallet" }
 lb-zksign                          = { default-features = false, package = "logos-blockchain-zksign", path = "./zk/proofs/zksign" }
 lb-zone-sdk                        = { default-features = false, package = "logos-blockchain-zone-sdk", path = "./zone-sdk" }
-lb_config                          = { default-features = false, package = "lb_config", path = "./tools/config" }
-lb_network                         = { default-features = false, package = "logos-blockchain-network-service", path = "./services/network" }
 # When bumping any lbc-* tag, also update the logos-blockchain-circuits flake input tag in flake.nix
 # and run `nix flake lock --update-input logos-blockchain-circuits`.
 lbc-poc-sys                      = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poc-sys", tag = "v0.5.3" }
@@ -234,7 +240,6 @@ multiaddr                          = { default-features = false, version = "0.18
 natpmp                             = { default-features = false, version = "0.5" }
 netdev                             = { default-features = false, version = "0.31" }
 nistrs                             = { default-features = false, version = "0.1.2" }
-nom                                = { default-features = false, version = "8" }
 num-bigint                         = { default-features = false, version = "0.4" }
 num-traits                         = { default-features = false, version = "0.2.19" }
 num_enum                           = { default-features = false, version = "0.7.4" }
@@ -245,8 +250,8 @@ opentelemetry-http                 = { default-features = false, version = "0.31
 opentelemetry-otlp                 = { default-features = false, version = "0.31" }
 opentelemetry-semantic-conventions = { default-features = false, version = "0.31" }
 opentelemetry_sdk                  = { default-features = false, version = "0.31" }
-overwatch                          = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "ef70b69fb82b0b585cfef1427972c4e97ea88c84" }
-overwatch-derive                   = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "ef70b69fb82b0b585cfef1427972c4e97ea88c84" }
+overwatch                          = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "ae887f41f5a626c341179026ad7f03953ff2072e" }
+overwatch-derive                   = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "ae887f41f5a626c341179026ad7f03953ff2072e" }
 owo-colors                         = { default-features = false, version = "4.2.3" }
 pprof                              = { default-features = false, version = "0.15" }
 proc-macro2                        = { default-features = false, version = "1" }
@@ -395,6 +400,8 @@ error_impl_error                   = { level = "allow" }
 impl_trait_in_params               = { level = "allow" }
 indexing_slicing                   = { level = "allow" }
 infinite_loop                      = { level = "allow" }
+inline_modules                     = { level = "allow" }
+inline_trait_bounds                = { level = "allow" }
 integer_division                   = { level = "allow" }
 large_stack_frames                 = { level = "allow" }
 missing_assert_message             = { level = "allow" }

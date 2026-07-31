@@ -1,4 +1,5 @@
-use lb_groth16::{Fr, serde::serde_fr};
+use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_groth16::{COMPRESSED_PROOF_SIZE, Fr, serde::serde_fr};
 use lb_log_targets::proofs;
 use lb_mmr::MerklePath;
 use serde::{Deserialize, Serialize};
@@ -6,11 +7,8 @@ use thiserror::Error;
 use tracing::error;
 
 use crate::{
-    mantle::{
-        nom::{NomDecode, NomEncode},
-        ops::leader_claim::VoucherSecret,
-    },
-    proofs::merkle::mmr_path_to_witness,
+    mantle::ops::leader_claim::VoucherSecret,
+    proofs::merkle::{MerklePathWitnessError, mmr_path_to_witness},
 };
 
 const LOG_TARGET: &str = proofs::LEADER_CLAIM;
@@ -21,17 +19,26 @@ pub struct Groth16LeaderClaimProof {
     proof: lb_poc::PoCProof,
 }
 
-impl NomEncode for Groth16LeaderClaimProof {
-    fn encode(&self) -> Vec<u8> {
-        self.proof.to_bytes().encode()
+impl BinaryEncode for Groth16LeaderClaimProof {
+    fn encoded_length(&self) -> usize {
+        COMPRESSED_PROOF_SIZE
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.proof.to_bytes());
     }
 }
 
-impl NomDecode for Groth16LeaderClaimProof {
-    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self> {
-        let (remaining_bytes, inner) = <[u8; _]>::decode(bytes)?;
+impl BinaryDecode for Groth16LeaderClaimProof {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, inner) = <[u8; _]>::decode(input, &())?;
         Ok((
-            remaining_bytes,
+            rest,
             Self {
                 proof: lb_poc::PoCProof::from_bytes(&inner),
             },
@@ -120,18 +127,17 @@ pub struct LeaderClaimPrivate {
 }
 
 impl LeaderClaimPrivate {
-    #[must_use]
-    pub fn new(
+    pub fn try_new(
         public: LeaderClaimPublic,
         voucher_path: &MerklePath,
         secret_voucher: VoucherSecret,
-    ) -> Self {
+    ) -> Result<Self, MerklePathWitnessError> {
         let chain = lb_poc::PoCChainInputsData {
             voucher_root: public.voucher_root,
             mantle_tx_hash: public.mantle_tx_hash,
         };
         let (voucher_merkle_path, voucher_merkle_path_selectors) =
-            mmr_path_to_witness(voucher_path);
+            mmr_path_to_witness(voucher_path)?;
         let wallet = lb_poc::PoCWalletInputsData {
             secret_voucher: secret_voucher.into(),
             voucher_merkle_path_and_selectors: core::array::from_fn(|i| {
@@ -139,7 +145,7 @@ impl LeaderClaimPrivate {
             }),
         };
         let input = lb_poc::PoCWitnessInputsData::from_chain_and_wallet_data(chain, wallet);
-        Self { input }
+        Ok(Self { input })
     }
 
     #[must_use]

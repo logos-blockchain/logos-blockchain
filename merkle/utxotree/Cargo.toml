@@ -1,0 +1,27 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-utxotree"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[dependencies]
+ark-ff            = { workspace = true }
+lb-dynamic-merkle = { workspace = true }
+lb-merkle-tree    = { workspace = true }
+lb-poseidon2      = { workspace = true }
+rpds              = { workspace = true }
+serde             = { features = ["derive"], workspace = true }
+
+[dev-dependencies]
+num-bigint        = { workspace = true }
+quickcheck        = { workspace = true }
+quickcheck_macros = { workspace = true }
+rand              = { workspace = true }
+
+[lints]
+workspace = true

@@ -48,7 +48,6 @@ use overwatch::{
     overwatch::{OverwatchHandle, commands::OverwatchCommand},
     services::{ServiceData, relay::OutboundRelay, state::StateUpdater},
 };
-use tempfile::NamedTempFile;
 use tokio::sync::{
     broadcast::{self},
     mpsc, watch,
@@ -89,17 +88,13 @@ pub fn new_membership(size: u8) -> (Membership<NodeId>, UnsecuredEd25519Key) {
 
 /// Creates a [`BlendConfig`] with the given parameters and reasonable defaults
 /// for the rest.
-///
-/// Also returns a [`NamedTempFile`] used for service recovery
-/// that must not be dropped, as doing so will delete the underlying temp file.
 pub fn settings<BackendSettings>(
     local_private_key: UnsecuredEd25519Key,
     minimum_network_size: NonZeroU64,
     backend_settings: BackendSettings,
     data_replication_factor: u64,
-) -> (BlendConfig<BackendSettings>, NamedTempFile) {
-    let recovery_file = NamedTempFile::new().unwrap();
-    let settings = BlendConfig {
+) -> BlendConfig<BackendSettings> {
+    BlendConfig {
         backend: backend_settings,
         scheduler: SchedulerSettings {
             cover: CoverTrafficSettings {
@@ -116,11 +111,9 @@ pub fn settings<BackendSettings>(
         non_ephemeral_signing_key: local_private_key,
         num_blend_layers: NonZeroU64::try_from(1).unwrap(),
         minimum_network_size,
-        recovery_path: recovery_file.path().to_path_buf(),
         data_replication_factor,
         activity_threshold_sensitivity: 1,
-    };
-    (settings, recovery_file)
+    }
 }
 
 pub fn timing_settings() -> TimingSettings {

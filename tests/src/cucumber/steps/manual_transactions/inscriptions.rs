@@ -118,7 +118,7 @@ async fn submit_inscription_transaction(
         world,
         &step.value,
         prepared,
-        vec![inscription_signature_proof(tx_hash, &signing_key)],
+        [inscription_signature_proof(tx_hash, &signing_key)].into(),
         None,
         None,
     )

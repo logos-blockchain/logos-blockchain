@@ -595,7 +595,7 @@ mod tests {
     use lb_core::{
         header::HeaderId,
         mantle::{
-            MantleTx, Note, Op, SignedMantleTx, Transaction as _, Utxo,
+            MantleTx, Note, Op, SignedMantleTx, Utxo,
             ledger::Inputs,
             ops::{
                 OpProof,
@@ -606,7 +606,8 @@ mod tests {
                     withdraw::ChannelWithdrawOp,
                 },
             },
-            transactions::Ops,
+            traits::Hashable as _,
+            transactions::{Ops, OpsProofs},
         },
     };
     use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
@@ -677,22 +678,22 @@ mod tests {
         // Sign the `MantleTx`
         let signed_tx = SignedMantleTx::new(
             tx.clone(),
-            vec![
+            [
                 OpProof::ZkSig(
                     ZkKey::multi_sign(std::slice::from_ref(&sk), &tx.clone().hash().to_fr())
                         .unwrap(),
                 ),
                 OpProof::Ed25519Sig(inscription_sig),
-            ],
-        )
-        .unwrap();
+            ]
+            .into(),
+        );
 
         // Submit via the handle (mutates state + queues post to in_flight).
         let (result, checkpoint) = sequencer
             .handle()
             .submit_signed_tx(signed_tx.clone(), msg_id)
             .unwrap();
-        assert_eq!(result.inscription_id(), signed_tx.mantle_tx.hash());
+        assert_eq!(result.inscription_id(), signed_tx.mantle_tx().hash());
         assert_eq!(checkpoint.last_msg_id, msg_id);
 
         // The post lives in `in_flight` until the drive loop polls it.
@@ -772,7 +773,7 @@ mod tests {
 
         assert!(
             posted
-                .mantle_tx
+                .mantle_tx()
                 .ops()
                 .iter()
                 .any(|op| matches!(op, Op::ChannelInscribe(_))),
@@ -808,10 +809,7 @@ mod tests {
             .unwrap(),
         );
         let tx_hash = mantle_tx.hash();
-        let signed_tx = SignedMantleTx {
-            mantle_tx,
-            ops_proofs: Vec::new(),
-        };
+        let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
         track_pending_tx(&mut state, signed_tx, channel_id);
@@ -843,10 +841,7 @@ mod tests {
         };
         let mantle_tx = MantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
         let tx_hash = mantle_tx.hash();
-        let signed_tx = SignedMantleTx {
-            mantle_tx,
-            ops_proofs: Vec::new(),
-        };
+        let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
         track_pending_tx(&mut state, signed_tx, channel_id);
@@ -871,10 +866,7 @@ mod tests {
         };
         let mantle_tx = MantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
         let tx_hash = mantle_tx.hash();
-        let signed_tx = SignedMantleTx {
-            mantle_tx,
-            ops_proofs: Vec::new(),
-        };
+        let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
         track_pending_tx(&mut state, signed_tx, our_channel);
@@ -908,7 +900,7 @@ mod tests {
         };
         let expected_msg_id = inscribe.id();
         let genesis_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(inscribe)]);
-        let genesis_tx_hash = genesis_tx.mantle_tx.hash();
+        let genesis_tx_hash = genesis_tx.mantle_tx().hash();
 
         let genesis_block = api_block(1, 0, 0, vec![genesis_tx]);
         // Empty block at slot 1 so the block stream advances and the

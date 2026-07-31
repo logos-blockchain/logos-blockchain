@@ -19,6 +19,7 @@ hex                           = { workspace = true }
 itertools                     = { workspace = true }
 lb-blend-crypto               = { workspace = true }
 lb-blend-proofs               = { workspace = true }
+lb-codec                      = { workspace = true }
 lb-core                       = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
 lb-groth16                    = { workspace = true }

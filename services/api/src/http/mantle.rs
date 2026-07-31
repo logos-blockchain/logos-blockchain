@@ -5,14 +5,20 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt as _, future::join_all};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
 use lb_chain_service::{
-    ConsensusMsg, CryptarchiaInfo, ProcessedBlockEvent, Slot,
+    ConsensusMsg, CryptarchiaInfo, ProcessedBlockEvent, Query, Slot,
     storage::{StorageAdapter as _, adapters::StorageAdapter},
 };
 use lb_core::{
     block::Block,
     events::Events,
     header::HeaderId,
-    mantle::{SignedMantleTx, Transaction, TxHash, channel::ChannelState, ops::channel::ChannelId},
+    mantle::{
+        SignedMantleTx,
+        channel::ChannelState,
+        ops::channel::ChannelId,
+        traits::Hashable,
+        transactions::{hash::TxHash, states::Preverified},
+    },
     sdp::{Declaration, DeclarationId},
 };
 use lb_log_targets::api;
@@ -56,17 +62,37 @@ pub struct BlockWithChainState<Tx> {
 }
 
 pub type MempoolService<StorageAdapter, RuntimeServiceId> = TxMempoolService<
-    MempoolNetworkAdapter<SignedMantleTx, <SignedMantleTx as Transaction>::Hash, RuntimeServiceId>,
+    MempoolNetworkAdapter<
+        SignedMantleTx<Preverified>,
+        <SignedMantleTx<Preverified> as Hashable>::Hash,
+        RuntimeServiceId,
+    >,
     Mempool<
         HeaderId,
-        SignedMantleTx,
-        <SignedMantleTx as Transaction>::Hash,
+        SignedMantleTx<Preverified>,
+        <SignedMantleTx<Preverified> as Hashable>::Hash,
         StorageAdapter,
         RuntimeServiceId,
     >,
     StorageAdapter,
     RuntimeServiceId,
 >;
+
+pub async fn channel_state<RuntimeServiceId>(
+    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
+    id: ChannelId,
+) -> Result<Option<ChannelState>, super::DynError>
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    let ledger_state = cryptarchia_ledger_state(handle).await?;
+    Ok(ledger_state
+        .mantle_ledger()
+        .channels()
+        .channel_state(&id)
+        .cloned())
+}
 
 pub async fn channel<RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
@@ -76,12 +102,8 @@ where
     RuntimeServiceId:
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
-    let ledger_state = cryptarchia_ledger_state(handle).await?;
-    ledger_state
-        .mantle_ledger()
-        .channels()
-        .channel_state(&id)
-        .cloned()
+    channel_state(handle, id)
+        .await?
         .ok_or_else(|| "channel not found".into())
 }
 
@@ -91,18 +113,23 @@ pub async fn mantle_mempool_metrics<StorageAdapter, RuntimeServiceId>(
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Key = <SignedMantleTx as Transaction>::Hash,
-            Item = SignedMantleTx,
+            Key = <SignedMantleTx<Preverified> as Hashable>::Hash,
+            Item = SignedMantleTx<Preverified>,
         > + Clone
         + 'static,
     StorageAdapter::Error: Debug,
     RuntimeServiceId: Debug
+        + Clone
         + Sync
         + Send
         + Display
+        + 'static
+        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
         + AsServiceId<MempoolService<StorageAdapter, RuntimeServiceId>>,
 {
-    let relay = handle.relay().await?;
+    let relay = handle
+        .relay::<MempoolService<StorageAdapter, RuntimeServiceId>>()
+        .await?;
     let (sender, receiver) = oneshot::channel();
     relay
         .send(MempoolMsg::Metrics {
@@ -116,23 +143,28 @@ where
 
 pub async fn mantle_mempool_status<StorageAdapter, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-    items: Vec<<SignedMantleTx as Transaction>::Hash>,
+    items: Vec<<SignedMantleTx<Preverified> as Hashable>::Hash>,
 ) -> Result<Vec<Status>, super::DynError>
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Key = <SignedMantleTx as Transaction>::Hash,
-            Item = SignedMantleTx,
+            Key = <SignedMantleTx<Preverified> as Hashable>::Hash,
+            Item = SignedMantleTx<Preverified>,
         > + Clone
         + 'static,
     StorageAdapter::Error: Debug,
     RuntimeServiceId: Debug
+        + Clone
         + Sync
         + Send
         + Display
+        + 'static
+        + AsServiceId<StorageService<StorageAdapter::Backend, RuntimeServiceId>>
         + AsServiceId<MempoolService<StorageAdapter, RuntimeServiceId>>,
 {
-    let relay = handle.relay().await?;
+    let relay = handle
+        .relay::<MempoolService<StorageAdapter, RuntimeServiceId>>()
+        .await?;
     let (sender, receiver) = oneshot::channel();
     relay
         .send(MempoolMsg::Status {
@@ -188,7 +220,7 @@ where
     let (sender, receiver) = oneshot::channel();
 
     relay
-        .send(ConsensusMsg::NewBlockSubscribe { sender })
+        .send(Query::NewBlockSubscribe { sender }.into())
         .await
         .map_err(|(error, _)| error)?;
 
@@ -216,14 +248,8 @@ pub async fn get_new_blocks_stream<
     super::DynError,
 >
 where
-    Transaction: Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + 'static
-        + lb_core::mantle::Transaction<Hash = TxHash>,
+    Transaction:
+        Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
@@ -314,14 +340,8 @@ async fn load_blocks_with_chain_state_by_ids<Transaction, StorageBackend, Runtim
     blocks_limit: usize,
 ) -> Result<Vec<BlockWithChainState<Transaction>>, super::DynError>
 where
-    Transaction: Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + 'static
-        + lb_core::mantle::Transaction<Hash = TxHash>,
+    Transaction:
+        Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
@@ -394,14 +414,8 @@ async fn fetch_and_load_mutable_blocks<Transaction, StorageBackend, RuntimeServi
     descending: bool,
 ) -> Result<Vec<BlockWithChainState<Transaction>>, super::DynError>
 where
-    Transaction: Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + 'static
-        + lb_core::mantle::Transaction<Hash = TxHash>,
+    Transaction:
+        Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
@@ -507,14 +521,8 @@ async fn fetch_and_load_immutable_blocks<Transaction, StorageBackend, RuntimeSer
     descending: bool,
 ) -> Result<Vec<BlockWithChainState<Transaction>>, super::DynError>
 where
-    Transaction: Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + 'static
-        + lb_core::mantle::Transaction<Hash = TxHash>,
+    Transaction:
+        Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
@@ -551,14 +559,8 @@ pub async fn get_blocks_in_slot_range_with_snapshot<Transaction, StorageBackend,
     chain_info: &CryptarchiaInfo,
 ) -> Result<Vec<BlockWithChainState<Transaction>>, super::DynError>
 where
-    Transaction: Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + 'static
-        + lb_core::mantle::Transaction<Hash = TxHash>,
+    Transaction:
+        Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
@@ -731,14 +733,8 @@ pub async fn get_immutable_blocks<Transaction, StorageBackend, RuntimeServiceId>
     to_slot: usize,
 ) -> Result<Vec<Block<Transaction>>, super::DynError>
 where
-    Transaction: Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + 'static
-        + lb_core::mantle::Transaction<Hash = TxHash>,
+    Transaction:
+        Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
@@ -786,14 +782,8 @@ pub async fn get_block<Transaction, StorageBackend, RuntimeServiceId>(
     header_id: HeaderId,
 ) -> Result<Option<Block<Transaction>>, super::DynError>
 where
-    Transaction: Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + 'static
-        + lb_core::mantle::Transaction<Hash = TxHash>,
+    Transaction:
+        Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
@@ -830,14 +820,8 @@ pub async fn get_transactions<Transaction, StorageBackend, RuntimeServiceId>(
     super::DynError,
 >
 where
-    Transaction: Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + 'static
-        + lb_core::mantle::Transaction<Hash = TxHash>,
+    Transaction:
+        Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
@@ -872,14 +856,8 @@ pub async fn get_transaction<Transaction, StorageBackend, RuntimeServiceId>(
     tx_hash: TxHash,
 ) -> Result<Option<Transaction>, super::DynError>
 where
-    Transaction: Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + 'static
-        + lb_core::mantle::Transaction<Hash = TxHash>,
+    Transaction:
+        Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
@@ -915,9 +893,12 @@ where
     let (sender, receiver) = oneshot::channel();
 
     relay
-        .send(ConsensusMsg::GetSdpDeclarations {
-            reply_channel: sender,
-        })
+        .send(
+            Query::GetSdpDeclarations {
+                reply_channel: sender,
+            }
+            .into(),
+        )
         .await
         .map_err(|(e, _)| e)?;
 
@@ -940,9 +921,12 @@ where
     let (sender, receiver) = oneshot::channel();
 
     relay
-        .send(ConsensusMsg::GetSdpSnapshot {
-            reply_channel: sender,
-        })
+        .send(
+            Query::GetSdpSnapshot {
+                reply_channel: sender,
+            }
+            .into(),
+        )
         .await
         .map_err(|(e, _)| e)?;
 

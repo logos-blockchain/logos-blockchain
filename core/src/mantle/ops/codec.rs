@@ -1,17 +1,17 @@
+use lb_codec::{BinaryDecodeExt as _, BinaryEncode as _, DecodeError};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
-use nom::{IResult, Parser as _, combinator::map};
 
 use crate::{
-    mantle::{
-        Op, OpProof,
-        nom::{NomDecode as _, NomEncode as _},
-    },
+    mantle::{Op, OpProof, transactions::OpsProofs},
     proofs::{
         channel_multi_sig_proof::ChannelMultiSigProof, leader_claim_proof::Groth16LeaderClaimProof,
     },
 };
 
-pub fn decode_ops_proofs<'a>(input: &'a [u8], ops: &[Op]) -> IResult<&'a [u8], Vec<OpProof>> {
+pub fn decode_ops_proofs<'a>(
+    input: &'a [u8],
+    ops: &[Op],
+) -> Result<(&'a [u8], OpsProofs), DecodeError> {
     let mut remaining = input;
     let mut proofs = Vec::with_capacity(ops.len());
 
@@ -20,14 +20,19 @@ pub fn decode_ops_proofs<'a>(input: &'a [u8], ops: &[Op]) -> IResult<&'a [u8], V
         proofs.push(proof);
         remaining = new_remaining;
     }
+    let ops_proofs = OpsProofs::try_from(proofs).map_err(|_| {
+        DecodeError::length_out_of_bounds::<OpsProofs>(ops.len(), OpsProofs::MIN, OpsProofs::MAX)
+    })?;
 
-    Ok((remaining, proofs))
+    Ok((remaining, ops_proofs))
 }
 
-fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
+fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> Result<(&'a [u8], OpProof), DecodeError> {
     match op {
         // Ed25519SigProof = Ed25519Signature
-        Op::ChannelInscribe(_) => map(Ed25519Signature::decode, OpProof::Ed25519Sig).parse(input),
+        Op::ChannelInscribe(_) => {
+            Ed25519Signature::decode(input).map(|(rest, sig)| (rest, OpProof::Ed25519Sig(sig)))
+        }
 
         // ZkAndEd25519SigsProof = ZkSignature Ed25519Signature
         Op::SDPDeclare(_) => {
@@ -44,15 +49,18 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
 
         // ZkSigProof = ZkSignature
         Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_) | Op::ChannelDeposit(_) => {
-            map(ZkSignature::decode, OpProof::ZkSig).parse(input)
+            ZkSignature::decode(input).map(|(rest, sig)| (rest, OpProof::ZkSig(sig)))
         }
 
         // ProofOfClaimProof = Groth16
-        Op::LeaderClaim(_) => map(Groth16LeaderClaimProof::decode, OpProof::PoC).parse(input),
+        Op::LeaderClaim(_) => {
+            Groth16LeaderClaimProof::decode(input).map(|(rest, poc)| (rest, OpProof::PoC(poc)))
+        }
 
         // ChannelMultiSigProof — also used by ChannelConfig (threshold sigs)
         Op::ChannelWithdraw(_) | Op::ChannelTransfer(_) | Op::ChannelConfig(_) => {
-            map(ChannelMultiSigProof::decode, OpProof::ChannelMultiSigProof).parse(input)
+            ChannelMultiSigProof::decode(input)
+                .map(|(rest, proof)| (rest, OpProof::ChannelMultiSigProof(proof)))
         }
     }
 }
@@ -60,18 +68,18 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
 fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
     if proof_matches(proof, op) {
         match proof {
-            OpProof::Ed25519Sig(sig) => sig.encode(),
-            OpProof::ChannelMultiSigProof(proof) => proof.encode(),
+            OpProof::Ed25519Sig(sig) => sig.encode_to_vec(),
+            OpProof::ChannelMultiSigProof(proof) => proof.encode_to_vec(),
             OpProof::ZkAndEd25519Sigs {
                 zk_sig,
                 ed25519_sig,
             } => {
-                let mut bytes = zk_sig.encode();
-                bytes.extend(ed25519_sig.encode());
+                let mut bytes = zk_sig.encode_to_vec();
+                bytes.extend(ed25519_sig.encode_to_vec());
                 bytes
             }
-            OpProof::ZkSig(sig) => sig.encode(),
-            OpProof::PoC(poc) => poc.encode(),
+            OpProof::ZkSig(sig) => sig.encode_to_vec(),
+            OpProof::PoC(poc) => poc.encode_to_vec(),
         }
     } else {
         panic!("Mismatch between proof type and operation type");

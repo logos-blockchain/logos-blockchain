@@ -1,6 +1,7 @@
 pub mod api;
 pub mod backends;
 mod metrics;
+pub mod recovery;
 
 use std::{
     fmt::{Debug, Display, Formatter},

@@ -11,7 +11,7 @@ use lb_core::{
     codec::{DeserializeOp as _, SerializeOp as _},
     events::Events,
     header::HeaderId,
-    mantle::{Transaction, TxHash},
+    mantle::{traits::Hashable, transactions::hash::TxHash},
 };
 use lb_cryptarchia_engine::Slot;
 use lb_storage_service::{
@@ -52,14 +52,7 @@ where
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
-    Tx: Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + Send
-        + Sync
-        + 'static
-        + Transaction<Hash = TxHash>,
+    Tx: Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static + Hashable<Hash = TxHash>,
 {
     type Backend = Storage;
     type Block = Block<Tx>;

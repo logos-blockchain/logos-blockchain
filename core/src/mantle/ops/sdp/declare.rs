@@ -5,9 +5,10 @@ use super::{SDPDeclareOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        Note, TxHash,
+        Note,
         channel::Channels,
         ledger::{Declarations, Operation, Utxos},
+        transactions::hash::TxHash,
     },
     sdp::{Declaration, MinStake, locked_notes::LockedNotes},
 };
@@ -38,7 +39,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         min_stake: &MinStake,
     ) -> Result<(), SdpError> {
         // Check that the declaration doesn't already exist
-        if declarations.contains_key(&self.id()) {
+        if declarations.contains(&self.id()) {
             return Err(SdpError::DuplicateDeclaration(self.id()));
         }
         validate_service_scoped_uniqueness(self, declarations)?;
@@ -73,7 +74,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
     ) -> Result<(SDPDeclareExecutionContext, Vec<TxEvent>), SdpError> {
         let declaration_id = self.id();
         let declaration = Declaration::new(ctx.epoch, self);
-        ctx.declarations = ctx.declarations.insert(declaration_id, declaration);
+        ctx.declarations = ctx.declarations.insert(declaration_id, declaration).0;
         let utxo = ctx
             .utxo_tree
             .utxos()
@@ -86,6 +87,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
             .lock(
                 &ctx.min_stake,
                 self.service_type,
+                declaration_id,
                 utxo.note,
                 &self.locked_note_id,
             )
@@ -101,7 +103,8 @@ fn validate_service_scoped_uniqueness(
     declarations: &Declarations,
 ) -> Result<(), SdpError> {
     declarations
-        .values()
+        .iter()
+        .map(|(_, declaration)| declaration)
         .filter(|d| d.service_type == op.service_type)
         .try_for_each(|existing| {
             if existing.provider_id == op.provider_id {
@@ -226,5 +229,67 @@ impl Operation<SDPDeclareGenesisValidationContext<'_>> for SDPDeclareOp {
         ctx: Self::ExecutionContext<'_>,
     ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         SDPDeclareValidationExt::execute(self, ctx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_cryptarchia_engine::Epoch;
+    use lb_groth16::{AdditiveGroup as _, Fr};
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+    use num_bigint::BigUint;
+
+    use super::{SDPDeclareOp, SdpError, validate_service_scoped_uniqueness};
+    use crate::{
+        mantle::ledger::Declarations,
+        sdp::{Declaration, ServiceType},
+    };
+
+    fn declare_op(provider_sk: u8, zk_sk: u64, locator: &str) -> SDPDeclareOp {
+        SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locators: vec![locator.parse().unwrap()].try_into().unwrap(),
+            provider_id: Ed25519Key::from_bytes(&[provider_sk; 32])
+                .public_key()
+                .into(),
+            zk_id: ZkKey::from(BigUint::from(zk_sk)).to_public_key(),
+            locked_note_id: Fr::ZERO.into(),
+        }
+    }
+
+    /// Two declarations in the same service sharing the same `provider_id`
+    /// (different `zk_id` and locators) must be rejected by the SDP
+    /// per-service uniqueness check.
+    #[test]
+    fn rejects_duplicate_provider_id_within_service() {
+        let declare_a = declare_op(1, 1, "/ip4/1.1.1.1/udp/0");
+        let declare_b = declare_op(1, 2, "/ip4/2.2.2.2/udp/0");
+
+        let declarations = Declarations::new()
+            .insert(declare_a.id(), Declaration::new(Epoch::new(0), &declare_a))
+            .0;
+
+        assert!(matches!(
+            validate_service_scoped_uniqueness(&declare_b, &declarations),
+            Err(SdpError::DuplicateProviderId { .. })
+        ));
+    }
+
+    /// Two declarations in the same service sharing the same `zk_id`
+    /// (different `provider_id` and locators) must be rejected by the SDP
+    /// per-service uniqueness check.
+    #[test]
+    fn rejects_duplicate_zk_id_within_service() {
+        let declare_a = declare_op(1, 1, "/ip4/1.1.1.1/udp/0");
+        let declare_b = declare_op(2, 1, "/ip4/2.2.2.2/udp/0");
+
+        let declarations = Declarations::new()
+            .insert(declare_a.id(), Declaration::new(Epoch::new(0), &declare_a))
+            .0;
+
+        assert!(matches!(
+            validate_service_scoped_uniqueness(&declare_b, &declarations),
+            Err(SdpError::DuplicateZkId { .. })
+        ));
     }
 }

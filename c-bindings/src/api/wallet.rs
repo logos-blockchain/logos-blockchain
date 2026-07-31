@@ -8,7 +8,7 @@ use lb_api_service::http::mempool;
 use lb_core::{
     header::HeaderId as CoreHeaderId,
     mantle::{
-        MantleTx, Note, NoteId as CoreNoteId, Op, OpProof, SignedMantleTx, Transaction,
+        MantleTx, Note, NoteId as CoreNoteId, Op, OpProof, SignedMantleTx,
         gas::GasCost,
         ledger::{Inputs, Outputs},
         ops::{
@@ -18,7 +18,11 @@ use lb_core::{
             },
             transfer::TransferOp,
         },
-        transactions::MantleTxBuilder,
+        traits::Hashable,
+        transactions::{
+            MantleTxBuilder,
+            states::{Preverified, Unverified},
+        },
     },
 };
 use lb_groth16::{fr_from_bytes, fr_to_bytes};
@@ -687,7 +691,7 @@ pub(crate) fn transfer_funds_sync(
     funding_public_keys: Vec<ZkPublicKey>,
     recipient_public_key: ZkPublicKey,
     amount: u64,
-) -> StatusResult<SignedMantleTx> {
+) -> StatusResult<SignedMantleTx<Preverified>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
@@ -712,7 +716,7 @@ pub(crate) fn transfer_funds_sync(
                 )
             })?;
 
-        if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Transaction::hash).await {
+        if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Hashable::hash).await {
             return Err(OperationStatus::error(
                 OperationStatusCode::DynError,
                 format!("Failed to add transaction to mempool: {error}"),
@@ -940,7 +944,7 @@ pub(crate) fn channel_deposit_with_notes_sync(
     change_public_key: ZkPublicKey,
     funding_public_keys: Vec<ZkPublicKey>,
     max_tx_fee: GasCost,
-) -> StatusResult<SignedMantleTx> {
+) -> StatusResult<SignedMantleTx<Preverified>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
@@ -999,7 +1003,7 @@ pub(crate) fn channel_deposit_with_notes_sync(
             })?
             .response;
 
-        if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Transaction::hash).await {
+        if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Hashable::hash).await {
             return Err(OperationStatus::error(
                 OperationStatusCode::DynError,
                 format!("Failed to add transaction to mempool: {error}"),
@@ -1244,7 +1248,7 @@ pub(crate) fn channel_deposit_sync(
     funding_public_key: ZkPublicKey,
     amount: Value,
     metadata: Metadata,
-) -> StatusResult<SignedMantleTx> {
+) -> StatusResult<SignedMantleTx<Preverified>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
@@ -1339,8 +1343,9 @@ pub(crate) fn channel_deposit_sync(
             })?;
         let signed_tx = SignedMantleTx::new(
             tx,
-            vec![OpProof::ZkSig(user_sig.clone()), OpProof::ZkSig(user_sig)],
+            [OpProof::ZkSig(user_sig.clone()), OpProof::ZkSig(user_sig)].into(),
         )
+        .preverify()
         .map_err(|error| {
             OperationStatus::error(
                 OperationStatusCode::DynError,
@@ -1349,7 +1354,7 @@ pub(crate) fn channel_deposit_sync(
         })?;
 
         // 6. Submit to the mempool.
-        if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Transaction::hash).await {
+        if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Hashable::hash).await {
             return Err(OperationStatus::error(
                 OperationStatusCode::DynError,
                 format!("Failed to add transaction to mempool: {error}"),
@@ -1619,7 +1624,7 @@ pub type FfiSubmitTransactionResult = FfiStatusResult<Hash>;
 ///
 /// Mirrors the node's `POST /mempool/add/tx` HTTP handler. The transaction is
 /// a JSON string with the exact same schema as the HTTP request body — for
-/// example a transaction funded via [`wallet_fund_tx`] and completed with the
+/// example, a transaction funded via [`wallet_fund_tx`] and completed with the
 /// caller's op proofs.
 ///
 /// # Arguments
@@ -1646,29 +1651,40 @@ pub unsafe extern "C" fn submit_signed_transaction(
     return_error_if_null_pointer!(signed_tx_json);
     let node = unsafe { &*node };
 
-    let signed_tx_json = match unsafe { CStr::from_ptr(signed_tx_json) }.to_str() {
-        Ok(signed_tx_json) => signed_tx_json,
-        Err(error) => {
-            return FfiSubmitTransactionResult::err(OperationStatus::error(
-                OperationStatusCode::ValidationError,
-                format!("Transaction is not valid UTF-8: {error}"),
-            ));
-        }
-    };
-    let signed_tx: SignedMantleTx = match serde_json::from_str(signed_tx_json) {
-        Ok(signed_tx) => signed_tx,
-        Err(error) => {
-            return FfiSubmitTransactionResult::err(OperationStatus::error(
-                OperationStatusCode::ValidationError,
-                format!("Failed to parse signed transaction: {error}"),
-            ));
+    let preverified_tx = {
+        let signed_tx_json = match unsafe { CStr::from_ptr(signed_tx_json) }.to_str() {
+            Ok(signed_tx_json) => signed_tx_json,
+            Err(error) => {
+                return FfiSubmitTransactionResult::err(OperationStatus::error(
+                    OperationStatusCode::ValidationError,
+                    format!("Transaction is not valid UTF-8: {error}"),
+                ));
+            }
+        };
+        let signed_tx: SignedMantleTx<Unverified> = match serde_json::from_str(signed_tx_json) {
+            Ok(signed_tx) => signed_tx,
+            Err(error) => {
+                return FfiSubmitTransactionResult::err(OperationStatus::error(
+                    OperationStatusCode::ValidationError,
+                    format!("Failed to parse signed transaction: {error}"),
+                ));
+            }
+        };
+        match signed_tx.preverify() {
+            Ok(preverified_tx) => preverified_tx,
+            Err(error) => {
+                return FfiSubmitTransactionResult::err(OperationStatus::error(
+                    OperationStatusCode::ValidationError,
+                    format!("Failed to preverify signed transaction: {error}"),
+                ));
+            }
         }
     };
 
-    let transaction_hash = signed_tx.hash().as_signing_bytes();
+    let transaction_hash = preverified_tx.hash().as_signing_bytes();
     let runtime_handle = node.get_runtime_handle();
     let submit_result = runtime_handle.block_on(async {
-        mempool::add_tx(node.get_overwatch_handle(), signed_tx, Transaction::hash).await
+        mempool::add_tx(node.get_overwatch_handle(), preverified_tx, Hashable::hash).await
     });
     if let Err(error) = submit_result {
         return FfiSubmitTransactionResult::err(OperationStatus::error(

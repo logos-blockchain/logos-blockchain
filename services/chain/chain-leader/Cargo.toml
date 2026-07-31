@@ -24,10 +24,11 @@ lb-cryptarchia-engine            = { workspace = true }
 lb-key-management-system-service = { features = ["unsafe"], workspace = true }
 lb-ledger                        = { workspace = true }
 lb-services-utils                = { workspace = true }
+lb-storage-service               = { workspace = true }
 lb-time-service                  = { workspace = true }
 lb-tracing                       = { workspace = true }
 lb-tx-service                    = { workspace = true }
-lb-utils                         = { workspace = true }
+lb-utils                         = { features = ["tokio"], workspace = true }
 lb-wallet-service                = { workspace = true }
 overwatch                        = { workspace = true }
 rand                             = { workspace = true }
@@ -46,3 +47,4 @@ default = []
 # Suppresses publishing of locally-proposed blocks over the blend network.
 # The block is still self-applied to this node's chain. Test-only build flag.
 testing-disable-proposal-publish = []
+tokio-task-names                 = ["lb-utils/tokio-task-names"]

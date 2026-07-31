@@ -20,6 +20,7 @@ futures                       = { workspace = true }
 hex                           = { workspace = true }
 lb-blend-message              = { workspace = true }
 lb-blend-proofs               = { workspace = true }
+lb-codec                      = { workspace = true }
 lb-core                       = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
 lb-groth16                    = { workspace = true }
@@ -42,4 +43,5 @@ libp2p           = { workspace = true }
 test-log         = { features = ["trace"], workspace = true }
 
 [features]
+tokio-task-names      = ["lb-utils/tokio-task-names"]
 unsafe-test-functions = []

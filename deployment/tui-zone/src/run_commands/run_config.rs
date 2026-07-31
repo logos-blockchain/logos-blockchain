@@ -1,13 +1,14 @@
 use std::path::PathBuf;
 
+use lb_codec::BinaryEncode as _;
 use lb_core::{
     mantle::{
-        Op, OpProof, SignedMantleTx, Transaction as _,
-        nom::NomEncode as _,
+        Op, OpProof, SignedMantleTx,
         ops::channel::{
             ChannelId, ChannelKeyIndex,
             config::{ChannelConfigOp, Keys},
         },
+        traits::Hashable as _,
         transactions::codec::encode_signed_mantle_tx,
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
@@ -50,7 +51,7 @@ pub(crate) async fn run_config(args: ConfigArgs) -> RunResult<()> {
         start_cli_sequencer_with_channel_state(&args.node_key).await?;
     print_channel_state("zone_config before", &channel_id, channel_state.as_ref());
     let status_rx = sequencer.subscribe_tx_status();
-    let (_result, _checkpoint, signed_tx) = sequencer
+    let (_receipt, signed_tx) = sequencer
         .handle()
         .channel_config(
             Keys::try_from(authorized_keys)?,
@@ -237,7 +238,7 @@ pub(crate) fn run_config_combine(args: ConfigCombineArgs) -> RunResult<()> {
         )
         .into());
     }
-    let signed_tx = SignedMantleTx::new(tx, vec![OpProof::ChannelMultiSigProof(proof)])?;
+    let signed_tx = SignedMantleTx::new(tx, [OpProof::ChannelMultiSigProof(proof)].into());
     let signed = SignedConfigFile {
         version: ZONE_FILE_TRANSFER_VERSION,
         kind: ZONE_SIGNED_CONFIG.to_owned(),

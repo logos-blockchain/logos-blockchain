@@ -1,11 +1,11 @@
 use core::time::Duration;
 use std::sync::OnceLock;
 
+use lb_codec::BinaryEncode as _;
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
         CryptarchiaParameter, GenesisTime, MantleTx, Note, NoteId, OpProof, Utxo,
-        nom::NomEncode as _,
         ops::{
             Op, OpId as _,
             channel::{
@@ -14,7 +14,7 @@ use lb_core::{
             },
             transfer::TransferOp,
         },
-        transactions::{GenesisTx, Ops},
+        transactions::{GenesisTx, Ops, OpsProofs},
     },
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };
@@ -22,7 +22,7 @@ use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr};
 use lb_key_management_system_service::keys::{
     Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
 };
-use lb_node::{SignedMantleTx, Transaction as _};
+use lb_node::{Hashable as _, SignedMantleTx};
 use num_bigint::BigUint;
 use time::OffsetDateTime;
 
@@ -115,7 +115,7 @@ fn inscription_for_current_test(test_context: Option<&str>) -> InscriptionOp {
                 genesis_time: get_or_init_genesis_time(),
                 epoch_nonce: Fr::ZERO,
             }
-            .encode(),
+            .encode_to_vec(),
         ),
         parent: MsgId::root(),
         signer: Ed25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY).unwrap(),
@@ -307,12 +307,12 @@ pub fn create_genesis_block_with_declarations(
     let mantle_tx = MantleTx(Ops::new_unchecked(ops));
 
     let mantle_tx_hash = mantle_tx.hash();
-    let mut ops_proofs = vec![
+    let mut ops_proofs = OpsProofs::from([
         OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
             &EMPTY_GROTH16_PROOF_BYTES,
         ))),
         OpProof::Ed25519Sig(Ed25519Signature::zero()),
-    ];
+    ]);
 
     for provider in providers {
         let zk_sig =
@@ -321,16 +321,15 @@ pub fn create_genesis_block_with_declarations(
         let ed25519_sig = provider
             .provider_sk
             .sign_payload(mantle_tx_hash.as_signing_bytes().as_ref());
-        ops_proofs.push(OpProof::ZkAndEd25519Sigs {
-            zk_sig,
-            ed25519_sig,
-        });
+        ops_proofs
+            .try_push(OpProof::ZkAndEd25519Sigs {
+                zk_sig,
+                ed25519_sig,
+            })
+            .expect("genesis transaction proofs are bounded");
     }
 
-    let signed_mantle_tx = SignedMantleTx {
-        mantle_tx,
-        ops_proofs,
-    };
+    let signed_mantle_tx = SignedMantleTx::new_trusted(mantle_tx, ops_proofs);
 
     // TODO: Maybe use the builder instead of trusting the signed mantle tx
     GenesisBlockBuilder::new()

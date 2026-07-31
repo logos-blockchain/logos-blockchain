@@ -15,18 +15,16 @@ use std::{
 use futures::StreamExt as _;
 use lb_core::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
-    mantle::{StorageSize, Transaction},
+    mantle::traits::{Hashable, StorageSize},
 };
 use lb_log_targets::mempool;
 use lb_network_service::{NetworkService, message::BackendNetworkMsg};
 use lb_services_utils::{
-    overwatch::{
-        JsonFileBackend, RecoveryOperator,
-        recovery::operators::RecoveryBackend as RecoveryBackendTrait,
-    },
+    overwatch::{RecoveryOperator, recovery::operators::RecoveryBackend as RecoveryBackendTrait},
     wait_until_services_are_ready,
 };
-use lb_storage_service::StorageService;
+use lb_storage_service::{StorageService, recovery::StorageRecoveryBackend};
+use lb_utils::tokio::task::spawn;
 use overwatch::{
     OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
@@ -65,18 +63,20 @@ type TxMempoolRecoverySettings<Pool, NetworkAdapter, RuntimeServiceId> = TxMempo
     <NetworkAdapter as NetworkAdapterTrait<RuntimeServiceId>>::Settings,
 >;
 
-type TxMempoolRecoveryBackend<Pool, NetworkAdapter, RuntimeServiceId> = JsonFileBackend<
-    TxMempoolRecoveryState<Pool, NetworkAdapter, RuntimeServiceId>,
-    TxMempoolRecoverySettings<Pool, NetworkAdapter, RuntimeServiceId>,
->;
+type TxMempoolRecoveryBackend<Pool, NetworkAdapter, StorageAdapter, RuntimeServiceId> =
+    StorageRecoveryBackend<
+        TxMempoolRecoveryState<Pool, NetworkAdapter, RuntimeServiceId>,
+        TxMempoolRecoverySettings<Pool, NetworkAdapter, RuntimeServiceId>,
+        <StorageAdapter as MempoolStorageAdapter<RuntimeServiceId>>::Backend,
+        RuntimeServiceId,
+    >;
 
-/// A tx mempool service that uses a [`JsonFileBackend`] as a recovery
-/// mechanism.
+/// A tx mempool service that stores recovery state in its storage backend.
 pub type TxMempoolService<MempoolNetworkAdapter, Pool, StorageAdapter, RuntimeServiceId> =
     GenericTxMempoolService<
         Pool,
         MempoolNetworkAdapter,
-        TxMempoolRecoveryBackend<Pool, MempoolNetworkAdapter, RuntimeServiceId>,
+        TxMempoolRecoveryBackend<Pool, MempoolNetworkAdapter, StorageAdapter, RuntimeServiceId>,
         StorageAdapter,
         RuntimeServiceId,
     >;
@@ -95,7 +95,7 @@ pub struct GenericTxMempoolService<
     <Pool as MemPoolTrait>::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId> + Send + Sync,
     NetworkAdapter::Settings: Clone,
-    RecoveryBackend: RecoveryBackendTrait + Send + Sync,
+    RecoveryBackend: RecoveryBackendTrait<RuntimeServiceId> + Send + Sync,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     initial_state: <Self as ServiceData>::State,
@@ -110,7 +110,7 @@ where
     <Pool as MemPoolTrait>::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId> + Send + Sync,
     NetworkAdapter::Settings: Clone,
-    RecoveryBackend: RecoveryBackendTrait + Send + Sync,
+    RecoveryBackend: RecoveryBackendTrait<RuntimeServiceId> + Send + Sync,
 {
     pub const fn new(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -138,7 +138,7 @@ where
     <Pool as MemPoolTrait>::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId> + Send + Sync,
     NetworkAdapter::Settings: Clone,
-    RecoveryBackend: RecoveryBackendTrait + Send + Sync,
+    RecoveryBackend: RecoveryBackendTrait<RuntimeServiceId> + Send + Sync,
 {
     type Settings = TxMempoolSettings<<Pool as MemPoolTrait>::Settings, NetworkAdapter::Settings>;
     type State = TxMempoolState<
@@ -164,12 +164,12 @@ where
     Pool: MemPoolTrait<Storage = StorageAdapter> + RecoverableMempool + Send + Sync,
     StorageAdapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     <Pool as RecoverableMempool>::RecoveryState: Debug + Send + Sync,
-    Pool::Item: Transaction<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
+    Pool::Item: Hashable<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
     Pool::Settings: Clone + Sync + Send,
     NetworkAdapter:
         NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item, Key = Pool::Key> + Send + Sync,
     NetworkAdapter::Settings: Clone + Send + Sync + 'static,
-    RecoveryBackend: RecoveryBackendTrait + Send + Sync,
+    RecoveryBackend: RecoveryBackendTrait<RuntimeServiceId> + Send + Sync,
     RuntimeServiceId: Display
         + Debug
         + Sync
@@ -265,11 +265,11 @@ impl<Pool, NetworkAdapter, RecoveryBackend, StorageAdapter, RuntimeServiceId>
 where
     Pool: MemPoolTrait<Storage = StorageAdapter> + RecoverableMempool + Send + Sync,
     StorageAdapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    Pool::Item: Transaction<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
+    Pool::Item: Hashable<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
     Pool::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item> + Send + Sync,
     NetworkAdapter::Settings: Clone + Send + 'static,
-    RecoveryBackend: RecoveryBackendTrait + Send + Sync,
+    RecoveryBackend: RecoveryBackendTrait<RuntimeServiceId> + Send + Sync,
     RuntimeServiceId: 'static,
 {
     async fn run_event_loop(
@@ -396,7 +396,7 @@ where
             Err(MempoolError::ExistingItem) => {
                 // Tx already in pool, but since this came from a local submission
                 // (not gossip), re-gossip it so leader nodes can pick it up.
-                tokio::spawn(async move {
+                spawn("logos/mempool/transaction-regossip", async move {
                     let adapter = NetworkAdapter::new(settings, network_relay).await;
                     adapter.send(item_for_broadcast).await;
                 });
@@ -460,7 +460,7 @@ where
         })?;
 
         let mut fetched_by_hash = items_stream
-            .map(|tx| (Transaction::hash(&tx), tx))
+            .map(|tx| (Hashable::hash(&tx), tx))
             .collect::<BTreeMap<_, _>>()
             .await;
 
@@ -497,7 +497,7 @@ where
     ) {
         state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
 
-        tokio::spawn(async move {
+        spawn("logos/mempool/transaction-broadcast", async move {
             let adapter = NetworkAdapter::new(settings, network_relay).await;
             adapter.send(item_for_broadcast).await;
         });

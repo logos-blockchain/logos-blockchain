@@ -1,7 +1,10 @@
+# The stable `Cucumber result` check runs on pull requests so branch protection
+# can allow an approved PR into the merge queue. The heavy, self-hosted suite
+# runs ONLY on `merge_group`, on the queued merge commit, after review.
 on:
   pull_request:
-  push:
-    branches: [ master ]
+  merge_group:
+    types: [ checks_requested ]
 
 name: Cucumber integration tests
 
@@ -13,39 +16,35 @@ concurrency:
 
 jobs:
   tests:
-    name: Run cucumber integration tests
+    name: Run cucumber integration tests (${{ matrix.platform.label }})
+    # Heavy, self-hosted suite: run ONLY inside the merge queue so the pull
+    # request phase reports only the lightweight `Cucumber result` check below.
+    if: ${{ github.event_name == 'merge_group' }}
 
     permissions:
       contents: read
       actions: write
       checks: write
 
-    # Only run if not a WIP or DO NOT MERGE PR
-    if: >
-      ${{
-        github.event_name != 'pull_request' ||
-        (
-          !startsWith(github.event.pull_request.title, '[WIP]') &&
-          !contains(toJson(github.event.pull_request.labels), 'DO NOT MERGE')
-        )
-      }}
-
     strategy:
-      # All OSes should be tested even if one fails (default: true)
+      # A failed OS must not cancel the other OS because only one OS needs to pass.
       fail-fast: false
       matrix:
         platform:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
           - os: [ self-hosted, Linux ]
             label: self-hosted-linux
+            peer_label: self-hosted-macos
           - os: [ self-hosted, macOS ]
             label: self-hosted-macos
+            peer_label: self-hosted-linux
     runs-on: ${{ matrix.platform.os }}
     env:
       # Heavy Rust integration tests become less stable when oversubscribing the
       # self-hosted runners. Keep these lanes single-job to reduce retries.
       E2E_NEXTEST_JOBS: 1
       LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
+      PEER_SUCCEEDED: "false"
 
     steps:
       # Remove any rustup override to ensure default toolchain is used
@@ -59,17 +58,15 @@ jobs:
           echo "RUSTFLAGS=-C linker=rust-lld -L /run/current-system/sw/lib" >> "$GITHUB_ENV"
           echo "LIBRARY_PATH=/run/current-system/sw/lib" >> "$GITHUB_ENV"
 
-      # Checkout the repository code
-      # Notes:
-      # - We need to test the exact PR code, immutable, no synthetic merge commit from master
-      # - For PRs we use `github.event.pull_request.head.sha` - the exact commit from the PR branch
-      # - For pushes to master this falls back to `github.sha` - the commit that triggered the workflow
-      # - Uses SHA (immutable) rather than branch name (which could move during workflow execution)
-      # - You control integration - manually merge/rebase when YOU decide the PR is ready
+      # Checkout the merge-queue commit.
+      # - `github.sha` is the merge queue's temporary commit (master + the queued PR,
+      #   plus any PRs ahead of it in the queue) - i.e. the exact state that will
+      #   become master if this run passes. This is what we want to validate.
+      # - Uses SHA (immutable) rather than branch name (which could move during execution).
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
 
       # Prune before any builds.
       - name: Prune disk space (cache-aware, self-hosted)
@@ -80,15 +77,31 @@ jobs:
         id: verify_local_ntp
         uses: ./.github/actions/verify-local-ntp-server
 
+      # This cooperative checkpoint is reused before each expensive phase.
+      # It does not cancel the workflow. If the other OS has completed the
+      # entire lane and its `Report success` step passed, this lane skips all
+      # remaining expensive work and proceeds to cleanup.
+      - &check_peer_success
+        name: Stop if another Cucumber OS has already passed
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' }}
+        uses: ./.github/actions/check-peer-success
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          current-label: ${{ matrix.platform.label }}
+          peer-label: ${{ matrix.platform.peer_label }}
+          job-name-prefix: Run cucumber integration tests
+
       # Build release binaries for the cucumber tests.
       - name: Build binaries for cucumber tests
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: build
           args: --locked --release --all
         env:
           CARGO_INCREMENTAL: 0  # Disable incremental compilation
+
+      - *check_peer_success
 
       # Run cucumber integration tests with environment variables for binaries and test params
       # Special exclusion tags (we want to run the rest of the tests and not fail the workflow):
@@ -97,7 +110,7 @@ jobs:
 
       # Feature: Smoke (@smoke_ci)
       - name: Run cucumber suite - smoke
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
         uses: ./.github/actions/run-cucumber-suite
         with:
@@ -106,9 +119,11 @@ jobs:
           artifact_subdir: Smoke
           max_concurrent_scenarios: "1"
 
+      - *check_peer_success
+
       # Feature: Cryptarchia (@cryptarchia_ci)
       - name: Run cucumber suite - cryptarchia
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
         uses: ./.github/actions/run-cucumber-suite
         with:
@@ -117,9 +132,11 @@ jobs:
           artifact_subdir: Cryptarchia
           max_concurrent_scenarios: "1"
 
+      - *check_peer_success
+
       # Feature: Blend (@blend_ci)
       - name: Run cucumber suite - blend
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
         uses: ./.github/actions/run-cucumber-suite
         with:
@@ -128,10 +145,12 @@ jobs:
           artifact_subdir: Blend
           max_concurrent_scenarios: "1"
 
+      - *check_peer_success
+
       # Feature: Transactions (@transactions_ci)
       - name: Run cucumber suite - transactions
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
-        timeout-minutes: 60
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
+        timeout-minutes: 120
         uses: ./.github/actions/run-cucumber-suite
         with:
           suite_tag: "@transactions_ci"
@@ -140,9 +159,25 @@ jobs:
           verbose_console: "true"
           max_concurrent_scenarios: "1"
 
+      - *check_peer_success
+
+      # Feature: Fees (@fees_ci)
+      - name: Run cucumber suite - fees
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
+        with:
+          suite_tag: "@fees_ci"
+          suite_name: fees
+          artifact_subdir: Fees
+          verbose_console: "true"
+          max_concurrent_scenarios: "1"
+
+      - *check_peer_success
+
       # Feature: Mempool (@mempool_ci)
       - name: Run cucumber suite - mempool
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
         uses: ./.github/actions/run-cucumber-suite
         with:
@@ -151,9 +186,11 @@ jobs:
           artifact_subdir: Mempool lifecycle
           verbose_console: "true"
 
+      - *check_peer_success
+
       # Feature: Zone SDK (@zone_ci)
       - name: Run cucumber suite - zone
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
         uses: ./.github/actions/run-cucumber-suite
         with:
@@ -162,9 +199,11 @@ jobs:
           artifact_subdir: Zone
           max_concurrent_scenarios: "1"
 
+      - *check_peer_success
+
       # Feature: CLI utility binary (@cli_ci)
       - name: Run cucumber suite - CLI utilities
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
         uses: ./.github/actions/run-cucumber-suite
         with:
@@ -173,23 +212,23 @@ jobs:
           artifact_subdir: Cli
           max_concurrent_scenarios: "1"
 
-      # Always upload JUnit test results for reporting, even if tests fail
+      # Upload JUnit test results only for a lane that ran to completion.
       - name: Upload cucumber JUnit results
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         continue-on-error: true
-        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # v4.6.2
+        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
-          name: cucumber-junit-${{ runner.os }}  # ✅ Unique per OS
+          name: cucumber-junit-${{ runner.os }}
           path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber-output-junit.xml
           if-no-files-found: warn
 
-      # Always publish a test report for visibility, do not fail workflow if this step fails
+      # Publish a test report only for a lane that ran to completion.
       - name: Publish cucumber test report
-        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         continue-on-error: true
         uses: dorny/test-reporter@v1
         with:
-          name: Cucumber-${{ runner.os }}  # Optional: distinguish Linux vs macOS
+          name: Cucumber-${{ runner.os }}
           path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber-output-junit.xml
           reporter: java-junit
 
@@ -202,3 +241,51 @@ jobs:
       - name: Clean up cucumber artifacts
         if: success() || failure()
         run: rm -rf ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts
+
+      # This step is the unambiguous signal consumed by the peer lane and the
+      # required result job. A cooperatively stopped lane skips this step.
+      - name: Report success
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' }}
+        run: echo "All Cucumber tests passed on ${{ matrix.platform.label }}"
+
+  # This is the stable required check for the Cucumber suite.
+  #
+  # It intentionally has no `needs: tests`: on merge_group it starts alongside
+  # the matrix and polls the current workflow run. It succeeds as soon as either
+  # OS has completed the entire lane and its `Report success` step passed.
+  # It fails once both lanes have completed without reporting success.
+  #
+  # On pull requests it succeeds immediately without starting self-hosted jobs.
+  cucumber-result:
+    name: Cucumber result
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 230
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      # On pull requests, report the required check without running or checking
+      # either self-hosted lane.
+      - name: Report pull-request result
+        if: ${{ github.event_name != 'merge_group' }}
+        run: echo "Cucumber integration tests run only in the merge queue"
+
+      # A local composite action must be checked out before it can be invoked.
+      # Only the required action directory is fetched.
+      - name: Checkout result action
+        if: ${{ github.event_name == 'merge_group' }}
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2 # Version 4.2.2
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: .github/actions/check-any-lane-result
+          sparse-checkout-cone-mode: false
+
+      - name: Check Cucumber result
+        if: ${{ github.event_name == 'merge_group' }}
+        uses: ./.github/actions/check-any-lane-result
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          result-name: Cucumber
+          job-name-prefix: Run cucumber integration tests
+          lane-labels-json: '["self-hosted-linux", "self-hosted-macos"]'

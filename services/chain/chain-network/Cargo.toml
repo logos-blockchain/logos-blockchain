@@ -24,10 +24,11 @@ lb-cryptarchia-sync     = { workspace = true }
 lb-ledger               = { workspace = true }
 lb-network-service      = { workspace = true }
 lb-services-utils       = { workspace = true }
+lb-storage-service      = { workspace = true }
 lb-time-service         = { workspace = true }
 lb-tracing              = { workspace = true }
 lb-tx-service           = { workspace = true }
-lb-utils                = { workspace = true }
+lb-utils                = { features = ["tokio"], workspace = true }
 lru                     = { workspace = true }
 overwatch               = { workspace = true }
 rand                    = { workspace = true }
@@ -45,4 +46,5 @@ lb-network-service = { workspace = true }
 lb-utils           = { workspace = true }
 
 [features]
-default = []
+default          = []
+tokio-task-names = ["lb-utils/tokio-task-names"]

@@ -20,7 +20,7 @@ use lb_core::{
 };
 use lb_groth16::Fr;
 use lb_mmr::MerkleMountainRange;
-use lb_utxotree::DynamicMerkleTree;
+use lb_utxotree::{DynamicMerkleTree, UtxoMerkleHasher};
 
 const SAMPLE_COUNT: u32 = 3;
 
@@ -57,10 +57,16 @@ fn tree_11th_epoch(bencher: Bencher) {
 }
 
 type Mmr = MerkleMountainRange<VoucherCm, ZkHasher>;
-type Tree = DynamicMerkleTree<VoucherCm, ZkHasher>;
+type Tree = DynamicMerkleTree<UtxoMerkleHasher<ZkHasher>>;
 
 fn voucher(i: u64) -> VoucherCm {
     VoucherCm::from_secret(VoucherSecret::from(Fr::from(i)))
+}
+
+/// The tree stores leaf hashes directly, so a voucher's leaf is its field
+/// element (matching `UtxoLeaf`).
+fn voucher_leaf(i: u64) -> Fr {
+    *voucher(i).as_ref()
 }
 
 /// Simulate one full epoch of 21,600 insertions into an MMR that already has
@@ -100,7 +106,7 @@ fn bench_mmr_epoch(bencher: Bencher, initial_size: u64) {
 fn bench_tree_epoch(bencher: Bencher, initial_size: u64) {
     let mut tree = Tree::new();
     for i in 0..initial_size {
-        let (new_tree, _) = tree.insert(voucher(i));
+        let (new_tree, _) = tree.insert(voucher_leaf(i));
         tree = new_tree;
     }
 
@@ -108,7 +114,7 @@ fn bench_tree_epoch(bencher: Bencher, initial_size: u64) {
         let mut tree = tree.clone();
 
         for i in 0..BLOCKS_PER_EPOCH {
-            let (new_tree, _) = tree.insert(voucher(initial_size + i));
+            let (new_tree, _) = tree.insert(voucher_leaf(initial_size + i));
             tree = new_tree;
         }
 

@@ -12,7 +12,10 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use crate::{
     codec::{DeserializeOp as _, SerializeOp as _},
     header::{ContentId, Header, HeaderId},
-    mantle::{StorageSize, Transaction, TxHash},
+    mantle::{
+        traits::{Hashable, StorageSize},
+        transactions::hash::TxHash,
+    },
     proofs::leader_proof::{Groth16LeaderProof, LeaderProof as _},
     utils::merkle,
 };
@@ -50,9 +53,29 @@ pub struct Proposal {
     pub signature: Ed25519Signature,
 }
 
+/// Transaction hashes referenced by a block proposal.
+pub type BlockTransactionReferences = BoundedVec<TxHash, 0, MAX_BLOCK_TRANSACTIONS>;
+
+/// References to transactions that are included in a block proposal.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct References {
-    pub mempool_transactions: Vec<TxHash>,
+    /// Bounded hashes of the transactions that are included in the block
+    /// proposal.
+    pub mempool_transactions: BlockTransactionReferences,
+}
+
+impl References {
+    /// Constructs a `References` instance from a list of transactions,
+    /// extracting their hashes.
+    #[must_use]
+    pub(crate) fn from_block_transactions<Tx>(transactions: &BlockTransactions<Tx>) -> Self
+    where
+        Tx: Hashable<Hash = TxHash>,
+    {
+        Self {
+            mempool_transactions: transactions.map_ref(|transaction| Tx::hash(transaction)),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -65,7 +88,7 @@ pub struct Block<Tx> {
 
 impl<'de, Tx> Deserialize<'de> for Block<Tx>
 where
-    Tx: Clone + Eq + Deserialize<'de> + Transaction<Hash = TxHash> + StorageSize,
+    Tx: Clone + Eq + Deserialize<'de> + Hashable<Hash = TxHash> + StorageSize,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -123,7 +146,7 @@ impl<Tx> Block<Tx> {
         signing_key: &Ed25519Key,
     ) -> Result<Self, Error>
     where
-        Tx: Transaction<Hash = TxHash> + StorageSize,
+        Tx: Hashable<Hash = TxHash> + StorageSize,
     {
         // 1. Non-genesis blocks only
         if slot == Slot::genesis() {
@@ -162,7 +185,7 @@ impl<Tx> Block<Tx> {
         signature: Ed25519Signature,
     ) -> Result<Self, Error>
     where
-        Tx: Transaction<Hash = TxHash> + StorageSize,
+        Tx: Hashable<Hash = TxHash> + StorageSize,
     {
         let block = Self {
             header,
@@ -176,7 +199,7 @@ impl<Tx> Block<Tx> {
 
     fn into_verified(self) -> Result<Self, Error>
     where
-        Tx: Transaction<Hash = TxHash> + StorageSize,
+        Tx: Hashable<Hash = TxHash> + StorageSize,
     {
         // 1. Non-genesis blocks only
         if self.header.slot() == Slot::genesis() {
@@ -187,10 +210,7 @@ impl<Tx> Block<Tx> {
         self.validate_total_transactions_size()?;
 
         // 3. Block root matches transactions merkle hash
-        let calculated_content_id = Self::calculate_content_id(&self.transactions);
-        if self.header.block_root() != &calculated_content_id {
-            return Err(Error::BlockRootMismatch);
-        }
+        self.validate_block_root()?;
 
         // 4. Signature is valid over the header bytes
         let leader_public_key = self.header.leader_proof().leader_key();
@@ -205,7 +225,7 @@ impl<Tx> Block<Tx> {
 
     fn validate_total_transactions_size(&self) -> Result<usize, Error>
     where
-        Tx: Transaction<Hash = TxHash> + StorageSize,
+        Tx: Hashable<Hash = TxHash> + StorageSize,
     {
         let mut total = 0usize;
 
@@ -228,9 +248,21 @@ impl<Tx> Block<Tx> {
         Ok(total)
     }
 
+    fn validate_block_root(&self) -> Result<(), Error>
+    where
+        Tx: Hashable<Hash = TxHash>,
+    {
+        let calculated_content_id = Self::calculate_content_id(&self.transactions);
+        if self.header.block_root() != &calculated_content_id {
+            return Err(Error::BlockRootMismatch);
+        }
+
+        Ok(())
+    }
+
     fn calculate_content_id(transactions: &[Tx]) -> ContentId
     where
-        Tx: Transaction<Hash = TxHash>,
+        Tx: Hashable<Hash = TxHash>,
     {
         let root_hash = merkle::calculate_block_root(transactions);
         ContentId::from(root_hash)
@@ -242,13 +274,13 @@ impl<Tx> Block<Tx> {
     }
 
     #[must_use]
-    pub fn transactions(&self) -> impl ExactSizeIterator<Item = &Tx> + '_ {
+    pub fn transactions_iter(&self) -> impl ExactSizeIterator<Item = &Tx> + '_ {
         self.transactions.as_slice().iter()
     }
 
     #[must_use]
-    pub fn transactions_vec(&self) -> &Vec<Tx> {
-        self.transactions.as_ref()
+    pub const fn transactions(&self) -> &BlockTransactions<Tx> {
+        &self.transactions
     }
 
     #[must_use]
@@ -261,25 +293,20 @@ impl<Tx> Block<Tx> {
         &self.signature
     }
 
+    #[must_use]
     pub fn to_proposal(self) -> Proposal
     where
-        Tx: Transaction<Hash = TxHash>,
+        Tx: Hashable<Hash = TxHash>,
     {
-        let mempool_transactions: Vec<TxHash> =
-            self.transactions.iter().map(Transaction::hash).collect();
-        let references = References {
-            mempool_transactions,
-        };
-
         Proposal {
             header: self.header,
-            references,
+            references: References::from_block_transactions(&self.transactions),
             signature: self.signature,
         }
     }
 }
 
-impl<Tx: Clone + Eq + Serialize + DeserializeOwned + Transaction<Hash = TxHash> + StorageSize>
+impl<Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize>
     TryFrom<Bytes> for Block<Tx>
 {
     type Error = crate::codec::Error;
@@ -294,7 +321,9 @@ impl<Tx: Clone + Eq + Serialize + DeserializeOwned + Transaction<Hash = TxHash> 
     }
 }
 
-impl<Tx: Clone + Eq + Serialize + DeserializeOwned> TryFrom<Block<Tx>> for Bytes {
+impl<Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash>> TryFrom<Block<Tx>>
+    for Bytes
+{
     type Error = crate::codec::Error;
 
     fn try_from(block: Block<Tx>) -> Result<Self, Self::Error> {
@@ -316,10 +345,10 @@ mod tests {
     use crate::{
         crypto::ZkHasher,
         mantle::{
-            MantleTx, TransactionHasher,
             ledger::{Note, Utxo},
             ops::leader_claim::VoucherCm,
-            transactions::Ops,
+            traits::hashable,
+            transactions::{Ops, mantle_tx::MantleTx},
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };
@@ -387,6 +416,26 @@ mod tests {
         iter::repeat_with(|| MantleTx(Ops::new_unchecked(vec![])))
             .take(count)
             .collect()
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct IndexedTestMantleTx {
+        index: u8,
+    }
+
+    impl Hashable for IndexedTestMantleTx {
+        const HASHER: hashable::Hasher<Self> = |transaction| TxHash::from([transaction.index; 32]);
+        type Hash = TxHash;
+
+        fn as_signing(&self) -> Vec<u8> {
+            vec![self.index]
+        }
+    }
+
+    impl StorageSize for IndexedTestMantleTx {
+        fn storage_size(&self) -> usize {
+            1
+        }
     }
 
     #[test]
@@ -468,11 +517,101 @@ mod tests {
         }
     }
 
+    #[test]
+    fn proposal_references_preserve_transaction_hashes_and_order() {
+        let parent_block = [0u8; 32].into();
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let transactions = BlockTransactions::<IndexedTestMantleTx>::try_from(vec![
+            IndexedTestMantleTx { index: 1 },
+            IndexedTestMantleTx { index: 2 },
+            IndexedTestMantleTx { index: 3 },
+        ])
+        .unwrap();
+        let expected_hashes: Vec<_> = transactions.iter().map(IndexedTestMantleTx::hash).collect();
+
+        let proposal = Block::create(
+            parent_block,
+            Slot::from(42u64),
+            create_proof(),
+            transactions,
+            &signing_key,
+        )
+        .unwrap()
+        .to_proposal();
+
+        assert_eq!(proposal.mempool_transactions(), expected_hashes.as_slice());
+    }
+
+    #[test]
+    fn proposal_accepts_maximum_transaction_references() {
+        let parent_block = [0u8; 32].into();
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let block = Block::create(
+            parent_block,
+            Slot::from(42u64),
+            create_proof(),
+            BlockTransactions::<MantleTx>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap(),
+            &signing_key,
+        )
+        .unwrap();
+
+        let proposal = block.to_proposal();
+
+        assert_eq!(
+            proposal.mempool_transactions().len(),
+            MAX_BLOCK_TRANSACTIONS
+        );
+    }
+
+    #[test]
+    fn proposal_deserialization_rejects_excess_transaction_references() {
+        #[derive(Serialize)]
+        struct LegacyReferences {
+            mempool_transactions: Vec<TxHash>,
+        }
+
+        #[derive(Serialize)]
+        struct LegacyProposal {
+            header: Header,
+            references: LegacyReferences,
+            signature: Ed25519Signature,
+        }
+
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let proposal = Block::create(
+            [0u8; 32].into(),
+            Slot::from(42u64),
+            create_proof(),
+            BlockTransactions::<MantleTx>::empty(),
+            &signing_key,
+        )
+        .unwrap()
+        .to_proposal();
+        let legacy = LegacyProposal {
+            header: proposal.header.clone(),
+            references: LegacyReferences {
+                mempool_transactions: vec![TxHash::from([0u8; 32]); MAX_BLOCK_TRANSACTIONS + 1],
+            },
+            signature: *proposal.signature(),
+        };
+        let bytes = bincode::serialize(&legacy).unwrap();
+
+        let error = <Proposal as crate::codec::DeserializeOp>::from_bytes(&bytes)
+            .expect_err("proposal with too many transaction references must be rejected");
+
+        assert!(
+            error.to_string().contains("exceeds static maximum"),
+            "unexpected deserialization error: {error}"
+        );
+    }
+
     #[derive(Clone, Copy, Debug)]
     struct TestMantleTx<const SIZE: usize>;
 
-    impl<const SIZE: usize> Transaction for TestMantleTx<SIZE> {
-        const HASHER: TransactionHasher<Self> = |_tx| TxHash::from([0u8; 32]);
+    impl<const SIZE: usize> Hashable for TestMantleTx<SIZE> {
+        //noinspection RsTypeCheck: The type is correct, but the linter is confused by
+        // the closure.
+        const HASHER: hashable::Hasher<Self> = |_tx| TxHash::from([0u8; 32]);
         type Hash = TxHash;
 
         fn as_signing(&self) -> Vec<u8> {

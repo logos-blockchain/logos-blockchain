@@ -7,14 +7,14 @@ use thiserror::Error;
 
 use crate::{
     mantle::{
-        GasCalculator as _, GasConstants, Note, NoteId, Op, Utxo, Value,
+        GasConstants, Note, NoteId, Op, Utxo, Value,
         gas::{GasCost, GasOverflow},
         ledger::{BoundedUtxos, Inputs, Outputs},
         ops::{
             channel::{ChannelId, withdraw::ChannelWithdrawOp},
             transfer::TransferOp,
         },
-        transactions::{MantleTx, MantleTxContext},
+        transactions::mantle_tx::{MantleTx, MantleTxContext},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
@@ -56,7 +56,7 @@ impl From<(BoundedError, BoundedTag)> for TxBuilderError {
 ///
 /// The builder is intentionally free of any [`MantleTxContext`]: gas prices are
 /// tip-dependent, so the context is supplied as a parameter to the fee-aware
-/// methods ([`Self::gas_cost`], [`Self::funding_delta`],
+/// methods ([`Self::minimum_gas_cost`], [`Self::funding_delta`],
 /// [`Self::return_change`]) at the moment they run. This keeps the builder
 /// serializable, so a partially built tx can be handed to a wallet (e.g. over
 /// HTTP) to be funded against a freshly fetched context.
@@ -233,7 +233,10 @@ impl MantleTxBuilder {
             .map_err(|_| TxBuilderError::NegativeNetBalance { net_balance })
     }
 
-    pub fn gas_cost<G: GasConstants>(
+    /// Predicts the minimum gas cost of the transaction once signed.
+    /// See [`MantleTx::minimum_total_gas_cost`] to understand why this is only
+    /// a minimum, not an exact cost.
+    pub fn minimum_gas_cost<G: GasConstants>(
         &self,
         context: &MantleTxContext,
     ) -> Result<GasCost, TxBuilderError> {
@@ -254,14 +257,14 @@ impl MantleTxBuilder {
         }
 
         let build = self.clone().build()?;
-        Ok(build.total_gas_cost::<G>(&context.gas_context)?)
+        Ok(build.minimum_total_gas_cost::<G>(&context.gas_context)?)
     }
 
     pub fn funding_delta<G: GasConstants>(
         &self,
         context: &MantleTxContext,
     ) -> Result<i128, TxBuilderError> {
-        Ok(self.net_balance() - i128::from(self.gas_cost::<G>(context)?.into_inner()))
+        Ok(self.net_balance() - i128::from(self.minimum_gas_cost::<G>(context)?.into_inner()))
     }
 
     /// Returns all note IDs already consumed or locked by this transaction,
@@ -477,7 +480,7 @@ mod tests {
             leader_reward_amount: 0,
         };
 
-        let result = builder.gas_cost::<MainnetGasConstants>(&context);
+        let result = builder.minimum_gas_cost::<MainnetGasConstants>(&context);
 
         assert!(matches!(
             result,

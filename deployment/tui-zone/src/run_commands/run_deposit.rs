@@ -1,5 +1,5 @@
 use lb_core::mantle::{
-    Op, OpProof, SignedMantleTx, Transaction as _, ops::channel::inscribe::Inscription,
+    Op, OpProof, SignedMantleTx, ops::channel::inscribe::Inscription, traits::Hashable as _,
 };
 use lb_key_management_system_service::keys::ZkKey;
 
@@ -44,12 +44,13 @@ pub(crate) async fn run_deposit(args: DepositArgs) -> RunResult<()> {
     let user_sig = ZkKey::multi_sign(&[wallet_key], &tx.hash().to_fr())?;
     let signed_tx = SignedMantleTx::new(
         tx,
-        vec![
+        [
             OpProof::ZkSig(user_sig.clone()),
             OpProof::ZkSig(user_sig),
             OpProof::Ed25519Sig(sequencer_sig),
-        ],
-    )?;
+        ]
+        .into(),
+    );
     let tx_hash = signed_tx.hash();
 
     let goal = CommandGoal::Deposit {
@@ -58,7 +59,7 @@ pub(crate) async fn run_deposit(args: DepositArgs) -> RunResult<()> {
         amount: args.amount,
         metadata: goal_metadata,
     };
-    let (_result, _checkpoint) = sequencer.handle().submit_signed_tx(signed_tx, msg_id)?;
+    let _receipt = sequencer.handle().submit_signed_tx(signed_tx, msg_id)?;
     println!(
         "{} deposit: submitted tx_hash={} msg_id={}",
         timestamp(),

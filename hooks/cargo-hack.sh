@@ -1,3 +1,3 @@
 #!/bin/bash
 
-RUSTFLAGS="-D warnings" cargo hack --feature-powerset --no-dev-deps --keep-going --all-targets check
+CARGO_BUILD_WARNINGS="deny" cargo hack --feature-powerset --no-dev-deps --keep-going --all-targets check

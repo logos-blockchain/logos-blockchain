@@ -159,7 +159,7 @@ impl Behaviour {
 
     fn handle_received_serialized_encapsulated_message(&mut self, serialized_message: &[u8]) {
         let Ok(deserialized_encapsulated_message) =
-            deserialize_encapsulated_message(serialized_message, self.num_blend_layers)
+            deserialize_encapsulated_message(serialized_message, &self.num_blend_layers)
         else {
             tracing::trace!(target: LOG_TARGET, "Failed to deserialize received message. Ignoring...");
             return;

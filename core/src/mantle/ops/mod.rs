@@ -14,11 +14,8 @@ use channel::{
     channel_transfer::ChannelTransferOp, config::ChannelConfigOp, deposit::DepositOp,
     inscribe::InscriptionOp, withdraw::ChannelWithdrawOp,
 };
+use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
-use nom::{
-    IResult,
-    error::{Error, ErrorKind},
-};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{
@@ -30,12 +27,9 @@ use super::{
 };
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
-    mantle::{
-        nom::{NomDecode, NomEncode},
-        ops::{
-            internal::{OpDe, OpSer},
-            transfer::TransferOp,
-        },
+    mantle::ops::{
+        internal::{OpDe, OpSer},
+        transfer::TransferOp,
     },
     proofs::{
         channel_multi_sig_proof::ChannelMultiSigProof, leader_claim_proof::Groth16LeaderClaimProof,
@@ -118,7 +112,7 @@ impl<'de> Deserialize<'de> for Op {
             OpDe::deserialize(deserializer).map(Self::from)
         } else {
             let bytes = <Vec<u8>>::deserialize(deserializer)?;
-            Self::decode(&bytes)
+            Self::decode(&bytes, &())
                 .map(|(_, op)| op)
                 .map_err(serde::de::Error::custom)
         }
@@ -126,83 +120,82 @@ impl<'de> Deserialize<'de> for Op {
 }
 
 // Op = Opcode OpPayload
-impl NomEncode for Op {
-    fn encode(&self) -> Vec<u8> {
-        let op_code = self.code();
-        let mut bytes = op_code.encode();
+impl BinaryEncode for Op {
+    fn encoded_length(&self) -> usize {
+        let payload = match self {
+            Self::ChannelInscribe(op) => op.encoded_length(),
+            Self::ChannelConfig(op) => op.encoded_length(),
+            Self::ChannelDeposit(op) => op.encoded_length(),
+            Self::ChannelWithdraw(op) => op.encoded_length(),
+            Self::ChannelTransfer(op) => op.encoded_length(),
+            Self::SDPDeclare(op) => op.encoded_length(),
+            Self::SDPWithdraw(op) => op.encoded_length(),
+            Self::SDPActive(op) => op.encoded_length(),
+            Self::LeaderClaim(op) => op.encoded_length(),
+            Self::Transfer(op) => op.encoded_length(),
+        };
+        self.code().encoded_length().checked_add(payload).unwrap()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.code().encode_into(out);
         match self {
-            Self::ChannelInscribe(op) => {
-                bytes.extend(op.encode());
-            }
-            Self::ChannelConfig(op) => {
-                bytes.extend(op.encode());
-            }
-            Self::ChannelDeposit(op) => {
-                bytes.extend(op.encode());
-            }
-            Self::ChannelWithdraw(op) => {
-                bytes.extend(op.encode());
-            }
-            Self::ChannelTransfer(op) => {
-                bytes.extend(op.encode());
-            }
-            Self::SDPDeclare(op) => {
-                bytes.extend(op.encode());
-            }
-            Self::SDPWithdraw(op) => {
-                bytes.extend(op.encode());
-            }
-            Self::SDPActive(op) => {
-                bytes.extend(op.encode());
-            }
-            Self::LeaderClaim(op) => {
-                bytes.extend(op.encode());
-            }
-            Self::Transfer(op) => bytes.extend(op.encode()),
+            Self::ChannelInscribe(op) => op.encode_into(out),
+            Self::ChannelConfig(op) => op.encode_into(out),
+            Self::ChannelDeposit(op) => op.encode_into(out),
+            Self::ChannelWithdraw(op) => op.encode_into(out),
+            Self::ChannelTransfer(op) => op.encode_into(out),
+            Self::SDPDeclare(op) => op.encode_into(out),
+            Self::SDPWithdraw(op) => op.encode_into(out),
+            Self::SDPActive(op) => op.encode_into(out),
+            Self::LeaderClaim(op) => op.encode_into(out),
+            Self::Transfer(op) => op.encode_into(out),
         }
-        bytes
     }
 }
 
-impl NomDecode for Op {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, opcode) = u8::decode(bytes)?;
+impl BinaryDecode for Op {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, opcode) = u8::decode(input, &())?;
 
         match opcode {
-            INSCRIBE => {
-                InscriptionOp::decode(bytes).map(|(bytes, op)| (bytes, Self::ChannelInscribe(op)))
-            }
-            CHANNEL_CONFIG => {
-                ChannelConfigOp::decode(bytes).map(|(bytes, op)| (bytes, Self::ChannelConfig(op)))
-            }
+            INSCRIBE => InscriptionOp::decode(input, &())
+                .map(|(rest, op)| (rest, Self::ChannelInscribe(op))),
+            CHANNEL_CONFIG => ChannelConfigOp::decode(input, &())
+                .map(|(rest, op)| (rest, Self::ChannelConfig(op))),
             CHANNEL_DEPOSIT => {
-                DepositOp::decode(bytes).map(|(bytes, op)| (bytes, Self::ChannelDeposit(op)))
+                DepositOp::decode(input, &()).map(|(rest, op)| (rest, Self::ChannelDeposit(op)))
             }
-            CHANNEL_WITHDRAW => ChannelWithdrawOp::decode(bytes)
-                .map(|(bytes, op)| (bytes, Self::ChannelWithdraw(op))),
-            CHANNEL_TRANSFER => ChannelTransferOp::decode(bytes)
-                .map(|(bytes, op)| (bytes, Self::ChannelTransfer(op))),
+            CHANNEL_WITHDRAW => ChannelWithdrawOp::decode(input, &())
+                .map(|(rest, op)| (rest, Self::ChannelWithdraw(op))),
+            CHANNEL_TRANSFER => ChannelTransferOp::decode(input, &())
+                .map(|(rest, op)| (rest, Self::ChannelTransfer(op))),
             SDP_DECLARE => {
-                SDPDeclareOp::decode(bytes).map(|(bytes, op)| (bytes, Self::SDPDeclare(op)))
+                SDPDeclareOp::decode(input, &()).map(|(rest, op)| (rest, Self::SDPDeclare(op)))
             }
             SDP_WITHDRAW => {
-                SDPWithdrawOp::decode(bytes).map(|(bytes, op)| (bytes, Self::SDPWithdraw(op)))
+                SDPWithdrawOp::decode(input, &()).map(|(rest, op)| (rest, Self::SDPWithdraw(op)))
             }
             SDP_ACTIVE => {
-                SDPActiveOp::decode(bytes).map(|(bytes, op)| (bytes, Self::SDPActive(op)))
+                SDPActiveOp::decode(input, &()).map(|(rest, op)| (rest, Self::SDPActive(op)))
             }
             LEADER_CLAIM => {
-                LeaderClaimOp::decode(bytes).map(|(bytes, op)| (bytes, Self::LeaderClaim(op)))
+                LeaderClaimOp::decode(input, &()).map(|(rest, op)| (rest, Self::LeaderClaim(op)))
             }
-            TRANSFER => TransferOp::decode(bytes).map(|(bytes, op)| (bytes, Self::Transfer(op))),
-            _ => Err(nom::Err::Error(Error::new(bytes, ErrorKind::Fail))),
+            TRANSFER => TransferOp::decode(input, &()).map(|(rest, op)| (rest, Self::Transfer(op))),
+            other => Err(DecodeError::unknown_discriminant::<Self>(u64::from(other))),
         }
     }
 }
 
 // We just check that the enum discriminant tag is encoded correctly, so a
 // single fixture is fine here.
-// TODO: Remove once the `NomCodec` macro supports enums.
+// TODO: Remove once the `BinaryCodec` macro supports enums.
 
 impl Op {
     #[must_use]
@@ -304,10 +297,11 @@ mod mantle_test_vectors {
     use super::*;
     use crate::{
         mantle::{
-            MantleTx, Note, Transaction as _,
+            MantleTx, Note,
             channel::{SlotTimeframe, SlotTimeout},
             ledger::{Inputs, NoteId, Outputs},
             ops::channel::{ChannelId, MsgId, config::Keys, deposit::Metadata},
+            traits::Hashable as _,
             transactions::Ops,
         },
         sdp::{

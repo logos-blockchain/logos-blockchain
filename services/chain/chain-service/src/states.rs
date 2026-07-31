@@ -1,6 +1,6 @@
 use std::{collections::HashSet, time::SystemTime};
 
-use lb_core::{header::HeaderId, mantle::GenesisTx as _};
+use lb_core::{header::HeaderId, mantle::traits::GenesisTx as _};
 use lb_ledger::LedgerState;
 use overwatch::{DynError, services::state::ServiceState};
 use serde::{Deserialize, Serialize};
@@ -24,6 +24,11 @@ pub struct CryptarchiaConsensusState {
 }
 
 impl CryptarchiaConsensusState {
+    #[must_use]
+    pub const fn tip(&self) -> HeaderId {
+        self.tip
+    }
+
     /// Re-create the [`CryptarchiaConsensusState`]
     /// given the cryptarchia engine and ledger state.
     ///
@@ -70,7 +75,7 @@ impl ServiceState for CryptarchiaConsensusState {
             StartingState::Genesis { genesis_block } => {
                 let lib_id = genesis_block.header().id();
                 let genesis_tx = genesis_block
-                    .transactions()
+                    .transactions_iter()
                     .next()
                     .expect("Genesis block should be valid");
                 let (ledger, _events) = LedgerState::from_genesis_tx(
@@ -113,7 +118,10 @@ mod tests {
         sync::Arc,
     };
 
-    use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
+    use lb_core::{
+        codec::{DeserializeOp as _, SerializeOp as _},
+        sdp::{MinStake, ServiceParameters, ServiceType},
+    };
     use lb_cryptarchia_engine::State::Bootstrapping;
     use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards};
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
@@ -348,6 +356,8 @@ mod tests {
             HashSet::new(),
         )
         .unwrap();
+        let encoded_state = saved_state.to_bytes().unwrap();
+        let saved_state = CryptarchiaConsensusState::from_bytes(&encoded_state).unwrap();
 
         // Restore (simulates initialize_cryptarchia on restart):
         // Create a new Cryptarchia from the saved LIB with its slot and length.

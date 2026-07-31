@@ -1,6 +1,6 @@
 use lb_core::{
     mantle::{
-        MantleTx, SignedMantleTx, Transaction as _, Value,
+        SignedMantleTx, TxHash,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         ops::{
             Op, OpProof,
@@ -10,7 +10,8 @@ use lb_core::{
                 inscribe::{Inscription, InscriptionOp},
             },
         },
-        transactions::{MantleTxBuilder, Ops, TxHash},
+        traits::Hashable as _,
+        transactions::{MantleTxBuilder, Ops, OpsProofs, mantle_tx::MantleTx, states::Unverified},
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
@@ -19,14 +20,6 @@ use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 
 use super::types::{Error, FundingConfig};
 use crate::adapter;
-
-/// Execution tip paid on top of the mandatory fee when funding a transaction,
-/// buffering gas-price movement between funding and inclusion: in the current
-/// spec the base fee moves at most 12.5% per block, so this covers a few
-/// blocks of drift at current fee levels.
-///
-/// TODO: promote to [`FundingConfig`] if clients need to tune it.
-const PRIORITY_FEE: Value = 200;
 
 /// Assemble the ops for a transaction, funding it from the node's wallet when
 /// a [`FundingConfig`] is present.
@@ -61,7 +54,7 @@ where
             change_public_key: funding.funding_pk,
             funding_public_keys: vec![funding.funding_pk],
             max_tx_fee: funding.max_tx_fee,
-            priority_fee: PRIORITY_FEE,
+            priority_fee: funding.priority_fee,
         })
         .await
         .map_err(|e| Error::Network(format!("funding failed: {e}")))?;
@@ -74,9 +67,9 @@ where
 /// op; a fee-less transaction carries none).
 pub(super) fn attach_transfer_proof(
     tx: &MantleTx,
-    mut channel_proofs: Vec<OpProof>,
+    mut channel_proofs: OpsProofs,
     transfer_proof: Option<OpProof>,
-) -> Result<Vec<OpProof>, Error> {
+) -> Result<OpsProofs, Error> {
     let transfer_count = tx
         .ops()
         .iter()
@@ -84,7 +77,9 @@ pub(super) fn attach_transfer_proof(
         .count();
     match (transfer_count, transfer_proof) {
         (0, _) => {}
-        (1, Some(proof)) => channel_proofs.push(proof),
+        (1, Some(proof)) => channel_proofs
+            .try_push(proof)
+            .map_err(|e| Error::Network(format!("too many operation proofs: {e:?}")))?,
         (1, None) => {
             return Err(Error::Network(
                 "funded transaction carries a fee transfer but no transfer proof".into(),
@@ -114,19 +109,25 @@ pub(super) fn build_atomic_withdraw_ops_proofs(
     own_key_index: ChannelKeyIndex,
     own_sig: Ed25519Signature,
     transfer_proof: Option<&OpProof>,
-) -> Result<Vec<OpProof>, Error> {
+) -> Result<OpsProofs, Error> {
     let withdraw_proof =
         ChannelMultiSigProof::try_new([IndexedSignature::new(own_key_index, own_sig)].into())
             .map_err(|e| Error::Network(format!("multi-sig proof assembly failed: {e:?}")))?;
-    let mut ops_proofs = Vec::with_capacity(tx.ops().len());
+    let mut ops_proofs = OpsProofs::empty();
     for op in tx.ops() {
         match op {
             Op::ChannelWithdraw(_) => {
-                ops_proofs.push(OpProof::ChannelMultiSigProof(withdraw_proof.clone()));
+                ops_proofs
+                    .try_push(OpProof::ChannelMultiSigProof(withdraw_proof.clone()))
+                    .map_err(|e| Error::Network(format!("too many operation proofs: {e:?}")))?;
             }
-            Op::ChannelInscribe(_) => ops_proofs.push(OpProof::Ed25519Sig(own_sig)),
+            Op::ChannelInscribe(_) => ops_proofs
+                .try_push(OpProof::Ed25519Sig(own_sig))
+                .map_err(|e| Error::Network(format!("too many operation proofs: {e:?}")))?,
             Op::Transfer(_) => match transfer_proof {
-                Some(proof) => ops_proofs.push(proof.clone()),
+                Some(proof) => ops_proofs
+                    .try_push(proof.clone())
+                    .map_err(|e| Error::Network(format!("too many operation proofs: {e:?}")))?,
                 None => {
                     return Err(Error::Network(
                         "funded transaction carries a fee transfer but no transfer proof".into(),
@@ -171,7 +172,7 @@ pub(super) async fn create_inscribe_tx<Node>(
     signing_key: &Ed25519Key,
     inscription: Inscription,
     parent: MsgId,
-) -> Result<(SignedMantleTx, MsgId), Error>
+) -> Result<(SignedMantleTx<Unverified>, MsgId), Error>
 where
     Node: adapter::Node + Sync,
 {
@@ -192,14 +193,11 @@ where
     let signature = sign_tx(tx_hash, signing_key);
     let ops_proofs = attach_transfer_proof(
         &inscribe_tx,
-        vec![OpProof::Ed25519Sig(signature)],
+        [OpProof::Ed25519Sig(signature)].into(),
         transfer_proof,
     )?;
 
-    let signed_tx = SignedMantleTx {
-        ops_proofs,
-        mantle_tx: inscribe_tx,
-    };
+    let signed_tx = SignedMantleTx::new(inscribe_tx, ops_proofs);
 
     Ok((signed_tx, msg_id))
 }
@@ -218,7 +216,7 @@ pub(super) async fn create_channel_config_tx<Node>(
     posting_timeout: SlotTimeout,
     configuration_threshold: u16,
     transfer_threshold: u16,
-) -> Result<SignedMantleTx, Error>
+) -> Result<SignedMantleTx<Unverified>, Error>
 where
     Node: adapter::Node + Sync,
 {
@@ -250,14 +248,11 @@ where
     let proof = ChannelMultiSigProof::try_new(signatures).unwrap();
     let ops_proofs = attach_transfer_proof(
         &config_tx,
-        vec![OpProof::ChannelMultiSigProof(proof)],
+        [OpProof::ChannelMultiSigProof(proof)].into(),
         transfer_proof,
     )?;
 
-    Ok(SignedMantleTx {
-        ops_proofs,
-        mantle_tx: config_tx,
-    })
+    Ok(SignedMantleTx::new(config_tx, ops_proofs))
 }
 
 pub(super) fn prepare_tx(

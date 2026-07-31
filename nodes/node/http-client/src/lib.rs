@@ -2,12 +2,15 @@ use std::sync::Arc;
 
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 pub use lb_chain_broadcast_service::BlockInfo;
-pub use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, Slot, State};
+pub use lb_chain_service::{ChainServiceInfo, CryptarchiaInfo, PhaseTag, Slot, State};
 pub use lb_core::events::{Event, Events, TxEventPayload};
 use lb_core::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
     header::{ContentId, HeaderId},
-    mantle::{SignedMantleTx, channel::ChannelState, ops::channel::ChannelId},
+    mantle::{
+        SignedMantleTx, channel::ChannelState, ops::channel::ChannelId,
+        transactions::states::Unverified,
+    },
     proofs::leader_proof::Groth16LeaderProof,
     sdp::{DeclarationId, DeclarationMessage},
 };
@@ -62,10 +65,10 @@ pub struct ApiHeader {
 #[derive(Clone, Debug, Deserialize)]
 pub struct ApiBlock {
     pub header: ApiHeader,
-    pub transactions: Vec<SignedMantleTx>,
+    pub transactions: Vec<SignedMantleTx<Unverified>>,
 }
 
-/// Processed block event from the blocks stream.
+/// Processed block event from the block stream.
 /// Matches the server's `ApiProcessedBlockEvent`.
 #[derive(Clone, Debug, Deserialize)]
 pub struct ProcessedBlockEvent {

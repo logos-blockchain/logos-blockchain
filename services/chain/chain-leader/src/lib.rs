@@ -20,8 +20,10 @@ use lb_core::{
     block::{Block, BlockTransactions, Error as BlockError, MAX_BLOCK_TRANSACTIONS_SIZE},
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, SignedMantleTx, StorageSize, Transaction, TxHash,
+        SignedMantleTx,
         gas::MainnetGasConstants,
+        traits::{Hashable, MantleTxWithProofs, StorageSize},
+        transactions::{hash::TxHash, states::Preverified},
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
 };
@@ -29,6 +31,7 @@ use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
 use lb_ledger::LedgerState;
 use lb_services_utils::wait_until_services_are_ready;
+use lb_storage_service::StorageService;
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
 use lb_tx_service::{
     TxMempoolService,
@@ -36,6 +39,7 @@ use lb_tx_service::{
     network::NetworkAdapter as MempoolNetworkAdapter,
     storage::MempoolStorageAdapter,
 };
+use lb_utils::tokio::task::spawn;
 use lb_wallet_service::api::{WalletApi, WalletApiError};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -169,7 +173,7 @@ pub struct CryptarchiaLeader<
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Settings: Clone,
     Mempool::Item: Clone + Eq + Debug + 'static,
-    Mempool::Item: AuthenticatedMantleTx,
+    Mempool::Item: MantleTxWithProofs,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
@@ -208,7 +212,7 @@ where
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::Settings: Clone,
-    Mempool::Item: AuthenticatedMantleTx + Clone + Eq + Debug,
+    Mempool::Item: MantleTxWithProofs + Clone + Eq + Debug,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
@@ -257,7 +261,7 @@ where
         + Send
         + 'static,
     BlendService::BroadcastSettings: Clone + Send + Sync,
-    Mempool: MemPool<Item = SignedMantleTx>
+    Mempool: MemPool<Item = SignedMantleTx<Preverified>>
         + RecoverableMempool<BlockId = HeaderId, Key = TxHash>
         + Send
         + Sync
@@ -265,7 +269,7 @@ where
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Settings: Clone + Send + Sync + 'static,
-    Mempool::Item: Transaction<Hash = Mempool::Key>
+    Mempool::Item: Hashable<Hash = Mempool::Key>
         + Debug
         + Clone
         + Eq
@@ -275,7 +279,7 @@ where
         + Sync
         + Unpin
         + 'static,
-    Mempool::Item: AuthenticatedMantleTx,
+    Mempool::Item: MantleTxWithProofs,
     MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>
         + Send
         + Sync
@@ -287,12 +291,19 @@ where
     ChainNetwork: ChainNetworkServiceData<Tx = Mempool::Item>,
     Wallet: lb_wallet_service::api::WalletServiceData + 'static,
     RuntimeServiceId: Debug
+        + Clone
         + Send
         + Sync
         + Display
         + 'static
         + AsServiceId<Self>
         + AsServiceId<BlendService>
+        + AsServiceId<
+            StorageService<
+                <Mempool::Storage as MempoolStorageAdapter<RuntimeServiceId>>::Backend,
+                RuntimeServiceId,
+            >,
+        >
         + AsServiceId<
             TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
         >
@@ -536,14 +547,14 @@ where
         + Send
         + 'static,
     BlendService::BroadcastSettings: Clone + Send + Sync,
-    Mempool: MemPool<Item = SignedMantleTx>
+    Mempool: MemPool<Item = SignedMantleTx<Preverified>>
         + RecoverableMempool<BlockId = HeaderId, Key = TxHash>
         + Send
         + Sync
         + 'static,
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Settings: Clone + Send + Sync + 'static,
-    Mempool::Item: AuthenticatedMantleTx<Hash = Mempool::Key>
+    Mempool::Item: MantleTxWithProofs<Hash = Mempool::Key>
         + Debug
         + Clone
         + Eq
@@ -621,9 +632,9 @@ where
             for tx in pending {
                 match ledger_state
                     .clone()
-                    .try_apply_contents::<HeaderId, MainnetGasConstants>(
+                    .try_apply_contents::<_, HeaderId, MainnetGasConstants>(
                         ledger_config,
-                        iter::once(tx.clone()),
+                        iter::once(&tx),
                     ) {
                     Ok((new_state, _events)) => {
                         ledger_state = new_state;
@@ -646,7 +657,7 @@ where
 
         // Transactions that never became applicable are genuinely invalid against
         // this block's ledger state and can be evicted from the mempool.
-        let invalid_tx_hashes: Vec<_> = pending.iter().map(Transaction::hash).collect();
+        let invalid_tx_hashes: Vec<_> = pending.iter().map(Hashable::hash).collect();
 
         if !invalid_tx_hashes.is_empty()
             && let Err(e) = relays
@@ -665,7 +676,7 @@ where
         info!(
             "proposed block {:?} with {} transactions ({} removed)",
             block.header().id(),
-            block.transactions().len(),
+            block.transactions_iter().len(),
             invalid_tx_hashes.len()
         );
 
@@ -722,14 +733,17 @@ where
                 // channel providing backpressure.
                 let (epoch_handoff_sender, epoch_handoff_receiver) =
                     mpsc::channel(WINNING_POL_EPOCH_HANDOFF_BUFFER_SIZE);
-                tokio::spawn(search_for_winning_slots(
-                    (*cryptarchia).clone(),
-                    (*wallet).clone(),
-                    (*kms).clone(),
-                    (*time_relay).clone(),
-                    (*ledger_config).clone(),
-                    epoch_handoff_sender,
-                ));
+                spawn(
+                    "logos/chain/winning-slot-scanner",
+                    search_for_winning_slots(
+                        (*cryptarchia).clone(),
+                        (*wallet).clone(),
+                        (*kms).clone(),
+                        (*time_relay).clone(),
+                        (*ledger_config).clone(),
+                        epoch_handoff_sender,
+                    ),
+                );
                 let stream: WinningPolEpochSlotsStream =
                     Box::pin(ReceiverStream::new(epoch_handoff_receiver));
                 if sender.send(stream).is_err() {
@@ -764,7 +778,7 @@ where
         let signed_tx = wallet
             .build_leader_claim_tx(
                 tip,
-                ledger_state.mantle_ledger().vouchers_snapshot_root(),
+                *ledger_state.mantle_ledger().vouchers_snapshot_root(),
                 reward_amount,
                 config.funding_pk,
                 config.max_tx_fee,

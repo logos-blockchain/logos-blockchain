@@ -11,7 +11,7 @@ use crate::{
     },
 };
 
-/// Private inputs for all types of Proof of Quota. Spec: <https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#215261aa09df81a18576f67b910d34d4>.
+/// Private inputs for all types of Proof of Quota. Spec: <https://lip.logos.co/blockchain/raw/proof-of-quota.html#witness>.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Inputs {
@@ -47,7 +47,7 @@ impl Inputs {
         }
     }
 
-    /// Return the right `sk` for a Proof of Quota depending on the proof type, as per the spec: <https://www.notion.so/nomos-tech/Proof-of-Quota-Specification-215261aa09df81d88118ee22205cbafe?source=copy_link#25a261aa09df80e0a410f708190ac802>.
+    /// Return the right `sk` for a Proof of Quota depending on the proof type, as per the spec: <https://lip.logos.co/blockchain/raw/proof-of-quota.html#constraints>.
     #[must_use]
     pub fn get_secret_selection_randomness_sk(
         &self,

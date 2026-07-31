@@ -10,19 +10,23 @@ use std::{
 
 pub use error::WalletError;
 use lb_core::{
-    block::Block,
+    block::{Block, BlockTransactions},
     crypto::{Hash, ZkHasher},
     events::{Event, Events, HeaderEvent, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, GasConstants, NoteId, TxHash, Utxo, Value,
+        GasConstants, NoteId, TxHash, Utxo, Value,
         ops::{
             Op, OpId as _,
-            channel::{channel_transfer::ChannelTransferOp, withdraw::ChannelWithdrawOp},
+            channel::{
+                channel_transfer::ChannelTransferOp, deposit::DepositOp,
+                withdraw::ChannelWithdrawOp,
+            },
             leader_claim::{VoucherCm, VoucherNullifier},
             transfer::TransferOp,
         },
-        transactions::{MantleTxContext, builder::MantleTxBuilder},
+        traits::MantleTxWithProofs,
+        transactions::{MAX_OPS_PER_TX, MantleTxContext, builder::MantleTxBuilder},
     },
     proofs::leader_proof::LeaderProof as _,
 };
@@ -31,6 +35,7 @@ use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_ledger::LedgerState;
 use lb_log_targets::wallet;
 use lb_mmr::{MerkleMountainRange, MerklePath};
+use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -49,13 +54,13 @@ pub struct WalletBlock {
     pub epoch: Epoch,
     pub voucher_cm: VoucherCm,
     pub header_ops: Vec<HeaderOp>,
-    pub txs: Vec<WalletTx>,
+    pub txs: BlockTransactions<WalletTx>,
 }
 
 /// Wallet-relevant content of one transaction, in source order.
 #[derive(Clone, Debug, Default)]
 pub struct WalletTx {
-    ops: Vec<WalletOp>,
+    ops: UpperBoundedVec<WalletOp, MAX_OPS_PER_TX>,
 }
 
 /// A wallet-relevant effect produced by the block header processing.
@@ -91,10 +96,10 @@ pub enum WalletOp {
     Lock(NoteId),
     /// Create the reward note.
     LeaderClaim(Utxo),
-    /// Mark the deposited notes as channel notes: they stay in the wallet
-    /// and remain eligible for `PoL`, but are gated out of wallet-driven
-    /// spending.
-    ChannelDeposit(Vec<NoteId>),
+    /// Drop the deposited notes from the wallet and insert the channel notes
+    /// they are re-created as. The re-created notes keep the same key, so they
+    /// remain eligible for `PoL`, but are gated out of wallet-driven spending.
+    ChannelDeposit(DepositOp),
     /// Drop the input channel notes from the wallet and insert the output
     /// channel notes owned by known keys.
     ChannelTransfer(ChannelTransferOp),
@@ -106,7 +111,7 @@ impl WalletBlock {
     #[must_use]
     pub fn from_block<Tx>(block: &Block<Tx>, epoch: Epoch, events: &Events) -> Self
     where
-        Tx: AuthenticatedMantleTx + Clone,
+        Tx: MantleTxWithProofs + Clone,
     {
         // TODO: devise a better way to mirror ledger's execution always correctly: https://github.com/logos-blockchain/logos-blockchain/issues/2627
         let (header_events, tx_events) = group_events(events);
@@ -116,7 +121,7 @@ impl WalletBlock {
             epoch,
             voucher_cm: *block.header().leader_proof().voucher_cm(),
             header_ops: header_events.iter().map(Into::into).collect(),
-            txs: transform_txs(block.transactions(), tx_events).collect(),
+            txs: transform_txs(block.transactions(), tx_events),
         }
     }
 
@@ -128,7 +133,7 @@ impl WalletBlock {
             .flat_map(|tx| tx.ops.iter())
             .flat_map(|op| match op {
                 WalletOp::Transfer(transfer) => transfer.inputs.iter().copied().collect::<Vec<_>>(),
-                WalletOp::ChannelDeposit(inputs) => inputs.clone(),
+                WalletOp::ChannelDeposit(op) => op.inputs.iter().copied().collect::<Vec<_>>(),
                 WalletOp::ChannelTransfer(op) => op.inputs.iter().copied().collect::<Vec<_>>(),
                 WalletOp::Lock(note_id) => vec![*note_id],
                 WalletOp::ChannelWithdraw(_) | WalletOp::LeaderClaim(_) => Vec::new(),
@@ -332,13 +337,12 @@ impl WalletState {
         Some(balance)
     }
 
-    #[must_use]
     pub fn apply_block<KeyId, VoucherId>(
         &self,
         known_keys: &HashMap<ZkPublicKey, KeyId>,
         known_vouchers: &Vouchers<VoucherId>,
         block: &WalletBlock,
-    ) -> Self {
+    ) -> Result<Self, WalletError> {
         let mut utxos = self.utxos.clone();
         let mut pk_index = self.pk_index.clone();
         let mut locked_notes = self.locked_notes.clone();
@@ -369,16 +373,22 @@ impl WalletState {
                         for input_id in transfer.inputs.iter() {
                             remove_spent_utxo(input_id, &mut utxos, &mut pk_index);
                         }
-                        for utxo in transfer.outputs.utxos(transfer) {
+                        for utxo in transfer.utxos() {
                             insert_utxo_if_owned(utxo, known_keys, &mut utxos, &mut pk_index);
                         }
                     }
-                    WalletOp::ChannelDeposit(inputs) => {
-                        // Mark the input notes as channel notes since they shouldn't be spent by
-                        // wallet. They keep staying in `utxos`, so they're still eligible for PoL.
-                        for input_id in inputs {
-                            if utxos.contains_key(input_id) {
-                                channel_notes.insert_mut(*input_id);
+                    WalletOp::ChannelDeposit(op) => {
+                        // The deposit consumes its inputs and re-creates them as channel notes
+                        // under a new NoteId, so drop the inputs and insert the re-created notes.
+                        // They keep the same key, so they're still eligible for PoL.
+                        for (output_index, input) in op.inputs.iter().enumerate() {
+                            let note = utxos.get(input).map(|utxo| utxo.note);
+                            remove_spent_utxo(input, &mut utxos, &mut pk_index);
+
+                            let Some(note) = note else { continue };
+                            let utxo = Utxo::new(op.op_id(), output_index, note);
+                            if insert_utxo_if_owned(utxo, known_keys, &mut utxos, &mut pk_index) {
+                                channel_notes.insert_mut(utxo.id());
                             }
                         }
                     }
@@ -387,7 +397,7 @@ impl WalletState {
                             remove_spent_utxo(input_id, &mut utxos, &mut pk_index);
                             channel_notes.remove_mut(input_id);
                         }
-                        for utxo in op.outputs.utxos(op) {
+                        for utxo in op.utxos() {
                             if insert_utxo_if_owned(utxo, known_keys, &mut utxos, &mut pk_index) {
                                 channel_notes.insert_mut(utxo.id());
                             }
@@ -413,9 +423,9 @@ impl WalletState {
         }
 
         let (vouchers, voucher_paths, voucher_paths_snapshot) =
-            self.apply_voucher(known_vouchers, block);
+            self.apply_voucher(known_vouchers, block)?;
 
-        Self {
+        Ok(Self {
             utxos,
             pk_index,
             locked_notes,
@@ -424,7 +434,7 @@ impl WalletState {
             vouchers,
             voucher_paths,
             voucher_paths_snapshot,
-        }
+        })
     }
 
     /// Apply the voucher commitment from the block to the wallet state.
@@ -438,11 +448,14 @@ impl WalletState {
         &self,
         known_vouchers: &Vouchers<VoucherId>,
         block: &WalletBlock,
-    ) -> (
-        MerkleMountainRange<VoucherCm, ZkHasher>,
-        VoucherPaths,
-        VoucherPaths,
-    ) {
+    ) -> Result<
+        (
+            MerkleMountainRange<VoucherCm, ZkHasher>,
+            VoucherPaths,
+            VoucherPaths,
+        ),
+        WalletError,
+    > {
         // Snapshot voucher paths if epoch is advancing
         let snapshot = if block.epoch > self.epoch {
             self.voucher_paths.clone()
@@ -463,7 +476,10 @@ impl WalletState {
         let (vouchers, new_path) = self
             .vouchers
             .push_with_paths(block.voucher_cm, &mut paths)
-            .expect("vouchers MMR shouldn't be full");
+            .map_err(|error| match error {
+                lb_mmr::PushWithPathsError::MmrFull(_) => WalletError::VoucherMmrFull,
+                lb_mmr::PushWithPathsError::InvalidTrackedPath(error) => error.into(),
+            })?;
 
         // Rebuild the tracked voucher paths map with updated paths.
         let mut voucher_paths = rpds::HashTrieMapSync::new_sync();
@@ -476,7 +492,7 @@ impl WalletState {
             voucher_paths = voucher_paths.insert(block.voucher_cm, new_path);
         }
 
-        (vouchers, voucher_paths, snapshot)
+        Ok((vouchers, voucher_paths, snapshot))
     }
 }
 
@@ -504,24 +520,21 @@ fn insert_utxo_if_owned<KeyId>(
     true
 }
 
-fn transform_txs<'t, Tx>(
-    txs: impl Iterator<Item = &'t Tx> + 't,
+fn transform_txs<Tx>(
+    txs: &BlockTransactions<Tx>,
     mut events_by_tx: HashMap<TxHash, HashMap<Hash, TxEventPayload>>,
-) -> impl Iterator<Item = WalletTx> + 't
+) -> BlockTransactions<WalletTx>
 where
-    Tx: AuthenticatedMantleTx + 't,
+    Tx: MantleTxWithProofs,
 {
-    txs.map(move |tx| {
+    txs.map_ref(move |tx| {
         let mut events_by_op = events_by_tx.remove(&tx.hash()).unwrap_or_default();
-        let ops = tx
-            .mantle_tx()
-            .ops()
-            .iter()
-            .filter_map(|op| {
-                let event = op_id(op).and_then(|id| events_by_op.remove(&id));
-                transform_op(op, event)
-            })
-            .collect();
+
+        let ops = tx.mantle_tx().ops().filter_map_ref(|op| {
+            let event = op_id(op).and_then(|id| events_by_op.remove(&id));
+            transform_op(op, event)
+        });
+
         WalletTx { ops }
     })
 }
@@ -571,9 +584,7 @@ fn op_id(op: &Op) -> Option<Hash> {
 fn transform_op(op: &Op, event: Option<TxEventPayload>) -> Option<WalletOp> {
     match op {
         Op::Transfer(transfer) => Some(WalletOp::Transfer(transfer.clone())),
-        Op::ChannelDeposit(deposit) => Some(WalletOp::ChannelDeposit(
-            deposit.inputs.iter().copied().collect(),
-        )),
+        Op::ChannelDeposit(deposit) => Some(WalletOp::ChannelDeposit(deposit.clone())),
         Op::ChannelTransfer(op) => Some(WalletOp::ChannelTransfer(op.clone())),
         Op::ChannelWithdraw(op) => Some(WalletOp::ChannelWithdraw(op.clone())),
         Op::SDPDeclare(declaration) => Some(WalletOp::Lock(declaration.locked_note_id)),
@@ -660,7 +671,10 @@ where
     /// (e.g., restored from persisted state).
     ///
     /// Tracking of Merkle paths  for known vouchers starts from the paths
-    /// stored in the [`WalletState`].
+    /// stored in the [`WalletState`]. Persisted Merkle paths are globally
+    /// bounded during deserialization. Compatibility with the production
+    /// MMR height is validated when active paths are updated, and `PoC`
+    /// compatibility is validated during witness construction.
     pub fn from_lib_wallet_state(
         known_keys: impl IntoIterator<Item = (ZkPublicKey, KeyId)>,
         known_vouchers: Vouchers<VoucherId>,
@@ -725,7 +739,7 @@ where
             &self.known_keys,
             &self.known_vouchers,
             block,
-        );
+        )?;
         self.wallet_states.insert(block.id, block_wallet_state);
         Ok(())
     }
@@ -846,20 +860,29 @@ mod tests {
     use lb_core::{
         crypto::ZkDigest as _,
         mantle::{
-            Note,
+            MantleTx, Note, OpProof, SignedMantleTx,
             channel::Channels,
             gas::MainnetGasConstants as Gas,
             ledger::{Inputs, Outputs},
-            ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
-            transactions::{GasPrices, MantleTxGasContext},
+            ops::channel::{
+                ChannelId, MsgId,
+                deposit::Metadata,
+                inscribe::{Inscription, InscriptionOp},
+            },
+            transactions::{GasPrices, MantleTxGasContext, Ops, OpsProofs, states::Unverified},
         },
+        proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
-    use lb_cryptarchia_engine::EpochConfig;
-    use lb_groth16::{Field as _, Fr};
-    use lb_key_management_system_keys::keys::Ed25519Key;
+    use lb_cryptarchia_engine::{EpochConfig, Slot};
+    use lb_groth16::{CompressedGroth16Proof, Field as _, Fr};
+    use lb_key_management_system_keys::keys::{
+        Ed25519Key, Ed25519Signature, UnsecuredZkKey, ZkSignature,
+    };
     use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards};
+    use lb_pol::LotteryConstants;
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+    use lb_utxotree::UtxoTree;
     use num_bigint::BigUint;
     use rpds::HashTrieSetSync;
 
@@ -951,6 +974,58 @@ mod tests {
     }
 
     #[test]
+    fn test_recovered_malformed_voucher_path_fails_cleanly_on_append() {
+        let genesis = HeaderId::from([0; 32]);
+        let (voucher_cm, voucher_nf) = voucher(1, 0);
+        let mut state = WalletState::from_ledger(
+            &HashMap::<ZkPublicKey, u64>::new(),
+            &LedgerState::from_utxos([], &ledger_config()),
+        );
+        state.vouchers = MerkleMountainRange::new().push(voucher_cm).unwrap();
+        state.voucher_paths = rpds::HashTrieMapSync::new_sync()
+            .insert(voucher_cm, MerklePath::try_new(0, vec![]).unwrap());
+        state.voucher_paths_snapshot = state.voucher_paths.clone();
+        let state: WalletState =
+            bincode::deserialize(&bincode::serialize(&state).unwrap()).unwrap();
+
+        let mut wallet = Wallet::<u64, TestVoucherId>::from_lib_wallet_state(
+            [],
+            Vouchers::new([(voucher_cm, voucher_nf, (1, 0))]),
+            genesis,
+            state,
+        );
+        assert_eq!(
+            wallet
+                .voucher_path_snapshot(genesis, &voucher_cm)
+                .unwrap()
+                .unwrap()
+                .siblings()
+                .len(),
+            0
+        );
+        let next_block = WalletBlock {
+            id: HeaderId::from([1; 32]),
+            parent: genesis,
+            epoch: 0.into(),
+            voucher_cm: voucher(2, 0).0,
+            header_ops: vec![],
+            txs: BlockTransactions::empty(),
+        };
+
+        assert!(matches!(
+            wallet.apply_block(&next_block),
+            Err(WalletError::InvalidVoucherPath(
+                lb_mmr::MerklePathError::InvalidSiblingCount {
+                    expected: 32,
+                    actual: 0,
+                }
+            ))
+        ));
+        assert!(!wallet.has_processed_block(next_block.id));
+    }
+
+    #[test]
+    #[expect(clippy::too_many_lines, reason = "Test function.")]
     fn test_sync() {
         let alice = pk(1);
         let bob = pk(2);
@@ -987,12 +1062,14 @@ mod tests {
             voucher_cm: v1_cm,
             // Unknown unlocked note that will be ignored.
             header_ops: vec![HeaderOp::Unlock(NoteId::from(Fr::ONE))],
-            txs: vec![WalletTx {
-                ops: vec![
+            txs: [WalletTx {
+                ops: [
                     WalletOp::Transfer(transfer1.clone()),
                     WalletOp::Lock(locked_note),
-                ],
-            }],
+                ]
+                .into(),
+            }]
+            .into(),
         };
 
         wallet.apply_block(&block_1).unwrap();
@@ -1016,13 +1093,15 @@ mod tests {
             voucher_cm: v2_cm,
             // Unlock the previously locked note
             header_ops: vec![HeaderOp::Unlock(locked_note)],
-            txs: vec![WalletTx {
-                ops: vec![
+            txs: [WalletTx {
+                ops: [
                     WalletOp::Transfer(transfer2.clone()),
                     // Unknown locked note that will be ignored
                     WalletOp::Lock(NoteId::from(Fr::ONE)),
-                ],
-            }],
+                ]
+                .into(),
+            }]
+            .into(),
         };
         wallet.apply_block(&block_2).unwrap();
         assert_locked_notes(&wallet, block_2.id, []);
@@ -1056,18 +1135,27 @@ mod tests {
         // - voucher v3 is not ours -> should not be tracked
         let alice_80_nmo_utxo = transfer2.outputs.utxo_by_index(1, &transfer2).unwrap();
 
+        let deposit = DepositOp {
+            channel_id: ChannelId::from([0u8; 32]),
+            inputs: [alice_80_nmo_utxo.id()].into(),
+            metadata: Metadata::empty(),
+        };
+        let deposited = Utxo::new(deposit.op_id(), 0, alice_80_nmo_utxo.note);
+
         let block_3 = WalletBlock {
             id: HeaderId::from([3; 32]),
             parent: block_2.id,
             epoch: 2.into(),
             voucher_cm: v3_cm,
             header_ops: vec![],
-            txs: vec![WalletTx {
-                ops: vec![
-                    WalletOp::ChannelDeposit(vec![alice_80_nmo_utxo.id()]),
+            txs: [WalletTx {
+                ops: [
+                    WalletOp::ChannelDeposit(deposit),
                     WalletOp::LeaderClaim(Utxo::new(tx_hash(9), 0, Note::new(38, alice))),
-                ],
-            }],
+                ]
+                .into(),
+            }]
+            .into(),
         };
         wallet.apply_block(&block_3).unwrap();
 
@@ -1080,11 +1168,13 @@ mod tests {
             wallet.balance(block_3.id, bob).unwrap().unwrap().balance,
             20
         );
-        // The deposit marks the 80 NMO note as a channel note; the note
-        // itself stays in the wallet so it remains eligible for PoL.
+        // The deposit consumes the 80 NMO note and re-creates it as a channel
+        // note under a new NoteId, still owned by Alice so it stays eligible
+        // for PoL.
         let state = wallet.wallet_state_at(block_3.id).unwrap();
-        assert!(state.utxos.contains_key(&alice_80_nmo_utxo.id()));
-        assert!(state.channel_notes.contains(&alice_80_nmo_utxo.id()));
+        assert!(!state.utxos.contains_key(&alice_80_nmo_utxo.id()));
+        assert!(state.utxos.contains_key(&deposited.id()));
+        assert!(state.channel_notes.contains(&deposited.id()));
 
         // v1 is still claimable
         assert_snapshotted_voucher(&wallet, block_3.id, &v1_cm);
@@ -1137,12 +1227,14 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm,
             header_ops: vec![],
-            txs: vec![WalletTx {
-                ops: vec![
+            txs: [WalletTx {
+                ops: [
                     WalletOp::Transfer(transfer_a),
                     WalletOp::Transfer(transfer_b),
-                ],
-            }],
+                ]
+                .into(),
+            }]
+            .into(),
         };
         wallet.apply_block(&block).unwrap();
 
@@ -1192,14 +1284,15 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm,
             header_ops: vec![],
-            txs: vec![
+            txs: [
                 WalletTx {
-                    ops: vec![WalletOp::Transfer(transfer_a)],
+                    ops: [WalletOp::Transfer(transfer_a)].into(),
                 },
                 WalletTx {
-                    ops: vec![WalletOp::Transfer(transfer_b)],
+                    ops: [WalletOp::Transfer(transfer_b)].into(),
                 },
-            ],
+            ]
+            .into(),
         };
         wallet.apply_block(&block).unwrap();
 
@@ -1281,7 +1374,7 @@ mod tests {
                 HeaderOp::SdpReward(alice_reward),
                 HeaderOp::SdpReward(bob_reward),
             ],
-            txs: vec![],
+            txs: BlockTransactions::empty(),
         };
 
         wallet.apply_block(&block).unwrap();
@@ -1327,7 +1420,7 @@ mod tests {
         assert_eq!(
             794,
             funded_tx_builder
-                .gas_cost::<Gas>(&context)
+                .minimum_gas_cost::<Gas>(&context)
                 .unwrap()
                 .into_inner()
         );
@@ -1383,7 +1476,7 @@ mod tests {
 
         // The tip is left as excess balance above the mandatory fee.
         let gas_cost = funded_tx_builder
-            .gas_cost::<Gas>(&context)
+            .minimum_gas_cost::<Gas>(&context)
             .unwrap()
             .into_inner();
         assert_eq!(
@@ -1626,7 +1719,7 @@ mod tests {
                 .clone()
                 .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
                 .unwrap()
-                .gas_cost::<Gas>(&context)
+                .minimum_gas_cost::<Gas>(&context)
                 .unwrap()
                 .into_inner()
         );
@@ -1665,7 +1758,7 @@ mod tests {
                 .unwrap()
                 .with_dummy_change_note()
                 .unwrap()
-                .gas_cost::<Gas>(&context)
+                .minimum_gas_cost::<Gas>(&context)
                 .unwrap()
                 .into_inner()
         );
@@ -1832,23 +1925,31 @@ mod tests {
         assert_eq!(state.balance(alice).unwrap().balance, 100);
 
         // Deposit the note into a channel.
+        let deposit = DepositOp {
+            channel_id: ChannelId::from([0u8; 32]),
+            inputs: [alice_utxo.id()].into(),
+            metadata: Metadata::empty(),
+        };
+        let deposited = Utxo::new(deposit.op_id(), 0, alice_utxo.note);
         let block = WalletBlock {
             id: HeaderId::from([1; 32]),
             parent: genesis,
             epoch: 1.into(),
             voucher_cm: v_cm,
             header_ops: vec![],
-            txs: vec![WalletTx {
-                ops: vec![WalletOp::ChannelDeposit(vec![alice_utxo.id()])],
-            }],
+            txs: [WalletTx {
+                ops: [WalletOp::ChannelDeposit(deposit)].into(),
+            }]
+            .into(),
         };
         wallet.apply_block(&block).unwrap();
 
-        // The note is still in the wallet (still eligible for PoL) but
-        // marked as a channel note, so it drops out of the balance.
+        // The re-created note is still in the wallet (still eligible for PoL)
+        // but marked as a channel note, so it drops out of the balance.
         let state = wallet.wallet_state_at(block.id).unwrap();
-        assert!(state.utxos.contains_key(&alice_utxo.id()));
-        assert!(state.channel_notes.contains(&alice_utxo.id()));
+        assert!(!state.utxos.contains_key(&alice_utxo.id()));
+        assert!(state.utxos.contains_key(&deposited.id()));
+        assert!(state.channel_notes.contains(&deposited.id()));
         assert_eq!(state.balance(alice).unwrap().balance, 0);
 
         // `fund_tx` must also exclude the channel note: with no other
@@ -1896,22 +1997,29 @@ mod tests {
             genesis,
             &genesis_ledger,
         );
+        let deposit = DepositOp {
+            channel_id,
+            inputs: [pk1_utxo.id()].into(),
+            metadata: Metadata::empty(),
+        };
+        let pk1_channel_note = Utxo::new(deposit.op_id(), 0, pk1_utxo.note);
         let deposit_block = WalletBlock {
             id: HeaderId::from([1; 32]),
             parent: genesis,
             epoch: 1.into(),
             voucher_cm: v_cm_1,
             header_ops: vec![],
-            txs: vec![WalletTx {
-                ops: vec![WalletOp::ChannelDeposit(vec![pk1_utxo.id()])],
-            }],
+            txs: [WalletTx {
+                ops: [WalletOp::ChannelDeposit(deposit)].into(),
+            }]
+            .into(),
         };
         wallet.apply_block(&deposit_block).unwrap();
 
         // Transfer the channel note to `pk2`.
         let transfer_op = ChannelTransferOp {
             channel_id,
-            inputs: Inputs::new([pk1_utxo.id()]),
+            inputs: Inputs::new([pk1_channel_note.id()]),
             outputs: Outputs::new([Note::new(100, pk2)]),
         };
         let pk2_output_id = transfer_op
@@ -1925,21 +2033,22 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_2,
             header_ops: vec![],
-            txs: vec![WalletTx {
-                ops: vec![WalletOp::ChannelTransfer(transfer_op)],
-            }],
+            txs: [WalletTx {
+                ops: [WalletOp::ChannelTransfer(transfer_op)].into(),
+            }]
+            .into(),
         };
         wallet.apply_block(&transfer_block).unwrap();
 
         let state = wallet.wallet_state_at(transfer_block.id).unwrap();
-        // The original note has been gone from the wallet.
-        assert!(!state.utxos.contains_key(&pk1_utxo.id()));
-        assert!(!state.channel_notes.contains(&pk1_utxo.id()));
+        // The `pk1` channel note has been gone from the wallet.
+        assert!(!state.utxos.contains_key(&pk1_channel_note.id()));
+        assert!(!state.channel_notes.contains(&pk1_channel_note.id()));
         assert!(
             state
                 .pk_index
                 .get(&pk1)
-                .is_none_or(|set| !set.contains(&pk1_utxo.id()))
+                .is_none_or(|set| !set.contains(&pk1_channel_note.id()))
         );
         // The `pk2` note has been added to the wallet, as a channel note.
         assert!(state.utxos.contains_key(&pk2_output_id));
@@ -1975,22 +2084,29 @@ mod tests {
             genesis,
             &genesis_ledger,
         );
+        let deposit = DepositOp {
+            channel_id,
+            inputs: [alice_utxo.id()].into(),
+            metadata: Metadata::empty(),
+        };
+        let alice_channel_note = Utxo::new(deposit.op_id(), 0, alice_utxo.note);
         let deposit_block = WalletBlock {
             id: HeaderId::from([1; 32]),
             parent: genesis,
             epoch: 1.into(),
             voucher_cm: v_cm_1,
             header_ops: vec![],
-            txs: vec![WalletTx {
-                ops: vec![WalletOp::ChannelDeposit(vec![alice_utxo.id()])],
-            }],
+            txs: [WalletTx {
+                ops: [WalletOp::ChannelDeposit(deposit)].into(),
+            }]
+            .into(),
         };
         wallet.apply_block(&deposit_block).unwrap();
 
         // Transfer Alice -> an unknown-to-wallet pk.
         let transfer_op = ChannelTransferOp {
             channel_id,
-            inputs: Inputs::new([alice_utxo.id()]),
+            inputs: Inputs::new([alice_channel_note.id()]),
             outputs: Outputs::new([Note::new(100, stranger)]),
         };
         let stranger_output_id = transfer_op
@@ -2004,16 +2120,17 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_2,
             header_ops: vec![],
-            txs: vec![WalletTx {
-                ops: vec![WalletOp::ChannelTransfer(transfer_op)],
-            }],
+            txs: [WalletTx {
+                ops: [WalletOp::ChannelTransfer(transfer_op)].into(),
+            }]
+            .into(),
         };
         wallet.apply_block(&transfer_block).unwrap();
 
         let state = wallet.wallet_state_at(transfer_block.id).unwrap();
-        // Alice's note is gone.
-        assert!(!state.utxos.contains_key(&alice_utxo.id()));
-        assert!(!state.channel_notes.contains(&alice_utxo.id()));
+        // Alice's channel note is gone.
+        assert!(!state.utxos.contains_key(&alice_channel_note.id()));
+        assert!(!state.channel_notes.contains(&alice_channel_note.id()));
         // Stranger's new note is not tracked.
         assert!(!state.utxos.contains_key(&stranger_output_id));
         assert!(!state.channel_notes.contains(&stranger_output_id));
@@ -2038,27 +2155,35 @@ mod tests {
             genesis,
             &genesis_ledger,
         );
+        let deposit = DepositOp {
+            channel_id,
+            inputs: [alice_utxo.id()].into(),
+            metadata: Metadata::empty(),
+        };
+        let alice_channel_note = Utxo::new(deposit.op_id(), 0, alice_utxo.note);
         let deposit_block = WalletBlock {
             id: HeaderId::from([1; 32]),
             parent: genesis,
             epoch: 1.into(),
             voucher_cm: v_cm_1,
             header_ops: vec![],
-            txs: vec![WalletTx {
-                ops: vec![WalletOp::ChannelDeposit(vec![alice_utxo.id()])],
-            }],
+            txs: [WalletTx {
+                ops: [WalletOp::ChannelDeposit(deposit)].into(),
+            }]
+            .into(),
         };
         wallet.apply_block(&deposit_block).unwrap();
 
         // Sanity: after deposit the note is channel-marked, so balance is 0.
         let state = wallet.wallet_state_at(deposit_block.id).unwrap();
-        assert!(state.channel_notes.contains(&alice_utxo.id()));
+        assert!(state.channel_notes.contains(&alice_channel_note.id()));
         assert_eq!(state.balance(alice).unwrap().balance, 0);
 
-        // Withdraw releases the channel note back to spendable.
+        // Withdraw releases the channel note back to spendable. It keeps the
+        // NoteId it got when the deposit re-created it.
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
-            inputs: Inputs::new([alice_utxo.id()]),
+            inputs: Inputs::new([alice_channel_note.id()]),
         };
         let withdraw_block = WalletBlock {
             id: HeaderId::from([2; 32]),
@@ -2066,20 +2191,21 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v_cm_2,
             header_ops: vec![],
-            txs: vec![WalletTx {
-                ops: vec![WalletOp::ChannelWithdraw(withdraw_op)],
-            }],
+            txs: [WalletTx {
+                ops: [WalletOp::ChannelWithdraw(withdraw_op)].into(),
+            }]
+            .into(),
         };
         wallet.apply_block(&withdraw_block).unwrap();
 
         let state = wallet.wallet_state_at(withdraw_block.id).unwrap();
-        assert!(state.utxos.contains_key(&alice_utxo.id()));
-        assert!(!state.channel_notes.contains(&alice_utxo.id()));
+        assert!(state.utxos.contains_key(&alice_channel_note.id()));
+        assert!(!state.channel_notes.contains(&alice_channel_note.id()));
         assert!(
             state
                 .pk_index
                 .get(&alice)
-                .is_some_and(|set| set.contains(&alice_utxo.id()))
+                .is_some_and(|set| set.contains(&alice_channel_note.id()))
         );
         assert_eq!(state.balance(alice).unwrap().balance, 100);
 
@@ -2103,5 +2229,121 @@ mod tests {
             .unwrap_err();
         // The error detail says that the withdrawn note is now spendable.
         assert_eq!(err, WalletError::InsufficientFunds { available: 100 });
+    }
+
+    #[test]
+    fn wallet_block_transformation_preserves_bounds_and_source_order() {
+        let first_input = NoteId::from(Fr::from(1));
+        let second_input = NoteId::from(Fr::from(2));
+
+        let transfer = Op::Transfer(TransferOp::new(Inputs::empty(), Outputs::new([])));
+
+        let deposit = Op::ChannelDeposit(DepositOp {
+            channel_id: ChannelId::from([0; 32]),
+            inputs: Inputs::new([first_input, second_input]),
+            metadata: Metadata::default(),
+        });
+
+        let ignored_inscription = Op::ChannelInscribe(InscriptionOp {
+            channel_id: ChannelId::from([0; 32]),
+            inscription: Inscription::default(),
+            parent: MsgId::root(),
+            signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+        });
+
+        let source_transactions: BlockTransactions<SignedMantleTx<Unverified>> = [
+            signed_test_tx(vec![transfer, deposit]),
+            signed_test_tx(vec![ignored_inscription]),
+        ]
+        .into();
+
+        let source_block = Block::create(
+            HeaderId::from([0; 32]),
+            Slot::from(1),
+            test_leader_proof(),
+            source_transactions,
+            &Ed25519Key::from_bytes(&[0; 32]),
+        )
+        .expect("test block should be valid");
+
+        let wallet_block =
+            WalletBlock::from_block(&source_block, Epoch::new(0), &Events::default());
+
+        assert_eq!(wallet_block.txs.len(), source_block.transactions().len());
+
+        // Transaction order is preserved.
+        assert_eq!(wallet_block.txs.len(), 2);
+
+        // The first transaction keeps both wallet-relevant operations in order.
+        let first_wallet_tx = &wallet_block.txs[0];
+        assert_eq!(first_wallet_tx.ops.len(), 2);
+        assert!(matches!(first_wallet_tx.ops[0], WalletOp::Transfer(_)));
+
+        let WalletOp::ChannelDeposit(op) = &first_wallet_tx.ops[1] else {
+            panic!("expected channel deposit as the second wallet operation");
+        };
+
+        assert_eq!(
+            op.inputs.clone().into_inner().as_slice(),
+            &[first_input, second_input]
+        );
+
+        // A transaction containing only ignored operations is retained, but its
+        // wallet operation list is empty.
+        let second_wallet_tx = &wallet_block.txs[1];
+        assert!(second_wallet_tx.ops.is_empty());
+    }
+
+    fn signed_test_tx(ops: Vec<Op>) -> SignedMantleTx<Unverified> {
+        let proofs = OpsProofs::try_from_iter(ops.iter().map(|op| match op {
+            Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
+            _ => OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
+                &[0; 128],
+            ))),
+        }))
+        .expect("test proofs should fit");
+
+        SignedMantleTx::new(
+            MantleTx(Ops::try_from(ops).expect("test operations should fit")),
+            proofs,
+        )
+    }
+
+    fn test_leader_proof() -> Groth16LeaderProof {
+        let leader_sk = UnsecuredZkKey::zero();
+        let utxo = Utxo::new(tx_hash(0), 0, Note::new(1000, leader_sk.to_public_key()));
+        let utxo_tree = UtxoTree::<_, _, ZkHasher>::new().insert(utxo.id(), utxo).0;
+        let utxo_merkle_path = utxo_tree.path(&utxo.id()).unwrap();
+        let (lottery_0, lottery_1) =
+            LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
+                .compute_lottery_values(1000);
+        let public_inputs = (0..1000)
+            .map(|nonce| {
+                LeaderPublic::new(
+                    utxo_tree.root(),
+                    utxo_tree.root(),
+                    Fr::from(nonce),
+                    0,
+                    lottery_0,
+                    lottery_1,
+                )
+            })
+            .find(|inputs| {
+                inputs.check_winning(utxo.note.value, *utxo.id().as_fr(), *leader_sk.as_fr())
+            })
+            .unwrap();
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        Groth16LeaderProof::prove(
+            LeaderPrivate::new(
+                public_inputs,
+                utxo,
+                &utxo_merkle_path,
+                &utxo_merkle_path,
+                *leader_sk.as_fr(),
+                &signing_key.public_key(),
+            ),
+            VoucherCm::default(),
+        )
+        .unwrap()
     }
 }

@@ -3,12 +3,13 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        SignedMantleTx, Transaction as _,
+        SignedMantleTx,
         ops::{
             Op,
             channel::{ChannelId, MsgId, inscribe::Inscription},
         },
-        transactions::TxHash,
+        traits::Hashable as _,
+        transactions::{hash::TxHash, states::Unverified},
     },
 };
 use rpds::HashTrieSetSync;
@@ -39,16 +40,19 @@ pub struct ChannelUpdateInfo {
 /// the tx is always mineable) — such entries are never shed.
 #[derive(Debug, Clone)]
 struct PendingOtherTx {
-    signed_tx: SignedMantleTx,
+    signed_tx: SignedMantleTx<Unverified>,
     first_parent: Option<MsgId>,
     last_msg: Option<MsgId>,
 }
 
-fn opaque_lineage(tx: &SignedMantleTx, channel_id: ChannelId) -> (Option<MsgId>, Option<MsgId>) {
+fn opaque_lineage(
+    tx: &SignedMantleTx<Unverified>,
+    channel_id: ChannelId,
+) -> (Option<MsgId>, Option<MsgId>) {
     let mut first_parent = None;
     let mut first_seen = false;
     let mut last_msg = None;
-    for op in tx.mantle_tx.ops() {
+    for op in tx.mantle_tx().ops() {
         match op {
             Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
                 if !first_seen {
@@ -75,7 +79,7 @@ fn opaque_lineage(tx: &SignedMantleTx, channel_id: ChannelId) -> (Option<MsgId>,
 #[derive(Debug, Clone)]
 pub struct PendingInscription {
     pub tx_hash: TxHash,
-    pub signed_tx: SignedMantleTx,
+    pub signed_tx: SignedMantleTx<Unverified>,
     pub parent_msg: MsgId,
     pub this_msg: MsgId,
     pub payload: Inscription,
@@ -129,7 +133,7 @@ pub enum BlockChannelTx {
     /// caller's own recovery logic — along with its tip-advancing entries
     /// in op order.
     Custom {
-        tx: SignedMantleTx,
+        tx: SignedMantleTx<Unverified>,
         entries: Vec<InscriptionInfo>,
     },
 }
@@ -186,7 +190,7 @@ impl TxState {
     /// [`Self::submit_atomic_withdraw`] for inscription+withdraw bundles.
     pub fn submit_inscription(
         &mut self,
-        signed_tx: SignedMantleTx,
+        signed_tx: SignedMantleTx<Unverified>,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,
@@ -198,7 +202,7 @@ impl TxState {
     /// must mirror the `Op::ChannelWithdraw` ops in the bundle, in tx order.
     pub fn submit_atomic_withdraw(
         &mut self,
-        signed_tx: SignedMantleTx,
+        signed_tx: SignedMantleTx<Unverified>,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,
@@ -209,13 +213,13 @@ impl TxState {
 
     fn insert_pending(
         &mut self,
-        signed_tx: SignedMantleTx,
+        signed_tx: SignedMantleTx<Unverified>,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,
         withdraws: Option<Vec<WithdrawInfo>>,
     ) {
-        let tx_hash = signed_tx.mantle_tx.hash();
+        let tx_hash = signed_tx.mantle_tx().hash();
         self.track_local_tx(tx_hash);
         self.pending_by_parent
             .entry(parent_msg)
@@ -247,13 +251,13 @@ impl TxState {
     /// chain, so they never count as first-time publishes.
     pub fn observe_channel_inscription(
         &mut self,
-        signed_tx: SignedMantleTx,
+        signed_tx: SignedMantleTx<Unverified>,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,
         withdraws: Option<Vec<WithdrawInfo>>,
     ) {
-        let tx_hash = signed_tx.mantle_tx.hash();
+        let tx_hash = signed_tx.mantle_tx().hash();
         if self.is_tracked(&tx_hash) {
             return;
         }
@@ -291,8 +295,8 @@ impl TxState {
             .collect()
     }
 
-    pub fn submit_other(&mut self, signed_tx: SignedMantleTx, channel_id: ChannelId) {
-        let tx_hash = signed_tx.mantle_tx.hash();
+    pub fn submit_other(&mut self, signed_tx: SignedMantleTx<Unverified>, channel_id: ChannelId) {
+        let tx_hash = signed_tx.mantle_tx().hash();
         let (first_parent, last_msg) = opaque_lineage(&signed_tx, channel_id);
         self.track_local_tx(tx_hash);
         self.pending_other.insert(
@@ -443,7 +447,7 @@ impl TxState {
     /// `pending_by_parent`) so the node's mempool sees the parent before
     /// any child — matters on checkpoint resume, where `HashMap`
     /// iteration order is arbitrary.
-    pub fn pending_txs(&self, tip: HeaderId) -> Vec<(TxHash, SignedMantleTx)> {
+    pub fn pending_txs(&self, tip: HeaderId) -> Vec<(TxHash, SignedMantleTx<Unverified>)> {
         let safe = self
             .block_states
             .get(&tip)
@@ -585,7 +589,10 @@ impl TxState {
     /// Shed pending opaque txs whose first inscription's parent slot was
     /// consumed by a conflicting entry: removed from retry and returned
     /// whole for orphan reporting.
-    pub fn shed_off_branch_pending_other(&mut self, tip: HeaderId) -> Vec<SignedMantleTx> {
+    pub fn shed_off_branch_pending_other(
+        &mut self,
+        tip: HeaderId,
+    ) -> Vec<SignedMantleTx<Unverified>> {
         if self.pending_other.is_empty() {
             return Vec::new();
         }
@@ -686,7 +693,7 @@ impl TxState {
 
     /// All pending transactions (for checkpoint serialization).
     #[must_use]
-    pub fn all_pending_txs(&self) -> Vec<(TxHash, SignedMantleTx)> {
+    pub fn all_pending_txs(&self) -> Vec<(TxHash, SignedMantleTx<Unverified>)> {
         let inscriptions = self
             .pending
             .iter()
@@ -699,7 +706,7 @@ impl TxState {
     }
 
     /// Remove a pending inscription and return its signed tx.
-    pub fn remove_pending(&mut self, tx_hash: &TxHash) -> Option<SignedMantleTx> {
+    pub fn remove_pending(&mut self, tx_hash: &TxHash) -> Option<SignedMantleTx<Unverified>> {
         if let Some(removed) = self.pending.remove(tx_hash) {
             if let Some(children) = self.pending_by_parent.get_mut(&removed.parent_msg) {
                 children.retain(|h| h != tx_hash);
@@ -1029,14 +1036,15 @@ impl TxState {
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
-        MantleTx, Op::ChannelInscribe, Transaction as _, ops::channel::inscribe::InscriptionOp,
+        MantleTx, Op::ChannelInscribe, ops::channel::inscribe::InscriptionOp,
+        traits::Hashable as _, transactions::OpsProofs,
     };
     use lb_key_management_system_service::keys::Ed25519PublicKey;
 
     use super::*;
     use crate::test_support::header_id;
 
-    fn make_dummy_tx(data: u8) -> SignedMantleTx {
+    fn make_dummy_tx(data: u8) -> SignedMantleTx<Unverified> {
         let mantle_tx = MantleTx(
             [ChannelInscribe(InscriptionOp {
                 channel_id: [0u8; 32].into(),
@@ -1046,10 +1054,7 @@ mod tests {
             })]
             .into(),
         );
-        SignedMantleTx {
-            ops_proofs: vec![],
-            mantle_tx,
-        }
+        SignedMantleTx::new(mantle_tx, OpsProofs::empty())
     }
 
     #[test]
@@ -1069,7 +1074,7 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
 
         let tx = make_dummy_tx(1);
-        let hash = tx.mantle_tx.hash();
+        let hash = tx.mantle_tx().hash();
         state.submit_other(tx, ChannelId::from([0u8; 32]));
 
         // Process block containing our tx, lib stays at genesis
@@ -1090,7 +1095,7 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
 
         let tx = make_dummy_tx(1);
-        let hash = tx.mantle_tx.hash();
+        let hash = tx.mantle_tx().hash();
         state.submit_other(tx, ChannelId::from([0u8; 32]));
 
         // b1 with our tx
@@ -1119,8 +1124,8 @@ mod tests {
 
         let tx1 = make_dummy_tx(1);
         let tx2 = make_dummy_tx(2);
-        let hash1 = tx1.mantle_tx.hash();
-        let hash2 = tx2.mantle_tx.hash();
+        let hash1 = tx1.mantle_tx().hash();
+        let hash2 = tx2.mantle_tx().hash();
 
         state.submit_other(tx1, ChannelId::from([0u8; 32]));
         state.submit_other(tx2, ChannelId::from([0u8; 32]));
@@ -1144,7 +1149,7 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
 
         let tx = make_dummy_tx(1);
-        let hash = tx.mantle_tx.hash();
+        let hash = tx.mantle_tx().hash();
         state.submit_other(tx, ChannelId::from([0u8; 32]));
 
         // b1 has our tx
@@ -1242,7 +1247,7 @@ mod tests {
         this_msg: MsgId,
     ) -> TxHash {
         let tx = make_dummy_tx(data);
-        let hash = tx.mantle_tx.hash();
+        let hash = tx.mantle_tx().hash();
         state.submit_inscription(tx, parent_msg, this_msg, [data].into());
         hash
     }
@@ -1376,7 +1381,7 @@ mod tests {
 
         let c1_msg = msg_id(20);
         let c1_tx = make_dummy_tx(99);
-        let c1_tx_hash = c1_tx.mantle_tx.hash();
+        let c1_tx_hash = c1_tx.mantle_tx().hash();
         let c1_inscription = InscriptionInfo {
             tx_hash: c1_tx_hash,
             parent_msg: MsgId::root(),
@@ -1439,7 +1444,7 @@ mod tests {
 
         let c1_msg = msg_id(20);
         let c1_inscription = InscriptionInfo {
-            tx_hash: make_dummy_tx(99).mantle_tx.hash(),
+            tx_hash: make_dummy_tx(99).mantle_tx().hash(),
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
             payload: [99].into(),
@@ -1515,7 +1520,7 @@ mod tests {
         // c1 lands, consuming root
         let c1_msg = msg_id(20);
         let c1_inscription = InscriptionInfo {
-            tx_hash: make_dummy_tx(99).mantle_tx.hash(),
+            tx_hash: make_dummy_tx(99).mantle_tx().hash(),
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
             payload: [99].into(),
@@ -1546,8 +1551,8 @@ mod tests {
 
         let tx1 = make_dummy_tx(1);
         let tx2 = make_dummy_tx(2);
-        let hash1 = tx1.mantle_tx.hash();
-        let hash2 = tx2.mantle_tx.hash();
+        let hash1 = tx1.mantle_tx().hash();
+        let hash2 = tx2.mantle_tx().hash();
 
         state.submit_other(tx1, ChannelId::from([0u8; 32]));
         state.submit_other(tx2, ChannelId::from([0u8; 32]));

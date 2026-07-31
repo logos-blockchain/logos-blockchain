@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use lb_core::mantle::{GenesisTx as _, Utxo};
+use lb_core::mantle::{Utxo, traits::GenesisTx as _};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::Multiaddr;
 use lb_node::{UserConfig, config::RunConfig};
@@ -358,7 +358,7 @@ pub fn genesis_wallet_utxos(config: &TopologyConfig) -> Vec<Utxo> {
         .genesis_tx();
     let genesis_transfer = genesis_tx.genesis_transfer();
 
-    genesis_transfer.outputs.utxos(genesis_transfer).collect()
+    genesis_transfer.utxos().collect()
 }
 
 #[must_use]

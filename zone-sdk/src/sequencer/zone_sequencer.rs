@@ -11,10 +11,11 @@ use lb_common_http_client::{ProcessedBlockEvent, Slot};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        MantleTx, Op, SignedMantleTx, Transaction as _,
+        Op, SignedMantleTx,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         ops::channel::{ChannelId, MsgId, config::Keys, inscribe::Inscription},
-        transactions::{Ops, TxHash},
+        traits::Hashable as _,
+        transactions::{Ops, hash::TxHash, mantle_tx::MantleTx, states::Unverified},
     },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
@@ -134,6 +135,8 @@ pub struct ZoneSequencer<Node> {
     request_rx: mpsc::UnboundedReceiver<ActorRequest>,
 }
 
+pub type PublishReceipt = (PublishResult, SequencerCheckpoint);
+
 /// Internal request enum routed through the actor's `request_rx` channel.
 ///
 /// Sent by [`SequencerClient`] from any task; processed inside
@@ -143,12 +146,12 @@ pub struct ZoneSequencer<Node> {
 pub(super) enum ActorRequest {
     Publish {
         data: Inscription,
-        response_tx: oneshot::Sender<Result<(PublishResult, SequencerCheckpoint), Error>>,
+        response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
     },
     PublishAtomicWithdraw {
         inscribe: Inscription,
         withdraws: Vec<WithdrawArg>,
-        response_tx: oneshot::Sender<Result<(PublishResult, SequencerCheckpoint), Error>>,
+        response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
     },
     ChannelConfig {
         keys: Keys,
@@ -156,13 +159,12 @@ pub(super) enum ActorRequest {
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
         transfer_threshold: u16,
-        response_tx:
-            oneshot::Sender<Result<(PublishResult, SequencerCheckpoint, SignedMantleTx), Error>>,
+        response_tx: oneshot::Sender<Result<(PublishReceipt, SignedMantleTx<Unverified>), Error>>,
     },
     SubmitSignedTx {
-        tx: SignedMantleTx,
+        tx: SignedMantleTx<Unverified>,
         msg_id: MsgId,
-        response_tx: oneshot::Sender<Result<(PublishResult, SequencerCheckpoint), Error>>,
+        response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
     },
     PrepareTx {
         ops: Ops,
@@ -586,10 +588,7 @@ where
     /// Core publish logic. Shared by [`SequencerHandle::publish`] (called
     /// from the drive task) and the actor's [`ActorRequest::Publish`] handler
     /// (called from outside the drive task via [`SequencerClient`]).
-    pub(super) async fn do_publish(
-        &mut self,
-        data: Inscription,
-    ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
+    pub(super) async fn do_publish(&mut self, data: Inscription) -> Result<PublishReceipt, Error> {
         self.ensure_ready()?;
         self.ensure_fundable()?;
 
@@ -603,7 +602,7 @@ where
             parent,
         )
         .await?;
-        let id = signed_tx.mantle_tx.hash();
+        let id = signed_tx.mantle_tx().hash();
 
         debug!(target: TARGET,
             "Prepared publish: payload={:?}, parent={}, msg_id={}, tx={}",
@@ -782,7 +781,7 @@ where
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
         transfer_threshold: u16,
-    ) -> Result<(PublishResult, SequencerCheckpoint, SignedMantleTx), Error> {
+    ) -> Result<(PublishReceipt, SignedMantleTx<Unverified>), Error> {
         self.ensure_ready()?;
         self.ensure_fundable()?;
 
@@ -811,7 +810,7 @@ where
             transfer_threshold,
         )
         .await?;
-        let tx_hash = signed_tx.mantle_tx.hash();
+        let tx_hash = signed_tx.mantle_tx().hash();
 
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
@@ -828,30 +827,28 @@ where
             reason: "checkpoint unavailable",
         })?;
 
-        Ok((
-            PublishResult {
-                tx: PendingTx::Inscription(InscriptionInfo {
-                    tx_hash,
-                    parent_msg: self.last_msg_id,
-                    this_msg: self.last_msg_id,
-                    payload: Inscription::new_unchecked(Vec::new()),
-                }),
-            },
-            checkpoint,
-            signed_tx,
-        ))
+        let publish_result = PublishResult {
+            tx: PendingTx::Inscription(InscriptionInfo {
+                tx_hash,
+                parent_msg: self.last_msg_id,
+                this_msg: self.last_msg_id,
+                payload: Inscription::new_unchecked(Vec::new()),
+            }),
+        };
+        let publish_receipt = (publish_result, checkpoint);
+        Ok((publish_receipt, signed_tx))
     }
 
     pub(super) fn do_submit_signed_tx(
         &mut self,
-        tx: SignedMantleTx,
+        tx: SignedMantleTx<Unverified>,
         msg_id: MsgId,
-    ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
+    ) -> Result<PublishReceipt, Error> {
         self.ensure_ready()?;
 
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
-        let id = tx.mantle_tx.hash();
+        let id = tx.mantle_tx().hash();
         track_pending_tx(state, tx.clone(), self.channel_id);
         let parent_msg = self.last_msg_id;
         self.last_msg_id = msg_id;
@@ -860,7 +857,7 @@ where
         info!(target: TARGET, "Submitted tx including inscription {:?}", id);
 
         let payload = tx
-            .mantle_tx
+            .mantle_tx()
             .ops()
             .iter()
             .find_map(|op| match op {
@@ -949,7 +946,11 @@ where
     /// Push a single-tx publish post into `in_flight`. Used by
     /// `handle.publish` / `submit_signed_tx` / `channel_config` —
     /// independent user-initiated actions that can run concurrently.
-    pub(super) fn queue_publish_post(&mut self, tx_hash: TxHash, signed_tx: SignedMantleTx) {
+    pub(super) fn queue_publish_post(
+        &mut self,
+        tx_hash: TxHash,
+        signed_tx: SignedMantleTx<Unverified>,
+    ) {
         self.posting.insert(tx_hash);
         self.in_flight.push(Box::pin(post_batch(
             self.node.clone(),
@@ -961,7 +962,10 @@ where
     /// before pushing; the future clears it on completion. Caller must
     /// check `resubmit_active` first to avoid duplicate sweeps —
     /// `resubmit_pending` does this gate.
-    pub(super) fn queue_resubmit_batch(&mut self, batch: Vec<(TxHash, SignedMantleTx)>) {
+    pub(super) fn queue_resubmit_batch(
+        &mut self,
+        batch: Vec<(TxHash, SignedMantleTx<Unverified>)>,
+    ) {
         if batch.is_empty() {
             return;
         }
@@ -979,7 +983,10 @@ where
     }
 }
 
-async fn post_batch<Node>(node: Node, batch: Vec<(TxHash, SignedMantleTx)>) -> Vec<(TxHash, bool)>
+async fn post_batch<Node>(
+    node: Node,
+    batch: Vec<(TxHash, SignedMantleTx<Unverified>)>,
+) -> Vec<(TxHash, bool)>
 where
     Node: adapter::Node + Clone + Send + Sync + 'static,
 {
@@ -989,6 +996,15 @@ where
         match node.post_transaction(signed_tx).await {
             Ok(()) => results.push((tx_hash, true)),
             Err(e) => {
+                // TODO: We need to distinguish node rejection (invalid tx) from node
+                // unavailability.   Any post error (e.g. network failure, badly
+                // formed tx) lands here: the tx stays   pending, is retried
+                // every time, and is only ever evicted by chain inclusion.
+                //   That never happens for a rejected tx.
+                //   Since batches are parent-before-child and we abort on first error, one
+                // rejected   inscription also blocks every tx behind it.
+                //   Rejections should evict the tx.
+
                 // Node looks unavailable — bail on the rest of the batch.
                 // Remaining txs stay `!posted` in `state.pending` and the
                 // next `resubmit_pending` tick retries.
@@ -1021,14 +1037,14 @@ pub(super) fn build_checkpoint(
 }
 
 fn restored_pending_channel_tip(
-    pending_txs: &[(TxHash, SignedMantleTx)],
+    pending_txs: &[(TxHash, SignedMantleTx<Unverified>)],
     channel_id: ChannelId,
 ) -> Option<MsgId> {
     let mut parents = Vec::new();
     let mut children = HashSet::new();
 
     for (_, tx) in pending_txs {
-        for op in tx.mantle_tx.ops() {
+        for op in tx.mantle_tx().ops() {
             if let Op::ChannelInscribe(ins) = op
                 && ins.channel_id == channel_id
             {
@@ -1045,7 +1061,11 @@ fn restored_pending_channel_tip(
 
 /// Track a signed tx in pending state: publish-shaped txs enter the
 /// inscription lineage, everything else is tracked opaquely.
-pub(super) fn track_pending_tx(state: &mut TxState, tx: SignedMantleTx, channel_id: ChannelId) {
+pub(super) fn track_pending_tx(
+    state: &mut TxState,
+    tx: SignedMantleTx<Unverified>,
+    channel_id: ChannelId,
+) {
     match classify_channel_tx(&tx, channel_id, &mut None) {
         Some(BlockChannelTx::Inscription(i)) => {
             state.submit_inscription(tx, i.parent_msg, i.this_msg, i.payload);

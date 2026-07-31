@@ -5,10 +5,9 @@
 
 use std::{collections::HashSet, time::Duration};
 
-use hex::ToHex as _;
-use lb_core::{
-    codec::SerializeOp as _,
-    mantle::{OpProof, SignedMantleTx, TxHash, Utxo},
+use lb_core::mantle::{
+    SignedMantleTx, TxHash, Utxo,
+    transactions::{OpsProofs, states::Preverified},
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -21,8 +20,8 @@ use crate::{
         chain,
         wallet::{
             PreparedWalletTransaction, PreparedWalletTransactionWorkItem, SignedWalletTransaction,
-            WalletFundingResources, WalletFundingSource, WalletReservedInputs,
-            WalletTransactionError, WalletTransactionIntent, WalletUtxos,
+            WalletFundingResources, WalletFundingSource, WalletInputSelectionStrategy,
+            WalletReservedInputs, WalletTransactionError, WalletTransactionIntent, WalletUtxos,
             finalize_prepared_wallet_transaction, prepare_wallet_transaction_work_item,
         },
     },
@@ -30,6 +29,7 @@ use crate::{
         defaults::CUCUMBER_VERBOSE_CONSOLE,
         error::StepError,
         fee_reserve::{DEFAULT_STORAGE_GAS_PRICE, ScenarioFeeFundingError},
+        utils::tx_hash_to_hex,
         wallet::{
             TARGET,
             best_node::{BestNodeInfo, get_best_node_info, sanitize_best_node_info},
@@ -75,7 +75,7 @@ impl SignedUserWalletSubmission {
         self.submission.tx_hash()
     }
 
-    pub(crate) const fn signed_tx(&self) -> &SignedMantleTx {
+    pub(crate) const fn signed_tx(&self) -> &SignedMantleTx<Preverified> {
         self.submission.signed_tx()
     }
 
@@ -111,6 +111,8 @@ pub(crate) async fn reserve_user_wallet_transaction_submission_with_utxo_cache(
         WalletTransactionIntent::transfer(receivers, DEFAULT_STORAGE_GAS_PRICE)
             .map_err(wallet_transaction_error)?,
         Some(available_utxos),
+        None,
+        WalletInputSelectionStrategy::LargestFirst,
     )
     .await?;
     apply_reserved_inputs_to_utxo_cache(available_utxos, reserved.reserved_inputs());
@@ -333,16 +335,40 @@ pub async fn create_and_submit_transaction(
 
     let tx_hashes_hex = tx_hashes
         .iter()
-        .map(|h| {
-            h.to_bytes()
-                .unwrap()
-                .to_ascii_lowercase()
-                .encode_hex::<String>()
-        })
+        .map(tx_hash_to_hex)
         .collect::<Vec<_>>()
         .join(", ");
 
     Ok(tx_hashes_hex)
+}
+
+/// Submit one transaction through a node-owned wallet, directing change to the
+/// receiver.
+///
+/// Drain flows call this sequentially and wait for inclusion between calls so
+/// the node wallet can observe each spent input.
+pub async fn submit_node_wallet_transfer(
+    world: &CucumberWorld,
+    sender_wallet_name: &str,
+    receiver_public_key: ZkPublicKey,
+    amount: u64,
+    change_public_key: ZkPublicKey,
+) -> Result<TxHash, StepError> {
+    let wallet = world.resolve_wallet(sender_wallet_name)?;
+    if !wallet.is_node_wallet() {
+        return Err(StepError::InvalidArgument {
+            message: format!("Wallet `{sender_wallet_name}` must be a node wallet"),
+        });
+    }
+
+    let body = WalletTransferFundsRequestBody {
+        tip: None,
+        change_public_key,
+        funding_public_keys: vec![wallet.public_key()?],
+        recipient_public_key: receiver_public_key,
+        amount,
+    };
+    world.submit_funding_wallet_transaction(&wallet, body).await
 }
 
 /// Build and submit one or more wallet transactions, optionally using a shared
@@ -377,7 +403,7 @@ pub async fn create_and_submit_transaction_hashes_with_utxo_cache(
                 info!(
                     target: TARGET,
                     "Wallet `{sender_wallet_name}` submitted transaction {} total value {} LGO successfully",
-                    tx_hash.to_bytes()?.to_ascii_lowercase().encode_hex::<String>(),
+                     tx_hash_to_hex(&tx_hash),
                     receivers.iter().map(|(_, value)| value).sum::<u64>()
                 );
             }
@@ -403,7 +429,7 @@ pub async fn create_and_submit_transaction_hashes_with_utxo_cache(
                     info!(
                         target: TARGET,
                         "Wallet `{sender_wallet_name}` submitted transaction {} total value {} LGO successfully",
-                        tx_hash.to_bytes()?.to_ascii_lowercase().encode_hex::<String>(),
+                         tx_hash_to_hex(&tx_hash),
                         receivers.iter().map(|(_, value)| value).sum::<u64>(),
                     );
                 }
@@ -464,7 +490,7 @@ pub async fn submit_prepared_user_wallet_transaction(
     world: &mut CucumberWorld,
     step: &str,
     prepared: PreparedUserWalletSubmission,
-    extra_op_proofs: Vec<OpProof>,
+    extra_op_proofs: OpsProofs,
     best_node_info: Option<&BestNodeInfo>,
     in_memory_available_utxos: Option<&mut WalletUtxos>,
 ) -> Result<TxHash, StepError> {
@@ -499,7 +525,7 @@ pub async fn submit_prepared_user_wallet_transaction(
 pub(crate) fn sign_prepared_user_wallet_transaction(
     step: &str,
     prepared: PreparedUserWalletSubmission,
-    extra_op_proofs: Vec<OpProof>,
+    extra_op_proofs: OpsProofs,
 ) -> Result<SignedUserWalletSubmission, StepError> {
     let PreparedUserWalletSubmission { wallet, submission } = prepared;
     let signed_submission = submission
@@ -529,7 +555,7 @@ fn finalize_reserved_user_wallet_submission(
     sign_prepared_user_wallet_transaction(
         step,
         PreparedUserWalletSubmission { wallet, submission },
-        Vec::new(),
+        OpsProofs::empty(),
     )
 }
 
@@ -557,12 +583,58 @@ pub(crate) async fn prepare_user_wallet_transaction_submission(
     transaction_intent: WalletTransactionIntent,
     in_memory_available_utxos: Option<&WalletUtxos>,
 ) -> Result<PreparedUserWalletSubmission, StepError> {
+    prepare_user_wallet_transaction_submission_with_change(
+        world,
+        step,
+        sender_wallet_name,
+        transaction_intent,
+        in_memory_available_utxos,
+        None,
+    )
+    .await
+}
+
+/// Prepare a user-wallet transaction with an explicit change recipient.
+/// Prepare a user-wallet transaction with an explicit change recipient.
+pub(crate) async fn prepare_user_wallet_transaction_submission_with_change(
+    world: &mut CucumberWorld,
+    step: &str,
+    sender_wallet_name: &str,
+    transaction_intent: WalletTransactionIntent,
+    in_memory_available_utxos: Option<&WalletUtxos>,
+    change_public_key: Option<ZkPublicKey>,
+) -> Result<PreparedUserWalletSubmission, StepError> {
+    prepare_user_wallet_transaction_submission_with_change_and_strategy(
+        world,
+        step,
+        sender_wallet_name,
+        transaction_intent,
+        in_memory_available_utxos,
+        change_public_key,
+        WalletInputSelectionStrategy::LargestFirst,
+    )
+    .await
+}
+
+/// Prepare a user-wallet transaction with an explicit change recipient and
+/// input-selection strategy.
+pub(crate) async fn prepare_user_wallet_transaction_submission_with_change_and_strategy(
+    world: &mut CucumberWorld,
+    step: &str,
+    sender_wallet_name: &str,
+    transaction_intent: WalletTransactionIntent,
+    in_memory_available_utxos: Option<&WalletUtxos>,
+    change_public_key: Option<ZkPublicKey>,
+    input_selection_strategy: WalletInputSelectionStrategy,
+) -> Result<PreparedUserWalletSubmission, StepError> {
     let reserved = reserve_user_wallet_transaction_submission(
         world,
         step,
         sender_wallet_name,
         transaction_intent,
         in_memory_available_utxos,
+        change_public_key,
+        input_selection_strategy,
     )
     .await?;
     let ReservedUserWalletSubmission { wallet, submission } = reserved;
@@ -581,6 +653,8 @@ async fn reserve_user_wallet_transaction_submission(
     sender_wallet_name: &str,
     transaction_intent: WalletTransactionIntent,
     in_memory_available_utxos: Option<&WalletUtxos>,
+    change_public_key: Option<ZkPublicKey>,
+    input_selection_strategy: WalletInputSelectionStrategy,
 ) -> Result<ReservedUserWalletSubmission, StepError> {
     let wallet = world.resolve_wallet(sender_wallet_name).inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step);
@@ -617,9 +691,11 @@ async fn reserve_user_wallet_transaction_submission(
         scenario_fee_account_state(world, sender_wallet_name, available_utxos)?;
 
     let funding_resources = user_wallet_funding_resources(
-        wallet_account.clone(),
-        sender_available_utxos,
+        wallet_account,
+        &sender_available_utxos,
         scenario_fee_funds,
+        change_public_key,
+        input_selection_strategy,
     );
 
     let submission = prepare_wallet_transaction_work_item(transaction_intent, funding_resources)
@@ -653,7 +729,7 @@ async fn submit_user_wallet_transaction(
         world,
         step,
         prepared,
-        Vec::new(),
+        OpsProofs::empty(),
         best_node_info,
         in_memory_available_utxos,
     )
@@ -661,11 +737,30 @@ async fn submit_user_wallet_transaction(
 }
 
 fn user_wallet_funding_resources(
-    wallet_account: WalletAccount,
-    sender_available_utxos: Vec<Utxo>,
+    wallet_account: &WalletAccount,
+    sender_available_utxos: &[Utxo],
     scenario_fee_funds: Option<WalletFundingSource>,
+    change_public_key: Option<ZkPublicKey>,
+    input_selection_strategy: WalletInputSelectionStrategy,
 ) -> WalletFundingResources {
-    let sender = WalletFundingSource::new(wallet_account, sender_available_utxos);
+    let sender = change_public_key.map_or_else(
+        || {
+            WalletFundingSource::with_change_pk_and_strategy(
+                wallet_account.clone(),
+                sender_available_utxos.to_vec(),
+                wallet_account.public_key(),
+                input_selection_strategy,
+            )
+        },
+        |change_public_key| {
+            WalletFundingSource::with_change_pk_and_strategy(
+                wallet_account.clone(),
+                sender_available_utxos.to_vec(),
+                change_public_key,
+                input_selection_strategy,
+            )
+        },
+    );
 
     match scenario_fee_funds {
         Some(fee_sponsor) => WalletFundingResources::fee_sponsored(sender, fee_sponsor),

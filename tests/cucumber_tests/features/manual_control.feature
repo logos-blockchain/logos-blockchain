@@ -85,7 +85,7 @@ Feature: Manual control of transactions
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
-    When all nodes have at least 2 blocks and converged to within 1 blocks in 300 seconds
+    When all nodes have at least 2 blocks and converged to within 0 blocks in 300 seconds
     When I perform manual control of transactions for all wallets no time-out
     Then I stop all nodes
 
@@ -205,7 +205,8 @@ Feature: Manual control of transactions
   Scenario: Devnet transactions manual control
     Given I have a devnet cluster with capacity of 2 nodes
     And we join an external network
-#    And I will initialize started nodes from snapshot "SNAP_TEST_03" source node "NODE"
+#    And I will initialize started nodes from snapshot "DEVNET_01" source node "NODE"
+    And I will create a snapshot "DEVNET_01" of all nodes when stopping
     And I have a faucet with URL "https://devnet.blockchain.logos.co/web/faucet-backend/"
     And I have initial peers:
       | initial_peer                                                                                   |
@@ -233,7 +234,8 @@ Feature: Manual control of transactions
   Scenario: Devnet transactions stress manual control
     Given I have a devnet cluster with capacity of 10 nodes
     And we join an external network
-#    And I will initialize started nodes from snapshot "000_094_856" source node "NODE"
+#    And I will initialize started nodes from snapshot "DEVNET_02" source node "NODE"
+    And I will create a snapshot "DEVNET_02" of all nodes when stopping
     And I have a faucet with URL "https://devnet.blockchain.logos.co/web/faucet-backend/"
     And I have initial peers:
       | initial_peer                                                                                   |

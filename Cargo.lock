@@ -4006,6 +4006,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-blake2btree"
+version = "0.0.0"
+dependencies = [
+ "blake2",
+ "logos-blockchain-dynamic-merkle",
+ "logos-blockchain-merkle-tree",
+ "quickcheck",
+ "quickcheck_macros",
+ "rand 0.8.6",
+ "serde",
+]
+
+[[package]]
 name = "logos-blockchain-blend"
 version = "0.0.0"
 dependencies = [
@@ -4040,6 +4053,7 @@ dependencies = [
  "itertools 0.14.0",
  "logos-blockchain-blend-crypto",
  "logos-blockchain-blend-proofs",
+ "logos-blockchain-codec",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
@@ -4089,6 +4103,7 @@ dependencies = [
  "generic-array 1.4.3",
  "hex",
  "logos-blockchain-blend-crypto",
+ "logos-blockchain-codec",
  "logos-blockchain-core",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
@@ -4114,6 +4129,7 @@ dependencies = [
  "libp2p",
  "logos-blockchain-blend-message",
  "logos-blockchain-blend-proofs",
+ "logos-blockchain-codec",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
@@ -4161,7 +4177,6 @@ dependencies = [
  "rand 0.8.6",
  "serde",
  "serde_with",
- "tempfile",
  "test-log",
  "thiserror 2.0.18",
  "tokio",
@@ -4174,6 +4189,7 @@ name = "logos-blockchain-c"
 version = "0.0.0"
 dependencies = [
  "cbindgen",
+ "futures",
  "logos-blockchain-api-service",
  "logos-blockchain-chain-leader-service",
  "logos-blockchain-chain-service",
@@ -4182,6 +4198,7 @@ dependencies = [
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-node",
+ "logos-blockchain-time-service",
  "logos-blockchain-utils",
  "logos-blockchain-wallet-service",
  "multiaddr",
@@ -4222,6 +4239,7 @@ dependencies = [
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-ledger",
  "logos-blockchain-services-utils",
+ "logos-blockchain-storage-service",
  "logos-blockchain-time-service",
  "logos-blockchain-tracing",
  "logos-blockchain-tx-service",
@@ -4252,6 +4270,7 @@ dependencies = [
  "logos-blockchain-ledger",
  "logos-blockchain-network-service",
  "logos-blockchain-services-utils",
+ "logos-blockchain-storage-service",
  "logos-blockchain-time-service",
  "logos-blockchain-tracing",
  "logos-blockchain-tx-service",
@@ -4395,6 +4414,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-codec"
+version = "0.0.0"
+dependencies = [
+ "hex",
+ "logos-blockchain-codec-macros",
+ "logos-blockchain-groth16",
+ "logos-blockchain-utils",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "logos-blockchain-codec-macros"
+version = "0.0.0"
+dependencies = [
+ "hex",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
 name = "logos-blockchain-common-http-client"
 version = "0.0.0"
 dependencies = [
@@ -4421,6 +4461,7 @@ name = "logos-blockchain-config"
 version = "0.0.0"
 dependencies = [
  "hex",
+ "logos-blockchain-codec",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
@@ -4446,8 +4487,9 @@ dependencies = [
  "divan",
  "hasher",
  "hex",
+ "logos-blockchain-blake2btree",
  "logos-blockchain-blend-proofs",
- "logos-blockchain-core-macros",
+ "logos-blockchain-codec",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
@@ -4458,12 +4500,9 @@ dependencies = [
  "logos-blockchain-poseidon2",
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
- "logos-blockchain-zksign",
  "multiaddr",
- "nom 8.0.0",
  "num-bigint",
  "rand 0.8.6",
- "rpds",
  "serde",
  "serde_json",
  "strum",
@@ -4474,19 +4513,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "logos-blockchain-core-macros"
-version = "0.0.0"
-dependencies = [
- "hex",
- "proc-macro2",
- "quote",
- "syn 2.0.118",
-]
-
-[[package]]
 name = "logos-blockchain-cryptarchia-engine"
 version = "0.0.0"
 dependencies = [
+ "logos-blockchain-codec",
  "logos-blockchain-pol",
  "logos-blockchain-utils",
  "rpds",
@@ -4567,6 +4597,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-dynamic-merkle"
+version = "0.0.0"
+dependencies = [
+ "ark-ff",
+ "logos-blockchain-poseidon2",
+ "num-bigint",
+ "rand 0.8.6",
+ "rpds",
+ "serde",
+]
+
+[[package]]
 name = "logos-blockchain-faucet"
 version = "0.0.0"
 dependencies = [
@@ -4634,6 +4676,7 @@ dependencies = [
  "ed25519-dalek",
  "generic-array 1.4.3",
  "hex",
+ "logos-blockchain-codec",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-macros",
  "logos-blockchain-log-targets",
@@ -4674,6 +4717,7 @@ dependencies = [
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-log-targets",
  "logos-blockchain-poseidon2",
+ "logos-blockchain-utils",
  "logos-blockchain-utxotree",
  "tokio",
  "tracing",
@@ -4772,16 +4816,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-merkle-tree"
+version = "0.0.0"
+dependencies = [
+ "logos-blockchain-dynamic-merkle",
+ "rpds",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "logos-blockchain-mmr"
 version = "0.0.0"
 dependencies = [
  "ark-ff",
+ "bincode",
  "logos-blockchain-groth16",
  "logos-blockchain-poseidon2",
+ "logos-blockchain-utils",
  "proptest",
  "proptest-macro",
  "rpds",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 
@@ -4815,6 +4872,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "axum 0.7.9",
+ "bytes",
  "clap",
  "color-eyre",
  "dhat",
@@ -4974,13 +5032,13 @@ name = "logos-blockchain-services-utils"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "futures",
  "log",
  "logos-blockchain-log-targets",
  "overwatch",
  "overwatch-derive",
  "serde",
- "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -4996,7 +5054,9 @@ dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-log-targets",
+ "logos-blockchain-services-utils",
  "logos-blockchain-tracing",
+ "logos-blockchain-utils",
  "overwatch",
  "rocksdb",
  "serde",
@@ -5034,6 +5094,7 @@ dependencies = [
  "libp2p",
  "logos-blockchain-api-service",
  "logos-blockchain-chain-service",
+ "logos-blockchain-codec",
  "logos-blockchain-common-http-client",
  "logos-blockchain-config",
  "logos-blockchain-core",
@@ -5044,6 +5105,7 @@ dependencies = [
  "logos-blockchain-libp2p",
  "logos-blockchain-mmr",
  "logos-blockchain-node",
+ "logos-blockchain-storage-service",
  "logos-blockchain-tui-zone",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
@@ -5100,6 +5162,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "logos-blockchain-codec",
  "logos-blockchain-common-http-client",
  "logos-blockchain-config",
  "logos-blockchain-core",
@@ -5169,6 +5232,7 @@ dependencies = [
  "chrono",
  "clap",
  "hex",
+ "logos-blockchain-codec",
  "logos-blockchain-core",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-service",
@@ -5202,7 +5266,6 @@ dependencies = [
  "logos-blockchain-utils",
  "overwatch",
  "overwatch-derive",
- "rand 0.8.6",
  "serde",
  "serde_json",
  "tempfile",
@@ -5247,7 +5310,8 @@ name = "logos-blockchain-utxotree"
 version = "0.0.0"
 dependencies = [
  "ark-ff",
- "logos-blockchain-groth16",
+ "logos-blockchain-dynamic-merkle",
+ "logos-blockchain-merkle-tree",
  "logos-blockchain-poseidon2",
  "num-bigint",
  "quickcheck",
@@ -5255,13 +5319,13 @@ dependencies = [
  "rand 0.8.6",
  "rpds",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "logos-blockchain-wallet"
 version = "0.0.0"
 dependencies = [
+ "bincode",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
@@ -5269,7 +5333,9 @@ dependencies = [
  "logos-blockchain-ledger",
  "logos-blockchain-log-targets",
  "logos-blockchain-mmr",
+ "logos-blockchain-pol",
  "logos-blockchain-utils",
+ "logos-blockchain-utxotree",
  "num-bigint",
  "rpds",
  "serde",
@@ -5307,6 +5373,7 @@ dependencies = [
  "logos-blockchain-mmr",
  "logos-blockchain-services-utils",
  "logos-blockchain-storage-service",
+ "logos-blockchain-utils",
  "logos-blockchain-wallet",
  "overwatch",
  "serde",
@@ -5330,6 +5397,7 @@ dependencies = [
  "num-bigint",
  "rand 0.8.6",
  "serde",
+ "serde-big-array",
  "serde_json",
  "thiserror 2.0.18",
  "tracing",
@@ -6197,7 +6265,7 @@ dependencies = [
 [[package]]
 name = "overwatch"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/Overwatch?rev=ef70b69fb82b0b585cfef1427972c4e97ea88c84#ef70b69fb82b0b585cfef1427972c4e97ea88c84"
+source = "git+https://github.com/logos-co/Overwatch?rev=ae887f41f5a626c341179026ad7f03953ff2072e#ae887f41f5a626c341179026ad7f03953ff2072e"
 dependencies = [
  "async-trait",
  "futures",
@@ -6212,7 +6280,7 @@ dependencies = [
 [[package]]
 name = "overwatch-derive"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/Overwatch?rev=ef70b69fb82b0b585cfef1427972c4e97ea88c84#ef70b69fb82b0b585cfef1427972c4e97ea88c84"
+source = "git+https://github.com/logos-co/Overwatch?rev=ae887f41f5a626c341179026ad7f03953ff2072e#ae887f41f5a626c341179026ad7f03953ff2072e"
 dependencies = [
  "convert_case 0.8.0",
  "manyhow",
@@ -7592,6 +7660,15 @@ checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
  "serde_core",
  "serde_derive",
+]
+
+[[package]]
+name = "serde-big-array"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11fc7cc2c76d73e0f27ee52abbd64eec84d46f370c88371120433196934e4b7f"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

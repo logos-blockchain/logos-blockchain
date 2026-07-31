@@ -8,19 +8,18 @@ use lb_core::{
     crypto::{ZkDigest, ZkHasher},
     events::TxEvent,
     mantle::{
-        GenesisTx, NoteId, TxHash, Utxo, Value,
-        channel::Channels,
-        gas::{Gas, GasConstants, GasCost, GasPrice},
+        NoteId, Utxo, Value,
+        gas::{Gas, GasConstants, GasCost, GasOverflow, GasPrice},
         ledger::Operation as _,
-        ops::transfer::{TransferOp, TransferValidationContext},
+        ops::transfer::TransferOp,
+        traits::GenesisTx,
         transactions::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
     },
     proofs::leader_proof::{self, LeaderPublic},
-    sdp::{Declarations, locked_notes::LockedNotes},
+    sdp::Declarations,
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::{Fr, fr_from_bytes};
-use lb_key_management_system_keys::keys::ZkSignature;
 use lb_utxotree::MerklePath;
 
 use crate::{
@@ -37,10 +36,10 @@ const EXECUTION_MARKET_EMA_DENOMINATOR: u128 = 10;
 const EXECUTION_MARKET_EMA_PREV_WEIGHT: u128 = 9;
 // Corresponds to 7 * G_target because the numerator is 1 + phi (G_avg -
 // G_target)
-const EXECUTION_MARKET_BASE_FEE_NUMERATOR: u128 = 11_176_760;
+const EXECUTION_MARKET_BASE_FEE_NUMERATOR: u128 = 11_177_110;
 // Corresponds to 8 * G_target because the denominator is 1 + phi (G_avg -
 // // G_target)
-const EXECUTION_MARKET_BASE_FEE_DENOMINATOR: u128 = 12_773_440;
+const EXECUTION_MARKET_BASE_FEE_DENOMINATOR: u128 = 12_773_840;
 
 // Corresponds to the denominator of 1/beta
 const STORAGE_MARKET_EMA_DENOMINATOR: u128 = 2;
@@ -167,7 +166,7 @@ impl EpochState {
 #[derive(Derivative, serde::Serialize, serde::Deserialize)]
 #[derivative(Clone, PartialEq)]
 pub struct LedgerState {
-    // All available Unspent Transtaction Outputs (UTXOs) at the current slot
+    // All available Unspent Transaction Outputs (UTXOs) at the current slot
     // TODO: move UTXOs in the mantle ledger. There is no reason to keep them here
     pub utxos: UtxoTree,
     // randomness contribution
@@ -405,13 +404,25 @@ impl LedgerState {
             * (EXECUTION_MARKET_BASE_FEE_NUMERATOR
                 + u128::from(new_average_execution_gas.into_inner()));
         let new_base_fee =
-            ((fee_numerator / EXECUTION_MARKET_BASE_FEE_DENOMINATOR) as Value).into();
+            (fee_numerator.div_ceil(EXECUTION_MARKET_BASE_FEE_DENOMINATOR) as Value).into();
 
         Self {
             average_execution_gas: new_average_execution_gas,
             execution_base_fee: new_base_fee,
             ..self
         }
+    }
+
+    /// Accumulates the storage gas consumed by an applied block into the
+    /// current epoch's counter, which drives the storage price update at the
+    /// next epoch rotation.
+    pub fn add_storage_gas_consumed(self, storage_gas: Gas) -> Result<Self, GasOverflow> {
+        Ok(Self {
+            storage_gas_consumed_in_epoch: self
+                .storage_gas_consumed_in_epoch
+                .checked_add(storage_gas)?,
+            ..self
+        })
     }
 
     fn try_apply_proof<LeaderProof, Id>(
@@ -461,23 +472,8 @@ impl LedgerState {
 
     pub fn try_apply_transfer<Id, Constants: GasConstants>(
         mut self,
-        locked_notes: &LockedNotes,
-        channels: &Channels,
         transfer_op: &TransferOp,
-        transfer_sig: &ZkSignature,
-        tx_hash: TxHash,
     ) -> Result<(Self, Balance, Vec<TxEvent>), LedgerError<Id>> {
-        //validate the transfer
-        transfer_op
-            .validate(&TransferValidationContext {
-                locked_notes,
-                channels,
-                utxos: &self.utxos,
-                tx_hash: &tx_hash,
-                transfer_sig,
-            })
-            .map_err(mantle::Error::Transfer)?;
-
         // Compute the balance
         let balance = transfer_op
             .balance(&self.utxos)
@@ -493,7 +489,7 @@ impl LedgerState {
 
     fn update_nonce(self, contrib: &Fr, slot: Slot) -> Self {
         // constants and structure as defined in the Mantle spec:
-        // https://www.notion.so/Cryptarchia-v1-Protocol-Specification-21c261aa09df810cb85eff1c76e5798c
+        // https://lip.logos.co/blockchain/raw/cryptarchia-v1-protocol.html
         static EPOCH_NONCE_V1: LazyLock<Fr> =
             LazyLock::new(|| fr_from_bytes(b"EPOCH_NONCE_V1").unwrap());
         let mut hasher = ZkHasher::new();
@@ -584,6 +580,12 @@ impl LedgerState {
         &self.storage_gas_price
     }
 
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) const fn storage_gas_consumed_in_epoch(&self) -> Gas {
+        self.storage_gas_consumed_in_epoch
+    }
+
     #[must_use]
     pub const fn aged_utxos(&self) -> &UtxoTree {
         &self.epoch_state.utxos
@@ -625,11 +627,7 @@ impl LedgerState {
             return Err(LedgerError::InputInGenesis(first_input));
         }
 
-        Ok(Self::from_utxos(
-            transfer_op.outputs.utxos(transfer_op),
-            config,
-            epoch_nonce,
-        ))
+        Ok(Self::from_utxos(transfer_op.utxos(), config, epoch_nonce))
     }
 
     pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, config: &Config, nonce: Fr) -> Self {
@@ -690,7 +688,7 @@ impl LedgerState {
 
 // This function upgrade the storage Gas price when a new epoch starts assuming
 // the structure contains how much storage gas was consumed in the previous
-// epoch according to <https://www.notion.so/nomos-tech/v1-1-Storage-Markets-Specification-326261aa09df804ab483f573f522baf5>
+// epoch according to <https://lip.logos.co/blockchain/raw/storage-markets.html>
 fn update_storage_market(
     storage_gas_price: GasPrice,
     storage_gas_consumed_in_epoch: Gas,
@@ -712,15 +710,15 @@ fn update_storage_market(
     }
     let comparator = STORAGE_MARKET_CLAMP_DENOMINATOR * total_storage_gas;
     let new_price = if comparator <= STORAGE_MARKET_CLAMP_DOWN_NUMERATOR * new_ema_unsigned {
-        ((previous_price * STORAGE_MARKET_CLAMP_DOWN_NUMERATOR / STORAGE_MARKET_CLAMP_DENOMINATOR)
-            as Value)
+        ((previous_price * STORAGE_MARKET_CLAMP_DOWN_NUMERATOR)
+            .div_ceil(STORAGE_MARKET_CLAMP_DENOMINATOR) as Value)
             .into()
     } else if comparator >= STORAGE_MARKET_CLAMP_UP_NUMERATOR * new_ema_unsigned {
-        ((previous_price * STORAGE_MARKET_CLAMP_UP_NUMERATOR / STORAGE_MARKET_CLAMP_DENOMINATOR)
-            as Value)
+        ((previous_price * STORAGE_MARKET_CLAMP_UP_NUMERATOR)
+            .div_ceil(STORAGE_MARKET_CLAMP_DENOMINATOR) as Value)
             .into()
     } else {
-        ((previous_price * total_storage_gas / new_ema_unsigned) as Value).into()
+        ((previous_price * total_storage_gas).div_ceil(new_ema_unsigned) as Value).into()
     };
 
     (new_price, new_ema)
@@ -747,19 +745,23 @@ pub mod tests {
     use lb_core::{
         crypto::{Digest as _, Hasher},
         mantle::{
-            AuthenticatedMantleTx, MantleTx, Note, Op,
+            GasCalculator as _, MantleTx, Note, Op,
             OpProof::ZkSig,
-            SignedMantleTx, Transaction as _,
+            SignedMantleTx,
             gas::MainnetGasConstants,
             ledger::{Inputs, Outputs},
             ops::{leader_claim::VoucherCm, sdp::SDPDeclareOp},
-            transactions::GasPrices,
+            traits::Hashable as _,
+            transactions::{
+                GasPrices,
+                states::{Preverified, Unverified},
+            },
         },
         sdp::{Declaration, DeclarationId, Locator, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::EpochConfig;
     use lb_groth16::AdditiveGroup as _;
-    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey};
+    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkSignature};
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
@@ -856,16 +858,15 @@ pub mod tests {
             .unwrap()
             .clone()
             .cryptarchia_ledger
-            .update_epoch_state::<HeaderId>(slot, &SdpLedger::new(0.into()), ledger.config())
-            .unwrap();
+            .update_epoch_state::<HeaderId>(slot, &SdpLedger::new(0.into()), ledger.config())?;
         let id = make_id(parent, slot, utxo);
         let proof = generate_proof(&ledger_state, &utxo, slot);
-        let (_, state, _) = ledger.prepare_update::<_, MainnetGasConstants>(
+        let (_, state, _) = ledger.prepare_update::<_, _, MainnetGasConstants>(
             id,
             parent,
             slot,
             &proof,
-            std::iter::empty::<&SignedMantleTx>(),
+            std::iter::empty::<&SignedMantleTx<Preverified>>(),
         )?;
         ledger.commit_update(id, state);
         Ok(id)
@@ -1057,11 +1058,8 @@ pub mod tests {
         utxo_proof: Utxo,
         utxo_add: Utxo,
         sdp_utxo: Utxo,
-        sdp_note_sk: ZkKey,
     ) -> (HeaderId, SDPDeclareOp, ZkKey) {
         let id = apply_and_add_utxo(ledger, parent, slot, utxo_proof, utxo_add);
-
-        let tx_hash = TxHash::from([0u8; 32]);
 
         let mut zk_key = [0u8; 16];
         thread_rng().fill_bytes(&mut zk_key);
@@ -1084,10 +1082,7 @@ pub mod tests {
             .clone()
             .try_apply_sdp_declaration(
                 &declare_op,
-                &ZkKey::multi_sign(&[sdp_note_sk, zk_key.clone()], &tx_hash.to_fr()).unwrap(),
-                &signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
                 block_ledger.cryptarchia_ledger.latest_utxos(),
-                tx_hash,
                 &config,
             )
             .unwrap()
@@ -1143,7 +1138,7 @@ pub mod tests {
             .epoch_state
             .active_declarations
             .for_service(&ServiceType::BlendNetwork)
-            .and_then(|m| m.get(declaration_id))
+            .and_then(|m| m.get_ref(declaration_id))
     }
 
     #[test]
@@ -1192,8 +1187,8 @@ pub mod tests {
     #[test]
     fn test_epoch_transition() {
         let leader_utxos = std::iter::repeat_with(utxo).take(4).collect::<Vec<_>>();
-        let (sdp_utxo_key_1, sdp_utxo_1) = utxo_with_sk();
-        let (sdp_utxo_key_2, sdp_utxo_2) = utxo_with_sk();
+        let (_sdp_utxo_key_1, sdp_utxo_1) = utxo_with_sk();
+        let (_sdp_utxo_key_2, sdp_utxo_2) = utxo_with_sk();
         let genesis_utxos = leader_utxos
             .iter()
             .copied()
@@ -1227,7 +1222,6 @@ pub mod tests {
             leader_utxos[2],
             new_utxo_1,
             sdp_utxo_1,
-            sdp_utxo_key_1,
         );
         assert_declaration_exists(&ledger, &h_3, &declare_1.id());
 
@@ -1265,7 +1259,6 @@ pub mod tests {
             leader_utxos[3],
             new_utxo_2,
             sdp_utxo_2,
-            sdp_utxo_key_2,
         );
         assert_declaration_exists(&ledger, &h_5, &declare_2.id());
         // nonce for epoch 1 should be taken at the end of slot 10,
@@ -1325,7 +1318,7 @@ pub mod tests {
     #[test]
     fn epoch_state_snapshot_excludes_inactive_declaration() {
         let leader_utxo = utxo();
-        let (sdp_utxo_key, sdp_utxo) = utxo_with_sk();
+        let (_sdp_utxo_key, sdp_utxo) = utxo_with_sk();
         let new_utxo = utxo();
         let config = config();
         let epoch_length = config.epoch_length();
@@ -1340,13 +1333,12 @@ pub mod tests {
             leader_utxo,
             new_utxo,
             sdp_utxo,
-            sdp_utxo_key,
         );
 
         // Advance to epoch 5 (one-by-one).
         // With inactivity_period=2, the declaration goes inactive at epoch 5.
         // It shouldn't be in the snapshot, but should still exist in the live SDP
-        // ledger because the user has not yet witdrawn it.
+        // ledger because the user has not yet withdrawn it.
         let mut ledger = ledger0.clone();
         let mut head = head0;
         for epoch in 1..=5u64 {
@@ -1585,7 +1577,7 @@ pub mod tests {
     fn create_tx_with_transfer(
         inputs: &[(&ZkKey, &Utxo)],
         outputs: Vec<Note>,
-    ) -> (SignedMantleTx, TransferOp, ZkSignature) {
+    ) -> (SignedMantleTx<Unverified>, TransferOp, ZkSignature) {
         let sks = inputs
             .iter()
             .map(|(sk, _)| (*sk).clone())
@@ -1597,14 +1589,8 @@ pub mod tests {
         );
         let mantle_tx = MantleTx([Op::Transfer(transfer_op.clone())].into());
         let transfer_sig = ZkKey::multi_sign(&sks, &mantle_tx.hash().to_fr()).unwrap();
-        (
-            SignedMantleTx {
-                ops_proofs: vec![ZkSig(transfer_sig.clone())],
-                mantle_tx,
-            },
-            transfer_op,
-            transfer_sig,
-        )
+        let tx = SignedMantleTx::new(mantle_tx, [ZkSig(transfer_sig.clone())].into());
+        (tx, transfer_op, transfer_sig)
     }
 
     #[test]
@@ -1620,22 +1606,14 @@ pub mod tests {
 
         let output_note = Note::new(200, output_note_sk.to_public_key());
 
-        let locked_notes = LockedNotes::new();
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
-        let (tx, transfer_op, transfer_sig) = create_tx_with_transfer(
+        let (tx, transfer_op, _transfer_sig) = create_tx_with_transfer(
             &[(&note_sk, &input_utxo), (&note_sk, &input_utxo)],
             vec![output_note],
         );
 
-        let _fees =
-            AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
-        let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
-            &locked_notes,
-            &Channels::new(),
-            &transfer_op,
-            &transfer_sig,
-            tx.hash(),
-        );
+        let _fees = tx.total_gas_cost::<MainnetGasConstants>(&GasPrices::new(0, 0));
+        let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(&transfer_op);
 
         assert!(result.is_err());
     }
@@ -1655,21 +1633,13 @@ pub mod tests {
         let output_note1 = Note::new(4000, output_note1_sk.to_public_key());
         let output_note2 = Note::new(3000, output_note2_sk.to_public_key());
 
-        let locked_notes = LockedNotes::new();
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
-        let (tx, transfer_op, transfer_sig) =
+        let (tx, transfer_op, _transfer_sig) =
             create_tx_with_transfer(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
 
-        let _fees =
-            AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
+        let _fees = tx.total_gas_cost::<MainnetGasConstants>(&GasPrices::new(0, 0));
         let (new_state, balance, events) = ledger_state
-            .try_apply_transfer::<(), MainnetGasConstants>(
-                &locked_notes,
-                &Channels::new(),
-                &transfer_op,
-                &transfer_sig,
-                tx.hash(),
-            )
+            .try_apply_transfer::<(), MainnetGasConstants>(&transfer_op)
             .unwrap();
 
         assert_eq!(
@@ -1691,25 +1661,19 @@ pub mod tests {
         assert!(new_state.utxos.contains(&output_utxo2.id()));
 
         // The new outputs can be spent in future transactions
-        let (tx, transfer_op, transfer_sig) = create_tx_with_transfer(
+        let (tx, transfer_op, _transfer_sig) = create_tx_with_transfer(
             &[
                 (&output_note1_sk, &output_utxo1),
                 (&output_note2_sk, &output_utxo2),
             ],
             vec![],
         );
-        let locked_notes = LockedNotes::new();
-        let _fees =
-            AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
+
+        let _fees = tx.total_gas_cost::<MainnetGasConstants>(&GasPrices::new(0, 0));
         let (final_state, final_balance, events) = new_state
-            .try_apply_transfer::<(), MainnetGasConstants>(
-                &locked_notes,
-                &Channels::new(),
-                &transfer_op,
-                &transfer_sig,
-                tx.hash(),
-            )
+            .try_apply_transfer::<(), MainnetGasConstants>(&transfer_op)
             .unwrap();
+
         assert_eq!(
             final_balance,
             i128::from(output_note1.value + output_note2.value)
@@ -1755,19 +1719,12 @@ pub mod tests {
             non_existent_utxo_3,
         ];
 
-        let locked_notes = LockedNotes::new();
         for non_existent_utxo in invalid_utxos {
-            let (tx, transfer_op, transfer_sig) =
+            let (_tx, transfer_op, _transfer_sig) =
                 create_tx_with_transfer(&[(&ZkKey::zero(), &non_existent_utxo)], vec![]);
             let result = ledger_state
                 .clone()
-                .try_apply_transfer::<(), MainnetGasConstants>(
-                    &locked_notes,
-                    &Channels::new(),
-                    &transfer_op,
-                    &transfer_sig,
-                    tx.hash(),
-                );
+                .try_apply_transfer::<(), MainnetGasConstants>(&transfer_op);
             assert!(matches!(result, Err(LedgerError::Mantle(_))));
         }
     }
@@ -1784,35 +1741,22 @@ pub mod tests {
 
         let output_note = Note::new(1, Fr::from(BigUint::from(2u8)).into());
 
-        let locked_notes = LockedNotes::new();
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
-        let (tx, transfer_op, transfer_sig) =
+        let (_tx, transfer_op, _transfer_sig) =
             create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![output_note, output_note]);
 
         let (_, balance, events) = ledger_state
             .clone()
-            .try_apply_transfer::<(), MainnetGasConstants>(
-                &locked_notes,
-                &Channels::new(),
-                &transfer_op,
-                &transfer_sig,
-                tx.hash(),
-            )
+            .try_apply_transfer::<(), MainnetGasConstants>(&transfer_op)
             .unwrap();
         assert_eq!(balance, -1);
         assert!(events.is_empty());
 
-        let (tx, transfer_op, transfer_sig) =
+        let (_tx, transfer_op, _transfer_sig) =
             create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![output_note]);
         assert_eq!(
             ledger_state
-                .try_apply_transfer::<(), MainnetGasConstants>(
-                    &locked_notes,
-                    &Channels::new(),
-                    &transfer_op,
-                    &transfer_sig,
-                    tx.hash()
-                )
+                .try_apply_transfer::<(), MainnetGasConstants>(&transfer_op,)
                 .unwrap()
                 .1,
             0
@@ -1829,20 +1773,12 @@ pub mod tests {
             note: input_note,
         };
 
-        let locked_notes = LockedNotes::new();
         let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
-        let (tx, transfer_op, transfer_sig) =
+        let (tx, transfer_op, _transfer_sig) =
             create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![]);
 
-        let _fees =
-            AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
-        let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
-            &locked_notes,
-            &Channels::new(),
-            &transfer_op,
-            &transfer_sig,
-            tx.hash(),
-        );
+        let _fees = tx.total_gas_cost::<MainnetGasConstants>(&GasPrices::new(0, 0));
+        let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(&transfer_op);
         assert!(result.is_ok());
 
         let (new_state, balance, events) = result.unwrap();
@@ -1851,32 +1787,6 @@ pub mod tests {
 
         // Verify input was consumed
         assert!(!new_state.utxos.contains(&input_utxo.id()));
-    }
-
-    #[test]
-    fn test_output_not_zero() {
-        let input_sk = ZkKey::from(BigUint::from(1u8));
-        let input_utxo = Utxo {
-            op_id: [1u8; 32],
-            output_index: 0,
-            note: Note::new(10000, input_sk.to_public_key()),
-        };
-
-        let locked_notes = LockedNotes::new();
-        let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
-        let (tx, transfer_op, transfer_sig) = create_tx_with_transfer(
-            &[(&input_sk, &input_utxo)],
-            vec![Note::new(0, Fr::from(BigUint::from(2u8)).into())],
-        );
-
-        let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
-            &locked_notes,
-            &Channels::new(),
-            &transfer_op,
-            &transfer_sig,
-            tx.hash(),
-        );
-        assert!(matches!(result, Err(LedgerError::Mantle(_))));
     }
 
     #[test]
@@ -1989,72 +1899,162 @@ pub mod tests {
         )
     }
 
+    /// If the network is constantly full, execution gas must get more
+    /// expensive.
+    #[test]
+    fn execution_price_rises_under_sustained_maximum_load() {
+        let mut state = genesis_state(&[utxo()]);
+        let genesis_price = state.execution_base_fee().into_inner();
+
+        for _ in 0..10_000 {
+            state = state.update_execution_market(crate::EXECUTION_GAS_LIMIT);
+        }
+
+        assert!(
+            state.execution_base_fee().into_inner() > genesis_price,
+            "the execution base fee never rose above {genesis_price} under sustained \
+             blocks at the gas limit; the market cannot price demand from its genesis \
+             state"
+        );
+    }
+
+    /// After a quiet stretch, returning demand must be able to push the
+    /// execution price back up.
+    #[test]
+    fn execution_price_recovers_when_demand_returns_after_quiet_blocks() {
+        let mut state = genesis_state(&[utxo()]);
+
+        for _ in 0..100 {
+            state = state.update_execution_market(0.into());
+        }
+
+        let quiet_price = state.execution_base_fee().into_inner();
+
+        for _ in 0..10_000 {
+            state = state.update_execution_market(crate::EXECUTION_GAS_LIMIT);
+        }
+
+        assert!(
+            state.execution_base_fee().into_inner() > quiet_price,
+            "the execution base fee is stuck at {quiet_price} after quiet blocks and does \
+             not respond to returning demand; the market is dead from this state on"
+        );
+    }
+
+    /// If storage is constantly in heavy use, storage gas must get more
+    /// expensive.
+    #[test]
+    fn storage_price_rises_under_sustained_heavy_usage() {
+        let genesis_price = GENESIS_STORAGE_GAS_PRICE.into_inner();
+        let mut price = GENESIS_STORAGE_GAS_PRICE;
+        let mut ema: Gas = 0.into();
+        let heavy_usage: Gas = 1_000_000.into();
+
+        for _ in 0..1_000 {
+            (price, ema) = update_storage_market(price, heavy_usage, ema);
+        }
+
+        assert!(
+            price.into_inner() > genesis_price,
+            "the storage gas price never rose above {genesis_price} under sustained \
+             heavy usage; the market cannot price demand from its genesis state"
+        );
+    }
+
+    /// After quiet epochs, returning usage must be able to push the storage
+    /// price back up.
+    #[test]
+    fn storage_price_recovers_when_usage_returns_after_quiet_epochs() {
+        let mut price = GENESIS_STORAGE_GAS_PRICE;
+        let mut ema: Gas = 0.into();
+        let heavy_usage: Gas = 1_000_000.into();
+
+        for _ in 0..4 {
+            (price, ema) = update_storage_market(price, heavy_usage, ema);
+        }
+        for _ in 0..4 {
+            (price, ema) = update_storage_market(price, 0.into(), ema);
+        }
+
+        let quiet_price = price.into_inner();
+
+        for _ in 0..1_000 {
+            (price, ema) = update_storage_market(price, heavy_usage, ema);
+        }
+
+        assert!(
+            price.into_inner() > quiet_price,
+            "the storage gas price is stuck at {quiet_price} after quiet epochs and does \
+             not respond to returning usage; the market is dead from this state on"
+        );
+    }
+
     #[test]
     fn test_storage_market_update() {
         // empty epoch
         assert_eq!(
-            (437.into(), 340.into()),
+            (438.into(), 340.into()),
             update_storage_market(500.into(), 0.into(), 681.into())
         );
 
         // Some random values
-        // 1) raw = 113 * 1.125 = 127.125 -> 127
+        // 1) raw = 113 * 1.125 = 127.125 -> 128
         assert_eq!(
-            (127.into(), 450.into()),
+            (128.into(), 450.into()),
             update_storage_market(113.into(), 600.into(), 300.into())
         );
 
-        // 2) raw = 113 * 0.875 = 98.875 -> 98
+        // 2) raw = 113 * 0.875 = 98.875 -> 99
         assert_eq!(
-            (98.into(), 500.into()),
+            (99.into(), 500.into()),
             update_storage_market(113.into(), 200.into(), 800.into())
         );
 
-        // 3) raw = 221 * 1.125 = 248.625 -> 248
+        // 3) raw = 221 * 1.125 = 248.625 -> 249
         assert_eq!(
-            (248.into(), 550.into()),
+            (249.into(), 550.into()),
             update_storage_market(221.into(), 900.into(), 200.into())
         );
 
-        // 4) raw = 221 * 0.875 = 193.375 -> 193
+        // 4) raw = 221 * 0.875 = 193.375 -> 194
         assert_eq!(
-            (193.into(), 500.into()),
+            (194.into(), 500.into()),
             update_storage_market(221.into(), 100.into(), 900.into())
         );
 
-        // 5) raw = 345 * 1.125 = 388.125 -> 388
+        // 5) raw = 345 * 1.125 = 388.125 -> 389
         assert_eq!(
-            (388.into(), 165.into()),
+            (389.into(), 165.into()),
             update_storage_market(345.into(), 250.into(), 80.into())
         );
 
-        // 6) raw = 345 * 0.875 = 301.875 -> 301
+        // 6) raw = 345 * 0.875 = 301.875 -> 302
         assert_eq!(
-            (301.into(), 400.into()),
+            (302.into(), 400.into()),
             update_storage_market(345.into(), 50.into(), 750.into())
         );
 
-        // 7) raw = 517 * 1.125 = 581.625 -> 581
+        // 7) raw = 517 * 1.125 = 581.625 -> 582
         assert_eq!(
-            (581.into(), 160.into()),
+            (582.into(), 160.into()),
             update_storage_market(517.into(), 220.into(), 100.into())
         );
 
-        // 8) raw = 517 * 0.875 = 452.375 -> 452
+        // 8) raw = 517 * 0.875 = 452.375 -> 453
         assert_eq!(
-            (452.into(), 485.into()),
+            (453.into(), 485.into()),
             update_storage_market(517.into(), 120.into(), 850.into())
         );
 
-        // 9) raw = 999 * 1.125 = 1123.875 -> 1123
+        // 9) raw = 999 * 1.125 = 1123.875 -> 1124
         assert_eq!(
-            (1123.into(), 650.into()),
+            (1124.into(), 650.into()),
             update_storage_market(999.into(), 1000.into(), 300.into())
         );
 
-        // 10) raw = 999 * 0.875 = 874.125 -> 874
+        // 10) raw = 999 * 0.875 = 874.125 -> 875
         assert_eq!(
-            (874.into(), 650.into()),
+            (875.into(), 650.into()),
             update_storage_market(999.into(), 300.into(), 1000.into())
         );
     }
@@ -2064,54 +2064,80 @@ pub mod tests {
         // Create a base ledger first
         let mut ledger = LedgerState::from_utxos([], &config(), Fr::ZERO);
 
-        // 1) G_avg = (1_700_000 + 9*1_596_680)/10 = 1_607_012
-        // price = 10_000 * (11_176_760 + 1_607_012) / 12_773_440 = 10_008
+        // 1) G_avg = (1_700_000 + 9*1_596_730)/10 = 1_607_057
+        // price = ceil(10_000 * (11_177_110 + 1_607_057) / 12_773_840) = 10_009
         ledger.execution_base_fee = 10_000.into();
-        ledger.average_execution_gas = 1_596_680.into();
+        ledger.average_execution_gas = 1_596_730.into();
         ledger = ledger.update_execution_market(1_700_000.into());
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (10_008.into(), 1_607_012.into())
+            (10_009.into(), 1_607_057.into())
         );
 
-        // 2) G_avg = (1_400_000 + 9*1_596_680)/10 = 1_577_012
-        // price = 10_000 * (11_176_760 + 1_577_012) / 12_773_440 = 9_984
+        // 2) G_avg = (1_400_000 + 9*1_596_730)/10 = 1_577_057
+        // price = ceil(10_000 * (11_177_110 + 1_577_057) / 12_773_840) = 9_985
         ledger.execution_base_fee = 10_000.into();
-        ledger.average_execution_gas = 1_596_680.into();
+        ledger.average_execution_gas = 1_596_730.into();
         ledger = ledger.update_execution_market(1_400_000.into());
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (9_984.into(), 1_577_012.into())
+            (9_985.into(), 1_577_057.into())
         );
 
         // 3) G_avg = (2_500_000 + 9*1_000_000)/10 = 1_150_000
-        // price = 20_000 * (11_176_760 + 1_150_000) / 12_773_440 = 19_300
+        // price = ceil(20_000 * (11_177_110 + 1_150_000) / 12_773_840) = 19_301
         ledger.execution_base_fee = 20_000.into();
         ledger.average_execution_gas = 1_000_000.into();
         ledger = ledger.update_execution_market(2_500_000.into());
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (19_300.into(), 1_150_000.into())
+            (19_301.into(), 1_150_000.into())
         );
 
         // 4) G_avg = (500_000 + 9*2_000_000)/10 = 1_850_000
-        // price = 15_000 * (11_176_760 + 1_850_000) / 12_773_440 = 15_297
+        // price = ceil(15_000 * (11_177_110 + 1_850_000) / 12_773_840) = 15_298
         ledger.execution_base_fee = 15_000.into();
         ledger.average_execution_gas = 2_000_000.into();
         ledger = ledger.update_execution_market(500_000.into());
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (15_297.into(), 1_850_000.into())
+            (15_298.into(), 1_850_000.into())
         );
 
         // 5) G_avg = (1_000_000 + 9*1_800_000)/10 = 1_720_000
-        // price = 30_000 * (11_176_760 + 1_720_000) / 12_773_440 = 30_289
+        // price = ceil(30_000 * (11_177_110 + 1_720_000) / 12_773_840) = 30_290
         ledger.execution_base_fee = 30_000.into();
         ledger.average_execution_gas = 1_800_000.into();
         ledger = ledger.update_execution_market(1_000_000.into());
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (30_289.into(), 1_720_000.into())
+            (30_290.into(), 1_720_000.into())
         );
+    }
+
+    #[test]
+    fn test_accumulated_storage_gas_drives_next_epoch_price() {
+        let config = config();
+        let mut ledger = genesis_state(&[utxo()]);
+
+        // Seed a known storage-market state, then accumulate the storage gas
+        // that applied transactions consume during the epoch.
+        ledger.storage_gas_price = 113.into();
+        ledger.storage_gas_ema = 300.into();
+        let ledger = ledger.add_storage_gas_consumed(600.into()).unwrap();
+
+        // Cross a single epoch boundary so the storage price is recomputed.
+        let slot: Slot = (config.epoch_length() + 1).into();
+        assert_eq!(config.epoch(slot), 1);
+        let rotated = ledger
+            .update_epoch_state::<HeaderId>(slot, &SdpLedger::new(0.into()), &config)
+            .unwrap();
+
+        // The accumulated 600 must reach the price update: with a starting price
+        // of 113 and EMA 300 that yields (128, 450) after ceiling division.
+        assert_eq!(rotated.storage_gas_price, 128.into());
+        assert_eq!(rotated.storage_gas_ema, 450.into());
+        // The counter resets for the new epoch.
+        assert_eq!(rotated.storage_gas_consumed_in_epoch, 0.into());
     }
 }

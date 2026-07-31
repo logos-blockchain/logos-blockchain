@@ -2,9 +2,11 @@ use std::{collections::HashSet, time::Duration};
 
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
-    MantleTx, Note, Op, OpProof, SignedMantleTx, Transaction as _, TxHash,
+    Note, Op, OpProof, SignedMantleTx,
     ledger::{Inputs, Outputs},
     ops::transfer::TransferOp,
+    traits::Hashable as _,
+    transactions::{hash::TxHash, mantle_tx::MantleTx, states::Unverified},
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use tokio::time::{sleep, timeout};
@@ -60,13 +62,10 @@ pub async fn submit_funded_transfer_transaction(
     sender_wallet_name: String,
     receiver_wallet_name: String,
 ) -> Result<(), StepError> {
-    let wallets = world
-        .resolve_wallets(&[sender_wallet_name.clone(), receiver_wallet_name.clone()])
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{step}` error: {e}");
-        })?;
-    let sender_wallet = wallets[0].clone();
-    let receiver_wallet = wallets[1].clone();
+    let sender_wallet = world.resolve_wallet(&sender_wallet_name).inspect_err(|e| {
+        warn!(target: TARGET, "Step `{step}` error: {e}");
+    })?;
+    let receiver = world.resolve_recipient(&receiver_wallet_name)?;
 
     match &sender_wallet.wallet_type {
         WalletType::User { .. } => {}
@@ -96,7 +95,7 @@ pub async fn submit_funded_transfer_transaction(
         world,
         step,
         &sender_wallet_name,
-        &[(receiver_wallet.public_key()?, amount)],
+        &[(receiver.public_key, amount)],
         Some(&best_node_info),
         Some(&mut available_utxos),
     )
@@ -117,7 +116,8 @@ pub async fn submit_funded_transfer_transaction(
 
     info!(
         target: TARGET,
-        "Submitted funded transfer transaction `{transaction_alias}` from `{sender_wallet_name}` to `{receiver_wallet_name}`"
+        "Submitted funded transfer transaction `{transaction_alias}` from `{sender_wallet_name}` to `{}`",
+        receiver.label
     );
 
     Ok(())
@@ -197,7 +197,7 @@ async fn transaction_is_in_chain(
     .is_some()
 }
 
-pub fn create_invalid_transaction() -> SignedMantleTx {
+pub fn create_invalid_transaction() -> SignedMantleTx<Unverified> {
     let output_note = Note::new(1000, ZkPublicKey::new(1u8.into()));
     let transfer_op = TransferOp::new(
         Inputs::empty(),
@@ -210,8 +210,5 @@ pub fn create_invalid_transaction() -> SignedMantleTx {
     let transfer_proof = ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr())
         .expect("invalid transfer proof should still be constructible");
 
-    SignedMantleTx {
-        ops_proofs: vec![OpProof::ZkSig(transfer_proof)],
-        mantle_tx,
-    }
+    SignedMantleTx::new(mantle_tx, [OpProof::ZkSig(transfer_proof)].into())
 }

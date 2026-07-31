@@ -17,6 +17,7 @@ ed25519-dalek   = { workspace = true }
 generic-array   = { workspace = true }
 hex             = { workspace = true }
 lb-blend-crypto = { workspace = true }
+lb-codec        = { workspace = true }
 lb-groth16      = { workspace = true }
 lb-pol          = { workspace = true }
 lb-poq          = { workspace = true }

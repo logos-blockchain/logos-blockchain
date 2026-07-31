@@ -8,7 +8,7 @@ use std::{
 use async_trait::async_trait;
 use futures::StreamExt as _;
 use lb_common_http_client::{
-    ApiBlock, ApiHeader, BlockInfo, ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, Events,
+    ApiBlock, ApiHeader, BlockInfo, ChainServiceInfo, CryptarchiaInfo, Events, PhaseTag,
     ProcessedBlockEvent, Slot, State, TimeInfo,
 };
 use lb_core::{
@@ -24,14 +24,11 @@ use lb_core::{
                 inscribe::{Inscription, InscriptionOp},
             },
         },
-        transactions::Ops,
+        transactions::{Ops, OpsProofs, states::Unverified},
     },
     proofs::leader_proof::Groth16LeaderProof,
 };
-use lb_http_api_common::{
-    bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
-    queries::BlocksStreamQuery,
-};
+use lb_http_api_common::bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody};
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use tokio::sync::{mpsc, watch};
 
@@ -86,7 +83,7 @@ pub struct MockNode {
     /// the next `true -> false` transition, driving the reconnect path.
     pub up: Option<watch::Receiver<bool>>,
     /// Receives every `post_transaction` tx.
-    pub posted: Option<mpsc::Sender<SignedMantleTx>>,
+    pub posted: Option<mpsc::Sender<SignedMantleTx<Unverified>>>,
 }
 
 impl Default for MockNode {
@@ -111,7 +108,7 @@ impl Default for MockNode {
 
 impl MockNode {
     /// Default node plus a receiver for its posted transactions.
-    pub fn with_posted_channel() -> (Self, mpsc::Receiver<SignedMantleTx>) {
+    pub fn with_posted_channel() -> (Self, mpsc::Receiver<SignedMantleTx<Unverified>>) {
         let (tx, rx) = mpsc::channel(10);
         (
             Self {
@@ -145,8 +142,9 @@ impl adapter::Node for MockNode {
                 tip: self.tip,
                 slot: self.lib_slot,
                 height: 0,
+                state: State::Online,
             },
-            mode: ChainServiceMode::Started(State::Online),
+            phase: PhaseTag::Following,
         })
     }
 
@@ -195,13 +193,6 @@ impl adapter::Node for MockNode {
             StreamEnd::Hang => Box::pin(events.chain(futures::stream::pending())),
             StreamEnd::End => Box::pin(events),
         })
-    }
-
-    async fn blocks_range_stream(
-        &self,
-        _params: BlocksStreamQuery,
-    ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
-        Ok(Box::pin(futures::stream::empty()))
     }
 
     async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, lb_common_http_client::Error> {
@@ -257,7 +248,7 @@ impl adapter::Node for MockNode {
 
     async fn post_transaction(
         &self,
-        tx: SignedMantleTx,
+        tx: SignedMantleTx<Unverified>,
     ) -> Result<(), lb_common_http_client::Error> {
         if let Some(posted) = &self.posted {
             posted.send(tx).await.expect("posted receiver alive");
@@ -303,7 +294,12 @@ pub fn header_id(n: u8) -> HeaderId {
     HeaderId::from(bytes)
 }
 
-pub fn api_block(id: u8, parent: u8, slot: u64, transactions: Vec<SignedMantleTx>) -> ApiBlock {
+pub fn api_block(
+    id: u8,
+    parent: u8,
+    slot: u64,
+    transactions: Vec<SignedMantleTx<Unverified>>,
+) -> ApiBlock {
     ApiBlock {
         header: ApiHeader {
             id: header_id(id),
@@ -330,12 +326,12 @@ pub fn live_event(block: &ApiBlock) -> ProcessedBlockEvent {
 
 /// Build a `SignedMantleTx` carrying the given ops, with placeholder proofs.
 /// Suitable for tests that only care about op extraction, not verification.
-pub fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedMantleTx {
+pub fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedMantleTx<Unverified> {
     let n = ops.len();
     let mantle_tx = MantleTx(Ops::try_from(ops).expect("ops fit"));
-    SignedMantleTx::new_unverified(
+    SignedMantleTx::new(
         mantle_tx,
-        vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n],
+        OpsProofs::new_unchecked(vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n]),
     )
 }
 

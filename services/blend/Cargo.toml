@@ -48,8 +48,8 @@ tracing                          = { workspace = true }
 lb-blend          = { features = ["unsafe-test-functions"], workspace = true }
 libp2p            = { features = ["plaintext", "tcp", "yamux"], workspace = true }
 libp2p-swarm-test = { workspace = true }
-tempfile          = { workspace = true }
 test-log          = { features = ["trace"], workspace = true }
 
 [features]
-default = []
+default          = []
+tokio-task-names = ["lb-utils/tokio-task-names"]

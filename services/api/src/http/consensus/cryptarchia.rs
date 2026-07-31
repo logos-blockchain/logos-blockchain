@@ -1,8 +1,11 @@
 use std::fmt::{Debug, Display};
 
 use futures::{StreamExt as _, TryStreamExt as _};
-use lb_chain_service::{ChainServiceInfo, ConsensusMsg, CryptarchiaConsensus};
-use lb_core::{header::HeaderId, mantle::SignedMantleTx};
+use lb_chain_service::{ChainServiceInfo, CryptarchiaConsensus, Query};
+use lb_core::{
+    header::HeaderId,
+    mantle::{SignedMantleTx, transactions::states::Preverified},
+};
 use lb_ledger::LedgerState;
 use lb_storage_service::backends::rocksdb::RocksBackend;
 use lb_time_service::backends::ntp::NtpTimeBackend;
@@ -11,8 +14,12 @@ use tokio::sync::oneshot;
 
 use crate::http::DynError;
 
-pub type Cryptarchia<RuntimeServiceId> =
-    CryptarchiaConsensus<SignedMantleTx, RocksBackend, NtpTimeBackend, RuntimeServiceId>;
+pub type Cryptarchia<RuntimeServiceId> = CryptarchiaConsensus<
+    SignedMantleTx<Preverified>,
+    RocksBackend,
+    NtpTimeBackend,
+    RuntimeServiceId,
+>;
 
 pub async fn cryptarchia_info<RuntimeServiceId>(
     handle: &OverwatchHandle<RuntimeServiceId>,
@@ -24,9 +31,12 @@ where
     let relay = handle.relay().await?;
     let (sender, receiver) = oneshot::channel();
     relay
-        .send(ConsensusMsg::Info {
-            reply_channel: sender,
-        })
+        .send(
+            Query::Info {
+                reply_channel: sender,
+            }
+            .into(),
+        )
         .await
         .map_err(|(e, _)| e)?;
 
@@ -47,11 +57,14 @@ where
     let relay = handle.relay().await?;
     let (sender, receiver) = oneshot::channel();
     relay
-        .send(ConsensusMsg::GetHeaders {
-            from_descendant,
-            to_ancestor,
-            reply_channel: sender,
-        })
+        .send(
+            Query::GetHeaders {
+                from_descendant,
+                to_ancestor,
+                reply_channel: sender,
+            }
+            .into(),
+        )
         .await
         .map_err(|(e, _)| e)?;
 
@@ -73,10 +86,13 @@ where
     let relay = handle.relay().await?;
     let (sender, receiver) = oneshot::channel();
     relay
-        .send(ConsensusMsg::GetLedgerState {
-            block_id: cryptarchia_info.tip,
-            reply_channel: sender,
-        })
+        .send(
+            Query::GetLedgerState {
+                block_id: cryptarchia_info.tip,
+                reply_channel: sender,
+            }
+            .into(),
+        )
         .await
         .map_err(|(e, _)| e)?;
 

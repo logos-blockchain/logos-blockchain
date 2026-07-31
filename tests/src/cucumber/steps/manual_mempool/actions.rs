@@ -1,13 +1,23 @@
-use std::{
-    collections::BTreeSet,
-    fs, io,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{collections::BTreeSet, time::Duration};
 
-use lb_core::mantle::{SignedMantleTx, Transaction as _, TxHash};
+use lb_core::{
+    codec::DeserializeOp as _,
+    mantle::{
+        SignedMantleTx, TxHash,
+        traits::Hashable as _,
+        transactions::{OpsProofs, states::Preverified},
+    },
+};
 use lb_key_management_system_service::keys::ZkPublicKey;
-use lb_tx_service::{backend::PoolRecoveryState, tx::state::TxMempoolState};
+use lb_storage_service::{
+    backends::rocksdb::RocksBackendSettings,
+    recovery::{load_recovery_data, recovery_key},
+};
+use lb_testing_framework::USER_CONFIG_FILE;
+use lb_tx_service::{
+    backend::PoolRecoveryState,
+    tx::{settings::RECOVERY_KEY_SUFFIX, state::TxMempoolState},
+};
 use tokio::time::{sleep, timeout};
 use tracing::{info, warn};
 
@@ -17,6 +27,7 @@ use crate::{
         error::StepError,
         fee_reserve::DEFAULT_STORAGE_GAS_PRICE,
         steps::{TARGET, manual_transactions::tracked_transactions::create_invalid_transaction},
+        utils::{tx_hash_to_hex, user_config_from_node_yaml},
         wallet::submissions::{
             SignedUserWalletSubmission, prepare_user_wallet_transaction_submission,
             record_signed_user_wallet_submission, sign_prepared_user_wallet_transaction,
@@ -41,7 +52,7 @@ pub async fn prepare_transfer_transaction(
     let prepared =
         prepare_user_wallet_transaction_submission(world, step, &sender_wallet_name, intent, None)
             .await?;
-    let signed = sign_prepared_user_wallet_transaction(step, prepared, Vec::new())?;
+    let signed = sign_prepared_user_wallet_transaction(step, prepared, OpsProofs::empty())?;
     let tx_hash = record_prepared_transaction(world, transaction_alias.clone(), &signed)?;
 
     report_prepared_transaction(
@@ -98,15 +109,15 @@ pub async fn try_submit_invalid_transaction(
         Ok(()) => {
             info!(
                 target: TARGET,
-                "Submitted invalid transaction `{transaction_alias}` ({:?}) to `{node_name}`",
-                tx_hash
+                "Submitted invalid transaction `{transaction_alias}` ({}) to `{node_name}`",
+                tx_hash_to_hex(&tx_hash)
             );
         }
         Err(error) => {
             info!(
                 target: TARGET,
-                "Invalid transaction `{transaction_alias}` ({:?}) was rejected by `{node_name}`: {error}",
-                tx_hash
+                "Invalid transaction `{transaction_alias}` ({}) was rejected by `{node_name}`: {error}",
+                tx_hash_to_hex(&tx_hash)
             );
         }
     }
@@ -132,14 +143,13 @@ pub async fn wait_for_mempool_recovery_flush(
     if !pending_hashes.contains(&tx_hash) {
         return Err(StepError::LogicalError {
             message: format!(
-                "Transaction `{transaction_alias}` ({tx_hash:?}) is not pending in node `{node_name}` mempool"
+                "Transaction `{transaction_alias}` ({}) is not pending in node `{node_name}` mempool",
+                tx_hash_to_hex(&tx_hash)
             ),
         });
     }
 
-    let recovery_file = mempool_recovery_file(node_info);
-    wait_for_transaction_in_recovery_file(node_name, transaction_alias, tx_hash, recovery_file)
-        .await
+    wait_for_transaction_in_recovery_data(node_name, transaction_alias, tx_hash, node_info).await
 }
 
 async fn collect_pending_mempool_hashes(
@@ -154,23 +164,16 @@ async fn collect_pending_mempool_hashes(
         .collect())
 }
 
-fn mempool_recovery_file(node_info: &NodeInfo) -> PathBuf {
-    node_info
-        .runtime_dir
-        .join("recovery")
-        .join("mempool")
-        .join("recovery.json")
-}
-
-async fn wait_for_transaction_in_recovery_file(
+async fn wait_for_transaction_in_recovery_data(
     node_name: &str,
     transaction_alias: &str,
     tx_hash: TxHash,
-    recovery_file: PathBuf,
+    node_info: &NodeInfo,
 ) -> Result<(), StepError> {
+    let storage_settings = recovery_storage_settings(node_info)?;
     let wait_result = timeout(RECOVERY_FLUSH_TIMEOUT, async {
         loop {
-            let recovered_hashes = read_recovered_mempool_pending_hashes(&recovery_file)?;
+            let recovered_hashes = read_recovered_mempool_pending_hashes(storage_settings.clone())?;
 
             if recovered_hashes
                 .as_ref()
@@ -184,31 +187,54 @@ async fn wait_for_transaction_in_recovery_file(
     })
     .await;
 
-    wait_result.unwrap_or_else(
-        |_| Err(StepError::Timeout {
+    wait_result.unwrap_or_else(|_| {
+        Err(StepError::Timeout {
             message: format!(
-                "Timed out waiting for node `{node_name}` to flush transaction `{transaction_alias}` ({tx_hash:?}) to '{}'",
-                recovery_file.display()
+                "Timed out waiting for node `{node_name}` to flush transaction \
+                `{transaction_alias}` ({}) to '{}'",
+                tx_hash_to_hex(&tx_hash),
+                storage_settings.db_path.display()
             ),
-        }),
-    )
+        })
+    })
+}
+
+fn recovery_storage_settings(node_info: &NodeInfo) -> Result<RocksBackendSettings, StepError> {
+    let config = user_config_from_node_yaml(&node_info.runtime_dir.join(USER_CONFIG_FILE))?;
+
+    Ok(RocksBackendSettings {
+        db_path: node_info
+            .runtime_dir
+            .join(&config.storage.backend.folder_name),
+        read_only: true,
+        column_family: config.storage.backend.column_family,
+    })
 }
 
 fn read_recovered_mempool_pending_hashes(
-    recovery_file: &Path,
+    storage_settings: RocksBackendSettings,
 ) -> Result<Option<BTreeSet<TxHash>>, StepError> {
-    let contents = match fs::read_to_string(recovery_file) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
+    if !storage_settings.db_path.exists() {
+        return Ok(None);
+    }
+
+    let recovery_data =
+        load_recovery_data(storage_settings).map_err(|error| StepError::LogicalError {
+            message: format!("Failed to read mempool recovery data: {error}"),
+        })?;
+
+    let Some(bytes) = recovery_data
+        .take(&recovery_key(RECOVERY_KEY_SUFFIX))
+        .map_err(|error| StepError::LogicalError {
+            message: format!("Failed to access mempool recovery data: {error}"),
+        })?
+    else {
+        return Ok(None);
     };
 
     let recovery_state: TxMempoolState<PoolRecoveryState<TxHash>, (), ()> =
-        serde_json::from_str(&contents).map_err(|error| StepError::LogicalError {
-            message: format!(
-                "Failed to parse mempool recovery file '{}': {error}",
-                recovery_file.display()
-            ),
+        TxMempoolState::from_bytes(&bytes).map_err(|error| StepError::LogicalError {
+            message: format!("Failed to decode mempool recovery data: {error}"),
         })?;
 
     Ok(recovery_state
@@ -264,7 +290,7 @@ async fn submit_prepared_transaction_to_node(
     world: &CucumberWorld,
     step: &str,
     transaction_alias: &str,
-    signed_tx: &SignedMantleTx,
+    signed_tx: &SignedMantleTx<Preverified>,
     tx_hash: TxHash,
     node_name: &str,
 ) -> Result<(), StepError> {
@@ -278,8 +304,8 @@ async fn submit_prepared_transaction_to_node(
 
     info!(
         target: TARGET,
-        "Submitted prepared transaction `{transaction_alias}` ({:?}) to `{node_name}`",
-        tx_hash
+        "Submitted prepared transaction `{transaction_alias}` ({}) to `{node_name}`",
+        tx_hash_to_hex(&tx_hash)
     );
 
     Ok(())
@@ -293,7 +319,7 @@ fn report_prepared_transaction(
 ) {
     info!(
         target: TARGET,
-        "Prepared transfer transaction `{transaction_alias}` ({:?}) from `{sender_wallet_name}` to `{receiver_wallet_name}`",
-        tx_hash
+        "Prepared transfer transaction `{transaction_alias}` ({}) from `{sender_wallet_name}` to `{receiver_wallet_name}`",
+        tx_hash_to_hex(&tx_hash)
     );
 }

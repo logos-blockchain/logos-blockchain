@@ -19,6 +19,8 @@
 //! CLEAR_ENCUMBRANCES, wallet '<wallet_name>'
 //! CLEAR_ENCUMBRANCES_ALL_WALLETS
 //! SEND, num_transactions <count>, value <amount>, from '<wallet_name>', to '<wallet_name>'
+//! DRAIN, from '<wallet_name>', to '<wallet_name>'
+//! DRAIN_ALL_NODE_WALLETS, node_name '<node_name>', to '<wallet_name>'
 //! VERIFY_MAX, wallet '<wallet_name>', wallet_state_type 'on-chain'/'encumbered'/'available', outputs <count>, value 14000, time_out <duration_seconds>
 //! VERIFY_MIN, wallet '<wallet_name>', wallet_state_type 'on-chain'/'encumbered'/'available', outputs <count>, value 14000, time_out <duration_seconds>
 //! CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs <count>, coin_split_value <amount>, num_transactions <count>, value <amount>, cycles <count>
@@ -44,7 +46,7 @@ use std::{
     time::Duration,
 };
 
-use lb_core::mantle::{NoteId, TxHash, Utxo};
+use lb_core::mantle::{NoteId, Utxo, transactions::hash::TxHash};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_tui_zone::run_commands::{ZONE_FILE_TRANSFER_VERSION, ZONE_WALLET_FUNDS_EXPORT};
 use lb_wallet::WalletError;
@@ -65,6 +67,7 @@ use crate::{
             },
             manual_transactions::{
                 command_file_parsing::{ManualCommand, take_next_command},
+                drain_wallets::{drain_all_node_wallets, drain_node_wallet, drain_user_wallet},
                 utils,
                 utils::{BestNodeInfo, WalletOutputState, extend_note_id_set, extend_tx_hash_set},
             },
@@ -454,11 +457,11 @@ async fn execute_non_stop_manual_command(
             log_wallet_balances(world, step, world.all_user_wallets()).await
         }
         ManualCommand::WalletBalanceAllFundingWallets => {
-            log_wallet_balances(world, step, world.all_funding_wallets()).await
+            log_wallet_balances(world, step, world.all_node_wallets()).await
         }
         ManualCommand::WalletBalanceAllWallets => {
             let mut wallets = world.all_user_wallets();
-            wallets.extend(world.all_funding_wallets());
+            wallets.extend(world.all_node_wallets());
 
             log_wallet_balances(world, step, wallets).await
         }
@@ -488,6 +491,10 @@ async fn execute_non_stop_manual_command(
             from,
             to,
         } => execute_send(world, step, *num_transactions, *value, from, to).await,
+        ManualCommand::Drain { from, to } => execute_drain(world, step, from, to).await,
+        ManualCommand::DrainAllNodeWallets { node_name, to } => {
+            drain_all_node_wallets(world, node_name, to).await
+        }
         ManualCommand::ContinuousRoundRobinUserWallets { .. } => {
             execute_continuous_round_robin(world, step, command).await
         }
@@ -533,14 +540,43 @@ async fn execute_non_stop_manual_command(
     }
 }
 
+async fn execute_drain(world: &mut CucumberWorld, step: &str, from: &str, to: &str) -> StepResult {
+    let sender = world.resolve_wallet(from)?;
+    let receiver_pk = world.resolve_recipient(to)?.public_key;
+
+    if sender.public_key()? == receiver_pk {
+        return Err(StepError::InvalidArgument {
+            message: format!("Cannot drain wallet `{from}` into itself"),
+        });
+    }
+
+    match sender.wallet_type {
+        WalletType::User { .. } => drain_user_wallet(world, step, &sender, receiver_pk).await,
+        WalletType::Funding { .. } => drain_node_wallet(world, &sender, receiver_pk).await,
+    }
+}
+
 pub async fn log_wallet_balances(
     world: &mut CucumberWorld,
     step: &str,
     wallets: Vec<WalletInfo>,
 ) -> StepResult {
-    let states = utils::current_wallet_states_for_wallets(world, step, &wallets).await?;
+    let tracked_wallets = wallets
+        .iter()
+        .filter(|wallet| wallet.is_user_wallet())
+        .cloned()
+        .collect::<Vec<_>>();
+    let states = if tracked_wallets.is_empty() {
+        BTreeMap::new()
+    } else {
+        utils::current_wallet_states_for_wallets(world, step, &tracked_wallets).await?
+    };
 
     for wallet in &wallets {
+        if wallet.is_node_wallet() {
+            log_node_wallet_balance(world, wallet).await?;
+            continue;
+        }
         let state =
             states
                 .get(wallet.wallet_name.as_str())
@@ -550,8 +586,48 @@ pub async fn log_wallet_balances(
                         wallet.wallet_name
                     ),
                 })?;
-        log_wallet_state_balance(&wallet.wallet_name, state);
+        log_wallet_state_balance(&wallet.wallet_name, &wallet.public_key_hex(), state);
     }
+    Ok(())
+}
+
+async fn log_node_wallet_balance(world: &CucumberWorld, wallet: &WalletInfo) -> StepResult {
+    let node = world
+        .nodes_info
+        .get(&wallet.node_name)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!(
+                "Node '{}' for wallet '{}' not found",
+                wallet.node_name, wallet.wallet_name
+            ),
+        })?;
+
+    let balance_response = node
+        .started_node
+        .client
+        .wallet_balance(wallet.public_key()?, None)
+        .await;
+    match balance_response {
+        Ok(balance) => {
+            info!(
+                target: TARGET,
+                "Wallet `{}` [On-chain] {}/{} LGO, {}",
+                wallet.wallet_name,
+                balance.notes.len(),
+                balance.balance,
+                wallet.public_key_hex(),
+            );
+        }
+        Err(_) => {
+            info!(
+                target: TARGET,
+                "Wallet `{}` [On-chain] no funds yet, {}",
+                wallet.wallet_name,
+                wallet.public_key_hex(),
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -564,7 +640,7 @@ async fn log_wallet_balance(
     log_wallet_balances(world, step, vec![wallet]).await
 }
 
-fn log_wallet_state_balance(wallet_name: &str, state: &WalletStateView) {
+fn log_wallet_state_balance(wallet_name: &str, public_key_hex: &str, state: &WalletStateView) {
     let available = state.balance(WalletOutputState::Available);
     let reserved = state.balance(WalletOutputState::Reserved);
     let on_chain = state.balance(WalletOutputState::OnChain);
@@ -572,13 +648,14 @@ fn log_wallet_state_balance(wallet_name: &str, state: &WalletStateView) {
     info!(
         target: TARGET,
         "Wallet `{wallet_name}` [Available] {}/{} LGO, [Encumbered] {}/{} LGO, \
-        [On-chain] {}/{} LGO",
+        [On-chain] {}/{} LGO, {}",
         available.output_count,
         available.value,
         reserved.output_count,
         reserved.value,
         on_chain.output_count,
         on_chain.value,
+        public_key_hex,
     );
 }
 
@@ -830,7 +907,7 @@ fn request_faucet_funds_all_funding_wallets(
     let all_wallets_pk_hex = world
         .wallet_info
         .values()
-        .filter(|w| w.is_funding_wallet())
+        .filter(|wallet| wallet.is_node_funding_wallet())
         .map(WalletInfo::public_key_hex)
         .collect::<Vec<_>>();
     utils::request_faucet_funds(world, step, number_of_rounds, &all_wallets_pk_hex)
@@ -950,8 +1027,8 @@ async fn execute_send(
     from: &str,
     to: &str,
 ) -> Result<(), StepError> {
-    let receiver_wallet = world.resolve_wallet(to)?;
-    let receiver_pk = receiver_wallet.public_key()?;
+    let receiver = world.resolve_recipient(to)?;
+    let receiver_pk = receiver.public_key;
 
     let mut available_utxos = WalletUtxos::new();
     let best_node_info = sync::wait_wallet_send_ready(
@@ -1001,8 +1078,8 @@ async fn prepare_ring_send_round_send_with_utxo_cache(
     to: &str,
     available_utxos: &mut WalletUtxos,
 ) -> Result<Vec<SignedUserWalletSubmission>, StepError> {
-    let receiver_wallet = world.resolve_wallet(to)?;
-    let receiver_pk = receiver_wallet.public_key()?;
+    let receiver = world.resolve_recipient(to)?;
+    let receiver_pk = receiver.public_key;
     let mut reserved_submissions = Vec::with_capacity(transactions);
 
     for i in 0..transactions {
@@ -1522,8 +1599,8 @@ async fn prepare_round_robin_with_utxo_cache(
 
     for i in 0..transactions {
         let receiver_name = &recipients[i % recipients.len()];
-        let receiver_wallet = world.resolve_wallet(receiver_name)?;
-        let receiver_pk = receiver_wallet.public_key()?;
+        let receiver = world.resolve_recipient(receiver_name)?;
+        let receiver_pk = receiver.public_key;
 
         let receivers = vec![(receiver_pk, value)];
         let reserved_submission =

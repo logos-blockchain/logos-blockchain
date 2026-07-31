@@ -65,6 +65,7 @@ const SEQUENCER_READY_TIMEOUT: Duration = Duration::from_mins(2);
 const SEQUENCER_READY_POLL_TIMEOUT: Duration = Duration::from_secs(10);
 const SEQUENCER_READY_HEIGHT_ADVANCE_TIMEOUT: Duration = Duration::from_secs(30);
 const ZONE_SECURITY_PARAM: u32 = 5;
+const ZONE_TEST_PRIORITY_FEE: u64 = 400;
 
 pub(super) enum DriveMode {
     Passive {
@@ -262,7 +263,7 @@ pub(super) async fn submit_zone_channel_config(
         })?;
     checkpoint_rx.mark_unchanged();
 
-    let (result, post_call_checkpoint, _signed_tx) = handle
+    let ((result, post_call_checkpoint), _signed_tx) = handle
         .channel_config(
             Keys::new_unchecked(authorized_keys),
             posting_timeframe.into(),
@@ -776,11 +777,12 @@ async fn start_named_sequencer_with_config(
     let funding = world
         .zone
         .sequencer_node_name(&sequencer_alias)
-        .and_then(|node_name| world.resolve_wallet(&format!("{node_name}_WALLET")))
+        .and_then(|node_name| world.funding_wallet(node_name))
         .and_then(|wallet| wallet.public_key())
         .map(|funding_pk| FundingConfig {
             funding_pk,
             max_tx_fee: GasCost::new(u64::MAX),
+            priority_fee: ZONE_TEST_PRIORITY_FEE,
         })
         .ok();
     let config = lb_zone_sdk::sequencer::SequencerConfig { funding, ..config };

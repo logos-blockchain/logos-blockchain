@@ -1,52 +1,30 @@
-use lb_core::mantle::{MantleTx, OpProof, SignedMantleTx, TxHash, transactions::Ops};
+use lb_core::mantle::{
+    MantleTx, SignedMantleTx, TxHash,
+    transactions::{Ops, OpsProofs, states::VerificationState},
+};
 use serde::Serialize;
 
 #[derive(Serialize)]
 #[serde(remote = "MantleTx")]
 pub struct ApiTransactionSerializer {
-    #[serde(getter = "<MantleTx as lb_core::mantle::Transaction>::hash")]
+    #[serde(getter = "<MantleTx as lb_core::mantle::traits::Hashable>::hash")]
     hash: TxHash,
     #[serde(getter = "MantleTx::ops")]
     ops: Ops,
 }
 
 #[derive(Serialize)]
-#[serde(remote = "SignedMantleTx")]
-pub struct ApiSignedTransactionSerializer {
+pub struct ApiSignedTransaction<'tx> {
     #[serde(with = "ApiTransactionSerializer")]
-    mantle_tx: MantleTx,
-    ops_proofs: Vec<OpProof>,
+    mantle_tx: &'tx MantleTx,
+    ops_proofs: &'tx OpsProofs,
 }
 
-#[derive(Serialize)]
-pub struct ApiSignedTransactionRef<'a>(
-    #[serde(with = "ApiSignedTransactionSerializer")] &'a SignedMantleTx,
-);
-
-impl<'a> From<&'a SignedMantleTx> for ApiSignedTransactionRef<'a> {
-    fn from(value: &'a SignedMantleTx) -> Self {
-        Self(value)
-    }
-}
-
-pub mod signed_api_transaction_vec {
-    use lb_core::mantle::SignedMantleTx;
-    use serde::ser::SerializeSeq as _;
-
-    use crate::api::serializers::transactions::ApiSignedTransactionRef;
-
-    pub fn serialize<Serializer>(
-        value: &Vec<SignedMantleTx>,
-        serializer: Serializer,
-    ) -> Result<Serializer::Ok, Serializer::Error>
-    where
-        Serializer: serde::Serializer,
-    {
-        let mut sequence = serializer.serialize_seq(Some(value.len()))?;
-        for transaction in value {
-            let signed_api_transaction = ApiSignedTransactionRef(transaction);
-            sequence.serialize_element(&signed_api_transaction)?;
+impl<'tx, State: VerificationState> From<&'tx SignedMantleTx<State>> for ApiSignedTransaction<'tx> {
+    fn from(value: &'tx SignedMantleTx<State>) -> Self {
+        Self {
+            mantle_tx: value.mantle_tx(),
+            ops_proofs: value.ops_proofs(),
         }
-        sequence.end()
     }
 }
