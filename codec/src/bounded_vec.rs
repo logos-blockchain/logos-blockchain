@@ -74,12 +74,6 @@ fn decode_length_prefix<const MAX_LENGTH: usize>(
     }
 }
 
-/// Upper bound, in elements, on how much a decoder may pre-allocate from a
-/// declared length before decoding anything. Beyond this the `Vec` grows
-/// amortised, so the memory a peer can make us commit stays proportional to the
-/// bytes it actually sent.
-const PREALLOC_LIMIT: usize = 1024;
-
 /// Largest `MAX` for which an element type that decodes without consuming input
 /// is still supported.
 ///
@@ -125,8 +119,7 @@ where
             return Err(DecodeError::length_out_of_bounds::<Self>(len, MIN, MAX));
         }
 
-        // Pre-allocate up to a max limit to avoid memory amplification attacks.
-        let mut items = Vec::with_capacity(len.min(PREALLOC_LIMIT));
+        let mut items = Vec::new();
 
         for _ in 0..len {
             let (next, item) = T::decode(rest, context)?;
@@ -399,24 +392,6 @@ mod tests {
 
         assert!(rest.is_empty());
         assert!(decoded.is_empty());
-    }
-
-    /// The cap must not cost correctness: payloads longer than the
-    /// pre-allocation limit still decode, they just grow the `Vec` as bytes are
-    /// consumed.
-    #[test]
-    fn a_payload_longer_than_the_prealloc_limit_still_decodes() {
-        const LEN: usize = super::PREALLOC_LIMIT + 1;
-        type Wide = BoundedVec<u8, 1, { u16::MAX as usize }>;
-
-        let mut input = u16::try_from(LEN).unwrap().to_le_bytes().to_vec();
-        input.extend(std::iter::repeat_n(0xAB, LEN));
-
-        let (rest, decoded) = Wide::decode(&input).unwrap();
-
-        assert!(rest.is_empty());
-        assert_eq!(decoded.len(), LEN);
-        assert!(decoded.iter().all(|&b| b == 0xAB));
     }
 
     /// `[0, 0]` is a legal bound: the only inhabitant is the empty vector, so
