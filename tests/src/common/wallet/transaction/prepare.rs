@@ -16,7 +16,9 @@ use super::{
     prepared::PreparedWalletTransaction,
     signing::{WalletTransferSigners, build_transfer_proofs},
 };
-use crate::common::wallet::{WalletFundingResources, WalletFundingSource, WalletReservedInputs};
+use crate::common::wallet::{
+    TransactionFeePolicy, WalletFundingResources, WalletFundingSource, WalletReservedInputs,
+};
 
 /// Intermediate transaction state after funding/input reservation but before
 /// proof generation.
@@ -30,6 +32,7 @@ pub struct PreparedWalletTransactionWorkItem {
     ops: Vec<Op>,
     transfer_signers: WalletTransferSigners,
     reserved_inputs: WalletReservedInputs,
+    fee_policy: Option<TransactionFeePolicy>,
 }
 
 impl PreparedWalletTransactionWorkItem {
@@ -60,7 +63,7 @@ pub fn prepare_wallet_transaction_work_item(
     let transfer_signers = transfer_signers_for_funding(&resources);
     let input_utxos_by_note_id = input_utxos_by_note_id(&resources);
 
-    let (funded_builder, context) = fund_wallet_transaction(intent, resources)?;
+    let (funded_builder, context, fee_policy) = fund_wallet_transaction(intent, resources)?;
     let mantle_tx = funded_builder.clone().build()?;
     let tx_hash = mantle_tx.hash();
     let funding_inputs = funding_inputs_from_transfers(&mantle_tx, &input_utxos_by_note_id)?;
@@ -77,6 +80,7 @@ pub fn prepare_wallet_transaction_work_item(
         ops: mantle_tx.ops().to_vec(),
         transfer_signers,
         reserved_inputs,
+        fee_policy,
     })
 }
 
@@ -91,6 +95,7 @@ pub fn finalize_prepared_wallet_transaction(
         ops,
         transfer_signers,
         reserved_inputs,
+        fee_policy,
     } = work_item;
     let transfer_proofs = build_transfer_proofs(&ops, &tx_hash, &transfer_signers)?;
 
@@ -100,6 +105,7 @@ pub fn finalize_prepared_wallet_transaction(
         tx_hash,
         transfer_proofs,
         reserved_inputs,
+        fee_policy,
     ))
 }
 

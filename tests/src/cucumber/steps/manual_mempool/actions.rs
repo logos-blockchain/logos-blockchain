@@ -25,7 +25,6 @@ use crate::{
     common::wallet::{WalletTransactionError, WalletTransactionIntent},
     cucumber::{
         error::StepError,
-        fee_reserve::DEFAULT_STORAGE_GAS_PRICE,
         steps::{
             TARGET, manual_transactions::tracked_transactions::create_stateless_invalid_transaction,
         },
@@ -270,7 +269,7 @@ fn transfer_intent(
     receiver_pk: ZkPublicKey,
     amount: u64,
 ) -> Result<WalletTransactionIntent, StepError> {
-    WalletTransactionIntent::transfer(&[(receiver_pk, amount)], DEFAULT_STORAGE_GAS_PRICE)
+    WalletTransactionIntent::transfer(&[(receiver_pk, amount)])
         .map_err(|error| wallet_transaction_error(&error))
 }
 

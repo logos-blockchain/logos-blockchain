@@ -675,7 +675,11 @@ async fn step_manual_control_transactions_no_time_out(
 }
 
 #[when(
-    expr = "I perform continuous transactions on user wallets with {int} coin split outputs of {int} LGO, {int} transactions of {int} LGO each for {int} cycles"
+    expr = "I perform continuous transactions on user wallets with {int} coin split outputs of {int} LGO, {int} transactions of {int} LGO each for {int} cycles with {int} epochs headroom per cycle"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Cucumber step captures map directly to step arguments"
 )]
 async fn step_continuous_user_wallets(
     world: &mut CucumberWorld,
@@ -685,7 +689,9 @@ async fn step_continuous_user_wallets(
     transactions: usize,
     value: u64,
     cycles: usize,
+    epochs_headroom: u32,
 ) -> StepResult {
+    world.transaction_epochs_headroom = epochs_headroom;
     info!(
         target: TARGET,
         "Starting continuous user wallet transactions: coin_split_outputs={coin_split_outputs}, coin_split_value={coin_split_value}, transactions={transactions}, value={value}, cycles={cycles}"
@@ -699,6 +705,7 @@ async fn step_continuous_user_wallets(
         transactions,
         value,
         cycles,
+        epochs_headroom,
     )
     .await
     .inspect_err(|e| {
@@ -711,7 +718,7 @@ async fn step_continuous_user_wallets(
 }
 
 #[when(
-    expr = "I perform continuous transactions on user wallets with {int} coin split outputs of {int} LGO, {int} transactions of {int} LGO each for {int} cycles and timeout of {int} seconds"
+    expr = "I perform continuous transactions on user wallets with {int} coin split outputs of {int} LGO, {int} transactions of {int} LGO each for {int} cycles and timeout of {int} seconds with {int} epochs headroom per cycle"
 )]
 #[expect(
     clippy::too_many_arguments,
@@ -726,7 +733,9 @@ async fn step_continuous_user_wallets_with_timeout(
     value: u64,
     cycles: usize,
     timeout_seconds: u64,
+    epochs_headroom: u32,
 ) -> StepResult {
+    world.transaction_epochs_headroom = epochs_headroom;
     timeout(
         Duration::from_secs(timeout_seconds),
         step_continuous_user_wallets(
@@ -737,6 +746,7 @@ async fn step_continuous_user_wallets_with_timeout(
             transactions,
             value,
             cycles,
+            epochs_headroom,
         ),
     )
     .await
@@ -796,7 +806,7 @@ async fn step_verify_each_wallet_minimum_outputs(
 }
 
 #[when(
-    expr = "I perform {int} stress continuous cycles with {int} transactions of {int} LGO to the next user wallet"
+    expr = "I perform {int} stress continuous cycles with {int} transactions of {int} LGO to the next user wallet with {int} epochs headroom per cycle"
 )]
 async fn step_perform_stress_continuous_cycles_next_user_wallet(
     world: &mut CucumberWorld,
@@ -804,7 +814,9 @@ async fn step_perform_stress_continuous_cycles_next_user_wallet(
     cycles: usize,
     num_transactions: usize,
     value: u64,
+    epochs_headroom: u32,
 ) -> StepResult {
+    world.transaction_epochs_headroom = epochs_headroom;
     execute_continuous_next_wallet_user_wallet(
         world,
         &step.value,

@@ -46,7 +46,10 @@ use std::{
     time::Duration,
 };
 
-use lb_core::mantle::{NoteId, Utxo, transactions::hash::TxHash};
+use lb_core::mantle::{
+    NoteId, Utxo,
+    transactions::{GasPrices, hash::TxHash},
+};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_tui_zone::run_commands::{ZONE_FILE_TRANSFER_VERSION, ZONE_WALLET_FUNDS_EXPORT};
 use lb_wallet::WalletError;
@@ -55,7 +58,7 @@ use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
 use crate::{
-    common::wallet::{WalletStateView, WalletUtxos},
+    common::wallet::{TransactionFeePolicy, WalletStateView, WalletUtxos, build_fee_horizon},
     cucumber::{
         error::{StepError, StepResult},
         steps::{
@@ -75,7 +78,7 @@ use crate::{
         wallet::{
             best_node::get_best_node_info,
             checks::wait_for_observed_transaction_hashes,
-            submissions::SignedUserWalletSubmission,
+            submissions::{SignedUserWalletSubmission, validate_fee_horizon_after_wallet_batch},
             sync,
             sync::{WalletSendReadiness, current_available_utxos_for_user_wallets},
         },
@@ -85,6 +88,72 @@ use crate::{
 
 const MANUAL_COMMAND_FILE_ENV: &str = "CUCUMBER_MANUAL_COMMAND_FILE";
 const MANUAL_COMMAND_POLL_INTERVAL_ENV: &str = "CUCUMBER_MANUAL_COMMAND_POLL_INTERVAL_MS";
+const MAX_TEST_EPOCH_HEADROOM: u32 = 16;
+
+pub(crate) async fn build_cycle_fee_policy(
+    world: &CucumberWorld,
+    step: &str,
+    representative_wallet: &str,
+    epochs_headroom: u32,
+) -> Result<TransactionFeePolicy, StepError> {
+    if epochs_headroom > MAX_TEST_EPOCH_HEADROOM {
+        return Err(StepError::InvalidArgument {
+            message: format!("epochs headroom per cycle must be at most {MAX_TEST_EPOCH_HEADROOM}"),
+        });
+    }
+
+    let best = get_best_node_info(world, representative_wallet, None).await?;
+    let best_node = best.best_node_for_wallet(world, representative_wallet)?;
+    let client = world.resolve_node_http_client(&best_node)?;
+    let consensus = client
+        .consensus_info()
+        .await
+        .map_err(|source| StepError::StepFail {
+            message: format!("Step `{step}` error: consensus query failed: {source}"),
+        })?;
+    let tip = consensus.cryptarchia_info.tip;
+    let prices = client
+        .gas_prices(Some(tip))
+        .await
+        .map_err(|source| StepError::StepFail {
+            message: format!("Step `{step}` error: gas prices query failed: {source}"),
+        })?;
+    if prices.tip != tip {
+        return Err(StepError::StepFail {
+            message: format!(
+                "Step `{step}` error: gas prices response referenced tip {:?}, requested {:?}",
+                prices.tip, tip
+            ),
+        });
+    }
+    let live_prices = GasPrices {
+        execution_base_gas_price: prices.execution_base_gas_price,
+        storage_gas_price: prices.storage_gas_price,
+    };
+    let horizon = build_fee_horizon(
+        tip,
+        u64::from(consensus.cryptarchia_info.slot),
+        world.slots_per_epoch,
+        epochs_headroom,
+        live_prices,
+    )
+    .map_err(|source| StepError::LogicalError {
+        message: format!("failed to build transaction fee horizon: {source}"),
+    })?;
+    info!(
+        target: TARGET,
+        "Cycle fee horizon: prepared tip {:?}, slot {:?}, epoch {:?}, valid through {:?}, execution {}->{}, storage {}->{}, representative wallet `{representative_wallet}`",
+        horizon.prepared_at_tip,
+        consensus.cryptarchia_info.slot,
+        horizon.prepared_at_epoch,
+        horizon.valid_through_epoch,
+        horizon.live_prices.execution_base_gas_price.into_inner(),
+        horizon.ceiling_prices.execution_base_gas_price.into_inner(),
+        horizon.live_prices.storage_gas_price.into_inner(),
+        horizon.ceiling_prices.storage_gas_price.into_inner(),
+    );
+    Ok(TransactionFeePolicy::new(horizon))
+}
 
 pub(crate) async fn execute_manual_command(
     world: &mut CucumberWorld,
@@ -99,6 +168,10 @@ pub(crate) async fn execute_manual_command(
     Ok(false)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Cucumber transaction shape and fee policy inputs"
+)]
 pub(crate) async fn execute_continuous_round_robin_user_wallets(
     world: &mut CucumberWorld,
     step: &str,
@@ -107,7 +180,9 @@ pub(crate) async fn execute_continuous_round_robin_user_wallets(
     num_transactions: usize,
     value: u64,
     cycles: usize,
+    epochs_headroom: u32,
 ) -> Result<(), StepError> {
+    world.transaction_epochs_headroom = epochs_headroom;
     let command = ManualCommand::ContinuousRoundRobinUserWallets {
         coin_split_outputs,
         coin_split_value,
@@ -116,7 +191,10 @@ pub(crate) async fn execute_continuous_round_robin_user_wallets(
         cycles,
     };
 
-    execute_non_stop_manual_command(world, step, &command).await
+    world.transaction_fee_policy = None;
+    let result = execute_non_stop_manual_command(world, step, &command).await;
+    world.transaction_fee_policy = None;
+    result
 }
 
 pub(crate) async fn execute_coin_splits_all_user_wallets(
@@ -218,6 +296,17 @@ fn destructure_next_wallet_command(
 }
 
 pub(crate) async fn execute_continuous_next_wallet_user_wallet(
+    world: &mut CucumberWorld,
+    step: &str,
+    command: &ManualCommand,
+) -> Result<(), StepError> {
+    world.transaction_fee_policy = None;
+    let result = execute_continuous_next_wallet_user_wallet_inner(world, step, command).await;
+    world.transaction_fee_policy = None;
+    result
+}
+
+async fn execute_continuous_next_wallet_user_wallet_inner(
     world: &mut CucumberWorld,
     step: &str,
     command: &ManualCommand,
@@ -343,6 +432,10 @@ async fn execute_ring_send_round_with_utxo_cache<S: BuildHasher + Sync>(
     available_utxos: &mut WalletUtxos,
     used_input_note_ids: &HashSet<NoteId, S>,
 ) -> Result<(HashSet<TxHash>, HashSet<NoteId>), StepError> {
+    let headroom = world.transaction_epochs_headroom;
+    world.transaction_fee_policy =
+        Some(build_cycle_fee_policy(world, step, &wallet_names[0], headroom).await?);
+
     let mut signed_submissions = Vec::with_capacity(wallet_names.len() * transactions_per_wallet);
     let mut prepared_counts = BTreeMap::new();
 
@@ -387,6 +480,7 @@ async fn execute_ring_send_round_with_utxo_cache<S: BuildHasher + Sync>(
         )
         .await?;
         prepared_counts.insert(from.clone(), prepared.len());
+        validate_fee_horizon_after_wallet_batch(world, from, prepared.len()).await?;
         signed_submissions.append(&mut prepared);
     }
 
@@ -1170,6 +1264,10 @@ async fn prepare_and_submit_round_robin_transactions(
     value: u64,
     available_utxos: &mut WalletUtxos,
 ) -> Result<(HashSet<TxHash>, HashSet<NoteId>), StepError> {
+    let headroom = world.transaction_epochs_headroom;
+    world.transaction_fee_policy =
+        Some(build_cycle_fee_policy(world, step, &wallet_names[0], headroom).await?);
+
     let mut signed_submissions = Vec::with_capacity(wallet_names.len() * num_transactions);
     let mut prepared_counts = BTreeMap::new();
     for sender in wallet_names {
@@ -1193,6 +1291,7 @@ async fn prepare_and_submit_round_robin_transactions(
         })?;
 
         prepared_counts.insert(sender.clone(), prepared.len());
+        validate_fee_horizon_after_wallet_batch(world, sender, prepared.len()).await?;
         signed_submissions.append(&mut prepared);
     }
 
@@ -1249,6 +1348,10 @@ async fn manage_round_robin_coin_splits_with_utxo_cache(
     coin_split_value: u64,
     available_utxos: &mut WalletUtxos,
 ) -> Result<HashSet<NoteId>, StepError> {
+    let headroom = world.transaction_epochs_headroom;
+    world.transaction_fee_policy =
+        Some(build_cycle_fee_policy(world, step, &wallet_names[0], headroom).await?);
+
     let (split_tx_hashes, split_used_input_note_ids) =
         perform_coin_splits_for_round_robin_with_utxo_cache(
             world,

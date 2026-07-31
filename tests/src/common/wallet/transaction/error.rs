@@ -1,6 +1,7 @@
 //! Shared error type for wallet transaction preparation.
 
 use lb_core::mantle::{NoteId, VerificationError, gas::GasOverflow, transactions::TxBuilderError};
+use lb_utils::bounded::BoundedError;
 use lb_wallet::WalletError;
 use lb_zksign::ZkSignError;
 use thiserror::Error;
@@ -23,4 +24,8 @@ pub enum WalletTransactionError {
     Builder(#[from] TxBuilderError),
     #[error("wallet transaction output total overflowed u64")]
     OutputTotalOverflow,
+    #[error("wallet transaction inputs cannot cover its outputs")]
+    FeeAccounting,
+    #[error(transparent)]
+    BoundedError(#[from] BoundedError),
 }

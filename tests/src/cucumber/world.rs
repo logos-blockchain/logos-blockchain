@@ -44,7 +44,8 @@ use tracing::warn;
 use crate::{
     BIN_PATH_RELEASE,
     common::wallet::{
-        TrackedWalletKeys, TrackedWalletKeysBySource, TrackedWallets, WalletDiagnostics,
+        TrackedWalletKeys, TrackedWalletKeysBySource, TrackedWallets, TransactionFeePolicy,
+        WalletDiagnostics,
         scanner::{
             ScannerSeed, SharedWalletScannerState, WalletScannerRuntime, WalletScannerState,
             build_fork_group_scanner_configs, start_wallet_scanners, wait_for_scanner_catch_up,
@@ -834,6 +835,10 @@ pub struct ConsensusLivenessSpec {
     pub lag_allowance: Option<NonZero<u64>>,
 }
 
+/// This default slots per epoch value will be overwritten by scraping the
+/// started node's deployment settings
+const DEFAULT_SLOTS_PER_EPOCH: NonZero<u64> = NonZero::new(1).expect("one is non-zero");
+
 #[derive(World, Derivative)]
 #[derivative(Default)]
 pub struct CucumberWorld {
@@ -859,6 +864,10 @@ pub struct CucumberWorld {
     /// Manual: Header id of the locally generated genesis block, when the
     /// cluster deployment carries one.
     pub genesis_block_id: Option<HeaderId>,
+    /// Effective epoch length, populated from the first launched node's
+    /// deployment config.
+    #[derivative(Default(value = "DEFAULT_SLOTS_PER_EPOCH"))]
+    pub slots_per_epoch: NonZero<u64>,
     /// Manual: Optional local cluster instance for scenarios that use the local
     /// deployer.
     #[derivative(Default(value = "None"))]
@@ -888,6 +897,12 @@ pub struct CucumberWorld {
     pub node_provisioned_wallet_pks: HashSet<ZkPublicKey>,
     /// Manual: Scenario-level fee sponsor configuration and accounting.
     pub fee_state: ScenarioFeeState,
+    /// Fee policy shared by all transactions prepared in the current
+    /// long-running cycle.
+    pub transaction_fee_policy: Option<TransactionFeePolicy>,
+    /// Explicitly configured epoch headroom for long-running transactions.
+    /// Zero means use the live fee prices without epoch projection.
+    pub transaction_epochs_headroom: u32,
     /// Manual: Scenario-local wallet read model.
     ///
     /// This shared state contains wallet balances/UTXOs observed during a test
@@ -1068,6 +1083,7 @@ impl Debug for CucumberWorld {
                 &format!("{:?}", self.genesis_block_utxos),
             )
             .field("genesis_block_id", &self.genesis_block_id)
+            .field("slots_per_epoch", &self.slots_per_epoch)
             .field("local_cluster", {
                 if self.local_cluster.is_some() {
                     &"Has LbcManualCluster"
@@ -1096,6 +1112,11 @@ impl Debug for CucumberWorld {
                 &self.node_provisioned_wallet_pks.len(),
             )
             .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
+            .field("transaction_fee_policy", &self.transaction_fee_policy)
+            .field(
+                "transaction_epochs_headroom",
+                &self.transaction_epochs_headroom,
+            )
             .field("wallets", &"SharedTrackedWallets")
             .field("submitted_transactions", &self.submitted_transactions.len())
             .field("submission_outcomes", &self.submission_outcomes.len())

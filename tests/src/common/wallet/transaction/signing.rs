@@ -11,7 +11,7 @@ use lb_core::mantle::{
 use lb_key_management_system_service::keys::ZkKey;
 
 use super::{error::WalletTransactionError, signed::SignedWalletTransaction};
-use crate::common::wallet::WalletReservedInputs;
+use crate::common::wallet::{TransactionFeePolicy, WalletReservedInputs};
 
 pub(super) type WalletTransferSigners = HashMap<NoteId, ZkKey>;
 
@@ -21,24 +21,45 @@ pub(super) fn sign_prepared_wallet_transaction(
     tx_hash: TxHash,
     transfer_proofs: OpsProofs,
     reserved_inputs: WalletReservedInputs,
+    fee_policy: Option<&TransactionFeePolicy>,
     leading_op_proofs: OpsProofs,
 ) -> Result<SignedWalletTransaction, WalletTransactionError> {
     let gas_prices = context.gas_context.get_gas_prices();
     let mantle_tx = funded_builder.build()?;
     let mut op_proofs = leading_op_proofs.into_inner();
     op_proofs.extend(transfer_proofs);
-    let op_proofs = OpsProofs::new_unchecked(op_proofs);
+    let op_proofs = OpsProofs::try_from(op_proofs)?;
 
     let signed_tx = SignedMantleTx::new(mantle_tx, op_proofs).preverify()?;
-    let spent_fee = signed_tx
+    let mandatory_fee_at_preparation = signed_tx
         .total_gas_cost::<MainnetGasConstants>(&gas_prices)?
         .into_inner();
+    let output_total = signed_tx
+        .mantle_tx()
+        .ops()
+        .iter()
+        .filter_map(|op| match op {
+            Op::Transfer(transfer) => Some(transfer),
+            _ => None,
+        })
+        .flat_map(|transfer| transfer.outputs.iter())
+        .try_fold(0u64, |total, note| {
+            total
+                .checked_add(note.value)
+                .ok_or(WalletTransactionError::OutputTotalOverflow)
+        })?;
+    let paid_fee = reserved_inputs
+        .total_value()
+        .checked_sub(output_total)
+        .ok_or(WalletTransactionError::FeeAccounting)?;
 
     Ok(SignedWalletTransaction::new(
         signed_tx,
         tx_hash,
         reserved_inputs,
-        spent_fee,
+        paid_fee,
+        mandatory_fee_at_preparation,
+        fee_policy,
     ))
 }
 

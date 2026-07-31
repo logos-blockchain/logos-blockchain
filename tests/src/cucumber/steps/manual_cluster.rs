@@ -149,12 +149,13 @@ fn build_devnet_manual_cluster_deployment(
         });
     let config = apply_blend_core_nodes(world, config, nodes_count)?;
 
-    DeploymentBuilder::new(config)
+    let deployment = DeploymentBuilder::new(config)
         .with_deployment_seed(world.manual_cluster_deployment_seed())
         .build()
         .map_err(|e| StepError::LogicalError {
             message: format!("failed to build devnet manual cluster: {e}"),
-        })
+        })?;
+    Ok(deployment)
 }
 
 fn build_manual_cluster_from_spec(

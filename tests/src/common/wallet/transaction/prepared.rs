@@ -17,6 +17,7 @@ pub struct PreparedWalletTransaction {
     tx_hash: TxHash,
     transfer_proofs: OpsProofs,
     reserved_inputs: WalletReservedInputs,
+    fee_policy: Option<crate::common::wallet::TransactionFeePolicy>,
 }
 
 impl PreparedWalletTransaction {
@@ -27,6 +28,7 @@ impl PreparedWalletTransaction {
         tx_hash: TxHash,
         transfer_proofs: OpsProofs,
         reserved_inputs: WalletReservedInputs,
+        fee_policy: Option<crate::common::wallet::TransactionFeePolicy>,
     ) -> Self {
         Self {
             funded_builder,
@@ -34,6 +36,7 @@ impl PreparedWalletTransaction {
             tx_hash,
             transfer_proofs,
             reserved_inputs,
+            fee_policy,
         }
     }
 
@@ -52,6 +55,7 @@ impl PreparedWalletTransaction {
             tx_hash,
             transfer_proofs,
             reserved_inputs,
+            fee_policy,
         } = self;
 
         sign_prepared_wallet_transaction(
@@ -60,6 +64,7 @@ impl PreparedWalletTransaction {
             tx_hash,
             transfer_proofs,
             reserved_inputs,
+            fee_policy.as_ref(),
             leading_op_proofs,
         )
     }
