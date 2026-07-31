@@ -124,8 +124,8 @@ where
         for _ in 0..len {
             let (next, item) = T::decode(rest, context)?;
 
-            // If we decode more than `ZERO_LENGTH_ELEMENT_MAX` correctly without consuming
-            // the input, bail out to avoid hanging for too long.
+            // If we decode once without consuming any input bail out to avoid hanging for
+            // too long.
             // TODO: This logic can be made a compile-time check once generics become more
             // powerful and we get const generics expressions. For now, we just check it at
             // runtime.
