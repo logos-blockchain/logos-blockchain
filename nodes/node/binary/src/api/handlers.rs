@@ -27,6 +27,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Op, OpProof, SignedMantleTx, TxHash,
+        channel::ChannelState,
         ops::channel::ChannelId,
         traits::Hashable,
         transactions::{
@@ -915,6 +916,7 @@ where
     path = paths::CHANNEL,
     responses(
         (status = 200, description = "Channel state"),
+        (status = 404, description = "Channel not found", body = ErrorBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -926,7 +928,15 @@ where
     RuntimeServiceId:
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
-    make_request_and_return_response!(mantle::channel::<RuntimeServiceId>(&handle, id))
+    channel_response(mantle::channel_state::<RuntimeServiceId>(&handle, id).await)
+}
+
+fn channel_response(result: Result<Option<ChannelState>, DynError>) -> Response {
+    match result {
+        Ok(Some(channel)) => (StatusCode::OK, Json(channel)).into_response(),
+        Ok(None) => ApiError::NotFound("Channel not found".into()).into_response(),
+        Err(error) => ApiError::Internal(error).into_response(),
+    }
 }
 
 #[utoipa::path(
