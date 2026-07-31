@@ -1277,7 +1277,7 @@ mod tests {
         let x_msg = msg_id(30);
 
         let u_tx = make_dummy_tx(1);
-        let u_hash = u_tx.mantle_tx.hash();
+        let u_hash = u_tx.mantle_tx().hash();
         let u_info = InscriptionInfo {
             tx_hash: u_hash,
             parent_msg: MsgId::root(),
@@ -1285,7 +1285,7 @@ mod tests {
             payload: [1].into(),
         };
         let x_old = InscriptionInfo {
-            tx_hash: make_dummy_tx(2).mantle_tx.hash(),
+            tx_hash: make_dummy_tx(2).mantle_tx().hash(),
             parent_msg: u_msg,
             this_msg: x_msg,
             payload: [2].into(),
@@ -1307,13 +1307,13 @@ mod tests {
         assert_eq!(old_lineage.len(), 2, "old lineage: U then Config X");
 
         let v_info = InscriptionInfo {
-            tx_hash: make_dummy_tx(3).mantle_tx.hash(),
+            tx_hash: make_dummy_tx(3).mantle_tx().hash(),
             parent_msg: MsgId::root(),
             this_msg: v_msg,
             payload: [3].into(),
         };
         let x_new = InscriptionInfo {
-            tx_hash: make_dummy_tx(4).mantle_tx.hash(),
+            tx_hash: make_dummy_tx(4).mantle_tx().hash(),
             parent_msg: v_msg,
             this_msg: x_msg,
             payload: [2].into(),
