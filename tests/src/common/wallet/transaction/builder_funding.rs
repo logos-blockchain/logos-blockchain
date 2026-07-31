@@ -9,7 +9,7 @@ use lb_core::mantle::{
     ops::transfer::TransferOp,
     transactions::{MantleTxBuilder, MantleTxContext},
 };
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_service::keys::{MAX_ZK_SIGNING_KEYS, ZkPublicKey};
 use lb_mmr::MerkleMountainRange;
 use lb_wallet::{WalletError, WalletState};
 use rpds::{HashTrieMapSync, HashTrieSetSync};
@@ -181,7 +181,7 @@ pub fn extend_wallet_funding_inputs(
     tx_builder: &MantleTxBuilder,
     funding_utxos: &[Utxo],
 ) -> Result<MantleTxBuilder, WalletError> {
-    if funding_utxos.len() <= super::signing::ZKSIGN_MAX_INPUTS {
+    if funding_utxos.len() <= MAX_ZK_SIGNING_KEYS {
         return tx_builder
             .clone()
             .extend_ledger_inputs(funding_utxos.iter().copied())
@@ -201,7 +201,7 @@ fn evaluate_funding_inputs(
         return Ok(WalletFundingOutcome::NeedsMoreInputs);
     }
 
-    if selected_inputs.len() <= super::signing::ZKSIGN_MAX_INPUTS {
+    if selected_inputs.len() <= MAX_ZK_SIGNING_KEYS {
         return evaluate_standard_funding_inputs(tx_builder, selected_inputs, change_pk, context);
     }
 
@@ -242,9 +242,7 @@ fn build_chunked_funded_tx(
     change_pk: ZkPublicKey,
     context: &MantleTxContext,
 ) -> Result<Option<MantleTxBuilder>, WalletError> {
-    if funding_utxos.len() <= super::signing::ZKSIGN_MAX_INPUTS
-        || !tx_builder.ledger_inputs().is_empty()
-    {
+    if funding_utxos.len() <= MAX_ZK_SIGNING_KEYS || !tx_builder.ledger_inputs().is_empty() {
         return Ok(None);
     }
 
@@ -315,14 +313,14 @@ fn with_transfer_input_chunks(
     tx_builder: &MantleTxBuilder,
     funding_utxos: &[Utxo],
 ) -> Result<MantleTxBuilder, WalletError> {
-    let final_chunk_len = match funding_utxos.len() % super::signing::ZKSIGN_MAX_INPUTS {
-        0 => super::signing::ZKSIGN_MAX_INPUTS,
+    let final_chunk_len = match funding_utxos.len() % MAX_ZK_SIGNING_KEYS {
+        0 => MAX_ZK_SIGNING_KEYS,
         remainder => remainder,
     };
     let split_index = funding_utxos.len() - final_chunk_len;
 
     let mut builder = tx_builder.clone();
-    for chunk in funding_utxos[..split_index].chunks(super::signing::ZKSIGN_MAX_INPUTS) {
+    for chunk in funding_utxos[..split_index].chunks(MAX_ZK_SIGNING_KEYS) {
         builder = builder.push_op(Op::Transfer(TransferOp::new(
             Inputs::try_new(chunk.iter().map(Utxo::id).collect::<Vec<_>>())?,
             Outputs::empty(),

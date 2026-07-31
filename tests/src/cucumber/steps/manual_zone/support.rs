@@ -36,7 +36,7 @@ use lb_http_api_common::bodies::{
         sign::{WalletSignTxZkRequestBody, WalletSignTxZkResponseBody},
     },
 };
-use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, ZkSignature};
+use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, ZkPublicKeys, ZkSignature};
 use lb_node::SignedMantleTx;
 use lb_testing_framework::NodeHttpClient;
 use lb_zone_sdk::{
@@ -1919,7 +1919,7 @@ async fn sign_tx_zk(
             request_url,
             &WalletSignTxZkRequestBody {
                 tx_hash: tx.hash(),
-                pks: public_keys,
+                pks: ZkPublicKeys::try_from(public_keys)?,
             },
         )
         .await

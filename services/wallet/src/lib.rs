@@ -37,8 +37,8 @@ use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
     backend::{KMSBackend, preload::PreloadKMSBackend},
     keys::{
-        Ed25519Key, KeyOperators, PayloadEncoding, SignatureEncoding, ZkPublicKey, ZkSignature,
-        secured_key::SecuredKey,
+        Ed25519Key, KeyOperators, PayloadEncoding, SignatureEncoding, ZkPublicKey, ZkPublicKeys,
+        ZkSignature, secured_key::SecuredKey,
     },
     operators::zk::voucher::UnsafeVoucherOperator,
 };
@@ -179,7 +179,7 @@ pub enum WalletMsg {
     },
     SignTxWithZk {
         tx_hash: TxHash,
-        pks: Vec<ZkPublicKey>,
+        pks: ZkPublicKeys,
         resp_tx: Sender<Result<ZkSignature, WalletServiceError>>,
     },
     GetLeaderAgedNotes {
@@ -992,6 +992,7 @@ where
         pks: impl IntoIterator<Item = ZkPublicKey>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<ZkSignature, WalletServiceError> {
+        let pks = ZkPublicKeys::try_from_iter(pks)?;
         // Use hex-encoded public key as key_id for now
         let key_ids: Vec<_> = pks
             .into_iter()

@@ -13,7 +13,6 @@ use lb_key_management_system_service::keys::ZkKey;
 use super::{error::WalletTransactionError, signed::SignedWalletTransaction};
 use crate::common::wallet::WalletReservedInputs;
 
-pub(super) const ZKSIGN_MAX_INPUTS: usize = 32;
 pub(super) type WalletTransferSigners = HashMap<NoteId, ZkKey>;
 
 pub(super) fn sign_prepared_wallet_transaction(
