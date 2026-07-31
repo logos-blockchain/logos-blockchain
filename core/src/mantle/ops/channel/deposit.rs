@@ -100,10 +100,10 @@ impl ExecutableOperation for DepositOp {
     type Context<'a> = DepositExecutionContext;
     type Error = Error;
 
-    fn execute(
+    fn execute<'a>(
         &self,
-        mut ctx: Self::Context<'_>,
-    ) -> Result<(Self::Context<'_>, Vec<TxEvent>), Self::Error> {
+        mut ctx: Self::Context<'a>,
+    ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         // Get the amount deposited for the event payload
         let amount_deposited = self.inputs.amount(&ctx.utxos)?;
         let outputs = self.outputs(&ctx.utxos)?;

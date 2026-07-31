@@ -132,10 +132,10 @@ impl ExecutableOperation for ChannelTransferOp {
     type Context<'a> = ChannelTransferExecutionContext;
     type Error = Error;
 
-    fn execute(
+    fn execute<'a>(
         &self,
-        mut ctx: Self::Context<'_>,
-    ) -> Result<(Self::Context<'_>, Vec<TxEvent>), Self::Error> {
+        mut ctx: Self::Context<'a>,
+    ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         // Remove the inputs from the ledger and from the channel.
         ctx.utxos = self.inputs.execute(ctx.utxos)?;
         for note_id in self.inputs.iter() {

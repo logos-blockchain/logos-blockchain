@@ -12,8 +12,7 @@ use lb_core::{
         NoteId, OpProof, Utxo, Value,
         channel::Channels,
         ledger::{
-            Declarations, ExecutableOperation, VerifiableOperation,
-            verification_mode::{GenesisMode, StandardMode},
+            Declarations, ExecutableOperation, VerifiableOperation, verification_mode::GenesisMode,
         },
         ops::sdp::{
             SDPActiveExecutionContext, SDPActiveOp, SDPDeclareExecutionContext, SDPDeclareOp,

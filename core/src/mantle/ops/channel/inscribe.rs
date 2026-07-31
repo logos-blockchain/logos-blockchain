@@ -113,10 +113,10 @@ impl ExecutableOperation for InscriptionOp {
     type Context<'a> = InscriptionExecutionContext;
     type Error = Error;
 
-    fn execute(
+    fn execute<'a>(
         &self,
-        mut ctx: Self::Context<'_>,
-    ) -> Result<(Self::Context<'_>, Vec<TxEvent>), Self::Error> {
+        mut ctx: Self::Context<'a>,
+    ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         // if the channel doesn't exist, create it
         let channel = ctx
             .channels

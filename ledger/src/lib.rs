@@ -17,7 +17,7 @@ use lb_core::{
     mantle::{
         NoteId, Op, Utxo, Value, VerificationError,
         gas::{Gas, GasConstants, GasCost, GasOverflow},
-        ledger::{ExecutableOperation as _, VerifiableOperation as _},
+        ledger::ExecutableOperation as _,
         ops::{
             channel::{
                 channel_transfer::ChannelTransferExecutionContext,
@@ -725,7 +725,7 @@ mod tests {
         mantle::{
             GasCalculator as _, Note, OpProof, RawMantleTx, SignedMantleTx,
             gas::MainnetGasConstants,
-            ledger::{Inputs, Outputs, Utxos},
+            ledger::{Inputs, Outputs, Utxos, VerifiableOperation as _},
             ops::{
                 OpId as _,
                 channel::{

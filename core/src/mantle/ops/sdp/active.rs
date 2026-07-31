@@ -74,10 +74,10 @@ impl ExecutableOperation for SDPActiveOp {
     type Error = SdpError;
 
     // TODO: check service specific logic
-    fn execute(
+    fn execute<'a>(
         &self,
-        mut ctx: Self::Context<'_>,
-    ) -> Result<(Self::Context<'_>, Vec<TxEvent>), Self::Error> {
+        mut ctx: Self::Context<'a>,
+    ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         let mut declaration = ctx
             .declarations
             .get(&self.declaration_id)

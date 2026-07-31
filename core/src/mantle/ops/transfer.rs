@@ -121,10 +121,10 @@ impl ExecutableOperation for TransferOp {
     type Context<'a> = Utxos;
     type Error = TransferError;
 
-    fn execute(
+    fn execute<'a>(
         &self,
-        mut utxos: Self::Context<'_>,
-    ) -> Result<(Self::Context<'_>, Vec<TxEvent>), Self::Error> {
+        mut utxos: Self::Context<'a>,
+    ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         // Remove inputs from the ledger
         utxos = self.inputs.execute(utxos)?;
         // Add outputs from the ledger

@@ -61,15 +61,13 @@ pub trait VerifiableOperation<Mode: verification_mode::VerificationMode> {
 }
 
 pub trait ExecutableOperation {
-    type Context<'a>
-    where
-        Self: 'a;
+    type Context<'a>;
     type Error;
 
-    fn execute(
+    fn execute<'a>(
         &self,
-        context: Self::Context<'_>,
-    ) -> Result<(Self::Context<'_>, Vec<TxEvent>), Self::Error>;
+        context: Self::Context<'a>,
+    ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error>;
 }
 
 pub trait Operation<Mode: verification_mode::VerificationMode>:

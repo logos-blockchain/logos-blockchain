@@ -239,10 +239,10 @@ impl ExecutableOperation for LeaderClaimOp {
     type Context<'a> = LeaderClaimExecutionContext;
     type Error = LeaderClaimError;
 
-    fn execute(
+    fn execute<'a>(
         &self,
-        mut ctx: Self::Context<'_>,
-    ) -> Result<(Self::Context<'_>, Vec<TxEvent>), Self::Error> {
+        mut ctx: Self::Context<'a>,
+    ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         // Add the nullifier to the nullifier set
         ctx.nullifiers = ctx.nullifiers.insert(self.voucher_nullifier, ()).0;
 

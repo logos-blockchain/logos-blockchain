@@ -224,10 +224,10 @@ impl ExecutableOperation for SDPDeclareOp {
     type Context<'a> = SDPDeclareExecutionContext;
     type Error = SdpError;
 
-    fn execute(
+    fn execute<'a>(
         &self,
-        ctx: Self::Context<'_>,
-    ) -> Result<(Self::Context<'_>, Vec<TxEvent>), Self::Error> {
+        ctx: Self::Context<'a>,
+    ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         SDPDeclareValidationExt::execute(self, ctx)
     }
 }

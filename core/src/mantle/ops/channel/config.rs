@@ -104,10 +104,10 @@ impl ExecutableOperation for ChannelConfigOp {
     type Context<'a> = ChannelConfigExecutionContext;
     type Error = Error;
 
-    fn execute(
+    fn execute<'a>(
         &self,
-        mut ctx: Self::Context<'_>,
-    ) -> Result<(Self::Context<'_>, Vec<TxEvent>), Self::Error> {
+        mut ctx: Self::Context<'a>,
+    ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         let channel = ChannelState {
             accredited_keys: self.keys.clone().into(),
             configuration_threshold: self.configuration_threshold,
