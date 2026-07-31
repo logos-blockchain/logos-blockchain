@@ -26,7 +26,9 @@ use crate::{
     cucumber::{
         error::StepError,
         fee_reserve::DEFAULT_STORAGE_GAS_PRICE,
-        steps::{TARGET, manual_transactions::tracked_transactions::create_invalid_transaction},
+        steps::{
+            TARGET, manual_transactions::tracked_transactions::create_stateless_invalid_transaction,
+        },
         utils::{tx_hash_to_hex, user_config_from_node_yaml},
         wallet::submissions::{
             SignedUserWalletSubmission, prepare_user_wallet_transaction_submission,
@@ -100,7 +102,7 @@ pub async fn try_submit_invalid_transaction(
         .inspect_err(|e| {
             warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
-    let signed_tx = create_invalid_transaction();
+    let signed_tx = create_stateless_invalid_transaction();
     let tx_hash = signed_tx.hash();
 
     world.remember_submitted_transaction(transaction_alias.clone(), tx_hash);
