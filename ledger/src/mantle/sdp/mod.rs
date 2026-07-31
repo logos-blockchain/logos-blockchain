@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use lb_blend_message::crypto::proofs::RealProofsVerifier;
 use lb_core::{
     block::BlockNumber,
+    crypto::Hash,
     events::{HeaderEvent, TxEvent},
     mantle::{
         NoteId, OpProof, Utxo, Value,
@@ -42,7 +43,6 @@ impl Service {
         self,
         last_epoch_state: &EpochState,
         epoch_state: &EpochState,
-        locked_notes: &mut LockedNotes,
         config: ServiceParameters,
         rewards_params: &ServiceRewardsParameters,
     ) -> (Self, Vec<Utxo>, Vec<HeaderEvent>) {
@@ -51,36 +51,11 @@ impl Service {
                 let (new_state, utxos, events) = state.try_apply_header(
                     last_epoch_state,
                     epoch_state,
-                    locked_notes,
                     config,
                     &rewards_params.blend,
                 );
                 (Self::BlendNetwork(new_state), utxos, events)
             }
-        }
-    }
-
-    fn contains(&self, declaration_id: &DeclarationId) -> bool {
-        match self {
-            Self::BlendNetwork(state) => state.contains(declaration_id),
-        }
-    }
-
-    const fn declarations(&self) -> &Declarations {
-        match self {
-            Self::BlendNetwork(state) => &state.declarations,
-        }
-    }
-
-    pub fn declarations_clone(&self) -> Declarations {
-        match self {
-            Self::BlendNetwork(state) => state.declarations.clone(),
-        }
-    }
-
-    pub fn update_declarations(&mut self, declarations: Declarations) {
-        match self {
-            Self::BlendNetwork(state) => state.declarations = declarations,
         }
     }
 
@@ -159,8 +134,6 @@ pub enum Error {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct ServiceState<R: Rewards> {
     service_type: ServiceType,
-    /// Declarations accumulated until the current block.
-    declarations: Declarations,
     // Rewards calculation and tracking for this service
     pub rewards: R,
 }
@@ -170,7 +143,6 @@ impl<R: Rewards> ServiceState<R> {
         mut self,
         last_epoch_state: &EpochState,
         epoch_state: &EpochState,
-        locked_notes: &mut LockedNotes,
         service_params: ServiceParameters,
         rewards_params: &R::Params,
     ) -> (Self, Vec<Utxo>, Vec<HeaderEvent>) {
@@ -178,10 +150,6 @@ impl<R: Rewards> ServiceState<R> {
         let mut events = Vec::new();
 
         if last_epoch_state.epoch() < epoch_state.epoch() {
-            events.extend(
-                self.unlock_and_remove_withdrawn_declarations(locked_notes, epoch_state.epoch()),
-            );
-
             // Update and distribute rewards
             (self.rewards, reward_utxos) = self.rewards.update_epoch(
                 last_epoch_state,
@@ -208,54 +176,8 @@ impl<R: Rewards> ServiceState<R> {
         (self, reward_utxos, events)
     }
 
-    /// For every withdrawn declaration whose `withdrawn` epoch has been
-    /// reached, unlock the locked note and remove the declaration from the
-    /// set.
-    ///
-    /// Returns one [`HeaderEvent::SdpNoteUnlocked`] event per unlocked note.
-    fn unlock_and_remove_withdrawn_declarations(
-        &mut self,
-        locked_notes: &mut LockedNotes,
-        epoch: Epoch,
-    ) -> Vec<HeaderEvent> {
-        let mut events = Vec::new();
-
-        // The removals go to a clone.
-        let mut declarations = self.declarations.clone();
-        for (id, declaration) in &self.declarations {
-            let Some(withdraw_at) = declaration.withdraw_at else {
-                continue;
-            };
-            if epoch < withdraw_at {
-                continue;
-            }
-            if locked_notes
-                .is_locked_for_service(&declaration.locked_note_id, &declaration.service_type)
-            {
-                locked_notes
-                    .unlock(declaration.service_type, &declaration.locked_note_id)
-                    .expect("unlocking note from withdrawn declaration must be successful if it hasn't been unlocked yet");
-                events.push(HeaderEvent::SdpNoteUnlocked {
-                    note_id: declaration.locked_note_id,
-                    service_type: declaration.service_type,
-                    declaration_id: *id,
-                });
-            }
-            (declarations, _) = declarations
-                .remove(id)
-                .expect("the declaration is in the tree");
-        }
-        self.declarations = declarations;
-
-        events
-    }
-
     fn add_income(&mut self, income: Value) {
         self.rewards = self.rewards.add_income(income);
-    }
-
-    fn contains(&self, declaration_id: &DeclarationId) -> bool {
-        self.declarations.contains(declaration_id)
     }
 }
 
@@ -278,6 +200,7 @@ fn is_active(declaration: &Declaration, current_epoch: Epoch, config: ServicePar
 /// since we keep a copy of this state for each block.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SdpLedger {
+    declarations: Declarations,
     services: rpds::HashTrieMapSync<ServiceType, Service>,
     locked_notes: LockedNotes,
     // The epoch when this ledger was created
@@ -288,6 +211,7 @@ impl SdpLedger {
     #[must_use]
     pub fn new(epoch: Epoch) -> Self {
         Self {
+            declarations: Declarations::new(),
             services: rpds::HashTrieMapSync::new_sync(),
             locked_notes: LockedNotes::new(),
             epoch,
@@ -334,10 +258,12 @@ impl SdpLedger {
     }
 
     #[must_use]
-    fn new_service_state<R: Rewards>(service_type: ServiceType, rewards: R) -> ServiceState<R> {
+    const fn new_service_state<R: Rewards>(
+        service_type: ServiceType,
+        rewards: R,
+    ) -> ServiceState<R> {
         ServiceState {
             service_type,
-            declarations: Declarations::new(),
             rewards,
         }
     }
@@ -350,9 +276,14 @@ impl SdpLedger {
     ) -> Result<(Self, HeaderEffect), Error> {
         let mut all_reward_utxos = Vec::new();
         let mut all_events = Vec::new();
-        let mut locked_notes = self.locked_notes().clone();
+        let mut new_ledger = self.clone();
 
-        let services = self
+        if last_epoch_state.epoch() < epoch_state.epoch() {
+            all_events
+                .extend(new_ledger.unlock_and_remove_withdrawn_declarations(epoch_state.epoch()));
+        }
+
+        new_ledger.services = self
             .services
             .iter()
             .map(|(service, service_state)| {
@@ -363,7 +294,6 @@ impl SdpLedger {
                 let (new_state, reward_utxos, events) = service_state.clone().try_apply_header(
                     last_epoch_state,
                     epoch_state,
-                    &mut locked_notes,
                     *service_params,
                     &config.service_rewards_params,
                 );
@@ -372,18 +302,54 @@ impl SdpLedger {
                 Ok::<_, Error>((*service, new_state))
             })
             .collect::<Result<_, _>>()?;
+        new_ledger.epoch = epoch_state.epoch();
 
         Ok((
-            Self {
-                epoch: epoch_state.epoch(),
-                services,
-                locked_notes,
-            },
+            new_ledger,
             HeaderEffect {
                 reward_utxos: all_reward_utxos,
                 events: all_events,
             },
         ))
+    }
+
+    /// For every withdrawn declaration whose `withdrawn` epoch has been
+    /// reached, unlock the locked note and remove the declaration from the
+    /// registry.
+    ///
+    /// Returns one [`HeaderEvent::SdpNoteUnlocked`] event per unlocked note.
+    fn unlock_and_remove_withdrawn_declarations(&mut self, epoch: Epoch) -> Vec<HeaderEvent> {
+        let mut events = Vec::new();
+
+        // The removals go to a clone.
+        let mut declarations = self.declarations.clone();
+        for (id, declaration) in &self.declarations {
+            let Some(withdraw_at) = declaration.withdraw_at else {
+                continue;
+            };
+            if epoch < withdraw_at {
+                continue;
+            }
+            if self
+                .locked_notes
+                .is_locked_for_service(&declaration.locked_note_id, &declaration.service_type)
+            {
+                self.locked_notes
+                    .unlock(declaration.service_type, &declaration.locked_note_id)
+                    .expect("unlocking note from withdrawn declaration must be successful if it hasn't been unlocked yet");
+                events.push(HeaderEvent::SdpNoteUnlocked {
+                    note_id: declaration.locked_note_id,
+                    service_type: declaration.service_type,
+                    declaration_id: *id,
+                });
+            }
+            (declarations, _) = declarations
+                .remove(id)
+                .expect("the declaration is in the tree");
+        }
+        self.declarations = declarations;
+
+        events
     }
 
     pub fn try_apply_genesis_sdp_declaration(
@@ -393,9 +359,9 @@ impl SdpLedger {
         op: &SDPDeclareOp,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
-        let Some(service_state) = self.services.get_mut(&op.service_type) else {
+        if !self.services.contains_key(&op.service_type) {
             return Err(Error::ServiceNotFound(op.service_type));
-        };
+        }
 
         // Validate SDP Declare
         // TODO: Genesis has a different verification flow than `SignedMantleTx`.
@@ -404,7 +370,7 @@ impl SdpLedger {
             utxo_tree,
             channels,
             locked_notes: &self.locked_notes,
-            declarations: service_state.declarations(),
+            declarations: &self.declarations,
             min_stake: &config.min_stake,
         })?;
 
@@ -415,14 +381,14 @@ impl SdpLedger {
                 SDPDeclareExecutionContext {
                     utxo_tree: utxo_tree.clone(),
                     epoch: self.epoch,
-                    declarations: service_state.declarations_clone(),
+                    declarations: self.declarations.clone(),
                     locked_notes: self.locked_notes.clone(),
                     min_stake: config.min_stake,
                 },
             )?;
 
         self.locked_notes = result.locked_notes;
-        service_state.update_declarations(result.declarations);
+        self.declarations = result.declarations;
         Ok((self, events))
     }
 
@@ -432,23 +398,23 @@ impl SdpLedger {
         op: &SDPDeclareOp,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
-        let Some(service_state) = self.services.get_mut(&op.service_type) else {
+        if !self.services.contains_key(&op.service_type) {
             return Err(Error::ServiceNotFound(op.service_type));
-        };
+        }
 
         let (result, events) = <SDPDeclareOp as Operation<SDPDeclareValidationContext>>::execute(
             op,
             SDPDeclareExecutionContext {
                 utxo_tree: utxo_tree.clone(),
                 epoch: self.epoch,
-                declarations: service_state.declarations_clone(),
+                declarations: self.declarations.clone(),
                 locked_notes: self.locked_notes.clone(),
                 min_stake: config.min_stake,
             },
         )?;
 
         self.locked_notes = result.locked_notes;
-        service_state.update_declarations(result.declarations);
+        self.declarations = result.declarations;
         Ok((self, events))
     }
 
@@ -464,7 +430,7 @@ impl SdpLedger {
 
         let (result, events) = op.execute(SDPActiveExecutionContext {
             epoch: self.epoch,
-            declarations: service_state.declarations_clone(),
+            declarations: self.declarations.clone(),
         })?;
 
         let provider_id = result
@@ -473,7 +439,7 @@ impl SdpLedger {
             .expect("the declaration should be in the list after execution")
             .provider_id;
 
-        service_state.update_declarations(result.declarations);
+        self.declarations = result.declarations;
         service_state.update_rewards(provider_id, &op.metadata, &config.service_rewards_params)?;
 
         Ok((self, events))
@@ -485,18 +451,18 @@ impl SdpLedger {
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let (service, _) = self.get_service(&op.declaration_id, config)?;
-        let Some(service_state) = self.services.get_mut(&service) else {
+        if !self.services.contains_key(&service) {
             return Err(Error::ServiceNotFound(service));
-        };
+        }
 
         let (result, events) = op.execute(SDPWithdrawExecutionContext {
-            declarations: service_state.declarations_clone(),
+            declarations: self.declarations.clone(),
             locked_notes: self.locked_notes.clone(),
             epoch: self.epoch,
         })?;
 
         self.locked_notes = result.locked_notes;
-        service_state.update_declarations(result.declarations);
+        self.declarations = result.declarations;
 
         Ok((self, events))
     }
@@ -517,80 +483,45 @@ impl SdpLedger {
     /// Declarations of all services, which have been accumulated until the
     /// current block, regardless of whether they are active or not.
     #[must_use]
-    pub fn declarations(&self) -> lb_core::sdp::Declarations {
-        self.services
-            .iter()
-            .map(|(service_type, service_state)| {
-                (*service_type, service_state.declarations().clone())
-            })
-            .collect()
+    pub const fn declarations(&self) -> &Declarations {
+        &self.declarations
     }
 
-    /// Commitment to the declarations of `service_type`, or `None` if the
-    /// service is not declared.
+    /// Commitment to the declarations of all services.
     #[must_use]
-    pub fn declarations_root(&self, service_type: ServiceType) -> Option<lb_core::crypto::Hash> {
-        self.services
-            .get(&service_type)
-            .map(|service| service.declarations().root())
+    pub fn declarations_root(&self) -> Hash {
+        self.declarations.root()
     }
 
-    /// Returns the declarations that are active at `epoch`, grouped by
-    /// service type.
+    /// Returns the declarations that are active at `epoch`.
     ///
-    /// Service entries with no active declarations are omitted.
-    /// Services missing from `service_params` are skipped.
+    /// Declarations of services missing from `service_params` are dropped.
     #[must_use]
     pub fn active_declarations(
         &self,
         epoch: Epoch,
         service_params: &HashMap<ServiceType, ServiceParameters>,
-    ) -> lb_core::sdp::Declarations {
-        self.services
-            .iter()
-            .filter_map(|(service_type, service)| {
-                let params = service_params.get(service_type)?;
-                // The snapshot drops the inactive declarations from a clone of the
-                // live tree, so the surviving ones keep the position they occupy
-                // there and the root doesn't depend on the iteration order.
-                let mut snapshot = service.declarations().clone();
-                for (declaration_id, declaration) in service.declarations() {
-                    if !is_active(declaration, epoch, *params) {
-                        (snapshot, _) = snapshot
-                            .remove(declaration_id)
-                            .expect("the declaration is in the tree");
-                    }
-                }
-                (snapshot.size() > 0).then_some((*service_type, snapshot))
-            })
-            .collect()
+    ) -> Declarations {
+        // The snapshot drops the inactive declarations from a clone of the
+        // live tree, so the surviving ones keep the position they occupy
+        // there and the root doesn't depend on the iteration order.
+        let mut snapshot = self.declarations.clone();
+        for (declaration_id, declaration) in &self.declarations {
+            let active = service_params
+                .get(&declaration.service_type)
+                .is_some_and(|params| is_active(declaration, epoch, *params));
+            if !active {
+                (snapshot, _) = snapshot
+                    .remove(declaration_id)
+                    .expect("the declaration is in the tree");
+            }
+        }
+        snapshot
     }
 
     #[must_use]
     pub fn get_declaration(&self, declaration_id: &DeclarationId) -> Option<&Declaration> {
-        self.services.iter().find_map(|(_, service)| {
-            let declarations = match service {
-                Service::BlendNetwork(state) => &state.declarations,
-            };
-            declarations.get_ref(declaration_id)
-        })
-    }
-
-    /// Get the declarations for a given service type.
-    #[must_use]
-    pub fn get_declarations_by_service(&self, service_type: ServiceType) -> Option<&Declarations> {
-        self.services.get(&service_type).map(Service::declarations)
-    }
-
-    /// Get the service type and declarations for a given declaration ID.
-    #[must_use]
-    pub fn get_declarations_by_id(&self, declaration_id: &DeclarationId) -> Option<&Declarations> {
-        self.services.iter().find_map(|(_, service)| {
-            let declarations = service.declarations();
-            declarations
-                .contains(declaration_id)
-                .then_some(declarations)
-        })
+        self.declarations.get_ref(declaration_id)
     }
 
     /// Get the service type and parameters for a given declaration ID.
@@ -600,12 +531,10 @@ impl SdpLedger {
         config: &'a Config,
     ) -> Result<(ServiceType, &'a ServiceParameters), Error> {
         let service = self
-            .services
-            .iter()
-            .find_map(|(service_type, service)| {
-                service.contains(declaration_id).then_some(*service_type)
-            })
-            .ok_or(Error::DeclarationNotFound(*declaration_id))?;
+            .declarations
+            .get_ref(declaration_id)
+            .ok_or(Error::DeclarationNotFound(*declaration_id))?
+            .service_type;
 
         config
             .service_params
@@ -688,7 +617,7 @@ mod tests {
             total_stake: 100,
             lottery_0: LOTTERY_0,
             lottery_1: LOTTERY_1,
-            active_declarations: Arc::new(lb_core::sdp::Declarations::default()),
+            active_declarations: Arc::new(Declarations::default()),
         }
     }
 
@@ -726,8 +655,7 @@ mod tests {
     ) -> bool {
         ledger
             .active_declarations(epoch, &config.service_params)
-            .for_service(&ServiceType::BlendNetwork)
-            .is_some_and(|m| m.contains(decl_id))
+            .contains(decl_id)
     }
 
     /// `active_declarations` must drop entries that have gone inactive (i.e.,
@@ -947,9 +875,7 @@ mod tests {
             .try_apply_sdp_declaration(&utxo_tree(vec![utxo]), declare_op, &config)
             .map(|(sdp_ledger, _)| sdp_ledger)
             .unwrap();
-        let declarations = ledger
-            .get_declarations_by_service(ServiceType::BlendNetwork)
-            .unwrap();
+        let declarations = ledger.declarations();
         assert!(declarations.contains(&declaration_id));
 
         // Move forward to epoch 4 where the provider can submit an activity message.
@@ -961,9 +887,7 @@ mod tests {
         let epoch4 = next_epoch_state(4.into(), &ledger, &config);
         (ledger, _) = ledger.try_apply_header(&config, &epoch3, &epoch4).unwrap();
         // Check that the declaration is still present.
-        let declarations = ledger
-            .get_declarations_by_service(ServiceType::BlendNetwork)
-            .unwrap();
+        let declarations = ledger.declarations();
         assert_eq!(
             declarations.get(&declaration_id).unwrap().active,
             Epoch::new(3)
@@ -984,9 +908,7 @@ mod tests {
             .apply_active_msg(&active_op, &config)
             .map(|(sdp_ledger, _)| sdp_ledger)
             .unwrap();
-        let declarations = ledger
-            .get_declarations_by_service(ServiceType::BlendNetwork)
-            .unwrap();
+        let declarations = ledger.declarations();
         assert_eq!(
             declarations.get(&declaration_id).unwrap().active,
             Epoch::new(4) // epoch when the activity message is submitted/accepted
@@ -1002,9 +924,7 @@ mod tests {
         (ledger, _) = ledger.try_apply_header(&config, &epoch6, &epoch7).unwrap();
         // Nevertheless, the declaration should be still present because no withdrawal
         // message was submitted.
-        let declarations = ledger
-            .get_declarations_by_service(ServiceType::BlendNetwork)
-            .unwrap();
+        let declarations = ledger.declarations();
         assert_eq!(
             declarations.get(&declaration_id).unwrap().active,
             Epoch::new(4) // not changed

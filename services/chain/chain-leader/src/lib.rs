@@ -671,7 +671,14 @@ where
         let valid_tx_stream = stream::iter(valid_txs);
         let txs = txs_for_block(valid_tx_stream).await;
 
-        let block = Block::create(parent, slot, proof, txs, signing_key)?;
+        let block = Block::create(
+            parent,
+            slot,
+            *ledger_state.epoch_state_root(),
+            proof,
+            txs,
+            signing_key,
+        )?;
 
         info!(
             "proposed block {:?} with {} transactions ({} removed)",

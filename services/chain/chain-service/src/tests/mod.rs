@@ -8,6 +8,7 @@ use std::{
 use futures::StreamExt as _;
 use lb_core::{
     block::{Block, BlockTransactions},
+    header::EpochStateRoot,
     mantle::{
         Note, SignedMantleTx, Utxo,
         ops::leader_claim::{VoucherCm, VoucherSecret},
@@ -106,6 +107,81 @@ fn cryptarchia_switch_to_online() {
     // Check the ledger states of immutable blocks have been pruned
     assert!(cryptarchia.ledger.state(&block_ids[0]).is_none());
     assert!(cryptarchia.ledger.state(&block_ids[1]).is_none());
+}
+
+#[test]
+fn block_with_wrong_epoch_state_root_is_rejected() {
+    let k = NonZero::<u32>::new(1).unwrap();
+    let config = ledger_config(k);
+
+    let (zk_key, utxo) = utxo();
+    let genesis_id: HeaderId = [0; 32].into();
+    let mut cryptarchia = Cryptarchia::from_lib(
+        genesis_id,
+        LedgerState::from_utxos([utxo], &config),
+        genesis_id,
+        config,
+        lb_cryptarchia_engine::State::Bootstrapping,
+        Slot::new(0),
+        0,
+    );
+
+    let block = try_build_block_with_root(
+        &cryptarchia,
+        genesis_id,
+        utxo,
+        &zk_key,
+        Slot::new(1),
+        EpochStateRoot::from([1; 32]),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        cryptarchia.try_apply_block(&block, block.header().slot()),
+        Err(Error::EpochStateRootMismatch { .. })
+    ));
+}
+
+/// The root the leader commits must be the one the validator settles on, across
+/// an epoch boundary where it stops being the genesis zero.
+#[test]
+fn block_at_an_epoch_boundary_commits_the_settled_root() {
+    let k = NonZero::<u32>::new(1).unwrap();
+    let config = ledger_config(k);
+    let epoch_length = config.epoch_length();
+
+    let (zk_key, utxo) = utxo();
+    let genesis_id: HeaderId = [0; 32].into();
+    let mut cryptarchia = Cryptarchia::from_lib(
+        genesis_id,
+        LedgerState::from_utxos([utxo], &config),
+        genesis_id,
+        config,
+        lb_cryptarchia_engine::State::Bootstrapping,
+        Slot::new(0),
+        0,
+    );
+
+    // A block of epoch 0 carries the genesis commitment.
+    let block = try_build_block(&cryptarchia, genesis_id, utxo, &zk_key, Slot::new(1)).unwrap();
+    assert_eq!(*block.header().epoch_state_root(), EpochStateRoot::GENESIS);
+    cryptarchia
+        .try_apply_block(&block, block.header().slot())
+        .unwrap();
+
+    // The first block of epoch 1 commits the state settled at the boundary.
+    let block = try_build_block(
+        &cryptarchia,
+        cryptarchia.tip(),
+        utxo,
+        &zk_key,
+        Slot::new(epoch_length),
+    )
+    .unwrap();
+    assert_ne!(*block.header().epoch_state_root(), EpochStateRoot::GENESIS);
+    cryptarchia
+        .try_apply_block(&block, block.header().slot())
+        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -383,13 +459,13 @@ pub fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
 }
 
 /// Builds a block by grinding through slots
-pub fn try_build_block(
+/// Searches for a slot the given utxo wins, and proves it.
+fn find_winning_proof(
     cryptarchia: &Cryptarchia,
-    parent: HeaderId,
     utxo: Utxo,
     key: &ZkKey,
     start_slot: Slot,
-) -> Option<Block<SignedMantleTx<Preverified>>> {
+) -> Option<(Slot, Groth16LeaderProof, Ed25519Key)> {
     let start_slot: u64 = start_slot.into();
     for slot in start_slot..=(start_slot + 1000) {
         let epoch_state = cryptarchia.epoch_state_for_slot(slot.into()).unwrap();
@@ -422,19 +498,66 @@ pub fn try_build_block(
         )
         .unwrap();
 
-        return Some(
-            Block::create(
-                parent,
-                slot.into(),
-                proof,
-                BlockTransactions::empty(),
-                &signing_key,
-            )
-            .unwrap(),
-        );
+        return Some((slot.into(), proof, signing_key));
     }
 
     None
+}
+
+/// Builds a block carrying the epoch state root its ledger state settles on,
+/// the way the leader service does.
+pub fn try_build_block(
+    cryptarchia: &Cryptarchia,
+    parent: HeaderId,
+    utxo: Utxo,
+    key: &ZkKey,
+    start_slot: Slot,
+) -> Option<Block<SignedMantleTx<Preverified>>> {
+    let (slot, proof, signing_key) = find_winning_proof(cryptarchia, utxo, key, start_slot)?;
+    let (state, _) = cryptarchia
+        .ledger
+        .state(&parent)
+        .unwrap()
+        .clone()
+        .try_apply_header::<_, HeaderId>(slot, &proof, cryptarchia.ledger.config())
+        .unwrap();
+
+    Some(
+        Block::create(
+            parent,
+            slot,
+            *state.epoch_state_root(),
+            proof,
+            BlockTransactions::empty(),
+            &signing_key,
+        )
+        .unwrap(),
+    )
+}
+
+/// Builds a block carrying `epoch_state_root` verbatim, so a test can commit a
+/// root the ledger does not settle on.
+pub fn try_build_block_with_root(
+    cryptarchia: &Cryptarchia,
+    parent: HeaderId,
+    utxo: Utxo,
+    key: &ZkKey,
+    start_slot: Slot,
+    epoch_state_root: EpochStateRoot,
+) -> Option<Block<SignedMantleTx<Preverified>>> {
+    let (slot, proof, signing_key) = find_winning_proof(cryptarchia, utxo, key, start_slot)?;
+
+    Some(
+        Block::create(
+            parent,
+            slot,
+            epoch_state_root,
+            proof,
+            BlockTransactions::empty(),
+            &signing_key,
+        )
+        .unwrap(),
+    )
 }
 
 pub fn utxo() -> (ZkKey, Utxo) {

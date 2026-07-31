@@ -47,6 +47,11 @@ impl LockedNote {
     fn sdp_locked_note_hash(&self) -> Hash {
         let mut h = Hasher::new();
         h.update(b"LOCKED_NOTE_HASH_V1");
+        h.update(
+            u8::try_from(self.declarations.len())
+                .expect("a note is locked at most once per service")
+                .to_le_bytes(),
+        );
         for (_, declaration_id) in &self.declarations {
             h.update(declaration_id.0);
         }
@@ -379,6 +384,7 @@ mod tests {
 
         let mut locked_note_bytes = Vec::new();
         locked_note_bytes.extend_from_slice(b"LOCKED_NOTE_HASH_V1");
+        locked_note_bytes.extend_from_slice(&1u8.to_le_bytes()); // declaration count
         locked_note_bytes.extend_from_slice(&declaration_id(1).0);
         let locked_note_hash: Hash = Hasher::digest(&locked_note_bytes).into();
 

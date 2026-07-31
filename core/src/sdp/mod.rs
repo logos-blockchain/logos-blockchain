@@ -5,10 +5,8 @@ use core::{
     fmt::{self, Display, Formatter},
     str::FromStr,
 };
-use std::collections::HashMap;
 
 use blake2::{Blake2b, Digest as _};
-use bytes::Bytes;
 use lb_blake2btree::LeafHash;
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
@@ -24,11 +22,9 @@ use strum::{EnumCount, EnumIter};
 
 use crate::{
     block::BlockNumber,
-    codec::{self, DeserializeOp as _, SerializeOp as _},
     crypto::{Hash, Hasher},
     mantle::{
         NoteId,
-        ledger::Declarations as ServiceDeclarations,
         nom::{NomCodec, NomDecode, NomEncode},
         ops::channel::Ed25519PublicKey,
     },
@@ -278,6 +274,13 @@ impl AsRef<u8> for ServiceType {
     }
 }
 
+impl ServiceType {
+    #[must_use]
+    pub fn to_byte(&self) -> u8 {
+        *<Self as AsRef<u8>>::as_ref(self)
+    }
+}
+
 impl NomEncode for ServiceType {
     fn encode(&self) -> Vec<u8> {
         <Self as AsRef<u8>>::as_ref(self).encode()
@@ -407,9 +410,7 @@ impl Declaration {
         let mut h = Hasher::new();
         h.update(b"DECLARATION_INFO_HASH_V1");
         h.update([*<ServiceType as AsRef<u8>>::as_ref(&self.service_type)]);
-        for locator in &self.locators {
-            h.update(locator.0.as_ref());
-        }
+        h.update(self.locators.encode());
         h.update(self.provider_id.0);
         h.update(fr_to_bytes(self.zk_id.as_fr()));
         h.update(fr_to_bytes(self.locked_note_id.as_fr()));
@@ -427,48 +428,6 @@ impl LeafHash<DeclarationId> for Declaration {
         h.update(declaration_id.0);
         h.update(self.sdp_declaration_info_hash());
         h.finalize().into()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct Declarations(HashMap<ServiceType, ServiceDeclarations>);
-
-impl Declarations {
-    pub fn iter(&self) -> impl Iterator<Item = (&ServiceType, &ServiceDeclarations)> {
-        self.0.iter()
-    }
-
-    #[must_use]
-    pub fn for_service(&self, service_type: &ServiceType) -> Option<&ServiceDeclarations> {
-        self.0.get(service_type)
-    }
-}
-
-impl From<HashMap<ServiceType, ServiceDeclarations>> for Declarations {
-    fn from(value: HashMap<ServiceType, ServiceDeclarations>) -> Self {
-        Self(value)
-    }
-}
-
-impl FromIterator<(ServiceType, ServiceDeclarations)> for Declarations {
-    fn from_iter<I: IntoIterator<Item = (ServiceType, ServiceDeclarations)>>(iter: I) -> Self {
-        Self(iter.into_iter().collect())
-    }
-}
-
-impl TryFrom<Bytes> for Declarations {
-    type Error = codec::Error;
-
-    fn try_from(bytes: Bytes) -> Result<Self, Self::Error> {
-        Self::from_bytes(&bytes)
-    }
-}
-
-impl TryFrom<Declarations> for Bytes {
-    type Error = codec::Error;
-
-    fn try_from(this: Declarations) -> Result<Self, Self::Error> {
-        this.to_bytes()
     }
 }
 
@@ -566,10 +525,8 @@ mod tests {
 
     use crate::{
         crypto::{Digest as _, Hash, Hasher},
-        sdp::{
-            Declaration, DeclarationId, DeclarationMessage, Locator, Locators, ServiceDeclarations,
-            ServiceType,
-        },
+        mantle::ledger::Declarations as ServiceDeclarations,
+        sdp::{Declaration, DeclarationId, DeclarationMessage, Locator, Locators, ServiceType},
     };
 
     #[test]
@@ -686,8 +643,11 @@ mod tests {
         let mut info = Vec::new();
         info.extend_from_slice(b"DECLARATION_INFO_HASH_V1");
         info.push(0u8); // ServiceType::BlendNetwork
+        info.push(u8::try_from(declaration.locators.len()).unwrap()); // locator count
         for locator in &declaration.locators {
-            info.extend_from_slice(locator.as_ref());
+            let locator_bytes: &[u8] = locator.as_ref();
+            info.extend_from_slice(&u16::try_from(locator_bytes.len()).unwrap().to_le_bytes());
+            info.extend_from_slice(locator_bytes);
         }
         info.extend_from_slice(declaration.provider_id.0.as_bytes());
         info.extend_from_slice(&fr_to_bytes(declaration.zk_id.as_fr()));

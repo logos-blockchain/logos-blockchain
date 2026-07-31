@@ -111,7 +111,7 @@ impl LeaderState {
         Ok(self.update_epoch_state(epoch)?.add_voucher(voucher_cm))
     }
 
-    fn update_epoch_state(mut self, epoch: Epoch) -> Result<Self, Error> {
+    pub(crate) fn update_epoch_state(mut self, epoch: Epoch) -> Result<Self, Error> {
         match epoch.cmp(&self.epoch) {
             Ordering::Equal => Ok(self),
             Ordering::Less => Err(Error::InvalidEpoch {
@@ -136,7 +136,7 @@ impl LeaderState {
     }
 
     /// Add a voucher commitment to the MMR.
-    fn add_voucher(mut self, voucher_cm: VoucherCm) -> Self {
+    pub(crate) fn add_voucher(mut self, voucher_cm: VoucherCm) -> Self {
         self.vouchers = self
             .vouchers
             .push(voucher_cm)

@@ -4,6 +4,7 @@ mod config;
 //   algorithm, including a minimal UTxO model.
 // - `mantle_ops`: our extensions in the form of Mantle operations, e.g. SDP.
 pub mod cryptarchia;
+pub mod epoch_state_root;
 pub mod mantle;
 
 use std::hash::Hash;
@@ -14,6 +15,7 @@ pub use cryptarchia::{EpochState, UtxoTree};
 use lb_core::{
     block::BlockNumber,
     events::{Events, HeaderEvent, TxEvent},
+    header::EpochStateRoot,
     mantle::{
         NoteId, Op, Utxo, Value, VerificationError,
         gas::{Gas, GasConstants, GasCost, GasOverflow},
@@ -36,7 +38,9 @@ use mantle::LedgerState as MantleLedger;
 use rpds::HashTrieMapSync;
 use thiserror::Error;
 
-use crate::mantle::helpers::MantleOperationVerificationHelper;
+use crate::{
+    epoch_state_root::get_epoch_state_root, mantle::helpers::MantleOperationVerificationHelper,
+};
 
 const WINDOW_SIZE: usize = 120;
 
@@ -205,6 +209,7 @@ pub struct LedgerState {
     block_number: BlockNumber,
     cryptarchia_ledger: CryptarchiaLedger,
     mantle_ledger: MantleLedger,
+    epoch_state_root: EpochStateRoot,
 }
 
 impl LedgerState {
@@ -247,7 +252,7 @@ impl LedgerState {
         let last_epoch_state = self.cryptarchia_ledger.epoch_state().clone();
         let mut cryptarchia_ledger = self
             .cryptarchia_ledger
-            .try_apply_header::<LeaderProof, Id>(
+            .settle_epoch_boundary::<LeaderProof, Id>(
                 slot,
                 proof,
                 // TODO: threading SDP here because EpochState is currently embedded in
@@ -256,10 +261,9 @@ impl LedgerState {
                 &self.mantle_ledger.sdp,
                 config,
             )?;
-        let (mantle_ledger, effect) = self.mantle_ledger.try_apply_header(
+        let (mantle_ledger, effect) = self.mantle_ledger.settle_epoch_boundary(
             &last_epoch_state,
             cryptarchia_ledger.epoch_state(),
-            *proof.voucher_cm(),
             config,
         )?;
 
@@ -267,6 +271,24 @@ impl LedgerState {
         for utxo in effect.reward_utxos {
             cryptarchia_ledger.utxos = cryptarchia_ledger.utxos.insert(utxo.id(), utxo).0;
         }
+
+        // The settlement is complete and the block has contributed nothing yet, so
+        // the state is the one the first block of an epoch commits. Every later
+        // block of the epoch repeats the parent's commitment.
+        let epoch_state_root =
+            if last_epoch_state.epoch() < cryptarchia_ledger.epoch_state().epoch() {
+                get_epoch_state_root(
+                    &cryptarchia_ledger,
+                    &mantle_ledger,
+                    self.block_number,
+                    config,
+                )
+            } else {
+                self.epoch_state_root
+            };
+
+        let cryptarchia_ledger = cryptarchia_ledger.apply_block_contributions(slot, proof);
+        let mantle_ledger = mantle_ledger.record_leader_voucher(*proof.voucher_cm());
 
         Ok((
             Self {
@@ -276,6 +298,7 @@ impl LedgerState {
                     .expect("Logos blockchain lived long and prospered"),
                 cryptarchia_ledger,
                 mantle_ledger,
+                epoch_state_root,
             },
             effect.events,
         ))
@@ -456,6 +479,7 @@ impl LedgerState {
             block_number: 0,
             cryptarchia_ledger,
             mantle_ledger,
+            epoch_state_root: EpochStateRoot::GENESIS,
         }
     }
 
@@ -479,6 +503,7 @@ impl LedgerState {
                 block_number: 0,
                 cryptarchia_ledger,
                 mantle_ledger,
+                epoch_state_root: EpochStateRoot::GENESIS,
             },
             events,
         ))
@@ -492,6 +517,11 @@ impl LedgerState {
     #[must_use]
     pub const fn epoch_state(&self) -> &EpochState {
         self.cryptarchia_ledger.epoch_state()
+    }
+
+    #[must_use]
+    pub const fn epoch_state_root(&self) -> &EpochStateRoot {
+        &self.epoch_state_root
     }
 
     #[must_use]
@@ -735,7 +765,9 @@ mod tests {
                     inscribe::InscriptionOp,
                     withdraw::ChannelWithdrawOp,
                 },
-                leader_claim::{LeaderClaimError, LeaderClaimOp, LeaderClaimValidationContext},
+                leader_claim::{
+                    LeaderClaimError, LeaderClaimOp, LeaderClaimValidationContext, VoucherCm,
+                },
                 sdp::SDPActiveOp,
                 transfer::TransferOp,
             },
@@ -748,6 +780,7 @@ mod tests {
         proofs::{
             channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
             leader_claim_proof::Groth16LeaderClaimProof,
+            leader_proof::LeaderPublic,
         },
         sdp::{ActivityMetadata, DeclarationId, Nonce},
     };
@@ -759,8 +792,8 @@ mod tests {
     use super::*;
     use crate::{
         cryptarchia::tests::{
-            apply_and_add_utxo, apply_and_add_utxo_and_declaration, declaration_in_snapshot,
-            ledger, update_ledger, utxo_with_sk,
+            DummyProof, apply_and_add_utxo, apply_and_add_utxo_and_declaration,
+            declaration_in_snapshot, ledger, update_ledger, utxo_with_sk,
         },
         mantle::{leader::LeaderState, sdp::test_utils::generate_activity_proof},
     };
@@ -820,6 +853,100 @@ mod tests {
         assert_eq!(
             *ledger.next_epoch_state().active_declarations,
             expected_for_epoch_1
+        );
+    }
+
+    #[test]
+    fn epoch_state_root_is_settled_once_per_epoch() {
+        let leader_utxos = std::iter::repeat_with(utxo).take(3).collect::<Vec<_>>();
+        let config = config();
+        assert_eq!(config.epoch_length(), 100);
+        let (mut ledger, genesis) = ledger(&leader_utxos, config);
+
+        // Genesis has no previous epoch to settle.
+        let genesis_root = *ledger.state(&genesis).unwrap().epoch_state_root();
+        assert_eq!(genesis_root, EpochStateRoot::from([0; 32]));
+
+        let h_1 = update_ledger(&mut ledger, genesis, 10, leader_utxos[0]).unwrap();
+        assert_eq!(
+            *ledger.state(&h_1).unwrap().epoch_state_root(),
+            genesis_root
+        );
+
+        // The first block of epoch 1 commits the state settled at the boundary.
+        let h_2 = update_ledger(&mut ledger, h_1, 100, leader_utxos[1]).unwrap();
+        let settled_root = *ledger.state(&h_2).unwrap().epoch_state_root();
+        assert_ne!(settled_root, genesis_root);
+
+        let h_3 = update_ledger(&mut ledger, h_2, 110, leader_utxos[2]).unwrap();
+        assert_eq!(
+            *ledger.state(&h_3).unwrap().epoch_state_root(),
+            settled_root
+        );
+    }
+
+    /// The snapshot is taken once the boundary settlement is complete and
+    /// before the block contributes anything of its own, so the settlement
+    /// is in the commitment while two blocks differing only in their
+    /// voucher agree on it.
+    #[test]
+    fn epoch_state_root_excludes_the_block_own_contributions() {
+        let leader_utxos = std::iter::repeat_with(utxo).take(2).collect::<Vec<_>>();
+        let config = config();
+        let (mut ledger, genesis) = ledger(&leader_utxos, config.clone());
+
+        let parent = update_ledger(&mut ledger, genesis, 10, leader_utxos[0]).unwrap();
+        let parent_state = ledger.state(&parent).unwrap().clone();
+        let parent_root = *parent_state.epoch_state_root();
+        let parent_block_number = parent_state.block_number;
+
+        // The first block of epoch 1.
+        let slot = Slot::from(100u64);
+        let epoch_state = parent_state
+            .epoch_state_for_slot::<HeaderId>(slot, &config)
+            .unwrap();
+        let (lottery_0, lottery_1) = epoch_state.lottery_values();
+        let latest_root = parent_state.latest_utxos().root();
+        let make_proof = |voucher_cm| DummyProof {
+            public: LeaderPublic::new(
+                epoch_state.utxo_merkle_root(),
+                latest_root,
+                *epoch_state.nonce(),
+                slot.into(),
+                lottery_0,
+                lottery_1,
+            ),
+            leader_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            voucher_cm,
+        };
+
+        let (settled, _) = parent_state
+            .clone()
+            .try_apply_header::<_, HeaderId>(slot, &make_proof(VoucherCm::default()), &config)
+            .unwrap();
+        let (other, _) = parent_state
+            .try_apply_header::<_, HeaderId>(
+                slot,
+                &make_proof(VoucherCm::from(Fr::from(7u64))),
+                &config,
+            )
+            .unwrap();
+
+        // The settlement is committed...
+        assert_ne!(*settled.epoch_state_root(), parent_root);
+        // ...the voucher the block contributes is not.
+        assert_eq!(settled.epoch_state_root(), other.epoch_state_root());
+        // ...nor is its entropy: the running nonce the root commits is the one
+        // the block inherited, so recomputing over the state the block leaves
+        // behind, where the nonce has advanced, gives a different root.
+        assert_ne!(
+            *settled.epoch_state_root(),
+            get_epoch_state_root(
+                &settled.cryptarchia_ledger,
+                &settled.mantle_ledger,
+                parent_block_number,
+                &config,
+            )
         );
     }
 

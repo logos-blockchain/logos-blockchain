@@ -1,12 +1,9 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use lb_core::{
     crypto::ZkHash,
-    mantle::ledger::Declarations as ServiceDeclarations,
-    sdp::{
-        Declaration, DeclarationId, Declarations, Locator, ProviderId, ServiceParameters,
-        ServiceType,
-    },
+    mantle::ledger::Declarations,
+    sdp::{Declaration, DeclarationId, Locator, ProviderId, ServiceParameters, ServiceType},
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::{AdditiveGroup as _, Fr};
@@ -21,7 +18,7 @@ pub fn create_epoch_state(
     epoch: Epoch,
     nonce: Fr,
 ) -> EpochState {
-    let entries: ServiceDeclarations = provider_ids
+    let active_declarations: Declarations = provider_ids
         .iter()
         .enumerate()
         .map(|(i, provider_id)| {
@@ -40,8 +37,6 @@ pub fn create_epoch_state(
             (DeclarationId([i as u8; 32]), declaration)
         })
         .collect();
-
-    let active_declarations: Declarations = HashMap::from([(service_type, entries)]).into();
 
     EpochState {
         epoch,

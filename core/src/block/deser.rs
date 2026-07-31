@@ -13,6 +13,7 @@ mod tests {
         Block::create(
             [0u8; 32].into(),
             Slot::from(1u64),
+            [0u8; 32].into(),
             create_proof(),
             BlockTransactions::empty(),
             &signing_key,
@@ -76,6 +77,7 @@ mod tests {
         const PARENT_BLOCK: usize = 32;
         const SLOT: usize = 8;
         const BLOCK_ROOT: usize = 32;
+        const EPOCH_STATE_ROOT: usize = 32;
         const POL_PROOF: usize = 128;
         const ENTROPY_CONTRIBUTION: usize = 32;
         const LEADER_KEY: usize = 32;
@@ -86,6 +88,7 @@ mod tests {
             + PARENT_BLOCK
             + SLOT
             + BLOCK_ROOT
+            + EPOCH_STATE_ROOT
             + POL_PROOF
             + ENTROPY_CONTRIBUTION
             + LEADER_KEY

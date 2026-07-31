@@ -11,7 +11,7 @@ use crate::{
         NoteId,
         channel_notes::{self, ChannelNotes},
         ledger::{self, Operation as _},
-        nom::NomCodec,
+        nom::{NomCodec, NomEncode as _},
         ops::channel::{
             ChannelId, ChannelKeyIndex, MsgId,
             config::Keys,
@@ -133,9 +133,7 @@ impl LeafHash<ChannelId> for ChannelState {
         let mut h = Hasher::new();
         h.update(b"CHANNEL_HASH_V1");
         h.update(channel_id.as_ref());
-        for key in self.accredited_keys.iter() {
-            h.update(key.as_bytes());
-        }
+        h.update(self.accredited_keys.encode());
         h.update(self.configuration_threshold.to_le_bytes());
         h.update(self.tip_message.as_ref());
         h.update(self.tip_slot.to_le_bytes());
@@ -775,6 +773,7 @@ mod tests {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"CHANNEL_HASH_V1");
         bytes.extend_from_slice(channel_id.as_ref());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
         bytes.extend_from_slice(test_public_key(1).as_bytes());
         bytes.extend_from_slice(test_public_key(2).as_bytes());
         bytes.extend_from_slice(&2u16.to_le_bytes());

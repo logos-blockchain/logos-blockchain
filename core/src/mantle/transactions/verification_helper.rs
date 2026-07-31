@@ -11,7 +11,7 @@ use crate::{
             leader_claim::{RewardsRoot, VoucherNullifiers},
         },
     },
-    sdp::{DeclarationId, MinStake, ServiceType, locked_notes::LockedNotes},
+    sdp::{MinStake, locked_notes::LockedNotes},
 };
 
 pub trait OperationVerificationHelper {
@@ -21,15 +21,7 @@ pub trait OperationVerificationHelper {
 
     fn get_utxos(&self) -> &Utxos;
 
-    fn get_declarations_by_service(
-        &self,
-        service: ServiceType,
-    ) -> Result<&Declarations, VerificationError>;
-
-    fn get_declarations_by_id(
-        &self,
-        id: &DeclarationId,
-    ) -> Result<&Declarations, VerificationError>;
+    fn get_declarations(&self) -> &Declarations;
 
     fn get_min_stake(&self) -> &MinStake;
 
@@ -70,7 +62,7 @@ pub mod test_utils {
             },
             transactions::OperationVerificationHelper,
         },
-        sdp::{DeclarationId, MinStake, ServiceType, locked_notes::LockedNotes},
+        sdp::{MinStake, locked_notes::LockedNotes},
     };
 
     pub struct TestOperationVerificationHelper {
@@ -131,18 +123,8 @@ pub mod test_utils {
             &self.utxos
         }
 
-        fn get_declarations_by_service(
-            &self,
-            _service: ServiceType,
-        ) -> Result<&Declarations, VerificationError> {
-            Ok(&self.declarations)
-        }
-
-        fn get_declarations_by_id(
-            &self,
-            _id: &DeclarationId,
-        ) -> Result<&Declarations, VerificationError> {
-            Ok(&self.declarations)
+        fn get_declarations(&self) -> &Declarations {
+            &self.declarations
         }
 
         fn get_min_stake(&self) -> &MinStake {

@@ -4749,6 +4749,7 @@ dependencies = [
  "rpds",
  "serde",
  "serde_arrays",
+ "strum",
  "thiserror 2.0.18",
  "tracing",
 ]

@@ -221,15 +221,16 @@ where
                     .cryptarchia
                     .ledger
                     .state(&tip)
-                    .map(|ledger_state| ledger_state.mantle_ledger().sdp.declarations())
-                    .unwrap_or_default()
-                    .iter()
-                    .flat_map(|(_, declarations)| {
-                        declarations
+                    .map(|ledger_state| {
+                        ledger_state
+                            .mantle_ledger()
+                            .sdp
+                            .declarations()
                             .iter()
                             .map(|(id, declaration)| (*id, declaration.clone()))
+                            .collect()
                     })
-                    .collect();
+                    .unwrap_or_default();
                 reply_channel.send(declarations).unwrap_or_else(|_| {
                     error!("Could not send SDP declarations through channel");
                 });
@@ -245,11 +246,7 @@ where
                             .epoch_state()
                             .active_declarations
                             .iter()
-                            .flat_map(|(_, declarations)| {
-                                declarations
-                                    .iter()
-                                    .map(|(id, declaration)| (*id, declaration.clone()))
-                            })
+                            .map(|(id, declaration)| (*id, declaration.clone()))
                             .collect()
                     })
                     .unwrap_or_default();

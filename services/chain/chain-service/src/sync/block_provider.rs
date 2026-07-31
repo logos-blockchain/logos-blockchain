@@ -907,6 +907,7 @@ mod tests {
             Block::create(
                 prev_header,
                 slot,
+                [0u8; 32].into(),
                 self.proof.clone(),
                 BlockTransactions::empty(),
                 &dummy_signing_key,

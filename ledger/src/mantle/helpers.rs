@@ -5,11 +5,10 @@ use lb_core::{
         ops::{
             channel::{ChannelId, ChannelKeyIndex},
             leader_claim::{RewardsRoot, VoucherNullifiers},
-            sdp::SdpError,
         },
         transactions::{OperationVerificationHelper, VerificationError},
     },
-    sdp::{DeclarationId, MinStake, ServiceType, locked_notes::LockedNotes},
+    sdp::{MinStake, locked_notes::LockedNotes},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
@@ -50,28 +49,8 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
         &self.cryptarchia_ledger.utxos
     }
 
-    fn get_declarations_by_service(
-        &self,
-        service: ServiceType,
-    ) -> Result<&Declarations, VerificationError> {
-        self.ledger_state
-            .sdp_ledger()
-            .get_declarations_by_service(service)
-            .ok_or(VerificationError::SDPVerificationError(
-                SdpError::ServiceNotFound(service),
-            ))
-    }
-
-    fn get_declarations_by_id(
-        &self,
-        id: &DeclarationId,
-    ) -> Result<&Declarations, VerificationError> {
-        self.ledger_state
-            .sdp_ledger()
-            .get_declarations_by_id(id)
-            .ok_or(VerificationError::SDPVerificationError(
-                SdpError::DeclarationNotFound(*id),
-            ))
+    fn get_declarations(&self) -> &Declarations {
+        self.ledger_state.sdp_ledger().declarations()
     }
 
     fn get_min_stake(&self) -> &MinStake {

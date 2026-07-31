@@ -10,13 +10,12 @@ use lb_core::{
     mantle::{
         NoteId, Utxo, Value,
         gas::{Gas, GasConstants, GasCost, GasOverflow, GasPrice},
-        ledger::Operation as _,
+        ledger::{Declarations, Operation as _},
         ops::transfer::TransferOp,
         traits::GenesisTx,
         transactions::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
     },
     proofs::leader_proof::{self, LeaderPublic},
-    sdp::Declarations,
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::{Fr, fr_from_bytes};
@@ -450,6 +449,34 @@ impl LedgerState {
         Ok(self)
     }
 
+    // Synthesizes the epoch state for `slot` and verifies the block's proof
+    // against the ledger roots derived from its parent. Leaves the state as the
+    // epoch boundary settles it, before the block contributes anything of its own.
+    pub fn settle_epoch_boundary<LeaderProof, Id>(
+        self,
+        slot: Slot,
+        proof: &LeaderProof,
+        sdp: &SdpLedger,
+        config: &Config,
+    ) -> Result<Self, LedgerError<Id>>
+    where
+        LeaderProof: leader_proof::LeaderProof,
+    {
+        self.update_epoch_state(slot, sdp, config)?
+            .try_apply_proof(slot, proof, config)
+    }
+
+    // The contributions the block itself makes: its entropy feeds the running
+    // nonce and the block counts towards the epoch's density.
+    #[must_use]
+    pub fn apply_block_contributions<LeaderProof>(self, slot: Slot, proof: &LeaderProof) -> Self
+    where
+        LeaderProof: leader_proof::LeaderProof,
+    {
+        self.update_nonce(&proof.entropy(), slot)
+            .increment_block_density(slot)
+    }
+
     pub fn try_apply_header<LeaderProof, Id>(
         self,
         slot: Slot,
@@ -460,14 +487,9 @@ impl LedgerState {
     where
         LeaderProof: leader_proof::LeaderProof,
     {
-        // First, synthesize epoch state for `slot` before update the ledger state.
-        // Then, apply the proof and update the nonce. Finally, increment block density
-        // since this function is called for a new block.
         Ok(self
-            .update_epoch_state(slot, sdp, config)?
-            .try_apply_proof(slot, proof, config)?
-            .update_nonce(&proof.entropy(), slot)
-            .increment_block_density(slot))
+            .settle_epoch_boundary::<_, Id>(slot, proof, sdp, config)?
+            .apply_block_contributions(slot, proof))
     }
 
     pub fn try_apply_transfer<Id, Constants: GasConstants>(
@@ -578,6 +600,16 @@ impl LedgerState {
     #[must_use]
     pub const fn storage_gas_price(&self) -> &GasPrice {
         &self.storage_gas_price
+    }
+
+    #[must_use]
+    pub const fn average_execution_gas(&self) -> &Gas {
+        &self.average_execution_gas
+    }
+
+    #[must_use]
+    pub const fn storage_gas_ema(&self) -> &Gas {
+        &self.storage_gas_ema
     }
 
     #[cfg(test)]
@@ -744,6 +776,7 @@ pub mod tests {
 
     use lb_core::{
         crypto::{Digest as _, Hasher},
+        header::EpochStateRoot,
         mantle::{
             GasCalculator as _, MantleTx, Note, Op,
             OpProof::ZkSig,
@@ -1018,6 +1051,7 @@ pub mod tests {
             block_number: 0,
             cryptarchia_ledger,
             mantle_ledger,
+            epoch_state_root: EpochStateRoot::GENESIS,
         }
     }
 
@@ -1137,8 +1171,7 @@ pub mod tests {
             .cryptarchia_ledger
             .epoch_state
             .active_declarations
-            .for_service(&ServiceType::BlendNetwork)
-            .and_then(|m| m.get_ref(declaration_id))
+            .get_ref(declaration_id)
     }
 
     #[test]

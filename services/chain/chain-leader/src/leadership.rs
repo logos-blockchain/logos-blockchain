@@ -493,7 +493,7 @@ mod pol_tests {
 
     use lb_core::{
         mantle::{
-            ledger::{Inputs, Note, Outputs},
+            ledger::{Declarations, Inputs, Note, Outputs},
             ops::{leader_claim::VoucherCm, transfer::TransferOp},
         },
         proofs::leader_proof::{LeaderProof as _, check_winning},
@@ -546,7 +546,7 @@ mod pol_tests {
             total_stake,
             lottery_0,
             lottery_1,
-            active_declarations: Arc::new(lb_core::sdp::Declarations::default()),
+            active_declarations: Arc::new(Declarations::default()),
         };
 
         // Create dummy wallet service
@@ -638,7 +638,7 @@ mod pol_tests {
             total_stake,
             lottery_0,
             lottery_1,
-            active_declarations: Arc::new(lb_core::sdp::Declarations::default()),
+            active_declarations: Arc::new(Declarations::default()),
         };
 
         (

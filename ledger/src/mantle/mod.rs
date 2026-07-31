@@ -136,19 +136,40 @@ impl LedgerState {
         self.leaders.reward_amount()
     }
 
-    pub fn try_apply_header(
+    // Settles the epoch boundary: the previous epoch's vouchers are appended to
+    // the voucher tree, its leader rewards are aggregated into the pool, and its
+    // service rewards are distributed.
+    pub fn settle_epoch_boundary(
         mut self,
         last_epoch_state: &EpochState,
         epoch_state: &EpochState,
-        voucher: VoucherCm,
         config: &Config,
     ) -> Result<(Self, HeaderEffect), Error> {
-        self.leaders = self.leaders.try_apply_header(epoch_state.epoch, voucher)?;
+        self.leaders = self.leaders.update_epoch_state(epoch_state.epoch)?;
         let (new_sdp, effect) =
             self.sdp
                 .try_apply_header(&config.sdp_config, last_epoch_state, epoch_state)?;
         self.sdp = new_sdp;
         Ok((self, effect))
+    }
+
+    // The block's reward voucher, held for the current epoch and appended to the
+    // voucher tree at the next boundary.
+    #[must_use]
+    pub fn record_leader_voucher(mut self, voucher: VoucherCm) -> Self {
+        self.leaders = self.leaders.add_voucher(voucher);
+        self
+    }
+
+    pub fn try_apply_header(
+        self,
+        last_epoch_state: &EpochState,
+        epoch_state: &EpochState,
+        voucher: VoucherCm,
+        config: &Config,
+    ) -> Result<(Self, HeaderEffect), Error> {
+        let (ledger, effect) = self.settle_epoch_boundary(last_epoch_state, epoch_state, config)?;
+        Ok((ledger.record_leader_voucher(voucher), effect))
     }
 
     pub fn try_apply_channel_inscription(

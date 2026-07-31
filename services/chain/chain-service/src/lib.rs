@@ -25,7 +25,7 @@ use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
     block::{Block, genesis::GenesisBlock},
     events::Events,
-    header::HeaderId,
+    header::{EpochStateRoot, HeaderId},
     mantle::{
         gas::MainnetGasConstants,
         traits::{MantleTxWithProofs, PreverifiedMantleTx},
@@ -97,6 +97,11 @@ pub enum Error {
     },
     #[error("Block {0} has already been applied")]
     AlreadyApplied(HeaderId),
+    #[error("Epoch state root mismatch: expected {expected:?}, got {actual:?}")]
+    EpochStateRootMismatch {
+        expected: EpochStateRoot,
+        actual: EpochStateRoot,
+    },
     #[error("Ledger error: {0}")]
     Ledger(#[from] lb_ledger::LedgerError<HeaderId>),
     #[error("Consensus error: {0}")]
@@ -393,6 +398,13 @@ impl Cryptarchia {
                 },
                 err => Error::Ledger(err),
             })?;
+
+        if state.epoch_state_root() != header.epoch_state_root() {
+            return Err(Error::EpochStateRootMismatch {
+                expected: *state.epoch_state_root(),
+                actual: *header.epoch_state_root(),
+            });
+        }
 
         let (pruned_blocks, reorged_blocks) = self
             .consensus

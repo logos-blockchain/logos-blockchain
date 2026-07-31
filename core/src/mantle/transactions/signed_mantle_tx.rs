@@ -326,8 +326,7 @@ impl SignedMantleTx<Preverified> {
                     tx_hash,
                     declare_zk_sig: zk_sig,
                     declare_eddsa_sig: ed25519_sig,
-                    declarations: helper
-                        .get_declarations_by_service(sdp_declare_op.service_type)?,
+                    declarations: helper.get_declarations(),
                     min_stake: helper.get_min_stake(),
                 };
                 sdp_declare_op
@@ -336,7 +335,7 @@ impl SignedMantleTx<Preverified> {
             }
             (Op::SDPWithdraw(sdp_withdraw_op), OpProof::ZkSig(sdp_withdraw_proof)) => {
                 let context = SDPWithdrawValidationContext {
-                    declarations: helper.get_declarations_by_id(&sdp_withdraw_op.declaration_id)?,
+                    declarations: helper.get_declarations(),
                     epoch: helper.get_epoch(),
                     locked_notes: helper.get_locked_notes(),
                     tx_hash,
@@ -348,7 +347,7 @@ impl SignedMantleTx<Preverified> {
             }
             (Op::SDPActive(sdp_active_op), OpProof::ZkSig(sdp_active_proof)) => {
                 let context = SDPActiveValidationContext {
-                    declarations: helper.get_declarations_by_id(&sdp_active_op.declaration_id)?,
+                    declarations: helper.get_declarations(),
                     tx_hash,
                     active_sig: sdp_active_proof,
                     epoch: helper.get_epoch(),

@@ -32,9 +32,9 @@ where
 {
     let mut nodes: Vec<ZkNode<NodeId>> = epoch_state
         .active_declarations
-        .for_service(&ServiceType::BlendNetwork)
         .iter()
-        .flat_map(|declarations| declarations.iter().map(|(_, declaration)| declaration))
+        .map(|(_, declaration)| declaration)
+        .filter(|declaration| declaration.service_type == ServiceType::BlendNetwork)
         .filter_map(|declaration| {
             let provider_info = ProviderInfo {
                 locators: declaration.locators.clone(),

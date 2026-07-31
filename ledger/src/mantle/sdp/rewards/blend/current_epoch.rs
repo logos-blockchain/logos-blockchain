@@ -6,7 +6,7 @@ use lb_blend_message::{
 use lb_blend_proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs};
 use lb_core::{
     crypto::ZkHash,
-    mantle::{Value, ledger::Declarations},
+    mantle::Value,
     sdp::{Declaration, ProviderId, ServiceType},
 };
 use lb_cryptarchia_engine::Epoch;
@@ -121,11 +121,15 @@ impl CurrentEpochTracker {
             };
         }
 
-        let maybe_declarations = last_epoch_state
-            .active_declarations
-            .for_service(&ServiceType::BlendNetwork);
+        let blend_declarations = || {
+            last_epoch_state
+                .active_declarations
+                .iter()
+                .map(|(_, declaration)| declaration)
+                .filter(|declaration| declaration.service_type == ServiceType::BlendNetwork)
+        };
 
-        let declaration_count = maybe_declarations.map_or(0, Declarations::size);
+        let declaration_count = blend_declarations().count();
         if declaration_count < settings.minimum_network_size.get() as usize {
             debug!(target: LOG_TARGET, "Declaration count({}) is below minimum network size({}). Switching to WithoutTargetEpoch mode",
                 declaration_count,
@@ -137,12 +141,7 @@ impl CurrentEpochTracker {
             };
         }
 
-        let (providers, zk_root) = Self::providers_and_zk_root(
-            maybe_declarations
-                .expect("declaration set must exist since it's larger than minimum network size")
-                .iter()
-                .map(|(_, declaration)| declaration),
-        );
+        let (providers, zk_root) = Self::providers_and_zk_root(blend_declarations());
 
         let (core_quota, token_evaluation) = settings.core_quota_and_token_evaluation(
             providers.size() as u64,

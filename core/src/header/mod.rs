@@ -43,6 +43,20 @@ impl Debug for Nonce {
     }
 }
 
+#[derive(Clone, Eq, PartialEq, Copy)]
+pub struct EpochStateRoot([u8; 32]);
+
+impl EpochStateRoot {
+    /// Genesis has no prior epoch to settle, so it commits no epoch state.
+    pub const GENESIS: Self = Self([0; 32]);
+}
+
+impl Debug for EpochStateRoot {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "EpochStateRoot({})", hex::encode(self.0))
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Copy)]
 #[repr(u8)]
 pub enum Version {
@@ -117,6 +131,7 @@ pub struct Header {
     parent_block: HeaderId,
     slot: Slot,
     block_root: ContentId,
+    epoch_state_root: EpochStateRoot,
     proof_of_leadership: Groth16LeaderProof,
 }
 
@@ -137,6 +152,7 @@ impl Header {
         h.update(self.parent_block.0);
         h.update(self.slot.to_le_bytes());
         h.update(self.block_root.0);
+        h.update(self.epoch_state_root.0);
         h.update(self.proof_of_leadership.voucher_cm().to_bytes());
         h.update(fr_to_bytes(&self.proof_of_leadership.entropy()));
         h.update(self.proof_of_leadership.proof().to_bytes());
@@ -165,6 +181,11 @@ impl Header {
         self.slot
     }
 
+    #[must_use]
+    pub const fn epoch_state_root(&self) -> &EpochStateRoot {
+        &self.epoch_state_root
+    }
+
     pub fn sign(&self, signing_key: &Ed25519Key) -> Result<Ed25519Signature, crate::block::Error> {
         let header_bytes = self.to_bytes()?;
         Ok(signing_key.sign_payload(&header_bytes))
@@ -180,6 +201,7 @@ impl Header {
         parent_block: HeaderId,
         block_root: ContentId,
         slot: Slot,
+        epoch_state_root: EpochStateRoot,
         proof_of_leadership: Groth16LeaderProof,
     ) -> Self {
         Self {
@@ -187,6 +209,7 @@ impl Header {
             parent_block,
             slot,
             block_root,
+            epoch_state_root,
             proof_of_leadership,
         }
     }
@@ -198,6 +221,7 @@ impl Header {
             HeaderId([0; 32]),
             ContentId(block_root),
             Slot::from(0u64),
+            EpochStateRoot::GENESIS,
             Groth16LeaderProof::genesis(),
         )
     }
@@ -234,6 +258,24 @@ impl AsRef<[u8]> for HeaderId {
     }
 }
 
+impl From<[u8; 32]> for EpochStateRoot {
+    fn from(root: [u8; 32]) -> Self {
+        Self(root)
+    }
+}
+
+impl From<EpochStateRoot> for [u8; 32] {
+    fn from(root: EpochStateRoot) -> Self {
+        root.0
+    }
+}
+
+impl AsRef<[u8]> for EpochStateRoot {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 impl From<[u8; 32]> for ContentId {
     fn from(id: [u8; 32]) -> Self {
         Self(id)
@@ -249,10 +291,12 @@ impl From<ContentId> for [u8; 32] {
 display_hex_bytes_newtype!(HeaderId);
 display_hex_bytes_newtype!(ContentId);
 display_hex_bytes_newtype!(Nonce);
+display_hex_bytes_newtype!(EpochStateRoot);
 
 serde_bytes_newtype!(HeaderId, 32);
 serde_bytes_newtype!(ContentId, 32);
 serde_bytes_newtype!(Nonce, 32);
+serde_bytes_newtype!(EpochStateRoot, 32);
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -519,7 +563,14 @@ mod block_root_test_vectors {
             Ed25519Key::from_bytes(&[0x33u8; 32]).public_key(), // leader_key
             VoucherCm::from(Fr::from(0x4444u64)), // leader_voucher
         );
-        let header = Header::new(parent_block, ContentId(block_root), slot, proof);
+        let epoch_state_root = EpochStateRoot([0x66u8; 32]);
+        let header = Header::new(
+            parent_block,
+            ContentId(block_root),
+            slot,
+            epoch_state_root,
+            proof,
+        );
         let header_id = header.id();
 
         // Self-check: recompute the preimage from the public accessors and make
@@ -532,6 +583,7 @@ mod block_root_test_vectors {
         h.update(parent_block.0);
         h.update(slot.to_le_bytes());
         h.update(block_root);
+        h.update(epoch_state_root.0);
         h.update(proof.voucher_cm().to_bytes());
         h.update(fr_to_bytes(&proof.entropy()));
         h.update(proof.proof().to_bytes());
@@ -553,6 +605,11 @@ mod block_root_test_vectors {
         println!("{:20}: {}", "parent_block", hex::encode(parent_block.0));
         println!("{:20}: {}", "slot", u64::from(slot));
         println!("{:20}: {}", "block_root", hex::encode(block_root));
+        println!(
+            "{:20}: {}",
+            "epoch_state_root",
+            hex::encode(epoch_state_root.0)
+        );
         // proof_of_leadership fields (here, the deterministic genesis proof).
         println!(
             "{:20}: {}",
