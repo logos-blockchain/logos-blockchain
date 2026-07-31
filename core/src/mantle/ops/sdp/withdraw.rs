@@ -7,7 +7,10 @@ use super::{SDPWithdrawOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        ledger::{Declarations, ExecutableOperation, VerifiableOperation, verification_mode},
+        ledger::{
+            Declarations, ExecutableOperation, ProvableOperation, VerifiableOperation,
+            verification_mode,
+        },
         transactions::hash::TxHashView,
     },
     sdp::{self, locked_notes::LockedNotes},
@@ -20,7 +23,6 @@ pub struct SDPWithdrawValidationContext<'a> {
     pub epoch: Epoch,
     pub locked_notes: &'a LockedNotes,
     pub tx_hash_view: &'a TxHashView,
-    pub proof: &'a ZkSignature,
 }
 
 pub struct SDPWithdrawExecutionContext {
@@ -29,16 +31,28 @@ pub struct SDPWithdrawExecutionContext {
     pub epoch: Epoch,
 }
 
+impl ProvableOperation for SDPWithdrawOp {
+    type Proof = ZkSignature;
+}
+
 impl VerifiableOperation<verification_mode::StandardMode> for SDPWithdrawOp {
     type PreverificationContext<'a> = ();
     type VerificationContext<'a> = SDPWithdrawValidationContext<'a>;
     type Error = SdpError;
 
-    fn preverify(&self, _context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        _proof: &Self::Proof,
+        _context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         Ok(())
     }
 
-    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         // Check that the declaration exists
         let Some(declaration) = context.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
@@ -81,7 +95,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPWithdrawOp {
         if !ZkPublicKey::verify_multi(
             &[note.pk, declaration.zk_id],
             context.tx_hash_view.as_fr(),
-            context.proof,
+            proof,
         ) {
             return Err(SdpError::InvalidZkSignature);
         }

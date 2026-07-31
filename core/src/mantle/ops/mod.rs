@@ -247,13 +247,16 @@ impl Op {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ZkAndEd25519Proof {
+    pub zk_sig: ZkSignature,
+    pub ed25519_sig: Ed25519Signature,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OpProof {
     Ed25519Sig(Ed25519Signature),
     ZkSig(ZkSignature),
-    ZkAndEd25519Sigs {
-        zk_sig: ZkSignature,
-        ed25519_sig: Ed25519Signature,
-    },
+    ZkAndEd25519Sigs(ZkAndEd25519Proof),
     PoC(Groth16LeaderClaimProof),
     ChannelMultiSigProof(ChannelMultiSigProof),
 }

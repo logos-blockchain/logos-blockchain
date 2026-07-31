@@ -402,7 +402,10 @@ mod tests {
     use crate::{
         mantle::{
             ledger::{Inputs, Note, Outputs, Utxo, Value},
-            ops::channel::{Ed25519PublicKey, inscribe::Inscription},
+            ops::{
+                ZkAndEd25519Proof,
+                channel::{Ed25519PublicKey, inscribe::Inscription},
+            },
             transactions::{Ops, OpsProofs},
         },
         sdp::{Locator, ProviderId, ServiceType},
@@ -456,10 +459,13 @@ mod tests {
             Op::Transfer(_) => OpProof::ZkSig(ZkSignature::new(
                 CompressedGroth16Proof::from_bytes(&[0u8; 128]),
             )),
-            Op::SDPDeclare(_) => OpProof::ZkAndEd25519Sigs {
-                zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
-                ed25519_sig: Ed25519Signature::zero(),
-            },
+            Op::SDPDeclare(_) => {
+                let proof = ZkAndEd25519Proof {
+                    zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
+                    ed25519_sig: Ed25519Signature::zero(),
+                };
+                OpProof::ZkAndEd25519Sigs(proof)
+            }
             other => unreachable!("unexpected genesis op in tests: {}", other.as_str()),
         }
     }
