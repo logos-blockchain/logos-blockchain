@@ -167,11 +167,11 @@ impl<'a> IntoIterator for &'a Channels {
 
 impl Channels {
     pub fn from_genesis(op: &InscriptionOp) -> Result<(Self, Vec<TxEvent>), Error> {
-        let (ctx, events) = op.execute(InscriptionExecutionContext {
+        let (context, events) = op.execute(InscriptionExecutionContext {
             channels: Self::default(),
             block_slot: Slot::default(),
         })?;
-        Ok((ctx.channels, events))
+        Ok((context.channels, events))
     }
 
     #[must_use]

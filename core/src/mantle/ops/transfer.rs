@@ -102,14 +102,17 @@ impl VerifiableOperation<verification_mode::StandardMode> for TransferOp {
         Ok(())
     }
 
-    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
         // Validate Inputs
-        self.inputs
-            .validate_not_in_channel(ctx.locked_notes, ctx.channels, ctx.utxos)?;
+        self.inputs.validate_not_in_channel(
+            context.locked_notes,
+            context.channels,
+            context.utxos,
+        )?;
 
         // Check the transfer Proof
-        let pks = self.inputs.get_pk(ctx.utxos)?;
-        if !ZkPublicKey::verify_multi(&pks, ctx.tx_hash_view.as_fr(), ctx.proof) {
+        let pks = self.inputs.get_pk(context.utxos)?;
+        if !ZkPublicKey::verify_multi(&pks, context.tx_hash_view.as_fr(), context.proof) {
             return Err(TransferError::InvalidProof);
         }
 

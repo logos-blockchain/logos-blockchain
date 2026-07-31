@@ -54,19 +54,20 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelWithdrawOp 
         Ok(())
     }
 
-    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
         verify_channel_multi_sig(
             &self.channel_id,
-            ctx.proof,
-            ctx.tx_hash_view.as_bytes(),
-            ctx.helper,
-            ctx.op_index,
+            context.proof,
+            context.tx_hash_view.as_bytes(),
+            context.helper,
+            context.op_index,
         )
         .map_err(|_error| Error::InvalidSignature)?; // FIXME: Discards error details
 
         // Check that the channel exists
         let channel =
-            ctx.channels
+            context
+                .channels
                 .channel_state(&self.channel_id)
                 .ok_or(Error::ChannelNotFound {
                     channel_id: self.channel_id,
@@ -74,14 +75,14 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelWithdrawOp 
 
         // Check that the inputs are valid and belong to the channel
         self.inputs.validate_in_channel(
-            ctx.locked_notes,
-            ctx.channels,
+            context.locked_notes,
+            context.channels,
             &self.channel_id,
-            ctx.utxos,
+            context.utxos,
         )?;
 
         // Check there is enough signatures
-        let signatures = ctx.proof.signatures();
+        let signatures = context.proof.signatures();
         if signatures.len() != channel.transfer_threshold as usize {
             return Err(Error::ThresholdUnmet {
                 channel_id: self.channel_id,
@@ -96,7 +97,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelWithdrawOp 
                 .accredited_keys
                 .get(sig.channel_key_index as usize)
                 .ok_or(Error::InvalidSignature)?
-                .verify(ctx.tx_hash_view.as_bytes(), &sig.signature)
+                .verify(context.tx_hash_view.as_bytes(), &sig.signature)
                 .is_err()
             {
                 return Err(Error::InvalidSignature);
@@ -113,16 +114,16 @@ impl ExecutableOperation for ChannelWithdrawOp {
 
     fn execute<'a>(
         &self,
-        mut ctx: Self::Context<'a>,
+        mut context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         // Release the inputs from the channel. The notes keep their NoteId,
         // value and ZkPublicKey and stay in the ledger as regular notes.
         for note_id in self.inputs.iter() {
-            ctx.channels = ctx
+            context.channels = context
                 .channels
                 .unregister_channel_note(note_id, &self.channel_id)?;
         }
 
-        Ok((ctx, Vec::new()))
+        Ok((context, Vec::new()))
     }
 }

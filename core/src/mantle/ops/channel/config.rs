@@ -63,18 +63,18 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
         Ok(())
     }
 
-    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
         // Check that the indexes are unique and there is the same number of proof and
         // index. This is enforced by the proof structure that enforces it.
 
-        if let Some(channel) = ctx.channels.channel_state(&self.channel) {
+        if let Some(channel) = context.channels.channel_state(&self.channel) {
             // Check there is enough signatures
-            let signatures = ctx.proof.signatures();
+            let signatures = context.proof.signatures();
             if signatures.len() != channel.configuration_threshold as usize {
                 return Err(Error::ThresholdUnmet {
                     channel_id: self.channel,
                     threshold: channel.configuration_threshold,
-                    actual: ctx.proof.signatures().len(),
+                    actual: context.proof.signatures().len(),
                 });
             }
 
@@ -88,7 +88,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
                         sequencers: channel.accredited_keys.len(),
                         index: signature.channel_key_index,
                     })?
-                    .verify(ctx.tx_hash_view.as_bytes(), &signature.signature)
+                    .verify(context.tx_hash_view.as_bytes(), &signature.signature)
                     .is_err()
                 {
                     return Err(Error::InvalidSignature);
@@ -106,22 +106,22 @@ impl ExecutableOperation for ChannelConfigOp {
 
     fn execute<'a>(
         &self,
-        mut ctx: Self::Context<'a>,
+        mut context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         let channel = ChannelState {
             accredited_keys: self.keys.clone().into(),
             configuration_threshold: self.configuration_threshold,
             tip_message: self.id(),
-            tip_slot: ctx.block_slot,
+            tip_slot: context.block_slot,
             tip_sequencer: 0,
-            tip_sequencer_starting_slot: ctx.block_slot,
+            tip_sequencer_starting_slot: context.block_slot,
             posting_timeframe: self.posting_timeframe.clone(),
             transfer_threshold: self.transfer_threshold,
             posting_timeout: self.posting_timeout.clone(),
         };
 
         // if the channel doesn't exist, create it otherwise just update the config
-        ctx.channels = ctx.channels.set_channel_state(&self.channel, channel);
-        Ok((ctx, Vec::new()))
+        context.channels = context.channels.set_channel_state(&self.channel, channel);
+        Ok((context, Vec::new()))
     }
 }

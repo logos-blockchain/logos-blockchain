@@ -35,16 +35,16 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPActiveOp {
         Ok(())
     }
 
-    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
         // Check the declaration exists
-        let Some(declaration) = ctx.declarations.get(&self.declaration_id) else {
+        let Some(declaration) = context.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
         };
 
         // Check the declaration hasn't been withdrawn
         // (Return error if `scheduled_withdrawal_epoch` epoch has passed)
         if let Some(withdraw_at) = declaration.withdraw_at
-            && withdraw_at <= ctx.epoch
+            && withdraw_at <= context.epoch
         {
             return Err(SdpError::DeclarationWithdrawn {
                 declaration_id: self.declaration_id,
@@ -61,7 +61,11 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPActiveOp {
         }
 
         // Check the signature over the `zk_id`
-        if !ZkPublicKey::verify_multi(&[declaration.zk_id], ctx.tx_hash_view.as_fr(), ctx.proof) {
+        if !ZkPublicKey::verify_multi(
+            &[declaration.zk_id],
+            context.tx_hash_view.as_fr(),
+            context.proof,
+        ) {
             return Err(SdpError::InvalidZkSignature);
         }
 
@@ -76,16 +80,16 @@ impl ExecutableOperation for SDPActiveOp {
     // TODO: check service specific logic
     fn execute<'a>(
         &self,
-        mut ctx: Self::Context<'a>,
+        mut context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
-        let mut declaration = ctx
+        let mut declaration = context
             .declarations
             .get(&self.declaration_id)
             .expect("The operation should have been validated");
 
-        declaration.active = ctx.epoch;
+        declaration.active = context.epoch;
         declaration.nonce = self.nonce;
-        ctx.declarations = ctx
+        context.declarations = context
             .declarations
             .update(&self.declaration_id, declaration.clone())
             .expect("the declaration is in the tree");
@@ -97,6 +101,6 @@ impl ExecutableOperation for SDPActiveOp {
             "updated declaration with active message"
         );
 
-        Ok((ctx, Vec::new()))
+        Ok((context, Vec::new()))
     }
 }

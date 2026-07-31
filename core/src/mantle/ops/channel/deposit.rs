@@ -74,21 +74,24 @@ impl VerifiableOperation<verification_mode::StandardMode> for DepositOp {
         Ok(())
     }
 
-    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
         // Check that the channel exist
-        if !ctx.channels.contains_channel(&self.channel_id) {
+        if !context.channels.contains_channel(&self.channel_id) {
             return Err(Error::ChannelNotFound {
                 channel_id: self.channel_id,
             });
         }
 
         // Check that inputs are spendable and not already channel notes
-        self.inputs
-            .validate_not_in_channel(ctx.locked_notes, ctx.channels, ctx.utxos)?;
+        self.inputs.validate_not_in_channel(
+            context.locked_notes,
+            context.channels,
+            context.utxos,
+        )?;
 
         // Check the signature
-        let public_keys = self.inputs.get_pk(ctx.utxos)?;
-        if !ZkPublicKey::verify_multi(&public_keys, ctx.tx_hash_view.as_fr(), ctx.proof) {
+        let public_keys = self.inputs.get_pk(context.utxos)?;
+        if !ZkPublicKey::verify_multi(&public_keys, context.tx_hash_view.as_fr(), context.proof) {
             return Err(Error::InvalidSignature);
         }
 
@@ -102,28 +105,28 @@ impl ExecutableOperation for DepositOp {
 
     fn execute<'a>(
         &self,
-        mut ctx: Self::Context<'a>,
+        mut context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         // Get the amount deposited for the event payload
-        let amount_deposited = self.inputs.amount(&ctx.utxos)?;
-        let outputs = self.outputs(&ctx.utxos)?;
+        let amount_deposited = self.inputs.amount(&context.utxos)?;
+        let outputs = self.outputs(&context.utxos)?;
 
         // Remove the inputs from the ledger.
-        ctx.utxos = self.inputs.execute(ctx.utxos)?;
+        context.utxos = self.inputs.execute(context.utxos)?;
 
         // Add the re-created notes to the ledger and register them as channel
         // notes.
-        ctx.utxos = outputs.execute(ctx.utxos, self);
+        context.utxos = outputs.execute(context.utxos, self);
         let mut note_ids = DepositRecreatedNotes::default();
         for utxo in outputs.utxos(self) {
-            ctx.channels = ctx
+            context.channels = context
                 .channels
                 .register_channel_note(&utxo.id(), &self.channel_id)?;
             note_ids.try_push(utxo.id()).map_err(InputsError::from)?;
         }
 
         let events = std::iter::once(TxEvent::new(
-            ctx.tx_hash,
+            context.tx_hash,
             self.op_id(),
             TxEventPayload::Deposit {
                 channel_id: self.channel_id,
@@ -134,6 +137,6 @@ impl ExecutableOperation for DepositOp {
         ))
         .collect();
 
-        Ok((ctx, events))
+        Ok((context, events))
     }
 }

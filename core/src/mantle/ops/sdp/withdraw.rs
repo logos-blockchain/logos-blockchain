@@ -38,9 +38,9 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPWithdrawOp {
         Ok(())
     }
 
-    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
         // Check that the declaration exists
-        let Some(declaration) = ctx.declarations.get(&self.declaration_id) else {
+        let Some(declaration) = context.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
         };
 
@@ -53,7 +53,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPWithdrawOp {
         }
 
         // Check that the locked note is locked for this service
-        if !ctx
+        if !context
             .locked_notes
             .is_locked_for_service(&self.locked_note_id, &declaration.service_type)
         {
@@ -74,14 +74,14 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPWithdrawOp {
 
         // Ensure locked note pk and zk_id attached to this declaration authorized this
         // Operation.
-        let note = ctx
+        let note = context
             .locked_notes
             .get(&self.locked_note_id)
             .expect("The Operation has been checked above");
         if !ZkPublicKey::verify_multi(
             &[note.pk, declaration.zk_id],
-            ctx.tx_hash_view.as_fr(),
-            ctx.proof,
+            context.tx_hash_view.as_fr(),
+            context.proof,
         ) {
             return Err(SdpError::InvalidZkSignature);
         }
@@ -104,9 +104,9 @@ impl ExecutableOperation for SDPWithdrawOp {
 
     fn execute<'a>(
         &self,
-        mut ctx: Self::Context<'a>,
+        mut context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
-        let mut declaration = ctx
+        let mut declaration = context
             .declarations
             .get(&self.declaration_id)
             .expect("The operation should have been validated");
@@ -117,9 +117,9 @@ impl ExecutableOperation for SDPWithdrawOp {
         // withdrawal because SDP uses the snapshot from `SNAPSHOT_FINALIZATION_DELAY`
         // epochs ago.
         // The note will be unlocked once the withdrawn epoch set here is reached.
-        declaration.withdraw_at = Some(ctx.epoch.strict_add(sdp::SNAPSHOT_FINALIZATION_DELAY));
+        declaration.withdraw_at = Some(context.epoch.strict_add(sdp::SNAPSHOT_FINALIZATION_DELAY));
         declaration.nonce = self.nonce;
-        ctx.declarations = ctx
+        context.declarations = context
             .declarations
             .update(&self.declaration_id, declaration.clone())
             .expect("the declaration is in the tree");
@@ -132,6 +132,6 @@ impl ExecutableOperation for SDPWithdrawOp {
             "updated declaration with withdraw message"
         );
 
-        Ok((ctx, Vec::new()))
+        Ok((context, Vec::new()))
     }
 }

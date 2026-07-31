@@ -27,7 +27,7 @@ trait SDPDeclareValidationExt {
 
     fn execute(
         &self,
-        ctx: SDPDeclareExecutionContext,
+        context: SDPDeclareExecutionContext,
     ) -> Result<(SDPDeclareExecutionContext, Vec<TxEvent>), SdpError>;
 }
 
@@ -72,22 +72,22 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
 
     fn execute(
         &self,
-        mut ctx: SDPDeclareExecutionContext,
+        mut context: SDPDeclareExecutionContext,
     ) -> Result<(SDPDeclareExecutionContext, Vec<TxEvent>), SdpError> {
         let declaration_id = self.id();
-        let declaration = Declaration::new(ctx.epoch, self);
-        ctx.declarations = ctx.declarations.insert(declaration_id, declaration).0;
-        let utxo = ctx
+        let declaration = Declaration::new(context.epoch, self);
+        context.declarations = context.declarations.insert(declaration_id, declaration).0;
+        let utxo = context
             .utxo_tree
             .utxos()
             .get(&self.locked_note_id)
             .expect("The operation should have been checked")
             .0;
 
-        ctx.locked_notes = ctx
+        context.locked_notes = context
             .locked_notes
             .lock(
-                &ctx.min_stake,
+                &context.min_stake,
                 self.service_type,
                 declaration_id,
                 utxo.note,
@@ -95,7 +95,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
             )
             .map_err(|_| SdpError::UnexpectedError)?;
 
-        Ok((ctx, Vec::new()))
+        Ok((context, Vec::new()))
     }
 }
 
@@ -166,9 +166,9 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPDeclareOp {
         self.preverify(context.tx_hash_view, context.proof_ed25519)
     }
 
-    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
         // Check that the note exist
-        let Some((utxo, _)) = ctx.utxo_tree.utxos().get(&self.locked_note_id) else {
+        let Some((utxo, _)) = context.utxo_tree.utxos().get(&self.locked_note_id) else {
             return Err(SdpError::InexistingNote(self.locked_note_id));
         };
 
@@ -176,8 +176,8 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPDeclareOp {
         let note = utxo.note;
         if !ZkPublicKey::verify_multi(
             &[note.pk, self.zk_id],
-            ctx.tx_hash_view.as_fr(),
-            ctx.proof_zk_signature,
+            context.tx_hash_view.as_fr(),
+            context.proof_zk_signature,
         ) {
             return Err(SdpError::InvalidZkSignature);
         }
@@ -185,10 +185,10 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPDeclareOp {
         SDPDeclareValidationExt::validate(
             self,
             note,
-            ctx.channels,
-            ctx.declarations,
-            ctx.locked_notes,
-            ctx.min_stake,
+            context.channels,
+            context.declarations,
+            context.locked_notes,
+            context.min_stake,
         )
     }
 }
@@ -202,9 +202,9 @@ impl VerifiableOperation<verification_mode::GenesisMode> for SDPDeclareOp {
         self.preverify(context.tx_hash_view, context.proof_ed25519)
     }
 
-    fn verify(&self, ctx: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
         // Check that the note exist
-        let Some((utxo, _)) = ctx.utxo_tree.utxos().get(&self.locked_note_id) else {
+        let Some((utxo, _)) = context.utxo_tree.utxos().get(&self.locked_note_id) else {
             return Err(SdpError::InexistingNote(self.locked_note_id));
         };
         let note = utxo.note;
@@ -212,10 +212,10 @@ impl VerifiableOperation<verification_mode::GenesisMode> for SDPDeclareOp {
         SDPDeclareValidationExt::validate(
             self,
             note,
-            ctx.channels,
-            ctx.declarations,
-            ctx.locked_notes,
-            ctx.min_stake,
+            context.channels,
+            context.declarations,
+            context.locked_notes,
+            context.min_stake,
         )
     }
 }
@@ -226,9 +226,9 @@ impl ExecutableOperation for SDPDeclareOp {
 
     fn execute<'a>(
         &self,
-        ctx: Self::Context<'a>,
+        context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
-        SDPDeclareValidationExt::execute(self, ctx)
+        SDPDeclareValidationExt::execute(self, context)
     }
 }
 
