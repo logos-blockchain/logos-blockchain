@@ -114,7 +114,7 @@ pub struct TxState {
     /// are payload-only hashes, so an id alone does not identify a lineage
     /// position — the pair does. `None` when the finalized entry is unknown
     /// (fresh state or checkpoint restore); the finalized-prefix search then
-    /// falls back to id-only matching.
+    /// matches nothing (see [`Self::finalized_prefix_ids`]).
     finalized_parent_msg: Option<MsgId>,
 }
 
@@ -180,7 +180,8 @@ impl TxState {
 
     /// Update the finalized channel tip from backfilled finalized history.
     /// `parent` is the entry's lineage-parent; pass `None` only when it is
-    /// genuinely unknown (weakens the finalized-prefix search to id-only).
+    /// genuinely unknown (disables the finalized-prefix mask until the next
+    /// boundary move records a parent).
     pub const fn set_finalized_msg(&mut self, msg: MsgId, parent: Option<MsgId>) {
         self.finalized_msg = msg;
         self.finalized_parent_msg = parent;
@@ -855,8 +856,12 @@ impl TxState {
     /// lineage and mask that branch's genuinely orphaned prefix (see
     /// `replayed_config_on_competing_branch_does_not_hide_orphans`). The
     /// last occurrence is taken because same-block config replay can repeat
-    /// the pair. Falls back to id-only matching when the finalized entry's
-    /// parent is unknown (fresh state or checkpoint restore).
+    /// the pair.
+    ///
+    /// An unknown parent (fresh state or checkpoint restore) matches
+    /// nothing: every boundary move records the parent, so until one happens
+    /// the boundary entry sits at-or-below the LIB and cannot appear in a
+    /// lineage — any id hit in that window is a recurrence false positive.
     fn finalized_prefix_ids(&self, lineage: &[InscriptionInfo]) -> HashSet<MsgId> {
         lineage
             .iter()
@@ -864,7 +869,7 @@ impl TxState {
                 i.this_msg == self.finalized_msg
                     && self
                         .finalized_parent_msg
-                        .is_none_or(|parent| i.parent_msg == parent)
+                        .is_some_and(|parent| i.parent_msg == parent)
             })
             .map_or_else(HashSet::new, |pos| {
                 lineage[..=pos].iter().map(|i| i.this_msg).collect()
@@ -1250,6 +1255,85 @@ mod tests {
         let hash = tx.mantle_tx().hash();
         state.submit_inscription(tx, parent_msg, this_msg, [data].into());
         hash
+    }
+
+    /// After a checkpoint restore the finalized entry's parent is unknown
+    /// (`finalized_parent_msg = None`). A replayed config above the restored
+    /// LIB then repeats the boundary id inside the live lineage — an id-only
+    /// fallback would mask its prefix and hide the orphan (the restore-window
+    /// variant of the recurrence bug). An unknown parent must match nothing.
+    #[test]
+    fn restored_state_with_unknown_parent_does_not_mask_replayed_boundary_id() {
+        let genesis = header_id(0);
+        let a1 = header_id(1);
+        let b1 = header_id(2);
+        // Restored boundary: finalized_msg = X, parent unknown.
+        let x_msg = msg_id(30);
+        let mut state = TxState::new(genesis, x_msg);
+
+        // Old branch replays a config with the boundary id above the LIB:
+        // a1: [Inscribe U(root→u), Config X(u→x)].
+        let u_tx = make_dummy_tx(1);
+        let u_hash = u_tx.mantle_tx().hash();
+        let u_info = InscriptionInfo {
+            tx_hash: u_hash,
+            parent_msg: MsgId::root(),
+            this_msg: msg_id(10),
+            payload: [1].into(),
+        };
+        let x_old = InscriptionInfo {
+            tx_hash: make_dummy_tx(2).mantle_tx().hash(),
+            parent_msg: msg_id(10),
+            this_msg: x_msg,
+            payload: [2].into(),
+        };
+        state.process_block(
+            a1,
+            genesis,
+            genesis,
+            vec![],
+            vec![
+                BlockChannelTx::Inscription(u_info),
+                BlockChannelTx::Config(x_old),
+            ],
+        );
+        let old_lineage = state.channel_lineage(a1);
+
+        // Competing branch b1: [Inscribe V(root→v), Config X(v→x)].
+        let v_info = InscriptionInfo {
+            tx_hash: make_dummy_tx(3).mantle_tx().hash(),
+            parent_msg: MsgId::root(),
+            this_msg: msg_id(20),
+            payload: [3].into(),
+        };
+        let x_new = InscriptionInfo {
+            tx_hash: make_dummy_tx(4).mantle_tx().hash(),
+            parent_msg: msg_id(20),
+            this_msg: x_msg,
+            payload: [2].into(),
+        };
+        state.process_block(
+            b1,
+            genesis,
+            genesis,
+            vec![],
+            vec![
+                BlockChannelTx::Inscription(v_info),
+                BlockChannelTx::Config(x_new),
+            ],
+        );
+
+        let update = state
+            .detect_channel_update(&old_lineage, b1)
+            .expect("branch switch must report");
+        assert!(
+            update.orphaned.iter().any(|tx| matches!(
+                tx,
+                ChannelUpdateTx::Inscription(info) if info.tx_hash == u_hash
+            )),
+            "U must be reported orphaned despite the unknown finalized parent; got {:?}",
+            update.orphaned
+        );
     }
 
     /// A byte-identical `ChannelConfig` replayed on a competing branch
