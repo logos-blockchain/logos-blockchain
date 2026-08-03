@@ -53,7 +53,7 @@ impl LeafHash<VoucherNullifier> for () {
 /// and never removed, so the leaves stay in the order they appeared on chain.
 pub type VoucherNullifiers = Blake2bTree<VoucherNullifier, ()>;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize, BinaryCodec)]
 pub struct VoucherCm(#[serde(with = "serde_fr")] ZkHash);
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
