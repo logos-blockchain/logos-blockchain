@@ -17,7 +17,7 @@ use lb_core::mantle::{
         },
     },
     traits::Hashable as _,
-    transactions::{hash::TxHash, mantle_tx::MantleTx, states::Preverified},
+    transactions::{hash::TxHash, mantle_tx::RawMantleTx, states::Preverified},
 };
 use lb_key_management_system_service::keys::Ed25519Key;
 use rand::{seq::SliceRandom as _, thread_rng};
@@ -392,7 +392,7 @@ fn build_inscription_transaction(
     };
     let msg_id = op.id();
 
-    let mantle_tx = MantleTx([Op::ChannelInscribe(op)].into());
+    let mantle_tx = RawMantleTx([Op::ChannelInscribe(op)].into());
     let tx_hash = mantle_tx.hash();
 
     let ed25519_signature = channel

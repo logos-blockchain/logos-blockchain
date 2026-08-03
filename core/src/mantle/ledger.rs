@@ -39,29 +39,58 @@ pub type BoundedUtxos = UpperBoundedVec<Utxo, MAX_TRANSACTION_INPUTS>;
 pub type BoundedInputs = UpperBoundedVec<NoteId, MAX_TRANSACTION_INPUTS>;
 pub type BoundedOutputs = UpperBoundedVec<Note, MAX_TRANSACTION_OUTPUTS>;
 
-// TODO: Specific proof type check?
-pub trait Operation<VerificationContext> {
-    type PreverificationContext<'a>
-    where
-        Self: 'a;
-    type ExecutionContext<'a>
-    where
-        Self: 'a;
+pub mod verification_mode {
+    pub trait VerificationMode {}
 
-    type VerificationError;
-    type ExecutionError;
+    pub struct GenesisMode;
+    impl VerificationMode for GenesisMode {}
+
+    pub struct StandardMode;
+    impl VerificationMode for StandardMode {}
+}
+
+pub trait ProvableOperation {
+    type Proof;
+}
+
+// TODO: Specific proof type check?
+pub trait VerifiableOperation<Mode: verification_mode::VerificationMode>:
+    ProvableOperation
+{
+    type PreverificationContext<'a>;
+    type VerificationContext<'a>;
+    type Error;
 
     fn preverify(
         &self,
+        proof: &Self::Proof,
         context: &Self::PreverificationContext<'_>,
-    ) -> Result<(), Self::VerificationError>;
+    ) -> Result<(), Self::Error>;
 
-    fn verify(&self, context: &VerificationContext) -> Result<(), Self::VerificationError>;
-
-    fn execute(
+    fn verify(
         &self,
-        context: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError>;
+        proof: &Self::Proof,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::Error>;
+}
+
+pub trait ExecutableOperation {
+    type Context<'a>;
+    type Error;
+
+    fn execute<'a>(
+        &self,
+        context: Self::Context<'a>,
+    ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error>;
+}
+
+pub trait Operation<Mode: verification_mode::VerificationMode>:
+    VerifiableOperation<Mode> + ExecutableOperation
+{
+}
+impl<T: VerifiableOperation<Mode> + ExecutableOperation, Mode: verification_mode::VerificationMode>
+    Operation<Mode> for T
+{
 }
 
 pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;

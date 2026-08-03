@@ -14,6 +14,7 @@ use lb_core::{
         traits::Hashable as _,
         transactions::{
             hash::TxHash,
+            mantle_tx::MantleTx as _,
             states::{Unverified, VerificationState},
         },
     },
@@ -183,18 +184,15 @@ where
     // whose `orphaned` is empty by construction), report only entries the
     // sequencer didn't already track: its own publishes land on the channel
     // through its own action and must not echo back. On a branch change the
-    // full delta flows through unfiltered. Updates emptied by the filter are
-    // dropped entirely.
-    let channel_update = channel_update
-        .map(|mut update| {
-            if update.orphaned.is_empty() {
-                update
-                    .adopted
-                    .retain(|tx| !tracked_before.contains(&tx.tx_hash()));
-            }
+    // full delta flows through unfiltered.
+    let channel_update = channel_update.map(|mut update| {
+        if update.orphaned.is_empty() {
             update
-        })
-        .filter(|update| !(update.orphaned.is_empty() && update.adopted.is_empty()));
+                .adopted
+                .retain(|tx| !tracked_before.contains(&tx.tx_hash()));
+        }
+        update
+    });
 
     Ok(BlockEventResult {
         finalized_items,
@@ -776,7 +774,7 @@ fn touches_channel_tip<State: VerificationState>(
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
-        MantleTx, NoteId,
+        NoteId, RawMantleTx,
         channel::{SlotTimeframe, SlotTimeout},
         ledger::Inputs,
         ops::{
@@ -1160,7 +1158,7 @@ mod tests {
     }
 
     fn dummy_pending_tx(seed: u8) -> SignedMantleTx<Unverified> {
-        let mantle_tx = MantleTx(
+        let mantle_tx = RawMantleTx(
             [Op::ChannelInscribe(InscriptionOp {
                 channel_id: [0u8; 32].into(),
                 inscription: Inscription::new_unchecked(vec![seed]),

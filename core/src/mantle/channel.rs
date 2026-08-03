@@ -11,7 +11,7 @@ use crate::{
     mantle::{
         NoteId,
         channel_notes::{self, ChannelNotes},
-        ledger::{self, Operation as _},
+        ledger::{self, ExecutableOperation as _},
         ops::channel::{
             ChannelId, ChannelKeyIndex, MsgId,
             config::Keys,
@@ -167,11 +167,11 @@ impl<'a> IntoIterator for &'a Channels {
 
 impl Channels {
     pub fn from_genesis(op: &InscriptionOp) -> Result<(Self, Vec<TxEvent>), Error> {
-        let (ctx, events) = op.execute(InscriptionExecutionContext {
+        let (context, events) = op.execute(InscriptionExecutionContext {
             channels: Self::default(),
             block_slot: Slot::default(),
         })?;
-        Ok((ctx.channels, events))
+        Ok((context.channels, events))
     }
 
     #[must_use]
