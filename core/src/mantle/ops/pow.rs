@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use ark_ff::Zero as _;
-use lb_codec::BinaryCodec;
+use lb_codec::{BinaryCodec, BinaryEncode};
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::{Fr, fr_from_mod_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -10,18 +10,19 @@ use thiserror::Error;
 
 use crate::{
     crypto::{Hash, ZkDigest as _, ZkHash, ZkHasher},
-    events::TxEvent,
+    events::{TxEvent, TxEventPayload},
     mantle::{
+        Note, TxHash, Utxo, Value,
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode,
         },
-        ops::NoOpProof,
+        ops::{NoOpProof, OpId},
     },
 };
 
 pub type PowTarget = Fr;
-pub type PowReward = u64;
+pub type PowReward = Value;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct PowNullifier(#[serde(with = "serde_fr")] ZkHash);
@@ -185,8 +186,24 @@ impl ClaimPoWRewardVerificationContext<'_> {
     }
 }
 
+impl OpId for ClaimPowRewardOp {
+    fn op_bytes(&self) -> Vec<u8> {
+        self.encode_to_vec()
+    }
+}
+
 pub struct ClaimPoWRewardExecutionContext {
-    _phantom: std::marker::PhantomData<()>, // fake content to be removed
+    reward_pool: PowReward,
+    epoch_reward: PowReward,
+    nullifiers: rpds::HashTrieSetSync<PowNullifier>,
+    tx_hash: TxHash,
+    utxos: Vec<Utxo>,
+}
+
+impl ClaimPoWRewardExecutionContext {
+    fn decrement_reward_pool(&mut self) {
+        self.reward_pool = self.reward_pool.saturating_sub(self.epoch_reward);
+    }
 }
 
 impl ProvableOperation for ClaimPowRewardOp {
@@ -228,8 +245,34 @@ impl ExecutableOperation for ClaimPowRewardOp {
 
     fn execute<'a>(
         &self,
-        _context: Self::Context<'a>,
+        mut context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
-        todo!("Execution for ClaimPowReward is not integrated yet")
+        // add the nullifier to the set
+        let nullifier = self.get_puzzle_ticket();
+        context.nullifiers.insert_mut(nullifier);
+        // create output note
+        let note = Note::new(context.epoch_reward, self.public_key);
+        let op_id = self.op_id();
+        let utxo = Utxo {
+            op_id,
+            output_index: 0,
+            note,
+        };
+        context.utxos.push(utxo);
+        // decrement current pool
+        context.decrement_reward_pool();
+        // output event
+        let tx_hash = context.tx_hash;
+        Ok((
+            context,
+            vec![TxEvent::new(
+                tx_hash,
+                op_id,
+                TxEventPayload::PoWRewardClaimed {
+                    pow_nullifier: nullifier,
+                    utxo,
+                },
+            )],
+        ))
     }
 }
