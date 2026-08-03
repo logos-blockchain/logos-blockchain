@@ -59,41 +59,28 @@ impl BinaryDecode for PayloadType {
 /// must be random rather than a fixed filler, so that the body never carries
 /// a region of plaintext known to an observer.
 #[serde_as]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaddedPayloadBody {
-    /// The real content length; `padded[..actual_len]` is the body.
+    #[serde(deserialize_with = "deserialize_actual_len")]
     actual_len: u16,
-    /// A body padded to [`MAX_PAYLOAD_BODY_SIZE`]. `Box` avoids a large stack
-    /// allocation.
+
     #[serde_as(as = "serde_with::Bytes")]
     padded: Box<[u8; MAX_PAYLOAD_BODY_SIZE]>,
 }
 
-#[serde_as]
-#[derive(Deserialize)]
-struct PaddedPayloadBodySerde {
-    actual_len: u16,
-    #[serde_as(as = "serde_with::Bytes")]
-    padded: Box<[u8; MAX_PAYLOAD_BODY_SIZE]>,
-}
+fn deserialize_actual_len<'de, D>(deserializer: D) -> Result<u16, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let actual_len = u16::deserialize(deserializer)?;
 
-impl<'de> Deserialize<'de> for PaddedPayloadBody {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let raw = PaddedPayloadBodySerde::deserialize(deserializer)?;
-        if usize::from(raw.actual_len) > MAX_PAYLOAD_BODY_SIZE {
-            return Err(serde::de::Error::custom(format_args!(
-                "actual payload length {} exceeds maximum {}",
-                raw.actual_len, MAX_PAYLOAD_BODY_SIZE
-            )));
-        }
-        Ok(Self {
-            actual_len: raw.actual_len,
-            padded: raw.padded,
-        })
+    if usize::from(actual_len) > MAX_PAYLOAD_BODY_SIZE {
+        return Err(serde::de::Error::custom(format_args!(
+            "actual payload length {actual_len} exceeds maximum {MAX_PAYLOAD_BODY_SIZE}"
+        )));
     }
+
+    Ok(actual_len)
 }
 
 impl TryFrom<Vec<u8>> for PaddedPayloadBody {

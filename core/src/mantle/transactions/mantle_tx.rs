@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::LazyLock};
 
 use lb_codec::{BinaryCodec, BinaryDecodeExt as _, BinaryEncode as _};
+use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
@@ -197,14 +198,16 @@ impl<'de> Deserialize<'de> for MantleTx {
     }
 }
 
-fn deserialize_bounded_bytes<'de, const MAX: usize, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+fn deserialize_bounded_bytes<'de, const MAX: usize, D>(
+    deserializer: D,
+) -> Result<UpperBoundedVec<u8, MAX>, D::Error>
 where
     D: Deserializer<'de>,
 {
     struct Visitor<const MAX: usize>;
 
-    impl<'de, const MAX: usize> serde::de::Visitor<'de> for Visitor<MAX> {
-        type Value = Vec<u8>;
+    impl<const MAX: usize> serde::de::Visitor<'_> for Visitor<MAX> {
+        type Value = UpperBoundedVec<u8, MAX>;
 
         fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(formatter, "at most {MAX} encoded MantleTx bytes")
@@ -220,33 +223,26 @@ where
                     bytes.len()
                 )));
             }
-            Ok(bytes.to_vec())
-        }
 
-        fn visit_borrowed_bytes<E>(self, bytes: &'de [u8]) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            self.visit_bytes(bytes)
+            Ok(UpperBoundedVec::new_unchecked(bytes.to_vec()))
         }
 
         fn visit_byte_buf<E>(self, bytes: Vec<u8>) -> Result<Self::Value, E>
         where
             E: serde::de::Error,
         {
-            if bytes.len() > MAX {
-                return Err(E::custom(format_args!(
-                    "encoded MantleTx contains {} bytes, maximum is {MAX}",
-                    bytes.len()
-                )));
-            }
-            Ok(bytes)
+            let byte_len = bytes.len();
+
+            UpperBoundedVec::try_from(bytes).map_err(|_| {
+                E::custom(format_args!(
+                    "encoded MantleTx contains {byte_len} bytes, maximum is {MAX}"
+                ))
+            })
         }
     }
 
     deserializer.deserialize_bytes(Visitor::<MAX>)
 }
-
 #[cfg(test)]
 mod tests {
     use lb_codec::BinaryEncode as _;
