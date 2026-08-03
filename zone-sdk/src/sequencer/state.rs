@@ -836,12 +836,9 @@ impl TxState {
             .filter(|i| !new_ids.contains(&i.this_msg) && !finalized.contains(&i.this_msg))
             .collect();
 
-        // Decide "did the channel change" on the RAW diff, before the
-        // reportability filtering below: a change consisting solely of
-        // non-reportable entries (configs map to `None` in `to_update_tx`)
-        // still moves the tip, and the caller's shed pass must run so pending
-        // txs cut off by the tip reset are surfaced as orphaned and cleaned
-        // up rather than silently stranded.
+        // Decide on the raw diff, before reportability filtering: a
+        // config-only change maps to no reportable entries but still moves
+        // the tip, and callers must run their shed pass on it.
         if adopted_infos.is_empty() && orphaned_infos.is_empty() {
             return None;
         }
