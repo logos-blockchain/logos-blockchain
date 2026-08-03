@@ -24,6 +24,7 @@ use lb_core::{
                 deposit::DepositExecutionContext, withdraw::WithdrawExecutionContext,
             },
             leader_claim::LeaderClaimExecutionContext,
+            pow::{ClaimPoWRewardExecutionContext, PowReward},
         },
         traits::{GenesisTx, MantleTxWithProofs, PreverifiedMantleTx},
         transactions::{GasPrices, MantleTxGasContext, hash::TxHash, mantle_tx::MantleTxContext},
@@ -72,6 +73,12 @@ const LEADER_REWARD_SHARE_DENOMINATOR: u128 = 10;
 const BLEND_REWARD_SHARE_NUMERATOR: u128 = 6;
 
 const BLEND_REWARD_SHARE_DENOMINATOR: u128 = 10;
+
+// `POW` related rewards
+// TODO: Activate this, currently is 0 based to keep original behaviour
+// (blend+leadership)
+const POW_REWARD_SHARE_NUMERATOR: u128 = 0;
+const POW_REWARD_SHARE_DENOMINATOR: u128 = 4;
 const EXECUTION_GAS_LIMIT: Gas = Gas::new(3_193_460);
 
 // While individual notes are constrained to be `u64`, intermediate calculations
@@ -333,12 +340,17 @@ impl LedgerState {
         )
         .checked_add(total_fee_tip)?;
 
+        let pow_reward = (reward_numerator * POW_REWARD_SHARE_NUMERATOR
+            / (reward_denominator * POW_REWARD_SHARE_DENOMINATOR))
+            as PowReward;
+
         self.mantle_ledger.leaders = self
             .mantle_ledger
             .leaders
             .add_pending_rewards(leader_reward.into_inner());
 
         self.mantle_ledger.sdp.add_blend_income(blend_reward);
+        self.mantle_ledger.pow.add_reward_refill_rewards(pow_reward);
 
         Ok(self)
     }
@@ -660,8 +672,23 @@ impl LedgerState {
                     .ok_or(LedgerError::BalanceOverflow)?;
                 tx_events.extend(events);
             }
-            Op::ClaimPowReward(_) => {
-                todo!("ClaimPowReward operation execution is not implemented yet");
+            Op::ClaimPowReward(claim_pow_reward) => {
+                let (result, events) = claim_pow_reward
+                    .execute(ClaimPoWRewardExecutionContext {
+                        reward_pool: self.mantle_ledger.pow.reward_pool(),
+                        // TODO: check correctness of epoch reward, as it should be from the op
+                        // specified epoch
+                        epoch_reward: self.mantle_ledger.pow.epoch_reward(),
+                        nullifiers: self.mantle_ledger.pow.nullifiers().clone(),
+                        tx_hash: *tx_hash,
+                        utxos: self.cryptarchia_ledger.latest_utxos().clone(),
+                    })
+                    .map_err(mantle::Error::ClaimPow)?;
+                self.mantle_ledger
+                    .pow
+                    .update_from_claim_execution_result(&result);
+                self.cryptarchia_ledger = self.cryptarchia_ledger.update_utxos(result.utxos);
+                tx_events.extend(events);
             }
         }
 

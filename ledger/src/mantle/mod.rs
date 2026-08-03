@@ -1,6 +1,7 @@
 pub use lb_core::mantle::channel;
 pub mod helpers;
 pub mod leader;
+mod pow;
 pub mod sdp;
 
 use lb_core::{
@@ -15,6 +16,7 @@ use lb_core::{
                 inscribe::{InscriptionExecutionContext, InscriptionOp},
             },
             leader_claim::{LeaderClaimError, RewardsRoot, VoucherCm},
+            pow::ClaimPowRewardError,
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferError,
         },
@@ -37,12 +39,16 @@ pub enum Error {
     Channel(#[from] channel::Error),
     #[error(transparent)]
     Leader(#[from] leader::Error),
+    #[error(transparent)]
+    Pow(#[from] pow::Error),
     #[error("Sdp ledger error: {0:?}")]
     Sdp(#[from] SdpLedgerError),
     #[error(transparent)]
     Transfer(#[from] TransferError),
     #[error(transparent)]
     LeaderClaim(#[from] LeaderClaimError),
+    #[error(transparent)]
+    ClaimPow(#[from] ClaimPowRewardError),
     #[error("Note not found: {0:?}")]
     NoteNotFound(NoteId),
 }
@@ -56,6 +62,7 @@ pub struct LedgerState {
     channels: channel::Channels,
     pub sdp: sdp::SdpLedger,
     pub leaders: leader::LeaderState,
+    pub pow: pow::PowState,
 }
 
 impl LedgerState {
@@ -66,6 +73,7 @@ impl LedgerState {
             sdp: sdp::SdpLedger::new(epoch_state.epoch())
                 .with_blend_service(&config.sdp_config.service_rewards_params.blend, epoch_state),
             leaders: leader::LeaderState::new(),
+            pow: pow::PowState::new(),
         }
     }
 
@@ -94,6 +102,7 @@ impl LedgerState {
                 channels,
                 sdp,
                 leaders: leader::LeaderState::new(),
+                pow: pow::PowState::new(),
             },
             tx_events,
         ))
