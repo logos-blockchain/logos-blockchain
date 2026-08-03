@@ -15,7 +15,7 @@ use crate::{
         Note, Utxo, Value,
         ledger::{Operation, Utxos},
         ops::OpId,
-        transactions::hash::TxHash,
+        transactions::hash::{TxHash, TxHashView},
     },
     proofs::leader_claim_proof::{
         Groth16LeaderClaimProof, LeaderClaimProof as _, LeaderClaimPublic,
@@ -172,11 +172,16 @@ pub enum LeaderClaimError {
     InvalidPoC,
 }
 
-pub struct LeaderClaimValidationContext<'a> {
+pub struct LeaderClaimPreverificationContext<'a> {
+    pub tx_hash_view: &'a TxHashView,
+    pub proof: &'a Groth16LeaderClaimProof,
+}
+
+pub struct LeaderClaimVerificationContext<'a> {
     pub nullifiers: &'a VoucherNullifiers,
     pub claimable_vouchers_root: &'a RewardsRoot,
-    pub proof_of_claim: &'a Groth16LeaderClaimProof,
-    pub tx_hash: &'a TxHash,
+    pub proof: &'a Groth16LeaderClaimProof,
+    pub tx_hash_view: &'a TxHashView,
 }
 
 pub struct LeaderClaimExecutionContext {
@@ -187,14 +192,36 @@ pub struct LeaderClaimExecutionContext {
     pub tx_hash: TxHash,
 }
 
-impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
+impl Operation<LeaderClaimVerificationContext<'_>> for LeaderClaimOp {
+    type PreverificationContext<'a>
+        = LeaderClaimPreverificationContext<'a>
+    where
+        Self: 'a;
     type ExecutionContext<'a>
         = LeaderClaimExecutionContext
     where
         Self: 'a;
-    type Error = LeaderClaimError;
+    type VerificationError = LeaderClaimError;
+    type ExecutionError = LeaderClaimError;
 
-    fn validate(&self, ctx: &LeaderClaimValidationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::VerificationError> {
+        let is_verified = context.proof.verify(&LeaderClaimPublic {
+            voucher_nullifier: self.voucher_nullifier.into(),
+            voucher_root: self.rewards_root.into(),
+            mantle_tx_hash: *context.tx_hash_view.as_fr(),
+        });
+
+        if is_verified {
+            Ok(())
+        } else {
+            Err(LeaderClaimError::InvalidPoC)
+        }
+    }
+
+    fn verify(&self, ctx: &LeaderClaimVerificationContext<'_>) -> Result<(), Self::ExecutionError> {
         // Check that the nullifier isn't in the set
         if ctx.nullifiers.contains(&self.voucher_nullifier) {
             return Err(LeaderClaimError::DuplicatedVoucherNullifier);
@@ -206,10 +233,10 @@ impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
         }
 
         // Check the proof of claim
-        if !ctx.proof_of_claim.verify(&LeaderClaimPublic {
+        if !ctx.proof.verify(&LeaderClaimPublic {
             voucher_nullifier: self.voucher_nullifier.into(),
             voucher_root: ctx.claimable_vouchers_root.0,
-            mantle_tx_hash: ctx.tx_hash.to_fr(),
+            mantle_tx_hash: *ctx.tx_hash_view.as_fr(),
         }) {
             return Err(LeaderClaimError::InvalidPoC);
         }
@@ -220,7 +247,7 @@ impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
         // Add the nullifier to the nullifier set
         ctx.nullifiers = ctx.nullifiers.insert(self.voucher_nullifier, ()).0;
 
@@ -281,14 +308,15 @@ mod tests {
             pk: ZkPublicKey::zero(),
         };
         let nullifiers = VoucherNullifiers::new();
-        let ctx = LeaderClaimValidationContext {
+        let tx_hash_view = TxHashView::from(tx_hash);
+        let ctx = LeaderClaimVerificationContext {
             nullifiers: &nullifiers,
             claimable_vouchers_root: &voucher_root,
-            proof_of_claim: &proof,
-            tx_hash: &tx_hash,
+            proof: &proof,
+            tx_hash_view: &tx_hash_view,
         };
 
-        assert_eq!(op.validate(&ctx), Ok(()));
+        assert_eq!(op.verify(&ctx), Ok(()));
     }
 
     #[test]
@@ -381,17 +409,18 @@ mod tests {
             pk: ZkPublicKey::zero(),
         };
         let nullifiers = VoucherNullifiers::new();
-        let ctx = LeaderClaimValidationContext {
+        let tx_hash_view = TxHashView::from(tx_hash);
+        let ctx = LeaderClaimVerificationContext {
             nullifiers: &nullifiers,
             claimable_vouchers_root: &voucher_root,
-            proof_of_claim: &proof,
-            tx_hash: &tx_hash,
+            proof: &proof,
+            tx_hash_view: &tx_hash_view,
         };
 
         // The proof is verified against `op.voucher_nullifier`, which does not
         // match the proven voucher -> rejected. A voucher cannot be claimed under
         // a substituted nullifier.
-        assert_eq!(op.validate(&ctx), Err(LeaderClaimError::InvalidPoC));
+        assert_eq!(op.verify(&ctx), Err(LeaderClaimError::InvalidPoC));
     }
 
     fn nullifier(secret: u64) -> VoucherNullifier {

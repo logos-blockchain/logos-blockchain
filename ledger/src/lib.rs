@@ -707,7 +707,7 @@ impl LedgerState {
             (self, balance, tx_events) = self.try_apply_op::<_, Constants>(
                 op,
                 config,
-                verified_ops.tx_hash(),
+                verified_ops.tx_hash_view().tx_hash(),
                 balance,
                 tx_events,
             )?;
@@ -735,13 +735,14 @@ mod tests {
                     inscribe::InscriptionOp,
                     withdraw::ChannelWithdrawOp,
                 },
-                leader_claim::{LeaderClaimError, LeaderClaimOp, LeaderClaimValidationContext},
+                leader_claim::{LeaderClaimError, LeaderClaimOp, LeaderClaimVerificationContext},
                 sdp::SDPActiveOp,
                 transfer::TransferOp,
             },
             traits::Hashable as _,
             transactions::{
                 Ops, OpsProofs,
+                hash::TxHashView,
                 states::{Preverified, Unverified},
             },
         },
@@ -1378,12 +1379,9 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err,
-            LedgerError::VerificationError(
-                VerificationError::ChannelMultiSigProofInvalidSignature {
-                    op_index: 0,
-                    signature_index: 0,
-                }
-            )
+            LedgerError::VerificationError(VerificationError::ChannelVerificationError(
+                mantle::channel::Error::InvalidSignature
+            ))
         );
 
         // The rejected withdraw left the note owned by the channel
@@ -1927,15 +1925,17 @@ mod tests {
         assert_eq!(utxo.note.value, 100);
 
         // Try to claim the reward using the same nullifier.
+        let tx_hash = TxHash::from([0u8; 32]);
+        let tx_hash_view = TxHashView::from(tx_hash);
         let err = op
-            .validate(&LeaderClaimValidationContext {
+            .verify(&LeaderClaimVerificationContext {
                 nullifiers: leaders.nullifiers(),
                 claimable_vouchers_root: leaders.vouchers_snapshot_root(),
                 // Use a dummy proof since duplication is detected before proof verification
-                proof_of_claim: &Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(
+                proof: &Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(
                     &[0u8; 128],
                 )),
-                tx_hash: &TxHash::from([0u8; 32]),
+                tx_hash_view: &tx_hash_view,
             })
             .unwrap_err();
         assert_eq!(err, LeaderClaimError::DuplicatedVoucherNullifier);

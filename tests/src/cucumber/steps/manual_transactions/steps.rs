@@ -21,7 +21,9 @@ use crate::{
                 drain_wallets::{drain_all_node_wallets, drain_node_wallet, drain_user_wallet},
                 tracked_transactions::{
                     submit_funded_transfer_transaction, submit_invalid_transfer_transaction,
+                    submit_stateless_invalid_transfer_transaction,
                     transaction_is_not_included_in_seconds,
+                    transaction_is_rejected_during_preverification,
                 },
                 utils,
                 utils::{
@@ -546,6 +548,33 @@ async fn step_submit_invalid_transfer_transaction(
     node_name: String,
 ) -> StepResult {
     submit_invalid_transfer_transaction(world, &step.value, transaction_alias, node_name).await
+}
+
+#[when(expr = "I submit a stateless-invalid transfer transaction {string} to node {string}")]
+async fn step_submit_stateless_invalid_transfer_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    transaction_alias: String,
+    node_name: String,
+) -> StepResult {
+    submit_stateless_invalid_transfer_transaction(world, &step.value, transaction_alias, node_name)
+        .await
+}
+
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Cucumber step captures are always owned `String`s, even when the step only needs to borrow them"
+)]
+#[then(expr = "transaction {string} is rejected during preverification")]
+fn step_transaction_is_rejected_during_preverification(
+    world: &mut CucumberWorld,
+    transaction_alias: String,
+) -> StepResult {
+    transaction_is_rejected_during_preverification(world, &transaction_alias)
 }
 
 #[when(
