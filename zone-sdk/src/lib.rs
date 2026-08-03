@@ -31,13 +31,13 @@
 //! use lb_zone_sdk::{
 //!     CommonHttpClient,
 //!     adapter::NodeHttpClient,
-//!     sequencer::{Event, ZoneSequencer},
+//!     sequencer::{Event, FundingConfig, ZoneSequencer},
 //! };
 //! # use lb_core::mantle::ops::channel::ChannelId;
 //! # use lb_key_management_system_service::keys::Ed25519Key;
-//! # async fn run(channel_id: ChannelId, signing_key: Ed25519Key) {
+//! # async fn run(channel_id: ChannelId, signing_key: Ed25519Key, funding: FundingConfig) {
 //! let node = NodeHttpClient::new(CommonHttpClient::new(None), "http://localhost:8080".parse().unwrap());
-//! let mut sequencer = ZoneSequencer::init(channel_id, signing_key, node, None);
+//! let mut sequencer = ZoneSequencer::init(channel_id, signing_key, node, funding, None);
 //!
 //! // Cross-task surface: clone and move into any task. Carries both
 //! // publish/admin methods and subscription receivers.

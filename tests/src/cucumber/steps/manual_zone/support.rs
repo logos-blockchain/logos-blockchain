@@ -54,9 +54,10 @@ use tokio::{
 use tracing::warn;
 
 use super::runner::{
-    self, ChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx, InscriptionId,
-    InscriptionInfo, PendingTx, PublishResult, SequencerChannelView, SequencerCheckpoint,
-    SequencerClient, SequencerConfig, TurnNotification, TxStatus, TxStatusUpdate, WithdrawArg,
+    self, ChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx, FundingConfig,
+    InscriptionId, InscriptionInfo, PendingTx, PublishResult, SequencerChannelView,
+    SequencerCheckpoint, SequencerClient, SequencerConfig, TurnNotification, TxStatus,
+    TxStatusUpdate, WithdrawArg,
 };
 
 /// Inscriptions in the just-finalized txs — the permanent, settled part of the
@@ -785,22 +786,23 @@ pub fn parse_balance_payload(payload: &Inscription) -> Option<(String, String, i
 /// Uses a short resubmit interval so retry-sensitive zone scenarios settle
 /// quickly enough for CI.
 #[must_use]
-pub fn sequencer_config() -> SequencerConfig {
+pub const fn sequencer_config(funding: FundingConfig) -> SequencerConfig {
     SequencerConfig {
         resubmit_interval: Duration::from_secs(3),
         min_slots_remaining_in_turn: 2,
-        ..SequencerConfig::default()
+        ..SequencerConfig::new(funding)
     }
 }
 
 /// Uses the same retry profile while overriding pending publish submit depth.
 #[must_use]
-pub fn sequencer_config_with_pending_submit_depth(
+pub const fn sequencer_config_with_pending_submit_depth(
     max_pending_publish_depth: usize,
+    funding: FundingConfig,
 ) -> SequencerConfig {
     SequencerConfig {
         max_pending_publish_depth,
-        ..sequencer_config()
+        ..sequencer_config(funding)
     }
 }
 

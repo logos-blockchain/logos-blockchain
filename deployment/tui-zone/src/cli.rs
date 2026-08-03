@@ -94,11 +94,9 @@ pub struct NodeKeyArgs {
     pub key_path: String,
 
     /// Node wallet public key (hex, 32 bytes) used to pay transaction fees.
-    /// The value comes from the node's own configuration. When absent,
-    /// transactions are built fee-less (only valid while gas prices are
-    /// zero).
+    /// The value comes from the node's own configuration.
     #[arg(long, env = "FUNDING_PK")]
-    pub funding_pk: Option<String>,
+    pub funding_pk: String,
 
     /// Cap on a single transaction's fee (in gas units) when funding via
     /// `--funding-pk`.
