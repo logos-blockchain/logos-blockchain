@@ -109,7 +109,7 @@ fn hash<H: MerkleHasher>(left: &Node<H::Hash>, right: &Node<H::Hash>) -> H::Hash
     let left = match left {
         Node::Inner { value, .. } => *value,
         Node::Leaf { value } => (*value).unwrap_or(H::EMPTY_VALUE),
-        Node::Empty { .. } => panic!("Empty node in left subtree is not allowed"),
+        Node::Empty { height } => H::empty_subtree_root(*height),
     };
     let right = match right {
         Node::Inner { value, .. } => *value,
@@ -139,6 +139,24 @@ impl<Hash> Node<Hash> {
     // size of the full subtree
     const fn capacity(&self) -> usize {
         1 << self.height()
+    }
+
+    fn first_empty_index(&self) -> Option<usize> {
+        match self {
+            Self::Inner { left, right, .. } => {
+                if left.size() < left.capacity() {
+                    left.first_empty_index()
+                } else if right.size() < right.capacity() {
+                    right
+                        .first_empty_index()
+                        .map(|index| left.capacity() + index)
+                } else {
+                    None
+                }
+            }
+            Self::Empty { .. } | Self::Leaf { value: None } => Some(0),
+            Self::Leaf { value: Some(_) } => None,
+        }
     }
 
     const fn height(&self) -> usize {
@@ -375,10 +393,11 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
             "max capacity reached, cannot insert more items"
         );
 
-        let (holes, index) = self.holes.first().map_or_else(
-            || (self.holes.clone(), self.root.size()),
-            |hole| (self.holes.remove(hole), *hole),
-        );
+        let index = self
+            .root
+            .first_empty_index()
+            .expect("tree has capacity but no empty position");
+        let holes = self.holes.remove(&index);
 
         let root = self.root.insert_at::<H>(index, value);
         (
@@ -465,8 +484,8 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
         })
     }
 
-    /// Rebuilds a tree placing each leaf hash at its given index, filling the
-    /// gaps between indices with holes.
+    /// Rebuilds a tree placing each leaf hash at its given index, representing
+    /// gaps as implicit empty subtrees.
     ///
     /// The values must be yielded in strictly increasing index order; this is
     /// the inverse of enumerating a tree's occupied positions and is meant
@@ -478,42 +497,59 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
     /// bounds.
     #[must_use]
     pub fn from_sorted_items(items: impl IntoIterator<Item = (usize, H::Hash)>) -> Self {
-        let mut tree = Self::new();
-        let mut current_pos = 0;
-        for (pos, value) in items {
-            while current_pos < pos {
-                // Insert a hole for the missing position
-                tree = tree.insert_hole(current_pos);
-                current_pos += 1;
-            }
-
-            tree.root = tree.root.insert_at::<H>(pos, value);
-            current_pos = pos + 1;
-        }
-        tree
-    }
-
-    // This is only for maintaining holes information when recovering
-    // the tree from a compressed format, should not be used otherwise.
-    fn insert_hole(&self, index: usize) -> Self {
+        let mut items = items.into_iter().peekable();
+        let root = Self::build_sparse_subtree(&mut items, 0, TREE_HEIGHT_EXCEPT_ROOT);
         assert!(
-            index < self.root.capacity(),
-            "Index out of bounds for inserting an empty node"
+            items.next().is_none(),
+            "indices must be strictly increasing and within bounds"
         );
-
-        let holes = self.holes.insert(index);
-        let root = self
-            .root
-            .insert_or_modify::<H, _>(index, |node| match node {
-                Node::Empty { .. } => Node::Leaf { value: None },
-                _ => panic!("Cannot insert a hole into a non-empty/non-leaf node"),
-            });
-
         Self {
             root,
-            holes,
+            holes: RedBlackTreeSetSync::new_sync(),
             _hasher: PhantomData,
         }
+    }
+
+    fn build_sparse_subtree<I>(
+        items: &mut std::iter::Peekable<I>,
+        start: usize,
+        height: usize,
+    ) -> Arc<Node<H::Hash>>
+    where
+        I: Iterator<Item = (usize, H::Hash)>,
+    {
+        let Some(&(position, _)) = items.peek() else {
+            return Arc::new(Node::Empty { height });
+        };
+        let capacity = 1usize << height;
+        assert!(
+            position >= start && position - start < capacity,
+            "indices must be strictly increasing and within bounds"
+        );
+        if height == 0 {
+            let (position, value) = items.next().expect("peeked item must be available");
+            assert_eq!(position, start, "indices must be strictly increasing");
+            return Arc::new(Node::new(value));
+        }
+
+        let midpoint = start + (capacity / 2);
+        let left = if items
+            .peek()
+            .is_some_and(|(position, _)| *position < midpoint)
+        {
+            Self::build_sparse_subtree(items, start, height - 1)
+        } else {
+            Arc::new(Node::Empty { height: height - 1 })
+        };
+        let right = if items
+            .peek()
+            .is_some_and(|(position, _)| *position < start + capacity)
+        {
+            Self::build_sparse_subtree(items, midpoint, height - 1)
+        } else {
+            Arc::new(Node::Empty { height: height - 1 })
+        };
+        Arc::new(Node::new_inner::<H>(left, right))
     }
 }
 
@@ -746,6 +782,18 @@ mod tests {
         }
 
         assert_eq!(tree.size(), 3);
+    }
+
+    #[test]
+    fn test_sparse_recovery_does_not_materialize_gaps() {
+        let value = fr_from_usize(1);
+        let recovered =
+            DynamicMerkleTree::<TestHasher>::from_sorted_items([((1usize << 31) + 1, value)]);
+
+        assert_eq!(recovered.size(), 1);
+        let (recovered, index) = recovered.insert(fr_from_usize(2));
+        assert_eq!(index, 0);
+        assert_eq!(recovered.size(), 2);
     }
 
     #[test]

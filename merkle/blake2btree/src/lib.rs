@@ -424,6 +424,115 @@ mod tests {
         assert!(tree.path(&TestLeaf::from_usize(2)).is_none());
     }
 
+    #[test]
+    fn test_sparse_recovery_preserves_paths_and_supports_mutation() {
+        let capacity = 1usize << lb_dynamic_merkle::TREE_HEIGHT_EXCEPT_ROOT;
+        let entries = [
+            (1, TestLeaf::from_usize(1), TestLeaf::from_usize(101)),
+            (7, TestLeaf::from_usize(7), TestLeaf::from_usize(107)),
+            (
+                1usize << 31,
+                TestLeaf::from_usize(31),
+                TestLeaf::from_usize(131),
+            ),
+            (
+                capacity - 1,
+                TestLeaf::from_usize(32),
+                TestLeaf::from_usize(132),
+            ),
+        ];
+        let serialized = serialized_tree(&entries);
+        let tree: Blake2bTree<TestLeaf, TestLeaf> =
+            serde_json::from_str(&serialized).expect("sparse tree should deserialize");
+
+        assert_eq!(tree.size(), entries.len());
+        for (_, key, item) in &entries {
+            verify_path(&tree, key, item);
+        }
+
+        let inserted_key = TestLeaf::from_usize(99);
+        let inserted_item = TestLeaf::from_usize(199);
+        let (tree, position) = tree.insert(inserted_key, inserted_item);
+        assert_eq!(position, 0);
+        for (_, key, item) in &entries {
+            verify_path(&tree, key, item);
+        }
+        verify_path(&tree, &inserted_key, &inserted_item);
+
+        let removed_key = entries[3].1;
+        let (tree, removed_item) = tree.remove(&removed_key).unwrap();
+        assert_eq!(removed_item, entries[3].2);
+        assert!(tree.path(&removed_key).is_none());
+
+        let (tree, position) = tree.insert(removed_key, removed_item);
+        assert_eq!(position, 2);
+        for (_, key, item) in &entries {
+            verify_path(&tree, key, item);
+        }
+        verify_path(&tree, &inserted_key, &inserted_item);
+    }
+
+    #[test]
+    fn test_public_deserialization_rejects_out_of_capacity_position() {
+        let capacity = 1usize << lb_dynamic_merkle::TREE_HEIGHT_EXCEPT_ROOT;
+        let serialized =
+            serialized_tree(&[(capacity, TestLeaf::from_usize(1), TestLeaf::from_usize(1))]);
+
+        let error = serde_json::from_str::<Blake2bTree<TestLeaf, TestLeaf>>(&serialized)
+            .expect_err("out-of-capacity positions must be rejected");
+        assert!(error.to_string().contains("exceeds capacity"));
+    }
+
+    #[test]
+    fn test_public_deserialization_rejects_duplicate_logical_keys() {
+        let key = TestLeaf::from_usize(1);
+        let serialized = serialized_tree(&[
+            (0, key, TestLeaf::from_usize(101)),
+            (1, key, TestLeaf::from_usize(102)),
+        ]);
+
+        let error = serde_json::from_str::<Blake2bTree<TestLeaf, TestLeaf>>(&serialized)
+            .expect_err("duplicate logical keys must be rejected");
+        assert!(error.to_string().contains("duplicate keys"));
+    }
+
+    #[test]
+    fn test_public_deserialization_rejects_duplicate_serialized_positions() {
+        let value =
+            serde_json::to_string(&(TestLeaf::from_usize(1), TestLeaf::from_usize(101))).unwrap();
+        let serialized = format!("{{\"0\":{value},\"0\":{value}}}");
+
+        let error = serde_json::from_str::<Blake2bTree<TestLeaf, TestLeaf>>(&serialized)
+            .expect_err("duplicate serialized positions must be rejected");
+        assert!(error.to_string().contains("duplicate positions"));
+    }
+
+    fn serialized_tree(entries: &[(usize, TestLeaf, TestLeaf)]) -> String {
+        let entries = entries
+            .iter()
+            .map(|(position, key, item)| {
+                format!(
+                    "{}:{}",
+                    serde_json::to_string(&position.to_string()).unwrap(),
+                    serde_json::to_string(&(key, item)).unwrap()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("{{{entries}}}")
+    }
+
+    fn verify_path(tree: &Blake2bTree<TestLeaf, TestLeaf>, key: &TestLeaf, item: &TestLeaf) {
+        let mut current = Blake2bLeaf::leaf(key, item);
+        for node in tree.path(key).expect("path should exist") {
+            current = match node {
+                MerkleNode::Left(sibling) => Blake2bMerkleHasher::compress(&sibling, &current),
+                MerkleNode::Right(sibling) => Blake2bMerkleHasher::compress(&current, &sibling),
+            };
+        }
+        assert_eq!(current, tree.root());
+    }
+
     // `Blake2bTree` is a type alias for the foreign `MerkleTree`, so `Arbitrary`
     // (also foreign) can't be implemented on it directly. Wrap it in a local
     // newtype for the property test.
@@ -460,7 +569,7 @@ mod tests {
         let compressed = original_tree.compressed();
 
         // Recover the tree from compressed format
-        let recovered_tree: Blake2bTree<_, _> = compressed.into();
+        let recovered_tree: Blake2bTree<_, _> = compressed.try_into().unwrap();
 
         recovered_tree == original_tree && recovered_tree.root() == original_tree.root()
     }
