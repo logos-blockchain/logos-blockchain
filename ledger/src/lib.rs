@@ -1032,7 +1032,8 @@ mod tests {
             new_state
                 .mantle_ledger
                 .channels()
-                .contains_channel(&channel_id)
+                .channels
+                .contains_key(&channel_id)
         );
         assert!(events.is_empty());
     }
@@ -1076,13 +1077,15 @@ mod tests {
             new_state
                 .mantle_ledger
                 .channels()
-                .contains_channel(&channel_id)
+                .channels
+                .contains_key(&channel_id)
         );
         assert_eq!(
             *new_state
                 .mantle_ledger
                 .channels()
-                .channel_state(&channel_id)
+                .channels
+                .get(&channel_id)
                 .unwrap()
                 .accredited_keys,
             verifying_key.into()
@@ -1110,7 +1113,8 @@ mod tests {
             ledger_state
                 .mantle_ledger()
                 .channels()
-                .contains_channel(&channel_id)
+                .channels
+                .contains_key(&channel_id)
         );
 
         // Submit a deposit operation
@@ -1597,13 +1601,26 @@ mod tests {
             .unwrap()
             .0;
 
-        assert!(result.mantle_ledger.channels().contains_channel(&channel1));
-        assert!(result.mantle_ledger.channels().contains_channel(&channel2));
+        assert!(
+            result
+                .mantle_ledger
+                .channels()
+                .channels
+                .contains_key(&channel1)
+        );
+        assert!(
+            result
+                .mantle_ledger
+                .channels()
+                .channels
+                .contains_key(&channel2)
+        );
         assert_eq!(
             result
                 .mantle_ledger
                 .channels()
-                .channel_state(&channel1)
+                .channels
+                .get(&channel1)
                 .unwrap()
                 .tip_message,
             inscribe_op3.id()

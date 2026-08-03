@@ -20,7 +20,6 @@ blake2                        = { workspace = true }
 bytes                         = { workspace = true }
 const-hex                     = { features = ["alloc"], workspace = true }
 hex                           = { features = ["alloc"], workspace = true }
-lb-blake2btree                = { workspace = true }
 lb-blend-proofs               = { workspace = true }
 lb-core-macros                = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }

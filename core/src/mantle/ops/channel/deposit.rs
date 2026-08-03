@@ -71,7 +71,7 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
 
     fn validate(&self, ctx: &DepositValidationContext<'_>) -> Result<(), Self::Error> {
         // Check that the channel exist
-        if !ctx.channels.contains_channel(&self.channel_id) {
+        if !ctx.channels.channels.contains_key(&self.channel_id) {
             return Err(Error::ChannelNotFound {
                 channel_id: self.channel_id,
             });

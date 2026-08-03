@@ -61,7 +61,8 @@ impl Operation<ChannelTransferValidationContext<'_>> for ChannelTransferOp {
         // Check that the channel exist
         let channel =
             ctx.channels
-                .channel_state(&self.channel_id)
+                .channels
+                .get(&self.channel_id)
                 .ok_or(Error::ChannelNotFound {
                     channel_id: self.channel_id,
                 })?;

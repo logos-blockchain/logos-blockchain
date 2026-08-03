@@ -126,10 +126,10 @@ mod tests {
         let signed_tx = create_withdraw_tx(channel_id, &[&key0, &key1], Some(withdraw_inputs));
 
         let channels = {
-            let channels = Channels::new();
+            let mut channels = Channels::new();
             let channel_state = make_channel_state(2, Some(keys));
+            channels.channels.insert_mut(channel_id, channel_state);
             channels
-                .set_channel_state(&channel_id, channel_state)
                 .register_channel_note(&note_id, &channel_id)
                 .expect("Note should be registered.")
         };
@@ -211,9 +211,10 @@ mod tests {
         let signed_tx = create_withdraw_tx(channel_id, &[&key0, &key1], None);
 
         let channels = {
-            let channels = Channels::new();
+            let mut channels = Channels::new();
             let channel_state = make_channel_state(2, None);
-            channels.set_channel_state(&channel_id, channel_state)
+            channels.channels.insert_mut(channel_id, channel_state);
+            channels
         };
         let helper =
             TestOperationVerificationHelper::new(channels, [((channel_id, 0), key0.public_key())]);
@@ -235,9 +236,10 @@ mod tests {
         let signed_tx = create_withdraw_tx(channel_id, &[&key0], None);
 
         let channels = {
-            let channels = Channels::new();
+            let mut channels = Channels::new();
             let channel_state = make_channel_state(2, None);
-            channels.set_channel_state(&channel_id, channel_state)
+            channels.channels.insert_mut(channel_id, channel_state);
+            channels
         };
         let helper =
             TestOperationVerificationHelper::new(channels, [((channel_id, 0), key0.public_key())]);
@@ -261,9 +263,10 @@ mod tests {
         let signed_tx = create_withdraw_tx(channel_id, &[&wrong_key], None);
 
         let channels = {
-            let channels = Channels::new();
+            let mut channels = Channels::new();
             let channel_state = make_channel_state(1, None);
-            channels.set_channel_state(&channel_id, channel_state)
+            channels.channels.insert_mut(channel_id, channel_state);
+            channels
         };
         let helper = TestOperationVerificationHelper::new(
             channels,
