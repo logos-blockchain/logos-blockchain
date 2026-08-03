@@ -19,7 +19,7 @@ use nom::{
     error::{Error, ErrorKind},
 };
 use serde::{Deserialize, Serialize};
-use strum::{EnumCount, EnumIter};
+use strum::EnumIter;
 
 use crate::{
     block::BlockNumber,
@@ -244,7 +244,7 @@ impl NomDecode for Locator {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, EnumIter, EnumCount)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, EnumIter)]
 pub enum ServiceType {
     #[serde(rename = "BN")]
     BlendNetwork,

@@ -87,7 +87,6 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
             .lock(
                 &ctx.min_stake,
                 self.service_type,
-                declaration_id,
                 utxo.note,
                 &self.locked_note_id,
             )
