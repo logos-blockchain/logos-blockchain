@@ -537,6 +537,15 @@ impl SdpLedger {
             .collect()
     }
 
+    /// Commitment to the declarations of `service_type`, or `None` if the
+    /// service is not declared.
+    #[must_use]
+    pub fn declarations_root(&self, service_type: ServiceType) -> Option<lb_core::crypto::Hash> {
+        self.services
+            .get(&service_type)
+            .map(|service| service.declarations().root())
+    }
+
     /// Returns the declarations that are active at `epoch`, grouped by
     /// service type.
     ///

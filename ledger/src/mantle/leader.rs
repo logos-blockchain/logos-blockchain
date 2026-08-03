@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
 use lb_core::{
-    crypto::ZkHasher,
+    crypto::{Hash, ZkHasher},
     mantle::{
         Value,
         ops::leader_claim::{RewardsRoot, VoucherCm, VoucherNullifiers},
@@ -91,6 +91,11 @@ impl LeaderState {
 
     pub fn update_nullifiers(&mut self, nullifiers: VoucherNullifiers) {
         self.nfs = nullifiers;
+    }
+
+    #[must_use]
+    pub fn nullifiers_root(&self) -> Hash {
+        self.nfs.root()
     }
 
     pub const fn update_rewards(&mut self, claimable_rewards: Value) {
