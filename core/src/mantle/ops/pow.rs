@@ -14,6 +14,7 @@ use crate::{
     mantle::{
         Note, TxHash, Utxo, Value,
         ledger::{
+            Utxos,
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode,
         },
@@ -193,15 +194,15 @@ impl OpId for ClaimPowRewardOp {
 }
 
 pub struct ClaimPoWRewardExecutionContext {
-    reward_pool: PowReward,
-    epoch_reward: PowReward,
-    nullifiers: rpds::HashTrieSetSync<PowNullifier>,
-    tx_hash: TxHash,
-    utxos: Vec<Utxo>,
+    pub reward_pool: PowReward,
+    pub epoch_reward: PowReward,
+    pub nullifiers: rpds::HashTrieSetSync<PowNullifier>,
+    pub tx_hash: TxHash,
+    pub utxos: Utxos,
 }
 
 impl ClaimPoWRewardExecutionContext {
-    fn decrement_reward_pool(&mut self) {
+    const fn decrement_reward_pool(&mut self) {
         self.reward_pool = self.reward_pool.saturating_sub(self.epoch_reward);
     }
 }
@@ -258,7 +259,7 @@ impl ExecutableOperation for ClaimPowRewardOp {
             output_index: 0,
             note,
         };
-        context.utxos.push(utxo);
+        context.utxos.insert(utxo.id(), utxo);
         // decrement current pool
         context.decrement_reward_pool();
         // output event
