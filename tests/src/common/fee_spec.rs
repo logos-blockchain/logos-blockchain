@@ -25,6 +25,7 @@ use lb_core::mantle::{
     transactions::{
         GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext,
         codec::{encode_signed_mantle_tx, minimum_signed_mantle_tx_size},
+        mantle_tx::MantleTx as _,
         states::{Preverified, VerificationState},
     },
 };

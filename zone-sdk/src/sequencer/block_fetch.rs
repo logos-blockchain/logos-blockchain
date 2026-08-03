@@ -14,6 +14,7 @@ use lb_core::{
         traits::Hashable as _,
         transactions::{
             hash::TxHash,
+            mantle_tx::MantleTx as _,
             states::{Unverified, VerificationState},
         },
     },
@@ -773,7 +774,7 @@ fn touches_channel_tip<State: VerificationState>(
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
-        MantleTx, NoteId,
+        NoteId, RawMantleTx,
         channel::{SlotTimeframe, SlotTimeout},
         ledger::Inputs,
         ops::{
@@ -1157,7 +1158,7 @@ mod tests {
     }
 
     fn dummy_pending_tx(seed: u8) -> SignedMantleTx<Unverified> {
-        let mantle_tx = MantleTx(
+        let mantle_tx = RawMantleTx(
             [Op::ChannelInscribe(InscriptionOp {
                 channel_id: [0u8; 32].into(),
                 inscription: Inscription::new_unchecked(vec![seed]),

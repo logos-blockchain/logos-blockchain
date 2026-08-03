@@ -5,9 +5,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
-        MantleTx, Value, VerificationError,
+        RawMantleTx, Value, VerificationError,
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow},
-        ledger::Operation,
+        ledger::{VerifiableOperation, verification_mode::StandardMode},
         ops::{
             Op, OpProof,
             channel::{
@@ -32,6 +32,7 @@ use crate::{
             GasPrices, OperationVerificationHelper, OpsProofs, VerifiedOps,
             codec::{decode_signed_mantle_tx, encode_signed_mantle_tx},
             hash::{TxHash, TxHashView},
+            mantle_tx::MantleTx as _,
             states::{Preverified, Unverified, VerificationState},
         },
     },
@@ -41,7 +42,7 @@ use crate::{
 //   The current tests behave just like the old code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedMantleTx<State: VerificationState> {
-    pub(crate) mantle_tx: MantleTx,
+    pub(crate) mantle_tx: RawMantleTx,
     // TODO: make this more efficient
     ops_proofs: OpsProofs,
     state: PhantomData<State>,
@@ -70,7 +71,7 @@ impl<State: VerificationState> SignedMantleTx<State> {
     }
 
     #[must_use]
-    pub const fn mantle_tx(&self) -> &MantleTx {
+    pub const fn mantle_tx(&self) -> &RawMantleTx {
         &self.mantle_tx
     }
 
@@ -80,14 +81,14 @@ impl<State: VerificationState> SignedMantleTx<State> {
     }
 
     #[must_use]
-    pub fn into_parts(self) -> (MantleTx, OpsProofs) {
+    pub fn into_parts(self) -> (RawMantleTx, OpsProofs) {
         (self.mantle_tx, self.ops_proofs)
     }
 }
 
 impl SignedMantleTx<Unverified> {
     #[must_use]
-    pub const fn new(mantle_tx: MantleTx, ops_proofs: OpsProofs) -> Self {
+    pub const fn new(mantle_tx: RawMantleTx, ops_proofs: OpsProofs) -> Self {
         Self {
             mantle_tx,
             ops_proofs,
@@ -95,7 +96,7 @@ impl SignedMantleTx<Unverified> {
         }
     }
 
-    const fn ensure_one_proof_per_op(&self) -> Result<(), VerificationError> {
+    fn ensure_one_proof_per_op(&self) -> Result<(), VerificationError> {
         if self.mantle_tx.ops().len() == self.ops_proofs.len() {
             return Ok(());
         }
@@ -147,7 +148,7 @@ impl SignedMantleTx<Unverified> {
                     tx_hash_view,
                     proof_ed25519,
                 };
-                <SDPDeclareOp as Operation<SDPDeclareVerificationContext>>::preverify(op, &context)
+                <SDPDeclareOp as VerifiableOperation<StandardMode>>::preverify(op, &context)
                     .map_err(VerificationError::SDPVerificationError)
             }
             (Op::SDPWithdraw(op), OpProof::ZkSig(_proof)) => op
@@ -225,7 +226,7 @@ impl SignedMantleTx<Preverified> {
     /// testing purposes only.
     #[must_use]
     #[doc(hidden)]
-    pub const fn new_trusted(mantle_tx: MantleTx, ops_proofs: OpsProofs) -> Self {
+    pub const fn new_trusted(mantle_tx: RawMantleTx, ops_proofs: OpsProofs) -> Self {
         Self {
             mantle_tx,
             ops_proofs,
@@ -317,7 +318,7 @@ impl SignedMantleTx<Preverified> {
                     declarations: helper.get_declarations_by_service(op.service_type)?,
                     min_stake: helper.get_min_stake(),
                 };
-                op.verify(&context)
+                <SDPDeclareOp as VerifiableOperation<StandardMode>>::verify(op, &context)
                     .map_err(VerificationError::SDPVerificationError)
             }
             (Op::SDPWithdraw(op), OpProof::ZkSig(proof)) => {
@@ -391,7 +392,7 @@ impl<State: VerificationState> Hashable for SignedMantleTx<State> {
 }
 
 impl<State: VerificationState> MantleTxWithProofs for SignedMantleTx<State> {
-    fn mantle_tx(&self) -> &MantleTx {
+    fn mantle_tx(&self) -> &RawMantleTx {
         &self.mantle_tx
     }
 
@@ -472,7 +473,7 @@ impl PreverifiedMantleTx for SignedMantleTx<Preverified> {
 #[derive(Serialize)]
 #[serde(rename = "SignedMantleTx")]
 struct SignedMantleTxSerde<'a> {
-    mantle_tx: &'a MantleTx,
+    mantle_tx: &'a RawMantleTx,
     ops_proofs: &'a [OpProof],
 }
 
@@ -501,7 +502,7 @@ impl<State: VerificationState> Serialize for SignedMantleTx<State> {
 #[derive(Deserialize)]
 #[serde(rename = "SignedMantleTx")]
 struct OwnedSignedMantleTxSerde {
-    mantle_tx: MantleTx,
+    mantle_tx: RawMantleTx,
     ops_proofs: OpsProofs,
 }
 
@@ -555,7 +556,7 @@ pub mod test_utils {
     use lb_key_management_system_keys::keys::Ed25519Key;
 
     use crate::mantle::{
-        MantleTx, NoteId, Op, OpProof, SignedMantleTx,
+        NoteId, Op, OpProof, RawMantleTx, SignedMantleTx,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         ledger::Inputs,
         ops::channel::{
@@ -567,8 +568,8 @@ pub mod test_utils {
     };
 
     #[must_use]
-    pub fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {
-        MantleTx(Ops::new_unchecked(ops))
+    pub fn create_test_mantle_tx(ops: Vec<Op>) -> RawMantleTx {
+        RawMantleTx(Ops::new_unchecked(ops))
     }
 
     #[must_use]
