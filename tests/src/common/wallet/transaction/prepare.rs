@@ -155,7 +155,7 @@ fn wallet_reserved_inputs_from_inputs(
 }
 
 fn funding_inputs_from_transfers(
-    mantle_tx: &MantleTx,
+    mantle_tx: &impl MantleTx,
     input_utxos_by_note_id: &HashMap<NoteId, Utxo>,
 ) -> Result<Vec<Utxo>, WalletTransactionError> {
     mantle_tx

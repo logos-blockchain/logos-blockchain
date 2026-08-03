@@ -46,8 +46,11 @@ Feature: Fees
   # update and move its price at an epoch boundary. Together these guard the
   # consensus math and that the storage market remains connected to network
   # usage; price viability is covered by ledger market-liveness tests. With
-  # k=3 and f=1/2 below, each epoch is 60 slots long. Priority tips are not
-  # inputs to either price update, so the traffic transactions use zero tip.
+  # k=3 and f=1/2 below, each epoch is 60 slots long. The traffic transactions
+  # use zero tip because tips do not drive prices. A separate transaction is
+  # prepared with positive fee headroom before the storage-price update and
+  # submitted afterwards to show that it remains valid as the effective tip
+  # absorbs the higher mandatory fee.
   @fees_ci
   Scenario: Execution and storage gas prices respond according to the fee market rules
     Given the cluster uses cryptarchia security parameter 3
@@ -58,12 +61,15 @@ Feature: Fees
       | account_index | token_count | token_amount |
       | 1             | 1           | 10000        |
       | 2             | 1           | 10000        |
+      | 3             | 1           | 10000        |
     And I have a cluster with capacity of 1 nodes
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_1    | 2             | WALLET_2A   |              |
+      | NODE_1    | 3             | WALLET_3A   |              |
     When node "NODE_1" is at height 1 in 180 seconds
+    And I prepare a self-transfer with a 1000 LGO tip from wallet "WALLET_3A" via node "NODE_1" as "BUFFERED"
     And I submit an exactly funded self-transfer from wallet "WALLET_1A" via node "NODE_1" as "TRAFFIC_A"
     And I submit an exactly funded self-transfer from wallet "WALLET_2A" via node "NODE_1" as "TRAFFIC_B"
     And I record per-block gas prices on node "NODE_1" for 125 slots in 300 seconds
@@ -72,6 +78,9 @@ Feature: Fees
     And recorded gas prices cross a 60-slot epoch boundary
     And recorded execution gas prices follow the execution market spec reference
     And recorded storage gas prices respond to network usage
+    And transaction "BUFFERED" prepared with a 1000 LGO tip remains funded with a smaller tip at current prices on node "NODE_1"
+    When I submit prepared transaction "BUFFERED" via node "NODE_1"
+    Then transaction "BUFFERED" is included on node "NODE_1" in 60 seconds
     Then I stop all nodes
 
   # The fee rule at its exact boundary: balance == fee is included and

@@ -11,7 +11,7 @@ use lb_core::mantle::{
         inscribe::{Inscription, InscriptionOp},
     },
     traits::Hashable as _,
-    transactions::builder::MantleTxBuilder,
+    transactions::{builder::MantleTxBuilder, mantle_tx::MantleTx as _},
 };
 use lb_http_api_common::bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody};
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};

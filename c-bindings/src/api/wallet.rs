@@ -8,7 +8,7 @@ use lb_api_service::http::mempool;
 use lb_core::{
     header::HeaderId as CoreHeaderId,
     mantle::{
-        MantleTx, Note, NoteId as CoreNoteId, Op, OpProof, SignedMantleTx,
+        Note, NoteId as CoreNoteId, Op, OpProof, RawMantleTx, SignedMantleTx,
         gas::GasCost,
         ledger::{Inputs, Outputs},
         ops::{
@@ -1330,7 +1330,7 @@ pub(crate) fn channel_deposit_sync(
         //    inputs and the deposit's input note are owned by `funding_public_key`, so
         //    one signature over the tx hash satisfies both op proofs. Do not "simplify"
         //    this to `sign_tx`.
-        let tx = MantleTx([Op::Transfer(transfer), Op::ChannelDeposit(deposit)].into());
+        let tx = RawMantleTx([Op::Transfer(transfer), Op::ChannelDeposit(deposit)].into());
         let tx_hash = tx.hash();
         let user_sig = api
             .sign_tx_with_zk(tx_hash, vec![funding_public_key])

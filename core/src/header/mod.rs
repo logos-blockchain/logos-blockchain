@@ -319,7 +319,7 @@ mod block_root_test_vectors {
     use super::*;
     use crate::{
         mantle::{
-            MantleTx, Note, Op,
+            Note, Op, RawMantleTx,
             channel::{SlotTimeframe, SlotTimeout},
             ledger::{Inputs, NoteId, Outputs},
             ops::{
@@ -351,14 +351,14 @@ mod block_root_test_vectors {
         ZkPublicKey::from(Fr::from(seed))
     }
 
-    fn tx(op: Op) -> MantleTx {
-        MantleTx(Ops::new_unchecked(vec![op]))
+    fn tx(op: Op) -> RawMantleTx {
+        RawMantleTx(Ops::new_unchecked(vec![op]))
     }
 
     /// Builds one transaction per distinct mantle operation kind, each carrying
     /// a single operation. The instances mirror those used by the `OpId` test
     /// vectors so the two vector sets stay consistent.
-    fn one_tx_per_op() -> Vec<(&'static str, MantleTx)> {
+    fn one_tx_per_op() -> Vec<(&'static str, RawMantleTx)> {
         let activity = ActivityProof {
             epoch: Epoch::new(10),
             signing_key: ed25519_pk(1),
@@ -487,7 +487,7 @@ mod block_root_test_vectors {
         );
 
         // 1. Empty block: no transactions.
-        let empty: Vec<MantleTx> = vec![];
+        let empty: Vec<RawMantleTx> = vec![];
         let empty_root = merkle::calculate_block_root(&empty);
         println!("================================================================");
         println!("vector 1  : empty block (0 transactions)");
@@ -495,7 +495,7 @@ mod block_root_test_vectors {
 
         // 2. One transaction per operation kind (one op each).
         let txs_with_names = one_tx_per_op();
-        let txs: Vec<MantleTx> = txs_with_names.iter().map(|(_, tx)| tx.clone()).collect();
+        let txs: Vec<RawMantleTx> = txs_with_names.iter().map(|(_, tx)| tx.clone()).collect();
         println!("================================================================");
         println!(
             "vector 2  : one transaction per op kind ({} transactions)",

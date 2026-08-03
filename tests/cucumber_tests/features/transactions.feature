@@ -452,6 +452,20 @@ Feature: Transactions
     Then I stop all nodes
 
   @transactions_ci
+  Scenario: Preverification rejects a structurally invalid transaction
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 2           | 1000         |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet resources:
+      | node_name | account_index | wallet_name | connected_to |
+      | NODE_1    | 1             | WALLET_1A   |              |
+    When node "NODE_1" is at height 2 in 240 seconds
+    And I submit a stateless-invalid transfer transaction "BAD_TX" to node "NODE_1"
+    Then transaction "BAD_TX" is rejected during preverification
+    Then I stop all nodes
+
+  @transactions_ci
   Scenario: Invalid transactions do not block valid transactions
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |

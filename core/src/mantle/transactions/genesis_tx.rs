@@ -19,7 +19,11 @@ use crate::{
             transfer::TransferOp,
         },
         traits::{GenesisTx as GenesisTxTrait, Hashable, hashable},
-        transactions::{hash::TxHash, mantle_tx::MantleTx, states::Preverified},
+        transactions::{
+            hash::TxHash,
+            mantle_tx::{MantleTx as _, RawMantleTx},
+            states::Preverified,
+        },
     },
 };
 
@@ -217,7 +221,7 @@ impl GenesisTxTrait for GenesisTx {
         })
     }
 
-    fn mantle_tx(&self) -> &MantleTx {
+    fn mantle_tx(&self) -> &RawMantleTx {
         self.tx.mantle_tx()
     }
 }
@@ -469,7 +473,7 @@ mod tests {
         let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new([create_test_note(1000)]));
         let mut new_ops = vec![Op::Transfer(transfer_op)];
         new_ops.append(&mut ops);
-        let mantle_tx = MantleTx(Ops::new_unchecked(new_ops));
+        let mantle_tx = RawMantleTx(Ops::new_unchecked(new_ops));
         let ops_proofs = OpsProofs::try_from(ops_proofs).unwrap();
         let mut new_op_proofs = OpsProofs::from(OpProof::ZkSig(
             ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr()).unwrap(),

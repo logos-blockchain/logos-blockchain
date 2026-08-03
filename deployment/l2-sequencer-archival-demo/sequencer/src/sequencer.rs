@@ -14,7 +14,7 @@ use lb_core::{
         },
         traits::Hashable as _,
         transactions::{
-            mantle_tx::MantleTx,
+            mantle_tx::{MantleTx as _, RawMantleTx},
             states::{Unverified, VerificationState},
         },
     },
@@ -173,7 +173,7 @@ impl Sequencer {
             signer: verifying_key,
         };
 
-        let inscribe_tx = MantleTx([Op::ChannelInscribe(inscribe_op)].into());
+        let inscribe_tx = RawMantleTx([Op::ChannelInscribe(inscribe_op)].into());
 
         let tx_hash = inscribe_tx.hash();
         let signature_bytes = self

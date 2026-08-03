@@ -28,6 +28,14 @@ pub enum DecodeError {
         min: usize,
         max: usize,
     },
+    #[error(
+        "Element type {type_name} decodes without consuming input, which is only supported up to a maximum of {limit} elements; this collection allows {max}"
+    )]
+    ZeroLengthElement {
+        type_name: &'static str,
+        max: usize,
+        limit: usize,
+    },
     #[error("{0}")]
     Custom(Cow<'static, str>),
 }
@@ -80,6 +88,20 @@ impl DecodeError {
             len,
             min,
             max,
+        }
+    }
+
+    /// A `T` decoded successfully without consuming any input, in a collection
+    /// whose `max` is too large to repeat it safely.
+    #[must_use]
+    pub fn zero_length_element<T>(max: usize, limit: usize) -> Self
+    where
+        T: ?Sized,
+    {
+        Self::ZeroLengthElement {
+            type_name: type_name::<T>(),
+            max,
+            limit,
         }
     }
 

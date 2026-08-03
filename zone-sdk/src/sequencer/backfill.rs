@@ -85,7 +85,7 @@ where
         {
             self.last_msg_id = last_inscription.this_msg;
             if let Some(s) = self.state.as_mut() {
-                s.set_finalized_msg(last_inscription.this_msg);
+                s.set_finalized_msg(last_inscription.this_msg, Some(last_inscription.parent_msg));
             }
         }
 

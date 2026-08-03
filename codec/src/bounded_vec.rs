@@ -74,6 +74,15 @@ fn decode_length_prefix<const MAX_LENGTH: usize>(
     }
 }
 
+/// Largest `MAX` for which an element type that decodes without consuming input
+/// is still supported.
+///
+/// Such an element makes the decode loop independent of the input, so `MAX` is
+/// the only thing bounding it — repeating it is harmless exactly when `MAX` is
+/// small enough that a hostile length prefix buys nothing. Above this, the
+/// combination is refused rather than iterated.
+const ZERO_LENGTH_ELEMENT_MAX: usize = 1024;
+
 impl<T, const MIN: usize, const MAX: usize> BinaryEncode for BoundedVec<T, MIN, MAX>
 where
     T: BinaryEncode,
@@ -110,9 +119,23 @@ where
             return Err(DecodeError::length_out_of_bounds::<Self>(len, MIN, MAX));
         }
 
-        let mut items = Vec::with_capacity(len);
+        let mut items = Vec::new();
+
         for _ in 0..len {
             let (next, item) = T::decode(rest, context)?;
+
+            // If we decode once without consuming any input bail out to avoid hanging for
+            // too long.
+            // TODO: This logic can be made a compile-time check once generics become more
+            // powerful and we get const generics expressions. For now, we just check it at
+            // runtime.
+            if next.len() == rest.len() && MAX > ZERO_LENGTH_ELEMENT_MAX {
+                return Err(DecodeError::zero_length_element::<T>(
+                    MAX,
+                    ZERO_LENGTH_ELEMENT_MAX,
+                ));
+            }
+
             rest = next;
             items.push(item);
         }
@@ -131,13 +154,15 @@ impl<T, const MIN: usize, const MAX: usize> sealed::Sealed for BoundedVec<T, MIN
 // prefix — prefix drift is covered by the hand-pinned `#[test]`s below.
 //
 // `MIN` may be 0 (`UpperBoundedVec`), so we force at least one element;
-// otherwise the fixture would be empty and never touch `T`'s codec.
+// otherwise the fixture would be empty and never touch `T`'s codec. The floor
+// is capped by `MAX`, since `[0, 0]` is a legal bound and a one-element fixture
+// there would violate the type's own invariant (and fail to round-trip).
 impl<T, const MIN: usize, const MAX: usize> CodecExamples for BoundedVec<T, MIN, MAX>
 where
     T: CodecExamples,
 {
     fn fixtures() -> CodecFixtures<Self> {
-        let count = MIN.max(1);
+        let count = MIN.max(1).min(MAX);
 
         let mut values = Vec::with_capacity(count);
         let mut bytes = Vec::new();
@@ -163,7 +188,10 @@ where
 mod tests {
     use lb_utils::bounded::BoundedVec;
 
-    use crate::{BinaryDecodeExt as _, BinaryEncode as _, DecodeError};
+    use crate::{
+        BinaryDecodeExt as _, BinaryEncode as _, CodecExamples as _, DecodeError,
+        assert_codec_fixtures,
+    };
 
     /// Bound used across the tests: between 2 and 4 elements.
     const MIN: usize = 2;
@@ -301,6 +329,93 @@ mod tests {
         assert_eq!(decoded, original);
     }
 
+    /// Paired with a bound too large to iterate, a zero-length element type
+    /// turns the decode loop into a pure instruction count driven by the
+    /// prefix, which no amount of input truncation bounds. Before this
+    /// combination was refused, this exact call ran for minutes without
+    /// finishing: eight bytes buy `u64::MAX` iterations.
+    ///
+    /// If it regresses, this test hangs rather than fails.
+    #[test]
+    fn a_zero_length_element_type_cannot_drive_an_unbounded_loop() {
+        type ZeroLength = BoundedVec<[u8; 0], 0, { u64::MAX as usize }>;
+
+        let err = ZeroLength::decode(&[0xFF; 8]).unwrap_err();
+
+        assert!(matches!(err, DecodeError::ZeroLengthElement { .. }));
+    }
+
+    /// Under a small bound the same element type is supported: `MAX` caps the
+    /// loop at a harmless number of no-op iterations, so there is nothing to
+    /// refuse. The count is all such an encoding carries, and it survives the
+    /// round trip.
+    #[test]
+    fn a_zero_length_element_type_roundtrips_under_a_small_bound() {
+        type ZeroLength = BoundedVec<[u8; 0], 0, 4>;
+
+        let original = ZeroLength::new_unchecked(vec![[]; 3]);
+        let bytes = original.encode_to_vec();
+        assert_eq!(bytes, vec![3]); // the length prefix is the whole encoding
+
+        let (rest, decoded) = ZeroLength::decode(&bytes).unwrap();
+
+        assert!(rest.is_empty());
+        assert_eq!(decoded, original);
+        assert_eq!(decoded.len(), 3);
+    }
+
+    /// Support is decided by `MAX` alone, so it is a property of the type
+    /// rather than of the message: a type either always works or always fails,
+    /// and which one is visible from its declaration.
+    #[test]
+    fn zero_length_element_support_turns_on_the_bound_not_the_message() {
+        type AtTheLimit = BoundedVec<[u8; 0], 0, { super::ZERO_LENGTH_ELEMENT_MAX }>;
+        type PastTheLimit = BoundedVec<[u8; 0], 0, { super::ZERO_LENGTH_ELEMENT_MAX + 1 }>;
+
+        // A 2-byte prefix for both bounds, declaring a single element.
+        let input = 1u16.to_le_bytes();
+
+        let (_, decoded) = AtTheLimit::decode(&input).unwrap();
+        assert_eq!(decoded.len(), 1);
+
+        let err = PastTheLimit::decode(&input).unwrap_err();
+        assert!(matches!(err, DecodeError::ZeroLengthElement { .. }));
+    }
+
+    /// The check must fire on the elements, not on the type: decoding *no*
+    /// elements never loops, so an empty collection stays decodable.
+    #[test]
+    fn a_zero_length_element_type_still_decodes_when_empty() {
+        type ZeroLength = BoundedVec<[u8; 0], 0, 4>;
+
+        let (rest, decoded) = ZeroLength::decode(&[0]).unwrap();
+
+        assert!(rest.is_empty());
+        assert!(decoded.is_empty());
+    }
+
+    /// `[0, 0]` is a legal bound: the only inhabitant is the empty vector, so
+    /// the fixture must *not* apply the usual "at least one element" floor.
+    #[test]
+    fn zero_max_fixture_is_empty_and_roundtrips() {
+        type Empty = BoundedVec<u8, 0, 0>;
+
+        let fixtures = Empty::fixtures();
+        let fixture = fixtures.first().unwrap();
+        assert!(fixture.value.is_empty());
+        assert_eq!(fixture.bytes.as_ref(), &[0]); // just a 1-byte length prefix (0)
+
+        assert_codec_fixtures::<Empty>();
+    }
+
+    #[test]
+    fn zero_max_rejects_any_non_empty_length() {
+        type Empty = BoundedVec<u8, 0, 0>;
+
+        let err = Empty::decode(&[1, 7]).unwrap_err();
+        assert!(matches!(err, DecodeError::LengthOutOfBounds { len: 1, .. }));
+    }
+
     #[test]
     fn eight_byte_length_prefix() {
         type EightByteBounded = BoundedVec<u8, 1, { u64::MAX as usize }>;
@@ -310,5 +425,123 @@ mod tests {
         let (rest, decoded) = EightByteBounded::decode(&bytes).unwrap();
         assert!(rest.is_empty());
         assert_eq!(decoded, original);
+    }
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use std::{
+        alloc::{GlobalAlloc, Layout, System},
+        cell::Cell,
+    };
+
+    use lb_utils::bounded::BoundedVec;
+
+    use crate::{BinaryDecodeExt as _, DecodeError};
+
+    /// Runs `f` and reports how many bytes it allocated on this thread.
+    fn bytes_allocated_by<F, R>(f: F) -> (R, usize)
+    where
+        F: FnOnce() -> R,
+    {
+        let before = ALLOCATED_BYTES.get();
+        let result = f();
+        (result, ALLOCATED_BYTES.get() - before)
+    }
+
+    /// Forwards to the system allocator, tallying every byte handed out. Growth
+    /// is counted too, so a `Vec` that reallocates as it fills is not free.
+    ///
+    /// Installed for the whole test binary — every test in this crate allocates
+    /// through it — but it only adds a counter bump on top of `System`.
+    struct CountingAllocator;
+
+    // SAFETY: every method forwards its arguments unchanged to `System`, which
+    // upholds the `GlobalAlloc` contract. The only added work is a thread-local
+    // counter bump, which allocates nothing and so cannot re-enter the
+    // allocator.
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            record_allocation(layout.size());
+            // SAFETY: `layout` is forwarded untouched from our caller.
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            record_allocation(layout.size());
+            // SAFETY: `layout` is forwarded untouched from our caller.
+            unsafe { System.alloc_zeroed(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            // SAFETY: `ptr` was handed out by `System` under `layout`, since
+            // every allocating method here delegates to it.
+            unsafe { System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            record_allocation(new_size.saturating_sub(layout.size()));
+            // SAFETY: as `dealloc`; `new_size` is forwarded untouched.
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    // The tally is thread-local, not a global counter: the harness runs the
+    // tests in this binary in parallel, each on its own thread, so a global one
+    // would attribute their allocations to whoever happens to be measuring.
+    //
+    // `const`-initialised so reading it neither allocates nor registers a
+    // destructor — either would re-enter the allocator below.
+    thread_local! {
+        static ALLOCATED_BYTES: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn record_allocation(bytes: usize) {
+        // `try_with` because TLS is gone while a thread is being torn down, and
+        // an allocation at that point is not part of any measurement anyway.
+        let _ = ALLOCATED_BYTES.try_with(|counter| counter.set(counter.get() + bytes));
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+    /// A declared length of `u16::MAX` backed by a single item must cost us
+    /// roughly one item, not `u16::MAX` of them. Without the cap the decoder
+    /// reserves the full declared length up front: ~512 KiB from a 10-byte
+    /// input, a >50,000x amplification an attacker gets for free on every
+    /// message.
+    #[test]
+    fn a_large_declared_length_does_not_preallocate_from_the_wire() {
+        type Wide = BoundedVec<u64, 1, { u16::MAX as usize }>;
+
+        const DECLARED: u16 = u16::MAX;
+        /// What reserving the declared length outright would cost.
+        const UNCAPPED_COST: usize = DECLARED as usize * size_of::<u64>();
+
+        // Declares `u16::MAX` items but carries only one.
+        let mut input = DECLARED.to_le_bytes().to_vec();
+        input.extend_from_slice(&7u64.to_le_bytes());
+
+        let (err, allocated) = bytes_allocated_by(|| Wide::decode(&input).unwrap_err());
+
+        assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
+        assert!(
+            allocated < UNCAPPED_COST / 8,
+            "decoding a {} byte input allocated {allocated} bytes; \
+             reserving the declared length would cost {UNCAPPED_COST}",
+            input.len(),
+        );
+    }
+
+    /// A declared length must never be pre-allocated on trust: with a
+    /// `usize::MAX` bound nothing rejects it up front, so reserving it outright
+    /// aborts the process on a 8-byte input instead of returning an error.
+    #[test]
+    fn huge_declared_length_does_not_preallocate_from_the_wire() {
+        type Wide = BoundedVec<u8, 1, { u64::MAX as usize }>;
+
+        let err = Wide::decode(&u64::MAX.to_le_bytes()).unwrap_err();
+
+        assert!(matches!(err, DecodeError::UnexpectedEnd { .. }));
     }
 }

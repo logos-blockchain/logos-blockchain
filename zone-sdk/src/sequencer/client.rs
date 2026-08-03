@@ -2,7 +2,7 @@ use lb_core::mantle::{
     SignedMantleTx,
     channel::{SlotTimeframe, SlotTimeout},
     ops::channel::{MsgId, config::Keys, inscribe::Inscription},
-    transactions::{Ops, mantle_tx::MantleTx, states::Unverified},
+    transactions::{Ops, mantle_tx::RawMantleTx, states::Unverified},
 };
 use lb_key_management_system_service::keys::Ed25519Signature;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -129,14 +129,14 @@ impl SequencerClient {
         Self::recv(response_rx).await?
     }
 
-    /// Build a [`MantleTx`] for the given ops and an inscription message.
+    /// Build a [`RawMantleTx`] for the given ops and an inscription message.
     ///
     /// Async counterpart of [`super::SequencerHandle::prepare_tx`].
     pub async fn prepare_tx(
         &self,
         ops: Ops,
         data: Inscription,
-    ) -> Result<(MantleTx, MsgId, Ed25519Signature), Error> {
+    ) -> Result<(RawMantleTx, MsgId, Ed25519Signature), Error> {
         let (response_tx, response_rx) = oneshot::channel();
         self.send(ActorRequest::PrepareTx {
             ops,
@@ -146,11 +146,11 @@ impl SequencerClient {
         Self::recv(response_rx).await?
     }
 
-    /// Sign a [`MantleTx`] using the sequencer's key.
+    /// Sign a [`RawMantleTx`] using the sequencer's key.
     ///
     /// Async counterpart of [`super::SequencerHandle::sign_tx`]. Clones `tx`
     /// internally so the call site can keep its borrow.
-    pub async fn sign_tx(&self, tx: &MantleTx) -> Result<Ed25519Signature, Error> {
+    pub async fn sign_tx(&self, tx: &RawMantleTx) -> Result<Ed25519Signature, Error> {
         let (response_tx, response_rx) = oneshot::channel();
         self.send(ActorRequest::SignTx {
             tx: tx.clone(),
