@@ -11,7 +11,6 @@ use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
 use lb_blake2btree::LeafHash;
 use lb_cryptarchia_engine::Epoch;
-use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec, UpperBoundedVec};
 use multiaddr::{Multiaddr, Protocol};
@@ -411,8 +410,10 @@ impl Declaration {
             h.update(locator.0.as_ref());
         }
         h.update(self.provider_id.0);
-        h.update(fr_to_bytes(self.zk_id.as_fr()));
-        h.update(fr_to_bytes(self.locked_note_id.as_fr()));
+        for number in self.zk_id.as_fr().0.0 {
+            h.update(number.to_le_bytes());
+        }
+        h.update(self.locked_note_id.as_bytes());
         h.update(self.created.into_inner().to_le_bytes());
         h.update(self.active.into_inner().to_le_bytes());
         h.update(self.withdraw_at.map_or(0, Epoch::into_inner).to_le_bytes());
@@ -562,7 +563,7 @@ impl NomDecode for ActivityMetadata {
 mod tests {
     use lb_blake2btree::LeafHash as _;
     use lb_cryptarchia_engine::Epoch;
-    use lb_groth16::{AdditiveGroup as _, Fr, fr_to_bytes};
+    use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
     use multiaddr::Multiaddr;
 
@@ -692,8 +693,10 @@ mod tests {
             info.extend_from_slice(locator.as_ref());
         }
         info.extend_from_slice(declaration.provider_id.0.as_bytes());
-        info.extend_from_slice(&fr_to_bytes(declaration.zk_id.as_fr()));
-        info.extend_from_slice(&fr_to_bytes(declaration.locked_note_id.as_fr()));
+        for number in declaration.zk_id.as_fr().0.0 {
+            info.extend_from_slice(&number.to_le_bytes());
+        }
+        info.extend_from_slice(&declaration.locked_note_id.as_bytes());
         info.extend_from_slice(&4u32.to_le_bytes());
         info.extend_from_slice(&5u32.to_le_bytes());
         info.extend_from_slice(&6u32.to_le_bytes());

@@ -1,5 +1,4 @@
 use lb_blake2btree::{Blake2bTree, LeafHash};
-use lb_groth16::fr_to_bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -28,7 +27,7 @@ pub enum Error {
 impl LeafHash<NoteId> for ChannelId {
     fn leaf_hash(&self, note_id: &NoteId) -> Hash {
         let mut h = Hasher::new();
-        h.update(fr_to_bytes(note_id.as_fr()));
+        h.update(note_id.as_bytes());
         h.update(self.as_ref());
         h.finalize().into()
     }
@@ -116,7 +115,7 @@ mod tests {
         let channel_id = ChannelId::from([0u8; 32]);
 
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(&fr_to_bytes(note_id.as_fr()));
+        bytes.extend_from_slice(&note_id.as_bytes());
         bytes.extend_from_slice(channel_id.as_ref());
 
         let expected: Hash = Hasher::digest(&bytes).into();

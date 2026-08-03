@@ -1,5 +1,4 @@
 use lb_blake2btree::{Blake2bTree, LeafHash};
-use lb_groth16::fr_to_bytes;
 use lb_utils::bounded::NonEmptyBoundedVec;
 use serde::{Deserialize, Serialize};
 use strum::EnumCount as _;
@@ -59,7 +58,7 @@ impl LockedNote {
 impl LeafHash<NoteId> for LockedNote {
     fn leaf_hash(&self, note_id: &NoteId) -> Hash {
         let mut h = Hasher::new();
-        h.update(fr_to_bytes(note_id.as_fr()));
+        h.update(note_id.as_bytes());
         h.update(self.sdp_locked_note_hash());
         h.finalize().into()
     }
@@ -383,7 +382,7 @@ mod tests {
         let locked_note_hash: Hash = Hasher::digest(&locked_note_bytes).into();
 
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(&fr_to_bytes(note_id.as_fr()));
+        bytes.extend_from_slice(&note_id.as_bytes());
         bytes.extend_from_slice(&locked_note_hash);
 
         let expected: Hash = Hasher::digest(&bytes).into();
