@@ -1,8 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashSet},
-    fmt,
-    marker::PhantomData,
-};
+use std::{collections::BTreeMap, fmt, marker::PhantomData};
 
 use lb_dynamic_merkle::MerkleHasher;
 pub use lb_dynamic_merkle::{DynamicMerkleTree, MerkleNode, MerklePath};
@@ -272,37 +268,13 @@ where
     }
 }
 
-#[derive(Error, Debug, Clone, PartialEq, Eq)]
-pub enum RecoveryError {
-    #[error("compressed Merkle tree position {position} exceeds capacity {capacity}")]
-    PositionOutOfBounds { position: usize, capacity: usize },
-    #[error("compressed Merkle tree contains duplicate keys")]
-    DuplicateKey,
-}
-
-impl<Key, Item, Leaf> TryFrom<CompressedMerkleTree<Key, Item>> for MerkleTree<Key, Item, Leaf>
+impl<Key, Item, Leaf> From<CompressedMerkleTree<Key, Item>> for MerkleTree<Key, Item, Leaf>
 where
     Key: Clone + std::hash::Hash + Eq,
     Item: Clone,
     Leaf: LeafExtractor<Key, Item>,
 {
-    type Error = RecoveryError;
-
-    fn try_from(compressed: CompressedMerkleTree<Key, Item>) -> Result<Self, Self::Error> {
-        let capacity = 1usize << lb_dynamic_merkle::TREE_HEIGHT_EXCEPT_ROOT;
-        let mut keys = HashSet::with_capacity(compressed.items.len());
-        for (position, (key, _)) in &compressed.items {
-            if *position >= capacity {
-                return Err(RecoveryError::PositionOutOfBounds {
-                    position: *position,
-                    capacity,
-                });
-            }
-            if !keys.insert(key) {
-                return Err(RecoveryError::DuplicateKey);
-            }
-        }
-
+    fn from(compressed: CompressedMerkleTree<Key, Item>) -> Self {
         // `items` is a `BTreeMap`, so iteration is ordered by position.
         let merkle = DynamicMerkleTree::from_sorted_items(
             compressed
@@ -310,7 +282,7 @@ where
                 .iter()
                 .map(|(pos, (key, item))| (*pos, Leaf::leaf(key, item))),
         );
-        Ok(Self {
+        Self {
             merkle,
             items: compressed
                 .items
@@ -318,56 +290,14 @@ where
                 .map(|(pos, (key, item))| (key.clone(), (item.clone(), *pos)))
                 .collect(),
             _leaf: PhantomData,
-        })
+        }
     }
 }
 
-#[derive(::serde::Serialize)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
 #[serde(transparent)]
 pub struct CompressedMerkleTree<Key, Item> {
     items: BTreeMap<usize, (Key, Item)>,
-}
-
-impl<'de, Key, Item> ::serde::Deserialize<'de> for CompressedMerkleTree<Key, Item>
-where
-    Key: ::serde::Deserialize<'de>,
-    Item: ::serde::Deserialize<'de>,
-{
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: ::serde::Deserializer<'de>,
-    {
-        struct CompressedMerkleTreeVisitor<Key, Item>(PhantomData<(Key, Item)>);
-
-        impl<'de, Key, Item> ::serde::de::Visitor<'de> for CompressedMerkleTreeVisitor<Key, Item>
-        where
-            Key: ::serde::Deserialize<'de>,
-            Item: ::serde::Deserialize<'de>,
-        {
-            type Value = CompressedMerkleTree<Key, Item>;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("a map of Merkle tree positions to entries")
-            }
-
-            fn visit_map<A>(self, mut access: A) -> Result<Self::Value, A::Error>
-            where
-                A: ::serde::de::MapAccess<'de>,
-            {
-                let mut items = BTreeMap::new();
-                while let Some((position, item)) = access.next_entry()? {
-                    if items.insert(position, item).is_some() {
-                        return Err(::serde::de::Error::custom(
-                            "compressed Merkle tree contains duplicate positions",
-                        ));
-                    }
-                }
-                Ok(CompressedMerkleTree { items })
-            }
-        }
-
-        deserializer.deserialize_map(CompressedMerkleTreeVisitor(PhantomData))
-    }
 }
 
 mod serde {
@@ -400,7 +330,7 @@ mod serde {
             D: Deserializer<'de>,
         {
             let compressed = super::CompressedMerkleTree::<Key, Item>::deserialize(deserializer)?;
-            Self::try_from(compressed).map_err(serde::de::Error::custom)
+            Ok(compressed.into())
         }
     }
 }
