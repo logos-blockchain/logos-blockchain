@@ -99,9 +99,9 @@ impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
         &self,
         mut ctx: Self::ExecutionContext<'_>,
     ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
-        let mut declaration = ctx
+        let declaration = ctx
             .declarations
-            .get(&self.declaration_id)
+            .get_mut(&self.declaration_id)
             .expect("The operation should have been validated");
 
         // Delay the withdrawal by `SNAPSHOT_FINALIZATION_DELAY` epochs
@@ -112,10 +112,6 @@ impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
         // The note will be unlocked once the withdrawn epoch set here is reached.
         declaration.withdraw_at = Some(ctx.epoch.strict_add(sdp::SNAPSHOT_FINALIZATION_DELAY));
         declaration.nonce = self.nonce;
-        ctx.declarations = ctx
-            .declarations
-            .update(&self.declaration_id, declaration.clone())
-            .expect("the declaration is in the tree");
 
         debug!(
             target: LOG_TARGET,

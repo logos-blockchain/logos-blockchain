@@ -71,17 +71,13 @@ impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
         &self,
         mut ctx: Self::ExecutionContext<'_>,
     ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
-        let mut declaration = ctx
+        let declaration = ctx
             .declarations
-            .get(&self.declaration_id)
+            .get_mut(&self.declaration_id)
             .expect("The operation should have been validated");
 
         declaration.active = ctx.epoch;
         declaration.nonce = self.nonce;
-        ctx.declarations = ctx
-            .declarations
-            .update(&self.declaration_id, declaration.clone())
-            .expect("the declaration is in the tree");
         info!(
             target: LOG_TARGET,
             provider_id = ?declaration.provider_id,

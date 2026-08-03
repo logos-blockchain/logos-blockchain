@@ -39,7 +39,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         min_stake: &MinStake,
     ) -> Result<(), SdpError> {
         // Check that the declaration doesn't already exist
-        if declarations.contains(&self.id()) {
+        if declarations.contains_key(&self.id()) {
             return Err(SdpError::DuplicateDeclaration(self.id()));
         }
         validate_service_scoped_uniqueness(self, declarations)?;
@@ -74,7 +74,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
     ) -> Result<(SDPDeclareExecutionContext, Vec<TxEvent>), SdpError> {
         let declaration_id = self.id();
         let declaration = Declaration::new(ctx.epoch, self);
-        ctx.declarations = ctx.declarations.insert(declaration_id, declaration).0;
+        ctx.declarations = ctx.declarations.insert(declaration_id, declaration);
         let utxo = ctx
             .utxo_tree
             .utxos()
@@ -102,8 +102,7 @@ fn validate_service_scoped_uniqueness(
     declarations: &Declarations,
 ) -> Result<(), SdpError> {
     declarations
-        .iter()
-        .map(|(_, declaration)| declaration)
+        .values()
         .filter(|d| d.service_type == op.service_type)
         .try_for_each(|existing| {
             if existing.provider_id == op.provider_id {
@@ -264,9 +263,8 @@ mod tests {
         let declare_a = declare_op(1, 1, "/ip4/1.1.1.1/udp/0");
         let declare_b = declare_op(1, 2, "/ip4/2.2.2.2/udp/0");
 
-        let declarations = Declarations::new()
-            .insert(declare_a.id(), Declaration::new(Epoch::new(0), &declare_a))
-            .0;
+        let declarations = Declarations::new_sync()
+            .insert(declare_a.id(), Declaration::new(Epoch::new(0), &declare_a));
 
         assert!(matches!(
             validate_service_scoped_uniqueness(&declare_b, &declarations),
@@ -282,9 +280,8 @@ mod tests {
         let declare_a = declare_op(1, 1, "/ip4/1.1.1.1/udp/0");
         let declare_b = declare_op(2, 1, "/ip4/2.2.2.2/udp/0");
 
-        let declarations = Declarations::new()
-            .insert(declare_a.id(), Declaration::new(Epoch::new(0), &declare_a))
-            .0;
+        let declarations = Declarations::new_sync()
+            .insert(declare_a.id(), Declaration::new(Epoch::new(0), &declare_a));
 
         assert!(matches!(
             validate_service_scoped_uniqueness(&declare_b, &declarations),

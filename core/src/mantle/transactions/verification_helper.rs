@@ -98,7 +98,7 @@ pub mod test_utils {
                 keys: keys.into_iter().collect(),
                 locked_notes: LockedNotes::new(),
                 utxos: Utxos::new(),
-                declarations: Declarations::new(),
+                declarations: Declarations::new_sync(),
                 min_stake: MinStake {
                     threshold: 0,
                     timestamp: 0,
