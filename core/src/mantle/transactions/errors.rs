@@ -2,10 +2,6 @@ use crate::mantle::ops::channel::{ChannelId, ChannelKeyIndex};
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum VerificationError {
-    #[error("Invalid signature for operation at index {op_index}")]
-    InvalidSignature { op_index: usize },
-    #[error("Invalid proof of claim for operation at index {op_index}")]
-    InvalidProofOfClaim { op_index: usize },
     #[error("Missing required proof for {op_type} operation at index {op_index}")]
     MissingProof {
         op_type: &'static str,
@@ -47,11 +43,10 @@ pub enum VerificationError {
         op_index: usize,
         signature_index: usize,
     },
-
     #[error("Channel verification error: {0}")]
     ChannelVerificationError(crate::mantle::channel::Error),
     #[error("Transfer verification error: {0}")]
-    TransferVerificationError(crate::mantle::ops::transfer::TransferError),
+    TransferVerificationError(#[from] crate::mantle::ops::transfer::TransferError),
     #[error("SDP verification error: {0}")]
     SDPVerificationError(crate::mantle::ops::sdp::SdpError),
     #[error("LeaderClaim verification error: {0}")]

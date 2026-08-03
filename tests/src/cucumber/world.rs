@@ -914,6 +914,10 @@ pub struct CucumberWorld {
     pub wallets: SharedTrackedWallets,
     /// Manual: Mapping of scenario transaction aliases to submitted hashes.
     pub submitted_transactions: HashMap<String, TxHash>,
+    /// Manual: Outcome of a transaction submission attempt, keyed by scenario
+    /// alias, for scenarios that assert on submission being rejected rather
+    /// than on later inclusion.
+    pub submission_outcomes: HashMap<String, Result<(), String>>,
     /// Manual: Exact signed transactions prepared for later submission.
     pub prepared_transactions: HashMap<String, SignedMantleTx<Preverified>>,
     /// Manual: Transaction hashes observed in blocks by the wallet scanner.
@@ -1109,6 +1113,7 @@ impl Debug for CucumberWorld {
             .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
             .field("wallets", &"SharedTrackedWallets")
             .field("submitted_transactions", &self.submitted_transactions.len())
+            .field("submission_outcomes", &self.submission_outcomes.len())
             .field("prepared_transactions", &self.prepared_transactions.len())
             .field(
                 "observed_transaction_hashes",
@@ -1971,6 +1976,21 @@ impl CucumberWorld {
 
     pub fn remember_submitted_transaction(&mut self, alias: String, tx_hash: TxHash) {
         self.submitted_transactions.insert(alias, tx_hash);
+    }
+
+    pub fn remember_submission_outcome(&mut self, alias: String, outcome: Result<(), String>) {
+        self.submission_outcomes.insert(alias, outcome);
+    }
+
+    pub fn resolve_submission_outcome(
+        &self,
+        alias: &str,
+    ) -> Result<&Result<(), String>, StepError> {
+        self.submission_outcomes
+            .get(alias)
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!("Submission outcome for alias '{alias}' not found in world state"),
+            })
     }
 
     #[must_use]

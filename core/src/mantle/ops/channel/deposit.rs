@@ -9,7 +9,7 @@ use crate::{
         channel::{Channels, Error},
         ledger::{Inputs, InputsError, Operation, Outputs, Utxos},
         ops::{OpId, channel::ChannelId},
-        transactions::hash::TxHash,
+        transactions::hash::{TxHash, TxHashView},
     },
     sdp::locked_notes::LockedNotes,
 };
@@ -52,8 +52,8 @@ pub struct DepositValidationContext<'a> {
     pub channels: &'a Channels,
     pub locked_notes: &'a LockedNotes,
     pub utxos: &'a Utxos,
-    pub tx_hash: &'a TxHash,
-    pub deposit_sig: &'a ZkSignature,
+    pub tx_hash_view: &'a TxHashView,
+    pub proof: &'a ZkSignature,
 }
 
 pub struct DepositExecutionContext {
@@ -63,13 +63,25 @@ pub struct DepositExecutionContext {
 }
 
 impl Operation<DepositValidationContext<'_>> for DepositOp {
+    type PreverificationContext<'a>
+        = ()
+    where
+        Self: 'a;
     type ExecutionContext<'a>
         = DepositExecutionContext
     where
         Self: 'a;
-    type Error = Error;
+    type VerificationError = Error;
+    type ExecutionError = Error;
 
-    fn validate(&self, ctx: &DepositValidationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        _context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::VerificationError> {
+        Ok(())
+    }
+
+    fn verify(&self, ctx: &DepositValidationContext<'_>) -> Result<(), Self::ExecutionError> {
         // Check that the channel exist
         if !ctx.channels.contains_channel(&self.channel_id) {
             return Err(Error::ChannelNotFound {
@@ -82,8 +94,8 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
             .validate_not_in_channel(ctx.locked_notes, ctx.channels, ctx.utxos)?;
 
         // Check the signature
-        let pks = self.inputs.get_pk(ctx.utxos)?;
-        if !ZkPublicKey::verify_multi(&pks, &ctx.tx_hash.to_fr(), ctx.deposit_sig) {
+        let public_keys = self.inputs.get_pk(ctx.utxos)?;
+        if !ZkPublicKey::verify_multi(&public_keys, ctx.tx_hash_view.as_fr(), ctx.proof) {
             return Err(Error::InvalidSignature);
         }
 
@@ -93,7 +105,7 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
         // Get the amount deposited for the event payload
         let amount_deposited = self.inputs.amount(&ctx.utxos)?;
         let outputs = self.outputs(&ctx.utxos)?;

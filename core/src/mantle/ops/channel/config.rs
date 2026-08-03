@@ -10,7 +10,7 @@ use crate::{
     mantle::{
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
         ledger::Operation,
-        transactions::hash::TxHash,
+        transactions::hash::TxHashView,
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
@@ -39,8 +39,8 @@ impl ChannelConfigOp {
 
 pub struct ChannelConfigValidationContext<'a> {
     pub channels: &'a Channels,
-    pub tx_hash: &'a TxHash,
-    pub config_sigs: &'a ChannelMultiSigProof,
+    pub tx_hash_view: &'a TxHashView,
+    pub proof: &'a ChannelMultiSigProof,
 }
 
 pub struct ChannelConfigExecutionContext {
@@ -49,44 +49,56 @@ pub struct ChannelConfigExecutionContext {
 }
 
 impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
+    type PreverificationContext<'a>
+        = ()
+    where
+        Self: 'a;
     type ExecutionContext<'a>
         = ChannelConfigExecutionContext
     where
         Self: 'a;
-    type Error = Error;
+    type VerificationError = Error;
+    type ExecutionError = Error;
 
-    fn validate(&self, ctx: &ChannelConfigValidationContext<'_>) -> Result<(), Self::Error> {
-        // Check that the indexes are unique and there is the same number of proof and
-        // index. This is enforced by the proof structure that enforces it.
-
-        // Check config wellformness
+    fn preverify(
+        &self,
+        _context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::VerificationError> {
+        // Check config is well-formed
         if self.configuration_threshold == 0 || self.transfer_threshold == 0 || self.keys.is_empty()
         {
             return Err(Error::InvalidChannelConfig);
         }
 
+        Ok(())
+    }
+
+    fn verify(&self, ctx: &ChannelConfigValidationContext<'_>) -> Result<(), Self::ExecutionError> {
+        // Check that the indexes are unique and there is the same number of proof and
+        // index. This is enforced by the proof structure that enforces it.
+
         if let Some(channel) = ctx.channels.channel_state(&self.channel) {
             // Check there is enough signatures
-            let signatures = ctx.config_sigs.signatures();
+            let signatures = ctx.proof.signatures();
             if signatures.len() != channel.configuration_threshold as usize {
                 return Err(Error::ThresholdUnmet {
                     channel_id: self.channel,
                     threshold: channel.configuration_threshold,
-                    actual: ctx.config_sigs.signatures().len(),
+                    actual: ctx.proof.signatures().len(),
                 });
             }
 
             // Check the signatures
-            for sig in signatures {
+            for signature in signatures {
                 if channel
                     .accredited_keys
-                    .get(sig.channel_key_index as usize)
+                    .get(signature.channel_key_index as usize)
                     .ok_or_else(|| Error::InvalidSignatureIndex {
                         channel_id: self.channel,
                         sequencers: channel.accredited_keys.len(),
-                        index: sig.channel_key_index,
+                        index: signature.channel_key_index,
                     })?
-                    .verify(ctx.tx_hash.as_signing_bytes().as_ref(), &sig.signature)
+                    .verify(ctx.tx_hash_view.as_bytes(), &signature.signature)
                     .is_err()
                 {
                     return Err(Error::InvalidSignature);
@@ -100,7 +112,7 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
         let channel = ChannelState {
             accredited_keys: self.keys.clone().into(),
             configuration_threshold: self.configuration_threshold,

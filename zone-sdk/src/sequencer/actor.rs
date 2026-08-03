@@ -622,7 +622,9 @@ mod tests {
         },
         *,
     };
-    use crate::test_support::{MockNode, api_block, unverified_tx_with_ops};
+    use crate::test_support::{
+        MockNode, StreamEnd, StreamScript, api_block, live_event, scripts, unverified_tx_with_ops,
+    };
 
     #[must_use]
     pub fn utxo_with_sk() -> (ZkKey, Utxo) {
@@ -908,13 +910,16 @@ mod tests {
         let node = MockNode {
             lib: genesis_block.header.id,
             tip: genesis_block.header.id,
-            stream: vec![ProcessedBlockEvent {
-                block: live_block.clone(),
-                tip: live_block.header.id,
-                tip_slot: live_block.header.slot,
-                lib: genesis_block.header.id,
-                lib_slot: Slot::genesis(),
-            }],
+            scripts: scripts(vec![StreamScript {
+                events: vec![ProcessedBlockEvent {
+                    block: live_block.clone(),
+                    tip: live_block.header.id,
+                    tip_slot: live_block.header.slot,
+                    lib: genesis_block.header.id,
+                    lib_slot: Slot::genesis(),
+                }],
+                then: StreamEnd::Hang,
+            }]),
             immutable: vec![genesis_block],
             ..MockNode::default()
         };
@@ -947,5 +952,117 @@ mod tests {
             }
             other => panic!("expected Inscription, got {other:?}"),
         }
+    }
+
+    /// Realistic stream-gap scenario, driven end-to-end through the public
+    /// `ZoneSequencer` event loop.
+    ///
+    /// Chain: G <- B1 <- B2 <- B3, one canonical branch, LIB at genesis.
+    /// The live stream delivers B1 (inscription A) and drops. B2 (inscription
+    /// Y, child of A) is mined during the outage. The stream resumes at B3;
+    /// the sequencer self-heals by backfilling B2.
+    ///
+    /// Per the [`Event::Ready`] / [`ChannelUpdate`] contract, catch-up deltas
+    /// surface on the next `BlocksProcessed` once the stream resumes — so Y
+    /// must be reported as `adopted`. A consumer mirroring the channel from
+    /// `ChannelUpdate` otherwise silently misses Y until finalization.
+    #[tokio::test]
+    async fn stream_gap_surfaces_backfilled_inscriptions_as_adopted() {
+        use std::time::Duration;
+
+        use tokio::time::timeout;
+
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+
+        let a = InscriptionOp {
+            channel_id,
+            parent: MsgId::root(),
+            inscription: Inscription::new_unchecked(b"a".to_vec()),
+            signer: sequencer_key.public_key(),
+        };
+        let a_id = a.id();
+        let y = InscriptionOp {
+            channel_id,
+            parent: a_id,
+            inscription: Inscription::new_unchecked(b"y".to_vec()),
+            signer: sequencer_key.public_key(),
+        };
+        let y_id = y.id();
+
+        let b1 = api_block(
+            1,
+            0,
+            1,
+            vec![unverified_tx_with_ops(vec![Op::ChannelInscribe(a)])],
+        );
+        let b2 = api_block(
+            2,
+            1,
+            2,
+            vec![unverified_tx_with_ops(vec![Op::ChannelInscribe(y)])],
+        );
+        let b3 = api_block(3, 2, 3, Vec::new());
+
+        let node = MockNode {
+            scripts: scripts(vec![
+                StreamScript {
+                    events: vec![live_event(&b1)],
+                    then: StreamEnd::End,
+                },
+                StreamScript {
+                    events: vec![live_event(&b3)],
+                    then: StreamEnd::Hang,
+                },
+            ]),
+            blocks: vec![b2],
+            ..MockNode::default()
+        };
+        let mut sequencer = ZoneSequencer::init(channel_id, sequencer_key, node, None);
+
+        // Phase 1: drive until B1's channel update adopts A (Ready and turn
+        // notifications interleave).
+        let adopted = timeout(Duration::from_secs(10), async {
+            loop {
+                if let Event::BlocksProcessed { channel_update, .. } = sequencer.next_event().await
+                    && !channel_update.adopted.is_empty()
+                {
+                    return channel_update.adopted;
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for B1's channel update");
+        assert!(
+            adopted
+                .iter()
+                .any(|t| t.inscription().is_some_and(|i| i.this_msg == a_id)),
+            "sanity: A is adopted from the live B1"
+        );
+
+        // Phase 2: stream #1 has ended — a disconnect. `next_event`
+        // reconnects internally and resumes at B3; the canonical backfill
+        // fetches the missed B2. The first `BlocksProcessed` after the
+        // reconnect is B3's ingestion and must carry Y as adopted.
+        let update = timeout(Duration::from_secs(10), async {
+            loop {
+                if let Event::BlocksProcessed { channel_update, .. } = sequencer.next_event().await
+                {
+                    return channel_update;
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for the post-reconnect BlocksProcessed");
+        assert!(
+            update
+                .adopted
+                .iter()
+                .any(|t| t.inscription().is_some_and(|i| i.this_msg == y_id)),
+            "inscription mined during the stream gap must surface as adopted on the next \
+             BlocksProcessed after reconnect; got adopted={:?}, orphaned={:?}",
+            update.adopted,
+            update.orphaned,
+        );
     }
 }

@@ -110,6 +110,12 @@ pub struct TxState {
     block_txs: HashMap<HeaderId, Vec<BlockChannelTx>>,
     /// Last finalized channel tip — used as parent when pending is empty.
     finalized_msg: MsgId,
+    /// Lineage-parent of the entry behind [`Self::finalized_msg`]. Config ids
+    /// are payload-only hashes, so an id alone does not identify a lineage
+    /// position — the pair does. `None` when the finalized entry is unknown
+    /// (fresh state or checkpoint restore); the finalized-prefix search then
+    /// matches nothing (see [`Self::finalized_prefix_ids`]).
+    finalized_parent_msg: Option<MsgId>,
 }
 
 /// A channel-touching tx's tip-advancing content, classified once at block
@@ -142,9 +148,9 @@ impl BlockChannelTx {
         }
     }
 
-    /// The channel tip after this tx (its last tip-advancing op).
-    fn tip_msg(&self) -> Option<MsgId> {
-        self.infos().last().map(|i| i.this_msg)
+    /// The entry this tx leaves the channel at (its last tip-advancing op).
+    fn tip_entry(&self) -> Option<&InscriptionInfo> {
+        self.infos().last()
     }
 
     #[must_use]
@@ -168,12 +174,17 @@ impl TxState {
             current_lib: lib,
             block_txs: HashMap::new(),
             finalized_msg,
+            finalized_parent_msg: None,
         }
     }
 
     /// Update the finalized channel tip from backfilled finalized history.
-    pub const fn set_finalized_msg(&mut self, msg: MsgId) {
+    /// `parent` is the entry's lineage-parent; pass `None` only when it is
+    /// genuinely unknown (disables the finalized-prefix mask until the next
+    /// boundary move records a parent).
+    pub const fn set_finalized_msg(&mut self, msg: MsgId, parent: Option<MsgId>) {
         self.finalized_msg = msg;
+        self.finalized_parent_msg = parent;
     }
 
     /// Submit an inscription tx for tracking with lineage metadata. Use
@@ -361,7 +372,15 @@ impl TxState {
         if lib != self.current_lib {
             // Compute finalized_msg BEFORE pruning — walk from new LIB
             // backwards to find the latest inscription in the finalized range.
-            self.finalized_msg = self.channel_tip_at(lib);
+            // Keep its lineage-parent too: the (id, parent) pair is what
+            // identifies the finalized position in `finalized_prefix_ids`.
+            if let Some((msg, parent)) = self
+                .channel_tip_entry_at(lib)
+                .map(|entry| (entry.this_msg, entry.parent_msg))
+            {
+                self.finalized_msg = msg;
+                self.finalized_parent_msg = Some(parent);
+            }
 
             // Prune ancestors of new lib (but not lib itself)
             let mut prune_cursor = self.parent_map.get(&lib).copied();
@@ -744,21 +763,29 @@ impl TxState {
     /// unfinalized window.
     #[must_use]
     pub fn channel_tip_at(&self, block_id: HeaderId) -> MsgId {
+        self.channel_tip_entry_at(block_id)
+            .map_or(self.finalized_msg, |entry| entry.this_msg)
+    }
+
+    /// Like [`Self::channel_tip_at`], but returns the tip-advancing entry
+    /// itself so callers can also learn its lineage-parent. `None` when no
+    /// entry exists in the walked window (the finalized boundary applies).
+    fn channel_tip_entry_at(&self, block_id: HeaderId) -> Option<&InscriptionInfo> {
         let mut current = block_id;
         loop {
             if let Some(txs) = self.block_txs.get(&current)
-                && let Some(tip) = txs.iter().rev().find_map(BlockChannelTx::tip_msg)
+                && let Some(entry) = txs.iter().rev().find_map(BlockChannelTx::tip_entry)
             {
-                return tip;
+                return Some(entry);
             }
 
             if current == self.current_lib {
-                return self.finalized_msg;
+                return None;
             }
 
             match self.parent_map.get(&current) {
                 Some(&parent) => current = parent,
-                None => return self.finalized_msg,
+                None => return None,
             }
         }
     }
@@ -773,6 +800,9 @@ impl TxState {
     /// - `orphaned`: txs that left it (replaced by a conflict). A bare un-mine
     ///   is a no-op — the link stays in the lineage via its held block.
     ///
+    /// Content at or below the finalized boundary is excluded from both
+    /// sides: it is immutable on every branch and surfaces via `finalized`.
+    ///
     /// Returns `None` if no channel state change.
     #[must_use]
     pub fn detect_channel_update(
@@ -786,16 +816,23 @@ impl TxState {
         let old_ids: HashSet<MsgId> = old_lineage.iter().map(|i| i.this_msg).collect();
         let new_ids: HashSet<MsgId> = new_lineage.iter().map(|i| i.this_msg).collect();
 
+        // Each lineage stops at the LIB of its capture time, so a LIB
+        // advance between the captures shifts the diff's lower boundary.
+        // Mask the finalized prefix on both sides so the shifted floor
+        // doesn't read as adopted/orphaned content.
+        let mut finalized = self.finalized_prefix_ids(old_lineage);
+        finalized.extend(self.finalized_prefix_ids(&new_lineage));
+
         let adopted = self.update_txs_from_infos(
             new_lineage
                 .iter()
-                .filter(|i| !old_ids.contains(&i.this_msg)),
+                .filter(|i| !old_ids.contains(&i.this_msg) && !finalized.contains(&i.this_msg)),
         );
 
         let orphaned = self.update_txs_from_infos(
             old_lineage
                 .iter()
-                .filter(|i| !new_ids.contains(&i.this_msg)),
+                .filter(|i| !new_ids.contains(&i.this_msg) && !finalized.contains(&i.this_msg)),
         );
 
         if orphaned.is_empty() && adopted.is_empty() {
@@ -807,6 +844,36 @@ impl TxState {
             adopted,
             new_channel_tip,
         })
+    }
+
+    /// Msg-ids of `lineage`'s prefix up to and including the finalized entry;
+    /// empty when the finalized boundary lies below the lineage's start.
+    ///
+    /// The entry is matched as a `(this_msg, parent_msg)` pair, not by id
+    /// alone: config ids are payload-only hashes, so a byte-identical config
+    /// replayed on a competing branch repeats the id under a different
+    /// lineage-parent — an id-only search would find it in the dead branch's
+    /// lineage and mask that branch's genuinely orphaned prefix (see
+    /// `replayed_config_on_competing_branch_does_not_hide_orphans`). The
+    /// last occurrence is taken because same-block config replay can repeat
+    /// the pair.
+    ///
+    /// An unknown parent (fresh state or checkpoint restore) matches
+    /// nothing: every boundary move records the parent, so until one happens
+    /// the boundary entry sits at-or-below the LIB and cannot appear in a
+    /// lineage — any id hit in that window is a recurrence false positive.
+    fn finalized_prefix_ids(&self, lineage: &[InscriptionInfo]) -> HashSet<MsgId> {
+        lineage
+            .iter()
+            .rposition(|i| {
+                i.this_msg == self.finalized_msg
+                    && self
+                        .finalized_parent_msg
+                        .is_some_and(|parent| i.parent_msg == parent)
+            })
+            .map_or_else(HashSet::new, |pos| {
+                lineage[..=pos].iter().map(|i| i.this_msg).collect()
+            })
     }
 
     /// One update entry per tx: a multi-op custom tx contributes several
@@ -1188,6 +1255,184 @@ mod tests {
         let hash = tx.mantle_tx().hash();
         state.submit_inscription(tx, parent_msg, this_msg, [data].into());
         hash
+    }
+
+    /// After a checkpoint restore the finalized entry's parent is unknown
+    /// (`finalized_parent_msg = None`). A replayed config above the restored
+    /// LIB then repeats the boundary id inside the live lineage — an id-only
+    /// fallback would mask its prefix and hide the orphan (the restore-window
+    /// variant of the recurrence bug). An unknown parent must match nothing.
+    #[test]
+    fn restored_state_with_unknown_parent_does_not_mask_replayed_boundary_id() {
+        let genesis = header_id(0);
+        let a1 = header_id(1);
+        let b1 = header_id(2);
+        // Restored boundary: finalized_msg = X, parent unknown.
+        let x_msg = msg_id(30);
+        let mut state = TxState::new(genesis, x_msg);
+
+        // Old branch replays a config with the boundary id above the LIB:
+        // a1: [Inscribe U(root→u), Config X(u→x)].
+        let u_tx = make_dummy_tx(1);
+        let u_hash = u_tx.mantle_tx().hash();
+        let u_info = InscriptionInfo {
+            tx_hash: u_hash,
+            parent_msg: MsgId::root(),
+            this_msg: msg_id(10),
+            payload: [1].into(),
+        };
+        let x_old = InscriptionInfo {
+            tx_hash: make_dummy_tx(2).mantle_tx().hash(),
+            parent_msg: msg_id(10),
+            this_msg: x_msg,
+            payload: [2].into(),
+        };
+        state.process_block(
+            a1,
+            genesis,
+            genesis,
+            vec![],
+            vec![
+                BlockChannelTx::Inscription(u_info),
+                BlockChannelTx::Config(x_old),
+            ],
+        );
+        let old_lineage = state.channel_lineage(a1);
+
+        // Competing branch b1: [Inscribe V(root→v), Config X(v→x)].
+        let v_info = InscriptionInfo {
+            tx_hash: make_dummy_tx(3).mantle_tx().hash(),
+            parent_msg: MsgId::root(),
+            this_msg: msg_id(20),
+            payload: [3].into(),
+        };
+        let x_new = InscriptionInfo {
+            tx_hash: make_dummy_tx(4).mantle_tx().hash(),
+            parent_msg: msg_id(20),
+            this_msg: x_msg,
+            payload: [2].into(),
+        };
+        state.process_block(
+            b1,
+            genesis,
+            genesis,
+            vec![],
+            vec![
+                BlockChannelTx::Inscription(v_info),
+                BlockChannelTx::Config(x_new),
+            ],
+        );
+
+        let update = state
+            .detect_channel_update(&old_lineage, b1)
+            .expect("branch switch must report");
+        assert!(
+            update.orphaned.iter().any(|tx| matches!(
+                tx,
+                ChannelUpdateTx::Inscription(info) if info.tx_hash == u_hash
+            )),
+            "U must be reported orphaned despite the unknown finalized parent; got {:?}",
+            update.orphaned
+        );
+    }
+
+    /// A byte-identical `ChannelConfig` replayed on a competing branch
+    /// repeats its msg id (config ids are payload-only hashes). When the LIB
+    /// jumps onto the new branch in the same event, an id-only
+    /// finalized-boundary search finds the replayed id in the OLD lineage and
+    /// masks its whole prefix — hiding the genuinely orphaned inscription
+    /// beneath it. Matching the boundary as a `(this_msg, parent_msg)` pair
+    /// keeps it positional: the two configs share an id but not a
+    /// lineage-parent.
+    #[test]
+    fn replayed_config_on_competing_branch_does_not_hide_orphans() {
+        // genesis ─ a1: [Inscribe U(root→u), Config X(u→x)]   (old canonical)
+        //        └─ b1: [Inscribe V(root→v), Config X(v→x)]   (new canonical)
+        //           b2: child of b1; LIB jumps to b1 in the same event
+        let genesis = header_id(0);
+        let a1 = header_id(1);
+        let b1 = header_id(2);
+        let b2 = header_id(3);
+        let mut state = TxState::new(genesis, MsgId::root());
+
+        let u_msg = msg_id(10);
+        let v_msg = msg_id(20);
+        // Same config payload on both branches ⇒ same id.
+        let x_msg = msg_id(30);
+
+        let u_tx = make_dummy_tx(1);
+        let u_hash = u_tx.mantle_tx().hash();
+        let u_info = InscriptionInfo {
+            tx_hash: u_hash,
+            parent_msg: MsgId::root(),
+            this_msg: u_msg,
+            payload: [1].into(),
+        };
+        let x_old = InscriptionInfo {
+            tx_hash: make_dummy_tx(2).mantle_tx().hash(),
+            parent_msg: u_msg,
+            this_msg: x_msg,
+            payload: [2].into(),
+        };
+        state.process_block(
+            a1,
+            genesis,
+            genesis,
+            vec![],
+            vec![
+                BlockChannelTx::Inscription(u_info),
+                BlockChannelTx::Config(x_old),
+            ],
+        );
+
+        // Captured at the old tip before the competing branch arrives,
+        // mirroring the real caller.
+        let old_lineage = state.channel_lineage(a1);
+        assert_eq!(old_lineage.len(), 2, "old lineage: U then Config X");
+
+        let v_info = InscriptionInfo {
+            tx_hash: make_dummy_tx(3).mantle_tx().hash(),
+            parent_msg: MsgId::root(),
+            this_msg: v_msg,
+            payload: [3].into(),
+        };
+        let x_new = InscriptionInfo {
+            tx_hash: make_dummy_tx(4).mantle_tx().hash(),
+            parent_msg: v_msg,
+            this_msg: x_msg,
+            payload: [2].into(),
+        };
+        state.process_block(
+            b1,
+            genesis,
+            genesis,
+            vec![],
+            vec![
+                BlockChannelTx::Inscription(v_info),
+                BlockChannelTx::Config(x_new),
+            ],
+        );
+        // The event that switches branches also advances the LIB past the
+        // replayed config: the finalized boundary becomes (x, parent = v).
+        state.process_block(b2, b1, b1, vec![], vec![]);
+
+        let update = state
+            .detect_channel_update(&old_lineage, b2)
+            .expect("branch switch with an orphaned inscription must report");
+        assert!(
+            update.orphaned.iter().any(|tx| matches!(
+                tx,
+                ChannelUpdateTx::Inscription(info) if info.tx_hash == u_hash
+            )),
+            "U fell off the canonical channel and must be reported orphaned; got {:?}",
+            update.orphaned
+        );
+        // V is finalized — it surfaces via the finalized path, not `adopted`.
+        assert!(
+            update.adopted.is_empty(),
+            "finalized content must not be reported adopted; got {:?}",
+            update.adopted
+        );
     }
 
     #[test]

@@ -75,7 +75,7 @@ pub enum Error {
     },
     #[error("Channel {channel_id:?} not found")]
     ChannelNotFound { channel_id: ChannelId },
-    #[error("The Channel Config isn't well formed")]
+    #[error("The Channel Config isn't well-formed")]
     InvalidChannelConfig,
     #[error("Channel transfer inputs and outputs have different total value")]
     UnbalancedTransfer,
@@ -267,9 +267,10 @@ impl ChannelState {
     // Returns the new sequencer index and its starting slot
     #[must_use]
     pub fn round_robin(&self, block_slot: Slot) -> (u16, Slot) {
-        let elapsed_slot_since_last_tip = (block_slot.saturating_sub(self.tip_slot)).into_inner();
-        let tip_sequencer_duration =
-            (block_slot.saturating_sub(self.tip_sequencer_starting_slot)).into_inner();
+        let elapsed_slot_since_last_tip = block_slot.saturating_sub(self.tip_slot).into_inner();
+        let tip_sequencer_duration = block_slot
+            .saturating_sub(self.tip_sequencer_starting_slot)
+            .into_inner();
         let posting_timeframe = u64::from(self.posting_timeframe.0);
         let posting_timeout = u64::from(self.posting_timeout.0);
         let num_sequencers = self.accredited_keys.len() as u64; // bounded by ChannelKeyIndex::MAX

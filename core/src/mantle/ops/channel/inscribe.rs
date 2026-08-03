@@ -15,7 +15,7 @@ use crate::{
         channel::{ChannelState, Channels, Error},
         ledger::Operation,
         ops::channel::config::Keys,
-        transactions::hash::TxHash,
+        transactions::hash::TxHashView,
     },
 };
 
@@ -45,10 +45,13 @@ impl InscriptionOp {
     }
 }
 
+pub struct InscriptionPreverificationContext<'a> {
+    pub tx_hash_view: &'a TxHashView,
+    pub proof: &'a Ed25519Signature,
+}
+
 pub struct InscriptionValidationContext<'a> {
     pub channels: &'a Channels,
-    pub tx_hash: &'a TxHash,
-    pub inscribe_sig: &'a Ed25519Signature,
     pub block_slot: Slot,
 }
 
@@ -58,13 +61,30 @@ pub struct InscriptionExecutionContext {
 }
 
 impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
+    type PreverificationContext<'a>
+        = InscriptionPreverificationContext<'a>
+    where
+        Self: 'a;
     type ExecutionContext<'a>
         = InscriptionExecutionContext
     where
         Self: 'a;
-    type Error = Error;
+    type VerificationError = Error;
+    type ExecutionError = Error;
 
-    fn validate(&self, ctx: &InscriptionValidationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::VerificationError> {
+        // Check the signature
+        self.signer
+            .verify(context.tx_hash_view.as_bytes(), context.proof)
+            .map_err(|_error| Error::InvalidSignature)?;
+
+        Ok(())
+    }
+
+    fn verify(&self, ctx: &InscriptionValidationContext<'_>) -> Result<(), Self::ExecutionError> {
         // Check if the channel exist otherwise the inscription is valid only if and
         // only if parent == ZERO
         if let Some(channel) = ctx.channels.channel_state(&self.channel_id) {
@@ -95,22 +115,13 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
             });
         }
 
-        // Check the signature
-        if self
-            .signer
-            .verify(ctx.tx_hash.as_signing_bytes().as_ref(), ctx.inscribe_sig)
-            .is_err()
-        {
-            return Err(Error::InvalidSignature);
-        }
-
         Ok(())
     }
 
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::ExecutionError> {
         // if the channel doesn't exist, create it
         let channel = ctx
             .channels
