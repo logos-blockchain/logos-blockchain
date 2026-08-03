@@ -8,6 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 use config::{api, sdp, state, storage, wallet};
+use flate2::read::GzDecoder;
 use lb_config::kms::key_id_for_preload_backend;
 use lb_core::{
     block::genesis::GenesisBlock,
@@ -28,10 +29,10 @@ use lb_node::{
 use rand::Rng as _;
 use testing_framework_core::scenario::{Application, DynError, PeerSelection, StartNodeOptions};
 use testing_framework_runner_local::{
-    BinaryProviderRef, BuildBinaryProvider, BuildCommand, BuiltNodeConfig, EnvBinaryProvider,
-    FallbackBinaryProvider, LaunchEnvVar, LaunchFile, LocalDeployerEnv, NodeConfigEntry,
-    NodeEndpointPort, NodeEndpoints, PathBinaryProvider, ProcessSpawnError, env::Node,
-    process::LaunchSpec,
+    BinaryProviderRef, BuildBinaryProvider, BuildCommand, BuiltNodeConfig, DownloadBinaryProvider,
+    DownloadChecksum, DownloadUrl, EnvBinaryProvider, FallbackBinaryProvider, LaunchEnvVar,
+    LaunchFile, LocalDeployerEnv, NodeConfigEntry, NodeEndpointPort, NodeEndpoints,
+    PathBinaryProvider, ProcessSpawnError, env::Node, process::LaunchSpec,
 };
 use tracing::debug;
 
@@ -53,6 +54,10 @@ use crate::{
 
 const LOGS_PREFIX: &str = "__logs";
 const DEFAULT_BLEND_NETWORK_PORT: u16 = 3400;
+/// URL of a Logos node release binary downloaded by the local TF deployer.
+pub const LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL: &str = "LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL";
+/// Optional SHA-256 checksum for [`LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL`].
+pub const LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_SHA256: &str = "LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_SHA256";
 /// The default filename for the user config.
 pub const USER_CONFIG_FILE: &str = "node.yaml";
 /// The default filename for the deployment config.
@@ -145,7 +150,7 @@ impl LocalDeployerEnv for LbcEnv {
         Some(topology.config().scenario_base_dir.join(node_name))
     }
 
-    fn build_launch_spec(
+    async fn build_launch_spec(
         config: &<Self as Application>::NodeConfig,
         dir: &Path,
         label: &str,
@@ -191,7 +196,7 @@ impl LocalDeployerEnv for LbcEnv {
         let deployment_yaml =
             serde_yaml::to_string(&config.deployment).map_err(io::Error::other)?;
 
-        build_node_launch_spec(dir, user_yaml, deployment_yaml)
+        build_node_launch_spec(dir, user_yaml, deployment_yaml).await
     }
 
     fn node_endpoints(
@@ -246,7 +251,7 @@ fn allocate_udp_port(label: &'static str) -> Result<u16, DynError> {
         })
 }
 
-fn build_node_launch_spec(
+async fn build_node_launch_spec(
     dir: &Path,
     user_yaml: String,
     deployment_yaml: String,
@@ -265,7 +270,7 @@ fn build_node_launch_spec(
             } else {
                 None
             };
-            let resolve_result = node_binary_provider(&node_binary_profile).resolve();
+            let resolve_result = node_binary_provider(&node_binary_profile).resolve().await;
             if node_binary_profile == NodeBinaryProfile::TokioConsole {
                 if let Some(val) = current {
                     let _unused = replace_default_env("RUSTFLAGS", &val);
@@ -311,24 +316,65 @@ fn launch_file(relative_path: &str, contents: Vec<u8>) -> LaunchFile {
 
 /// Resolves (building if necessary) the node binary for `node_binary_profile`
 /// and populates the process-local binary cache.
-pub fn ensure_node_binary_built(
+pub async fn ensure_node_binary_built(
     node_binary_profile: &NodeBinaryProfile,
 ) -> Result<PathBuf, DynError> {
     node_binary_provider(node_binary_profile)
         .resolve()
+        .await
         .map_err(Into::into)
 }
 
 fn node_binary_provider(node_binary_profile: &NodeBinaryProfile) -> BinaryProviderRef {
-    let providers: [BinaryProviderRef; 2] = [
-        Arc::new(EnvBinaryProvider::new("LOGOS_BLOCKCHAIN_NODE_BIN")),
-        match node_binary_profile {
-            NodeBinaryProfile::Normal => default_node_binary_provider(),
-            NodeBinaryProfile::TokioConsole => tokio_console_node_binary_provider(),
-        },
-    ];
+    let mut providers: Vec<BinaryProviderRef> = vec![Arc::new(EnvBinaryProvider::new(
+        "LOGOS_BLOCKCHAIN_NODE_BIN",
+    ))];
+
+    if env::var_os(LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL).is_some_and(|url| !url.is_empty()) {
+        providers.push(Arc::new(release_binary_provider()));
+    }
+
+    providers.push(match node_binary_profile {
+        NodeBinaryProfile::Normal => default_node_binary_provider(),
+        NodeBinaryProfile::TokioConsole => tokio_console_node_binary_provider(),
+    });
 
     Arc::new(FallbackBinaryProvider::new(providers))
+}
+
+fn release_binary_provider() -> DownloadBinaryProvider {
+    DownloadBinaryProvider {
+        url: DownloadUrl::Env(LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL.to_owned()),
+        sha256: Some(DownloadChecksum::Env(
+            LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_SHA256.to_owned(),
+        )),
+        cache_dir: None,
+        processor: None,
+    }
+    .with_processor_fn("logos-node-tar-gz-v1", extract_release_binary)
+}
+
+fn extract_release_binary(artifact: &Path, output: &Path) -> Result<(), DynError> {
+    let decoder = GzDecoder::new(fs::File::open(artifact)?);
+    let mut archive = tar::Archive::new(decoder);
+
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        if entry
+            .path()?
+            .file_name()
+            .is_some_and(|name| name == "logos-blockchain-node")
+        {
+            entry.unpack(output)?;
+            return Ok(());
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        "release archive does not contain logos-blockchain-node",
+    )
+    .into())
 }
 
 fn default_node_binary_provider() -> BinaryProviderRef {
