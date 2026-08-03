@@ -591,6 +591,7 @@ mod tests {
         codec::DeserializeOp as _,
         crypto::ZkHasher,
         events::Events,
+        header::UncleRefs,
         mantle::{
             MantleTx, Note, SignedMantleTx, ledger::Utxo, ops::leader_claim::VoucherCm,
             transactions::states::Unverified,
@@ -907,6 +908,7 @@ mod tests {
             Block::create(
                 prev_header,
                 slot,
+                UncleRefs::empty(),
                 self.proof.clone(),
                 BlockTransactions::empty(),
                 &dummy_signing_key,

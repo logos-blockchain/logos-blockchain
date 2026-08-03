@@ -8,6 +8,7 @@ use std::{
 use futures::StreamExt as _;
 use lb_core::{
     block::{Block, BlockTransactions},
+    header::UncleRefs,
     mantle::{
         Note, SignedMantleTx, Utxo,
         ops::leader_claim::{VoucherCm, VoucherSecret},
@@ -426,6 +427,7 @@ pub fn try_build_block(
             Block::create(
                 parent,
                 slot.into(),
+                UncleRefs::empty(),
                 proof,
                 BlockTransactions::empty(),
                 &signing_key,

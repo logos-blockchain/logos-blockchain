@@ -376,6 +376,8 @@ impl Cryptarchia {
             });
         }
 
+        // TODO: validate the uncle references and resolve their slots for the TSI.
+
         // A block number of this block if it's applied to the chain.
         let (_, state, events) = self
             .ledger

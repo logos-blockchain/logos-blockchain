@@ -18,7 +18,7 @@ use lb_chain_service::{
 };
 use lb_core::{
     block::{Block, BlockTransactions, Error as BlockError, MAX_BLOCK_TRANSACTIONS_SIZE},
-    header::HeaderId,
+    header::{HeaderId, UncleRefs},
     mantle::{
         SignedMantleTx,
         gas::MainnetGasConstants,
@@ -671,7 +671,9 @@ where
         let valid_tx_stream = stream::iter(valid_txs);
         let txs = txs_for_block(valid_tx_stream).await;
 
-        let block = Block::create(parent, slot, proof, txs, signing_key)?;
+        // TODO: select the uncles to reference.
+        let uncles = UncleRefs::empty();
+        let block = Block::create(parent, slot, uncles, proof, txs, signing_key)?;
 
         info!(
             "proposed block {:?} with {} transactions ({} removed)",

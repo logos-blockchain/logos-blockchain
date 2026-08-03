@@ -5,6 +5,7 @@ mod tests {
 
     use crate::{
         block::{Block, BlockTransactions, tests::create_proof},
+        header::UncleRefs,
         mantle::MantleTx,
     };
 
@@ -13,6 +14,7 @@ mod tests {
         Block::create(
             [0u8; 32].into(),
             Slot::from(1u64),
+            UncleRefs::empty(),
             create_proof(),
             BlockTransactions::empty(),
             &signing_key,
@@ -76,6 +78,7 @@ mod tests {
         const PARENT_BLOCK: usize = 32;
         const SLOT: usize = 8;
         const BLOCK_ROOT: usize = 32;
+        const UNCLES: usize = 32 * UncleRefs::MAX_UNCLES;
         const POL_PROOF: usize = 128;
         const ENTROPY_CONTRIBUTION: usize = 32;
         const LEADER_KEY: usize = 32;
@@ -86,6 +89,7 @@ mod tests {
             + PARENT_BLOCK
             + SLOT
             + BLOCK_ROOT
+            + UNCLES
             + POL_PROOF
             + ENTROPY_CONTRIBUTION
             + LEADER_KEY

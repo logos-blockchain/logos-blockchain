@@ -859,6 +859,7 @@ mod tests {
 
     use lb_core::{
         crypto::ZkDigest as _,
+        header::UncleRefs,
         mantle::{
             MantleTx, Note, OpProof, SignedMantleTx,
             channel::Channels,
@@ -2260,6 +2261,7 @@ mod tests {
         let source_block = Block::create(
             HeaderId::from([0; 32]),
             Slot::from(1),
+            UncleRefs::empty(),
             test_leader_proof(),
             source_transactions,
             &Ed25519Key::from_bytes(&[0; 32]),

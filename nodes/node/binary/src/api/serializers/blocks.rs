@@ -2,7 +2,7 @@ use lb_api_service::http::mantle::BlockWithChainState;
 use lb_chain_service::Slot;
 use lb_core::{
     block::Block,
-    header::{ContentId, Header, HeaderId},
+    header::{ContentId, Header, HeaderId, UncleRefs},
     mantle::{SignedMantleTx, transactions::states::VerificationState},
     proofs::leader_proof::Groth16LeaderProof,
 };
@@ -69,6 +69,8 @@ pub struct ApiHeaderSerializer {
     slot: Slot,
     #[serde(getter = "Header::block_root")]
     block_root: ContentId,
+    #[serde(getter = "Header::uncles")]
+    uncles: UncleRefs,
     #[serde(getter = "Header::leader_proof")]
     proof_of_leadership: Groth16LeaderProof,
 }

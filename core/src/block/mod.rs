@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
     codec::{DeserializeOp as _, SerializeOp as _},
-    header::{ContentId, Header, HeaderId},
+    header::{ContentId, Header, HeaderId, UncleRefs},
     mantle::{
         traits::{Hashable, StorageSize},
         transactions::hash::TxHash,
@@ -141,6 +141,7 @@ impl<Tx> Block<Tx> {
     pub fn create(
         parent_block: HeaderId,
         slot: Slot,
+        uncles: UncleRefs,
         proof_of_leadership: Groth16LeaderProof,
         transactions: BlockTransactions<Tx>,
         signing_key: &Ed25519Key,
@@ -161,7 +162,7 @@ impl<Tx> Block<Tx> {
 
         // 3. Block root & header
         let block_root = Self::calculate_content_id(transactions.as_slice());
-        let header = Header::new(parent_block, block_root, slot, proof_of_leadership);
+        let header = Header::new(parent_block, block_root, slot, uncles, proof_of_leadership);
 
         // 4. Signature over the header
         let signature = header.sign(signing_key)?;
@@ -449,6 +450,7 @@ mod tests {
         let valid_block = Block::create(
             parent_block,
             slot,
+            UncleRefs::empty(),
             proof_of_leadership,
             transactions.clone(),
             &valid_signing_key,
@@ -486,6 +488,7 @@ mod tests {
         let _valid_block: Block<MantleTx> = Block::create(
             parent_block,
             slot,
+            UncleRefs::empty(),
             proof_of_leadership.clone(),
             transactions,
             &signing_key,
@@ -496,6 +499,7 @@ mod tests {
         let _valid_block: Block<MantleTx> = Block::create(
             parent_block,
             slot,
+            UncleRefs::empty(),
             proof_of_leadership,
             transactions,
             &signing_key,
@@ -532,6 +536,7 @@ mod tests {
         let proposal = Block::create(
             parent_block,
             Slot::from(42u64),
+            UncleRefs::empty(),
             create_proof(),
             transactions,
             &signing_key,
@@ -549,6 +554,7 @@ mod tests {
         let block = Block::create(
             parent_block,
             Slot::from(42u64),
+            UncleRefs::empty(),
             create_proof(),
             BlockTransactions::<MantleTx>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap(),
             &signing_key,
@@ -581,6 +587,7 @@ mod tests {
         let proposal = Block::create(
             [0u8; 32].into(),
             Slot::from(42u64),
+            UncleRefs::empty(),
             create_proof(),
             BlockTransactions::<MantleTx>::empty(),
             &signing_key,
@@ -636,6 +643,7 @@ mod tests {
         let _valid_block: Block<MantleTx> = Block::create(
             parent_block,
             slot,
+            UncleRefs::empty(),
             proof_of_leadership.clone(),
             transactions,
             &signing_key,
@@ -647,6 +655,7 @@ mod tests {
         let _valid_block = Block::create(
             parent_block,
             slot,
+            UncleRefs::empty(),
             proof_of_leadership.clone(),
             transactions,
             &signing_key,
@@ -659,6 +668,7 @@ mod tests {
         let invalid_transaction_inputs_result = Block::create(
             parent_block,
             slot,
+            UncleRefs::empty(),
             proof_of_leadership,
             oversized,
             &signing_key,
@@ -690,8 +700,15 @@ mod tests {
         // Build a syntactically valid non-genesis block first.
         let txs = BlockTransactions::<MantleTx>::empty();
         let key = Ed25519Key::from_bytes(&[0; 32]);
-        let block_result =
-            Block::create(parent_block, Slot::from(0u64), proof, txs, &key).unwrap_err();
+        let block_result = Block::create(
+            parent_block,
+            Slot::from(0u64),
+            UncleRefs::empty(),
+            proof,
+            txs,
+            &key,
+        )
+        .unwrap_err();
 
         assert!(
             matches!(block_result, Error::Validation(msg) if msg == "expected non-genesis slot")
@@ -709,6 +726,7 @@ mod tests {
         let valid = Block::create(
             parent_block,
             Slot::from(1u64),
+            UncleRefs::empty(),
             proof.clone(),
             BlockTransactions::<MantleTx>::empty(),
             &key,
@@ -721,6 +739,7 @@ mod tests {
             parent_block,
             *valid.header().block_root(),
             Slot::genesis(),
+            UncleRefs::empty(),
             proof,
         );
         let genesis_signature = genesis_header
