@@ -10,6 +10,7 @@ use crate::{
         ops::{
             channel::{ChannelId, deposit::Metadata},
             leader_claim::VoucherNullifier,
+            pow::PowNullifier,
         },
         transactions::hash::TxHash,
     },
@@ -115,6 +116,11 @@ pub enum TxEventPayload {
     /// A leader claim operation created the reward note for its beneficiary.
     LeaderRewardClaimed {
         voucher_nullifier: VoucherNullifier,
+        utxo: Utxo,
+    },
+    /// A PoW claim operation created a reward not for its beneficiary
+    PoWRewardClaimed {
+        pow_nullifier: PowNullifier,
         utxo: Utxo,
     },
 }
