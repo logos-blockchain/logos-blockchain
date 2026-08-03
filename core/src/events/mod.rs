@@ -118,7 +118,7 @@ pub enum TxEventPayload {
         voucher_nullifier: VoucherNullifier,
         utxo: Utxo,
     },
-    /// A PoW claim operation created a reward not for its beneficiary
+    /// A `PoW` claim operation created a reward not for its beneficiary
     PoWRewardClaimed {
         pow_nullifier: PowNullifier,
         utxo: Utxo,
