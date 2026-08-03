@@ -8,8 +8,8 @@ use crate::{
     mantle::{
         channel::{Channels, Error},
         ledger::{
-            ExecutableOperation, Inputs, InputsError, Outputs, ProvableOperation, Utxos,
-            VerifiableOperation, verification_mode,
+            ExecutableOperation, Inputs, InputsError, Outputs, PreverifiableOperation,
+            ProvableOperation, Utxos, VerifiableOperation, verification_mode,
         },
         ops::{OpId, channel::ChannelId},
         transactions::hash::{TxHash, TxHashView},
@@ -68,24 +68,24 @@ impl ProvableOperation for DepositOp {
     type Proof = ZkSignature;
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for DepositOp {
-    type PreverificationContext<'a> = ();
-    type VerificationContext<'a> = DepositValidationContext<'a>;
+impl PreverifiableOperation<verification_mode::StandardMode> for DepositOp {
+    type Context<'a> = ();
     type Error = Error;
 
     fn preverify(
         &self,
         _proof: &Self::Proof,
-        _context: &Self::PreverificationContext<'_>,
+        _context: &Self::Context<'_>,
     ) -> Result<(), Self::Error> {
         Ok(())
     }
+}
 
-    fn verify(
-        &self,
-        proof: &Self::Proof,
-        context: &Self::VerificationContext<'_>,
-    ) -> Result<(), Self::Error> {
+impl VerifiableOperation<verification_mode::StandardMode> for DepositOp {
+    type Context<'a> = DepositValidationContext<'a>;
+    type Error = Error;
+
+    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
         // Check that the channel exist
         if !context.channels.channels.contains_key(&self.channel_id) {
             return Err(Error::ChannelNotFound {

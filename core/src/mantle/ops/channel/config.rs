@@ -9,7 +9,10 @@ use crate::{
     events::TxEvent,
     mantle::{
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
-        ledger::{ExecutableOperation, ProvableOperation, VerifiableOperation, verification_mode},
+        ledger::{
+            ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
+            verification_mode,
+        },
         transactions::hash::TxHashView,
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
@@ -51,15 +54,14 @@ impl ProvableOperation for ChannelConfigOp {
     type Proof = ChannelMultiSigProof;
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
-    type PreverificationContext<'a> = ();
-    type VerificationContext<'a> = ChannelConfigValidationContext<'a>;
+impl PreverifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
+    type Context<'a> = ();
     type Error = Error;
 
     fn preverify(
         &self,
         _proof: &Self::Proof,
-        _context: &Self::PreverificationContext<'_>,
+        _context: &Self::Context<'_>,
     ) -> Result<(), Self::Error> {
         // Check config is well-formed
         if self.configuration_threshold == 0 || self.transfer_threshold == 0 || self.keys.is_empty()
@@ -69,12 +71,13 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
 
         Ok(())
     }
+}
 
-    fn verify(
-        &self,
-        proof: &Self::Proof,
-        context: &Self::VerificationContext<'_>,
-    ) -> Result<(), Self::Error> {
+impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
+    type Context<'a> = ChannelConfigValidationContext<'a>;
+    type Error = Error;
+
+    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
         // Check that the indexes are unique and there is the same number of proof and
         // index. This is enforced by the proof structure that enforces it.
 

@@ -4,8 +4,8 @@ use crate::{
     events::TxEvent,
     mantle::{
         ledger::{
-            ExecutableOperation, Operation, ProvableOperation, VerifiableOperation,
-            verification_mode::VerificationMode,
+            ExecutableOperation, Operation, PreverifiableOperation, ProvableOperation,
+            VerifiableOperation, verification_mode::VerificationMode,
         },
         transactions::states::{Preverified, Unverified, VerificationState, Verified},
     },
@@ -57,24 +57,20 @@ impl<T: ProvableOperation, Mode: VerificationMode> SignedOp<T, Unverified, Mode>
     }
 }
 
-impl<T: ProvableOperation + VerifiableOperation<Mode>, Mode: VerificationMode>
-    SignedOp<T, Unverified, Mode>
-{
+impl<T: PreverifiableOperation<Mode>, Mode: VerificationMode> SignedOp<T, Unverified, Mode> {
     pub fn preverify(
         self,
-        context: &T::PreverificationContext<'_>,
+        context: &T::Context<'_>,
     ) -> Result<SignedOp<T, Preverified, Mode>, T::Error> {
         self.operation.preverify(&self.proof, context)?;
         Ok(self.into_state())
     }
 }
 
-impl<T: ProvableOperation + VerifiableOperation<Mode>, Mode: VerificationMode>
-    SignedOp<T, Preverified, Mode>
-{
+impl<T: VerifiableOperation<Mode>, Mode: VerificationMode> SignedOp<T, Preverified, Mode> {
     pub fn verify(
         self,
-        context: &T::VerificationContext<'_>,
+        context: &T::Context<'_>,
     ) -> Result<SignedOp<T, Verified, Mode>, (Self, T::Error)> {
         let verify_result = self.operation.verify(&self.proof, context);
         match verify_result {

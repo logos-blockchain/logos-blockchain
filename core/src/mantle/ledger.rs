@@ -51,25 +51,26 @@ pub trait ProvableOperation {
     type Proof;
 }
 
-// TODO: Specific proof type check?
-pub trait VerifiableOperation<Mode: verification_mode::VerificationMode>:
+pub trait PreverifiableOperation<Mode: verification_mode::VerificationMode>:
     ProvableOperation
 {
-    type PreverificationContext<'a>;
-    type VerificationContext<'a>;
+    type Context<'a>;
     type Error;
 
     fn preverify(
         &self,
         proof: &Self::Proof,
-        context: &Self::PreverificationContext<'_>,
+        context: &Self::Context<'_>,
     ) -> Result<(), Self::Error>;
+}
 
-    fn verify(
-        &self,
-        proof: &Self::Proof,
-        context: &Self::VerificationContext<'_>,
-    ) -> Result<(), Self::Error>;
+pub trait VerifiableOperation<Mode: verification_mode::VerificationMode>:
+    ProvableOperation
+{
+    type Context<'a>;
+    type Error;
+
+    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error>;
 }
 
 pub trait ExecutableOperation {
@@ -83,11 +84,17 @@ pub trait ExecutableOperation {
 }
 
 pub trait Operation<Mode: verification_mode::VerificationMode>:
-    VerifiableOperation<Mode> + ExecutableOperation
+    ProvableOperation + PreverifiableOperation<Mode> + VerifiableOperation<Mode> + ExecutableOperation
 {
 }
-impl<T: VerifiableOperation<Mode> + ExecutableOperation, Mode: verification_mode::VerificationMode>
-    Operation<Mode> for T
+
+impl<
+    T: ProvableOperation
+        + PreverifiableOperation<Mode>
+        + VerifiableOperation<Mode>
+        + ExecutableOperation,
+    Mode: verification_mode::VerificationMode,
+> Operation<Mode> for T
 {
 }
 
