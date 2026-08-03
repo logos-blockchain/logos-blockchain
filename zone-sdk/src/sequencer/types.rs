@@ -9,9 +9,10 @@ use lb_core::{
         SignedMantleTx, Value,
         channel::ChannelState,
         gas::GasCost,
-        ledger::{Inputs, Outputs},
+        ledger::{Inputs, NoteId, Outputs},
         ops::channel::{
-            ChannelId, MsgId, deposit::Metadata, inscribe::Inscription, withdraw::ChannelWithdrawOp,
+            ChannelId, MsgId, channel_transfer::ChannelTransferOp, deposit::Metadata,
+            inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
         traits::Hashable as _,
         transactions::{TxHash, states::Unverified},
@@ -38,6 +39,12 @@ pub struct SequencerCheckpoint {
     pub lib: HeaderId,
     /// Last known LIB slot (for backfill range queries).
     pub lib_slot: Slot,
+    /// Finalized channel notes as of `lib`. Defaults to empty when restoring
+    /// a checkpoint written before channel-note tracking existed — such
+    /// restores miss notes finalized before the checkpoint; a cold start
+    /// rebuilds the full set.
+    #[serde(default)]
+    pub channel_notes: Vec<ChannelNote>,
 }
 
 /// Result of a publish operation.
@@ -448,6 +455,59 @@ pub struct DepositInfo {
     pub metadata: Metadata,
 }
 
+/// A channel transfer observed on chain: channel notes consumed and
+/// re-created under new keys/denominations by the channel committee.
+#[derive(Debug, Clone)]
+pub struct ChannelTransferInfo {
+    /// Transaction hash that contained this transfer op.
+    pub tx_hash: TxHash,
+    /// The transfer op (`channel_id`, inputs, outputs).
+    pub op: ChannelTransferOp,
+}
+
+/// A note owned by the channel, as reconstructed from block data.
+///
+/// `value` and `pk` are exact for notes created by a `ChannelTransfer` (the
+/// op payload carries full notes) and for single-input deposits (the deposit
+/// event carries the total). Notes from multi-input deposits carry `None`
+/// for both — the event publishes only ids and a total — and are grouped via
+/// [`Self::deposit_group`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ChannelNote {
+    pub note_id: NoteId,
+    /// Exact value, when derivable from chain data.
+    pub value: Option<Value>,
+    /// The key holding the note's `PoS` participation power, when derivable.
+    pub pk: Option<ZkPublicKey>,
+    /// Set when this note was created by a multi-input deposit: per-note
+    /// values are unknown, but the group total is. The group's total is only
+    /// meaningful while all `size` members are unspent.
+    pub deposit_group: Option<DepositGroup>,
+}
+
+/// Identity and total of a multi-input deposit's recreated note group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DepositGroup {
+    /// `op_id` of the deposit op that created the group.
+    pub op_id: Hash,
+    /// Total value across all notes of the group.
+    pub total: Value,
+    /// Number of notes the deposit created.
+    pub size: usize,
+}
+
+/// The channel's note set as tracked from block data.
+///
+/// `finalized` holds notes created below LIB and unspent at the tracked tip
+/// — immune to reorgs. `unfinalized` holds notes created above LIB on the
+/// tracked branch; they can disappear on a branch change (their ids are
+/// branch-stable, so a re-included op recreates the same ids).
+#[derive(Debug, Clone, Default)]
+pub struct ChannelWalletView {
+    pub finalized: Vec<ChannelNote>,
+    pub unfinalized: Vec<ChannelNote>,
+}
+
 /// A tx enqueued for posting and surfaced as a publish return value or in
 /// orphan payloads.
 ///
@@ -516,4 +576,7 @@ pub enum FinalizedOp {
     /// inscription+withdraw bundle (the bundling is implicit via the parent
     /// [`FinalizedTx::tx_hash`]).
     Withdraw(WithdrawInfo),
+    /// A channel transfer op on the channel: notes re-keyed/re-denominated
+    /// under channel authority.
+    ChannelTransfer(ChannelTransferInfo),
 }

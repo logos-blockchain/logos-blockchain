@@ -39,9 +39,9 @@ use super::{
         sign_tx as build_sign_tx,
     },
     types::{
-        Error, Event, InscriptionInfo, PendingTx, PublishResult, SequencerChannelView,
-        SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource, TxStatus, TxStatusUpdate,
-        WithdrawArg,
+        ChannelWalletView, Error, Event, InscriptionInfo, PendingTx, PublishResult,
+        SequencerChannelView, SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource,
+        TxStatus, TxStatusUpdate, WithdrawArg,
     },
 };
 use crate::{adapter, adapter::BoxStream};
@@ -180,6 +180,9 @@ pub(super) enum ActorRequest {
         tx: RawMantleTx,
         response_tx: oneshot::Sender<Result<Ed25519Signature, Error>>,
     },
+    ChannelWallet {
+        response_tx: oneshot::Sender<ChannelWalletView>,
+    },
 }
 
 impl<Node> ZoneSequencer<Node>
@@ -227,10 +230,12 @@ where
                 pending_txs,
                 lib,
                 lib_slot,
+                channel_notes,
             } = cp;
             let finalized_msg =
                 restored_pending_channel_tip(&pending_txs, channel_id).unwrap_or(last_msg_id);
             let mut tx_state = TxState::new(lib, finalized_msg);
+            tx_state.restore_channel_notes(channel_notes);
             for (_hash, tx) in pending_txs {
                 track_pending_tx(&mut tx_state, tx, channel_id);
             }
@@ -347,6 +352,17 @@ where
     #[must_use]
     pub fn checkpoint(&self) -> Option<SequencerCheckpoint> {
         self.checkpoint_tx.borrow().clone()
+    }
+
+    /// The channel's note set as tracked from block data: finalized base
+    /// plus the unfinalized notes on the currently tracked branch. Empty
+    /// until the first block is processed.
+    #[must_use]
+    pub fn channel_wallet(&self) -> ChannelWalletView {
+        self.state
+            .as_ref()
+            .map(|s| s.channel_wallet_view(self.current_tip))
+            .unwrap_or_default()
     }
 
     /// Subscribe to readiness. Returns a [`watch::Receiver<bool>`] that
@@ -520,6 +536,9 @@ where
                 response_tx,
             } => {
                 drop(response_tx.send(self.do_submit_signed_tx(tx, msg_id)));
+            }
+            ActorRequest::ChannelWallet { response_tx } => {
+                drop(response_tx.send(self.channel_wallet()));
             }
             ActorRequest::PrepareTx {
                 ops,
@@ -1038,6 +1057,7 @@ pub(super) fn build_checkpoint(
         pending_txs: state.all_pending_txs(),
         lib: state.lib(),
         lib_slot,
+        channel_notes: state.channel_notes_base(),
     }
 }
 

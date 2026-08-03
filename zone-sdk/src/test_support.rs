@@ -1,7 +1,7 @@
 //! Configurable [`adapter::Node`] mock and shared builders for unit tests.
 
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     sync::{Arc, Mutex},
 };
 
@@ -12,18 +12,22 @@ use lb_common_http_client::{
     ProcessedBlockEvent, Slot, State, TimeInfo,
 };
 use lb_core::{
+    events::{Event as ChainEvent, TxEvent, TxEventPayload},
     header::{ContentId, HeaderId},
     mantle::{
-        Op, RawMantleTx, SignedMantleTx,
+        Op, RawMantleTx, SignedMantleTx, Value,
         channel::ChannelState,
+        ledger::NoteId,
         ops::{
-            OpProof,
+            OpId as _, OpProof,
             channel::{
                 ChannelId, MsgId,
                 config::Keys,
+                deposit::DepositOp,
                 inscribe::{Inscription, InscriptionOp},
             },
         },
+        traits::Hashable as _,
         transactions::{Ops, OpsProofs, states::Unverified},
     },
     proofs::leader_proof::Groth16LeaderProof,
@@ -84,6 +88,8 @@ pub struct MockNode {
     pub up: Option<watch::Receiver<bool>>,
     /// Receives every `post_transaction` tx.
     pub posted: Option<mpsc::Sender<SignedMantleTx<Unverified>>>,
+    /// Served by `block_events()`, keyed by block id; absent ids yield `None`.
+    pub events: HashMap<HeaderId, Events>,
 }
 
 impl Default for MockNode {
@@ -102,6 +108,7 @@ impl Default for MockNode {
             zone_messages: Vec::new(),
             up: None,
             posted: None,
+            events: HashMap::new(),
         }
     }
 }
@@ -205,9 +212,9 @@ impl adapter::Node for MockNode {
 
     async fn block_events(
         &self,
-        _id: HeaderId,
+        id: HeaderId,
     ) -> Result<Option<Events>, lb_common_http_client::Error> {
-        Ok(None)
+        Ok(self.events.get(&id).cloned())
     }
 
     async fn immutable_blocks(
@@ -343,4 +350,23 @@ pub fn inscribe_op(channel_id: ChannelId, parent: MsgId, payload: &[u8]) -> Insc
         parent,
         signer: Ed25519Key::from_bytes(&[0u8; 32]).public_key(),
     }
+}
+
+/// A `Deposit` block event matching `op` inside `tx`, recreating `notes`.
+pub fn deposit_event(
+    tx: &SignedMantleTx<Unverified>,
+    op: &DepositOp,
+    amount: Value,
+    notes: Vec<NoteId>,
+) -> Events {
+    Events::from(ChainEvent::Tx(TxEvent::new(
+        tx.mantle_tx().hash(),
+        op.op_id(),
+        TxEventPayload::Deposit {
+            channel_id: op.channel_id,
+            amount,
+            metadata: op.metadata.clone(),
+            notes: notes.try_into().expect("bounded note count"),
+        },
+    )))
 }

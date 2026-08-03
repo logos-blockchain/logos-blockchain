@@ -9,8 +9,8 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use super::{
     types::{
-        Error, Event, SequencerChannelView, SequencerCheckpoint, TurnNotification, TxStatusUpdate,
-        WithdrawArg,
+        ChannelWalletView, Error, Event, SequencerChannelView, SequencerCheckpoint,
+        TurnNotification, TxStatusUpdate, WithdrawArg,
     },
     zone_sequencer::ActorRequest,
 };
@@ -157,6 +157,14 @@ impl SequencerClient {
             response_tx,
         })?;
         Self::recv(response_rx).await?
+    }
+
+    /// The channel's tracked note set, served by the drive task — see
+    /// [`super::ZoneSequencer::channel_wallet`].
+    pub async fn channel_wallet(&self) -> Result<ChannelWalletView, Error> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(ActorRequest::ChannelWallet { response_tx })?;
+        Self::recv(response_rx).await
     }
 
     /// Subscribe to the broadcast channel of events.

@@ -14,8 +14,12 @@ use lb_core::{
 };
 use rpds::HashTrieSetSync;
 
-use super::types::{
-    AtomicWithdrawInfo, ChannelUpdateTx, InscriptionInfo, PendingTx, TxSource, WithdrawInfo,
+use super::{
+    channel_wallet::{ChannelWallet, NoteOp},
+    types::{
+        AtomicWithdrawInfo, ChannelNote, ChannelUpdateTx, ChannelWalletView, InscriptionInfo,
+        PendingTx, TxSource, WithdrawInfo,
+    },
 };
 
 /// Result of channel update detection — the linear block-level delta
@@ -116,6 +120,8 @@ pub struct TxState {
     /// (fresh state or checkpoint restore); the finalized-prefix search then
     /// matches nothing (see [`Self::finalized_prefix_ids`]).
     finalized_parent_msg: Option<MsgId>,
+    /// The channel's note set: finalized base + per-block overlay.
+    wallet: ChannelWallet,
 }
 
 /// A channel-touching tx's tip-advancing content, classified once at block
@@ -175,6 +181,7 @@ impl TxState {
             block_txs: HashMap::new(),
             finalized_msg,
             finalized_parent_msg: None,
+            wallet: ChannelWallet::default(),
         }
     }
 
@@ -335,6 +342,7 @@ impl TxState {
         lib: HeaderId,
         our_txs: impl IntoIterator<Item = TxHash>,
         channel_txs: Vec<BlockChannelTx>,
+        note_ops: Vec<NoteOp>,
     ) {
         // Store parent relationship for pruning
         self.parent_map.insert(block_id, parent_id);
@@ -361,6 +369,7 @@ impl TxState {
         if !channel_txs.is_empty() {
             self.block_txs.insert(block_id, channel_txs);
         }
+        self.wallet.store_overlay(block_id, note_ops);
 
         // When lib advances: update finalized_msg and prune.
         // NOTE: we do NOT remove pending txs here. Pending txs are only
@@ -387,6 +396,7 @@ impl TxState {
             while let Some(b) = prune_cursor {
                 self.block_states.remove(&b);
                 self.block_txs.remove(&b);
+                self.wallet.prune_block(&b);
                 prune_cursor = self.parent_map.remove(&b);
             }
 
@@ -436,6 +446,7 @@ impl TxState {
             for orphan in orphans {
                 self.block_states.remove(&orphan);
                 self.block_txs.remove(&orphan);
+                self.wallet.prune_block(&orphan);
                 self.parent_map.remove(&orphan);
             }
         }
@@ -927,6 +938,42 @@ impl TxState {
         ))
     }
 
+    /// Apply channel-note ops from finalized blocks to the wallet base set.
+    pub fn apply_finalized_note_ops(&mut self, ops: Vec<NoteOp>) {
+        self.wallet.apply_finalized(ops);
+    }
+
+    /// The channel's note set at `tip` (or the finalized base only when no
+    /// tip is known yet). The overlay walk excludes the LIB block: blocks at
+    /// and below LIB reach the base via the finalized-backfill path.
+    #[must_use]
+    pub fn channel_wallet_view(&self, tip: Option<HeaderId>) -> ChannelWalletView {
+        let mut blocks = Vec::new();
+        if let Some(tip) = tip {
+            let mut current = tip;
+            while current != self.current_lib {
+                blocks.push(current);
+                match self.parent_map.get(&current) {
+                    Some(&parent) => current = parent,
+                    None => break,
+                }
+            }
+            blocks.reverse();
+        }
+        self.wallet.view(blocks.iter())
+    }
+
+    /// Export the finalized channel-note base for checkpointing.
+    #[must_use]
+    pub fn channel_notes_base(&self) -> Vec<ChannelNote> {
+        self.wallet.export_base()
+    }
+
+    /// Restore the finalized channel-note base from a checkpoint.
+    pub fn restore_channel_notes(&mut self, notes: Vec<ChannelNote>) {
+        self.wallet.restore_base(notes);
+    }
+
     /// The channel's inscription chain at an L1 tip: the mined inscriptions,
     /// extended forward through on-chain links we still hold whose position
     /// hasn't been taken by a competing inscription.
@@ -1083,7 +1130,7 @@ mod tests {
         state.submit_other(tx, ChannelId::from([0u8; 32]));
 
         // Process block containing our tx, lib stays at genesis
-        state.process_block(b1, genesis, genesis, vec![hash], vec![]);
+        state.process_block(b1, genesis, genesis, vec![hash], vec![], Vec::new());
 
         // Tx is still pending (not finalized yet, lib hasn't advanced)
         assert_eq!(state.unfinalized_count(), 1);
@@ -1104,12 +1151,12 @@ mod tests {
         state.submit_other(tx, ChannelId::from([0u8; 32]));
 
         // b1 with our tx
-        state.process_block(b1, genesis, genesis, vec![hash], vec![]);
+        state.process_block(b1, genesis, genesis, vec![hash], vec![], Vec::new());
         assert_eq!(state.unfinalized_count(), 1);
 
         // b2, lib advances to b1 — process_block does not remove from
         // pending (that's done by backfill ground truth)
-        state.process_block(b2, b1, b1, vec![], vec![]);
+        state.process_block(b2, b1, b1, vec![], vec![], Vec::new());
         assert_eq!(
             state.unfinalized_count(),
             1,
@@ -1136,7 +1183,7 @@ mod tests {
         state.submit_other(tx2, ChannelId::from([0u8; 32]));
 
         // b1 contains only tx1
-        state.process_block(b1, genesis, genesis, vec![hash1], vec![]);
+        state.process_block(b1, genesis, genesis, vec![hash1], vec![], Vec::new());
 
         // pending_txs at b1 should only return tx2
         let pending: Vec<_> = state.pending_txs(b1).into_iter().map(|(h, _)| h).collect();
@@ -1158,16 +1205,141 @@ mod tests {
         state.submit_other(tx, ChannelId::from([0u8; 32]));
 
         // b1 has our tx
-        state.process_block(b1, genesis, genesis, vec![hash], vec![]);
+        state.process_block(b1, genesis, genesis, vec![hash], vec![], Vec::new());
 
         // At b1 tip, tx is in safe set (not in pending_txs)
         assert!(state.pending_txs(b1).is_empty());
 
         // b2 forks from genesis, no tx
-        state.process_block(b2, genesis, genesis, vec![], vec![]);
+        state.process_block(b2, genesis, genesis, vec![], vec![], Vec::new());
 
         // At b2 tip, tx is back in pending_txs (different branch)
         assert!(state.pending_txs(b2).iter().any(|(h, _)| *h == hash));
+    }
+
+    fn wallet_note(seed: u64, value: u64) -> NoteOp {
+        NoteOp::Add(ChannelNote {
+            note_id: lb_core::mantle::ledger::NoteId::from(lb_groth16::Fr::from(seed)),
+            value: Some(value),
+            pk: None,
+            deposit_group: None,
+        })
+    }
+
+    fn wallet_note_id(seed: u64) -> lb_core::mantle::ledger::NoteId {
+        lb_core::mantle::ledger::NoteId::from(lb_groth16::Fr::from(seed))
+    }
+
+    #[test]
+    fn wallet_view_follows_branch() {
+        // G <- a1 (adds n1)
+        //   <- b1 (adds n2)
+        let genesis = header_id(0);
+        let a1 = header_id(1);
+        let b1 = header_id(2);
+        let mut state = TxState::new(genesis, MsgId::root());
+
+        state.process_block(
+            a1,
+            genesis,
+            genesis,
+            vec![],
+            vec![],
+            vec![wallet_note(1, 10)],
+        );
+        state.process_block(
+            b1,
+            genesis,
+            genesis,
+            vec![],
+            vec![],
+            vec![wallet_note(2, 20)],
+        );
+
+        let at_a = state.channel_wallet_view(Some(a1));
+        assert_eq!(at_a.unfinalized.len(), 1);
+        assert_eq!(at_a.unfinalized[0].note_id, wallet_note_id(1));
+
+        let at_b = state.channel_wallet_view(Some(b1));
+        assert_eq!(at_b.unfinalized.len(), 1);
+        assert_eq!(at_b.unfinalized[0].note_id, wallet_note_id(2));
+    }
+
+    #[test]
+    fn wallet_lib_advance_excludes_folded_overlay() {
+        // G <- a1 (adds n1) <- a2; LIB advances to a1. The finalized-backfill
+        // path applies a1's ops to the base; the branch walk from a2 must
+        // exclude a1's overlay entry so the note is not double-counted.
+        let genesis = header_id(0);
+        let a1 = header_id(1);
+        let a2 = header_id(2);
+        let mut state = TxState::new(genesis, MsgId::root());
+
+        state.process_block(
+            a1,
+            genesis,
+            genesis,
+            vec![],
+            vec![],
+            vec![wallet_note(1, 10)],
+        );
+        // What `fetch_and_process_blocks` does when a1's range finalizes:
+        state.apply_finalized_note_ops(vec![wallet_note(1, 10)]);
+        state.process_block(a2, a1, a1, vec![], vec![], Vec::new());
+
+        let view = state.channel_wallet_view(Some(a2));
+        assert_eq!(view.finalized.len(), 1);
+        assert_eq!(view.finalized[0].note_id, wallet_note_id(1));
+        assert!(
+            view.unfinalized.is_empty(),
+            "a1's overlay entry must not double-count the finalized note"
+        );
+    }
+
+    #[test]
+    fn wallet_prunes_orphaned_branch_entries() {
+        // G <- a1 <- a2 (lib advances to a1); b1 forks from G with a note.
+        // After the lib advance b1 is pruned, so its note is unreachable
+        // even if a stale tip were queried.
+        let genesis = header_id(0);
+        let a1 = header_id(1);
+        let b1 = header_id(2);
+        let a2 = header_id(3);
+        let mut state = TxState::new(genesis, MsgId::root());
+
+        state.process_block(a1, genesis, genesis, vec![], vec![], Vec::new());
+        state.process_block(
+            b1,
+            genesis,
+            genesis,
+            vec![],
+            vec![],
+            vec![wallet_note(2, 20)],
+        );
+        state.process_block(a2, a1, a1, vec![], vec![], Vec::new());
+
+        let view = state.channel_wallet_view(Some(b1));
+        assert!(view.unfinalized.is_empty(), "orphaned branch entry pruned");
+    }
+
+    #[test]
+    fn wallet_checkpoint_roundtrip() {
+        let genesis = header_id(0);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.apply_finalized_note_ops(vec![wallet_note(1, 10), wallet_note(2, 20)]);
+
+        let mut exported = state.channel_notes_base();
+        exported.sort_by_key(|n| n.note_id);
+
+        let mut restored = TxState::new(genesis, MsgId::root());
+        restored.restore_channel_notes(exported.clone());
+        let mut base = restored.channel_notes_base();
+        base.sort_by_key(|n| n.note_id);
+        assert_eq!(exported, base);
+
+        let view = restored.channel_wallet_view(None);
+        assert_eq!(view.finalized.len(), 2);
+        assert!(view.unfinalized.is_empty());
     }
 
     #[test]
@@ -1188,19 +1360,19 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
 
         // Build main chain up to a1
-        state.process_block(a1, genesis, genesis, vec![], vec![]);
+        state.process_block(a1, genesis, genesis, vec![], vec![], Vec::new());
 
         // Build fork from a1 (before lib advances past a1)
-        state.process_block(b1, a1, genesis, vec![], vec![]);
-        state.process_block(b2, b1, genesis, vec![], vec![]);
+        state.process_block(b1, a1, genesis, vec![], vec![], Vec::new());
+        state.process_block(b2, b1, genesis, vec![], vec![], Vec::new());
 
         // Verify fork blocks exist before lib advances
         assert!(state.block_states.contains_key(&b1));
         assert!(state.block_states.contains_key(&b2));
 
         // Continue main chain, lib advances to a3
-        state.process_block(a2, a1, genesis, vec![], vec![]);
-        state.process_block(a3, a2, a3, vec![], vec![]); // lib advances to a3
+        state.process_block(a2, a1, genesis, vec![], vec![], Vec::new());
+        state.process_block(a3, a2, a3, vec![], vec![], Vec::new()); // lib advances to a3
 
         // After lib advances to a3:
         // - genesis, a1, a2 should be pruned (ancestors up to and including old lib)
@@ -1225,9 +1397,9 @@ mod tests {
         assert!(state.block_states.contains_key(&a3), "lib should exist");
 
         // Continue and verify pruning continues working
-        state.process_block(a4, a3, a3, vec![], vec![]);
-        state.process_block(a5, a4, a5, vec![], vec![]); // lib advances to a5
-        state.process_block(a6, a5, a5, vec![], vec![]);
+        state.process_block(a4, a3, a3, vec![], vec![], Vec::new());
+        state.process_block(a5, a4, a5, vec![], vec![], Vec::new()); // lib advances to a5
+        state.process_block(a6, a5, a5, vec![], vec![], Vec::new());
 
         assert!(
             !state.block_states.contains_key(&a3),
@@ -1296,6 +1468,7 @@ mod tests {
                 BlockChannelTx::Inscription(u_info),
                 BlockChannelTx::Config(x_old),
             ],
+            Vec::new(),
         );
         let old_lineage = state.channel_lineage(a1);
 
@@ -1321,6 +1494,7 @@ mod tests {
                 BlockChannelTx::Inscription(v_info),
                 BlockChannelTx::Config(x_new),
             ],
+            Vec::new(),
         );
 
         let update = state
@@ -1383,6 +1557,7 @@ mod tests {
                 BlockChannelTx::Inscription(u_info),
                 BlockChannelTx::Config(x_old),
             ],
+            Vec::new(),
         );
 
         // Captured at the old tip before the competing branch arrives,
@@ -1411,10 +1586,11 @@ mod tests {
                 BlockChannelTx::Inscription(v_info),
                 BlockChannelTx::Config(x_new),
             ],
+            Vec::new(),
         );
         // The event that switches branches also advances the LIB past the
         // replayed config: the finalized boundary becomes (x, parent = v).
-        state.process_block(b2, b1, b1, vec![], vec![]);
+        state.process_block(b2, b1, b1, vec![], vec![], Vec::new());
 
         let update = state
             .detect_channel_update(&old_lineage, b2)
@@ -1457,7 +1633,7 @@ mod tests {
         submit_fake_inscription(&mut state, 3, b2_msg, b3_msg);
         assert_eq!(state.pending.len(), 3);
 
-        state.process_block(block1, genesis, genesis, vec![], vec![]);
+        state.process_block(block1, genesis, genesis, vec![], vec![], Vec::new());
 
         // Capture the old lineage before inserting block2, mirroring the real
         // caller; computing it after would let c1 bridge into the "before" view.
@@ -1482,6 +1658,7 @@ mod tests {
             genesis,
             vec![c1_tx_hash],
             vec![BlockChannelTx::Inscription(c1_inscription)],
+            Vec::new(),
         );
 
         let update = state
@@ -1520,7 +1697,7 @@ mod tests {
         submit_fake_inscription(&mut state, 1, MsgId::root(), b1_msg);
         submit_fake_inscription(&mut state, 4, MsgId::root(), d1_msg);
 
-        state.process_block(block1, genesis, genesis, vec![], vec![]);
+        state.process_block(block1, genesis, genesis, vec![], vec![], Vec::new());
 
         // Capture the old lineage before inserting block2, mirroring the real
         // caller; computing it after would let c1 bridge into the "before" view.
@@ -1539,6 +1716,7 @@ mod tests {
             genesis,
             vec![],
             vec![BlockChannelTx::Inscription(c1_inscription)],
+            Vec::new(),
         );
 
         let update = state.detect_channel_update(&old_lineage, block2).unwrap();
@@ -1563,7 +1741,7 @@ mod tests {
         submit_fake_inscription(&mut state, 1, MsgId::root(), b1_msg);
         submit_fake_inscription(&mut state, 4, MsgId::root(), d1_msg);
 
-        state.process_block(block1, genesis, genesis, vec![], vec![]);
+        state.process_block(block1, genesis, genesis, vec![], vec![], Vec::new());
 
         // Ambiguous: two children of root → falls back to canonical tip
         assert_eq!(state.publish_parent(block1), MsgId::root());
@@ -1582,7 +1760,7 @@ mod tests {
         submit_fake_inscription(&mut state, 1, MsgId::root(), b1_msg);
         submit_fake_inscription(&mut state, 2, b1_msg, b2_msg);
 
-        state.process_block(block1, genesis, genesis, vec![], vec![]);
+        state.process_block(block1, genesis, genesis, vec![], vec![], Vec::new());
 
         assert_eq!(state.publish_parent(block1), b2_msg);
     }
@@ -1599,7 +1777,7 @@ mod tests {
         let b1_msg = msg_id(10);
         submit_fake_inscription(&mut state, 1, MsgId::root(), b1_msg);
 
-        state.process_block(block1, genesis, genesis, vec![], vec![]);
+        state.process_block(block1, genesis, genesis, vec![], vec![], Vec::new());
 
         // c1 lands, consuming root
         let c1_msg = msg_id(20);
@@ -1615,6 +1793,7 @@ mod tests {
             genesis,
             vec![],
             vec![BlockChannelTx::Inscription(c1_inscription)],
+            Vec::new(),
         );
 
         // b1 is stale — publish_parent should return canonical tip (c1)
@@ -1642,11 +1821,11 @@ mod tests {
         state.submit_other(tx2, ChannelId::from([0u8; 32]));
 
         // b1 has tx1
-        state.process_block(b1, genesis, genesis, vec![hash1], vec![]);
+        state.process_block(b1, genesis, genesis, vec![hash1], vec![], Vec::new());
         // b2 has tx2
-        state.process_block(b2, b1, genesis, vec![hash2], vec![]);
+        state.process_block(b2, b1, genesis, vec![hash2], vec![], Vec::new());
         // b3, lib jumps from genesis to b2 (skipping b1)
-        state.process_block(b3, b2, b2, vec![], vec![]);
+        state.process_block(b3, b2, b2, vec![], vec![], Vec::new());
         assert_eq!(
             state.unfinalized_count(),
             2,

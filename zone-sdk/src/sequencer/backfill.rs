@@ -80,7 +80,9 @@ where
             .flat_map(|t| t.ops.iter().rev())
             .find_map(|op| match op {
                 FinalizedOp::Inscription(i) => Some(i),
-                FinalizedOp::Deposit(_) | FinalizedOp::Withdraw(_) => None,
+                FinalizedOp::Deposit(_)
+                | FinalizedOp::Withdraw(_)
+                | FinalizedOp::ChannelTransfer(_) => None,
             })
         {
             self.last_msg_id = last_inscription.this_msg;

@@ -26,7 +26,8 @@ use super::{
     support::{
         CustomRepublishDeps, PublishDeadline, balance_update_payload, collect_indexed_messages,
         collect_indexed_messages_exactly_once, ensure_zone_transactions_included,
-        parse_balance_payload, publish_message_with_retry, wait_for_channel_view, wait_for_deposit,
+        parse_balance_payload, publish_message_with_retry, wait_for_channel_view,
+        wait_for_channel_wallet_counts, wait_for_channel_wallet_note, wait_for_deposit,
         wait_for_exact_indexed_payload_count,
         wait_for_finalized_deposit_via_sequencer_and_collect_mempool_pending,
         wait_for_finalized_withdraw_via_sequencer_and_collect_mempool_pending,
@@ -1511,6 +1512,72 @@ async fn step_zone_indexer_returns_finalized_withdraw(
     wait_for_withdraw(indexer, &withdraw, Duration::from_secs(timeout_seconds))
         .await
         .map_err(|error| zone_step_error(step, &error))
+}
+
+#[cucumber::then(
+    expr = "the channel wallet of {string} contains a note of value {int} in {int} seconds"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_channel_wallet_contains_note(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    value: u64,
+    timeout_seconds: u64,
+) -> StepResult {
+    let client = log_step_error(step, world.zone.sequencer_client(&sequencer_alias))?;
+    wait_for_channel_wallet_note(client, value, false, Duration::from_secs(timeout_seconds))
+        .await
+        .map_err(|error| zone_step_error(step, &error))
+}
+
+#[cucumber::then(
+    expr = "the channel wallet of {string} contains a finalized note of value {int} in {int} seconds"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_channel_wallet_contains_finalized_note(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    value: u64,
+    timeout_seconds: u64,
+) -> StepResult {
+    let client = log_step_error(step, world.zone.sequencer_client(&sequencer_alias))?;
+    wait_for_channel_wallet_note(client, value, true, Duration::from_secs(timeout_seconds))
+        .await
+        .map_err(|error| zone_step_error(step, &error))
+}
+
+#[cucumber::then(
+    expr = "the channel wallet of {string} has exactly {int} finalized and {int} unfinalized notes in {int} seconds"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_channel_wallet_has_exact_counts(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    finalized: usize,
+    unfinalized: usize,
+    timeout_seconds: u64,
+) -> StepResult {
+    let client = log_step_error(step, world.zone.sequencer_client(&sequencer_alias))?;
+    wait_for_channel_wallet_counts(
+        client,
+        finalized,
+        unfinalized,
+        Duration::from_secs(timeout_seconds),
+    )
+    .await
+    .map_err(|error| zone_step_error(step, &error))
 }
 
 #[cucumber::then(expr = "sequencer {string} finalizes deposit {string} in {int} seconds")]

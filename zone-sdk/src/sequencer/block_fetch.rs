@@ -23,10 +23,11 @@ use tracing::{debug, error, warn};
 
 use super::{
     TARGET,
+    channel_wallet::note_ops_from_txs,
     state::{BlockChannelTx, ChannelUpdateInfo, TxState},
     types::{
-        AtomicWithdrawInfo, ChannelUpdateTx, DepositInfo, Error, FinalizedOp, FinalizedTx,
-        InscriptionInfo, PendingTx, WithdrawInfo,
+        AtomicWithdrawInfo, ChannelTransferInfo, ChannelUpdateTx, DepositInfo, Error, FinalizedOp,
+        FinalizedTx, InscriptionInfo, PendingTx, WithdrawInfo,
     },
 };
 use crate::{adapter, adapter::build_deposit_events};
@@ -83,6 +84,13 @@ where
     };
 
     let old_tip = *current_tip;
+
+    // Fetched before any state mutation (this call and per-block errors below
+    // leave state untouched, so the caller can retry the same event). Only
+    // hits the node when the block actually carries deposits for our channel.
+    let deposit_events =
+        fetch_block_deposit_events(node, block_id, &event.block.transactions, channel_id).await?;
+    let note_ops = note_ops_from_txs(&event.block.transactions, channel_id, &deposit_events);
 
     // Snapshot which txs were tracked BEFORE this event mutates state: the
     // extension-case `adopted` filter below distinguishes entries the
@@ -145,7 +153,7 @@ where
     observe_channel_inscriptions(s, &channel_txs, &event.block.transactions);
 
     // Process the actual event block
-    s.process_block(block_id, parent_id, lib, our_txs, channel_txs);
+    s.process_block(block_id, parent_id, lib, our_txs, channel_txs, note_ops);
 
     // Remove our pending txs that were finalized in the backfilled LIB blocks.
     // `finalized_items` already carries the typed payloads (built before
@@ -359,6 +367,14 @@ where
         result.our_tx_hashes.extend(our_txs.iter().copied());
         result.items.extend(block_items);
 
+        // These blocks are immutable — their note ops go straight to the
+        // wallet's finalized base, never through the per-block overlay.
+        state.apply_finalized_note_ops(note_ops_from_txs(
+            &block.transactions,
+            channel_id,
+            &deposit_events,
+        ));
+
         let current_lib = state.lib();
         state.process_block(
             block.header.id,
@@ -366,6 +382,7 @@ where
             current_lib,
             our_txs,
             channel_txs,
+            Vec::new(),
         );
     }
 
@@ -533,6 +550,12 @@ fn extract_finalized_items(
                         op: withdraw.clone(),
                     }));
                 }
+                Op::ChannelTransfer(transfer) if transfer.channel_id == channel_id => {
+                    ops.push(FinalizedOp::ChannelTransfer(ChannelTransferInfo {
+                        tx_hash,
+                        op: transfer.clone(),
+                    }));
+                }
                 _ => {}
             }
         }
@@ -565,7 +588,13 @@ async fn backfill_canonical<Node>(
     let blocks = walk_back_to_known(state, missing_parent, node).await;
     let lib = state.lib();
     for block in &blocks {
-        apply_backfilled_block(state, block, channel_id, lib);
+        // Same best-effort contract as the block walk itself: on a fetch
+        // failure stop applying, leaving the remaining blocks for the next
+        // backfill attempt.
+        let Some(deposit_events) = backfill_deposit_events(node, block, channel_id).await else {
+            break;
+        };
+        apply_backfilled_block(state, block, channel_id, lib, &deposit_events);
     }
     debug!(target: TARGET, "Canonical backfill complete");
 }
@@ -610,11 +639,34 @@ where
     blocks
 }
 
+/// [`fetch_block_deposit_events`] with the canonical-backfill error contract:
+/// `None` (after a warn) tells the caller to stop applying blocks.
+async fn backfill_deposit_events<Node>(
+    node: &Node,
+    block: &lb_common_http_client::ApiBlock,
+    channel_id: ChannelId,
+) -> Option<HashMap<(TxHash, Hash), (Value, DepositRecreatedNotes)>>
+where
+    Node: adapter::Node + Sync,
+{
+    match fetch_block_deposit_events(node, block.header.id, &block.transactions, channel_id).await {
+        Ok(events) => Some(events),
+        Err(e) => {
+            warn!(
+                target: TARGET,
+                "Failed to fetch deposit events during canonical backfill: {e}"
+            );
+            None
+        }
+    }
+}
+
 fn apply_backfilled_block(
     state: &mut TxState,
     block: &lb_common_http_client::ApiBlock,
     channel_id: ChannelId,
     lib: HeaderId,
+    deposit_events: &HashMap<(TxHash, Hash), (Value, DepositRecreatedNotes)>,
 ) {
     let block_id = block.header.id;
     let parent_id = block.header.parent_block;
@@ -632,8 +684,10 @@ fn apply_backfilled_block(
     // the live-block path in `handle_block_event`.
     observe_channel_inscriptions(state, &channel_txs, &block.transactions);
 
+    let note_ops = note_ops_from_txs(&block.transactions, channel_id, deposit_events);
+
     // Use current state lib to avoid premature finalization
-    state.process_block(block_id, parent_id, lib, our_txs, channel_txs);
+    state.process_block(block_id, parent_id, lib, our_txs, channel_txs, note_ops);
 }
 
 /// Classify a block's channel-touching txs in tx-then-op order: a `publish`
@@ -777,12 +831,13 @@ fn touches_channel_tip<State: VerificationState>(
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
-        NoteId, RawMantleTx,
+        Note, NoteId, RawMantleTx,
         channel::{SlotTimeframe, SlotTimeout},
-        ledger::Inputs,
+        ledger::{Inputs, Outputs},
         ops::{
             OpId as _, OpProof,
             channel::{
+                channel_transfer::ChannelTransferOp,
                 config::{ChannelConfigOp, Keys},
                 deposit::{DepositOp, Metadata},
                 inscribe::InscriptionOp,
@@ -795,7 +850,8 @@ mod tests {
 
     use super::*;
     use crate::test_support::{
-        MockNode, api_block, header_id, inscribe_op, live_event, unverified_tx_with_ops,
+        MockNode, api_block, deposit_event, header_id, inscribe_op, live_event,
+        unverified_tx_with_ops,
     };
 
     fn deposit_op(channel_id: ChannelId, input_seed: u32, metadata: Metadata) -> DepositOp {
@@ -979,7 +1035,14 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
         let old_lineage = state.channel_lineage(genesis);
         observe_channel_inscriptions(&mut state, &classified, std::slice::from_ref(&tx));
-        state.process_block(block, genesis, genesis, vec![tx_hash], classified);
+        state.process_block(
+            block,
+            genesis,
+            genesis,
+            vec![tx_hash],
+            classified,
+            Vec::new(),
+        );
 
         assert!(
             !state.is_tracked(&tx_hash),
@@ -1033,7 +1096,14 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
         let old_lineage = state.channel_lineage(genesis);
         observe_channel_inscriptions(&mut state, &classified, std::slice::from_ref(&tx));
-        state.process_block(block, genesis, genesis, vec![tx_hash], classified);
+        state.process_block(
+            block,
+            genesis,
+            genesis,
+            vec![tx_hash],
+            classified,
+            Vec::new(),
+        );
 
         assert!(
             !state.is_tracked(&tx_hash),
@@ -1088,7 +1158,14 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
         let old_lineage = state.channel_lineage(genesis);
         observe_channel_inscriptions(&mut state, &classified, std::slice::from_ref(&tx));
-        state.process_block(block, genesis, genesis, vec![tx_hash], classified);
+        state.process_block(
+            block,
+            genesis,
+            genesis,
+            vec![tx_hash],
+            classified,
+            Vec::new(),
+        );
 
         let update = state
             .detect_channel_update(&old_lineage, block)
@@ -1250,7 +1327,14 @@ mod tests {
         let extracted = run_with_timeout(std::time::Duration::from_secs(2), move || {
             classify_channel_txs(std::slice::from_ref(&tx), channel_id)
         });
-        state.process_block(block, genesis, genesis, vec![tx_hash], extracted);
+        state.process_block(
+            block,
+            genesis,
+            genesis,
+            vec![tx_hash],
+            extracted,
+            Vec::new(),
+        );
 
         // Tip must match the ledger after the replay.
         assert_eq!(
@@ -1295,7 +1379,14 @@ mod tests {
         let extracted = run_with_timeout(std::time::Duration::from_secs(2), move || {
             classify_channel_txs(std::slice::from_ref(&tx), channel_id)
         });
-        state.process_block(block, genesis, genesis, vec![tx_hash], extracted);
+        state.process_block(
+            block,
+            genesis,
+            genesis,
+            vec![tx_hash],
+            extracted,
+            Vec::new(),
+        );
 
         assert_eq!(state.channel_tip_at(block), config_id);
     }
@@ -1328,13 +1419,27 @@ mod tests {
 
         // Process block A; LIB stays at genesis.
         let extracted_a = classify_channel_txs(std::slice::from_ref(&tx_a), channel_id);
-        state.process_block(block_a, genesis, genesis, vec![tx_a_hash], extracted_a);
+        state.process_block(
+            block_a,
+            genesis,
+            genesis,
+            vec![tx_a_hash],
+            extracted_a,
+            Vec::new(),
+        );
         assert_eq!(state.channel_tip_at(block_a), config_id);
 
         // A dummy intermediate block to advance LIB past A. LIB advance to
         // block_a finalizes the config and prunes A's block_inscriptions.
         let block_intermediate = header_id(3);
-        state.process_block(block_intermediate, block_a, block_a, vec![], vec![]);
+        state.process_block(
+            block_intermediate,
+            block_a,
+            block_a,
+            vec![],
+            vec![],
+            Vec::new(),
+        );
 
         // Pending chained from the now-finalized config tip.
         let pending = dummy_pending_tx(5);
@@ -1354,6 +1459,7 @@ mod tests {
             block_a,
             vec![tx_b_hash],
             extracted_b,
+            Vec::new(),
         );
 
         // Tip after the replay is still hash(X) — matches the ledger.
@@ -1744,6 +1850,120 @@ mod tests {
                 .is_none_or(|u| u.orphaned.is_empty()),
             "a finalized inscription must never be reported orphaned; got {:?}",
             third.channel_update,
+        );
+    }
+
+    /// End-to-end wallet tracking through the live + finalized paths: a live
+    /// deposit surfaces as an unfinalized note, a live transfer re-keys it,
+    /// and the LIB backfill folds the result into the finalized base without
+    /// double-counting.
+    #[tokio::test]
+    async fn wallet_tracks_deposit_and_transfer_through_finalization() {
+        let channel_id = ChannelId::from([0u8; 32]);
+        let recreated = NoteId::from(Fr::from(1010u64));
+        let out_pk = lb_key_management_system_service::keys::ZkPublicKey::from(Fr::from(7u64));
+
+        let dep = deposit_op(channel_id, 1, Metadata::try_from(b"d".to_vec()).unwrap());
+        let dep_tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(dep.clone())]);
+        let b1 = api_block(1, 0, 1, vec![dep_tx.clone()]);
+
+        let transfer = ChannelTransferOp {
+            channel_id,
+            inputs: Inputs::new([recreated]),
+            outputs: Outputs::new([Note::new(50, out_pk)]),
+        };
+        let out_id = transfer.utxos().next().unwrap().id();
+        let transfer_tx = unverified_tx_with_ops(vec![Op::ChannelTransfer(transfer)]);
+        let b2 = api_block(2, 1, 2, vec![transfer_tx]);
+        let b3 = api_block(3, 2, 3, Vec::new());
+
+        let node = MockNode {
+            immutable: vec![b1.clone(), b2.clone()],
+            events: HashMap::from([(
+                header_id(1),
+                deposit_event(&dep_tx, &dep, 50, vec![recreated]),
+            )]),
+            ..MockNode::default()
+        };
+        let mut state = None;
+        let mut current_tip = None;
+        let mut lib_slot = Slot::genesis();
+
+        handle_block_event(
+            &live_event(&b1),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing B1 succeeds");
+        let view = state
+            .as_ref()
+            .unwrap()
+            .channel_wallet_view(Some(header_id(1)));
+        assert!(view.finalized.is_empty());
+        assert_eq!(view.unfinalized.len(), 1);
+        assert_eq!(view.unfinalized[0].note_id, recreated);
+        assert_eq!(view.unfinalized[0].value, Some(50));
+
+        handle_block_event(
+            &live_event(&b2),
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing B2 succeeds");
+        let view = state
+            .as_ref()
+            .unwrap()
+            .channel_wallet_view(Some(header_id(2)));
+        assert_eq!(view.unfinalized.len(), 1, "transfer re-keys the note");
+        assert_eq!(view.unfinalized[0].note_id, out_id);
+        assert_eq!(view.unfinalized[0].pk, Some(out_pk));
+
+        // LIB advances to B2: the immutable range folds into the base.
+        let event = ProcessedBlockEvent {
+            block: b3,
+            tip: header_id(3),
+            tip_slot: Slot::from(3),
+            lib: header_id(2),
+            lib_slot: Slot::from(2),
+        };
+        let result = handle_block_event(
+            &event,
+            &mut state,
+            &mut current_tip,
+            &mut lib_slot,
+            channel_id,
+            &node,
+        )
+        .await
+        .expect("processing B3 succeeds");
+
+        let view = state
+            .as_ref()
+            .unwrap()
+            .channel_wallet_view(Some(header_id(3)));
+        assert_eq!(view.finalized.len(), 1);
+        assert_eq!(view.finalized[0].note_id, out_id);
+        assert!(
+            view.unfinalized.is_empty(),
+            "folded overlay entries must not double-count"
+        );
+
+        // The finalized stream surfaces the transfer op to consumers.
+        assert!(
+            result
+                .finalized_items
+                .iter()
+                .flat_map(|t| t.ops.iter())
+                .any(|op| matches!(op, FinalizedOp::ChannelTransfer(t) if t.op.channel_id == channel_id)),
+            "finalized items carry the channel transfer"
         );
     }
 }

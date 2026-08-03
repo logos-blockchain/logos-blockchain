@@ -69,7 +69,9 @@ fn finalized_inscriptions(finalized: &[FinalizedTx]) -> impl Iterator<Item = &In
         .flat_map(|tx| tx.ops.iter())
         .filter_map(|op| match op {
             FinalizedOp::Inscription(info) => Some(info),
-            FinalizedOp::Deposit(_) | FinalizedOp::Withdraw(_) => None,
+            FinalizedOp::Deposit(_)
+            | FinalizedOp::Withdraw(_)
+            | FinalizedOp::ChannelTransfer(_) => None,
         })
 }
 use crate::common::{
@@ -99,6 +101,10 @@ pub enum ZoneTestError {
     Block { message: String },
     #[error("timed out waiting for zone transactions to finalize")]
     FinalizationTimeout,
+    #[error("channel wallet request failed: {message}")]
+    ChannelWallet { message: String },
+    #[error("timed out waiting for a channel wallet note")]
+    ChannelWalletTimeout,
     #[error("timed out waiting for zone LIB to advance")]
     LibAdvanceTimeout,
     #[error("timed out waiting for zone sequencer channel view condition: {message}")]
@@ -1122,6 +1128,69 @@ async fn count_indexed_payload(
 
 /// Waits until the zone indexer observes the expected channel deposit,
 /// including its amount.
+/// Polls the sequencer's channel wallet until a note of `value` is present.
+/// With `finalized_only`, only the finalized layer counts.
+/// Polls until the wallet holds exactly the given number of finalized and
+/// unfinalized notes — an exact-count check that catches double-counting.
+pub async fn wait_for_channel_wallet_counts(
+    client: &SequencerClient,
+    finalized: usize,
+    unfinalized: usize,
+    duration: Duration,
+) -> Result<(), ZoneTestError> {
+    timeout(duration, async {
+        loop {
+            let view =
+                client
+                    .channel_wallet()
+                    .await
+                    .map_err(|error| ZoneTestError::ChannelWallet {
+                        message: error.to_string(),
+                    })?;
+            if view.finalized.len() == finalized && view.unfinalized.len() == unfinalized {
+                return Ok(());
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .map_err(|_| ZoneTestError::ChannelWalletTimeout)?
+}
+
+pub async fn wait_for_channel_wallet_note(
+    client: &SequencerClient,
+    value: Value,
+    finalized_only: bool,
+    duration: Duration,
+) -> Result<(), ZoneTestError> {
+    timeout(duration, async {
+        loop {
+            let view =
+                client
+                    .channel_wallet()
+                    .await
+                    .map_err(|error| ZoneTestError::ChannelWallet {
+                        message: error.to_string(),
+                    })?;
+            let unfinalized = (!finalized_only)
+                .then_some(view.unfinalized.iter())
+                .into_iter()
+                .flatten();
+            if view
+                .finalized
+                .iter()
+                .chain(unfinalized)
+                .any(|note| note.value == Some(value))
+            {
+                return Ok(());
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .map_err(|_| ZoneTestError::ChannelWalletTimeout)?
+}
+
 pub async fn wait_for_deposit(
     indexer: &ZoneIndexer<ZoneNodeHttpClient>,
     expected: &DepositOp,
