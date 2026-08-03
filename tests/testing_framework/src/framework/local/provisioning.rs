@@ -10,16 +10,14 @@ use async_trait::async_trait;
 use config::{api, sdp, state, storage, wallet};
 use flate2::read::GzDecoder;
 use lb_config::kms::key_id_for_preload_backend;
-use lb_core::{
-    block::genesis::GenesisBlock,
-    mantle::{self},
-};
+use lb_core::mantle;
 use lb_key_management_system_service::keys::{Key, secured_key::SecuredKey as _};
 use lb_libp2p::Multiaddr;
 use lb_node::{
     UserConfig,
     config::{
         self, RunConfig,
+        deployment::DeploymentSettings,
         tracing::serde::{
             Level,
             logger::{self, AppenderType},
@@ -39,7 +37,10 @@ use tracing::debug;
 use crate::{
     LOG_LEVEL,
     configs::deployment::NodeBinaryProfile,
-    diagnostics::{record_system_monitor_event, register_system_monitor_output_file},
+    diagnostics::{
+        record_system_monitor_event, register_system_monitor_output_file,
+        unregister_system_monitor_output_file,
+    },
     env as tf_env,
     env::{remove_default_env, replace_default_env},
     framework::LbcEnv,
@@ -47,7 +48,7 @@ use crate::{
         DeploymentPlan, NodeHttpClient, NodePlan,
         configs::{
             Config, Libp2pNetworkLayout, NetworkParams, create_node_config_for_node,
-            default_e2e_deployment_settings, deployment::TopologyConfig,
+            deployment::TopologyConfig, deployment_settings_for_topology,
         },
     },
 };
@@ -55,6 +56,10 @@ use crate::{
 const LOGS_PREFIX: &str = "__logs";
 const DEFAULT_BLEND_NETWORK_PORT: u16 = 3400;
 /// URL of a Logos node release binary downloaded by the local TF deployer.
+///
+/// Use an immutable URL, or set [`LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_SHA256`]. An
+/// archive republished at the same URL is otherwise served from the download
+/// cache without being fetched again.
 pub const LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL: &str = "LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL";
 /// Optional SHA-256 checksum for [`LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL`].
 pub const LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_SHA256: &str = "LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_SHA256";
@@ -66,7 +71,7 @@ pub const DEPLOYMENT_CONFIG_FILE: &str = "deployment.yaml";
 struct PlannedLocalNodeConfig {
     config: Config,
     descriptor_override: Option<RunConfig>,
-    genesis_block: GenesisBlock,
+    deployment_settings: DeploymentSettings,
     port_strategy: PortStrategy,
 }
 
@@ -78,6 +83,24 @@ enum PortStrategy {
 
 #[async_trait]
 impl LocalDeployerEnv for LbcEnv {
+    fn prepare_local_cluster(topology: &Self::Deployment) {
+        register_system_monitor_output_file(
+            &topology
+                .config()
+                .scenario_base_dir
+                .join("system_stats.ndjson"),
+        );
+    }
+
+    fn cleanup_local_cluster(topology: &Self::Deployment) {
+        unregister_system_monitor_output_file(
+            &topology
+                .config()
+                .scenario_base_dir
+                .join("system_stats.ndjson"),
+        );
+    }
+
     fn build_node_config(
         topology: &Self::Deployment,
         index: usize,
@@ -116,13 +139,6 @@ impl LocalDeployerEnv for LbcEnv {
     fn build_initial_node_configs(
         topology: &Self::Deployment,
     ) -> Result<Vec<NodeConfigEntry<<Self as Application>::NodeConfig>>, ProcessSpawnError> {
-        register_system_monitor_output_file(
-            &topology
-                .config()
-                .scenario_base_dir
-                .join("system_stats.ndjson"),
-        );
-
         topology
             .nodes()
             .iter()
@@ -554,14 +570,19 @@ fn plan_local_node_config(
 
         config.network_config.backend.initial_peers = initial_peers;
 
+        let genesis_block = descriptors
+            .config()
+            .genesis_block
+            .as_ref()
+            .ok_or_else(|| io::Error::other("missing topology genesis tx"))?;
+
         return Ok(PlannedLocalNodeConfig {
             config,
             descriptor_override: descriptors.config().node_config_override(index).cloned(),
-            genesis_block: descriptors
-                .config()
-                .genesis_block
-                .clone()
-                .ok_or_else(|| io::Error::other("missing topology genesis tx"))?,
+            deployment_settings: deployment_settings_for_topology(
+                genesis_block,
+                descriptors.config(),
+            ),
             port_strategy: PortStrategy::PreservePlannedPorts,
         });
     }
@@ -604,14 +625,16 @@ fn plan_local_node_config(
         config
     };
 
+    let genesis_block = descriptors
+        .config()
+        .genesis_block
+        .as_ref()
+        .ok_or_else(|| io::Error::other("missing topology genesis tx"))?;
+
     Ok(PlannedLocalNodeConfig {
         config,
         descriptor_override: descriptors.config().node_config_override(index).cloned(),
-        genesis_block: descriptors
-            .config()
-            .genesis_block
-            .clone()
-            .ok_or_else(|| io::Error::other("missing topology genesis tx"))?,
+        deployment_settings: deployment_settings_for_topology(genesis_block, descriptors.config()),
         port_strategy: PortStrategy::AllocateEphemeralPorts,
     })
 }
@@ -630,7 +653,8 @@ pub fn build_node_run_config(
         .genesis_block
         .clone()
         .ok_or_else(|| io::Error::other("missing topology genesis tx"))?;
-    Ok(build_run_config(node.general.clone(), &genesis_block))
+    let deployment_settings = deployment_settings_for_topology(&genesis_block, topology.config());
+    Ok(build_run_config(node.general.clone(), &deployment_settings))
 }
 
 fn finalize_dynamic_run_config(
@@ -650,11 +674,10 @@ fn finalize_dynamic_run_config(
         return override_config.clone();
     }
 
-    build_run_config(plan.config.clone(), &plan.genesis_block)
+    build_run_config(plan.config.clone(), &plan.deployment_settings)
 }
 
-fn build_run_config(config: Config, genesis_block: &GenesisBlock) -> RunConfig {
-    let deployment_config = default_e2e_deployment_settings(genesis_block);
+fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) -> RunConfig {
     let mut tracing = config.tracing_config.tracing_settings;
     tracing.level = Level::INFO;
 
@@ -733,7 +756,7 @@ fn build_run_config(config: Config, genesis_block: &GenesisBlock) -> RunConfig {
     };
 
     RunConfig {
-        deployment: deployment_config,
+        deployment: deployment_settings.clone(),
         user: user_config,
     }
 }
@@ -849,5 +872,32 @@ fn initial_peers_for_dynamic_node(
             .iter()
             .map(|port| lb_libp2p::multiaddr(Ipv4Addr::LOCALHOST, *port))
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use testing_framework_runner_local::LocalDeployerEnv as _;
+
+    use super::*;
+    use crate::node::configs::deployment::DeploymentBuilder;
+
+    #[test]
+    fn local_cluster_lifecycle_unregisters_system_monitor_output() {
+        let state_dir = tempfile::tempdir().expect("state directory should be created");
+        let output = state_dir.path().join("system_stats.ndjson");
+        let deployment = DeploymentBuilder::new(TopologyConfig::with_node_numbers(1))
+            .scenario_base_dir(state_dir.path().to_owned())
+            .build()
+            .expect("deployment should build");
+
+        LbcEnv::prepare_local_cluster(&deployment);
+        assert!(output.exists());
+
+        LbcEnv::cleanup_local_cluster(&deployment);
+        fs::remove_file(&output).expect("monitor output should be removable after cleanup");
+        record_system_monitor_event("after_cluster_cleanup", "test");
+
+        assert!(!output.exists(), "cleaned-up output must not be recreated");
     }
 }

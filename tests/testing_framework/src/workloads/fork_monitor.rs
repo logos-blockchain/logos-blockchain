@@ -3,6 +3,7 @@ mod report;
 use std::{
     collections::{HashMap, HashSet},
     marker::PhantomData,
+    num::NonZeroU64,
     time::{Duration, Instant},
 };
 
@@ -355,7 +356,7 @@ where
 
         self.reset_capture_state();
         self.apply_thresholds(derive_thresholds(ctx));
-        self.security_param = u64::from(ctx.descriptors().config().security_param);
+        self.security_param = NonZeroU64::from(ctx.descriptors().config().security_param).get();
 
         Ok(())
     }
