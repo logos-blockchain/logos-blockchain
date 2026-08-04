@@ -28,9 +28,9 @@ use crate::{
 };
 
 /// Builds a self-transfer whose balance is the mandatory fee plus `tip` at
-/// the live gas prices, checks the size predictor against the actual
-/// encoding, submits it, and records it under the alias.
-pub async fn submit_self_transfer_with_tip(
+/// the live gas prices, checks the size predictor against the actual encoding,
+/// and records it for later submission.
+pub async fn prepare_self_transfer_with_tip(
     world: &mut CucumberWorld,
     step: &Step,
     wallet_name: &str,
@@ -51,6 +51,29 @@ pub async fn submit_self_transfer_with_tip(
         }
     })?;
 
+    info!(
+        target: TARGET,
+        "Prepared self-transfer `{transaction_alias}` ({:?}) from wallet \
+         '{wallet_name}' with tip {tip} at prices execution={:?} storage={:?}",
+        signed_tx.hash(),
+        prices.execution_base_gas_price, prices.storage_gas_price,
+    );
+
+    world.remember_prepared_transaction(transaction_alias, signed_tx);
+
+    Ok(())
+}
+
+/// Submits a previously prepared transaction and records its hash under the
+/// same alias.
+pub async fn submit_prepared_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    node_name: &str,
+    transaction_alias: &str,
+) -> StepResult {
+    let client = world.resolve_node_http_client(node_name)?;
+    let signed_tx = world.resolve_prepared_transaction(transaction_alias)?;
     let tx_hash = signed_tx.hash();
 
     client
@@ -65,15 +88,35 @@ pub async fn submit_self_transfer_with_tip(
 
     info!(
         target: TARGET,
-        "Submitted self-transfer `{transaction_alias}` ({tx_hash:?}) from wallet \
-         '{wallet_name}' with tip {tip} at prices execution={:?} storage={:?}",
-        prices.execution_base_gas_price, prices.storage_gas_price,
+        "Submitted prepared transaction `{transaction_alias}` ({tx_hash:?}) via node \
+         '{node_name}'",
     );
 
-    world.remember_submitted_transaction(transaction_alias.clone(), tx_hash);
-    world.remember_prepared_transaction(transaction_alias, signed_tx);
+    world.remember_submitted_transaction(transaction_alias.to_owned(), tx_hash);
 
     Ok(())
+}
+
+/// Prepares and immediately submits a self-transfer at the live gas prices.
+pub async fn submit_self_transfer_with_tip(
+    world: &mut CucumberWorld,
+    step: &Step,
+    wallet_name: &str,
+    node_name: &str,
+    transaction_alias: String,
+    tip: i128,
+) -> StepResult {
+    prepare_self_transfer_with_tip(
+        world,
+        step,
+        wallet_name,
+        node_name,
+        transaction_alias.clone(),
+        tip,
+    )
+    .await?;
+
+    submit_prepared_transaction(world, step, node_name, &transaction_alias).await
 }
 
 /// Records the gas prices after every block into the world, for the

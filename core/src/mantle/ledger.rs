@@ -39,16 +39,58 @@ pub type BoundedUtxos = UpperBoundedVec<Utxo, MAX_TRANSACTION_INPUTS>;
 pub type BoundedInputs = UpperBoundedVec<NoteId, MAX_TRANSACTION_INPUTS>;
 pub type BoundedOutputs = UpperBoundedVec<Note, MAX_TRANSACTION_OUTPUTS>;
 
-pub trait Operation<ValidationContext> {
-    type ExecutionContext<'a>
-    where
-        Self: 'a;
+pub mod verification_mode {
+    pub trait VerificationMode {}
+
+    pub struct GenesisMode;
+    impl VerificationMode for GenesisMode {}
+
+    pub struct StandardMode;
+    impl VerificationMode for StandardMode {}
+}
+
+pub trait ProvableOperation {
+    type Proof;
+}
+
+// TODO: Specific proof type check?
+pub trait VerifiableOperation<Mode: verification_mode::VerificationMode>:
+    ProvableOperation
+{
+    type PreverificationContext<'a>;
+    type VerificationContext<'a>;
     type Error;
-    fn validate(&self, ctx: &ValidationContext) -> Result<(), Self::Error>;
-    fn execute(
+
+    fn preverify(
         &self,
-        ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error>;
+        proof: &Self::Proof,
+        context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::Error>;
+
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::Error>;
+}
+
+pub trait ExecutableOperation {
+    type Context<'a>;
+    type Error;
+
+    fn execute<'a>(
+        &self,
+        context: Self::Context<'a>,
+    ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error>;
+}
+
+pub trait Operation<Mode: verification_mode::VerificationMode>:
+    VerifiableOperation<Mode> + ExecutableOperation
+{
+}
+impl<T: VerifiableOperation<Mode> + ExecutableOperation, Mode: verification_mode::VerificationMode>
+    Operation<Mode> for T
+{
 }
 
 pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;

@@ -20,6 +20,7 @@ use lb_core::{
         gas::{GasCost, GasOverflow, MainnetGasConstants},
         ledger::Inputs,
         ops::{
+            ZkAndEd25519Proof,
             channel::{ChannelId, config::ChannelConfigOp, inscribe::InscriptionOp},
             leader_claim::{
                 LeaderClaimOp, RewardsRoot, VoucherCm, VoucherNullifier, VoucherSecret,
@@ -28,7 +29,8 @@ use lb_core::{
         },
         traits::{Hashable as _, MantleTxWithProofs},
         transactions::{
-            MantleTxBuilder, MantleTxContext, OpsProofs, TxBuilderError, states::Preverified,
+            MantleTxBuilder, MantleTxContext, OpsProofs, TxBuilderError, mantle_tx::MantleTx as _,
+            states::Preverified,
         },
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
@@ -809,10 +811,11 @@ where
         let zk_sig = Self::sign_zksig(tx_hash, [note.pk, declare_op.zk_id], kms).await?;
         let ed25519_sig = Self::sign_ed25519(tx_hash, declare_op.provider_id.0, kms).await?;
 
-        Ok(OpProof::ZkAndEd25519Sigs {
+        let proof = ZkAndEd25519Proof {
             zk_sig,
             ed25519_sig,
-        })
+        };
+        Ok(OpProof::ZkAndEd25519Sigs(proof))
     }
 
     async fn sign_sdp_withdraw(

@@ -373,7 +373,7 @@ mod tests {
             ChannelId, MsgId,
             inscribe::{Inscription, InscriptionOp},
         },
-        transactions::{GasPrices, MantleTxGasContext},
+        transactions::{GasPrices, MantleTxGasContext, mantle_tx::MantleTx as _},
     };
     use lb_key_management_system_service::keys::Ed25519Key;
     use lb_testing_framework::configs::wallet::WalletAccount;

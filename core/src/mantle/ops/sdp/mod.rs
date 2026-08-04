@@ -3,7 +3,7 @@ pub mod declare;
 pub mod withdraw;
 
 pub use active::{SDPActiveExecutionContext, SDPActiveValidationContext};
-pub use declare::{SDPDeclareExecutionContext, SDPDeclareValidationContext};
+pub use declare::{SDPDeclareExecutionContext, SDPDeclareVerificationContext};
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use thiserror::Error;

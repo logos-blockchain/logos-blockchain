@@ -9,8 +9,8 @@
 use std::marker::PhantomData;
 
 use lb_blend_service::message::{NetworkMessage, ProxyServiceMessage, ServiceMessage};
-use lb_chain_service_common::NetworkMessage as ChainNetworkMessage;
-use lb_core::{block::Proposal, codec::SerializeOp as _};
+use lb_codec::BinaryEncode as _;
+use lb_core::block::Proposal;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use tracing::error;
 
@@ -60,11 +60,7 @@ where
             .relay
             .send(
                 ServiceMessage::Blend(NetworkMessage {
-                    message: ChainNetworkMessage::to_bytes(&ChainNetworkMessage::Proposal(
-                        proposal,
-                    ))
-                    .expect("NetworkMessage should be able to be serialized")
-                    .to_vec(),
+                    message: proposal.encode_to_vec(),
                     broadcast_settings: self.broadcast_settings.clone(),
                 })
                 .into(),

@@ -22,26 +22,37 @@ use crate::{
     input::EncapsulationInput,
     message::{
         blending_header::BlendingHeader,
-        payload::Payload,
+        payload::{MAX_PAYLOAD_BODY_SIZE, Payload},
         public_header::{PublicHeader, PublicHeaderWithVerifiedSignature, VerifiedPublicHeader},
     },
 };
 
 // -- Payload ---------------------------------------------------------------
 
+/// Build a fixture body of exactly [`MAX_PAYLOAD_BODY_SIZE`] bytes: `prefix`,
+/// then `0xAA` to the end.
+///
+/// A shorter body would be padded out with random bytes, which no golden
+/// fixture can pin. One that already fills the buffer leaves nothing to pad, so
+/// the encoding is deterministic.
+fn full_length_body(prefix: &[u8]) -> PaddedPayloadBody {
+    let mut body = prefix.to_vec();
+    body.resize(MAX_PAYLOAD_BODY_SIZE, 0xAA);
+    PaddedPayloadBody::try_from(body).expect("body is exactly the maximum size")
+}
+
 codec_fixtures!(PayloadType, Self::Cover => "00", Self::Data => "01");
 
 codec_fixtures!(
     PaddedPayloadBody,
-    Self::try_from(&[1u8, 2, 3][..]).unwrap()
-        => include_str!("padded_payload_body.hex")
+    full_length_body(&[1u8, 2, 3]) => include_str!("padded_payload_body.hex")
 );
 
 codec_fixtures!(
     Payload,
     Self::new(
         PayloadType::Data,
-        PaddedPayloadBody::try_from(&[4u8, 5, 6][..]).unwrap(),
+        full_length_body(&[4u8, 5, 6]),
     ) => include_str!("payload.hex")
 );
 
@@ -49,7 +60,7 @@ codec_fixtures!(
     EncapsulatedPayload,
     Self::initialize(&Payload::new(
         PayloadType::Data,
-        PaddedPayloadBody::try_from(&[7u8, 8, 9][..]).unwrap(),
+        full_length_body(&[7u8, 8, 9]),
     )) => include_str!("encapsulated_payload.hex")
 );
 
@@ -64,7 +75,7 @@ codec_fixtures!(
             &UnsecuredEd25519Key::from_bytes(&[2u8; 32]).public_key(),
             VerifiedProofOfQuota::from_bytes_unchecked([0u8; PROOF_OF_QUOTA_SIZE]),
             VerifiedProofOfSelection::from_bytes_unchecked([0u8; PROOF_OF_SELECTION_SIZE]),
-        ).unwrap()]
+        ).unwrap()], 1
     ).unwrap() => "47a7f32151949c60050ec4454b43fcaf351a2f2383ddef2a6ab4176e269e34477821d1abaf629a228ad07b998628f4dd1e137827ca30ec8d99e90aaf9ff355af72e911fbe5eaaf7a867ca80e0a45d5a00c89a7360996aaf496503291d771adeb9caed0ca2bc20af7c31ecea182b4eb797300b68a4e5001ee438e45b402993984782478001f7336041173182189484d18804b75fb1b753c8c7cc0ae56d45c1d5b281ed36752418b833ac7e8d97bb2f78a3ac0ef9704c4f4c61ebd1c2bbfb3806dabbd2ef7b33c7778ce23a4133ac0dcf3d39c43f0562090f590506fd30e38eae7b8eb89690481bbb9a9848921d9d951b56a4ad15eec0093997cf07c04722b32edccf3bec96815f21a40d1e40e7fe5cea75d821f9763339402a92e136541b6837c7e"
 );
 
@@ -125,7 +136,7 @@ codec_fixtures!(
 
 // -- Encapsulated message --------------------------------------------------
 //
-// All three message types encode to the same bytes: a genuine, deterministic
+// All three message types encode to the same bytes: a genuine, deterministi
 // single-layer encapsulation built by [`wire_fixture_message`].
 
 fn wire_fixture_message() -> EncapsulatedMessageWithVerifiedPublicHeader {
@@ -138,13 +149,17 @@ fn wire_fixture_message() -> EncapsulatedMessageWithVerifiedPublicHeader {
     )
     .expect("well-known encapsulation input is valid")];
 
-    let payload_body = PaddedPayloadBody::try_from(b"well-known blend message payload".as_ref())
-        .expect("payload body fits");
+    let payload_body = full_length_body(b"well-known blend message payload");
 
     let (part, signing_key, proof_of_quota) = inputs.iter().enumerate().fold(
         (
-            EncapsulatedPart::try_initialize(&inputs, PayloadType::Data, payload_body)
-                .expect("inputs are non-empty"),
+            EncapsulatedPart::try_initialize(
+                &inputs,
+                PayloadType::Data,
+                payload_body,
+                inputs.len(),
+            )
+            .expect("inputs are non-empty"),
             // Fixed stand-ins for `try_new`'s randomly-sampled outer-sender identity.
             UnsecuredEd25519Key::from_bytes(&[3u8; 32]),
             VerifiedProofOfQuota::from_bytes_unchecked([0u8; PROOF_OF_QUOTA_SIZE]),

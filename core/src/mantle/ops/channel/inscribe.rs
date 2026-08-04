@@ -13,9 +13,9 @@ use crate::{
     events::TxEvent,
     mantle::{
         channel::{ChannelState, Channels, Error},
-        ledger::Operation,
+        ledger::{ExecutableOperation, ProvableOperation, VerifiableOperation, verification_mode},
         ops::channel::config::Keys,
-        transactions::hash::TxHash,
+        transactions::hash::TxHashView,
     },
 };
 
@@ -45,10 +45,12 @@ impl InscriptionOp {
     }
 }
 
+pub struct InscriptionPreverificationContext<'a> {
+    pub tx_hash_view: &'a TxHashView,
+}
+
 pub struct InscriptionValidationContext<'a> {
     pub channels: &'a Channels,
-    pub tx_hash: &'a TxHash,
-    pub inscribe_sig: &'a Ed25519Signature,
     pub block_slot: Slot,
 }
 
@@ -57,17 +59,36 @@ pub struct InscriptionExecutionContext {
     pub block_slot: Slot,
 }
 
-impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
-    type ExecutionContext<'a>
-        = InscriptionExecutionContext
-    where
-        Self: 'a;
+impl ProvableOperation for InscriptionOp {
+    type Proof = Ed25519Signature;
+}
+
+impl VerifiableOperation<verification_mode::StandardMode> for InscriptionOp {
+    type PreverificationContext<'a> = InscriptionPreverificationContext<'a>;
+    type VerificationContext<'a> = InscriptionValidationContext<'a>;
     type Error = Error;
 
-    fn validate(&self, ctx: &InscriptionValidationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::Error> {
+        // Check the signature
+        self.signer
+            .verify(context.tx_hash_view.as_bytes(), proof)
+            .map_err(|_error| Error::InvalidSignature)?;
+
+        Ok(())
+    }
+
+    fn verify(
+        &self,
+        _proof: &Self::Proof,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         // Check if the channel exist otherwise the inscription is valid only if and
         // only if parent == ZERO
-        if let Some(channel) = ctx.channels.channel_state(&self.channel_id) {
+        if let Some(channel) = context.channels.channel_state(&self.channel_id) {
             // Check the parent corresponds to the payload
             if self.parent != channel.tip_message {
                 return Err(Error::InvalidParent {
@@ -79,7 +100,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
 
             // Check that the signer is the authorized one
             if self.signer
-                != channel.accredited_keys[channel.round_robin(ctx.block_slot).0 as usize]
+                != channel.accredited_keys[channel.round_robin(context.block_slot).0 as usize]
             {
                 return Err(Error::UnauthorizedSigner {
                     channel_id: self.channel_id,
@@ -95,24 +116,20 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
             });
         }
 
-        // Check the signature
-        if self
-            .signer
-            .verify(ctx.tx_hash.as_signing_bytes().as_ref(), ctx.inscribe_sig)
-            .is_err()
-        {
-            return Err(Error::InvalidSignature);
-        }
-
         Ok(())
     }
+}
 
-    fn execute(
+impl ExecutableOperation for InscriptionOp {
+    type Context<'a> = InscriptionExecutionContext;
+    type Error = Error;
+
+    fn execute<'a>(
         &self,
-        mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
+        mut context: Self::Context<'a>,
+    ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         // if the channel doesn't exist, create it
-        let channel = ctx
+        let channel = context
             .channels
             .channel_state(&self.channel_id)
             .cloned()
@@ -120,9 +137,9 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
                 accredited_keys: Keys::from(self.signer).into(),
                 configuration_threshold: 1,
                 tip_message: MsgId::root(),
-                tip_slot: ctx.block_slot,
+                tip_slot: context.block_slot,
                 tip_sequencer: 0,
-                tip_sequencer_starting_slot: ctx.block_slot,
+                tip_sequencer_starting_slot: context.block_slot,
                 posting_timeframe: 0.into(),
                 transfer_threshold: crate::mantle::channel::DEFAULT_TRANSFER_THRESHOLD,
                 posting_timeout: 0.into(),
@@ -130,17 +147,19 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
 
         // Update the channel sequencer, its starting slot, the tip message and the tip
         // slot
-        let (new_sequencer, new_starting_slot) = channel.round_robin(ctx.block_slot);
+        let (new_sequencer, new_starting_slot) = channel.round_robin(context.block_slot);
         let updated = ChannelState {
             tip_message: self.id(),
             accredited_keys: Arc::clone(&channel.accredited_keys),
             tip_sequencer: new_sequencer,
             tip_sequencer_starting_slot: new_starting_slot,
-            tip_slot: ctx.block_slot,
+            tip_slot: context.block_slot,
             ..channel
         };
-        ctx.channels = ctx.channels.set_channel_state(&self.channel_id, updated);
-        Ok((ctx, Vec::new()))
+        context.channels = context
+            .channels
+            .set_channel_state(&self.channel_id, updated);
+        Ok((context, Vec::new()))
     }
 }
 

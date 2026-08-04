@@ -3,10 +3,10 @@
 use std::collections::HashMap;
 
 use lb_core::mantle::{
-    GasCalculator as _, MantleTx, NoteId, Op, OpProof, SignedMantleTx, TxHash,
+    GasCalculator as _, NoteId, Op, OpProof, RawMantleTx, SignedMantleTx, TxHash,
     gas::MainnetGasConstants,
     traits::Hashable as _,
-    transactions::{MantleTxBuilder, MantleTxContext, OpsProofs},
+    transactions::{MantleTxBuilder, MantleTxContext, OpsProofs, mantle_tx::MantleTx as _},
 };
 use lb_key_management_system_service::keys::ZkKey;
 
@@ -46,7 +46,7 @@ pub(super) fn sign_prepared_wallet_transaction(
 /// every input with the same wallet key. Suitable for transactions whose
 /// funding inputs all come from a single wallet account.
 pub fn transfer_proofs_for_funded_wallet_tx(
-    tx: &MantleTx,
+    tx: &RawMantleTx,
     signing_key: &ZkKey,
 ) -> Result<OpsProofs, WalletTransactionError> {
     let tx_hash = tx.hash();

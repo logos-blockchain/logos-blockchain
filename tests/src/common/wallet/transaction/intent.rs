@@ -6,7 +6,7 @@ use lb_core::mantle::{
     Note, Op,
     transactions::{
         GENESIS_EXECUTION_GAS_PRICE, GasPrices, MantleTxBuilder, MantleTxContext,
-        MantleTxGasContext,
+        MantleTxGasContext, mantle_tx::MantleTx as _,
     },
 };
 use lb_key_management_system_service::keys::ZkPublicKey;

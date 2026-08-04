@@ -6,10 +6,13 @@ use thiserror::Error;
 use crate::{
     events::TxEvent,
     mantle::{
-        TxHash,
         channel::Channels,
-        ledger::{self, Inputs, Operation, Outputs, Utxo, Utxos},
+        ledger::{
+            self, ExecutableOperation, Inputs, Outputs, ProvableOperation, Utxo, Utxos,
+            VerifiableOperation, verification_mode,
+        },
         ops::OpId,
+        transactions::hash::TxHashView,
     },
     sdp::locked_notes::LockedNotes,
 };
@@ -78,39 +81,64 @@ pub struct TransferValidationContext<'a> {
     pub locked_notes: &'a LockedNotes,
     pub channels: &'a Channels,
     pub utxos: &'a Utxos,
-    pub tx_hash: &'a TxHash,
-    pub transfer_sig: &'a ZkSignature,
+    pub tx_hash_view: &'a TxHashView,
 }
 
-impl Operation<TransferValidationContext<'_>> for TransferOp {
-    type ExecutionContext<'a>
-        = Utxos
-    where
-        Self: 'a;
+impl ProvableOperation for TransferOp {
+    type Proof = ZkSignature;
+}
+
+impl VerifiableOperation<verification_mode::StandardMode> for TransferOp {
+    type PreverificationContext<'a> = ();
+    type VerificationContext<'a> = TransferValidationContext<'a>;
     type Error = TransferError;
 
-    fn validate(&self, ctx: &TransferValidationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        _proof: &Self::Proof,
+        _context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         // Ensure the inputs is non-empty
         if self.inputs.is_empty() {
             return Err(TransferError::NoInputTransfer);
         }
-        // Validate Inputs
-        self.inputs
-            .validate_not_in_channel(ctx.locked_notes, ctx.channels, ctx.utxos)?;
+
         // Validate Outputs
         self.outputs.validate()?;
-        // Check the transfer Proof
-        let pks = self.inputs.get_pk(ctx.utxos)?;
-        if !ZkPublicKey::verify_multi(&pks, &ctx.tx_hash.to_fr(), ctx.transfer_sig) {
-            return Err(TransferError::InvalidProof);
-        }
+
         Ok(())
     }
 
-    fn execute(
+    fn verify(
         &self,
-        mut utxos: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
+        proof: &Self::Proof,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::Error> {
+        // Validate Inputs
+        self.inputs.validate_not_in_channel(
+            context.locked_notes,
+            context.channels,
+            context.utxos,
+        )?;
+
+        // Check the transfer Proof
+        let pks = self.inputs.get_pk(context.utxos)?;
+        if !ZkPublicKey::verify_multi(&pks, context.tx_hash_view.as_fr(), proof) {
+            return Err(TransferError::InvalidProof);
+        }
+
+        Ok(())
+    }
+}
+
+impl ExecutableOperation for TransferOp {
+    type Context<'a> = Utxos;
+    type Error = TransferError;
+
+    fn execute<'a>(
+        &self,
+        mut utxos: Self::Context<'a>,
+    ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         // Remove inputs from the ledger
         utxos = self.inputs.execute(utxos)?;
         // Add outputs from the ledger

@@ -30,7 +30,7 @@ use logos_blockchain_core::{
         transactions::{
             codec::{decode_signed_mantle_tx, encode_signed_mantle_tx},
             hash::TxHash,
-            mantle_tx::MantleTx,
+            mantle_tx::RawMantleTx,
             states::Unverified,
         },
     },
@@ -54,9 +54,9 @@ const SIZES: &[usize] = &[
 ];
 
 // Helper fn to create an inscription `MantleTx`, no ledger inputs ot outputs.
-fn make_inscription_tx(payload_size: usize) -> MantleTx {
+fn make_inscription_tx(payload_size: usize) -> RawMantleTx {
     let signing_key = Ed25519Key::from_bytes(&[1; 32]);
-    MantleTx(
+    RawMantleTx(
         [Op::ChannelInscribe(InscriptionOp {
             channel_id: ChannelId::from([0xAA; 32]),
             inscription: Inscription::new_unchecked(vec![0xAB; payload_size]),
@@ -107,7 +107,7 @@ fn bench_poseidon2_hash(bencher: Bencher, size: usize) {
 fn bench_blake2b_poseidon2_hash(bencher: Bencher, size: usize) {
     bencher
         .with_inputs(|| make_inscription_tx(size))
-        .bench_values(|tx: MantleTx| {
+        .bench_values(|tx: RawMantleTx| {
             // Encoding is included here to compare fairly with the Poseidon2 hash function,
             // which includes it.
             let encoded = tx.encode();
@@ -156,7 +156,7 @@ fn bench_sign_c_mantle_tx_new_verify_ops_proofs_single_proof(bencher: Bencher, s
             let op_sig = signing_key.sign_payload(&txhash.as_signing_bytes());
             (tx, op_sig)
         })
-        .bench_values(|(tx, op_sig): (MantleTx, Ed25519Signature)| {
+        .bench_values(|(tx, op_sig): (RawMantleTx, Ed25519Signature)| {
             black_box(SignedMantleTx::new(tx, [OpProof::Ed25519Sig(op_sig)].into()).preverify())
         });
 }
@@ -174,7 +174,7 @@ fn bench_sign_d_fully_empty(bencher: Bencher, size: usize) {
             let tx_hash = tx.hash();
             (tx, tx_hash)
         })
-        .bench_values(|(tx, tx_hash): (MantleTx, TxHash)| {
+        .bench_values(|(tx, tx_hash): (RawMantleTx, TxHash)| {
             let op_sig = signing_key.sign_payload(&tx_hash.as_signing_bytes());
             black_box(SignedMantleTx::new(tx, [OpProof::Ed25519Sig(op_sig)].into()).preverify())
         });

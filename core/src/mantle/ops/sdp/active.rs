@@ -7,8 +7,11 @@ use super::{SDPActiveOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        ledger::{Declarations, Operation},
-        transactions::hash::TxHash,
+        ledger::{
+            Declarations, ExecutableOperation, ProvableOperation, VerifiableOperation,
+            verification_mode,
+        },
+        transactions::hash::TxHashView,
     },
 };
 
@@ -16,8 +19,7 @@ const LOG_TARGET: &str = mantle::sdp::message::ACTIVE;
 
 pub struct SDPActiveValidationContext<'a> {
     pub declarations: &'a Declarations,
-    pub tx_hash: &'a TxHash,
-    pub active_sig: &'a ZkSignature,
+    pub tx_hash_view: &'a TxHashView,
     pub epoch: Epoch,
 }
 
@@ -26,23 +28,37 @@ pub struct SDPActiveExecutionContext {
     pub declarations: Declarations,
 }
 
-impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
-    type ExecutionContext<'a>
-        = SDPActiveExecutionContext
-    where
-        Self: 'a;
+impl ProvableOperation for SDPActiveOp {
+    type Proof = ZkSignature;
+}
+
+impl VerifiableOperation<verification_mode::StandardMode> for SDPActiveOp {
+    type PreverificationContext<'a> = ();
+    type VerificationContext<'a> = SDPActiveValidationContext<'a>;
     type Error = SdpError;
 
-    fn validate(&self, ctx: &SDPActiveValidationContext<'_>) -> Result<(), Self::Error> {
-        // Check the declaration exist
-        let Some(declaration) = ctx.declarations.get(&self.declaration_id) else {
+    fn preverify(
+        &self,
+        _proof: &Self::Proof,
+        _context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::Error> {
+        // Check the declaration exists
+        let Some(declaration) = context.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
         };
 
         // Check the declaration hasn't been withdrawn
         // (Return error if `scheduled_withdrawal_epoch` epoch has passed)
         if let Some(withdraw_at) = declaration.withdraw_at
-            && withdraw_at <= ctx.epoch
+            && withdraw_at <= context.epoch
         {
             return Err(SdpError::DeclarationWithdrawn {
                 declaration_id: self.declaration_id,
@@ -59,26 +75,31 @@ impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
         }
 
         // Check the signature over the `zk_id`
-        if !ZkPublicKey::verify_multi(&[declaration.zk_id], &ctx.tx_hash.to_fr(), ctx.active_sig) {
+        if !ZkPublicKey::verify_multi(&[declaration.zk_id], context.tx_hash_view.as_fr(), proof) {
             return Err(SdpError::InvalidZkSignature);
         }
 
         Ok(())
     }
+}
+
+impl ExecutableOperation for SDPActiveOp {
+    type Context<'a> = SDPActiveExecutionContext;
+    type Error = SdpError;
 
     // TODO: check service specific logic
-    fn execute(
+    fn execute<'a>(
         &self,
-        mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
-        let mut declaration = ctx
+        mut context: Self::Context<'a>,
+    ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
+        let mut declaration = context
             .declarations
             .get(&self.declaration_id)
             .expect("The operation should have been validated");
 
-        declaration.active = ctx.epoch;
+        declaration.active = context.epoch;
         declaration.nonce = self.nonce;
-        ctx.declarations = ctx
+        context.declarations = context
             .declarations
             .update(&self.declaration_id, declaration.clone())
             .expect("the declaration is in the tree");
@@ -90,6 +111,6 @@ impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
             "updated declaration with active message"
         );
 
-        Ok((ctx, Vec::new()))
+        Ok((context, Vec::new()))
     }
 }

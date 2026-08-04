@@ -26,7 +26,9 @@ use lb_core::{
             transfer::TransferOp,
         },
         traits::MantleTxWithProofs,
-        transactions::{MAX_OPS_PER_TX, MantleTxContext, builder::MantleTxBuilder},
+        transactions::{
+            MAX_OPS_PER_TX, MantleTxContext, builder::MantleTxBuilder, mantle_tx::MantleTx as _,
+        },
     },
     proofs::leader_proof::LeaderProof as _,
 };
@@ -860,7 +862,7 @@ mod tests {
     use lb_core::{
         crypto::ZkDigest as _,
         mantle::{
-            MantleTx, Note, OpProof, SignedMantleTx,
+            Note, OpProof, RawMantleTx, SignedMantleTx,
             channel::Channels,
             gas::MainnetGasConstants as Gas,
             ledger::{Inputs, Outputs},
@@ -2304,7 +2306,7 @@ mod tests {
         .expect("test proofs should fit");
 
         SignedMantleTx::new(
-            MantleTx(Ops::try_from(ops).expect("test operations should fit")),
+            RawMantleTx(Ops::try_from(ops).expect("test operations should fit")),
             proofs,
         )
     }

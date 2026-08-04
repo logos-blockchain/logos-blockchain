@@ -131,8 +131,9 @@ where
             &inputs,
             PayloadType::Data,
             validated_payload,
+            self.num_blend_layers.get() as usize,
         )
-        .expect("Number of encapsulation layers is greater than 0."))
+        .expect("Number of encapsulation inputs is in `1..=num_blend_layers`."))
     }
 
     pub async fn encapsulate_and_serialize_data_payload(

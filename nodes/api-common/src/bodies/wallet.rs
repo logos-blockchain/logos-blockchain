@@ -151,7 +151,7 @@ pub mod fund {
         mantle::{
             OpProof, Value,
             gas::GasCost,
-            transactions::{MantleTx, builder::MantleTxBuilder},
+            transactions::{RawMantleTx, builder::MantleTxBuilder},
         },
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -174,7 +174,7 @@ pub mod fund {
         pub tip: HeaderId,
         /// The funded transaction, with the fee transfer appended as the last
         /// op. All ops are still unsigned.
-        pub funded_tx: MantleTx,
+        pub funded_tx: RawMantleTx,
         /// Proof for the appended fee transfer, signed over the funded
         /// transaction hash. `None` if funding required no transfer (zero
         /// fee and no inputs pulled in).

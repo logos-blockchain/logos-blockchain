@@ -1,9 +1,11 @@
 use std::{collections::HashMap, sync::LazyLock};
 
 use lb_codec::{BinaryCodec, BinaryDecodeExt as _, BinaryEncode as _};
+use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
+    block::MAX_BLOCK_TRANSACTIONS_SIZE,
     crypto::{Digest as _, Hasher},
     mantle::{
         GasConstants, Op, SignedMantleTx, TxHash, Value,
@@ -23,9 +25,9 @@ use crate::{
 static MANTLE_TX_HASH_V1_BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| b"MANTLE_TXHASH_V1".to_vec());
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
-pub struct MantleTx(pub Ops);
+pub struct RawMantleTx(pub Ops);
 
-impl MantleTx {
+impl RawMantleTx {
     /// Predicts the minimum total gas cost of the transaction once signed.
     ///
     /// See [`minimum_signed_mantle_tx_size`] for why this doesn't implement
@@ -83,14 +85,15 @@ impl MantleTx {
         }
         transfers
     }
+}
 
-    #[must_use]
-    pub const fn ops(&self) -> &Ops {
+impl MantleTx for RawMantleTx {
+    fn ops(&self) -> &Ops {
         &self.0
     }
 }
 
-impl Hashable for MantleTx {
+impl Hashable for RawMantleTx {
     //noinspection RsTypeCheck: The type is correct, but the linter is confused by
     // the closure.
     const HASHER: hashable::Hasher<Self> = |tx| {
@@ -108,7 +111,7 @@ impl Hashable for MantleTx {
     }
 }
 
-impl StorageSize for MantleTx {
+impl StorageSize for RawMantleTx {
     fn storage_size(&self) -> usize {
         self.encode().len()
     }
@@ -137,36 +140,36 @@ fn contextual_op_execution_gas<Constants: GasConstants>(
         .checked_mul(Value::from(multiplier))
 }
 
-impl<State: VerificationState> From<SignedMantleTx<State>> for MantleTx {
+impl<State: VerificationState> From<SignedMantleTx<State>> for RawMantleTx {
     fn from(signed_tx: SignedMantleTx<State>) -> Self {
         signed_tx.mantle_tx
     }
 }
 
 #[derive(Serialize, Deserialize)]
-struct MantleTxSerde {
+struct RawMantleTxSerde {
     pub ops: Ops,
 }
 
-impl From<MantleTxSerde> for MantleTx {
-    fn from(MantleTxSerde { ops }: MantleTxSerde) -> Self {
+impl From<RawMantleTxSerde> for RawMantleTx {
+    fn from(RawMantleTxSerde { ops }: RawMantleTxSerde) -> Self {
         Self(ops)
     }
 }
 
-impl From<MantleTx> for MantleTxSerde {
-    fn from(MantleTx(ops): MantleTx) -> Self {
+impl From<RawMantleTx> for RawMantleTxSerde {
+    fn from(RawMantleTx(ops): RawMantleTx) -> Self {
         Self { ops }
     }
 }
 
-impl Serialize for MantleTx {
+impl Serialize for RawMantleTx {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         if serializer.is_human_readable() {
-            let tx_deser: MantleTxSerde = self.clone().into();
+            let tx_deser: RawMantleTxSerde = self.clone().into();
             tx_deser.serialize(serializer)
         } else {
             let bytes = self.encode();
@@ -175,19 +178,94 @@ impl Serialize for MantleTx {
     }
 }
 
-impl<'de> Deserialize<'de> for MantleTx {
+impl<'de> Deserialize<'de> for RawMantleTx {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         if deserializer.is_human_readable() {
-            <MantleTxSerde as Deserialize>::deserialize(deserializer).map(Into::into)
+            <RawMantleTxSerde as Deserialize>::deserialize(deserializer).map(Into::into)
         } else {
-            let bytes: Vec<u8> = <Vec<u8>>::deserialize(deserializer)?;
-            Self::decode(&bytes)
-                .map(|(_, tx)| tx)
-                .map_err(serde::de::Error::custom)
+            let bytes = deserialize_bounded_bytes::<MAX_BLOCK_TRANSACTIONS_SIZE, D>(deserializer)?;
+            let (remaining, tx) = Self::decode(&bytes).map_err(serde::de::Error::custom)?;
+            if remaining.is_empty() {
+                Ok(tx)
+            } else {
+                Err(serde::de::Error::custom(
+                    "MantleTx binary encoding contains trailing bytes",
+                ))
+            }
         }
+    }
+}
+
+fn deserialize_bounded_bytes<'de, const MAX: usize, D>(
+    deserializer: D,
+) -> Result<UpperBoundedVec<u8, MAX>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct Visitor<const MAX: usize>;
+
+    impl<const MAX: usize> serde::de::Visitor<'_> for Visitor<MAX> {
+        type Value = UpperBoundedVec<u8, MAX>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(formatter, "at most {MAX} encoded MantleTx bytes")
+        }
+
+        fn visit_bytes<E>(self, bytes: &[u8]) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            if bytes.len() > MAX {
+                return Err(E::custom(format_args!(
+                    "encoded MantleTx contains {} bytes, maximum is {MAX}",
+                    bytes.len()
+                )));
+            }
+
+            Ok(UpperBoundedVec::new_unchecked(bytes.to_vec()))
+        }
+
+        fn visit_byte_buf<E>(self, bytes: Vec<u8>) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            let byte_len = bytes.len();
+
+            UpperBoundedVec::try_from(bytes).map_err(|_| {
+                E::custom(format_args!(
+                    "encoded MantleTx contains {byte_len} bytes, maximum is {MAX}"
+                ))
+            })
+        }
+    }
+
+    deserializer.deserialize_bytes(Visitor::<MAX>)
+}
+#[cfg(test)]
+mod tests {
+    use lb_codec::BinaryEncode as _;
+
+    use super::*;
+
+    #[test]
+    fn binary_serde_rejects_trailing_bytes_inside_transaction_envelope() {
+        let tx = RawMantleTx(Ops::empty());
+        let mut encoded_tx = tx.encode().into_vec();
+        encoded_tx.push(0);
+        let envelope = bincode::serialize(&encoded_tx).unwrap();
+
+        assert!(bincode::deserialize::<RawMantleTx>(&envelope).is_err());
+    }
+
+    #[test]
+    fn binary_serde_rejects_oversized_transaction_envelope() {
+        let oversized = vec![0u8; MAX_BLOCK_TRANSACTIONS_SIZE + 1];
+        let envelope = bincode::serialize(&oversized).unwrap();
+
+        assert!(bincode::deserialize::<RawMantleTx>(&envelope).is_err());
     }
 }
 
@@ -246,4 +324,8 @@ impl MantleTxGasContext {
     pub fn get_gas_prices(&self) -> GasPrices {
         self.gas_prices.clone()
     }
+}
+
+pub trait MantleTx {
+    fn ops(&self) -> &Ops;
 }

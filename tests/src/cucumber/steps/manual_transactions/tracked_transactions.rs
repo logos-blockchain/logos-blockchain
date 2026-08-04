@@ -2,12 +2,13 @@ use std::{collections::HashSet, time::Duration};
 
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
-    Note, Op, OpProof, SignedMantleTx,
+    Note, NoteId, Op, OpProof, SignedMantleTx,
     ledger::{Inputs, Outputs},
     ops::transfer::TransferOp,
     traits::Hashable as _,
-    transactions::{hash::TxHash, mantle_tx::MantleTx, states::Unverified},
+    transactions::{hash::TxHash, mantle_tx::RawMantleTx, states::Unverified},
 };
+use lb_groth16::Fr;
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use tokio::time::{sleep, timeout};
 use tracing::{info, warn};
@@ -25,6 +26,8 @@ use crate::{
     },
 };
 
+/// Submit a transaction that passes stateless validation but is invalid against
+/// ledger state.
 pub async fn submit_invalid_transfer_transaction(
     world: &mut CucumberWorld,
     step: &str,
@@ -37,7 +40,7 @@ pub async fn submit_invalid_transfer_transaction(
             warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
 
-    let signed_tx = create_invalid_transaction();
+    let signed_tx = create_stateful_invalid_transaction();
     let tx_hash = signed_tx.hash();
 
     node.submit_transaction(&signed_tx).await.inspect_err(|e| {
@@ -52,6 +55,56 @@ pub async fn submit_invalid_transfer_transaction(
     );
 
     Ok(())
+}
+
+/// Submit a transaction that fails stateless validation.
+pub async fn submit_stateless_invalid_transfer_transaction(
+    world: &mut CucumberWorld,
+    step: &str,
+    transaction_alias: String,
+    node_name: String,
+) -> Result<(), StepError> {
+    let node = world
+        .resolve_node_http_client(&node_name)
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{step}` error: {e}");
+        })?;
+
+    let signed_tx = create_stateless_invalid_transaction();
+    let outcome = node
+        .submit_transaction(&signed_tx)
+        .await
+        .map_err(|e| e.to_string());
+
+    info!(
+        target: TARGET,
+        "Submitted stateless-invalid transfer transaction `{transaction_alias}` to `{node_name}`: {outcome:?}"
+    );
+
+    world.remember_submission_outcome(transaction_alias, outcome);
+
+    Ok(())
+}
+
+/// Assert that a previously submitted transaction was rejected during
+/// preverification.
+pub fn transaction_is_rejected_during_preverification(
+    world: &CucumberWorld,
+    transaction_alias: &str,
+) -> Result<(), StepError> {
+    match world.resolve_submission_outcome(transaction_alias)? {
+        Ok(()) => Err(StepError::LogicalError {
+            message: format!(
+                "expected transaction `{transaction_alias}` to be rejected during preverification, but it was accepted"
+            ),
+        }),
+        Err(message) if message.contains("doesn't have any input") => Ok(()),
+        Err(other) => Err(StepError::LogicalError {
+            message: format!(
+                "expected transaction `{transaction_alias}` to be rejected mentioning 'doesn't have any input', got: {other}"
+            ),
+        }),
+    }
 }
 
 pub async fn submit_funded_transfer_transaction(
@@ -197,15 +250,30 @@ async fn transaction_is_in_chain(
     .is_some()
 }
 
-pub fn create_invalid_transaction() -> SignedMantleTx<Unverified> {
+/// Builds a transaction that fails stateless validation: a `TransferOp` with no
+/// inputs.
+pub fn create_stateless_invalid_transaction() -> SignedMantleTx<Unverified> {
+    let output_note = Note::new(1000, ZkPublicKey::new(1u8.into()));
+    let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new([output_note]));
+
+    build_signed_transfer(transfer_op)
+}
+
+/// Builds a transaction that passes stateless validation but is invalid against
+/// ledger state: its input note id does not correspond to any real UTXO.
+fn create_stateful_invalid_transaction() -> SignedMantleTx<Unverified> {
+    let nonexistent_input = NoteId(Fr::from(0xDEAD_BEEFu64));
     let output_note = Note::new(1000, ZkPublicKey::new(1u8.into()));
     let transfer_op = TransferOp::new(
-        Inputs::empty(),
-        // Outputs::new([output_note]),
+        Inputs::new([nonexistent_input]),
         Outputs::new([output_note]),
     );
 
-    let mantle_tx = MantleTx([Op::Transfer(transfer_op)].into());
+    build_signed_transfer(transfer_op)
+}
+
+fn build_signed_transfer(transfer_op: TransferOp) -> SignedMantleTx<Unverified> {
+    let mantle_tx = RawMantleTx([Op::Transfer(transfer_op)].into());
 
     let transfer_proof = ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr())
         .expect("invalid transfer proof should still be constructible");

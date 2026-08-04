@@ -18,7 +18,7 @@ use lb_core::mantle::{
         transfer::TransferOp,
     },
     transactions::{
-        codec::decode_signed_mantle_tx, hash::TxHash, mantle_tx::MantleTx, states::Unverified,
+        codec::decode_signed_mantle_tx, hash::TxHash, mantle_tx::RawMantleTx, states::Unverified,
     },
 };
 use lb_key_management_system_service::keys::{
@@ -228,9 +228,9 @@ pub fn decode_exported_utxos(funds: &WalletFundsExport) -> RunResult<Vec<Utxo>> 
 }
 
 /// Decode a hex-encoded mantle transaction and reject trailing bytes.
-pub fn decode_mantle_tx_hex(value: &str) -> RunResult<MantleTx> {
+pub fn decode_mantle_tx_hex(value: &str) -> RunResult<RawMantleTx> {
     let bytes = decode_hex(value)?;
-    let (remaining, tx) = MantleTx::decode(&bytes).map_err(|error| format!("{error:?}"))?;
+    let (remaining, tx) = RawMantleTx::decode(&bytes).map_err(|error| format!("{error:?}"))?;
     if !remaining.is_empty() {
         return Err("mantle tx has trailing bytes".into());
     }
@@ -336,26 +336,18 @@ pub fn build_deposit_op(
     })
 }
 
-/// Build the sequencer funding config from CLI args. `--funding-pk` enables
-/// funding transactions from the node's wallet; absent means fee-less
-/// transactions.
-pub fn funding_config(args: &NodeKeyArgs) -> RunResult<Option<FundingConfig>> {
-    let Some(funding_pk_hex) = &args.funding_pk else {
-        return Ok(None);
-    };
-    Ok(Some(FundingConfig {
-        funding_pk: decode_zk_public_key_hex(funding_pk_hex)?,
+/// Build the sequencer funding config from CLI args.
+pub fn funding_config(args: &NodeKeyArgs) -> RunResult<FundingConfig> {
+    Ok(FundingConfig {
+        funding_pk: decode_zk_public_key_hex(&args.funding_pk)?,
         max_tx_fee: args.max_tx_fee.into(),
         priority_fee: args.priority_fee,
-    }))
+    })
 }
 
 /// Sequencer config for CLI commands, with funding taken from the args.
 pub fn cli_sequencer_config(args: &NodeKeyArgs) -> RunResult<SequencerConfig> {
-    Ok(SequencerConfig {
-        funding: funding_config(args)?,
-        ..SequencerConfig::default()
-    })
+    Ok(SequencerConfig::new(funding_config(args)?))
 }
 
 /// Start a zone sequencer for non-interactive CLI commands and wait for

@@ -474,16 +474,19 @@ where
             Some(update) => {
                 Self::log_channel_update(&update);
 
+                let new_channel_tip = update.new_channel_tip;
+                let built = self.build_channel_update(update);
+
                 let has_pending = self
                     .state
                     .as_ref()
                     .is_some_and(TxState::has_pending_inscriptions);
 
-                if !update.orphaned.is_empty() || !has_pending {
-                    self.last_msg_id = update.new_channel_tip;
+                if !built.orphaned.is_empty() || !has_pending {
+                    self.last_msg_id = new_channel_tip;
                 }
 
-                self.build_channel_update(update)
+                built
             }
             None => ChannelUpdate {
                 orphaned: Vec::new(),
@@ -595,19 +598,21 @@ mod tests {
     use lb_core::{
         header::HeaderId,
         mantle::{
-            MantleTx, Note, Op, SignedMantleTx, Utxo,
+            Note, Op, RawMantleTx, SignedMantleTx, Utxo,
+            channel::{SlotTimeframe, SlotTimeout},
             ledger::Inputs,
             ops::{
                 OpProof,
                 channel::{
                     ChannelId, MsgId,
+                    config::{ChannelConfigOp, Keys},
                     deposit::DepositOp,
                     inscribe::{Inscription, InscriptionOp},
                     withdraw::ChannelWithdrawOp,
                 },
             },
             traits::Hashable as _,
-            transactions::{Ops, OpsProofs},
+            transactions::{Ops, OpsProofs, mantle_tx::MantleTx as _},
         },
     };
     use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
@@ -622,7 +627,10 @@ mod tests {
         },
         *,
     };
-    use crate::test_support::{MockNode, api_block, unverified_tx_with_ops};
+    use crate::test_support::{
+        MockNode, StreamEnd, StreamScript, api_block, funding_config, live_event, scripts,
+        unverified_tx_with_ops,
+    };
 
     #[must_use]
     pub fn utxo_with_sk() -> (ZkKey, Utxo) {
@@ -644,7 +652,8 @@ mod tests {
         let channel_id = ChannelId::from([0; 32]);
         let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
         let (node, mut posted_txs) = MockNode::with_posted_channel();
-        let mut sequencer = ZoneSequencer::init(channel_id, sequencer_key, node, None);
+        let mut sequencer =
+            ZoneSequencer::init(channel_id, sequencer_key, node, funding_config(), None);
 
         // Drive sequencer until ready
         loop {
@@ -707,14 +716,13 @@ mod tests {
         }
     }
 
-    /// Comment #1 regression guard for client publishes during reconnect.
-    ///
-    /// A `SequencerClient::publish` issued while the node is down (reconnect in
-    /// progress) must be accepted locally and resolve promptly — matching
-    /// `SequencerHandle::publish` — instead of blocking until connectivity is
-    /// restored. It must also be posted once the node comes back.
+    /// A `SequencerClient::publish` issued while the node is down (reconnect
+    /// in progress) must resolve promptly with [`Error::Unavailable`] —
+    /// funding needs the node — instead of blocking until connectivity is
+    /// restored. Once the node is back and `Ready` is re-announced,
+    /// publishing works again.
     #[tokio::test]
-    async fn client_publish_accepted_locally_during_reconnect() {
+    async fn client_publish_fails_fast_during_reconnect_and_recovers() {
         let channel_id = ChannelId::from([0; 32]);
         let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
         let (up_tx, up_rx) = watch::channel(true);
@@ -723,7 +731,7 @@ mod tests {
         let config = SequencerConfig {
             reconnect_delay: std::time::Duration::from_millis(20),
             resubmit_interval: std::time::Duration::from_millis(20),
-            ..SequencerConfig::default()
+            ..SequencerConfig::new(funding_config())
         };
         let mut sequencer =
             ZoneSequencer::init_with_config(channel_id, sequencer_key, node, config, None);
@@ -736,9 +744,31 @@ mod tests {
             }
         }
 
+        // After `Ready` on this single-key channel the turn-to-write watch is
+        // true; the stream drop clears it, giving a deterministic signal that
+        // the sequencer observed the disconnect before we publish.
+        let mut turn_rx = client.subscribe_turn_to_write();
+        assert!(
+            turn_rx.borrow_and_update().our_turn_to_write,
+            "single-key channel must report our turn after Ready"
+        );
+
         // Take the node down: the live stream ends and the sequencer enters
         // reconnect (subsequent `block_stream` calls error).
         up_tx.send(false).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if !turn_rx.borrow_and_update().our_turn_to_write {
+                    break;
+                }
+                tokio::select! {
+                    changed = turn_rx.changed() => changed.unwrap(),
+                    () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
+                }
+            }
+        })
+        .await
+        .expect("stream drop must clear turn-to-write");
 
         // A client publish while the node is down must resolve promptly. We
         // drive `next_event` concurrently; the publish is serviced from inside
@@ -746,19 +776,42 @@ mod tests {
         // behavior the request would never be drained during reconnect and this
         // would hang (caught by the timeout).
         let publish = client.publish(b"during-reconnect".into());
-        let (_result, _checkpoint) =
-            tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                tokio::select! {
-                    result = publish => result,
-                    () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
-                }
-            })
-            .await
-            .expect("client publish must resolve during reconnect, not block on connectivity")
-            .expect("publish should be accepted locally after Ready");
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::select! {
+                result = publish => result,
+                () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
+            }
+        })
+        .await
+        .expect("client publish must resolve during reconnect, not block on connectivity");
+        assert!(
+            matches!(result, Err(Error::Unavailable { .. })),
+            "publish while disconnected must fail fast, got {result:?}"
+        );
 
-        // Bring the node back up; the locally-queued inscription must be posted.
+        // Bring the node back up and wait for the re-announced `Ready`.
         up_tx.send(true).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if matches!(sequencer.next_event().await, Event::Ready) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("Ready should be re-announced after reconnect");
+
+        // Publishing works again and the inscription is posted.
+        let publish = client.publish(b"after-reconnect".into());
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::select! {
+                result = publish => result,
+                () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
+            }
+        })
+        .await
+        .expect("client publish must resolve after reconnect")
+        .expect("publish should succeed after reconnect");
         let posted = tokio::time::timeout(std::time::Duration::from_secs(10), async {
             tokio::select! {
                 tx = posted_txs.recv() => tx,
@@ -776,6 +829,109 @@ mod tests {
                 .iter()
                 .any(|op| matches!(op, Op::ChannelInscribe(_))),
             "posted tx should carry the inscription published during reconnect"
+        );
+    }
+
+    #[tokio::test]
+    async fn config_only_block_sheds_pending_and_advances_checkpoint() {
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+
+        let config_op = ChannelConfigOp {
+            channel: channel_id,
+            keys: Keys::try_from(vec![Ed25519Key::from_bytes(&[0; 32]).public_key()]).unwrap(),
+            posting_timeframe: SlotTimeframe::from(0u32),
+            posting_timeout: SlotTimeout::from(0u32),
+            configuration_threshold: 1,
+            transfer_threshold: 1,
+        };
+        let config_msg = config_op.id();
+        let config_tx = unverified_tx_with_ops(vec![Op::ChannelConfig(config_op)]);
+        let config_block = api_block(2, 1, 2, vec![config_tx]);
+
+        // Second connection (the config block) is gated behind `up` so it
+        // cannot be consumed before the publish is in.
+        let (up_tx, up_rx) = watch::channel(true);
+        let node = MockNode {
+            up: Some(up_rx),
+            scripts: scripts(vec![
+                StreamScript {
+                    events: vec![live_event(&api_block(1, 0, 1, Vec::new()))],
+                    then: StreamEnd::Hang,
+                },
+                StreamScript {
+                    events: vec![live_event(&config_block)],
+                    then: StreamEnd::Hang,
+                },
+            ]),
+            ..MockNode::default()
+        };
+        let config = SequencerConfig {
+            reconnect_delay: std::time::Duration::from_millis(20),
+            resubmit_interval: std::time::Duration::from_millis(20),
+            ..SequencerConfig::new(funding_config())
+        };
+        let mut sequencer =
+            ZoneSequencer::init_with_config(channel_id, sequencer_key, node, config, None);
+        let client = sequencer.client();
+
+        loop {
+            if matches!(sequencer.next_event().await, Event::Ready) {
+                break;
+            }
+        }
+
+        let publish = client.publish(b"cut-by-config".into());
+        let (result, _checkpoint) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::select! {
+                    result = publish => result,
+                    () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
+                }
+            })
+            .await
+            .expect("publish must resolve")
+            .expect("publish should be accepted after Ready");
+        let p_hash = result.inscription_id();
+
+        // Keep driving between the toggles so the down-edge is observed.
+        up_tx.send(false).unwrap();
+        let (checkpoint, update) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let toggle = async {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                up_tx.send(true).unwrap();
+            };
+            let drive = async {
+                loop {
+                    if let Event::BlocksProcessed {
+                        checkpoint,
+                        channel_update,
+                        ..
+                    } = sequencer.next_event().await
+                        && !channel_update.orphaned.is_empty()
+                    {
+                        return (checkpoint, channel_update);
+                    }
+                }
+            };
+            let ((), out) = tokio::join!(toggle, drive);
+            out
+        })
+        .await
+        .expect("the config-only block must surface the shed orphan");
+
+        assert!(
+            update.orphaned.iter().any(|tx| tx.tx_hash() == p_hash),
+            "cut-off pending inscription must be emitted as orphaned; got {:?}",
+            update.orphaned
+        );
+        assert_eq!(
+            checkpoint.last_msg_id, config_msg,
+            "checkpoint must use the config tip as last_msg_id"
+        );
+        assert!(
+            checkpoint.pending_txs.iter().all(|(h, _)| *h != p_hash),
+            "the shed inscription must be removed from pending state"
         );
     }
 
@@ -799,7 +955,7 @@ mod tests {
             parent: MsgId::root(),
             signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
         };
-        let mantle_tx = MantleTx(
+        let mantle_tx = RawMantleTx(
             Ops::try_from(vec![
                 Op::ChannelWithdraw(withdraw_op.clone()),
                 Op::ChannelInscribe(inscribe_op),
@@ -837,7 +993,7 @@ mod tests {
             parent: MsgId::root(),
             signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
         };
-        let mantle_tx = MantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
+        let mantle_tx = RawMantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
         let tx_hash = mantle_tx.hash();
         let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
 
@@ -862,7 +1018,7 @@ mod tests {
             parent: MsgId::root(),
             signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
         };
-        let mantle_tx = MantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
+        let mantle_tx = RawMantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
         let tx_hash = mantle_tx.hash();
         let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
 
@@ -908,17 +1064,21 @@ mod tests {
         let node = MockNode {
             lib: genesis_block.header.id,
             tip: genesis_block.header.id,
-            stream: vec![ProcessedBlockEvent {
-                block: live_block.clone(),
-                tip: live_block.header.id,
-                tip_slot: live_block.header.slot,
-                lib: genesis_block.header.id,
-                lib_slot: Slot::genesis(),
-            }],
+            scripts: scripts(vec![StreamScript {
+                events: vec![ProcessedBlockEvent {
+                    block: live_block.clone(),
+                    tip: live_block.header.id,
+                    tip_slot: live_block.header.slot,
+                    lib: genesis_block.header.id,
+                    lib_slot: Slot::genesis(),
+                }],
+                then: StreamEnd::Hang,
+            }]),
             immutable: vec![genesis_block],
             ..MockNode::default()
         };
-        let mut sequencer = ZoneSequencer::init(channel_id, sequencer_key, node, None);
+        let mut sequencer =
+            ZoneSequencer::init(channel_id, sequencer_key, node, funding_config(), None);
 
         let mut finalized_items: Vec<FinalizedTx> = Vec::new();
         loop {
@@ -947,5 +1107,118 @@ mod tests {
             }
             other => panic!("expected Inscription, got {other:?}"),
         }
+    }
+
+    /// Realistic stream-gap scenario, driven end-to-end through the public
+    /// `ZoneSequencer` event loop.
+    ///
+    /// Chain: G <- B1 <- B2 <- B3, one canonical branch, LIB at genesis.
+    /// The live stream delivers B1 (inscription A) and drops. B2 (inscription
+    /// Y, child of A) is mined during the outage. The stream resumes at B3;
+    /// the sequencer self-heals by backfilling B2.
+    ///
+    /// Per the [`Event::Ready`] / [`ChannelUpdate`] contract, catch-up deltas
+    /// surface on the next `BlocksProcessed` once the stream resumes — so Y
+    /// must be reported as `adopted`. A consumer mirroring the channel from
+    /// `ChannelUpdate` otherwise silently misses Y until finalization.
+    #[tokio::test]
+    async fn stream_gap_surfaces_backfilled_inscriptions_as_adopted() {
+        use std::time::Duration;
+
+        use tokio::time::timeout;
+
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+
+        let a = InscriptionOp {
+            channel_id,
+            parent: MsgId::root(),
+            inscription: Inscription::new_unchecked(b"a".to_vec()),
+            signer: sequencer_key.public_key(),
+        };
+        let a_id = a.id();
+        let y = InscriptionOp {
+            channel_id,
+            parent: a_id,
+            inscription: Inscription::new_unchecked(b"y".to_vec()),
+            signer: sequencer_key.public_key(),
+        };
+        let y_id = y.id();
+
+        let b1 = api_block(
+            1,
+            0,
+            1,
+            vec![unverified_tx_with_ops(vec![Op::ChannelInscribe(a)])],
+        );
+        let b2 = api_block(
+            2,
+            1,
+            2,
+            vec![unverified_tx_with_ops(vec![Op::ChannelInscribe(y)])],
+        );
+        let b3 = api_block(3, 2, 3, Vec::new());
+
+        let node = MockNode {
+            scripts: scripts(vec![
+                StreamScript {
+                    events: vec![live_event(&b1)],
+                    then: StreamEnd::End,
+                },
+                StreamScript {
+                    events: vec![live_event(&b3)],
+                    then: StreamEnd::Hang,
+                },
+            ]),
+            blocks: vec![b2],
+            ..MockNode::default()
+        };
+        let mut sequencer =
+            ZoneSequencer::init(channel_id, sequencer_key, node, funding_config(), None);
+
+        // Phase 1: drive until B1's channel update adopts A (Ready and turn
+        // notifications interleave).
+        let adopted = timeout(Duration::from_secs(10), async {
+            loop {
+                if let Event::BlocksProcessed { channel_update, .. } = sequencer.next_event().await
+                    && !channel_update.adopted.is_empty()
+                {
+                    return channel_update.adopted;
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for B1's channel update");
+        assert!(
+            adopted
+                .iter()
+                .any(|t| t.inscription().is_some_and(|i| i.this_msg == a_id)),
+            "sanity: A is adopted from the live B1"
+        );
+
+        // Phase 2: stream #1 has ended — a disconnect. `next_event`
+        // reconnects internally and resumes at B3; the canonical backfill
+        // fetches the missed B2. The first `BlocksProcessed` after the
+        // reconnect is B3's ingestion and must carry Y as adopted.
+        let update = timeout(Duration::from_secs(10), async {
+            loop {
+                if let Event::BlocksProcessed { channel_update, .. } = sequencer.next_event().await
+                {
+                    return channel_update;
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for the post-reconnect BlocksProcessed");
+        assert!(
+            update
+                .adopted
+                .iter()
+                .any(|t| t.inscription().is_some_and(|i| i.this_msg == y_id)),
+            "inscription mined during the stream gap must surface as adopted on the next \
+             BlocksProcessed after reconnect; got adopted={:?}, orphaned={:?}",
+            update.adopted,
+            update.orphaned,
+        );
     }
 }

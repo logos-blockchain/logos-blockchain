@@ -2,8 +2,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry};
 
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
-    NoteId, SignedMantleTx, TxHash, Utxo, ops::Op, traits::Hashable as _,
-    transactions::states::Unverified,
+    NoteId, SignedMantleTx, TxHash, Utxo,
+    ops::Op,
+    traits::Hashable as _,
+    transactions::{mantle_tx::MantleTx as _, states::Unverified},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 
@@ -221,7 +223,7 @@ mod tests {
     use lb_core::{
         header::{ContentId, HeaderId},
         mantle::{
-            MantleTx, Note, SignedMantleTx, Utxo,
+            Note, RawMantleTx, SignedMantleTx, Utxo,
             ledger::{Inputs, Outputs},
             ops::{
                 Op,
@@ -270,7 +272,7 @@ mod tests {
     /// notes, so a transfer is what the accounting observes owned outputs from.
     fn transfer_tx(outputs: [Note; 2]) -> SignedMantleTx<Unverified> {
         SignedMantleTx::new(
-            MantleTx(
+            RawMantleTx(
                 [Op::Transfer(TransferOp::new(
                     Inputs::empty(),
                     Outputs::new(outputs),
@@ -347,7 +349,7 @@ mod tests {
     fn accounting_removes_spent_utxos() {
         let owned = utxo(10, 0, pk(1));
         let spend = SignedMantleTx::new(
-            MantleTx(
+            RawMantleTx(
                 [Op::ChannelDeposit(DepositOp {
                     channel_id: ChannelId::from([0; 32]),
                     inputs: Inputs::from([owned.id()]),
@@ -381,11 +383,11 @@ mod tests {
         let locked = utxo(10, 0, pk(1));
         let declaration = sdp_declaration(locked.id());
         let declare_tx = SignedMantleTx::new(
-            MantleTx([Op::SDPDeclare(declaration.clone())].into()),
+            RawMantleTx([Op::SDPDeclare(declaration.clone())].into()),
             OpsProofs::empty(),
         );
         let withdraw_tx = SignedMantleTx::new(
-            MantleTx(
+            RawMantleTx(
                 [Op::SDPWithdraw(WithdrawMessage {
                     declaration_id: declaration.id(),
                     locked_note_id: locked.id(),
