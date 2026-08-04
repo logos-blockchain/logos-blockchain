@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use ark_ff::Zero as _;
 use lb_codec::{BinaryCodec, BinaryEncode};
-use lb_cryptarchia_engine::Epoch;
+use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::{Fr, fr_from_mod_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
@@ -103,8 +103,8 @@ pub enum ClaimPowRewardError {
     InvalidPoWRewardTicket,
     #[error("Ticket was already claimed")]
     DoubleClaimed,
-    #[error("Out of window height ({height})")]
-    OutOfWindowHeight { height: u64 },
+    #[error("Out of window slot ({slot:?})")]
+    OutOfWindowSlot { slot: Slot },
     #[error("Missing block ({block_id:?})")]
     MissingBlock { block_id: Hash },
 }
@@ -112,8 +112,8 @@ pub enum ClaimPowRewardError {
 /// Ledger context needed to validate a [`ClaimPowRewardOp`].
 pub struct ClaimPoWRewardVerificationContext<'a> {
     // As per spec
-    /// Height of the block the claim is being validated in.
-    pub current_block_height: u64,
+    /// Slot of the block the claim is being validated in.
+    pub current_block_slot: Slot,
     /// `d_reward`: current reward difficulty a puzzle ticket must meet.
     pub reward_difficulty: PowTarget,
     /// Nullifiers of already-claimed `PoW` solutions.
@@ -127,9 +127,9 @@ pub struct ClaimPoWRewardVerificationContext<'a> {
     pub current_epoch_nonce: Epoch,
     /// Nonce of the previous epoch, also accepted for claims.
     pub previous_epoch_nonce: Epoch,
-    /// Heights of known blocks, used to check the claim's block is within
+    /// Slots of known blocks, used to check the claim's block is within
     /// the acceptance window.
-    pub blocks_height: HashMap<Hash, u64>,
+    pub blocks_slot: HashMap<Hash, Slot>,
 }
 
 impl ClaimPoWRewardVerificationContext<'_> {
@@ -148,23 +148,23 @@ impl ClaimPoWRewardVerificationContext<'_> {
         Ok(())
     }
 
-    /// On-chain `block_hash` window check
+    /// On-chain `block_hash` window check, measured in slots.
     pub fn accept_claim<const WINDOW: u64>(
         &self,
         block_id: Hash,
     ) -> Result<(), ClaimPowRewardError> {
-        let Some(&block_height) = self.blocks_height.get(&block_id) else {
+        let Some(&block_slot) = self.blocks_slot.get(&block_id) else {
             return Err(ClaimPowRewardError::MissingBlock { block_id });
         };
 
-        let Some(check_height) = self.current_block_height.checked_sub(block_height) else {
-            return Err(ClaimPowRewardError::OutOfWindowHeight {
-                height: block_height,
+        let Some(slot_gap) = self.current_block_slot.checked_sub(block_slot) else {
+            return Err(ClaimPowRewardError::OutOfWindowSlot {
+                slot: block_slot,
             });
         };
-        if check_height > WINDOW {
-            return Err(ClaimPowRewardError::OutOfWindowHeight {
-                height: block_height,
+        if slot_gap > WINDOW {
+            return Err(ClaimPowRewardError::OutOfWindowSlot {
+                slot: block_slot,
             });
         }
         Ok(())
@@ -331,14 +331,14 @@ mod tests {
         epoch_reward_pool: PowReward,
     ) -> ClaimPoWRewardVerificationContext<'_> {
         ClaimPoWRewardVerificationContext {
-            current_block_height: 0,
+            current_block_slot: Slot::from(0u64),
             reward_difficulty: PowTarget::default(),
             pow_nullifiers: nullifiers,
             epoch_pow_reward,
             epoch_reward_pool,
             current_epoch_nonce: 0.into(),
             previous_epoch_nonce: 0.into(),
-            blocks_height: HashMap::new(),
+            blocks_slot: HashMap::new(),
         }
     }
 
@@ -395,12 +395,12 @@ mod tests {
     }
 
     /// A context that accepts `claim_op(CURRENT_EPOCH)`: funded pool,
-    /// permissive difficulty, claim block a few blocks deep.
+    /// permissive difficulty, claim block a few slots back.
     fn accepting_context(
         nullifiers: &rpds::HashTrieSetSync<PowNullifier>,
     ) -> ClaimPoWRewardVerificationContext<'_> {
         ClaimPoWRewardVerificationContext {
-            current_block_height: 50,
+            current_block_slot: Slot::from(50u64),
             // p - 1, the largest field element: every ticket passes.
             reward_difficulty: -Fr::ONE,
             pow_nullifiers: nullifiers,
@@ -408,7 +408,7 @@ mod tests {
             epoch_reward_pool: 1_000,
             current_epoch_nonce: CURRENT_EPOCH.into(),
             previous_epoch_nonce: PREVIOUS_EPOCH.into(),
-            blocks_height: HashMap::from([(CLAIM_BLOCK_HASH, 45)]),
+            blocks_slot: HashMap::from([(CLAIM_BLOCK_HASH, Slot::from(45u64))]),
         }
     }
 
@@ -442,12 +442,12 @@ mod tests {
         let mut ctx = accepting_context(&nullifiers);
 
         // Gap of zero: the claim's block is the current block.
-        ctx.blocks_height.insert(CLAIM_BLOCK_HASH, 50);
+        ctx.blocks_slot.insert(CLAIM_BLOCK_HASH, Slot::from(50u64));
         assert_eq!(ctx.accept_claim::<10>(CLAIM_BLOCK_HASH), Ok(()));
 
         // Gap exactly equal to the window is still inside it (§5.1.1:
-        // `0 <= current - height <= WINDOW`).
-        ctx.blocks_height.insert(CLAIM_BLOCK_HASH, 40);
+        // `0 <= current - anchor <= WINDOW`, measured in slots).
+        ctx.blocks_slot.insert(CLAIM_BLOCK_HASH, Slot::from(40u64));
         assert_eq!(ctx.accept_claim::<10>(CLAIM_BLOCK_HASH), Ok(()));
     }
 
@@ -466,11 +466,13 @@ mod tests {
     fn accept_claim_rejects_block_beyond_the_window() {
         let nullifiers = rpds::HashTrieSetSync::new_sync();
         let mut ctx = accepting_context(&nullifiers);
-        // Gap of WINDOW + 1: one block too old.
-        ctx.blocks_height.insert(CLAIM_BLOCK_HASH, 39);
+        // Gap of WINDOW + 1: one slot too old.
+        ctx.blocks_slot.insert(CLAIM_BLOCK_HASH, Slot::from(39u64));
         assert_eq!(
             ctx.accept_claim::<10>(CLAIM_BLOCK_HASH),
-            Err(ClaimPowRewardError::OutOfWindowHeight { height: 39 })
+            Err(ClaimPowRewardError::OutOfWindowSlot {
+                slot: Slot::from(39u64)
+            })
         );
     }
 
@@ -478,12 +480,14 @@ mod tests {
     fn accept_claim_rejects_block_from_the_future() {
         let nullifiers = rpds::HashTrieSetSync::new_sync();
         let mut ctx = accepting_context(&nullifiers);
-        // The claim's block is above the current height (negative gap),
+        // The claim's block is ahead of the current slot (negative gap),
         // e.g. a hash from a competing, longer branch.
-        ctx.blocks_height.insert(CLAIM_BLOCK_HASH, 51);
+        ctx.blocks_slot.insert(CLAIM_BLOCK_HASH, Slot::from(51u64));
         assert_eq!(
             ctx.accept_claim::<10>(CLAIM_BLOCK_HASH),
-            Err(ClaimPowRewardError::OutOfWindowHeight { height: 51 })
+            Err(ClaimPowRewardError::OutOfWindowSlot {
+                slot: Slot::from(51u64)
+            })
         );
     }
 

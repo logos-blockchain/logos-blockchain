@@ -340,14 +340,14 @@ impl SignedMantleTx<Preverified> {
             }
             (Op::ClaimPowReward(claim_pow_op), OpProof::None) => {
                 let context = ClaimPoWRewardValidationContext {
-                    current_block_height: helper.get_current_block_height(),
+                    current_block_slot: helper.get_block_slot(),
                     reward_difficulty: helper.get_pow_reward_difficulty(),
                     pow_nullifiers: helper.get_pow_nullifiers(),
                     epoch_pow_reward: helper.get_epoch_pow_reward(),
                     epoch_reward_pool: helper.get_pow_reward_pool(),
                     current_epoch_nonce: helper.get_epoch(),
                     previous_epoch_nonce: helper.get_previous_epoch(),
-                    blocks_height: helper.get_blocks_height(),
+                    blocks_slot: helper.get_blocks_slot(),
                 };
                 claim_pow_op
                     .verify(&context)

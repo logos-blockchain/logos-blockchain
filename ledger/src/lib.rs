@@ -739,7 +739,6 @@ impl LedgerState {
                 &self.mantle_ledger,
                 &self.cryptarchia_ledger,
                 config,
-                self.block_number,
             );
             let Some(op) = verified_ops.next(&helper).transpose()? else {
                 break;

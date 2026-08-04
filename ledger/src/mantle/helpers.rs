@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use lb_core::{
-    block::BlockNumber,
     crypto::Hash,
     mantle::{
         channel::Channels,
@@ -26,7 +25,6 @@ pub struct MantleOperationVerificationHelper<'a> {
     ledger_state: &'a LedgerState,
     cryptarchia_ledger: &'a crate::CryptarchiaLedger,
     config: &'a crate::Config,
-    block_number: BlockNumber,
 }
 
 impl<'a> MantleOperationVerificationHelper<'a> {
@@ -35,13 +33,11 @@ impl<'a> MantleOperationVerificationHelper<'a> {
         ledger_state: &'a LedgerState,
         cryptarchia_ledger: &'a crate::CryptarchiaLedger,
         config: &'a crate::Config,
-        block_number: BlockNumber,
     ) -> Self {
         Self {
             ledger_state,
             cryptarchia_ledger,
             config,
-            block_number,
         }
     }
 }
@@ -136,10 +132,6 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
             .cloned()
     }
 
-    fn get_current_block_height(&self) -> u64 {
-        self.block_number
-    }
-
     fn get_pow_reward_difficulty(&self) -> PowTarget {
         self.ledger_state.pow.reward_difficulty()
     }
@@ -160,8 +152,8 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
         Epoch::from(self.get_epoch().into_inner().saturating_sub(1))
     }
 
-    fn get_blocks_height(&self) -> HashMap<Hash, u64> {
-        // TODO: the ledger does not track block heights by hash yet. Until it
+    fn get_blocks_slot(&self) -> HashMap<Hash, Slot> {
+        // TODO: the ledger does not track block slots by hash yet. Until it
         // does, every claim fails the window-of-acceptance check with
         // `MissingBlock` — a safe (conservative) default.
         HashMap::new()

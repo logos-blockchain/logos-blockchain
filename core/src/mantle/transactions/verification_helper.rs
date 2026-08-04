@@ -58,12 +58,10 @@ pub trait OperationVerificationHelper {
 
     // `PoW` claim validation inputs, one per
     // [`ClaimPoWRewardValidationContext`] field. The current epoch comes from
-    // [`Self::get_epoch`].
+    // [`Self::get_epoch`] and the current block slot from
+    // [`Self::get_block_slot`].
     //
     // [`ClaimPoWRewardValidationContext`]: crate::mantle::ops::pow::ClaimPoWRewardValidationContext
-
-    /// Height of the block the claim is being validated in.
-    fn get_current_block_height(&self) -> u64;
 
     /// `d_reward`: the reward difficulty a puzzle ticket must be strictly
     /// below.
@@ -82,9 +80,9 @@ pub trait OperationVerificationHelper {
     /// for claims mined just before an epoch boundary.
     fn get_previous_epoch(&self) -> Epoch;
 
-    /// Heights of the blocks a claim may anchor to, keyed by block hash;
+    /// Slots of the blocks a claim may anchor to, keyed by block hash;
     /// used for the window-of-acceptance check.
-    fn get_blocks_height(&self) -> HashMap<Hash, u64>;
+    fn get_blocks_slot(&self) -> HashMap<Hash, Slot>;
 }
 
 #[cfg(test)]
@@ -121,13 +119,12 @@ pub mod test_utils {
         block_slot: Slot,
         nullifiers: HashTrieSetSync<VoucherNullifier>,
         claimable_vouchers_root: RewardsRoot,
-        current_block_height: u64,
         pow_reward_difficulty: PowTarget,
         pow_nullifiers: HashTrieSetSync<PowNullifier>,
         epoch_pow_reward: PowReward,
         pow_reward_pool: PowReward,
         previous_epoch: Epoch,
-        blocks_height: HashMap<Hash, u64>,
+        blocks_slot: HashMap<Hash, Slot>,
     }
 
     impl TestOperationVerificationHelper {
@@ -150,13 +147,12 @@ pub mod test_utils {
                 block_slot: Slot::from(0u64),
                 nullifiers: HashTrieSetSync::new_sync(),
                 claimable_vouchers_root: RewardsRoot::default(),
-                current_block_height: 0,
                 pow_reward_difficulty: PowTarget::default(),
                 pow_nullifiers: HashTrieSetSync::new_sync(),
                 epoch_pow_reward: 0,
                 pow_reward_pool: 0,
                 previous_epoch: Epoch::from(0u32),
-                blocks_height: HashMap::new(),
+                blocks_slot: HashMap::new(),
             }
         }
 
@@ -169,8 +165,8 @@ pub mod test_utils {
         }
 
         #[must_use]
-        pub const fn with_current_block_height(mut self, height: u64) -> Self {
-            self.current_block_height = height;
+        pub const fn with_block_slot(mut self, slot: Slot) -> Self {
+            self.block_slot = slot;
             self
         }
 
@@ -205,11 +201,11 @@ pub mod test_utils {
         }
 
         #[must_use]
-        pub fn with_blocks_height(
+        pub fn with_blocks_slot(
             mut self,
-            blocks_height: impl IntoIterator<Item = (Hash, u64)>,
+            blocks_slot: impl IntoIterator<Item = (Hash, Slot)>,
         ) -> Self {
-            self.blocks_height = blocks_height.into_iter().collect();
+            self.blocks_slot = blocks_slot.into_iter().collect();
             self
         }
     }
@@ -287,10 +283,6 @@ pub mod test_utils {
             )
         }
 
-        fn get_current_block_height(&self) -> u64 {
-            self.current_block_height
-        }
-
         fn get_pow_reward_difficulty(&self) -> PowTarget {
             self.pow_reward_difficulty
         }
@@ -311,8 +303,8 @@ pub mod test_utils {
             self.previous_epoch
         }
 
-        fn get_blocks_height(&self) -> HashMap<Hash, u64> {
-            self.blocks_height.clone()
+        fn get_blocks_slot(&self) -> HashMap<Hash, Slot> {
+            self.blocks_slot.clone()
         }
     }
 }
