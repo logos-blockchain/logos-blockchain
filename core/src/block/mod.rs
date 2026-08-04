@@ -1,12 +1,14 @@
 mod deser;
+mod fixtures;
 pub mod genesis;
 
 use core::fmt::Debug;
 
 use bytes::Bytes;
+use lb_codec::BinaryCodec;
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
-use lb_utils::bounded::{BoundedError, BoundedVec};
+use lb_utils::bounded::{BoundedError, BoundedVec, UpperBoundedVec};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
@@ -46,7 +48,7 @@ pub enum Error {
     ContentTooBig { size: usize, max: usize },
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
 pub struct Proposal {
     pub header: Header,
     pub references: References,
@@ -54,10 +56,10 @@ pub struct Proposal {
 }
 
 /// Transaction hashes referenced by a block proposal.
-pub type BlockTransactionReferences = BoundedVec<TxHash, 0, MAX_BLOCK_TRANSACTIONS>;
+pub type BlockTransactionReferences = UpperBoundedVec<TxHash, MAX_BLOCK_TRANSACTIONS>;
 
 /// References to transactions that are included in a block proposal.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
 pub struct References {
     /// Bounded hashes of the transactions that are included in the block
     /// proposal.

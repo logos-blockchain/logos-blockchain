@@ -83,6 +83,7 @@ tikv-jemallocator = { optional = true, workspace = true }
 bytes            = { workspace = true }
 rand             = { workspace = true }
 serde_urlencoded = { workspace = true }
+serial_test      = { workspace = true }
 
 [features]
 default   = ["tracing"]

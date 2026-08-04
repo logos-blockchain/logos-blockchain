@@ -7,7 +7,10 @@ use super::{SDPActiveOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        ledger::{Declarations, ExecutableOperation, VerifiableOperation, verification_mode},
+        ledger::{
+            Declarations, ExecutableOperation, ProvableOperation, VerifiableOperation,
+            verification_mode,
+        },
         transactions::hash::TxHashView,
     },
 };
@@ -17,7 +20,6 @@ const LOG_TARGET: &str = mantle::sdp::message::ACTIVE;
 pub struct SDPActiveValidationContext<'a> {
     pub declarations: &'a Declarations,
     pub tx_hash_view: &'a TxHashView,
-    pub proof: &'a ZkSignature,
     pub epoch: Epoch,
 }
 
@@ -26,16 +28,28 @@ pub struct SDPActiveExecutionContext {
     pub declarations: Declarations,
 }
 
+impl ProvableOperation for SDPActiveOp {
+    type Proof = ZkSignature;
+}
+
 impl VerifiableOperation<verification_mode::StandardMode> for SDPActiveOp {
     type PreverificationContext<'a> = ();
     type VerificationContext<'a> = SDPActiveValidationContext<'a>;
     type Error = SdpError;
 
-    fn preverify(&self, _context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        _proof: &Self::Proof,
+        _context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         Ok(())
     }
 
-    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         // Check the declaration exists
         let Some(declaration) = context.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
@@ -61,11 +75,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPActiveOp {
         }
 
         // Check the signature over the `zk_id`
-        if !ZkPublicKey::verify_multi(
-            &[declaration.zk_id],
-            context.tx_hash_view.as_fr(),
-            context.proof,
-        ) {
+        if !ZkPublicKey::verify_multi(&[declaration.zk_id], context.tx_hash_view.as_fr(), proof) {
             return Err(SdpError::InvalidZkSignature);
         }
 

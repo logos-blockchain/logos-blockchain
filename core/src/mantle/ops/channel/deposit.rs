@@ -8,8 +8,8 @@ use crate::{
     mantle::{
         channel::{Channels, Error},
         ledger::{
-            ExecutableOperation, Inputs, InputsError, Outputs, Utxos, VerifiableOperation,
-            verification_mode,
+            ExecutableOperation, Inputs, InputsError, Outputs, ProvableOperation, Utxos,
+            VerifiableOperation, verification_mode,
         },
         ops::{OpId, channel::ChannelId},
         transactions::hash::{TxHash, TxHashView},
@@ -56,7 +56,6 @@ pub struct DepositValidationContext<'a> {
     pub locked_notes: &'a LockedNotes,
     pub utxos: &'a Utxos,
     pub tx_hash_view: &'a TxHashView,
-    pub proof: &'a ZkSignature,
 }
 
 pub struct DepositExecutionContext {
@@ -65,16 +64,28 @@ pub struct DepositExecutionContext {
     pub tx_hash: TxHash,
 }
 
+impl ProvableOperation for DepositOp {
+    type Proof = ZkSignature;
+}
+
 impl VerifiableOperation<verification_mode::StandardMode> for DepositOp {
     type PreverificationContext<'a> = ();
     type VerificationContext<'a> = DepositValidationContext<'a>;
     type Error = Error;
 
-    fn preverify(&self, _context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        _proof: &Self::Proof,
+        _context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         Ok(())
     }
 
-    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         // Check that the channel exist
         if !context.channels.channels.contains_key(&self.channel_id) {
             return Err(Error::ChannelNotFound {
@@ -91,7 +102,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for DepositOp {
 
         // Check the signature
         let public_keys = self.inputs.get_pk(context.utxos)?;
-        if !ZkPublicKey::verify_multi(&public_keys, context.tx_hash_view.as_fr(), context.proof) {
+        if !ZkPublicKey::verify_multi(&public_keys, context.tx_hash_view.as_fr(), proof) {
             return Err(Error::InvalidSignature);
         }
 

@@ -13,7 +13,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         channel::{ChannelState, Channels, Error},
-        ledger::{ExecutableOperation, VerifiableOperation, verification_mode},
+        ledger::{ExecutableOperation, ProvableOperation, VerifiableOperation, verification_mode},
         ops::channel::config::Keys,
         transactions::hash::TxHashView,
     },
@@ -47,7 +47,6 @@ impl InscriptionOp {
 
 pub struct InscriptionPreverificationContext<'a> {
     pub tx_hash_view: &'a TxHashView,
-    pub proof: &'a Ed25519Signature,
 }
 
 pub struct InscriptionValidationContext<'a> {
@@ -60,21 +59,33 @@ pub struct InscriptionExecutionContext {
     pub block_slot: Slot,
 }
 
+impl ProvableOperation for InscriptionOp {
+    type Proof = Ed25519Signature;
+}
+
 impl VerifiableOperation<verification_mode::StandardMode> for InscriptionOp {
     type PreverificationContext<'a> = InscriptionPreverificationContext<'a>;
     type VerificationContext<'a> = InscriptionValidationContext<'a>;
     type Error = Error;
 
-    fn preverify(&self, context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         // Check the signature
         self.signer
-            .verify(context.tx_hash_view.as_bytes(), context.proof)
+            .verify(context.tx_hash_view.as_bytes(), proof)
             .map_err(|_error| Error::InvalidSignature)?;
 
         Ok(())
     }
 
-    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        _proof: &Self::Proof,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         // Check if the channel exist otherwise the inscription is valid only if and
         // only if parent == ZERO
         if let Some(channel) = context.channels.channels.get(&self.channel_id).cloned() {

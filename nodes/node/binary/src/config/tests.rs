@@ -12,7 +12,7 @@ use tracing::Level;
 
 use crate::{
     UserConfig,
-    cli::CliArgs,
+    cli::{CliArgs, build_run_config_from_env},
     config::{
         DeploymentSettings, RequiredValues as ConfigRequiredValues,
         blend::{
@@ -126,6 +126,65 @@ fn parse_config_path() {
         parsed_args.user_config_path().to_str().unwrap(),
         "test_cfg.yaml"
     );
+}
+
+/// Builds a minimal, valid [`UserConfig`] for override tests.
+fn minimal_user_config() -> UserConfig {
+    UserConfig::with_required_values(ConfigRequiredValues {
+        blend: BlendConfig::with_required_values(BlendRequiredValues {
+            non_ephemeral_signing_key_id: "non_ephemeral_signing_key_id".into(),
+            secret_key_kms_id: "secret_key_kms_id".into(),
+        }),
+        cryptarchia: CryptarchiaConfig::with_required_values(CryptarchiaRequiredValues {
+            funding_pk: ZkPublicKey::zero(),
+        }),
+        sdp: SdpConfig::with_required_values(SdpRequiredValues {
+            funding_pk: ZkPublicKey::zero(),
+        }),
+        wallet: WalletConfig::with_required_values(WalletRequiredValues {
+            voucher_master_key_id: "voucher_master_key_id".into(),
+        }),
+    })
+}
+
+/// Environment variables applied on top of the YAML config must reach the
+/// resulting `RunConfig`, matching the standalone binary's behaviour (which the
+/// c-bindings reuse via `build_run_config_from_env`).
+#[test]
+#[serial_test::serial]
+fn build_run_config_from_env_applies_environment_overrides() {
+    let http_host = "127.0.0.1:8080";
+    let state_path = "/tmp/env-override-test-state";
+
+    // SAFETY: The test is serialized via `#[serial]`, and the variables are
+    // removed again before any assertion runs, so no other thread observes them.
+    unsafe { std::env::set_var("HTTP_HOST", http_host) };
+    // SAFETY: see above.
+    unsafe { std::env::set_var("STATE_PATH", state_path) };
+    // SAFETY: see above.
+    unsafe { std::env::set_var("LOG_LEVEL", "debug") };
+
+    let run_config = build_run_config_from_env(minimal_user_config());
+
+    // Clean up before asserting so a failing assertion can't leak env state.
+    // SAFETY: see above.
+    unsafe { std::env::remove_var("HTTP_HOST") };
+    // SAFETY: see above.
+    unsafe { std::env::remove_var("STATE_PATH") };
+    // SAFETY: see above.
+    unsafe { std::env::remove_var("LOG_LEVEL") };
+
+    let run_config = run_config.expect("env overrides should build a valid RunConfig");
+
+    assert_eq!(
+        run_config.user.api.backend.listen_address,
+        http_host.parse().unwrap()
+    );
+    assert_eq!(
+        run_config.user.state.base_folder,
+        std::path::PathBuf::from(state_path)
+    );
+    assert_eq!(run_config.user.tracing.level, Level::DEBUG);
 }
 
 #[test]

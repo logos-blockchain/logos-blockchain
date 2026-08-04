@@ -11,6 +11,11 @@ pub enum DecodeError {
         type_name: &'static str,
         needed: usize,
     },
+    #[error("Input remaining while decoding {type_name}: {remaining} remaining from the input")]
+    InputRemaining {
+        type_name: &'static str,
+        remaining: usize,
+    },
     #[error("Invalid encoding for {type_name}: {message}")]
     InvalidValue {
         type_name: &'static str,
@@ -102,6 +107,17 @@ impl DecodeError {
             type_name: type_name::<T>(),
             max,
             limit,
+        }
+    }
+
+    #[must_use]
+    pub fn input_remaining<T>(remaining: usize) -> Self
+    where
+        T: ?Sized,
+    {
+        Self::InputRemaining {
+            type_name: type_name::<T>(),
+            remaining,
         }
     }
 

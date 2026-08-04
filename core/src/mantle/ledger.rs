@@ -48,15 +48,29 @@ pub mod verification_mode {
     impl VerificationMode for StandardMode {}
 }
 
+pub trait ProvableOperation {
+    type Proof;
+}
+
 // TODO: Specific proof type check?
-pub trait VerifiableOperation<Mode: verification_mode::VerificationMode> {
+pub trait VerifiableOperation<Mode: verification_mode::VerificationMode>:
+    ProvableOperation
+{
     type PreverificationContext<'a>;
     type VerificationContext<'a>;
     type Error;
 
-    fn preverify(&self, context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error>;
+    fn preverify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::Error>;
 
-    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error>;
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::Error>;
 }
 
 pub trait ExecutableOperation {

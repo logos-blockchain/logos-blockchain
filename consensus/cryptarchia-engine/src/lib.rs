@@ -85,7 +85,9 @@ where
 
     let forks = branches.branches();
     for chain in forks {
-        let lowest_common_ancestor = branches.lca(&cmax, &chain);
+        let lowest_common_ancestor = branches
+            .lca(&cmax, &chain)
+            .expect("local chain and fork must have a common ancestor");
         let m = cmax.length - lowest_common_ancestor.length;
         if m <= k {
             // Classic longest chain rule with parameter k
@@ -116,7 +118,9 @@ where
 
     let forks = branches.branches();
     for chain in forks {
-        let lowest_common_ancestor = branches.lca(&cmax, &chain);
+        let lowest_common_ancestor = branches
+            .lca(&cmax, &chain)
+            .expect("local chain and fork must have a common ancestor");
         let m = cmax.length - lowest_common_ancestor.length;
         if m <= k && cmax.length < chain.length {
             // Classic longest chain rule with parameter k
@@ -244,23 +248,25 @@ where
     }
 
     /// find the lowest common ancestor of two branches
-    pub fn lca<'a>(&'a self, mut b1: &'a Branch<Id>, mut b2: &'a Branch<Id>) -> Branch<Id> {
+    ///
+    /// `None` if the two branches have no common ancestor in this tree.
+    pub fn lca<'a>(&'a self, mut b1: &'a Branch<Id>, mut b2: &'a Branch<Id>) -> Option<Branch<Id>> {
         // first reduce branches to the same length
         while b1.length > b2.length {
-            b1 = &self.branches[&b1.parent];
+            b1 = self.parent(b1)?;
         }
 
         while b2.length > b1.length {
-            b2 = &self.branches[&b2.parent];
+            b2 = self.parent(b2)?;
         }
 
         // then walk up the chain until we find the common ancestor
         while b1.id != b2.id {
-            b1 = &self.branches[&b1.parent];
-            b2 = &self.branches[&b2.parent];
+            b1 = self.parent(b1)?;
+            b2 = self.parent(b2)?;
         }
 
-        *b1
+        Some(*b1)
     }
 
     pub fn get(&self, id: &Id) -> Option<&Branch<Id>> {
@@ -271,31 +277,47 @@ where
         self.get(header_id).map(|branch| branch.length)
     }
 
-    /// Walk back the chain until the target slot
+    /// The parent of `branch`, or `None` if `branch` is the oldest block in the
+    /// tree, whose parent is either itself (genesis) or outside the tree
+    /// (pruned).
+    fn parent<'a>(&'a self, branch: &Branch<Id>) -> Option<&'a Branch<Id>> {
+        if branch.parent == branch.id {
+            return None;
+        }
+        self.branches.get(&branch.parent)
+    }
+
+    /// Walk back the chain until the target slot, stopping at the oldest block
+    /// in the tree.
     fn walk_back_before(&self, branch: &Branch<Id>, slot: Slot) -> Branch<Id> {
         let mut current = branch;
         while current.slot > slot {
-            current = &self.branches[&current.parent];
+            let Some(parent) = self.parent(current) else {
+                break;
+            };
+            current = parent;
         }
         *current
     }
 
     /// Walk back the chain and return all blocks in the range
     /// `[branch.id, target_exclusive)`.
+    ///
+    /// Ends at the oldest block in the tree if `target_exclusive` is not an
+    /// ancestor of `branch` or is not in the tree (pruned).
     fn walk_back_to_block<'s>(
         &'s self,
         branch: &'s Branch<Id>,
         target_exclusive: Id,
     ) -> impl Iterator<Item = Id> + 's {
-        let mut current = branch.id;
+        let mut current = Some(branch);
         std::iter::from_fn(move || {
-            if current == target_exclusive {
-                None
-            } else {
-                let branch = &self.branches[&current];
-                current = branch.parent;
-                Some(branch.id)
+            let branch = current?;
+            if branch.id == target_exclusive {
+                return None;
             }
+            current = self.parent(branch);
+            Some(branch.id)
         })
     }
 
@@ -305,11 +327,10 @@ where
         let mut current = branch;
         while n > 0 {
             n -= 1;
-            if let Some(parent) = self.branches.get(&current.parent) {
-                current = parent;
-            } else {
+            let Some(parent) = self.parent(current) else {
                 return *current;
-            }
+            };
+            current = parent;
         }
         *current
     }
@@ -379,7 +400,10 @@ where
             // It's safer to compute LCA here, not in `fork_choice`,
             // because `fork_choice` may walk through multiple candidates
             // whose pairwise LCAs don't lie on `old_local_chain`'s parent chain.
-            let lca = self.branches.lca(&old_local_chain, &new_local_chain);
+            let lca = self
+                .branches
+                .lca(&old_local_chain, &new_local_chain)
+                .expect("old and new local chains must have a common ancestor");
             ReorgedBlocks(
                 self.branches
                     .walk_back_to_block(&old_local_chain, lca.id())
@@ -473,7 +497,10 @@ where
         Box::new(self.non_canonical_forks().filter_map(move |fork| {
             // We calculate LCA once and store it in `ForkInfo` so it can be consumed
             // elsewhere without the need to re-calculate it.
-            let lca = self.branches.lca(&local_chain, &fork);
+            let lca = self
+                .branches
+                .lca(&local_chain, &fork)
+                .expect("local chain and fork must have a common ancestor");
             // If the fork is diverged deeper than `deepest_div_block`, it's prunable.
             (lca.length < deepest_div_block).then_some(ForkDivergenceInfo { tip: fork, lca })
         }))
@@ -742,6 +769,55 @@ pub mod tests {
             branches.apply_header(child, parent, 1.into()),
             Err(Error::InvalidSlot(_))
         ));
+    }
+
+    #[test]
+    fn lca_with_branch_outside_the_tree() {
+        // b0(LIB) - b1 - b2      c0 (a separate tree)
+        let cryptarchia = create_canonical_chain(3.try_into().unwrap(), None);
+        let branches = cryptarchia.branches();
+        let other = super::Branches::from_lib(hash(&100u64), 0.into(), 0);
+
+        assert!(
+            branches
+                .lca(
+                    branches.get(&hash(&2u64)).unwrap(),
+                    other.get(&hash(&100u64)).unwrap(),
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn walk_back_before_stops_at_the_oldest_block() {
+        // b0(LIB, slot 5) - b1(slot 6)
+        let mut branches = super::Branches::from_lib(hash(&0u64), 5.into(), 0);
+        branches
+            .apply_header(hash(&1u64), hash(&0u64), 6.into())
+            .unwrap();
+
+        // Slot 0 precedes the oldest block, so the walk stops there.
+        assert_eq!(
+            branches
+                .walk_back_before(branches.get(&hash(&1u64)).unwrap(), 0.into())
+                .id(),
+            hash(&0u64)
+        );
+    }
+
+    #[test]
+    fn walk_back_to_block_outside_the_tree() {
+        // b0(LIB) - b1 - b2
+        let cryptarchia = create_canonical_chain(3.try_into().unwrap(), None);
+        let branches = cryptarchia.branches();
+
+        // The target is not an ancestor, so the walk ends at the oldest block.
+        assert_eq!(
+            branches
+                .walk_back_to_block(branches.get(&hash(&2u64)).unwrap(), hash(&100u64))
+                .collect::<Vec<_>>(),
+            vec![hash(&2u64), hash(&1u64), hash(&0u64)]
+        );
     }
 
     #[test]

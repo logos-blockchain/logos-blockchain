@@ -61,7 +61,6 @@ members = [
   "services/api",
   "services/blend",
   "services/chain/broadcast-service",
-  "services/chain/chain-common",
   "services/chain/chain-leader",
   "services/chain/chain-network",
   "services/chain/chain-service",
@@ -119,7 +118,6 @@ lb-chain-broadcast-service         = { default-features = false, package = "logo
 lb-chain-leader-service            = { default-features = false, package = "logos-blockchain-chain-leader-service", path = "./services/chain/chain-leader" }
 lb-chain-network-service           = { default-features = false, package = "logos-blockchain-chain-network-service", path = "./services/chain/chain-network" }
 lb-chain-service                   = { default-features = false, package = "logos-blockchain-chain-service", path = "./services/chain/chain-service" }
-lb-chain-service-common            = { default-features = false, package = "logos-blockchain-chain-service-common", path = "./services/chain/chain-common" }
 lb-circuits-prover                 = { default-features = false, package = "logos-blockchain-circuits-prover", path = "./zk/circuits/prover" }
 lb-circuits-verifier               = { default-features = false, package = "logos-blockchain-circuits-verifier", path = "./zk/circuits/verifier" }
 lb-codec                           = { default-features = false, package = "logos-blockchain-codec", path = "./codec" }

@@ -3,7 +3,7 @@ use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
 use lb_poc::PoCProof;
 
 use crate::{
-    mantle::ops::leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
+    mantle::ops::leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm, VoucherNullifier},
     proofs::leader_claim_proof::Groth16LeaderClaimProof,
 };
 
@@ -29,4 +29,10 @@ codec_fixtures!(
 codec_fixtures!(
     Groth16LeaderClaimProof,
     Self::new(PoCProof::from_bytes(&[1u8; _])) => "0101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101"
+);
+
+codec_fixtures!(
+    VoucherCm,
+    Fr::ZERO.into() => "0000000000000000000000000000000000000000000000000000000000000000",
+    Fr::ONE.into() => "0100000000000000000000000000000000000000000000000000000000000000"
 );

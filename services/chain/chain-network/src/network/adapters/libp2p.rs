@@ -1,10 +1,9 @@
 use std::{collections::HashSet, fmt::Debug, hash::Hash, iter, marker::PhantomData, time::Instant};
 
 use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream};
-use lb_chain_service_common::NetworkMessage;
+use lb_codec::BinaryDecodeExt as _;
 use lb_core::{
     block::{Block, Proposal},
-    codec::DeserializeOp as _,
     header::HeaderId,
     mantle::traits::MantleTxWithProofs,
 };
@@ -206,17 +205,14 @@ where
         let topic_hash = TopicHash::from_raw(self.settings.topic.clone());
         let stream = receiver.await.map_err(Box::new)?;
         Ok(Box::new(stream.filter_map(move |message| match message {
-            Ok(message) if message.topic == topic_hash => {
-                NetworkMessage::from_bytes(&message.data).map_or_else(
-                    |_| {
-                        tracing::debug!("unrecognized gossipsub message");
-                        None
-                    },
-                    |msg| match msg {
-                        NetworkMessage::Proposal(proposal) => Some(proposal),
-                    },
-                )
-            }
+            Ok(message) if message.topic == topic_hash => match Proposal::decode_all(&message.data)
+            {
+                Ok(proposal) => Some(proposal),
+                Err(e) => {
+                    tracing::debug!("unrecognized gossipsub message: {e}");
+                    None
+                }
+            },
             Ok(_) => None,
             Err(BroadcastStreamRecvError::Lagged(n)) => {
                 tracing::error!("lagged messages: {n}");

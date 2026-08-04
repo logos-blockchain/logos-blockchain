@@ -2,7 +2,8 @@ use core::fmt::Debug;
 use std::sync::LazyLock;
 
 use ark_ff::{AdditiveGroup as _, PrimeField as _};
-use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
+use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_groth16::{COMPRESSED_PROOF_SIZE, Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_log_targets::proofs;
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
@@ -21,7 +22,7 @@ use crate::{
 
 const LOG_TARGET: &str = proofs::LEADER;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Groth16LeaderProof {
     #[serde(with = "proof_serde")]
     proof: lb_pol::PoLProof,
@@ -42,6 +43,48 @@ impl Debug for Groth16LeaderProof {
             .field("leader_key", &self.leader_key)
             .field("voucher_cm", &self.voucher_cm)
             .finish()
+    }
+}
+
+impl BinaryEncode for Groth16LeaderProof {
+    fn encoded_length(&self) -> usize {
+        COMPRESSED_PROOF_SIZE
+            .checked_add(self.entropy_contribution.encoded_length())
+            .unwrap()
+            .checked_add(self.leader_key.encoded_length())
+            .unwrap()
+            .checked_add(self.voucher_cm.encoded_length())
+            .unwrap()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.proof.to_bytes());
+        self.entropy_contribution.encode_into(out);
+        self.leader_key.encode_into(out);
+        self.voucher_cm.encode_into(out);
+    }
+}
+
+impl BinaryDecode for Groth16LeaderProof {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, proof_bytes) = <[u8; COMPRESSED_PROOF_SIZE]>::decode(input, &())?;
+        let (rest, entropy_contribution) = Fr::decode(rest, &())?;
+        let (rest, leader_key) = Ed25519PublicKey::decode(rest, &())?;
+        let (rest, voucher_cm) = VoucherCm::decode(rest, &())?;
+        Ok((
+            rest,
+            Self {
+                proof: lb_pol::PoLProof::from_bytes(&proof_bytes),
+                entropy_contribution,
+                leader_key,
+                voucher_cm,
+            },
+        ))
     }
 }
 
@@ -89,13 +132,12 @@ impl Groth16LeaderProof {
 
     /// Construct a proof directly from its parts.
     ///
-    /// Test-only: the resulting proof is not necessarily valid; it is used to
-    /// build deterministic reference test vectors with distinct per-field
-    /// values (so a field-transposition bug in another implementation cannot be
-    /// masked by shared values).
-    #[cfg(test)]
+    /// Crate-internal: the resulting proof is not necessarily valid; it is used
+    /// to build deterministic reference test vectors and codec fixtures with
+    /// distinct per-field values (so a field-transposition bug in another
+    /// implementation cannot be masked by shared values).
     #[must_use]
-    pub const fn from_parts(
+    pub(crate) const fn from_parts(
         proof: lb_pol::PoLProof,
         entropy_contribution: Fr,
         leader_key: Ed25519PublicKey,
