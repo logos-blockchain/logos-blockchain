@@ -2,11 +2,9 @@ use std::collections::HashMap;
 
 use lb_common_http_client::{ProcessedBlockEvent, Slot};
 use lb_core::{
-    crypto::Hash,
-    events::DepositRecreatedNotes,
     header::HeaderId,
     mantle::{
-        SignedMantleTx, Value,
+        SignedMantleTx,
         ops::{
             Op, OpId as _,
             channel::{ChannelId, MsgId, inscribe::Inscription},
@@ -30,7 +28,10 @@ use super::{
         FinalizedTx, InscriptionInfo, PendingTx, WithdrawInfo,
     },
 };
-use crate::{adapter, adapter::build_deposit_events};
+use crate::{
+    adapter,
+    adapter::{DepositEvents, DepositOpKey, build_deposit_events},
+};
 
 /// Result of processing a block event.
 pub(super) struct BlockEventResult {
@@ -406,23 +407,26 @@ async fn fetch_block_deposit_events<Node>(
     block_id: HeaderId,
     transactions: &[SignedMantleTx<Unverified>],
     channel_id: ChannelId,
-) -> Result<HashMap<(TxHash, Hash), (Value, DepositRecreatedNotes)>, Error>
+) -> Result<DepositEvents, Error>
 where
     Node: adapter::Node + Sync,
 {
-    let expected: Vec<(TxHash, Hash)> = transactions
+    let expected: Vec<DepositOpKey> = transactions
         .iter()
         .flat_map(|tx| {
             let tx_hash = tx.mantle_tx().hash();
             tx.mantle_tx().ops().iter().filter_map(move |op| match op {
-                Op::ChannelDeposit(d) if d.channel_id == channel_id => Some((tx_hash, d.op_id())),
+                Op::ChannelDeposit(d) if d.channel_id == channel_id => Some(DepositOpKey {
+                    tx_hash,
+                    op_id: d.op_id(),
+                }),
                 _ => None,
             })
         })
         .collect();
 
     if expected.is_empty() {
-        return Ok(HashMap::new());
+        return Ok(DepositEvents::new());
     }
 
     let events = match node.block_events(block_id).await {
@@ -452,14 +456,14 @@ where
             error!(
                 target: TARGET,
                 ?block_id,
-                tx_hash = ?key.0,
-                op_id = ?key.1,
+                tx_hash = ?key.tx_hash,
+                op_id = ?key.op_id,
                 "Block events missing an entry for a known channel deposit op; \
                  expected atomic block/events visibility per node semantics"
             );
             return Err(Error::Network(format!(
                 "block {block_id} events missing deposit entry for tx {:?} op {:?}",
-                key.0, key.1
+                key.tx_hash, key.op_id
             )));
         }
     }
@@ -485,7 +489,7 @@ fn extract_finalized_items(
     transactions: &[SignedMantleTx<Unverified>],
     channel_id: ChannelId,
     l1_slot: Slot,
-    deposit_events: &HashMap<(TxHash, Hash), (Value, DepositRecreatedNotes)>,
+    deposit_events: &DepositEvents,
 ) -> Vec<FinalizedTx> {
     let mut items: Vec<FinalizedTx> = Vec::new();
     let mut last_in_block: Option<MsgId> = None;
@@ -530,7 +534,7 @@ fn extract_finalized_items(
                     // channel-deposit op in the block has a matching event
                     // entry before returning, so the lookup is infallible
                     // here. A miss would be a caller-side bug.
-                    let (amount, notes) = deposit_events.get(&(tx_hash, op_id)).expect(
+                    let event = deposit_events.get(&DepositOpKey { tx_hash, op_id }).expect(
                         "deposit_events must contain every channel deposit op - \
                          fetch_block_deposit_events invariant",
                     );
@@ -539,8 +543,8 @@ fn extract_finalized_items(
                         op_id,
                         channel_id,
                         inputs: deposit.inputs.clone(),
-                        notes: notes.clone(),
-                        amount: *amount,
+                        notes: event.notes.clone(),
+                        amount: event.amount,
                         metadata: deposit.metadata.clone(),
                     }));
                 }
@@ -645,7 +649,7 @@ async fn backfill_deposit_events<Node>(
     node: &Node,
     block: &lb_common_http_client::ApiBlock,
     channel_id: ChannelId,
-) -> Option<HashMap<(TxHash, Hash), (Value, DepositRecreatedNotes)>>
+) -> Option<DepositEvents>
 where
     Node: adapter::Node + Sync,
 {
@@ -666,7 +670,7 @@ fn apply_backfilled_block(
     block: &lb_common_http_client::ApiBlock,
     channel_id: ChannelId,
     lib: HeaderId,
-    deposit_events: &HashMap<(TxHash, Hash), (Value, DepositRecreatedNotes)>,
+    deposit_events: &DepositEvents,
 ) {
     let block_id = block.header.id;
     let parent_id = block.header.parent_block;
@@ -830,18 +834,22 @@ fn touches_channel_tip<State: VerificationState>(
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{
-        Note, NoteId, RawMantleTx,
-        channel::{SlotTimeframe, SlotTimeout},
-        ledger::{Inputs, Outputs},
-        ops::{
-            OpId as _, OpProof,
-            channel::{
-                channel_transfer::ChannelTransferOp,
-                config::{ChannelConfigOp, Keys},
-                deposit::{DepositOp, Metadata},
-                inscribe::InscriptionOp,
-                withdraw::ChannelWithdrawOp,
+    use lb_core::{
+        crypto::Hash,
+        events::DepositRecreatedNotes,
+        mantle::{
+            Note, NoteId, RawMantleTx, Value,
+            channel::{SlotTimeframe, SlotTimeout},
+            ledger::{Inputs, Outputs},
+            ops::{
+                OpId as _, OpProof,
+                channel::{
+                    channel_transfer::ChannelTransferOp,
+                    config::{ChannelConfigOp, Keys},
+                    deposit::{DepositOp, Metadata},
+                    inscribe::InscriptionOp,
+                    withdraw::ChannelWithdrawOp,
+                },
             },
         },
     };
@@ -849,9 +857,12 @@ mod tests {
     use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 
     use super::*;
-    use crate::test_support::{
-        MockNode, api_block, deposit_event, header_id, inscribe_op, live_event,
-        unverified_tx_with_ops,
+    use crate::{
+        adapter::DepositEvent,
+        test_support::{
+            MockNode, api_block, deposit_event, header_id, inscribe_op, live_event,
+            unverified_tx_with_ops,
+        },
     };
 
     fn deposit_op(channel_id: ChannelId, input_seed: u32, metadata: Metadata) -> DepositOp {
@@ -862,12 +873,26 @@ mod tests {
         }
     }
 
+    fn deposit_event_entry(
+        tx_hash: TxHash,
+        op_id: Hash,
+        amount: Value,
+    ) -> (DepositOpKey, DepositEvent) {
+        (
+            DepositOpKey { tx_hash, op_id },
+            DepositEvent {
+                amount,
+                notes: DepositRecreatedNotes::default(),
+            },
+        )
+    }
+
     /// Extract deposits via the unified walker and filter to deposit entries
     /// for assertion clarity.
     fn extract_deposits_for_test(
         transactions: &[SignedMantleTx<Unverified>],
         channel_id: ChannelId,
-        deposit_events: &HashMap<(TxHash, Hash), (u64, DepositRecreatedNotes)>,
+        deposit_events: &DepositEvents,
     ) -> Vec<DepositInfo> {
         extract_finalized_items(transactions, channel_id, Slot::from(0), deposit_events)
             .into_iter()
@@ -894,11 +919,7 @@ mod tests {
         ]);
         let tx_hash = tx.mantle_tx().hash();
 
-        let mut amounts = HashMap::new();
-        amounts.insert(
-            (tx_hash, our_op_id),
-            (1234u64, DepositRecreatedNotes::default()),
-        );
+        let amounts = DepositEvents::from([deposit_event_entry(tx_hash, our_op_id, 1234)]);
 
         let deposits = extract_deposits_for_test(std::slice::from_ref(&tx), channel_id, &amounts);
         assert_eq!(
@@ -951,10 +972,11 @@ mod tests {
         let hash_a = tx_a.mantle_tx().hash();
         let hash_b = tx_b.mantle_tx().hash();
 
-        let mut amounts = HashMap::new();
-        amounts.insert((hash_a, id1), (10, DepositRecreatedNotes::default()));
-        amounts.insert((hash_a, id2), (20, DepositRecreatedNotes::default()));
-        amounts.insert((hash_b, id3), (30, DepositRecreatedNotes::default()));
+        let amounts = DepositEvents::from([
+            deposit_event_entry(hash_a, id1, 10),
+            deposit_event_entry(hash_a, id2, 20),
+            deposit_event_entry(hash_b, id3, 30),
+        ]);
 
         let deposits = extract_deposits_for_test(&[tx_a, tx_b], channel_id, &amounts);
         let metadata_in_order: Vec<&[u8]> =
@@ -987,10 +1009,16 @@ mod tests {
             unverified_tx_with_ops(vec![Op::ChannelDeposit(dep), Op::ChannelInscribe(inscribe)]);
         let tx_hash = tx.mantle_tx().hash();
 
-        let mut amounts = HashMap::new();
+        let mut amounts = DepositEvents::new();
         amounts.insert(
-            (tx_hash, dep_op_id),
-            (500u64, DepositRecreatedNotes::default()),
+            DepositOpKey {
+                tx_hash,
+                op_id: dep_op_id,
+            },
+            DepositEvent {
+                amount: 500,
+                notes: DepositRecreatedNotes::default(),
+            },
         );
 
         let items = extract_finalized_items(

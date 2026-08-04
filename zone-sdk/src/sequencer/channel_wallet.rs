@@ -11,19 +11,18 @@
 use std::collections::HashMap;
 
 use lb_core::{
-    crypto::Hash,
-    events::DepositRecreatedNotes,
     header::HeaderId,
     mantle::{
-        SignedMantleTx, Value,
+        SignedMantleTx,
         ledger::NoteId,
         ops::{Op, OpId as _, channel::ChannelId},
         traits::Hashable as _,
-        transactions::{hash::TxHash, mantle_tx::MantleTx as _, states::Unverified},
+        transactions::{mantle_tx::MantleTx as _, states::Unverified},
     },
 };
 
 use super::types::{ChannelNote, ChannelWalletView, DepositGroup};
+use crate::adapter::{DepositEvents, DepositOpKey};
 
 /// One channel-note mutation, in on-chain execution order.
 #[derive(Debug, Clone)]
@@ -117,7 +116,7 @@ impl ChannelWallet {
 pub(super) fn note_ops_from_txs(
     transactions: &[SignedMantleTx<Unverified>],
     channel_id: ChannelId,
-    deposit_events: &HashMap<(TxHash, Hash), (Value, DepositRecreatedNotes)>,
+    deposit_events: &DepositEvents,
 ) -> Vec<NoteOp> {
     let mut ops = Vec::new();
     for tx in transactions {
@@ -126,19 +125,19 @@ pub(super) fn note_ops_from_txs(
             match op {
                 Op::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
                     let op_id = deposit.op_id();
-                    let (amount, notes) = deposit_events.get(&(tx_hash, op_id)).expect(
+                    let event = deposit_events.get(&DepositOpKey { tx_hash, op_id }).expect(
                         "deposit_events must contain every channel deposit op - \
                          fetch_block_deposit_events invariant",
                     );
-                    let group = (notes.len() > 1).then_some(DepositGroup {
+                    let group = (event.notes.len() > 1).then_some(DepositGroup {
                         op_id,
-                        total: *amount,
-                        size: notes.len(),
+                        total: event.amount,
+                        size: event.notes.len(),
                     });
-                    for note_id in notes.iter() {
+                    for note_id in event.notes.iter() {
                         ops.push(NoteOp::Add(ChannelNote {
                             note_id: *note_id,
-                            value: group.is_none().then_some(*amount),
+                            value: group.is_none().then_some(event.amount),
                             pk: None,
                             deposit_group: group,
                         }));
@@ -168,7 +167,7 @@ pub(super) fn note_ops_from_txs(
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
-        Note,
+        Note, Value,
         ledger::{Inputs, Outputs},
         ops::channel::{
             channel_transfer::ChannelTransferOp,
@@ -202,10 +201,16 @@ mod tests {
         op: &DepositOp,
         amount: Value,
         notes: Vec<NoteId>,
-    ) -> HashMap<(TxHash, Hash), (Value, DepositRecreatedNotes)> {
-        HashMap::from([(
-            (tx.mantle_tx().hash(), op.op_id()),
-            (amount, notes.try_into().unwrap()),
+    ) -> DepositEvents {
+        DepositEvents::from([(
+            DepositOpKey {
+                tx_hash: tx.mantle_tx().hash(),
+                op_id: op.op_id(),
+            },
+            crate::adapter::DepositEvent {
+                amount,
+                notes: notes.try_into().unwrap(),
+            },
         )])
     }
 
@@ -279,7 +284,7 @@ mod tests {
         let expected_ids: Vec<NoteId> = op.utxos().map(|u| u.id()).collect();
         let tx = crate::test_support::unverified_tx_with_ops(vec![Op::ChannelTransfer(op)]);
 
-        let ops = note_ops_from_txs(std::slice::from_ref(&tx), channel_id, &HashMap::new());
+        let ops = note_ops_from_txs(std::slice::from_ref(&tx), channel_id, &DepositEvents::new());
 
         assert_eq!(removed(&ops), vec![note_id(10)]);
         let adds = added(&ops);
@@ -307,7 +312,7 @@ mod tests {
             Op::ChannelWithdraw(foreign),
         ]);
 
-        let ops = note_ops_from_txs(std::slice::from_ref(&tx), channel_id, &HashMap::new());
+        let ops = note_ops_from_txs(std::slice::from_ref(&tx), channel_id, &DepositEvents::new());
 
         assert_eq!(removed(&ops), vec![note_id(10)]);
         assert!(added(&ops).is_empty());
