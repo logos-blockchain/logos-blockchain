@@ -33,7 +33,7 @@ cryptarchia:
         inactivity_period: 2
         epoch: 0
     min_stake:
-      threshold: 1
+      threshold: 1000000000
       timestamp: 0
   gossipsub_protocol: /logos-blockchain-standalone-local/cryptarchia/1.0.0
   genesis_block:
