@@ -33,6 +33,7 @@ tracing                       = { workspace = true }
 zeroize                       = { workspace = true }
 
 [dev-dependencies]
+bincode  = { workspace = true }
 test-log = { features = ["trace"], workspace = true }
 
 [features]

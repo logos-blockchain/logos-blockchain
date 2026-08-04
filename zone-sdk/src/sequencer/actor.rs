@@ -628,7 +628,8 @@ mod tests {
         *,
     };
     use crate::test_support::{
-        MockNode, StreamEnd, StreamScript, api_block, live_event, scripts, unverified_tx_with_ops,
+        MockNode, StreamEnd, StreamScript, api_block, funding_config, live_event, scripts,
+        unverified_tx_with_ops,
     };
 
     #[must_use]
@@ -651,7 +652,8 @@ mod tests {
         let channel_id = ChannelId::from([0; 32]);
         let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
         let (node, mut posted_txs) = MockNode::with_posted_channel();
-        let mut sequencer = ZoneSequencer::init(channel_id, sequencer_key, node, None);
+        let mut sequencer =
+            ZoneSequencer::init(channel_id, sequencer_key, node, funding_config(), None);
 
         // Drive sequencer until ready
         loop {
@@ -714,14 +716,13 @@ mod tests {
         }
     }
 
-    /// Comment #1 regression guard for client publishes during reconnect.
-    ///
-    /// A `SequencerClient::publish` issued while the node is down (reconnect in
-    /// progress) must be accepted locally and resolve promptly — matching
-    /// `SequencerHandle::publish` — instead of blocking until connectivity is
-    /// restored. It must also be posted once the node comes back.
+    /// A `SequencerClient::publish` issued while the node is down (reconnect
+    /// in progress) must resolve promptly with [`Error::Unavailable`] —
+    /// funding needs the node — instead of blocking until connectivity is
+    /// restored. Once the node is back and `Ready` is re-announced,
+    /// publishing works again.
     #[tokio::test]
-    async fn client_publish_accepted_locally_during_reconnect() {
+    async fn client_publish_fails_fast_during_reconnect_and_recovers() {
         let channel_id = ChannelId::from([0; 32]);
         let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
         let (up_tx, up_rx) = watch::channel(true);
@@ -730,7 +731,7 @@ mod tests {
         let config = SequencerConfig {
             reconnect_delay: std::time::Duration::from_millis(20),
             resubmit_interval: std::time::Duration::from_millis(20),
-            ..SequencerConfig::default()
+            ..SequencerConfig::new(funding_config())
         };
         let mut sequencer =
             ZoneSequencer::init_with_config(channel_id, sequencer_key, node, config, None);
@@ -743,9 +744,31 @@ mod tests {
             }
         }
 
+        // After `Ready` on this single-key channel the turn-to-write watch is
+        // true; the stream drop clears it, giving a deterministic signal that
+        // the sequencer observed the disconnect before we publish.
+        let mut turn_rx = client.subscribe_turn_to_write();
+        assert!(
+            turn_rx.borrow_and_update().our_turn_to_write,
+            "single-key channel must report our turn after Ready"
+        );
+
         // Take the node down: the live stream ends and the sequencer enters
         // reconnect (subsequent `block_stream` calls error).
         up_tx.send(false).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if !turn_rx.borrow_and_update().our_turn_to_write {
+                    break;
+                }
+                tokio::select! {
+                    changed = turn_rx.changed() => changed.unwrap(),
+                    () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
+                }
+            }
+        })
+        .await
+        .expect("stream drop must clear turn-to-write");
 
         // A client publish while the node is down must resolve promptly. We
         // drive `next_event` concurrently; the publish is serviced from inside
@@ -753,19 +776,42 @@ mod tests {
         // behavior the request would never be drained during reconnect and this
         // would hang (caught by the timeout).
         let publish = client.publish(b"during-reconnect".into());
-        let (_result, _checkpoint) =
-            tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                tokio::select! {
-                    result = publish => result,
-                    () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
-                }
-            })
-            .await
-            .expect("client publish must resolve during reconnect, not block on connectivity")
-            .expect("publish should be accepted locally after Ready");
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::select! {
+                result = publish => result,
+                () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
+            }
+        })
+        .await
+        .expect("client publish must resolve during reconnect, not block on connectivity");
+        assert!(
+            matches!(result, Err(Error::Unavailable { .. })),
+            "publish while disconnected must fail fast, got {result:?}"
+        );
 
-        // Bring the node back up; the locally-queued inscription must be posted.
+        // Bring the node back up and wait for the re-announced `Ready`.
         up_tx.send(true).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if matches!(sequencer.next_event().await, Event::Ready) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("Ready should be re-announced after reconnect");
+
+        // Publishing works again and the inscription is posted.
+        let publish = client.publish(b"after-reconnect".into());
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::select! {
+                result = publish => result,
+                () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
+            }
+        })
+        .await
+        .expect("client publish must resolve after reconnect")
+        .expect("publish should succeed after reconnect");
         let posted = tokio::time::timeout(std::time::Duration::from_secs(10), async {
             tokio::select! {
                 tx = posted_txs.recv() => tx,
@@ -823,7 +869,7 @@ mod tests {
         let config = SequencerConfig {
             reconnect_delay: std::time::Duration::from_millis(20),
             resubmit_interval: std::time::Duration::from_millis(20),
-            ..SequencerConfig::default()
+            ..SequencerConfig::new(funding_config())
         };
         let mut sequencer =
             ZoneSequencer::init_with_config(channel_id, sequencer_key, node, config, None);
@@ -1031,7 +1077,8 @@ mod tests {
             immutable: vec![genesis_block],
             ..MockNode::default()
         };
-        let mut sequencer = ZoneSequencer::init(channel_id, sequencer_key, node, None);
+        let mut sequencer =
+            ZoneSequencer::init(channel_id, sequencer_key, node, funding_config(), None);
 
         let mut finalized_items: Vec<FinalizedTx> = Vec::new();
         loop {
@@ -1126,7 +1173,8 @@ mod tests {
             blocks: vec![b2],
             ..MockNode::default()
         };
-        let mut sequencer = ZoneSequencer::init(channel_id, sequencer_key, node, None);
+        let mut sequencer =
+            ZoneSequencer::init(channel_id, sequencer_key, node, funding_config(), None);
 
         // Phase 1: drive until B1's channel update adopts A (Ready and turn
         // notifications interleave).
