@@ -1,12 +1,10 @@
 use std::sync::Arc;
 
-use lb_blake2btree::{Blake2bTree, LeafHash};
 use lb_codec::BinaryCodec;
 use lb_cryptarchia_engine::Slot;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    crypto::{Digest as _, Hash, Hasher},
     events::TxEvent,
     mantle::{
         NoteId,
@@ -97,7 +95,7 @@ pub enum Error {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Channels {
-    channels: Blake2bTree<ChannelId, ChannelState>,
+    pub channels: rpds::HashTrieMapSync<ChannelId, ChannelState>,
     channel_notes: ChannelNotes,
 }
 
@@ -126,42 +124,11 @@ pub struct ChannelState {
                                               * channel */
 }
 
-// The leaf binds the channel id to its whole state, so that any configuration
-// or sequencing update changes the root.
-impl LeafHash<ChannelId> for ChannelState {
-    fn leaf_hash(&self, channel_id: &ChannelId) -> Hash {
-        let mut h = Hasher::new();
-        h.update(b"CHANNEL_HASH_V1");
-        h.update(channel_id.as_ref());
-        for key in self.accredited_keys.iter() {
-            h.update(key.as_bytes());
-        }
-        h.update(self.configuration_threshold.to_le_bytes());
-        h.update(self.tip_message.as_ref());
-        h.update(self.tip_slot.to_le_bytes());
-        h.update(self.tip_sequencer.to_le_bytes());
-        h.update(self.tip_sequencer_starting_slot.to_le_bytes());
-        h.update(self.posting_timeframe.0.to_le_bytes());
-        h.update(self.posting_timeout.0.to_le_bytes());
-        h.update(self.transfer_threshold.to_le_bytes());
-        h.finalize().into()
-    }
-}
-
 pub(crate) const DEFAULT_TRANSFER_THRESHOLD: ChannelKeyIndex = 1;
 
 impl Default for Channels {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl<'a> IntoIterator for &'a Channels {
-    type Item = (&'a ChannelId, &'a ChannelState);
-    type IntoIter = <&'a Blake2bTree<ChannelId, ChannelState> as IntoIterator>::IntoIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.channels.into_iter()
     }
 }
 
@@ -177,51 +144,14 @@ impl Channels {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            channels: Blake2bTree::new(),
+            channels: rpds::HashTrieMapSync::new_sync(),
             channel_notes: ChannelNotes::new(),
         }
     }
 
     #[must_use]
     pub fn channel_state(&self, channel_id: &ChannelId) -> Option<&ChannelState> {
-        self.channels.get_ref(channel_id)
-    }
-
-    #[must_use]
-    pub fn contains_channel(&self, channel_id: &ChannelId) -> bool {
-        self.channels.contains(channel_id)
-    }
-
-    #[must_use]
-    pub fn iter(&self) -> <&Self as IntoIterator>::IntoIter {
-        self.into_iter()
-    }
-
-    /// Creates `channel_id` with `channel`, or replaces its state if it already
-    /// exists.
-    pub(crate) fn set_channel_state(
-        mut self,
-        channel_id: &ChannelId,
-        channel: ChannelState,
-    ) -> Self {
-        self.channels = if self.channels.contains(channel_id) {
-            self.channels
-                .update(channel_id, channel)
-                .expect("channel is in the tree")
-        } else {
-            self.channels.insert(*channel_id, channel).0
-        };
-        self
-    }
-
-    #[must_use]
-    pub fn channels_root(&self) -> Hash {
-        self.channels.root()
-    }
-
-    #[must_use]
-    pub fn channel_notes_root(&self) -> Hash {
-        self.channel_notes.root()
+        self.channels.get(channel_id)
     }
 
     /// Returns `true` if `note_id` is owned by any channel.
@@ -233,7 +163,7 @@ impl Channels {
     /// Returns the channel owning `note_id`, if it is a channel note.
     #[must_use]
     pub fn get_channel(&self, note_id: &NoteId) -> Option<ChannelId> {
-        self.channel_notes.get(note_id)
+        self.channel_notes.get(note_id).copied()
     }
 
     /// Returns `true` if `note_id` is a channel note owned by `channel_id`.
@@ -398,35 +328,39 @@ mod tests {
         let second_id = ChannelId::from([2u8; 32]);
         let missing_id = ChannelId::from([0u8; 32]);
 
-        let channels = Channels::new()
-            .set_channel_state(
-                &first_id,
-                ChannelState {
-                    accredited_keys: Keys::from(test_public_key(11)).into(),
-                    configuration_threshold: 1,
-                    tip_message: MsgId::root(),
-                    tip_slot: Slot::default(),
-                    tip_sequencer: 0,
-                    tip_sequencer_starting_slot: Slot::default(),
-                    posting_timeframe: 0u32.into(),
-                    transfer_threshold: 1,
-                    posting_timeout: 0u32.into(),
-                },
-            )
-            .set_channel_state(
-                &second_id,
-                ChannelState {
-                    accredited_keys: Keys::from([test_public_key(22), test_public_key(23)]).into(),
-                    configuration_threshold: 1,
-                    tip_message: MsgId::root(),
-                    tip_slot: Slot::default(),
-                    tip_sequencer: 0,
-                    tip_sequencer_starting_slot: Slot::default(),
-                    posting_timeframe: 0.into(),
-                    transfer_threshold: 2,
-                    posting_timeout: 0.into(),
-                },
-            );
+        let channels = Channels {
+            channels: rpds::HashTrieMapSync::new_sync()
+                .insert(
+                    first_id,
+                    ChannelState {
+                        accredited_keys: Keys::from(test_public_key(11)).into(),
+                        configuration_threshold: 1,
+                        tip_message: MsgId::root(),
+                        tip_slot: Slot::default(),
+                        tip_sequencer: 0,
+                        tip_sequencer_starting_slot: Slot::default(),
+                        posting_timeframe: 0u32.into(),
+                        transfer_threshold: 1,
+                        posting_timeout: 0u32.into(),
+                    },
+                )
+                .insert(
+                    second_id,
+                    ChannelState {
+                        accredited_keys: Keys::from([test_public_key(22), test_public_key(23)])
+                            .into(),
+                        configuration_threshold: 1,
+                        tip_message: MsgId::root(),
+                        tip_slot: Slot::default(),
+                        tip_sequencer: 0,
+                        tip_sequencer_starting_slot: Slot::default(),
+                        posting_timeframe: 0.into(),
+                        transfer_threshold: 2,
+                        posting_timeout: 0.into(),
+                    },
+                ),
+            channel_notes: ChannelNotes::new(),
+        };
 
         let gas_context = MantleTxGasContext::from_channels(&channels, GasPrices::new(0, 0));
 
@@ -749,130 +683,5 @@ mod tests {
     fn zero_elapsed_no_change() {
         let channel = make_channel(100, 3, 95, 10, 20, 5);
         assert_eq!(channel.round_robin(100.into()), (3, 95.into()));
-    }
-
-    // Leaf commitment
-    fn leaf_channel_state() -> ChannelState {
-        ChannelState {
-            accredited_keys: Keys::from([test_public_key(1), test_public_key(2)]).into(),
-            configuration_threshold: 2,
-            tip_message: MsgId::from([3u8; 32]),
-            tip_slot: Slot::new(42),
-            tip_sequencer: 1,
-            tip_sequencer_starting_slot: Slot::new(7),
-            posting_timeframe: SlotTimeframe(10),
-            posting_timeout: SlotTimeout(20),
-            transfer_threshold: 2,
-        }
-    }
-
-    // The encoding is spelled out field by field, so any change to `leaf_hash`
-    // has to be mirrored here and in the specification.
-    #[test]
-    fn channel_leaf_matches_the_specified_encoding() {
-        let channel_id = ChannelId::from([0u8; 32]);
-        let channel = leaf_channel_state();
-
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(b"CHANNEL_HASH_V1");
-        bytes.extend_from_slice(channel_id.as_ref());
-        bytes.extend_from_slice(test_public_key(1).as_bytes());
-        bytes.extend_from_slice(test_public_key(2).as_bytes());
-        bytes.extend_from_slice(&2u16.to_le_bytes());
-        bytes.extend_from_slice(&[3u8; 32]);
-        bytes.extend_from_slice(&42u64.to_le_bytes());
-        bytes.extend_from_slice(&1u16.to_le_bytes());
-        bytes.extend_from_slice(&7u64.to_le_bytes());
-        bytes.extend_from_slice(&10u32.to_le_bytes());
-        bytes.extend_from_slice(&20u32.to_le_bytes());
-        bytes.extend_from_slice(&2u16.to_le_bytes());
-
-        let expected: Hash = Hasher::digest(&bytes).into();
-        assert_eq!(channel.leaf_hash(&channel_id), expected);
-    }
-
-    #[test]
-    fn channel_leaf_binds_the_channel_id() {
-        let channel = leaf_channel_state();
-
-        assert_ne!(
-            channel.leaf_hash(&ChannelId::from([0u8; 32])),
-            channel.leaf_hash(&ChannelId::from([1u8; 32]))
-        );
-    }
-
-    #[test]
-    fn channel_leaf_binds_every_field() {
-        let channel_id = ChannelId::from([0u8; 32]);
-        let channel = leaf_channel_state();
-        let leaf = channel.leaf_hash(&channel_id);
-
-        let mutations = [
-            ChannelState {
-                accredited_keys: Keys::from(test_public_key(9)).into(),
-                ..channel.clone()
-            },
-            ChannelState {
-                configuration_threshold: 1,
-                ..channel.clone()
-            },
-            ChannelState {
-                tip_message: MsgId::root(),
-                ..channel.clone()
-            },
-            ChannelState {
-                tip_slot: Slot::new(43),
-                ..channel.clone()
-            },
-            ChannelState {
-                tip_sequencer: 0,
-                ..channel.clone()
-            },
-            ChannelState {
-                tip_sequencer_starting_slot: Slot::new(8),
-                ..channel.clone()
-            },
-            ChannelState {
-                posting_timeframe: SlotTimeframe(11),
-                ..channel.clone()
-            },
-            ChannelState {
-                posting_timeout: SlotTimeout(21),
-                ..channel.clone()
-            },
-            ChannelState {
-                transfer_threshold: 1,
-                ..channel
-            },
-        ];
-
-        for mutated in mutations {
-            assert_ne!(mutated.leaf_hash(&channel_id), leaf);
-        }
-    }
-
-    #[test]
-    fn channels_root_tracks_insertions_and_updates() {
-        let channel_id = ChannelId::from([0u8; 32]);
-        let channels = Channels::new();
-        let empty_root = channels.channels_root();
-
-        let channels = channels.set_channel_state(&channel_id, leaf_channel_state());
-        let root = channels.channels_root();
-        assert_ne!(root, empty_root);
-
-        let channels = channels.set_channel_state(
-            &channel_id,
-            ChannelState {
-                tip_slot: Slot::new(43),
-                ..leaf_channel_state()
-            },
-        );
-        assert_ne!(channels.channels_root(), root);
-
-        // The state is updated in place, so restoring it restores the root
-        // instead of committing to a second leaf.
-        let channels = channels.set_channel_state(&channel_id, leaf_channel_state());
-        assert_eq!(channels.channels_root(), root);
     }
 }

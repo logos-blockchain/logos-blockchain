@@ -78,7 +78,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
         // Check that the indexes are unique and there is the same number of proof and
         // index. This is enforced by the proof structure that enforces it.
 
-        if let Some(channel) = context.channels.channel_state(&self.channel) {
+        if let Some(channel) = context.channels.channels.get(&self.channel).cloned() {
             // Check there is enough signatures
             let signatures = proof.signatures();
             if signatures.len() != channel.configuration_threshold as usize {
@@ -119,20 +119,33 @@ impl ExecutableOperation for ChannelConfigOp {
         &self,
         mut context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
-        let channel = ChannelState {
-            accredited_keys: self.keys.clone().into(),
-            configuration_threshold: self.configuration_threshold,
-            tip_message: self.id(),
-            tip_slot: context.block_slot,
-            tip_sequencer: 0,
-            tip_sequencer_starting_slot: context.block_slot,
-            posting_timeframe: self.posting_timeframe.clone(),
-            transfer_threshold: self.transfer_threshold,
-            posting_timeout: self.posting_timeout.clone(),
-        };
-
         // if the channel doesn't exist, create it otherwise just update the config
-        context.channels = context.channels.set_channel_state(&self.channel, channel);
+        if let Some(channel) = context.channels.channels.get_mut(&self.channel) {
+            channel.accredited_keys = self.keys.clone().into();
+            channel.configuration_threshold = self.configuration_threshold;
+            channel.tip_sequencer = 0;
+            channel.tip_sequencer_starting_slot = context.block_slot;
+            channel.posting_timeframe = self.posting_timeframe.clone();
+            channel.posting_timeout = self.posting_timeout.clone();
+            channel.transfer_threshold = self.transfer_threshold;
+            channel.tip_slot = context.block_slot;
+            channel.tip_message = self.id();
+        } else {
+            context.channels.channels = context.channels.channels.insert(
+                self.channel,
+                ChannelState {
+                    accredited_keys: self.keys.clone().into(),
+                    configuration_threshold: self.configuration_threshold,
+                    tip_message: self.id(),
+                    tip_slot: context.block_slot,
+                    tip_sequencer: 0,
+                    tip_sequencer_starting_slot: context.block_slot,
+                    posting_timeframe: self.posting_timeframe.clone(),
+                    transfer_threshold: self.transfer_threshold,
+                    posting_timeout: self.posting_timeout.clone(),
+                },
+            );
+        }
         Ok((context, Vec::new()))
     }
 }
