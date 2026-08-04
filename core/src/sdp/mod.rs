@@ -689,5 +689,4 @@ mod tests {
         assert_eq!(concatenated(&joined), concatenated(&split));
         assert_ne!(joined.id(), split.id());
     }
-
 }
