@@ -12,7 +12,10 @@ use lb_core::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
     codec::{DeserializeOp as _, SerializeOp as _},
     header::HeaderId,
-    mantle::mock::{MockTransaction, MockTxId},
+    mantle::{
+        mock::{MockTransaction, MockTxId},
+        transactions::hash::{PrefixedKey as _, TxHashPrefix},
+    },
 };
 use lb_network_service::{
     NetworkService,
@@ -163,14 +166,14 @@ async fn pending_txs(
         .await
 }
 
-async fn txs_by_hashes(
+async fn txs_by_prefix(
     mempool_outbound: &OutboundRelay<<MockMempoolService as ServiceData>::Message>,
-    hashes: Vec<MockTxId>,
+    prefix: TxHashPrefix,
 ) -> Vec<MockTransaction<MockMessage>> {
     let (reply_channel, reply) = tokio::sync::oneshot::channel();
     mempool_outbound
-        .send(MempoolMsg::GetTransactionsByHashes {
-            hashes,
+        .send(MempoolMsg::GetTransactionsByPrefix {
+            prefix,
             reply_channel,
         })
         .await
@@ -178,9 +181,10 @@ async fn txs_by_hashes(
 
     reply
         .await
-        .expect("mempool should reply to tx lookup")
-        .expect("tx lookup should succeed")
-        .into_found()
+        .expect("mempool should reply to prefix lookup")
+        .expect("prefix lookup should succeed")
+        .collect::<Vec<_>>()
+        .await
 }
 
 #[derive(Clone, Default)]
@@ -524,68 +528,6 @@ fn mempool_view_preserves_receive_order() {
 }
 
 #[test]
-fn get_transactions_by_hashes_preserves_request_order() {
-    run_with_mock_pool_node(Vec::new(), |settings, _temp_dir| {
-        let app = OverwatchRunner::<MockPoolNode>::run(settings, None)
-            .map_err(|e| eprintln!("Error encountered: {e}"))
-            .unwrap();
-
-        drop(
-            app.runtime()
-                .handle()
-                .block_on(app.handle().start_all_services()),
-        );
-
-        let mempool_outbound = app
-            .runtime()
-            .handle()
-            .block_on(async { app.handle().relay::<MockMempoolService>().await.unwrap() });
-
-        let first_tx = MockTransaction::new(MockMessage {
-            payload: "first".to_owned(),
-            content_topic: MOCK_TX_CONTENT_TOPIC,
-            version: 0,
-            timestamp: 1,
-        });
-
-        let second_tx = MockTransaction::new(MockMessage {
-            payload: "second".to_owned(),
-            content_topic: MOCK_TX_CONTENT_TOPIC,
-            version: 0,
-            timestamp: 2,
-        });
-
-        app.runtime()
-            .handle()
-            .block_on(add_tx(&mempool_outbound, first_tx.clone()))
-            .expect("first tx should be added");
-
-        app.runtime()
-            .handle()
-            .block_on(add_tx(&mempool_outbound, second_tx.clone()))
-            .expect("second tx should be added");
-
-        let requested_txs = if first_tx.id() < second_tx.id() {
-            vec![second_tx, first_tx]
-        } else {
-            vec![first_tx, second_tx]
-        };
-
-        let requested_hashes = requested_txs.iter().map(MockTransaction::id).collect();
-
-        let fetched_txs = app
-            .runtime()
-            .handle()
-            .block_on(txs_by_hashes(&mempool_outbound, requested_hashes));
-
-        assert_eq!(fetched_txs, requested_txs);
-
-        drop(app.runtime().handle().block_on(app.handle().shutdown()));
-        app.blocking_wait_finished();
-    });
-}
-
-#[test]
 fn test_mock_mempool() {
     let exist = Arc::new(AtomicBool::new(false));
     let exist2 = Arc::clone(&exist);
@@ -688,5 +630,89 @@ fn test_mock_mempool() {
             .expect("Recovery state should exist.");
         assert_eq!(recovered_state.pool().unwrap().pending_items.len(), 2);
         assert!(recovered_state.pool().unwrap().last_item_timestamp > 0);
+    });
+}
+
+/// The prefix index is derived state, so the risk is that it drifts out of
+/// sync with the pending set. These drive the real service message end to end:
+/// index lookup, storage fetch, stream.
+#[test]
+fn prefix_lookup_tracks_the_pending_set() {
+    run_with_mock_pool_node(Vec::new(), |settings, _temp_dir| {
+        let app = OverwatchRunner::<MockPoolNode>::run(settings, None)
+            .map_err(|e| eprintln!("Error encountered: {e}"))
+            .unwrap();
+
+        drop(
+            app.runtime()
+                .handle()
+                .block_on(app.handle().start_all_services()),
+        );
+
+        let mempool_outbound = app
+            .runtime()
+            .handle()
+            .block_on(async { app.handle().relay::<MockMempoolService>().await.unwrap() });
+
+        let tx = MockTransaction::new(MockMessage {
+            payload: "indexed".to_owned(),
+            content_topic: MOCK_TX_CONTENT_TOPIC,
+            version: 0,
+            timestamp: 1,
+        });
+        let prefix = tx.id().key_prefix();
+
+        // Unknown prefix resolves to nothing.
+        assert!(
+            app.runtime()
+                .handle()
+                .block_on(txs_by_prefix(&mempool_outbound, prefix))
+                .is_empty(),
+            "a prefix with no transaction must resolve to no candidates"
+        );
+
+        app.runtime()
+            .handle()
+            .block_on(add_tx(&mempool_outbound, tx.clone()))
+            .expect("tx should be added");
+
+        assert_eq!(
+            app.runtime()
+                .handle()
+                .block_on(txs_by_prefix(&mempool_outbound, prefix)),
+            vec![tx.clone()],
+            "an added transaction must be reachable through its hash prefix"
+        );
+
+        // A prefix that no transaction carries stays empty.
+        let absent = TxHashPrefix([0xFFu8; 8]);
+        if absent != prefix {
+            assert!(
+                app.runtime()
+                    .handle()
+                    .block_on(txs_by_prefix(&mempool_outbound, absent))
+                    .is_empty(),
+                "an unrelated prefix must not pick up candidates"
+            );
+        }
+
+        app.runtime().handle().block_on(async {
+            mempool_outbound
+                .send(MempoolMsg::Remove { ids: vec![tx.id()] })
+                .await
+                .unwrap();
+        });
+
+        // Removal must evict from the index, not just the pending set.
+        assert!(
+            app.runtime()
+                .handle()
+                .block_on(txs_by_prefix(&mempool_outbound, prefix))
+                .is_empty(),
+            "a removed transaction must no longer be reachable through its prefix"
+        );
+
+        drop(app.runtime().handle().block_on(app.handle().shutdown()));
+        app.blocking_wait_finished();
     });
 }

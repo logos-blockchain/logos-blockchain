@@ -1,8 +1,11 @@
 use lb_core::{
     header::HeaderId,
-    mantle::{traits::Hashable, transactions::hash::TxHash},
+    mantle::{
+        traits::Hashable,
+        transactions::hash::{TxHash, TxHashPrefix},
+    },
 };
-use lb_tx_service::{MempoolMsg, TransactionsByHashesResponse};
+use lb_tx_service::{MempoolMsg, TxsWithCommonPrefix};
 use overwatch::services::relay::OutboundRelay;
 use tokio::sync::oneshot;
 
@@ -51,19 +54,19 @@ where
         Ok(())
     }
 
-    async fn get_transactions_by_hashes(
+    async fn get_transactions_by_prefix(
         &self,
-        hashes: Vec<TxHash>,
-    ) -> Result<TransactionsByHashesResponse<Tx, TxHash>, overwatch::DynError> {
+        prefix: TxHashPrefix,
+    ) -> Result<TxsWithCommonPrefix<Tx>, overwatch::DynError> {
         let (resp_tx, resp_rx) = oneshot::channel();
 
         self.mempool_relay
-            .send(MempoolMsg::GetTransactionsByHashes {
-                hashes,
+            .send(MempoolMsg::GetTransactionsByPrefix {
+                prefix,
                 reply_channel: resp_tx,
             })
             .await
-            .map_err(|(e, _)| format!("Could not get transactions by hashes: {e}"))?;
+            .map_err(|(e, _)| format!("Could not get transactions by prefix: {e}"))?;
 
         let response = resp_rx
             .await

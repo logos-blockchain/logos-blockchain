@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap, hash_map::Entry},
     fmt::Debug,
     hash::Hash,
     pin::Pin,
@@ -9,6 +9,7 @@ use std::{
 use async_trait::async_trait;
 use futures::Stream;
 use indexmap::IndexSet;
+use lb_core::mantle::transactions::hash::PrefixedKey;
 use lb_log_targets::mempool;
 use serde::{Deserialize, Serialize};
 
@@ -32,8 +33,19 @@ where
     pub last_item_timestamp: u64,
 }
 
-pub struct Mempool<BlockId, Item, Key, Storage, RuntimeServiceId> {
+pub struct Mempool<BlockId, Item, Key, Storage, RuntimeServiceId>
+where
+    Key: PrefixedKey,
+{
     pending_items: IndexSet<Key>,
+    /// Secondary index over [`Self::pending_items`], keyed by the hash prefix a
+    /// block proposal would use to refer to a transaction.
+    ///
+    /// Buckets are plain vectors: a 64-bit prefix makes collisions vanishingly
+    /// rare, so almost every one holds a single key, and the branching cap puts
+    /// a hard ceiling of a handful on the rest. A set would cost a hash table
+    /// per bucket to deduplicate keys that are already unique.
+    by_prefix: HashMap<Key::Prefix, Vec<Key>>,
     removed_items: BTreeMap<Key, u64>,
     last_item_timestamp: u64,
     storage_adapter: Storage,
@@ -45,11 +57,12 @@ impl<BlockId, Item, Key, Storage, RuntimeServiceId> Debug
 where
     BlockId: Debug,
     Item: Debug,
-    Key: Debug,
+    Key: Debug + PrefixedKey<Prefix: Debug>,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Mempool")
             .field("pending_items", &self.pending_items)
+            .field("by_prefix", &self.by_prefix)
             .field("removed_items", &self.removed_items)
             .field("last_item_timestamp", &self.last_item_timestamp)
             .field("storage_adapter", &"<StorageAdapter>")
@@ -61,7 +74,14 @@ where
 impl<BlockId, Item, Key, Storage, RuntimeServiceId> MemPool
     for Mempool<BlockId, Item, Key, Storage, RuntimeServiceId>
 where
-    Key: Hash + Eq + Ord + Clone + Send + Sync + 'static,
+    Key: Hash
+        + Eq
+        + Ord
+        + Clone
+        + Send
+        + Sync
+        + PrefixedKey<Prefix: Eq + Hash + Send + Sync>
+        + 'static,
     Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
     BlockId: Hash + Eq + Copy + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
     Storage:
@@ -78,6 +98,7 @@ where
     fn new(_settings: Self::Settings, storage: Self::Storage) -> Self {
         Self {
             pending_items: IndexSet::new(),
+            by_prefix: HashMap::new(),
             removed_items: BTreeMap::new(),
             last_item_timestamp: 0,
             storage_adapter: storage,
@@ -104,6 +125,10 @@ where
             .map_err(|e| MempoolError::StorageError(format!("{e:?}")))?;
 
         self.removed_items.remove(&key);
+        self.by_prefix
+            .entry(key.key_prefix())
+            .or_default()
+            .push(key.clone());
         self.pending_items.insert(key);
         self.last_item_timestamp = timestamp;
         tracing::debug!(
@@ -125,6 +150,14 @@ where
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, MempoolError> {
         self.get_items_by_keys(self.pending_items.iter().cloned())
             .await
+    }
+
+    fn keys_by_prefix(
+        &self,
+        prefix: &<Self::Key as PrefixedKey>::Prefix,
+    ) -> impl Iterator<Item = &Self::Key> + '_ {
+        // Returns empty iterator if prefix is not found.
+        self.by_prefix.get(prefix).into_iter().flatten()
     }
 
     async fn get_items_by_keys<I>(
@@ -150,6 +183,17 @@ where
 
         for key in keys {
             self.pending_items.shift_remove(key);
+            if let Entry::Occupied(mut bucket) = self.by_prefix.entry(key.key_prefix()) {
+                // Bucket order is irrelevant — only reference order matters, and
+                // that comes from a block proposal — so a swap-remove is fine to avoid shifting
+                // remaining elements around.)
+                if let Some(position) = bucket.get().iter().position(|held| held == key) {
+                    bucket.get_mut().swap_remove(position);
+                }
+                if bucket.get().is_empty() {
+                    bucket.remove();
+                }
+            }
             self.removed_items.insert(key.clone(), removed_at);
         }
         log_removed_items(removed_count, self.pending_items.len());
@@ -183,7 +227,16 @@ where
 impl<BlockId, Item, Key, Storage, RuntimeServiceId> RecoverableMempool
     for Mempool<BlockId, Item, Key, Storage, RuntimeServiceId>
 where
-    Key: Hash + Eq + Ord + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
+    Key: Hash
+        + Eq
+        + Ord
+        + Clone
+        + Send
+        + Sync
+        + PrefixedKey<Prefix: Eq + Hash + Send + Sync>
+        + 'static
+        + Serialize
+        + for<'de> Deserialize<'de>,
     Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
     BlockId: Hash + Eq + Copy + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
     Storage:
@@ -206,8 +259,19 @@ where
         state: Self::RecoveryState,
         storage: <Self as MemPool>::Storage,
     ) -> Self {
+        // `by_prefix` is derived, so it is rebuilt rather than restored.
+        let mut by_prefix: HashMap<Key::Prefix, Vec<Key>> =
+            HashMap::with_capacity(state.pending_items.len());
+        for key in &state.pending_items {
+            by_prefix
+                .entry(key.key_prefix())
+                .or_default()
+                .push(key.clone());
+        }
+
         Self {
             pending_items: state.pending_items,
+            by_prefix,
             removed_items: state.removed_items,
             last_item_timestamp: state.last_item_timestamp,
             storage_adapter: storage,
@@ -219,7 +283,7 @@ where
 impl<BlockId, Item, Key, Storage, RuntimeServiceId>
     Mempool<BlockId, Item, Key, Storage, RuntimeServiceId>
 where
-    Key: Hash + Eq + Ord + Clone + Send + Sync + 'static,
+    Key: Hash + Eq + Ord + Clone + Send + Sync + PrefixedKey + 'static,
     Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
     BlockId: Hash + Eq + Copy + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
     Storage:
