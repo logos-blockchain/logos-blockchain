@@ -761,4 +761,29 @@ mod tests {
 
         assert!(matches!(err, Error::Validation(msg) if msg == "expected non-genesis slot"));
     }
+
+    /// The specification fixes the maximum proposal at 8,555 bytes. It reaches
+    /// that as `header (299) || references (8192) || signature (64)` with the
+    /// reference count in the header; this implementation reaches the same
+    /// total as `header (297) || references (2 + 8192) || signature (64)`,
+    /// carrying the count as the reference list's own length prefix.
+    #[test]
+    fn maximum_proposal_matches_the_specified_size() {
+        use lb_codec::BinaryEncode as _;
+
+        const SPECIFIED_MAX_PROPOSAL_SIZE: usize = 8555;
+
+        let proposal = Block::create(
+            [0u8; 32].into(),
+            Slot::from(42u64),
+            create_proof(),
+            BlockTransactions::<RawMantleTx>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap(),
+            &Ed25519Key::from_bytes(&[0; 32]),
+        )
+        .expect("valid block")
+        .to_proposal();
+
+        assert_eq!(proposal.encoded_length(), SPECIFIED_MAX_PROPOSAL_SIZE);
+        assert_eq!(proposal.encode().len(), SPECIFIED_MAX_PROPOSAL_SIZE);
+    }
 }
