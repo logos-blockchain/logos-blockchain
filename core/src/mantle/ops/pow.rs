@@ -139,7 +139,7 @@ impl ClaimPoWRewardVerificationContext<'_> {
         if self.epoch_pow_reward.is_zero() {
             return Err(ClaimPowRewardError::EmptyRewards);
         }
-        if self.epoch_reward_pool <= self.epoch_pow_reward {
+        if self.epoch_reward_pool < self.epoch_pow_reward {
             return Err(ClaimPowRewardError::InsufficientPoolBalance {
                 pool: self.epoch_reward_pool,
                 reward: self.epoch_pow_reward,
@@ -315,5 +315,62 @@ impl ExecutableOperation for ClaimPowRewardOp {
                 },
             )],
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn validation_context(
+        nullifiers: &rpds::HashTrieSetSync<PowNullifier>,
+        epoch_pow_reward: PowReward,
+        epoch_reward_pool: PowReward,
+    ) -> ClaimPoWRewardValidationContext<'_> {
+        ClaimPoWRewardValidationContext {
+            current_block_height: 0,
+            reward_difficulty: PowTarget::default(),
+            pow_nullifiers: nullifiers,
+            epoch_pow_reward,
+            epoch_reward_pool,
+            current_epoch_nonce: 0.into(),
+            previous_epoch_nonce: 0.into(),
+            blocks_height: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn pow_reward_enabled_accepts_pool_exactly_covering_the_reward() {
+        // Spec §5.6: claiming is enabled when `pow_reward_pool >= sigma_e`.
+        // A pool exactly equal to the reward must be claimable; rejecting it
+        // (as the previous `<=` comparison did) strands the last reward.
+        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let ctx = validation_context(&nullifiers, 10, 10);
+        assert_eq!(ctx.pow_reward_enabled(), Ok(()));
+    }
+
+    #[test]
+    fn pow_reward_enabled_rejects_pool_below_the_reward() {
+        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let ctx = validation_context(&nullifiers, 10, 9);
+        assert_eq!(
+            ctx.pow_reward_enabled(),
+            Err(ClaimPowRewardError::InsufficientPoolBalance {
+                pool: 9,
+                reward: 10,
+            })
+        );
+    }
+
+    #[test]
+    fn pow_reward_enabled_rejects_zero_reward() {
+        // sigma_e == 0 is the safety cutoff: claims are rejected outright,
+        // regardless of the pool balance.
+        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let ctx = validation_context(&nullifiers, 0, 1_000);
+        assert_eq!(
+            ctx.pow_reward_enabled(),
+            Err(ClaimPowRewardError::EmptyRewards)
+        );
     }
 }

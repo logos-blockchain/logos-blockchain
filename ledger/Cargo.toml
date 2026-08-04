@@ -34,7 +34,8 @@ thiserror                     = { workspace = true }
 tracing                       = { workspace = true }
 
 [dev-dependencies]
-rand = { features = ["std", "std_rng"], workspace = true }
+rand       = { features = ["std", "std_rng"], workspace = true }
+serde_json = { features = ["alloc"], workspace = true }
 
 [package.metadata.cargo-machete]
 ignored = ["serde_arrays"]
