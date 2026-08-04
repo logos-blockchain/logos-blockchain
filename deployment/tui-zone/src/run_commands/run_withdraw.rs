@@ -5,7 +5,7 @@ use lb_core::{
         Op, OpProof, SignedMantleTx,
         ops::channel::{ChannelId, ChannelKeyIndex},
         traits::Hashable as _,
-        transactions::codec::encode_signed_mantle_tx,
+        transactions::{codec::encode_signed_mantle_tx, mantle_tx::MantleTx as _},
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };

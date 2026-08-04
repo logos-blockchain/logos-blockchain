@@ -13,7 +13,7 @@ pub use gas::{GasCalculator, GasConstants};
 pub use ledger::{Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof};
 pub use transactions::{
-    CryptarchiaParameter, GenesisTime, SignedMantleTx, hash::TxHash, mantle_tx::MantleTx,
+    CryptarchiaParameter, GenesisTime, SignedMantleTx, hash::TxHash, mantle_tx::RawMantleTx,
 };
 
 pub use crate::mantle::transactions::VerificationError;

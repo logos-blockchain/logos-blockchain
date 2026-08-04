@@ -148,7 +148,7 @@ if let Event::BlocksProcessed { finalized, .. } = event {
 
 When `withdraw_threshold > 1`, no single sequencer can authorize a withdraw alone. The Zone SDK exposes the lower-level building blocks for threshold coordination, and the proposing sequencer builds the `ChannelWithdrawOp` itself (instead of `WithdrawArg`) because it needs to commit to a specific `withdraw_nonce` before sharing the unsigned tx with the rest of the committee.
 
-- `handle.prepare_tx(ops, inscription)` — build the unsigned `MantleTx` for arbitrary `ops` (including `ChannelWithdraw`) and return it plus this sequencer's own signature.
+- `handle.prepare_tx(ops, inscription)` — build the unsigned `RawMantleTx` for arbitrary `ops` (including `ChannelWithdraw`) and return it plus this sequencer's own signature.
 - `handle.sign_tx(&tx)` — sign a transaction prepared elsewhere, e.g. one proposed by another committee member.
 - `handle.submit_signed_tx(signed_tx, msg_id)` — submit once the committee has gathered `ChannelState.withdraw_threshold` signatures.
 

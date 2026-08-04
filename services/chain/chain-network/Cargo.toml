@@ -13,32 +13,32 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait             = { workspace = true }
-backon                  = { features = ["tokio-sleep"], workspace = true }
-futures                 = { workspace = true }
-lb-chain-service        = { workspace = true }
-lb-chain-service-common = { workspace = true }
-lb-core                 = { workspace = true }
-lb-cryptarchia-engine   = { workspace = true }
-lb-cryptarchia-sync     = { workspace = true }
-lb-ledger               = { workspace = true }
-lb-network-service      = { workspace = true }
-lb-services-utils       = { workspace = true }
-lb-storage-service      = { workspace = true }
-lb-time-service         = { workspace = true }
-lb-tracing              = { workspace = true }
-lb-tx-service           = { workspace = true }
-lb-utils                = { features = ["tokio"], workspace = true }
-lru                     = { workspace = true }
-overwatch               = { workspace = true }
-rand                    = { workspace = true }
-serde                   = { workspace = true }
-serde_with              = { workspace = true }
-thiserror               = { workspace = true }
-tokio                   = { workspace = true }
-tokio-stream            = { workspace = true }
-tracing                 = { workspace = true }
-tracing-futures         = { workspace = true }
+async-trait           = { workspace = true }
+backon                = { features = ["tokio-sleep"], workspace = true }
+futures               = { workspace = true }
+lb-chain-service      = { workspace = true }
+lb-codec              = { workspace = true }
+lb-core               = { workspace = true }
+lb-cryptarchia-engine = { workspace = true }
+lb-cryptarchia-sync   = { workspace = true }
+lb-ledger             = { workspace = true }
+lb-network-service    = { workspace = true }
+lb-services-utils     = { workspace = true }
+lb-storage-service    = { workspace = true }
+lb-time-service       = { workspace = true }
+lb-tracing            = { workspace = true }
+lb-tx-service         = { workspace = true }
+lb-utils              = { features = ["tokio"], workspace = true }
+lru                   = { workspace = true }
+overwatch             = { workspace = true }
+rand                  = { workspace = true }
+serde                 = { workspace = true }
+serde_with            = { workspace = true }
+thiserror             = { workspace = true }
+tokio                 = { workspace = true }
+tokio-stream          = { workspace = true }
+tracing               = { workspace = true }
+tracing-futures       = { workspace = true }
 
 [dev-dependencies]
 lb-core            = { workspace = true }

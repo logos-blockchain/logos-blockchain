@@ -11,7 +11,11 @@ use lb_core::{
             },
         },
         traits::Hashable as _,
-        transactions::{MantleTxBuilder, Ops, OpsProofs, mantle_tx::MantleTx, states::Unverified},
+        transactions::{
+            MantleTxBuilder, Ops, OpsProofs,
+            mantle_tx::{MantleTx, RawMantleTx},
+            states::Unverified,
+        },
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
@@ -30,7 +34,7 @@ pub(super) async fn fund_ops<Node>(
     node: &Node,
     funding: &FundingConfig,
     ops: Vec<Op>,
-) -> Result<(MantleTx, Option<OpProof>), Error>
+) -> Result<(RawMantleTx, Option<OpProof>), Error>
 where
     Node: adapter::Node + Sync,
 {
@@ -57,7 +61,7 @@ where
 /// funded transaction's op layout (funding appends the transfer as the last
 /// op).
 pub(super) fn attach_transfer_proof(
-    tx: &MantleTx,
+    tx: &impl MantleTx,
     mut channel_proofs: OpsProofs,
     transfer_proof: Option<OpProof>,
 ) -> Result<OpsProofs, Error> {
@@ -96,7 +100,7 @@ pub(super) fn attach_transfer_proof(
     reason = "Belongs to the atomic withdraw flow; restored with `do_publish_atomic_withdraw`."
 )]
 pub(super) fn build_atomic_withdraw_ops_proofs(
-    tx: &MantleTx,
+    tx: &impl MantleTx,
     own_key_index: ChannelKeyIndex,
     own_sig: Ed25519Signature,
     transfer_proof: Option<&OpProof>,
@@ -252,7 +256,7 @@ pub(super) fn prepare_tx(
     signing_key: &Ed25519Key,
     inscription: Inscription,
     parent: MsgId,
-) -> (MantleTx, MsgId, Ed25519Signature) {
+) -> (RawMantleTx, MsgId, Ed25519Signature) {
     let inscription_op = InscriptionOp {
         channel_id,
         inscription,
@@ -264,7 +268,7 @@ pub(super) fn prepare_tx(
     ops.try_push(Op::ChannelInscribe(inscription_op)).unwrap();
 
     // TODO: fund tx
-    let tx = MantleTx(ops);
+    let tx = RawMantleTx(ops);
 
     let inscription_sig = sign_tx(tx.hash(), signing_key);
 

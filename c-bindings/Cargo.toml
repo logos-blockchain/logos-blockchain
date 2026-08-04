@@ -30,7 +30,8 @@ tempfile                      = { workspace = true }
 tokio                         = { features = ["rt-multi-thread"], workspace = true }
 
 [dev-dependencies]
-serde_yaml = { workspace = true }
+serde_yaml  = { workspace = true }
+serial_test = { workspace = true }
 
 [build-dependencies]
 cbindgen = { workspace = true }

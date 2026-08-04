@@ -14,7 +14,7 @@ use lb_common_http_client::{
 use lb_core::{
     header::{ContentId, HeaderId},
     mantle::{
-        MantleTx, Op, SignedMantleTx,
+        Op, RawMantleTx, SignedMantleTx,
         channel::ChannelState,
         gas::GasCost,
         ops::{
@@ -340,7 +340,7 @@ pub fn live_event(block: &ApiBlock) -> ProcessedBlockEvent {
 /// Suitable for tests that only care about op extraction, not verification.
 pub fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedMantleTx<Unverified> {
     let n = ops.len();
-    let mantle_tx = MantleTx(Ops::try_from(ops).expect("ops fit"));
+    let mantle_tx = RawMantleTx(Ops::try_from(ops).expect("ops fit"));
     SignedMantleTx::new(
         mantle_tx,
         OpsProofs::new_unchecked(vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n]),

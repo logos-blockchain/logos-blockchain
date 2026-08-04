@@ -1,12 +1,14 @@
 mod deser;
+mod fixtures;
 pub mod genesis;
 
 use core::fmt::Debug;
 
 use bytes::Bytes;
+use lb_codec::BinaryCodec;
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
-use lb_utils::bounded::{BoundedError, BoundedVec};
+use lb_utils::bounded::{BoundedError, BoundedVec, UpperBoundedVec};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
@@ -46,7 +48,7 @@ pub enum Error {
     ContentTooBig { size: usize, max: usize },
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
 pub struct Proposal {
     pub header: Header,
     pub references: References,
@@ -54,10 +56,10 @@ pub struct Proposal {
 }
 
 /// Transaction hashes referenced by a block proposal.
-pub type BlockTransactionReferences = BoundedVec<TxHash, 0, MAX_BLOCK_TRANSACTIONS>;
+pub type BlockTransactionReferences = UpperBoundedVec<TxHash, MAX_BLOCK_TRANSACTIONS>;
 
 /// References to transactions that are included in a block proposal.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
 pub struct References {
     /// Bounded hashes of the transactions that are included in the block
     /// proposal.
@@ -348,7 +350,7 @@ mod tests {
             ledger::{Note, Utxo},
             ops::leader_claim::VoucherCm,
             traits::hashable,
-            transactions::{Ops, mantle_tx::MantleTx},
+            transactions::{Ops, mantle_tx::RawMantleTx},
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };
@@ -412,8 +414,8 @@ mod tests {
             .expect("Proof generation should succeed")
     }
 
-    fn create_tx(count: usize) -> Vec<MantleTx> {
-        iter::repeat_with(|| MantleTx(Ops::new_unchecked(vec![])))
+    fn create_tx(count: usize) -> Vec<RawMantleTx> {
+        iter::repeat_with(|| RawMantleTx(Ops::new_unchecked(vec![])))
             .take(count)
             .collect()
     }
@@ -443,7 +445,7 @@ mod tests {
         let parent_block = [0u8; 32].into();
         let slot = Slot::from(42u64);
         let proof_of_leadership = create_proof();
-        let transactions = BlockTransactions::<MantleTx>::empty();
+        let transactions = BlockTransactions::<RawMantleTx>::empty();
 
         let valid_signing_key = Ed25519Key::from_bytes(&[0; 32]);
         let valid_block = Block::create(
@@ -483,7 +485,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[0; 32]);
 
         let transactions = BlockTransactions::empty();
-        let _valid_block: Block<MantleTx> = Block::create(
+        let _valid_block: Block<RawMantleTx> = Block::create(
             parent_block,
             slot,
             proof_of_leadership.clone(),
@@ -493,7 +495,7 @@ mod tests {
         .expect("Valid block should be created");
 
         let transactions = BlockTransactions::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap();
-        let _valid_block: Block<MantleTx> = Block::create(
+        let _valid_block: Block<RawMantleTx> = Block::create(
             parent_block,
             slot,
             proof_of_leadership,
@@ -503,7 +505,7 @@ mod tests {
         .expect("Valid block should be created");
 
         let invalid_transaction_inputs_result =
-            BlockTransactions::<MantleTx>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS + 1));
+            BlockTransactions::<RawMantleTx>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS + 1));
 
         assert!(invalid_transaction_inputs_result.is_err());
         let error = invalid_transaction_inputs_result.unwrap_err();
@@ -550,7 +552,7 @@ mod tests {
             parent_block,
             Slot::from(42u64),
             create_proof(),
-            BlockTransactions::<MantleTx>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap(),
+            BlockTransactions::<RawMantleTx>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap(),
             &signing_key,
         )
         .unwrap();
@@ -582,7 +584,7 @@ mod tests {
             [0u8; 32].into(),
             Slot::from(42u64),
             create_proof(),
-            BlockTransactions::<MantleTx>::empty(),
+            BlockTransactions::<RawMantleTx>::empty(),
             &signing_key,
         )
         .unwrap()
@@ -633,7 +635,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[0; 32]);
 
         let transactions = BlockTransactions::empty();
-        let _valid_block: Block<MantleTx> = Block::create(
+        let _valid_block: Block<RawMantleTx> = Block::create(
             parent_block,
             slot,
             proof_of_leadership.clone(),
@@ -678,8 +680,11 @@ mod tests {
 
     #[test]
     fn global_block_limits_are_reflective_in_block_transaction_bounds() {
-        assert_eq!(BlockTransactions::<MantleTx>::MIN, 0);
-        assert_eq!(BlockTransactions::<MantleTx>::MAX, MAX_BLOCK_TRANSACTIONS);
+        assert_eq!(BlockTransactions::<RawMantleTx>::MIN, 0);
+        assert_eq!(
+            BlockTransactions::<RawMantleTx>::MAX,
+            MAX_BLOCK_TRANSACTIONS
+        );
     }
 
     #[test]
@@ -688,7 +693,7 @@ mod tests {
         let proof = create_proof();
 
         // Build a syntactically valid non-genesis block first.
-        let txs = BlockTransactions::<MantleTx>::empty();
+        let txs = BlockTransactions::<RawMantleTx>::empty();
         let key = Ed25519Key::from_bytes(&[0; 32]);
         let block_result =
             Block::create(parent_block, Slot::from(0u64), proof, txs, &key).unwrap_err();
@@ -710,7 +715,7 @@ mod tests {
             parent_block,
             Slot::from(1u64),
             proof.clone(),
-            BlockTransactions::<MantleTx>::empty(),
+            BlockTransactions::<RawMantleTx>::empty(),
             &key,
         )
         .expect("valid non-genesis block");
@@ -729,7 +734,7 @@ mod tests {
 
         let err = Block::reconstruct(
             genesis_header,
-            BlockTransactions::<MantleTx>::empty(),
+            BlockTransactions::<RawMantleTx>::empty(),
             genesis_signature,
         )
         .expect_err("genesis slot must be rejected by reconstruct path");

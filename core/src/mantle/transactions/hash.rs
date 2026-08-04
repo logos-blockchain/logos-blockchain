@@ -1,11 +1,12 @@
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
+use lb_codec::BinaryCodec;
 use lb_groth16::Fr;
 
 use crate::{crypto::Hash, utils::serde_bytes_newtype};
 
 /// The hash of a transaction
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord, BinaryCodec)]
 pub struct TxHash(pub Hash);
 serde_bytes_newtype!(TxHash, 32);
 

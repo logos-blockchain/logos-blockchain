@@ -474,16 +474,19 @@ where
             Some(update) => {
                 Self::log_channel_update(&update);
 
+                let new_channel_tip = update.new_channel_tip;
+                let built = self.build_channel_update(update);
+
                 let has_pending = self
                     .state
                     .as_ref()
                     .is_some_and(TxState::has_pending_inscriptions);
 
-                if !update.orphaned.is_empty() || !has_pending {
-                    self.last_msg_id = update.new_channel_tip;
+                if !built.orphaned.is_empty() || !has_pending {
+                    self.last_msg_id = new_channel_tip;
                 }
 
-                self.build_channel_update(update)
+                built
             }
             None => ChannelUpdate {
                 orphaned: Vec::new(),
@@ -595,19 +598,21 @@ mod tests {
     use lb_core::{
         header::HeaderId,
         mantle::{
-            MantleTx, Note, Op, SignedMantleTx, Utxo,
+            Note, Op, RawMantleTx, SignedMantleTx, Utxo,
+            channel::{SlotTimeframe, SlotTimeout},
             ledger::Inputs,
             ops::{
                 OpProof,
                 channel::{
                     ChannelId, MsgId,
+                    config::{ChannelConfigOp, Keys},
                     deposit::DepositOp,
                     inscribe::{Inscription, InscriptionOp},
                     withdraw::ChannelWithdrawOp,
                 },
             },
             traits::Hashable as _,
-            transactions::{Ops, OpsProofs},
+            transactions::{Ops, OpsProofs, mantle_tx::MantleTx as _},
         },
     };
     use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
@@ -739,9 +744,31 @@ mod tests {
             }
         }
 
+        // After `Ready` on this single-key channel the turn-to-write watch is
+        // true; the stream drop clears it, giving a deterministic signal that
+        // the sequencer observed the disconnect before we publish.
+        let mut turn_rx = client.subscribe_turn_to_write();
+        assert!(
+            turn_rx.borrow_and_update().our_turn_to_write,
+            "single-key channel must report our turn after Ready"
+        );
+
         // Take the node down: the live stream ends and the sequencer enters
         // reconnect (subsequent `block_stream` calls error).
         up_tx.send(false).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if !turn_rx.borrow_and_update().our_turn_to_write {
+                    break;
+                }
+                tokio::select! {
+                    changed = turn_rx.changed() => changed.unwrap(),
+                    () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
+                }
+            }
+        })
+        .await
+        .expect("stream drop must clear turn-to-write");
 
         // A client publish while the node is down must resolve promptly. We
         // drive `next_event` concurrently; the publish is serviced from inside
@@ -805,6 +832,109 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn config_only_block_sheds_pending_and_advances_checkpoint() {
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+
+        let config_op = ChannelConfigOp {
+            channel: channel_id,
+            keys: Keys::try_from(vec![Ed25519Key::from_bytes(&[0; 32]).public_key()]).unwrap(),
+            posting_timeframe: SlotTimeframe::from(0u32),
+            posting_timeout: SlotTimeout::from(0u32),
+            configuration_threshold: 1,
+            transfer_threshold: 1,
+        };
+        let config_msg = config_op.id();
+        let config_tx = unverified_tx_with_ops(vec![Op::ChannelConfig(config_op)]);
+        let config_block = api_block(2, 1, 2, vec![config_tx]);
+
+        // Second connection (the config block) is gated behind `up` so it
+        // cannot be consumed before the publish is in.
+        let (up_tx, up_rx) = watch::channel(true);
+        let node = MockNode {
+            up: Some(up_rx),
+            scripts: scripts(vec![
+                StreamScript {
+                    events: vec![live_event(&api_block(1, 0, 1, Vec::new()))],
+                    then: StreamEnd::Hang,
+                },
+                StreamScript {
+                    events: vec![live_event(&config_block)],
+                    then: StreamEnd::Hang,
+                },
+            ]),
+            ..MockNode::default()
+        };
+        let config = SequencerConfig {
+            reconnect_delay: std::time::Duration::from_millis(20),
+            resubmit_interval: std::time::Duration::from_millis(20),
+            ..SequencerConfig::new(funding_config())
+        };
+        let mut sequencer =
+            ZoneSequencer::init_with_config(channel_id, sequencer_key, node, config, None);
+        let client = sequencer.client();
+
+        loop {
+            if matches!(sequencer.next_event().await, Event::Ready) {
+                break;
+            }
+        }
+
+        let publish = client.publish(b"cut-by-config".into());
+        let (result, _checkpoint) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::select! {
+                    result = publish => result,
+                    () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
+                }
+            })
+            .await
+            .expect("publish must resolve")
+            .expect("publish should be accepted after Ready");
+        let p_hash = result.inscription_id();
+
+        // Keep driving between the toggles so the down-edge is observed.
+        up_tx.send(false).unwrap();
+        let (checkpoint, update) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let toggle = async {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                up_tx.send(true).unwrap();
+            };
+            let drive = async {
+                loop {
+                    if let Event::BlocksProcessed {
+                        checkpoint,
+                        channel_update,
+                        ..
+                    } = sequencer.next_event().await
+                        && !channel_update.orphaned.is_empty()
+                    {
+                        return (checkpoint, channel_update);
+                    }
+                }
+            };
+            let ((), out) = tokio::join!(toggle, drive);
+            out
+        })
+        .await
+        .expect("the config-only block must surface the shed orphan");
+
+        assert!(
+            update.orphaned.iter().any(|tx| tx.tx_hash() == p_hash),
+            "cut-off pending inscription must be emitted as orphaned; got {:?}",
+            update.orphaned
+        );
+        assert_eq!(
+            checkpoint.last_msg_id, config_msg,
+            "checkpoint must use the config tip as last_msg_id"
+        );
+        assert!(
+            checkpoint.pending_txs.iter().all(|(h, _)| *h != p_hash),
+            "the shed inscription must be removed from pending state"
+        );
+    }
+
     #[test]
     fn track_pending_tx_classifies_atomic_bundle_with_withdraws() {
         // Bundle: [ChannelWithdraw(channel_id), ChannelInscribe(channel_id)]
@@ -825,7 +955,7 @@ mod tests {
             parent: MsgId::root(),
             signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
         };
-        let mantle_tx = MantleTx(
+        let mantle_tx = RawMantleTx(
             Ops::try_from(vec![
                 Op::ChannelWithdraw(withdraw_op.clone()),
                 Op::ChannelInscribe(inscribe_op),
@@ -863,7 +993,7 @@ mod tests {
             parent: MsgId::root(),
             signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
         };
-        let mantle_tx = MantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
+        let mantle_tx = RawMantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
         let tx_hash = mantle_tx.hash();
         let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
 
@@ -888,7 +1018,7 @@ mod tests {
             parent: MsgId::root(),
             signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
         };
-        let mantle_tx = MantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
+        let mantle_tx = RawMantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
         let tx_hash = mantle_tx.hash();
         let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
 

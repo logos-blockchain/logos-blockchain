@@ -15,7 +15,12 @@ use lb_core::{
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         ops::channel::{ChannelId, MsgId, config::Keys, inscribe::Inscription},
         traits::Hashable as _,
-        transactions::{Ops, hash::TxHash, mantle_tx::MantleTx, states::Unverified},
+        transactions::{
+            Ops,
+            hash::TxHash,
+            mantle_tx::{MantleTx as _, RawMantleTx},
+            states::Unverified,
+        },
     },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
@@ -169,10 +174,10 @@ pub(super) enum ActorRequest {
     PrepareTx {
         ops: Ops,
         data: Inscription,
-        response_tx: oneshot::Sender<Result<(MantleTx, MsgId, Ed25519Signature), Error>>,
+        response_tx: oneshot::Sender<Result<(RawMantleTx, MsgId, Ed25519Signature), Error>>,
     },
     SignTx {
-        tx: MantleTx,
+        tx: RawMantleTx,
         response_tx: oneshot::Sender<Result<Ed25519Signature, Error>>,
     },
 }
@@ -890,7 +895,7 @@ where
         &self,
         ops: Ops,
         data: Inscription,
-    ) -> Result<(MantleTx, MsgId, Ed25519Signature), Error> {
+    ) -> Result<(RawMantleTx, MsgId, Ed25519Signature), Error> {
         self.ensure_ready()?;
         let parent = self.compute_publish_parent();
         Ok(build_prepare_tx(
@@ -902,7 +907,7 @@ where
         ))
     }
 
-    pub(super) fn do_sign_tx(&self, tx: &MantleTx) -> Result<Ed25519Signature, Error> {
+    pub(super) fn do_sign_tx(&self, tx: &RawMantleTx) -> Result<Ed25519Signature, Error> {
         self.ensure_ready()?;
         Ok(build_sign_tx(tx.hash(), &self.signing_key))
     }

@@ -1,7 +1,10 @@
 use crate::mantle::{
     Op, OpProof, SignedMantleTx, VerificationError,
     traits::Hashable as _,
-    transactions::{OperationVerificationHelper, hash::TxHashView, states::Preverified},
+    transactions::{
+        OperationVerificationHelper, hash::TxHashView, mantle_tx::MantleTx as _,
+        states::Preverified,
+    },
 };
 
 pub struct VerifiedOps<'tx> {
