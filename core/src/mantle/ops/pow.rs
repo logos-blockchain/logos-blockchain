@@ -22,9 +22,14 @@ use crate::{
     },
 };
 
+/// `d_reward`: the difficulty threshold a puzzle ticket must not exceed to
+/// qualify for a `PoW` reward claim.
 pub type PowTarget = Fr;
+/// A `PoW` reward amount, denominated like any other note [`Value`].
 pub type PowReward = Value;
 
+/// Nullifier of a spent `PoW` solution, recorded on claim to prevent the same
+/// solution from being claimed twice.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct PowNullifier(#[serde(with = "serde_fr")] ZkHash);
 
@@ -35,6 +40,8 @@ impl PowNullifier {
     }
 }
 
+/// The ticket derived from a claim's inputs, checked against the reward
+/// [`PowTarget`] and, once accepted, recorded as a [`PowNullifier`].
 pub type PuzzleTicket = PowNullifier;
 
 impl From<ZkHash> for PowNullifier {
@@ -49,15 +56,27 @@ impl From<PowNullifier> for ZkHash {
     }
 }
 
+/// Operation claiming the `PoW` reward for a solved puzzle.
+///
+/// The puzzle solution is not carried directly on the op: it is proven by
+/// deriving a [`PuzzleTicket`] from `epoch_nonce`, `block_hash` and
+/// `public_key` (see [`Self::get_puzzle_ticket`]) and checking that ticket
+/// against the current reward difficulty during validation.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct ClaimPowRewardOp {
+    /// Epoch nonce the puzzle was solved against; must match the current or
+    /// previous epoch nonce.
     #[serde(with = "serde_fr")]
     pub epoch_nonce: ZkHash,
+    /// Hash of the block the puzzle solution is anchored to.
     pub block_hash: Hash,
+    /// Public key of the reward beneficiary.
     pub public_key: ZkPublicKey,
 }
 
 impl ClaimPowRewardOp {
+    /// Derive this claim's [`PuzzleTicket`] from `epoch_nonce`, `block_hash`
+    /// and `public_key`.
     #[must_use]
     pub fn get_puzzle_ticket(&self) -> PuzzleTicket {
         PowNullifier(ZkHasher::digest(&[
@@ -68,6 +87,7 @@ impl ClaimPowRewardOp {
     }
 }
 
+/// Errors returned while validating a [`ClaimPowRewardOp`].
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum ClaimPowRewardError {
     #[error("Insufficient pool ({pool}) for reward ({reward})")]
@@ -89,16 +109,26 @@ pub enum ClaimPowRewardError {
     MissingBlock { block_id: Hash },
 }
 
+/// Ledger context needed to validate a [`ClaimPowRewardOp`].
 pub struct ClaimPoWRewardVerificationContext<'a> {
     // As per spec
+    /// Height of the block the claim is being validated in.
     pub current_block_height: u64,
+    /// `d_reward`: current reward difficulty a puzzle ticket must meet.
     pub reward_difficulty: PowTarget,
+    /// Nullifiers of already-claimed `PoW` solutions.
     pub pow_nullifiers: &'a rpds::HashTrieSetSync<PowNullifier>,
     // needed not in spec yet
+    /// `sigma_e`: reward amount per claim for the current epoch.
     pub epoch_pow_reward: PowReward,
+    /// `R_PoW`: current balance of the `PoW` reward pool.
     pub epoch_reward_pool: PowReward,
+    /// Nonce of the current epoch.
     pub current_epoch_nonce: Epoch,
+    /// Nonce of the previous epoch, also accepted for claims.
     pub previous_epoch_nonce: Epoch,
+    /// Heights of known blocks, used to check the claim's block is within
+    /// the acceptance window.
     pub blocks_height: HashMap<Hash, u64>,
 }
 
@@ -165,6 +195,7 @@ impl ClaimPoWRewardVerificationContext<'_> {
         })
     }
 
+    /// The puzzle ticket must not exceed the current reward difficulty.
     fn validate_difficulty_reward(
         &self,
         puzzle_ticket: PuzzleTicket,
@@ -176,6 +207,7 @@ impl ClaimPoWRewardVerificationContext<'_> {
         Ok(())
     }
 
+    /// The puzzle ticket must not already have been claimed.
     fn validate_double_claiming(
         &self,
         puzzle_ticket: PuzzleTicket,
@@ -193,15 +225,23 @@ impl OpId for ClaimPowRewardOp {
     }
 }
 
+/// Ledger context needed to execute a [`ClaimPowRewardOp`], and the outcome
+/// carried back out to update the ledger's `PoW` state.
 pub struct ClaimPoWRewardExecutionContext {
+    /// `R_PoW`: current balance of the `PoW` reward pool.
     pub reward_pool: PowReward,
+    /// `sigma_e`: reward amount paid out by this claim.
     pub epoch_reward: PowReward,
+    /// Nullifiers of already-claimed `PoW` solutions.
     pub nullifiers: rpds::HashTrieSetSync<PowNullifier>,
+    /// Hash of the transaction carrying this claim.
     pub tx_hash: TxHash,
+    /// Unspent transaction outputs, extended with the reward note.
     pub utxos: Utxos,
 }
 
 impl ClaimPoWRewardExecutionContext {
+    /// Deduct the paid-out `epoch_reward` from the `reward_pool`.
     const fn decrement_reward_pool(&mut self) {
         self.reward_pool = self.reward_pool.saturating_sub(self.epoch_reward);
     }
