@@ -5,6 +5,8 @@ use lb_core::mantle::{
 use lb_groth16::serde::serde_fr;
 use rpds::HashTrieSetSync;
 
+use crate::EpochState;
+
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PowState {
     /// `R_PoW`: reserve funding `PoW` rewards. Credited at each epoch boundary
@@ -64,19 +66,41 @@ impl PowState {
     pub(crate) const fn add_reward_refill_rewards(&mut self, reward: PowReward) {
         self.refill_rewards = self.refill_rewards.saturating_add(reward);
     }
+
+    pub(crate) fn try_apply_header(
+        &self,
+        _config: (),
+        previous_epoch: &EpochState,
+        next_epoch: &EpochState,
+    ) -> Self {
+        if previous_epoch.epoch >= next_epoch.epoch {
+            return self.clone();
+        }
+        let mut new_self = self.clone();
+        new_self.add_rewards_to_pool::<ClaimPoWDisabledConstants>();
+        new_self
+    }
 }
 
 pub trait ClaimPoWConstants {
-    const RATE_NUM: u64 = 1;
+    const RATE_NUM: u64 = 0;
     const RATE_DEN: u64 = 100;
-    const TARGET_CLAIM_PER_BLOCK: u64;
-    const EXPECTED_BLOCKS_PER_EPOCH: u64;
+    const TARGET_CLAIM_PER_BLOCK: u64 = 0;
+    const EXPECTED_BLOCKS_PER_EPOCH: u64 = 0;
 
     fn denominator() -> u64 {
         Self::RATE_DEN * Self::TARGET_CLAIM_PER_BLOCK * Self::EXPECTED_BLOCKS_PER_EPOCH
     }
 }
 
+struct ClaimPoWDisabledConstants;
+
+impl ClaimPoWConstants for ClaimPoWDisabledConstants {
+    const RATE_NUM: u64 = 0;
+    const RATE_DEN: u64 = 0;
+    const TARGET_CLAIM_PER_BLOCK: u64 = 0;
+    const EXPECTED_BLOCKS_PER_EPOCH: u64 = 0;
+}
 pub fn compute_epoch_pow_reward<Constants: ClaimPoWConstants>(
     pow_reward_pool: PowReward,
 ) -> PowReward {
