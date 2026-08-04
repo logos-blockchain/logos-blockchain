@@ -8,5 +8,5 @@ export CFG_DEPLOYMENT_PATH="/node-data/deployment.yaml"
     --port $FAUCET_PORT \
     --node-base-url $NODE_API_ADDR \
     --deployment-file $CFG_DEPLOYMENT_PATH \
-    --drip-amount 1000
+    --drip-amount 1000000000000
 
