@@ -1,7 +1,10 @@
+use std::collections::HashMap;
+
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
 
 use crate::{
+    crypto::Hash,
     mantle::{
         VerificationError,
         channel::Channels,
@@ -9,6 +12,7 @@ use crate::{
         ops::{
             channel::{ChannelId, ChannelKeyIndex},
             leader_claim::{RewardsRoot, VoucherNullifier},
+            pow::{PowNullifier, PowReward, PowTarget},
         },
     },
     sdp::{DeclarationId, MinStake, ServiceType, locked_notes::LockedNotes},
@@ -51,6 +55,36 @@ pub trait OperationVerificationHelper {
         channel_id: &ChannelId,
         key_index: &ChannelKeyIndex,
     ) -> Result<Ed25519PublicKey, VerificationError>;
+
+    // `PoW` claim validation inputs, one per
+    // [`ClaimPoWRewardValidationContext`] field. The current epoch comes from
+    // [`Self::get_epoch`].
+    //
+    // [`ClaimPoWRewardValidationContext`]: crate::mantle::ops::pow::ClaimPoWRewardValidationContext
+
+    /// Height of the block the claim is being validated in.
+    fn get_current_block_height(&self) -> u64;
+
+    /// `d_reward`: the reward difficulty a puzzle ticket must be strictly
+    /// below.
+    fn get_pow_reward_difficulty(&self) -> PowTarget;
+
+    /// Nullifiers of already-claimed `PoW` solutions.
+    fn get_pow_nullifiers(&self) -> &rpds::HashTrieSetSync<PowNullifier>;
+
+    /// `sigma_e`: reward amount per claim for the current epoch.
+    fn get_epoch_pow_reward(&self) -> PowReward;
+
+    /// `R_PoW`: current balance of the `PoW` reward pool.
+    fn get_pow_reward_pool(&self) -> PowReward;
+
+    /// The epoch preceding [`Self::get_epoch`], whose nonce is also accepted
+    /// for claims mined just before an epoch boundary.
+    fn get_previous_epoch(&self) -> Epoch;
+
+    /// Heights of the blocks a claim may anchor to, keyed by block hash;
+    /// used for the window-of-acceptance check.
+    fn get_blocks_height(&self) -> HashMap<Hash, u64>;
 }
 
 #[cfg(test)]
@@ -61,6 +95,7 @@ pub mod test_utils {
     use rpds::HashTrieSetSync;
 
     use crate::{
+        crypto::Hash,
         mantle::{
             Utxo, VerificationError,
             channel::Channels,
@@ -68,6 +103,7 @@ pub mod test_utils {
             ops::{
                 channel::{ChannelId, ChannelKeyIndex, Ed25519PublicKey},
                 leader_claim::{RewardsRoot, VoucherNullifier},
+                pow::{PowNullifier, PowReward, PowTarget},
             },
             transactions::OperationVerificationHelper,
         },
@@ -85,6 +121,13 @@ pub mod test_utils {
         block_slot: Slot,
         nullifiers: HashTrieSetSync<VoucherNullifier>,
         claimable_vouchers_root: RewardsRoot,
+        current_block_height: u64,
+        pow_reward_difficulty: PowTarget,
+        pow_nullifiers: HashTrieSetSync<PowNullifier>,
+        epoch_pow_reward: PowReward,
+        pow_reward_pool: PowReward,
+        previous_epoch: Epoch,
+        blocks_height: HashMap<Hash, u64>,
     }
 
     impl TestOperationVerificationHelper {
@@ -107,6 +150,13 @@ pub mod test_utils {
                 block_slot: Slot::from(0u64),
                 nullifiers: HashTrieSetSync::new_sync(),
                 claimable_vouchers_root: RewardsRoot::default(),
+                current_block_height: 0,
+                pow_reward_difficulty: PowTarget::default(),
+                pow_nullifiers: HashTrieSetSync::new_sync(),
+                epoch_pow_reward: 0,
+                pow_reward_pool: 0,
+                previous_epoch: Epoch::from(0u32),
+                blocks_height: HashMap::new(),
             }
         }
 
@@ -115,6 +165,51 @@ pub mod test_utils {
             for utxo in utxos {
                 self.utxos = self.utxos.insert(utxo.id(), utxo).0;
             }
+            self
+        }
+
+        #[must_use]
+        pub const fn with_current_block_height(mut self, height: u64) -> Self {
+            self.current_block_height = height;
+            self
+        }
+
+        #[must_use]
+        pub const fn with_pow_reward_difficulty(mut self, difficulty: PowTarget) -> Self {
+            self.pow_reward_difficulty = difficulty;
+            self
+        }
+
+        #[must_use]
+        pub const fn with_pow_rewards(
+            mut self,
+            epoch_pow_reward: PowReward,
+            pow_reward_pool: PowReward,
+        ) -> Self {
+            self.epoch_pow_reward = epoch_pow_reward;
+            self.pow_reward_pool = pow_reward_pool;
+            self
+        }
+
+        #[must_use]
+        pub fn with_pow_nullifiers(mut self, nullifiers: HashTrieSetSync<PowNullifier>) -> Self {
+            self.pow_nullifiers = nullifiers;
+            self
+        }
+
+        #[must_use]
+        pub fn with_epochs(mut self, previous: Epoch, current: Epoch) -> Self {
+            self.previous_epoch = previous;
+            self.epoch = current;
+            self
+        }
+
+        #[must_use]
+        pub fn with_blocks_height(
+            mut self,
+            blocks_height: impl IntoIterator<Item = (Hash, u64)>,
+        ) -> Self {
+            self.blocks_height = blocks_height.into_iter().collect();
             self
         }
     }
@@ -190,6 +285,34 @@ pub mod test_utils {
                     key_index: *key_index,
                 },
             )
+        }
+
+        fn get_current_block_height(&self) -> u64 {
+            self.current_block_height
+        }
+
+        fn get_pow_reward_difficulty(&self) -> PowTarget {
+            self.pow_reward_difficulty
+        }
+
+        fn get_pow_nullifiers(&self) -> &HashTrieSetSync<PowNullifier> {
+            &self.pow_nullifiers
+        }
+
+        fn get_epoch_pow_reward(&self) -> PowReward {
+            self.epoch_pow_reward
+        }
+
+        fn get_pow_reward_pool(&self) -> PowReward {
+            self.pow_reward_pool
+        }
+
+        fn get_previous_epoch(&self) -> Epoch {
+            self.previous_epoch
+        }
+
+        fn get_blocks_height(&self) -> HashMap<Hash, u64> {
+            self.blocks_height.clone()
         }
     }
 }

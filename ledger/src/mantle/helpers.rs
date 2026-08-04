@@ -1,10 +1,15 @@
+use std::collections::HashMap;
+
 use lb_core::{
+    block::BlockNumber,
+    crypto::Hash,
     mantle::{
         channel::Channels,
         ledger::{Declarations, Utxos},
         ops::{
             channel::{ChannelId, ChannelKeyIndex},
             leader_claim::{RewardsRoot, VoucherNullifier},
+            pow::{PowNullifier, PowReward, PowTarget},
             sdp::SdpError,
         },
         transactions::{OperationVerificationHelper, VerificationError},
@@ -21,6 +26,7 @@ pub struct MantleOperationVerificationHelper<'a> {
     ledger_state: &'a LedgerState,
     cryptarchia_ledger: &'a crate::CryptarchiaLedger,
     config: &'a crate::Config,
+    block_number: BlockNumber,
 }
 
 impl<'a> MantleOperationVerificationHelper<'a> {
@@ -29,11 +35,13 @@ impl<'a> MantleOperationVerificationHelper<'a> {
         ledger_state: &'a LedgerState,
         cryptarchia_ledger: &'a crate::CryptarchiaLedger,
         config: &'a crate::Config,
+        block_number: BlockNumber,
     ) -> Self {
         Self {
             ledger_state,
             cryptarchia_ledger,
             config,
+            block_number,
         }
     }
 }
@@ -126,5 +134,36 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
                 key_index: *key_index,
             })
             .cloned()
+    }
+
+    fn get_current_block_height(&self) -> u64 {
+        self.block_number
+    }
+
+    fn get_pow_reward_difficulty(&self) -> PowTarget {
+        self.ledger_state.pow.reward_difficulty()
+    }
+
+    fn get_pow_nullifiers(&self) -> &HashTrieSetSync<PowNullifier> {
+        self.ledger_state.pow.nullifiers()
+    }
+
+    fn get_epoch_pow_reward(&self) -> PowReward {
+        self.ledger_state.pow.epoch_reward()
+    }
+
+    fn get_pow_reward_pool(&self) -> PowReward {
+        self.ledger_state.pow.reward_pool()
+    }
+
+    fn get_previous_epoch(&self) -> Epoch {
+        Epoch::from(self.get_epoch().into_inner().saturating_sub(1))
+    }
+
+    fn get_blocks_height(&self) -> HashMap<Hash, u64> {
+        // TODO: the ledger does not track block heights by hash yet. Until it
+        // does, every claim fails the window-of-acceptance check with
+        // `MissingBlock` — a safe (conservative) default.
+        HashMap::new()
     }
 }

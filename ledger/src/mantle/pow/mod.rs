@@ -36,9 +36,16 @@ pub struct PowState {
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum Error {}
 
+impl Default for PowState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PowState {
     /// Create an empty `PoW` state with no rewards, no claims and default
     /// difficulty.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             // TODO: Use genesis value instead
@@ -52,16 +59,19 @@ impl PowState {
     }
 
     /// `R_PoW`: current balance of the `PoW` reward pool.
+    #[must_use]
     pub const fn reward_pool(&self) -> Value {
         self.reward_pool
     }
 
     /// `sigma_e`: reward per claim for the current epoch.
+    #[must_use]
     pub const fn epoch_reward(&self) -> Value {
         self.epoch_reward
     }
 
     /// Nullifiers of already-claimed `PoW` solutions.
+    #[must_use]
     pub const fn nullifiers(&self) -> &HashTrieSetSync<PowNullifier> {
         &self.nullifiers
     }
@@ -140,6 +150,7 @@ pub trait ClaimPoWConstants {
     const EXPECTED_BLOCKS_PER_EPOCH: u64 = 0;
 
     /// Full denominator of the per-epoch payout rate.
+    #[must_use]
     fn denominator() -> u64 {
         Self::RATE_DEN * Self::TARGET_CLAIM_PER_BLOCK * Self::EXPECTED_BLOCKS_PER_EPOCH
     }
@@ -162,6 +173,7 @@ impl ClaimPoWConstants for ClaimPoWDisabledConstants {
 /// The intermediate product is widened to `u128` so a full pool
 /// (`u64::MAX`, reachable through saturation) cannot overflow with a
 /// `RATE_NUM` greater than one; a result beyond `u64` saturates.
+#[must_use]
 pub fn compute_epoch_pow_reward<Constants: ClaimPoWConstants>(
     pow_reward_pool: PowReward,
 ) -> PowReward {

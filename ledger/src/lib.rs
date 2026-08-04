@@ -739,6 +739,7 @@ impl LedgerState {
                 &self.mantle_ledger,
                 &self.cryptarchia_ledger,
                 config,
+                self.block_number,
             );
             let Some(op) = verified_ops.next(&helper).transpose()? else {
                 break;
@@ -2003,7 +2004,7 @@ mod tests {
     }
 
     mod pow {
-        use lb_core::mantle::ops::pow::{ClaimPowRewardOp, PowTarget};
+        use lb_core::mantle::ops::pow::{ClaimPowRewardError, ClaimPowRewardOp, PowTarget};
         use lb_groth16::AdditiveGroup as _;
 
         use super::*;
@@ -2105,24 +2106,54 @@ mod tests {
             assert_eq!(state.mantle_ledger.pow.reward_difficulty(), Fr::ZERO);
         }
 
-        #[test]
-        fn claim_tx_is_rejected_at_preverification() {
-            // Pins the missing wiring: `verify_stateless_op` has no
-            // `(Op::ClaimPowReward, OpProof::None)` arm, so a claim
-            // transaction cannot pass preverification and can never reach a
-            // block. This test turns red when the pairing is wired in —
-            // update it then to drive the claim through
-            // `try_apply_contents` end to end.
+        fn claim_tx() -> SignedMantleTx<Preverified> {
             let mantle_tx = MantleTx([Op::ClaimPowReward(claim_op())].into());
-            let result = SignedMantleTx::new(mantle_tx, [OpProof::None].into()).preverify();
+            SignedMantleTx::new(mantle_tx, [OpProof::None].into())
+                .preverify()
+                .expect("claim op with OpProof::None should pass preverification")
+        }
 
-            assert_eq!(
-                result.err(),
-                Some(VerificationError::IncorrectProofType {
-                    op_type: "ClaimPowReward",
-                    op_index: 0,
-                })
-            );
+        #[test]
+        fn claim_tx_validation_rejects_disabled_rewards() {
+            // End-to-end through `try_apply_tx`: at unseeded genesis the
+            // epoch reward is zero, so the claim fails the §5.6 safety
+            // cutoff. This exercises the full wiring: preverification, the
+            // stateful `ClaimPowReward` arm and the helper-built context.
+            let config = config();
+            let state = LedgerState::from_utxos([utxo()], &config);
+
+            let err = state
+                .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&config, &claim_tx())
+                .expect_err("claim should fail validation");
+
+            assert!(matches!(
+                err,
+                LedgerError::VerificationError(VerificationError::ClaimPowRewardError(
+                    ClaimPowRewardError::EmptyRewards
+                ))
+            ));
+        }
+
+        #[test]
+        fn claim_tx_validation_rejects_unknown_anchor_block() {
+            // With a funded pool the claim advances to the window-of-
+            // acceptance check, which fails: `get_blocks_height` returns an
+            // empty map until the ledger tracks block heights by hash
+            // (see the TODO in `MantleOperationVerificationHelper`). This
+            // pins that claims cannot yet complete end to end — when height
+            // tracking lands, extend this into a full success-path test.
+            let (state, config) = pow_ledger_state(1_000);
+
+            let err = state
+                .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&config, &claim_tx())
+                .expect_err("claim should fail validation");
+
+            assert!(matches!(
+                err,
+                LedgerError::VerificationError(VerificationError::ClaimPowRewardError(
+                    ClaimPowRewardError::MissingBlock { block_id }
+                )) if block_id == claim_op().block_hash
+            ));
         }
 
         #[test]
@@ -2178,13 +2209,16 @@ mod tests {
         }
 
         #[test]
-        fn claim_execution_currently_has_no_double_claim_guard() {
-            // Tripwire for the missing validation wiring: `try_apply_op`
-            // only calls `execute`, and the double-claim check lives in
-            // `ClaimPowRewardOp::validate`, which nothing in the ledger
-            // invokes yet (`verify_stateful_op` has no ClaimPowReward arm).
-            // The same solution therefore pays twice. When validation is
-            // wired in, this test must flip to expect `DoubleClaimed`.
+        fn claim_execution_alone_has_no_double_claim_guard() {
+            // `try_apply_op` is execute-only by design (like the other op
+            // arms): the double-claim check lives in
+            // `ClaimPowRewardOp::validate`, which `try_apply_tx` runs via
+            // `verify_stateful_op` before execution. Calling the execution
+            // path directly therefore pays the same solution twice — pinned
+            // here to document that the guard lives in validation, not
+            // execution. The tx-level double-claim rejection can be tested
+            // end to end once block-height tracking lets a first claim
+            // through the window check.
             let (state, config) = pow_ledger_state(1_000);
             let op = Op::ClaimPowReward(claim_op());
             let tx_hash = TxHash::from([9u8; 32]);
