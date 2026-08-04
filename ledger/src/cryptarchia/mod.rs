@@ -1133,7 +1133,7 @@ pub mod tests {
             .epoch_state
             .active_declarations
             .for_service(&ServiceType::BlendNetwork)
-            .and_then(|m| m.get_ref(declaration_id))
+            .and_then(|m| m.get(declaration_id))
     }
 
     #[test]

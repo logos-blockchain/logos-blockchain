@@ -87,7 +87,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for DepositOp {
         context: &Self::VerificationContext<'_>,
     ) -> Result<(), Self::Error> {
         // Check that the channel exist
-        if !context.channels.contains_channel(&self.channel_id) {
+        if !context.channels.channels.contains_key(&self.channel_id) {
             return Err(Error::ChannelNotFound {
                 channel_id: self.channel_id,
             });

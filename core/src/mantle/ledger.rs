@@ -2,7 +2,6 @@ use std::{collections::HashSet, slice::IterMut, sync::LazyLock};
 
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
-use lb_blake2btree::Blake2bTree;
 use lb_codec::BinaryCodec;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -93,7 +92,7 @@ impl<T: VerifiableOperation<Mode> + ExecutableOperation, Mode: verification_mode
 }
 
 pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;
-pub type Declarations = Blake2bTree<DeclarationId, Declaration>;
+pub type Declarations = rpds::RedBlackTreeMapSync<DeclarationId, Declaration>;
 
 pub type Value = u64;
 
