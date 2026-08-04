@@ -22,8 +22,8 @@ use crate::{
     },
 };
 
-/// `d_reward`: the difficulty threshold a puzzle ticket must not exceed to
-/// qualify for a `PoW` reward claim.
+/// `d_reward`: the difficulty threshold a puzzle ticket must be strictly
+/// below to qualify for a `PoW` reward claim.
 pub type PowTarget = Fr;
 /// A `PoW` reward amount, denominated like any other note [`Value`].
 pub type PowReward = Value;
@@ -195,13 +195,14 @@ impl ClaimPoWRewardVerificationContext<'_> {
         })
     }
 
-    /// The puzzle ticket must not exceed the current reward difficulty.
+    /// The puzzle ticket must be strictly below the current reward
+    /// difficulty (§5.3: `puzzle_ticket < difficulty_reward`).
     fn validate_difficulty_reward(
         &self,
         puzzle_ticket: PuzzleTicket,
     ) -> Result<(), ClaimPowRewardError> {
         let ticket_as_fr = *puzzle_ticket.as_fr();
-        if ticket_as_fr > self.reward_difficulty {
+        if ticket_as_fr >= self.reward_difficulty {
             return Err(ClaimPowRewardError::InvalidPoWRewardTicket);
         }
         Ok(())
@@ -527,17 +528,18 @@ mod tests {
     }
 
     #[test]
-    fn validate_accepts_ticket_equal_to_the_reward_difficulty() {
-        // Pins current behaviour: a ticket exactly on the target passes.
-        // NOTE: spec §5.3 states the strict form `puzzle_ticket <
-        // difficulty_reward`; the implementation accepts equality. The
-        // discrepancy is negligible in practice (a single point of the field)
-        // but is documented here so a deliberate change breaks this test.
+    fn validate_rejects_ticket_equal_to_the_reward_difficulty() {
+        // Spec §5.3: the check is the strict `puzzle_ticket <
+        // difficulty_reward`, so a ticket exactly on the target does not
+        // qualify.
         let nullifiers = rpds::HashTrieSetSync::new_sync();
         let op = claim_op(CURRENT_EPOCH);
         let mut ctx = accepting_context(&nullifiers);
         ctx.reward_difficulty = op.get_puzzle_ticket().into();
-        assert_eq!(op.verify(&NoOpProof, &ctx), Ok(()));
+        assert_eq!(
+            op.verify(&NoOpProof, &ctx),
+            Err(ClaimPowRewardError::InvalidPoWRewardTicket)
+        );
     }
 
     #[test]
