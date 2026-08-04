@@ -43,15 +43,24 @@ struct PendingOtherTx {
     signed_tx: SignedMantleTx<Unverified>,
     first_parent: Option<MsgId>,
     last_msg: Option<MsgId>,
+    /// True when the tx bundles an inscription with its other ops (an atomic
+    /// bundle): it is part of the message chain, so publishes must chain
+    /// after it. A pure config cut carries no inscription and is not chained
+    /// — it orphans whatever it cuts off when it lands.
+    is_atomic_bundle: bool,
+    /// Submission order, for picking the newest chain restart among
+    /// config-led atomic bundles (see [`TxState::publish_parent`]).
+    seq: u64,
 }
 
 fn opaque_lineage(
     tx: &SignedMantleTx<Unverified>,
     channel_id: ChannelId,
-) -> (Option<MsgId>, Option<MsgId>) {
+) -> (Option<MsgId>, Option<MsgId>, bool) {
     let mut first_parent = None;
     let mut first_seen = false;
     let mut last_msg = None;
+    let mut is_atomic_bundle = false;
     for op in tx.mantle_tx().ops() {
         match op {
             Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
@@ -60,6 +69,7 @@ fn opaque_lineage(
                     first_parent = Some(inscribe.parent);
                 }
                 last_msg = Some(inscribe.id());
+                is_atomic_bundle = true;
             }
             Op::ChannelConfig(config) if config.channel == channel_id => {
                 first_seen = true;
@@ -68,7 +78,7 @@ fn opaque_lineage(
             _ => {}
         }
     }
-    (first_parent, last_msg)
+    (first_parent, last_msg, is_atomic_bundle)
 }
 
 /// Local pending inscription with lineage metadata.
@@ -110,6 +120,8 @@ pub struct TxState {
     block_txs: HashMap<HeaderId, Vec<BlockChannelTx>>,
     /// Last finalized channel tip — used as parent when pending is empty.
     finalized_msg: MsgId,
+    /// Monotonic submission counter for [`Self::pending_other`] entries.
+    next_other_seq: u64,
     /// Lineage-parent of the entry behind [`Self::finalized_msg`]. Config ids
     /// are payload-only hashes, so an id alone does not identify a lineage
     /// position — the pair does. `None` when the finalized entry is unknown
@@ -175,6 +187,7 @@ impl TxState {
             block_txs: HashMap::new(),
             finalized_msg,
             finalized_parent_msg: None,
+            next_other_seq: 0,
         }
     }
 
@@ -304,14 +317,18 @@ impl TxState {
         channel_id: ChannelId,
     ) -> Option<MsgId> {
         let tx_hash = signed_tx.mantle_tx().hash();
-        let (first_parent, last_msg) = opaque_lineage(&signed_tx, channel_id);
+        let (first_parent, last_msg, is_atomic_bundle) = opaque_lineage(&signed_tx, channel_id);
         self.track_local_tx(tx_hash);
+        let seq = self.next_other_seq;
+        self.next_other_seq += 1;
         self.pending_other.insert(
             tx_hash,
             PendingOtherTx {
                 signed_tx,
                 first_parent,
                 last_msg,
+                is_atomic_bundle,
+                seq,
             },
         );
         last_msg
@@ -738,8 +755,23 @@ impl TxState {
     #[must_use]
     pub fn publish_parent(&self, tip: HeaderId) -> MsgId {
         let channel_tip = self.channel_tip_at(tip);
-        let tail = self.pending_publish_tail(channel_tip);
-        tail.unwrap_or(channel_tip)
+        // A pending config-led atomic bundle (`first_parent == None` but
+        // carrying an inscription) is part of the message chain even though
+        // nothing anchors it — the config resets the tip wherever it lands —
+        // so it acts as a chain restart: the walk starts from the newest
+        // one's last tip-advancing op instead of the mined channel tip. A
+        // pure config cut (no inscription) is deliberately NOT chained: it
+        // lands whenever it lands and orphans what it cut off, which is the
+        // shed/republish recovery contract.
+        let restart = self
+            .pending_other
+            .values()
+            .filter(|other| other.first_parent.is_none() && other.is_atomic_bundle)
+            .max_by_key(|other| other.seq)
+            .and_then(|other| other.last_msg);
+        let start = restart.unwrap_or(channel_tip);
+        let tail = self.pending_publish_tail(start);
+        tail.unwrap_or(start)
     }
 
     /// Walk local pending lineage from `from_msg` to find the tail,
@@ -1307,6 +1339,92 @@ mod tests {
             state.publish_parent(tip),
             MsgId::root(),
             "walk must stop before a contested position"
+        );
+    }
+
+    /// A pending config-led tx (`[config, inscribe]`, nothing anchoring it to
+    /// the chain) acts as a chain restart: the next publish chains on its
+    /// last tip-advancing op, and anchored pending links continue from there.
+    #[test]
+    fn publish_parent_restarts_at_pending_config_led_tx() {
+        use lb_core::mantle::{
+            channel::{SlotTimeframe, SlotTimeout},
+            ops::channel::config::{ChannelConfigOp, Keys},
+        };
+        let genesis = header_id(0);
+        let tip = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![]);
+
+        let config = ChannelConfigOp {
+            channel: [0u8; 32].into(),
+            keys: Keys::try_from(vec![Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()]).unwrap(),
+            posting_timeframe: SlotTimeframe::from(0u32),
+            posting_timeout: SlotTimeout::from(0u32),
+            configuration_threshold: 1,
+            transfer_threshold: 1,
+        };
+        let inscribe = InscriptionOp {
+            channel_id: [0u8; 32].into(),
+            inscription: [7].into(),
+            parent: config.id(),
+            signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+        };
+        let inscribe_msg = inscribe.id();
+        let tx = SignedMantleTx::new(
+            RawMantleTx([Op::ChannelConfig(config), ChannelInscribe(inscribe)].into()),
+            OpsProofs::empty(),
+        );
+
+        let derived = state.submit_other(tx, channel_id);
+        assert_eq!(derived, Some(inscribe_msg), "tip is the tx's last op");
+        assert_eq!(
+            state.publish_parent(tip),
+            inscribe_msg,
+            "walk restarts at the pending config-led tx's last op"
+        );
+
+        // Anchored pending links continue from the restart point.
+        state.submit_inscription(make_dummy_tx(9), inscribe_msg, msg_id(90), [9].into());
+        assert_eq!(state.publish_parent(tip), msg_id(90));
+    }
+
+    /// A pure config cut (no inscription in the tx) is NOT chained: it lands
+    /// whenever it lands and orphans what it cut off — publishes keep
+    /// chaining on the existing pending chain meanwhile.
+    #[test]
+    fn publish_parent_ignores_pending_pure_config_cut() {
+        use lb_core::mantle::{
+            channel::{SlotTimeframe, SlotTimeout},
+            ops::channel::config::{ChannelConfigOp, Keys},
+        };
+        let genesis = header_id(0);
+        let tip = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![]);
+
+        state.submit_inscription(make_dummy_tx(1), MsgId::root(), msg_id(10), [1].into());
+
+        let config = ChannelConfigOp {
+            channel: [0u8; 32].into(),
+            keys: Keys::try_from(vec![Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()]).unwrap(),
+            posting_timeframe: SlotTimeframe::from(0u32),
+            posting_timeout: SlotTimeout::from(0u32),
+            configuration_threshold: 1,
+            transfer_threshold: 1,
+        };
+        let cut = SignedMantleTx::new(
+            RawMantleTx([Op::ChannelConfig(config)].into()),
+            OpsProofs::empty(),
+        );
+        state.submit_other(cut, channel_id);
+
+        assert_eq!(
+            state.publish_parent(tip),
+            msg_id(10),
+            "a pure config cut must not divert the publish chain"
         );
     }
 
