@@ -415,7 +415,10 @@ mod tests {
     #[test]
     fn puzzle_ticket_is_deterministic_and_binds_every_field() {
         let op = claim_op(CURRENT_EPOCH);
-        assert_eq!(op.get_puzzle_ticket(), claim_op(CURRENT_EPOCH).get_puzzle_ticket());
+        assert_eq!(
+            op.get_puzzle_ticket(),
+            claim_op(CURRENT_EPOCH).get_puzzle_ticket()
+        );
 
         // Spec §3: the ticket commits to all three fields, so changing the
         // epoch nonce (cross-epoch replay), the anchored block, or the
@@ -587,7 +590,11 @@ mod tests {
         let Some(TxEvent {
             tx_hash: event_tx_hash,
             op_id,
-            payload: TxEventPayload::PoWRewardClaimed { pow_nullifier, utxo },
+            payload:
+                TxEventPayload::PoWRewardClaimed {
+                    pow_nullifier,
+                    utxo,
+                },
         }) = events.next()
         else {
             panic!("expected PoWRewardClaimed tx event");

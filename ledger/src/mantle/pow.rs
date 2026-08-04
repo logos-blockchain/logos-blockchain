@@ -438,7 +438,10 @@ mod tests {
 
     /// Build a claim execution result that drains the pool to `reward_pool`,
     /// recording `nullifier` as spent.
-    fn claim_result(reward_pool: PowReward, nullifier: PowNullifier) -> ClaimPoWRewardExecutionContext {
+    fn claim_result(
+        reward_pool: PowReward,
+        nullifier: PowNullifier,
+    ) -> ClaimPoWRewardExecutionContext {
         ClaimPoWRewardExecutionContext {
             reward_pool,
             epoch_reward: 0,
