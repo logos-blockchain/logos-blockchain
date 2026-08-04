@@ -1,7 +1,7 @@
 pub use lb_core::mantle::channel;
 pub mod helpers;
 pub mod leader;
-mod pow;
+pub mod pow;
 pub mod sdp;
 
 use lb_core::{

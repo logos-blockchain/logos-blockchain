@@ -66,6 +66,13 @@ impl PowState {
         &self.nullifiers
     }
 
+    /// `d_reward`: the current reward difficulty a puzzle ticket must be
+    /// strictly below.
+    #[must_use]
+    pub const fn reward_difficulty(&self) -> PowTarget {
+        self.reward_difficulty
+    }
+
     /// Apply the outcome of a [`ClaimPowRewardOp`] execution to this state.
     ///
     /// [`ClaimPowRewardOp`]: lb_core::mantle::ops::pow::ClaimPowRewardOp
@@ -108,6 +115,15 @@ impl PowState {
         let mut new_self = self.clone();
         new_self.add_rewards_to_pool::<ClaimPoWDisabledConstants>();
         new_self
+    }
+}
+
+#[cfg(test)]
+impl PowState {
+    /// Test-only: seed the reward difficulty directly, standing in for the
+    /// genesis initial-difficulty seeding that is not implemented yet.
+    pub(crate) const fn set_reward_difficulty(&mut self, difficulty: PowTarget) {
+        self.reward_difficulty = difficulty;
     }
 }
 

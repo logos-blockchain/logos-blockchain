@@ -2001,4 +2001,233 @@ mod tests {
             .unwrap_err();
         assert_eq!(err, LeaderClaimError::DuplicatedVoucherNullifier);
     }
+
+    mod pow {
+        use lb_core::mantle::ops::pow::{ClaimPowRewardOp, PowTarget};
+        use lb_groth16::AdditiveGroup as _;
+
+        use super::*;
+        use crate::mantle::pow::ClaimPoWConstants;
+
+        /// A payout rate of `1/100`: `sigma_e = pool / 100`, used to give the
+        /// `PoW` state a nonzero per-claim reward in tests.
+        struct TestPoolConstants;
+        impl ClaimPoWConstants for TestPoolConstants {
+            const RATE_NUM: u64 = 1;
+            const RATE_DEN: u64 = 1;
+            const TARGET_CLAIM_PER_BLOCK: u64 = 10;
+            const EXPECTED_BLOCKS_PER_EPOCH: u64 = 10;
+        }
+
+        /// A ledger state with a funded `PoW` pool (1000, `sigma_e` = 10) and
+        /// a seeded reward difficulty.
+        fn pow_ledger_state(reward_difficulty: u64) -> (LedgerState, Config) {
+            let config = config();
+            let mut state = LedgerState::from_utxos([utxo()], &config);
+            state.mantle_ledger.pow.add_reward_refill_rewards(1_000);
+            state
+                .mantle_ledger
+                .pow
+                .add_rewards_to_pool::<TestPoolConstants>();
+            state
+                .mantle_ledger
+                .pow
+                .set_reward_difficulty(PowTarget::from(reward_difficulty));
+            (state, config)
+        }
+
+        fn claim_op() -> ClaimPowRewardOp {
+            ClaimPowRewardOp {
+                epoch_nonce: Fr::ZERO,
+                block_hash: [1u8; 32],
+                public_key: ZkPublicKey::new(Fr::from(42u64)),
+            }
+        }
+
+        fn apply_empty_block(state: LedgerState, config: &Config) -> LedgerState {
+            state
+                .try_apply_contents::<_, HeaderId, MainnetGasConstants>(
+                    config,
+                    std::iter::empty::<&SignedMantleTx<Preverified>>(),
+                )
+                .expect("empty block should apply")
+                .0
+        }
+
+        #[test]
+        fn difficulty_eases_on_each_applied_block_without_claims() {
+            // `PoWDifficultySettings`: q = 9/10, T = 100. An empty block is
+            // the largest easing step, a factor of P/F = 10/9 per block:
+            //   900 -> 10·100·900/(9·100) = 1000 -> 1000000/900 = 1111.
+            let (state, config) = pow_ledger_state(900);
+
+            let state = apply_empty_block(state, &config);
+            assert_eq!(
+                state.mantle_ledger.pow.reward_difficulty(),
+                PowTarget::from(1_000u64)
+            );
+
+            let state = apply_empty_block(state, &config);
+            assert_eq!(
+                state.mantle_ledger.pow.reward_difficulty(),
+                PowTarget::from(1_111u64)
+            );
+        }
+
+        #[test]
+        fn difficulty_hardens_when_claims_exceed_the_target() {
+            // Exercises the `LedgerState` plumbing directly with a claim
+            // count (claim txs cannot yet enter a block, see
+            // `claim_tx_is_rejected_at_preverification`): 2T claims shrink
+            // the target, 1000 -> 10·100·1000/(1·200 + 9·100) = 909.
+            let (mut state, _config) = pow_ledger_state(1_000);
+
+            state.update_pow_difficulty(200);
+
+            assert_eq!(
+                state.mantle_ledger.pow.reward_difficulty(),
+                PowTarget::from(909u64)
+            );
+        }
+
+        #[test]
+        fn difficulty_from_unseeded_genesis_is_stuck_at_zero() {
+            // Pins the genesis gap: `PowState::new` leaves the difficulty at
+            // zero, and zero is an absorbing state for the controller, so
+            // no block can ever move it (and no ticket can ever satisfy a
+            // zero target). Genesis must seed a real initial difficulty
+            // before claiming can function.
+            let config = config();
+            let state = LedgerState::from_utxos([utxo()], &config);
+            assert_eq!(state.mantle_ledger.pow.reward_difficulty(), Fr::ZERO);
+
+            let state = apply_empty_block(state, &config);
+            assert_eq!(state.mantle_ledger.pow.reward_difficulty(), Fr::ZERO);
+        }
+
+        #[test]
+        fn claim_tx_is_rejected_at_preverification() {
+            // Pins the missing wiring: `verify_stateless_op` has no
+            // `(Op::ClaimPowReward, OpProof::None)` arm, so a claim
+            // transaction cannot pass preverification and can never reach a
+            // block. This test turns red when the pairing is wired in —
+            // update it then to drive the claim through
+            // `try_apply_contents` end to end.
+            let mantle_tx = MantleTx([Op::ClaimPowReward(claim_op())].into());
+            let result = SignedMantleTx::new(mantle_tx, [OpProof::None].into()).preverify();
+
+            assert_eq!(
+                result.err(),
+                Some(VerificationError::IncorrectProofType {
+                    op_type: "ClaimPowReward",
+                    op_index: 0,
+                })
+            );
+        }
+
+        #[test]
+        fn claim_execution_pays_the_reward_and_updates_the_ledger() {
+            // The execution path (`try_apply_op`): the claim drains sigma_e
+            // from the pool, records the nullifier, inserts the reward note
+            // into the UTXO set and emits the claim event.
+            let (state, config) = pow_ledger_state(1_000);
+            let op = claim_op();
+            let tx_hash = TxHash::from([9u8; 32]);
+
+            let (state, _balance, events) = state
+                .try_apply_op::<HeaderId, MainnetGasConstants>(
+                    &Op::ClaimPowReward(op.clone()),
+                    &config,
+                    &tx_hash,
+                    0,
+                    Vec::new(),
+                )
+                .expect("claim execution should succeed");
+
+            assert_eq!(state.mantle_ledger.pow.reward_pool(), 990);
+            assert!(
+                state
+                    .mantle_ledger
+                    .pow
+                    .nullifiers()
+                    .contains(&op.get_puzzle_ticket())
+            );
+
+            let expected_utxo = Utxo {
+                op_id: op.op_id(),
+                output_index: 0,
+                note: Note::new(10, op.public_key),
+            };
+            assert_eq!(
+                state
+                    .cryptarchia_ledger
+                    .latest_utxos()
+                    .get(&expected_utxo.id()),
+                Some(expected_utxo)
+            );
+
+            assert_eq!(events.len(), 1);
+            assert!(matches!(
+                &events[0],
+                TxEvent {
+                    tx_hash: event_tx_hash,
+                    payload: TxEventPayload::PoWRewardClaimed { .. },
+                    ..
+                } if *event_tx_hash == tx_hash
+            ));
+        }
+
+        #[test]
+        fn claim_execution_currently_has_no_double_claim_guard() {
+            // Tripwire for the missing validation wiring: `try_apply_op`
+            // only calls `execute`, and the double-claim check lives in
+            // `ClaimPowRewardOp::validate`, which nothing in the ledger
+            // invokes yet (`verify_stateful_op` has no ClaimPowReward arm).
+            // The same solution therefore pays twice. When validation is
+            // wired in, this test must flip to expect `DoubleClaimed`.
+            let (state, config) = pow_ledger_state(1_000);
+            let op = Op::ClaimPowReward(claim_op());
+            let tx_hash = TxHash::from([9u8; 32]);
+
+            let (state, _, _) = state
+                .try_apply_op::<HeaderId, MainnetGasConstants>(
+                    &op,
+                    &config,
+                    &tx_hash,
+                    0,
+                    Vec::new(),
+                )
+                .expect("first claim should succeed");
+            let (state, _, _) = state
+                .try_apply_op::<HeaderId, MainnetGasConstants>(
+                    &op,
+                    &config,
+                    &tx_hash,
+                    0,
+                    Vec::new(),
+                )
+                .expect("second claim currently also succeeds (no validation)");
+
+            assert_eq!(state.mantle_ledger.pow.reward_pool(), 980);
+        }
+
+        #[test]
+        fn block_fees_do_not_refill_the_pow_pool_while_the_share_is_zero() {
+            // Pins that `POW_REWARD_SHARE_NUMERATOR` is still 0: block fees
+            // are split between leaders and blend only, so nothing accrues
+            // to the PoW refill and the pool is unchanged after crediting.
+            let config = config();
+            let mut state = LedgerState::from_utxos([utxo()], &config);
+
+            state = state
+                .compute_block_rewards(1_000.into(), 0.into())
+                .expect("reward computation should succeed");
+
+            state
+                .mantle_ledger
+                .pow
+                .add_rewards_to_pool::<TestPoolConstants>();
+            assert_eq!(state.mantle_ledger.pow.reward_pool(), 0);
+        }
+    }
 }
