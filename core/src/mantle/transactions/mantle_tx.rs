@@ -252,12 +252,12 @@ mod tests {
 
     #[test]
     fn binary_serde_rejects_trailing_bytes_inside_transaction_envelope() {
-        let tx = MantleTx(Ops::empty());
+        let tx = RawMantleTx(Ops::empty());
         let mut encoded_tx = tx.encode().into_vec();
         encoded_tx.push(0);
         let envelope = bincode::serialize(&encoded_tx).unwrap();
 
-        assert!(bincode::deserialize::<MantleTx>(&envelope).is_err());
+        assert!(bincode::deserialize::<RawMantleTx>(&envelope).is_err());
     }
 
     #[test]
@@ -265,7 +265,7 @@ mod tests {
         let oversized = vec![0u8; MAX_BLOCK_TRANSACTIONS_SIZE + 1];
         let envelope = bincode::serialize(&oversized).unwrap();
 
-        assert!(bincode::deserialize::<MantleTx>(&envelope).is_err());
+        assert!(bincode::deserialize::<RawMantleTx>(&envelope).is_err());
     }
 }
 
