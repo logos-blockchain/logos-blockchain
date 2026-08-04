@@ -1706,8 +1706,12 @@ where
 /// Builds the funding transfer that creates the note consumed by an atomic
 /// zone deposit.
 /// Generous fee margin for the atomic `[Transfer, Deposit, Inscribe]`
-/// transaction; the actual cost is a few hundred gas units at genesis prices.
-const ATOMIC_DEPOSIT_FEE_MARGIN: u64 = 2_000;
+/// transaction. The mandatory fee (execution + size-based storage gas) is
+/// roughly 2k and varies with input count and change-note presence, so a
+/// tight margin intermittently underfunds the tx — which is permanently
+/// invalid and silently evicted at block assembly. Matches
+/// `MAX_ZONE_DEPOSIT_TX_FEE`; the excess above the mandatory fee is a tip.
+const ATOMIC_DEPOSIT_FEE_MARGIN: u64 = 10_000;
 
 fn build_atomic_deposit_transfer(
     available_utxos: Vec<Utxo>,
