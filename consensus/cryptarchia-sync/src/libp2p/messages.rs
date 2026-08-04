@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use lb_core::header::HeaderId;
 use serde::{Deserialize, Deserializer, Serialize, de::Visitor};
 
-use crate::{BlocksUnavailableReason, SerialisedBlock};
+use crate::{BlocksUnavailableReason, SerialisedBlock, libp2p::provider::MAX_ADDITIONAL_BLOCKS};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum RequestMessage {
@@ -32,8 +32,6 @@ pub struct KnownBlocks {
     /// The list of additional blocks that the requester has.
     pub additional_blocks: HashSet<HeaderId>,
 }
-
-const MAX_ADDITIONAL_BLOCKS: usize = 5;
 
 impl<'de> Deserialize<'de> for KnownBlocks {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -76,7 +74,9 @@ where
         type Value = Vec<HeaderId>;
 
         fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str("at most five unique additional block identifiers")
+            formatter.write_str(&format!(
+                "at most {MAX_ADDITIONAL_BLOCKS} additional block identifiers"
+            ))
         }
 
         fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
