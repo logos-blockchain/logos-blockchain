@@ -103,17 +103,6 @@ impl MantleTxBuilder {
         Ok(self)
     }
 
-    pub fn push_channel_withdraw(
-        self,
-        op: ChannelWithdrawOp,
-        proof: ChannelMultiSigProof,
-    ) -> Result<Self, TxBuilderError> {
-        let mut builder = self.push_op(Op::ChannelWithdraw(op))?;
-        let index = builder.mantle_tx.ops().len() - 1;
-        builder.channel_multi_sig_proofs.insert(index, proof);
-        Ok(builder)
-    }
-
     pub fn add_ledger_input(self, utxo: Utxo) -> Result<Self, TxBuilderError> {
         self.extend_ledger_inputs([utxo])
     }

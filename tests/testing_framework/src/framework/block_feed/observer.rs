@@ -76,12 +76,6 @@ impl BlockFeedSnapshot {
             .find(|node_head| node_head.node == node_name)
     }
 
-    /// Returns the retained height for one observed header, if available.
-    #[must_use]
-    pub fn header_height(&self, header: &HeaderId) -> Option<u64> {
-        self.header_heights.get(header).copied()
-    }
-
     /// Returns a concise summary for timeout and validation errors.
     #[must_use]
     pub fn summary(&self) -> String {

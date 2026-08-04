@@ -4,10 +4,7 @@ mod metrics;
 pub mod state;
 pub mod wallet;
 
-use std::{
-    collections::BTreeSet,
-    fmt::{Debug, Display},
-};
+use std::fmt::{Debug, Display};
 
 use async_trait::async_trait;
 use lb_chain_service::{
@@ -15,16 +12,12 @@ use lb_chain_service::{
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
-    block::BlockNumber,
     header::HeaderId,
     mantle::{
         NoteId, SignedMantleTx,
         transactions::{MantleTxBuilder, states::Preverified},
     },
-    sdp::{
-        ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locator, ProviderId,
-        ServiceType, WithdrawMessage,
-    },
+    sdp::{ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, WithdrawMessage},
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_services_utils::overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings};
@@ -42,27 +35,6 @@ use crate::{
     state::{SdpState, SdpStateStorage},
     wallet::{SdpWalletAdapter, SdpWalletConfig},
 };
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DeclarationState {
-    Active,
-    Inactive,
-    Withdrawn,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BlockEventUpdate {
-    pub service_type: ServiceType,
-    pub provider_id: ProviderId,
-    pub state: DeclarationState,
-    pub locators: BTreeSet<Locator>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BlockEvent {
-    pub block_number: BlockNumber,
-    pub updates: Vec<BlockEventUpdate>,
-}
 
 #[derive(Debug, Error)]
 pub enum SdpError {
