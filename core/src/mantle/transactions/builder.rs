@@ -10,10 +10,7 @@ use crate::{
         GasConstants, Note, NoteId, Op, Utxo, Value,
         gas::{GasCost, GasOverflow},
         ledger::{BoundedUtxos, Inputs, Outputs},
-        ops::{
-            channel::{ChannelId, withdraw::ChannelWithdrawOp},
-            transfer::TransferOp,
-        },
+        ops::{channel::ChannelId, transfer::TransferOp},
         transactions::mantle_tx::{MantleTx as _, MantleTxContext, RawMantleTx},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
@@ -315,6 +312,7 @@ mod tests {
                 channel::{
                     deposit::{DepositOp, Metadata},
                     inscribe::InscriptionOp,
+                    withdraw::ChannelWithdrawOp,
                 },
                 leader_claim::LeaderClaimOp,
                 sdp::{SDPDeclareOp, SDPWithdrawOp},
