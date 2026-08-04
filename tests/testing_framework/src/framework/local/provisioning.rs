@@ -281,12 +281,13 @@ async fn build_node_launch_spec(
 
     Ok(LaunchSpec {
         binary: {
+            let provider = node_binary_provider(&node_binary_profile)?;
             let current = if node_binary_profile == NodeBinaryProfile::TokioConsole {
                 replace_default_env("RUSTFLAGS", &rustflags_with_tokio_unstable())
             } else {
                 None
             };
-            let resolve_result = node_binary_provider(&node_binary_profile).resolve().await;
+            let resolve_result = provider.resolve().await;
             if node_binary_profile == NodeBinaryProfile::TokioConsole {
                 if let Some(val) = current {
                     let _unused = replace_default_env("RUSTFLAGS", &val);
@@ -335,18 +336,24 @@ fn launch_file(relative_path: &str, contents: Vec<u8>) -> LaunchFile {
 pub async fn ensure_node_binary_built(
     node_binary_profile: &NodeBinaryProfile,
 ) -> Result<PathBuf, DynError> {
-    node_binary_provider(node_binary_profile)
+    node_binary_provider(node_binary_profile)?
         .resolve()
         .await
         .map_err(Into::into)
 }
 
-fn node_binary_provider(node_binary_profile: &NodeBinaryProfile) -> BinaryProviderRef {
+fn node_binary_provider(
+    node_binary_profile: &NodeBinaryProfile,
+) -> Result<BinaryProviderRef, DynError> {
+    let release_download_requested =
+        env::var_os(LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL).is_some_and(|url| !url.is_empty());
+    validate_node_binary_selection(node_binary_profile, release_download_requested)?;
+
     let mut providers: Vec<BinaryProviderRef> = vec![Arc::new(EnvBinaryProvider::new(
         "LOGOS_BLOCKCHAIN_NODE_BIN",
     ))];
 
-    if env::var_os(LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL).is_some_and(|url| !url.is_empty()) {
+    if release_download_requested {
         providers.push(Arc::new(release_binary_provider()));
     }
 
@@ -355,7 +362,24 @@ fn node_binary_provider(node_binary_profile: &NodeBinaryProfile) -> BinaryProvid
         NodeBinaryProfile::TokioConsole => tokio_console_node_binary_provider(),
     });
 
-    Arc::new(FallbackBinaryProvider::new(providers))
+    Ok(Arc::new(FallbackBinaryProvider::new(providers)))
+}
+
+fn validate_node_binary_selection(
+    node_binary_profile: &NodeBinaryProfile,
+    release_download_requested: bool,
+) -> Result<(), DynError> {
+    if release_download_requested && *node_binary_profile == NodeBinaryProfile::TokioConsole {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL} cannot be used with the tokio-console node binary profile"
+            ),
+        )
+        .into());
+    }
+
+    Ok(())
 }
 
 fn release_binary_provider() -> DownloadBinaryProvider {
@@ -877,10 +901,84 @@ fn initial_peers_for_dynamic_node(
 
 #[cfg(test)]
 mod tests {
+    use flate2::{Compression, write::GzEncoder};
     use testing_framework_runner_local::LocalDeployerEnv as _;
 
     use super::*;
     use crate::node::configs::deployment::DeploymentBuilder;
+
+    #[test]
+    fn release_download_rejects_tokio_console_profile() {
+        let error = validate_node_binary_selection(&NodeBinaryProfile::TokioConsole, true)
+            .expect_err("downloaded releases do not include tokio-console support");
+
+        assert_eq!(
+            error.downcast_ref::<io::Error>().map(io::Error::kind),
+            Some(io::ErrorKind::InvalidInput)
+        );
+        assert!(
+            error
+                .to_string()
+                .contains(LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL)
+        );
+    }
+
+    #[test]
+    fn extracts_node_binary_from_release_archive() {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let archive = temp_dir.path().join("release.tar.gz");
+        let output = temp_dir.path().join("logos-blockchain-node");
+        write_tar_gz(
+            &archive,
+            &[(
+                "logos-blockchain-node/target/release/logos-blockchain-node",
+                b"node binary",
+            )],
+        );
+
+        extract_release_binary(&archive, &output).expect("node binary should be extracted");
+
+        assert_eq!(
+            fs::read(output).expect("extracted binary should be readable"),
+            b"node binary"
+        );
+    }
+
+    #[test]
+    fn release_archive_without_node_binary_is_rejected() {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let archive = temp_dir.path().join("release.tar.gz");
+        let output = temp_dir.path().join("logos-blockchain-node");
+        write_tar_gz(&archive, &[("release/README.md", b"missing binary")]);
+
+        let error = extract_release_binary(&archive, &output)
+            .expect_err("archive without the node binary should fail");
+
+        assert_eq!(
+            error.downcast_ref::<io::Error>().map(io::Error::kind),
+            Some(io::ErrorKind::NotFound)
+        );
+        assert!(!output.exists());
+    }
+
+    fn write_tar_gz(path: &Path, entries: &[(&str, &[u8])]) {
+        let file = fs::File::create(path).expect("archive file should be created");
+        let encoder = GzEncoder::new(file, Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+
+        for (entry_path, contents) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(contents.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, entry_path, *contents)
+                .expect("archive entry should be written");
+        }
+
+        let encoder = archive.into_inner().expect("archive should be finalized");
+        encoder.finish().expect("gzip stream should be finalized");
+    }
 
     #[test]
     fn local_cluster_lifecycle_unregisters_system_monitor_output() {
