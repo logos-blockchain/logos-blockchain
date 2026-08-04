@@ -10,7 +10,7 @@ use lb_core::{
     mantle::{
         NoteId, Utxo, Value,
         gas::{Gas, GasConstants, GasCost, GasOverflow, GasPrice},
-        ledger::Operation as _,
+        ledger::ExecutableOperation as _,
         ops::transfer::TransferOp,
         traits::GenesisTx,
         transactions::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
@@ -745,9 +745,9 @@ pub mod tests {
     use lb_core::{
         crypto::{Digest as _, Hasher},
         mantle::{
-            GasCalculator as _, MantleTx, Note, Op,
+            GasCalculator as _, Note, Op,
             OpProof::ZkSig,
-            SignedMantleTx,
+            RawMantleTx, SignedMantleTx,
             gas::MainnetGasConstants,
             ledger::{Inputs, Outputs},
             ops::{leader_claim::VoucherCm, sdp::SDPDeclareOp},
@@ -1587,7 +1587,7 @@ pub mod tests {
             Inputs::try_new(inputs).expect("Invalid inputs size"),
             Outputs::try_new(outputs).expect("Invalid outputs size"),
         );
-        let mantle_tx = MantleTx([Op::Transfer(transfer_op.clone())].into());
+        let mantle_tx = RawMantleTx([Op::Transfer(transfer_op.clone())].into());
         let transfer_sig = ZkKey::multi_sign(&sks, &mantle_tx.hash().to_fr()).unwrap();
         let tx = SignedMantleTx::new(mantle_tx, [ZkSig(transfer_sig.clone())].into());
         (tx, transfer_op, transfer_sig)

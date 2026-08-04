@@ -18,7 +18,7 @@ futures                          = { workspace = true }
 lb-blend-service                 = { workspace = true }
 lb-chain-network-service         = { workspace = true }
 lb-chain-service                 = { workspace = true }
-lb-chain-service-common          = { workspace = true }
+lb-codec                         = { workspace = true }
 lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { workspace = true }
 lb-key-management-system-service = { features = ["unsafe"], workspace = true }

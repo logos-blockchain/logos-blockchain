@@ -4207,6 +4207,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "serial_test",
  "tempfile",
  "tokio",
 ]
@@ -4233,7 +4234,7 @@ dependencies = [
  "logos-blockchain-blend-service",
  "logos-blockchain-chain-network-service",
  "logos-blockchain-chain-service",
- "logos-blockchain-chain-service-common",
+ "logos-blockchain-codec",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
@@ -4264,7 +4265,7 @@ dependencies = [
  "backon",
  "futures",
  "logos-blockchain-chain-service",
- "logos-blockchain-chain-service-common",
+ "logos-blockchain-codec",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-cryptarchia-sync",
@@ -4321,14 +4322,6 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "utoipa",
-]
-
-[[package]]
-name = "logos-blockchain-chain-service-common"
-version = "0.0.0"
-dependencies = [
- "logos-blockchain-core",
- "serde",
 ]
 
 [[package]]
@@ -4918,6 +4911,7 @@ dependencies = [
  "serde_urlencoded",
  "serde_with",
  "serde_yaml",
+ "serial_test",
  "thiserror 2.0.18",
  "tikv-jemallocator",
  "time",

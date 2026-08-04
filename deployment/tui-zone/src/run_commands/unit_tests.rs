@@ -8,7 +8,7 @@ mod tests {
 
     use lb_codec::BinaryEncode as _;
     use lb_core::mantle::{
-        MantleTx, Note, NoteId, Op, SignedMantleTx, Utxo, Value,
+        Note, NoteId, Op, RawMantleTx, SignedMantleTx, Utxo, Value,
         ledger::Inputs,
         ops::channel::{
             ChannelId, MsgId,
@@ -67,8 +67,8 @@ mod tests {
         Ed25519Key::from_bytes(&[byte; ED25519_SECRET_KEY_SIZE])
     }
 
-    fn empty_mantle_tx() -> MantleTx {
-        MantleTx(Ops::try_from(Vec::new()).expect("empty ops must be valid"))
+    fn empty_mantle_tx() -> RawMantleTx {
+        RawMantleTx(Ops::try_from(Vec::new()).expect("empty ops must be valid"))
     }
 
     #[test]
@@ -234,7 +234,7 @@ mod tests {
             parent: MsgId::root(),
             signer: inscriber.public_key(),
         };
-        let tx = MantleTx(
+        let tx = RawMantleTx(
             Ops::try_from(vec![
                 Op::ChannelWithdraw(withdraw),
                 Op::ChannelInscribe(inscribe),
@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn withdraw_combine_rejects_too_few_signatures() {
-        let tx = MantleTx(
+        let tx = RawMantleTx(
             Ops::try_from(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id: ChannelId::from([9; 32]),
                 inputs: Inputs::new([NoteId::from(Fr::from(1u64))]),
@@ -349,7 +349,7 @@ mod tests {
         let channel_id = ChannelId::from([10; 32]);
         let signer = test_signing_key(2);
         let second_signer = test_signing_key(3);
-        let tx = MantleTx(
+        let tx = RawMantleTx(
             Ops::try_from(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id,
                 inputs: Inputs::new([NoteId::from(Fr::from(1u64))]),
@@ -423,7 +423,7 @@ mod tests {
         let channel_id = ChannelId::from([11; 32]);
         let signer = test_signing_key(2);
         let second_signer = test_signing_key(3);
-        let tx = MantleTx(
+        let tx = RawMantleTx(
             Ops::try_from(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id,
                 inputs: Inputs::new([NoteId::from(Fr::from(1u64))]),

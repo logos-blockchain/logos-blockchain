@@ -9,7 +9,7 @@ use lb_core::{
             channel::{ChannelId, MsgId, inscribe::Inscription},
         },
         traits::Hashable as _,
-        transactions::{hash::TxHash, states::Unverified},
+        transactions::{hash::TxHash, mantle_tx::MantleTx as _, states::Unverified},
     },
 };
 use rpds::HashTrieSetSync;
@@ -803,7 +803,10 @@ impl TxState {
     /// Content at or below the finalized boundary is excluded from both
     /// sides: it is immutable on every branch and surfaces via `finalized`.
     ///
-    /// Returns `None` if no channel state change.
+    /// Returns `None` only when the channel did not change at all. A change
+    /// made purely of non-reportable entries (a config landing alone) yields
+    /// `Some` with empty `adopted`/`orphaned` — the tip still moved, and
+    /// callers must run their shed pass on every reported update.
     #[must_use]
     pub fn detect_channel_update(
         &self,
@@ -823,21 +826,25 @@ impl TxState {
         let mut finalized = self.finalized_prefix_ids(old_lineage);
         finalized.extend(self.finalized_prefix_ids(&new_lineage));
 
-        let adopted = self.update_txs_from_infos(
-            new_lineage
-                .iter()
-                .filter(|i| !old_ids.contains(&i.this_msg) && !finalized.contains(&i.this_msg)),
-        );
+        let adopted_infos: Vec<&InscriptionInfo> = new_lineage
+            .iter()
+            .filter(|i| !old_ids.contains(&i.this_msg) && !finalized.contains(&i.this_msg))
+            .collect();
 
-        let orphaned = self.update_txs_from_infos(
-            old_lineage
-                .iter()
-                .filter(|i| !new_ids.contains(&i.this_msg) && !finalized.contains(&i.this_msg)),
-        );
+        let orphaned_infos: Vec<&InscriptionInfo> = old_lineage
+            .iter()
+            .filter(|i| !new_ids.contains(&i.this_msg) && !finalized.contains(&i.this_msg))
+            .collect();
 
-        if orphaned.is_empty() && adopted.is_empty() {
+        // Decide on the raw diff, before reportability filtering: a
+        // config-only change maps to no reportable entries but still moves
+        // the tip, and callers must run their shed pass on it.
+        if adopted_infos.is_empty() && orphaned_infos.is_empty() {
             return None;
         }
+
+        let adopted = self.update_txs_from_infos(adopted_infos.into_iter());
+        let orphaned = self.update_txs_from_infos(orphaned_infos.into_iter());
 
         Some(ChannelUpdateInfo {
             orphaned,
@@ -1041,7 +1048,7 @@ impl TxState {
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
-        MantleTx, Op::ChannelInscribe, ops::channel::inscribe::InscriptionOp,
+        Op::ChannelInscribe, RawMantleTx, ops::channel::inscribe::InscriptionOp,
         traits::Hashable as _, transactions::OpsProofs,
     };
     use lb_key_management_system_service::keys::Ed25519PublicKey;
@@ -1050,7 +1057,7 @@ mod tests {
     use crate::test_support::header_id;
 
     fn make_dummy_tx(data: u8) -> SignedMantleTx<Unverified> {
-        let mantle_tx = MantleTx(
+        let mantle_tx = RawMantleTx(
             [ChannelInscribe(InscriptionOp {
                 channel_id: [0u8; 32].into(),
                 inscription: [data].into(),
@@ -1255,6 +1262,74 @@ mod tests {
         let hash = tx.mantle_tx().hash();
         state.submit_inscription(tx, parent_msg, this_msg, [data].into());
         hash
+    }
+
+    /// A config landing ALONE resets the channel tip, cutting off pending
+    /// inscriptions anchored at the previous tip. Configs are non-reportable
+    /// (`to_update_tx` maps them to `None`), so with the change-detection
+    /// keyed on the filtered lists the update collapsed to `None`, the
+    /// caller's shed pass never ran, and the cut-off pending was neither
+    /// surfaced as orphaned nor cleaned up. The raw diff must decide instead:
+    /// the update reports (with empty lists), and shed rescues the pending.
+    #[test]
+    fn config_landing_alone_reports_update_so_stale_pending_is_shed() {
+        let genesis = header_id(0);
+        let b1 = header_id(1);
+        let b2 = header_id(2);
+        let mut state = TxState::new(genesis, MsgId::root());
+
+        // Mined inscription M establishes channel tip m.
+        let m_info = InscriptionInfo {
+            tx_hash: make_dummy_tx(1).mantle_tx().hash(),
+            parent_msg: MsgId::root(),
+            this_msg: msg_id(1),
+            payload: [1].into(),
+        };
+        state.process_block(
+            b1,
+            genesis,
+            genesis,
+            vec![],
+            vec![BlockChannelTx::Inscription(m_info)],
+        );
+
+        // Local pending inscription P chained on m (published, not mined).
+        let p_hash = submit_fake_inscription(&mut state, 2, msg_id(1), msg_id(2));
+
+        let old_lineage = state.channel_lineage(b1);
+
+        // Config C lands alone; the tip resets to c.
+        let c_info = InscriptionInfo {
+            tx_hash: make_dummy_tx(3).mantle_tx().hash(),
+            parent_msg: msg_id(1),
+            this_msg: msg_id(3),
+            payload: [3].into(),
+        };
+        state.process_block(
+            b2,
+            b1,
+            genesis,
+            vec![],
+            vec![BlockChannelTx::Config(c_info)],
+        );
+
+        let update = state
+            .detect_channel_update(&old_lineage, b2)
+            .expect("a config-only landing changes the channel and must report");
+        assert_eq!(update.new_channel_tip, msg_id(3));
+        assert!(
+            update.adopted.is_empty() && update.orphaned.is_empty(),
+            "configs are non-reportable; the update carries the tip change only"
+        );
+
+        // P no longer reaches the tip: excluded from resubmission and
+        // rescued by the shed pass the reported update triggers.
+        assert!(state.pending_txs(b2).iter().all(|(h, _)| *h != p_hash));
+        let shed = state.shed_off_branch_pending(b2);
+        assert!(
+            shed.iter().any(|p| p.tx_hash() == p_hash),
+            "the cut-off pending inscription must be shed for republish"
+        );
     }
 
     /// After a checkpoint restore the finalized entry's parent is unknown

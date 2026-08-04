@@ -5,10 +5,10 @@ mod tests {
 
     use crate::{
         block::{Block, BlockTransactions, tests::create_proof},
-        mantle::MantleTx,
+        mantle::RawMantleTx,
     };
 
-    fn make_empty_block() -> Block<MantleTx> {
+    fn make_empty_block() -> Block<RawMantleTx> {
         let signing_key = Ed25519Key::from_bytes(&[0; 32]);
         Block::create(
             [0u8; 32].into(),
@@ -24,7 +24,7 @@ mod tests {
     fn test_json_round_trip() {
         let block = make_empty_block();
         let json = serde_json::to_string(&block).expect("JSON serialization should succeed");
-        let restored: Block<MantleTx> =
+        let restored: Block<RawMantleTx> =
             serde_json::from_str(&json).expect("JSON deserialization should succeed");
         assert_eq!(block.header().id(), restored.header().id());
         assert_eq!(block.signature(), restored.signature());
@@ -64,7 +64,7 @@ mod tests {
     fn test_bincode_round_trip() {
         let block = make_empty_block();
         let bytes = bincode::serialize(&block).expect("bincode serialization should succeed");
-        let restored: Block<MantleTx> =
+        let restored: Block<RawMantleTx> =
             bincode::deserialize(&bytes).expect("bincode deserialization should succeed");
         assert_eq!(block.header().id(), restored.header().id());
         assert_eq!(block.signature(), restored.signature());

@@ -439,9 +439,8 @@ where
         known_blocks
             .iter()
             .filter_map(|known| {
-                branches
-                    .get(known)
-                    .map(|known_branch| branches.lca(known_branch, target_branch))
+                let known_branch = branches.get(known)?;
+                branches.lca(known_branch, target_branch)
             })
             .max_by_key(Branch::length)
     }
@@ -592,7 +591,7 @@ mod tests {
         crypto::ZkHasher,
         events::Events,
         mantle::{
-            MantleTx, Note, SignedMantleTx, ledger::Utxo, ops::leader_claim::VoucherCm,
+            Note, RawMantleTx, SignedMantleTx, ledger::Utxo, ops::leader_claim::VoucherCm,
             transactions::states::Unverified,
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
@@ -1040,7 +1039,7 @@ mod tests {
                     }
                     ProviderResponse::Available(mut stream) => match stream.next().await {
                         Some(Ok(bytes)) => {
-                            let block: Block<MantleTx> = Block::try_from(bytes).unwrap();
+                            let block: Block<RawMantleTx> = Block::try_from(bytes).unwrap();
                             (
                                 false,
                                 format!("Available(first_block={:?})", block.header().id()),

@@ -6,7 +6,7 @@ use lb_core::mantle::{
     ledger::{Inputs, Outputs},
     ops::transfer::TransferOp,
     traits::Hashable as _,
-    transactions::{hash::TxHash, mantle_tx::MantleTx, states::Unverified},
+    transactions::{hash::TxHash, mantle_tx::RawMantleTx, states::Unverified},
 };
 use lb_groth16::Fr;
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
@@ -273,7 +273,7 @@ fn create_stateful_invalid_transaction() -> SignedMantleTx<Unverified> {
 }
 
 fn build_signed_transfer(transfer_op: TransferOp) -> SignedMantleTx<Unverified> {
-    let mantle_tx = MantleTx([Op::Transfer(transfer_op)].into());
+    let mantle_tx = RawMantleTx([Op::Transfer(transfer_op)].into());
 
     let transfer_proof = ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr())
         .expect("invalid transfer proof should still be constructible");

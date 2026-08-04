@@ -247,13 +247,16 @@ impl Op {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ZkAndEd25519Proof {
+    pub zk_sig: ZkSignature,
+    pub ed25519_sig: Ed25519Signature,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OpProof {
     Ed25519Sig(Ed25519Signature),
     ZkSig(ZkSignature),
-    ZkAndEd25519Sigs {
-        zk_sig: ZkSignature,
-        ed25519_sig: Ed25519Signature,
-    },
+    ZkAndEd25519Sigs(ZkAndEd25519Proof),
     PoC(Groth16LeaderClaimProof),
     ChannelMultiSigProof(ChannelMultiSigProof),
 }
@@ -297,7 +300,7 @@ mod mantle_test_vectors {
     use super::*;
     use crate::{
         mantle::{
-            MantleTx, Note,
+            Note, RawMantleTx,
             channel::{SlotTimeframe, SlotTimeout},
             ledger::{Inputs, NoteId, Outputs},
             ops::channel::{ChannelId, MsgId, config::Keys, deposit::Metadata},
@@ -430,7 +433,7 @@ mod mantle_test_vectors {
         println!();
     }
 
-    fn print_tx_vector(label: &str, tx: &MantleTx) {
+    fn print_tx_vector(label: &str, tx: &RawMantleTx) {
         let payload = tx.encode();
         let tx_hash = tx_hash_from_payload(&payload);
         // The hand-rolled computation must match the production `hash()`.
@@ -476,12 +479,12 @@ mod mantle_test_vectors {
     fn generate_mantle_tx_hash_test_vectors() {
         println!();
         // Empty transaction (zero operations).
-        print_tx_vector("empty (0 ops)", &MantleTx(Ops::new_unchecked(vec![])));
+        print_tx_vector("empty (0 ops)", &RawMantleTx(Ops::new_unchecked(vec![])));
 
         // Transaction holding one of every operation.
         print_tx_vector(
             "one of each operation (9 ops)",
-            &MantleTx(Ops::new_unchecked(sample_ops())),
+            &RawMantleTx(Ops::new_unchecked(sample_ops())),
         );
     }
 }
