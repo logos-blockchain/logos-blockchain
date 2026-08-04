@@ -1791,6 +1791,7 @@ impl CucumberWorld {
 
     /// Helper to check if a node is configured for immediate start (not
     /// awaiting network readiness)
+    #[must_use]
     pub fn network_immediate_start(&self, node_name: &str) -> bool {
         self.nodes_info
             .get(node_name)
@@ -1810,6 +1811,7 @@ impl CucumberWorld {
 
     /// Helper to resolve a list of node names to their corresponding started
     /// node names.
+    #[must_use]
     pub fn resolve_named_peers(&self, initial_peers: &[String]) -> Vec<String> {
         initial_peers
             .iter()
@@ -1858,6 +1860,7 @@ impl CucumberWorld {
     }
 
     /// Helper to retrieve all node names.
+    #[must_use]
     pub fn all_node_names(&self) -> Vec<String> {
         self.nodes_info.keys().cloned().collect::<Vec<_>>()
     }
@@ -1873,6 +1876,7 @@ impl CucumberWorld {
 
     /// Helper to resolve all user wallet names to the actual wallet
     /// information.
+    #[must_use]
     pub fn all_user_wallets(&self) -> Vec<WalletInfo> {
         self.wallet_info
             .values()
@@ -1883,6 +1887,7 @@ impl CucumberWorld {
 
     /// Helper to resolve all funding wallet names to the actual wallet
     /// information.
+    #[must_use]
     pub fn all_funding_wallets(&self) -> Vec<WalletInfo> {
         let mut wallets = self
             .wallet_info
@@ -1895,6 +1900,7 @@ impl CucumberWorld {
     }
 
     /// Helper to resolve all node-owned wallet keys.
+    #[must_use]
     pub fn all_node_wallets(&self) -> Vec<WalletInfo> {
         let mut wallets = self
             .wallet_info

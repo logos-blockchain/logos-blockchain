@@ -27,3 +27,13 @@ pub fn default_e2e_deployment_settings(
 ) -> DeploymentSettings {
     e2e_deployment_settings_with_genesis_block(genesis_block)
 }
+
+#[must_use]
+pub fn deployment_settings_for_topology(
+    genesis_block: &lb_core::block::genesis::GenesisBlock,
+    topology: &deployment::TopologyConfig,
+) -> DeploymentSettings {
+    let mut settings = default_e2e_deployment_settings(genesis_block);
+    topology.apply_deployment_overrides(&mut settings);
+    settings
+}

@@ -193,18 +193,15 @@ where
     // whose `orphaned` is empty by construction), report only entries the
     // sequencer didn't already track: its own publishes land on the channel
     // through its own action and must not echo back. On a branch change the
-    // full delta flows through unfiltered. Updates emptied by the filter are
-    // dropped entirely.
-    let channel_update = channel_update
-        .map(|mut update| {
-            if update.orphaned.is_empty() {
-                update
-                    .adopted
-                    .retain(|tx| !tracked_before.contains(&tx.tx_hash()));
-            }
+    // full delta flows through unfiltered.
+    let channel_update = channel_update.map(|mut update| {
+        if update.orphaned.is_empty() {
             update
-        })
-        .filter(|update| !(update.orphaned.is_empty() && update.adopted.is_empty()));
+                .adopted
+                .retain(|tx| !tracked_before.contains(&tx.tx_hash()));
+        }
+        update
+    });
 
     Ok(BlockEventResult {
         finalized_items,

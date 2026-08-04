@@ -8,17 +8,16 @@ use std::{
 
 use async_trait::async_trait;
 use config::{api, sdp, state, storage, wallet};
+use flate2::read::GzDecoder;
 use lb_config::kms::key_id_for_preload_backend;
-use lb_core::{
-    block::genesis::GenesisBlock,
-    mantle::{self},
-};
+use lb_core::mantle;
 use lb_key_management_system_service::keys::{Key, secured_key::SecuredKey as _};
 use lb_libp2p::Multiaddr;
 use lb_node::{
     UserConfig,
     config::{
         self, RunConfig,
+        deployment::DeploymentSettings,
         tracing::serde::{
             Level,
             logger::{self, AppenderType},
@@ -28,17 +27,20 @@ use lb_node::{
 use rand::Rng as _;
 use testing_framework_core::scenario::{Application, DynError, PeerSelection, StartNodeOptions};
 use testing_framework_runner_local::{
-    BinaryProviderRef, BuildBinaryProvider, BuildCommand, BuiltNodeConfig, EnvBinaryProvider,
-    FallbackBinaryProvider, LaunchEnvVar, LaunchFile, LocalDeployerEnv, NodeConfigEntry,
-    NodeEndpointPort, NodeEndpoints, PathBinaryProvider, ProcessSpawnError, env::Node,
-    process::LaunchSpec,
+    BinaryProviderRef, BuildBinaryProvider, BuildCommand, BuiltNodeConfig, DownloadBinaryProvider,
+    DownloadChecksum, DownloadUrl, EnvBinaryProvider, FallbackBinaryProvider, LaunchEnvVar,
+    LaunchFile, LocalDeployerEnv, NodeConfigEntry, NodeEndpointPort, NodeEndpoints,
+    PathBinaryProvider, ProcessSpawnError, env::Node, process::LaunchSpec,
 };
 use tracing::debug;
 
 use crate::{
     LOG_LEVEL,
     configs::deployment::NodeBinaryProfile,
-    diagnostics::{record_system_monitor_event, register_system_monitor_output_file},
+    diagnostics::{
+        record_system_monitor_event, register_system_monitor_output_file,
+        unregister_system_monitor_output_file,
+    },
     env as tf_env,
     env::{remove_default_env, replace_default_env},
     framework::LbcEnv,
@@ -46,13 +48,21 @@ use crate::{
         DeploymentPlan, NodeHttpClient, NodePlan,
         configs::{
             Config, Libp2pNetworkLayout, NetworkParams, create_node_config_for_node,
-            default_e2e_deployment_settings, deployment::TopologyConfig,
+            deployment::TopologyConfig, deployment_settings_for_topology,
         },
     },
 };
 
 const LOGS_PREFIX: &str = "__logs";
 const DEFAULT_BLEND_NETWORK_PORT: u16 = 3400;
+/// URL of a Logos node release binary downloaded by the local TF deployer.
+///
+/// Use an immutable URL, or set [`LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_SHA256`]. An
+/// archive republished at the same URL is otherwise served from the download
+/// cache without being fetched again.
+pub const LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL: &str = "LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL";
+/// Optional SHA-256 checksum for [`LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL`].
+pub const LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_SHA256: &str = "LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_SHA256";
 /// The default filename for the user config.
 pub const USER_CONFIG_FILE: &str = "node.yaml";
 /// The default filename for the deployment config.
@@ -61,7 +71,7 @@ pub const DEPLOYMENT_CONFIG_FILE: &str = "deployment.yaml";
 struct PlannedLocalNodeConfig {
     config: Config,
     descriptor_override: Option<RunConfig>,
-    genesis_block: GenesisBlock,
+    deployment_settings: DeploymentSettings,
     port_strategy: PortStrategy,
 }
 
@@ -73,6 +83,24 @@ enum PortStrategy {
 
 #[async_trait]
 impl LocalDeployerEnv for LbcEnv {
+    fn prepare_local_cluster(topology: &Self::Deployment) {
+        register_system_monitor_output_file(
+            &topology
+                .config()
+                .scenario_base_dir
+                .join("system_stats.ndjson"),
+        );
+    }
+
+    fn cleanup_local_cluster(topology: &Self::Deployment) {
+        unregister_system_monitor_output_file(
+            &topology
+                .config()
+                .scenario_base_dir
+                .join("system_stats.ndjson"),
+        );
+    }
+
     fn build_node_config(
         topology: &Self::Deployment,
         index: usize,
@@ -111,13 +139,6 @@ impl LocalDeployerEnv for LbcEnv {
     fn build_initial_node_configs(
         topology: &Self::Deployment,
     ) -> Result<Vec<NodeConfigEntry<<Self as Application>::NodeConfig>>, ProcessSpawnError> {
-        register_system_monitor_output_file(
-            &topology
-                .config()
-                .scenario_base_dir
-                .join("system_stats.ndjson"),
-        );
-
         topology
             .nodes()
             .iter()
@@ -145,7 +166,7 @@ impl LocalDeployerEnv for LbcEnv {
         Some(topology.config().scenario_base_dir.join(node_name))
     }
 
-    fn build_launch_spec(
+    async fn build_launch_spec(
         config: &<Self as Application>::NodeConfig,
         dir: &Path,
         label: &str,
@@ -191,7 +212,7 @@ impl LocalDeployerEnv for LbcEnv {
         let deployment_yaml =
             serde_yaml::to_string(&config.deployment).map_err(io::Error::other)?;
 
-        build_node_launch_spec(dir, user_yaml, deployment_yaml)
+        build_node_launch_spec(dir, user_yaml, deployment_yaml).await
     }
 
     fn node_endpoints(
@@ -246,7 +267,7 @@ fn allocate_udp_port(label: &'static str) -> Result<u16, DynError> {
         })
 }
 
-fn build_node_launch_spec(
+async fn build_node_launch_spec(
     dir: &Path,
     user_yaml: String,
     deployment_yaml: String,
@@ -260,12 +281,13 @@ fn build_node_launch_spec(
 
     Ok(LaunchSpec {
         binary: {
+            let provider = node_binary_provider(&node_binary_profile)?;
             let current = if node_binary_profile == NodeBinaryProfile::TokioConsole {
                 replace_default_env("RUSTFLAGS", &rustflags_with_tokio_unstable())
             } else {
                 None
             };
-            let resolve_result = node_binary_provider(&node_binary_profile).resolve();
+            let resolve_result = provider.resolve().await;
             if node_binary_profile == NodeBinaryProfile::TokioConsole {
                 if let Some(val) = current {
                     let _unused = replace_default_env("RUSTFLAGS", &val);
@@ -311,24 +333,88 @@ fn launch_file(relative_path: &str, contents: Vec<u8>) -> LaunchFile {
 
 /// Resolves (building if necessary) the node binary for `node_binary_profile`
 /// and populates the process-local binary cache.
-pub fn ensure_node_binary_built(
+pub async fn ensure_node_binary_built(
     node_binary_profile: &NodeBinaryProfile,
 ) -> Result<PathBuf, DynError> {
-    node_binary_provider(node_binary_profile)
+    node_binary_provider(node_binary_profile)?
         .resolve()
+        .await
         .map_err(Into::into)
 }
 
-fn node_binary_provider(node_binary_profile: &NodeBinaryProfile) -> BinaryProviderRef {
-    let providers: [BinaryProviderRef; 2] = [
-        Arc::new(EnvBinaryProvider::new("LOGOS_BLOCKCHAIN_NODE_BIN")),
-        match node_binary_profile {
-            NodeBinaryProfile::Normal => default_node_binary_provider(),
-            NodeBinaryProfile::TokioConsole => tokio_console_node_binary_provider(),
-        },
-    ];
+fn node_binary_provider(
+    node_binary_profile: &NodeBinaryProfile,
+) -> Result<BinaryProviderRef, DynError> {
+    let release_download_requested =
+        env::var_os(LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL).is_some_and(|url| !url.is_empty());
+    validate_node_binary_selection(node_binary_profile, release_download_requested)?;
 
-    Arc::new(FallbackBinaryProvider::new(providers))
+    let mut providers: Vec<BinaryProviderRef> = vec![Arc::new(EnvBinaryProvider::new(
+        "LOGOS_BLOCKCHAIN_NODE_BIN",
+    ))];
+
+    if release_download_requested {
+        providers.push(Arc::new(release_binary_provider()));
+    }
+
+    providers.push(match node_binary_profile {
+        NodeBinaryProfile::Normal => default_node_binary_provider(),
+        NodeBinaryProfile::TokioConsole => tokio_console_node_binary_provider(),
+    });
+
+    Ok(Arc::new(FallbackBinaryProvider::new(providers)))
+}
+
+fn validate_node_binary_selection(
+    node_binary_profile: &NodeBinaryProfile,
+    release_download_requested: bool,
+) -> Result<(), DynError> {
+    if release_download_requested && *node_binary_profile == NodeBinaryProfile::TokioConsole {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL} cannot be used with the tokio-console node binary profile"
+            ),
+        )
+        .into());
+    }
+
+    Ok(())
+}
+
+fn release_binary_provider() -> DownloadBinaryProvider {
+    DownloadBinaryProvider {
+        url: DownloadUrl::Env(LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL.to_owned()),
+        sha256: Some(DownloadChecksum::Env(
+            LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_SHA256.to_owned(),
+        )),
+        cache_dir: None,
+        processor: None,
+    }
+    .with_processor_fn("logos-node-tar-gz-v1", extract_release_binary)
+}
+
+fn extract_release_binary(artifact: &Path, output: &Path) -> Result<(), DynError> {
+    let decoder = GzDecoder::new(fs::File::open(artifact)?);
+    let mut archive = tar::Archive::new(decoder);
+
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        if entry
+            .path()?
+            .file_name()
+            .is_some_and(|name| name == "logos-blockchain-node")
+        {
+            entry.unpack(output)?;
+            return Ok(());
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        "release archive does not contain logos-blockchain-node",
+    )
+    .into())
 }
 
 fn default_node_binary_provider() -> BinaryProviderRef {
@@ -508,14 +594,19 @@ fn plan_local_node_config(
 
         config.network_config.backend.initial_peers = initial_peers;
 
+        let genesis_block = descriptors
+            .config()
+            .genesis_block
+            .as_ref()
+            .ok_or_else(|| io::Error::other("missing topology genesis tx"))?;
+
         return Ok(PlannedLocalNodeConfig {
             config,
             descriptor_override: descriptors.config().node_config_override(index).cloned(),
-            genesis_block: descriptors
-                .config()
-                .genesis_block
-                .clone()
-                .ok_or_else(|| io::Error::other("missing topology genesis tx"))?,
+            deployment_settings: deployment_settings_for_topology(
+                genesis_block,
+                descriptors.config(),
+            ),
             port_strategy: PortStrategy::PreservePlannedPorts,
         });
     }
@@ -558,14 +649,16 @@ fn plan_local_node_config(
         config
     };
 
+    let genesis_block = descriptors
+        .config()
+        .genesis_block
+        .as_ref()
+        .ok_or_else(|| io::Error::other("missing topology genesis tx"))?;
+
     Ok(PlannedLocalNodeConfig {
         config,
         descriptor_override: descriptors.config().node_config_override(index).cloned(),
-        genesis_block: descriptors
-            .config()
-            .genesis_block
-            .clone()
-            .ok_or_else(|| io::Error::other("missing topology genesis tx"))?,
+        deployment_settings: deployment_settings_for_topology(genesis_block, descriptors.config()),
         port_strategy: PortStrategy::AllocateEphemeralPorts,
     })
 }
@@ -584,7 +677,8 @@ pub fn build_node_run_config(
         .genesis_block
         .clone()
         .ok_or_else(|| io::Error::other("missing topology genesis tx"))?;
-    Ok(build_run_config(node.general.clone(), &genesis_block))
+    let deployment_settings = deployment_settings_for_topology(&genesis_block, topology.config());
+    Ok(build_run_config(node.general.clone(), &deployment_settings))
 }
 
 fn finalize_dynamic_run_config(
@@ -604,11 +698,10 @@ fn finalize_dynamic_run_config(
         return override_config.clone();
     }
 
-    build_run_config(plan.config.clone(), &plan.genesis_block)
+    build_run_config(plan.config.clone(), &plan.deployment_settings)
 }
 
-fn build_run_config(config: Config, genesis_block: &GenesisBlock) -> RunConfig {
-    let deployment_config = default_e2e_deployment_settings(genesis_block);
+fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) -> RunConfig {
     let mut tracing = config.tracing_config.tracing_settings;
     tracing.level = Level::INFO;
 
@@ -687,7 +780,7 @@ fn build_run_config(config: Config, genesis_block: &GenesisBlock) -> RunConfig {
     };
 
     RunConfig {
-        deployment: deployment_config,
+        deployment: deployment_settings.clone(),
         user: user_config,
     }
 }
@@ -803,5 +896,106 @@ fn initial_peers_for_dynamic_node(
             .iter()
             .map(|port| lb_libp2p::multiaddr(Ipv4Addr::LOCALHOST, *port))
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use flate2::{Compression, write::GzEncoder};
+    use testing_framework_runner_local::LocalDeployerEnv as _;
+
+    use super::*;
+    use crate::node::configs::deployment::DeploymentBuilder;
+
+    #[test]
+    fn release_download_rejects_tokio_console_profile() {
+        let error = validate_node_binary_selection(&NodeBinaryProfile::TokioConsole, true)
+            .expect_err("downloaded releases do not include tokio-console support");
+
+        assert_eq!(
+            error.downcast_ref::<io::Error>().map(io::Error::kind),
+            Some(io::ErrorKind::InvalidInput)
+        );
+        assert!(
+            error
+                .to_string()
+                .contains(LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL)
+        );
+    }
+
+    #[test]
+    fn extracts_node_binary_from_release_archive() {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let archive = temp_dir.path().join("release.tar.gz");
+        let output = temp_dir.path().join("logos-blockchain-node");
+        write_tar_gz(
+            &archive,
+            &[(
+                "logos-blockchain-node/target/release/logos-blockchain-node",
+                b"node binary",
+            )],
+        );
+
+        extract_release_binary(&archive, &output).expect("node binary should be extracted");
+
+        assert_eq!(
+            fs::read(output).expect("extracted binary should be readable"),
+            b"node binary"
+        );
+    }
+
+    #[test]
+    fn release_archive_without_node_binary_is_rejected() {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let archive = temp_dir.path().join("release.tar.gz");
+        let output = temp_dir.path().join("logos-blockchain-node");
+        write_tar_gz(&archive, &[("release/README.md", b"missing binary")]);
+
+        let error = extract_release_binary(&archive, &output)
+            .expect_err("archive without the node binary should fail");
+
+        assert_eq!(
+            error.downcast_ref::<io::Error>().map(io::Error::kind),
+            Some(io::ErrorKind::NotFound)
+        );
+        assert!(!output.exists());
+    }
+
+    fn write_tar_gz(path: &Path, entries: &[(&str, &[u8])]) {
+        let file = fs::File::create(path).expect("archive file should be created");
+        let encoder = GzEncoder::new(file, Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+
+        for (entry_path, contents) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(contents.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, entry_path, *contents)
+                .expect("archive entry should be written");
+        }
+
+        let encoder = archive.into_inner().expect("archive should be finalized");
+        encoder.finish().expect("gzip stream should be finalized");
+    }
+
+    #[test]
+    fn local_cluster_lifecycle_unregisters_system_monitor_output() {
+        let state_dir = tempfile::tempdir().expect("state directory should be created");
+        let output = state_dir.path().join("system_stats.ndjson");
+        let deployment = DeploymentBuilder::new(TopologyConfig::with_node_numbers(1))
+            .scenario_base_dir(state_dir.path().to_owned())
+            .build()
+            .expect("deployment should build");
+
+        LbcEnv::prepare_local_cluster(&deployment);
+        assert!(output.exists());
+
+        LbcEnv::cleanup_local_cluster(&deployment);
+        fs::remove_file(&output).expect("monitor output should be removable after cleanup");
+        record_system_monitor_event("after_cluster_cleanup", "test");
+
+        assert!(!output.exists(), "cleaned-up output must not be recreated");
     }
 }

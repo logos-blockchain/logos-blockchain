@@ -17,6 +17,7 @@ use lb_core::{
     mantle::{
         Op, RawMantleTx, SignedMantleTx, Value,
         channel::ChannelState,
+        gas::GasCost,
         ledger::NoteId,
         ops::{
             OpId as _, OpProof,
@@ -276,6 +277,17 @@ impl adapter::Node for MockNode {
             })?,
             transfer_proof: None,
         })
+    }
+}
+
+/// Funding config backed by a fixture key; [`MockNode::fund_tx`] ignores it
+/// and returns the ops unchanged.
+#[must_use]
+pub fn funding_config() -> crate::sequencer::FundingConfig {
+    crate::sequencer::FundingConfig {
+        funding_pk: lb_groth16::Fr::from(1u64).into(),
+        max_tx_fee: GasCost::new(u64::MAX),
+        priority_fee: crate::sequencer::FundingConfig::DEFAULT_PRIORITY_FEE,
     }
 }
 

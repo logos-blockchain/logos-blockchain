@@ -13,7 +13,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         channel::{ChannelState, Channels, Error},
-        ledger::{ExecutableOperation, VerifiableOperation, verification_mode},
+        ledger::{ExecutableOperation, ProvableOperation, VerifiableOperation, verification_mode},
         ops::channel::config::Keys,
         transactions::hash::TxHashView,
     },
@@ -47,7 +47,6 @@ impl InscriptionOp {
 
 pub struct InscriptionPreverificationContext<'a> {
     pub tx_hash_view: &'a TxHashView,
-    pub proof: &'a Ed25519Signature,
 }
 
 pub struct InscriptionValidationContext<'a> {
@@ -60,24 +59,36 @@ pub struct InscriptionExecutionContext {
     pub block_slot: Slot,
 }
 
+impl ProvableOperation for InscriptionOp {
+    type Proof = Ed25519Signature;
+}
+
 impl VerifiableOperation<verification_mode::StandardMode> for InscriptionOp {
     type PreverificationContext<'a> = InscriptionPreverificationContext<'a>;
     type VerificationContext<'a> = InscriptionValidationContext<'a>;
     type Error = Error;
 
-    fn preverify(&self, context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         // Check the signature
         self.signer
-            .verify(context.tx_hash_view.as_bytes(), context.proof)
+            .verify(context.tx_hash_view.as_bytes(), proof)
             .map_err(|_error| Error::InvalidSignature)?;
 
         Ok(())
     }
 
-    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        _proof: &Self::Proof,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         // Check if the channel exist otherwise the inscription is valid only if and
         // only if parent == ZERO
-        if let Some(channel) = context.channels.channel_state(&self.channel_id) {
+        if let Some(channel) = context.channels.channels.get(&self.channel_id).cloned() {
             // Check the parent corresponds to the payload
             if self.parent != channel.tip_message {
                 return Err(Error::InvalidParent {
@@ -120,7 +131,8 @@ impl ExecutableOperation for InscriptionOp {
         // if the channel doesn't exist, create it
         let channel = context
             .channels
-            .channel_state(&self.channel_id)
+            .channels
+            .get(&self.channel_id)
             .cloned()
             .unwrap_or_else(|| ChannelState {
                 accredited_keys: Keys::from(self.signer).into(),
@@ -137,17 +149,17 @@ impl ExecutableOperation for InscriptionOp {
         // Update the channel sequencer, its starting slot, the tip message and the tip
         // slot
         let (new_sequencer, new_starting_slot) = channel.round_robin(context.block_slot);
-        let updated = ChannelState {
-            tip_message: self.id(),
-            accredited_keys: Arc::clone(&channel.accredited_keys),
-            tip_sequencer: new_sequencer,
-            tip_sequencer_starting_slot: new_starting_slot,
-            tip_slot: context.block_slot,
-            ..channel
-        };
-        context.channels = context
-            .channels
-            .set_channel_state(&self.channel_id, updated);
+        context.channels.channels = context.channels.channels.insert(
+            self.channel_id,
+            ChannelState {
+                tip_message: self.id(),
+                accredited_keys: Arc::clone(&channel.accredited_keys),
+                tip_sequencer: new_sequencer,
+                tip_sequencer_starting_slot: new_starting_slot,
+                tip_slot: context.block_slot,
+                ..channel
+            },
+        );
         Ok((context, Vec::new()))
     }
 }

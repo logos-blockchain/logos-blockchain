@@ -6,7 +6,10 @@ use crate::{
     mantle::{
         TxHash,
         channel::{Channels, Error},
-        ledger::{ExecutableOperation, Inputs, Utxos, VerifiableOperation, verification_mode},
+        ledger::{
+            ExecutableOperation, Inputs, ProvableOperation, Utxos, VerifiableOperation,
+            verification_mode,
+        },
         ops::{
             OpId,
             channel::{ChannelId, verification::verify_channel_multi_sig},
@@ -35,7 +38,6 @@ pub struct WithdrawValidationContext<'a> {
     pub locked_notes: &'a LockedNotes,
     pub utxos: &'a Utxos,
     pub tx_hash_view: &'a TxHashView,
-    pub proof: &'a ChannelMultiSigProof,
     pub op_index: usize,
     pub helper: &'a dyn OperationVerificationHelper,
 }
@@ -45,19 +47,31 @@ pub struct WithdrawExecutionContext {
     pub tx_hash: TxHash,
 }
 
+impl ProvableOperation for ChannelWithdrawOp {
+    type Proof = ChannelMultiSigProof;
+}
+
 impl VerifiableOperation<verification_mode::StandardMode> for ChannelWithdrawOp {
     type PreverificationContext<'a> = ();
     type VerificationContext<'a> = WithdrawValidationContext<'a>;
     type Error = Error;
 
-    fn preverify(&self, _context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        _proof: &Self::Proof,
+        _context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         Ok(())
     }
 
-    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         verify_channel_multi_sig(
             &self.channel_id,
-            context.proof,
+            proof,
             context.tx_hash_view.as_bytes(),
             context.helper,
             context.op_index,
@@ -68,7 +82,8 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelWithdrawOp 
         let channel =
             context
                 .channels
-                .channel_state(&self.channel_id)
+                .channels
+                .get(&self.channel_id)
                 .ok_or(Error::ChannelNotFound {
                     channel_id: self.channel_id,
                 })?;
@@ -82,7 +97,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelWithdrawOp 
         )?;
 
         // Check there is enough signatures
-        let signatures = context.proof.signatures();
+        let signatures = proof.signatures();
         if signatures.len() != channel.transfer_threshold as usize {
             return Err(Error::ThresholdUnmet {
                 channel_id: self.channel_id,

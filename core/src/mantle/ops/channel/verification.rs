@@ -129,7 +129,13 @@ mod tests {
         let key0 = Ed25519Key::from_bytes(&[0; 32]);
         let proof = create_channel_multi_sig_proof(&tx_hash, &[&key0]);
 
-        let channels = Channels::new().set_channel_state(&channel_id, make_channel_state(2, None));
+        let channels = {
+            let mut channels = Channels::new();
+            channels
+                .channels
+                .insert_mut(channel_id, make_channel_state(2, None));
+            channels
+        };
         let helper =
             TestOperationVerificationHelper::new(channels, [((channel_id, 0), key0.public_key())]);
 
@@ -153,7 +159,13 @@ mod tests {
         let key0 = Ed25519Key::from_bytes(&[0; 32]);
         let proof = create_channel_multi_sig_proof(&tx_hash, &[&key0]);
 
-        let channels = Channels::new().set_channel_state(&channel_id, make_channel_state(1, None));
+        let channels = {
+            let mut channels = Channels::new();
+            channels
+                .channels
+                .insert_mut(channel_id, make_channel_state(1, None));
+            channels
+        };
         let helper = TestOperationVerificationHelper::new(channels, []);
 
         let result = verify_channel_multi_sig(&channel_id, &proof, &tx_hash_bytes, &helper, 0);
@@ -176,7 +188,13 @@ mod tests {
         let wrong_key = Ed25519Key::from_bytes(&[9; 32]);
         let proof = create_channel_multi_sig_proof(&tx_hash, &[&wrong_key]);
 
-        let channels = Channels::new().set_channel_state(&channel_id, make_channel_state(1, None));
+        let channels = {
+            let mut channels = Channels::new();
+            channels
+                .channels
+                .insert_mut(channel_id, make_channel_state(1, None));
+            channels
+        };
         let helper = TestOperationVerificationHelper::new(
             channels,
             [((channel_id, 0), expected_key.public_key())],

@@ -2,7 +2,6 @@ use std::{collections::HashSet, slice::IterMut, sync::LazyLock};
 
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
-use lb_blake2btree::Blake2bTree;
 use lb_codec::BinaryCodec;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -49,15 +48,29 @@ pub mod verification_mode {
     impl VerificationMode for StandardMode {}
 }
 
+pub trait ProvableOperation {
+    type Proof;
+}
+
 // TODO: Specific proof type check?
-pub trait VerifiableOperation<Mode: verification_mode::VerificationMode> {
+pub trait VerifiableOperation<Mode: verification_mode::VerificationMode>:
+    ProvableOperation
+{
     type PreverificationContext<'a>;
     type VerificationContext<'a>;
     type Error;
 
-    fn preverify(&self, context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error>;
+    fn preverify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::Error>;
 
-    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error>;
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::Error>;
 }
 
 pub trait ExecutableOperation {
@@ -80,7 +93,7 @@ impl<T: VerifiableOperation<Mode> + ExecutableOperation, Mode: verification_mode
 }
 
 pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;
-pub type Declarations = Blake2bTree<DeclarationId, Declaration>;
+pub type Declarations = rpds::RedBlackTreeMapSync<DeclarationId, Declaration>;
 
 pub type Value = u64;
 

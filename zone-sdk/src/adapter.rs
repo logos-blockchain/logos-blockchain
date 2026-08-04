@@ -482,14 +482,23 @@ mod tests {
     async fn external_backend_plugs_into_sequencer_and_indexer() {
         use lb_key_management_system_service::keys::Ed25519Key;
 
-        use crate::{indexer::ZoneIndexer, sequencer::ZoneSequencer, test_support::MockNode};
+        use crate::{
+            indexer::ZoneIndexer,
+            sequencer::ZoneSequencer,
+            test_support::{MockNode, funding_config},
+        };
 
         let channel_id = ChannelId::from([0; 32]);
         let node = MockNode::default();
 
         let _indexer = ZoneIndexer::new(channel_id, node.clone());
-        let _sequencer =
-            ZoneSequencer::init(channel_id, Ed25519Key::from_bytes(&[0; 32]), node, None);
+        let _sequencer = ZoneSequencer::init(
+            channel_id,
+            Ed25519Key::from_bytes(&[0; 32]),
+            node,
+            funding_config(),
+            None,
+        );
     }
 
     /// A deposit whose amount is absent from the block's events is dropped

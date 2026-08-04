@@ -8,8 +8,8 @@ use crate::{
     mantle::{
         channel::Channels,
         ledger::{
-            self, ExecutableOperation, Inputs, Outputs, Utxo, Utxos, VerifiableOperation,
-            verification_mode,
+            self, ExecutableOperation, Inputs, Outputs, ProvableOperation, Utxo, Utxos,
+            VerifiableOperation, verification_mode,
         },
         ops::OpId,
         transactions::hash::TxHashView,
@@ -82,7 +82,10 @@ pub struct TransferValidationContext<'a> {
     pub channels: &'a Channels,
     pub utxos: &'a Utxos,
     pub tx_hash_view: &'a TxHashView,
-    pub proof: &'a ZkSignature,
+}
+
+impl ProvableOperation for TransferOp {
+    type Proof = ZkSignature;
 }
 
 impl VerifiableOperation<verification_mode::StandardMode> for TransferOp {
@@ -90,7 +93,11 @@ impl VerifiableOperation<verification_mode::StandardMode> for TransferOp {
     type VerificationContext<'a> = TransferValidationContext<'a>;
     type Error = TransferError;
 
-    fn preverify(&self, _context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        _proof: &Self::Proof,
+        _context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         // Ensure the inputs is non-empty
         if self.inputs.is_empty() {
             return Err(TransferError::NoInputTransfer);
@@ -102,7 +109,11 @@ impl VerifiableOperation<verification_mode::StandardMode> for TransferOp {
         Ok(())
     }
 
-    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         // Validate Inputs
         self.inputs.validate_not_in_channel(
             context.locked_notes,
@@ -112,7 +123,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for TransferOp {
 
         // Check the transfer Proof
         let pks = self.inputs.get_pk(context.utxos)?;
-        if !ZkPublicKey::verify_multi(&pks, context.tx_hash_view.as_fr(), context.proof) {
+        if !ZkPublicKey::verify_multi(&pks, context.tx_hash_view.as_fr(), proof) {
             return Err(TransferError::InvalidProof);
         }
 

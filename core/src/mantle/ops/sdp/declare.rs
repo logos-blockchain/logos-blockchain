@@ -1,5 +1,5 @@
 use lb_cryptarchia_engine::Epoch;
-use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
+use lb_key_management_system_keys::keys::ZkPublicKey;
 
 use super::{SDPDeclareOp, SdpError};
 use crate::{
@@ -8,8 +8,10 @@ use crate::{
         Note,
         channel::Channels,
         ledger::{
-            Declarations, ExecutableOperation, Utxos, VerifiableOperation, verification_mode,
+            Declarations, ExecutableOperation, ProvableOperation, Utxos, VerifiableOperation,
+            verification_mode,
         },
+        ops::ZkAndEd25519Proof,
         transactions::hash::TxHashView,
     },
     sdp::{Declaration, MinStake, locked_notes::LockedNotes},
@@ -41,7 +43,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         min_stake: &MinStake,
     ) -> Result<(), SdpError> {
         // Check that the declaration doesn't already exist
-        if declarations.contains(&self.id()) {
+        if declarations.contains_key(&self.id()) {
             return Err(SdpError::DuplicateDeclaration(self.id()));
         }
         validate_service_scoped_uniqueness(self, declarations)?;
@@ -76,7 +78,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
     ) -> Result<(SDPDeclareExecutionContext, Vec<TxEvent>), SdpError> {
         let declaration_id = self.id();
         let declaration = Declaration::new(context.epoch, self);
-        context.declarations = context.declarations.insert(declaration_id, declaration).0;
+        context.declarations = context.declarations.insert(declaration_id, declaration);
         let utxo = context
             .utxo_tree
             .utxos()
@@ -89,7 +91,6 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
             .lock(
                 &context.min_stake,
                 self.service_type,
-                declaration_id,
                 utxo.note,
                 &self.locked_note_id,
             )
@@ -105,8 +106,7 @@ fn validate_service_scoped_uniqueness(
     declarations: &Declarations,
 ) -> Result<(), SdpError> {
     declarations
-        .iter()
-        .map(|(_, declaration)| declaration)
+        .values()
         .filter(|d| d.service_type == op.service_type)
         .try_for_each(|existing| {
             if existing.provider_id == op.provider_id {
@@ -127,7 +127,6 @@ fn validate_service_scoped_uniqueness(
 
 pub struct SDPDeclarePreverificationContext<'a> {
     pub tx_hash_view: &'a TxHashView,
-    pub proof_ed25519: &'a Ed25519Signature,
 }
 
 pub struct SDPDeclareVerificationContext<'a> {
@@ -135,8 +134,6 @@ pub struct SDPDeclareVerificationContext<'a> {
     pub channels: &'a Channels,
     pub locked_notes: &'a LockedNotes,
     pub tx_hash_view: &'a TxHashView,
-    pub proof_zk_signature: &'a ZkSignature,
-    pub proof_ed25519_signature: &'a Ed25519Signature,
     pub declarations: &'a Declarations,
     pub min_stake: &'a MinStake,
 }
@@ -157,16 +154,28 @@ pub struct SDPDeclareExecutionContext {
     pub min_stake: MinStake,
 }
 
+impl ProvableOperation for SDPDeclareOp {
+    type Proof = ZkAndEd25519Proof;
+}
+
 impl VerifiableOperation<verification_mode::StandardMode> for SDPDeclareOp {
     type PreverificationContext<'a> = SDPDeclarePreverificationContext<'a>;
     type VerificationContext<'a> = SDPDeclareVerificationContext<'a>;
     type Error = SdpError;
 
-    fn preverify(&self, context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
-        self.preverify(context.tx_hash_view, context.proof_ed25519)
+    fn preverify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::Error> {
+        self.preverify(context.tx_hash_view, &proof.ed25519_sig)
     }
 
-    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         // Check that the note exist
         let Some((utxo, _)) = context.utxo_tree.utxos().get(&self.locked_note_id) else {
             return Err(SdpError::InexistingNote(self.locked_note_id));
@@ -177,7 +186,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPDeclareOp {
         if !ZkPublicKey::verify_multi(
             &[note.pk, self.zk_id],
             context.tx_hash_view.as_fr(),
-            context.proof_zk_signature,
+            &proof.zk_sig,
         ) {
             return Err(SdpError::InvalidZkSignature);
         }
@@ -198,11 +207,19 @@ impl VerifiableOperation<verification_mode::GenesisMode> for SDPDeclareOp {
     type VerificationContext<'a> = SDPDeclareGenesisValidationContext<'a>;
     type Error = SdpError;
 
-    fn preverify(&self, context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
-        self.preverify(context.tx_hash_view, context.proof_ed25519)
+    fn preverify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::Error> {
+        self.preverify(context.tx_hash_view, &proof.ed25519_sig)
     }
 
-    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        _proof: &Self::Proof,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         // Check that the note exist
         let Some((utxo, _)) = context.utxo_tree.utxos().get(&self.locked_note_id) else {
             return Err(SdpError::InexistingNote(self.locked_note_id));
@@ -265,9 +282,8 @@ mod tests {
         let declare_a = declare_op(1, 1, "/ip4/1.1.1.1/udp/0");
         let declare_b = declare_op(1, 2, "/ip4/2.2.2.2/udp/0");
 
-        let declarations = Declarations::new()
-            .insert(declare_a.id(), Declaration::new(Epoch::new(0), &declare_a))
-            .0;
+        let declarations = Declarations::new_sync()
+            .insert(declare_a.id(), Declaration::new(Epoch::new(0), &declare_a));
 
         assert!(matches!(
             validate_service_scoped_uniqueness(&declare_b, &declarations),
@@ -283,9 +299,8 @@ mod tests {
         let declare_a = declare_op(1, 1, "/ip4/1.1.1.1/udp/0");
         let declare_b = declare_op(2, 1, "/ip4/2.2.2.2/udp/0");
 
-        let declarations = Declarations::new()
-            .insert(declare_a.id(), Declaration::new(Epoch::new(0), &declare_a))
-            .0;
+        let declarations = Declarations::new_sync()
+            .insert(declare_a.id(), Declaration::new(Epoch::new(0), &declare_a));
 
         assert!(matches!(
             validate_service_scoped_uniqueness(&declare_b, &declarations),

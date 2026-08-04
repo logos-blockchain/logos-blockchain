@@ -414,25 +414,6 @@ mod tests {
         assert_eq!(tree.get_ref(&TestLeaf::from_usize(2)), None);
     }
 
-    // Iteration yields the surviving items, whatever position they occupy.
-    #[test]
-    fn test_iter_skips_removed_items() {
-        let tree: Blake2bTree<TestLeaf, TestLeaf> = Blake2bTree::new();
-
-        let mut current_tree = tree;
-        let keys = (0..3).map(TestLeaf::from_usize).collect::<Vec<_>>();
-        for key in &keys {
-            current_tree = current_tree.insert(*key, *key).0;
-        }
-        let (current_tree, _) = current_tree.remove(&keys[1]).unwrap();
-
-        let items = current_tree.into_iter().collect::<Vec<_>>();
-
-        assert_eq!(items.len(), 2);
-        assert!(items.contains(&(&keys[0], &keys[0])));
-        assert!(items.contains(&(&keys[2], &keys[2])));
-    }
-
     #[test]
     fn test_path_for_present_and_absent_keys() {
         let tree: Blake2bTree<TestLeaf, TestLeaf> = Blake2bTree::new();

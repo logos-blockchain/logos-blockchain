@@ -27,18 +27,45 @@ From the Zone SDK, the steps are:
 
 ```rust
 use lb_zone_sdk::{
-    CommonHttpClient, adapter::NodeHttpClient, sequencer::ZoneSequencer,
+    CommonHttpClient,
+    adapter::NodeHttpClient,
+    sequencer::{FundingConfig, ZoneSequencer},
 };
 
 let node = NodeHttpClient::new(
     CommonHttpClient::new(None),
     "http://localhost:8080".parse()?,
 );
-let mut sequencer = ZoneSequencer::init(channel_id, signing_key, node, None);
+
+// Every publish-type call funds its transaction from the connected node's
+// wallet before signing, so a funding config is mandatory. `funding_pk` is
+// the public key of a wallet key that node controls — the same key the
+// node's own configuration declares as its funding wallet. The node builds
+// and proves the fee transfer; the secret key never leaves it.
+let funding = FundingConfig {
+    funding_pk,
+    max_tx_fee: 1_000_000.into(),
+    priority_fee: FundingConfig::DEFAULT_PRIORITY_FEE,
+};
+let mut sequencer = ZoneSequencer::init(channel_id, signing_key, node, funding, None);
 
 // Inside the drive task, once `Event::Ready` has fired:
 // publishing the first inscription creates the channel just-in-time.
 let (result, checkpoint) = sequencer.handle().publish(genesis_zone_block)?;
+```
+
+To override other sequencer settings, build the config explicitly —
+`SequencerConfig::new(funding)` fills in the defaults for everything else:
+
+```rust
+use lb_zone_sdk::sequencer::SequencerConfig;
+
+let config = SequencerConfig {
+    resubmit_interval: Duration::from_secs(10),
+    ..SequencerConfig::new(funding)
+};
+let mut sequencer =
+    ZoneSequencer::init_with_config(channel_id, signing_key, node, config, None);
 ```
 
 `publish` returns synchronously after enqueueing the tx into the sequencer's pending set; the post hits the node the next time the drive loop polls `next_event`. The returned `PublishReceipt` carries everything you need to persist this publish into your outbox alongside the resulting checkpoint.

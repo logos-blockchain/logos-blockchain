@@ -117,6 +117,7 @@ mod tests {
             Note, NoteId, OpProof, Utxo,
             ledger::{BoundedInputs, BoundedOutputs, Inputs, Outputs},
             ops::{
+                ZkAndEd25519Proof,
                 channel::{
                     ChannelId, MsgId,
                     config::{ChannelConfigOp, Keys},
@@ -524,14 +525,11 @@ mod tests {
 
         // Create a signed tx and encode it to get actual size
         let tx_hash = mantle_tx.hash();
-        let signed_tx = SignedMantleTx::new(
-            mantle_tx,
-            [OpProof::ZkAndEd25519Sigs {
-                zk_sig: ZkKey::multi_sign(&[locked_note_sk, zk_sk], &tx_hash.to_fr()).unwrap(),
-                ed25519_sig: Ed25519Signature::from_bytes(&[0u8; 64]),
-            }]
-            .into(),
-        );
+        let proof = ZkAndEd25519Proof {
+            zk_sig: ZkKey::multi_sign(&[locked_note_sk, zk_sk], &tx_hash.to_fr()).unwrap(),
+            ed25519_sig: Ed25519Signature::from_bytes(&[0u8; 64]),
+        };
+        let signed_tx = SignedMantleTx::new(mantle_tx, [OpProof::ZkAndEd25519Sigs(proof)].into());
         let encoded = encode_signed_mantle_tx(&signed_tx);
         let actual_size = encoded.len();
 
@@ -767,15 +765,16 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let op_ed25519_sig = signing_key1.sign_payload(&tx_hash.as_signing_bytes());
         let config_proof = ChannelMultiSigProof::try_new([].into()).unwrap();
+        let zk_and_ed25519_proof = ZkAndEd25519Proof {
+            zk_sig: ZkKey::multi_sign(&[locked_note_sk, zk_sk], &tx_hash.to_fr()).unwrap(),
+            ed25519_sig: op_ed25519_sig,
+        };
         let signed_tx = SignedMantleTx::new(
             mantle_tx,
             [
                 OpProof::Ed25519Sig(op_ed25519_sig),
                 OpProof::ChannelMultiSigProof(config_proof),
-                OpProof::ZkAndEd25519Sigs {
-                    zk_sig: ZkKey::multi_sign(&[locked_note_sk, zk_sk], &tx_hash.to_fr()).unwrap(),
-                    ed25519_sig: op_ed25519_sig,
-                },
+                OpProof::ZkAndEd25519Sigs(zk_and_ed25519_proof),
                 OpProof::ZkSig(ZkKey::multi_sign(&[], &Fr::ZERO).unwrap()),
             ]
             .into(),

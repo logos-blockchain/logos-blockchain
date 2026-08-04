@@ -1034,7 +1034,8 @@ mod tests {
             new_state
                 .mantle_ledger
                 .channels()
-                .contains_channel(&channel_id)
+                .channels
+                .contains_key(&channel_id)
         );
         assert!(events.is_empty());
     }
@@ -1078,13 +1079,15 @@ mod tests {
             new_state
                 .mantle_ledger
                 .channels()
-                .contains_channel(&channel_id)
+                .channels
+                .contains_key(&channel_id)
         );
         assert_eq!(
             *new_state
                 .mantle_ledger
                 .channels()
-                .channel_state(&channel_id)
+                .channels
+                .get(&channel_id)
                 .unwrap()
                 .accredited_keys,
             verifying_key.into()
@@ -1112,7 +1115,8 @@ mod tests {
             ledger_state
                 .mantle_ledger()
                 .channels()
-                .contains_channel(&channel_id)
+                .channels
+                .contains_key(&channel_id)
         );
 
         // Submit a deposit operation
@@ -1596,13 +1600,26 @@ mod tests {
             .unwrap()
             .0;
 
-        assert!(result.mantle_ledger.channels().contains_channel(&channel1));
-        assert!(result.mantle_ledger.channels().contains_channel(&channel2));
+        assert!(
+            result
+                .mantle_ledger
+                .channels()
+                .channels
+                .contains_key(&channel1)
+        );
+        assert!(
+            result
+                .mantle_ledger
+                .channels()
+                .channels
+                .contains_key(&channel2)
+        );
         assert_eq!(
             result
                 .mantle_ledger
                 .channels()
-                .channel_state(&channel1)
+                .channels
+                .get(&channel1)
                 .unwrap()
                 .tip_message,
             inscribe_op3.id()
@@ -1928,16 +1945,17 @@ mod tests {
         // Try to claim the reward using the same nullifier.
         let tx_hash = TxHash::from([0u8; 32]);
         let tx_hash_view = TxHashView::from(tx_hash);
+        // Use a dummy proof since duplication is detected before proof verification
+        let proof = Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
         let err = op
-            .verify(&LeaderClaimVerificationContext {
-                nullifiers: leaders.nullifiers(),
-                claimable_vouchers_root: leaders.vouchers_snapshot_root(),
-                // Use a dummy proof since duplication is detected before proof verification
-                proof: &Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(
-                    &[0u8; 128],
-                )),
-                tx_hash_view: &tx_hash_view,
-            })
+            .verify(
+                &proof,
+                &LeaderClaimVerificationContext {
+                    nullifiers: leaders.nullifiers(),
+                    claimable_vouchers_root: leaders.vouchers_snapshot_root(),
+                    tx_hash_view: &tx_hash_view,
+                },
+            )
             .unwrap_err();
         assert_eq!(err, LeaderClaimError::DuplicatedVoucherNullifier);
     }

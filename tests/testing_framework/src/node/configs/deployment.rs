@@ -1,8 +1,11 @@
-use std::{collections::HashMap, error::Error, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap, error::Error, num::NonZeroU32, path::PathBuf, sync::Arc, time::Duration,
+};
 
 use lb_config::kms::key_id_for_preload_backend;
 use lb_core::block::genesis::GenesisBlock;
-use lb_node::config::RunConfig;
+use lb_node::config::{RunConfig, deployment::DeploymentSettings};
+use lb_utils::math::NonNegativeRatio;
 use rand::{Rng, SeedableRng as _};
 use testing_framework_core::topology::{DeploymentProvider, DeploymentSeed, DynTopologyError};
 use thiserror::Error;
@@ -22,8 +25,9 @@ use crate::{
 
 pub type DynError = Box<dyn Error + Send + Sync + 'static>;
 const DEFAULT_SLOT_TIME_IN_SECS: u64 = 1;
-const DEFAULT_ACTIVE_SLOT_COEFF: f64 = 1.0;
-const DEFAULT_SECURITY_PARAM: u32 = 10;
+const DEFAULT_ACTIVE_SLOT_COEFF: NonNegativeRatio =
+    NonNegativeRatio::new(1, NonZeroU32::new(10).unwrap());
+const DEFAULT_SECURITY_PARAM: NonZeroU32 = NonZeroU32::new(20).unwrap();
 
 #[derive(Debug, Error)]
 pub enum TopologyBuildError {
@@ -82,8 +86,8 @@ pub struct TopologyConfig {
     pub scenario_base_dir: PathBuf,
     pub genesis_block: Option<GenesisBlock>,
     pub slot_duration: Option<Duration>,
-    pub active_slot_coeff: f64,
-    pub security_param: u32,
+    pub active_slot_coeff: NonNegativeRatio,
+    pub security_param: NonZeroU32,
     node_config_overrides: HashMap<usize, RunConfig>,
     allow_multiple_genesis_tokens: bool,
     allow_zero_value_genesis_tokens: bool,
@@ -146,6 +150,11 @@ impl TopologyConfig {
     #[must_use]
     pub fn node_config_override(&self, index: usize) -> Option<&RunConfig> {
         self.node_config_overrides.get(&index)
+    }
+
+    pub(crate) const fn apply_deployment_overrides(&self, settings: &mut DeploymentSettings) {
+        settings.cryptarchia.security_param = self.security_param;
+        settings.cryptarchia.slot_activation_coeff = self.active_slot_coeff;
     }
 }
 
@@ -223,6 +232,24 @@ impl DeploymentBuilder {
     #[must_use]
     pub fn with_wallet_config(mut self, wallet: WalletConfig) -> Self {
         self.config.wallet_config = wallet;
+        self
+    }
+
+    /// Overrides the node deployment's Cryptarchia security parameter.
+    #[must_use]
+    pub const fn with_security_param(mut self, security_param: NonZeroU32) -> Self {
+        self.config.security_param = security_param;
+        self
+    }
+
+    /// Overrides the node deployment's Cryptarchia slot activation coefficient.
+    #[must_use]
+    pub const fn with_slot_activation_coeff(
+        mut self,
+        numerator: u32,
+        denominator: NonZeroU32,
+    ) -> Self {
+        self.config.active_slot_coeff = NonNegativeRatio::new(numerator, denominator);
         self
     }
 

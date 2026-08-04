@@ -10,7 +10,10 @@ use std::sync::LazyLock;
 mod diagnostics;
 pub mod env;
 mod framework;
-pub use framework::local::{USER_CONFIG_FILE, ensure_node_binary_built};
+pub use framework::local::{
+    LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_SHA256, LOGOS_BLOCKCHAIN_NODE_DOWNLOAD_URL, USER_CONFIG_FILE,
+    ensure_node_binary_built,
+};
 mod node;
 mod unique_persistent;
 pub mod workloads;

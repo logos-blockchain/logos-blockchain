@@ -162,13 +162,14 @@ pub struct SequencerConfig {
     pub min_slots_remaining_in_turn: u64,
     pub max_pending_publish_depth: usize,
     pub max_local_tx_tracking: usize,
-    /// Fund transactions from the node's wallet before signing. `None`
-    /// builds fee-less transactions (only valid while gas prices are zero).
-    pub funding: Option<FundingConfig>,
+    /// Fund transactions from the node's wallet before signing.
+    pub funding: FundingConfig,
 }
 
-impl Default for SequencerConfig {
-    fn default() -> Self {
+impl SequencerConfig {
+    /// Config with default values for everything but `funding`.
+    #[must_use]
+    pub const fn new(funding: FundingConfig) -> Self {
         Self {
             resubmit_interval: DEFAULT_RESUBMIT_INTERVAL,
             reconnect_delay: DEFAULT_RECONNECT_DELAY,
@@ -176,7 +177,7 @@ impl Default for SequencerConfig {
             min_slots_remaining_in_turn: 1,
             max_pending_publish_depth: 10,
             max_local_tx_tracking: DEFAULT_MAX_LOCAL_TX_TRACKING,
-            funding: None,
+            funding,
         }
     }
 }

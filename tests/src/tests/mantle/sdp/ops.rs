@@ -12,7 +12,11 @@ use std::{
 use lb_chain_service::Epoch;
 use lb_common_http_client::Error;
 use lb_core::{
-    mantle::{NoteId, OpProof, Utxo, ops::Op, traits::Hashable as _},
+    mantle::{
+        NoteId, OpProof, Utxo,
+        ops::{Op, ZkAndEd25519Proof},
+        traits::Hashable as _,
+    },
     sdp::{
         Declaration, DeclarationId, DeclarationMessage, Locator, ProviderId, ServiceType,
         WithdrawMessage,
@@ -122,10 +126,11 @@ async fn sdp_ops_e2e() {
             )
             .expect("SDP declare zk proof should build");
 
-            OpProof::ZkAndEd25519Sigs {
+            let proof = ZkAndEd25519Proof {
                 zk_sig,
                 ed25519_sig,
-            }
+            };
+            OpProof::ZkAndEd25519Sigs(proof)
         },
     )
     .await;

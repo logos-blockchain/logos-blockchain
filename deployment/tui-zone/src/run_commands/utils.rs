@@ -336,26 +336,18 @@ pub fn build_deposit_op(
     })
 }
 
-/// Build the sequencer funding config from CLI args. `--funding-pk` enables
-/// funding transactions from the node's wallet; absent means fee-less
-/// transactions.
-pub fn funding_config(args: &NodeKeyArgs) -> RunResult<Option<FundingConfig>> {
-    let Some(funding_pk_hex) = &args.funding_pk else {
-        return Ok(None);
-    };
-    Ok(Some(FundingConfig {
-        funding_pk: decode_zk_public_key_hex(funding_pk_hex)?,
+/// Build the sequencer funding config from CLI args.
+pub fn funding_config(args: &NodeKeyArgs) -> RunResult<FundingConfig> {
+    Ok(FundingConfig {
+        funding_pk: decode_zk_public_key_hex(&args.funding_pk)?,
         max_tx_fee: args.max_tx_fee.into(),
         priority_fee: args.priority_fee,
-    }))
+    })
 }
 
 /// Sequencer config for CLI commands, with funding taken from the args.
 pub fn cli_sequencer_config(args: &NodeKeyArgs) -> RunResult<SequencerConfig> {
-    Ok(SequencerConfig {
-        funding: funding_config(args)?,
-        ..SequencerConfig::default()
-    })
+    Ok(SequencerConfig::new(funding_config(args)?))
 }
 
 /// Start a zone sequencer for non-interactive CLI commands and wait for
