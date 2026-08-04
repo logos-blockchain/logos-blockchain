@@ -1928,16 +1928,17 @@ mod tests {
         // Try to claim the reward using the same nullifier.
         let tx_hash = TxHash::from([0u8; 32]);
         let tx_hash_view = TxHashView::from(tx_hash);
+        // Use a dummy proof since duplication is detected before proof verification
+        let proof = Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
         let err = op
-            .verify(&LeaderClaimVerificationContext {
-                nullifiers: leaders.nullifiers(),
-                claimable_vouchers_root: leaders.vouchers_snapshot_root(),
-                // Use a dummy proof since duplication is detected before proof verification
-                proof: &Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(
-                    &[0u8; 128],
-                )),
-                tx_hash_view: &tx_hash_view,
-            })
+            .verify(
+                &proof,
+                &LeaderClaimVerificationContext {
+                    nullifiers: leaders.nullifiers(),
+                    claimable_vouchers_root: leaders.vouchers_snapshot_root(),
+                    tx_hash_view: &tx_hash_view,
+                },
+            )
             .unwrap_err();
         assert_eq!(err, LeaderClaimError::DuplicatedVoucherNullifier);
     }

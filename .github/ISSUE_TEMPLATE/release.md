@@ -43,7 +43,7 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Verify the `HEAD` of the release branch has green CI ✅
 - [ ] Commit the changes, and tag them with `X.Y.Z`
 - [ ] Push the commit and the tag
-- [ ] Manually trigger the [Logos Blockchain tools build workflow][build-logos-tools-docker-workflow] from the `HEAD` of the release branch (with the latest changes) specifying the `testnet` image tag.
+- [ ] Manually trigger the [Logos Blockchain tools build workflow][build-logos-tools-docker-workflow] from the `X.Y.Z` tag on GitHub specifying the `testnet` image tag. Leave "Optional version tag" empty.
 - [ ] Post the link to the workflow run to this issue for easier review
 - [ ] Without waiting for the workflow to complete, move on to the next section
 

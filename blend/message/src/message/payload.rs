@@ -61,12 +61,26 @@ impl BinaryDecode for PayloadType {
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaddedPayloadBody {
-    /// The real content length; `padded[..actual_len]` is the body.
+    #[serde(deserialize_with = "deserialize_actual_len")]
     actual_len: u16,
-    /// A body padded to [`MAX_PAYLOAD_BODY_SIZE`]. `Box` avoids a large stack
-    /// allocation.
+
     #[serde_as(as = "serde_with::Bytes")]
     padded: Box<[u8; MAX_PAYLOAD_BODY_SIZE]>,
+}
+
+fn deserialize_actual_len<'de, D>(deserializer: D) -> Result<u16, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let actual_len = u16::deserialize(deserializer)?;
+
+    if usize::from(actual_len) > MAX_PAYLOAD_BODY_SIZE {
+        return Err(serde::de::Error::custom(format_args!(
+            "actual payload length {actual_len} exceeds maximum {MAX_PAYLOAD_BODY_SIZE}"
+        )));
+    }
+
+    Ok(actual_len)
 }
 
 impl TryFrom<Vec<u8>> for PaddedPayloadBody {
@@ -124,6 +138,13 @@ impl BinaryDecode for PaddedPayloadBody {
         (): &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
         let (input, actual_len) = u16::decode(input, &())?;
+        if usize::from(actual_len) > MAX_PAYLOAD_BODY_SIZE {
+            return Err(DecodeError::length_out_of_bounds::<Self>(
+                usize::from(actual_len),
+                0,
+                MAX_PAYLOAD_BODY_SIZE,
+            ));
+        }
         let (body_bytes, remaining) = take::<Self>(input, MAX_PAYLOAD_BODY_SIZE)?;
         let padded: Box<[u8; MAX_PAYLOAD_BODY_SIZE]> = body_bytes
             .to_vec()
@@ -131,6 +152,56 @@ impl BinaryDecode for PaddedPayloadBody {
             .try_into()
             .expect("Take guarantees the length");
         Ok((remaining, Self { actual_len, padded }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_codec::{BinaryDecode as _, BinaryEncode as _};
+    use serde::Serialize;
+    use serde_with::serde_as;
+
+    use super::*;
+
+    #[serde_as]
+    #[derive(Serialize)]
+    struct InvalidPaddedPayloadBody {
+        actual_len: u16,
+        #[serde_as(as = "serde_with::Bytes")]
+        padded: Box<[u8; MAX_PAYLOAD_BODY_SIZE]>,
+    }
+
+    #[test]
+    fn binary_decode_rejects_invalid_actual_length() {
+        let actual_len = (MAX_PAYLOAD_BODY_SIZE + 1) as u16;
+        let mut encoded = Vec::with_capacity(size_of::<u16>() + MAX_PAYLOAD_BODY_SIZE);
+        actual_len.encode_into(&mut encoded);
+        encoded.resize(encoded.capacity(), 0);
+
+        let error = PaddedPayloadBody::decode(&encoded, &()).unwrap_err();
+        assert!(matches!(
+            error,
+            DecodeError::LengthOutOfBounds {
+                len,
+                max: MAX_PAYLOAD_BODY_SIZE,
+                ..
+            } if len == MAX_PAYLOAD_BODY_SIZE + 1
+        ));
+    }
+
+    #[test]
+    fn serde_deserialize_rejects_invalid_actual_length() {
+        let raw = InvalidPaddedPayloadBody {
+            actual_len: (MAX_PAYLOAD_BODY_SIZE + 1) as u16,
+            padded: vec![0; MAX_PAYLOAD_BODY_SIZE]
+                .into_boxed_slice()
+                .try_into()
+                .unwrap(),
+        };
+        let encoded = bincode::serialize(&raw).unwrap();
+        let error = bincode::deserialize::<PaddedPayloadBody>(&encoded).unwrap_err();
+
+        assert!(format!("{error}").contains("actual payload length"));
     }
 }
 

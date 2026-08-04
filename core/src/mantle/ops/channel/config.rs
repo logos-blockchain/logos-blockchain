@@ -9,7 +9,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
-        ledger::{ExecutableOperation, VerifiableOperation, verification_mode},
+        ledger::{ExecutableOperation, ProvableOperation, VerifiableOperation, verification_mode},
         transactions::hash::TxHashView,
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
@@ -40,7 +40,6 @@ impl ChannelConfigOp {
 pub struct ChannelConfigValidationContext<'a> {
     pub channels: &'a Channels,
     pub tx_hash_view: &'a TxHashView,
-    pub proof: &'a ChannelMultiSigProof,
 }
 
 pub struct ChannelConfigExecutionContext {
@@ -48,12 +47,20 @@ pub struct ChannelConfigExecutionContext {
     pub block_slot: Slot,
 }
 
+impl ProvableOperation for ChannelConfigOp {
+    type Proof = ChannelMultiSigProof;
+}
+
 impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
     type PreverificationContext<'a> = ();
     type VerificationContext<'a> = ChannelConfigValidationContext<'a>;
     type Error = Error;
 
-    fn preverify(&self, _context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        _proof: &Self::Proof,
+        _context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         // Check config is well-formed
         if self.configuration_threshold == 0 || self.transfer_threshold == 0 || self.keys.is_empty()
         {
@@ -63,18 +70,22 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
         Ok(())
     }
 
-    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         // Check that the indexes are unique and there is the same number of proof and
         // index. This is enforced by the proof structure that enforces it.
 
         if let Some(channel) = context.channels.channel_state(&self.channel) {
             // Check there is enough signatures
-            let signatures = context.proof.signatures();
+            let signatures = proof.signatures();
             if signatures.len() != channel.configuration_threshold as usize {
                 return Err(Error::ThresholdUnmet {
                     channel_id: self.channel,
                     threshold: channel.configuration_threshold,
-                    actual: context.proof.signatures().len(),
+                    actual: proof.signatures().len(),
                 });
             }
 

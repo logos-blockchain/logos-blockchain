@@ -7,8 +7,8 @@ use crate::{
         TxHash,
         channel::{Channels, Error},
         ledger::{
-            ExecutableOperation, Inputs, Outputs, Utxo, Utxos, VerifiableOperation,
-            verification_mode,
+            ExecutableOperation, Inputs, Outputs, ProvableOperation, Utxo, Utxos,
+            VerifiableOperation, verification_mode,
         },
         ops::{
             OpId,
@@ -45,7 +45,6 @@ pub struct ChannelTransferValidationContext<'a> {
     pub locked_notes: &'a LockedNotes,
     pub utxos: &'a Utxos,
     pub tx_hash_view: &'a TxHashView,
-    pub proof: &'a ChannelMultiSigProof,
     pub op_index: usize,
     pub helper: &'a dyn OperationVerificationHelper,
 }
@@ -56,22 +55,34 @@ pub struct ChannelTransferExecutionContext {
     pub tx_hash: TxHash,
 }
 
+impl ProvableOperation for ChannelTransferOp {
+    type Proof = ChannelMultiSigProof;
+}
+
 impl VerifiableOperation<verification_mode::StandardMode> for ChannelTransferOp {
     type PreverificationContext<'a> = ();
     type VerificationContext<'a> = ChannelTransferValidationContext<'a>;
     type Error = Error;
 
-    fn preverify(&self, _context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        _proof: &Self::Proof,
+        _context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         // Check that the outputs are valid
         self.outputs.validate()?;
 
         Ok(())
     }
 
-    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         verify_channel_multi_sig(
             &self.channel_id,
-            context.proof,
+            proof,
             context.tx_hash_view.as_bytes(),
             context.helper,
             context.op_index,
@@ -103,7 +114,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelTransferOp 
         }
 
         // Check there is enough signatures
-        let signatures = context.proof.signatures();
+        let signatures = proof.signatures();
         if signatures.len() != channel.transfer_threshold as usize {
             return Err(Error::ThresholdUnmet {
                 channel_id: self.channel_id,

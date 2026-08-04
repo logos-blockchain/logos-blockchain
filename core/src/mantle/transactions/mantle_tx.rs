@@ -1,9 +1,11 @@
 use std::{collections::HashMap, sync::LazyLock};
 
 use lb_codec::{BinaryCodec, BinaryDecodeExt as _, BinaryEncode as _};
+use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
+    block::MAX_BLOCK_TRANSACTIONS_SIZE,
     crypto::{Digest as _, Hasher},
     mantle::{
         GasConstants, Op, SignedMantleTx, TxHash, Value,
@@ -184,11 +186,86 @@ impl<'de> Deserialize<'de> for RawMantleTx {
         if deserializer.is_human_readable() {
             <RawMantleTxSerde as Deserialize>::deserialize(deserializer).map(Into::into)
         } else {
-            let bytes: Vec<u8> = <Vec<u8>>::deserialize(deserializer)?;
-            Self::decode(&bytes)
-                .map(|(_, tx)| tx)
-                .map_err(serde::de::Error::custom)
+            let bytes = deserialize_bounded_bytes::<MAX_BLOCK_TRANSACTIONS_SIZE, D>(deserializer)?;
+            let (remaining, tx) = Self::decode(&bytes).map_err(serde::de::Error::custom)?;
+            if remaining.is_empty() {
+                Ok(tx)
+            } else {
+                Err(serde::de::Error::custom(
+                    "MantleTx binary encoding contains trailing bytes",
+                ))
+            }
         }
+    }
+}
+
+fn deserialize_bounded_bytes<'de, const MAX: usize, D>(
+    deserializer: D,
+) -> Result<UpperBoundedVec<u8, MAX>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct Visitor<const MAX: usize>;
+
+    impl<const MAX: usize> serde::de::Visitor<'_> for Visitor<MAX> {
+        type Value = UpperBoundedVec<u8, MAX>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(formatter, "at most {MAX} encoded MantleTx bytes")
+        }
+
+        fn visit_bytes<E>(self, bytes: &[u8]) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            if bytes.len() > MAX {
+                return Err(E::custom(format_args!(
+                    "encoded MantleTx contains {} bytes, maximum is {MAX}",
+                    bytes.len()
+                )));
+            }
+
+            Ok(UpperBoundedVec::new_unchecked(bytes.to_vec()))
+        }
+
+        fn visit_byte_buf<E>(self, bytes: Vec<u8>) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            let byte_len = bytes.len();
+
+            UpperBoundedVec::try_from(bytes).map_err(|_| {
+                E::custom(format_args!(
+                    "encoded MantleTx contains {byte_len} bytes, maximum is {MAX}"
+                ))
+            })
+        }
+    }
+
+    deserializer.deserialize_bytes(Visitor::<MAX>)
+}
+#[cfg(test)]
+mod tests {
+    use lb_codec::BinaryEncode as _;
+
+    use super::*;
+
+    #[test]
+    fn binary_serde_rejects_trailing_bytes_inside_transaction_envelope() {
+        let tx = RawMantleTx(Ops::empty());
+        let mut encoded_tx = tx.encode().into_vec();
+        encoded_tx.push(0);
+        let envelope = bincode::serialize(&encoded_tx).unwrap();
+
+        assert!(bincode::deserialize::<RawMantleTx>(&envelope).is_err());
+    }
+
+    #[test]
+    fn binary_serde_rejects_oversized_transaction_envelope() {
+        let oversized = vec![0u8; MAX_BLOCK_TRANSACTIONS_SIZE + 1];
+        let envelope = bincode::serialize(&oversized).unwrap();
+
+        assert!(bincode::deserialize::<RawMantleTx>(&envelope).is_err());
     }
 }
 

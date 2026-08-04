@@ -1,5 +1,5 @@
 use lb_cryptarchia_engine::Epoch;
-use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
+use lb_key_management_system_keys::keys::ZkPublicKey;
 
 use super::{SDPDeclareOp, SdpError};
 use crate::{
@@ -8,8 +8,10 @@ use crate::{
         Note,
         channel::Channels,
         ledger::{
-            Declarations, ExecutableOperation, Utxos, VerifiableOperation, verification_mode,
+            Declarations, ExecutableOperation, ProvableOperation, Utxos, VerifiableOperation,
+            verification_mode,
         },
+        ops::ZkAndEd25519Proof,
         transactions::hash::TxHashView,
     },
     sdp::{Declaration, MinStake, locked_notes::LockedNotes},
@@ -127,7 +129,6 @@ fn validate_service_scoped_uniqueness(
 
 pub struct SDPDeclarePreverificationContext<'a> {
     pub tx_hash_view: &'a TxHashView,
-    pub proof_ed25519: &'a Ed25519Signature,
 }
 
 pub struct SDPDeclareVerificationContext<'a> {
@@ -135,8 +136,6 @@ pub struct SDPDeclareVerificationContext<'a> {
     pub channels: &'a Channels,
     pub locked_notes: &'a LockedNotes,
     pub tx_hash_view: &'a TxHashView,
-    pub proof_zk_signature: &'a ZkSignature,
-    pub proof_ed25519_signature: &'a Ed25519Signature,
     pub declarations: &'a Declarations,
     pub min_stake: &'a MinStake,
 }
@@ -157,16 +156,28 @@ pub struct SDPDeclareExecutionContext {
     pub min_stake: MinStake,
 }
 
+impl ProvableOperation for SDPDeclareOp {
+    type Proof = ZkAndEd25519Proof;
+}
+
 impl VerifiableOperation<verification_mode::StandardMode> for SDPDeclareOp {
     type PreverificationContext<'a> = SDPDeclarePreverificationContext<'a>;
     type VerificationContext<'a> = SDPDeclareVerificationContext<'a>;
     type Error = SdpError;
 
-    fn preverify(&self, context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
-        self.preverify(context.tx_hash_view, context.proof_ed25519)
+    fn preverify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::Error> {
+        self.preverify(context.tx_hash_view, &proof.ed25519_sig)
     }
 
-    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         // Check that the note exist
         let Some((utxo, _)) = context.utxo_tree.utxos().get(&self.locked_note_id) else {
             return Err(SdpError::InexistingNote(self.locked_note_id));
@@ -177,7 +188,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPDeclareOp {
         if !ZkPublicKey::verify_multi(
             &[note.pk, self.zk_id],
             context.tx_hash_view.as_fr(),
-            context.proof_zk_signature,
+            &proof.zk_sig,
         ) {
             return Err(SdpError::InvalidZkSignature);
         }
@@ -198,11 +209,19 @@ impl VerifiableOperation<verification_mode::GenesisMode> for SDPDeclareOp {
     type VerificationContext<'a> = SDPDeclareGenesisValidationContext<'a>;
     type Error = SdpError;
 
-    fn preverify(&self, context: &Self::PreverificationContext<'_>) -> Result<(), Self::Error> {
-        self.preverify(context.tx_hash_view, context.proof_ed25519)
+    fn preverify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::PreverificationContext<'_>,
+    ) -> Result<(), Self::Error> {
+        self.preverify(context.tx_hash_view, &proof.ed25519_sig)
     }
 
-    fn verify(&self, context: &Self::VerificationContext<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        _proof: &Self::Proof,
+        context: &Self::VerificationContext<'_>,
+    ) -> Result<(), Self::Error> {
         // Check that the note exist
         let Some((utxo, _)) = context.utxo_tree.utxos().get(&self.locked_note_id) else {
             return Err(SdpError::InexistingNote(self.locked_note_id));

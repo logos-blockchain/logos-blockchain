@@ -29,15 +29,7 @@ where
     Writer: AsyncWriteExt + Send + Unpin,
 {
     let packed_message = message.to_bytes()?;
-
-    let length_prefix: LenType =
-        packed_message
-            .len()
-            .try_into()
-            .map_err(|_| PackingError::MessageTooLarge {
-                max: MAX_MSG_LEN,
-                actual: packed_message.len(),
-            })?;
+    let length_prefix = checked_length_prefix(packed_message.len())?;
 
     writer
         .write_all(&length_prefix.to_le_bytes())
@@ -45,6 +37,21 @@ where
         .map_err(Into::<PackingError>::into)?;
 
     writer.write_all(&packed_message).await.map_err(Into::into)
+}
+
+fn checked_length_prefix(actual: usize) -> Result<LenType> {
+    if actual > MAX_MSG_LEN {
+        return Err(PackingError::MessageTooLarge {
+            max: MAX_MSG_LEN,
+            actual,
+        });
+    }
+    actual
+        .try_into()
+        .map_err(|_| PackingError::MessageTooLarge {
+            max: MAX_MSG_LEN,
+            actual,
+        })
 }
 
 async fn read_data_length<R>(reader: &mut R) -> Result<usize>
@@ -74,4 +81,22 @@ where
     let mut data = vec![0u8; data_length];
     reader.read_exact(&mut data).await?;
     Ok(Message::from_bytes(&data)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sender_rejects_messages_above_frame_limit() {
+        let error = checked_length_prefix(MAX_MSG_LEN + 1).unwrap_err();
+        assert!(matches!(
+            error,
+            PackingError::MessageTooLarge {
+                max: MAX_MSG_LEN,
+                actual,
+            }
+            if actual == MAX_MSG_LEN + 1
+        ));
+    }
 }

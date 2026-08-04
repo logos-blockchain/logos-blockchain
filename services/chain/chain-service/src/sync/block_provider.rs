@@ -439,9 +439,8 @@ where
         known_blocks
             .iter()
             .filter_map(|known| {
-                branches
-                    .get(known)
-                    .map(|known_branch| branches.lca(known_branch, target_branch))
+                let known_branch = branches.get(known)?;
+                branches.lca(known_branch, target_branch)
             })
             .max_by_key(Branch::length)
     }

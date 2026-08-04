@@ -25,28 +25,19 @@ use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use super::types::{Error, FundingConfig};
 use crate::adapter;
 
-/// Assemble the ops for a transaction, funding it from the node's wallet when
-/// a [`FundingConfig`] is present.
+/// Assemble the ops for a transaction, funding it from the node's wallet.
 ///
-/// With funding, the node appends a fee transfer (paid from
-/// `funding.funding_pk`, change back to it) and returns the proof for that
-/// transfer; all other ops must be proven by the caller over the funded
-/// transaction hash. Without funding the ops become a fee-less transaction
-/// (only valid while gas prices are zero).
+/// The node appends a fee transfer (paid from `funding.funding_pk`, change
+/// back to it) and returns the proof for that transfer; all other ops must
+/// be proven by the caller over the funded transaction hash.
 pub(super) async fn fund_ops<Node>(
     node: &Node,
-    funding: Option<&FundingConfig>,
+    funding: &FundingConfig,
     ops: Vec<Op>,
 ) -> Result<(RawMantleTx, Option<OpProof>), Error>
 where
     Node: adapter::Node + Sync,
 {
-    let Some(funding) = funding else {
-        let ops = Ops::try_from(ops)
-            .map_err(|e| Error::Network(format!("too many ops in transaction: {e:?}")))?;
-        return Ok((RawMantleTx(ops), None));
-    };
-
     let tx_builder = MantleTxBuilder::new()
         .extend_ops(ops)
         .map_err(|e| Error::Network(format!("too many ops in transaction: {e:?}")))?;
@@ -68,7 +59,7 @@ where
 
 /// Append the fee transfer's proof to the channel-op proofs, matching the
 /// funded transaction's op layout (funding appends the transfer as the last
-/// op; a fee-less transaction carries none).
+/// op).
 pub(super) fn attach_transfer_proof(
     tx: &impl MantleTx,
     mut channel_proofs: OpsProofs,
@@ -171,7 +162,7 @@ pub(super) fn find_own_key_index(
 
 pub(super) async fn create_inscribe_tx<Node>(
     node: &Node,
-    funding: Option<&FundingConfig>,
+    funding: &FundingConfig,
     channel_id: ChannelId,
     signing_key: &Ed25519Key,
     inscription: Inscription,
@@ -212,7 +203,7 @@ where
 )]
 pub(super) async fn create_channel_config_tx<Node>(
     node: &Node,
-    funding: Option<&FundingConfig>,
+    funding: &FundingConfig,
     channel_id: ChannelId,
     signing_keys: &[&Ed25519Key],
     keys: Keys,

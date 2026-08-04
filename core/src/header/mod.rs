@@ -1,12 +1,13 @@
 use core::fmt::{self, Debug, Formatter};
 
 use blake2::Digest as _;
+use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-pub const BEDROCK_VERSION: u8 = 1;
+mod fixtures;
 
 use crate::{
     codec::SerializeOp as _,
@@ -16,7 +17,9 @@ use crate::{
     utils::{display_hex_bytes_newtype, merkle, serde_bytes_newtype},
 };
 
-#[derive(Clone, Eq, PartialEq, Copy, Hash, PartialOrd, Ord)]
+pub const BEDROCK_VERSION: u8 = 1;
+
+#[derive(Clone, Eq, PartialEq, Copy, Hash, PartialOrd, Ord, BinaryCodec)]
 pub struct HeaderId([u8; 32]);
 
 impl Debug for HeaderId {
@@ -25,7 +28,7 @@ impl Debug for HeaderId {
     }
 }
 
-#[derive(Clone, Eq, PartialEq, Copy, Hash)]
+#[derive(Clone, Eq, PartialEq, Copy, Hash, BinaryCodec)]
 pub struct ContentId([u8; 32]);
 
 impl Debug for ContentId {
@@ -111,7 +114,31 @@ impl<'de> Deserialize<'de> for Version {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+impl BinaryEncode for Version {
+    fn encoded_length(&self) -> usize {
+        self.as_byte().encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.push(self.as_byte());
+    }
+}
+
+impl BinaryDecode for Version {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        context: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, version) = u8::decode(input, context)?;
+        let version = Self::try_from(version)
+            .map_err(|_| DecodeError::unknown_discriminant::<Self>(u64::from(version)))?;
+        Ok((input, version))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
 pub struct Header {
     version: Version,
     parent_block: HeaderId,
