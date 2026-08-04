@@ -1,3 +1,5 @@
+mod difficulty;
+
 use lb_core::mantle::{
     Value,
     ops::pow::{ClaimPoWRewardExecutionContext, PowNullifier, PowReward, PowTarget},
@@ -5,7 +7,10 @@ use lb_core::mantle::{
 use lb_groth16::serde::serde_fr;
 use rpds::HashTrieSetSync;
 
-use crate::EpochState;
+use crate::{
+    EpochState,
+    mantle::pow::difficulty::{PoWDifficultySettings, compute_new_reward_difficulty},
+};
 
 /// `PoW` reward-claiming state of the mantle ledger.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -80,6 +85,13 @@ impl PowState {
     /// Add `reward` to the current epoch's pending `refill_rewards`.
     pub(crate) const fn add_reward_refill_rewards(&mut self, reward: PowReward) {
         self.refill_rewards = self.refill_rewards.saturating_add(reward);
+    }
+
+    pub(crate) fn update_difficulty(&mut self, claims_in_block: u64) {
+        self.reward_difficulty = compute_new_reward_difficulty::<PoWDifficultySettings>(
+            claims_in_block,
+            self.reward_difficulty,
+        );
     }
 
     /// Apply an epoch transition: on epoch change, refill the reward pool

@@ -609,7 +609,7 @@ mod tests {
     #[test]
     fn execute_saturates_when_pool_cannot_cover_the_reward() {
         // Validation (`pow_reward_enabled`) is the real guard; execution
-        // saturates defensively rather than underflowing the pool.
+        // saturates defensively rather than underflow the pool.
         let op = claim_op(CURRENT_EPOCH);
         let (ctx, _events) = op
             .execute(ClaimPoWRewardExecutionContext {

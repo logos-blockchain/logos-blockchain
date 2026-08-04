@@ -13,7 +13,7 @@ use cryptarchia::LedgerState as CryptarchiaLedger;
 pub use cryptarchia::{EpochState, UtxoTree};
 use lb_core::{
     block::BlockNumber,
-    events::{Events, HeaderEvent, TxEvent},
+    events::{Events, HeaderEvent, TxEvent, TxEventPayload},
     mantle::{
         NoteId, Op, Utxo, Value, VerificationError,
         gas::{Gas, GasConstants, GasCost, GasOverflow},
@@ -455,6 +455,15 @@ impl LedgerState {
         // Accumulate storage gas consumed so the storage market can update the
         // price at the next epoch rotation.
         self = self.add_storage_gas_consumed(total_block_storage_gas)?;
+        self.update_pow_difficulty(
+            // count all claimed rewards
+            tx_events
+                .iter()
+                .filter(|TxEvent { payload, .. }| {
+                    matches!(payload, TxEventPayload::PoWRewardClaimed { .. })
+                })
+                .count() as u64,
+        );
         Ok((self, tx_events))
     }
 
@@ -745,13 +754,16 @@ impl LedgerState {
 
         Ok((self, balance, tx_events))
     }
+
+    fn update_pow_difficulty(&mut self, claims_in_block: u64) {
+        self.mantle_ledger.pow.update_difficulty(claims_in_block);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use cryptarchia::tests::{config, generate_proof, utxo};
     use lb_core::{
-        events::TxEventPayload,
         mantle::{
             GasCalculator as _, Note, OpProof, RawMantleTx, SignedMantleTx,
             gas::MainnetGasConstants,
