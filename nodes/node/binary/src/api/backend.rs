@@ -244,13 +244,11 @@ where
             )
             .route(
                 paths::BLEND_NETWORK_INFO,
-                routing::get(blend_info::<BlendService, BlendBroadcastSettings, RuntimeServiceId>),
+                routing::get(blend_info::<BlendService, RuntimeServiceId>),
             )
             .route(
                 paths::BLEND_JOIN_NETWORK,
-                routing::post(
-                    blend_join_network::<BlendService, BlendBroadcastSettings, RuntimeServiceId>,
-                ),
+                routing::post(blend_join_network::<BlendService, RuntimeServiceId>),
             )
             .route(
                 paths::MEMPOOL_ADD_TX,

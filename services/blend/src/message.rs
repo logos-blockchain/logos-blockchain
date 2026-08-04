@@ -41,20 +41,17 @@ impl<InnerMessage> From<InnerMessage> for ProxyServiceMessage<InnerMessage> {
 }
 
 /// A message that is handled by [`BlendService`].
-pub enum ServiceMessage<BroadcastSettings, NodeId> {
+pub enum ServiceMessage<NodeId> {
     /// To send a message to the blend network and eventually broadcast it to
     /// the [`NetworkService`].
-    Blend(NetworkMessage<BroadcastSettings>),
+    Blend(NetworkMessage),
     /// Request the current blend network info (connected peers).
     GetNetworkInfo {
         reply: oneshot::Sender<Option<NetworkInfo<NodeId>>>,
     },
 }
 
-impl<BroadcastSettings, NodeId> Debug for ServiceMessage<BroadcastSettings, NodeId>
-where
-    BroadcastSettings: Debug,
-{
+impl<NodeId> Debug for ServiceMessage<NodeId> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Blend(msg) => f.debug_tuple("Blend").field(msg).finish(),
@@ -65,44 +62,35 @@ where
 
 /// A message that is sent to the blend network.
 ///
-/// To eventually broadcast the message to the network service,
-/// [`BroadcastSettings`] must be included in the [`NetworkMessage`].
-/// [`BroadcastSettings`] is a generic type defined by [`NetworkAdapter`].
+/// Carries only the message bytes. Where a receiving node republishes them is
+/// its own configuration, held by the [`NetworkAdapter`], so nothing about the
+/// broadcast destination travels over the Blend network or is persisted.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct NetworkMessage<BroadcastSettings> {
+pub struct NetworkMessage {
     pub message: Vec<u8>,
-    pub broadcast_settings: BroadcastSettings,
 }
 
-impl<BroadcastSettings> Debug for NetworkMessage<BroadcastSettings>
-where
-    BroadcastSettings: Debug,
-{
+impl Debug for NetworkMessage {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("NetworkMessage")
             .field("message", &format_args!("{} bytes", self.message.len()))
-            .field("broadcast_settings", &self.broadcast_settings)
             .finish()
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum ProcessedMessage<BroadcastSettings> {
-    Network(NetworkMessage<BroadcastSettings>),
+pub enum ProcessedMessage {
+    Network(NetworkMessage),
     Encapsulated(Box<EncapsulatedMessageWithVerifiedPublicHeader>),
 }
 
-impl<BroadcastSettings> From<NetworkMessage<BroadcastSettings>>
-    for ProcessedMessage<BroadcastSettings>
-{
-    fn from(value: NetworkMessage<BroadcastSettings>) -> Self {
+impl From<NetworkMessage> for ProcessedMessage {
+    fn from(value: NetworkMessage) -> Self {
         Self::Network(value)
     }
 }
 
-impl<BroadcastSettings> From<EncapsulatedMessageWithVerifiedPublicHeader>
-    for ProcessedMessage<BroadcastSettings>
-{
+impl From<EncapsulatedMessageWithVerifiedPublicHeader> for ProcessedMessage {
     fn from(value: EncapsulatedMessageWithVerifiedPublicHeader) -> Self {
         Self::Encapsulated(Box::new(value))
     }

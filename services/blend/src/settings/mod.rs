@@ -15,14 +15,15 @@ mod timing;
 pub use self::timing::TimingSettings;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Settings<CoreBackendSettings, EdgeBackendSettings> {
+pub struct Settings<CoreBackendSettings, EdgeBackendSettings, NetworkSettings> {
     pub common: CommonSettings,
-    pub core: CoreSettings<CoreBackendSettings>,
+    pub core: CoreSettings<CoreBackendSettings, NetworkSettings>,
     pub edge: EdgeSettings<EdgeBackendSettings>,
 }
 
-impl<CoreBackendSettings, EdgeBackendSettings>
-    From<Settings<CoreBackendSettings, EdgeBackendSettings>> for CoreConfig<CoreBackendSettings>
+impl<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>
+    From<Settings<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>>
+    for CoreConfig<CoreBackendSettings, NetworkSettings>
 {
     fn from(
         Settings {
@@ -38,15 +39,17 @@ impl<CoreBackendSettings, EdgeBackendSettings>
             core:
                 CoreSettings {
                     backend,
+                    network,
                     scheduler,
                     zk,
                     activity_threshold_sensitivity,
                 },
             ..
-        }: Settings<CoreBackendSettings, EdgeBackendSettings>,
+        }: Settings<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>,
     ) -> Self {
         Self {
             backend,
+            network,
             scheduler,
             time,
             zk,
@@ -60,8 +63,9 @@ impl<CoreBackendSettings, EdgeBackendSettings>
     }
 }
 
-impl<CoreBackendSettings, EdgeBackendSettings>
-    From<Settings<CoreBackendSettings, EdgeBackendSettings>> for EdgeConfig<EdgeBackendSettings>
+impl<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>
+    From<Settings<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>>
+    for EdgeConfig<EdgeBackendSettings>
 {
     fn from(
         Settings {
@@ -80,7 +84,7 @@ impl<CoreBackendSettings, EdgeBackendSettings>
                     scheduler: SchedulerSettings { cover, .. },
                     ..
                 },
-        }: Settings<CoreBackendSettings, EdgeBackendSettings>,
+        }: Settings<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>,
     ) -> Self {
         Self {
             backend,

@@ -624,23 +624,16 @@ where
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
-pub async fn blend_info<BlendService, BroadcastSettings, RuntimeServiceId>(
+pub async fn blend_info<BlendService, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
 ) -> Response
 where
     BlendService: ServiceData<
-            Message = ProxyServiceMessage<
-                lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>,
-            >,
+            Message = ProxyServiceMessage<lb_blend_service::message::ServiceMessage<PeerId>>,
         > + 'static,
-    BroadcastSettings: Send + 'static,
     RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
 {
-    make_request_and_return_response!(blend::blend_info::<
-        BlendService,
-        BroadcastSettings,
-        RuntimeServiceId,
-    >(&handle))
+    make_request_and_return_response!(blend::blend_info::<BlendService, RuntimeServiceId>(&handle))
 }
 
 #[utoipa::path(
@@ -652,24 +645,21 @@ where
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
-pub async fn blend_join_network<BlendService, BroadcastSettings, RuntimeServiceId>(
+pub async fn blend_join_network<BlendService, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(req): Json<JoinBlendRequestBody>,
 ) -> Response
 where
     BlendService: ServiceData<
-            Message = ProxyServiceMessage<
-                lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>,
-            >,
+            Message = ProxyServiceMessage<lb_blend_service::message::ServiceMessage<PeerId>>,
         > + 'static,
-    BroadcastSettings: Send + 'static,
     RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
 {
-    make_request_and_return_response!(blend::blend_join_network::<
-        BlendService,
-        BroadcastSettings,
-        RuntimeServiceId,
-    >(&handle, req.locator, req.locked_note_id))
+    make_request_and_return_response!(blend::blend_join_network::<BlendService, RuntimeServiceId>(
+        &handle,
+        req.locator,
+        req.locked_note_id
+    ))
 }
 
 #[utoipa::path(

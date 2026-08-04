@@ -21,7 +21,6 @@ where
     BlendService: ServiceData + lb_blend_service::ServiceComponents,
 {
     relay: OutboundRelay<<BlendService as ServiceData>::Message>,
-    broadcast_settings: BlendService::BroadcastSettings,
     // `fn() -> BlendService` (rather than `PhantomData<BlendService>`) so the
     // adapter's `Send`/`Sync` do not depend on `BlendService`'s — the adapter
     // only uses `BlendService` as a type-level tag for the relay message type,
@@ -33,13 +32,9 @@ impl<BlendService> BlendAdapter<BlendService>
 where
     BlendService: ServiceData + lb_blend_service::ServiceComponents,
 {
-    pub const fn new(
-        relay: OutboundRelay<<BlendService as ServiceData>::Message>,
-        broadcast_settings: BlendService::BroadcastSettings,
-    ) -> Self {
+    pub const fn new(relay: OutboundRelay<<BlendService as ServiceData>::Message>) -> Self {
         Self {
             relay,
-            broadcast_settings,
             _phantom: PhantomData,
         }
     }
@@ -47,13 +42,9 @@ where
 
 impl<BlendService> BlendAdapter<BlendService>
 where
-    BlendService: ServiceData<
-            Message = ProxyServiceMessage<
-                ServiceMessage<BlendService::BroadcastSettings, BlendService::NodeId>,
-            >,
-        > + lb_blend_service::ServiceComponents,
+    BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<BlendService::NodeId>>>
+        + lb_blend_service::ServiceComponents,
     <BlendService as ServiceData>::Message: Send,
-    BlendService::BroadcastSettings: Clone + Sync,
 {
     pub async fn publish_proposal(&self, proposal: Proposal) {
         if let Err((e, _)) = self
@@ -61,7 +52,6 @@ where
             .send(
                 ServiceMessage::Blend(NetworkMessage {
                     message: proposal.encode_to_vec(),
-                    broadcast_settings: self.broadcast_settings.clone(),
                 })
                 .into(),
             )

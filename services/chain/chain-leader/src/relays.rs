@@ -84,7 +84,6 @@ where
         Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
         Mempool::Settings: Sync,
         BlendService: lb_blend_service::ServiceComponents,
-        BlendService::BroadcastSettings: Send + Sync,
         <BlendService as ServiceData>::Message: Send + 'static,
         TimeBackend: TimeBackendTrait,
         TimeBackend::Settings: Clone + Send + Sync + 'static,

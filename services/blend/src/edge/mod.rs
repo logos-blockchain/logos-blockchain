@@ -64,7 +64,6 @@ type RunningSettings<Backend, NodeId, RuntimeServiceId> =
 pub struct BlendService<
     Backend,
     NodeId,
-    BroadcastSettings,
     ProofsGenerator,
     TimeBackend,
     ChainService,
@@ -78,20 +77,11 @@ pub struct BlendService<
     _phantom: PhantomData<(ProofsGenerator, TimeBackend, ChainService, PolInfoProvider)>,
 }
 
-impl<
-    Backend,
-    NodeId,
-    BroadcastSettings,
-    ProofsGenerator,
-    TimeBackend,
-    ChainService,
-    PolInfoProvider,
-    RuntimeServiceId,
-> ServiceData
+impl<Backend, NodeId, ProofsGenerator, TimeBackend, ChainService, PolInfoProvider, RuntimeServiceId>
+    ServiceData
     for BlendService<
         Backend,
         NodeId,
-        BroadcastSettings,
         ProofsGenerator,
         TimeBackend,
         ChainService,
@@ -105,24 +95,15 @@ where
     type Settings = StartingBlendConfig<Backend::Settings>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
-    type Message = ServiceMessage<BroadcastSettings, NodeId>;
+    type Message = ServiceMessage<NodeId>;
 }
 
 #[async_trait::async_trait]
-impl<
-    Backend,
-    NodeId,
-    BroadcastSettings,
-    ProofsGenerator,
-    TimeBackend,
-    ChainService,
-    PolInfoProvider,
-    RuntimeServiceId,
-> ServiceCore<RuntimeServiceId>
+impl<Backend, NodeId, ProofsGenerator, TimeBackend, ChainService, PolInfoProvider, RuntimeServiceId>
+    ServiceCore<RuntimeServiceId>
     for BlendService<
         Backend,
         NodeId,
-        BroadcastSettings,
         ProofsGenerator,
         TimeBackend,
         ChainService,
@@ -132,7 +113,6 @@ impl<
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId> + Send + Sync,
     NodeId: Clone + Debug + Eq + Hash + Send + Sync + node_id::TryFrom + 'static,
-    BroadcastSettings: Serialize + DeserializeOwned + Send,
     ProofsGenerator: LeaderProofsGenerator + Send,
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
     ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
@@ -215,11 +195,9 @@ where
 
         let messages_to_blend_stream = Box::pin(inbound_relay.filter_map(async |msg| {
             match msg {
-                ServiceMessage::Blend(message) => Some(
-                    NetworkMessage::<BroadcastSettings>::to_bytes(&message)
-                        .expect("NetworkMessage should be able to be serialized")
-                        .to_vec(),
-                ),
+                // The Blend payload is exactly the message bytes — where a
+                // receiving node republishes them is its own configuration.
+                ServiceMessage::Blend(message) => Some(message.message),
                 ServiceMessage::GetNetworkInfo { reply } => {
                     drop(reply.send(Some(NetworkInfo {
                         node_id: local_node_id.clone(),
