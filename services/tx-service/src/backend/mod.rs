@@ -1,8 +1,10 @@
 pub mod pool;
 
+use core::hash::Hash;
 use std::pin::Pin;
 
 use futures::Stream;
+use lb_core::mantle::transactions::hash::PrefixedKey;
 pub use pool::{Mempool, PoolRecoveryState};
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +24,7 @@ pub enum MempoolError {
 pub trait MemPool {
     type Settings: Send;
     type Item: Send;
-    type Key: Send + Sync + Clone + Ord;
+    type Key: Send + Sync + Clone + Ord + PrefixedKey;
     type BlockId: Send;
     type Storage: Send;
 
@@ -47,6 +49,12 @@ pub trait MemPool {
         &self,
         ancestor_hint: Self::BlockId,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, MempoolError>;
+
+    /// Keys currently in the mempool sharing `prefix`.
+    fn keys_by_prefix(
+        &self,
+        prefix: &<Self::Key as PrefixedKey>::Prefix,
+    ) -> impl Iterator<Item = &Self::Key> + '_;
 
     /// Get multiple items by their keys from the mempool via storage lookup
     async fn get_items_by_keys<I>(

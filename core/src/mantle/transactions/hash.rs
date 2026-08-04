@@ -3,12 +3,49 @@ use bytes::Bytes;
 use lb_codec::BinaryCodec;
 use lb_groth16::Fr;
 
-use crate::{crypto::Hash, utils::serde_bytes_newtype};
+use crate::{
+    crypto::Hash,
+    utils::{display_hex_bytes_newtype, serde_bytes_newtype},
+};
 
 /// The hash of a transaction
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord, BinaryCodec)]
 pub struct TxHash(pub Hash);
 serde_bytes_newtype!(TxHash, 32);
+
+/// Number of leading hash bytes a block proposal uses to refer to a
+/// transaction.
+const REFERENCE_PREFIX_BYTES: usize = 8;
+
+/// The leading [`REFERENCE_PREFIX_BYTES`] bytes of a [`TxHash`] — how a block
+/// proposal refers to a transaction that is already in a validator's mempool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord, BinaryCodec)]
+pub struct TxHashPrefix(pub [u8; REFERENCE_PREFIX_BYTES]);
+serde_bytes_newtype!(TxHashPrefix, REFERENCE_PREFIX_BYTES);
+display_hex_bytes_newtype!(TxHashPrefix);
+
+impl From<[u8; REFERENCE_PREFIX_BYTES]> for TxHashPrefix {
+    fn from(prefix: [u8; REFERENCE_PREFIX_BYTES]) -> Self {
+        Self(prefix)
+    }
+}
+
+/// A mempool key that a block proposal can refer to by a short prefix.
+pub trait PrefixedKey {
+    /// The short form a proposal carries in place of the full key.
+    type Prefix;
+
+    /// The prefix a proposal would use to refer to this key.
+    fn key_prefix(&self) -> Self::Prefix;
+}
+
+impl PrefixedKey for TxHash {
+    type Prefix = TxHashPrefix;
+
+    fn key_prefix(&self) -> Self::Prefix {
+        self.prefix()
+    }
+}
 
 impl From<Hash> for TxHash {
     fn from(hash: Hash) -> Self {
@@ -41,6 +78,19 @@ impl TxHash {
         let mut bytes = [0u8; 32];
         rng.fill_bytes(&mut bytes);
         Self(bytes)
+    }
+
+    /// The short form a block proposal uses to refer to this transaction.
+    // TODO: Done this way so we can keep the function a `const`.
+    #[must_use]
+    pub const fn prefix(&self) -> TxHashPrefix {
+        let mut prefix = [0u8; REFERENCE_PREFIX_BYTES];
+        let mut index = 0;
+        while index < REFERENCE_PREFIX_BYTES {
+            prefix[index] = self.0[index];
+            index = index.checked_add(1).unwrap();
+        }
+        TxHashPrefix(prefix)
     }
 
     #[must_use]
@@ -93,5 +143,44 @@ impl TxHashView {
 impl From<TxHash> for TxHashView {
     fn from(value: TxHash) -> Self {
         Self::new(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::mantle::{
+        TxHash,
+        transactions::hash::{PrefixedKey as _, REFERENCE_PREFIX_BYTES, TxHashPrefix},
+    };
+
+    #[test]
+    fn prefix_is_the_leading_hash_bytes() {
+        let mut hash = [0u8; 32];
+        for (index, byte) in hash.iter_mut().enumerate() {
+            *byte = u8::try_from(index).unwrap();
+        }
+
+        assert_eq!(
+            TxHash(hash).prefix(),
+            TxHashPrefix([0, 1, 2, 3, 4, 5, 6, 7])
+        );
+    }
+
+    #[test]
+    fn hashes_sharing_a_prefix_collide_while_differing_beyond_it() {
+        let mut first = [0xAAu8; 32];
+        let mut second = [0xAAu8; 32];
+        // Differ only past the prefix.
+        first[REFERENCE_PREFIX_BYTES] = 0x01;
+        second[REFERENCE_PREFIX_BYTES] = 0x02;
+
+        assert_ne!(TxHash(first), TxHash(second));
+        assert_eq!(TxHash(first).prefix(), TxHash(second).prefix());
+    }
+
+    #[test]
+    fn prefix_matches_the_prefixed_key_impl() {
+        let hash = TxHash([0x5Au8; 32]);
+        assert_eq!(hash.prefix(), hash.key_prefix());
     }
 }

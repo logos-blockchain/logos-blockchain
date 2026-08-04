@@ -5,7 +5,6 @@ pub mod openapi {
 }
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
     fmt::{Debug, Display},
     marker::PhantomData,
     pin::Pin,
@@ -15,7 +14,10 @@ use std::{
 use futures::StreamExt as _;
 use lb_core::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
-    mantle::traits::{Hashable, StorageSize},
+    mantle::{
+        traits::{Hashable, StorageSize},
+        transactions::hash::PrefixedKey,
+    },
 };
 use lb_log_targets::mempool;
 use lb_network_service::{NetworkService, message::BackendNetworkMsg};
@@ -32,8 +34,8 @@ use overwatch::{
 use tokio::sync::oneshot;
 
 use crate::{
-    MempoolMetrics, MempoolMsg, TransactionsByHashesResponse, backend,
-    backend::{MemPool as MemPoolTrait, MempoolError, RecoverableMempool},
+    MempoolMetrics, MempoolMsg, TxsWithCommonPrefix,
+    backend::{self, MemPool as MemPoolTrait, MempoolError, RecoverableMempool},
     network::NetworkAdapter as NetworkAdapterTrait,
     storage::MempoolStorageAdapter,
     tx::{settings::TxMempoolSettings, state::TxMempoolState},
@@ -91,6 +93,7 @@ pub struct GenericTxMempoolService<
     RuntimeServiceId,
 > where
     Pool: MemPoolTrait<Storage = StorageAdapter> + RecoverableMempool + Send + Sync,
+    Pool::Key: PrefixedKey,
     StorageAdapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     <Pool as MemPoolTrait>::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId> + Send + Sync,
@@ -106,6 +109,7 @@ impl<Pool, NetworkAdapter, RecoveryBackend, StorageAdapter, RuntimeServiceId>
     GenericTxMempoolService<Pool, NetworkAdapter, RecoveryBackend, StorageAdapter, RuntimeServiceId>
 where
     Pool: MemPoolTrait<Storage = StorageAdapter> + RecoverableMempool + Send + Sync,
+    Pool::Key: PrefixedKey,
     StorageAdapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     <Pool as MemPoolTrait>::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId> + Send + Sync,
@@ -134,6 +138,7 @@ impl<Pool, NetworkAdapter, RecoveryBackend, StorageAdapter, RuntimeServiceId> Se
     >
 where
     Pool: MemPoolTrait<Storage = StorageAdapter> + RecoverableMempool + Send + Sync,
+    Pool::Key: PrefixedKey,
     StorageAdapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     <Pool as MemPoolTrait>::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId> + Send + Sync,
@@ -165,6 +170,7 @@ where
     StorageAdapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     <Pool as RecoverableMempool>::RecoveryState: Debug + Send + Sync,
     Pool::Item: Hashable<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
+    Pool::Key: PrefixedKey<Prefix: Send + Sync>,
     Pool::Settings: Clone + Sync + Send,
     NetworkAdapter:
         NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item, Key = Pool::Key> + Send + Sync,
@@ -266,6 +272,7 @@ where
     Pool: MemPoolTrait<Storage = StorageAdapter> + RecoverableMempool + Send + Sync,
     StorageAdapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Pool::Item: Hashable<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
+    Pool::Key: PrefixedKey<Prefix: Send + Sync>,
     Pool::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item> + Send + Sync,
     NetworkAdapter::Settings: Clone + Send + 'static,
@@ -338,14 +345,14 @@ where
             } => {
                 Self::handle_view_message(pool, ancestor_hint, reply_channel).await;
             }
-            MempoolMsg::GetTransactionsByHashes {
-                hashes,
+            MempoolMsg::GetTransactionsByPrefix {
+                prefix,
                 reply_channel,
             } => {
-                let result = Self::partition_transactions_by_availability(pool, hashes).await;
+                let result = Self::get_transactions_by_prefix(pool, &prefix).await;
 
                 if let Err(_e) = reply_channel.send(result) {
-                    tracing::debug!(target: LOG_TARGET, "Failed to send transactions reply");
+                    tracing::debug!(target: LOG_TARGET, "Failed to send prefix lookup reply");
                 }
             }
             MempoolMsg::Remove { ids } => {
@@ -449,42 +456,21 @@ where
         }
     }
 
-    async fn partition_transactions_by_availability(
+    /// Every transaction whose hash starts with `prefix`.
+    ///
+    /// The prefix index is consulted first, so the storage round-trip only
+    /// covers keys that actually match. No policy is applied here: how many
+    /// candidates are tolerable is a consensus question, so it belongs to the
+    /// caller.
+    async fn get_transactions_by_prefix(
         pool: &Pool,
-        hashes: Vec<Pool::Key>,
-    ) -> Result<TransactionsByHashesResponse<Pool::Item, Pool::Key>, MempoolError> {
-        let unique_hashes: BTreeSet<Pool::Key> = hashes.iter().cloned().collect();
+        prefix: &<Pool::Key as PrefixedKey>::Prefix,
+    ) -> Result<TxsWithCommonPrefix<Pool::Item>, MempoolError> {
+        let keys: Vec<Pool::Key> = pool.keys_by_prefix(prefix).cloned().collect();
 
-        let items_stream = pool.get_items_by_keys(unique_hashes).await.map_err(|e| {
-            MempoolError::StorageError(format!("Failed to get items by keys: {e:?}"))
-        })?;
-
-        let mut fetched_by_hash = items_stream
-            .map(|tx| (Hashable::hash(&tx), tx))
-            .collect::<BTreeMap<_, _>>()
-            .await;
-
-        let mut seen_hashes = BTreeSet::new();
-        let mut found_transactions = Vec::new();
-        let mut not_found_hashes = BTreeSet::new();
-
-        for hash in hashes {
-            if !seen_hashes.insert(hash.clone()) {
-                continue;
-            }
-
-            match fetched_by_hash.remove(&hash) {
-                Some(tx) => found_transactions.push(tx),
-                None => {
-                    not_found_hashes.insert(hash);
-                }
-            }
-        }
-
-        Ok(TransactionsByHashesResponse::new(
-            found_transactions,
-            not_found_hashes,
-        ))
+        pool.get_items_by_keys(keys)
+            .await
+            .map_err(|e| MempoolError::StorageError(format!("Failed to get items by keys: {e:?}")))
     }
 
     fn handle_add_success(
