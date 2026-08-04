@@ -1,5 +1,10 @@
 //! Configurable [`adapter::Node`] mock and shared builders for unit tests.
 
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
+
 use async_trait::async_trait;
 use futures::StreamExt as _;
 use lb_common_http_client::{
@@ -9,7 +14,7 @@ use lb_common_http_client::{
 use lb_core::{
     header::{ContentId, HeaderId},
     mantle::{
-        MantleTx, Op, SignedMantleTx,
+        Op, RawMantleTx, SignedMantleTx,
         channel::ChannelState,
         ops::{
             OpProof,
@@ -32,6 +37,27 @@ use crate::{
     adapter::{self, BoxStream},
 };
 
+/// One scripted `block_stream` connection: serve `events`, then `then`.
+#[derive(Clone)]
+pub struct StreamScript {
+    pub events: Vec<ProcessedBlockEvent>,
+    pub then: StreamEnd,
+}
+
+/// How a scripted stream behaves after its events.
+#[derive(Clone, Copy)]
+pub enum StreamEnd {
+    /// Stay open without further events.
+    Hang,
+    /// End the stream — a dropped connection.
+    End,
+}
+
+/// Wrap stream scripts for [`MockNode::scripts`].
+pub fn scripts(scripts: Vec<StreamScript>) -> Arc<Mutex<VecDeque<StreamScript>>> {
+    Arc::new(Mutex::new(scripts.into()))
+}
+
 /// Configurable mock node. Construct with struct-update syntax over
 /// [`MockNode::default`], overriding only what the scenario needs.
 #[derive(Clone)]
@@ -43,9 +69,9 @@ pub struct MockNode {
     pub tip: HeaderId,
     /// LIB slot (and current slot) reported by `consensus_info()`.
     pub lib_slot: Slot,
-    /// Served by every `block_stream()` connection, which then stays open —
-    /// or, when `up` is set, ends on the next up→down transition.
-    pub stream: Vec<ProcessedBlockEvent>,
+    /// Successive `block_stream()` connections consume these; the last
+    /// script is reused once the queue would run dry.
+    pub scripts: Arc<Mutex<VecDeque<StreamScript>>>,
     /// Served by `block()`, keyed by header id; unknown ids yield `None`.
     pub blocks: Vec<ApiBlock>,
     /// Served by `immutable_blocks()`, filtered by the queried slot range.
@@ -67,7 +93,10 @@ impl Default for MockNode {
             lib: header_id(0),
             tip: header_id(0),
             lib_slot: Slot::genesis(),
-            stream: vec![live_event(&api_block(1, 0, 1, Vec::new()))],
+            scripts: scripts(vec![StreamScript {
+                events: vec![live_event(&api_block(1, 0, 1, Vec::new()))],
+                then: StreamEnd::Hang,
+            }]),
             blocks: Vec::new(),
             immutable: Vec::new(),
             zone_messages: Vec::new(),
@@ -88,6 +117,18 @@ impl MockNode {
             },
             rx,
         )
+    }
+
+    fn next_script(&self) -> StreamScript {
+        let mut queue = self.scripts.lock().expect("mock scripts lock");
+        if queue.len() > 1 {
+            queue.pop_front().expect("len checked")
+        } else {
+            queue.front().cloned().unwrap_or(StreamScript {
+                events: Vec::new(),
+                then: StreamEnd::Hang,
+            })
+        }
     }
 }
 
@@ -131,7 +172,8 @@ impl adapter::Node for MockNode {
         {
             return Err(lb_common_http_client::Error::Client("node down".to_owned()));
         }
-        let events = futures::stream::iter(self.stream.clone());
+        let script = self.next_script();
+        let events = futures::stream::iter(script.events);
         if let Some(up_rx) = &self.up {
             // Stay open until the node goes down, then end so the sequencer
             // re-enters `ensure_connected` (where `block_stream` errors).
@@ -147,7 +189,10 @@ impl adapter::Node for MockNode {
             .filter_map(async |()| None::<ProcessedBlockEvent>);
             return Ok(Box::pin(events.chain(until_down)));
         }
-        Ok(Box::pin(events.chain(futures::stream::pending())))
+        Ok(match script.then {
+            StreamEnd::Hang => Box::pin(events.chain(futures::stream::pending())),
+            StreamEnd::End => Box::pin(events),
+        })
     }
 
     async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, lb_common_http_client::Error> {
@@ -283,7 +328,7 @@ pub fn live_event(block: &ApiBlock) -> ProcessedBlockEvent {
 /// Suitable for tests that only care about op extraction, not verification.
 pub fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedMantleTx<Unverified> {
     let n = ops.len();
-    let mantle_tx = MantleTx(Ops::try_from(ops).expect("ops fit"));
+    let mantle_tx = RawMantleTx(Ops::try_from(ops).expect("ops fit"));
     SignedMantleTx::new(
         mantle_tx,
         OpsProofs::new_unchecked(vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n]),

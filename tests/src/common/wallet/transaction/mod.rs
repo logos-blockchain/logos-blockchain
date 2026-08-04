@@ -12,7 +12,9 @@ mod prepared;
 mod signed;
 mod signing;
 
-pub use builder_funding::{fund_builder_from_wallet_source, wallet_state_from_utxos};
+pub use builder_funding::{
+    extend_wallet_funding_inputs, fund_builder_from_wallet_source, wallet_state_from_utxos,
+};
 pub use error::WalletTransactionError;
 pub use intent::WalletTransactionIntent;
 pub use prepare::{

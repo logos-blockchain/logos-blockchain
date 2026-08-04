@@ -52,3 +52,45 @@ impl TxHash {
         Fr::from_le_bytes_mod_order(&self.0)
     }
 }
+
+/// Holds a reference to a [`TxHash`] and its corresponding [`Bytes`] and [`Fr`]
+/// representations, to avoid repeated conversions.
+pub struct TxHashView {
+    tx_hash: TxHash,
+    tx_hash_bytes: Bytes,
+    tx_hash_fr: Fr,
+}
+
+impl TxHashView {
+    #[must_use]
+    pub fn new(tx_hash: TxHash) -> Self {
+        let tx_hash_bytes = tx_hash.as_signing_bytes();
+        let tx_hash_fr = tx_hash.to_fr();
+        Self {
+            tx_hash,
+            tx_hash_bytes,
+            tx_hash_fr,
+        }
+    }
+
+    #[must_use]
+    pub const fn tx_hash(&self) -> &TxHash {
+        &self.tx_hash
+    }
+
+    #[must_use]
+    pub const fn as_bytes(&self) -> &Bytes {
+        &self.tx_hash_bytes
+    }
+
+    #[must_use]
+    pub const fn as_fr(&self) -> &Fr {
+        &self.tx_hash_fr
+    }
+}
+
+impl From<TxHash> for TxHashView {
+    fn from(value: TxHash) -> Self {
+        Self::new(value)
+    }
+}

@@ -40,13 +40,14 @@ use crate::cucumber::{
         tokio_console::profile::TokioConsoleProfileNode,
     },
     utils::{
-        display_last_path_components, extract_child_dir_name, funding_wallet_pk_from_node_yaml,
-        matching_child_dirs, peer_id_from_node_yaml, track_progress, truncate_hash,
+        display_last_path_components, extract_child_dir_name, matching_child_dirs,
+        node_wallet_keys_from_node_yaml, peer_id_from_node_yaml, track_progress, truncate_hash,
     },
     wallet::snapshot::{create_and_save_all_wallets_snapshot, restore_wallet_snapshot_if_present},
     world::{
         ChainInfoMap, ConfigOverride, CucumberWorld, ManualNodeConfigOverrides, NodeInfo,
-        PublicCryptarchiaEndpointPeer, WalletInfo, WalletInfoMap, WalletType,
+        NodeWalletKey, NodeWalletKeyRole, PublicCryptarchiaEndpointPeer, WalletInfo, WalletInfoMap,
+        WalletType,
     },
 };
 
@@ -383,6 +384,8 @@ async fn catch_up_known_wallet_tracking_after_chain_sync(
     }
 
     let started_at = Instant::now();
+    // The wallet scanner timeout is moderate here because the contract is that the
+    // majority nodes have been synced prior just to this step.
     world
         .wait_for_wallet_scanner_catch_up(Duration::from_secs(30))
         .await?;
@@ -1334,21 +1337,68 @@ fn compile_wallet_in_map(
         );
     }
 
-    let funding_wallet_name = format!("{node_name}_WALLET");
-    wallet_info.insert(
-        funding_wallet_name.clone(),
-        WalletInfo {
-            wallet_name: funding_wallet_name,
-            node_name: node_name.to_owned(),
-            wallet_type: WalletType::Funding {
-                wallet_pk: funding_wallet_pk_from_node_yaml(
-                    &node_runtime_dir.join(USER_CONFIG_FILE),
-                )?,
+    let node_wallet_keys =
+        node_wallet_keys_from_node_yaml(&node_runtime_dir.join(USER_CONFIG_FILE))?;
+    let user_wallets_by_pk = world
+        .wallet_accounts
+        .values()
+        .map(|account| (account.public_key_hex(), account.label.clone()))
+        .chain(
+            world
+                .fee_state
+                .wallet_account
+                .iter()
+                .map(|account| (account.public_key_hex(), account.label.clone())),
+        )
+        .collect::<HashMap<_, _>>();
+    let mut generic_key_index = 0usize;
+
+    for node_wallet_key in node_wallet_keys {
+        if let Some(user_wallet_name) = user_wallets_by_pk.get(&node_wallet_key.wallet_pk) {
+            if node_wallet_key.role != NodeWalletKeyRole::General {
+                return Err(StepError::LogicalError {
+                    message: format!(
+                        "Scenario wallet `{user_wallet_name}` public key conflicts with the \
+                         {role:?} key owned by `{node_name}`",
+                        role = node_wallet_key.role,
+                    ),
+                });
+            }
+            info!(
+                target: TARGET,
+                "Scenario wallet `{user_wallet_name}` is registered with `{node_name}`; \
+                 excluding its public key from node-wallet aliases"
+            );
+            continue;
+        }
+
+        let wallet_name = node_wallet_name(node_name, &node_wallet_key, &mut generic_key_index);
+        wallet_info.insert(
+            wallet_name.clone(),
+            WalletInfo {
+                wallet_name,
+                node_name: node_name.to_owned(),
+                wallet_type: WalletType::Funding {
+                    key: node_wallet_key,
+                },
             },
-        },
-    );
+        );
+    }
 
     Ok(wallet_info)
+}
+
+fn node_wallet_name(node_name: &str, key: &NodeWalletKey, generic_key_index: &mut usize) -> String {
+    let role = match key.role {
+        NodeWalletKeyRole::Funding => "FUNDING".to_owned(),
+        NodeWalletKeyRole::VoucherMaster => "VOUCHER_MASTER".to_owned(),
+        NodeWalletKeyRole::BlendZk => "BLEND_ZK".to_owned(),
+        NodeWalletKeyRole::General => {
+            *generic_key_index += 1;
+            format!("GENERAL_{}", *generic_key_index)
+        }
+    };
+    format!("{node_name}_WALLET_{role}")
 }
 
 fn tips_aligned_at_min_difference(
@@ -1404,8 +1454,7 @@ async fn fetch_and_update_chain_info(
                 .get_mut(&started_node_name)
                 .ok_or(StepError::LogicalError {
                     message: format!(
-                        "Started node '{}' not found in chain info map",
-                        &started_node_name
+                        "Started node '{started_node_name}' not found in chain info map",
                     ),
                 })?;
         let chain_info = node_info.chain_info();
@@ -1855,5 +1904,78 @@ pub(crate) async fn get_cryptarchia_info_all_nodes(world: &CucumberWorld, step: 
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod wallet_name_tests {
+    use super::{NodeWalletKey, NodeWalletKeyRole, node_wallet_name};
+
+    fn node_wallet_key(role: NodeWalletKeyRole) -> NodeWalletKey {
+        NodeWalletKey {
+            wallet_pk: "00".repeat(32),
+            role,
+        }
+    }
+
+    #[test]
+    fn node_wallet_names_use_semantic_roles_before_numbered_fallbacks() {
+        let mut generic_key_index = 0;
+
+        assert_eq!(
+            node_wallet_name(
+                "NODE_1",
+                &node_wallet_key(NodeWalletKeyRole::Funding),
+                &mut generic_key_index
+            ),
+            "NODE_1_WALLET_FUNDING"
+        );
+        assert_eq!(
+            node_wallet_name(
+                "NODE_1",
+                &node_wallet_key(NodeWalletKeyRole::VoucherMaster),
+                &mut generic_key_index
+            ),
+            "NODE_1_WALLET_VOUCHER_MASTER"
+        );
+        assert_eq!(
+            node_wallet_name(
+                "NODE_1",
+                &node_wallet_key(NodeWalletKeyRole::BlendZk),
+                &mut generic_key_index
+            ),
+            "NODE_1_WALLET_BLEND_ZK"
+        );
+        assert_eq!(
+            node_wallet_name(
+                "NODE_1",
+                &node_wallet_key(NodeWalletKeyRole::General),
+                &mut generic_key_index
+            ),
+            "NODE_1_WALLET_GENERAL_1"
+        );
+        assert_eq!(
+            node_wallet_name(
+                "NODE_1",
+                &node_wallet_key(NodeWalletKeyRole::General),
+                &mut generic_key_index
+            ),
+            "NODE_1_WALLET_GENERAL_2"
+        );
+    }
+
+    #[test]
+    fn semantic_wallet_names_do_not_consume_general_indexes() {
+        let mut generic_key_index = 0;
+
+        assert_eq!(
+            node_wallet_name(
+                "NODE_1",
+                &node_wallet_key(NodeWalletKeyRole::Funding),
+                &mut generic_key_index
+            ),
+            "NODE_1_WALLET_FUNDING"
+        );
+        assert_eq!(generic_key_index, 0);
     }
 }

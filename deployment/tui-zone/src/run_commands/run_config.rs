@@ -1,15 +1,15 @@
 use std::path::PathBuf;
 
+use lb_codec::BinaryEncode as _;
 use lb_core::{
     mantle::{
         Op, OpProof, SignedMantleTx,
-        nom::NomEncode as _,
         ops::channel::{
             ChannelId, ChannelKeyIndex,
             config::{ChannelConfigOp, Keys},
         },
         traits::Hashable as _,
-        transactions::codec::encode_signed_mantle_tx,
+        transactions::{codec::encode_signed_mantle_tx, mantle_tx::MantleTx as _},
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
@@ -105,7 +105,7 @@ pub(crate) async fn run_config_prepare(args: ConfigPrepareArgs) -> RunResult<()>
         args.transfer_threshold,
     )?;
     let msg_id = config_op.id();
-    let tx = lb_core::mantle::MantleTx([Op::ChannelConfig(config_op)].into());
+    let tx = lb_core::mantle::RawMantleTx([Op::ChannelConfig(config_op)].into());
     let tx_hash = tx.hash();
     let intent = ConfigIntent {
         version: ZONE_FILE_TRANSFER_VERSION,
@@ -384,7 +384,7 @@ fn validate_authorized_signer(
     .into())
 }
 
-fn validate_config_tx(tx: &lb_core::mantle::MantleTx, intent: &ConfigIntent) -> RunResult<()> {
+fn validate_config_tx(tx: &lb_core::mantle::RawMantleTx, intent: &ConfigIntent) -> RunResult<()> {
     let config = tx
         .ops()
         .iter()

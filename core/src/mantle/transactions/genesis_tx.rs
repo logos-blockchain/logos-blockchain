@@ -1,12 +1,8 @@
 use core::fmt::{self, Display, Formatter};
 
-use lb_core_macros::NomCodec;
+use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::Fr;
 use lb_utils::bounded::{BoundedString, BoundedVec};
-use nom::{
-    IResult,
-    error::{Error as NomError, ErrorKind},
-};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -15,7 +11,6 @@ use crate::{
     mantle::{
         OpProof, SignedMantleTx,
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow},
-        nom::{NomDecode, NomEncode},
         ops::{
             Op,
             channel::{ChannelId, MsgId, inscribe::InscriptionOp},
@@ -24,7 +19,11 @@ use crate::{
             transfer::TransferOp,
         },
         traits::{GenesisTx as GenesisTxTrait, Hashable, hashable},
-        transactions::{hash::TxHash, mantle_tx::MantleTx, states::Preverified},
+        transactions::{
+            hash::TxHash,
+            mantle_tx::{MantleTx as _, RawMantleTx},
+            states::Preverified,
+        },
     },
 };
 
@@ -144,7 +143,7 @@ fn valid_cryptarchia_inscription(
     }
 
     Ok(
-        CryptarchiaParameter::decode(inscription.inscription.as_ref())
+        CryptarchiaParameter::decode(inscription.inscription.as_ref(), &())
             .map_err(|e| Error::InvalidCryptarchiaParameter(format!("Decoding error: {e}")))?
             .1,
     )
@@ -222,7 +221,7 @@ impl GenesisTxTrait for GenesisTx {
         })
     }
 
-    fn mantle_tx(&self) -> &MantleTx {
+    fn mantle_tx(&self) -> &RawMantleTx {
         self.tx.mantle_tx()
     }
 }
@@ -333,28 +332,33 @@ impl<const MIN: usize, const MAX: usize> TryFrom<BoundedVec<u8, MIN, MAX>> for C
     }
 }
 
-impl NomEncode for ChainId {
-    fn encode(&self) -> Vec<u8> {
-        let bounded_bytes =
-            ChainIdBoundedVec::new_unchecked(<Self as AsRef<[u8]>>::as_ref(self).to_owned());
-        bounded_bytes.encode()
+impl BinaryEncode for ChainId {
+    fn encoded_length(&self) -> usize {
+        self.0.to_vec().encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.0.to_vec().encode_into(out);
     }
 }
 
-impl NomDecode for ChainId {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (remaining_bytes, value) = ChainIdBoundedVec::decode(bytes)?;
-        Ok((
-            remaining_bytes,
-            Self::try_from(value)
-                .map_err(|_| nom::Err::Error(NomError::new(bytes, ErrorKind::MapRes)))?,
-        ))
+impl BinaryDecode for ChainId {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, value) = ChainIdBoundedVec::decode(input, &())?;
+        let chain_id = Self::try_from(value)
+            .map_err(|_| DecodeError::invalid_value::<Self>("invalid chain id bytes"))?;
+        Ok((rest, chain_id))
     }
 }
 
 /// Time at which the chain should start. u32 suffices: we only need the
 /// positive half of the i64 Unix timestamp.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, NomCodec)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, BinaryCodec)]
 pub struct GenesisTime(u32);
 
 impl GenesisTime {
@@ -381,7 +385,7 @@ impl TryFrom<OffsetDateTime> for GenesisTime {
 }
 
 /// Cryptarchia parameters encoded as an inscription in the genesis block.
-#[derive(Debug, Clone, PartialEq, Eq, NomCodec)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
 pub struct CryptarchiaParameter {
     pub chain_id: ChainId,
     pub genesis_time: GenesisTime,
@@ -412,7 +416,7 @@ mod tests {
     ) -> InscriptionOp {
         InscriptionOp {
             channel_id,
-            inscription: Inscription::new_unchecked(cryptarchia_param.encode()),
+            inscription: Inscription::new_unchecked(cryptarchia_param.encode_to_vec()),
             parent,
             signer,
         }
@@ -469,7 +473,7 @@ mod tests {
         let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new([create_test_note(1000)]));
         let mut new_ops = vec![Op::Transfer(transfer_op)];
         new_ops.append(&mut ops);
-        let mantle_tx = MantleTx(Ops::new_unchecked(new_ops));
+        let mantle_tx = RawMantleTx(Ops::new_unchecked(new_ops));
         let ops_proofs = OpsProofs::try_from(ops_proofs).unwrap();
         let mut new_op_proofs = OpsProofs::from(OpProof::ZkSig(
             ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr()).unwrap(),
@@ -696,14 +700,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cryptarchia_parameter_roundtrip() {
-        let param = cryptarchia_param();
-        let encoded = param.encode();
-        let (_, decoded) = CryptarchiaParameter::decode(&encoded).unwrap();
-        assert_eq!(param, decoded);
-    }
-
-    #[test]
     fn test_genesis_time_boundaries() {
         // The u32::MAX unix timestamp is the largest value `GenesisTime` accepts.
         let max = OffsetDateTime::from_unix_timestamp(i64::from(u32::MAX)).unwrap();
@@ -726,43 +722,31 @@ mod tests {
         // A single byte is a complete 1-byte chain_id length prefix of 0, which
         // is below the chain_id minimum length of 1.
         assert!(matches!(
-            CryptarchiaParameter::decode(&[0; 1]).unwrap_err(),
-            nom::Err::Error(NomError {
-                code: ErrorKind::LengthValue,
-                ..
-            })
+            CryptarchiaParameter::decode(&[0; 1], &()).unwrap_err(),
+            DecodeError::LengthOutOfBounds { .. }
         ));
 
         // Genuinely too short: not even the length prefix can be read.
         assert!(matches!(
-            CryptarchiaParameter::decode(&[]).unwrap_err(),
-            nom::Err::Error(NomError {
-                code: ErrorKind::Eof,
-                ..
-            })
+            CryptarchiaParameter::decode(&[], &()).unwrap_err(),
+            DecodeError::UnexpectedEnd { .. }
         ));
 
         // Wrong length (chain_id_len says 100 but only a few bytes follow)
         let mut bad = vec![0; 48];
         bad[0] = 100; // chain_id_len = 100
         assert!(matches!(
-            CryptarchiaParameter::decode(&bad).unwrap_err(),
-            nom::Err::Error(NomError {
-                code: ErrorKind::Eof,
-                ..
-            })
+            CryptarchiaParameter::decode(&bad, &()).unwrap_err(),
+            DecodeError::UnexpectedEnd { .. }
         ));
 
         // Invalid UTF-8 chain_id. The chain_id bytes begin right after its
         // single-byte length prefix, so index 1 is the first UTF-8 byte.
-        let mut encoded = cryptarchia_param().encode();
+        let mut encoded = cryptarchia_param().encode_to_vec();
         encoded[1] = 0xFF; // corrupt the first chain_id UTF-8 byte
         assert!(matches!(
-            CryptarchiaParameter::decode(&encoded).unwrap_err(),
-            nom::Err::Error(NomError {
-                code: ErrorKind::MapRes,
-                ..
-            })
+            CryptarchiaParameter::decode(&encoded, &()).unwrap_err(),
+            DecodeError::InvalidValue { .. }
         ));
     }
 

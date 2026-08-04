@@ -95,7 +95,7 @@ impl RemotePeerConnectionDetails {
 /// A [`NetworkBehaviour`] that processes incoming Blend messages, and
 /// propagates messages from the Blend service to the rest of the Blend network.
 ///
-/// The public header signature and uniqueness of incoming messages is validated according to the [Blend v1 specification](https://www.notion.so/nomos-tech/Blend-Protocol-Version-1-215261aa09df81ae8857d71066a80084) before the message is propagated to the swarm and to the Blend service.
+/// The public header signature and uniqueness of incoming messages is validated according to the [Blend specification](https://lip.logos.co/blockchain/raw/blend-protocol.html) before the message is propagated to the swarm and to the Blend service.
 pub struct Behaviour<ObservationWindowClockProvider> {
     /// Tracks connections between this node and other core nodes.
     ///

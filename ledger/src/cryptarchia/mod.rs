@@ -10,7 +10,7 @@ use lb_core::{
     mantle::{
         NoteId, Utxo, Value,
         gas::{Gas, GasConstants, GasCost, GasOverflow, GasPrice},
-        ledger::Operation as _,
+        ledger::ExecutableOperation as _,
         ops::transfer::TransferOp,
         traits::GenesisTx,
         transactions::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
@@ -489,7 +489,7 @@ impl LedgerState {
 
     fn update_nonce(self, contrib: &Fr, slot: Slot) -> Self {
         // constants and structure as defined in the Mantle spec:
-        // https://www.notion.so/Cryptarchia-v1-Protocol-Specification-21c261aa09df810cb85eff1c76e5798c
+        // https://lip.logos.co/blockchain/raw/cryptarchia-v1-protocol.html
         static EPOCH_NONCE_V1: LazyLock<Fr> =
             LazyLock::new(|| fr_from_bytes(b"EPOCH_NONCE_V1").unwrap());
         let mut hasher = ZkHasher::new();
@@ -688,7 +688,7 @@ impl LedgerState {
 
 // This function upgrade the storage Gas price when a new epoch starts assuming
 // the structure contains how much storage gas was consumed in the previous
-// epoch according to <https://www.notion.so/nomos-tech/v1-1-Storage-Markets-Specification-326261aa09df804ab483f573f522baf5>
+// epoch according to <https://lip.logos.co/blockchain/raw/storage-markets.html>
 fn update_storage_market(
     storage_gas_price: GasPrice,
     storage_gas_consumed_in_epoch: Gas,
@@ -745,9 +745,9 @@ pub mod tests {
     use lb_core::{
         crypto::{Digest as _, Hasher},
         mantle::{
-            GasCalculator as _, MantleTx, Note, Op,
+            GasCalculator as _, Note, Op,
             OpProof::ZkSig,
-            SignedMantleTx,
+            RawMantleTx, SignedMantleTx,
             gas::MainnetGasConstants,
             ledger::{Inputs, Outputs},
             ops::{leader_claim::VoucherCm, sdp::SDPDeclareOp},
@@ -1587,7 +1587,7 @@ pub mod tests {
             Inputs::try_new(inputs).expect("Invalid inputs size"),
             Outputs::try_new(outputs).expect("Invalid outputs size"),
         );
-        let mantle_tx = MantleTx([Op::Transfer(transfer_op.clone())].into());
+        let mantle_tx = RawMantleTx([Op::Transfer(transfer_op.clone())].into());
         let transfer_sig = ZkKey::multi_sign(&sks, &mantle_tx.hash().to_fr()).unwrap();
         let tx = SignedMantleTx::new(mantle_tx, [ZkSig(transfer_sig.clone())].into());
         (tx, transfer_op, transfer_sig)

@@ -8,7 +8,7 @@ use lb_core::{
     events::TxEvent,
     mantle::{
         NoteId, Value,
-        ledger::Operation as _,
+        ledger::ExecutableOperation as _,
         ops::{
             channel::{
                 config::{ChannelConfigExecutionContext, ChannelConfigOp},

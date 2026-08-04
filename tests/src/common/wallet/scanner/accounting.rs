@@ -1,9 +1,11 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry};
 
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
-    NoteId, SignedMantleTx, TxHash, Utxo, ops::Op, traits::Hashable as _,
-    transactions::states::Unverified,
+    NoteId, SignedMantleTx, TxHash, Utxo,
+    ops::Op,
+    traits::Hashable as _,
+    transactions::{mantle_tx::MantleTx as _, states::Unverified},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 
@@ -53,7 +55,7 @@ impl ScannerAccounting {
     fn empty(
         tracked_wallets: Vec<TrackedWalletKeys>,
     ) -> Result<Self, crate::common::wallet::TrackedWalletKeysError> {
-        let mut public_key_to_wallet = HashMap::new();
+        let mut public_key_to_wallet: HashMap<ZkPublicKey, WalletId> = HashMap::new();
         let mut wallet_utxos = BTreeMap::new();
 
         for tracked_wallet in &tracked_wallets {
@@ -65,14 +67,20 @@ impl ScannerAccounting {
         for tracked_wallet in &tracked_wallets {
             let wallet_id = tracked_wallet.wallet_id().clone();
             for pk in tracked_wallet.wallet_pks() {
-                if let Some(existing_wallet) = public_key_to_wallet.insert(pk, wallet_id.clone()) {
-                    return Err(
-                        crate::common::wallet::TrackedWalletKeysError::DuplicatePublicKey {
-                            public_key: pk,
-                            first_wallet: existing_wallet,
-                            second_wallet: wallet_id,
-                        },
-                    );
+                match public_key_to_wallet.entry(pk) {
+                    Entry::Occupied(entry) if entry.get() != &wallet_id => {
+                        return Err(
+                            crate::common::wallet::TrackedWalletKeysError::DuplicatePublicKey {
+                                public_key: pk,
+                                first_wallet: entry.get().clone(),
+                                second_wallet: wallet_id,
+                            },
+                        );
+                    }
+                    Entry::Occupied(_) => {}
+                    Entry::Vacant(entry) => {
+                        entry.insert(wallet_id.clone());
+                    }
                 }
             }
         }
@@ -215,7 +223,7 @@ mod tests {
     use lb_core::{
         header::{ContentId, HeaderId},
         mantle::{
-            MantleTx, Note, SignedMantleTx, Utxo,
+            Note, RawMantleTx, SignedMantleTx, Utxo,
             ledger::{Inputs, Outputs},
             ops::{
                 Op,
@@ -264,7 +272,7 @@ mod tests {
     /// notes, so a transfer is what the accounting observes owned outputs from.
     fn transfer_tx(outputs: [Note; 2]) -> SignedMantleTx<Unverified> {
         SignedMantleTx::new(
-            MantleTx(
+            RawMantleTx(
                 [Op::Transfer(TransferOp::new(
                     Inputs::empty(),
                     Outputs::new(outputs),
@@ -341,7 +349,7 @@ mod tests {
     fn accounting_removes_spent_utxos() {
         let owned = utxo(10, 0, pk(1));
         let spend = SignedMantleTx::new(
-            MantleTx(
+            RawMantleTx(
                 [Op::ChannelDeposit(DepositOp {
                     channel_id: ChannelId::from([0; 32]),
                     inputs: Inputs::from([owned.id()]),
@@ -375,11 +383,11 @@ mod tests {
         let locked = utxo(10, 0, pk(1));
         let declaration = sdp_declaration(locked.id());
         let declare_tx = SignedMantleTx::new(
-            MantleTx([Op::SDPDeclare(declaration.clone())].into()),
+            RawMantleTx([Op::SDPDeclare(declaration.clone())].into()),
             OpsProofs::empty(),
         );
         let withdraw_tx = SignedMantleTx::new(
-            MantleTx(
+            RawMantleTx(
                 [Op::SDPWithdraw(WithdrawMessage {
                     declaration_id: declaration.id(),
                     locked_note_id: locked.id(),

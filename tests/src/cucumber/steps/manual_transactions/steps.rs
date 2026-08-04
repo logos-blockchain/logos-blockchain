@@ -18,9 +18,12 @@ use crate::{
                     execute_continuous_round_robin_user_wallets, log_wallet_balances,
                     perform_manual_step_control, verify_min_outputs_all_user_wallets,
                 },
+                drain_wallets::{drain_all_node_wallets, drain_node_wallet, drain_user_wallet},
                 tracked_transactions::{
                     submit_funded_transfer_transaction, submit_invalid_transfer_transaction,
+                    submit_stateless_invalid_transfer_transaction,
                     transaction_is_not_included_in_seconds,
+                    transaction_is_rejected_during_preverification,
                 },
                 utils,
                 utils::{
@@ -35,7 +38,7 @@ use crate::{
             submissions::create_and_submit_transaction_hashes_with_utxo_cache,
             sync::{WalletSendReadiness, wait_wallet_send_ready},
         },
-        world::{CucumberWorld, WalletInfo},
+        world::{CucumberWorld, WalletInfo, WalletType},
     },
     non_zero,
 };
@@ -113,11 +116,9 @@ async fn step_topup_node_funding_wallet(
     node_name: String,
     transaction_alias: String,
 ) -> StepResult {
-    let funding_wallet = world
-        .resolve_wallet(&format!("{node_name}_WALLET"))
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-        })?;
+    let funding_wallet = world.funding_wallet(&node_name).inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
     let funding_pk = funding_wallet.public_key().inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step.value);
     })?;
@@ -159,7 +160,8 @@ async fn step_topup_node_funding_wallet(
     info!(
         target: TARGET,
         "Submitted funding wallet top-up `{transaction_alias}`: {note_count} notes of \
-        {note_value} LGO from `{wallet_name}` to `{node_name}_WALLET`",
+        {note_value} LGO from `{wallet_name}` to `{}`",
+        funding_wallet.wallet_name,
     );
 
     Ok(())
@@ -402,9 +404,50 @@ async fn step_wallet_has_exact_coins_and_value(
 #[then(expr = "I log wallet balances for all wallets")]
 async fn step_wallet_balance_all_wallets(world: &mut CucumberWorld, step: &Step) -> StepResult {
     let mut wallets = world.all_user_wallets();
-    wallets.extend(world.all_funding_wallets());
+    wallets.extend(world.all_node_wallets());
 
     log_wallet_balances(world, &step.value, wallets).await
+}
+
+#[when(expr = "I drain wallet {string} into {string}")]
+#[then(expr = "I drain wallet {string} into {string}")]
+async fn step_drain_wallet(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sender_wallet_name: String,
+    receiver_wallet_name: String,
+) -> StepResult {
+    let sender = world.resolve_wallet(&sender_wallet_name)?;
+    let receiver = world.resolve_recipient(&receiver_wallet_name)?;
+    let sender_pk = sender.public_key()?;
+    let receiver_pk = receiver.public_key;
+
+    if sender_pk == receiver_pk {
+        return Err(StepError::InvalidArgument {
+            message: format!("Cannot drain wallet `{sender_wallet_name}` into itself"),
+        });
+    }
+
+    match sender.wallet_type {
+        WalletType::User { .. } => {
+            drain_user_wallet(world, &step.value, &sender, receiver_pk).await
+        }
+        WalletType::Funding { .. } => drain_node_wallet(world, &sender, receiver_pk).await,
+    }
+}
+
+#[when(expr = "I drain all node {string} wallets into {string}")]
+#[then(expr = "I drain all node {string} wallets into {string}")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require a mutable World reference"
+)]
+async fn step_drain_all_node_wallets(
+    world: &mut CucumberWorld,
+    node_name: String,
+    receiver_wallet_name: String,
+) -> StepResult {
+    drain_all_node_wallets(world, &node_name, &receiver_wallet_name).await
 }
 
 #[when(expr = "wallet {string} has all submitted transactions settled in {int} seconds")]
@@ -452,14 +495,11 @@ async fn step_send_multiple_transactions_to_single_wallet(
     sender_wallet_name: String,
     receiver_wallet_name: String,
 ) -> StepResult {
-    let wallets = world
-        .resolve_wallets(&[sender_wallet_name.clone(), receiver_wallet_name.clone()])
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-        })?;
-    let (sender_wallet, receiver_wallet) = (wallets[0].clone(), wallets[1].clone());
-
-    let receiver_wallet_pk = receiver_wallet.public_key()?;
+    let sender_wallet = world.resolve_wallet(&sender_wallet_name).inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
+    let receiver = world.resolve_recipient(&receiver_wallet_name)?;
+    let receiver_wallet_pk = receiver.public_key;
 
     let mut available_utxos = WalletUtxos::new();
     let best_node_info = wait_wallet_send_ready(
@@ -490,9 +530,10 @@ async fn step_send_multiple_transactions_to_single_wallet(
 
         info!(
             target: TARGET,
-            "Sent normal transaction from `{sender_wallet_name}/{}` to {receiver_wallet_name}, \
+            "Sent normal transaction from `{sender_wallet_name}/{}` to {}, \
             value: {output_value}, tx hash: {tx_hash_hex}",
-            sender_wallet.node_name
+            sender_wallet.node_name,
+            receiver.label
         );
     }
 
@@ -507,6 +548,33 @@ async fn step_submit_invalid_transfer_transaction(
     node_name: String,
 ) -> StepResult {
     submit_invalid_transfer_transaction(world, &step.value, transaction_alias, node_name).await
+}
+
+#[when(expr = "I submit a stateless-invalid transfer transaction {string} to node {string}")]
+async fn step_submit_stateless_invalid_transfer_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    transaction_alias: String,
+    node_name: String,
+) -> StepResult {
+    submit_stateless_invalid_transfer_transaction(world, &step.value, transaction_alias, node_name)
+        .await
+}
+
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Cucumber step captures are always owned `String`s, even when the step only needs to borrow them"
+)]
+#[then(expr = "transaction {string} is rejected during preverification")]
+fn step_transaction_is_rejected_during_preverification(
+    world: &mut CucumberWorld,
+    transaction_alias: String,
+) -> StepResult {
+    transaction_is_rejected_during_preverification(world, &transaction_alias)
 }
 
 #[when(
@@ -558,16 +626,11 @@ async fn step_send_single_transaction_multiple_outputs_to_single_wallet(
     sender_wallet_name: String,
     receiver_wallet_name: String,
 ) -> StepResult {
-    let wallets = world
-        .resolve_wallets(&[sender_wallet_name.clone(), receiver_wallet_name.clone()])
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-        })?;
-    let (sender_wallet, receiver_wallet) = (wallets[0].clone(), wallets[1].clone());
-
-    let receiver_wallet_pk = receiver_wallet.public_key().inspect_err(|e| {
+    let sender_wallet = world.resolve_wallet(&sender_wallet_name).inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step.value);
     })?;
+    let receiver = world.resolve_recipient(&receiver_wallet_name)?;
+    let receiver_wallet_pk = receiver.public_key;
 
     let receivers = vec![(receiver_wallet_pk, output_value); number_of_outputs];
     let tx_hash_hex = create_and_submit_transaction(
@@ -585,9 +648,10 @@ async fn step_send_single_transaction_multiple_outputs_to_single_wallet(
 
     info!(
         target: TARGET,
-        "Sent normal transaction from `{sender_wallet_name}/{}` to {receiver_wallet_name}, \
+        "Sent normal transaction from `{sender_wallet_name}/{}` to {}, \
         number_of_outputs: {number_of_outputs}, value: {output_value}, tx hash: {tx_hash_hex}",
-        sender_wallet.node_name
+        sender_wallet.node_name,
+        receiver.label
     );
 
     Ok(())
@@ -843,7 +907,7 @@ fn step_request_faucet_funds_for_all_funding_wallets(
     let all_wallets_pk_hex = world
         .wallet_info
         .values()
-        .filter(|w| w.is_funding_wallet())
+        .filter(|wallet| wallet.is_node_funding_wallet())
         .map(WalletInfo::public_key_hex)
         .collect::<Vec<_>>();
 

@@ -80,7 +80,7 @@ pub fn handle_received_serialized_encapsulated_message_and_update_cache(
 ) -> Result<(), ReceiveError> {
     // Deserialize the message.
     let deserialized_encapsulated_message =
-        deserialize_encapsulated_message(serialized_message, num_blend_layers)
+        deserialize_encapsulated_message(serialized_message, &num_blend_layers)
             .map_err(|_| ReceiveError::UndeserializableMessage)?;
 
     // Add the message to the set of exchanged message identifiers with the sender,

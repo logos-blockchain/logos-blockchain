@@ -205,7 +205,8 @@ Feature: Manual control of transactions
   Scenario: Devnet transactions manual control
     Given I have a devnet cluster with capacity of 2 nodes
     And we join an external network
-#    And I will initialize started nodes from snapshot "SNAP_TEST_03" source node "NODE"
+#    And I will initialize started nodes from snapshot "DEVNET_01" source node "NODE"
+    And I will create a snapshot "DEVNET_01" of all nodes when stopping
     And I have a faucet with URL "https://devnet.blockchain.logos.co/web/faucet-backend/"
     And I have initial peers:
       | initial_peer                                                                                   |
@@ -233,7 +234,8 @@ Feature: Manual control of transactions
   Scenario: Devnet transactions stress manual control
     Given I have a devnet cluster with capacity of 10 nodes
     And we join an external network
-#    And I will initialize started nodes from snapshot "000_094_856" source node "NODE"
+#    And I will initialize started nodes from snapshot "DEVNET_02" source node "NODE"
+    And I will create a snapshot "DEVNET_02" of all nodes when stopping
     And I have a faucet with URL "https://devnet.blockchain.logos.co/web/faucet-backend/"
     And I have initial peers:
       | initial_peer                                                                                   |

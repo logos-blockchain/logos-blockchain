@@ -4,7 +4,7 @@ use crate::mantle::gas::GasPrice;
 
 /// Initial storage gas price at genesis
 ///
-/// [Spec](https://www.notion.so/nomos-tech/v1-1-Storage-Markets-Specification-326261aa09df804ab483f573f522baf5?source=copy_link#326261aa09df804280b1fd5da1120a14):
+/// [Spec](https://lip.logos.co/blockchain/raw/storage-markets.html):
 /// `P_STR(0)` = 1 LGO/gas
 pub const GENESIS_STORAGE_GAS_PRICE: GasPrice = GasPrice::new(1);
 

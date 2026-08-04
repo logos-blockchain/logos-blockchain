@@ -1,23 +1,24 @@
+use lb_codec::{BinaryDecodeExt as _, BinaryEncode as _, DecodeError};
 use lb_groth16::COMPRESSED_PROOF_SIZE;
 use lb_key_management_system_keys::keys::ED25519_SIGNATURE_SIZE;
-use nom::IResult;
 
 use crate::{
     mantle::{
         Op, SignedMantleTx,
-        nom::{NomDecode as _, NomEncode as _},
         ops::codec::{decode_ops_proofs, encode_ops_proofs},
         transactions::{
-            mantle_tx::{MantleTx, MantleTxGasContext},
+            mantle_tx::{MantleTx as _, MantleTxGasContext, RawMantleTx},
             states::{Unverified, VerificationState},
         },
     },
     proofs::channel_multi_sig_proof::codec::calculate_channel_multi_sig_proof_byte_size,
 };
 
-pub fn decode_signed_mantle_tx(input: &[u8]) -> IResult<&[u8], SignedMantleTx<Unverified>> {
+pub fn decode_signed_mantle_tx(
+    input: &[u8],
+) -> Result<(&[u8], SignedMantleTx<Unverified>), DecodeError> {
     // SignedMantleTx = MantleTx OpsProofs
-    let (input, mantle_tx) = MantleTx::decode(input)?;
+    let (input, mantle_tx) = RawMantleTx::decode(input)?;
     let (input, ops_proofs) = decode_ops_proofs(input, mantle_tx.ops())?;
 
     let signed_tx = SignedMantleTx::new(mantle_tx, ops_proofs);
@@ -42,7 +43,7 @@ pub fn encode_signed_mantle_tx<State: VerificationState>(tx: &SignedMantleTx<Sta
 /// Attaching more proofs than predicted is allowed, but if the tx is funded
 /// based on the predicted size, it may end up paying insufficient fees.
 #[must_use]
-pub fn minimum_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGasContext) -> usize {
+pub fn minimum_signed_mantle_tx_size(tx: &RawMantleTx, context: &MantleTxGasContext) -> usize {
     let mantle_tx_size = tx.encode().len();
 
     let ops_proofs_size = tx
@@ -108,7 +109,6 @@ mod tests {
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey};
     use lb_utils::bounded::BoundedError;
     use multiaddr::Multiaddr;
-    use nom::error::{Error, ErrorKind};
     use num_bigint::BigUint;
 
     use super::*;
@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn test_decode_signed_mantle_tx_empty() {
-        let mantle_tx = MantleTx(Ops::new_unchecked(vec![]));
+        let mantle_tx = RawMantleTx(Ops::new_unchecked(vec![]));
 
         let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
 
@@ -195,7 +195,7 @@ mod tests {
     #[test]
     fn test_decode_signed_mantle_tx_with_inscribe() {
         let signing_key = Ed25519Key::from_bytes(&[4u8; 32]);
-        let mantle_tx = MantleTx(
+        let mantle_tx = RawMantleTx(
             [Op::ChannelInscribe(InscriptionOp {
                 channel_id: ChannelId::from([0xAA; 32]),
                 inscription: b"hello".into(),
@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn test_decode_signed_mantle_tx_with_multiple_ops() {
         let signing_key = Ed25519Key::from_bytes(&[4u8; 32]);
-        let mantle_tx = MantleTx(Ops::new_unchecked(vec![
+        let mantle_tx = RawMantleTx(Ops::new_unchecked(vec![
             Op::ChannelInscribe(InscriptionOp {
                 channel_id: ChannelId::from([0x11; 32]),
                 inscription: b"first".into(),
@@ -306,7 +306,7 @@ mod tests {
                 };
 
                 let mantle_tx =
-                    MantleTx(Ops::new_unchecked(vec![Op::ChannelInscribe(inscribe_op)]));
+                    RawMantleTx(Ops::new_unchecked(vec![Op::ChannelInscribe(inscribe_op)]));
 
                 let tx_hash = mantle_tx.hash();
                 let op_sig = signing_key.sign_payload(&tx_hash.as_signing_bytes());
@@ -350,13 +350,13 @@ mod tests {
     #[test]
     fn test_encode_decode_roundtrip_empty_tx() {
         // Create an empty MantleTx
-        let original_tx = MantleTx(Ops::new_unchecked(vec![]));
+        let original_tx = RawMantleTx(Ops::new_unchecked(vec![]));
 
         // Encode
         let encoded = original_tx.encode();
 
         // Decode
-        let (remaining, decoded_tx) = MantleTx::decode(&encoded).unwrap();
+        let (remaining, decoded_tx) = RawMantleTx::decode(&encoded).unwrap();
 
         // Verify
         assert!(remaining.is_empty());
@@ -371,13 +371,13 @@ mod tests {
         let note_id = NoteId(BigUint::from(123u64).into());
         let transfer_op = TransferOp::new(Inputs::new([note_id]), Outputs::new([note]));
 
-        let original_tx = MantleTx(Ops::new_unchecked(vec![Op::Transfer(transfer_op)]));
+        let original_tx = RawMantleTx(Ops::new_unchecked(vec![Op::Transfer(transfer_op)]));
 
         // Encode
         let encoded = original_tx.encode();
 
         // Decode
-        let (remaining, decoded_tx) = MantleTx::decode(&encoded).unwrap();
+        let (remaining, decoded_tx) = RawMantleTx::decode(&encoded).unwrap();
 
         // Verify
         assert!(remaining.is_empty());
@@ -387,7 +387,7 @@ mod tests {
     #[test]
     fn test_encode_decode_roundtrip_signed_tx() {
         // Create a simple SignedMantleTx
-        let mantle_tx = MantleTx(Ops::new_unchecked(vec![]));
+        let mantle_tx = RawMantleTx(Ops::new_unchecked(vec![]));
         let original_tx = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
 
         // Encode
@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn test_minimum_signed_mantle_tx_size_empty_tx() {
         // Create an empty MantleTx
-        let mantle_tx = MantleTx(Ops::new_unchecked(vec![]));
+        let mantle_tx = RawMantleTx(Ops::new_unchecked(vec![]));
 
         // Predict size
         let gas_context =
@@ -429,7 +429,7 @@ mod tests {
             signer: signing_key.public_key(),
         };
 
-        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelInscribe(inscribe_op)]));
+        let mantle_tx = RawMantleTx(Ops::new_unchecked(vec![Op::ChannelInscribe(inscribe_op)]));
 
         // Predict size
         let gas_context =
@@ -466,7 +466,7 @@ mod tests {
             transfer_threshold: 0,
         };
 
-        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelConfig(config_op)]));
+        let mantle_tx = RawMantleTx(Ops::new_unchecked(vec![Op::ChannelConfig(config_op)]));
 
         // Predict size
         let gas_context =
@@ -515,7 +515,7 @@ mod tests {
             locked_note_id: locked_note.id(),
         };
 
-        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::SDPDeclare(sdp_declare_op)]));
+        let mantle_tx = RawMantleTx(Ops::new_unchecked(vec![Op::SDPDeclare(sdp_declare_op)]));
 
         // Predict size
         let gas_context =
@@ -548,7 +548,7 @@ mod tests {
             locked_note_id,
         };
 
-        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::SDPWithdraw(sdp_withdraw_op)]));
+        let mantle_tx = RawMantleTx(Ops::new_unchecked(vec![Op::SDPWithdraw(sdp_withdraw_op)]));
 
         let tx_hash = mantle_tx.hash();
 
@@ -589,7 +589,7 @@ mod tests {
             metadata,
         };
 
-        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::SDPActive(sdp_active_op)]));
+        let mantle_tx = RawMantleTx(Ops::new_unchecked(vec![Op::SDPActive(sdp_active_op)]));
 
         let gas_context =
             MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
@@ -643,7 +643,7 @@ mod tests {
             metadata: ActivityMetadata::Blend(Box::new(blend_proof)),
         };
 
-        let mantle_tx = MantleTx(Ops::new_unchecked(vec![
+        let mantle_tx = RawMantleTx(Ops::new_unchecked(vec![
             Op::ChannelInscribe(inscribe_op),
             Op::ChannelConfig(config_op),
             Op::SDPActive(sdp_active_op),
@@ -691,7 +691,7 @@ mod tests {
             Outputs::new([note1, note2]),
         );
 
-        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::Transfer(transfer_op)]));
+        let mantle_tx = RawMantleTx(Ops::new_unchecked(vec![Op::Transfer(transfer_op)]));
 
         // Predict size
         let gas_context =
@@ -750,7 +750,7 @@ mod tests {
                 .id(),
         };
 
-        let mantle_tx = MantleTx(Ops::new_unchecked(vec![
+        let mantle_tx = RawMantleTx(Ops::new_unchecked(vec![
             Op::ChannelInscribe(inscribe_op),
             Op::ChannelConfig(config_op),
             Op::SDPDeclare(sdp_declare_op),
@@ -794,7 +794,7 @@ mod tests {
             pk: ZkPublicKey::from(BigUint::from(0u64)),
         };
 
-        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::LeaderClaim(leader_claim_op)]));
+        let mantle_tx = RawMantleTx(Ops::new_unchecked(vec![Op::LeaderClaim(leader_claim_op)]));
 
         let empty_gas_context =
             MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
@@ -828,7 +828,7 @@ mod tests {
     #[test]
     fn test_encode_decode_channel_withdraw_tx() {
         let signing_key = Ed25519Key::from_bytes(&[21u8; 32]);
-        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelWithdraw(
+        let mantle_tx = RawMantleTx(Ops::new_unchecked(vec![Op::ChannelWithdraw(
             ChannelWithdrawOp {
                 channel_id: ChannelId::from([0xAB; 32]),
                 inputs: Inputs::new([
@@ -894,12 +894,10 @@ mod tests {
         assert!(result.is_err(), "Should reject oversized inscription");
 
         // Verify it fails with the right error kind
-        match result {
-            Err(nom::Err::Error(e)) => {
-                assert_eq!(e.code, ErrorKind::TooLarge);
-            }
-            _ => panic!("Expected TooLarge error"),
-        }
+        assert!(
+            matches!(result, Err(DecodeError::LengthOutOfBounds { .. })),
+            "Expected LengthOutOfBounds error",
+        );
     }
 
     #[test]
@@ -935,8 +933,11 @@ mod tests {
 
         // Should not fail with TooLarge error (will fail with incomplete data)
         let result = Ops::decode(&valid_input);
-        if let Err(nom::Err::Error(e)) = result {
-            assert_ne!(e.code, ErrorKind::TooLarge, "Should not reject at u8::MAX]");
+        if let Err(err) = result {
+            assert!(
+                !matches!(err, DecodeError::LengthOutOfBounds { .. }),
+                "Should not reject at u8::MAX",
+            );
         }
     }
 
@@ -987,13 +988,8 @@ mod tests {
         }
         .encode();
 
-        assert_eq!(
-            ChannelConfigOp::decode(&encoded_config_op).unwrap_err(),
-            nom::Err::Error(Error {
-                input: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0][..],
-                code: ErrorKind::LengthValue,
-            }),
-        );
+        let err = ChannelConfigOp::decode(&encoded_config_op).unwrap_err();
+        assert!(matches!(err, DecodeError::LengthOutOfBounds { len: 0, .. }));
     }
 
     #[test]
@@ -1058,15 +1054,10 @@ mod tests {
         // ... rest of SDPDeclare fields ...
 
         let result = SDPDeclareOp::decode(&malicious_input);
-        if let Err(nom::Err::Error(ref e)) = result {
-            assert_eq!(
-                e.code,
-                ErrorKind::TooLarge,
-                "Should reject at `MAX_LOCATOR_BYTE_SIZE + 1`"
-            );
-        } else {
-            panic!("Should reject oversized locator");
-        }
+        assert!(
+            matches!(result, Err(DecodeError::LengthOutOfBounds { .. })),
+            "Should reject at `MAX_LOCATOR_BYTE_SIZE + 1`",
+        );
     }
 
     #[test]
@@ -1089,11 +1080,10 @@ mod tests {
         // ... rest of SDPDeclare fields ...
 
         let result = SDPDeclareOp::decode(&malicious_input);
-        if let Err(nom::Err::Error(ref e)) = result {
-            assert_ne!(
-                e.code,
-                ErrorKind::LengthValue,
-                "Should not reject at `MAX_LOCATOR_BYTE_SIZE`"
+        if let Err(ref err) = result {
+            assert!(
+                !matches!(err, DecodeError::LengthOutOfBounds { .. }),
+                "Should not reject at `MAX_LOCATOR_BYTE_SIZE`",
             );
         }
         assert!(result.is_err(), "Should reject invalid declaration");
@@ -1115,10 +1105,10 @@ mod tests {
         let encoded = op.encode();
         let result = SDPDeclareOp::decode(&encoded);
 
-        match result {
-            Err(nom::Err::Error(e)) => assert_eq!(e.code, ErrorKind::MapRes),
-            _ => panic!("Expected Verify error for invalid locator"),
-        }
+        assert!(
+            matches!(result, Err(DecodeError::InvalidValue { .. })),
+            "Expected an invalid-value error for invalid locator",
+        );
     }
 
     #[test]

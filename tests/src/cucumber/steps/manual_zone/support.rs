@@ -14,7 +14,7 @@ use std::{
 use futures::StreamExt as _;
 use lb_common_http_client::{CommonHttpClient, Slot};
 use lb_core::mantle::{
-    MantleTx, Note, Op, OpProof, Utxo, Value,
+    Note, Op, OpProof, RawMantleTx, Utxo, Value,
     gas::GasCost,
     ledger::{Inputs, Outputs, OutputsError},
     ops::{
@@ -1905,7 +1905,7 @@ pub async fn publish_atomic_zone_withdraw(
 /// ZK keys.
 async fn sign_tx_zk(
     node_url: &Url,
-    tx: &MantleTx,
+    tx: &RawMantleTx,
     public_keys: Vec<ZkPublicKey>,
 ) -> Result<ZkSignature, ZoneTestError> {
     let request_url =
