@@ -296,7 +296,13 @@ impl TxState {
             .collect()
     }
 
-    pub fn submit_other(&mut self, signed_tx: SignedMantleTx<Unverified>, channel_id: ChannelId) {
+    /// Returns the channel tip the tx leaves behind once mined (its last
+    /// tip-advancing op), or `None` when it carries none for this channel.
+    pub fn submit_other(
+        &mut self,
+        signed_tx: SignedMantleTx<Unverified>,
+        channel_id: ChannelId,
+    ) -> Option<MsgId> {
         let tx_hash = signed_tx.mantle_tx().hash();
         let (first_parent, last_msg) = opaque_lineage(&signed_tx, channel_id);
         self.track_local_tx(tx_hash);
@@ -308,6 +314,7 @@ impl TxState {
                 last_msg,
             },
         );
+        last_msg
     }
 
     fn track_local_tx(&mut self, tx_hash: TxHash) {
@@ -742,19 +749,52 @@ impl TxState {
         let mut current = from_msg;
         let mut found_any = false;
 
-        loop {
-            let Some(children) = self.pending_by_parent.get(&current) else {
+        // Bounded by the pending population: a longer walk would mean a
+        // cycle in (possibly inconsistent) pending lineage data.
+        for _ in 0..=(self.pending.len() + self.pending_other.len()) {
+            let Some(next) = self.single_pending_child(current) else {
                 return found_any.then_some(current);
             };
-            if children.len() != 1 {
-                return found_any.then_some(current);
-            }
-            let Some(pending) = self.pending.get(&children[0]) else {
-                return found_any.then_some(current);
-            };
-            current = pending.this_msg;
+            current = next;
             found_any = true;
         }
+        found_any.then_some(current)
+    }
+
+    /// The unique pending link chaining off `current`, considering both plain
+    /// pending inscriptions and opaque pending txs (`submit_signed_tx`
+    /// bundles), which enter the chain at their first inscription's parent
+    /// and leave it at their last tip-advancing op. A contested position
+    /// (multiple candidates) yields `None` so the caller stops before it.
+    fn single_pending_child(&self, current: MsgId) -> Option<MsgId> {
+        let mut candidate: Option<MsgId> = None;
+        let mut push = |msg: MsgId| -> bool {
+            if candidate.is_some() && candidate != Some(msg) {
+                return false;
+            }
+            candidate = Some(msg);
+            true
+        };
+
+        if let Some(children) = self.pending_by_parent.get(&current) {
+            for tx_hash in children {
+                if let Some(pending) = self.pending.get(tx_hash)
+                    && !push(pending.this_msg)
+                {
+                    return None;
+                }
+            }
+        }
+        for other in self.pending_other.values() {
+            if other.first_parent == Some(current)
+                && let Some(last_msg) = other.last_msg
+                && last_msg != current
+                && !push(last_msg)
+            {
+                return None;
+            }
+        }
+        candidate
     }
 
     /// Derive the channel tip `MsgId` at a given L1 block by walking backwards
@@ -1175,6 +1215,99 @@ mod tests {
 
         // At b2 tip, tx is back in pending_txs (different branch)
         assert!(state.pending_txs(b2).iter().any(|(h, _)| *h == hash));
+    }
+
+    /// Build an `[inscribe(parent), config]` bundle tx for the zero channel.
+    fn bundle_tx(parent: MsgId, data: u8) -> (SignedMantleTx<Unverified>, MsgId, MsgId) {
+        use lb_core::mantle::{
+            channel::{SlotTimeframe, SlotTimeout},
+            ops::channel::config::{ChannelConfigOp, Keys},
+        };
+        let inscribe = InscriptionOp {
+            channel_id: [0u8; 32].into(),
+            inscription: [data].into(),
+            parent,
+            signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+        };
+        let config = ChannelConfigOp {
+            channel: [0u8; 32].into(),
+            keys: Keys::try_from(vec![Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()]).unwrap(),
+            posting_timeframe: SlotTimeframe::from(0u32),
+            posting_timeout: SlotTimeout::from(0u32),
+            configuration_threshold: 1,
+            transfer_threshold: 1,
+        };
+        let inscribe_msg = inscribe.id();
+        let config_msg = config.id();
+        let tx = SignedMantleTx::new(
+            RawMantleTx([ChannelInscribe(inscribe), Op::ChannelConfig(config)].into()),
+            OpsProofs::empty(),
+        );
+        (tx, inscribe_msg, config_msg)
+    }
+
+    /// A pending `submit_signed_tx` bundle must participate in publish-parent
+    /// chaining: the next publish chains off the bundle's *last* tip-advancing
+    /// op (the config), not the pre-bundle tip — otherwise the two txs race
+    /// for the same channel position and one is permanently invalidated.
+    #[test]
+    fn publish_parent_chains_through_pending_bundle() {
+        let genesis = header_id(0);
+        let tip = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![]);
+
+        let (bundle, _inscribe_msg, config_msg) = bundle_tx(MsgId::root(), 1);
+        let derived = state.submit_other(bundle, channel_id);
+        assert_eq!(derived, Some(config_msg), "bundle tip is its config op");
+
+        assert_eq!(
+            state.publish_parent(tip),
+            config_msg,
+            "next publish must chain after the pending bundle"
+        );
+    }
+
+    /// The chain walk composes across kinds: pending inscription, then a
+    /// bundle chained on it, then another pending inscription on the bundle's
+    /// config tip.
+    #[test]
+    fn publish_parent_walks_mixed_pending_chain() {
+        let genesis = header_id(0);
+        let tip = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![]);
+
+        state.submit_inscription(make_dummy_tx(1), MsgId::root(), msg_id(10), [1].into());
+        let (bundle, _i, config_msg) = bundle_tx(msg_id(10), 2);
+        state.submit_other(bundle, channel_id);
+        state.submit_inscription(make_dummy_tx(3), config_msg, msg_id(30), [3].into());
+
+        assert_eq!(state.publish_parent(tip), msg_id(30));
+    }
+
+    /// A contested position (pending inscription and bundle both claiming the
+    /// same parent) stops the walk before the conflict, as for competing
+    /// inscriptions.
+    #[test]
+    fn publish_parent_stops_at_contested_bundle_position() {
+        let genesis = header_id(0);
+        let tip = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![]);
+
+        state.submit_inscription(make_dummy_tx(1), MsgId::root(), msg_id(10), [1].into());
+        let (bundle, _i, _c) = bundle_tx(MsgId::root(), 2);
+        state.submit_other(bundle, channel_id);
+
+        assert_eq!(
+            state.publish_parent(tip),
+            MsgId::root(),
+            "walk must stop before a contested position"
+        );
     }
 
     #[test]

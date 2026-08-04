@@ -853,9 +853,20 @@ where
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
         let id = tx.mantle_tx().hash();
-        track_pending_tx(state, tx.clone(), self.channel_id);
+        let derived_tip = track_pending_tx(state, tx.clone(), self.channel_id);
         let parent_msg = self.last_msg_id;
-        self.last_msg_id = msg_id;
+        // The tip the tx leaves behind is defined by its ops (the last
+        // tip-advancing one — e.g. a config after an inscribe resets it), so
+        // the caller's `msg_id` is only a fallback for txs without one.
+        let new_tip = derived_tip.unwrap_or(msg_id);
+        if new_tip != msg_id {
+            warn!(target: TARGET,
+                "submit_signed_tx: caller msg_id {:?} is not the tx's resulting channel tip {:?}; \
+                 using the derived tip",
+                msg_id, new_tip
+            );
+        }
+        self.last_msg_id = new_tip;
         self.queue_tx_status(id, TxStatus::AcceptedLocally);
 
         info!(target: TARGET, "Submitted tx including inscription {:?}", id);
@@ -883,7 +894,7 @@ where
                 tx: PendingTx::Inscription(InscriptionInfo {
                     tx_hash: id,
                     parent_msg,
-                    this_msg: msg_id,
+                    this_msg: new_tip,
                     payload,
                 }),
             },
@@ -1065,22 +1076,30 @@ fn restored_pending_channel_tip(
 
 /// Track a signed tx in pending state: publish-shaped txs enter the
 /// inscription lineage, everything else is tracked opaquely.
+/// Returns the channel tip the tx leaves behind once mined (its last
+/// tip-advancing op), or `None` when the tx carries none for this channel.
 pub(super) fn track_pending_tx(
     state: &mut TxState,
     tx: SignedMantleTx<Unverified>,
     channel_id: ChannelId,
-) {
+) -> Option<MsgId> {
     match classify_channel_tx(&tx, channel_id, &mut None) {
         Some(BlockChannelTx::Inscription(i)) => {
-            state.submit_inscription(tx, i.parent_msg, i.this_msg, i.payload);
+            let this_msg = i.this_msg;
+            state.submit_inscription(tx, i.parent_msg, this_msg, i.payload);
+            Some(this_msg)
         }
-        Some(BlockChannelTx::AtomicWithdraw(aw)) => state.submit_atomic_withdraw(
-            tx,
-            aw.inscription.parent_msg,
-            aw.inscription.this_msg,
-            aw.inscription.payload,
-            aw.withdraws,
-        ),
+        Some(BlockChannelTx::AtomicWithdraw(aw)) => {
+            let this_msg = aw.inscription.this_msg;
+            state.submit_atomic_withdraw(
+                tx,
+                aw.inscription.parent_msg,
+                this_msg,
+                aw.inscription.payload,
+                aw.withdraws,
+            );
+            Some(this_msg)
+        }
         _ => state.submit_other(tx, channel_id),
     }
 }

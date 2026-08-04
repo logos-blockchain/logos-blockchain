@@ -832,6 +832,74 @@ mod tests {
         );
     }
 
+    /// A `submit_signed_tx` bundle whose last tip-advancing op is a config
+    /// must chain subsequent publishes off the config's id — even when the
+    /// caller passes the inscription's id as `msg_id`. Otherwise the next
+    /// publish claims the same channel position as the bundle and the two
+    /// race, permanently invalidating one side.
+    #[tokio::test]
+    async fn publish_after_bundle_chains_on_the_bundle_config_tip() {
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+        let node = MockNode::default();
+        let mut sequencer = ZoneSequencer::init(
+            channel_id,
+            sequencer_key.clone(),
+            node,
+            funding_config(),
+            None,
+        );
+
+        loop {
+            if matches!(sequencer.next_event().await, Event::Ready) {
+                break;
+            }
+        }
+
+        let inscribe = InscriptionOp {
+            channel_id,
+            inscription: b"bundle".to_vec().try_into().unwrap(),
+            parent: MsgId::root(),
+            signer: sequencer_key.public_key(),
+        };
+        let config = ChannelConfigOp {
+            channel: channel_id,
+            keys: Keys::try_from(vec![sequencer_key.public_key()]).unwrap(),
+            posting_timeframe: SlotTimeframe::from(0u32),
+            posting_timeout: SlotTimeout::from(0u32),
+            configuration_threshold: 1,
+            transfer_threshold: 1,
+        };
+        let inscribe_msg = inscribe.id();
+        let config_msg = config.id();
+        let bundle = unverified_tx_with_ops(vec![
+            Op::ChannelInscribe(inscribe),
+            Op::ChannelConfig(config),
+        ]);
+
+        // The caller passes the *inscription's* id — the mistake this guards.
+        let (result, _cp) = sequencer
+            .handle()
+            .submit_signed_tx(bundle, inscribe_msg)
+            .expect("bundle submit should be accepted");
+        assert_eq!(
+            result.tx.inscription().this_msg,
+            config_msg,
+            "the bundle's resulting tip is its config op"
+        );
+
+        let (published, _cp) = sequencer
+            .handle()
+            .publish(b"after-bundle".into())
+            .await
+            .expect("publish after bundle should be accepted");
+        assert_eq!(
+            published.tx.inscription().parent_msg,
+            config_msg,
+            "the next publish must chain after the pending bundle's config tip"
+        );
+    }
+
     #[tokio::test]
     async fn config_only_block_sheds_pending_and_advances_checkpoint() {
         let channel_id = ChannelId::from([0; 32]);
