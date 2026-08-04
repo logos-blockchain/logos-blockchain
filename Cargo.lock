@@ -5075,7 +5075,6 @@ dependencies = [
 name = "logos-blockchain-tests"
 version = "0.0.0"
 dependencies = [
- "async-trait",
  "axum 0.7.9",
  "bincode",
  "cucumber",
