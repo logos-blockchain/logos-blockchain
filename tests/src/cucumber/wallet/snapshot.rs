@@ -321,7 +321,7 @@ fn save_all_wallets_snapshot_value(snapshot_name: &str, snapshot: WalletSnapshot
     let artifact = snapshot.into_artifact().map_err(|e| snapshot_error(&e))?;
 
     SnapshotStore::new(snapshots_root_dir())
-        .save_extension_artifact(snapshot_name, WALLET_SNAPSHOT_EXTENSION_ID, artifact)
+        .save_provider_artifact(snapshot_name, WALLET_SNAPSHOT_EXTENSION_ID, artifact)
         .map(|_| ())
         .map_err(|e| snapshot_error(&e))
 }
@@ -423,7 +423,7 @@ fn read_wallet_snapshot_if_present(
     let artifact = SnapshotStore::new(snapshots_root_dir())
         .read_manifest(snapshot_name)
         .map_err(|e| snapshot_error(&e))?
-        .extensions
+        .providers
         .get(WALLET_SNAPSHOT_EXTENSION_ID)
         .cloned();
 

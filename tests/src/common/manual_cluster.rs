@@ -31,14 +31,17 @@ pub struct LocalManualClusterHarnessBase {
 }
 
 impl LocalManualClusterHarnessBase {
+    #[must_use]
     pub fn scenario_base_dir(&self) -> &Path {
         &self.scenario_base_dir
     }
 
+    #[must_use]
     pub const fn deployment(&self) -> &DeploymentPlan {
         &self.deployment
     }
 
+    #[must_use]
     pub const fn cluster(&self) -> &LbcManualCluster {
         &self.cluster
     }

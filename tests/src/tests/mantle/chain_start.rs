@@ -34,6 +34,7 @@ async fn delayed_chain_start() {
     // Resolve/build the node binary up front so the genesis-time countdown doesn't
     // need to account for compilation time
     ensure_node_binary_built(&NodeBinaryProfile::default())
+        .await
         .expect("node binary should build or resolve");
     let genesis_time = OffsetDateTime::now_utc() + Duration::from_secs(30);
     let (_base, nodes) = start_local_manual_cluster_with_layout(
