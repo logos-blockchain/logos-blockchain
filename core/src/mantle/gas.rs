@@ -171,13 +171,14 @@ pub trait OperationGas<Profile: GasProfile>: ProvableOperation {
 }
 
 pub trait SignedOperationExecutionGas {
-    fn gas_signature_count(&self) -> Value;
+    /// The factor `execution_gas` scales the operation's base gas cost by.
+    fn gas_multiplier(&self) -> Value;
 
+    /// Calculates the execution gas.
     fn execution_gas<Profile: GasProfile>(&self) -> Result<Gas, GasOverflow>
     where
         Self: OperationGas<Profile>,
     {
-        let multiplier = self.gas_signature_count();
-        Self::GAS_CONSTANT.checked_mul(multiplier)
+        Self::GAS_CONSTANT.checked_mul(self.gas_multiplier())
     }
 }

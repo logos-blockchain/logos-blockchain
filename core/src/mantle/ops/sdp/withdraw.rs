@@ -7,12 +7,14 @@ use super::{SDPWithdrawOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
-        gas::{Gas, MainnetGasProfile, OperationGas},
+        Value,
+        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
-            VerifiableOperation, verification_mode,
+            VerifiableOperation, verification_mode, verification_mode::VerificationMode,
         },
-        transactions::hash::TxHashView,
+        ops::SignedOp,
+        transactions::{hash::TxHashView, states::VerificationState},
     },
     sdp::{self, locked_notes::LockedNotes},
 };
@@ -148,5 +150,13 @@ impl ExecutableOperation for SDPWithdrawOp {
         );
 
         Ok((context, Vec::new()))
+    }
+}
+
+impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
+    for SignedOp<SDPWithdrawOp, State, Mode>
+{
+    fn gas_multiplier(&self) -> Value {
+        1
     }
 }

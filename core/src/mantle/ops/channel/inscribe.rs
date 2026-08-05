@@ -12,14 +12,15 @@ use crate::{
     crypto::{Digest as _, Hasher},
     events::TxEvent,
     mantle::{
+        Value,
         channel::{ChannelState, Channels, Error},
-        gas::{Gas, MainnetGasProfile, OperationGas},
+        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
-            verification_mode,
+            verification_mode, verification_mode::VerificationMode,
         },
-        ops::channel::config::Keys,
-        transactions::hash::TxHashView,
+        ops::{SignedOp, channel::config::Keys},
+        transactions::{hash::TxHashView, states::VerificationState},
     },
 };
 
@@ -191,6 +192,14 @@ impl ExecutableOperation for InscriptionOp {
             },
         );
         Ok((context, Vec::new()))
+    }
+}
+
+impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
+    for SignedOp<InscriptionOp, State, Mode>
+{
+    fn gas_multiplier(&self) -> Value {
+        1
     }
 }
 
