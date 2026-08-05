@@ -7,14 +7,14 @@ use crate::mantle::{
     },
 };
 
-pub struct VerifiedOps<'tx> {
+pub struct VerifiedOperations<'tx> {
     ops: &'tx [Op],
     proofs: &'tx [OpProof],
     tx_hash_view: TxHashView,
     index: usize,
 }
 
-impl<'tx> VerifiedOps<'tx> {
+impl<'tx> VerifiedOperations<'tx> {
     #[must_use]
     pub fn new(transaction: &'tx MantleTransaction<Preverified>) -> Self {
         let ops = transaction.mantle_tx.ops();
@@ -71,9 +71,9 @@ impl<'tx> VerifiedOps<'tx> {
     }
 }
 
-impl<'tx> From<&'tx MantleTransaction<Preverified>> for VerifiedOps<'tx> {
+impl<'tx> From<&'tx MantleTransaction<Preverified>> for VerifiedOperations<'tx> {
     fn from(transaction: &'tx MantleTransaction<Preverified>) -> Self {
-        VerifiedOps::new(transaction)
+        VerifiedOperations::new(transaction)
     }
 }
 

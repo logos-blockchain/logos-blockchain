@@ -30,7 +30,7 @@ use crate::{
             mantle_tx::OpWithProof,
         },
         transactions::{
-            GasPrices, OpProofs, OperationVerificationHelper, VerifiedOps,
+            GasPrices, OpProofs, OperationVerificationHelper, VerifiedOperations,
             codec::{decode_signed_mantle_tx, encode_signed_mantle_tx},
             hash::{TxHash, TxHashView},
             mantle_tx::MantleTx as _,
@@ -362,7 +362,7 @@ impl MantleTransaction<Preverified> {
     }
 
     #[must_use]
-    pub fn verified_ops(&self) -> VerifiedOps<'_> {
+    pub fn verified_ops(&self) -> VerifiedOperations<'_> {
         self.into()
     }
 }
@@ -455,7 +455,7 @@ impl<State: VerificationState> StorageSize for MantleTransaction<State> {
 }
 
 impl PreverifiedMantleTx for MantleTransaction<Preverified> {
-    fn verified_ops(&self) -> VerifiedOps<'_> {
+    fn verified_ops(&self) -> VerifiedOperations<'_> {
         self.verified_ops()
     }
 }
