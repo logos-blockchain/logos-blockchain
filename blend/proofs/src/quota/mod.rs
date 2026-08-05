@@ -31,13 +31,8 @@ pub(crate) type Ed25519PublicKey = VerifyingKey;
 pub(crate) const ED25519_PUBLIC_KEY_SIZE: usize = PUBLIC_KEY_LENGTH;
 
 const KEY_NULLIFIER_SIZE: usize = size_of::<ZkHash>();
-const POW_PK_SIZE: usize = size_of::<ZkHash>();
 const PROOF_CIRCUIT_SIZE: usize = size_of::<PoQProof>();
-pub const PROOF_OF_QUOTA_SIZE: usize = KEY_NULLIFIER_SIZE
-    .checked_add(POW_PK_SIZE)
-    .unwrap()
-    .checked_add(PROOF_CIRCUIT_SIZE)
-    .unwrap();
+pub const PROOF_OF_QUOTA_SIZE: usize = KEY_NULLIFIER_SIZE.checked_add(PROOF_CIRCUIT_SIZE).unwrap();
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -54,8 +49,6 @@ pub enum Error {
 pub struct ProofOfQuota {
     #[serde(with = "lb_groth16::serde::serde_fr")]
     key_nullifier: ZkHash,
-    #[serde(with = "lb_groth16::serde::serde_fr")]
-    pow_pk: ZkHash,
     #[serde(with = "self::serde::proof::SerializablePoQProof")]
     proof: PoQProof,
 }
@@ -67,7 +60,6 @@ impl Debug for ProofOfQuota {
                 "key_nullifier",
                 &hex::encode(fr_to_bytes(&self.key_nullifier)),
             )
-            .field("pow_pk", &hex::encode(fr_to_bytes(&self.pow_pk)))
             .field("proof", &hex::encode(self.proof.to_bytes()))
             .finish()
     }
@@ -76,15 +68,11 @@ impl Debug for ProofOfQuota {
 impl ProofOfQuota {
     /// Verify a Proof of Quota with the provided inputs.
     ///
-    /// The key nullifier and the `PoW` public key required to verify the proof
-    /// are taken from the proof itself and are not contained in the passed
-    /// inputs.
+    /// The key nullifier required to verify the proof is taken from the proof
+    /// itself and is not contained in the passed inputs.
     pub fn verify(self, public_inputs: &PublicInputs) -> Result<VerifiedProofOfQuota, Error> {
-        let verifier_input = VerifyInputs::from_prove_inputs_and_outputs(
-            *public_inputs,
-            self.key_nullifier,
-            self.pow_pk,
-        );
+        let verifier_input =
+            VerifyInputs::from_prove_inputs_and_nullifier(*public_inputs, self.key_nullifier);
         let is_proof_valid = matches!(verify(&self.proof, verifier_input.into()), Ok(true));
         if is_proof_valid {
             Ok(VerifiedProofOfQuota(self))
@@ -96,11 +84,6 @@ impl ProofOfQuota {
     #[must_use]
     pub const fn key_nullifier(&self) -> ZkHash {
         self.key_nullifier
-    }
-
-    #[must_use]
-    pub const fn pow_pk(&self) -> ZkHash {
-        self.pow_pk
     }
 }
 
@@ -114,9 +97,7 @@ impl From<&ProofOfQuota> for [u8; PROOF_OF_QUOTA_SIZE] {
     fn from(proof: &ProofOfQuota) -> Self {
         let mut bytes = [0u8; PROOF_OF_QUOTA_SIZE];
         bytes[..KEY_NULLIFIER_SIZE].copy_from_slice(&fr_to_bytes(&proof.key_nullifier));
-        bytes[KEY_NULLIFIER_SIZE..KEY_NULLIFIER_SIZE + POW_PK_SIZE]
-            .copy_from_slice(&fr_to_bytes(&proof.pow_pk));
-        bytes[KEY_NULLIFIER_SIZE + POW_PK_SIZE..].copy_from_slice(&proof.proof.to_bytes());
+        bytes[KEY_NULLIFIER_SIZE..].copy_from_slice(&proof.proof.to_bytes());
         bytes
     }
 }
@@ -125,10 +106,8 @@ impl TryFrom<[u8; PROOF_OF_QUOTA_SIZE]> for ProofOfQuota {
     type Error = Box<dyn std::error::Error>;
 
     fn try_from(bytes: [u8; PROOF_OF_QUOTA_SIZE]) -> Result<Self, Self::Error> {
-        let (key_nullifier_bytes, rest) = bytes.split_at(KEY_NULLIFIER_SIZE);
-        let (pow_pk_bytes, proof_circuit_bytes) = rest.split_at(POW_PK_SIZE);
+        let (key_nullifier_bytes, proof_circuit_bytes) = bytes.split_at(KEY_NULLIFIER_SIZE);
         let key_nullifier = fr_from_bytes(key_nullifier_bytes).map_err(Box::new)?;
-        let pow_pk = fr_from_bytes(pow_pk_bytes).map_err(Box::new)?;
         let (pi_a, pi_b, pi_c) = split_proof_components::<
             <Bn254 as CompressSize>::G1CompressedSize,
             <Bn254 as CompressSize>::G2CompressedSize,
@@ -136,7 +115,6 @@ impl TryFrom<[u8; PROOF_OF_QUOTA_SIZE]> for ProofOfQuota {
 
         Ok(Self {
             key_nullifier,
-            pow_pk,
             proof: PoQProof::new(pi_a, pi_b, pi_c),
         })
     }
@@ -187,20 +165,13 @@ impl VerifiedProofOfQuota {
         }
         .try_into()
         .map_err(|e| Error::InvalidInput(Box::new(e)))?;
-        let (
-            proof,
-            PoQVerifierInput {
-                key_nullifier,
-                pow_pk,
-                ..
-            },
-        ) = prove(witness_inputs).map_err(Error::ProofGeneration)?;
+        let (proof, PoQVerifierInput { key_nullifier, .. }) =
+            prove(witness_inputs).map_err(Error::ProofGeneration)?;
         let secret_selection_randomness =
             generate_secret_selection_randomness(&secret_selection_randomness_input, key_index);
         Ok((
             Self(ProofOfQuota {
                 key_nullifier: key_nullifier.into_inner(),
-                pow_pk: pow_pk.into_inner(),
                 proof,
             }),
             secret_selection_randomness,
@@ -214,10 +185,8 @@ impl VerifiedProofOfQuota {
 
     #[must_use]
     pub fn from_bytes_unchecked(bytes: [u8; PROOF_OF_QUOTA_SIZE]) -> Self {
-        let (key_nullifier_bytes, rest) = bytes.split_at(KEY_NULLIFIER_SIZE);
-        let (pow_pk_bytes, proof_circuit_bytes) = rest.split_at(POW_PK_SIZE);
+        let (key_nullifier_bytes, proof_circuit_bytes) = bytes.split_at(KEY_NULLIFIER_SIZE);
         let key_nullifier = fr_from_bytes_unchecked(key_nullifier_bytes);
-        let pow_pk = fr_from_bytes_unchecked(pow_pk_bytes);
         let (pi_a, pi_b, pi_c) = split_proof_components::<
             <Bn254 as CompressSize>::G1CompressedSize,
             <Bn254 as CompressSize>::G2CompressedSize,
@@ -225,7 +194,6 @@ impl VerifiedProofOfQuota {
 
         Self(ProofOfQuota {
             key_nullifier,
-            pow_pk,
             proof: PoQProof::new(pi_a, pi_b, pi_c),
         })
     }

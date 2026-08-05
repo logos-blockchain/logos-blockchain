@@ -257,11 +257,6 @@ mod tests {
             )
             .unwrap()
             .into(),
-            block_hash: BigUint::from_str(
-                "8120861784052316792639248700404452951342238269077440156691809582275873301855",
-            )
-            .unwrap()
-            .into(),
         };
         let common_data = PoQCommonInputsData {
             core_quota: 10,
@@ -284,9 +279,6 @@ mod tests {
             PoQWitnessInputs::from_core_node_data(chain_data, common_data, blend_data).unwrap();
         let (proof, inputs) = prove(witness_inputs).unwrap();
         let key_nullifier = inputs.key_nullifier.into_inner();
-        // `pow_pk` is a circuit output derived from the randomly generated `pow_sk`, so
-        // it can only be recovered from the proof's public signals.
-        let pow_pk = inputs.pow_pk.into_inner();
         // Test that verifying with the inputs returned by `prove` works.
         assert!(verify(&proof, inputs).unwrap());
 
@@ -298,10 +290,8 @@ mod tests {
             k_part_one: common_data.message_key.0,
             k_part_two: common_data.message_key.1,
             key_nullifier,
-            pow_pk,
             leader_quota: common_data.leader_quota,
             pow_quota: common_data.pow_quota,
-            pow_block_hash: chain_data.block_hash,
             pow_blend_difficulty: common_data.pow_difficulty,
             pol_epoch_nonce: chain_data.pol_epoch_nonce,
             pol_ledger_aged: chain_data.pol_ledger_aged,
@@ -335,11 +325,6 @@ mod tests {
             .into(),
             lottery_0,
             lottery_1,
-            block_hash: BigUint::from_str(
-                "8120861784052316792639248700404452951342238269077440156691809582275873301855",
-            )
-            .unwrap()
-            .into(),
         };
         let common_data = PoQCommonInputsData {
             core_quota: 15,
@@ -508,9 +493,6 @@ mod tests {
             PoQWitnessInputs::from_leader_data(chain_data, common_data, wallet_data).unwrap();
         let (proof, inputs) = prove(witness_inputs).unwrap();
         let key_nullifier = inputs.key_nullifier.into_inner();
-        // `pow_pk` is a circuit output derived from the randomly generated `pow_sk`, so
-        // it can only be recovered from the proof's public signals.
-        let pow_pk = inputs.pow_pk.into_inner();
         // Test that verifying with the inputs returned by `prove` works.
         assert!(verify(&proof, inputs).unwrap());
 
@@ -522,10 +504,8 @@ mod tests {
             k_part_one: common_data.message_key.0,
             k_part_two: common_data.message_key.1,
             key_nullifier,
-            pow_pk,
             leader_quota: common_data.leader_quota,
             pow_quota: common_data.pow_quota,
-            pow_block_hash: chain_data.block_hash,
             pow_blend_difficulty: common_data.pow_difficulty,
             pol_epoch_nonce: chain_data.pol_epoch_nonce,
             pol_ledger_aged: chain_data.pol_ledger_aged,
@@ -563,11 +543,6 @@ mod tests {
             )
             .unwrap()
             .into(),
-            block_hash: BigUint::from_str(
-                "17412116459874055221726429396167151400213699852365025340176158516975240665302",
-            )
-            .unwrap()
-            .into(),
         };
         let common_data = PoQCommonInputsData {
             core_quota: 10,
@@ -591,15 +566,17 @@ mod tests {
             )
             .unwrap()
             .into(),
+            block_hash: BigUint::from_str(
+                "17412116459874055221726429396167151400213699852365025340176158516975240665302",
+            )
+            .unwrap()
+            .into(),
         };
 
         let witness_inputs =
             PoQWitnessInputs::from_pow_data(chain_data, common_data, pow_data).unwrap();
         let (proof, inputs) = prove(witness_inputs).unwrap();
         let key_nullifier = inputs.key_nullifier.into_inner();
-        // On this path `pow_pk` is derived from the real `pow_sk`, but it is still a
-        // circuit output and so is read back from the proof's public signals.
-        let pow_pk = inputs.pow_pk.into_inner();
         // Test that verifying with the inputs returned by `prove` works.
         assert!(verify(&proof, inputs).unwrap());
 
@@ -611,10 +588,8 @@ mod tests {
             k_part_one: common_data.message_key.0,
             k_part_two: common_data.message_key.1,
             key_nullifier,
-            pow_pk,
             leader_quota: common_data.leader_quota,
             pow_quota: common_data.pow_quota,
-            pow_block_hash: chain_data.block_hash,
             pow_blend_difficulty: common_data.pow_difficulty,
             pol_epoch_nonce: chain_data.pol_epoch_nonce,
             pol_ledger_aged: chain_data.pol_ledger_aged,

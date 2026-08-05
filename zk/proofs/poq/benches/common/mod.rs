@@ -71,11 +71,6 @@ pub fn core_node_inputs(key_index: u64) -> PoQWitnessInputs {
         .into(),
         lottery_0,
         lottery_1,
-        block_hash: BigUint::from_str(
-            "8120861784052316792639248700404452951342238269077440156691809582275873301855",
-        )
-        .unwrap()
-        .into(),
     };
     let blend_data = PoQBlendInputsData {
         core_sk: BigUint::from_str(
@@ -201,11 +196,6 @@ pub fn leader_inputs(key_index: u64) -> PoQWitnessInputs {
         .into(),
         lottery_0,
         lottery_1,
-        block_hash: BigUint::from_str(
-            "8120861784052316792639248700404452951342238269077440156691809582275873301855",
-        )
-        .unwrap()
-        .into(),
     };
     let wallet_data = PoQWalletInputsData {
         slot: 2_966_761_920,

@@ -47,6 +47,19 @@ impl Inputs {
         }
     }
 
+    #[must_use]
+    pub fn new_proof_of_work_quota_inputs(
+        key_index: u64,
+        proof_of_work_quota_inputs: ProofOfWorkQuotaInputs,
+    ) -> Self {
+        let proof_type: ProofType = proof_of_work_quota_inputs.into();
+        Self {
+            key_index,
+            selector: proof_type.proof_selector(),
+            proof_type,
+        }
+    }
+
     /// Return the right `sk` for a Proof of Quota depending on the proof type, as per the spec: <https://lip.logos.co/blockchain/raw/proof-of-quota.html#constraints>.
     #[must_use]
     pub fn get_secret_selection_randomness_sk(
@@ -138,6 +151,7 @@ impl From<ProofOfLeadershipQuotaInputs> for ProofType {
 #[derive(Clone, PartialEq, Eq, ZeroizeOnDrop)]
 pub struct ProofOfWorkQuotaInputs {
     pub pow_sk: ZkHash,
+    pub pow_block_hash: ZkHash,
 }
 
 impl From<ProofOfWorkQuotaInputs> for ProofType {

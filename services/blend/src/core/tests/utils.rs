@@ -329,11 +329,7 @@ pub fn new_crypto_processor<CorePoQGenerator>(
         PoQVerificationInputsMinusSigningKey {
             core: epoch_info.poq_core_public_inputs,
             leader: epoch_info.poq_leadership_public_inputs,
-            pow: PowInputs {
-                pow_blend_difficulty: ZkHash::default(),
-                pow_block_hash: ZkHash::default(),
-                pow_quota: 0,
-            },
+            pow: PowInputs::unwired_placeholder(),
         },
         core_poq_generator,
         epoch_info.epoch,

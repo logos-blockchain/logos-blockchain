@@ -6,7 +6,7 @@ use crate::quota::{
     Ed25519PublicKey,
     inputs::prove::{
         PublicInputs,
-        private::{ProofOfCoreQuotaInputs, ProofOfLeadershipQuotaInputs},
+        private::{ProofOfCoreQuotaInputs, ProofOfLeadershipQuotaInputs, ProofOfWorkQuotaInputs},
         public::{CoreInputs, LeaderInputs, PowInputs},
     },
 };
@@ -42,7 +42,6 @@ pub fn valid_proof_of_core_quota_inputs(
         },
         pow: PowInputs {
             pow_blend_difficulty: BigUint::from(1u64).into(),
-            pow_block_hash: BigUint::from(1u64).into(),
             pow_quota: 1,
         },
     };
@@ -176,7 +175,6 @@ pub fn valid_proof_of_leadership_quota_inputs(
         },
         pow: PowInputs {
             pow_blend_difficulty: BigUint::from(1u64).into(),
-            pow_block_hash: BigUint::from(1u64).into(),
             pow_quota: 1,
         },
     };
@@ -325,6 +323,68 @@ pub fn valid_proof_of_leadership_quota_inputs(
             .parse::<BigUint>()
             .unwrap()
             .into(),
+    };
+
+    (public_inputs, private_inputs)
+}
+
+// Reference values taken from the tests within the `poq` crate.
+#[must_use]
+pub fn valid_proof_of_work_quota_inputs(
+    signing_key: Ed25519PublicKey,
+    pow_quota: u64,
+) -> (PublicInputs, ProofOfWorkQuotaInputs) {
+    let public_inputs = PublicInputs {
+        signing_key,
+        pow: PowInputs {
+            pow_blend_difficulty:
+                "10631870504716456348838861774188160492563879712126054449569633827216160699117"
+                    .parse::<BigUint>()
+                    .unwrap()
+                    .into(),
+            pow_quota,
+        },
+        core: CoreInputs {
+            zk_root: "7196120816867742764244305920813414287385070139349175831448761050095304066684"
+                .parse::<BigUint>()
+                .unwrap()
+                .into(),
+            quota: 10,
+        },
+        leader: LeaderInputs {
+            pol_epoch_nonce:
+                "10612486568558363932403470969435464905237449260307875593547304337083779862075"
+                    .parse::<BigUint>()
+                    .unwrap()
+                    .into(),
+            pol_ledger_aged:
+                "12901234158445930888471913831760642108627105440164948073754288938400615804116"
+                    .parse::<BigUint>()
+                    .unwrap()
+                    .into(),
+            message_quota: 15,
+            lottery_0: "148409079361904587837471709956458430342187235603420891378597419711486680"
+                .parse::<BigUint>()
+                .unwrap()
+                .into(),
+            lottery_1:
+                "21888242871336145414933615591437256729835795974444825699352339602896135814447"
+                    .parse::<BigUint>()
+                    .unwrap()
+                    .into(),
+        },
+    };
+
+    let private_inputs = ProofOfWorkQuotaInputs {
+        pow_sk: "10044758699144566038746293679996441958807939592793641056821682251877616662024"
+            .parse::<BigUint>()
+            .unwrap()
+            .into(),
+        pow_block_hash:
+            "17412116459874055221726429396167151400213699852365025340176158516975240665302"
+                .parse::<BigUint>()
+                .unwrap()
+                .into(),
     };
 
     (public_inputs, private_inputs)

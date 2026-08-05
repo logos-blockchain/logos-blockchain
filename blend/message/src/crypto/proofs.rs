@@ -45,11 +45,7 @@ impl Default for PoQVerificationInputsMinusSigningKey {
                 lottery_0: Fr::ZERO,
                 lottery_1: Fr::ZERO,
             },
-            pow: PowInputs {
-                pow_blend_difficulty: ZkHash::default(),
-                pow_block_hash: ZkHash::default(),
-                pow_quota: 1,
-            },
+            pow: PowInputs::unwired_placeholder(),
         }
     }
 }

@@ -1,6 +1,6 @@
 use core::fmt::{self, Debug, Formatter};
 
-use lb_groth16::{Fr, fr_to_bytes};
+use lb_groth16::{AdditiveGroup as _, Fr, fr_to_bytes};
 use serde::{Deserialize, Serialize};
 
 use crate::{ZkHash, quota::Ed25519PublicKey};
@@ -93,9 +93,24 @@ impl Debug for LeaderInputs {
 pub struct PowInputs {
     #[serde(with = "lb_groth16::serde::serde_fr")]
     pub pow_blend_difficulty: ZkHash,
-    #[serde(with = "lb_groth16::serde::serde_fr")]
-    pub pow_block_hash: ZkHash,
     pub pow_quota: u64,
+}
+
+impl PowInputs {
+    /// Placeholder inputs for the `PoW` quota parameters, which are not plumbed
+    /// through from the chain yet.
+    ///
+    /// These are public inputs, so a prover and the verifier checking its
+    /// proofs must use identical values. Every call site shares this single
+    /// definition so they cannot drift apart.
+    // TODO: Remove once the PoW quota parameters are sourced from the chain.
+    #[must_use]
+    pub const fn unwired_placeholder() -> Self {
+        Self {
+            pow_blend_difficulty: ZkHash::ZERO,
+            pow_quota: 0,
+        }
+    }
 }
 
 impl Debug for PowInputs {
@@ -104,10 +119,6 @@ impl Debug for PowInputs {
             .field(
                 "pow_blend_difficulty",
                 &hex::encode(fr_to_bytes(&self.pow_blend_difficulty)),
-            )
-            .field(
-                "pow_block_hash",
-                &hex::encode(fr_to_bytes(&self.pow_block_hash)),
             )
             .field("pow_quota", &self.pow_quota)
             .finish()

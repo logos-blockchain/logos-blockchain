@@ -257,11 +257,7 @@ mod test {
                         zk_root: ZkHash::ZERO,
                     },
                     leader: leader_inputs,
-                    pow: PowInputs {
-                        pow_blend_difficulty: ZkHash::ZERO,
-                        pow_block_hash: ZkHash::ZERO,
-                        pow_quota: 1,
-                    },
+                    pow: PowInputs::unwired_placeholder(),
                 },
                 MockCorePoQGenerator,
                 Epoch::new(0),

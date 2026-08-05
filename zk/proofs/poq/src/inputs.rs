@@ -1,4 +1,4 @@
-use lb_groth16::{AdditiveGroup as _, Fr, Groth16Input, Groth16InputDeser, UniformRand as _};
+use lb_groth16::{AdditiveGroup as _, Fr, Groth16Input, Groth16InputDeser};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -81,11 +81,10 @@ impl PoQWitnessInputs {
         })
     }
 
-    // it's important to set it to a random number and not 0 to not leak that it's
-    // not the PoW path (because the Pk is a public output)
     fn unused_pow_inputs() -> PoQPowInputs {
         PoQPowInputs::from(PoQPowInputsData {
-            pow_secret_key: Fr::rand(&mut rand::thread_rng()),
+            pow_secret_key: Fr::ZERO,
+            block_hash: Fr::ZERO,
         })
     }
 }
@@ -128,19 +127,17 @@ impl From<PoQWitnessInputs> for PoQInputsJson {
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct PoQVerifierInputJson([Groth16InputDeser; 14]);
+pub struct PoQVerifierInputJson([Groth16InputDeser; 12]);
 
 #[derive(Clone)]
 pub struct PoQVerifierInput {
     pub key_nullifier: Groth16Input,
-    pub pow_pk: Groth16Input,
     pub core_quota: Groth16Input,
     pub leader_quota: Groth16Input,
     pub core_root: Groth16Input,
     pub pow_quota: Groth16Input,
     pub k_part_one: Groth16Input,
     pub k_part_two: Groth16Input,
-    pub pow_block_hash: Groth16Input,
     pub pow_blend_difficulty: Groth16Input,
     pub pol_epoch_nonce: Groth16Input,
     pub pol_t0: Groth16Input,
@@ -150,14 +147,12 @@ pub struct PoQVerifierInput {
 
 pub struct PoQVerifierInputData {
     pub key_nullifier: Fr,
-    pub pow_pk: Fr,
     pub core_quota: u64,
     pub leader_quota: u64,
     pub core_root: Fr,
     pub pow_quota: u64,
     pub k_part_one: Fr,
     pub k_part_two: Fr,
-    pub pow_block_hash: Fr,
     pub pow_blend_difficulty: Fr,
     pub pol_epoch_nonce: Fr,
     pub lottery_0: Fr,
@@ -171,7 +166,6 @@ impl TryFrom<PoQVerifierInputJson> for PoQVerifierInput {
     fn try_from(value: PoQVerifierInputJson) -> Result<Self, Self::Error> {
         let [
             key_nullifier,
-            pow_pk,
             core_quota,
             leader_quota,
             core_root,
@@ -179,7 +173,6 @@ impl TryFrom<PoQVerifierInputJson> for PoQVerifierInput {
             pol_ledger_aged,
             k_part_one,
             k_part_two,
-            pow_block_hash,
             pow_blend_difficulty,
             pol_epoch_nonce,
             pol_t0,
@@ -187,14 +180,12 @@ impl TryFrom<PoQVerifierInputJson> for PoQVerifierInput {
         ] = value.0;
         Ok(Self {
             key_nullifier: key_nullifier.try_into()?,
-            pow_pk: pow_pk.try_into()?,
             core_quota: core_quota.try_into()?,
             leader_quota: leader_quota.try_into()?,
             core_root: core_root.try_into()?,
             pow_quota: pow_quota.try_into()?,
             k_part_one: k_part_one.try_into()?,
             k_part_two: k_part_two.try_into()?,
-            pow_block_hash: pow_block_hash.try_into()?,
             pow_blend_difficulty: pow_blend_difficulty.try_into()?,
             pol_epoch_nonce: pol_epoch_nonce.try_into()?,
             pol_t0: pol_t0.try_into()?,
@@ -206,10 +197,9 @@ impl TryFrom<PoQVerifierInputJson> for PoQVerifierInput {
 
 impl PoQVerifierInput {
     #[must_use]
-    pub const fn to_inputs(self) -> [Fr; 14] {
+    pub const fn to_inputs(self) -> [Fr; 12] {
         [
             self.key_nullifier.into_inner(),
-            self.pow_pk.into_inner(),
             self.core_quota.into_inner(),
             self.leader_quota.into_inner(),
             self.core_root.into_inner(),
@@ -217,7 +207,6 @@ impl PoQVerifierInput {
             self.pol_ledger_aged.into_inner(),
             self.k_part_one.into_inner(),
             self.k_part_two.into_inner(),
-            self.pow_block_hash.into_inner(),
             self.pow_blend_difficulty.into_inner(),
             self.pol_epoch_nonce.into_inner(),
             self.pol_t0.into_inner(),
@@ -234,10 +223,8 @@ impl From<PoQVerifierInputData> for PoQVerifierInput {
             k_part_one: value.k_part_one.into(),
             k_part_two: value.k_part_two.into(),
             key_nullifier: value.key_nullifier.into(),
-            pow_pk: value.pow_pk.into(),
             leader_quota: Groth16Input::new(value.leader_quota.into()),
             pow_quota: Groth16Input::new(value.pow_quota.into()),
-            pow_block_hash: value.pow_block_hash.into(),
             pow_blend_difficulty: value.pow_blend_difficulty.into(),
             pol_epoch_nonce: value.pol_epoch_nonce.into(),
             pol_ledger_aged: value.pol_ledger_aged.into(),

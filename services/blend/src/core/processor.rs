@@ -305,11 +305,7 @@ mod tests {
                 lottery_0: Fr::ZERO,
                 lottery_1: Fr::ZERO,
             },
-            pow: PowInputs {
-                pow_blend_difficulty: ZkHash::ZERO,
-                pow_block_hash: ZkHash::ZERO,
-                pow_quota: 0,
-            },
+            pow: PowInputs::unwired_placeholder(),
         }
     }
 

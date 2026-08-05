@@ -6,7 +6,10 @@ use lb_key_management_system_keys::keys::UnsecuredZkKey;
 use crate::{
     quota::{
         DOMAIN_SEPARATION_TAG_FR, ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, VerifiedProofOfQuota,
-        fixtures::{valid_proof_of_core_quota_inputs, valid_proof_of_leadership_quota_inputs},
+        fixtures::{
+            valid_proof_of_core_quota_inputs, valid_proof_of_leadership_quota_inputs,
+            valid_proof_of_work_quota_inputs,
+        },
         inputs::prove::{
             PrivateInputs, PublicInputs,
             private::ProofOfCoreQuotaInputs,
@@ -94,6 +97,26 @@ fn valid_proof_of_leadership_quota() {
     let (proof, secret_selection_randomness) = VerifiedProofOfQuota::new(
         &public_inputs,
         PrivateInputs::new_proof_of_leadership_quota_inputs(0, private_inputs),
+    )
+    .unwrap();
+
+    let verified_proof_of_quota = proof.into_inner().verify(&public_inputs).unwrap();
+    assert_eq!(
+        derive_key_nullifier_from_secret_selection_randomness(secret_selection_randomness),
+        verified_proof_of_quota.key_nullifier()
+    );
+}
+
+#[test]
+fn valid_proof_of_work_quota() {
+    let (public_inputs, private_inputs) = valid_proof_of_work_quota_inputs(
+        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
+        20,
+    );
+
+    let (proof, secret_selection_randomness) = VerifiedProofOfQuota::new(
+        &public_inputs,
+        PrivateInputs::new_proof_of_work_quota_inputs(0, private_inputs),
     )
     .unwrap();
 
