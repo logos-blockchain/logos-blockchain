@@ -5,6 +5,7 @@ pub mod gas;
 pub mod genesis_tx;
 pub mod hash;
 pub mod mantle_tx;
+pub mod raw_signed_mantle_tx;
 pub mod signed_mantle_tx;
 pub mod states;
 pub mod verification_helper;
