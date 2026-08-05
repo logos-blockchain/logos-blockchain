@@ -230,12 +230,12 @@ num-bigint                         = { default-features = false, version = "0.4"
 num-traits                         = { default-features = false, version = "0.2.19" }
 num_enum                           = { default-features = false, version = "0.7.4" }
 nutype                             = { default-features = false, version = "0.6.2" }
-opentelemetry                      = { default-features = false, version = "0.31" }
-opentelemetry-appender-tracing     = { default-features = false, version = "0.31" }
-opentelemetry-http                 = { default-features = false, version = "0.31" }
-opentelemetry-otlp                 = { default-features = false, version = "0.31" }
-opentelemetry-semantic-conventions = { default-features = false, version = "0.31" }
-opentelemetry_sdk                  = { default-features = false, version = "0.31" }
+opentelemetry                      = { default-features = false, version = "0.32.0" }
+opentelemetry-appender-tracing     = { default-features = false, version = "0.32.0" }
+opentelemetry-http                 = { default-features = false, version = "0.32.0" }
+opentelemetry-otlp                 = { default-features = false, version = "0.32.0" }
+opentelemetry-semantic-conventions = { default-features = false, version = "0.32.1" }
+opentelemetry_sdk                  = { default-features = false, version = "0.32.1" }
 overwatch                          = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "ae887f41f5a626c341179026ad7f03953ff2072e" }
 overwatch-derive                   = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "ae887f41f5a626c341179026ad7f03953ff2072e" }
 owo-colors                         = { default-features = false, version = "4.2.3" }
@@ -289,7 +289,7 @@ tracing-appender      = { default-features = false, version = "0.2" }
 tracing-futures       = { default-features = false, version = "0.2" }
 tracing-gelf          = { default-features = false, version = "0.7" }
 tracing-loki          = { default-features = false, version = "0.2.5" }
-tracing-opentelemetry = { default-features = false, version = "0.32.1" }
+tracing-opentelemetry = { default-features = false, version = "0.33.0" }
 tracing-subscriber    = { default-features = false, version = "0.3" }
 url                   = { default-features = false, version = "2" }
 utoipa                = { default-features = false, version = "4.0" }
