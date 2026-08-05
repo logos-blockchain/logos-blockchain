@@ -37,4 +37,4 @@ use crate::mantle::{Op, OpProof, ops::SignedOp};
 pub const MAX_OPS_PER_TX: usize = u8::MAX as usize;
 pub type Ops = UpperBoundedVec<Op, MAX_OPS_PER_TX>;
 pub type SignedOps<State, Mode> = UpperBoundedVec<SignedOp<State, Mode>, MAX_OPS_PER_TX>;
-pub type OpsProofs = UpperBoundedVec<OpProof, MAX_OPS_PER_TX>;
+pub type OpProofs = UpperBoundedVec<OpProof, MAX_OPS_PER_TX>;

@@ -16,7 +16,7 @@ mod tests {
             withdraw::ChannelWithdrawOp,
         },
         traits::Hashable as _,
-        transactions::{Ops, OpsProofs, codec::encode_signed_mantle_tx},
+        transactions::{OpProofs, Ops, codec::encode_signed_mantle_tx},
     };
     use lb_groth16::{Fr, fr_to_bytes};
     use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key, ZkKey};
@@ -122,7 +122,7 @@ mod tests {
         ensure_tx_hash(&hex::encode(tx.hash().as_ref()), tx.hash()).unwrap();
         assert!(ensure_tx_hash(&hex::encode([1u8; 32]), tx.hash()).is_err());
 
-        let signed_tx = MantleTransaction::new(tx, OpsProofs::empty());
+        let signed_tx = MantleTransaction::new(tx, OpProofs::empty());
         let signed_encoded = hex::encode(encode_signed_mantle_tx(&signed_tx));
         assert_eq!(
             decode_signed_mantle_tx_hex(&signed_encoded).unwrap(),

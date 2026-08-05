@@ -26,7 +26,7 @@ use lb_core::mantle::{
         transfer::TransferOp,
     },
     traits::Hashable as _,
-    transactions::{OpsProofs, builder::MantleTxBuilder, states::Unverified},
+    transactions::{OpProofs, builder::MantleTxBuilder, states::Unverified},
 };
 use lb_http_api_common::bodies::{
     channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
@@ -1606,7 +1606,7 @@ async fn build_funded_custom_tx(
     let funded_tx = response.funded_tx;
     let signature = signing_key.sign_payload(funded_tx.hash().as_signing_bytes().as_ref());
     let mut ops_proofs =
-        OpsProofs::new_unchecked(vec![OpProof::Ed25519Sig(signature); payloads.len()]);
+        OpProofs::new_unchecked(vec![OpProof::Ed25519Sig(signature); payloads.len()]);
     if let Some(proof) = response.transfer_proof {
         ops_proofs
             .try_push(proof)

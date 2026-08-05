@@ -232,7 +232,7 @@ mod tests {
                 transfer::TransferOp,
             },
             traits::Hashable as _,
-            transactions::{OpsProofs, states::Unverified},
+            transactions::{OpProofs, states::Unverified},
         },
         proofs::leader_proof::Groth16LeaderProof,
         sdp::{DeclarationMessage, Locator, ProviderId, ServiceType, WithdrawMessage},
@@ -281,7 +281,7 @@ mod tests {
                 ))]
                 .into(),
             ),
-            OpsProofs::empty(),
+            OpProofs::empty(),
         )
     }
 
@@ -359,7 +359,7 @@ mod tests {
                 })]
                 .into(),
             ),
-            OpsProofs::empty(),
+            OpProofs::empty(),
         );
         let mut accounting =
             ScannerAccounting::new(vec![TrackedWalletKeys::new("alice", [pk(1)])], &[owned])
@@ -386,7 +386,7 @@ mod tests {
         let declaration = sdp_declaration(locked.id());
         let declare_tx = MantleTransaction::new(
             RawMantleTx([Op::SDPDeclare(declaration.clone())].into()),
-            OpsProofs::empty(),
+            OpProofs::empty(),
         );
         let withdraw_tx = MantleTransaction::new(
             RawMantleTx(
@@ -397,7 +397,7 @@ mod tests {
                 })]
                 .into(),
             ),
-            OpsProofs::empty(),
+            OpProofs::empty(),
         );
         let mut accounting =
             ScannerAccounting::new(vec![TrackedWalletKeys::new("alice", [pk(1)])], &[locked])

@@ -28,7 +28,7 @@ use lb_core::{
             },
         },
         traits::Hashable as _,
-        transactions::{Ops, OpsProofs, states::Unverified},
+        transactions::{OpProofs, Ops, states::Unverified},
     },
     proofs::leader_proof::Groth16LeaderProof,
 };
@@ -404,7 +404,7 @@ pub fn unverified_tx_with_ops(ops: Vec<Op>) -> MantleTransaction<Unverified> {
     let mantle_tx = RawMantleTx(Ops::try_from(ops).expect("ops fit"));
     MantleTransaction::new(
         mantle_tx,
-        OpsProofs::new_unchecked(vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n]),
+        OpProofs::new_unchecked(vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n]),
     )
 }
 

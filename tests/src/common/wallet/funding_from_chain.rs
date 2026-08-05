@@ -7,7 +7,7 @@ use lb_core::mantle::{
     ops::channel::{ChannelId, ChannelKeyIndex},
     traits::Hashable as _,
     transactions::{
-        GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext, OpsProofs,
+        GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext, OpProofs,
         states::Unverified,
     },
 };
@@ -86,7 +86,7 @@ pub async fn funded_signed_tx(
         transfer_proofs_for_funded_wallet_tx(&mantle_tx, &funding_account.secret_key)
             .expect("transfer proofs should build"),
     );
-    let signed_tx = MantleTransaction::new(mantle_tx, OpsProofs::try_from(proofs).unwrap());
+    let signed_tx = MantleTransaction::new(mantle_tx, OpProofs::try_from(proofs).unwrap());
 
     (signed_tx, fee)
 }

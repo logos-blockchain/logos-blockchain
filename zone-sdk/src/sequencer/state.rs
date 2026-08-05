@@ -1180,7 +1180,7 @@ impl TxState {
 mod tests {
     use lb_core::mantle::{
         Op::ChannelInscribe, RawMantleTx, ops::channel::inscribe::InscriptionOp,
-        transactions::OpsProofs,
+        transactions::OpProofs,
     };
     use lb_key_management_system_service::keys::Ed25519PublicKey;
 
@@ -1197,7 +1197,7 @@ mod tests {
             })]
             .into(),
         );
-        MantleTransaction::new(mantle_tx, OpsProofs::empty())
+        MantleTransaction::new(mantle_tx, OpProofs::empty())
     }
 
     #[test]
@@ -1411,7 +1411,7 @@ mod tests {
         let config_msg = config.id();
         let tx = MantleTransaction::new(
             RawMantleTx([ChannelInscribe(inscribe), Op::ChannelConfig(config)].into()),
-            OpsProofs::empty(),
+            OpProofs::empty(),
         );
         (tx, inscribe_msg, config_msg)
     }
@@ -1587,7 +1587,7 @@ mod tests {
         let inscribe_msg = inscribe.id();
         let tx = MantleTransaction::new(
             RawMantleTx([Op::ChannelConfig(config), ChannelInscribe(inscribe)].into()),
-            OpsProofs::empty(),
+            OpProofs::empty(),
         );
 
         let derived = state.submit_other(tx, channel_id);
@@ -1630,7 +1630,7 @@ mod tests {
         };
         let cut = MantleTransaction::new(
             RawMantleTx([Op::ChannelConfig(config)].into()),
-            OpsProofs::empty(),
+            OpProofs::empty(),
         );
         state.submit_other(cut, channel_id);
 

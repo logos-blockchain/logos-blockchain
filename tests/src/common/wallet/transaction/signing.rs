@@ -6,7 +6,7 @@ use lb_core::mantle::{
     MantleTransaction, NoteId, Op, OpProof, RawMantleTx, TxGasCalculator as _, TxHash,
     gas::MainnetGasProfile,
     traits::Hashable as _,
-    transactions::{MantleTxBuilder, MantleTxContext, OpsProofs, mantle_tx::MantleTx as _},
+    transactions::{MantleTxBuilder, MantleTxContext, OpProofs, mantle_tx::MantleTx as _},
 };
 use lb_key_management_system_service::keys::ZkKey;
 
@@ -19,15 +19,15 @@ pub(super) fn sign_prepared_wallet_transaction(
     funded_builder: MantleTxBuilder,
     context: &MantleTxContext,
     tx_hash: TxHash,
-    transfer_proofs: OpsProofs,
+    transfer_proofs: OpProofs,
     reserved_inputs: WalletReservedInputs,
-    leading_op_proofs: OpsProofs,
+    leading_op_proofs: OpProofs,
 ) -> Result<SignedWalletTransaction, WalletTransactionError> {
     let gas_prices = context.gas_context.get_gas_prices();
     let mantle_tx = funded_builder.build()?;
     let mut op_proofs = leading_op_proofs.into_inner();
     op_proofs.extend(transfer_proofs);
-    let op_proofs = OpsProofs::try_from(op_proofs)?;
+    let op_proofs = OpProofs::try_from(op_proofs)?;
 
     let signed_tx = MantleTransaction::new(mantle_tx, op_proofs).preverify()?;
     let mandatory_fee_at_preparation = signed_tx
@@ -67,7 +67,7 @@ pub(super) fn sign_prepared_wallet_transaction(
 pub fn transfer_proofs_for_funded_wallet_tx(
     tx: &RawMantleTx,
     signing_key: &ZkKey,
-) -> Result<OpsProofs, WalletTransactionError> {
+) -> Result<OpProofs, WalletTransactionError> {
     let tx_hash = tx.hash();
     let proofs = tx
         .ops()
@@ -88,14 +88,14 @@ pub fn transfer_proofs_for_funded_wallet_tx(
             )?))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(OpsProofs::try_from(proofs).expect("transaction proofs are bounded"))
+    Ok(OpProofs::try_from(proofs).expect("transaction proofs are bounded"))
 }
 
 pub(super) fn build_transfer_proofs(
     ops: &[Op],
     tx_hash: &TxHash,
     transfer_signers: &WalletTransferSigners,
-) -> Result<OpsProofs, WalletTransactionError> {
+) -> Result<OpProofs, WalletTransactionError> {
     let proofs = ops
         .iter()
         .filter_map(|op| match op {
@@ -120,5 +120,5 @@ pub(super) fn build_transfer_proofs(
             )?))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(OpsProofs::try_from(proofs).expect("transaction proofs are bounded"))
+    Ok(OpProofs::try_from(proofs).expect("transaction proofs are bounded"))
 }

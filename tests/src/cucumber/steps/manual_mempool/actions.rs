@@ -5,7 +5,7 @@ use lb_core::{
     mantle::{
         MantleTransaction, TxHash,
         traits::Hashable as _,
-        transactions::{OpsProofs, states::Preverified},
+        transactions::{OpProofs, states::Preverified},
     },
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -53,7 +53,7 @@ pub async fn prepare_transfer_transaction(
     let prepared =
         prepare_user_wallet_transaction_submission(world, step, &sender_wallet_name, intent, None)
             .await?;
-    let signed = sign_prepared_user_wallet_transaction(step, prepared, OpsProofs::empty())?;
+    let signed = sign_prepared_user_wallet_transaction(step, prepared, OpProofs::empty())?;
     let tx_hash = record_prepared_transaction(world, transaction_alias.clone(), &signed)?;
 
     report_prepared_transaction(

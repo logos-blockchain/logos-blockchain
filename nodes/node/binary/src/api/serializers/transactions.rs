@@ -1,7 +1,7 @@
 use lb_core::mantle::{
     MantleTransaction, TxHash,
     traits::Hashable,
-    transactions::{Ops, OpsProofs, mantle_tx::MantleTx, states::VerificationState},
+    transactions::{OpProofs, Ops, mantle_tx::MantleTx, states::VerificationState},
 };
 use serde::Serialize;
 
@@ -26,7 +26,7 @@ where
 #[derive(Serialize)]
 pub struct ApiSignedTransaction<'tx> {
     mantle_tx: ApiTransactionSerializer<'tx>,
-    ops_proofs: &'tx OpsProofs,
+    ops_proofs: &'tx OpProofs,
 }
 
 impl<'tx, State: VerificationState> From<&'tx MantleTransaction<State>>

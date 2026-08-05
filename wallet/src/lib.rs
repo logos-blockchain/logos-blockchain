@@ -883,7 +883,7 @@ mod tests {
                 deposit::Metadata,
                 inscribe::{Inscription, InscriptionOp},
             },
-            transactions::{GasPrices, MantleTxGasContext, Ops, OpsProofs, states::Unverified},
+            transactions::{GasPrices, MantleTxGasContext, OpProofs, Ops, states::Unverified},
         },
         proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
         sdp::{MinStake, ServiceParameters, ServiceType},
@@ -2341,7 +2341,7 @@ mod tests {
     }
 
     fn signed_test_tx(ops: Vec<Op>) -> MantleTransaction<Unverified> {
-        let proofs = OpsProofs::try_from_iter(ops.iter().map(|op| match op {
+        let proofs = OpProofs::try_from_iter(ops.iter().map(|op| match op {
             Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
             _ => OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
                 &[0; 128],
