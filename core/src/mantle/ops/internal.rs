@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    CHANNEL_CONFIG, CHANNEL_DEPOSIT, CHANNEL_TRANSFER, CHANNEL_WITHDRAW, CLAIM_POW_REWARD,
-    INSCRIBE, LEADER_CLAIM, Op, SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW, TRANSFER,
+    Op,
     channel::{config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp},
     leader_claim::LeaderClaimOp,
+    op_codes,
     sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
     serde_::OpWire,
     transfer::TransferOp,
@@ -18,17 +18,17 @@ use crate::mantle::ops::{
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum OpSer<'a> {
-    ChannelInscribe(OpWire<INSCRIBE, &'a InscriptionOp>),
-    ChannelConfig(OpWire<CHANNEL_CONFIG, &'a ChannelConfigOp>),
-    ChannelDeposit(OpWire<CHANNEL_DEPOSIT, &'a DepositOp>),
-    ChannelWithdraw(OpWire<CHANNEL_WITHDRAW, &'a ChannelWithdrawOp>),
-    ChannelTransfer(OpWire<CHANNEL_TRANSFER, &'a ChannelTransferOp>),
-    SDPDeclare(OpWire<SDP_DECLARE, &'a SDPDeclareOp>),
-    SDPWithdraw(OpWire<SDP_WITHDRAW, &'a SDPWithdrawOp>),
-    SDPActive(OpWire<SDP_ACTIVE, &'a SDPActiveOp>),
-    LeaderClaim(OpWire<LEADER_CLAIM, &'a LeaderClaimOp>),
-    Transfer(OpWire<TRANSFER, &'a TransferOp>),
-    ClaimPowReward(OpWire<CLAIM_POW_REWARD, &'a ClaimPowRewardOp>),
+    ChannelInscribe(OpWire<{ op_codes::INSCRIBE }, &'a InscriptionOp>),
+    ChannelConfig(OpWire<{ op_codes::CHANNEL_CONFIG }, &'a ChannelConfigOp>),
+    ChannelDeposit(OpWire<{ op_codes::CHANNEL_DEPOSIT }, &'a DepositOp>),
+    ChannelWithdraw(OpWire<{ op_codes::CHANNEL_WITHDRAW }, &'a ChannelWithdrawOp>),
+    ChannelTransfer(OpWire<{ op_codes::CHANNEL_TRANSFER }, &'a ChannelTransferOp>),
+    SDPDeclare(OpWire<{ op_codes::SDP_DECLARE }, &'a SDPDeclareOp>),
+    SDPWithdraw(OpWire<{ op_codes::SDP_WITHDRAW }, &'a SDPWithdrawOp>),
+    SDPActive(OpWire<{ op_codes::SDP_ACTIVE }, &'a SDPActiveOp>),
+    LeaderClaim(OpWire<{ op_codes::LEADER_CLAIM }, &'a LeaderClaimOp>),
+    Transfer(OpWire<{ op_codes::TRANSFER }, &'a TransferOp>),
+    ClaimPowReward(OpWire<{ op_codes::CLAIM_POW_REWARD }, &'a ClaimPowRewardOp>),
 }
 
 impl<'a> From<&'a Op> for OpSer<'a> {
@@ -53,17 +53,17 @@ impl<'a> From<&'a Op> for OpSer<'a> {
 #[derive(Deserialize)]
 #[serde(untagged)]
 pub enum OpDe {
-    ChannelInscribe(OpWire<INSCRIBE, InscriptionOp>),
-    ChannelConfig(OpWire<CHANNEL_CONFIG, ChannelConfigOp>),
-    ChannelDeposit(OpWire<CHANNEL_DEPOSIT, DepositOp>),
-    ChannelWithdraw(OpWire<CHANNEL_WITHDRAW, ChannelWithdrawOp>),
-    ChannelTransfer(OpWire<CHANNEL_TRANSFER, ChannelTransferOp>),
-    SDPDeclare(OpWire<SDP_DECLARE, SDPDeclareOp>),
-    SDPWithdraw(OpWire<SDP_WITHDRAW, SDPWithdrawOp>),
-    SDPActive(OpWire<SDP_ACTIVE, SDPActiveOp>),
-    LeaderClaim(OpWire<LEADER_CLAIM, LeaderClaimOp>),
-    Transfer(OpWire<TRANSFER, TransferOp>),
-    ClaimPoWReward(OpWire<CLAIM_POW_REWARD, ClaimPowRewardOp>),
+    ChannelInscribe(OpWire<{ op_codes::INSCRIBE }, InscriptionOp>),
+    ChannelConfig(OpWire<{ op_codes::CHANNEL_CONFIG }, ChannelConfigOp>),
+    ChannelDeposit(OpWire<{ op_codes::CHANNEL_DEPOSIT }, DepositOp>),
+    ChannelWithdraw(OpWire<{ op_codes::CHANNEL_WITHDRAW }, ChannelWithdrawOp>),
+    ChannelTransfer(OpWire<{ op_codes::CHANNEL_TRANSFER }, ChannelTransferOp>),
+    SDPDeclare(OpWire<{ op_codes::SDP_DECLARE }, SDPDeclareOp>),
+    SDPWithdraw(OpWire<{ op_codes::SDP_WITHDRAW }, SDPWithdrawOp>),
+    SDPActive(OpWire<{ op_codes::SDP_ACTIVE }, SDPActiveOp>),
+    LeaderClaim(OpWire<{ op_codes::LEADER_CLAIM }, LeaderClaimOp>),
+    Transfer(OpWire<{ op_codes::TRANSFER }, TransferOp>),
+    ClaimPoWReward(OpWire<{ op_codes::CLAIM_POW_REWARD }, ClaimPowRewardOp>),
 }
 
 impl From<OpDe> for Op {
