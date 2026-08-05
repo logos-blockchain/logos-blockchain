@@ -398,7 +398,7 @@ impl<State: VerificationState> TxGasCalculator for SignedMantleTx<State> {
         &self,
         context: &Self::Context,
     ) -> Result<GasCost, GasOverflow> {
-        let execution_gas = TxGasCalculator::execution_gas_consumption::<Profile>(&self, context)?;
+        let execution_gas = TxGasCalculator::execution_gas_consumption::<Profile>(self, context)?;
         let execution_gas_cost =
             GasCost::calculate(execution_gas, context.execution_base_gas_price)?;
         let storage_gas_cost = TxGasCalculator::storage_gas_cost(self, context)?;
@@ -407,7 +407,7 @@ impl<State: VerificationState> TxGasCalculator for SignedMantleTx<State> {
     }
 
     fn storage_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow> {
-        let storage_gas = TxGasCalculator::storage_gas_consumption(&self, context)?;
+        let storage_gas = TxGasCalculator::storage_gas_consumption(self, context)?;
         GasCost::calculate(storage_gas, context.storage_gas_price)
     }
 

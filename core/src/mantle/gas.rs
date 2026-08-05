@@ -130,32 +130,6 @@ pub trait TxGasCalculator {
 #[error("Gas overflow")]
 pub struct GasOverflow;
 
-impl<T: TxGasCalculator> TxGasCalculator for &T {
-    type Context = T::Context;
-
-    fn total_gas_cost<Profile: GasProfile>(
-        &self,
-        context: &Self::Context,
-    ) -> Result<GasCost, GasOverflow> {
-        T::total_gas_cost::<Profile>(self, context)
-    }
-
-    fn storage_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow> {
-        T::storage_gas_cost(self, context)
-    }
-
-    fn execution_gas_consumption<Profile: GasProfile>(
-        &self,
-        context: &Self::Context,
-    ) -> Result<Gas, GasOverflow> {
-        T::execution_gas_consumption::<Profile>(self, context)
-    }
-
-    fn storage_gas_consumption(&self, context: &Self::Context) -> Result<Gas, GasOverflow> {
-        T::storage_gas_consumption(self, context)
-    }
-}
-
 mod private {
     pub trait Sealed {}
 }

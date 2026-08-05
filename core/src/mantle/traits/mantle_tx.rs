@@ -15,13 +15,3 @@ pub trait MantleTxWithProofs: Hashable<Hash = TxHash> + TxGasCalculator + Storag
     /// in this transaction.
     fn ops_with_proof(&self) -> impl Iterator<Item = OpWithProof<'_>>;
 }
-
-impl<T: MantleTxWithProofs> MantleTxWithProofs for &T {
-    fn mantle_tx(&self) -> &RawMantleTx {
-        T::mantle_tx(self)
-    }
-
-    fn ops_with_proof(&self) -> impl Iterator<Item = OpWithProof<'_>> {
-        T::ops_with_proof(self)
-    }
-}
