@@ -7,7 +7,7 @@ use std::{
 use chrono::{DateTime, Utc};
 use lb_codec::BinaryDecodeExt as _;
 use lb_core::mantle::{
-    Note, SignedMantleTx, Utxo, Value,
+    MantleTransaction, Note, Utxo, Value,
     channel::ChannelState,
     ledger::{Inputs, Outputs},
     ops::{
@@ -238,7 +238,7 @@ pub fn decode_mantle_tx_hex(value: &str) -> RunResult<RawMantleTx> {
 }
 
 /// Decode a hex-encoded signed mantle transaction and reject trailing bytes.
-pub fn decode_signed_mantle_tx_hex(value: &str) -> RunResult<SignedMantleTx<Unverified>> {
+pub fn decode_signed_mantle_tx_hex(value: &str) -> RunResult<MantleTransaction<Unverified>> {
     let bytes = decode_hex(value)?;
     let (remaining, tx) = decode_signed_mantle_tx(&bytes).map_err(|error| format!("{error:?}"))?;
     if !remaining.is_empty() {

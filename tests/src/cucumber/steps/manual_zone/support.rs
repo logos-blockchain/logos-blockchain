@@ -36,7 +36,7 @@ use lb_http_api_common::bodies::{
     },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, ZkPublicKeys, ZkSignature};
-use lb_node::SignedMantleTx;
+use lb_node::MantleTransaction;
 use lb_testing_framework::NodeHttpClient;
 use lb_zone_sdk::{
     adapter::NodeHttpClient as ZoneNodeHttpClient,
@@ -1538,7 +1538,7 @@ pub async fn submit_atomic_zone_deposit(
         })?;
 
     let user_sig = sign_tx_zk(node_url, &tx, vec![funding_public_key]).await?;
-    let signed_tx = SignedMantleTx::new(
+    let signed_tx = MantleTransaction::new(
         tx,
         [
             OpProof::ZkSig(user_sig.clone()),
@@ -1569,7 +1569,7 @@ async fn build_funded_custom_tx(
     funding_pk: ZkPublicKey,
     payloads: &[Inscription],
     mut parent: MsgId,
-) -> Result<(SignedMantleTx<Unverified>, MsgId), ZoneTestError> {
+) -> Result<(MantleTransaction<Unverified>, MsgId), ZoneTestError> {
     let signer = signing_key.public_key();
     let mut tx_builder = MantleTxBuilder::new();
     for payload in payloads {
@@ -1614,7 +1614,7 @@ async fn build_funded_custom_tx(
                 message: format!("too many operation proofs: {error:?}"),
             })?;
     }
-    let signed_tx = SignedMantleTx::new(funded_tx, ops_proofs);
+    let signed_tx = MantleTransaction::new(funded_tx, ops_proofs);
 
     Ok((signed_tx, parent))
 }
@@ -1892,7 +1892,7 @@ pub async fn submit_zone_withdraw(
 //             }
 //         };
 //
-//     let signed_tx = SignedMantleTx::new(
+//     let mantle_transaction = MantleTransaction::new(
 //         tx,
 //         vec![
 //             OpProof::ChannelMultiSigProof(withdraw_proof),
@@ -1904,7 +1904,7 @@ pub async fn submit_zone_withdraw(
 //     })?;
 //
 //     let (result, _cp) = client
-//         .submit_signed_tx(signed_tx, msg_id)
+//         .submit_signed_tx(mantle_transaction, msg_id)
 //         .await
 //         .map_err(|error| ZoneTestError::SubmitWithdraw {
 //             message: error.to_string(),

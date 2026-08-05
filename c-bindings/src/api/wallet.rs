@@ -8,7 +8,7 @@ use lb_api_service::http::mempool;
 use lb_core::{
     header::HeaderId as CoreHeaderId,
     mantle::{
-        Note, NoteId as CoreNoteId, Op, OpProof, RawMantleTx, SignedMantleTx,
+        MantleTransaction, Note, NoteId as CoreNoteId, Op, OpProof, RawMantleTx,
         gas::GasCost,
         ledger::{Inputs, Outputs},
         ops::{
@@ -682,7 +682,7 @@ impl TransferFundsArguments {
 ///
 /// # Returns
 ///
-/// A `Result` containing a [`SignedMantleTx`] on success, or an
+/// A `Result` containing a [`MantleTransaction`] on success, or an
 /// [`OperationStatus`] error on failure.
 pub(crate) fn transfer_funds_sync(
     node: &LogosBlockchainNode,
@@ -691,7 +691,7 @@ pub(crate) fn transfer_funds_sync(
     funding_public_keys: Vec<ZkPublicKey>,
     recipient_public_key: ZkPublicKey,
     amount: u64,
-) -> StatusResult<SignedMantleTx<Preverified>> {
+) -> StatusResult<MantleTransaction<Preverified>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
@@ -935,8 +935,8 @@ impl ChannelDepositWithNotesArguments {
 ///
 /// # Returns
 ///
-/// A [`Result`] containing the submitted [`SignedMantleTx`] on success, or an
-/// [`OperationStatus`] error on failure.
+/// A [`Result`] containing the submitted [`MantleTransaction`] on success, or
+/// an [`OperationStatus`] error on failure.
 pub(crate) fn channel_deposit_with_notes_sync(
     node: &LogosBlockchainNode,
     tip: lb_core::header::HeaderId,
@@ -944,7 +944,7 @@ pub(crate) fn channel_deposit_with_notes_sync(
     change_public_key: ZkPublicKey,
     funding_public_keys: Vec<ZkPublicKey>,
     max_tx_fee: GasCost,
-) -> StatusResult<SignedMantleTx<Preverified>> {
+) -> StatusResult<MantleTransaction<Preverified>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
@@ -1239,8 +1239,8 @@ impl ChannelDepositArguments {
 ///
 /// # Returns
 ///
-/// A [`Result`] containing the submitted [`SignedMantleTx`] on success, or an
-/// [`OperationStatus`] error on failure.
+/// A [`Result`] containing the submitted [`MantleTransaction`] on success, or
+/// an [`OperationStatus`] error on failure.
 pub(crate) fn channel_deposit_sync(
     node: &LogosBlockchainNode,
     tip: lb_core::header::HeaderId,
@@ -1248,7 +1248,7 @@ pub(crate) fn channel_deposit_sync(
     funding_public_key: ZkPublicKey,
     amount: Value,
     metadata: Metadata,
-) -> StatusResult<SignedMantleTx<Preverified>> {
+) -> StatusResult<MantleTransaction<Preverified>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
@@ -1341,7 +1341,7 @@ pub(crate) fn channel_deposit_sync(
                     format!("Failed to sign deposit tx: {error}"),
                 )
             })?;
-        let signed_tx = SignedMantleTx::new(
+        let signed_tx = MantleTransaction::new(
             tx,
             [OpProof::ZkSig(user_sig.clone()), OpProof::ZkSig(user_sig)].into(),
         )
@@ -1668,7 +1668,7 @@ pub unsafe extern "C" fn submit_signed_transaction(
                 ));
             }
         };
-        let signed_tx: SignedMantleTx<Unverified> = match serde_json::from_str(signed_tx_json) {
+        let signed_tx: MantleTransaction<Unverified> = match serde_json::from_str(signed_tx_json) {
             Ok(signed_tx) => signed_tx,
             Err(error) => {
                 return FfiSubmitTransactionResult::err(OperationStatus::error(

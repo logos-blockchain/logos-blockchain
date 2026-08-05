@@ -5,7 +5,7 @@ use lb_common_http_client::CommonHttpClient;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx,
+        MantleTransaction, Op,
         ops::channel::{ChannelId, inscribe::InscriptionOp},
         traits::Hashable as _,
         transactions::{hash::TxHash, states::Unverified},
@@ -84,7 +84,7 @@ impl BlockStream {
 }
 
 fn extract_l2_blocks(
-    block_txs: impl Iterator<Item = SignedMantleTx<Unverified>>,
+    block_txs: impl Iterator<Item = MantleTransaction<Unverified>>,
     decoded_channel_id: &ChannelId,
     token_name: &str,
 ) -> Vec<(BlockData, TxHash)> {

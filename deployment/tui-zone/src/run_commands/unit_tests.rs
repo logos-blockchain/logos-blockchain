@@ -8,7 +8,7 @@ mod tests {
 
     use lb_codec::BinaryEncode as _;
     use lb_core::mantle::{
-        Note, NoteId, Op, RawMantleTx, SignedMantleTx, Utxo, Value,
+        MantleTransaction, Note, NoteId, Op, RawMantleTx, Utxo, Value,
         ledger::Inputs,
         ops::channel::{
             ChannelId, MsgId,
@@ -122,7 +122,7 @@ mod tests {
         ensure_tx_hash(&hex::encode(tx.hash().as_ref()), tx.hash()).unwrap();
         assert!(ensure_tx_hash(&hex::encode([1u8; 32]), tx.hash()).is_err());
 
-        let signed_tx = SignedMantleTx::new(tx, OpsProofs::empty());
+        let signed_tx = MantleTransaction::new(tx, OpsProofs::empty());
         let signed_encoded = hex::encode(encode_signed_mantle_tx(&signed_tx));
         assert_eq!(
             decode_signed_mantle_tx_hex(&signed_encoded).unwrap(),

@@ -14,7 +14,7 @@ use lb_core::{
     },
 };
 use lb_node::{
-    ApiStorageAdapter, RocksBackend, RuntimeServiceId, SignedMantleTx, StorageService,
+    ApiStorageAdapter, MantleTransaction, RocksBackend, RuntimeServiceId, StorageService,
     api::serializers::blocks::ApiProcessedBlockEventOwned, generic_services::CryptarchiaService,
 };
 use serde::Serialize;
@@ -33,15 +33,15 @@ use crate::{
 pub struct TxWithId {
     id: TxHash,
     #[serde(flatten)]
-    tx: SignedMantleTx<Unverified>,
+    tx: MantleTransaction<Unverified>,
 }
 
 impl Hashable for TxWithId {
     //noinspection RsTypeCheck: The type is correct, but the linter is confused by
     // the closure.
     const HASHER: hashable::Hasher<Self> =
-        |tx| <SignedMantleTx<Unverified> as Hashable>::HASHER(&tx.tx);
-    type Hash = <SignedMantleTx<Unverified> as Hashable>::Hash;
+        |tx| <MantleTransaction<Unverified> as Hashable>::HASHER(&tx.tx);
+    type Hash = <MantleTransaction<Unverified> as Hashable>::Hash;
 
     fn as_signing(&self) -> Vec<u8> {
         self.tx.as_signing()
@@ -86,7 +86,7 @@ pub fn subscribe_to_new_blocks_sync(
                 runtime_handler.spawn(async move {
                     while let Ok(event) = block_stream.recv().await {
                         let relay = storage_relay.clone();
-                        let res: Result<Option<CoreBlock<SignedMantleTx<Unverified>>>, _> =
+                        let res: Result<Option<CoreBlock<MantleTransaction<Unverified>>>, _> =
                             ApiStorageAdapter::<RuntimeServiceId>::get_block(relay, event.block_id)
                                 .await;
                         if let Ok(Some(block)) = res {
@@ -185,7 +185,7 @@ pub fn subscribe_to_processed_blocks_sync(
     let overwatch = node.get_overwatch_handle();
     runtime_handler.block_on(async move {
         let stream = match lb_api_service::http::mantle::get_new_blocks_stream::<
-            SignedMantleTx<Preverified>,
+            MantleTransaction<Preverified>,
             RocksBackend,
             CryptarchiaService<RuntimeServiceId>,
             RuntimeServiceId,

@@ -1,6 +1,6 @@
 use lb_core::{
     mantle::{
-        Op, SignedMantleTx,
+        MantleTransaction, Op,
         transactions::{MantleTxBuilder, states::Preverified},
     },
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
@@ -41,7 +41,7 @@ where
         mut tx_builder: MantleTxBuilder,
         declaration: DeclarationMessage,
         config: &SdpWalletConfig,
-    ) -> Result<SignedMantleTx<Preverified>, SdpWalletError> {
+    ) -> Result<MantleTransaction<Preverified>, SdpWalletError> {
         tx_builder = tx_builder.push_op(Op::SDPDeclare(declaration))?;
 
         let TipResponse {
@@ -82,7 +82,7 @@ where
         mut tx_builder: MantleTxBuilder,
         withdraw: WithdrawMessage,
         config: &SdpWalletConfig,
-    ) -> Result<SignedMantleTx<Preverified>, SdpWalletError> {
+    ) -> Result<MantleTransaction<Preverified>, SdpWalletError> {
         tx_builder = tx_builder.push_op(Op::SDPWithdraw(withdraw))?;
 
         let TipResponse {
@@ -123,7 +123,7 @@ where
         mut tx_builder: MantleTxBuilder,
         active: ActiveMessage,
         config: &SdpWalletConfig,
-    ) -> Result<SignedMantleTx<Preverified>, SdpWalletError> {
+    ) -> Result<MantleTransaction<Preverified>, SdpWalletError> {
         tx_builder = tx_builder.push_op(Op::SDPActive(active))?;
 
         let TipResponse {

@@ -1,5 +1,5 @@
 use lb_core::mantle::{
-    Op, OpProof, SignedMantleTx, ops::channel::inscribe::Inscription, traits::Hashable as _,
+    MantleTransaction, Op, OpProof, ops::channel::inscribe::Inscription, traits::Hashable as _,
 };
 use lb_key_management_system_service::keys::ZkKey;
 
@@ -42,7 +42,7 @@ pub(crate) async fn run_deposit(args: DepositArgs) -> RunResult<()> {
         inscription,
     )?;
     let user_sig = ZkKey::multi_sign(&[wallet_key], &tx.hash().to_fr())?;
-    let signed_tx = SignedMantleTx::new(
+    let signed_tx = MantleTransaction::new(
         tx,
         [
             OpProof::ZkSig(user_sig.clone()),

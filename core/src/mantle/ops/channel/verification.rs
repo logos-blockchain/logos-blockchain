@@ -98,7 +98,7 @@ mod tests {
         channel::Channels,
         ops::channel::ChannelId,
         transactions::{
-            TxHash, signed_mantle_tx::test_utils::make_channel_state,
+            TxHash, mantle_transaction::test_utils::make_channel_state,
             verification_helper::test_utils::TestOperationVerificationHelper,
         },
     };

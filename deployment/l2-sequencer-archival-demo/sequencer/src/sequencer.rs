@@ -4,7 +4,7 @@ use lb_common_http_client::{ChainServiceInfo, CommonHttpClient};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        SignedMantleTx,
+        MantleTransaction,
         ops::{
             Op, OpProof,
             channel::{
@@ -161,7 +161,11 @@ impl Sequencer {
     }
 
     /// Create and sign a transaction for inscribing data
-    fn create_inscribe_tx(&self, data: Inscription, parent: MsgId) -> SignedMantleTx<Unverified> {
+    fn create_inscribe_tx(
+        &self,
+        data: Inscription,
+        parent: MsgId,
+    ) -> MantleTransaction<Unverified> {
         let verifying_key_bytes = self.signing_key.public_key().to_bytes();
         let verifying_key =
             Ed25519PublicKey::from_bytes(&verifying_key_bytes).expect("valid ed25519 public key");
@@ -184,11 +188,11 @@ impl Sequencer {
             lb_key_management_system_service::keys::Ed25519Signature::from_bytes(&signature_bytes);
 
         // TODO: Should preverify?
-        SignedMantleTx::new(inscribe_tx, [OpProof::Ed25519Sig(signature)].into())
+        MantleTransaction::new(inscribe_tx, [OpProof::Ed25519Sig(signature)].into())
     }
 
     /// Post a transaction to the node and wait for inclusion
-    async fn post_and_wait(&self, tx: &SignedMantleTx<Unverified>) -> Result<()> {
+    async fn post_and_wait(&self, tx: &MantleTransaction<Unverified>) -> Result<()> {
         // Post the transaction
         self.http_client
             .post_transaction(self.node_url.clone(), tx.clone())
@@ -273,7 +277,7 @@ impl Sequencer {
     }
 
     fn get_expected_inscription<State: VerificationState>(
-        tx: &SignedMantleTx<State>,
+        tx: &MantleTransaction<State>,
     ) -> &InscriptionOp {
         let expected_op = tx
             .mantle_tx()
@@ -312,7 +316,7 @@ impl Sequencer {
     }
 
     /// Wait for a transaction to be included in a block.
-    async fn wait_for_inclusion(&self, tx: &SignedMantleTx<Unverified>) -> Result<()> {
+    async fn wait_for_inclusion(&self, tx: &MantleTransaction<Unverified>) -> Result<()> {
         let expected_inscription = Self::get_expected_inscription(tx);
 
         let timeout_duration = Duration::from_mins(5);

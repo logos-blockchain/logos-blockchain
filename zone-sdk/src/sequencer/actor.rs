@@ -623,7 +623,7 @@ mod tests {
     use lb_core::{
         header::HeaderId,
         mantle::{
-            Note, Op, RawMantleTx, SignedMantleTx, Utxo,
+            MantleTransaction, Note, Op, RawMantleTx, Utxo,
             channel::{SlotTimeframe, SlotTimeout},
             ledger::Inputs,
             ops::{
@@ -708,7 +708,7 @@ mod tests {
         assert!(matches!(&tx.ops()[1], &Op::ChannelInscribe(_)));
 
         // Sign the `MantleTx`
-        let signed_tx = SignedMantleTx::new(
+        let signed_tx = MantleTransaction::new(
             tx.clone(),
             [
                 OpProof::ZkSig(
@@ -1208,7 +1208,7 @@ mod tests {
             .unwrap(),
         );
         let tx_hash = mantle_tx.hash();
-        let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
+        let signed_tx = MantleTransaction::new(mantle_tx, OpsProofs::empty());
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
         track_pending_tx(&mut state, signed_tx, channel_id);
@@ -1240,7 +1240,7 @@ mod tests {
         };
         let mantle_tx = RawMantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
         let tx_hash = mantle_tx.hash();
-        let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
+        let signed_tx = MantleTransaction::new(mantle_tx, OpsProofs::empty());
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
         track_pending_tx(&mut state, signed_tx, channel_id);
@@ -1265,7 +1265,7 @@ mod tests {
         };
         let mantle_tx = RawMantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
         let tx_hash = mantle_tx.hash();
-        let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
+        let signed_tx = MantleTransaction::new(mantle_tx, OpsProofs::empty());
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
         track_pending_tx(&mut state, signed_tx, our_channel);

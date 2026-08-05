@@ -6,7 +6,7 @@
 use std::{collections::HashSet, time::Duration};
 
 use lb_core::mantle::{
-    SignedMantleTx, TxGasCalculator as _, TxHash, Utxo,
+    MantleTransaction, TxGasCalculator as _, TxHash, Utxo,
     gas::MainnetGasProfile,
     transactions::{GasPrices, OpsProofs, states::Preverified},
 };
@@ -77,7 +77,7 @@ impl SignedUserWalletSubmission {
         self.submission.tx_hash()
     }
 
-    pub(crate) const fn signed_tx(&self) -> &SignedMantleTx<Preverified> {
+    pub(crate) const fn signed_tx(&self) -> &MantleTransaction<Preverified> {
         self.submission.signed_tx()
     }
 

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use lb_core::{
     mantle::{
-        Op, OpProof, SignedMantleTx,
+        MantleTransaction, Op, OpProof,
         ops::channel::{ChannelId, ChannelKeyIndex},
         traits::Hashable as _,
         transactions::{codec::encode_signed_mantle_tx, mantle_tx::MantleTx as _},
@@ -206,7 +206,7 @@ pub(crate) fn run_withdraw_combine(args: WithdrawCombineArgs) -> RunResult<()> {
         })
         .collect::<RunResult<Vec<_>>>()?
         .try_into()?;
-    let signed_tx = SignedMantleTx::new(tx, op_proofs);
+    let signed_tx = MantleTransaction::new(tx, op_proofs);
     let signed = SignedWithdrawFile {
         version: ZONE_FILE_TRANSFER_VERSION,
         kind: ZONE_SIGNED_TRANSACTION.to_owned(),

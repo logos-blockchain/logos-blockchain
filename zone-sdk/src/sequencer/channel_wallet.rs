@@ -14,7 +14,7 @@ use lb_common_http_client::Slot;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        SignedMantleTx,
+        MantleTransaction,
         ledger::NoteId,
         ops::{Op, OpId as _, channel::ChannelId},
         traits::Hashable as _,
@@ -115,7 +115,7 @@ impl ChannelWallet {
 /// `fetch_block_deposit_events` — it is guaranteed to contain every channel
 /// deposit op of these transactions.
 pub(super) fn note_ops_from_txs(
-    transactions: &[SignedMantleTx<Unverified>],
+    transactions: &[MantleTransaction<Unverified>],
     channel_id: ChannelId,
     deposit_events: &DepositEvents,
     slot: Slot,
@@ -205,7 +205,7 @@ mod tests {
     }
 
     fn deposit_events_for(
-        tx: &SignedMantleTx<Unverified>,
+        tx: &MantleTransaction<Unverified>,
         op: &DepositOp,
         amount: Value,
         notes: Vec<DepositNote>,

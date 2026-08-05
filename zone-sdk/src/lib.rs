@@ -95,7 +95,7 @@ pub mod node_types {
         events::DepositRecreatedNotes,
         header::HeaderId,
         mantle::{
-            SignedMantleTx, TxHash, Value,
+            MantleTransaction, TxHash, Value,
             channel::ChannelState,
             ledger::Inputs,
             ops::channel::{ChannelId, MsgId, deposit::Metadata, inscribe::Inscription},

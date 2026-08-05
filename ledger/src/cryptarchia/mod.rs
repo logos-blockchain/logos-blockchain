@@ -832,9 +832,9 @@ pub mod tests {
     use lb_core::{
         crypto::{Digest as _, Hasher},
         mantle::{
-            Note, Op,
+            MantleTransaction, Note, Op,
             OpProof::ZkSig,
-            RawMantleTx, SignedMantleTx, TxGasCalculator as _,
+            RawMantleTx, TxGasCalculator as _,
             gas::MainnetGasProfile,
             ledger::{Inputs, Outputs},
             ops::{leader_claim::VoucherCm, sdp::SDPDeclareOp},
@@ -983,7 +983,7 @@ pub mod tests {
             slot,
             &proof,
             &UncleSlots::default(),
-            std::iter::empty::<&SignedMantleTx<Preverified>>(),
+            std::iter::empty::<&MantleTransaction<Preverified>>(),
         )?;
         ledger.commit_update(id, state);
         Ok(id)
@@ -1883,7 +1883,7 @@ pub mod tests {
     fn create_tx_with_transfer(
         inputs: &[(&ZkKey, &Utxo)],
         outputs: Vec<Note>,
-    ) -> (SignedMantleTx<Unverified>, TransferOp, ZkSignature) {
+    ) -> (MantleTransaction<Unverified>, TransferOp, ZkSignature) {
         let sks = inputs
             .iter()
             .map(|(sk, _)| (*sk).clone())
@@ -1895,7 +1895,7 @@ pub mod tests {
         );
         let mantle_tx = RawMantleTx([Op::Transfer(transfer_op.clone())].into());
         let transfer_sig = ZkKey::multi_sign(&sks, &mantle_tx.hash().to_fr()).unwrap();
-        let tx = SignedMantleTx::new(mantle_tx, [ZkSig(transfer_sig.clone())].into());
+        let tx = MantleTransaction::new(mantle_tx, [ZkSig(transfer_sig.clone())].into());
         (tx, transfer_op, transfer_sig)
     }
 

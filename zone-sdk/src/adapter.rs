@@ -11,7 +11,7 @@ use lb_core::{
     events::{DepositRecreatedNotes, TxEvent},
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx, Value,
+        MantleTransaction, Op, Value,
         channel::ChannelState,
         ops::{OpId as _, channel::ChannelId},
         traits::Hashable as _,
@@ -74,7 +74,7 @@ pub trait Node {
         slot_to: Slot,
     ) -> Result<Vec<ApiBlock>, Error>;
 
-    async fn post_transaction(&self, tx: SignedMantleTx<Unverified>) -> Result<(), Error>;
+    async fn post_transaction(&self, tx: MantleTransaction<Unverified>) -> Result<(), Error>;
 
     /// Fund a transaction from the node's wallet.
     ///
@@ -204,7 +204,7 @@ impl Node for NodeHttpClient {
             .await
     }
 
-    async fn post_transaction(&self, tx: SignedMantleTx<Unverified>) -> Result<(), Error> {
+    async fn post_transaction(&self, tx: MantleTransaction<Unverified>) -> Result<(), Error> {
         self.client
             .post_transaction(self.base_url.clone(), tx)
             .await
@@ -220,7 +220,7 @@ impl Node for NodeHttpClient {
 
 /// Returns true if `transactions` contains any deposit op on `channel_id`.
 pub(crate) fn has_channel_deposit<State: VerificationState>(
-    transactions: &[SignedMantleTx<State>],
+    transactions: &[MantleTransaction<State>],
     channel_id: ChannelId,
 ) -> bool {
     transactions.iter().any(|tx| {
@@ -277,7 +277,7 @@ pub(crate) fn build_deposit_events(events: &Events) -> DepositEvents {
 /// Walks a block's transactions and emits the [`ZoneMessage`]s relevant to
 /// `channel_id`, looking up deposit amounts and notes from `deposit_events`.
 fn block_to_messages<State: VerificationState>(
-    transactions: Vec<SignedMantleTx<State>>,
+    transactions: Vec<MantleTransaction<State>>,
     channel_id: ChannelId,
     deposit_events: &DepositEvents,
 ) -> Vec<ZoneMessage> {

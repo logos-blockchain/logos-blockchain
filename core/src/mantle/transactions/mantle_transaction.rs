@@ -42,21 +42,21 @@ use crate::{
 // TODO: Increase test coverage after type state refactor.
 //   The current tests behave just like the old code.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SignedMantleTx<State: VerificationState> {
+pub struct MantleTransaction<State: VerificationState> {
     pub(crate) mantle_tx: RawMantleTx,
     // TODO: make this more efficient
     ops_proofs: OpsProofs,
     state: PhantomData<State>,
 }
 
-impl<State: VerificationState> SignedMantleTx<State> {
-    fn into_state<T: VerificationState>(self) -> SignedMantleTx<T> {
+impl<State: VerificationState> MantleTransaction<State> {
+    fn into_state<T: VerificationState>(self) -> MantleTransaction<T> {
         let Self {
             mantle_tx,
             ops_proofs,
             ..
         } = self;
-        SignedMantleTx::<T> {
+        MantleTransaction::<T> {
             mantle_tx,
             ops_proofs,
             state: PhantomData,
@@ -87,7 +87,7 @@ impl<State: VerificationState> SignedMantleTx<State> {
     }
 }
 
-impl SignedMantleTx<Unverified> {
+impl MantleTransaction<Unverified> {
     #[must_use]
     pub const fn new(mantle_tx: RawMantleTx, ops_proofs: OpsProofs) -> Self {
         Self {
@@ -175,7 +175,7 @@ impl SignedMantleTx<Unverified> {
         Ok(())
     }
 
-    fn into_preverified(self) -> SignedMantleTx<Preverified> {
+    fn into_preverified(self) -> MantleTransaction<Preverified> {
         self.into_state()
     }
 
@@ -189,27 +189,27 @@ impl SignedMantleTx<Unverified> {
     /// - Each operation has a corresponding proof of the correct type
     /// - [`InscriptionOp`](crate::mantle::ops::channel::inscribe::InscriptionOp)
     ///   and [`LeaderClaimOp`](crate::mantle::ops::leader_claim::LeaderClaimOp) have valid signatures/proofs.
-    pub fn preverify(self) -> Result<SignedMantleTx<Preverified>, VerificationError> {
+    pub fn preverify(self) -> Result<MantleTransaction<Preverified>, VerificationError> {
         self.ensure_one_proof_per_op()?;
         self.preverify_ops()?;
         Ok(self.into_preverified())
     }
 
-    /// Converts a `SignedMantleTx<Unverified>` into a
-    /// `SignedMantleTx<Preverified>` without performing any verification.
+    /// Converts a `MantleTransaction<Unverified>` into a
+    /// `MantleTransaction<Preverified>` without performing any verification.
     ///
     /// This function is intended for
     /// [`GenesisTx`](crate::mantle::transactions::genesis_tx::GenesisTx) and
     /// testing purposes only.
     #[must_use]
     #[doc(hidden)]
-    pub(crate) fn into_trusted(self) -> SignedMantleTx<Preverified> {
-        SignedMantleTx::new_trusted(self.mantle_tx, self.ops_proofs)
+    pub(crate) fn into_trusted(self) -> MantleTransaction<Preverified> {
+        MantleTransaction::new_trusted(self.mantle_tx, self.ops_proofs)
     }
 }
 
-impl SignedMantleTx<Preverified> {
-    /// Creates a new `SignedMantleTx<Preverified>` without performing any
+impl MantleTransaction<Preverified> {
+    /// Creates a new `MantleTransaction<Preverified>` without performing any
     /// verification.
     ///
     /// This function is intended for
@@ -353,7 +353,7 @@ impl SignedMantleTx<Preverified> {
                     .verify(proof, &context)
                     .map_err(VerificationError::ClaimPowRewardError)
             }
-            // SignedMantleTx<Preverified> invariant: Op/Proof pairs have been verified in
+            // MantleTransaction<Preverified> invariant: Op/Proof pairs have been verified in
             // preverify, so this branch should be unreachable.
             _ => {
                 unreachable!("All stateless verification should have been done in preverify.");
@@ -367,7 +367,7 @@ impl SignedMantleTx<Preverified> {
     }
 }
 
-impl<State: VerificationState> Hashable for SignedMantleTx<State> {
+impl<State: VerificationState> Hashable for MantleTransaction<State> {
     //noinspection RsTypeCheck: The type is correct, but the linter is confused by
     // the closure.
     const HASHER: hashable::Hasher<Self> = |tx| {
@@ -381,7 +381,7 @@ impl<State: VerificationState> Hashable for SignedMantleTx<State> {
     }
 }
 
-impl<State: VerificationState> MantleTxWithProofs for SignedMantleTx<State> {
+impl<State: VerificationState> MantleTxWithProofs for MantleTransaction<State> {
     fn mantle_tx(&self) -> &RawMantleTx {
         &self.mantle_tx
     }
@@ -391,7 +391,7 @@ impl<State: VerificationState> MantleTxWithProofs for SignedMantleTx<State> {
     }
 }
 
-impl<State: VerificationState> TxGasCalculator for SignedMantleTx<State> {
+impl<State: VerificationState> TxGasCalculator for MantleTransaction<State> {
     type Context = GasPrices;
 
     fn total_gas_cost<Profile: GasProfile>(
@@ -448,13 +448,13 @@ fn signed_op_execution_gas<Profile: GasProfile>(
     op.execution_gas::<Profile>().checked_mul(multiplier)
 }
 
-impl<State: VerificationState> StorageSize for SignedMantleTx<State> {
+impl<State: VerificationState> StorageSize for MantleTransaction<State> {
     fn storage_size(&self) -> usize {
         self.gas_storage_size() as usize
     }
 }
 
-impl PreverifiedMantleTx for SignedMantleTx<Preverified> {
+impl PreverifiedMantleTx for MantleTransaction<Preverified> {
     fn verified_ops(&self) -> VerifiedOps<'_> {
         self.verified_ops()
     }
@@ -462,13 +462,15 @@ impl PreverifiedMantleTx for SignedMantleTx<Preverified> {
 
 #[derive(Serialize)]
 #[serde(rename = "SignedMantleTx")]
-struct SignedMantleTxSerde<'a> {
+struct MantleTransactionSerde<'a> {
     mantle_tx: &'a RawMantleTx,
     ops_proofs: &'a [OpProof],
 }
 
-impl<'a, State: VerificationState> From<&'a SignedMantleTx<State>> for SignedMantleTxSerde<'a> {
-    fn from(signed_mantle_tx: &'a SignedMantleTx<State>) -> Self {
+impl<'a, State: VerificationState> From<&'a MantleTransaction<State>>
+    for MantleTransactionSerde<'a>
+{
+    fn from(signed_mantle_tx: &'a MantleTransaction<State>) -> Self {
         Self {
             mantle_tx: &signed_mantle_tx.mantle_tx,
             ops_proofs: &signed_mantle_tx.ops_proofs,
@@ -476,13 +478,13 @@ impl<'a, State: VerificationState> From<&'a SignedMantleTx<State>> for SignedMan
     }
 }
 
-impl<State: VerificationState> Serialize for SignedMantleTx<State> {
+impl<State: VerificationState> Serialize for MantleTransaction<State> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         if serializer.is_human_readable() {
-            SignedMantleTxSerde::from(self).serialize(serializer)
+            MantleTransactionSerde::from(self).serialize(serializer)
         } else {
             encode_signed_mantle_tx(self).serialize(serializer)
         }
@@ -491,24 +493,24 @@ impl<State: VerificationState> Serialize for SignedMantleTx<State> {
 
 #[derive(Deserialize)]
 #[serde(rename = "SignedMantleTx")]
-struct OwnedSignedMantleTxSerde {
+struct OwnedMantleTransactionSerde {
     mantle_tx: RawMantleTx,
     ops_proofs: OpsProofs,
 }
 
-impl From<OwnedSignedMantleTxSerde> for SignedMantleTx<Unverified> {
-    fn from(helper: OwnedSignedMantleTxSerde) -> Self {
+impl From<OwnedMantleTransactionSerde> for MantleTransaction<Unverified> {
+    fn from(helper: OwnedMantleTransactionSerde) -> Self {
         Self::new(helper.mantle_tx, helper.ops_proofs)
     }
 }
 
-impl<'de> Deserialize<'de> for SignedMantleTx<Unverified> {
+impl<'de> Deserialize<'de> for MantleTransaction<Unverified> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         if deserializer.is_human_readable() {
-            OwnedSignedMantleTxSerde::deserialize(deserializer).map(Self::from)
+            OwnedMantleTransactionSerde::deserialize(deserializer).map(Self::from)
         } else {
             let bytes: Vec<u8> = Deserialize::deserialize(deserializer)?;
             let (remaining, tx) =
@@ -527,12 +529,12 @@ impl<'de> Deserialize<'de> for SignedMantleTx<Unverified> {
 // TODO: This `impl` might be removed in favor of explicit preverification at
 // specific boundaries.   E.g.: HTTP service uses `Unverify` and only runs
 // `preverify` when crossing the boundary.
-impl<'de> Deserialize<'de> for SignedMantleTx<Preverified> {
+impl<'de> Deserialize<'de> for MantleTransaction<Preverified> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let unverified_tx = SignedMantleTx::<Unverified>::deserialize(deserializer)?;
+        let unverified_tx = MantleTransaction::<Unverified>::deserialize(deserializer)?;
         unverified_tx.preverify().map_err(serde::de::Error::custom)
     }
 }
@@ -546,7 +548,7 @@ pub mod test_utils {
     use lb_key_management_system_keys::keys::Ed25519Key;
 
     use crate::mantle::{
-        NoteId, Op, OpProof, RawMantleTx, SignedMantleTx,
+        MantleTransaction, NoteId, Op, OpProof, RawMantleTx,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         ledger::Inputs,
         ops::channel::{
@@ -603,7 +605,7 @@ pub mod test_utils {
         channel_id: ChannelId,
         signing_keys: &[&Ed25519Key],
         inputs: Option<Inputs>,
-    ) -> SignedMantleTx<Preverified> {
+    ) -> MantleTransaction<Preverified> {
         let inputs = inputs.unwrap_or_else(|| Inputs::new([NoteId(Fr::from(0u64))]));
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
             channel_id,
@@ -613,7 +615,7 @@ pub mod test_utils {
         let tx_hash = mantle_tx.hash();
         let proof = create_channel_multi_sig_proof(&tx_hash, signing_keys);
 
-        let tx = SignedMantleTx::new(mantle_tx, [OpProof::ChannelMultiSigProof(proof)].into())
+        let tx = MantleTransaction::new(mantle_tx, [OpProof::ChannelMultiSigProof(proof)].into())
             .preverify()
             .unwrap();
         assert_eq!(
@@ -647,7 +649,7 @@ mod tests {
         },
         transactions::{
             MantleTxGasContext,
-            signed_mantle_tx::test_utils::{create_test_inscribe_op, create_test_mantle_tx},
+            mantle_transaction::test_utils::{create_test_inscribe_op, create_test_mantle_tx},
         },
     };
 
@@ -740,7 +742,7 @@ mod tests {
         let deposit_proof = ZkKey::multi_sign(&[], &tx_hash.to_fr()).unwrap();
         let withdraw_proof = create_channel_multi_sig_proof(&tx_hash, &withdraw_signers);
 
-        let signed_tx = SignedMantleTx::new(
+        let signed_tx = MantleTransaction::new(
             mantle_tx,
             [
                 OpProof::ChannelMultiSigProof(config_proof),
@@ -776,7 +778,7 @@ mod tests {
         let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
         let result =
-            SignedMantleTx::new(mantle_tx, [OpProof::Ed25519Sig(signature)].into()).preverify();
+            MantleTransaction::new(mantle_tx, [OpProof::Ed25519Sig(signature)].into()).preverify();
 
         assert!(result.is_ok());
     }
@@ -786,7 +788,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let inscribe_op = create_test_inscribe_op(&signing_key);
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
-        let result = SignedMantleTx::new(mantle_tx, OpsProofs::empty()).preverify();
+        let result = MantleTransaction::new(mantle_tx, OpsProofs::empty()).preverify();
 
         assert!(matches!(
             result,
@@ -809,7 +811,7 @@ mod tests {
         let signature = wrong_signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
         let result =
-            SignedMantleTx::new(mantle_tx, [OpProof::Ed25519Sig(signature)].into()).preverify();
+            MantleTransaction::new(mantle_tx, [OpProof::Ed25519Sig(signature)].into()).preverify();
 
         assert!(matches!(
             result,
@@ -828,7 +830,7 @@ mod tests {
         // Use wrong proof type
         let tx_hash = mantle_tx.hash();
         let zk_sig = OpProof::ZkSig(ZkKey::multi_sign(&[], &tx_hash.to_fr()).unwrap());
-        let result = SignedMantleTx::new(mantle_tx, [zk_sig].into()).preverify();
+        let result = MantleTransaction::new(mantle_tx, [zk_sig].into()).preverify();
 
         assert!(matches!(
             result,
@@ -856,7 +858,7 @@ mod tests {
         let sig1 = signing_key1.sign_payload(&tx_hash.as_signing_bytes());
         let sig2 = signing_key2.sign_payload(&tx_hash.as_signing_bytes());
 
-        let result = SignedMantleTx::new(
+        let result = MantleTransaction::new(
             mantle_tx,
             [OpProof::Ed25519Sig(sig1), OpProof::Ed25519Sig(sig2)].into(),
         )
@@ -883,7 +885,7 @@ mod tests {
         let sig1 = signing_key1.sign_payload(&tx_hash.as_signing_bytes());
         let sig2 = wrong_key.sign_payload(&tx_hash.as_signing_bytes()); // Wrong signature
 
-        let result = SignedMantleTx::new(
+        let result = MantleTransaction::new(
             mantle_tx,
             [OpProof::Ed25519Sig(sig1), OpProof::Ed25519Sig(sig2)].into(),
         )
@@ -914,7 +916,7 @@ mod tests {
         let transfer_sig = ZkKey::multi_sign(&[input_sk], &mantle_tx.hash().to_fr())
             .expect("Signing should succeed");
         let result =
-            SignedMantleTx::new(mantle_tx, [OpProof::ZkSig(transfer_sig)].into()).preverify();
+            MantleTransaction::new(mantle_tx, [OpProof::ZkSig(transfer_sig)].into()).preverify();
 
         assert_eq!(
             result,
@@ -933,13 +935,14 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
-        let signed_tx = SignedMantleTx::new(mantle_tx, [OpProof::Ed25519Sig(signature)].into())
+        let signed_tx = MantleTransaction::new(mantle_tx, [OpProof::Ed25519Sig(signature)].into())
             .preverify()
             .unwrap();
 
         // Serialize and deserialize
         let serialized = serde_json::to_string(&signed_tx).unwrap();
-        let deserialized: Result<SignedMantleTx<Unverified>, _> = serde_json::from_str(&serialized);
+        let deserialized: Result<MantleTransaction<Unverified>, _> =
+            serde_json::from_str(&serialized);
         let deserialized_signed_tx = deserialized.unwrap().preverify().unwrap();
 
         assert_eq!(deserialized_signed_tx, signed_tx);
@@ -951,18 +954,18 @@ mod tests {
         let inscribe_op = create_test_inscribe_op(&signing_key);
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
 
-        let helper = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
+        let helper = MantleTransaction::new(mantle_tx, OpsProofs::empty());
 
         let serialized = serde_json::to_string(&helper).unwrap();
 
-        // Deserialization into `SignedMantleTx<Unverified>` should succeed, even with
-        // missing proof.
-        serde_json::from_str::<SignedMantleTx<Unverified>>(&serialized)
+        // Deserialization into `MantleTransaction<Unverified>` should succeed, even
+        // with missing proof.
+        serde_json::from_str::<MantleTransaction<Unverified>>(&serialized)
             .expect("Unverified deserialization should succeed");
 
-        // Deserialization into `SignedMantleTx<Preverified>` should fail due to missing
-        // proof.
-        let deserialized: Result<SignedMantleTx<Preverified>, _> =
+        // Deserialization into `MantleTransaction<Preverified>` should fail due to
+        // missing proof.
+        let deserialized: Result<MantleTransaction<Preverified>, _> =
             serde_json::from_str(&serialized);
 
         let err_msg = deserialized
@@ -984,18 +987,19 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let wrong_signature = wrong_key.sign_payload(&tx_hash.as_signing_bytes());
 
-        let helper = SignedMantleTx::new(mantle_tx, [OpProof::Ed25519Sig(wrong_signature)].into());
+        let helper =
+            MantleTransaction::new(mantle_tx, [OpProof::Ed25519Sig(wrong_signature)].into());
 
         let serialized = serde_json::to_string(&helper).unwrap();
 
-        // Deserialization into `SignedMantleTx<Unverified>` should succeed, even with
-        // invalid signature.
-        serde_json::from_str::<SignedMantleTx<Unverified>>(&serialized)
+        // Deserialization into `MantleTransaction<Unverified>` should succeed, even
+        // with invalid signature.
+        serde_json::from_str::<MantleTransaction<Unverified>>(&serialized)
             .expect("Unverified deserialization should succeed");
 
-        // Deserialization into `SignedMantleTx<Preverified>` should fail due to invalid
-        // signature.
-        let deserialized: Result<SignedMantleTx<Preverified>, _> =
+        // Deserialization into `MantleTransaction<Preverified>` should fail due to
+        // invalid signature.
+        let deserialized: Result<MantleTransaction<Preverified>, _> =
             serde_json::from_str(&serialized);
 
         let err_msg = deserialized
@@ -1013,7 +1017,7 @@ mod tests {
         let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
         // Test too few proofs
-        let result = SignedMantleTx::new(mantle_tx.clone(), OpsProofs::empty()).preverify();
+        let result = MantleTransaction::new(mantle_tx.clone(), OpsProofs::empty()).preverify();
         assert!(matches!(
             result,
             Err(VerificationError::ProofCountMismatch {
@@ -1023,7 +1027,7 @@ mod tests {
         ));
 
         // Test too many proofs
-        let result = SignedMantleTx::new(
+        let result = MantleTransaction::new(
             mantle_tx,
             [
                 OpProof::Ed25519Sig(signature),

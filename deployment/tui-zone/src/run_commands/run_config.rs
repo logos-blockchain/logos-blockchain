@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use lb_codec::BinaryEncode as _;
 use lb_core::{
     mantle::{
-        Op, OpProof, SignedMantleTx,
+        MantleTransaction, Op, OpProof,
         ops::channel::{
             ChannelId, ChannelKeyIndex,
             config::{ChannelConfigOp, Keys},
@@ -238,7 +238,7 @@ pub(crate) fn run_config_combine(args: ConfigCombineArgs) -> RunResult<()> {
         )
         .into());
     }
-    let signed_tx = SignedMantleTx::new(tx, [OpProof::ChannelMultiSigProof(proof)].into());
+    let signed_tx = MantleTransaction::new(tx, [OpProof::ChannelMultiSigProof(proof)].into());
     let signed = SignedConfigFile {
         version: ZONE_FILE_TRANSFER_VERSION,
         kind: ZONE_SIGNED_CONFIG.to_owned(),

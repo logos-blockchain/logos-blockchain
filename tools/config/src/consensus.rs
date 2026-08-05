@@ -21,7 +21,7 @@ use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr};
 use lb_key_management_system_service::keys::{
     Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
 };
-use lb_node::{Hashable as _, SignedMantleTx};
+use lb_node::{Hashable as _, MantleTransaction};
 use num_bigint::BigUint;
 
 use crate::unique::unique_test_context;
@@ -327,7 +327,7 @@ pub fn create_genesis_block_with_declarations(
             .expect("genesis transaction proofs are bounded");
     }
 
-    let signed_mantle_tx = SignedMantleTx::new_trusted(mantle_tx, ops_proofs);
+    let signed_mantle_tx = MantleTransaction::new_trusted(mantle_tx, ops_proofs);
 
     // TODO: Maybe use the builder instead of trusting the signed mantle tx
     GenesisBlockBuilder::new()

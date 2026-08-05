@@ -9,7 +9,7 @@ use std::{
 
 use async_trait::async_trait;
 use lb_core::mantle::{
-    Note, OpProof, SignedMantleTx, Utxo,
+    MantleTransaction, Note, OpProof, Utxo,
     gas::MainnetGasProfile,
     ops::OpId as _,
     traits::{GenesisTx as _, Hashable as _},
@@ -218,7 +218,7 @@ const SUBMIT_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 async fn submit_transaction_via_cluster(
     ctx: &RunContext<impl LbcScenarioEnv>,
-    tx: Arc<SignedMantleTx<Preverified>>,
+    tx: Arc<MantleTransaction<Preverified>>,
 ) -> Result<(), DynError> {
     let tx_hash = tx.hash();
     debug!(?tx_hash, "submitting transaction via cluster (nodes first)");
@@ -247,7 +247,7 @@ const fn has_submission_retry(attempt: usize) -> bool {
 
 async fn submit_to_clients(
     clients: &mut [NodeHttpClient],
-    tx: &SignedMantleTx<Preverified>,
+    tx: &MantleTransaction<Preverified>,
     attempt: usize,
 ) -> Result<(), DynError> {
     let tx_hash = tx.hash();
@@ -277,7 +277,7 @@ fn cluster_client_exhausted_error() -> DynError {
 fn build_wallet_transaction(
     input: &WalletInput,
     gas_context: &MantleTxGasContext,
-) -> Result<SignedMantleTx<Preverified>, DynError> {
+) -> Result<MantleTransaction<Preverified>, DynError> {
     let receiver = input.account.public_key();
 
     let provisional_tx = MantleTxBuilder::new()
@@ -312,7 +312,7 @@ fn build_wallet_transaction(
     )
     .map_err(|err| format!("failed to sign transaction: {err}"))?;
 
-    SignedMantleTx::new(tx, [OpProof::ZkSig(signature)].into())
+    MantleTransaction::new(tx, [OpProof::ZkSig(signature)].into())
         .preverify()
         .map_err(|err| format!("failed to build signed transaction: {err}").into())
 }

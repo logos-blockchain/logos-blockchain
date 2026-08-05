@@ -1,5 +1,5 @@
 use lb_core::mantle::{
-    SignedMantleTx,
+    MantleTransaction,
     traits::Hashable as _,
     transactions::{hash::TxHash, states::Preverified},
 };
@@ -24,11 +24,11 @@ impl ServiceConfig {
         recovery_data: RecoveryData,
     ) -> TxMempoolSettings<
         MempoolSettings,
-        Libp2pNetworkAdapterSettings<TxHash, SignedMantleTx<Preverified>>,
+        Libp2pNetworkAdapterSettings<TxHash, MantleTransaction<Preverified>>,
     > {
         TxMempoolSettings {
             network_adapter: Libp2pNetworkAdapterSettings {
-                id: SignedMantleTx::<Preverified>::hash,
+                id: MantleTransaction::<Preverified>::hash,
                 topic: self.deployment.pubsub_topic,
             },
             pool: MempoolSettings {

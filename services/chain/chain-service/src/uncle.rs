@@ -174,7 +174,7 @@ mod tests {
     use lb_core::{
         block::BlockTransactions,
         header::{ContentId, Header},
-        mantle::{SignedMantleTx, Utxo, transactions::states::Preverified},
+        mantle::{MantleTransaction, Utxo, transactions::states::Preverified},
         proofs::leader_proof::Groth16LeaderProof,
     };
     use lb_cryptarchia_engine::{Slot, UncleSlots};
@@ -398,8 +398,8 @@ mod tests {
     #[expect(clippy::type_complexity, reason = "a test helper")]
     fn chain_with_fork() -> (
         Cryptarchia,
-        Block<SignedMantleTx<Preverified>>,
-        Block<SignedMantleTx<Preverified>>,
+        Block<MantleTransaction<Preverified>>,
+        Block<MantleTransaction<Preverified>>,
         Ed25519Key,
         ZkKey,
         Utxo,
@@ -445,7 +445,7 @@ mod tests {
         (cryptarchia, b1, u1, u1_key, zk_key, utxo)
     }
 
-    fn signed_header(block: &Block<SignedMantleTx<Preverified>>) -> SignedHeader {
+    fn signed_header(block: &Block<MantleTransaction<Preverified>>) -> SignedHeader {
         SignedHeader::new(block.header().clone(), *block.signature())
     }
 
@@ -457,7 +457,7 @@ mod tests {
         uncle_headers: UncleHeaders,
         proof: &Groth16LeaderProof,
         key: &Ed25519Key,
-    ) -> Block<SignedMantleTx<Preverified>> {
+    ) -> Block<MantleTransaction<Preverified>> {
         Block::create(
             parent,
             slot,

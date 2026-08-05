@@ -3,7 +3,7 @@ use lb_chain_service::Slot;
 use lb_core::{
     block::{Block, SignedHeader},
     header::{ContentId, Header, HeaderId},
-    mantle::{SignedMantleTx, transactions::states::VerificationState},
+    mantle::{MantleTransaction, transactions::states::VerificationState},
     proofs::leader_proof::Groth16LeaderProof,
 };
 use lb_key_management_system_service::keys::Ed25519Signature;
@@ -21,7 +21,7 @@ pub struct ApiBlock<'block> {
 
 impl<'block> ApiBlock<'block> {
     pub fn serialize<State: VerificationState, Serializer>(
-        block: &'block Block<SignedMantleTx<State>>,
+        block: &'block Block<MantleTransaction<State>>,
         serializer: Serializer,
     ) -> Result<Serializer::Ok, Serializer::Error>
     where
@@ -31,10 +31,10 @@ impl<'block> ApiBlock<'block> {
     }
 }
 
-impl<'block, State: VerificationState> From<&'block Block<SignedMantleTx<State>>>
+impl<'block, State: VerificationState> From<&'block Block<MantleTransaction<State>>>
     for ApiBlock<'block>
 {
-    fn from(value: &'block Block<SignedMantleTx<State>>) -> Self {
+    fn from(value: &'block Block<MantleTransaction<State>>) -> Self {
         let transactions = value
             .transactions()
             .iter()
@@ -69,11 +69,11 @@ impl<'block> From<&'block SignedHeader> for ApiSignedHeader<'block> {
 #[serde(transparent)]
 pub struct ApiBlockOwned<State: VerificationState> {
     #[serde(with = "ApiBlock")]
-    block: Block<SignedMantleTx<State>>,
+    block: Block<MantleTransaction<State>>,
 }
 
-impl<State: VerificationState> From<Block<SignedMantleTx<State>>> for ApiBlockOwned<State> {
-    fn from(value: Block<SignedMantleTx<State>>) -> Self {
+impl<State: VerificationState> From<Block<MantleTransaction<State>>> for ApiBlockOwned<State> {
+    fn from(value: Block<MantleTransaction<State>>) -> Self {
         Self { block: value }
     }
 }
@@ -104,7 +104,7 @@ pub struct ApiHeaderSerializer {
 pub struct ApiProcessedBlockEvent<'block, State: VerificationState> {
     /// The processed block.
     #[serde(with = "ApiBlock")]
-    pub block: &'block Block<SignedMantleTx<State>>,
+    pub block: &'block Block<MantleTransaction<State>>,
     /// The current canonical tip after processing this block.
     pub tip: &'block HeaderId,
     pub tip_slot: &'block Slot,
@@ -115,7 +115,7 @@ pub struct ApiProcessedBlockEvent<'block, State: VerificationState> {
 
 impl<'block, State: VerificationState> ApiProcessedBlockEvent<'block, State> {
     pub fn serialize<Serializer>(
-        value: &'block BlockWithChainState<SignedMantleTx<State>>,
+        value: &'block BlockWithChainState<MantleTransaction<State>>,
         serializer: Serializer,
     ) -> Result<Serializer::Ok, Serializer::Error>
     where
@@ -125,10 +125,10 @@ impl<'block, State: VerificationState> ApiProcessedBlockEvent<'block, State> {
     }
 }
 
-impl<'block, State: VerificationState> From<&'block BlockWithChainState<SignedMantleTx<State>>>
+impl<'block, State: VerificationState> From<&'block BlockWithChainState<MantleTransaction<State>>>
     for ApiProcessedBlockEvent<'block, State>
 {
-    fn from(value: &'block BlockWithChainState<SignedMantleTx<State>>) -> Self {
+    fn from(value: &'block BlockWithChainState<MantleTransaction<State>>) -> Self {
         Self {
             block: &value.block,
             tip: &value.tip,
@@ -143,20 +143,20 @@ impl<'block, State: VerificationState> From<&'block BlockWithChainState<SignedMa
 #[serde(transparent)]
 pub struct ApiProcessedBlockEventOwned<State: VerificationState> {
     #[serde(with = "ApiProcessedBlockEvent")]
-    block_with_chain_state: BlockWithChainState<SignedMantleTx<State>>,
+    block_with_chain_state: BlockWithChainState<MantleTransaction<State>>,
 }
 
 impl<State: VerificationState> ApiProcessedBlockEventOwned<State> {
     #[must_use]
-    pub const fn block(&self) -> &Block<SignedMantleTx<State>> {
+    pub const fn block(&self) -> &Block<MantleTransaction<State>> {
         &self.block_with_chain_state.block
     }
 }
 
-impl<State: VerificationState> From<BlockWithChainState<SignedMantleTx<State>>>
+impl<State: VerificationState> From<BlockWithChainState<MantleTransaction<State>>>
     for ApiProcessedBlockEventOwned<State>
 {
-    fn from(value: BlockWithChainState<SignedMantleTx<State>>) -> Self {
+    fn from(value: BlockWithChainState<MantleTransaction<State>>) -> Self {
         Self {
             block_with_chain_state: value,
         }

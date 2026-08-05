@@ -4,9 +4,9 @@ pub mod errors;
 pub mod gas;
 pub mod genesis_tx;
 pub mod hash;
+pub mod mantle_transaction;
 pub mod mantle_tx;
 pub mod raw_signed_mantle_tx;
-pub mod signed_mantle_tx;
 pub mod states;
 pub mod verification_helper;
 pub mod verified_ops;
@@ -17,8 +17,8 @@ pub use gas::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GasPrices}
 pub use genesis_tx::{CryptarchiaParameter, GenesisTime, GenesisTx};
 pub use hash::TxHash;
 use lb_utils::bounded::UpperBoundedVec;
+pub use mantle_transaction::MantleTransaction;
 pub use mantle_tx::{MantleTxContext, MantleTxGasContext, RawMantleTx};
-pub use signed_mantle_tx::SignedMantleTx;
 pub use verification_helper::OperationVerificationHelper;
 pub use verified_ops::VerifiedOps;
 

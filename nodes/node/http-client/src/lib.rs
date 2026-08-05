@@ -8,7 +8,7 @@ use lb_core::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
     header::{ContentId, HeaderId},
     mantle::{
-        SignedMantleTx, channel::ChannelState, ops::channel::ChannelId,
+        MantleTransaction, channel::ChannelState, ops::channel::ChannelId,
         transactions::states::Unverified,
     },
     proofs::leader_proof::Groth16LeaderProof,
@@ -67,7 +67,7 @@ pub struct ApiHeader {
 pub struct ApiBlock {
     pub header: ApiHeader,
     pub uncle_headers: Vec<ApiSignedHeader>,
-    pub transactions: Vec<SignedMantleTx<Unverified>>,
+    pub transactions: Vec<MantleTransaction<Unverified>>,
 }
 
 /// Client-side signed header representation matching the server's
