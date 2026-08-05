@@ -468,10 +468,11 @@ impl TxState {
     /// Pending txs eligible for resubmission: not yet safe at tip AND
     /// part of the local suffix reachable from canonical channel tip.
     ///
-    /// Returned in parent-before-child order (BFS from channel tip via
-    /// `pending_by_parent`) so the node's mempool sees the parent before
-    /// any child — matters on checkpoint resume, where `HashMap`
-    /// iteration order is arbitrary.
+    /// Returned in parent-before-child order so the node's mempool sees the
+    /// parent before any child: inscriptions via BFS from channel tip
+    /// (`pending_by_parent`), opaque txs by submission order (`seq`) — a
+    /// locally chained bundle can only be built after the bundle that
+    /// establishes its parent tip, so submission order is dependency order.
     pub fn pending_txs(&self, tip: HeaderId) -> Vec<(TxHash, SignedMantleTx<Unverified>)> {
         let safe = self
             .block_states
@@ -489,12 +490,19 @@ impl TxState {
                     .get(&info.tx_hash)
                     .map(|p| (info.tx_hash, p.signed_tx.clone()))
             });
-        let others = self
+        let mut others: Vec<_> = self
             .pending_other
             .iter()
             .filter(|(hash, _)| !safe.contains(hash))
-            .map(|(hash, entry)| (*hash, entry.signed_tx.clone()));
-        inscriptions.chain(others).collect()
+            .collect();
+        others.sort_unstable_by_key(|(_, entry)| entry.seq);
+        inscriptions
+            .chain(
+                others
+                    .into_iter()
+                    .map(|(hash, entry)| (*hash, entry.signed_tx.clone())),
+            )
+            .collect()
     }
 
     /// Number of pending transactions (all types).
@@ -723,11 +731,15 @@ impl TxState {
             .pending
             .iter()
             .map(|(hash, p)| (*hash, p.signed_tx.clone()));
-        let others = self
-            .pending_other
-            .iter()
-            .map(|(hash, entry)| (*hash, entry.signed_tx.clone()));
-        inscriptions.chain(others).collect()
+        let mut others: Vec<_> = self.pending_other.iter().collect();
+        others.sort_unstable_by_key(|(_, entry)| entry.seq);
+        inscriptions
+            .chain(
+                others
+                    .into_iter()
+                    .map(|(hash, entry)| (*hash, entry.signed_tx.clone())),
+            )
+            .collect()
     }
 
     /// Remove a pending inscription and return its signed tx.
@@ -1298,6 +1310,35 @@ mod tests {
             state.publish_parent(tip),
             config_msg,
             "next publish must chain after the pending bundle"
+        );
+    }
+
+    #[test]
+    fn pending_txs_orders_chained_bundles_parent_before_child() {
+        let genesis = header_id(0);
+        let tip = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![]);
+
+        let mut parent = MsgId::root();
+        let mut hashes = Vec::new();
+        for data in 1..=6u8 {
+            let (bundle, _inscribe_msg, config_msg) = bundle_tx(parent, data);
+            hashes.push(bundle.mantle_tx().hash());
+            state.submit_other(bundle, channel_id);
+            parent = config_msg;
+        }
+
+        let resubmit: Vec<TxHash> = state.pending_txs(tip).iter().map(|(h, _)| *h).collect();
+        assert_eq!(
+            resubmit, hashes,
+            "resubmission must return chained bundles parent-before-child"
+        );
+        let checkpoint: Vec<TxHash> = state.all_pending_txs().iter().map(|(h, _)| *h).collect();
+        assert_eq!(
+            checkpoint, hashes,
+            "checkpoint serialization must preserve bundle submission order"
         );
     }
 
