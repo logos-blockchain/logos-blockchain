@@ -20,7 +20,7 @@ use lb_utils::bounded::UpperBoundedVec;
 pub use mantle_transaction::MantleTransaction;
 pub use mantle_tx::{MantleTxContext, MantleTxGasContext, RawMantleTx};
 pub use verification_helper::OperationVerificationHelper;
-pub use verified_ops::VerifiedOps;
+pub use verified_ops::VerifiedOperations;
 
 use crate::mantle::{Op, OpProof, ops::SignedOp};
 
