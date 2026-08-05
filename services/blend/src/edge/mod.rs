@@ -23,7 +23,6 @@ use lb_blend::{
     },
 };
 use lb_chain_service::api::CryptarchiaServiceData;
-use lb_core::codec::SerializeOp as _;
 use lb_key_management_system_service::{
     api::KmsServiceApi, keys::KeyOperators,
     operators::ed25519::exfiltrate_secret_key::LeakSecretKeyOperator,
@@ -40,7 +39,6 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
-use serde::{Serialize, de::DeserializeOwned};
 use settings::StartingBlendConfig;
 use tokio::sync::oneshot;
 use tracing::{debug, error, info};
@@ -53,7 +51,7 @@ use crate::{
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     kms::PreloadKmsService,
     membership::{self, chain::BlendEpochState, node_id},
-    message::{NetworkInfo, NetworkMessage, ServiceMessage},
+    message::{NetworkInfo, ServiceMessage},
 };
 
 const LOG_TARGET: &str = blend::service::EDGE;
@@ -197,7 +195,7 @@ where
             match msg {
                 // The Blend payload is exactly the message bytes — where a
                 // receiving node republishes them is its own configuration.
-                ServiceMessage::Blend(message) => Some(message.message),
+                ServiceMessage::Blend(message) => Some(message),
                 ServiceMessage::GetNetworkInfo { reply } => {
                     drop(reply.send(Some(NetworkInfo {
                         node_id: local_node_id.clone(),

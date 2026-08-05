@@ -45,7 +45,7 @@ impl<
     >
 where
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
-    Network: crate::core::network::NetworkAdapter<RuntimeServiceId>,
+    Network: NetworkAdapter<RuntimeServiceId>,
     StateStorage: lb_services_utils::overwatch::recovery::RecoveryBackend<
             RuntimeServiceId,
             State = crate::core::state::RecoveryServiceState<Backend::Settings, Network::Settings>,
@@ -61,7 +61,7 @@ where
 
 pub type NetworkBackendOfService<Service, RuntimeServiceId> = <<Service as ServiceComponents<
     RuntimeServiceId,
->>::NetworkAdapter as crate::core::network::NetworkAdapter<RuntimeServiceId>>::Backend;
+>>::NetworkAdapter as NetworkAdapter<RuntimeServiceId>>::Backend;
 pub type BlendBackendSettingsOfService<Service, RuntimeServiceId> =
     <Service as ServiceComponents<RuntimeServiceId>>::BackendSettings;
 
@@ -94,7 +94,7 @@ impl<NodeId> MessageComponents<NodeId> for ServiceMessage<NodeId> {
 
     fn into_payload(self) -> Self::Payload {
         match self {
-            Self::Blend(network_message) => network_message.message,
+            Self::Blend(message) => message,
             Self::GetNetworkInfo { .. } => {
                 panic!("NetworkInfo messages should be handled before calling into_payload")
             }

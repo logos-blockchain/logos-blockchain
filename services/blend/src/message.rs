@@ -60,23 +60,8 @@ impl<NodeId> Debug for ServiceMessage<NodeId> {
     }
 }
 
-/// A message that is sent to the blend network.
-///
-/// Carries only the message bytes. Where a receiving node republishes them is
-/// its own configuration, held by the [`NetworkAdapter`], so nothing about the
-/// broadcast destination travels over the Blend network or is persisted.
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct NetworkMessage {
-    pub message: Vec<u8>,
-}
-
-impl Debug for NetworkMessage {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("NetworkMessage")
-            .field("message", &format_args!("{} bytes", self.message.len()))
-            .finish()
-    }
-}
+// TODO: Replace with strong types for each message type Blend supports.
+pub type NetworkMessage = Vec<u8>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ProcessedMessage {

@@ -8,7 +8,7 @@
 
 use std::marker::PhantomData;
 
-use lb_blend_service::message::{NetworkMessage, ProxyServiceMessage, ServiceMessage};
+use lb_blend_service::message::{ProxyServiceMessage, ServiceMessage};
 use lb_codec::BinaryEncode as _;
 use lb_core::block::Proposal;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
@@ -49,12 +49,7 @@ where
     pub async fn publish_proposal(&self, proposal: Proposal) {
         if let Err((e, _)) = self
             .relay
-            .send(
-                ServiceMessage::Blend(NetworkMessage {
-                    message: proposal.encode_to_vec(),
-                })
-                .into(),
-            )
+            .send(ServiceMessage::Blend(proposal.encode_to_vec()).into())
             .await
         {
             error!(target: LOG_TARGET, "Failed to relay proposal to blend service: {e:?}");

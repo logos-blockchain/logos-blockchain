@@ -50,7 +50,7 @@ use super::handlers::{
     mantle_status, mempool_view, time_info, transaction, wallet,
 };
 use crate::{
-    BlendBroadcastSettings, BlendService, TracingService, WalletService,
+    BlendService, TracingService, WalletService,
     api::{
         handlers::{
             blend_join_network, channel, channel_deposit, leader_claim, post_activity,

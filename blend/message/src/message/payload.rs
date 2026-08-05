@@ -5,16 +5,6 @@ use serde_with::serde_as;
 
 use crate::Error;
 
-/// The fixed body length of every Blend payload: exactly a block proposal at
-/// its maximum size, as fixed by the block-construction specification.
-///
-/// The Blend payload carries nothing but the proposal — where a receiving node
-/// republishes it is that node's own configuration — so this is the proposal
-/// size and nothing more.
-///
-/// Fixed size is what makes payloads indistinguishable: a shorter body is
-/// padded out with random bytes, so an observer cannot tell a block proposal
-/// from cover traffic by looking at its length.
 pub const MAX_PAYLOAD_BODY_SIZE: usize = 8555;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

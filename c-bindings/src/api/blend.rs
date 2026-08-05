@@ -5,10 +5,7 @@ use lb_core::{
     sdp::{self, Locator},
 };
 use lb_groth16::fr_from_bytes;
-use lb_node::{
-    RuntimeServiceId,
-    generic_services::blend::{BlendBroadcastSettings, BlendService},
-};
+use lb_node::{RuntimeServiceId, generic_services::blend::BlendService};
 
 use crate::{
     LogosBlockchainNode,

@@ -78,10 +78,7 @@ mod serde {
 
 pub use self::service::ServiceState;
 mod service {
-    use core::{
-        fmt::{self, Debug, Formatter},
-        hash::Hash,
-    };
+    use core::fmt::{self, Debug, Formatter};
     use std::collections::HashSet;
 
     use lb_blend::message::{
@@ -310,9 +307,7 @@ mod service {
                 self.state_updater,
             )
         }
-    }
 
-    impl<BackendSettings, NetworkSettings> ServiceState<BackendSettings, NetworkSettings> {
         pub(super) fn add_unsent_processed_message(
             &mut self,
             message: ProcessedMessage,
@@ -372,7 +367,6 @@ mod service {
 
 pub use self::state_updater::StateUpdater;
 mod state_updater {
-    use core::hash::Hash;
 
     use lb_blend::message::{
         encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
@@ -433,24 +427,7 @@ mod state_updater {
             self.changed = true;
             self.inner.clear_old_epoch_token_collector()
         }
-    }
 
-    impl<BackendSettings, NetworkSettings> StateUpdater<BackendSettings, NetworkSettings>
-    where
-        BackendSettings: Clone,
-    {
-        /// Consumes `self` and stores the latest state via the underlying
-        /// `overwatch::services::state::StateUpdater`, returning the updated
-        /// [`ServiceState`].
-        pub fn commit_changes(self) -> ServiceState<BackendSettings, NetworkSettings> {
-            if self.changed {
-                self.inner.save();
-            }
-            self.inner
-        }
-    }
-
-    impl<BackendSettings, NetworkSettings> StateUpdater<BackendSettings, NetworkSettings> {
         /// Mark a new [`ProcessedMessage`] as unsent, meaning that it has been
         /// decapsulated and scheduled for release but not yet released.
         ///
@@ -503,6 +480,21 @@ mod state_updater {
         ) -> Result<(), ()> {
             self.changed = true;
             self.inner.remove_sent_data_message(message)
+        }
+    }
+
+    impl<BackendSettings, NetworkSettings> StateUpdater<BackendSettings, NetworkSettings>
+    where
+        BackendSettings: Clone,
+    {
+        /// Consumes `self` and stores the latest state via the underlying
+        /// `overwatch::services::state::StateUpdater`, returning the updated
+        /// [`ServiceState`].
+        pub fn commit_changes(self) -> ServiceState<BackendSettings, NetworkSettings> {
+            if self.changed {
+                self.inner.save();
+            }
+            self.inner
         }
     }
 }

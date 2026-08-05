@@ -10,7 +10,7 @@ use lb_blend::{
     },
 };
 use lb_chain_service::Epoch;
-use lb_core::{codec::SerializeOp as _, crypto::ZkHash, sdp::ActivityMetadata};
+use lb_core::{crypto::ZkHash, sdp::ActivityMetadata};
 use lb_groth16::AdditiveGroup as _;
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_poq::CORE_MERKLE_TREE_HEIGHT;
@@ -83,9 +83,7 @@ async fn test_handle_incoming_blend_message() {
         &public_info,
         (),
     );
-    let payload = NetworkMessage { message: vec![] }
-        .to_bytes()
-        .expect("NetworkMessage serialization must succeed");
+    let payload: NetworkMessage = vec![];
     let msg = processor
         .encapsulate_data_payload(&payload)
         .await
@@ -317,9 +315,7 @@ async fn test_duplicate_decapsulated_replica_handled_gracefully() {
     );
 
     // One logical data message, serialized once...
-    let payload = NetworkMessage { message: vec![] }
-        .to_bytes()
-        .expect("NetworkMessage serialization must succeed");
+    let payload: NetworkMessage = vec![];
 
     // ...encapsulated twice. Each call draws fresh randomness, so these are two
     // distinct encapsulated messages (different identifiers) that the swarm
@@ -410,9 +406,7 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
         (),
     );
 
-    let payload = NetworkMessage { message: vec![] }
-        .to_bytes()
-        .expect("NetworkMessage serialization must succeed");
+    let payload: NetworkMessage = vec![];
     let msg = processor_0
         .encapsulate_data_payload(&payload)
         .await
@@ -1492,9 +1486,7 @@ async fn test_proof_generator_epoch_binding() {
     );
 
     // Build a message with epoch 0 proofs.
-    let payload = NetworkMessage { message: vec![] }
-        .to_bytes()
-        .expect("NetworkMessage serialization must succeed");
+    let payload: NetworkMessage = vec![];
     let msg_0 = generator_0
         .encapsulate_data_payload(&payload)
         .await
