@@ -221,7 +221,7 @@ libp2p                             = { default-features = false, version = "0.56
 libp2p-stream                      = { default-features = false, version = "0.4.0-alpha" }
 libp2p-swarm-test                  = { default-features = false, version = "0.6" }
 log                                = { default-features = false, version = "0.4" }
-lru                                = { default-features = false, version = "0.12" }
+lru                                = { default-features = false, version = "0.18.2" }
 multiaddr                          = { default-features = false, version = "0.18" }
 natpmp                             = { default-features = false, version = "0.5" }
 netdev                             = { default-features = false, version = "0.31" }
