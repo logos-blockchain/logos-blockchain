@@ -22,13 +22,31 @@ pub struct PoQCommonInputs {
     pub pow_difficulty: Groth16Input,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PoQSelector {
+    Core,
+    Leader,
+    Pow,
+}
+
+impl PoQSelector {
+    #[must_use]
+    pub const fn as_u8(self) -> u8 {
+        match self {
+            Self::Core => 0,
+            Self::Leader => 1,
+            Self::Pow => 2,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct PoQCommonInputsData {
     pub core_quota: u64,
     pub leader_quota: u64,
     pub pow_quota: u64,
     pub message_key: (Fr, Fr),
-    pub selector: u8,
+    pub selector: PoQSelector,
     pub index: u64,
     pub pow_difficulty: Fr,
 }
@@ -105,7 +123,7 @@ impl TryFrom<PoQCommonInputsData> for PoQCommonInputs {
             pow_quota: Groth16Input::new(Fr::from(BigUint::from(pow_quota))),
             key_part_one: message_key.0.into(),
             key_part_two: message_key.1.into(),
-            selector: Groth16Input::new(Fr::from(BigUint::from(selector))),
+            selector: Groth16Input::new(Fr::from(BigUint::from(selector.as_u8()))),
             index: Groth16Input::new(Fr::from(BigUint::from(index))),
             pow_difficulty: pow_difficulty.into(),
         })

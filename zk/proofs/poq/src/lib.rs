@@ -13,7 +13,7 @@ pub use blend_inputs::{
     CORE_MERKLE_TREE_HEIGHT, CorePathAndSelectors, PoQBlendInputs, PoQBlendInputsData,
 };
 pub use chain_inputs::{PoQChainInputs, PoQChainInputsData, PoQInputsFromDataError};
-pub use common_inputs::{PoQCommonInputs, PoQCommonInputsData};
+pub use common_inputs::{PoQCommonInputs, PoQCommonInputsData, PoQSelector};
 pub use inputs::{PoQVerifierInput, PoQVerifierInputData, PoQWitnessInputs};
 use lb_circuits_prover::Prover as _;
 use lb_groth16::{
@@ -271,7 +271,7 @@ mod tests {
                 BigUint::from(123_456u32).into(),
                 BigUint::from(654_321u32).into(),
             ),
-            selector: 0,
+            selector: PoQSelector::Core,
             index: 9,
             pow_difficulty: BigUint::from_str(
                 "2334035772366381927456001473031809359552034265892309520954243351196711606017",
@@ -349,7 +349,7 @@ mod tests {
                 BigUint::from(123_456u32).into(),
                 BigUint::from(654_321u32).into(),
             ),
-            selector: 1,
+            selector: PoQSelector::Leader,
             index: 2,
             pow_difficulty: BigUint::from_str(
                 "2334035772366381927456001473031809359552034265892309520954243351196711606017",
@@ -577,7 +577,7 @@ mod tests {
                 BigUint::from(123_456u32).into(),
                 BigUint::from(654_321u32).into(),
             ),
-            selector: 2,
+            selector: PoQSelector::Pow,
             index: 8,
             pow_difficulty: BigUint::from_str(
                 "10631870504716456348838861774188160492563879712126054449569633827216160699117",

@@ -1,6 +1,6 @@
 use core::fmt::{self, Debug, Formatter};
 
-use lb_poq::AgedNotePathAndSelectors;
+use lb_poq::{AgedNotePathAndSelectors, PoQSelector};
 use zeroize::ZeroizeOnDrop;
 
 use crate::{
@@ -16,7 +16,7 @@ use crate::{
 #[non_exhaustive]
 pub struct Inputs {
     pub key_index: u64,
-    pub selector: u8,
+    pub selector: PoQSelector,
     pub proof_type: ProofType,
 }
 
@@ -98,11 +98,11 @@ impl Debug for ProofType {
 
 impl ProofType {
     #[must_use]
-    pub const fn proof_selector(&self) -> u8 {
+    pub const fn proof_selector(&self) -> PoQSelector {
         match self {
-            Self::CoreQuota(_) => 0,
-            Self::LeadershipQuota(_) => 1,
-            Self::PowQuota(_) => 2,
+            Self::CoreQuota(_) => PoQSelector::Core,
+            Self::LeadershipQuota(_) => PoQSelector::Leader,
+            Self::PowQuota(_) => PoQSelector::Pow,
         }
     }
 }

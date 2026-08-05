@@ -8,7 +8,7 @@ use std::str::FromStr as _;
 use lb_pol::LotteryConstants;
 use lb_utils::math::NonNegativeRatio;
 use logos_blockchain_poq::{
-    PoQBlendInputsData, PoQChainInputsData, PoQCommonInputsData, PoQWalletInputsData,
+    PoQBlendInputsData, PoQChainInputsData, PoQCommonInputsData, PoQSelector, PoQWalletInputsData,
     PoQWitnessInputs,
 };
 use num_bigint::BigUint;
@@ -24,7 +24,7 @@ fn lottery() -> (lb_groth16::Fr, lb_groth16::Fr) {
         .compute_lottery_values(5000)
 }
 
-fn common_data(selector: u8, key_index: u64) -> PoQCommonInputsData {
+fn common_data(selector: PoQSelector, key_index: u64) -> PoQCommonInputsData {
     PoQCommonInputsData {
         core_quota: QUOTA,
         leader_quota: QUOTA,
@@ -168,8 +168,12 @@ pub fn core_node_inputs(key_index: u64) -> PoQWitnessInputs {
         .map(|(v, s)| (BigUint::from_str(v).unwrap().into(), s)),
     };
 
-    PoQWitnessInputs::from_core_node_data(chain_data, common_data(0, key_index), blend_data)
-        .unwrap()
+    PoQWitnessInputs::from_core_node_data(
+        chain_data,
+        common_data(PoQSelector::Core, key_index),
+        blend_data,
+    )
+    .unwrap()
 }
 
 /// Witness inputs for a leadership Proof of Quota at the given key index.
@@ -350,5 +354,10 @@ pub fn leader_inputs(key_index: u64) -> PoQWitnessInputs {
         .into(),
     };
 
-    PoQWitnessInputs::from_leader_data(chain_data, common_data(1, key_index), wallet_data).unwrap()
+    PoQWitnessInputs::from_leader_data(
+        chain_data,
+        common_data(PoQSelector::Leader, key_index),
+        wallet_data,
+    )
+    .unwrap()
 }
