@@ -20,7 +20,7 @@ use crate::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode::{self, VerificationMode},
         },
-        ops::{SignedOp, channel::config::Keys},
+        ops::{SignedOperation, channel::config::Keys},
         transactions::{hash::TxHashView, states::VerificationState},
     },
 };
@@ -203,7 +203,7 @@ impl ExecutableOperation for InscriptionOp {
 }
 
 impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOp<InscriptionOp, State, Mode>
+    for SignedOperation<InscriptionOp, State, Mode>
 {
     fn gas_multiplier(&self) -> Value {
         1

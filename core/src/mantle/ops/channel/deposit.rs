@@ -15,7 +15,7 @@ use crate::{
             ProvableOperation, Utxos, VerifiableOperation,
             verification_mode::{self, VerificationMode},
         },
-        ops::{OpId, SignedOp, channel::ChannelId},
+        ops::{OpId, SignedOperation, channel::ChannelId},
         transactions::{
             hash::{TxHash, TxHashView},
             states::VerificationState,
@@ -178,7 +178,7 @@ impl ExecutableOperation for DepositOp {
 }
 
 impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOp<DepositOp, State, Mode>
+    for SignedOperation<DepositOp, State, Mode>
 {
     fn gas_multiplier(&self) -> Value {
         1

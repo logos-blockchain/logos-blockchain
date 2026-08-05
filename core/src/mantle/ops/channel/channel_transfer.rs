@@ -14,7 +14,7 @@ use crate::{
             verification_mode::{self, VerificationMode},
         },
         ops::{
-            OpId, SignedOp,
+            OpId, SignedOperation,
             channel::{ChannelId, verification::verify_channel_multi_sig},
         },
         transactions::{OperationVerificationHelper, hash::TxHashView, states::VerificationState},
@@ -186,7 +186,7 @@ impl ExecutableOperation for ChannelTransferOp {
 }
 
 impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOp<ChannelTransferOp, State, Mode>
+    for SignedOperation<ChannelTransferOp, State, Mode>
 {
     fn gas_multiplier(&self) -> Value {
         let signature_count = self.proof().signatures().len();

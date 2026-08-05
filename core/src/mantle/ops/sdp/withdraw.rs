@@ -15,7 +15,7 @@ use crate::{
             VerifiableOperation,
             verification_mode::{self, VerificationMode},
         },
-        ops::SignedOp,
+        ops::SignedOperation,
         transactions::{hash::TxHashView, states::VerificationState},
     },
     sdp::{self, service_notes::ServiceNotes},
@@ -161,7 +161,7 @@ impl ExecutableOperation for SDPWithdrawOp {
 }
 
 impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOp<SDPWithdrawOp, State, Mode>
+    for SignedOperation<SDPWithdrawOp, State, Mode>
 {
     fn gas_multiplier(&self) -> Value {
         1
