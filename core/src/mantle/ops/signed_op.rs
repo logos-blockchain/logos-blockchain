@@ -94,19 +94,10 @@ impl<T: Operation<Mode>, Mode: VerificationMode> SignedOp<T, Verified, Mode> {
     }
 }
 
-impl<T, State, Mode> ProvableOperation for SignedOp<T, State, Mode>
-where
-    T: ProvableOperation,
-    Mode: VerificationMode,
-    State: VerificationState,
-{
-    type Proof = T::Proof;
-}
-
 impl<Profile, T, State, Mode> OperationGas<Profile> for SignedOp<T, State, Mode>
 where
     Profile: GasProfile,
-    T: OperationGas<Profile>,
+    T: OperationGas<Profile> + ProvableOperation,
     State: VerificationState,
     Mode: VerificationMode,
 {

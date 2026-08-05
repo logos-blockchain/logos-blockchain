@@ -5,7 +5,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::mantle::{Value, ledger::ProvableOperation};
+use crate::mantle::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Gas(Value);
@@ -166,7 +166,7 @@ pub struct MainnetGasProfile;
 impl private::Sealed for MainnetGasProfile {}
 impl GasProfile for MainnetGasProfile {}
 
-pub trait OperationGas<Profile: GasProfile>: ProvableOperation {
+pub trait OperationGas<Profile: GasProfile> {
     const GAS_CONSTANT: Gas;
 }
 
