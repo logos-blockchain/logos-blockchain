@@ -191,18 +191,14 @@ where
             )
             .await;
 
-        let messages_to_blend_stream = Box::pin(inbound_relay.filter_map(async |msg| {
-            match msg {
-                // The Blend payload is exactly the message bytes — where a
-                // receiving node republishes them is its own configuration.
-                ServiceMessage::Blend(message) => Some(message),
-                ServiceMessage::GetNetworkInfo { reply } => {
-                    drop(reply.send(Some(NetworkInfo {
-                        node_id: local_node_id.clone(),
-                        core_info: None,
-                    })));
-                    None
-                }
+        let messages_to_blend_stream = Box::pin(inbound_relay.filter_map(async |msg| match msg {
+            ServiceMessage::Blend(message) => Some(message),
+            ServiceMessage::GetNetworkInfo { reply } => {
+                drop(reply.send(Some(NetworkInfo {
+                    node_id: local_node_id.clone(),
+                    core_info: None,
+                })));
+                None
             }
         }));
 

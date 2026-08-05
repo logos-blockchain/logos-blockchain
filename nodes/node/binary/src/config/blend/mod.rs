@@ -79,9 +79,6 @@ impl ServiceConfig {
                 data_replication_factor: self.deployment.common.data_replication_factor,
             },
             core: CoreSettings {
-                // Where a message coming off the Blend network is republished.
-                // Held here rather than travelling in the payload, so a Blend
-                // payload is exactly a block proposal.
                 network: Libp2pBroadcastSettings {
                     topic: cryptarchia_deployment.gossipsub_protocol.clone(),
                 },

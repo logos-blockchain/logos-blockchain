@@ -108,9 +108,6 @@ mod service {
         >,
     }
 
-    // Hand-written rather than derived: neither settings type is stored, they
-    // only appear inside the state updater's type, so cloning must not require
-    // them to be `Clone`.
     impl<BackendSettings, NetworkSettings> Clone for ServiceState<BackendSettings, NetworkSettings> {
         fn clone(&self) -> Self {
             Self {
@@ -487,9 +484,6 @@ mod state_updater {
     where
         BackendSettings: Clone,
     {
-        /// Consumes `self` and stores the latest state via the underlying
-        /// `overwatch::services::state::StateUpdater`, returning the updated
-        /// [`ServiceState`].
         pub fn commit_changes(self) -> ServiceState<BackendSettings, NetworkSettings> {
             if self.changed {
                 self.inner.save();
@@ -523,7 +517,7 @@ mod recovery_state {
         pub service_state: Option<SerializableServiceState>,
         /// Type-level tie to the service's settings only — neither settings
         /// type contributes any persisted data.
-        _phantom: PhantomData<(BackendSettings, NetworkSettings)>,
+        _phantom: PhantomData<fn() -> (BackendSettings, NetworkSettings)>,
     }
 
     impl<BackendSettings, NetworkSettings> From<ServiceState<BackendSettings, NetworkSettings>>

@@ -11,9 +11,6 @@ use crate::settings::TimingSettings;
 #[derive(Clone, Debug)]
 pub struct StartingBlendConfig<BackendSettings, NetworkSettings> {
     pub backend: BackendSettings,
-    /// Configuration for the adapter that republishes messages arriving off the
-    /// Blend network — for libp2p, the gossipsub topic. Held locally rather
-    /// than carried in the payload, so it may change across restarts.
     pub network: NetworkSettings,
     pub scheduler: SchedulerSettings,
     pub time: TimingSettings,

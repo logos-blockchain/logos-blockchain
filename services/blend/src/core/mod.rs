@@ -943,10 +943,6 @@ async fn retire<
     }
 }
 
-#[expect(
-    clippy::future_not_send,
-    reason = "Driven from the core service's single-threaded run loop; the concrete proofs generator holds a `dyn Stream + Send` and so is not `Sync`."
-)]
 /// Handles an [`EpochEvent`].
 ///
 /// On a new epoch it consumes the previous cryptographic processor and creates
@@ -1208,10 +1204,6 @@ enum HandleEpochEventOutput<
     },
 }
 
-#[expect(
-    clippy::future_not_send,
-    reason = "Driven from the core service's single-threaded run loop; the concrete proofs generator holds a `dyn Stream + Send` and so is not `Sync`."
-)]
 /// Processes an already-serialized local data message from another service.
 ///
 /// The serialized payload is encapsulated with blend layers. Before scheduling,
@@ -1295,7 +1287,6 @@ where
                 fully_decapsulated_message.payload_type() == PayloadType::Data,
                 "Locally-generated and fully-decapsulated message should be a data message."
             );
-            // The payload is the message itself — there is no envelope to decode.
             let data_message: NetworkMessage = fully_decapsulated_message.payload_body().to_vec();
             tracing::trace!(target: LOG_TARGET, "Locally generated data message of {} bytes had all the {} layers addressed to this same node. Propagating only the fully decapsulated message.", data_message.len(), blending_tokens.len());
             ProcessedMessage::from(data_message)
@@ -1631,8 +1622,6 @@ where
                         "Processing a fully decapsulated data message of {} bytes.",
                         data_message.len()
                     );
-                    // The payload is the message itself — there is no envelope to
-                    // decode, so nothing here can fail.
                     let processed_message = ProcessedMessage::from(data_message);
                     scheduler.schedule_processed_message(processed_message.clone());
                     (Some(processed_message), blending_tokens.into_iter())
@@ -1871,10 +1860,6 @@ where
         ).collect()
 }
 
-#[expect(
-    clippy::future_not_send,
-    reason = "Driven from the core service's single-threaded run loop; the concrete proofs generator holds a `dyn Stream + Send` and so is not `Sync`."
-)]
 /// Generate and encapsulate a cover message. Then, try to locally decapsulate
 /// the outermost `N` layers that have the local node as the intended recipient.
 ///

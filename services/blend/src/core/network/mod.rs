@@ -12,13 +12,7 @@ use serde::{Serialize, de::DeserializeOwned};
 pub trait NetworkAdapter<RuntimeServiceId> {
     /// The network backend used by the network service.
     type Backend: NetworkBackend<RuntimeServiceId> + 'static;
-    /// What the adapter needs in order to publish a message — for libp2p, the
-    /// gossipsub topic.
-    ///
-    /// Deployment configuration held by the receiving node, not something a
-    /// sender chooses, so it never travels over the Blend network and is never
-    /// persisted: it may legitimately change across restarts. Keeping it out of
-    /// the payload is what lets the payload be exactly a block proposal.
+    /// Settings used to broadcast messages using the network service.
     type Settings: Clone + Debug + Serialize + DeserializeOwned + Send + Sync + 'static;
 
     fn new(
@@ -27,6 +21,7 @@ pub trait NetworkAdapter<RuntimeServiceId> {
         >,
         settings: Self::Settings,
     ) -> Self;
-    /// Broadcast a message to the network service.
+    /// Broadcast a message to the network service using the configured
+    /// settings.
     async fn broadcast(&self, message: Vec<u8>);
 }
