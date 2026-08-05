@@ -8,7 +8,7 @@ pub(crate) mod internal;
 pub(crate) mod codec;
 pub mod pow;
 mod serde_;
-pub mod signed_op;
+pub mod signed_operation;
 
 use std::sync::LazyLock;
 
@@ -19,7 +19,7 @@ use channel::{
 use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-pub use signed_op::SignedOp;
+pub use signed_operation::SignedOperation;
 
 use super::{
     gas::{Gas, GasProfile},

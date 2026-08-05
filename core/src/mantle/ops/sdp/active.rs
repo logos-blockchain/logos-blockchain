@@ -13,7 +13,7 @@ use crate::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
             VerifiableOperation, verification_mode, verification_mode::VerificationMode,
         },
-        ops::SignedOp,
+        ops::SignedOperation,
         transactions::{hash::TxHashView, states::VerificationState},
     },
 };
@@ -119,7 +119,7 @@ impl ExecutableOperation for SDPActiveOp {
 }
 
 impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOp<SDPActiveOp, State, Mode>
+    for SignedOperation<SDPActiveOp, State, Mode>
 {
     fn gas_multiplier(&self) -> Value {
         1

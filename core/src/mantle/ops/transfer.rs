@@ -14,7 +14,7 @@ use crate::{
             Utxo, Utxos, VerifiableOperation, verification_mode,
             verification_mode::VerificationMode,
         },
-        ops::{OpId, SignedOp},
+        ops::{OpId, SignedOperation},
         transactions::{hash::TxHashView, states::VerificationState},
     },
     sdp::locked_notes::LockedNotes,
@@ -151,7 +151,7 @@ impl ExecutableOperation for TransferOp {
 }
 
 impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOp<TransferOp, State, Mode>
+    for SignedOperation<TransferOp, State, Mode>
 {
     fn gas_multiplier(&self) -> Value {
         1

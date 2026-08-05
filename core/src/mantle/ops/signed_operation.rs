@@ -13,24 +13,24 @@ use crate::{
     },
 };
 
-pub struct SignedOp<T: ProvableOperation, State: VerificationState, Mode: VerificationMode> {
+pub struct SignedOperation<T: ProvableOperation, State: VerificationState, Mode: VerificationMode> {
     operation: T,
     proof: T::Proof,
     _marker: PhantomData<(State, Mode)>,
 }
 
 impl<T: ProvableOperation, State: VerificationState, Mode: VerificationMode>
-    SignedOp<T, State, Mode>
+    SignedOperation<T, State, Mode>
 {
     #[must_use]
-    fn into_state<NewState: VerificationState>(self) -> SignedOp<T, NewState, Mode> {
+    fn into_state<NewState: VerificationState>(self) -> SignedOperation<T, NewState, Mode> {
         let Self {
             operation,
             proof,
             _marker,
         } = self;
 
-        SignedOp::<T, NewState, Mode> {
+        SignedOperation::<T, NewState, Mode> {
             operation,
             proof,
             _marker: PhantomData,
@@ -48,7 +48,7 @@ impl<T: ProvableOperation, State: VerificationState, Mode: VerificationMode>
     }
 }
 
-impl<T: ProvableOperation, Mode: VerificationMode> SignedOp<T, Unverified, Mode> {
+impl<T: ProvableOperation, Mode: VerificationMode> SignedOperation<T, Unverified, Mode> {
     #[must_use]
     pub const fn new(operation: T, proof: T::Proof) -> Self {
         Self {
@@ -59,21 +59,21 @@ impl<T: ProvableOperation, Mode: VerificationMode> SignedOp<T, Unverified, Mode>
     }
 }
 
-impl<T: PreverifiableOperation<Mode>, Mode: VerificationMode> SignedOp<T, Unverified, Mode> {
+impl<T: PreverifiableOperation<Mode>, Mode: VerificationMode> SignedOperation<T, Unverified, Mode> {
     pub fn preverify(
         self,
         context: &T::Context<'_>,
-    ) -> Result<SignedOp<T, Preverified, Mode>, T::Error> {
+    ) -> Result<SignedOperation<T, Preverified, Mode>, T::Error> {
         self.operation.preverify(&self.proof, context)?;
         Ok(self.into_state())
     }
 }
 
-impl<T: VerifiableOperation<Mode>, Mode: VerificationMode> SignedOp<T, Preverified, Mode> {
+impl<T: VerifiableOperation<Mode>, Mode: VerificationMode> SignedOperation<T, Preverified, Mode> {
     pub fn verify(
         self,
         context: &T::Context<'_>,
-    ) -> Result<SignedOp<T, Verified, Mode>, (Self, T::Error)> {
+    ) -> Result<SignedOperation<T, Verified, Mode>, (Self, T::Error)> {
         let verify_result = self.operation.verify(&self.proof, context);
         match verify_result {
             Ok(()) => Ok(self.into_state()),
@@ -82,7 +82,7 @@ impl<T: VerifiableOperation<Mode>, Mode: VerificationMode> SignedOp<T, Preverifi
     }
 }
 
-impl<T: Operation<Mode>, Mode: VerificationMode> SignedOp<T, Verified, Mode> {
+impl<T: Operation<Mode>, Mode: VerificationMode> SignedOperation<T, Verified, Mode> {
     pub fn execute<'a>(
         &self,
         context: <T as ExecutableOperation>::Context<'a>,
@@ -94,7 +94,7 @@ impl<T: Operation<Mode>, Mode: VerificationMode> SignedOp<T, Verified, Mode> {
     }
 }
 
-impl<Profile, T, State, Mode> OperationGas<Profile> for SignedOp<T, State, Mode>
+impl<Profile, T, State, Mode> OperationGas<Profile> for SignedOperation<T, State, Mode>
 where
     Profile: GasProfile,
     T: OperationGas<Profile> + ProvableOperation,

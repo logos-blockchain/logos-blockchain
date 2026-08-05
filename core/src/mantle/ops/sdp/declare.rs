@@ -12,7 +12,7 @@ use crate::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
             VerifiableOperation, verification_mode, verification_mode::VerificationMode,
         },
-        ops::{SignedOp, ZkAndEd25519Proof},
+        ops::{SignedOperation, ZkAndEd25519Proof},
         transactions::{hash::TxHashView, states::VerificationState},
     },
     sdp::{Declaration, MinStake, locked_notes::LockedNotes},
@@ -255,7 +255,7 @@ impl ExecutableOperation for SDPDeclareOp {
 }
 
 impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOp<SDPDeclareOp, State, Mode>
+    for SignedOperation<SDPDeclareOp, State, Mode>
 {
     fn gas_multiplier(&self) -> Value {
         1
