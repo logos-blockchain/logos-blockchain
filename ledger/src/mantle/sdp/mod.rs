@@ -11,9 +11,7 @@ use lb_core::{
     mantle::{
         NoteId, OpProof, Utxo, Value,
         channel::Channels,
-        ledger::{
-            Declarations, ExecutableOperation, VerifiableOperation, verification_mode::GenesisMode,
-        },
+        ledger::{ExecutableOperation, VerifiableOperation, verification_mode::GenesisMode},
         ops::sdp::{
             SDPActiveExecutionContext, SDPActiveOp, SDPDeclareExecutionContext, SDPDeclareOp,
             SDPWithdrawExecutionContext, SDPWithdrawOp,
@@ -33,6 +31,8 @@ use tracing::debug;
 use crate::{EpochState, UtxoTree, mantle::sdp::rewards::blend};
 
 const LOG_TARGET: &str = "ledger::mantle::sdp";
+
+type Declarations = rpds::RedBlackTreeMapSync<DeclarationId, Declaration>;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 enum Service {
@@ -222,32 +222,36 @@ impl<R: Rewards> ServiceState<R> {
     ) -> Vec<HeaderEvent> {
         let mut events = Vec::new();
 
-        // The removals go to a clone.
-        let mut declarations = self.declarations.clone();
-        for (id, declaration) in &self.declarations {
-            let Some(withdraw_at) = declaration.withdraw_at else {
-                continue;
-            };
-            if epoch < withdraw_at {
-                continue;
-            }
-            if locked_notes
-                .is_locked_for_service(&declaration.locked_note_id, &declaration.service_type)
-            {
-                locked_notes
-                    .unlock(declaration.service_type, &declaration.locked_note_id)
-                    .expect("unlocking note from withdrawn declaration must be successful if it hasn't been unlocked yet");
-                events.push(HeaderEvent::SdpNoteUnlocked {
-                    note_id: declaration.locked_note_id,
-                    service_type: declaration.service_type,
-                    declaration_id: *id,
-                });
-            }
-            (declarations, _) = declarations
-                .remove(id)
-                .expect("the declaration is in the tree");
+        // Collect IDs to remove first, and remove them in a second pass.
+        // `rpds` doesn't support `retain`, and we can't remove entries while iterating
+        // over them.
+        let to_remove: Vec<DeclarationId> = self
+            .declarations
+            .iter()
+            .filter_map(|(id, declaration)| {
+                if epoch < declaration.withdraw_at? {
+                    return None;
+                }
+                if locked_notes
+                    .is_locked_for_service(&declaration.locked_note_id, &declaration.service_type)
+                {
+                    locked_notes
+                        .unlock(declaration.service_type, &declaration.locked_note_id)
+                        .expect("unlocking note from withdrawn declaration must be successful if it hasn't been unlocked yet");
+                    events.push(
+                        HeaderEvent::SdpNoteUnlocked {
+                            note_id: declaration.locked_note_id,
+                            service_type: declaration.service_type,
+                            declaration_id: *id,
+                        }
+                    );
+                }
+                Some(*id)
+            })
+            .collect();
+        for id in &to_remove {
+            self.declarations.remove_mut(id);
         }
-        self.declarations = declarations;
 
         events
     }
@@ -257,7 +261,7 @@ impl<R: Rewards> ServiceState<R> {
     }
 
     fn contains(&self, declaration_id: &DeclarationId) -> bool {
-        self.declarations.contains(declaration_id)
+        self.declarations.contains_key(declaration_id)
     }
 }
 
@@ -361,7 +365,7 @@ impl SdpLedger {
     fn new_service_state<R: Rewards>(service_type: ServiceType, rewards: R) -> ServiceState<R> {
         ServiceState {
             service_type,
-            declarations: Declarations::new(),
+            declarations: rpds::RedBlackTreeMapSync::new_sync(),
             rewards,
         }
     }
@@ -532,18 +536,16 @@ impl SdpLedger {
         self.services
             .iter()
             .map(|(service_type, service_state)| {
-                (*service_type, service_state.declarations().clone())
+                (
+                    *service_type,
+                    service_state
+                        .declarations()
+                        .iter()
+                        .map(|(declaration_id, declaration)| (*declaration_id, declaration.clone()))
+                        .collect(),
+                )
             })
             .collect()
-    }
-
-    /// Commitment to the declarations of `service_type`, or `None` if the
-    /// service is not declared.
-    #[must_use]
-    pub fn declarations_root(&self, service_type: ServiceType) -> Option<lb_core::crypto::Hash> {
-        self.services
-            .get(&service_type)
-            .map(|service| service.declarations().root())
     }
 
     /// Returns the declarations that are active at `epoch`, grouped by
@@ -561,18 +563,17 @@ impl SdpLedger {
             .iter()
             .filter_map(|(service_type, service)| {
                 let params = service_params.get(service_type)?;
-                // The snapshot drops the inactive declarations from a clone of the
-                // live tree, so the surviving ones keep the position they occupy
-                // there and the root doesn't depend on the iteration order.
-                let mut snapshot = service.declarations().clone();
-                for (declaration_id, declaration) in service.declarations() {
-                    if !is_active(declaration, epoch, *params) {
-                        (snapshot, _) = snapshot
-                            .remove(declaration_id)
-                            .expect("the declaration is in the tree");
-                    }
+                let entries: HashMap<DeclarationId, Declaration> = service
+                    .declarations()
+                    .iter()
+                    .filter(|(_, declaration)| is_active(declaration, epoch, *params))
+                    .map(|(declaration_id, declaration)| (*declaration_id, declaration.clone()))
+                    .collect();
+                if entries.is_empty() {
+                    None
+                } else {
+                    Some((*service_type, entries))
                 }
-                (snapshot.size() > 0).then_some((*service_type, snapshot))
             })
             .collect()
     }
@@ -583,7 +584,7 @@ impl SdpLedger {
             let declarations = match service {
                 Service::BlendNetwork(state) => &state.declarations,
             };
-            declarations.get_ref(declaration_id)
+            declarations.get(declaration_id)
         })
     }
 
@@ -599,7 +600,7 @@ impl SdpLedger {
         self.services.iter().find_map(|(_, service)| {
             let declarations = service.declarations();
             declarations
-                .contains(declaration_id)
+                .contains_key(declaration_id)
                 .then_some(declarations)
         })
     }
@@ -738,7 +739,7 @@ mod tests {
         ledger
             .active_declarations(epoch, &config.service_params)
             .for_service(&ServiceType::BlendNetwork)
-            .is_some_and(|m| m.contains(decl_id))
+            .is_some_and(|m| m.contains_key(decl_id))
     }
 
     /// `active_declarations` must drop entries that have gone inactive (i.e.,
@@ -961,7 +962,7 @@ mod tests {
         let declarations = ledger
             .get_declarations_by_service(ServiceType::BlendNetwork)
             .unwrap();
-        assert!(declarations.contains(&declaration_id));
+        assert!(declarations.contains_key(&declaration_id));
 
         // Move forward to epoch 4 where the provider can submit an activity message.
         // (The provider is expected to provide the service from epoch 3)

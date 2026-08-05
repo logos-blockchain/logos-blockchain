@@ -20,7 +20,6 @@ mod utils;
 #[cfg(test)]
 mod unit_tests;
 
-pub const ZONE_DEPOSIT_SUBMISSION: &str = "zone_deposit_submission";
 /// The TUI sequencer prefix for all config intent files to ensure they are
 /// easily identifiable.
 pub const ZONE_CONFIG_INTENT: &str = "zone_config_intent";

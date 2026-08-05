@@ -397,24 +397,6 @@ pub fn update_tracing_level_and_filter(
     Ok(())
 }
 
-pub fn update_tracing_filter_and_derive_level(
-    tracing: &mut TracingConfig,
-    filter: &str,
-) -> Result<()> {
-    let layer = parse_log_filter_layer(filter)?;
-    let Layer::Env(EnvConfig { ref filters }) = layer else {
-        unreachable!("parse_log_filter_layer always returns an env filter");
-    };
-
-    if let Some(level) = filters.values().copied().max() {
-        tracing.level = level;
-    }
-
-    tracing.filter = layer;
-
-    Ok(())
-}
-
 /// Parses CLI/env filter overrides into the typed filter config form.
 fn parse_log_filter_layer(raw: &str) -> Result<Layer> {
     let filters = parse_filter_directives(raw).map_err(|error| eyre!(error))?;

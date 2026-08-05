@@ -7,8 +7,6 @@ use num_bigint::BigUint;
 use rand::Rng as _;
 use thiserror::Error;
 
-const DEFAULT_FUNDS_PER_WALLET: u64 = 100;
-
 /// Collection of wallet accounts that should be funded at genesis.
 #[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
 pub struct WalletConfig {
@@ -103,18 +101,6 @@ impl WalletConfig {
 
 fn allocation_for(index: usize, base_allocation: u64, remainder: usize) -> u64 {
     base_allocation + u64::from(index < remainder)
-}
-
-pub fn wallet_config_for_users(users: usize) -> Result<WalletConfig, WalletConfigError> {
-    let user_count = NonZeroUsize::new(users).ok_or(WalletConfigError::ZeroUsers)?;
-    let total_funds = DEFAULT_FUNDS_PER_WALLET
-        .checked_mul(user_count.get() as u64)
-        .ok_or(WalletConfigError::FundsOverflow {
-            users,
-            funds_per_wallet: DEFAULT_FUNDS_PER_WALLET,
-        })?;
-
-    WalletConfig::uniform(total_funds, user_count)
 }
 
 /// Wallet account that may hold funds in the genesis state.

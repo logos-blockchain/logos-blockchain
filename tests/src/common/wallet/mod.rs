@@ -9,7 +9,6 @@ mod funding;
 mod funding_from_chain;
 
 pub use chain::{
-    source::{NodeHttpWalletChainSource, WalletChainSource},
     state::{TrackedWalletKeys, TrackedWalletKeysError, WalletUtxos},
     tracked_keys::{TrackedWalletKeysBySource, TrackedWalletKeysForSource},
 };

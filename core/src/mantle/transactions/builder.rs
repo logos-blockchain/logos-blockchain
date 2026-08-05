@@ -10,10 +10,7 @@ use crate::{
         GasConstants, Note, NoteId, Op, Utxo, Value,
         gas::{GasCost, GasOverflow},
         ledger::{BoundedUtxos, Inputs, Outputs},
-        ops::{
-            channel::{ChannelId, withdraw::ChannelWithdrawOp},
-            transfer::TransferOp,
-        },
+        ops::{channel::ChannelId, transfer::TransferOp},
         transactions::mantle_tx::{MantleTx as _, MantleTxContext, RawMantleTx},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
@@ -101,17 +98,6 @@ impl MantleTxBuilder {
                 .map_err(|err| TxBuilderError::from((err, BoundedTag::Ops)))?;
         }
         Ok(self)
-    }
-
-    pub fn push_channel_withdraw(
-        self,
-        op: ChannelWithdrawOp,
-        proof: ChannelMultiSigProof,
-    ) -> Result<Self, TxBuilderError> {
-        let mut builder = self.push_op(Op::ChannelWithdraw(op))?;
-        let index = builder.mantle_tx.ops().len() - 1;
-        builder.channel_multi_sig_proofs.insert(index, proof);
-        Ok(builder)
     }
 
     pub fn add_ledger_input(self, utxo: Utxo) -> Result<Self, TxBuilderError> {
@@ -326,6 +312,7 @@ mod tests {
                 channel::{
                     deposit::{DepositOp, Metadata},
                     inscribe::InscriptionOp,
+                    withdraw::ChannelWithdrawOp,
                 },
                 leader_claim::LeaderClaimOp,
                 sdp::{SDPDeclareOp, SDPWithdrawOp},

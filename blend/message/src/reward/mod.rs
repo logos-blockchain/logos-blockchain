@@ -134,11 +134,6 @@ impl OldEpochBlendingTokenCollector {
     }
 }
 
-#[must_use]
-pub const fn evaluate_hamming_distance(distance: u64, activity_threshold: u64) -> bool {
-    distance <= activity_threshold
-}
-
 #[cfg(test)]
 mod tests {
     use lb_blend_proofs::{

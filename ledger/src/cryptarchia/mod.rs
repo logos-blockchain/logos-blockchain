@@ -140,11 +140,6 @@ impl EpochState {
     }
 
     #[must_use]
-    pub const fn lottery_values(&self) -> (Fr, Fr) {
-        (self.lottery_0, self.lottery_1)
-    }
-
-    #[must_use]
     pub fn utxo_merkle_root(&self) -> Fr {
         self.utxos.root()
     }
@@ -1138,7 +1133,7 @@ pub mod tests {
             .epoch_state
             .active_declarations
             .for_service(&ServiceType::BlendNetwork)
-            .and_then(|m| m.get_ref(declaration_id))
+            .and_then(|m| m.get(declaration_id))
     }
 
     #[test]

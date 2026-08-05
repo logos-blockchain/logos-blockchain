@@ -2,14 +2,12 @@ use std::{collections::HashSet, slice::IterMut, sync::LazyLock};
 
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
-use lb_blake2btree::Blake2bTree;
 use lb_codec::BinaryCodec;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
 use lb_utils::bounded::{BoundedError, UpperBoundedVec};
 use lb_utxotree::UtxoTree;
-use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -94,7 +92,7 @@ impl<T: VerifiableOperation<Mode> + ExecutableOperation, Mode: verification_mode
 }
 
 pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;
-pub type Declarations = Blake2bTree<DeclarationId, Declaration>;
+pub type Declarations = rpds::RedBlackTreeMapSync<DeclarationId, Declaration>;
 
 pub type Value = u64;
 
@@ -476,11 +474,6 @@ impl Note {
     pub const fn new(value: Value, pk: ZkPublicKey) -> Self {
         Self { value, pk }
     }
-
-    #[must_use]
-    pub fn as_fr_components(&self) -> [Fr; 2] {
-        [BigUint::from(self.value).into(), *self.pk.as_fr()]
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -529,6 +522,8 @@ impl Utxo {
 #[cfg(test)]
 mod test {
     use std::str::FromStr as _;
+
+    use num_bigint::BigUint;
 
     use super::*;
 

@@ -13,11 +13,6 @@ pub struct TokioConsoleProfile {
 
 impl TokioConsoleProfile {
     #[must_use]
-    pub fn is_enabled_for(&self, node_name: &str) -> bool {
-        self.profile_nodes.contains_key(node_name)
-    }
-
-    #[must_use]
     pub fn node(&self, node_name: &str) -> Option<&TokioConsoleProfileNode> {
         self.profile_nodes.get(node_name)
     }

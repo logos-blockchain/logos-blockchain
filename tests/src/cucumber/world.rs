@@ -36,7 +36,7 @@ use lb_testing_framework::{
 use lb_zone_sdk::{adapter::NodeHttpClient as ZoneNodeHttpClient, indexer::ZoneIndexer};
 use reqwest::Url;
 use testing_framework_core::{
-    scenario::{NodeControlCapability, PeerSelection, Scenario, StartedNode},
+    scenario::{PeerSelection, Scenario, StartedNode},
     topology::DeploymentSeed,
 };
 use tokio::task::JoinHandle;
@@ -167,7 +167,6 @@ pub struct ZoneSequencerRuntime {
     task: JoinHandle<()>,
     events: tokio::sync::broadcast::Receiver<Event>,
     checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
-    ready_rx: tokio::sync::watch::Receiver<bool>,
     channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
     turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
     tx_status_rx: Option<tokio::sync::broadcast::Receiver<TxStatusUpdate>>,
@@ -275,12 +274,6 @@ impl ZoneState {
             })
     }
 
-    pub fn default_sequencer_signing_key(&self) -> Result<&Ed25519Key, StepError> {
-        let alias = self.default_sequencer_alias()?.to_owned();
-
-        self.sequencer_signing_key(&alias)
-    }
-
     pub fn sequencer_channel_id(&self, alias: &str) -> Result<ChannelId, StepError> {
         self.sequencers
             .get(alias)
@@ -288,12 +281,6 @@ impl ZoneState {
             .ok_or(StepError::LogicalError {
                 message: format!("Zone sequencer '{alias}' is not registered"),
             })
-    }
-
-    pub fn default_channel_id(&self) -> Result<ChannelId, StepError> {
-        let alias = self.default_sequencer_alias()?.to_owned();
-
-        self.sequencer_channel_id(&alias)
     }
 
     #[must_use]
@@ -608,7 +595,6 @@ impl ZoneState {
         sequencer_task: JoinHandle<()>,
         sequencer_events: tokio::sync::broadcast::Receiver<Event>,
         checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
-        ready_rx: tokio::sync::watch::Receiver<bool>,
         channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
         turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
         tx_status_rx: tokio::sync::broadcast::Receiver<TxStatusUpdate>,
@@ -625,25 +611,12 @@ impl ZoneState {
                 task: sequencer_task,
                 events: sequencer_events,
                 checkpoint_rx,
-                ready_rx,
                 channel_view_rx,
                 turn_to_write_rx,
                 tx_status_rx: Some(tx_status_rx),
                 discarded_payloads,
             },
         );
-    }
-
-    pub fn sequencer_ready_rx(
-        &self,
-        alias: &str,
-    ) -> Result<tokio::sync::watch::Receiver<bool>, StepError> {
-        self.runtimes
-            .get(alias)
-            .map(|runtime| runtime.ready_rx.clone())
-            .ok_or(StepError::LogicalError {
-                message: format!("Zone sequencer '{alias}' is not running"),
-            })
     }
 
     pub fn sequencer_channel_view_rx(
@@ -1649,19 +1622,6 @@ impl CucumberWorld {
             .map_err(|source| StepError::ScenarioBuild { source })
     }
 
-    /// Build a scenario for compose deployment based on the current world
-    /// configuration. This performs necessary preflight checks and returns
-    /// a built scenario ready for deployment.
-    pub fn build_compose_scenario(
-        &self,
-    ) -> Result<Scenario<LbcEnv, NodeControlCapability>, StepError> {
-        let builder = self.make_builder_for_deployer(DeployerKind::Compose)?;
-        builder
-            .enable_node_control()
-            .build()
-            .map_err(|source| StepError::ScenarioBuild { source })
-    }
-
     /// Build a scenario for k8s deployment based on the current world
     /// configuration.
     pub fn build_k8s_scenario(&self) -> Result<Scenario<LbcEnv>, StepError> {
@@ -1791,6 +1751,7 @@ impl CucumberWorld {
 
     /// Helper to check if a node is configured for immediate start (not
     /// awaiting network readiness)
+    #[must_use]
     pub fn network_immediate_start(&self, node_name: &str) -> bool {
         self.nodes_info
             .get(node_name)
@@ -1810,6 +1771,7 @@ impl CucumberWorld {
 
     /// Helper to resolve a list of node names to their corresponding started
     /// node names.
+    #[must_use]
     pub fn resolve_named_peers(&self, initial_peers: &[String]) -> Vec<String> {
         initial_peers
             .iter()
@@ -1858,21 +1820,14 @@ impl CucumberWorld {
     }
 
     /// Helper to retrieve all node names.
+    #[must_use]
     pub fn all_node_names(&self) -> Vec<String> {
         self.nodes_info.keys().cloned().collect::<Vec<_>>()
     }
 
-    pub fn any_started_node(&self) -> Result<&NodeInfo, StepError> {
-        self.nodes_info
-            .values()
-            .next()
-            .ok_or_else(|| StepError::LogicalError {
-                message: "No started nodes available in world".to_owned(),
-            })
-    }
-
     /// Helper to resolve all user wallet names to the actual wallet
     /// information.
+    #[must_use]
     pub fn all_user_wallets(&self) -> Vec<WalletInfo> {
         self.wallet_info
             .values()
@@ -1881,20 +1836,8 @@ impl CucumberWorld {
             .collect::<Vec<_>>()
     }
 
-    /// Helper to resolve all funding wallet names to the actual wallet
-    /// information.
-    pub fn all_funding_wallets(&self) -> Vec<WalletInfo> {
-        let mut wallets = self
-            .wallet_info
-            .values()
-            .filter(|wallet| wallet.is_node_funding_wallet())
-            .cloned()
-            .collect::<Vec<_>>();
-        wallets.sort_by(|left, right| left.wallet_name.cmp(&right.wallet_name));
-        wallets
-    }
-
     /// Helper to resolve all node-owned wallet keys.
+    #[must_use]
     pub fn all_node_wallets(&self) -> Vec<WalletInfo> {
         let mut wallets = self
             .wallet_info

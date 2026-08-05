@@ -2,7 +2,6 @@ use std::{collections::HashMap, sync::Arc};
 
 use lb_core::{
     crypto::ZkHash,
-    mantle::ledger::Declarations as ServiceDeclarations,
     sdp::{
         Declaration, DeclarationId, Declarations, Locator, ProviderId, ServiceParameters,
         ServiceType,
@@ -21,7 +20,7 @@ pub fn create_epoch_state(
     epoch: Epoch,
     nonce: Fr,
 ) -> EpochState {
-    let entries: ServiceDeclarations = provider_ids
+    let entries: HashMap<DeclarationId, Declaration> = provider_ids
         .iter()
         .enumerate()
         .map(|(i, provider_id)| {

@@ -88,7 +88,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for InscriptionOp {
     ) -> Result<(), Self::Error> {
         // Check if the channel exist otherwise the inscription is valid only if and
         // only if parent == ZERO
-        if let Some(channel) = context.channels.channel_state(&self.channel_id) {
+        if let Some(channel) = context.channels.channels.get(&self.channel_id).cloned() {
             // Check the parent corresponds to the payload
             if self.parent != channel.tip_message {
                 return Err(Error::InvalidParent {
@@ -131,7 +131,8 @@ impl ExecutableOperation for InscriptionOp {
         // if the channel doesn't exist, create it
         let channel = context
             .channels
-            .channel_state(&self.channel_id)
+            .channels
+            .get(&self.channel_id)
             .cloned()
             .unwrap_or_else(|| ChannelState {
                 accredited_keys: Keys::from(self.signer).into(),
@@ -148,17 +149,17 @@ impl ExecutableOperation for InscriptionOp {
         // Update the channel sequencer, its starting slot, the tip message and the tip
         // slot
         let (new_sequencer, new_starting_slot) = channel.round_robin(context.block_slot);
-        let updated = ChannelState {
-            tip_message: self.id(),
-            accredited_keys: Arc::clone(&channel.accredited_keys),
-            tip_sequencer: new_sequencer,
-            tip_sequencer_starting_slot: new_starting_slot,
-            tip_slot: context.block_slot,
-            ..channel
-        };
-        context.channels = context
-            .channels
-            .set_channel_state(&self.channel_id, updated);
+        context.channels.channels = context.channels.channels.insert(
+            self.channel_id,
+            ChannelState {
+                tip_message: self.id(),
+                accredited_keys: Arc::clone(&channel.accredited_keys),
+                tip_sequencer: new_sequencer,
+                tip_sequencer_starting_slot: new_starting_slot,
+                tip_slot: context.block_slot,
+                ..channel
+            },
+        );
         Ok((context, Vec::new()))
     }
 }

@@ -155,20 +155,6 @@ impl AddKeyArgs {
 }
 
 #[derive(Parser, Debug)]
-pub struct GetKeyArgs {
-    /// Path for the user config file.
-    #[clap(long = "user_config", short = 'c', default_value = "user_config.yaml")]
-    user_config: PathBuf,
-
-    /// Path for the keystore file.
-    #[clap(long = "keystore", short = 'k', default_value = "keystore.yaml")]
-    keystore: PathBuf,
-
-    #[clap(long = "title")]
-    pub key_title: String,
-}
-
-#[derive(Parser, Debug)]
 pub struct RemoveKeyArgs {
     /// Path for the user config file.
     #[clap(long = "user_config", short = 'c', default_value = "user_config.yaml")]

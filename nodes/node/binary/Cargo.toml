@@ -86,7 +86,6 @@ serde_urlencoded = { workspace = true }
 serial_test      = { workspace = true }
 
 [features]
-default   = ["tracing"]
 dhat-heap = ["dep:dhat"]
 jemalloc  = ["dep:tikv-jemallocator"]
 # Existing broad profiling feature. Keep this as an umbrella feature for
@@ -117,4 +116,3 @@ tokio-console = [
   "overwatch/tokio-task-names",
   "tokio/tracing",
 ]
-tracing = []

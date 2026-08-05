@@ -64,7 +64,7 @@ fn consensus_target_blocks<E: LbcScenarioEnv>(ctx: &RunContext<E>) -> u64 {
         return 0;
     };
 
-    let active_slot_coeff = config.active_slot_coeff;
+    let active_slot_coeff = config.active_slot_coeff.as_f64();
     let run_secs = ctx.run_duration().as_secs_f64();
     let slot_secs = slot_duration.as_secs_f64();
     let expected = run_secs / slot_secs * active_slot_coeff;
