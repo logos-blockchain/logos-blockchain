@@ -9,7 +9,7 @@ use lb_common_http_client::ApiBlock;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        SignedMantleTx,
+        MantleTransaction,
         gas::{GasCost, MainnetGasProfile, TxGasCalculator as _},
         traits::Hashable as _,
         transactions::{GasPrices, builder::MantleTxBuilder, states::Preverified},
@@ -158,7 +158,7 @@ async fn fund_self_transfer(
 fn assemble_funded_transaction(
     response: WalletFundResponseBody,
     step: &Step,
-) -> Result<SignedMantleTx<Preverified>, StepError> {
+) -> Result<MantleTransaction<Preverified>, StepError> {
     let transfer_proof = response
         .transfer_proof
         .ok_or_else(|| StepError::LogicalError {
@@ -167,7 +167,7 @@ fn assemble_funded_transaction(
                 step.value
             ),
         })?;
-    SignedMantleTx::new(response.funded_tx, [transfer_proof].into())
+    MantleTransaction::new(response.funded_tx, [transfer_proof].into())
         .preverify()
         .map_err(|source| StepError::StepFail {
             message: format!(
@@ -180,7 +180,7 @@ fn assemble_funded_transaction(
 fn record_prepared_priority_fee(
     world: &CucumberWorld,
     step: &Step,
-    signed_tx: &SignedMantleTx<Preverified>,
+    signed_tx: &MantleTransaction<Preverified>,
     prices: &GasPrices,
     priority_fee_percent: u64,
 ) -> Result<PreparedPriorityFee, StepError> {

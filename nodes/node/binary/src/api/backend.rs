@@ -20,7 +20,7 @@ use lb_chain_leader_service::api::ChainLeaderServiceData;
 use lb_chain_service::CryptarchiaConsensus;
 use lb_core::{
     header::HeaderId,
-    mantle::{SignedMantleTx, traits::Hashable, transactions::states::Preverified},
+    mantle::{MantleTransaction, traits::Hashable, transactions::states::Preverified},
 };
 use lb_http_api_common::metrics::http_metrics_middleware;
 pub use lb_http_api_common::settings::AxumBackendSettings;
@@ -127,8 +127,8 @@ where
         lb_api_service::http::storage::StorageAdapter<RuntimeServiceId> + Send + Sync + 'static,
     MempoolStorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Item = SignedMantleTx<Preverified>,
-            Key = <SignedMantleTx<Preverified> as Hashable>::Hash,
+            Item = MantleTransaction<Preverified>,
+            Key = <MantleTransaction<Preverified> as Hashable>::Hash,
         > + Send
         + Sync
         + Clone
@@ -165,14 +165,14 @@ where
         + AsServiceId<
             TxMempoolService<
                 lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
-                    SignedMantleTx<Preverified>,
-                    <SignedMantleTx<Preverified> as Hashable>::Hash,
+                    MantleTransaction<Preverified>,
+                    <MantleTransaction<Preverified> as Hashable>::Hash,
                     RuntimeServiceId,
                 >,
                 Mempool<
                     HeaderId,
-                    SignedMantleTx<Preverified>,
-                    <SignedMantleTx<Preverified> as Hashable>::Hash,
+                    MantleTransaction<Preverified>,
+                    <MantleTransaction<Preverified> as Hashable>::Hash,
                     MempoolStorageAdapter,
                     RuntimeServiceId,
                 >,

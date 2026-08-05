@@ -11,7 +11,7 @@ use lb_common_http_client::{ProcessedBlockEvent, Slot};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Note, Op, SignedMantleTx, Value,
+        MantleTransaction, Note, Op, Value,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         ledger::{Inputs, NoteId, Outputs},
         ops::channel::{
@@ -187,7 +187,8 @@ pub(super) enum ActorRequest {
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
         transfer_threshold: u16,
-        response_tx: oneshot::Sender<Result<(PublishReceipt, SignedMantleTx<Unverified>), Error>>,
+        response_tx:
+            oneshot::Sender<Result<(PublishReceipt, MantleTransaction<Unverified>), Error>>,
     },
     PrepareChannelConfig {
         keys: Keys,
@@ -205,7 +206,7 @@ pub(super) enum ActorRequest {
         response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
     },
     SubmitSignedTx {
-        tx: SignedMantleTx<Unverified>,
+        tx: MantleTransaction<Unverified>,
         msg_id: MsgId,
         response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
     },
@@ -849,7 +850,7 @@ where
         let own_sig = build_sign_tx(tx.hash(), &self.signing_key);
         let ops_proofs =
             build_atomic_bundle_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
-        let signed_tx = SignedMantleTx::new(tx, ops_proofs);
+        let signed_tx = MantleTransaction::new(tx, ops_proofs);
 
         let tx_hash = signed_tx.mantle_tx().hash();
         let withdraw_infos = vec![WithdrawInfo {
@@ -1124,7 +1125,7 @@ where
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
         transfer_threshold: u16,
-    ) -> Result<(PublishReceipt, SignedMantleTx<Unverified>), Error> {
+    ) -> Result<(PublishReceipt, MantleTransaction<Unverified>), Error> {
         self.ensure_ready()?;
         self.ensure_fundable()?;
 
@@ -1325,7 +1326,7 @@ where
 
     pub(super) fn do_submit_signed_tx(
         &mut self,
-        tx: SignedMantleTx<Unverified>,
+        tx: MantleTransaction<Unverified>,
         msg_id: MsgId,
     ) -> Result<PublishReceipt, Error> {
         self.ensure_ready()?;
@@ -1446,7 +1447,7 @@ where
     pub(super) fn queue_publish_post(
         &mut self,
         tx_hash: TxHash,
-        signed_tx: SignedMantleTx<Unverified>,
+        signed_tx: MantleTransaction<Unverified>,
     ) {
         self.posting.insert(tx_hash);
         self.in_flight.push(Box::pin(post_batch(
@@ -1461,7 +1462,7 @@ where
     /// `resubmit_pending` does this gate.
     pub(super) fn queue_resubmit_batch(
         &mut self,
-        batch: Vec<(TxHash, SignedMantleTx<Unverified>)>,
+        batch: Vec<(TxHash, MantleTransaction<Unverified>)>,
     ) {
         if batch.is_empty() {
             return;
@@ -1482,7 +1483,7 @@ where
 
 async fn post_batch<Node>(
     node: Node,
-    batch: Vec<(TxHash, SignedMantleTx<Unverified>)>,
+    batch: Vec<(TxHash, MantleTransaction<Unverified>)>,
 ) -> Vec<(TxHash, bool)>
 where
     Node: adapter::Node + Clone + Send + Sync + 'static,
@@ -1536,7 +1537,7 @@ pub(super) fn build_checkpoint(
 }
 
 fn restored_pending_channel_tip(
-    pending_txs: &[(TxHash, SignedMantleTx<Unverified>)],
+    pending_txs: &[(TxHash, MantleTransaction<Unverified>)],
     channel_id: ChannelId,
 ) -> Option<MsgId> {
     let mut parents = Vec::new();
@@ -1564,7 +1565,7 @@ fn restored_pending_channel_tip(
 /// tip-advancing op), or `None` when the tx carries none for this channel.
 pub(super) fn track_pending_tx(
     state: &mut TxState,
-    tx: SignedMantleTx<Unverified>,
+    tx: MantleTransaction<Unverified>,
     channel_id: ChannelId,
 ) -> Option<MsgId> {
     match classify_channel_tx(&tx, channel_id, &mut None) {

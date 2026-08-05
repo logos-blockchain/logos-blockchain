@@ -1,6 +1,6 @@
 use lb_core::{
     mantle::{
-        SignedMantleTx,
+        MantleTransaction,
         channel::{SlotTimeframe, SlotTimeout},
         ledger::NoteId,
         ops::channel::{MsgId, config::Keys, inscribe::Inscription},
@@ -106,7 +106,7 @@ where
         self.sequencer.do_sign_tx(tx)
     }
 
-    /// Enqueue a [`SignedMantleTx`] associated with a [`MsgId`] for posting.
+    /// Enqueue a [`MantleTransaction`] associated with a [`MsgId`] for posting.
     ///
     /// Synchronously records the tx as pending and queues a
     /// `post_transaction` future onto the drive loop's in-flight pool — the
@@ -115,7 +115,7 @@ where
     /// acknowledgement.
     pub fn submit_signed_tx(
         &mut self,
-        tx: SignedMantleTx<Unverified>,
+        tx: MantleTransaction<Unverified>,
         msg_id: MsgId,
     ) -> Result<PublishReceipt, Error> {
         self.sequencer.do_submit_signed_tx(tx, msg_id)
@@ -150,7 +150,7 @@ where
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
         transfer_threshold: u16,
-    ) -> Result<(PublishReceipt, SignedMantleTx<Unverified>), Error> {
+    ) -> Result<(PublishReceipt, MantleTransaction<Unverified>), Error> {
         self.sequencer
             .do_channel_config(
                 keys,

@@ -869,9 +869,9 @@ impl LedgerState {
     ///
     /// Verification is interleaved with execution: each operation is verified
     /// against the current ledger state (via
-    /// [`SignedMantleTx::verified_ops`]) immediately before it is executed, so
-    /// an operation may depend on state produced by earlier operations in
-    /// the same transaction.
+    /// [`MantleTransaction::verified_ops`]) immediately before it is executed,
+    /// so an operation may depend on state produced by earlier operations
+    /// in the same transaction.
     ///
     /// # Returns
     ///
@@ -931,7 +931,7 @@ mod tests {
     use lb_core::{
         events::DepositNote,
         mantle::{
-            Note, OpProof, RawMantleTx, SignedMantleTx, TxGasCalculator as _,
+            MantleTransaction, Note, OpProof, RawMantleTx, TxGasCalculator as _,
             gas::MainnetGasProfile,
             ledger::{Inputs, Outputs, Utxos, VerifiableOperation as _},
             ops::{
@@ -984,7 +984,7 @@ mod tests {
         inputs: Vec<NoteId>,
         outputs: Vec<Note>,
         sks: &[ZkKey],
-    ) -> SignedMantleTx<Unverified> {
+    ) -> MantleTransaction<Unverified> {
         let transfer_op = TransferOp::new(
             Inputs::try_new(inputs).expect("Invalid inputs size"),
             Outputs::try_new(outputs).expect("Invalid outputs size"),
@@ -994,7 +994,7 @@ mod tests {
             ZkKey::multi_sign(sks, &mantle_tx.hash().to_fr()).unwrap(),
         )]
         .into();
-        SignedMantleTx::new(mantle_tx, ops_proofs)
+        MantleTransaction::new(mantle_tx, ops_proofs)
     }
 
     pub fn create_test_ledger() -> (Ledger<HeaderId>, HeaderId, Utxo) {
@@ -1056,14 +1056,14 @@ mod tests {
         MultiSequencer(ChannelMultiSigProof),
     }
 
-    fn create_signed_tx(op: Op, signing_key: &Key) -> SignedMantleTx<Preverified> {
+    fn create_signed_tx(op: Op, signing_key: &Key) -> MantleTransaction<Preverified> {
         create_multi_signed_tx(vec![op], vec![signing_key])
     }
 
     fn create_multi_signed_tx(
         ops: Vec<Op>,
         signing_keys: Vec<&Key>,
-    ) -> SignedMantleTx<Preverified> {
+    ) -> MantleTransaction<Preverified> {
         let mantle_tx = RawMantleTx(Ops::new_unchecked(ops.clone()));
 
         let tx_hash = mantle_tx.hash();
@@ -1083,7 +1083,7 @@ mod tests {
             .collect::<Vec<_>>();
         let ops_proofs = OpsProofs::try_from(ops_proofs).expect("operation proofs are bounded");
 
-        SignedMantleTx::new(mantle_tx, ops_proofs)
+        MantleTransaction::new(mantle_tx, ops_proofs)
             .preverify()
             .expect("Test transaction should have valid signatures")
     }
@@ -1113,7 +1113,7 @@ mod tests {
     fn create_config_tx(
         config_op: ChannelConfigOp,
         signing_key: &Ed25519Key,
-    ) -> SignedMantleTx<Preverified> {
+    ) -> MantleTransaction<Preverified> {
         let config_tx_hash = RawMantleTx([Op::ChannelConfig(config_op.clone())].into()).hash();
         let config_proof = ChannelMultiSigProof::try_new(
             [IndexedSignature::new(
@@ -2611,9 +2611,9 @@ mod tests {
             assert!(difficulty_at(&test_ledger, block_1) > genesis_difficulty);
         }
 
-        fn claim_tx() -> SignedMantleTx<Preverified> {
+        fn claim_tx() -> MantleTransaction<Preverified> {
             let mantle_tx = RawMantleTx([Op::ClaimPowReward(claim_op())].into());
-            SignedMantleTx::new(mantle_tx, [OpProof::None(NoOpProof)].into())
+            MantleTransaction::new(mantle_tx, [OpProof::None(NoOpProof)].into())
                 .preverify()
                 .expect("claim op with OpProof::None should pass preverification")
         }

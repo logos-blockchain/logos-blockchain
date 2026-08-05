@@ -26,7 +26,7 @@ use std::{
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Note, Op, OpProof, SignedMantleTx, Utxo,
+        MantleTransaction, Note, Op, OpProof, Utxo,
         batch::DeferredZkpVerifications,
         gas::MainnetGasProfile,
         ledger::{Inputs, Outputs},
@@ -147,7 +147,7 @@ mod multi_block_with_per_block_batching {
 struct TxPool {
     config: Config,
     genesis: LedgerState,
-    txs: Vec<SignedMantleTx<Preverified>>,
+    txs: Vec<MantleTransaction<Preverified>>,
 }
 
 static TX_POOL: LazyLock<TxPool> = LazyLock::new(|| {
@@ -181,13 +181,13 @@ static TX_POOL: LazyLock<TxPool> = LazyLock::new(|| {
     }
 });
 
-fn apply_batched(state: &LedgerState, txs: &[SignedMantleTx<Preverified>]) -> LedgerState {
+fn apply_batched(state: &LedgerState, txs: &[MantleTransaction<Preverified>]) -> LedgerState {
     let (state, deferred) = apply(state, txs);
     deferred.verify().expect("proofs should verify");
     state
 }
 
-fn apply_sequential(state: &LedgerState, txs: &[SignedMantleTx<Preverified>]) -> LedgerState {
+fn apply_sequential(state: &LedgerState, txs: &[MantleTransaction<Preverified>]) -> LedgerState {
     let (state, deferred) = apply(state, txs);
     for (proof, inputs) in deferred.zk_sigs() {
         assert!(verify(proof, inputs).expect("proof should verify"));
@@ -197,7 +197,7 @@ fn apply_sequential(state: &LedgerState, txs: &[SignedMantleTx<Preverified>]) ->
 
 fn apply(
     state: &LedgerState,
-    txs: &[SignedMantleTx<Preverified>],
+    txs: &[MantleTransaction<Preverified>],
 ) -> (LedgerState, DeferredZkpVerifications) {
     let (state, _, deferred) = state
         .clone()
@@ -208,7 +208,7 @@ fn apply(
 
 /// Builds a transaction with a `Transfer` operation that spends `utxo` and
 /// sends the very little amount to `key`.
-fn build_tx(utxo: Utxo, key: &ZkKey) -> SignedMantleTx<Preverified> {
+fn build_tx(utxo: Utxo, key: &ZkKey) -> MantleTransaction<Preverified> {
     let transfer_op = TransferOp::new(
         Inputs::new([utxo.id()]),
         // Most of the tx's value goes as a tip, to withstand gas cost increases.
@@ -218,7 +218,7 @@ fn build_tx(utxo: Utxo, key: &ZkKey) -> SignedMantleTx<Preverified> {
     let signature =
         ZkKey::multi_sign(std::slice::from_ref(key), &mantle_tx.hash().to_fr()).unwrap();
 
-    SignedMantleTx::new(mantle_tx, [OpProof::ZkSig(signature)].into())
+    MantleTransaction::new(mantle_tx, [OpProof::ZkSig(signature)].into())
         .preverify()
         .expect("transaction should preverify")
 }

@@ -9,7 +9,7 @@ use time::OffsetDateTime;
 use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
-        OpProof, SignedMantleTx,
+        MantleTransaction, OpProof,
         gas::{Gas, GasCost, GasOverflow, GasProfile, TxGasCalculator},
         ops::{
             Op,
@@ -29,7 +29,7 @@ use crate::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenesisTx {
-    tx: SignedMantleTx<Preverified>,
+    tx: MantleTransaction<Preverified>,
     cryptarchia_parameter: CryptarchiaParameter,
 }
 
@@ -65,7 +65,7 @@ pub enum Error {
 }
 
 impl GenesisTx {
-    pub fn from_tx(signed_mantle_tx: SignedMantleTx<Preverified>) -> Result<Self, Error> {
+    pub fn from_tx(signed_mantle_tx: MantleTransaction<Preverified>) -> Result<Self, Error> {
         let mantle_tx = signed_mantle_tx.mantle_tx();
 
         // Genesis transactions must contain exactly one transfer as the first op,
@@ -241,7 +241,7 @@ impl<'de> Deserialize<'de> for GenesisTx {
     where
         D: serde::Deserializer<'de>,
     {
-        let tx = SignedMantleTx::deserialize(deserializer)?.into_trusted();
+        let tx = MantleTransaction::deserialize(deserializer)?.into_trusted();
         Self::from_tx(tx).map_err(serde::de::Error::custom)
     }
 }
@@ -475,7 +475,7 @@ mod tests {
     fn create_trusted_tx(
         mut ops: Vec<Op>,
         ops_proofs: Vec<OpProof>,
-    ) -> SignedMantleTx<Preverified> {
+    ) -> MantleTransaction<Preverified> {
         let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new([create_test_note(1000)]));
         let mut new_ops = vec![Op::Transfer(transfer_op)];
         new_ops.append(&mut ops);
@@ -487,7 +487,7 @@ mod tests {
         for proof in ops_proofs {
             new_op_proofs.try_push(proof).unwrap();
         }
-        SignedMantleTx::new_trusted(mantle_tx, new_op_proofs)
+        MantleTransaction::new_trusted(mantle_tx, new_op_proofs)
     }
 
     #[test]

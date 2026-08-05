@@ -18,7 +18,7 @@ use lb_poseidon2::Digest;
 use logos_blockchain_core::{
     crypto::{Hasher, ZkHasher},
     mantle::{
-        SignedMantleTx,
+        MantleTransaction,
         ops::{
             Op, OpProof,
             channel::{
@@ -67,13 +67,13 @@ fn make_inscription_tx(payload_size: usize) -> RawMantleTx {
     )
 }
 
-// Helper fn to create a `SignedMantleTx`.
-fn make_signed_tx(payload_size: usize) -> SignedMantleTx<Unverified> {
+// Helper fn to create a `MantleTransaction`.
+fn make_signed_tx(payload_size: usize) -> MantleTransaction<Unverified> {
     let signing_key = Ed25519Key::from_bytes(&[1; 32]);
     let tx = make_inscription_tx(payload_size);
     let tx_hash = tx.hash();
     let op_sig = signing_key.sign_payload(&tx_hash.as_signing_bytes());
-    SignedMantleTx::new(tx, [OpProof::Ed25519Sig(op_sig)].into())
+    MantleTransaction::new(tx, [OpProof::Ed25519Sig(op_sig)].into())
 }
 
 // `Blake2b` wrapper function using the defined `Hasher`.
@@ -157,7 +157,7 @@ fn bench_sign_c_mantle_tx_new_verify_ops_proofs_single_proof(bencher: Bencher, s
             (tx, op_sig)
         })
         .bench_values(|(tx, op_sig): (RawMantleTx, Ed25519Signature)| {
-            black_box(SignedMantleTx::new(tx, [OpProof::Ed25519Sig(op_sig)].into()).preverify())
+            black_box(MantleTransaction::new(tx, [OpProof::Ed25519Sig(op_sig)].into()).preverify())
         });
 }
 
@@ -176,20 +176,20 @@ fn bench_sign_d_fully_empty(bencher: Bencher, size: usize) {
         })
         .bench_values(|(tx, tx_hash): (RawMantleTx, TxHash)| {
             let op_sig = signing_key.sign_payload(&tx_hash.as_signing_bytes());
-            black_box(SignedMantleTx::new(tx, [OpProof::Ed25519Sig(op_sig)].into()).preverify())
+            black_box(MantleTransaction::new(tx, [OpProof::Ed25519Sig(op_sig)].into()).preverify())
         });
 }
 
-// Encode a `SignedMantleTx` to bytes.
+// Encode a `MantleTransaction` to bytes.
 #[divan::bench(args = SIZES)]
-fn bench_encode_signed_mantle_tx(bencher: Bencher, size: usize) {
+fn bench_encode_mantle_transaction(bencher: Bencher, size: usize) {
     let signed_tx = make_signed_tx(size);
     bencher.bench_local(|| black_box(encode_signed_mantle_tx(&signed_tx)));
 }
 
-// Decode a `SignedMantleTx` from bytes.
+// Decode a `MantleTransaction` from bytes.
 #[divan::bench(args = SIZES)]
-fn bench_decode_signed_mantle_tx(bencher: Bencher, size: usize) {
+fn bench_decode_mantle_transaction(bencher: Bencher, size: usize) {
     let signed_tx = make_signed_tx(size);
     let encoded = encode_signed_mantle_tx(&signed_tx);
     bencher.bench_local(|| {

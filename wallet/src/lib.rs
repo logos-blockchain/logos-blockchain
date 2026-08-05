@@ -874,7 +874,7 @@ mod tests {
     use lb_core::{
         crypto::ZkDigest as _,
         mantle::{
-            Note, OpProof, RawMantleTx, SignedMantleTx,
+            MantleTransaction, Note, OpProof, RawMantleTx,
             channel::Channels,
             gas::MainnetGasProfile as Gas,
             ledger::{Inputs, Outputs},
@@ -2317,7 +2317,7 @@ mod tests {
             signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
         });
 
-        let source_transactions: BlockTransactions<SignedMantleTx<Unverified>> = [
+        let source_transactions: BlockTransactions<MantleTransaction<Unverified>> = [
             signed_test_tx(vec![transfer, deposit]),
             signed_test_tx(vec![ignored_inscription]),
         ]
@@ -2361,7 +2361,7 @@ mod tests {
         assert!(second_wallet_tx.ops.is_empty());
     }
 
-    fn signed_test_tx(ops: Vec<Op>) -> SignedMantleTx<Unverified> {
+    fn signed_test_tx(ops: Vec<Op>) -> MantleTransaction<Unverified> {
         let proofs = OpsProofs::try_from_iter(ops.iter().map(|op| match op {
             Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
             _ => OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
@@ -2370,7 +2370,7 @@ mod tests {
         }))
         .expect("test proofs should fit");
 
-        SignedMantleTx::new(
+        MantleTransaction::new(
             RawMantleTx(Ops::try_from(ops).expect("test operations should fit")),
             proofs,
         )

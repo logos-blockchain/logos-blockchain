@@ -95,7 +95,8 @@ pub mod transfer_funds {
     use lb_core::{
         header::HeaderId,
         mantle::{
-            SignedMantleTx, Value, traits::Hashable as _, transactions::states::VerificationState,
+            MantleTransaction, Value, traits::Hashable as _,
+            transactions::states::VerificationState,
         },
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -119,8 +120,8 @@ pub mod transfer_funds {
         pub hash: lb_core::mantle::transactions::TxHash,
     }
 
-    impl<State: VerificationState> From<SignedMantleTx<State>> for WalletTransferFundsResponseBody {
-        fn from(value: SignedMantleTx<State>) -> Self {
+    impl<State: VerificationState> From<MantleTransaction<State>> for WalletTransferFundsResponseBody {
+        fn from(value: MantleTransaction<State>) -> Self {
             Self {
                 hash: value.mantle_tx().hash(),
             }

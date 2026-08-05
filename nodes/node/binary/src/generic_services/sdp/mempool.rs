@@ -6,7 +6,7 @@ use std::{
 use lb_core::{
     header::HeaderId,
     mantle::{
-        SignedMantleTx,
+        MantleTransaction,
         traits::Hashable as _,
         transactions::{hash::TxHash, states::Preverified},
     },
@@ -40,7 +40,7 @@ where
 impl<MempoolNetAdapter, Mempool, RuntimeServiceId> SdpMempoolAdapterTrait
     for SdpMempoolAdapter<MempoolNetAdapter, Mempool, RuntimeServiceId>
 where
-    Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = SignedMantleTx<Preverified>>
+    Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = MantleTransaction<Preverified>>
         + Send
         + Sync,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
@@ -65,7 +65,7 @@ where
 {
     type MempoolService =
         TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>;
-    type Tx = SignedMantleTx<Preverified>;
+    type Tx = MantleTransaction<Preverified>;
 
     fn new(mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>) -> Self {
         Self {

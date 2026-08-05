@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
-    Note, Op, SignedMantleTx, Utxo,
+    MantleTransaction, Note, Op, Utxo,
     gas::{MainnetGasProfile, TxGasCalculator as _},
     traits::Hashable as _,
     transactions::{
@@ -142,7 +142,7 @@ pub fn self_transfer_paying_fee_at(
     account: &WalletAccount,
     prices: &GasPrices,
     tip: i128,
-) -> SignedMantleTx<Preverified> {
+) -> MantleTransaction<Preverified> {
     const MAX_FEE_CONVERGENCE_ATTEMPTS: usize = 32;
 
     let utxo = genesis_utxos
@@ -220,7 +220,7 @@ pub fn self_transfer_paying_fee_at(
     let proofs = transfer_proofs_for_funded_wallet_tx(&mantle_tx, &account.secret_key)
         .expect("transfer proofs should build");
 
-    SignedMantleTx::new(mantle_tx, proofs)
+    MantleTransaction::new(mantle_tx, proofs)
         .preverify()
         .expect("signed transaction should be valid")
 }
@@ -232,7 +232,7 @@ pub fn self_transfer_paying_fee_at(
 ///
 /// Returns both sizes when they differ.
 pub fn check_size_prediction<State: VerificationState>(
-    tx: &SignedMantleTx<State>,
+    tx: &MantleTransaction<State>,
     prices: &GasPrices,
 ) -> Result<(), String> {
     let gas_context = MantleTxGasContext::new(HashMap::new(), HashMap::new(), prices.clone());
@@ -256,7 +256,7 @@ pub fn check_size_prediction<State: VerificationState>(
 /// genesis notes.
 pub fn net_balance_against<State: VerificationState>(
     genesis_utxos: &[Utxo],
-    tx: &SignedMantleTx<State>,
+    tx: &MantleTransaction<State>,
 ) -> Result<u64, String> {
     let mut input_sum = 0u64;
     let mut output_sum = 0u64;
@@ -290,7 +290,7 @@ pub fn net_balance_against<State: VerificationState>(
 /// calculated.
 pub fn fee_surplus_at<State: VerificationState>(
     genesis_utxos: &[Utxo],
-    tx: &SignedMantleTx<State>,
+    tx: &MantleTransaction<State>,
     prices: &GasPrices,
 ) -> Result<i128, String> {
     let paid = net_balance_against(genesis_utxos, tx)?;

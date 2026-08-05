@@ -7,6 +7,7 @@ pub mod op_proof;
 pub mod pow;
 pub mod sdp;
 mod serde_;
+pub mod signed_op;
 pub mod signed_operation;
 pub mod transfer;
 
@@ -15,6 +16,7 @@ use std::sync::LazyLock;
 pub use crate::mantle::ops::{
     op::{Op, OpId},
     op_proof::{NoOpProof, OpProof, ZkAndEd25519Proof},
+    signed_op::SignedOp,
     signed_operation::SignedOperation,
 };
 

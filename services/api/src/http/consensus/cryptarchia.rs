@@ -4,7 +4,7 @@ use futures::{StreamExt as _, TryStreamExt as _};
 use lb_chain_service::{ChainServiceInfo, CryptarchiaConsensus, Query};
 use lb_core::{
     header::HeaderId,
-    mantle::{SignedMantleTx, transactions::states::Preverified},
+    mantle::{MantleTransaction, transactions::states::Preverified},
 };
 use lb_ledger::LedgerState;
 use lb_storage_service::backends::rocksdb::RocksBackend;
@@ -15,7 +15,7 @@ use tokio::sync::oneshot;
 use crate::http::DynError;
 
 pub type Cryptarchia<RuntimeServiceId> = CryptarchiaConsensus<
-    SignedMantleTx<Preverified>,
+    MantleTransaction<Preverified>,
     RocksBackend,
     NtpTimeBackend,
     RuntimeServiceId,

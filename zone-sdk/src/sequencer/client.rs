@@ -1,6 +1,6 @@
 use lb_core::{
     mantle::{
-        SignedMantleTx,
+        MantleTransaction,
         channel::{SlotTimeframe, SlotTimeout},
         ledger::NoteId,
         ops::channel::{MsgId, config::Keys, inscribe::Inscription},
@@ -124,7 +124,7 @@ impl SequencerClient {
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
         transfer_threshold: u16,
-    ) -> Result<(PublishReceipt, SignedMantleTx<Unverified>), Error> {
+    ) -> Result<(PublishReceipt, MantleTransaction<Unverified>), Error> {
         let (response_tx, response_rx) = oneshot::channel();
         self.send(ActorRequest::ChannelConfig {
             keys,
@@ -180,12 +180,12 @@ impl SequencerClient {
         Self::recv(response_rx).await?
     }
 
-    /// Enqueue a pre-signed [`SignedMantleTx`] for posting.
+    /// Enqueue a pre-signed [`MantleTransaction`] for posting.
     ///
     /// Async counterpart of [`super::SequencerHandle::submit_signed_tx`].
     pub async fn submit_signed_tx(
         &self,
-        tx: SignedMantleTx<Unverified>,
+        tx: MantleTransaction<Unverified>,
         msg_id: MsgId,
     ) -> Result<PublishReceipt, Error> {
         let (response_tx, response_rx) = oneshot::channel();

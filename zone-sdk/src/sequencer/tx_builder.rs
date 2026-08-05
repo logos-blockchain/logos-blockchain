@@ -1,6 +1,6 @@
 use lb_core::{
     mantle::{
-        SignedMantleTx, TxHash,
+        MantleTransaction, TxHash,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         ops::{
             Op, OpProof,
@@ -164,7 +164,7 @@ pub(super) async fn create_inscribe_tx<Node>(
     signing_key: &Ed25519Key,
     inscription: Inscription,
     parent: MsgId,
-) -> Result<(SignedMantleTx<Unverified>, MsgId), Error>
+) -> Result<(MantleTransaction<Unverified>, MsgId), Error>
 where
     Node: adapter::Node + Sync,
 {
@@ -189,7 +189,7 @@ where
         transfer_proof,
     )?;
 
-    let signed_tx = SignedMantleTx::new(inscribe_tx, ops_proofs);
+    let signed_tx = MantleTransaction::new(inscribe_tx, ops_proofs);
 
     Ok((signed_tx, msg_id))
 }
@@ -244,7 +244,7 @@ pub(super) fn assemble_channel_config_tx(
     config_tx: RawMantleTx,
     transfer_proof: Option<OpProof>,
     signatures: Vec<IndexedSignature>,
-) -> Result<SignedMantleTx<Unverified>, Error> {
+) -> Result<MantleTransaction<Unverified>, Error> {
     let signatures = signatures
         .try_into()
         .map_err(|e| Error::Network(format!("too many channel-config signatures: {e:?}")))?;
@@ -256,7 +256,7 @@ pub(super) fn assemble_channel_config_tx(
         transfer_proof,
     )?;
 
-    Ok(SignedMantleTx::new(config_tx, ops_proofs))
+    Ok(MantleTransaction::new(config_tx, ops_proofs))
 }
 
 /// Build, fund, and single-signer-sign a `ChannelConfig` transaction.
@@ -284,7 +284,7 @@ pub(super) async fn create_channel_config_tx<Node>(
     posting_timeout: SlotTimeout,
     configuration_threshold: u16,
     transfer_threshold: u16,
-) -> Result<SignedMantleTx<Unverified>, Error>
+) -> Result<MantleTransaction<Unverified>, Error>
 where
     Node: adapter::Node + Sync,
 {

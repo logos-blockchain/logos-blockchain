@@ -8,7 +8,7 @@ use crate::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
     crypto::{Digest as _, Hasher},
     mantle::{
-        GasProfile, Op, SignedMantleTx, TxHash, Value,
+        GasProfile, MantleTransaction, Op, TxHash, Value,
         channel::Channels,
         gas::{Gas, GasCost, GasOverflow},
         ops::{
@@ -140,8 +140,8 @@ fn contextual_op_execution_gas<Profile: GasProfile>(
         .checked_mul(Value::from(multiplier))
 }
 
-impl<State: VerificationState> From<SignedMantleTx<State>> for RawMantleTx {
-    fn from(signed_tx: SignedMantleTx<State>) -> Self {
+impl<State: VerificationState> From<MantleTransaction<State>> for RawMantleTx {
+    fn from(signed_tx: MantleTransaction<State>) -> Self {
         signed_tx.mantle_tx
     }
 }

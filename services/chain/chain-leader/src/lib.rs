@@ -22,7 +22,7 @@ use lb_core::{
     },
     header::HeaderId,
     mantle::{
-        SignedMantleTx,
+        MantleTransaction,
         gas::MainnetGasProfile,
         ops::Op,
         traits::{Hashable, MantleTxWithProofs, StorageSize},
@@ -288,7 +288,7 @@ where
         > + lb_blend_service::ServiceComponents<NodeId: Send + Sync>
         + Send
         + 'static,
-    Mempool: MemPool<Item = SignedMantleTx<Preverified>>
+    Mempool: MemPool<Item = MantleTransaction<Preverified>>
         + RecoverableMempool<BlockId = HeaderId, Key = TxHash>
         + Send
         + Sync
@@ -572,7 +572,7 @@ where
         > + lb_blend_service::ServiceComponents<NodeId: Send + Sync>
         + Send
         + 'static,
-    Mempool: MemPool<Item = SignedMantleTx<Preverified>>
+    Mempool: MemPool<Item = MantleTransaction<Preverified>>
         + RecoverableMempool<BlockId = HeaderId, Key = TxHash>
         + Send
         + Sync

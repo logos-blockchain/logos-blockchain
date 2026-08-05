@@ -23,7 +23,7 @@ use lb_core::{
     events::{Event, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
-        Note, NoteId, Op, OpProof, SignedMantleTx, Utxo, Value,
+        MantleTransaction, Note, NoteId, Op, OpProof, Utxo, Value,
         gas::MainnetGasProfile,
         ledger::{Inputs, InputsError, Outputs},
         ops::{
@@ -1269,7 +1269,7 @@ async fn build_reward_claim_tx(
     ledger_state: &LedgerState,
     reward_pool: Value,
     tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
-) -> Result<(SignedMantleTx<Unverified>, usize), PoWError> {
+) -> Result<(MantleTransaction<Unverified>, usize), PoWError> {
     // The reward value and gas prices are read at `ledger_state`; they must
     // match the state the tx applies against, or the reconstructed UTXOs / fee
     // will be off.
@@ -1291,7 +1291,7 @@ async fn build_reward_claim_tx_inner(
     reward_pool: Value,
     gas_prices: GasPrices,
     tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
-) -> Result<(SignedMantleTx<Unverified>, usize), PoWError> {
+) -> Result<(MantleTransaction<Unverified>, usize), PoWError> {
     if reward_value == 0 {
         return Err(PoWError::RewardsDisabled);
     }
@@ -1352,7 +1352,7 @@ async fn build_reward_claim_tx_inner(
         }
         ops_proofs.try_push(OpProof::ZkSig(zk_sig))?;
     }
-    Ok((SignedMantleTx::new(mantle_tx, ops_proofs), claim_count))
+    Ok((MantleTransaction::new(mantle_tx, ops_proofs), claim_count))
 }
 
 /// Builds the `Transfer` ops spending `note_ids`, grouped into batches of up to
@@ -1429,7 +1429,7 @@ fn change_outputs(
 /// whichever node exits the blend network decodes what it expects.
 async fn publish_reward_claim<BlendService, RuntimeServiceId>(
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
-    signed_tx: SignedMantleTx<Unverified>,
+    signed_tx: MantleTransaction<Unverified>,
 ) -> Result<(), PoWError>
 where
     BlendService: BlendServiceData,
@@ -1469,7 +1469,7 @@ mod tests {
     use lb_core::{
         header::HeaderId,
         mantle::{
-            Note, NoteId, Op, OpProof, SignedMantleTx, Utxo,
+            MantleTransaction, Note, NoteId, Op, OpProof, Utxo,
             ops::{OpId as _, pow::ClaimPowRewardOp},
             transactions::{
                 GasPrices, MAX_OPS_PER_TX, MantleTxBuilder, MantleTxContext, MantleTxGasContext,
@@ -1522,7 +1522,7 @@ mod tests {
     /// Asserts a built tx respects the transaction's own structural limits: the
     /// op budget, the per-transfer signing-key limit, and a correctly-typed
     /// proof per op (the last via the ledger's stateless `preverify`).
-    fn assert_within_tx_limits(tx: &SignedMantleTx<Unverified>) {
+    fn assert_within_tx_limits(tx: &MantleTransaction<Unverified>) {
         let ops = tx.mantle_tx().ops();
         assert!(ops.len() <= MAX_OPS_PER_TX, "op count exceeds the tx limit");
         for op in ops.iter() {

@@ -13,7 +13,7 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        SignedMantleTx,
+        MantleTransaction,
         channel::ChannelState,
         ops::channel::ChannelId,
         traits::Hashable,
@@ -63,14 +63,14 @@ pub struct BlockWithChainState<Tx> {
 
 pub type MempoolService<StorageAdapter, RuntimeServiceId> = TxMempoolService<
     MempoolNetworkAdapter<
-        SignedMantleTx<Preverified>,
-        <SignedMantleTx<Preverified> as Hashable>::Hash,
+        MantleTransaction<Preverified>,
+        <MantleTransaction<Preverified> as Hashable>::Hash,
         RuntimeServiceId,
     >,
     Mempool<
         HeaderId,
-        SignedMantleTx<Preverified>,
-        <SignedMantleTx<Preverified> as Hashable>::Hash,
+        MantleTransaction<Preverified>,
+        <MantleTransaction<Preverified> as Hashable>::Hash,
         StorageAdapter,
         RuntimeServiceId,
     >,
@@ -113,8 +113,8 @@ pub async fn mantle_mempool_metrics<StorageAdapter, RuntimeServiceId>(
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Key = <SignedMantleTx<Preverified> as Hashable>::Hash,
-            Item = SignedMantleTx<Preverified>,
+            Key = <MantleTransaction<Preverified> as Hashable>::Hash,
+            Item = MantleTransaction<Preverified>,
         > + Clone
         + 'static,
     StorageAdapter::Error: Debug,
@@ -143,13 +143,13 @@ where
 
 pub async fn mantle_mempool_status<StorageAdapter, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-    items: Vec<<SignedMantleTx<Preverified> as Hashable>::Hash>,
+    items: Vec<<MantleTransaction<Preverified> as Hashable>::Hash>,
 ) -> Result<Vec<Status>, super::DynError>
 where
     StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
             RuntimeServiceId,
-            Key = <SignedMantleTx<Preverified> as Hashable>::Hash,
-            Item = SignedMantleTx<Preverified>,
+            Key = <MantleTransaction<Preverified> as Hashable>::Hash,
+            Item = MantleTransaction<Preverified>,
         > + Clone
         + 'static,
     StorageAdapter::Error: Debug,

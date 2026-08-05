@@ -15,7 +15,7 @@ use lb_chain_service::{
 use lb_core::{
     header::HeaderId,
     mantle::{
-        NoteId, SignedMantleTx,
+        MantleTransaction, NoteId,
         traits::Hashable as _,
         transactions::{MantleTxBuilder, states::Preverified},
     },
@@ -144,9 +144,10 @@ impl<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId
     ServiceCore<RuntimeServiceId>
     for SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
 where
-    MempoolAdapter: SdpMempoolAdapter<Tx = SignedMantleTx<Preverified>> + Send + Sync + 'static,
+    MempoolAdapter: SdpMempoolAdapter<Tx = MantleTransaction<Preverified>> + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
-    ChainService: CryptarchiaServiceData<Tx = SignedMantleTx<Preverified>> + Send + Sync + 'static,
+    ChainService:
+        CryptarchiaServiceData<Tx = MantleTransaction<Preverified>> + Send + Sync + 'static,
     StateStorage: SdpStateStorage<RuntimeServiceId> + Send + Sync,
     RuntimeServiceId: Debug
         + AsServiceId<Self>
@@ -234,9 +235,10 @@ where
 impl<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
     SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
 where
-    MempoolAdapter: SdpMempoolAdapter<Tx = SignedMantleTx<Preverified>> + Send + Sync + 'static,
+    MempoolAdapter: SdpMempoolAdapter<Tx = MantleTransaction<Preverified>> + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
-    ChainService: CryptarchiaServiceData<Tx = SignedMantleTx<Preverified>> + Send + Sync + 'static,
+    ChainService:
+        CryptarchiaServiceData<Tx = MantleTransaction<Preverified>> + Send + Sync + 'static,
     StateStorage: SdpStateStorage<RuntimeServiceId> + Send + Sync,
     RuntimeServiceId: Debug
         + AsServiceId<Self>

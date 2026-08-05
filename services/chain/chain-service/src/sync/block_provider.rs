@@ -591,7 +591,7 @@ mod tests {
         crypto::ZkHasher,
         events::Events,
         mantle::{
-            Note, RawMantleTx, SignedMantleTx, ledger::Utxo, ops::leader_claim::VoucherCm,
+            MantleTransaction, Note, RawMantleTx, ledger::Utxo, ops::leader_claim::VoucherCm,
             transactions::states::Unverified,
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
@@ -764,7 +764,7 @@ mod tests {
         storage_relay: StorageRelay<RocksBackend>,
         cryptarchia: lb_cryptarchia_engine::Cryptarchia<HeaderId>,
         proof: lb_core::proofs::leader_proof::Groth16LeaderProof,
-        provider: BlockProvider<RocksBackend, SignedMantleTx<Unverified>>,
+        provider: BlockProvider<RocksBackend, MantleTransaction<Unverified>>,
     }
 
     impl TestEnv {
@@ -828,7 +828,12 @@ mod tests {
             &self,
             count: usize,
             slot_offset: u64,
-        ) -> Vec<(Block<SignedMantleTx<Unverified>>, HeaderId, HeaderId, Slot)> {
+        ) -> Vec<(
+            Block<MantleTransaction<Unverified>>,
+            HeaderId,
+            HeaderId,
+            Slot,
+        )> {
             let mut blocks = Vec::new();
             let mut prev_header = HeaderId::from([0u8; 32]);
 
@@ -901,7 +906,7 @@ mod tests {
             &self,
             prev_header: HeaderId,
             slot: Slot,
-        ) -> Option<Block<SignedMantleTx<Unverified>>> {
+        ) -> Option<Block<MantleTransaction<Unverified>>> {
             let dummy_signing_key = Ed25519Key::from_bytes(&[1u8; 32]);
             Block::create(
                 prev_header,
@@ -916,7 +921,7 @@ mod tests {
 
         async fn add_block(
             &mut self,
-            block: &Block<SignedMantleTx<Unverified>>,
+            block: &Block<MantleTransaction<Unverified>>,
             header_id: HeaderId,
             prev_header: HeaderId,
             slot: Slot,
@@ -930,7 +935,7 @@ mod tests {
 
         async fn store_block_only(
             &self,
-            block: &Block<SignedMantleTx<Unverified>>,
+            block: &Block<MantleTransaction<Unverified>>,
             header_id: HeaderId,
         ) {
             let parent_id = block.header().parent();
@@ -957,7 +962,7 @@ mod tests {
 
         async fn store_block_in_storage(
             &self,
-            block: &Block<SignedMantleTx<Unverified>>,
+            block: &Block<MantleTransaction<Unverified>>,
             header_id: HeaderId,
             slot: Slot,
         ) {
@@ -995,7 +1000,7 @@ mod tests {
             if let Some(ProviderResponse::Available(mut stream)) = rx.recv().await {
                 while let Some(res) = &stream.next().await {
                     if let Ok(bytes) = &res {
-                        let block: Block<SignedMantleTx<Unverified>> =
+                        let block: Block<MantleTransaction<Unverified>> =
                             Block::from_bytes(bytes).unwrap();
                         blocks.push(block.header().id());
                     } else {

@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, time::Duration};
 use lb_core::{
     codec::DeserializeOp as _,
     mantle::{
-        SignedMantleTx, TxHash,
+        MantleTransaction, TxHash,
         traits::Hashable as _,
         transactions::{OpsProofs, states::Preverified},
     },
@@ -318,7 +318,7 @@ async fn submit_prepared_transaction_to_node(
     world: &CucumberWorld,
     step: &str,
     transaction_alias: &str,
-    signed_tx: &SignedMantleTx<Preverified>,
+    signed_tx: &MantleTransaction<Preverified>,
     tx_hash: TxHash,
     node_name: &str,
 ) -> Result<(), StepError> {

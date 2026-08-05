@@ -15,7 +15,7 @@ use lb_core::mantle::transactions::states::Preverified;
 pub use lb_core::{
     codec,
     header::HeaderId,
-    mantle::{SignedMantleTx, traits::Hashable, transactions::hash::TxHash},
+    mantle::{MantleTransaction, traits::Hashable, transactions::hash::TxHash},
 };
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 pub use lb_storage_service::backends::{
@@ -99,7 +99,7 @@ pub type ApiService = lb_api_service::ApiService<
     AxumBackend<
         NtpTimeBackend,
         ApiStorageAdapter<RuntimeServiceId>,
-        RocksStorageAdapter<SignedMantleTx<Preverified>, TxHash>,
+        RocksStorageAdapter<MantleTransaction<Preverified>, TxHash>,
         SdpMempoolAdapter<RuntimeServiceId>,
         SdpWalletAdapter<RuntimeServiceId>,
         SdpRecoveryBackend<RuntimeServiceId>,

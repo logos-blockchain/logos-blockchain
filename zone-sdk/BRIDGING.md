@@ -195,7 +195,7 @@ The proposing sequencer needs the current `withdraw_nonce` and its own accredite
 
 ```rust
 use lb_core::mantle::{
-    Op, SignedMantleTx,
+    Op, MantleTransaction,
     ops::{OpProof, channel::withdraw::ChannelWithdrawOp},
 };
 use lb_core::proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature};
@@ -230,7 +230,7 @@ let signatures: Vec<IndexedSignature> = collect_signatures_from_committee(
 
 // 4. Assemble the threshold proof and submit.
 let withdraw_proof = ChannelMultiSigProof::new(signatures)?;
-let signed_tx = SignedMantleTx::new(
+let signed_tx = MantleTransaction::new(
     tx,
     vec![
         OpProof::ChannelMultiSigProof(withdraw_proof),

@@ -4,7 +4,7 @@ use lb_common_http_client::{ApiBlock, ProcessedBlockEvent, Slot};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        SignedMantleTx,
+        MantleTransaction,
         ledger::{Inputs, Outputs},
         ops::{
             Op, OpId as _,
@@ -342,9 +342,9 @@ fn apply_prepared_block_event(
 fn observe_channel_inscriptions(
     state: &mut TxState,
     classified: &[BlockChannelTx],
-    transactions: &[SignedMantleTx<Unverified>],
+    transactions: &[MantleTransaction<Unverified>],
 ) {
-    let by_hash: HashMap<TxHash, &SignedMantleTx<Unverified>> = transactions
+    let by_hash: HashMap<TxHash, &MantleTransaction<Unverified>> = transactions
         .iter()
         .map(|tx| (tx.mantle_tx().hash(), tx))
         .collect();
@@ -447,7 +447,7 @@ fn is_identity_deposit_transfer(
 /// not part of the message lineage and yield no entries.
 #[must_use]
 pub fn channel_inscriptions(
-    tx: &SignedMantleTx<Unverified>,
+    tx: &MantleTransaction<Unverified>,
     channel_id: ChannelId,
 ) -> Vec<InscriptionInfo> {
     let tx_hash = tx.mantle_tx().hash();
@@ -473,7 +473,7 @@ pub fn channel_inscriptions(
 /// ids. Status is keyed on the tx, so a tx already covered by an inscription
 /// entry in `mined` needs nothing more.
 fn mined_config_entries(
-    transactions: &[SignedMantleTx<Unverified>],
+    transactions: &[MantleTransaction<Unverified>],
     channel_id: ChannelId,
     mined: &[InscriptionInfo],
 ) -> Vec<InscriptionInfo> {
@@ -677,7 +677,7 @@ where
 async fn fetch_block_deposit_events<Node>(
     node: &Node,
     block_id: HeaderId,
-    transactions: &[SignedMantleTx<Unverified>],
+    transactions: &[MantleTransaction<Unverified>],
     channel_id: ChannelId,
 ) -> Result<DepositEvents, Error>
 where
@@ -758,7 +758,7 @@ where
 ///
 /// Deposits without a matching event entry are skipped with a warning.
 fn extract_finalized_items(
-    transactions: &[SignedMantleTx<Unverified>],
+    transactions: &[MantleTransaction<Unverified>],
     channel_id: ChannelId,
     l1_slot: Slot,
     deposit_events: &DepositEvents,
@@ -992,7 +992,7 @@ fn apply_backfilled_block(
 /// silently re-deriving order, because the same node bug could produce an
 /// undetectable mis-ordering elsewhere.
 fn classify_channel_txs(
-    txs: &[SignedMantleTx<Unverified>],
+    txs: &[MantleTransaction<Unverified>],
     channel_id: ChannelId,
 ) -> Vec<BlockChannelTx> {
     // Running in-block channel tip, for the chain-order assertion.
@@ -1004,7 +1004,7 @@ fn classify_channel_txs(
 
 /// Classify one tx's channel ops; `None` when the tx has no tip-advancing op.
 pub(super) fn classify_channel_tx(
-    tx: &SignedMantleTx<Unverified>,
+    tx: &MantleTransaction<Unverified>,
     channel_id: ChannelId,
     block_tip: &mut Option<MsgId>,
 ) -> Option<BlockChannelTx> {
@@ -1121,7 +1121,7 @@ pub(super) fn classify_channel_tx(
 /// config-only shape [`classify_channel_tx`] reports as
 /// [`BlockChannelTx::Config`]. Mirrors that rule so a shed config is typed the
 /// same way it was classified on chain.
-fn is_pure_config(tx: &SignedMantleTx<Unverified>, channel_id: ChannelId) -> bool {
+fn is_pure_config(tx: &MantleTransaction<Unverified>, channel_id: ChannelId) -> bool {
     let mut configs = 0usize;
     let mut transfers = 0usize;
     for op in tx.mantle_tx().ops() {
@@ -1139,7 +1139,7 @@ fn is_pure_config(tx: &SignedMantleTx<Unverified>, channel_id: ChannelId) -> boo
 /// Type a shed pending tx for orphan reporting: a config-only tx as
 /// [`ChannelUpdateTx::Config`], anything else as [`ChannelUpdateTx::Custom`].
 pub(super) fn classify_shed_other(
-    tx: SignedMantleTx<Unverified>,
+    tx: MantleTransaction<Unverified>,
     channel_id: ChannelId,
 ) -> ChannelUpdateTx {
     if is_pure_config(&tx, channel_id) {
@@ -1153,7 +1153,7 @@ pub(super) fn classify_shed_other(
 /// (`ChannelInscribe` or `ChannelConfig`). Deposits and withdraws don't move
 /// the tip and so don't make a tx "ours" for tip-tracking purposes.
 fn touches_channel_tip<State: VerificationState>(
-    tx: &SignedMantleTx<State>,
+    tx: &MantleTransaction<State>,
     channel_id: ChannelId,
 ) -> bool {
     tx.mantle_tx().ops().iter().any(|op| match op {
@@ -1221,7 +1221,7 @@ mod tests {
     /// Extract deposits via the unified walker and filter to deposit entries
     /// for assertion clarity.
     fn extract_deposits_for_test(
-        transactions: &[SignedMantleTx<Unverified>],
+        transactions: &[MantleTransaction<Unverified>],
         channel_id: ChannelId,
         deposit_events: &DepositEvents,
     ) -> Vec<DepositInfo> {
@@ -1817,7 +1817,7 @@ mod tests {
         }
     }
 
-    fn dummy_pending_tx(seed: u8) -> SignedMantleTx<Unverified> {
+    fn dummy_pending_tx(seed: u8) -> MantleTransaction<Unverified> {
         let mantle_tx = RawMantleTx(
             [Op::ChannelInscribe(InscriptionOp {
                 channel_id: [0u8; 32].into(),
@@ -1827,7 +1827,7 @@ mod tests {
             })]
             .into(),
         );
-        SignedMantleTx::new(
+        MantleTransaction::new(
             mantle_tx,
             [OpProof::Ed25519Sig(Ed25519Signature::zero())].into(),
         )

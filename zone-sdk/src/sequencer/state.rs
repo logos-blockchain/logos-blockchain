@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        SignedMantleTx,
+        MantleTransaction,
         ledger::{Inputs, NoteId, Outputs},
         ops::{
             Op,
@@ -19,7 +19,7 @@ use rpds::HashTrieSetSync;
 /// The Ed25519 author of a tx's channel inscription op, if it carries one — the
 /// signer stored on the pending entry's `signed_tx`, recovered for lineage
 /// reconstruction.
-fn inscription_signer(tx: &SignedMantleTx<Unverified>) -> Option<Ed25519PublicKey> {
+fn inscription_signer(tx: &MantleTransaction<Unverified>) -> Option<Ed25519PublicKey> {
     tx.mantle_tx().ops().iter().find_map(|op| match op {
         Op::ChannelInscribe(inscribe) => Some(inscribe.signer),
         _ => None,
@@ -58,7 +58,7 @@ pub struct ChannelUpdateInfo {
 /// never shed.
 #[derive(Debug, Clone)]
 struct PendingOtherTx {
-    signed_tx: SignedMantleTx<Unverified>,
+    signed_tx: MantleTransaction<Unverified>,
     first_parent: Option<MsgId>,
     last_msg: Option<MsgId>,
     config_parent: Option<MsgId>,
@@ -68,7 +68,7 @@ struct PendingOtherTx {
 }
 
 fn opaque_lineage(
-    tx: &SignedMantleTx<Unverified>,
+    tx: &MantleTransaction<Unverified>,
     channel_id: ChannelId,
 ) -> (Option<MsgId>, Option<MsgId>, Option<MsgId>, Option<MsgId>) {
     let mut first_parent = None;
@@ -117,7 +117,7 @@ pub enum PendingBundle {
 #[derive(Debug, Clone)]
 pub struct PendingInscription {
     pub tx_hash: TxHash,
-    pub signed_tx: SignedMantleTx<Unverified>,
+    pub signed_tx: MantleTransaction<Unverified>,
     pub parent_msg: MsgId,
     pub this_msg: MsgId,
     pub payload: Inscription,
@@ -191,7 +191,7 @@ pub enum BlockChannelTx {
     /// which sit on the separate config lineage and never advance the message
     /// tip.
     Custom {
-        tx: SignedMantleTx<Unverified>,
+        tx: MantleTransaction<Unverified>,
         entries: Vec<InscriptionInfo>,
         config_entries: Vec<InscriptionInfo>,
     },
@@ -293,7 +293,7 @@ impl TxState {
     /// [`Self::submit_atomic_withdraw`] for inscription+withdraw bundles.
     pub fn submit_inscription(
         &mut self,
-        signed_tx: SignedMantleTx<Unverified>,
+        signed_tx: MantleTransaction<Unverified>,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,
@@ -312,7 +312,7 @@ impl TxState {
     /// `outputs` are the recipient notes it releases (for orphan re-issue).
     pub fn submit_atomic_withdraw(
         &mut self,
-        signed_tx: SignedMantleTx<Unverified>,
+        signed_tx: MantleTransaction<Unverified>,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,
@@ -350,7 +350,7 @@ impl TxState {
 
     fn insert_pending(
         &mut self,
-        signed_tx: SignedMantleTx<Unverified>,
+        signed_tx: MantleTransaction<Unverified>,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,
@@ -388,7 +388,7 @@ impl TxState {
     /// count as first-time publishes.
     pub fn observe_channel_inscription(
         &mut self,
-        signed_tx: SignedMantleTx<Unverified>,
+        signed_tx: MantleTransaction<Unverified>,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,
@@ -436,7 +436,7 @@ impl TxState {
     /// tip-advancing op), or `None` when it carries none for this channel.
     pub fn submit_other(
         &mut self,
-        signed_tx: SignedMantleTx<Unverified>,
+        signed_tx: MantleTransaction<Unverified>,
         channel_id: ChannelId,
     ) -> Option<MsgId> {
         let tx_hash = signed_tx.mantle_tx().hash();
@@ -607,7 +607,7 @@ impl TxState {
     /// (`pending_by_parent`), opaque txs by submission order (`seq`) — a
     /// locally chained bundle can only be built after the bundle that
     /// establishes its parent tip, so submission order is dependency order.
-    pub fn pending_txs(&self, tip: HeaderId) -> Vec<(TxHash, SignedMantleTx<Unverified>)> {
+    pub fn pending_txs(&self, tip: HeaderId) -> Vec<(TxHash, MantleTransaction<Unverified>)> {
         let safe = self
             .block_states
             .get(&tip)
@@ -794,7 +794,7 @@ impl TxState {
     pub fn shed_off_branch_pending_other(
         &mut self,
         tip: HeaderId,
-    ) -> Vec<SignedMantleTx<Unverified>> {
+    ) -> Vec<MantleTransaction<Unverified>> {
         if self.pending_other.is_empty() {
             return Vec::new();
         }
@@ -848,7 +848,10 @@ impl TxState {
     /// Shed pending config-carrying txs whose config parent can no longer
     /// reach the mined config tip: removed from retry and returned whole for
     /// orphan reporting.
-    pub fn shed_stale_pending_configs(&mut self, tip: HeaderId) -> Vec<SignedMantleTx<Unverified>> {
+    pub fn shed_stale_pending_configs(
+        &mut self,
+        tip: HeaderId,
+    ) -> Vec<MantleTransaction<Unverified>> {
         if self.pending_other.is_empty() {
             return Vec::new();
         }
@@ -955,7 +958,7 @@ impl TxState {
 
     /// All pending transactions (for checkpoint serialization).
     #[must_use]
-    pub fn all_pending_txs(&self) -> Vec<(TxHash, SignedMantleTx<Unverified>)> {
+    pub fn all_pending_txs(&self) -> Vec<(TxHash, MantleTransaction<Unverified>)> {
         let inscriptions = self
             .pending
             .iter()
@@ -972,7 +975,7 @@ impl TxState {
     }
 
     /// Remove a pending inscription and return its signed tx.
-    pub fn remove_pending(&mut self, tx_hash: &TxHash) -> Option<SignedMantleTx<Unverified>> {
+    pub fn remove_pending(&mut self, tx_hash: &TxHash) -> Option<MantleTransaction<Unverified>> {
         if let Some(removed) = self.pending.remove(tx_hash) {
             if let Some(children) = self.pending_by_parent.get_mut(&removed.parent_msg) {
                 children.retain(|h| h != tx_hash);
@@ -1429,7 +1432,7 @@ mod tests {
     use super::*;
     use crate::test_support::header_id;
 
-    fn make_dummy_tx(data: u8) -> SignedMantleTx<Unverified> {
+    fn make_dummy_tx(data: u8) -> MantleTransaction<Unverified> {
         let mantle_tx = RawMantleTx(
             [ChannelInscribe(InscriptionOp {
                 channel_id: [0u8; 32].into(),
@@ -1439,7 +1442,7 @@ mod tests {
             })]
             .into(),
         );
-        SignedMantleTx::new(mantle_tx, OpsProofs::empty())
+        MantleTransaction::new(mantle_tx, OpsProofs::empty())
     }
 
     #[test]
@@ -1630,7 +1633,7 @@ mod tests {
     }
 
     /// Build an `[inscribe(parent), config]` bundle tx for the zero channel.
-    fn bundle_tx(parent: MsgId, data: u8) -> (SignedMantleTx<Unverified>, MsgId, MsgId) {
+    fn bundle_tx(parent: MsgId, data: u8) -> (MantleTransaction<Unverified>, MsgId, MsgId) {
         use lb_core::mantle::{
             channel::{SlotTimeframe, SlotTimeout},
             ops::channel::config::{ChannelConfigOp, Keys},
@@ -1652,7 +1655,7 @@ mod tests {
         };
         let inscribe_msg = inscribe.id();
         let config_msg = config.id();
-        let tx = SignedMantleTx::new(
+        let tx = MantleTransaction::new(
             RawMantleTx([ChannelInscribe(inscribe), Op::ChannelConfig(config)].into()),
             OpsProofs::empty(),
         );
@@ -1825,7 +1828,7 @@ mod tests {
             configuration_threshold: 1,
             transfer_threshold: 1,
         };
-        let config_tx = SignedMantleTx::new(
+        let config_tx = MantleTransaction::new(
             RawMantleTx([Op::ChannelConfig(config)].into()),
             OpsProofs::empty(),
         );
@@ -1932,7 +1935,7 @@ mod tests {
 
     /// Build a pure `[config]` tx for the zero channel; `data` varies the
     /// payload so ids differ.
-    fn config_tx(parent: MsgId, data: u32) -> (SignedMantleTx<Unverified>, MsgId) {
+    fn config_tx(parent: MsgId, data: u32) -> (MantleTransaction<Unverified>, MsgId) {
         use lb_core::mantle::{
             channel::{SlotTimeframe, SlotTimeout},
             ops::channel::config::{ChannelConfigOp, Keys},
@@ -1947,7 +1950,7 @@ mod tests {
             transfer_threshold: 1,
         };
         let config_msg = config.id();
-        let tx = SignedMantleTx::new(
+        let tx = MantleTransaction::new(
             RawMantleTx([Op::ChannelConfig(config)].into()),
             OpsProofs::empty(),
         );
@@ -1959,7 +1962,7 @@ mod tests {
     /// `Custom { config_entries }` shape is exercised separately in
     /// `mixed_config_tx_is_custom_but_advances_the_config_tip`).
     fn config_block_tx(
-        tx: &SignedMantleTx<Unverified>,
+        tx: &MantleTransaction<Unverified>,
         this_msg: MsgId,
         parent: MsgId,
     ) -> BlockChannelTx {

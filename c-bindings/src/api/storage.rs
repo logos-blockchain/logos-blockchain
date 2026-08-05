@@ -1,7 +1,7 @@
 use std::ffi::{CString, c_char};
 
 use lb_core::mantle::transactions::states::Unverified;
-use lb_node::{RocksBackend, RuntimeServiceId, SignedMantleTx};
+use lb_node::{MantleTransaction, RocksBackend, RuntimeServiceId};
 
 use crate::{
     LogosBlockchainNode, OperationStatus,
@@ -36,7 +36,7 @@ pub(crate) fn get_block_sync(
 
     let block = runtime_handle
         .block_on(lb_api_service::http::mantle::get_block::<
-            SignedMantleTx<Unverified>,
+            MantleTransaction<Unverified>,
             RocksBackend,
             RuntimeServiceId,
         >(
@@ -141,7 +141,7 @@ pub(crate) fn get_transaction_sync(
 
     let tx = runtime_handle
         .block_on(lb_api_service::http::mantle::get_transaction::<
-            SignedMantleTx<Unverified>,
+            MantleTransaction<Unverified>,
             RocksBackend,
             RuntimeServiceId,
         >(overwatch_handle, tx_hash))
@@ -244,7 +244,7 @@ pub(crate) fn get_blocks_sync(
 
     let blocks = runtime_handle
         .block_on(lb_api_service::http::mantle::get_immutable_blocks::<
-            SignedMantleTx<Unverified>,
+            MantleTransaction<Unverified>,
             RocksBackend,
             RuntimeServiceId,
         >(overwatch_handle, from_slot, to_slot))

@@ -9,7 +9,7 @@ use futures::StreamExt as _;
 use lb_core::{
     block::{Block, BlockTransactions, UncleHeaders},
     mantle::{
-        Note, Op, OpProof, RawMantleTx, SignedMantleTx, TxGasCalculator as _, Utxo,
+        MantleTransaction, Note, Op, OpProof, RawMantleTx, TxGasCalculator as _, Utxo,
         gas::MainnetGasProfile,
         ledger::{Inputs, Outputs},
         ops::{
@@ -273,7 +273,7 @@ async fn recovery_blocks_fall_back_to_lib_when_tip_missing_from_storage() {
     let _storage_svc = spawn_storage_service(storage_rx);
     let (time_tx, _time_rx) = mpsc::channel(10);
     let relays = CryptarchiaConsensusRelays::<
-        SignedMantleTx<Preverified>,
+        MantleTransaction<Preverified>,
         RocksBackend,
         TestRuntimeServiceId,
     >::new(
@@ -309,7 +309,7 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     drop(storage_rx);
     let (time_tx, _time_rx) = mpsc::channel(10);
     let relays = CryptarchiaConsensusRelays::<
-        SignedMantleTx<Preverified>,
+        MantleTransaction<Preverified>,
         RocksBackend,
         TestRuntimeServiceId,
     >::new(
@@ -384,7 +384,7 @@ fn ledger_is_not_commited_if_block_contains_invalid_zkp() {
 }
 
 /// Creates a transfer tx with an fake sig.
-fn transfer_tx_with_fake_sig(utxo: Utxo, fake_key: &ZkKey) -> SignedMantleTx<Preverified> {
+fn transfer_tx_with_fake_sig(utxo: Utxo, fake_key: &ZkKey) -> MantleTransaction<Preverified> {
     let mut output_note = Note::new(1, fake_key.to_public_key());
     let fees = transfer_tx(utxo, output_note, fake_key)
         .total_gas_cost::<MainnetGasProfile>(&GasPrices::default())
@@ -396,17 +396,17 @@ fn transfer_tx_with_fake_sig(utxo: Utxo, fake_key: &ZkKey) -> SignedMantleTx<Pre
         .expect("a fake signature is only caught by the stateful checks")
 }
 
-fn transfer_tx(utxo: Utxo, output_note: Note, key: &ZkKey) -> SignedMantleTx<Unverified> {
+fn transfer_tx(utxo: Utxo, output_note: Note, key: &ZkKey) -> MantleTransaction<Unverified> {
     let transfer_op = TransferOp::new(Inputs::new([utxo.id()]), Outputs::new([output_note]));
     let mantle_tx = RawMantleTx([Op::Transfer(transfer_op)].into());
     let ops_proofs = [OpProof::ZkSig(
         ZkKey::multi_sign(std::slice::from_ref(key), &mantle_tx.hash().to_fr()).unwrap(),
     )]
     .into();
-    SignedMantleTx::new(mantle_tx, ops_proofs)
+    MantleTransaction::new(mantle_tx, ops_proofs)
 }
 
-fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedMantleTx<Preverified>>) {
+fn test_chain_with_next_block() -> (Cryptarchia, Block<MantleTransaction<Preverified>>) {
     let k = 3.try_into().unwrap();
     let config = ledger_config(k);
     let genesis_id = [0; 32].into();
@@ -516,7 +516,7 @@ pub fn try_build_block(
     key: &ZkKey,
     start_slot: Slot,
     uncle_headers: UncleHeaders,
-) -> Option<(Block<SignedMantleTx<Preverified>>, Ed25519Key)> {
+) -> Option<(Block<MantleTransaction<Preverified>>, Ed25519Key)> {
     try_build_block_with_transactions(
         cryptarchia,
         parent,
@@ -536,8 +536,8 @@ pub fn try_build_block_with_transactions(
     key: &ZkKey,
     start_slot: Slot,
     uncle_headers: UncleHeaders,
-    transactions: BlockTransactions<SignedMantleTx<Preverified>>,
-) -> Option<(Block<SignedMantleTx<Preverified>>, Ed25519Key)> {
+    transactions: BlockTransactions<MantleTransaction<Preverified>>,
+) -> Option<(Block<MantleTransaction<Preverified>>, Ed25519Key)> {
     let start_slot: u64 = start_slot.into();
     for slot in start_slot..=(start_slot + 1000) {
         let epoch_state = cryptarchia.epoch_state_for_slot(slot.into()).unwrap();
@@ -625,7 +625,7 @@ pub struct TestRuntimeServiceId;
 
 impl
     AsServiceId<
-        CryptarchiaConsensus<SignedMantleTx<Preverified>, RocksBackend, SystemTimeBackend, Self>,
+        CryptarchiaConsensus<MantleTransaction<Preverified>, RocksBackend, SystemTimeBackend, Self>,
     > for TestRuntimeServiceId
 {
     const SERVICE_ID: Self = Self;

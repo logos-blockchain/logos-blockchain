@@ -2,7 +2,7 @@ use std::{collections::HashSet, time::Duration};
 
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
-    Note, NoteId, Op, OpProof, SignedMantleTx,
+    MantleTransaction, Note, NoteId, Op, OpProof,
     ledger::{Inputs, Outputs},
     ops::transfer::TransferOp,
     traits::Hashable as _,
@@ -251,7 +251,7 @@ async fn transaction_is_in_chain(
 
 /// Builds a transaction that fails stateless validation: a `TransferOp` with no
 /// inputs.
-pub fn create_stateless_invalid_transaction() -> SignedMantleTx<Unverified> {
+pub fn create_stateless_invalid_transaction() -> MantleTransaction<Unverified> {
     let output_note = Note::new(1000, ZkPublicKey::new(1u8.into()));
     let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new([output_note]));
 
@@ -260,7 +260,7 @@ pub fn create_stateless_invalid_transaction() -> SignedMantleTx<Unverified> {
 
 /// Builds a transaction that passes stateless validation but is invalid against
 /// ledger state: its input note id does not correspond to any real UTXO.
-fn create_stateful_invalid_transaction() -> SignedMantleTx<Unverified> {
+fn create_stateful_invalid_transaction() -> MantleTransaction<Unverified> {
     let nonexistent_input = NoteId(Fr::from(0xDEAD_BEEFu64));
     let output_note = Note::new(1000, ZkPublicKey::new(1u8.into()));
     let transfer_op = TransferOp::new(
@@ -271,11 +271,11 @@ fn create_stateful_invalid_transaction() -> SignedMantleTx<Unverified> {
     build_signed_transfer(transfer_op)
 }
 
-fn build_signed_transfer(transfer_op: TransferOp) -> SignedMantleTx<Unverified> {
+fn build_signed_transfer(transfer_op: TransferOp) -> MantleTransaction<Unverified> {
     let mantle_tx = RawMantleTx([Op::Transfer(transfer_op)].into());
 
     let transfer_proof = ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr())
         .expect("invalid transfer proof should still be constructible");
 
-    SignedMantleTx::new(mantle_tx, [OpProof::ZkSig(transfer_proof)].into())
+    MantleTransaction::new(mantle_tx, [OpProof::ZkSig(transfer_proof)].into())
 }

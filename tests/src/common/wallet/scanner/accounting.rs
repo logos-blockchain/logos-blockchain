@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry};
 
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
-    NoteId, SignedMantleTx, TxHash, Utxo,
+    MantleTransaction, NoteId, TxHash, Utxo,
     ops::Op,
     traits::Hashable as _,
     transactions::{mantle_tx::MantleTx as _, states::Unverified},
@@ -106,7 +106,7 @@ impl ScannerAccounting {
     /// Record transaction hashes from a block without changing wallet UTXOs.
     pub fn observe_block_transactions(&mut self, block: &ApiBlock) {
         self.observed_transaction_hashes
-            .extend(block.transactions.iter().map(SignedMantleTx::hash));
+            .extend(block.transactions.iter().map(MantleTransaction::hash));
     }
 
     #[must_use]
@@ -146,7 +146,7 @@ impl ScannerAccounting {
         self.tracked_wallets.len()
     }
 
-    fn apply_transaction(&mut self, tx: &SignedMantleTx<Unverified>) {
+    fn apply_transaction(&mut self, tx: &MantleTransaction<Unverified>) {
         for op in tx.mantle_tx().ops() {
             match op {
                 Op::Transfer(transfer) => {
@@ -224,7 +224,7 @@ mod tests {
     use lb_core::{
         header::{ContentId, HeaderId},
         mantle::{
-            Note, RawMantleTx, SignedMantleTx, Utxo,
+            MantleTransaction, Note, RawMantleTx, Utxo,
             ledger::{Inputs, Outputs},
             ops::{
                 Op,
@@ -256,7 +256,7 @@ mod tests {
         Utxo::new([output_index as u8; 32], output_index, Note::new(value, pk))
     }
 
-    fn block(seed: u8, txs: Vec<SignedMantleTx<Unverified>>) -> ApiBlock {
+    fn block(seed: u8, txs: Vec<MantleTransaction<Unverified>>) -> ApiBlock {
         ApiBlock {
             header: ApiHeader {
                 id: HeaderId::from([seed; 32]),
@@ -272,8 +272,8 @@ mod tests {
 
     /// A transaction creating `outputs`. A channel withdraw no longer creates
     /// notes, so a transfer is what the accounting observes owned outputs from.
-    fn transfer_tx(outputs: [Note; 2]) -> SignedMantleTx<Unverified> {
-        SignedMantleTx::new(
+    fn transfer_tx(outputs: [Note; 2]) -> MantleTransaction<Unverified> {
+        MantleTransaction::new(
             RawMantleTx(
                 [Op::Transfer(TransferOp::new(
                     Inputs::empty(),
@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn accounting_removes_spent_utxos() {
         let owned = utxo(10, 0, pk(1));
-        let spend = SignedMantleTx::new(
+        let spend = MantleTransaction::new(
             RawMantleTx(
                 [Op::ChannelDeposit(DepositOp {
                     channel_id: ChannelId::from([0; 32]),
@@ -384,11 +384,11 @@ mod tests {
     fn sdp_declare_hides_and_withdraw_restores_locked_utxo() {
         let locked = utxo(10, 0, pk(1));
         let declaration = sdp_declaration(locked.id());
-        let declare_tx = SignedMantleTx::new(
+        let declare_tx = MantleTransaction::new(
             RawMantleTx([Op::SDPDeclare(declaration.clone())].into()),
             OpsProofs::empty(),
         );
-        let withdraw_tx = SignedMantleTx::new(
+        let withdraw_tx = MantleTransaction::new(
             RawMantleTx(
                 [Op::SDPWithdraw(WithdrawMessage {
                     declaration_id: declaration.id(),

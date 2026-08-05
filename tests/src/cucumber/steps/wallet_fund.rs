@@ -7,7 +7,7 @@ use std::{collections::HashSet, time::Duration};
 use cucumber::{gherkin::Step, then, when};
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
-    Note, Op, OpProof, SignedMantleTx, TxHash,
+    MantleTransaction, Note, Op, OpProof, TxHash,
     gas::GasCost,
     ops::channel::{
         ChannelId, MsgId,
@@ -102,7 +102,7 @@ async fn fund_and_submit_payment(
         });
     }
 
-    let signed_tx = SignedMantleTx::new(response.funded_tx, [transfer_proof].into());
+    let signed_tx = MantleTransaction::new(response.funded_tx, [transfer_proof].into());
     let tx_hash = signed_tx.hash();
 
     world
@@ -478,7 +478,7 @@ async fn step_fund_inscription_transaction(
 
     let tx_hash = response.funded_tx.hash();
     let signature = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
-    let signed_tx = SignedMantleTx::new(
+    let signed_tx = MantleTransaction::new(
         response.funded_tx,
         [OpProof::Ed25519Sig(signature), transfer_proof].into(),
     );
