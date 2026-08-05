@@ -21,7 +21,7 @@ pub use signed_mantle_tx::SignedMantleTx;
 pub use verification_helper::OperationVerificationHelper;
 pub use verified_ops::VerifiedOps;
 
-use crate::mantle::{Op, OpProof};
+use crate::mantle::{Op, OpProof, ops::SignedOp};
 
 // ==============================================================================
 // Memory Safety Limits
@@ -35,4 +35,5 @@ use crate::mantle::{Op, OpProof};
 // allow 4MiB.
 pub const MAX_OPS_PER_TX: usize = u8::MAX as usize;
 pub type Ops = UpperBoundedVec<Op, MAX_OPS_PER_TX>;
+pub type SignedOps<State, Mode> = UpperBoundedVec<SignedOp<State, Mode>, MAX_OPS_PER_TX>;
 pub type OpsProofs = UpperBoundedVec<OpProof, MAX_OPS_PER_TX>;

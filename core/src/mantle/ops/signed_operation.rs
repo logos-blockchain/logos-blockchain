@@ -14,6 +14,7 @@ use crate::{
     },
 };
 
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SignedOperation<T: ProvableOperation, State: VerificationState, Mode: VerificationMode> {
     operation: T,
     proof: T::Proof,
