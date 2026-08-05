@@ -5,7 +5,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::mantle::Value;
+use crate::mantle::{Value, ledger::ProvableOperation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Gas(Value);
@@ -156,54 +156,28 @@ impl<T: GasCalculator> GasCalculator for &T {
     }
 }
 
-pub trait GasConstants {
-    /// Verify the proof of ownership and relative balance.
-    const TRANSFER: Gas;
-
-    /// Verify the inscription signature.
-    const CHANNEL_INSCRIBE: Gas;
-
-    /// Verify the administrator signature.
-    const CHANNEL_CONFIG: Gas;
-
-    /// Verify the deposit signature.
-    const CHANNEL_DEPOSIT: Gas;
-
-    /// Verify the withdrawal signature.
-    const CHANNEL_WITHDRAW: Gas;
-
-    /// Verify the transfer signature.
-    const CHANNEL_TRANSFER: Gas;
-
-    /// Verify the proof of ownership.
-    const SDP_DECLARE: Gas;
-
-    /// Verify the proof of ownership.
-    const SDP_WITHDRAW: Gas;
-
-    /// Store the active message.
-    const SDP_ACTIVE: Gas;
-
-    /// Consume a reward ticket.
-    const LEADER_CLAIM: Gas;
-
-    /// Claim a `PoW` reward
-    const CLAIM_POW_REWARD: Gas;
+mod private {
+    pub trait Sealed {}
 }
 
-pub struct MainnetGasConstants;
+pub trait GasConstants: private::Sealed {}
 
-impl GasConstants for MainnetGasConstants {
-    const TRANSFER: Gas = Gas(590);
-    const CHANNEL_INSCRIBE: Gas = Gas(56);
-    const CHANNEL_CONFIG: Gas = Gas(56);
-    const CHANNEL_DEPOSIT: Gas = Gas(590);
-    const CHANNEL_WITHDRAW: Gas = Gas(56);
-    const CHANNEL_TRANSFER: Gas = Gas(56);
-    const SDP_DECLARE: Gas = Gas(646);
-    const SDP_WITHDRAW: Gas = Gas(590);
-    const SDP_ACTIVE: Gas = Gas(590);
-    const LEADER_CLAIM: Gas = Gas(580);
-    // TODO: Fix this value once decided
-    const CLAIM_POW_REWARD: Gas = Gas(1);
+pub struct MainnetGasConstants;
+impl private::Sealed for MainnetGasConstants {}
+impl GasConstants for MainnetGasConstants {}
+
+pub trait OperationGas<Constants: GasConstants>: ProvableOperation {
+    const GAS_CONSTANT: Gas;
+}
+
+pub trait SignedOperationExecutionGas {
+    fn gas_signature_count(&self) -> Value;
+
+    fn execution_gas<Constants: GasConstants>(&self) -> Result<Gas, GasOverflow>
+    where
+        Self: OperationGas<Constants>,
+    {
+        let multiplier = self.gas_signature_count();
+        Self::GAS_CONSTANT.checked_mul(multiplier)
+    }
 }

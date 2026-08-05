@@ -12,6 +12,7 @@ use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
         Note, Utxo, Value,
+        gas::{Gas, MainnetGasConstants, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
             VerifiableOperation, verification_mode,
@@ -180,6 +181,10 @@ pub struct LeaderClaimExecutionContext {
 
 impl ProvableOperation for LeaderClaimOp {
     type Proof = Groth16LeaderClaimProof;
+}
+
+impl OperationGas<MainnetGasConstants> for LeaderClaimOp {
+    const GAS_CONSTANT: Gas = Gas::new(580);
 }
 
 impl PreverifiableOperation<verification_mode::StandardMode> for LeaderClaimOp {

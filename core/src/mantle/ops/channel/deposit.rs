@@ -7,6 +7,7 @@ use crate::{
     events::{DepositRecreatedNotes, TxEvent, TxEventPayload},
     mantle::{
         channel::{Channels, Error},
+        gas::{Gas, MainnetGasConstants, OperationGas},
         ledger::{
             ExecutableOperation, Inputs, InputsError, Outputs, PreverifiableOperation,
             ProvableOperation, Utxos, VerifiableOperation, verification_mode,
@@ -66,6 +67,10 @@ pub struct DepositExecutionContext {
 
 impl ProvableOperation for DepositOp {
     type Proof = ZkSignature;
+}
+
+impl OperationGas<MainnetGasConstants> for DepositOp {
+    const GAS_CONSTANT: Gas = Gas::new(590);
 }
 
 impl PreverifiableOperation<verification_mode::StandardMode> for DepositOp {

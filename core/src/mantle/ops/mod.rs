@@ -30,10 +30,13 @@ use super::{
 };
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
-    mantle::ops::{
-        internal::{OpDe, OpSer},
-        pow::ClaimPowRewardOp,
-        transfer::TransferOp,
+    mantle::{
+        gas::OperationGas,
+        ops::{
+            internal::{OpDe, OpSer},
+            pow::ClaimPowRewardOp,
+            transfer::TransferOp,
+        },
     },
     proofs::{
         channel_multi_sig_proof::ChannelMultiSigProof, leader_claim_proof::Groth16LeaderClaimProof,
@@ -203,6 +206,14 @@ impl BinaryDecode for Op {
     }
 }
 
+const fn gas_constant_of<Constants, Op>(_op: &Op) -> Gas
+where
+    Constants: GasConstants,
+    Op: OperationGas<Constants>,
+{
+    Op::GAS_CONSTANT
+}
+
 // We just check that the enum discriminant tag is encoded correctly, so a
 // single fixture is fine here.
 // TODO: Remove once the `BinaryCodec` macro supports enums.
@@ -228,17 +239,17 @@ impl Op {
     #[must_use]
     pub const fn execution_gas<Constants: GasConstants>(&self) -> Gas {
         match self {
-            Self::ChannelInscribe(_) => Constants::CHANNEL_INSCRIBE,
-            Self::ChannelConfig(_) => Constants::CHANNEL_CONFIG,
-            Self::ChannelDeposit(_) => Constants::CHANNEL_DEPOSIT,
-            Self::ChannelWithdraw(_) => Constants::CHANNEL_WITHDRAW,
-            Self::ChannelTransfer(_) => Constants::CHANNEL_TRANSFER,
-            Self::SDPDeclare(_) => Constants::SDP_DECLARE,
-            Self::SDPWithdraw(_) => Constants::SDP_WITHDRAW,
-            Self::SDPActive(_) => Constants::SDP_ACTIVE,
-            Self::LeaderClaim(_) => Constants::LEADER_CLAIM,
-            Self::Transfer(_) => Constants::TRANSFER,
-            Self::ClaimPowReward(_) => Constants::CLAIM_POW_REWARD,
+            Self::ChannelInscribe(op) => gas_constant_of(op),
+            Self::ChannelConfig(op) => gas_constant_of(op),
+            Self::ChannelDeposit(op) => gas_constant_of(op),
+            Self::ChannelWithdraw(op) => gas_constant_of(op),
+            Self::ChannelTransfer(op) => gas_constant_of(op),
+            Self::SDPDeclare(op) => gas_constant_of(op),
+            Self::SDPWithdraw(op) => gas_constant_of(op),
+            Self::SDPActive(op) => gas_constant_of(op),
+            Self::LeaderClaim(op) => gas_constant_of(op),
+            Self::Transfer(op) => gas_constant_of(op),
+            Self::ClaimPowReward(op) => gas_constant_of(op),
         }
     }
 

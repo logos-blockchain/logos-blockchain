@@ -7,6 +7,7 @@ use crate::{
     mantle::{
         Note,
         channel::Channels,
+        gas::{Gas, MainnetGasConstants, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
             VerifiableOperation, verification_mode,
@@ -156,6 +157,10 @@ pub struct SDPDeclareExecutionContext {
 
 impl ProvableOperation for SDPDeclareOp {
     type Proof = ZkAndEd25519Proof;
+}
+
+impl OperationGas<MainnetGasConstants> for SDPDeclareOp {
+    const GAS_CONSTANT: Gas = Gas::new(646);
 }
 
 impl PreverifiableOperation<verification_mode::StandardMode> for SDPDeclareOp {

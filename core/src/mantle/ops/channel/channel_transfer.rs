@@ -6,6 +6,7 @@ use crate::{
     mantle::{
         TxHash,
         channel::{Channels, Error},
+        gas::{Gas, MainnetGasConstants, OperationGas},
         ledger::{
             ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation, Utxo,
             Utxos, VerifiableOperation, verification_mode,
@@ -57,6 +58,10 @@ pub struct ChannelTransferExecutionContext {
 
 impl ProvableOperation for ChannelTransferOp {
     type Proof = ChannelMultiSigProof;
+}
+
+impl OperationGas<MainnetGasConstants> for ChannelTransferOp {
+    const GAS_CONSTANT: Gas = Gas::new(56);
 }
 
 impl PreverifiableOperation<verification_mode::StandardMode> for ChannelTransferOp {

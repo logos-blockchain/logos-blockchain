@@ -9,6 +9,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
+        gas::{Gas, MainnetGasConstants, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode,
@@ -52,6 +53,10 @@ pub struct ChannelConfigExecutionContext {
 
 impl ProvableOperation for ChannelConfigOp {
     type Proof = ChannelMultiSigProof;
+}
+
+impl OperationGas<MainnetGasConstants> for ChannelConfigOp {
+    const GAS_CONSTANT: Gas = Gas::new(56);
 }
 
 impl PreverifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {

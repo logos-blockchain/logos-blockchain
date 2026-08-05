@@ -13,6 +13,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         channel::{ChannelState, Channels, Error},
+        gas::{Gas, MainnetGasConstants, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode,
@@ -86,6 +87,10 @@ pub struct InscriptionExecutionContext {
 
 impl ProvableOperation for InscriptionOp {
     type Proof = Ed25519Signature;
+}
+
+impl OperationGas<MainnetGasConstants> for InscriptionOp {
+    const GAS_CONSTANT: Gas = Gas::new(56);
 }
 
 impl PreverifiableOperation<verification_mode::StandardMode> for InscriptionOp {

@@ -3,6 +3,8 @@ use std::marker::PhantomData;
 use crate::{
     events::TxEvent,
     mantle::{
+        GasConstants,
+        gas::{Gas, OperationGas},
         ledger::{
             ExecutableOperation, Operation, PreverifiableOperation, ProvableOperation,
             VerifiableOperation, verification_mode::VerificationMode,
@@ -90,4 +92,23 @@ impl<T: Operation<Mode>, Mode: VerificationMode> SignedOp<T, Verified, Mode> {
     > {
         self.operation.execute(context)
     }
+}
+
+impl<T, State, Mode> ProvableOperation for SignedOp<T, State, Mode>
+where
+    T: ProvableOperation,
+    Mode: VerificationMode,
+    State: VerificationState,
+{
+    type Proof = T::Proof;
+}
+
+impl<Constants, T, State, Mode> OperationGas<Constants> for SignedOp<T, State, Mode>
+where
+    Constants: GasConstants,
+    T: OperationGas<Constants>,
+    State: VerificationState,
+    Mode: VerificationMode,
+{
+    const GAS_CONSTANT: Gas = T::GAS_CONSTANT;
 }

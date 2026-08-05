@@ -7,6 +7,7 @@ use super::{SDPWithdrawOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
+        gas::{Gas, MainnetGasConstants, OperationGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
             VerifiableOperation, verification_mode,
@@ -33,6 +34,10 @@ pub struct SDPWithdrawExecutionContext {
 
 impl ProvableOperation for SDPWithdrawOp {
     type Proof = ZkSignature;
+}
+
+impl OperationGas<MainnetGasConstants> for SDPWithdrawOp {
+    const GAS_CONSTANT: Gas = Gas::new(590);
 }
 
 impl PreverifiableOperation<verification_mode::StandardMode> for SDPWithdrawOp {
