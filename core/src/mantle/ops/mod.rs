@@ -21,17 +21,19 @@ pub use crate::mantle::ops::{
 pub(crate) static OPERATION_ID_V1: LazyLock<Vec<u8>> =
     LazyLock::new(|| b"OPERATION_ID_V1".to_vec());
 
-pub(crate) const TRANSFER: u8 = 0x00;
-pub(crate) const CHANNEL_CONFIG: u8 = 0x10;
-pub(crate) const INSCRIBE: u8 = 0x11;
-pub(crate) const CHANNEL_DEPOSIT: u8 = 0x12;
-pub(crate) const CHANNEL_WITHDRAW: u8 = 0x13;
-pub(crate) const CHANNEL_TRANSFER: u8 = 0x14;
-pub(crate) const SDP_DECLARE: u8 = 0x20;
-pub(crate) const SDP_WITHDRAW: u8 = 0x21;
-pub(crate) const SDP_ACTIVE: u8 = 0x22;
-pub(crate) const LEADER_CLAIM: u8 = 0x30;
-pub(crate) const CLAIM_POW_REWARD: u8 = 0x40;
+pub(crate) mod op_codes {
+    pub const TRANSFER: u8 = 0x00;
+    pub const CHANNEL_CONFIG: u8 = 0x10;
+    pub const INSCRIBE: u8 = 0x11;
+    pub const CHANNEL_DEPOSIT: u8 = 0x12;
+    pub const CHANNEL_WITHDRAW: u8 = 0x13;
+    pub const CHANNEL_TRANSFER: u8 = 0x14;
+    pub const SDP_DECLARE: u8 = 0x20;
+    pub const SDP_WITHDRAW: u8 = 0x21;
+    pub const SDP_ACTIVE: u8 = 0x22;
+    pub const LEADER_CLAIM: u8 = 0x30;
+    pub const CLAIM_POW_REWARD: u8 = 0x40;
+}
 
 /// Mantle reference test-vector generators.
 ///
