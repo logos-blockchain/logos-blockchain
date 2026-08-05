@@ -31,7 +31,7 @@ use crate::{
             mantle_tx::OpWithProof,
         },
         transactions::{
-            GasPrices, OperationVerificationHelper, OpsProofs, VerifiedOps,
+            GasPrices, OpProofs, OperationVerificationHelper, VerifiedOps,
             codec::{decode_signed_mantle_tx, encode_signed_mantle_tx},
             hash::{TxHash, TxHashView},
             mantle_tx::MantleTx as _,
@@ -46,7 +46,7 @@ use crate::{
 pub struct MantleTransaction<State: VerificationState> {
     pub(crate) mantle_tx: RawMantleTx,
     // TODO: make this more efficient
-    ops_proofs: OpsProofs,
+    ops_proofs: OpProofs,
     state: PhantomData<State>,
 }
 
@@ -78,19 +78,19 @@ impl<State: VerificationState> MantleTransaction<State> {
     }
 
     #[must_use]
-    pub const fn ops_proofs(&self) -> &OpsProofs {
+    pub const fn ops_proofs(&self) -> &OpProofs {
         &self.ops_proofs
     }
 
     #[must_use]
-    pub fn into_parts(self) -> (RawMantleTx, OpsProofs) {
+    pub fn into_parts(self) -> (RawMantleTx, OpProofs) {
         (self.mantle_tx, self.ops_proofs)
     }
 }
 
 impl MantleTransaction<Unverified> {
     #[must_use]
-    pub const fn new(mantle_tx: RawMantleTx, ops_proofs: OpsProofs) -> Self {
+    pub const fn new(mantle_tx: RawMantleTx, ops_proofs: OpProofs) -> Self {
         Self {
             mantle_tx,
             ops_proofs,
@@ -218,7 +218,7 @@ impl MantleTransaction<Preverified> {
     /// testing purposes only.
     #[must_use]
     #[doc(hidden)]
-    pub const fn new_trusted(mantle_tx: RawMantleTx, ops_proofs: OpsProofs) -> Self {
+    pub const fn new_trusted(mantle_tx: RawMantleTx, ops_proofs: OpProofs) -> Self {
         Self {
             mantle_tx,
             ops_proofs,
@@ -497,7 +497,7 @@ impl<State: VerificationState> Serialize for MantleTransaction<State> {
 #[serde(rename = "SignedMantleTx")]
 struct OwnedMantleTransactionSerde {
     mantle_tx: RawMantleTx,
-    ops_proofs: OpsProofs,
+    ops_proofs: OpProofs,
 }
 
 impl From<OwnedMantleTransactionSerde> for MantleTransaction<Unverified> {
@@ -792,7 +792,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let inscribe_op = create_test_inscribe_op(&signing_key);
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
-        let result = MantleTransaction::new(mantle_tx, OpsProofs::empty()).preverify();
+        let result = MantleTransaction::new(mantle_tx, OpProofs::empty()).preverify();
 
         assert!(matches!(
             result,
@@ -958,7 +958,7 @@ mod tests {
         let inscribe_op = create_test_inscribe_op(&signing_key);
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
 
-        let helper = MantleTransaction::new(mantle_tx, OpsProofs::empty());
+        let helper = MantleTransaction::new(mantle_tx, OpProofs::empty());
 
         let serialized = serde_json::to_string(&helper).unwrap();
 
@@ -1021,7 +1021,7 @@ mod tests {
         let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());
 
         // Test too few proofs
-        let result = MantleTransaction::new(mantle_tx.clone(), OpsProofs::empty()).preverify();
+        let result = MantleTransaction::new(mantle_tx.clone(), OpProofs::empty()).preverify();
         assert!(matches!(
             result,
             Err(VerificationError::ProofCountMismatch {

@@ -948,7 +948,7 @@ mod tests {
             },
             traits::Hashable as _,
             transactions::{
-                Ops, OpsProofs,
+                OpProofs, Ops,
                 hash::TxHashView,
                 mantle_tx::MantleTx as _,
                 states::{Preverified, Unverified},
@@ -1081,7 +1081,7 @@ mod tests {
                 Key::MultiSequencer(proof) => OpProof::ChannelMultiSigProof(proof.clone()),
             })
             .collect::<Vec<_>>();
-        let ops_proofs = OpsProofs::try_from(ops_proofs).expect("operation proofs are bounded");
+        let ops_proofs = OpProofs::try_from(ops_proofs).expect("operation proofs are bounded");
 
         MantleTransaction::new(mantle_tx, ops_proofs)
             .preverify()

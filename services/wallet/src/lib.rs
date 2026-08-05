@@ -29,7 +29,7 @@ use lb_core::{
         },
         traits::{Hashable as _, MantleTxWithProofs},
         transactions::{
-            MantleTxBuilder, MantleTxContext, OpsProofs, TxBuilderError, mantle_tx::MantleTx as _,
+            MantleTxBuilder, MantleTxContext, OpProofs, TxBuilderError, mantle_tx::MantleTx as _,
             states::Preverified,
         },
     },
@@ -931,7 +931,7 @@ where
         let mantle_tx = tx_builder.clone().build()?;
         let tx_hash = mantle_tx.hash();
 
-        let mut ops_proofs = OpsProofs::empty();
+        let mut ops_proofs = OpProofs::empty();
         for (i, op) in mantle_tx.ops().iter().enumerate() {
             let proof = match op {
                 Op::ChannelInscribe(inscribe_op) => {

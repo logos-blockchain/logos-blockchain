@@ -689,7 +689,7 @@ mod tests {
                     withdraw::ChannelWithdrawOp,
                 },
             },
-            transactions::{Ops, OpsProofs, mantle_tx::MantleTx as _, states::Unverified},
+            transactions::{OpProofs, Ops, mantle_tx::MantleTx as _, states::Unverified},
         },
     };
     use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
@@ -1274,7 +1274,7 @@ mod tests {
             .unwrap(),
         );
         let tx_hash = mantle_tx.hash();
-        let signed_tx = MantleTransaction::new(mantle_tx, OpsProofs::empty());
+        let signed_tx = MantleTransaction::new(mantle_tx, OpProofs::empty());
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
         track_pending_tx(&mut state, signed_tx, channel_id);
@@ -1305,7 +1305,7 @@ mod tests {
         };
         let mantle_tx = RawMantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
         let tx_hash = mantle_tx.hash();
-        let signed_tx = MantleTransaction::new(mantle_tx, OpsProofs::empty());
+        let signed_tx = MantleTransaction::new(mantle_tx, OpProofs::empty());
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
         track_pending_tx(&mut state, signed_tx, channel_id);
@@ -1330,7 +1330,7 @@ mod tests {
         };
         let mantle_tx = RawMantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
         let tx_hash = mantle_tx.hash();
-        let signed_tx = MantleTransaction::new(mantle_tx, OpsProofs::empty());
+        let signed_tx = MantleTransaction::new(mantle_tx, OpProofs::empty());
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
         track_pending_tx(&mut state, signed_tx, our_channel);

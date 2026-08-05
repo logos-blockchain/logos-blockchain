@@ -406,7 +406,7 @@ mod tests {
                 ZkAndEd25519Proof,
                 channel::{Ed25519PublicKey, inscribe::Inscription},
             },
-            transactions::{Ops, OpsProofs},
+            transactions::{OpProofs, Ops},
         },
         sdp::{Locator, ProviderId, ServiceType},
     };
@@ -480,8 +480,8 @@ mod tests {
         let mut new_ops = vec![Op::Transfer(transfer_op)];
         new_ops.append(&mut ops);
         let mantle_tx = RawMantleTx(Ops::new_unchecked(new_ops));
-        let ops_proofs = OpsProofs::try_from(ops_proofs).unwrap();
-        let mut new_op_proofs = OpsProofs::from(OpProof::ZkSig(
+        let ops_proofs = OpProofs::try_from(ops_proofs).unwrap();
+        let mut new_op_proofs = OpProofs::from(OpProof::ZkSig(
             ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr()).unwrap(),
         ));
         for proof in ops_proofs {

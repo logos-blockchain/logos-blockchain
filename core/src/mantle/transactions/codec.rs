@@ -17,7 +17,7 @@ use crate::{
 pub fn decode_signed_mantle_tx(
     input: &[u8],
 ) -> Result<(&[u8], MantleTransaction<Unverified>), DecodeError> {
-    // MantleTransaction = MantleTx OpsProofs
+    // MantleTransaction = MantleTx OpProofs
     let (input, mantle_tx) = RawMantleTx::decode(input)?;
     let (input, ops_proofs) = decode_ops_proofs(input, mantle_tx.ops())?;
 
@@ -133,7 +133,7 @@ mod tests {
                 transfer::TransferOp,
             },
             traits::Hashable as _,
-            transactions::{GasPrices, Ops, OpsProofs},
+            transactions::{GasPrices, OpProofs, Ops},
         },
         proofs::{
             channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
@@ -175,7 +175,7 @@ mod tests {
     fn test_decode_signed_mantle_tx_empty() {
         let mantle_tx = RawMantleTx(Ops::new_unchecked(vec![]));
 
-        let signed_tx = MantleTransaction::new(mantle_tx, OpsProofs::empty());
+        let signed_tx = MantleTransaction::new(mantle_tx, OpProofs::empty());
 
         #[expect(
             clippy::string_add,
@@ -394,7 +394,7 @@ mod tests {
     fn test_encode_decode_roundtrip_signed_tx() {
         // Create a simple MantleTransaction
         let mantle_tx = RawMantleTx(Ops::new_unchecked(vec![]));
-        let original_tx = MantleTransaction::new(mantle_tx, OpsProofs::empty());
+        let original_tx = MantleTransaction::new(mantle_tx, OpProofs::empty());
 
         // Encode
         let encoded = encode_signed_mantle_tx(&original_tx);
@@ -418,7 +418,7 @@ mod tests {
         let predicted_size = minimum_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
         // Create a signed tx and encode it to get actual size
-        let signed_tx = MantleTransaction::new(mantle_tx, OpsProofs::empty());
+        let signed_tx = MantleTransaction::new(mantle_tx, OpProofs::empty());
         let encoded = encode_signed_mantle_tx(&signed_tx);
         let actual_size = encoded.len();
 

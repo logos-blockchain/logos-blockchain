@@ -12,7 +12,7 @@ use lb_core::{
         },
         traits::Hashable as _,
         transactions::{
-            MantleTxBuilder, Ops, OpsProofs,
+            MantleTxBuilder, OpProofs, Ops,
             mantle_tx::{MantleTx, RawMantleTx},
             states::Unverified,
         },
@@ -64,9 +64,9 @@ where
 /// op).
 pub(super) fn attach_transfer_proof(
     tx: &impl MantleTx,
-    mut channel_proofs: OpsProofs,
+    mut channel_proofs: OpProofs,
     transfer_proof: Option<OpProof>,
-) -> Result<OpsProofs, Error> {
+) -> Result<OpProofs, Error> {
     let transfer_count = tx
         .ops()
         .iter()
@@ -103,11 +103,11 @@ pub(super) fn build_atomic_bundle_ops_proofs(
     own_key_index: ChannelKeyIndex,
     own_sig: Ed25519Signature,
     transfer_proof: Option<&OpProof>,
-) -> Result<OpsProofs, Error> {
+) -> Result<OpProofs, Error> {
     let channel_proof =
         ChannelMultiSigProof::try_new([IndexedSignature::new(own_key_index, own_sig)].into())
             .map_err(|e| Error::Network(format!("multi-sig proof assembly failed: {e:?}")))?;
-    let mut ops_proofs = OpsProofs::empty();
+    let mut ops_proofs = OpProofs::empty();
     for op in tx.ops() {
         match op {
             // Channel transfers (recipient/change or re-created deposit notes)

@@ -2,7 +2,7 @@
 
 use lb_core::mantle::{
     TxHash,
-    transactions::{MantleTxBuilder, MantleTxContext, OpsProofs},
+    transactions::{MantleTxBuilder, MantleTxContext, OpProofs},
 };
 
 use super::{
@@ -15,7 +15,7 @@ pub struct PreparedWalletTransaction {
     funded_builder: MantleTxBuilder,
     context: MantleTxContext,
     tx_hash: TxHash,
-    transfer_proofs: OpsProofs,
+    transfer_proofs: OpProofs,
     reserved_inputs: WalletReservedInputs,
 }
 
@@ -25,7 +25,7 @@ impl PreparedWalletTransaction {
         funded_builder: MantleTxBuilder,
         context: MantleTxContext,
         tx_hash: TxHash,
-        transfer_proofs: OpsProofs,
+        transfer_proofs: OpProofs,
         reserved_inputs: WalletReservedInputs,
     ) -> Self {
         Self {
@@ -44,7 +44,7 @@ impl PreparedWalletTransaction {
 
     pub fn sign_with_leading_proofs(
         self,
-        leading_op_proofs: OpsProofs,
+        leading_op_proofs: OpProofs,
     ) -> Result<SignedWalletTransaction, WalletTransactionError> {
         let Self {
             funded_builder,

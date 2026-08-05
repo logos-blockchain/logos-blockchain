@@ -13,7 +13,7 @@ use lb_core::{
             },
             transfer::TransferOp,
         },
-        transactions::{GenesisTx, Ops, OpsProofs},
+        transactions::{GenesisTx, OpProofs, Ops},
     },
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };
@@ -483,7 +483,7 @@ pub fn create_genesis_block_with_declarations(
     let mantle_tx = RawMantleTx(Ops::new_unchecked(ops));
 
     let mantle_tx_hash = mantle_tx.hash();
-    let mut ops_proofs = OpsProofs::from([
+    let mut ops_proofs = OpProofs::from([
         OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
             &EMPTY_GROTH16_PROOF_BYTES,
         ))),

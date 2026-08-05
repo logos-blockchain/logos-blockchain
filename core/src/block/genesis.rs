@@ -17,7 +17,7 @@ use crate::{
             transfer::TransferOp,
         },
         transactions::{
-            GenesisTx, MAX_OPS_PER_TX, Ops, OpsProofs, VerificationError, genesis_tx,
+            GenesisTx, MAX_OPS_PER_TX, OpProofs, Ops, VerificationError, genesis_tx,
             mantle_tx::RawMantleTx,
         },
     },
@@ -1254,7 +1254,7 @@ impl GenesisBlockBuilder<WithAll> {
                 count: n,
             }));
         };
-        let mut ops_proofs = OpsProofs::from([
+        let mut ops_proofs = OpProofs::from([
             OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
                 &[0u8; 128],
             ))),
@@ -1374,7 +1374,7 @@ mod tests {
         ];
         ops.extend(extra_ops);
 
-        let ops_proofs = OpsProofs::try_from_iter(ops.iter().map(|op| match op {
+        let ops_proofs = OpProofs::try_from_iter(ops.iter().map(|op| match op {
             Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
             Op::Transfer(_) => OpProof::ZkSig(ZkSignature::new(
                 CompressedGroth16Proof::from_bytes(&[0u8; 128]),

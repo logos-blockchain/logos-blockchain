@@ -8,7 +8,7 @@ use std::{collections::HashSet, time::Duration};
 use lb_core::mantle::{
     MantleTransaction, TxGasCalculator as _, TxHash, Utxo,
     gas::MainnetGasProfile,
-    transactions::{GasPrices, OpsProofs, states::Preverified},
+    transactions::{GasPrices, OpProofs, states::Preverified},
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -591,7 +591,7 @@ pub async fn submit_prepared_user_wallet_transaction(
     world: &mut CucumberWorld,
     step: &str,
     prepared: PreparedUserWalletSubmission,
-    extra_op_proofs: OpsProofs,
+    extra_op_proofs: OpProofs,
     best_node_info: Option<&BestNodeInfo>,
     in_memory_available_utxos: Option<&mut WalletUtxos>,
 ) -> Result<TxHash, StepError> {
@@ -626,7 +626,7 @@ pub async fn submit_prepared_user_wallet_transaction(
 pub(crate) fn sign_prepared_user_wallet_transaction(
     step: &str,
     prepared: PreparedUserWalletSubmission,
-    extra_op_proofs: OpsProofs,
+    extra_op_proofs: OpProofs,
 ) -> Result<SignedUserWalletSubmission, StepError> {
     let PreparedUserWalletSubmission { wallet, submission } = prepared;
     let signed_submission = submission
@@ -656,7 +656,7 @@ fn finalize_reserved_user_wallet_submission(
     sign_prepared_user_wallet_transaction(
         step,
         PreparedUserWalletSubmission { wallet, submission },
-        OpsProofs::empty(),
+        OpProofs::empty(),
     )
 }
 
@@ -844,7 +844,7 @@ async fn submit_user_wallet_transaction(
         world,
         step,
         prepared,
-        OpsProofs::empty(),
+        OpProofs::empty(),
         best_node_info,
         in_memory_available_utxos,
     )

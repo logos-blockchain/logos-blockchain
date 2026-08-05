@@ -10,7 +10,7 @@ use lb_core::mantle::{
     ledger::MAX_TRANSACTION_INPUTS,
     transactions::{
         GENESIS_EXECUTION_GAS_PRICE, GasPrices, MantleTxBuilder, MantleTxContext,
-        MantleTxGasContext, OpsProofs,
+        MantleTxGasContext, OpProofs,
     },
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -181,7 +181,7 @@ pub async fn drain_user_wallet(
                 world,
                 step,
                 prepared,
-                OpsProofs::empty(),
+                OpProofs::empty(),
                 None,
                 Some(&mut available),
             )

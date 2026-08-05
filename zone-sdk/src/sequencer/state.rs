@@ -1426,7 +1426,7 @@ impl TxState {
 mod tests {
     use lb_core::mantle::{
         Op::ChannelInscribe, RawMantleTx, ops::channel::inscribe::InscriptionOp,
-        transactions::OpsProofs,
+        transactions::OpProofs,
     };
 
     use super::*;
@@ -1442,7 +1442,7 @@ mod tests {
             })]
             .into(),
         );
-        MantleTransaction::new(mantle_tx, OpsProofs::empty())
+        MantleTransaction::new(mantle_tx, OpProofs::empty())
     }
 
     #[test]
@@ -1657,7 +1657,7 @@ mod tests {
         let config_msg = config.id();
         let tx = MantleTransaction::new(
             RawMantleTx([ChannelInscribe(inscribe), Op::ChannelConfig(config)].into()),
-            OpsProofs::empty(),
+            OpProofs::empty(),
         );
         (tx, inscribe_msg, config_msg)
     }
@@ -1830,7 +1830,7 @@ mod tests {
         };
         let config_tx = MantleTransaction::new(
             RawMantleTx([Op::ChannelConfig(config)].into()),
-            OpsProofs::empty(),
+            OpProofs::empty(),
         );
         state.submit_other(config_tx, channel_id);
 
@@ -1952,7 +1952,7 @@ mod tests {
         let config_msg = config.id();
         let tx = MantleTransaction::new(
             RawMantleTx([Op::ChannelConfig(config)].into()),
-            OpsProofs::empty(),
+            OpProofs::empty(),
         );
         (tx, config_msg)
     }

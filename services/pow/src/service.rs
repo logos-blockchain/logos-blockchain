@@ -34,7 +34,7 @@ use lb_core::{
         traits::Hashable as _,
         transactions::{
             GasPrices, MAX_OPS_PER_TX, MantleTxBuilder, MantleTxContext, MantleTxGasContext,
-            OpsProofs, TxBuilderError, hash::TxHash, states::Unverified,
+            OpProofs, TxBuilderError, hash::TxHash, states::Unverified,
         },
     },
 };
@@ -93,7 +93,7 @@ pub enum PoWError {
     #[error("invalid transfer inputs: {0}")]
     Inputs(#[from] InputsError),
     #[error("too many operation proofs: {0}")]
-    OpsProofs(#[from] BoundedError),
+    OpProofs(#[from] BoundedError),
     #[error("failed to sign transfer: {0}")]
     Sign(#[from] ZkSignError),
     #[error("signing task failed: {0}")]
@@ -1345,7 +1345,7 @@ async fn build_reward_claim_tx_inner(
 
     // Proofs follow the op order: a `None` per claim in the group, then that
     // group's transfer `ZkSig`.
-    let mut ops_proofs = OpsProofs::empty();
+    let mut ops_proofs = OpProofs::empty();
     for (group, zk_sig) in tickets.chunks(MAX_TRANSFER_INPUTS).zip(zk_sigs) {
         for _ in group {
             ops_proofs.try_push(OpProof::None(NoOpProof))?;
