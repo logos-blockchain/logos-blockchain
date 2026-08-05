@@ -84,7 +84,7 @@ impl From<PoQWalletInputsData> for PoQWalletInputs {
     ) -> Self {
         Self {
             pol_slot: Groth16Input::new(Fr::from(BigUint::from(slot))),
-            pol_secret_key: Groth16Input::new(Fr::from(BigUint::from(pol_secret_key))),
+            pol_secret_key: pol_secret_key.into(),
             pol_noteid_path_and_selectors: aged_path_and_selectors.map(|(hash, selector)| {
                 (
                     hash.into(),
