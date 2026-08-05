@@ -6,7 +6,7 @@ use std::{
 use lb_core::{
     header::HeaderId,
     mantle::{
-        GasConstants, NoteId, Value,
+        GasProfile, NoteId, Value,
         ops::leader_claim::{VoucherCm, VoucherNullifier},
         transactions::{MantleTxBuilder, MantleTxContext},
     },
@@ -360,7 +360,7 @@ impl<'u> ServiceState<'u> {
     /// Fund `tx_builder` from the wallet's UTXOs at `tip`, excluding notes
     /// already reserved for in-flight transactions. `priority_fee` is left
     /// as excess balance above the mandatory fee (the execution tip).
-    pub fn fund_tx<G: GasConstants>(
+    pub fn fund_tx<G: GasProfile>(
         &self,
         tip: HeaderId,
         tx_builder: &MantleTxBuilder,

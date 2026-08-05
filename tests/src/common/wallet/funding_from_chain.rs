@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use lb_common_http_client::Error as HttpClientError;
 use lb_core::mantle::{
     Op, OpProof, SignedMantleTx, TxHash, Utxo,
-    gas::MainnetGasConstants,
+    gas::MainnetGasProfile,
     ops::channel::{ChannelId, ChannelKeyIndex},
     traits::Hashable as _,
     transactions::{
@@ -74,7 +74,7 @@ pub async fn funded_signed_tx(
     let funded_builder = fund_builder_from_wallet_source(&funding_source, &tx_builder, &tx_context)
         .expect("funding transaction should succeed");
     let fee = funded_builder
-        .minimum_gas_cost::<MainnetGasConstants>(&tx_context)
+        .minimum_gas_cost::<MainnetGasProfile>(&tx_context)
         .expect("funded tx gas cost should calculate")
         .into_inner();
 

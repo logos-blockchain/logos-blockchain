@@ -111,14 +111,14 @@ pub trait GasCalculator {
     type Context;
 
     /// Returns the gas cost of this operation.
-    fn total_gas_cost<Constants: GasConstants>(
+    fn total_gas_cost<Profile: GasProfile>(
         &self,
         context: &Self::Context,
     ) -> Result<GasCost, GasOverflow>;
 
     fn storage_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow>;
 
-    fn execution_gas_consumption<Constants: GasConstants>(
+    fn execution_gas_consumption<Profile: GasProfile>(
         &self,
         context: &Self::Context,
     ) -> Result<Gas, GasOverflow>;
@@ -133,22 +133,22 @@ pub struct GasOverflow;
 impl<T: GasCalculator> GasCalculator for &T {
     type Context = T::Context;
 
-    fn total_gas_cost<Constants: GasConstants>(
+    fn total_gas_cost<Profile: GasProfile>(
         &self,
         context: &Self::Context,
     ) -> Result<GasCost, GasOverflow> {
-        T::total_gas_cost::<Constants>(self, context)
+        T::total_gas_cost::<Profile>(self, context)
     }
 
     fn storage_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow> {
         T::storage_gas_cost(self, context)
     }
 
-    fn execution_gas_consumption<Constants: GasConstants>(
+    fn execution_gas_consumption<Profile: GasProfile>(
         &self,
         context: &Self::Context,
     ) -> Result<Gas, GasOverflow> {
-        T::execution_gas_consumption::<Constants>(self, context)
+        T::execution_gas_consumption::<Profile>(self, context)
     }
 
     fn storage_gas_consumption(&self, context: &Self::Context) -> Result<Gas, GasOverflow> {
@@ -160,22 +160,22 @@ mod private {
     pub trait Sealed {}
 }
 
-pub trait GasConstants: private::Sealed {}
+pub trait GasProfile: private::Sealed {}
 
-pub struct MainnetGasConstants;
-impl private::Sealed for MainnetGasConstants {}
-impl GasConstants for MainnetGasConstants {}
+pub struct MainnetGasProfile;
+impl private::Sealed for MainnetGasProfile {}
+impl GasProfile for MainnetGasProfile {}
 
-pub trait OperationGas<Constants: GasConstants>: ProvableOperation {
+pub trait OperationGas<Profile: GasProfile>: ProvableOperation {
     const GAS_CONSTANT: Gas;
 }
 
 pub trait SignedOperationExecutionGas {
     fn gas_signature_count(&self) -> Value;
 
-    fn execution_gas<Constants: GasConstants>(&self) -> Result<Gas, GasOverflow>
+    fn execution_gas<Profile: GasProfile>(&self) -> Result<Gas, GasOverflow>
     where
-        Self: OperationGas<Constants>,
+        Self: OperationGas<Profile>,
     {
         let multiplier = self.gas_signature_count();
         Self::GAS_CONSTANT.checked_mul(multiplier)

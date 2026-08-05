@@ -22,7 +22,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub use signed_op::SignedOp;
 
 use super::{
-    gas::{Gas, GasConstants},
+    gas::{Gas, GasProfile},
     ops::{
         leader_claim::LeaderClaimOp,
         sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
@@ -206,10 +206,10 @@ impl BinaryDecode for Op {
     }
 }
 
-const fn gas_constant_of<Constants, Op>(_op: &Op) -> Gas
+const fn gas_constant_of<Profile, Op>(_op: &Op) -> Gas
 where
-    Constants: GasConstants,
-    Op: OperationGas<Constants>,
+    Profile: GasProfile,
+    Op: OperationGas<Profile>,
 {
     Op::GAS_CONSTANT
 }
@@ -237,7 +237,7 @@ impl Op {
     }
 
     #[must_use]
-    pub const fn execution_gas<Constants: GasConstants>(&self) -> Gas {
+    pub const fn execution_gas<Profile: GasProfile>(&self) -> Gas {
         match self {
             Self::ChannelInscribe(op) => gas_constant_of(op),
             Self::ChannelConfig(op) => gas_constant_of(op),

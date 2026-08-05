@@ -12,7 +12,7 @@ use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
         Note, TxHash, Utxo, Value,
-        gas::{Gas, MainnetGasConstants, OperationGas},
+        gas::{Gas, MainnetGasProfile, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
             VerifiableOperation, verification_mode,
@@ -267,7 +267,7 @@ impl ProvableOperation for ClaimPowRewardOp {
     type Proof = NoOpProof;
 }
 
-impl OperationGas<MainnetGasConstants> for ClaimPowRewardOp {
+impl OperationGas<MainnetGasProfile> for ClaimPowRewardOp {
     const GAS_CONSTANT: Gas = Gas::new(1);
 }
 

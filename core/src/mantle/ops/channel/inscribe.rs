@@ -13,7 +13,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         channel::{ChannelState, Channels, Error},
-        gas::{Gas, MainnetGasConstants, OperationGas},
+        gas::{Gas, MainnetGasProfile, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
             verification_mode,
@@ -89,7 +89,7 @@ impl ProvableOperation for InscriptionOp {
     type Proof = Ed25519Signature;
 }
 
-impl OperationGas<MainnetGasConstants> for InscriptionOp {
+impl OperationGas<MainnetGasProfile> for InscriptionOp {
     const GAS_CONSTANT: Gas = Gas::new(56);
 }
 

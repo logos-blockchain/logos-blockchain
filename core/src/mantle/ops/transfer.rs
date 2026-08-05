@@ -7,7 +7,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         channel::Channels,
-        gas::{Gas, MainnetGasConstants, OperationGas},
+        gas::{Gas, MainnetGasProfile, OperationGas},
         ledger::{
             self, ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation,
             Utxo, Utxos, VerifiableOperation, verification_mode,
@@ -89,7 +89,7 @@ impl ProvableOperation for TransferOp {
     type Proof = ZkSignature;
 }
 
-impl OperationGas<MainnetGasConstants> for TransferOp {
+impl OperationGas<MainnetGasProfile> for TransferOp {
     const GAS_CONSTANT: Gas = Gas::new(590);
 }
 

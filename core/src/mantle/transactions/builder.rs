@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::{
     mantle::{
-        GasConstants, Note, NoteId, Op, Utxo, Value,
+        GasProfile, Note, NoteId, Op, Utxo, Value,
         gas::{GasCost, GasOverflow},
         ledger::{BoundedUtxos, Inputs, Outputs},
         ops::{channel::ChannelId, transfer::TransferOp},
@@ -141,7 +141,7 @@ impl MantleTxBuilder {
 
     /// `priority_fee` is deliberately left unreturned: the resulting excess
     /// balance above the mandatory fee is the transaction's execution tip.
-    pub fn return_change<G: GasConstants>(
+    pub fn return_change<G: GasProfile>(
         self,
         context: &MantleTxContext,
         change_pk: ZkPublicKey,
@@ -222,7 +222,7 @@ impl MantleTxBuilder {
     /// Predicts the minimum gas cost of the transaction once signed.
     /// See [`RawMantleTx::minimum_total_gas_cost`] to understand why this is
     /// only a minimum, not an exact cost.
-    pub fn minimum_gas_cost<G: GasConstants>(
+    pub fn minimum_gas_cost<G: GasProfile>(
         &self,
         context: &MantleTxContext,
     ) -> Result<GasCost, TxBuilderError> {
@@ -246,7 +246,7 @@ impl MantleTxBuilder {
         Ok(build.minimum_total_gas_cost::<G>(&context.gas_context)?)
     }
 
-    pub fn funding_delta<G: GasConstants>(
+    pub fn funding_delta<G: GasProfile>(
         &self,
         context: &MantleTxContext,
     ) -> Result<i128, TxBuilderError> {
@@ -307,7 +307,7 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
-            gas::MainnetGasConstants,
+            gas::MainnetGasProfile,
             ops::{
                 channel::{
                     deposit::{DepositOp, Metadata},
@@ -376,7 +376,7 @@ mod tests {
         assert_eq!(builder.net_balance(), 0);
         assert_eq!(
             builder
-                .funding_delta::<MainnetGasConstants>(&context)
+                .funding_delta::<MainnetGasProfile>(&context)
                 .unwrap(),
             0
         );
@@ -408,7 +408,7 @@ mod tests {
         assert_eq!(builder.net_balance(), 0);
         assert_eq!(
             builder
-                .funding_delta::<MainnetGasConstants>(&context)
+                .funding_delta::<MainnetGasProfile>(&context)
                 .unwrap(),
             0
         );
@@ -439,7 +439,7 @@ mod tests {
         assert_eq!(builder.net_balance(), 0);
         assert_eq!(
             builder
-                .funding_delta::<MainnetGasConstants>(&context)
+                .funding_delta::<MainnetGasProfile>(&context)
                 .unwrap(),
             0
         );
@@ -467,7 +467,7 @@ mod tests {
             leader_reward_amount: 0,
         };
 
-        let result = builder.minimum_gas_cost::<MainnetGasConstants>(&context);
+        let result = builder.minimum_gas_cost::<MainnetGasProfile>(&context);
 
         assert!(matches!(
             result,
@@ -501,7 +501,7 @@ mod tests {
         assert_eq!(builder.net_balance(), 0);
         assert_eq!(
             builder
-                .funding_delta::<MainnetGasConstants>(&context)
+                .funding_delta::<MainnetGasProfile>(&context)
                 .unwrap(),
             0
         );
@@ -528,14 +528,14 @@ mod tests {
         assert_eq!(builder.net_balance(), 10);
         assert_eq!(
             builder
-                .funding_delta::<MainnetGasConstants>(&context)
+                .funding_delta::<MainnetGasProfile>(&context)
                 .unwrap(),
             10 // zero gas price for now
         );
 
         // Add change note
         let builder = builder
-            .return_change::<MainnetGasConstants>(&context, ZkPublicKey::zero(), 0)
+            .return_change::<MainnetGasProfile>(&context, ZkPublicKey::zero(), 0)
             .unwrap()
             .unwrap();
 
@@ -543,7 +543,7 @@ mod tests {
         assert_eq!(builder.net_balance(), 0);
         assert_eq!(
             builder
-                .funding_delta::<MainnetGasConstants>(&context)
+                .funding_delta::<MainnetGasProfile>(&context)
                 .unwrap(),
             0 // zero gas price for now
         );
@@ -593,7 +593,7 @@ mod tests {
         assert_eq!(builder.net_balance(), -40);
         assert_eq!(
             builder
-                .funding_delta::<MainnetGasConstants>(&context)
+                .funding_delta::<MainnetGasProfile>(&context)
                 .unwrap(),
             -40 // zero gas price for now
         );
@@ -607,7 +607,7 @@ mod tests {
         assert_eq!(builder.net_balance(), 0);
         assert_eq!(
             builder
-                .funding_delta::<MainnetGasConstants>(&context)
+                .funding_delta::<MainnetGasProfile>(&context)
                 .unwrap(),
             0 // zero gas price for now
         );

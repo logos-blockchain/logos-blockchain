@@ -15,7 +15,7 @@ use lb_core::{
     events::{Event, Events, HeaderEvent, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
-        GasConstants, NoteId, TxHash, Utxo, Value,
+        GasProfile, NoteId, TxHash, Utxo, Value,
         ops::{
             Op, OpId as _,
             channel::{
@@ -234,7 +234,7 @@ impl WalletState {
     /// Funds the transaction so its excess balance is exactly
     /// `priority_fee` above the mandatory fee — the excess is the
     /// transaction's execution tip. `0` funds to the exact minimum.
-    pub fn fund_tx<G: GasConstants>(
+    pub fn fund_tx<G: GasProfile>(
         &self,
         tx_builder: &MantleTxBuilder,
         change_pk: ZkPublicKey,
@@ -791,7 +791,7 @@ where
         clippy::too_many_arguments,
         reason = "thin passthrough to `WalletState::fund_tx` plus the tip"
     )]
-    pub fn fund_tx<G: GasConstants>(
+    pub fn fund_tx<G: GasProfile>(
         &self,
         tip: HeaderId,
         tx_builder: &MantleTxBuilder,
@@ -873,7 +873,7 @@ mod tests {
         mantle::{
             Note, OpProof, RawMantleTx, SignedMantleTx,
             channel::Channels,
-            gas::MainnetGasConstants as Gas,
+            gas::MainnetGasProfile as Gas,
             ledger::{Inputs, Outputs},
             ops::channel::{
                 ChannelId, MsgId,
