@@ -22,6 +22,7 @@ use crate::{
     },
 };
 
+pub const SLOT_WINDOW: u64 = 100;
 /// `d_reward`: the difficulty threshold a puzzle ticket must be strictly
 /// below to qualify for a `PoW` reward claim.
 pub type PowTarget = Fr;
@@ -272,7 +273,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for ClaimPowRewardOp {
     fn verify(&self, _proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
         context.are_pow_reward_enabled()?;
         // TODO Plug constant window
-        context.accept_claim::<100>(self.block_hash)?;
+        context.accept_claim::<{ SLOT_WINDOW }>(self.block_hash)?;
         context.validate_current_epoch_nonce(self.epoch_nonce)?;
         let puzzle_ticket = self.get_puzzle_ticket();
         context.validate_difficulty_reward(puzzle_ticket)?;

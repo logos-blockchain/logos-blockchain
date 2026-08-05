@@ -13,6 +13,7 @@ use cryptarchia::LedgerState as CryptarchiaLedger;
 pub use cryptarchia::{EpochState, UtxoTree};
 use lb_core::{
     block::BlockNumber,
+    crypto::Hash as BlockHash,
     events::{Events, HeaderEvent, TxEvent, TxEventPayload},
     mantle::{
         NoteId, Op, Utxo, Value, VerificationError,
@@ -132,7 +133,14 @@ impl<Id> Ledger<Id>
 where
     Id: Eq + Hash + Copy,
 {
-    pub fn new(id: Id, state: LedgerState, config: Config) -> Self {
+    pub fn new(id: Id, mut state: LedgerState, config: Config) -> Self
+    where
+        Id: Into<BlockHash>,
+    {
+        // Record the root block among the recently seen blocks, so early
+        // `PoW` reward claims can anchor to it. Later blocks are recorded
+        // as they are applied in `try_update`.
+        state.mantle_ledger.add_seen_block(id.into(), state.slot());
         Self {
             states: HashTrieMapSync::new_sync().insert(id, state),
             config,
@@ -156,6 +164,7 @@ where
         Tx: PreverifiedMantleTx<Context = GasPrices> + 'tx,
         LeaderProof: leader_proof::LeaderProof,
         Constants: GasConstants,
+        Id: Into<BlockHash>,
     {
         let parent_state = self
             .states
@@ -163,6 +172,7 @@ where
             .ok_or(LedgerError::ParentNotFound(parent_id))?;
 
         let (new_state, events) = parent_state.clone().try_update::<_, _, _, Constants>(
+            id,
             slot,
             proof,
             txs,
@@ -217,6 +227,7 @@ pub struct LedgerState {
 impl LedgerState {
     fn try_update<'tx, Tx, LeaderProof, Id, Constants>(
         self,
+        block_id: Id,
         slot: Slot,
         proof: &LeaderProof,
         txs: impl Iterator<Item = &'tx Tx>,
@@ -226,8 +237,14 @@ impl LedgerState {
         Tx: PreverifiedMantleTx<Context = GasPrices> + 'tx,
         LeaderProof: leader_proof::LeaderProof,
         Constants: GasConstants,
+        Id: Into<BlockHash>,
     {
-        let (state, header_events) = self.try_apply_header(slot, proof, config)?;
+        let (mut state, header_events) = self.try_apply_header(slot, proof, config)?;
+        // Record the applied block among the recently seen blocks `PoW`
+        // claims may anchor to. This is the canonical apply path, where the
+        // block's id is known — unlike a proposer's direct
+        // `try_apply_header` call for a block still being built.
+        state.mantle_ledger.add_seen_block(block_id.into(), slot);
         let (state, tx_events) = state.try_apply_contents::<_, _, Constants>(config, txs)?;
         let events = header_events
             .into_iter()
@@ -2003,8 +2020,11 @@ mod tests {
     }
 
     mod pow {
-        use lb_core::mantle::ops::pow::{ClaimPowRewardError, ClaimPowRewardOp, PowTarget};
-        use lb_groth16::AdditiveGroup as _;
+        use lb_core::{
+            crypto::{ZkDigest as _, ZkHasher},
+            mantle::ops::pow::{ClaimPowRewardError, ClaimPowRewardOp, PowTarget},
+        };
+        use lb_groth16::{AdditiveGroup as _, fr_from_mod_bytes};
 
         use super::*;
         use crate::mantle::pow::ClaimPoWConstants;
@@ -2038,7 +2058,9 @@ mod tests {
 
         fn claim_op() -> ClaimPowRewardOp {
             ClaimPowRewardOp {
-                epoch_nonce: Fr::ZERO,
+                // The nonce `validate_current_epoch_nonce` accepts for epoch
+                // 0, the current epoch of a fresh test ledger.
+                epoch_nonce: ZkHasher::digest(&[fr_from_mod_bytes(&0u32.to_le_bytes())]),
                 block_hash: [1u8; 32],
                 public_key: ZkPublicKey::new(Fr::from(42u64)),
             }
@@ -2136,11 +2158,8 @@ mod tests {
         #[test]
         fn claim_tx_validation_rejects_unknown_anchor_block() {
             // With a funded pool the claim advances to the window-of-
-            // acceptance check, which fails: `get_blocks_height` returns an
-            // empty map until the ledger tracks block heights by hash
-            // (see the TODO in `MantleOperationVerificationHelper`). This
-            // pins that claims cannot yet complete end to end — when height
-            // tracking lands, extend this into a full success-path test.
+            // acceptance check, which fails because the anchor block is not
+            // among the ledger's recently seen blocks.
             let (state, config) = pow_ledger_state(1_000);
 
             let err = state
@@ -2152,6 +2171,78 @@ mod tests {
                 LedgerError::VerificationError(VerificationError::ClaimPowRewardError(
                     ClaimPowRewardError::MissingBlock { block_id }
                 )) if block_id == claim_op().block_hash
+            ));
+        }
+
+        /// A funded state where `claim_tx()` passes full validation: max
+        /// difficulty (every ticket wins) and the anchor block recorded as
+        /// seen at the current slot.
+        fn claim_accepting_state() -> (LedgerState, Config) {
+            let (mut state, config) = pow_ledger_state(1_000);
+            state.mantle_ledger.pow.set_reward_difficulty(-PowTarget::ONE);
+            state
+                .mantle_ledger
+                .pow
+                .add_seen_block_slots(claim_op().block_hash, Slot::from(0u64));
+            (state, config)
+        }
+
+        #[test]
+        fn claim_tx_end_to_end_pays_the_reward() {
+            // The full §5.3 pipeline through `try_apply_tx`: preverification,
+            // helper-built validation context (pool, window, epoch nonce,
+            // difficulty, double-claim) and execution.
+            let (state, config) = claim_accepting_state();
+
+            let (state, _balance, events) = state
+                .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&config, &claim_tx())
+                .expect("claim should validate and execute");
+
+            assert_eq!(state.mantle_ledger.pow.reward_pool(), 990);
+            assert!(
+                state
+                    .mantle_ledger
+                    .pow
+                    .nullifiers()
+                    .contains(&claim_op().get_puzzle_ticket())
+            );
+            let expected_utxo = Utxo {
+                op_id: claim_op().op_id(),
+                output_index: 0,
+                note: Note::new(10, claim_op().public_key),
+            };
+            assert_eq!(
+                state
+                    .cryptarchia_ledger
+                    .latest_utxos()
+                    .get(&expected_utxo.id()),
+                Some(expected_utxo)
+            );
+            assert_eq!(events.len(), 1);
+            assert!(matches!(
+                &events[0].payload,
+                TxEventPayload::PoWRewardClaimed { .. }
+            ));
+        }
+
+        #[test]
+        fn claim_tx_double_claim_is_rejected() {
+            // Replaying the same solution is caught by the nullifier check
+            // during tx-level validation.
+            let (state, config) = claim_accepting_state();
+            let (state, _, _) = state
+                .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&config, &claim_tx())
+                .expect("first claim should succeed");
+
+            let err = state
+                .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&config, &claim_tx())
+                .expect_err("second claim should be rejected");
+
+            assert!(matches!(
+                err,
+                LedgerError::VerificationError(VerificationError::ClaimPowRewardError(
+                    ClaimPowRewardError::DoubleClaimed
+                ))
             ));
         }
 
@@ -2212,12 +2303,11 @@ mod tests {
             // `try_apply_op` is execute-only by design (like the other op
             // arms): the double-claim check lives in
             // `ClaimPowRewardOp::validate`, which `try_apply_tx` runs via
-            // `verify_stateful_op` before execution. Calling the execution
+            // `verify_stateful_op` before execution (see
+            // `claim_tx_double_claim_is_rejected`). Calling the execution
             // path directly therefore pays the same solution twice — pinned
             // here to document that the guard lives in validation, not
-            // execution. The tx-level double-claim rejection can be tested
-            // end to end once block-height tracking lets a first claim
-            // through the window check.
+            // execution.
             let (state, config) = pow_ledger_state(1_000);
             let op = Op::ClaimPowReward(claim_op());
             let tx_hash = TxHash::from([9u8; 32]);

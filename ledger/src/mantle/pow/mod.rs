@@ -1,11 +1,17 @@
 mod difficulty;
 
-use lb_core::mantle::{
-    Value,
-    ops::pow::{ClaimPoWRewardExecutionContext, PowNullifier, PowReward, PowTarget},
+use lb_core::{
+    crypto::Hash,
+    mantle::{
+        Value,
+        ops::pow::{
+            ClaimPoWRewardExecutionContext, PowNullifier, PowReward, PowTarget, SLOT_WINDOW,
+        },
+    },
 };
+use lb_cryptarchia_engine::Slot;
 use lb_groth16::serde::serde_fr;
-use rpds::HashTrieSetSync;
+use rpds::{HashTrieMapSync, HashTrieSetSync};
 
 use crate::{
     EpochState,
@@ -30,6 +36,12 @@ pub struct PowState {
     refill_rewards: PowReward,
     /// Spent `PoW` solutions, retained only for the acceptance
     nullifiers: HashTrieSetSync<PowNullifier>,
+    /// Slots of recently seen blocks by hash, retained for the
+    /// window-of-acceptance check and pruned as they age out of
+    /// [`SLOT_WINDOW`]. Keyed by the wire-format block hash — the same
+    /// value a `ClaimPowRewardOp` anchors to — so consensus state stays
+    /// independent of the node's header-id type.
+    block_slots: HashTrieMapSync<Hash, Slot>,
 }
 
 /// Errors that can occur while applying `PoW` state transitions.
@@ -55,6 +67,7 @@ impl PowState {
             reward_difficulty: PowTarget::default(),
             refill_rewards: 0,
             nullifiers: HashTrieSetSync::new_sync(),
+            block_slots: HashTrieMapSync::new_sync(),
         }
     }
 
@@ -109,6 +122,32 @@ impl PowState {
             claims_in_block,
             self.reward_difficulty,
         );
+    }
+
+    /// Slots of the recently seen blocks a claim may anchor to, by hash.
+    #[must_use]
+    pub const fn block_slots(&self) -> &HashTrieMapSync<Hash, Slot> {
+        &self.block_slots
+    }
+
+    /// Record the slot of a newly applied block.
+    pub(crate) fn add_seen_block_slots(&mut self, block_hash: Hash, slot: Slot) {
+        self.block_slots.insert_mut(block_hash, slot);
+    }
+
+    /// Drop seen blocks that have aged out of the acceptance window: the
+    /// window check rejects them regardless, so they no longer need to be
+    /// retained (§5.1.1).
+    pub(crate) fn prune_seen_block_slots(&mut self, current: Slot) {
+        let cutoff = current.saturating_sub(Slot::from(SLOT_WINDOW));
+        let prunable: Vec<Hash> = self
+            .block_slots
+            .iter()
+            .filter_map(|(id, slot)| (*slot < cutoff).then_some(*id))
+            .collect();
+        for id in prunable {
+            self.block_slots.remove_mut(&id);
+        }
     }
 
     /// Apply an epoch transition: on epoch change, refill the reward pool
@@ -220,12 +259,16 @@ mod tests {
     struct DefaultTraitConstants;
     impl ClaimPoWConstants for DefaultTraitConstants {}
 
+    const BLOCK_A: Hash = [1u8; 32];
+    const BLOCK_B: Hash = [2u8; 32];
+
     #[test]
     fn new_state_starts_empty() {
         let state = PowState::new();
         assert_eq!(state.reward_pool(), 0);
         assert_eq!(state.epoch_reward(), 0);
         assert!(state.nullifiers().is_empty());
+        assert!(state.block_slots().is_empty());
     }
 
     #[test]
@@ -450,6 +493,26 @@ mod tests {
     }
 
     #[test]
+    fn seen_block_slots_are_pruned_once_they_age_out_of_the_window() {
+        let mut state = PowState::new();
+
+        // Block A at slot 5, then block B exactly SLOT_WINDOW later: A sits
+        // right on the cutoff (`current - WINDOW`) and must survive, since
+        // the window check still accepts a gap equal to the window.
+        state.add_seen_block_slots(BLOCK_A, Slot::from(5u64));
+        state.add_seen_block_slots(BLOCK_B, Slot::from(5 + SLOT_WINDOW));
+        state.prune_seen_block_slots(Slot::from(5 + SLOT_WINDOW));
+        assert!(state.block_slots().contains_key(&BLOCK_A));
+        assert!(state.block_slots().contains_key(&BLOCK_B));
+
+        // One slot further, A is strictly older than the window and is
+        // pruned; B remains.
+        state.prune_seen_block_slots(Slot::from(5 + SLOT_WINDOW + 1));
+        assert!(!state.block_slots().contains_key(&BLOCK_A));
+        assert!(state.block_slots().contains_key(&BLOCK_B));
+    }
+
+    #[test]
     fn update_from_claim_execution_result_replaces_pool_and_nullifiers() {
         let mut state = PowState::new();
         state.add_reward_refill_rewards(1_000);
@@ -538,8 +601,8 @@ mod tests {
     fn try_apply_header_carries_nullifiers_forward() {
         // Spec §5.5/§5.1.1: spent solutions must stay rejected while their
         // block_hash is inside the acceptance window, which spans epoch
-        // boundaries. Pruning by window age is not implemented yet, so today
-        // the whole set must survive a transition untouched.
+        // boundaries. Nullifier pruning by window age is not implemented
+        // yet, so today the whole set must survive a transition untouched.
         let nullifier = PowNullifier::from(Fr::ONE);
         let mut state = PowState::new();
         state.update_from_claim_execution_result(&claim_result(0, nullifier));

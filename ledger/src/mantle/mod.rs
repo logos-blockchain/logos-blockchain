@@ -5,7 +5,7 @@ pub mod pow;
 pub mod sdp;
 
 use lb_core::{
-    crypto::ZkHasher,
+    crypto::{Hash, ZkHasher},
     events::TxEvent,
     mantle::{
         NoteId, Value,
@@ -159,6 +159,19 @@ impl LedgerState {
         self.sdp = new_sdp;
         self.pow = self.pow.try_apply_header((), last_epoch_state, epoch_state);
         Ok((self, effect))
+    }
+
+    /// Record a newly applied block among the recently seen blocks that
+    /// `PoW` reward claims may anchor to, pruning entries that aged out of
+    /// the acceptance window.
+    ///
+    /// This runs only on the canonical apply path, where the block's id is
+    /// known — a proposer applying the header of a block it is still
+    /// building has no id to record (and that block's transactions cannot
+    /// anchor to it anyway).
+    pub fn add_seen_block(&mut self, block_hash: Hash, slot: Slot) {
+        self.pow.add_seen_block_slots(block_hash, slot);
+        self.pow.prune_seen_block_slots(slot);
     }
 
     pub fn try_apply_channel_inscription(

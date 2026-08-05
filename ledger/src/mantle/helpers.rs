@@ -153,9 +153,11 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
     }
 
     fn get_blocks_slot(&self) -> HashMap<Hash, Slot> {
-        // TODO: the ledger does not track block slots by hash yet. Until it
-        // does, every claim fails the window-of-acceptance check with
-        // `MissingBlock` — a safe (conservative) default.
-        HashMap::new()
+        self.ledger_state
+            .pow
+            .block_slots()
+            .iter()
+            .map(|(block_hash, slot)| (*block_hash, *slot))
+            .collect()
     }
 }
