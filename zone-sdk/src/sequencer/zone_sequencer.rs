@@ -795,18 +795,34 @@ where
         // prediction exact: it predicts a threshold-0 multi-sig proof for a
         // channel it cannot see yet, and a superfluous signature would make
         // the funded fee undershoot the actual storage cost.
-        let own_key = [&self.signing_key];
-        let signing_keys: &[&Ed25519Key] = if self.channel_state.is_some() {
-            &own_key
-        } else {
-            &[]
+        //
+        // For an existing channel the signature must claim our key's index in
+        // the *current* accredited list — that is what the ledger verifies
+        // against. Signature collection for `configuration_threshold > 1` is
+        // out of scope, so reject it early instead of submitting a
+        // transaction that can only die at block assembly.
+        let signer = match &self.channel_state {
+            None => None,
+            Some(channel) => {
+                if channel.configuration_threshold != 1 {
+                    return Err(Error::Network(format!(
+                        "channel config update needs {} signatures; only single-signer \
+                         (configuration_threshold 1) updates are supported",
+                        channel.configuration_threshold
+                    )));
+                }
+                let index = self.own_key_index.ok_or_else(|| {
+                    Error::Network("sequencer key not in channel accredited_keys".into())
+                })?;
+                Some((index, &self.signing_key))
+            }
         };
 
         let signed_tx = create_channel_config_tx(
             &self.node,
             &self.config.funding,
             self.channel_id,
-            signing_keys,
+            signer,
             keys,
             posting_timeframe,
             posting_timeout,

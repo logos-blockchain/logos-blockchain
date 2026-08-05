@@ -629,7 +629,7 @@ mod tests {
     };
     use crate::test_support::{
         MockNode, StreamEnd, StreamScript, api_block, funding_config, live_event, scripts,
-        unverified_tx_with_ops,
+        single_key_channel_state, unverified_tx_with_ops,
     };
 
     #[must_use]
@@ -1219,6 +1219,169 @@ mod tests {
              BlocksProcessed after reconnect; got adopted={:?}, orphaned={:?}",
             update.adopted,
             update.orphaned,
+        );
+    }
+
+    async fn ready_sequencer_with_channel(
+        channel: Option<ChannelState>,
+        sequencer_key: Ed25519Key,
+    ) -> ZoneSequencer<MockNode> {
+        let (mut node, _posted_txs) = MockNode::with_posted_channel();
+        node.channel_state = channel;
+        let mut sequencer = ZoneSequencer::init(
+            ChannelId::from([0; 32]),
+            sequencer_key,
+            node,
+            funding_config(),
+            None,
+        );
+        loop {
+            if matches!(sequencer.next_event().await, Event::Ready) {
+                break;
+            }
+        }
+        sequencer
+    }
+
+    /// The config op's signature must claim our key's index in the *current*
+    /// accredited list — not index 0 — or the ledger rejects the update as
+    /// `InvalidSignature` whenever the sequencer is not the leading key.
+    #[tokio::test]
+    async fn channel_config_signs_with_own_current_accredited_index() {
+        let own_key = Ed25519Key::from_bytes(&[7; 32]);
+        let leading_key = Ed25519Key::from_bytes(&[0; 32]);
+        let channel = ChannelState {
+            accredited_keys: Keys::new_unchecked(vec![
+                leading_key.public_key(),
+                own_key.public_key(),
+            ])
+            .into(),
+            ..single_key_channel_state()
+        };
+        let mut sequencer = ready_sequencer_with_channel(Some(channel), own_key.clone()).await;
+
+        let (_receipt, signed_tx) = sequencer
+            .handle()
+            .channel_config(
+                Keys::new_unchecked(vec![own_key.public_key()]),
+                SlotTimeframe::from(0u32),
+                SlotTimeout::from(0u32),
+                1,
+                1,
+            )
+            .await
+            .expect("config update from an accredited non-leading key must build");
+
+        let OpProof::ChannelMultiSigProof(proof) = signed_tx
+            .ops_proofs()
+            .iter()
+            .next()
+            .expect("config op proof present")
+        else {
+            panic!("config op must carry a multi-sig proof");
+        };
+        let signatures = proof.signatures();
+        assert_eq!(signatures.len(), 1);
+        assert_eq!(
+            signatures[0].channel_key_index, 1,
+            "signature must claim the signer's position in the current accredited list"
+        );
+        own_key
+            .public_key()
+            .verify(
+                signed_tx.mantle_tx().hash().as_signing_bytes().as_ref(),
+                &signatures[0].signature,
+            )
+            .expect("signature must verify against the claimed key over the funded tx hash");
+    }
+
+    /// Configuring an unclaimed channel requires no signatures (the ledger
+    /// skips the check), so the proof must stay empty — a superfluous
+    /// signature would also break the node wallet's fee prediction.
+    #[tokio::test]
+    async fn channel_config_on_unclaimed_channel_carries_empty_proof() {
+        let own_key = Ed25519Key::from_bytes(&[7; 32]);
+        let mut sequencer = ready_sequencer_with_channel(None, own_key.clone()).await;
+
+        let (_receipt, signed_tx) = sequencer
+            .handle()
+            .channel_config(
+                Keys::new_unchecked(vec![own_key.public_key()]),
+                SlotTimeframe::from(0u32),
+                SlotTimeout::from(0u32),
+                1,
+                1,
+            )
+            .await
+            .expect("claiming an unclaimed channel must build");
+
+        let OpProof::ChannelMultiSigProof(proof) = signed_tx
+            .ops_proofs()
+            .iter()
+            .next()
+            .expect("config op proof present")
+        else {
+            panic!("config op must carry a multi-sig proof");
+        };
+        assert!(proof.signatures().is_empty());
+    }
+
+    /// A sequencer whose key is not on the current accredited list cannot
+    /// produce a verifiable config signature; fail locally instead of
+    /// submitting a transaction that silently dies at block assembly.
+    #[tokio::test]
+    async fn channel_config_fails_when_not_accredited() {
+        let own_key = Ed25519Key::from_bytes(&[7; 32]);
+        let mut sequencer =
+            ready_sequencer_with_channel(Some(single_key_channel_state()), own_key.clone()).await;
+
+        let error = sequencer
+            .handle()
+            .channel_config(
+                Keys::new_unchecked(vec![own_key.public_key()]),
+                SlotTimeframe::from(0u32),
+                SlotTimeout::from(0u32),
+                1,
+                1,
+            )
+            .await
+            .expect_err("config update from a non-accredited key must fail locally");
+        assert!(
+            error.to_string().contains("accredited"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// `configuration_threshold > 1` needs signatures the sequencer cannot
+    /// collect; reject early with a clear error.
+    #[tokio::test]
+    async fn channel_config_rejects_multi_sig_threshold() {
+        let own_key = Ed25519Key::from_bytes(&[7; 32]);
+        let channel = ChannelState {
+            accredited_keys: Keys::new_unchecked(vec![
+                own_key.public_key(),
+                Ed25519Key::from_bytes(&[0; 32]).public_key(),
+            ])
+            .into(),
+            configuration_threshold: 2,
+            ..single_key_channel_state()
+        };
+        let mut sequencer = ready_sequencer_with_channel(Some(channel), own_key.clone()).await;
+
+        let error = sequencer
+            .handle()
+            .channel_config(
+                Keys::new_unchecked(vec![own_key.public_key()]),
+                SlotTimeframe::from(0u32),
+                SlotTimeout::from(0u32),
+                1,
+                1,
+            )
+            .await
+            .expect_err("multi-sig threshold config update must fail locally");
+        assert!(
+            error.to_string().contains("single-signer"),
+            "unexpected error: {error}"
         );
     }
 }
