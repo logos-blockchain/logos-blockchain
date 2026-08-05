@@ -1,5 +1,5 @@
 use crate::mantle::{
-    GasCalculator, Op, OpProof,
+    Op, OpProof, TxGasCalculator,
     traits::{Hashable, StorageSize},
     transactions::{hash::TxHash, mantle_tx::RawMantleTx},
 };
@@ -7,7 +7,7 @@ use crate::mantle::{
 pub type OpWithProof<'a> = (&'a Op, &'a OpProof);
 
 // TODO: Supertrait to MantleTx and propagate
-pub trait MantleTxWithProofs: Hashable<Hash = TxHash> + GasCalculator + StorageSize {
+pub trait MantleTxWithProofs: Hashable<Hash = TxHash> + TxGasCalculator + StorageSize {
     /// Returns the underlying `MantleTx` that this transaction represents.
     fn mantle_tx(&self) -> &RawMantleTx;
 

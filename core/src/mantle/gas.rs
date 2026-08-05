@@ -107,7 +107,7 @@ impl Display for GasCost {
     }
 }
 
-pub trait GasCalculator {
+pub trait TxGasCalculator {
     type Context;
 
     /// Returns the gas cost of this operation.
@@ -130,7 +130,7 @@ pub trait GasCalculator {
 #[error("Gas overflow")]
 pub struct GasOverflow;
 
-impl<T: GasCalculator> GasCalculator for &T {
+impl<T: TxGasCalculator> TxGasCalculator for &T {
     type Context = T::Context;
 
     fn total_gas_cost<Profile: GasProfile>(

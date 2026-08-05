@@ -6,7 +6,7 @@ use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
         RawMantleTx, Value, VerificationError,
-        gas::{Gas, GasCalculator, GasCost, GasOverflow, GasProfile},
+        gas::{Gas, GasCost, GasOverflow, GasProfile, TxGasCalculator},
         ledger::{PreverifiableOperation, VerifiableOperation, verification_mode::StandardMode},
         ops::{
             Op, OpProof,
@@ -391,23 +391,23 @@ impl<State: VerificationState> MantleTxWithProofs for SignedMantleTx<State> {
     }
 }
 
-impl<State: VerificationState> GasCalculator for SignedMantleTx<State> {
+impl<State: VerificationState> TxGasCalculator for SignedMantleTx<State> {
     type Context = GasPrices;
 
     fn total_gas_cost<Profile: GasProfile>(
         &self,
         context: &Self::Context,
     ) -> Result<GasCost, GasOverflow> {
-        let execution_gas = GasCalculator::execution_gas_consumption::<Profile>(&self, context)?;
+        let execution_gas = TxGasCalculator::execution_gas_consumption::<Profile>(&self, context)?;
         let execution_gas_cost =
             GasCost::calculate(execution_gas, context.execution_base_gas_price)?;
-        let storage_gas_cost = GasCalculator::storage_gas_cost(self, context)?;
+        let storage_gas_cost = TxGasCalculator::storage_gas_cost(self, context)?;
 
         execution_gas_cost.checked_add(storage_gas_cost)
     }
 
     fn storage_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow> {
-        let storage_gas = GasCalculator::storage_gas_consumption(&self, context)?;
+        let storage_gas = TxGasCalculator::storage_gas_consumption(&self, context)?;
         GasCost::calculate(storage_gas, context.storage_gas_price)
     }
 
@@ -751,9 +751,11 @@ mod tests {
         );
 
         let gas_prices = GasPrices::new(1, 0);
-        let gas =
-            GasCalculator::execution_gas_consumption::<MainnetGasProfile>(&signed_tx, &gas_prices)
-                .unwrap();
+        let gas = TxGasCalculator::execution_gas_consumption::<MainnetGasProfile>(
+            &signed_tx,
+            &gas_prices,
+        )
+        .unwrap();
 
         let expected_config_gas = config_keys.len() as u64 * 56;
         let expected_deposit_gas = 590;

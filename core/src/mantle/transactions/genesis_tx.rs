@@ -10,7 +10,7 @@ use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
         OpProof, SignedMantleTx,
-        gas::{Gas, GasCalculator, GasCost, GasOverflow, GasProfile},
+        gas::{Gas, GasCost, GasOverflow, GasProfile, TxGasCalculator},
         ops::{
             Op,
             channel::{ChannelId, MsgId, inscribe::InscriptionOp},
@@ -160,7 +160,7 @@ impl Hashable for GenesisTx {
     }
 }
 
-impl GasCalculator for GenesisTx {
+impl TxGasCalculator for GenesisTx {
     type Context = ();
 
     fn total_gas_cost<Profile: GasProfile>(

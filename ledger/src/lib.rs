@@ -784,7 +784,7 @@ mod tests {
     use cryptarchia::tests::{config, generate_proof, utxo};
     use lb_core::{
         mantle::{
-            GasCalculator as _, Note, OpProof, RawMantleTx, SignedMantleTx,
+            Note, OpProof, RawMantleTx, SignedMantleTx, TxGasCalculator as _,
             gas::MainnetGasProfile,
             ledger::{Inputs, Outputs, Utxos, VerifiableOperation as _},
             ops::{

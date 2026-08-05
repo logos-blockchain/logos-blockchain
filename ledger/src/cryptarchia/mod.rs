@@ -740,9 +740,9 @@ pub mod tests {
     use lb_core::{
         crypto::{Digest as _, Hasher},
         mantle::{
-            GasCalculator as _, Note, Op,
+            Note, Op,
             OpProof::ZkSig,
-            RawMantleTx, SignedMantleTx,
+            RawMantleTx, SignedMantleTx, TxGasCalculator as _,
             gas::MainnetGasProfile,
             ledger::{Inputs, Outputs},
             ops::{leader_claim::VoucherCm, sdp::SDPDeclareOp},

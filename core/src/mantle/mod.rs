@@ -9,7 +9,7 @@ pub mod transactions;
 mod channel_notes;
 mod fixtures;
 
-pub use gas::{GasCalculator, GasProfile};
+pub use gas::{GasProfile, TxGasCalculator};
 pub use ledger::{Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof};
 pub use transactions::{

@@ -31,7 +31,7 @@ impl RawMantleTx {
     /// Predicts the minimum total gas cost of the transaction once signed.
     ///
     /// See [`minimum_signed_mantle_tx_size`] for why this doesn't implement
-    /// [`crate::mantle::GasCalculator`] which calculates an exact gas cost.
+    /// [`crate::mantle::TxGasCalculator`] which calculates an exact gas cost.
     pub fn minimum_total_gas_cost<Profile: GasProfile>(
         &self,
         context: &MantleTxGasContext,

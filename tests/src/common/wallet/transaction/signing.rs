@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use lb_core::mantle::{
-    GasCalculator as _, NoteId, Op, OpProof, RawMantleTx, SignedMantleTx, TxHash,
+    NoteId, Op, OpProof, RawMantleTx, SignedMantleTx, TxGasCalculator as _, TxHash,
     gas::MainnetGasProfile,
     traits::Hashable as _,
     transactions::{MantleTxBuilder, MantleTxContext, OpsProofs, mantle_tx::MantleTx as _},

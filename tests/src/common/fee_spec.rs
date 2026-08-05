@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
     Note, Op, SignedMantleTx, Utxo,
-    gas::{GasCalculator as _, MainnetGasProfile},
+    gas::{MainnetGasProfile, TxGasCalculator as _},
     traits::Hashable as _,
     transactions::{
         GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext,
