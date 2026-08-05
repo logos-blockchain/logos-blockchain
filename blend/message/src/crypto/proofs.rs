@@ -5,7 +5,7 @@ use lb_blend_proofs::{
         self, ProofOfQuota, VerifiedProofOfQuota,
         inputs::prove::{
             PublicInputs,
-            public::{CoreInputs, LeaderInputs},
+            public::{CoreInputs, LeaderInputs, PowInputs},
         },
     },
     selection::{self, ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
@@ -24,6 +24,7 @@ use crate::encap::ProofsVerifier;
 pub struct PoQVerificationInputsMinusSigningKey {
     pub core: CoreInputs,
     pub leader: LeaderInputs,
+    pub pow: PowInputs,
 }
 
 #[cfg(test)]
@@ -43,6 +44,11 @@ impl Default for PoQVerificationInputsMinusSigningKey {
                 message_quota: 1,
                 lottery_0: Fr::ZERO,
                 lottery_1: Fr::ZERO,
+            },
+            pow: PowInputs {
+                pow_blend_difficulty: ZkHash::default(),
+                pow_block_hash: ZkHash::default(),
+                pow_quota: 1,
             },
         }
     }
@@ -77,7 +83,7 @@ impl ProofsVerifier for RealProofsVerifier {
         proof: ProofOfQuota,
         signing_key: &Ed25519PublicKey,
     ) -> Result<VerifiedProofOfQuota, Self::Error> {
-        let PoQVerificationInputsMinusSigningKey { core, leader } = self.current_inputs;
+        let PoQVerificationInputsMinusSigningKey { core, leader, pow } = self.current_inputs;
 
         // Try with current input, and if it fails, try with the previous one, if any
         // (i.e., within the epoch transition period).
@@ -90,6 +96,7 @@ impl ProofsVerifier for RealProofsVerifier {
             .verify(&PublicInputs {
                 core,
                 leader,
+                pow,
                 signing_key: *signing_key.as_inner(),
             })
             .map_err(Error::ProofOfQuota);

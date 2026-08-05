@@ -11,6 +11,7 @@ pub struct Inputs {
     pub signing_key: Ed25519PublicKey,
     pub core: CoreInputs,
     pub leader: LeaderInputs,
+    pub pow: PowInputs,
 }
 
 impl Debug for Inputs {
@@ -19,6 +20,7 @@ impl Debug for Inputs {
             .field("signing_key", &hex::encode(self.signing_key.as_bytes()))
             .field("core", &self.core)
             .field("leader", &self.leader)
+            .field("pow", &self.pow)
             .finish()
     }
 }
@@ -32,6 +34,7 @@ impl Default for Inputs {
             signing_key: Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
             core: CoreInputs::default(),
             leader: LeaderInputs::default(),
+            pow: PowInputs::default(),
         }
     }
 }
@@ -81,6 +84,32 @@ impl Debug for LeaderInputs {
             .field("message_quota", &self.message_quota)
             .field("lottery_0", &hex::encode(fr_to_bytes(&self.lottery_0)))
             .field("lottery_1", &hex::encode(fr_to_bytes(&self.lottery_1)))
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Default))]
+pub struct PowInputs {
+    #[serde(with = "lb_groth16::serde::serde_fr")]
+    pub pow_blend_difficulty: ZkHash,
+    #[serde(with = "lb_groth16::serde::serde_fr")]
+    pub pow_block_hash: ZkHash,
+    pub pow_quota: u64,
+}
+
+impl Debug for PowInputs {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PowInputs")
+            .field(
+                "pow_blend_difficulty",
+                &hex::encode(fr_to_bytes(&self.pow_blend_difficulty)),
+            )
+            .field(
+                "pow_block_hash",
+                &hex::encode(fr_to_bytes(&self.pow_block_hash)),
+            )
+            .field("pow_quota", &self.pow_quota)
             .finish()
     }
 }

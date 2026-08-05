@@ -21,7 +21,7 @@ pub struct PoQWalletInputsData {
     pub transaction_hash: Fr,
     pub output_number: u64,
     pub aged_path_and_selectors: AgedNotePathAndSelectors,
-    pub secret_key: Fr,
+    pub pol_secret_key: Fr,
 }
 
 #[derive(Serialize)]
@@ -39,7 +39,7 @@ pub struct PoQWalletInputsJson {
     #[serde(rename = "pol_noteid_path_selectors")]
     aged_selector: [Groth16InputDeser; AGED_NOTE_MERKLE_TREE_HEIGHT],
     #[serde(rename = "pol_secret_key")]
-    secret_key: Groth16InputDeser,
+    pol_secret_key: Groth16InputDeser,
 }
 impl From<PoQWalletInputs> for PoQWalletInputsJson {
     fn from(
@@ -66,7 +66,7 @@ impl From<PoQWalletInputs> for PoQWalletInputsJson {
             output_number: (&pol_note_output_number).into(),
             aged_path,
             aged_selector,
-            secret_key: (&pol_secret_key).into(),
+            pol_secret_key: (&pol_secret_key).into(),
         }
     }
 }
@@ -79,12 +79,12 @@ impl From<PoQWalletInputsData> for PoQWalletInputs {
             transaction_hash,
             output_number,
             aged_path_and_selectors,
-            secret_key,
+            pol_secret_key,
         }: PoQWalletInputsData,
     ) -> Self {
         Self {
             pol_slot: Groth16Input::new(Fr::from(BigUint::from(slot))),
-            pol_secret_key: Groth16Input::new(Fr::from(BigUint::from(secret_key))),
+            pol_secret_key: Groth16Input::new(Fr::from(BigUint::from(pol_secret_key))),
             pol_noteid_path_and_selectors: aged_path_and_selectors.map(|(hash, selector)| {
                 (
                     hash.into(),

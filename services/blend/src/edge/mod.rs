@@ -16,14 +16,14 @@ use backends::BlendBackend;
 use futures::{Stream, StreamExt as _};
 use lb_blend::{
     message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
-    proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs},
+    proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs, PowInputs},
     scheduling::{
         epoch::{EpochEvent, UninitializedEpochEventStream},
         message_blend::provers::leader::LeaderProofsGenerator,
     },
 };
 use lb_chain_service::api::CryptarchiaServiceData;
-use lb_core::codec::SerializeOp as _;
+use lb_core::{codec::SerializeOp as _, crypto::ZkHash};
 use lb_key_management_system_service::{
     api::KmsServiceApi, keys::KeyOperators,
     operators::ed25519::exfiltrate_secret_key::LeakSecretKeyOperator,
@@ -452,6 +452,13 @@ where
             pol_epoch_nonce: current_public_epoch_info.nonce,
             pol_ledger_aged: current_public_epoch_info.aged,
             message_quota: settings.epoch_leadership_quota(),
+        },
+        // TODO: the PoW quota parameters are not plumbed through from the chain yet.
+        // These must stay in sync with the prover side until they are.
+        pow: PowInputs {
+            pow_blend_difficulty: ZkHash::default(),
+            pow_block_hash: ZkHash::default(),
+            pow_quota: 0,
         },
     };
 

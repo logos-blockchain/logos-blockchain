@@ -9,23 +9,27 @@ use crate::{
 /// Set of inputs required to verify a Proof of Quota.
 ///
 /// It includes the inputs used to generate the proof (which must be fetched
-/// from the verifier's context), and the proof key nullifier, which is part of
-/// the Proof of Quota that is included in a Blend header.
+/// from the verifier's context), and the circuit outputs (the proof key
+/// nullifier and the `PoW` public key), which are part of the Proof of Quota
+/// that is included in a Blend header.
 #[derive(Debug, Clone, Copy)]
 pub struct Inputs {
     pub prove_inputs: PublicInputs,
     pub key_nullifier: ZkHash,
+    pub pow_pk: ZkHash,
 }
 
 impl Inputs {
     #[must_use]
-    pub const fn from_prove_inputs_and_nullifier(
+    pub const fn from_prove_inputs_and_outputs(
         prove_inputs: PublicInputs,
         key_nullifier: ZkHash,
+        pow_pk: ZkHash,
     ) -> Self {
         Self {
             prove_inputs,
             key_nullifier,
+            pow_pk,
         }
     }
 }
@@ -42,7 +46,11 @@ impl From<Inputs> for PoQVerifierInput {
             k_part_two: fr_from_bytes(&signing_key_second_half[..])
                 .expect("Second half of signing public key does not represent a valid `Fr` point."),
             key_nullifier: value.key_nullifier,
+            pow_pk: value.pow_pk,
             leader_quota: value.prove_inputs.leader.message_quota,
+            pow_quota: value.prove_inputs.pow.pow_quota,
+            pow_block_hash: value.prove_inputs.pow.pow_block_hash,
+            pow_blend_difficulty: value.prove_inputs.pow.pow_blend_difficulty,
             pol_epoch_nonce: value.prove_inputs.leader.pol_epoch_nonce,
             pol_ledger_aged: value.prove_inputs.leader.pol_ledger_aged,
             lottery_0: value.prove_inputs.leader.lottery_0,

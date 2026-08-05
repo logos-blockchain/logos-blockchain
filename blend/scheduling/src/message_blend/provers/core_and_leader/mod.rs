@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
+use lb_blend_proofs::quota::inputs::prove::public::PowInputs;
+use lb_core::crypto::ZkHash;
 use lb_cryptarchia_engine::Epoch;
 use lb_log_targets::blend;
 
@@ -113,6 +115,14 @@ where
                 public_inputs: PoQVerificationInputsMinusSigningKey {
                     core: current_epoch_core_public_inputs,
                     leader: current_leader_inputs,
+                    // TODO: the PoW quota parameters are not plumbed through from the
+                    // chain yet. Provers and verifiers both read them from here, so core
+                    // and leader proofs stay consistent until they are.
+                    pow: PowInputs {
+                        pow_blend_difficulty: ZkHash::default(),
+                        pow_block_hash: ZkHash::default(),
+                        pow_quota: 0,
+                    },
                 },
                 encapsulation_layers: self.core_proofs_generator.settings.encapsulation_layers,
             },

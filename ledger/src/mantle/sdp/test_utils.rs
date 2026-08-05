@@ -9,12 +9,12 @@ use lb_blend_proofs::{
         inputs::prove::{
             PrivateInputs, PublicInputs,
             private::ProofOfCoreQuotaInputs,
-            public::{CoreInputs, LeaderInputs},
+            public::{CoreInputs, LeaderInputs, PowInputs},
         },
     },
     selection::VerifiedProofOfSelection,
 };
-use lb_core::{blend::core_quota, sdp::blend::ActivityProof};
+use lb_core::{blend::core_quota, crypto::ZkHash, sdp::blend::ActivityProof};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 
 use crate::{EpochState, mantle::sdp::rewards::blend::RewardsParameters};
@@ -83,6 +83,13 @@ pub fn generate_activity_proof(
         signing_key: ephemeral.public_key().into_inner(),
         core: core_inputs,
         leader: leader_inputs,
+        // Must match the values used by `create_proof_verifier`, since the PoW quota
+        // parameters are public inputs shared by the prover and the verifier.
+        pow: PowInputs {
+            pow_blend_difficulty: ZkHash::default(),
+            pow_block_hash: ZkHash::default(),
+            pow_quota: 0,
+        },
     };
     for message_release_index in 0u64.. {
         let private_inputs = PrivateInputs::new_proof_of_core_quota_inputs(

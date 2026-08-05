@@ -10,7 +10,7 @@ use crate::{
         inputs::prove::{
             PrivateInputs, PublicInputs,
             private::ProofOfCoreQuotaInputs,
-            public::{CoreInputs, LeaderInputs},
+            public::{CoreInputs, LeaderInputs, PowInputs},
         },
     },
     selection::derive_key_nullifier_from_secret_selection_randomness,
@@ -137,6 +137,7 @@ fn generate_inputs<const INPUTS: usize>() -> PoQInputs<INPUTS> {
         PublicInputs {
             core: core_inputs,
             leader: leader_inputs,
+            pow: PowInputs::default(),
             signing_key,
         }
     };
@@ -254,6 +255,7 @@ fn same_key_different_indices() {
                 zk_root: merkle_tree.root(),
             },
             leader: LeaderInputs::default(),
+            pow: PowInputs::default(),
             signing_key: Ed25519PublicKey::from_bytes(&[10; _]).unwrap(),
         },
         secret_inputs: [ProofOfCoreQuotaInputs {
@@ -306,6 +308,7 @@ fn different_keys_same_index() {
                 zk_root: merkle_tree.root(),
             },
             leader: LeaderInputs::default(),
+            pow: PowInputs::default(),
             signing_key: Ed25519PublicKey::from_bytes(&[1; _]).unwrap(),
         },
         secret_inputs: [ProofOfCoreQuotaInputs {

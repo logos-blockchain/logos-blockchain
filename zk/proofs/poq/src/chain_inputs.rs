@@ -9,6 +9,7 @@ pub struct PoQChainInputs {
     pol_epoch_nonce: Groth16Input,
     pol_t0: Groth16Input,
     pol_t1: Groth16Input,
+    block_hash: Groth16Input,
 }
 
 #[derive(Clone, Copy)]
@@ -18,6 +19,7 @@ pub struct PoQChainInputsData {
     pub pol_epoch_nonce: Fr,
     pub lottery_0: Fr,
     pub lottery_1: Fr,
+    pub block_hash: Fr,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -27,6 +29,8 @@ pub struct PoQChainInputsJson {
     pol_epoch_nonce: Groth16InputDeser,
     pol_t0: Groth16InputDeser,
     pol_t1: Groth16InputDeser,
+    #[serde(rename = "pow_block_hash")]
+    block_hash: Groth16InputDeser,
 }
 
 impl TryFrom<PoQChainInputsJson> for PoQChainInputs {
@@ -39,6 +43,7 @@ impl TryFrom<PoQChainInputsJson> for PoQChainInputs {
             pol_epoch_nonce,
             pol_t0,
             pol_t1,
+            block_hash,
         }: PoQChainInputsJson,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -47,6 +52,7 @@ impl TryFrom<PoQChainInputsJson> for PoQChainInputs {
             pol_epoch_nonce: pol_epoch_nonce.try_into()?,
             pol_t0: pol_t0.try_into()?,
             pol_t1: pol_t1.try_into()?,
+            block_hash: block_hash.try_into()?,
         })
     }
 }
@@ -59,6 +65,7 @@ impl From<&PoQChainInputs> for PoQChainInputsJson {
             pol_epoch_nonce,
             pol_t0,
             pol_t1,
+            block_hash,
         }: &PoQChainInputs,
     ) -> Self {
         Self {
@@ -67,6 +74,7 @@ impl From<&PoQChainInputs> for PoQChainInputsJson {
             pol_epoch_nonce: pol_epoch_nonce.into(),
             pol_t0: pol_t0.into(),
             pol_t1: pol_t1.into(),
+            block_hash: block_hash.into(),
         }
     }
 }
@@ -77,6 +85,8 @@ pub enum PoQInputsFromDataError {
     CoreQuotaMoreThan20Bits,
     #[error("Leader quota is greater than 20 bits")]
     LeaderQuotaMoreThan20Bits,
+    #[error("PoW quota is greater than 20 bits")]
+    PowQuotaMoreThan20Bits,
 }
 
 impl TryFrom<PoQChainInputsData> for PoQChainInputs {
@@ -89,6 +99,7 @@ impl TryFrom<PoQChainInputsData> for PoQChainInputs {
             pol_epoch_nonce,
             lottery_0,
             lottery_1,
+            block_hash,
         }: PoQChainInputsData,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -97,6 +108,7 @@ impl TryFrom<PoQChainInputsData> for PoQChainInputs {
             pol_epoch_nonce: pol_epoch_nonce.into(),
             pol_t0: Groth16Input::new(lottery_0),
             pol_t1: Groth16Input::new(lottery_1),
+            block_hash: Groth16Input::new(block_hash),
         })
     }
 }

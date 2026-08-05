@@ -13,7 +13,7 @@ use logos_blockchain_poq::{
 };
 use num_bigint::BigUint;
 
-/// Quota advertised by the fixtures, for both the core and the leader branch.
+/// Quota advertised by the fixtures, for the core, the leader and pow branches.
 ///
 /// It has to stay above every key index the benchmarks prove for, since the
 /// circuit only accepts indices below the quota of the branch being proven.
@@ -24,16 +24,22 @@ fn lottery() -> (lb_groth16::Fr, lb_groth16::Fr) {
         .compute_lottery_values(5000)
 }
 
-fn common_data(selector: bool, key_index: u64) -> PoQCommonInputsData {
+fn common_data(selector: u8, key_index: u64) -> PoQCommonInputsData {
     PoQCommonInputsData {
         core_quota: QUOTA,
         leader_quota: QUOTA,
+        pow_quota: QUOTA,
         message_key: (
             BigUint::from(123_456u32).into(),
             BigUint::from(654_321u32).into(),
         ),
         selector,
         index: key_index,
+        pow_difficulty: BigUint::from_str(
+            "2334035772366381927456001473031809359552034265892309520954243351196711606017",
+        )
+        .unwrap()
+        .into(),
     }
 }
 
@@ -65,6 +71,11 @@ pub fn core_node_inputs(key_index: u64) -> PoQWitnessInputs {
         .into(),
         lottery_0,
         lottery_1,
+        block_hash: BigUint::from_str(
+            "8120861784052316792639248700404452951342238269077440156691809582275873301855",
+        )
+        .unwrap()
+        .into(),
     };
     let blend_data = PoQBlendInputsData {
         core_sk: BigUint::from_str(
@@ -157,7 +168,7 @@ pub fn core_node_inputs(key_index: u64) -> PoQWitnessInputs {
         .map(|(v, s)| (BigUint::from_str(v).unwrap().into(), s)),
     };
 
-    PoQWitnessInputs::from_core_node_data(chain_data, common_data(false, key_index), blend_data)
+    PoQWitnessInputs::from_core_node_data(chain_data, common_data(0, key_index), blend_data)
         .unwrap()
 }
 
@@ -186,6 +197,11 @@ pub fn leader_inputs(key_index: u64) -> PoQWitnessInputs {
         .into(),
         lottery_0,
         lottery_1,
+        block_hash: BigUint::from_str(
+            "8120861784052316792639248700404452951342238269077440156691809582275873301855",
+        )
+        .unwrap()
+        .into(),
     };
     let wallet_data = PoQWalletInputsData {
         slot: 2_966_761_920,
@@ -327,13 +343,12 @@ pub fn leader_inputs(key_index: u64) -> PoQWitnessInputs {
             ),
         ]
         .map(|(v, s)| (BigUint::from_str(v).unwrap().into(), s)),
-        secret_key: BigUint::from_str(
+        pol_secret_key: BigUint::from_str(
             "17558656186380761716563192806052137702710836103853413805442046164934618201080",
         )
         .unwrap()
         .into(),
     };
 
-    PoQWitnessInputs::from_leader_data(chain_data, common_data(true, key_index), wallet_data)
-        .unwrap()
+    PoQWitnessInputs::from_leader_data(chain_data, common_data(1, key_index), wallet_data).unwrap()
 }

@@ -3,7 +3,7 @@ use lb_blend_message::{
     crypto::proofs::PoQVerificationInputsMinusSigningKey,
     encap::ProofsVerifier as ProofsVerifierTrait, reward::EpochRandomness,
 };
-use lb_blend_proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs};
+use lb_blend_proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs, PowInputs};
 use lb_core::{
     crypto::ZkHash,
     mantle::{Value, ledger::Declarations},
@@ -217,6 +217,14 @@ impl CurrentEpochTracker {
                 quota: core_quota,
             },
             leader: leader_input,
+            // TODO: the PoW quota parameters are not plumbed through from the chain yet.
+            // Provers and verifiers both read them from here, so core and leader proofs
+            // stay consistent until they are.
+            pow: PowInputs {
+                pow_blend_difficulty: ZkHash::default(),
+                pow_block_hash: ZkHash::default(),
+                pow_quota: 0,
+            },
         })
     }
 }

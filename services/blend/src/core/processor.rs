@@ -271,7 +271,7 @@ mod tests {
         proofs::{
             quota::{
                 VerifiedProofOfQuota,
-                inputs::prove::public::{CoreInputs, LeaderInputs},
+                inputs::prove::public::{CoreInputs, LeaderInputs, PowInputs},
             },
             selection::{self, VerifiedProofOfSelection},
         },
@@ -304,6 +304,11 @@ mod tests {
                 message_quota: 1,
                 lottery_0: Fr::ZERO,
                 lottery_1: Fr::ZERO,
+            },
+            pow: PowInputs {
+                pow_blend_difficulty: ZkHash::ZERO,
+                pow_block_hash: ZkHash::ZERO,
+                pow_quota: 0,
             },
         }
     }

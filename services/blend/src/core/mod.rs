@@ -30,7 +30,7 @@ use lb_blend::{
             OldEpochBlendingTokenCollector,
         },
     },
-    proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs},
+    proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs, PowInputs},
     scheduling::{
         EpochMessageScheduler,
         epoch::{EpochEvent, UninitializedEpochEventStream},
@@ -48,6 +48,7 @@ use lb_blend::{
 use lb_chain_service::{Epoch, api::CryptarchiaServiceData};
 use lb_core::{
     codec::{DeserializeOp as _, SerializeOp as _},
+    crypto::ZkHash,
     sdp::ActivityMetadata,
 };
 use lb_key_management_system_service::{
@@ -612,6 +613,13 @@ where
         PoQVerificationInputsMinusSigningKey {
             core: current_epoch_public_info.poq_core_public_inputs,
             leader: current_epoch_public_info.poq_leadership_public_inputs,
+            // TODO: the PoW quota parameters are not plumbed through from the chain yet.
+            // These must stay in sync with the prover side until they are.
+            pow: PowInputs {
+                pow_blend_difficulty: ZkHash::default(),
+                pow_block_hash: ZkHash::default(),
+                pow_quota: 0,
+            },
         },
         current_epoch_core_poq_generator
             .expect("Core PoQ generator must be present at startup: the proxy service only launches CoreMode when the node is part of the core membership."),
@@ -1086,6 +1094,14 @@ where
                 PoQVerificationInputsMinusSigningKey {
                     core: new_epoch_info.poq_core_public_inputs,
                     leader: new_epoch_info.poq_leadership_public_inputs,
+                    // TODO: the PoW quota parameters are not plumbed through from the
+                    // chain yet. These must stay in sync with the prover side until they
+                    // are.
+                    pow: PowInputs {
+                        pow_blend_difficulty: ZkHash::default(),
+                        pow_block_hash: ZkHash::default(),
+                        pow_quota: 0,
+                    },
                 },
                 core_poq_generator,
                 new_epoch_info.epoch,

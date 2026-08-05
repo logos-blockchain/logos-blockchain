@@ -212,7 +212,7 @@ mod test {
     use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
     use lb_blend_proofs::quota::inputs::prove::{
         private::ProofOfLeadershipQuotaInputs,
-        public::{CoreInputs, LeaderInputs},
+        public::{CoreInputs, LeaderInputs, PowInputs},
     };
     use lb_core::crypto::ZkHash;
     use lb_cryptarchia_engine::Epoch;
@@ -257,6 +257,11 @@ mod test {
                         zk_root: ZkHash::ZERO,
                     },
                     leader: leader_inputs,
+                    pow: PowInputs {
+                        pow_blend_difficulty: ZkHash::ZERO,
+                        pow_block_hash: ZkHash::ZERO,
+                        pow_quota: 1,
+                    },
                 },
                 MockCorePoQGenerator,
                 Epoch::new(0),
