@@ -18,6 +18,9 @@ use crate::{
     mantle::pow::difficulty::{PoWDifficultySettings, compute_new_reward_difficulty},
 };
 
+const POW_REWARD_POOL_GENESIS: PowReward = 1_000_000_000;
+const POW_EPOCH_REWARD_POOL_GENESIS: PowReward = 1_000_000;
+
 /// `PoW` reward-claiming state of the mantle ledger.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PowState {
@@ -59,12 +62,14 @@ impl PowState {
     /// difficulty.
     #[must_use]
     pub fn new() -> Self {
+        // TODO: Setup values when decided
         Self {
-            // TODO: Use genesis value instead
-            reward_pool: 0,
-            epoch_reward: 0,
-            // TODO: Set initial difficulty
-            reward_difficulty: PowTarget::default(),
+            reward_pool: POW_REWARD_POOL_GENESIS,
+            epoch_reward: POW_EPOCH_REWARD_POOL_GENESIS,
+            reward_difficulty: compute_new_reward_difficulty::<PoWDifficultySettings>(
+                1000,
+                PowTarget::from(POW_EPOCH_REWARD_POOL_GENESIS),
+            ),
             refill_rewards: 0,
             nullifiers: HashTrieSetSync::new_sync(),
             block_slots: HashTrieMapSync::new_sync(),

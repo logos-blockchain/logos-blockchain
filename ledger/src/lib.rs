@@ -2179,7 +2179,10 @@ mod tests {
         /// seen at the current slot.
         fn claim_accepting_state() -> (LedgerState, Config) {
             let (mut state, config) = pow_ledger_state(1_000);
-            state.mantle_ledger.pow.set_reward_difficulty(-PowTarget::ONE);
+            state
+                .mantle_ledger
+                .pow
+                .set_reward_difficulty(-PowTarget::ONE);
             state
                 .mantle_ledger
                 .pow
