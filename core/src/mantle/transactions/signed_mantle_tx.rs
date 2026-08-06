@@ -18,7 +18,7 @@ use crate::{
                 withdraw::WithdrawValidationContext,
             },
             leader_claim::{LeaderClaimPreverificationContext, LeaderClaimVerificationContext},
-            pow::ClaimPoWRewardValidationContext,
+            pow::ClaimPoWRewardVerificationContext,
             sdp::{
                 SDPActiveValidationContext, SDPDeclareOp, SDPDeclareVerificationContext,
                 SDPWithdrawValidationContext, declare::SDPDeclarePreverificationContext,
@@ -156,7 +156,7 @@ impl SignedMantleTx<Unverified> {
             (Op::Transfer(op), OpProof::ZkSig(proof)) => op
                 .preverify(proof, &())
                 .map_err(VerificationError::TransferVerificationError),
-            (Op::ClaimPowReward(op), OpProof::None) => op
+            (Op::ClaimPowReward(op), OpProof::None(proof)) => op
                 .preverify(proof, &())
                 .map_err(VerificationError::ClaimPowRewardError),
             _ => Err(VerificationError::IncorrectProofType {
@@ -338,8 +338,8 @@ impl SignedMantleTx<Preverified> {
                 op.verify(proof, &context)
                     .map_err(VerificationError::TransferVerificationError)
             }
-            (Op::ClaimPowReward(claim_pow_op), OpProof::None) => {
-                let context = ClaimPoWRewardValidationContext {
+            (Op::ClaimPowReward(claim_pow_op), OpProof::None(proof)) => {
+                let context = ClaimPoWRewardVerificationContext {
                     current_block_slot: helper.get_block_slot(),
                     reward_difficulty: helper.get_pow_reward_difficulty(),
                     pow_nullifiers: helper.get_pow_nullifiers(),
@@ -350,7 +350,7 @@ impl SignedMantleTx<Preverified> {
                     blocks_slot: helper.get_blocks_slot(),
                 };
                 claim_pow_op
-                    .verify(&context)
+                    .verify(proof, &context)
                     .map_err(VerificationError::ClaimPowRewardError)
             }
             // SignedMantleTx<Preverified> invariant: Op/Proof pairs have been verified in

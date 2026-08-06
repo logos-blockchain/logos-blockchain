@@ -2022,7 +2022,10 @@ mod tests {
     mod pow {
         use lb_core::{
             crypto::{ZkDigest as _, ZkHasher},
-            mantle::ops::pow::{ClaimPowRewardError, ClaimPowRewardOp, PowTarget},
+            mantle::ops::{
+                NoOpProof,
+                pow::{ClaimPowRewardError, ClaimPowRewardOp, PowTarget},
+            },
         };
         use lb_groth16::{AdditiveGroup as _, fr_from_mod_bytes};
 
@@ -2128,8 +2131,8 @@ mod tests {
         }
 
         fn claim_tx() -> SignedMantleTx<Preverified> {
-            let mantle_tx = MantleTx([Op::ClaimPowReward(claim_op())].into());
-            SignedMantleTx::new(mantle_tx, [OpProof::None].into())
+            let mantle_tx = RawMantleTx([Op::ClaimPowReward(claim_op())].into());
+            SignedMantleTx::new(mantle_tx, [OpProof::None(NoOpProof)].into())
                 .preverify()
                 .expect("claim op with OpProof::None should pass preverification")
         }

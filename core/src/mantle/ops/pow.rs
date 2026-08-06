@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use ark_ff::Zero as _;
-use lb_codec::{BinaryCodec, BinaryEncode};
+use lb_codec::{BinaryCodec, BinaryEncode as _};
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::{Fr, fr_from_mod_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -14,9 +14,8 @@ use crate::{
     mantle::{
         Note, TxHash, Utxo, Value,
         ledger::{
-            Utxos,
-            ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
-            verification_mode,
+            ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
+            VerifiableOperation, verification_mode,
         },
         ops::{NoOpProof, OpId},
     },
