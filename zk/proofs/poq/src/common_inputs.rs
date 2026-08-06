@@ -1,11 +1,7 @@
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr, Groth16Input, Groth16InputDeser};
-use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 
-use crate::chain_inputs::{
-    PoQInputsFromDataError,
-    PoQInputsFromDataError::{CoreQuotaMoreThan20Bits, LeaderQuotaMoreThan20Bits},
-};
+use crate::{KeyIndex, Quota};
 
 #[derive(Copy, Clone)]
 pub struct PoQCommonInputs {
@@ -19,11 +15,11 @@ pub struct PoQCommonInputs {
 
 #[derive(Clone, Copy)]
 pub struct PoQCommonInputsData {
-    pub core_quota: u64,
-    pub leader_quota: u64,
+    pub core_quota: Quota,
+    pub leader_quota: Quota,
     pub message_key: (Fr, Fr),
     pub selector: bool,
-    pub index: u64,
+    pub index: KeyIndex,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -60,9 +56,8 @@ impl From<&PoQCommonInputs> for PoQCommonInputsJson {
     }
 }
 
-impl TryFrom<PoQCommonInputsData> for PoQCommonInputs {
-    type Error = PoQInputsFromDataError;
-    fn try_from(
+impl From<PoQCommonInputsData> for PoQCommonInputs {
+    fn from(
         PoQCommonInputsData {
             core_quota,
             leader_quota,
@@ -70,22 +65,14 @@ impl TryFrom<PoQCommonInputsData> for PoQCommonInputs {
             selector,
             index,
         }: PoQCommonInputsData,
-    ) -> Result<Self, Self::Error> {
-        let leader_quota_bits = leader_quota.checked_ilog2().map_or(0, |v| v + 1);
-        if leader_quota_bits > 20 {
-            return Err(LeaderQuotaMoreThan20Bits);
-        }
-        let core_quota_bits = core_quota.checked_ilog2().map_or(0, |v| v + 1);
-        if core_quota_bits > 20 {
-            return Err(CoreQuotaMoreThan20Bits);
-        }
-        Ok(Self {
-            core_quota: Groth16Input::new(Fr::from(BigUint::from(core_quota))),
-            leader_quota: Groth16Input::new(Fr::from(BigUint::from(leader_quota))),
+    ) -> Self {
+        Self {
+            core_quota: core_quota.into(),
+            leader_quota: leader_quota.into(),
             key_part_one: message_key.0.into(),
             key_part_two: message_key.1.into(),
             selector: Groth16Input::new(if selector { Fr::ONE } else { Fr::ZERO }),
-            index: Groth16Input::new(Fr::from(BigUint::from(index))),
-        })
+            index: index.into(),
+        }
     }
 }

@@ -1,6 +1,5 @@
 use lb_groth16::{Fr, Groth16Input, Groth16InputDeser};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 #[derive(Copy, Clone)]
 pub struct PoQChainInputs {
@@ -71,18 +70,8 @@ impl From<&PoQChainInputs> for PoQChainInputsJson {
     }
 }
 
-#[derive(Debug, Error)]
-pub enum PoQInputsFromDataError {
-    #[error("Core quota is greater than 20 bits")]
-    CoreQuotaMoreThan20Bits,
-    #[error("Leader quota is greater than 20 bits")]
-    LeaderQuotaMoreThan20Bits,
-}
-
-impl TryFrom<PoQChainInputsData> for PoQChainInputs {
-    type Error = PoQInputsFromDataError;
-
-    fn try_from(
+impl From<PoQChainInputsData> for PoQChainInputs {
+    fn from(
         PoQChainInputsData {
             core_root,
             pol_ledger_aged,
@@ -90,13 +79,13 @@ impl TryFrom<PoQChainInputsData> for PoQChainInputs {
             lottery_0,
             lottery_1,
         }: PoQChainInputsData,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             core_root: core_root.into(),
             pol_ledger_aged: pol_ledger_aged.into(),
             pol_epoch_nonce: pol_epoch_nonce.into(),
             pol_t0: Groth16Input::new(lottery_0),
             pol_t1: Groth16Input::new(lottery_1),
-        })
+        }
     }
 }

@@ -19,30 +19,32 @@ pub struct PoQWitnessInputs {
 }
 
 impl PoQWitnessInputs {
+    #[must_use]
     pub fn from_leader_data(
         chain: PoQChainInputsData,
         common: PoQCommonInputsData,
         wallet: PoQWalletInputsData,
-    ) -> Result<Self, <PoQChainInputs as TryFrom<PoQChainInputsData>>::Error> {
-        Ok(Self {
-            chain: chain.try_into()?,
-            common: common.try_into()?,
+    ) -> Self {
+        Self {
+            chain: chain.into(),
+            common: common.into(),
             blend: PoQBlendInputs::from(PoQBlendInputsData {
                 core_sk: Fr::ZERO,
                 core_path_and_selectors: [(Fr::ZERO, false); _],
             }),
             wallet: wallet.into(),
-        })
+        }
     }
 
+    #[must_use]
     pub fn from_core_node_data(
         chain: PoQChainInputsData,
         common: PoQCommonInputsData,
         blend: PoQBlendInputsData,
-    ) -> Result<Self, <PoQChainInputs as TryFrom<PoQChainInputsData>>::Error> {
-        Ok(Self {
-            chain: chain.try_into()?,
-            common: common.try_into()?,
+    ) -> Self {
+        Self {
+            chain: chain.into(),
+            common: common.into(),
             blend: blend.into(),
             wallet: PoQWalletInputs::from(PoQWalletInputsData {
                 slot: 0,
@@ -52,7 +54,7 @@ impl PoQWitnessInputs {
                 aged_path_and_selectors: [(Fr::ZERO, false); _],
                 secret_key: Fr::ZERO,
             }),
-        })
+        }
     }
 }
 

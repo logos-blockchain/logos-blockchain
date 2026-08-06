@@ -9,7 +9,7 @@ use lb_pol::LotteryConstants;
 use lb_utils::math::NonNegativeRatio;
 use logos_blockchain_poq::{
     PoQBlendInputsData, PoQChainInputsData, PoQCommonInputsData, PoQWalletInputsData,
-    PoQWitnessInputs,
+    PoQWitnessInputs, Quota,
 };
 use num_bigint::BigUint;
 
@@ -17,7 +17,7 @@ use num_bigint::BigUint;
 ///
 /// It has to stay above every key index the benchmarks prove for, since the
 /// circuit only accepts indices below the quota of the branch being proven.
-const QUOTA: u64 = 64;
+const QUOTA: Quota = Quota::new::<64>();
 
 fn lottery() -> (lb_groth16::Fr, lb_groth16::Fr) {
     LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
@@ -158,7 +158,6 @@ pub fn core_node_inputs(key_index: u64) -> PoQWitnessInputs {
     };
 
     PoQWitnessInputs::from_core_node_data(chain_data, common_data(false, key_index), blend_data)
-        .unwrap()
 }
 
 /// Witness inputs for a leadership Proof of Quota at the given key index.
@@ -335,5 +334,4 @@ pub fn leader_inputs(key_index: u64) -> PoQWitnessInputs {
     };
 
     PoQWitnessInputs::from_leader_data(chain_data, common_data(true, key_index), wallet_data)
-        .unwrap()
 }

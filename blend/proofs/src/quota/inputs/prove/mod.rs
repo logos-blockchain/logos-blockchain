@@ -1,7 +1,7 @@
-use lb_groth16::fr_from_bytes;
+use lb_groth16::{CircuitIntegerOutOfRange, fr_from_bytes};
 use lb_poq::{
-    PoQBlendInputsData, PoQChainInputsData, PoQCommonInputsData, PoQInputsFromDataError,
-    PoQWalletInputsData, PoQWitnessInputs,
+    PoQBlendInputsData, PoQChainInputsData, PoQCommonInputsData, PoQWalletInputsData,
+    PoQWitnessInputs,
 };
 
 use crate::quota::inputs::{
@@ -20,7 +20,7 @@ pub(crate) struct Inputs {
 }
 
 impl TryFrom<Inputs> for PoQWitnessInputs {
-    type Error = PoQInputsFromDataError;
+    type Error = CircuitIntegerOutOfRange;
 
     fn try_from(value: Inputs) -> Result<Self, Self::Error> {
         let (signing_key_first_half, signing_key_second_half) =
@@ -33,9 +33,9 @@ impl TryFrom<Inputs> for PoQWitnessInputs {
             lottery_1: value.public.leader.lottery_1,
         };
         let common_input_data = PoQCommonInputsData {
-            core_quota: value.public.core.quota,
-            index: value.private.key_index,
-            leader_quota: value.public.leader.message_quota,
+            core_quota: value.public.core.quota.try_into()?,
+            index: value.private.key_index.try_into()?,
+            leader_quota: value.public.leader.message_quota.try_into()?,
             message_key: (
                 fr_from_bytes(&signing_key_first_half[..]).expect(
                     "First half of signing public key does not represent a valid `Fr` point.",
@@ -46,11 +46,11 @@ impl TryFrom<Inputs> for PoQWitnessInputs {
             ),
             selector: value.private.selector,
         };
-        witness_input_for_proof_type(
+        Ok(witness_input_for_proof_type(
             chain_input_data,
             common_input_data,
             value.private.proof_type,
-        )
+        ))
     }
 }
 
@@ -58,7 +58,7 @@ fn witness_input_for_proof_type(
     chain_input_data: PoQChainInputsData,
     common_input_data: PoQCommonInputsData,
     proof_type: ProofType,
-) -> Result<PoQWitnessInputs, PoQInputsFromDataError> {
+) -> PoQWitnessInputs {
     match proof_type {
         ProofType::CoreQuota(core_quota_private_inputs) => {
             let ProofOfCoreQuotaInputs {

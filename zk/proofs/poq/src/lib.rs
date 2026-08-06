@@ -11,12 +11,13 @@ use std::error::Error;
 pub use blend_inputs::{
     CORE_MERKLE_TREE_HEIGHT, CorePathAndSelectors, PoQBlendInputs, PoQBlendInputsData,
 };
-pub use chain_inputs::{PoQChainInputs, PoQChainInputsData, PoQInputsFromDataError};
+pub use chain_inputs::{PoQChainInputs, PoQChainInputsData};
 pub use common_inputs::{PoQCommonInputs, PoQCommonInputsData};
 pub use inputs::{PoQVerifierInput, PoQVerifierInputData, PoQWitnessInputs};
 use lb_circuits_prover::Prover as _;
 use lb_groth16::{
-    CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser, groth16_batch_verify,
+    CircuitInteger, CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser,
+    groth16_batch_verify,
 };
 use lb_log_targets::proofs;
 pub use lb_pol::AGED_NOTE_MERKLE_TREE_HEIGHT;
@@ -27,6 +28,16 @@ use crate::inputs::PoQVerifierInputJson;
 
 pub type PoQProof = CompressedGroth16Proof;
 pub type ProveError = lbp_error::Error;
+
+/// Width, in bits, of the quota signals in the `PoQ` circuit.
+pub const QUOTA_BITS: u8 = 20;
+
+/// A messaging quota, constrained to the width the `PoQ` circuit expects.
+pub type Quota = CircuitInteger<QUOTA_BITS>;
+
+/// An index into the keys covered by a quota, which the circuit constrains to
+/// the same width.
+pub type KeyIndex = Quota;
 
 const LOG_TARGET: &str = proofs::POQ;
 
@@ -252,8 +263,8 @@ mod tests {
             lottery_1,
         };
         let common_data = PoQCommonInputsData {
-            core_quota: 15,
-            leader_quota: 10,
+            core_quota: Quota::new::<15>(),
+            leader_quota: Quota::new::<10>(),
             message_key: (
                 BigUint::from(123_456u32).into(),
                 BigUint::from(654_321u32).into(),
@@ -263,7 +274,7 @@ mod tests {
         };
 
         let witness_inputs =
-            PoQWitnessInputs::from_core_node_data(chain_data, common_data, blend_data).unwrap();
+            PoQWitnessInputs::from_core_node_data(chain_data, common_data, blend_data);
         let (proof, inputs) = prove(witness_inputs).unwrap();
         let key_nullifier = inputs.key_nullifier.into_inner();
         // Test that verifying with the inputs returned by `prove` works.
@@ -272,12 +283,12 @@ mod tests {
         // Test that verifying with the reconstructed inputs inside the verifier context
         // works.
         let recomputed_verify_inputs = PoQVerifierInputData {
-            core_quota: common_data.core_quota,
+            core_quota: common_data.core_quota.get(),
             core_root: chain_data.core_root,
             k_part_one: common_data.message_key.0,
             k_part_two: common_data.message_key.1,
             key_nullifier,
-            leader_quota: common_data.leader_quota,
+            leader_quota: common_data.leader_quota.get(),
             pol_epoch_nonce: chain_data.pol_epoch_nonce,
             pol_ledger_aged: chain_data.pol_ledger_aged,
             lottery_0: chain_data.lottery_0,
@@ -312,8 +323,8 @@ mod tests {
             lottery_1,
         };
         let common_data = PoQCommonInputsData {
-            core_quota: 15,
-            leader_quota: 10,
+            core_quota: Quota::new::<15>(),
+            leader_quota: Quota::new::<10>(),
             message_key: (
                 BigUint::from(123_456u32).into(),
                 BigUint::from(654_321u32).into(),
@@ -469,7 +480,7 @@ mod tests {
         };
 
         let witness_inputs =
-            PoQWitnessInputs::from_leader_data(chain_data, common_data, wallet_data).unwrap();
+            PoQWitnessInputs::from_leader_data(chain_data, common_data, wallet_data);
         let (proof, inputs) = prove(witness_inputs).unwrap();
         let key_nullifier = inputs.key_nullifier.into_inner();
         // Test that verifying with the inputs returned by `prove` works.
@@ -478,12 +489,12 @@ mod tests {
         // Test that verifying with the reconstructed inputs inside the verifier context
         // works.
         let recomputed_verify_inputs = PoQVerifierInputData {
-            core_quota: common_data.core_quota,
+            core_quota: common_data.core_quota.get(),
             core_root: chain_data.core_root,
             k_part_one: common_data.message_key.0,
             k_part_two: common_data.message_key.1,
             key_nullifier,
-            leader_quota: common_data.leader_quota,
+            leader_quota: common_data.leader_quota.get(),
             pol_epoch_nonce: chain_data.pol_epoch_nonce,
             pol_ledger_aged: chain_data.pol_ledger_aged,
             lottery_0: chain_data.lottery_0,
