@@ -440,12 +440,12 @@ fn signed_op_execution_gas<Profile: GasProfile>(
             Op::ChannelConfig(_) | Op::ChannelWithdraw(_) | Op::ChannelTransfer(_),
             OpProof::ChannelMultiSigProof(proof),
         ) => proof.signatures().len(),
-        _ => return Ok(op.execution_gas::<Profile>()),
+        _ => return Ok(op.gas_cost::<Profile>()),
     };
     let multiplier = Value::try_from(signature_count)
         .expect("channel multi-signature proofs are bounded to u16::MAX signatures");
 
-    op.execution_gas::<Profile>().checked_mul(multiplier)
+    op.gas_cost::<Profile>().checked_mul(multiplier)
 }
 
 impl<State: VerificationState> StorageSize for MantleTransaction<State> {

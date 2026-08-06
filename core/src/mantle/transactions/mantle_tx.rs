@@ -133,10 +133,10 @@ fn contextual_op_execution_gas<Profile: GasProfile>(
         Op::ChannelTransfer(operation) => context
             .transfer_threshold(&operation.channel_id)
             .unwrap_or(0),
-        _ => return Ok(op.execution_gas::<Profile>()),
+        _ => return Ok(op.gas_cost::<Profile>()),
     };
 
-    op.execution_gas::<Profile>()
+    op.gas_cost::<Profile>()
         .checked_mul(Value::from(multiplier))
 }
 
