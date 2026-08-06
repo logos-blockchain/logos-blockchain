@@ -32,7 +32,7 @@ fn secret_selection_randomness_dst_encoding() {
 fn valid_proof_of_core_quota() {
     let (public_inputs, private_inputs) = valid_proof_of_core_quota_inputs(
         Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-        Quota::new::<1>(),
+        Quota::ONE,
     );
 
     let (proof, secret_selection_randomness) = VerifiedProofOfQuota::new(
@@ -58,9 +58,9 @@ fn same_key_nullifier_for_different_public_keys() {
         Ed25519PublicKey::from_bytes(&[250; ED25519_PUBLIC_KEY_SIZE]).unwrap();
 
     let (public_inputs_key_1, private_inputs_key_1) =
-        valid_proof_of_core_quota_inputs(key_1, Quota::new::<1>());
+        valid_proof_of_core_quota_inputs(key_1, Quota::ONE);
     let (public_inputs_key_2, private_inputs_key_2) =
-        valid_proof_of_core_quota_inputs(key_2, Quota::new::<1>());
+        valid_proof_of_core_quota_inputs(key_2, Quota::ONE);
 
     let (proof_key_1, _) = VerifiedProofOfQuota::new(
         &public_inputs_key_1,
@@ -91,7 +91,7 @@ fn same_key_nullifier_for_different_public_keys() {
 fn valid_proof_of_leadership_quota() {
     let (public_inputs, private_inputs) = valid_proof_of_leadership_quota_inputs(
         Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-        Quota::new::<1>(),
+        Quota::ONE,
     );
 
     let (proof, secret_selection_randomness) = VerifiedProofOfQuota::new(
@@ -126,11 +126,11 @@ fn generate_inputs<const INPUTS: usize>() -> PoQInputs<INPUTS> {
         MerkleTree::new(keys.clone().map(|(_, pk)| pk.into_inner()).to_vec()).unwrap();
     let public_inputs = {
         let core_inputs = CoreInputs {
-            quota: Quota::new::<1>(),
+            quota: Quota::ONE,
             zk_root: merkle_tree.root(),
         };
         let leader_inputs = LeaderInputs {
-            message_quota: Quota::new::<1>(),
+            message_quota: Quota::ONE,
             pol_epoch_nonce: ZkHash::ZERO,
             pol_ledger_aged: ZkHash::ZERO,
             lottery_0: Fr::ZERO,
@@ -311,7 +311,7 @@ fn different_keys_same_index() {
     } = PoQInputs {
         public_inputs: PublicInputs {
             core: CoreInputs {
-                quota: Quota::new::<1>(),
+                quota: Quota::ONE,
                 zk_root: merkle_tree.root(),
             },
             leader: LeaderInputs::default(),

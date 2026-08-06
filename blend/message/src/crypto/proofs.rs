@@ -36,7 +36,7 @@ impl Default for PoQVerificationInputsMinusSigningKey {
         Self {
             core: CoreInputs {
                 zk_root: ZkHash::default(),
-                quota: Quota::new::<1>(),
+                quota: Quota::ONE,
             },
             leader: LeaderInputs {
                 pol_ledger_aged: ZkHash::default(),

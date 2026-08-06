@@ -37,7 +37,7 @@ pub fn valid_proof_of_core_quota_inputs(
         leader: LeaderInputs {
             pol_epoch_nonce: BigUint::from(1u64).into(),
             pol_ledger_aged: BigUint::from(1u64).into(),
-            message_quota: Quota::new::<1>(),
+            message_quota: Quota::ONE,
             lottery_0,
             lottery_1,
         },
@@ -168,7 +168,7 @@ pub fn valid_proof_of_leadership_quota_inputs(
         },
         core: CoreInputs {
             zk_root: BigUint::from(1u64).into(),
-            quota: Quota::new::<1>(),
+            quota: Quota::ONE,
         },
     };
 

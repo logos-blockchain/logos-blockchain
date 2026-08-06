@@ -48,6 +48,8 @@ impl<const BITS: u8> CircuitInteger<BITS> {
     /// The smallest representable value.
     pub const ZERO: Self = Self::new::<0>();
 
+    pub const ONE: Self = Self::new::<1>();
+
     /// Builds a value from a constant, refusing to compile if it does not fit
     /// in `BITS` bits.
     ///

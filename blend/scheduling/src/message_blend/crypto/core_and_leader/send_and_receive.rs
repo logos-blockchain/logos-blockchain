@@ -152,7 +152,7 @@ mod test {
     #[tokio::test]
     async fn set_epoch_private_updates_generator() {
         let initial_leader = LeaderInputs {
-            message_quota: Quota::new::<1>(),
+            message_quota: Quota::ONE,
             pol_epoch_nonce: ZkHash::ZERO,
             pol_ledger_aged: ZkHash::ZERO,
             lottery_0: Fr::ZERO,
@@ -175,7 +175,7 @@ mod test {
             }]),
             PoQVerificationInputsMinusSigningKey {
                 core: CoreInputs {
-                    quota: Quota::new::<1>(),
+                    quota: Quota::ONE,
                     zk_root: ZkHash::ZERO,
                 },
                 leader: initial_leader,

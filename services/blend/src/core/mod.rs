@@ -1708,7 +1708,7 @@ where
                 tracing::warn!(target: LOG_TARGET, "Recovered data message should be present in the recovery state but was not found.");
             }
             // Each data message that is sent is one less cover message that should be generated, hence we consume one core quota per data message here.
-            state_updater.consume_core_quota(Quota::new::<1>());
+            state_updater.consume_core_quota(Quota::ONE);
         }).map(
             |data_message_to_blend| -> BoxFuture<'_, ()> {
                 backend.publish(data_message_to_blend, current_epoch).boxed()
@@ -1899,7 +1899,7 @@ where
         // First layer not addressed to ourselves. Publish as regular cover message,
         // hence we consume a core quota.
         tracing::trace!(target: LOG_TARGET, "Locally generated cover message does not have its outermost layer addressed to us. Sending it out fully encapsulated...");
-        state_updater.consume_core_quota(Quota::new::<1>());
+        state_updater.consume_core_quota(Quota::ONE);
         return Some(encapsulated_cover_message.into());
     };
     let (blending_tokens, message_type) = multi_layer_decapsulation_output.into_components();

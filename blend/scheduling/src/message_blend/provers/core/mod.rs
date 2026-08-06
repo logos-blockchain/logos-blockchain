@@ -63,7 +63,7 @@ where
 
     async fn get_next_proof(&mut self) -> Option<BlendLayerProof> {
         let start = Instant::now();
-        let Some(remaining_quota) = self.remaining_quota.checked_sub(Quota::new::<1>()) else {
+        let Some(remaining_quota) = self.remaining_quota.checked_sub(Quota::ONE) else {
             tracing::warn!(target: LOG_TARGET, "Core quota exhausted. No proof is generated.");
             return None;
         };

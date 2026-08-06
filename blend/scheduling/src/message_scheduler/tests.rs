@@ -263,7 +263,7 @@ async fn rotate_epoch_carries_over_queued_data_messages() {
     // Rotating into a new epoch must not silently drop the queued data messages.
     let (new_scheduler, _old_scheduler) = scheduler.rotate_epoch(
         EpochInfo {
-            core_quota: Quota::new::<1>(),
+            core_quota: Quota::ONE,
             epoch: Epoch::new(0),
         },
         Settings::default(),
