@@ -26,6 +26,13 @@ pub type PowReward = u64;
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct PowNullifier(#[serde(with = "serde_fr")] ZkHash);
 
+impl PowNullifier {
+    #[must_use]
+    pub const fn as_fr(&self) -> &Fr {
+        &self.0
+    }
+}
+
 pub type PuzzleTicket = PowNullifier;
 
 impl From<ZkHash> for PowNullifier {
@@ -96,7 +103,7 @@ pub struct ClaimPoWRewardVerificationContext<'a> {
 impl ClaimPoWRewardVerificationContext<'_> {
     /// Claiming must be enabled for this block context (pool can cover the
     /// reward)
-    fn pow_reward_enabled(&self) -> Result<(), ClaimPowRewardError> {
+    fn are_pow_reward_enabled(&self) -> Result<(), ClaimPowRewardError> {
         if self.epoch_pow_reward.is_zero() {
             return Err(ClaimPowRewardError::EmptyRewards);
         }
@@ -118,13 +125,12 @@ impl ClaimPoWRewardVerificationContext<'_> {
             return Err(ClaimPowRewardError::MissingBlock { block_id });
         };
 
-        let check_height: i128 = i128::from(self.current_block_height) - i128::from(block_height);
-        if check_height.is_negative() {
+        let Some(check_height) = self.current_block_height.checked_sub(block_height) else {
             return Err(ClaimPowRewardError::OutOfWindowHeight {
                 height: block_height,
             });
-        }
-        if !(0 <= check_height && check_height <= i128::from(WINDOW)) {
+        };
+        if check_height > WINDOW {
             return Err(ClaimPowRewardError::OutOfWindowHeight {
                 height: block_height,
             });
@@ -140,23 +146,28 @@ impl ClaimPoWRewardVerificationContext<'_> {
         let previous_epoch_nonce = ZkHasher::digest(&[fr_from_mod_bytes(
             &self.previous_epoch_nonce.into_inner().to_le_bytes(),
         )]);
+        if claim_epoch_nonce == previous_epoch_nonce {
+            return Ok(());
+        }
+
         let current_epoch_nonce = ZkHasher::digest(&[fr_from_mod_bytes(
             &self.current_epoch_nonce.into_inner().to_le_bytes(),
         )]);
-        if claim_epoch_nonce != previous_epoch_nonce && claim_epoch_nonce != current_epoch_nonce {
-            return Err(ClaimPowRewardError::MismatchEpochNonce {
-                claim: claim_epoch_nonce,
-                accepted: (self.previous_epoch_nonce, self.current_epoch_nonce),
-            });
+        if claim_epoch_nonce == current_epoch_nonce {
+            return Ok(());
         }
-        Ok(())
+
+        Err(ClaimPowRewardError::MismatchEpochNonce {
+            claim: claim_epoch_nonce,
+            accepted: (self.previous_epoch_nonce, self.current_epoch_nonce),
+        })
     }
 
     fn validate_difficulty_reward(
         &self,
         puzzle_ticket: PuzzleTicket,
     ) -> Result<(), ClaimPowRewardError> {
-        let ticket_as_fr = puzzle_ticket.0;
+        let ticket_as_fr = *puzzle_ticket.as_fr();
         if ticket_as_fr > self.reward_difficulty {
             return Err(ClaimPowRewardError::InvalidPoWRewardTicket);
         }
@@ -200,7 +211,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for ClaimPowRewardOp {
     type Error = ClaimPowRewardError;
 
     fn verify(&self, _proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
-        context.pow_reward_enabled()?;
+        context.are_pow_reward_enabled()?;
         // TODO Plug constant window
         context.accept_claim::<100>(self.block_hash)?;
         context.validate_current_epoch_nonce(self.epoch_nonce)?;
