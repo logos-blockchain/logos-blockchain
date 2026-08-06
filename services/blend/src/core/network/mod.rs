@@ -13,14 +13,15 @@ pub trait NetworkAdapter<RuntimeServiceId> {
     /// The network backend used by the network service.
     type Backend: NetworkBackend<RuntimeServiceId> + 'static;
     /// Settings used to broadcast messages using the network service.
-    type BroadcastSettings: Clone + Debug + Serialize + DeserializeOwned + Send + Sync + 'static;
+    type Settings: Clone + Debug + Serialize + DeserializeOwned + Send + Sync + 'static;
 
     fn new(
         network_relay: OutboundRelay<
             <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
         >,
+        settings: Self::Settings,
     ) -> Self;
-    /// Broadcast a message to the network service using the specified broadcast
+    /// Broadcast a message to the network service using the configured
     /// settings.
-    async fn broadcast(&self, message: Vec<u8>, broadcast_settings: Self::BroadcastSettings);
+    async fn broadcast(&self, message: Vec<u8>);
 }

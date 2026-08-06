@@ -150,9 +150,8 @@ impl Debug for LeaderMsg {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct LeaderSettings<BlendBroadcastSettings> {
+pub struct LeaderSettings {
     pub config: lb_ledger::Config,
-    pub blend_broadcast_settings: BlendBroadcastSettings,
     pub wallet_config: LeaderWalletConfig,
 }
 
@@ -222,7 +221,7 @@ where
     ChainNetwork: ChainNetworkServiceData,
     Wallet: lb_wallet_service::api::WalletServiceData,
 {
-    type Settings = LeaderSettings<BlendService::BroadcastSettings>;
+    type Settings = LeaderSettings;
     type State = overwatch::services::state::NoState<Self::Settings>;
     type StateOperator = overwatch::services::state::NoOperator<Self::State>;
     type Message = LeaderMsg;
@@ -252,15 +251,11 @@ impl<
 where
     BlendService: ServiceData<
             Message = lb_blend_service::message::ProxyServiceMessage<
-                lb_blend_service::message::ServiceMessage<
-                    BlendService::BroadcastSettings,
-                    BlendService::NodeId,
-                >,
+                lb_blend_service::message::ServiceMessage<BlendService::NodeId>,
             >,
         > + lb_blend_service::ServiceComponents<NodeId: Send + Sync>
         + Send
         + 'static,
-    BlendService::BroadcastSettings: Clone + Send + Sync,
     Mempool: MemPool<Item = SignedMantleTx<Preverified>>
         + RecoverableMempool<BlockId = HeaderId, Key = TxHash>
         + Send
@@ -350,7 +345,6 @@ where
 
         let LeaderSettings {
             config: ledger_config,
-            blend_broadcast_settings,
             wallet_config,
         } = self
             .service_resources_handle
@@ -373,10 +367,7 @@ where
                 .expect("Relay with KMS service should be available."),
         );
 
-        let blend_adapter = BlendAdapter::<BlendService>::new(
-            relays.blend_relay().clone(),
-            blend_broadcast_settings.clone(),
-        );
+        let blend_adapter = BlendAdapter::<BlendService>::new(relays.blend_relay().clone());
 
         // Wait for other services to become ready, with timeout.
         // (except Chain, ChainNetwork, and Blend)
@@ -538,15 +529,11 @@ impl<
 where
     BlendService: ServiceData<
             Message = lb_blend_service::message::ProxyServiceMessage<
-                lb_blend_service::message::ServiceMessage<
-                    BlendService::BroadcastSettings,
-                    BlendService::NodeId,
-                >,
+                lb_blend_service::message::ServiceMessage<BlendService::NodeId>,
             >,
         > + lb_blend_service::ServiceComponents<NodeId: Send + Sync>
         + Send
         + 'static,
-    BlendService::BroadcastSettings: Clone + Send + Sync,
     Mempool: MemPool<Item = SignedMantleTx<Preverified>>
         + RecoverableMempool<BlockId = HeaderId, Key = TxHash>
         + Send

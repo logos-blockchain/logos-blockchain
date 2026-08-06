@@ -245,17 +245,18 @@ pub struct TestNetworkAdapter;
 #[async_trait]
 impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for TestNetworkAdapter {
     type Backend = TestNetworkBackend;
-    type BroadcastSettings = ();
+    type Settings = ();
 
     fn new(
         _network_relay: OutboundRelay<
             <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
         >,
+        _settings: Self::Settings,
     ) -> Self {
         Self
     }
 
-    async fn broadcast(&self, _message: Vec<u8>, _broadcast_settings: Self::BroadcastSettings) {}
+    async fn broadcast(&self, _message: Vec<u8>) {}
 }
 
 pub struct TestNetworkBackend {
@@ -291,18 +292,18 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for TestNetworkBackend {
 }
 
 #[expect(clippy::type_complexity, reason = "a test utility")]
-pub fn dummy_overwatch_resources<BackendSettings, BroadcastSettings, RuntimeServiceId>() -> (
+pub fn dummy_overwatch_resources<BackendSettings, NetworkSettings, RuntimeServiceId>() -> (
     OverwatchHandle<RuntimeServiceId>,
     mpsc::Receiver<OverwatchCommand<RuntimeServiceId>>,
-    StateUpdater<Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>>,
-    watch::Receiver<Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>>,
+    StateUpdater<Option<RecoveryServiceState<BackendSettings, NetworkSettings>>>,
+    watch::Receiver<Option<RecoveryServiceState<BackendSettings, NetworkSettings>>>,
 ) {
     let (cmd_sender, cmd_receiver) = mpsc::channel(CHANNEL_SIZE);
     let handle =
         OverwatchHandle::<RuntimeServiceId>::new(tokio::runtime::Handle::current(), cmd_sender);
     let (state_sender, state_receiver) = watch::channel(None);
     let state_updater = StateUpdater::<
-        Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
+        Option<RecoveryServiceState<BackendSettings, NetworkSettings>>,
     >::new(Arc::new(state_sender));
 
     (handle, cmd_receiver, state_updater, state_receiver)

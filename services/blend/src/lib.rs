@@ -36,8 +36,8 @@ use crate::{
     core::{
         network::NetworkAdapter as NetworkAdapterTrait,
         service_components::{
-            BlendBackendSettingsOfService, MessageComponents, NetworkBackendOfService,
-            ServiceComponents as CoreServiceComponents,
+            BlendBackendSettingsOfService, MessageComponents, NetworkAdapterSettingsOfService,
+            NetworkBackendOfService, ServiceComponents as CoreServiceComponents,
         },
     },
     edge::service_components::ServiceComponents as EdgeServiceComponents,
@@ -90,6 +90,7 @@ where
     type Settings = Settings<
         BlendBackendSettingsOfService<CoreService, RuntimeServiceId>,
         <EdgeService as EdgeServiceComponents>::BackendSettings,
+        NetworkAdapterSettingsOfService<CoreService, RuntimeServiceId>,
     >;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
@@ -108,12 +109,7 @@ where
                          + 'static,
         > + CoreServiceComponents<
             RuntimeServiceId,
-            NetworkAdapter: NetworkAdapterTrait<
-                RuntimeServiceId,
-                BroadcastSettings = BroadcastSettings<CoreService, RuntimeServiceId>,
-            > + Send
-                                + Sync
-                                + 'static,
+            NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId> + Send + Sync + 'static,
             NodeId: Clone + Debug + Hash + Eq + Send + Sync + node_id::TryFrom + 'static,
             BackendSettings: Clone + Send + Sync,
         > + Send
@@ -268,6 +264,7 @@ where
             Mode::choose(&membership, minimal_network_size),
             local_node_id.clone(),
             overwatch_handle,
+            settings.core.network.clone(),
         )
         .await?;
 
@@ -288,6 +285,7 @@ where
                             overwatch_handle,
                             minimal_network_size,
                             local_node_id.clone(),
+                            settings.core.network.clone(),
                         )
                         .await?;
                 },
@@ -342,8 +340,3 @@ where
     };
     sdp_service_api.post_declaration(sdp_declaration).await
 }
-
-type BroadcastSettings<CoreService, RuntimeServiceId> =
-    <<CoreService as ServiceData>::Message as MessageComponents<
-        <CoreService as CoreServiceComponents<RuntimeServiceId>>::NodeId,
-    >>::BroadcastSettings;

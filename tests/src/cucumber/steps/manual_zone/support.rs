@@ -36,7 +36,7 @@ use lb_http_api_common::bodies::{
         sign::{WalletSignTxZkRequestBody, WalletSignTxZkResponseBody},
     },
 };
-use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, ZkSignature};
+use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, ZkPublicKeys, ZkSignature};
 use lb_node::SignedMantleTx;
 use lb_testing_framework::NodeHttpClient;
 use lb_zone_sdk::{
@@ -1706,8 +1706,12 @@ where
 /// Builds the funding transfer that creates the note consumed by an atomic
 /// zone deposit.
 /// Generous fee margin for the atomic `[Transfer, Deposit, Inscribe]`
-/// transaction; the actual cost is a few hundred gas units at genesis prices.
-const ATOMIC_DEPOSIT_FEE_MARGIN: u64 = 2_000;
+/// transaction. The mandatory fee (execution + size-based storage gas) is
+/// roughly 2k and varies with input count and change-note presence, so a
+/// tight margin intermittently underfunds the tx — which is permanently
+/// invalid and silently evicted at block assembly. Matches
+/// `MAX_ZONE_DEPOSIT_TX_FEE`; the excess above the mandatory fee is a tip.
+const ATOMIC_DEPOSIT_FEE_MARGIN: u64 = 10_000;
 
 fn build_atomic_deposit_transfer(
     available_utxos: Vec<Utxo>,
@@ -1921,7 +1925,7 @@ async fn sign_tx_zk(
             request_url,
             &WalletSignTxZkRequestBody {
                 tx_hash: tx.hash(),
-                pks: public_keys,
+                pks: ZkPublicKeys::try_from(public_keys)?,
             },
         )
         .await

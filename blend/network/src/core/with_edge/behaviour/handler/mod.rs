@@ -29,7 +29,6 @@ const LOG_TARGET: &str = blend::network::core::handler::CORE_EDGE;
 
 type TimerFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 type MessageReceiveFuture = Pin<Box<dyn Future<Output = Result<Vec<u8>, io::Error>> + Send>>;
-#[expect(deprecated, reason = "Self::InboundOpenInfo is deprecated")]
 type PollResult<T> = (
     Poll<
         ConnectionHandlerEvent<
@@ -40,7 +39,6 @@ type PollResult<T> = (
     >,
     T,
 );
-#[expect(deprecated, reason = "Self::InboundOpenInfo is deprecated")]
 type ConnectionEvent<'a> = libp2p::swarm::handler::ConnectionEvent<
     'a,
     <ConnectionHandler as libp2p::swarm::ConnectionHandler>::InboundProtocol,
@@ -147,7 +145,6 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
     type OutboundProtocol = DeniedUpgrade;
     type OutboundOpenInfo = ();
 
-    #[expect(deprecated, reason = "Self::InboundOpenInfo is deprecated")]
     fn listen_protocol(&self) -> SubstreamProtocol<Self::InboundProtocol, Self::InboundOpenInfo> {
         SubstreamProtocol::new(ReadyUpgrade::new(self.protocol_name.clone()), ())
     }
@@ -171,7 +168,6 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
         self.state = Some(state.on_connection_event(event));
     }
 
-    #[expect(deprecated, reason = "Self::InboundOpenInfo is deprecated")]
     fn poll(
         &mut self,
         cx: &mut Context<'_>,

@@ -6,7 +6,10 @@ use crate::mantle::{
     NoteId, Op, RawMantleTx,
     ledger::Outputs,
     ops::transfer::TransferOp,
-    transactions::{Ops, hash::TxHash},
+    transactions::{
+        Ops,
+        hash::{TxHash, TxHashPrefix},
+    },
 };
 
 codec_fixtures!(RawMantleTx,
@@ -18,4 +21,10 @@ codec_fixtures!(
     TxHash,
     Self([0u8; 32]) => "0000000000000000000000000000000000000000000000000000000000000000",
     Self([1u8; 32]) => "0101010101010101010101010101010101010101010101010101010101010101"
+);
+
+codec_fixtures!(
+    TxHashPrefix,
+    Self([0u8; 8]) => "0000000000000000",
+    Self([1u8; 8]) => "0101010101010101"
 );

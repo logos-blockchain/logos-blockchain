@@ -8,8 +8,8 @@ use crate::{
     events::TxEvent,
     mantle::{
         ledger::{
-            Declarations, ExecutableOperation, ProvableOperation, VerifiableOperation,
-            verification_mode,
+            Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
+            VerifiableOperation, verification_mode,
         },
         transactions::hash::TxHashView,
     },
@@ -32,24 +32,24 @@ impl ProvableOperation for SDPActiveOp {
     type Proof = ZkSignature;
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for SDPActiveOp {
-    type PreverificationContext<'a> = ();
-    type VerificationContext<'a> = SDPActiveValidationContext<'a>;
+impl PreverifiableOperation<verification_mode::StandardMode> for SDPActiveOp {
+    type Context<'a> = ();
     type Error = SdpError;
 
     fn preverify(
         &self,
         _proof: &Self::Proof,
-        _context: &Self::PreverificationContext<'_>,
+        _context: &Self::Context<'_>,
     ) -> Result<(), Self::Error> {
         Ok(())
     }
+}
 
-    fn verify(
-        &self,
-        proof: &Self::Proof,
-        context: &Self::VerificationContext<'_>,
-    ) -> Result<(), Self::Error> {
+impl VerifiableOperation<verification_mode::StandardMode> for SDPActiveOp {
+    type Context<'a> = SDPActiveValidationContext<'a>;
+    type Error = SdpError;
+
+    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
         // Check the declaration exists
         let Some(declaration) = context.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));

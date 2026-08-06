@@ -2,7 +2,7 @@ use lb_utils::blake_rng::BlakeRng;
 use tokio::sync::oneshot;
 
 use crate::{
-    core::{BlendService, backends::BlendBackend},
+    core::{BlendService, backends::BlendBackend, network::NetworkAdapter},
     message::ServiceMessage,
 };
 
@@ -10,7 +10,7 @@ use crate::{
 /// the core Blend service without having to specify all the generics the core
 /// service expects.
 pub trait ServiceComponents<RuntimeServiceId> {
-    type NetworkAdapter;
+    type NetworkAdapter: NetworkAdapter<RuntimeServiceId>;
     type BackendSettings;
     type NodeId;
     type Rng;
@@ -45,13 +45,10 @@ impl<
     >
 where
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
-    Network: crate::core::network::NetworkAdapter<RuntimeServiceId>,
+    Network: NetworkAdapter<RuntimeServiceId>,
     StateStorage: lb_services_utils::overwatch::recovery::RecoveryBackend<
             RuntimeServiceId,
-            State = crate::core::state::RecoveryServiceState<
-                Backend::Settings,
-                Network::BroadcastSettings,
-            >,
+            State = crate::core::state::RecoveryServiceState<Backend::Settings, Network::Settings>,
         > + Send
         + Sync,
 {
@@ -64,17 +61,23 @@ where
 
 pub type NetworkBackendOfService<Service, RuntimeServiceId> = <<Service as ServiceComponents<
     RuntimeServiceId,
->>::NetworkAdapter as crate::core::network::NetworkAdapter<RuntimeServiceId>>::Backend;
+>>::NetworkAdapter as NetworkAdapter<RuntimeServiceId>>::Backend;
 pub type BlendBackendSettingsOfService<Service, RuntimeServiceId> =
     <Service as ServiceComponents<RuntimeServiceId>>::BackendSettings;
+
+/// The settings the core service's network adapter needs in order to
+/// republish a message — deployment configuration, never carried in a payload.
+pub type NetworkAdapterSettingsOfService<Service, RuntimeServiceId> =
+    <<Service as ServiceComponents<RuntimeServiceId>>::NetworkAdapter as NetworkAdapter<
+        RuntimeServiceId,
+    >>::Settings;
 
 use crate::message::NetworkInfo;
 
 pub trait MessageComponents<NodeId> {
     type Payload;
-    type BroadcastSettings;
 
-    fn into_components(self) -> (Self::Payload, Self::BroadcastSettings);
+    fn into_payload(self) -> Self::Payload;
 
     /// Try to extract a network info request from the message.
     /// Returns `Ok(sender)` if the message is a `NetworkInfo` request,
@@ -86,19 +89,14 @@ pub trait MessageComponents<NodeId> {
         Self: Sized;
 }
 
-impl<BroadcastSettings, NodeId> MessageComponents<NodeId>
-    for ServiceMessage<BroadcastSettings, NodeId>
-{
+impl<NodeId> MessageComponents<NodeId> for ServiceMessage<NodeId> {
     type Payload = Vec<u8>;
-    type BroadcastSettings = BroadcastSettings;
 
-    fn into_components(self) -> (Self::Payload, Self::BroadcastSettings) {
+    fn into_payload(self) -> Self::Payload {
         match self {
-            Self::Blend(network_message) => {
-                (network_message.message, network_message.broadcast_settings)
-            }
+            Self::Blend(message) => message,
             Self::GetNetworkInfo { .. } => {
-                panic!("NetworkInfo messages should be handled before calling into_components")
+                panic!("NetworkInfo messages should be handled before calling into_payload")
             }
         }
     }

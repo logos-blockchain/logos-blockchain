@@ -5,52 +5,23 @@ pub mod storage;
 pub mod tx;
 
 use std::{
-    collections::BTreeSet,
     fmt::{Debug, Error, Formatter},
     pin::Pin,
 };
 
 use backend::{MempoolError, Status};
 use futures::Stream;
+use lb_core::mantle::transactions::hash::PrefixedKey;
 use tokio::sync::oneshot::Sender;
 pub use tx::{service::TxMempoolService, settings::TxMempoolSettings};
 
-/// Response for `GetTransactionsByHashes` request
-#[derive(Debug, Clone)]
-pub struct TransactionsByHashesResponse<Item, Key> {
-    /// Transactions that were found in the mempool, ordered like the requested
-    /// hashes.
-    found: Vec<Item>,
-    /// Hashes of transactions that were not found in the mempool
-    not_found: BTreeSet<Key>,
-}
+/// A stream of the transactions whose hash shares one reference prefix.
+pub type TxsWithCommonPrefix<Tx> = Pin<Box<dyn Stream<Item = Tx> + Send>>;
 
-impl<Item, Key> TransactionsByHashesResponse<Item, Key>
+pub enum MempoolMsg<BlockId, Payload, Item, Key>
 where
-    Key: Ord,
+    Key: PrefixedKey,
 {
-    #[must_use]
-    pub const fn new(found: Vec<Item>, not_found: BTreeSet<Key>) -> Self {
-        Self { found, not_found }
-    }
-
-    #[must_use]
-    pub fn all_found(&self) -> bool {
-        self.not_found.is_empty()
-    }
-
-    #[must_use]
-    pub const fn not_found(&self) -> &BTreeSet<Key> {
-        &self.not_found
-    }
-
-    #[must_use]
-    pub fn into_found(self) -> Vec<Item> {
-        self.found
-    }
-}
-
-pub enum MempoolMsg<BlockId, Payload, Item, Key> {
     Add {
         payload: Payload,
         key: Key,
@@ -60,12 +31,13 @@ pub enum MempoolMsg<BlockId, Payload, Item, Key> {
         ancestor_hint: BlockId,
         reply_channel: Sender<Pin<Box<dyn Stream<Item = Item> + Send>>>,
     },
-    /// Get specific transactions from mempool by their hashes
+    /// Get a stream of transactions whose hash starts with `prefix`.
     ///
-    /// Returns both found transactions and not found hashes.
-    GetTransactionsByHashes {
-        hashes: Vec<Key>,
-        reply_channel: Sender<Result<TransactionsByHashesResponse<Item, Key>, MempoolError>>,
+    /// The consumer is responsible for ensuring an upper bound when consuming
+    /// the stream as per the block compression spec.
+    GetTransactionsByPrefix {
+        prefix: Key::Prefix,
+        reply_channel: Sender<Result<TxsWithCommonPrefix<Item>, MempoolError>>,
     },
     Remove {
         ids: Vec<Key>,
@@ -84,17 +56,17 @@ where
     BlockId: Debug,
     Payload: Debug,
     Item: Debug,
-    Key: Debug,
+    Key: Debug + PrefixedKey<Prefix: Debug>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         match self {
             Self::View { ancestor_hint, .. } => {
                 write!(f, "MempoolMsg::View {{ ancestor_hint: {ancestor_hint:?} }}")
             }
-            Self::GetTransactionsByHashes { hashes, .. } => {
+            Self::GetTransactionsByPrefix { prefix, .. } => {
                 write!(
                     f,
-                    "MempoolMsg::GetTransactionsByHashes{{hashes: {hashes:?}}}"
+                    "MempoolMsg::GetTransactionsByPrefix{{prefix: {prefix:?}}}"
                 )
             }
             Self::Add { payload, .. } => write!(f, "MempoolMsg::Add{{payload: {payload:?}}}"),

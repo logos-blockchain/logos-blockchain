@@ -162,12 +162,10 @@ where
     type OutboundProtocol = ReadyUpgrade<StreamProtocol>;
     type OutboundOpenInfo = ();
 
-    #[expect(deprecated, reason = "Self::InboundOpenInfo is deprecated")]
     fn listen_protocol(&self) -> SubstreamProtocol<Self::InboundProtocol, Self::InboundOpenInfo> {
         SubstreamProtocol::new(ReadyUpgrade::new(self.protocol_name.clone()), ())
     }
 
-    #[expect(deprecated, reason = "Self::OutboundOpenInfo is deprecated")]
     #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     #[expect(
         clippy::cognitive_complexity,
@@ -346,10 +344,6 @@ where
         }
     }
 
-    #[expect(
-        deprecated,
-        reason = "Self::InboundOpenInfo and Self::OutboundOpenInfo are deprecated"
-    )]
     #[expect(
         clippy::cognitive_complexity,
         reason = "TODO: address this in a dedicated refactor"

@@ -1,5 +1,6 @@
 use lb_groth16::{AdditiveGroup as _, Fr, Groth16Input};
 use lb_log_targets::kms;
+use lb_utils::bounded::UpperBoundedVec;
 use lb_zksign::{ZkSignError, ZkSignVerifierInputs};
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
@@ -9,9 +10,13 @@ use crate::keys::zk::{private::SecretKey, signature::Signature};
 
 const LOG_TARGET: &str = kms::keys::ZK;
 
+pub const MAX_ZK_SIGNING_KEYS: usize = 32;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 #[serde(transparent)]
 pub struct PublicKey(#[serde(with = "lb_groth16::serde::serde_fr")] Fr);
+
+pub type PublicKeys = UpperBoundedVec<PublicKey, MAX_ZK_SIGNING_KEYS>;
 
 impl PublicKey {
     #[must_use]
@@ -70,16 +75,19 @@ impl From<Fr> for PublicKey {
 }
 
 fn try_from_pks(msg: Groth16Input, pks: &[PublicKey]) -> Result<ZkSignVerifierInputs, ZkSignError> {
-    if pks.len() > 32 {
+    if pks.len() > MAX_ZK_SIGNING_KEYS {
         return Err(ZkSignError::TooManyKeys(pks.len()));
     }
 
     // pks are padded with the pk corresponding to the zero SecretKey.
     let zero_pk = Groth16Input::from(SecretKey::zero().to_public_key().into_inner());
-    let mut public_keys = [zero_pk; 32];
+    let mut public_keys = [zero_pk; MAX_ZK_SIGNING_KEYS];
 
     for (i, pk) in pks.iter().enumerate() {
-        assert!(i < 32, "ZkSign supports signing with at most 32 keys");
+        assert!(
+            i < MAX_ZK_SIGNING_KEYS,
+            "ZkSign supports signing with at most {MAX_ZK_SIGNING_KEYS} keys"
+        );
         public_keys[i] = Groth16Input::from(pk.into_inner());
     }
 
