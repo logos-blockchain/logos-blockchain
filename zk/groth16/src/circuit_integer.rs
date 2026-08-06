@@ -54,6 +54,15 @@ impl<const BITS: u8> CircuitInteger<BITS> {
         Self(VALUE)
     }
 
+    /// As [`Self::try_new`], but discarding the error.
+    const fn new_checked(value: u64) -> Option<Self> {
+        if value <= Self::MAX {
+            Some(Self(value))
+        } else {
+            None
+        }
+    }
+
     /// Builds a value that is only known at runtime, returning [`Err`] if it
     /// does not fit in `BITS` bits.
     pub const fn try_new(value: u64) -> Result<Self, CircuitIntegerOutOfRange> {
@@ -61,6 +70,16 @@ impl<const BITS: u8> CircuitInteger<BITS> {
             Ok(Self(value))
         } else {
             Err(CircuitIntegerOutOfRange { value, bits: BITS })
+        }
+    }
+
+    /// Adds `rhs`, returning [`None`] if the sum does not fit in `BITS` bits.
+    #[must_use]
+    pub const fn checked_add(self, rhs: Self) -> Option<Self> {
+        // const `and_then` is not yet stable, so we cannot chain these.
+        match self.0.checked_add(rhs.0) {
+            Some(value) => Self::new_checked(value),
+            None => None,
         }
     }
 

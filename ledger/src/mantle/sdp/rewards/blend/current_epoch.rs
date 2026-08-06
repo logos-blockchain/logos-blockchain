@@ -164,7 +164,7 @@ impl CurrentEpochTracker {
             new_current_epoch = %next_epoch_state.epoch(),
             declaration_count,
             epoch_income = self.epoch_income,
-            core_quota,
+            core_quota = %core_quota,
             "finalized current epoch tracker with new target epoch established",
         );
 

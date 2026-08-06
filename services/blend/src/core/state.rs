@@ -6,6 +6,7 @@ mod serde {
         reward::{EpochBlendingTokenCollector, OldEpochBlendingTokenCollector},
     };
     use lb_chain_service::Epoch;
+    use lb_poq::Quota;
     use serde::{Deserialize, Serialize};
 
     use crate::{
@@ -19,7 +20,7 @@ mod serde {
     /// For details about its fields, check [`ServiceState`].
     pub struct SerializableServiceState {
         last_seen_epoch: Epoch,
-        spent_core_quota: u64,
+        spent_core_quota: Quota,
         unsent_processed_messages: HashSet<ProcessedMessage>,
         unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
         current_epoch_token_collector: EpochBlendingTokenCollector,
@@ -86,6 +87,7 @@ mod service {
         reward::{BlendingToken, EpochBlendingTokenCollector, OldEpochBlendingTokenCollector},
     };
     use lb_chain_service::Epoch;
+    use lb_poq::Quota;
 
     use crate::{
         core::state::{error, recovery_state::RecoveryServiceState, state_updater::StateUpdater},
@@ -98,7 +100,7 @@ mod service {
         last_seen_epoch: Epoch,
         /// The last value for the core quota allowance for the epoch that is
         /// tracked.
-        spent_core_quota: u64,
+        spent_core_quota: Quota,
         unsent_processed_messages: HashSet<ProcessedMessage>,
         unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
         current_epoch_token_collector: EpochBlendingTokenCollector,
@@ -146,7 +148,7 @@ mod service {
         // `state_updater`.
         pub(super) fn new(
             last_seen_epoch: Epoch,
-            spent_core_quota: u64,
+            spent_core_quota: Quota,
             unsent_processed_messages: HashSet<ProcessedMessage>,
             unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
             current_epoch_token_collector: EpochBlendingTokenCollector,
@@ -205,7 +207,7 @@ mod service {
         ) -> Result<Self, error::EpochMismatch> {
             Self::new(
                 epoch,
-                0,
+                Quota::ZERO,
                 HashSet::new(),
                 HashSet::new(),
                 current_epoch_token_collector,
@@ -231,14 +233,14 @@ mod service {
             self.last_seen_epoch
         }
 
-        pub(super) const fn spend_quota(&mut self, quota: u64) {
-            self.spent_core_quota = self
-                .spent_core_quota
-                .checked_add(quota)
-                .expect("Spent core quota addition overflow.");
+        pub(super) const fn spend_quota(&mut self, quota: Quota) {
+            self.spent_core_quota = match self.spent_core_quota.checked_add(quota) {
+                Some(spent) => spent,
+                None => panic!("Spent core quota addition overflow."),
+            };
         }
 
-        pub const fn spent_quota(&self) -> u64 {
+        pub const fn spent_quota(&self) -> Quota {
             self.spent_core_quota
         }
 
@@ -285,7 +287,7 @@ mod service {
             self,
         ) -> (
             Epoch,
-            u64,
+            Quota,
             HashSet<ProcessedMessage>,
             HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
             EpochBlendingTokenCollector,
@@ -369,6 +371,7 @@ mod state_updater {
         encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
         reward::{BlendingToken, OldEpochBlendingTokenCollector},
     };
+    use lb_poq::Quota;
 
     use crate::{
         core::state::{error, service::ServiceState},
@@ -397,7 +400,7 @@ mod state_updater {
             self.inner
         }
 
-        pub const fn consume_core_quota(&mut self, amount: u64) {
+        pub const fn consume_core_quota(&mut self, amount: Quota) {
             self.changed = true;
             self.inner.spend_quota(amount);
         }
