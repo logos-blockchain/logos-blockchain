@@ -126,7 +126,7 @@ mod test {
         Quota,
         inputs::prove::{
             private::ProofOfLeadershipQuotaInputs,
-            public::{CoreInputs, LeaderInputs},
+            public::{CoreInputs, LeaderInputs, PowInputs},
         },
     };
     use lb_core::crypto::ZkHash;
@@ -179,6 +179,7 @@ mod test {
                     zk_root: ZkHash::ZERO,
                 },
                 leader: initial_leader,
+                pow: PowInputs::unwired_placeholder(),
             },
             MockCorePoQGenerator,
             Epoch::new(0),

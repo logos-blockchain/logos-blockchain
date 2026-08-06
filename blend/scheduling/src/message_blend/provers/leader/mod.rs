@@ -115,6 +115,7 @@ fn create_proof_stream(
                             signing_key: ephemeral_signing_key.public_key().into_inner(),
                             core: public_inputs.core,
                             leader: public_inputs.leader,
+                            pow: public_inputs.pow,
                         },
                         PrivateInputs::new_proof_of_leadership_quota_inputs(
                             message_release_index,

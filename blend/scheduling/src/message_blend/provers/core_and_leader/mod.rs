@@ -104,6 +104,7 @@ where
         let current_epoch_membership_size = self.core_proofs_generator.settings.membership_size;
         let current_epoch_core_public_inputs =
             self.core_proofs_generator.settings.public_inputs.core;
+        let current_epoch_pow_public_inputs = self.core_proofs_generator.settings.public_inputs.pow;
 
         self.leader_proofs_generator = Some(RealLeaderProofsGenerator::new(
             ProofsGeneratorSettings {
@@ -113,6 +114,7 @@ where
                 public_inputs: PoQVerificationInputsMinusSigningKey {
                     core: current_epoch_core_public_inputs,
                     leader: current_leader_inputs,
+                    pow: current_epoch_pow_public_inputs,
                 },
                 encapsulation_layers: self.core_proofs_generator.settings.encapsulation_layers,
             },

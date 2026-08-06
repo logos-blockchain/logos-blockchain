@@ -20,7 +20,7 @@ use lb_blend::{
             ProofOfQuota, VerifiedProofOfQuota,
             inputs::prove::{
                 private::ProofOfLeadershipQuotaInputs,
-                public::{CoreInputs, LeaderInputs},
+                public::{CoreInputs, LeaderInputs, PowInputs},
             },
         },
         selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
@@ -330,6 +330,7 @@ pub fn new_crypto_processor<CorePoQGenerator>(
         PoQVerificationInputsMinusSigningKey {
             core: epoch_info.poq_core_public_inputs,
             leader: epoch_info.poq_leadership_public_inputs,
+            pow: PowInputs::unwired_placeholder(),
         },
         core_poq_generator,
         epoch_info.epoch,

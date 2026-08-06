@@ -112,6 +112,7 @@ where
                             signing_key: ephemeral_signing_key.public_key().into_inner(),
                             core: public_inputs.core,
                             leader: public_inputs.leader,
+                            pow: public_inputs.pow,
                         },
                         key_index,
                     ).await.expect("Core PoQ generation should not fail.");

@@ -1,6 +1,6 @@
 use core::fmt::{self, Debug, Formatter};
 
-use lb_poq::AgedNotePathAndSelectors;
+use lb_poq::{AgedNotePathAndSelectors, PoQSelector};
 use zeroize::ZeroizeOnDrop;
 
 use crate::{
@@ -16,7 +16,7 @@ use crate::{
 #[non_exhaustive]
 pub struct Inputs {
     pub key_index: KeyIndex,
-    pub selector: bool,
+    pub selector: PoQSelector,
     pub proof_type: ProofType,
 }
 
@@ -40,6 +40,19 @@ impl Inputs {
         proof_of_leadership_quota_inputs: ProofOfLeadershipQuotaInputs,
     ) -> Self {
         let proof_type: ProofType = proof_of_leadership_quota_inputs.into();
+        Self {
+            key_index,
+            selector: proof_type.proof_selector(),
+            proof_type,
+        }
+    }
+
+    #[must_use]
+    pub fn new_proof_of_work_quota_inputs(
+        key_index: KeyIndex,
+        proof_of_work_quota_inputs: ProofOfWorkQuotaInputs,
+    ) -> Self {
+        let proof_type: ProofType = proof_of_work_quota_inputs.into();
         Self {
             key_index,
             selector: proof_type.proof_selector(),
@@ -71,6 +84,10 @@ impl Inputs {
                     slot_number: leadership_quota_private_inputs.slot,
                 }
             }
+            ProofType::PowQuota(pow_quota_private_inputs) => SelectionRandomnessSecretInput::Pow {
+                pow_sk: pow_quota_private_inputs.pow_sk,
+                epoch_nonce: *pol_epoch_nonce,
+            },
         }
     }
 }
@@ -79,6 +96,7 @@ impl Inputs {
 pub enum ProofType {
     CoreQuota(Box<ProofOfCoreQuotaInputs>),
     LeadershipQuota(Box<ProofOfLeadershipQuotaInputs>),
+    PowQuota(Box<ProofOfWorkQuotaInputs>),
 }
 
 impl Debug for ProofType {
@@ -86,16 +104,18 @@ impl Debug for ProofType {
         match self {
             Self::CoreQuota(_) => f.write_str("ProofType::CoreQuota"),
             Self::LeadershipQuota(_) => f.write_str("ProofType::LeadershipQuota"),
+            Self::PowQuota(_) => f.write_str("ProofType::PowQuota"),
         }
     }
 }
 
 impl ProofType {
     #[must_use]
-    pub const fn proof_selector(&self) -> bool {
+    pub const fn proof_selector(&self) -> PoQSelector {
         match self {
-            Self::CoreQuota(_) => false,
-            Self::LeadershipQuota(_) => true,
+            Self::CoreQuota(_) => PoQSelector::Core,
+            Self::LeadershipQuota(_) => PoQSelector::Leader,
+            Self::PowQuota(_) => PoQSelector::Pow,
         }
     }
 }
@@ -125,5 +145,17 @@ pub struct ProofOfLeadershipQuotaInputs {
 impl From<ProofOfLeadershipQuotaInputs> for ProofType {
     fn from(value: ProofOfLeadershipQuotaInputs) -> Self {
         Self::LeadershipQuota(Box::new(value))
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, ZeroizeOnDrop)]
+pub struct ProofOfWorkQuotaInputs {
+    pub pow_sk: ZkHash,
+    pub pow_block_hash: ZkHash,
+}
+
+impl From<ProofOfWorkQuotaInputs> for ProofType {
+    fn from(value: ProofOfWorkQuotaInputs) -> Self {
+        Self::PowQuota(Box::new(value))
     }
 }

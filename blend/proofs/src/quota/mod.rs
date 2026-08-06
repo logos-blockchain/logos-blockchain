@@ -252,6 +252,10 @@ pub enum SelectionRandomnessSecretInput {
         note_secret_key: ZkHash,
         slot_number: u64,
     },
+    Pow {
+        pow_sk: ZkHash,
+        epoch_nonce: ZkHash,
+    },
 }
 const DOMAIN_SEPARATION_TAG: [u8; 23] = *b"SELECTION_RANDOMNESS_V1";
 static DOMAIN_SEPARATION_TAG_FR: LazyLock<ZkHash> = LazyLock::new(|| {
@@ -269,6 +273,10 @@ fn generate_secret_selection_randomness(
             note_secret_key,
             slot_number,
         } => (note_secret_key, (*slot_number).into()),
+        SelectionRandomnessSecretInput::Pow {
+            pow_sk,
+            epoch_nonce,
+        } => (pow_sk, (*epoch_nonce)),
     };
     [
         *DOMAIN_SEPARATION_TAG_FR,

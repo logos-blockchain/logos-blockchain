@@ -7,7 +7,7 @@ use lb_blend_message::{
 };
 use lb_blend_proofs::quota::{
     Quota,
-    inputs::prove::public::{CoreInputs, LeaderInputs},
+    inputs::prove::public::{CoreInputs, LeaderInputs, PowInputs},
 };
 use lb_core::{
     crypto::ZkHash,
@@ -221,6 +221,7 @@ impl CurrentEpochTracker {
                 quota: core_quota,
             },
             leader: leader_input,
+            pow: PowInputs::unwired_placeholder(),
         })
     }
 }

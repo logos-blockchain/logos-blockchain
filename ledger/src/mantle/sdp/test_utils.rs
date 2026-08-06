@@ -9,7 +9,7 @@ use lb_blend_proofs::{
         inputs::prove::{
             PrivateInputs, PublicInputs,
             private::ProofOfCoreQuotaInputs,
-            public::{CoreInputs, LeaderInputs},
+            public::{CoreInputs, LeaderInputs, PowInputs},
         },
     },
     selection::VerifiedProofOfSelection,
@@ -85,6 +85,7 @@ pub fn generate_activity_proof(
         signing_key: ephemeral.public_key().into_inner(),
         core: core_inputs,
         leader: leader_inputs,
+        pow: PowInputs::unwired_placeholder(),
     };
     for message_release_index in public_inputs.core.quota.values_range() {
         let private_inputs = PrivateInputs::new_proof_of_core_quota_inputs(

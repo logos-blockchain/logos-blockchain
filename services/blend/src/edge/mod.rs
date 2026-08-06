@@ -16,7 +16,7 @@ use backends::BlendBackend;
 use futures::{Stream, StreamExt as _};
 use lb_blend::{
     message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
-    proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs},
+    proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs, PowInputs},
     scheduling::{
         epoch::{EpochEvent, UninitializedEpochEventStream},
         message_blend::provers::leader::LeaderProofsGenerator,
@@ -425,6 +425,7 @@ where
             pol_ledger_aged: current_public_epoch_info.aged,
             message_quota: settings.epoch_leadership_quota(),
         },
+        pow: PowInputs::unwired_placeholder(),
     };
 
     debug!(target: LOG_TARGET, "Creating new handler for epoch {:?}", current_public_epoch_info.epoch);
