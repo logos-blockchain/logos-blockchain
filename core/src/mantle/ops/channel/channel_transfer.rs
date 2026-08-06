@@ -1,3 +1,4 @@
+use lb_codec::{BinaryCodec, BinaryEncode as _};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -5,16 +6,22 @@ use crate::{
     mantle::{
         TxHash,
         channel::{Channels, Error},
-        ledger::{Inputs, Operation, Outputs, Utxo, Utxos},
-        nom::{NomCodec, NomEncode as _},
-        ops::{OpId, channel::ChannelId},
+        ledger::{
+            ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation, Utxo,
+            Utxos, VerifiableOperation, verification_mode,
+        },
+        ops::{
+            OpId,
+            channel::{ChannelId, verification::verify_channel_multi_sig},
+        },
+        transactions::{OperationVerificationHelper, hash::TxHashView},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
     sdp::locked_notes::LockedNotes,
 };
 
 // ChannelTransfer = ChannelId Inputs Outputs — plain field-order concat.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
 pub struct ChannelTransferOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
@@ -29,7 +36,7 @@ impl ChannelTransferOp {
 
 impl OpId for ChannelTransferOp {
     fn op_bytes(&self) -> Vec<u8> {
-        self.encode()
+        self.encode_to_vec()
     }
 }
 
@@ -37,8 +44,9 @@ pub struct ChannelTransferValidationContext<'a> {
     pub channels: &'a Channels,
     pub locked_notes: &'a LockedNotes,
     pub utxos: &'a Utxos,
-    pub tx_hash: &'a TxHash,
-    pub transfer_sigs: &'a ChannelMultiSigProof,
+    pub tx_hash_view: &'a TxHashView,
+    pub op_index: usize,
+    pub helper: &'a dyn OperationVerificationHelper,
 }
 
 pub struct ChannelTransferExecutionContext {
@@ -47,42 +55,67 @@ pub struct ChannelTransferExecutionContext {
     pub tx_hash: TxHash,
 }
 
-impl Operation<ChannelTransferValidationContext<'_>> for ChannelTransferOp {
-    type ExecutionContext<'a>
-        = ChannelTransferExecutionContext
-    where
-        Self: 'a;
+impl ProvableOperation for ChannelTransferOp {
+    type Proof = ChannelMultiSigProof;
+}
+
+impl PreverifiableOperation<verification_mode::StandardMode> for ChannelTransferOp {
+    type Context<'a> = ();
     type Error = Error;
 
-    fn validate(&self, ctx: &ChannelTransferValidationContext<'_>) -> Result<(), Self::Error> {
+    fn preverify(
+        &self,
+        _proof: &Self::Proof,
+        _context: &Self::Context<'_>,
+    ) -> Result<(), Self::Error> {
         // Check that the outputs are valid
         self.outputs.validate()?;
 
+        Ok(())
+    }
+}
+
+impl VerifiableOperation<verification_mode::StandardMode> for ChannelTransferOp {
+    type Context<'a> = ChannelTransferValidationContext<'a>;
+    type Error = Error;
+
+    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+        verify_channel_multi_sig(
+            &self.channel_id,
+            proof,
+            context.tx_hash_view.as_bytes(),
+            context.helper,
+            context.op_index,
+        )
+        .map_err(|_error| Error::InvalidSignature)?; // FIXME: Discards error details
+
         // Check that the channel exist
         let channel =
-            ctx.channels
-                .channel_state(&self.channel_id)
+            context
+                .channels
+                .channels
+                .get(&self.channel_id)
                 .ok_or(Error::ChannelNotFound {
                     channel_id: self.channel_id,
                 })?;
 
         // Check that the inputs are valid and belong to the channel
         self.inputs.validate_in_channel(
-            ctx.locked_notes,
-            ctx.channels,
+            context.locked_notes,
+            context.channels,
             &self.channel_id,
-            ctx.utxos,
+            context.utxos,
         )?;
 
         // Check the balance is preserved
-        let input_amount = self.inputs.amount(ctx.utxos)?;
+        let input_amount = self.inputs.amount(context.utxos)?;
         let output_amount = self.outputs.amount()?;
         if input_amount != output_amount {
             return Err(Error::UnbalancedTransfer);
         }
 
         // Check there is enough signatures
-        let signatures = ctx.transfer_sigs.signatures();
+        let signatures = proof.signatures();
         if signatures.len() != channel.transfer_threshold as usize {
             return Err(Error::ThresholdUnmet {
                 channel_id: self.channel_id,
@@ -97,7 +130,7 @@ impl Operation<ChannelTransferValidationContext<'_>> for ChannelTransferOp {
                 .accredited_keys
                 .get(sig.channel_key_index as usize)
                 .ok_or(Error::InvalidSignature)?
-                .verify(ctx.tx_hash.as_signing_bytes().as_ref(), &sig.signature)
+                .verify(context.tx_hash_view.as_bytes(), &sig.signature)
                 .is_err()
             {
                 return Err(Error::InvalidSignature);
@@ -106,27 +139,32 @@ impl Operation<ChannelTransferValidationContext<'_>> for ChannelTransferOp {
 
         Ok(())
     }
+}
 
-    fn execute(
+impl ExecutableOperation for ChannelTransferOp {
+    type Context<'a> = ChannelTransferExecutionContext;
+    type Error = Error;
+
+    fn execute<'a>(
         &self,
-        mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
+        mut context: Self::Context<'a>,
+    ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         // Remove the inputs from the ledger and from the channel.
-        ctx.utxos = self.inputs.execute(ctx.utxos)?;
+        context.utxos = self.inputs.execute(context.utxos)?;
         for note_id in self.inputs.iter() {
-            ctx.channels = ctx
+            context.channels = context
                 .channels
                 .unregister_channel_note(note_id, &self.channel_id)?;
         }
 
         // Add the outputs to the ledger and register them as channel notes.
-        ctx.utxos = self.outputs.execute(ctx.utxos, self);
+        context.utxos = self.outputs.execute(context.utxos, self);
         for utxo in self.utxos() {
-            ctx.channels = ctx
+            context.channels = context
                 .channels
                 .register_channel_note(&utxo.id(), &self.channel_id)?;
         }
 
-        Ok((ctx, Vec::new()))
+        Ok((context, Vec::new()))
     }
 }

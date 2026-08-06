@@ -119,8 +119,7 @@ async fn restart_node_and_get_client(
     let mut args = vec!["--net-initial-peers".to_owned()];
     args.extend(initial_peers.into_iter().map(|addr| addr.to_string()));
 
-    cluster
-        .restart_node_with(node_name, StartNodeOptions::default().with_args(args))
+    Box::pin(cluster.restart_node_with(node_name, StartNodeOptions::default().with_args(args)))
         .await
         .unwrap_or_else(|_| panic!("node `{node_name}` should restart"));
 

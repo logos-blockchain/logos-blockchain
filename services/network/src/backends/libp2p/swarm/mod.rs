@@ -201,8 +201,8 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                     // (not our own `connect()`), so they have no `pending_dials`
                     // entry and would otherwise be re-dialed forever. Evict the
                     // stale address from Kademlia immediately instead of retrying.
-                    DialError::WrongPeerId { obtained, endpoint } => {
-                        let dial_addr = endpoint.get_remote_address();
+                    DialError::WrongPeerId { obtained, address } => {
+                        let dial_addr = &address;
                         tracing::debug!(
                             target: LOG_TARGET,
                             "Evicting stale address after WrongPeerId (expected {peer_id:?}, obtained {obtained}): {dial_addr}"
@@ -371,10 +371,7 @@ const fn exp_backoff(retry: usize) -> Duration {
 mod tests {
     use std::{collections::HashSet, net::Ipv4Addr, sync::Once, time::Instant};
 
-    use lb_libp2p::{
-        libp2p::core::{ConnectedPoint, Endpoint, transport::PortUse},
-        protocol_name::StreamProtocol,
-    };
+    use lb_libp2p::protocol_name::StreamProtocol;
     use lb_utils::net::get_available_udp_port;
     use rand::rngs::OsRng;
     use tracing_subscriber::EnvFilter;
@@ -719,11 +716,7 @@ mod tests {
             connection_id: ConnectionId::new_unchecked(1),
             error: DialError::WrongPeerId {
                 obtained: obtained_peer,
-                endpoint: ConnectedPoint::Dialer {
-                    address: remote_addr.clone(),
-                    role_override: Endpoint::Dialer,
-                    port_use: PortUse::Reuse,
-                },
+                address: remote_addr.clone(),
             },
         };
 

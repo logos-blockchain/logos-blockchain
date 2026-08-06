@@ -4,6 +4,7 @@ use core::{
 };
 use std::{num::NonZero, time::Duration};
 
+use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use time::OffsetDateTime;
 #[cfg(feature = "tokio")]
@@ -21,6 +22,7 @@ use tokio::time::{Interval, MissedTickBehavior};
     Ord,
     serde::Serialize,
     serde::Deserialize,
+    BinaryCodec,
 )]
 pub struct Slot(u64);
 
@@ -94,6 +96,28 @@ impl PartialOrd<Epoch> for u32 {
 impl AsRef<u32> for Epoch {
     fn as_ref(&self) -> &u32 {
         &self.0
+    }
+}
+
+impl BinaryEncode for Epoch {
+    fn encoded_length(&self) -> usize {
+        self.as_ref().encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.as_ref().encode_into(out);
+    }
+}
+
+impl BinaryDecode for Epoch {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, inner) = u32::decode(input, &())?;
+        Ok((rest, Self::new(inner)))
     }
 }
 

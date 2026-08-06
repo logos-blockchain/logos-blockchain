@@ -13,10 +13,7 @@ use std::{
 use async_trait::async_trait;
 use backends::{StorageBackend, StorageTransaction};
 use bytes::Bytes;
-use lb_core::{
-    block::BlockNumber,
-    codec::{DeserializeOp as _, SerializeOp as _},
-};
+use lb_core::codec::DeserializeOp as _;
 use lb_log_targets::storage;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -28,7 +25,7 @@ use overwatch::{
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot::Sender;
 
-use crate::api::{StorageApiRequest, StorageOperation, membership::requests::MembershipApiRequest};
+use crate::api::{StorageApiRequest, StorageOperation};
 
 const LOG_TARGET: &str = storage::ROOT;
 
@@ -111,56 +108,6 @@ impl<Backend: StorageBackend> StorageMsg<Backend> {
             Self::Load { key, reply_channel },
             StorageReplyReceiver::new(receiver),
         )
-    }
-
-    pub fn new_store_message<V: Serialize + DeserializeOwned>(
-        key: Bytes,
-        value: &V,
-    ) -> Result<Self, lb_core::codec::Error> {
-        let value = value.to_bytes()?;
-        Ok(Self::Store { key, value })
-    }
-
-    pub fn new_remove_message(key: Bytes) -> (Self, StorageReplyReceiver<Option<Bytes>, Backend>) {
-        let (reply_channel, receiver) = tokio::sync::oneshot::channel();
-        (
-            Self::Remove { key, reply_channel },
-            StorageReplyReceiver::new(receiver),
-        )
-    }
-
-    pub fn new_transaction_message(
-        transaction: Backend::Transaction,
-    ) -> (
-        Self,
-        StorageReplyReceiver<<Backend::Transaction as StorageTransaction>::Result, Backend>,
-    ) {
-        let (reply_channel, receiver) = tokio::sync::oneshot::channel();
-        (
-            Self::Execute {
-                transaction,
-                reply_channel,
-            },
-            StorageReplyReceiver::new(receiver),
-        )
-    }
-
-    #[must_use]
-    pub const fn save_latest_block_request(block_number: BlockNumber) -> Self {
-        Self::Api {
-            request: StorageApiRequest::Membership(MembershipApiRequest::SaveLatestBlock {
-                block_number,
-            }),
-        }
-    }
-
-    #[must_use]
-    pub const fn load_latest_block_request(response_tx: Sender<Option<BlockNumber>>) -> Self {
-        Self::Api {
-            request: StorageApiRequest::Membership(MembershipApiRequest::LoadLatestBlock {
-                response_tx,
-            }),
-        }
     }
 }
 

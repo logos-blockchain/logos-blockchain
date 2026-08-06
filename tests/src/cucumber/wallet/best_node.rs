@@ -5,18 +5,15 @@ use std::{
 
 use hex::ToHex as _;
 use lb_chain_service::CryptarchiaInfo;
-use lb_testing_framework::{BlockFeed, NodeHttpClient, is_truthy_env};
+use lb_testing_framework::{NodeHttpClient, is_truthy_env};
 use tokio::{
     task::JoinSet,
     time::{Instant, sleep, timeout},
 };
 use tracing::{info, warn};
 
-use crate::{
-    common::wallet::WalletChainSourceId,
-    cucumber::{
-        defaults::CUCUMBER_VERBOSE_CONSOLE, error::StepError, wallet::TARGET, world::CucumberWorld,
-    },
+use crate::cucumber::{
+    defaults::CUCUMBER_VERBOSE_CONSOLE, error::StepError, wallet::TARGET, world::CucumberWorld,
 };
 
 const BEST_NODE_SELECTION_TIMEOUT: Duration = Duration::from_mins(3);
@@ -106,27 +103,13 @@ pub async fn sanitize_best_node_info<'a>(
     wallet_name: &str,
     best_node_info: Option<&BestNodeInfo>,
 ) -> Result<(String, &'a NodeHttpClient, CryptarchiaInfo), StepError> {
-    sanitize_best_node_info_with_feed(world, wallet_name, best_node_info, None).await
-}
-
-/// Resolve a query node for `wallet_name`, reusing `best_node_info` when it is
-/// still on the observed chain.
-///
-/// If the cached selection is stale or missing, this waits for a fresh majority
-/// tip in the wallet's fork group and returns the selected node client.
-pub async fn sanitize_best_node_info_with_feed<'a>(
-    world: &'a CucumberWorld,
-    wallet_name: &str,
-    best_node_info: Option<&BestNodeInfo>,
-    feed: Option<&BlockFeed>,
-) -> Result<(String, &'a NodeHttpClient, CryptarchiaInfo), StepError> {
     let wallet_node_name = world.resolve_wallet_node_name(wallet_name)?;
 
     let mut last_msg = String::new();
     if let Some(best_info) = best_node_info
         && let Some(node) = best_info.for_wallet_node(&wallet_node_name, &world.node_to_group)
     {
-        if let Some(selection) = resolve_cached_best_node(world, node, feed).await? {
+        if let Some(selection) = resolve_cached_best_node(world, node).await? {
             return Ok(selection);
         }
 
@@ -136,52 +119,6 @@ pub async fn sanitize_best_node_info_with_feed<'a>(
 
     let refreshed = determine_best_node(world, &wallet_node_name, Some(&mut last_msg)).await?;
     resolve_selected_best_node(world, &wallet_node_name, &refreshed).await
-}
-
-/// Resolve a query node for a wallet-feed source group.
-///
-/// This is the group-oriented form used when the caller already knows the
-/// source id instead of a wallet name.
-pub async fn sanitize_best_node_info_for_group<'a>(
-    world: &'a CucumberWorld,
-    source_id: &WalletChainSourceId,
-    best_node_info: Option<&BestNodeInfo>,
-) -> Result<(String, &'a NodeHttpClient, CryptarchiaInfo), StepError> {
-    sanitize_best_node_info_for_group_with_feed(world, source_id, best_node_info, None).await
-}
-
-/// Resolve a query node for a source group, optionally validating against a
-/// block feed.
-///
-/// The feed check keeps a cached best node only if its tip is still part of the
-/// observed chain.
-pub async fn sanitize_best_node_info_for_group_with_feed<'a>(
-    world: &'a CucumberWorld,
-    source_id: &WalletChainSourceId,
-    best_node_info: Option<&BestNodeInfo>,
-    feed: Option<&BlockFeed>,
-) -> Result<(String, &'a NodeHttpClient, CryptarchiaInfo), StepError> {
-    let group_key = source_id.as_str();
-    let representative_node = representative_node_for_group(world, group_key)?;
-
-    let mut last_msg = String::new();
-    if let Some(best_info) = best_node_info
-        && let Some(node) = best_info
-            .best_nodes
-            .get(group_key)
-            .or_else(|| best_info.best_nodes.get(""))
-    {
-        if let Some(selection) = resolve_cached_best_node(world, node, feed).await? {
-            return Ok(selection);
-        }
-
-        let refreshed =
-            determine_best_node(world, &representative_node, Some(&mut last_msg)).await?;
-        return resolve_selected_best_node(world, &representative_node, &refreshed).await;
-    }
-
-    let refreshed = determine_best_node(world, &representative_node, Some(&mut last_msg)).await?;
-    resolve_selected_best_node(world, &representative_node, &refreshed).await
 }
 
 /// Determine the best node to query, scoped to the fork group that contains
@@ -294,39 +231,6 @@ struct NodeConsensusSnapshot {
     consensus: CryptarchiaInfo,
 }
 
-fn representative_node_for_group(
-    world: &CucumberWorld,
-    group_key: &str,
-) -> Result<String, StepError> {
-    if world.node_groups.is_empty() {
-        let mut candidates = world.all_node_names();
-        candidates.sort();
-        return candidates
-            .into_iter()
-            .next()
-            .ok_or_else(|| StepError::LogicalError {
-                message: "No available nodes to query for UTXOs".to_owned(),
-            });
-    }
-
-    let mut candidates = world
-        .node_groups
-        .get(group_key)
-        .ok_or_else(|| StepError::LogicalError {
-            message: format!("Node group '{group_key}' was not found in scenario state"),
-        })?
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>();
-    candidates.sort();
-    candidates
-        .into_iter()
-        .next()
-        .ok_or_else(|| StepError::LogicalError {
-            message: format!("Node group '{group_key}' has no nodes"),
-        })
-}
-
 async fn resolve_selected_best_node<'a>(
     world: &'a CucumberWorld,
     wallet_node_name: &str,
@@ -367,7 +271,6 @@ async fn resolve_selected_best_node<'a>(
 async fn resolve_cached_best_node<'a>(
     world: &'a CucumberWorld,
     selected: &BestGroupNode,
-    feed: Option<&BlockFeed>,
 ) -> Result<Option<(String, &'a NodeHttpClient, CryptarchiaInfo)>, StepError> {
     let Some(node_info) = world.nodes_info.get(&selected.node_name) else {
         return Err(StepError::LogicalError {
@@ -392,7 +295,7 @@ async fn resolve_cached_best_node<'a>(
     let tip_or_height_changed =
         selected_tip != live_tip || consensus.cryptarchia_info.height != selected.height;
 
-    if tip_or_height_changed && !selected_tip_still_on_observed_chain(feed, selected) {
+    if tip_or_height_changed {
         return Ok(None);
     }
 
@@ -401,23 +304,6 @@ async fn resolve_cached_best_node<'a>(
         &node_info.started_node.client,
         consensus.cryptarchia_info,
     )))
-}
-
-fn selected_tip_still_on_observed_chain(
-    feed: Option<&BlockFeed>,
-    selected: &BestGroupNode,
-) -> bool {
-    let Some(observation) = feed.and_then(BlockFeed::latest_observation) else {
-        return false;
-    };
-    let Some(node_chain) = observation.node(&selected.node_name) else {
-        return false;
-    };
-    let Some(observed_header) = node_chain.header_at_height(selected.height) else {
-        return false;
-    };
-
-    normalize_header_id_str(&selected.tip) == observed_header.encode_hex::<String>()
 }
 
 /// Group key display helper

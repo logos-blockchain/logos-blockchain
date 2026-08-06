@@ -5,7 +5,7 @@ use blake2::{Digest as _, digest::typenum::U32};
 pub use lb_dynamic_merkle::{DynamicMerkleTree, MerkleNode, MerklePath};
 use lb_dynamic_merkle::{MerkleHasher, empty_subtree_root};
 pub use lb_merkle_tree::Error;
-use lb_merkle_tree::{CompressedMerkleTree, LeafExtractor, MerkleTree};
+use lb_merkle_tree::{LeafExtractor, MerkleTree};
 
 pub type Hasher = blake2::Blake2b<U32>;
 
@@ -64,9 +64,6 @@ where
 /// from being reordered, and their position is recorded for future insertions.
 /// Updating an item replaces its leaf with another one, keeping its position.
 pub type Blake2bTree<Key, Item> = MerkleTree<Key, Item, Blake2bLeaf>;
-
-/// Compressed form of a [`Blake2bTree`].
-pub type CompressedBlake2bTree<Key, Item> = CompressedMerkleTree<Key, Item>;
 
 #[cfg(test)]
 mod tests {
@@ -412,25 +409,6 @@ mod tests {
         assert_eq!(tree.get(&TestLeaf::from_usize(2)), None);
         assert_eq!(tree.get_ref(&key), Some(&item));
         assert_eq!(tree.get_ref(&TestLeaf::from_usize(2)), None);
-    }
-
-    // Iteration yields the surviving items, whatever position they occupy.
-    #[test]
-    fn test_iter_skips_removed_items() {
-        let tree: Blake2bTree<TestLeaf, TestLeaf> = Blake2bTree::new();
-
-        let mut current_tree = tree;
-        let keys = (0..3).map(TestLeaf::from_usize).collect::<Vec<_>>();
-        for key in &keys {
-            current_tree = current_tree.insert(*key, *key).0;
-        }
-        let (current_tree, _) = current_tree.remove(&keys[1]).unwrap();
-
-        let items = current_tree.into_iter().collect::<Vec<_>>();
-
-        assert_eq!(items.len(), 2);
-        assert!(items.contains(&(&keys[0], &keys[0])));
-        assert!(items.contains(&(&keys[2], &keys[2])));
     }
 
     #[test]

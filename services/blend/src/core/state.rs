@@ -408,21 +408,6 @@ mod state_updater {
             self.inner.spend_quota(amount);
         }
 
-        /// Consumes `self` and return the state with any changes applied to it,
-        /// without storing those changes via the underlying
-        /// `overwatch::services::state::StateUpdater`.
-        ///
-        /// It is important to note that it is not equivalent to calling
-        /// rollback, since any changes applied before calling this function
-        /// will still be applied to the returned object.
-        /// In case the original state is needed, it needs to be `.clone()`d
-        /// before consuming it to produce this state updater instance.
-        pub fn consume_without_committing(
-            self,
-        ) -> ServiceState<BackendSettings, BroadcastSettings> {
-            self.inner
-        }
-
         pub fn collect_current_epoch_tokens(
             &mut self,
             tokens: impl Iterator<Item = BlendingToken>,

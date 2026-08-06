@@ -7,10 +7,15 @@ on:
         description: "Docker image tag to use"
         required: true
         default: "devnet"
+      custom_version:
+        description: "Optional version tag"
+        required: false
+        type: string
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  VERSION_TAG: ${{ github.ref_name }}
 
 jobs:
   build:
@@ -35,6 +40,11 @@ jobs:
       - name: Print run info
         run: |
           echo "Building Logos tools image for ${{ matrix.platform }} with tag: ${{ inputs.tag }}"
+          if [ -n "${{ inputs.custom_version }}" ]; then
+            echo "Applying custom version tag: ${{ inputs.custom_version }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "Applying git version tag: ${{ env.VERSION_TAG }}"
+          fi
 
       - name: Prepare platform pair
         run: |
@@ -124,9 +134,15 @@ jobs:
       - name: Create manifest list and push
         working-directory: ${{ runner.temp }}/digests
         run: |
-          docker buildx imagetools create \
-            -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }} \
-            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+          TAGS="-t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }}"
+
+          if [ -n "${{ inputs.custom_version }}" ]; then
+            TAGS="$TAGS -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.custom_version }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            TAGS="$TAGS -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION_TAG }}"
+          fi
+
+          docker buildx imagetools create $TAGS $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
 
       - name: Inspect image
         run: |

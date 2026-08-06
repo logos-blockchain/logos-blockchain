@@ -50,6 +50,14 @@ pub enum ManualCommand {
         from: String,
         to: String,
     },
+    Drain {
+        from: String,
+        to: String,
+    },
+    DrainAllNodeWallets {
+        node_name: String,
+        to: String,
+    },
     ContinuousRoundRobinUserWallets {
         coin_split_outputs: usize,
         coin_split_value: u64,
@@ -235,6 +243,14 @@ fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
             num_transactions: parse_usize_field(&parts, "num_transactions")?,
             value: parse_u64_field(&parts, "value")?,
             from: parse_quoted_field(&parts, "from")?,
+            to: parse_quoted_field(&parts, "to")?,
+        }),
+        "DRAIN" => Ok(ManualCommand::Drain {
+            from: parse_quoted_field(&parts, "from")?,
+            to: parse_quoted_field(&parts, "to")?,
+        }),
+        "DRAIN_ALL_NODE_WALLETS" => Ok(ManualCommand::DrainAllNodeWallets {
+            node_name: parse_quoted_field(&parts, "node_name")?,
             to: parse_quoted_field(&parts, "to")?,
         }),
         "CONTINUOUS_ROUND_ROBIN_USER_WALLETS" => {
@@ -539,6 +555,26 @@ mod tests {
         ));
     }
 
+    fn assert_drain_command() {
+        let command = parse_ok("DRAIN, from 'WALLET_1A', to 'NODE_1_WALLET_FUNDING'");
+
+        assert!(matches!(
+            command,
+            ManualCommand::Drain { from, to }
+                if from == "WALLET_1A" && to == "NODE_1_WALLET_FUNDING"
+        ));
+    }
+
+    fn assert_drain_all_node_wallets_command() {
+        let command = parse_ok("DRAIN_ALL_NODE_WALLETS, node_name 'NODE_1', to 'WALLET_1A'");
+
+        assert!(matches!(
+            command,
+            ManualCommand::DrainAllNodeWallets { node_name, to }
+                if node_name == "NODE_1" && to == "WALLET_1A"
+        ));
+    }
+
     fn assert_continuous_round_robin_user_wallets_command() {
         let command = parse_ok(
             "CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs 10, coin_split_value 100, num_transactions 4, value 50, cycles 3",
@@ -688,6 +724,14 @@ mod tests {
                 from: String::new(),
                 to: String::new(),
             },
+            ManualCommand::Drain {
+                from: String::new(),
+                to: String::new(),
+            },
+            ManualCommand::DrainAllNodeWallets {
+                node_name: String::new(),
+                to: String::new(),
+            },
             ManualCommand::ContinuousRoundRobinUserWallets {
                 coin_split_outputs: 0,
                 coin_split_value: 0,
@@ -733,6 +777,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "The test explicitly covers every manual command variant"
+    )]
     fn manual_command_parse_test_covers_all_variants() {
         let mut visited = 0;
 
@@ -785,6 +833,14 @@ mod tests {
                 }
                 ManualCommand::Send { .. } => {
                     assert_send_command();
+                    visited += 1;
+                }
+                ManualCommand::Drain { .. } => {
+                    assert_drain_command();
+                    visited += 1;
+                }
+                ManualCommand::DrainAllNodeWallets { .. } => {
+                    assert_drain_all_node_wallets_command();
                     visited += 1;
                 }
                 ManualCommand::ContinuousRoundRobinUserWallets { .. } => {

@@ -8,7 +8,7 @@ use crate::{
         ledger::{Declarations, Utxos},
         ops::{
             channel::{ChannelId, ChannelKeyIndex},
-            leader_claim::{RewardsRoot, VoucherNullifiers},
+            leader_claim::{RewardsRoot, VoucherNullifier},
         },
     },
     sdp::{DeclarationId, MinStake, ServiceType, locked_notes::LockedNotes},
@@ -37,7 +37,7 @@ pub trait OperationVerificationHelper {
 
     fn get_block_slot(&self) -> Slot;
 
-    fn get_nullifiers(&self) -> &VoucherNullifiers;
+    fn get_nullifiers(&self) -> &rpds::HashTrieSetSync<VoucherNullifier>;
 
     fn get_claimable_vouchers_root(&self) -> &RewardsRoot;
 
@@ -58,6 +58,7 @@ pub mod test_utils {
     use std::collections::HashMap;
 
     use lb_cryptarchia_engine::{Epoch, Slot};
+    use rpds::HashTrieSetSync;
 
     use crate::{
         mantle::{
@@ -66,7 +67,7 @@ pub mod test_utils {
             ledger::{Declarations, Utxos},
             ops::{
                 channel::{ChannelId, ChannelKeyIndex, Ed25519PublicKey},
-                leader_claim::{RewardsRoot, VoucherNullifiers},
+                leader_claim::{RewardsRoot, VoucherNullifier},
             },
             transactions::OperationVerificationHelper,
         },
@@ -82,7 +83,7 @@ pub mod test_utils {
         min_stake: MinStake,
         epoch: Epoch,
         block_slot: Slot,
-        nullifiers: VoucherNullifiers,
+        nullifiers: HashTrieSetSync<VoucherNullifier>,
         claimable_vouchers_root: RewardsRoot,
     }
 
@@ -97,14 +98,14 @@ pub mod test_utils {
                 keys: keys.into_iter().collect(),
                 locked_notes: LockedNotes::new(),
                 utxos: Utxos::new(),
-                declarations: Declarations::new(),
+                declarations: Declarations::new_sync(),
                 min_stake: MinStake {
                     threshold: 0,
                     timestamp: 0,
                 },
                 epoch: Epoch::from(0u32),
                 block_slot: Slot::from(0u64),
-                nullifiers: VoucherNullifiers::new(),
+                nullifiers: HashTrieSetSync::new_sync(),
                 claimable_vouchers_root: RewardsRoot::default(),
             }
         }
@@ -157,7 +158,7 @@ pub mod test_utils {
             self.block_slot
         }
 
-        fn get_nullifiers(&self) -> &VoucherNullifiers {
+        fn get_nullifiers(&self) -> &HashTrieSetSync<VoucherNullifier> {
             &self.nullifiers
         }
 
@@ -170,7 +171,8 @@ pub mod test_utils {
             channel_id: &ChannelId,
         ) -> Result<ChannelKeyIndex, VerificationError> {
             self.channels
-                .channel_state(channel_id)
+                .channels
+                .get(channel_id)
                 .ok_or(VerificationError::ChannelNotFound {
                     channel_id: *channel_id,
                 })

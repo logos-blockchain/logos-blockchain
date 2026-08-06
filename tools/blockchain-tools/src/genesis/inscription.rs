@@ -1,9 +1,9 @@
+use lb_codec::BinaryEncode as _;
 use lb_config::consensus::{EMPTY_CHANNEL_ID, EMPTY_ED25519_PUBLIC_KEY};
 use lb_core::{
     crypto::ZkDigest,
     mantle::{
         CryptarchiaParameter, GenesisTime,
-        nom::NomEncode as _,
         ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
         transactions::genesis_tx::ChainId,
     },
@@ -53,7 +53,7 @@ pub fn inscribe<D: ZkDigest>(
     InscriptionOp {
         channel_id: ChannelId::from(EMPTY_CHANNEL_ID),
         inscription: params
-            .encode()
+            .encode_to_vec()
             .try_into()
             .expect("CryptarchiaParameter encoding exceeded MAX_BYTES"),
         parent: MsgId::root(),

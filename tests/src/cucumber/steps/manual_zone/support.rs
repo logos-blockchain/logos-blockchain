@@ -13,7 +13,7 @@ use std::{
 
 use lb_common_http_client::{CommonHttpClient, Slot};
 use lb_core::mantle::{
-    MantleTx, Note, Op, OpProof, Utxo, Value,
+    Note, Op, OpProof, RawMantleTx, Utxo, Value,
     gas::GasCost,
     ledger::{Inputs, Outputs, OutputsError},
     ops::{
@@ -51,9 +51,10 @@ use tokio::{
 use tracing::warn;
 
 use super::runner::{
-    self, ChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx, InscriptionId,
-    InscriptionInfo, PendingTx, PublishResult, SequencerChannelView, SequencerCheckpoint,
-    SequencerClient, SequencerConfig, TurnNotification, TxStatus, TxStatusUpdate, WithdrawArg,
+    self, ChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx, FundingConfig,
+    InscriptionId, InscriptionInfo, PendingTx, PublishResult, SequencerChannelView,
+    SequencerCheckpoint, SequencerClient, SequencerConfig, TurnNotification, TxStatus,
+    TxStatusUpdate, WithdrawArg,
 };
 
 /// Inscriptions in the just-finalized txs — the permanent, settled part of the
@@ -785,22 +786,23 @@ pub fn parse_balance_payload(payload: &Inscription) -> Option<(String, String, i
 /// Uses a short resubmit interval so retry-sensitive zone scenarios settle
 /// quickly enough for CI.
 #[must_use]
-pub fn sequencer_config() -> SequencerConfig {
+pub const fn sequencer_config(funding: FundingConfig) -> SequencerConfig {
     SequencerConfig {
         resubmit_interval: Duration::from_secs(3),
         min_slots_remaining_in_turn: 2,
-        ..SequencerConfig::default()
+        ..SequencerConfig::new(funding)
     }
 }
 
 /// Uses the same retry profile while overriding pending publish submit depth.
 #[must_use]
-pub fn sequencer_config_with_pending_submit_depth(
+pub const fn sequencer_config_with_pending_submit_depth(
     max_pending_publish_depth: usize,
+    funding: FundingConfig,
 ) -> SequencerConfig {
     SequencerConfig {
         max_pending_publish_depth,
-        ..sequencer_config()
+        ..sequencer_config(funding)
     }
 }
 
@@ -975,7 +977,14 @@ pub async fn replay_finalized_history(
     reader: &ZoneReaderConfig,
 ) -> Result<Vec<FinalizedTx>, ZoneTestError> {
     let node = ZoneNodeHttpClient::new(CommonHttpClient::new(None), reader.node_url.clone());
-    let mut sequencer = ZoneSequencer::init(reader.channel_id, keygen(), node, None);
+    // Placeholder funding: the reader never publishes (random key, posting is
+    // turn-gated), so the funding wallet is never exercised.
+    let funding = FundingConfig {
+        funding_pk: lb_groth16::Fr::from(1u64).into(),
+        max_tx_fee: GasCost::new(u64::MAX),
+        priority_fee: FundingConfig::DEFAULT_PRIORITY_FEE,
+    };
+    let mut sequencer = ZoneSequencer::init(reader.channel_id, keygen(), node, funding, None);
 
     timeout(Duration::from_mins(3), async {
         let mut finalized = Vec::new();
@@ -1673,8 +1682,12 @@ where
 /// Builds the funding transfer that creates the note consumed by an atomic
 /// zone deposit.
 /// Generous fee margin for the atomic `[Transfer, Deposit, Inscribe]`
-/// transaction; the actual cost is a few hundred gas units at genesis prices.
-const ATOMIC_DEPOSIT_FEE_MARGIN: u64 = 2_000;
+/// transaction. The mandatory fee (execution + size-based storage gas) is
+/// roughly 2k and varies with input count and change-note presence, so a
+/// tight margin intermittently underfunds the tx — which is permanently
+/// invalid and silently evicted at block assembly. Matches
+/// `MAX_ZONE_DEPOSIT_TX_FEE`; the excess above the mandatory fee is a tip.
+const ATOMIC_DEPOSIT_FEE_MARGIN: u64 = 10_000;
 
 fn build_atomic_deposit_transfer(
     available_utxos: Vec<Utxo>,
@@ -1874,7 +1887,7 @@ pub async fn publish_atomic_zone_withdraw(
 /// ZK keys.
 async fn sign_tx_zk(
     node_url: &Url,
-    tx: &MantleTx,
+    tx: &RawMantleTx,
     public_keys: Vec<ZkPublicKey>,
 ) -> Result<ZkSignature, ZoneTestError> {
     let request_url =

@@ -1,6 +1,7 @@
 use core::hash::{Hash, Hasher};
 
 use ed25519_dalek::SIGNATURE_LENGTH;
+use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_utils::serde::{deserialize_bytes_array, serialize_bytes_array};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -68,5 +69,27 @@ impl From<Signature> for ed25519_dalek::Signature {
 impl From<[u8; SIGNATURE_SIZE]> for Signature {
     fn from(bytes: [u8; SIGNATURE_SIZE]) -> Self {
         Self::from_bytes(&bytes)
+    }
+}
+
+impl BinaryEncode for Signature {
+    fn encoded_length(&self) -> usize {
+        SIGNATURE_SIZE
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.to_bytes());
+    }
+}
+
+impl BinaryDecode for Signature {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, inner) = <[u8; _]>::decode(input, &())?;
+        Ok((rest, Self::from_bytes(&inner)))
     }
 }

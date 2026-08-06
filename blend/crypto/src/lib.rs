@@ -11,8 +11,12 @@ pub type ZkHasher = lb_poseidon2::Poseidon2Bn254Hasher;
 #[must_use]
 pub fn random_sized_bytes<const SIZE: usize>() -> [u8; SIZE] {
     let mut buf = [0u8; SIZE];
-    BlakeRng::from_entropy().fill_bytes(&mut buf);
+    fill_random_bytes(&mut buf);
     buf
+}
+
+pub fn fill_random_bytes(buf: &mut [u8]) {
+    BlakeRng::from_entropy().fill_bytes(buf);
 }
 
 /// Generates pseudo-random bytes of the constant size
@@ -20,15 +24,6 @@ pub fn random_sized_bytes<const SIZE: usize>() -> [u8; SIZE] {
 #[must_use]
 pub fn pseudo_random_sized_bytes<const SIZE: usize>(domain: &[u8], key: &[u8]) -> [u8; SIZE] {
     let mut buf = [0u8; SIZE];
-    blake_random_bytes(&mut buf, domain, key);
-    buf
-}
-
-/// Generates pseudo-random bytes of the given size
-/// using [`BlakeRng`] which is seeded with a hash of the domain and key.
-#[must_use]
-pub fn pseudo_random_bytes(domain: &[u8], key: &[u8], size: usize) -> Vec<u8> {
-    let mut buf = vec![0u8; size];
     blake_random_bytes(&mut buf, domain, key);
     buf
 }

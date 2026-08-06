@@ -26,10 +26,10 @@ mod tests {
 
         let deserialized_proof_as_verified =
             VerifiedProofOfQuota::from_bytes(&serialized_proof[..]).unwrap();
-        assert!(proof == deserialized_proof_as_verified);
+        assert_eq!(proof, deserialized_proof_as_verified);
 
         let deserialized_proof_as_unverified =
             ProofOfQuota::from_bytes(&serialized_proof[..]).unwrap();
-        assert!(proof == deserialized_proof_as_unverified);
+        assert_eq!(proof, deserialized_proof_as_unverified);
     }
 }

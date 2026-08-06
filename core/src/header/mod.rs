@@ -1,12 +1,13 @@
 use core::fmt::{self, Debug, Formatter};
 
 use blake2::Digest as _;
+use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-pub const BEDROCK_VERSION: u8 = 1;
+mod fixtures;
 
 use crate::{
     codec::SerializeOp as _,
@@ -16,7 +17,9 @@ use crate::{
     utils::{display_hex_bytes_newtype, merkle, serde_bytes_newtype},
 };
 
-#[derive(Clone, Eq, PartialEq, Copy, Hash, PartialOrd, Ord)]
+pub const BEDROCK_VERSION: u8 = 1;
+
+#[derive(Clone, Eq, PartialEq, Copy, Hash, PartialOrd, Ord, BinaryCodec)]
 pub struct HeaderId([u8; 32]);
 
 impl Debug for HeaderId {
@@ -25,7 +28,7 @@ impl Debug for HeaderId {
     }
 }
 
-#[derive(Clone, Eq, PartialEq, Copy, Hash)]
+#[derive(Clone, Eq, PartialEq, Copy, Hash, BinaryCodec)]
 pub struct ContentId([u8; 32]);
 
 impl Debug for ContentId {
@@ -111,7 +114,31 @@ impl<'de> Deserialize<'de> for Version {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+impl BinaryEncode for Version {
+    fn encoded_length(&self) -> usize {
+        self.as_byte().encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.push(self.as_byte());
+    }
+}
+
+impl BinaryDecode for Version {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        context: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, version) = u8::decode(input, context)?;
+        let version = Self::try_from(version)
+            .map_err(|_| DecodeError::unknown_discriminant::<Self>(u64::from(version)))?;
+        Ok((input, version))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
 pub struct Header {
     version: Version,
     parent_block: HeaderId,
@@ -319,7 +346,7 @@ mod block_root_test_vectors {
     use super::*;
     use crate::{
         mantle::{
-            MantleTx, Note, Op,
+            Note, Op, RawMantleTx,
             channel::{SlotTimeframe, SlotTimeout},
             ledger::{Inputs, NoteId, Outputs},
             ops::{
@@ -351,14 +378,14 @@ mod block_root_test_vectors {
         ZkPublicKey::from(Fr::from(seed))
     }
 
-    fn tx(op: Op) -> MantleTx {
-        MantleTx(Ops::new_unchecked(vec![op]))
+    fn tx(op: Op) -> RawMantleTx {
+        RawMantleTx(Ops::new_unchecked(vec![op]))
     }
 
     /// Builds one transaction per distinct mantle operation kind, each carrying
     /// a single operation. The instances mirror those used by the `OpId` test
     /// vectors so the two vector sets stay consistent.
-    fn one_tx_per_op() -> Vec<(&'static str, MantleTx)> {
+    fn one_tx_per_op() -> Vec<(&'static str, RawMantleTx)> {
         let activity = ActivityProof {
             epoch: Epoch::new(10),
             signing_key: ed25519_pk(1),
@@ -487,7 +514,7 @@ mod block_root_test_vectors {
         );
 
         // 1. Empty block: no transactions.
-        let empty: Vec<MantleTx> = vec![];
+        let empty: Vec<RawMantleTx> = vec![];
         let empty_root = merkle::calculate_block_root(&empty);
         println!("================================================================");
         println!("vector 1  : empty block (0 transactions)");
@@ -495,7 +522,7 @@ mod block_root_test_vectors {
 
         // 2. One transaction per operation kind (one op each).
         let txs_with_names = one_tx_per_op();
-        let txs: Vec<MantleTx> = txs_with_names.iter().map(|(_, tx)| tx.clone()).collect();
+        let txs: Vec<RawMantleTx> = txs_with_names.iter().map(|(_, tx)| tx.clone()).collect();
         println!("================================================================");
         println!(
             "vector 2  : one transaction per op kind ({} transactions)",

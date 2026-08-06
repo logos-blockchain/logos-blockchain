@@ -1,10 +1,11 @@
-mod codec;
 pub mod crypto;
 pub mod encap;
-mod error;
 pub mod input;
-mod message;
 pub mod reward;
+
+mod error;
+mod fixtures;
+mod message;
 
 pub use encap::encapsulated::MessageIdentifier;
 pub use error::Error;

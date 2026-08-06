@@ -1,0 +1,21 @@
+use ark_ff::AdditiveGroup as _;
+use lb_codec::codec_fixtures;
+use lb_groth16::Fr;
+
+use crate::mantle::transactions::genesis_tx::{ChainId, CryptarchiaParameter, GenesisTime};
+
+codec_fixtures!(
+    ChainId,
+    "logos-chain-1".to_owned().try_into().unwrap() => "0d6c6f676f732d636861696e2d31"
+);
+
+codec_fixtures!(
+    GenesisTime,
+    Self::new(1000) => "e8030000",
+    Self::new(u32::MAX) => "ffffffff"
+);
+
+codec_fixtures!(
+    CryptarchiaParameter,
+    Self { chain_id: ChainId::try_from("logos-chain-1".to_owned()).unwrap(), genesis_time: GenesisTime::new(1000), epoch_nonce: Fr::ZERO } => "0d6c6f676f732d636861696e2d31e80300000000000000000000000000000000000000000000000000000000000000000000"
+);

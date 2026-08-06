@@ -1,6 +1,7 @@
 use core::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 
+use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::Fr;
 use lb_zksign::ZkSignError;
 use num_bigint::BigUint;
@@ -62,12 +63,6 @@ impl ZkKey {
     pub fn into_unsecured(self) -> UnsecuredZkKey {
         self.0.clone()
     }
-
-    #[cfg(feature = "unsafe")]
-    #[must_use]
-    pub const fn as_unsecured(&self) -> &UnsecuredZkKey {
-        &self.0
-    }
 }
 
 impl Hash for ZkKey {
@@ -103,6 +98,28 @@ impl From<BigUint> for ZkKey {
 impl From<UnsecuredZkKey> for ZkKey {
     fn from(value: UnsecuredZkKey) -> Self {
         Self(value)
+    }
+}
+
+impl BinaryEncode for PublicKey {
+    fn encoded_length(&self) -> usize {
+        self.as_fr().encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.as_fr().encode_into(out);
+    }
+}
+
+impl BinaryDecode for PublicKey {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (rest, inner) = Fr::decode(input, &())?;
+        Ok((rest, Self::new(inner)))
     }
 }
 

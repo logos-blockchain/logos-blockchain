@@ -1,3 +1,4 @@
+use lb_codec::{BinaryCodec, BinaryEncode as _};
 use lb_cryptarchia_engine::Slot;
 use lb_utils::bounded::NonEmptyBoundedVec;
 use serde::{Deserialize, Serialize};
@@ -8,9 +9,11 @@ use crate::{
     events::TxEvent,
     mantle::{
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
-        ledger::Operation,
-        nom::{NomCodec, NomEncode as _},
-        transactions::hash::TxHash,
+        ledger::{
+            ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
+            verification_mode,
+        },
+        transactions::hash::TxHashView,
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
@@ -18,7 +21,7 @@ use crate::{
 pub const CHANNEL_MAX_KEYS: usize = u16::MAX as usize;
 pub type Keys = NonEmptyBoundedVec<Ed25519PublicKey, CHANNEL_MAX_KEYS>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct ChannelConfigOp {
     pub channel: ChannelId,
     pub keys: Keys,
@@ -39,8 +42,7 @@ impl ChannelConfigOp {
 
 pub struct ChannelConfigValidationContext<'a> {
     pub channels: &'a Channels,
-    pub tx_hash: &'a TxHash,
-    pub config_sigs: &'a ChannelMultiSigProof,
+    pub tx_hash_view: &'a TxHashView,
 }
 
 pub struct ChannelConfigExecutionContext {
@@ -48,45 +50,59 @@ pub struct ChannelConfigExecutionContext {
     pub block_slot: Slot,
 }
 
-impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
-    type ExecutionContext<'a>
-        = ChannelConfigExecutionContext
-    where
-        Self: 'a;
+impl ProvableOperation for ChannelConfigOp {
+    type Proof = ChannelMultiSigProof;
+}
+
+impl PreverifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
+    type Context<'a> = ();
     type Error = Error;
 
-    fn validate(&self, ctx: &ChannelConfigValidationContext<'_>) -> Result<(), Self::Error> {
-        // Check that the indexes are unique and there is the same number of proof and
-        // index. This is enforced by the proof structure that enforces it.
-
-        // Check config wellformness
+    fn preverify(
+        &self,
+        _proof: &Self::Proof,
+        _context: &Self::Context<'_>,
+    ) -> Result<(), Self::Error> {
+        // Check config is well-formed
         if self.configuration_threshold == 0 || self.transfer_threshold == 0 || self.keys.is_empty()
         {
             return Err(Error::InvalidChannelConfig);
         }
 
-        if let Some(channel) = ctx.channels.channel_state(&self.channel) {
+        Ok(())
+    }
+}
+
+impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
+    type Context<'a> = ChannelConfigValidationContext<'a>;
+    type Error = Error;
+
+    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+        // Check that the indexes are unique and there is the same number of proof and
+        // index. This is enforced by the proof structure that enforces it.
+
+        if let Some(channel) = context.channels.channels.get(&self.channel).cloned() {
             // Check there is enough signatures
-            let signatures = ctx.config_sigs.signatures();
+            let signatures = proof.signatures();
             if signatures.len() != channel.configuration_threshold as usize {
                 return Err(Error::ThresholdUnmet {
                     channel_id: self.channel,
                     threshold: channel.configuration_threshold,
-                    actual: ctx.config_sigs.signatures().len(),
+                    actual: proof.signatures().len(),
                 });
             }
 
             // Check the signatures
-            for sig in signatures {
+            for signature in signatures {
                 if channel
                     .accredited_keys
-                    .get(sig.channel_key_index as usize)
+                    .get(signature.channel_key_index as usize)
                     .ok_or_else(|| Error::InvalidSignatureIndex {
                         channel_id: self.channel,
                         sequencers: channel.accredited_keys.len(),
-                        index: sig.channel_key_index,
+                        index: signature.channel_key_index,
                     })?
-                    .verify(ctx.tx_hash.as_signing_bytes().as_ref(), &sig.signature)
+                    .verify(context.tx_hash_view.as_bytes(), &signature.signature)
                     .is_err()
                 {
                     return Err(Error::InvalidSignature);
@@ -96,25 +112,43 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
 
         Ok(())
     }
+}
 
-    fn execute(
+impl ExecutableOperation for ChannelConfigOp {
+    type Context<'a> = ChannelConfigExecutionContext;
+    type Error = Error;
+
+    fn execute<'a>(
         &self,
-        mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
-        let channel = ChannelState {
-            accredited_keys: self.keys.clone().into(),
-            configuration_threshold: self.configuration_threshold,
-            tip_message: self.id(),
-            tip_slot: ctx.block_slot,
-            tip_sequencer: 0,
-            tip_sequencer_starting_slot: ctx.block_slot,
-            posting_timeframe: self.posting_timeframe.clone(),
-            transfer_threshold: self.transfer_threshold,
-            posting_timeout: self.posting_timeout.clone(),
-        };
-
+        mut context: Self::Context<'a>,
+    ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
         // if the channel doesn't exist, create it otherwise just update the config
-        ctx.channels = ctx.channels.set_channel_state(&self.channel, channel);
-        Ok((ctx, Vec::new()))
+        if let Some(channel) = context.channels.channels.get_mut(&self.channel) {
+            channel.accredited_keys = self.keys.clone().into();
+            channel.configuration_threshold = self.configuration_threshold;
+            channel.tip_sequencer = 0;
+            channel.tip_sequencer_starting_slot = context.block_slot;
+            channel.posting_timeframe = self.posting_timeframe.clone();
+            channel.posting_timeout = self.posting_timeout.clone();
+            channel.transfer_threshold = self.transfer_threshold;
+            channel.tip_slot = context.block_slot;
+            channel.tip_message = self.id();
+        } else {
+            context.channels.channels = context.channels.channels.insert(
+                self.channel,
+                ChannelState {
+                    accredited_keys: self.keys.clone().into(),
+                    configuration_threshold: self.configuration_threshold,
+                    tip_message: self.id(),
+                    tip_slot: context.block_slot,
+                    tip_sequencer: 0,
+                    tip_sequencer_starting_slot: context.block_slot,
+                    posting_timeframe: self.posting_timeframe.clone(),
+                    transfer_threshold: self.transfer_threshold,
+                    posting_timeout: self.posting_timeout.clone(),
+                },
+            );
+        }
+        Ok((context, Vec::new()))
     }
 }

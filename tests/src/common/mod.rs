@@ -1,4 +1,5 @@
 pub mod chain;
+pub mod fee_spec;
 pub mod mantle_inscription;
 pub mod manual_cluster;
 pub mod wallet;

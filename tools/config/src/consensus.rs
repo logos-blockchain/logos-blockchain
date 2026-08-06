@@ -1,13 +1,13 @@
 use core::time::Duration;
 use std::sync::OnceLock;
 
+use lb_codec::BinaryEncode as _;
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
-        CryptarchiaParameter, GenesisTime, MantleTx, Note, NoteId, OpProof, Utxo,
-        nom::NomEncode as _,
+        CryptarchiaParameter, GenesisTime, Note, NoteId, OpProof, RawMantleTx, Utxo,
         ops::{
-            Op, OpId as _,
+            Op, OpId as _, ZkAndEd25519Proof,
             channel::{
                 ChannelId, Ed25519PublicKey, MsgId,
                 inscribe::{Inscription, InscriptionOp},
@@ -115,7 +115,7 @@ fn inscription_for_current_test(test_context: Option<&str>) -> InscriptionOp {
                 genesis_time: get_or_init_genesis_time(),
                 epoch_nonce: Fr::ZERO,
             }
-            .encode(),
+            .encode_to_vec(),
         ),
         parent: MsgId::root(),
         signer: Ed25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY).unwrap(),
@@ -304,7 +304,7 @@ pub fn create_genesis_block_with_declarations(
         ops.push(Op::SDPDeclare(declaration));
     }
 
-    let mantle_tx = MantleTx(Ops::new_unchecked(ops));
+    let mantle_tx = RawMantleTx(Ops::new_unchecked(ops));
 
     let mantle_tx_hash = mantle_tx.hash();
     let mut ops_proofs = OpsProofs::from([
@@ -321,11 +321,12 @@ pub fn create_genesis_block_with_declarations(
         let ed25519_sig = provider
             .provider_sk
             .sign_payload(mantle_tx_hash.as_signing_bytes().as_ref());
+        let proof = ZkAndEd25519Proof {
+            zk_sig,
+            ed25519_sig,
+        };
         ops_proofs
-            .try_push(OpProof::ZkAndEd25519Sigs {
-                zk_sig,
-                ed25519_sig,
-            })
+            .try_push(OpProof::ZkAndEd25519Sigs(proof))
             .expect("genesis transaction proofs are bounded");
     }
 

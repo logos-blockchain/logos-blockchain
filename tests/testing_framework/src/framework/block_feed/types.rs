@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, sync::Arc, time::SystemTime};
+use std::{sync::Arc, time::SystemTime};
 
 use lb_node::HeaderId;
 use testing_framework_core::observation::{
@@ -143,10 +143,8 @@ impl BlockFeedObservation {
     /// Returns a chain view for one observed node, if available.
     #[must_use]
     pub fn node(&self, node_name: &str) -> Option<NodeChainView<'_>> {
-        self.node_head(node_name).map(|node_head| NodeChainView {
-            observation: self,
-            node_head,
-        })
+        self.node_head(node_name)
+            .map(|node_head| NodeChainView { node_head })
     }
 }
 
@@ -162,66 +160,37 @@ pub enum BlockFeedWaitError {
 /// Query view over one node's canonical chain within one observation.
 #[derive(Clone, Copy, Debug)]
 pub struct NodeChainView<'a> {
-    observation: &'a BlockFeedObservation,
     node_head: &'a NodeHeadSnapshot,
 }
 
 impl<'a> NodeChainView<'a> {
     /// Returns the full retained head view for this node.
     #[must_use]
-    pub const fn head(&self) -> &'a NodeHeadSnapshot {
+    pub const fn head(self) -> &'a NodeHeadSnapshot {
         self.node_head
     }
 
     /// Returns the node tip header id from this observation.
     #[must_use]
-    pub const fn tip(&self) -> HeaderId {
+    pub const fn tip(self) -> HeaderId {
         self.node_head.tip
     }
 
     /// Returns the node LIB header id from this observation.
     #[must_use]
-    pub const fn lib(&self) -> HeaderId {
+    pub const fn lib(self) -> HeaderId {
         self.node_head.lib
     }
 
     /// Returns the retained tip height, if the observer has seen it.
     #[must_use]
-    pub const fn tip_height(&self) -> Option<u64> {
+    pub const fn tip_height(self) -> Option<u64> {
         self.node_head.tip_height
     }
 
     /// Returns the retained LIB height, if the observer has seen it.
     #[must_use]
-    pub const fn lib_height(&self) -> Option<u64> {
+    pub const fn lib_height(self) -> Option<u64> {
         self.node_head.lib_height
-    }
-
-    /// Walks backward from the node tip until it reaches one target height.
-    ///
-    /// This only works within the observer's retained ancestry window.
-    #[must_use]
-    pub fn header_at_height(&self, height: u64) -> Option<HeaderId> {
-        let mut cursor = self.tip();
-
-        loop {
-            let cursor_height = self.observation.snapshot.header_height(&cursor)?;
-            match cursor_height.cmp(&height) {
-                Ordering::Equal => return Some(cursor),
-                Ordering::Less => return None,
-                Ordering::Greater => {
-                    let parent = self
-                        .observation
-                        .snapshot
-                        .parent_edges
-                        .get(&cursor)
-                        .copied()?;
-                    if parent == cursor {
-                        return None;
-                    }
-                    cursor = parent;
-                }
-            }
-        }
     }
 }

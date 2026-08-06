@@ -35,7 +35,7 @@ use lb_testing_framework::{
 };
 use reqwest::Url;
 use testing_framework_core::{
-    scenario::{NodeControlCapability, PeerSelection, Scenario, StartedNode},
+    scenario::{PeerSelection, Scenario, StartedNode},
     topology::DeploymentSeed,
 };
 use tokio::task::JoinHandle;
@@ -166,7 +166,6 @@ pub struct ZoneSequencerRuntime {
     task: JoinHandle<()>,
     events: tokio::sync::broadcast::Receiver<Event>,
     checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
-    ready_rx: tokio::sync::watch::Receiver<bool>,
     channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
     turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
     tx_status_rx: Option<tokio::sync::broadcast::Receiver<TxStatusUpdate>>,
@@ -287,12 +286,6 @@ impl ZoneState {
             })
     }
 
-    pub fn default_sequencer_signing_key(&self) -> Result<&Ed25519Key, StepError> {
-        let alias = self.default_sequencer_alias()?.to_owned();
-
-        self.sequencer_signing_key(&alias)
-    }
-
     pub fn sequencer_channel_id(&self, alias: &str) -> Result<ChannelId, StepError> {
         self.sequencers
             .get(alias)
@@ -300,12 +293,6 @@ impl ZoneState {
             .ok_or(StepError::LogicalError {
                 message: format!("Zone sequencer '{alias}' is not registered"),
             })
-    }
-
-    pub fn default_channel_id(&self) -> Result<ChannelId, StepError> {
-        let alias = self.default_sequencer_alias()?.to_owned();
-
-        self.sequencer_channel_id(&alias)
     }
 
     #[must_use]
@@ -620,7 +607,6 @@ impl ZoneState {
         sequencer_task: JoinHandle<()>,
         sequencer_events: tokio::sync::broadcast::Receiver<Event>,
         checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
-        ready_rx: tokio::sync::watch::Receiver<bool>,
         channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
         turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
         tx_status_rx: tokio::sync::broadcast::Receiver<TxStatusUpdate>,
@@ -637,25 +623,12 @@ impl ZoneState {
                 task: sequencer_task,
                 events: sequencer_events,
                 checkpoint_rx,
-                ready_rx,
                 channel_view_rx,
                 turn_to_write_rx,
                 tx_status_rx: Some(tx_status_rx),
                 discarded_payloads,
             },
         );
-    }
-
-    pub fn sequencer_ready_rx(
-        &self,
-        alias: &str,
-    ) -> Result<tokio::sync::watch::Receiver<bool>, StepError> {
-        self.runtimes
-            .get(alias)
-            .map(|runtime| runtime.ready_rx.clone())
-            .ok_or(StepError::LogicalError {
-                message: format!("Zone sequencer '{alias}' is not running"),
-            })
     }
 
     pub fn sequencer_channel_view_rx(
@@ -926,6 +899,10 @@ pub struct CucumberWorld {
     pub wallets: SharedTrackedWallets,
     /// Manual: Mapping of scenario transaction aliases to submitted hashes.
     pub submitted_transactions: HashMap<String, TxHash>,
+    /// Manual: Outcome of a transaction submission attempt, keyed by scenario
+    /// alias, for scenarios that assert on submission being rejected rather
+    /// than on later inclusion.
+    pub submission_outcomes: HashMap<String, Result<(), String>>,
     /// Manual: Exact signed transactions prepared for later submission.
     pub prepared_transactions: HashMap<String, SignedMantleTx<Preverified>>,
     /// Manual: Transaction hashes observed in blocks by the wallet scanner.
@@ -998,6 +975,9 @@ pub struct CucumberWorld {
     pub zone: ZoneState,
     /// Manual: Per-node Tokio console profiling requested by Cucumber steps.
     pub tokio_console_profile: TokioConsoleProfile,
+    /// Manual: Per-block gas prices recorded by the fee-market steps,
+    /// verified against the fee-market spec reference.
+    pub recorded_gas_prices: Vec<crate::common::fee_spec::GasPriceRecord>,
 }
 
 impl Drop for CucumberWorld {
@@ -1118,6 +1098,7 @@ impl Debug for CucumberWorld {
             .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
             .field("wallets", &"SharedTrackedWallets")
             .field("submitted_transactions", &self.submitted_transactions.len())
+            .field("submission_outcomes", &self.submission_outcomes.len())
             .field("prepared_transactions", &self.prepared_transactions.len())
             .field(
                 "observed_transaction_hashes",
@@ -1193,6 +1174,7 @@ impl Debug for CucumberWorld {
                 &node_snapshot_on_startup_display(self.node_snapshot_on_startup.as_ref()),
             )
             .field("tokio_console_profile", &self.tokio_console_profile)
+            .field("recorded_gas_prices_len", &self.recorded_gas_prices.len())
             .finish()
     }
 }
@@ -1211,13 +1193,39 @@ pub struct GenesisTokens {
     pub token_amount: u64,
 }
 
-/// The wallet type can either be ussr defined or funding.
+/// A scenario wallet is either user-owned or backed by a node wallet key.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum NodeWalletKeyRole {
+    Funding,
+    VoucherMaster,
+    BlendZk,
+    General,
+}
+
+impl NodeWalletKeyRole {
+    #[must_use]
+    pub const fn priority(self) -> u8 {
+        match self {
+            Self::Funding => 0,
+            Self::VoucherMaster => 1,
+            Self::BlendZk => 2,
+            Self::General => 3,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct NodeWalletKey {
+    pub wallet_pk: String,
+    pub role: NodeWalletKeyRole,
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum WalletType {
-    /// User defined wallets with are not tied to a specific node
+    /// User-defined wallets are signed and tracked by the Cucumber harness.
     User { wallet_account: WalletAccount },
-    /// Funding wallets are tied to a node and participate in consensus
-    Funding { wallet_pk: String },
+    /// Funding wallets are keys owned by a node and served by its wallet API.
+    Funding { key: NodeWalletKey },
 }
 
 /// Information about a wallet resource created in the world, which can be used
@@ -1233,13 +1241,20 @@ pub struct WalletInfo {
     pub wallet_type: WalletType,
 }
 
+/// A recipient accepted by transaction steps, with a display label for logs.
+#[derive(Clone, Debug)]
+pub struct WalletRecipient {
+    pub label: String,
+    pub public_key: ZkPublicKey,
+}
+
 impl WalletInfo {
     /// Helper to get the wallet's public key as `String` type (default hex).
     #[must_use]
     pub fn public_key_hex(&self) -> String {
         match &self.wallet_type {
             WalletType::User { wallet_account, .. } => wallet_account.public_key_hex(),
-            WalletType::Funding { wallet_pk } => wallet_pk.clone(),
+            WalletType::Funding { key } => key.wallet_pk.clone(),
         }
     }
 
@@ -1247,8 +1262,8 @@ impl WalletInfo {
     pub fn public_key(&self) -> Result<ZkPublicKey, StepError> {
         match &self.wallet_type {
             WalletType::User { wallet_account, .. } => Ok(wallet_account.public_key()),
-            WalletType::Funding { wallet_pk } => {
-                Ok(ZkPublicKey::from_bytes(&hex::decode(wallet_pk)?)?)
+            WalletType::Funding { key } => {
+                Ok(ZkPublicKey::from_bytes(&hex::decode(&key.wallet_pk)?)?)
             }
         }
     }
@@ -1261,8 +1276,26 @@ impl WalletInfo {
 
     /// Helper to determine if this wallet is a funding wallet.
     #[must_use]
-    pub const fn is_funding_wallet(&self) -> bool {
+    pub const fn is_node_wallet(&self) -> bool {
         matches!(self.wallet_type, WalletType::Funding { .. })
+    }
+
+    #[must_use]
+    pub const fn is_node_funding_wallet(&self) -> bool {
+        matches!(
+            self.wallet_type,
+            WalletType::Funding {
+                key: NodeWalletKey {
+                    role: NodeWalletKeyRole::Funding,
+                    ..
+                }
+            }
+        )
+    }
+
+    #[must_use]
+    pub const fn is_scanner_tracked_wallet(&self) -> bool {
+        self.is_user_wallet() || self.is_node_funding_wallet()
     }
 }
 
@@ -1480,7 +1513,11 @@ impl CucumberWorld {
         let mut wallets_by_source_and_key: HashMap<String, HashMap<ZkPublicKey, Vec<String>>> =
             HashMap::new();
 
-        for wallet in self.wallet_info.values() {
+        for wallet in self
+            .wallet_info
+            .values()
+            .filter(|wallet| wallet.is_scanner_tracked_wallet())
+        {
             wallets_by_source_and_key
                 .entry(wallet.node_name.clone())
                 .or_default()
@@ -1593,19 +1630,6 @@ impl CucumberWorld {
     pub fn build_local_scenario(&self) -> Result<Scenario<LbcEnv>, StepError> {
         let builder = self.make_builder_for_deployer(DeployerKind::Local)?;
         builder
-            .build()
-            .map_err(|source| StepError::ScenarioBuild { source })
-    }
-
-    /// Build a scenario for compose deployment based on the current world
-    /// configuration. This performs necessary preflight checks and returns
-    /// a built scenario ready for deployment.
-    pub fn build_compose_scenario(
-        &self,
-    ) -> Result<Scenario<LbcEnv, NodeControlCapability>, StepError> {
-        let builder = self.make_builder_for_deployer(DeployerKind::Compose)?;
-        builder
-            .enable_node_control()
             .build()
             .map_err(|source| StepError::ScenarioBuild { source })
     }
@@ -1739,6 +1763,7 @@ impl CucumberWorld {
 
     /// Helper to check if a node is configured for immediate start (not
     /// awaiting network readiness)
+    #[must_use]
     pub fn network_immediate_start(&self, node_name: &str) -> bool {
         self.nodes_info
             .get(node_name)
@@ -1758,6 +1783,7 @@ impl CucumberWorld {
 
     /// Helper to resolve a list of node names to their corresponding started
     /// node names.
+    #[must_use]
     pub fn resolve_named_peers(&self, initial_peers: &[String]) -> Vec<String> {
         initial_peers
             .iter()
@@ -1806,21 +1832,14 @@ impl CucumberWorld {
     }
 
     /// Helper to retrieve all node names.
+    #[must_use]
     pub fn all_node_names(&self) -> Vec<String> {
         self.nodes_info.keys().cloned().collect::<Vec<_>>()
     }
 
-    pub fn any_started_node(&self) -> Result<&NodeInfo, StepError> {
-        self.nodes_info
-            .values()
-            .next()
-            .ok_or_else(|| StepError::LogicalError {
-                message: "No started nodes available in world".to_owned(),
-            })
-    }
-
     /// Helper to resolve all user wallet names to the actual wallet
     /// information.
+    #[must_use]
     pub fn all_user_wallets(&self) -> Vec<WalletInfo> {
         self.wallet_info
             .values()
@@ -1829,14 +1848,77 @@ impl CucumberWorld {
             .collect::<Vec<_>>()
     }
 
-    /// Helper to resolve all funding wallet names to the actual wallet
-    /// information.
-    pub fn all_funding_wallets(&self) -> Vec<WalletInfo> {
-        self.wallet_info
+    /// Helper to resolve all node-owned wallet keys.
+    #[must_use]
+    pub fn all_node_wallets(&self) -> Vec<WalletInfo> {
+        let mut wallets = self
+            .wallet_info
             .values()
-            .filter(|w| matches!(w.wallet_type, WalletType::Funding { .. }))
+            .filter(|wallet| wallet.is_node_wallet())
             .cloned()
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        wallets.sort_by(|left, right| left.wallet_name.cmp(&right.wallet_name));
+        wallets
+    }
+
+    /// Resolve the node key configured to fund node service transactions.
+    pub fn funding_wallet(&self, node_name: &str) -> Result<WalletInfo, StepError> {
+        let mut wallets = self
+            .wallet_info
+            .values()
+            .filter(|wallet| wallet.node_name == node_name && wallet.is_node_funding_wallet())
+            .cloned()
+            .collect::<Vec<_>>();
+        wallets.sort_by(|left, right| left.wallet_name.cmp(&right.wallet_name));
+        match wallets.as_slice() {
+            [wallet] => Ok(wallet.clone()),
+            [] => Err(StepError::LogicalError {
+                message: format!("Node `{node_name}` has no funding wallet"),
+            }),
+            _ => Err(StepError::LogicalError {
+                message: format!("Node `{node_name}` has multiple funding wallets"),
+            }),
+        }
+    }
+
+    /// Resolve a scenario wallet name or a bare hexadecimal public key.
+    pub fn resolve_recipient(&self, value: &str) -> Result<WalletRecipient, StepError> {
+        if let Ok(wallet) = self.resolve_wallet(value) {
+            let public_key = wallet.public_key()?;
+            return Ok(WalletRecipient {
+                label: wallet.wallet_name,
+                public_key,
+            });
+        }
+
+        let public_key = ZkPublicKey::from_bytes(&hex::decode(value).map_err(|_| {
+            StepError::InvalidArgument {
+                message: format!(
+                    "Recipient `{value}` must be a scenario wallet name or bare hexadecimal public key"
+                ),
+            }
+        })?)
+        .map_err(|_| StepError::InvalidArgument {
+            message: format!("Recipient `{value}` is not a valid public key"),
+        })?;
+
+        let mut matching_wallets = self
+            .wallet_info
+            .values()
+            .filter(|wallet| wallet.public_key().ok().as_ref() == Some(&public_key))
+            .collect::<Vec<_>>();
+        matching_wallets.sort_by(|left, right| {
+            left.is_node_wallet()
+                .cmp(&right.is_node_wallet())
+                .then_with(|| left.wallet_name.cmp(&right.wallet_name))
+        });
+
+        Ok(WalletRecipient {
+            label: matching_wallets
+                .first()
+                .map_or_else(|| value.to_owned(), |wallet| wallet.wallet_name.clone()),
+            public_key,
+        })
     }
 
     /// Helper to resolve a wallet name to the actual wallet information.
@@ -1849,6 +1931,21 @@ impl CucumberWorld {
 
     pub fn remember_submitted_transaction(&mut self, alias: String, tx_hash: TxHash) {
         self.submitted_transactions.insert(alias, tx_hash);
+    }
+
+    pub fn remember_submission_outcome(&mut self, alias: String, outcome: Result<(), String>) {
+        self.submission_outcomes.insert(alias, outcome);
+    }
+
+    pub fn resolve_submission_outcome(
+        &self,
+        alias: &str,
+    ) -> Result<&Result<(), String>, StepError> {
+        self.submission_outcomes
+            .get(alias)
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!("Submission outcome for alias '{alias}' not found in world state"),
+            })
     }
 
     #[must_use]
@@ -2364,4 +2461,30 @@ fn user_config_overrides_display(overrides: &[ConfigOverride]) -> String {
         .map(|override_item| format!("{}={:?}", override_item.path, override_item.value))
         .collect::<Vec<_>>();
     format!("[{}]", values.join(", "))
+}
+
+#[cfg(test)]
+mod node_wallet_tests {
+    use super::{NodeWalletKey, NodeWalletKeyRole, WalletInfo, WalletType};
+
+    fn node_wallet(role: NodeWalletKeyRole) -> WalletInfo {
+        WalletInfo {
+            wallet_name: "NODE_1_WALLET".to_owned(),
+            node_name: "NODE_1".to_owned(),
+            wallet_type: WalletType::Funding {
+                key: NodeWalletKey {
+                    wallet_pk: "00".repeat(32),
+                    role,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn scanner_tracks_only_the_node_funding_role() {
+        assert!(node_wallet(NodeWalletKeyRole::Funding).is_scanner_tracked_wallet());
+        assert!(!node_wallet(NodeWalletKeyRole::VoucherMaster).is_scanner_tracked_wallet());
+        assert!(!node_wallet(NodeWalletKeyRole::BlendZk).is_scanner_tracked_wallet());
+        assert!(!node_wallet(NodeWalletKeyRole::General).is_scanner_tracked_wallet());
+    }
 }

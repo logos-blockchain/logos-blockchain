@@ -17,7 +17,7 @@ use lb_core::{
     mantle::{
         NoteId, Op, Utxo, Value, VerificationError,
         gas::{Gas, GasConstants, GasCost, GasOverflow},
-        ledger::Operation as _,
+        ledger::ExecutableOperation as _,
         ops::{
             channel::{
                 channel_transfer::ChannelTransferExecutionContext,
@@ -291,7 +291,7 @@ impl LedgerState {
 
     /// total estimated stake and on the average of fees consumed per block over
     /// the last `BLOCK_REWARD_WINDOW_SIZE` blocks. See the block rewards
-    /// specification: <https://www.notion.so/nomos-tech/v1-1-Block-Rewards-Specification-326261aa09df80579edddaf092057b3d>
+    /// specification: <https://lip.logos.co/blockchain/raw/block-rewards.html>
     fn compute_block_rewards(
         mut self,
         total_fee_burned: GasCost,
@@ -347,7 +347,7 @@ impl LedgerState {
     /// consumption are updated based on the total execution gas consumed in the
     /// block and the smoothed average consumption. This function updates the
     /// `average_execution_gas` and the `execution_base_fee` stored in the
-    /// cryptarchia ledger. See the specification <https://www.notion.so/nomos-tech/v1-2-Execution-Market-Specification-326261aa09df8022b1cfcfe968bdb5e1>
+    /// cryptarchia ledger. See the specification <https://lip.logos.co/blockchain/raw/execution-market.html>
     fn update_execution_market(self, block_execution_gas_consumed: Gas) -> Self {
         Self {
             cryptarchia_ledger: self
@@ -707,7 +707,7 @@ impl LedgerState {
             (self, balance, tx_events) = self.try_apply_op::<_, Constants>(
                 op,
                 config,
-                verified_ops.tx_hash(),
+                verified_ops.tx_hash_view().tx_hash(),
                 balance,
                 tx_events,
             )?;
@@ -723,9 +723,9 @@ mod tests {
     use lb_core::{
         events::TxEventPayload,
         mantle::{
-            GasCalculator as _, MantleTx, Note, OpProof, SignedMantleTx,
+            GasCalculator as _, Note, OpProof, RawMantleTx, SignedMantleTx,
             gas::MainnetGasConstants,
-            ledger::{Inputs, Outputs, Utxos},
+            ledger::{Inputs, Outputs, Utxos, VerifiableOperation as _},
             ops::{
                 OpId as _,
                 channel::{
@@ -735,13 +735,15 @@ mod tests {
                     inscribe::InscriptionOp,
                     withdraw::ChannelWithdrawOp,
                 },
-                leader_claim::{LeaderClaimError, LeaderClaimOp, LeaderClaimValidationContext},
+                leader_claim::{LeaderClaimError, LeaderClaimOp, LeaderClaimVerificationContext},
                 sdp::SDPActiveOp,
                 transfer::TransferOp,
             },
             traits::Hashable as _,
             transactions::{
                 Ops, OpsProofs,
+                hash::TxHashView,
+                mantle_tx::MantleTx as _,
                 states::{Preverified, Unverified},
             },
         },
@@ -780,7 +782,7 @@ mod tests {
             Inputs::try_new(inputs).expect("Invalid inputs size"),
             Outputs::try_new(outputs).expect("Invalid outputs size"),
         );
-        let mantle_tx = MantleTx([Op::Transfer(transfer_op)].into());
+        let mantle_tx = RawMantleTx([Op::Transfer(transfer_op)].into());
         let ops_proofs = [OpProof::ZkSig(
             ZkKey::multi_sign(sks, &mantle_tx.hash().to_fr()).unwrap(),
         )]
@@ -855,7 +857,7 @@ mod tests {
         ops: Vec<Op>,
         signing_keys: Vec<&Key>,
     ) -> SignedMantleTx<Preverified> {
-        let mantle_tx = MantleTx(Ops::new_unchecked(ops.clone()));
+        let mantle_tx = RawMantleTx(Ops::new_unchecked(ops.clone()));
 
         let tx_hash = mantle_tx.hash();
         let ops_proofs = signing_keys
@@ -1032,7 +1034,8 @@ mod tests {
             new_state
                 .mantle_ledger
                 .channels()
-                .contains_channel(&channel_id)
+                .channels
+                .contains_key(&channel_id)
         );
         assert!(events.is_empty());
     }
@@ -1053,7 +1056,7 @@ mod tests {
             transfer_threshold: 1,
         };
 
-        let config_tx = MantleTx([Op::ChannelConfig(config_op.clone())].into());
+        let config_tx = RawMantleTx([Op::ChannelConfig(config_op.clone())].into());
         let config_tx_hash = config_tx.hash();
         let config_proof = ChannelMultiSigProof::try_new(
             [IndexedSignature::new(
@@ -1076,13 +1079,15 @@ mod tests {
             new_state
                 .mantle_ledger
                 .channels()
-                .contains_channel(&channel_id)
+                .channels
+                .contains_key(&channel_id)
         );
         assert_eq!(
             *new_state
                 .mantle_ledger
                 .channels()
-                .channel_state(&channel_id)
+                .channels
+                .get(&channel_id)
                 .unwrap()
                 .accredited_keys,
             verifying_key.into()
@@ -1110,7 +1115,8 @@ mod tests {
             ledger_state
                 .mantle_ledger()
                 .channels()
-                .contains_channel(&channel_id)
+                .channels
+                .contains_key(&channel_id)
         );
 
         // Submit a deposit operation
@@ -1217,7 +1223,7 @@ mod tests {
             channel_id,
             inputs: Inputs::new([deposited]),
         };
-        let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw)].into());
+        let withdraw_tx = RawMantleTx([Op::ChannelWithdraw(withdraw)].into());
         let withdraw_tx_hash = withdraw_tx.hash();
         let withdraw_proof = ChannelMultiSigProof::try_new(
             [IndexedSignature::new(
@@ -1281,7 +1287,7 @@ mod tests {
 
         // Withdraw releases the channel note under the NoteId the deposit gave
         // it, so the original input never comes back to the ledger.
-        let withdraw_tx = MantleTx(
+        let withdraw_tx = RawMantleTx(
             [Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id,
                 inputs: Inputs::new([deposited]),
@@ -1356,7 +1362,7 @@ mod tests {
             inputs: Inputs::new([deposited]),
         };
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
-        let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw)].into());
+        let withdraw_tx = RawMantleTx([Op::ChannelWithdraw(withdraw)].into());
         let withdraw_tx_hash = withdraw_tx.hash();
         let invalid_proof = ChannelMultiSigProof::try_new(
             [IndexedSignature::new(
@@ -1378,12 +1384,9 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err,
-            LedgerError::VerificationError(
-                VerificationError::ChannelMultiSigProofInvalidSignature {
-                    op_index: 0,
-                    signature_index: 0,
-                }
-            )
+            LedgerError::VerificationError(VerificationError::ChannelVerificationError(
+                mantle::channel::Error::InvalidSignature
+            ))
         );
 
         // The rejected withdraw left the note owned by the channel
@@ -1571,7 +1574,7 @@ mod tests {
             Op::ChannelConfig(config_op),
             Op::ChannelInscribe(inscribe_op3.clone()),
         ];
-        let config_tx = MantleTx(Ops::new_unchecked(ops.clone()));
+        let config_tx = RawMantleTx(Ops::new_unchecked(ops.clone()));
         let config_tx_hash = config_tx.hash();
         let config_proof = ChannelMultiSigProof::try_new(
             [IndexedSignature::new(
@@ -1597,13 +1600,26 @@ mod tests {
             .unwrap()
             .0;
 
-        assert!(result.mantle_ledger.channels().contains_channel(&channel1));
-        assert!(result.mantle_ledger.channels().contains_channel(&channel2));
+        assert!(
+            result
+                .mantle_ledger
+                .channels()
+                .channels
+                .contains_key(&channel1)
+        );
+        assert!(
+            result
+                .mantle_ledger
+                .channels()
+                .channels
+                .contains_key(&channel2)
+        );
         assert_eq!(
             result
                 .mantle_ledger
                 .channels()
-                .channel_state(&channel1)
+                .channels
+                .get(&channel1)
                 .unwrap()
                 .tip_message,
             inscribe_op3.id()
@@ -1927,16 +1943,19 @@ mod tests {
         assert_eq!(utxo.note.value, 100);
 
         // Try to claim the reward using the same nullifier.
+        let tx_hash = TxHash::from([0u8; 32]);
+        let tx_hash_view = TxHashView::from(tx_hash);
+        // Use a dummy proof since duplication is detected before proof verification
+        let proof = Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
         let err = op
-            .validate(&LeaderClaimValidationContext {
-                nullifiers: leaders.nullifiers(),
-                claimable_vouchers_root: leaders.vouchers_snapshot_root(),
-                // Use a dummy proof since duplication is detected before proof verification
-                proof_of_claim: &Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(
-                    &[0u8; 128],
-                )),
-                tx_hash: &TxHash::from([0u8; 32]),
-            })
+            .verify(
+                &proof,
+                &LeaderClaimVerificationContext {
+                    nullifiers: leaders.nullifiers(),
+                    claimable_vouchers_root: leaders.vouchers_snapshot_root(),
+                    tx_hash_view: &tx_hash_view,
+                },
+            )
             .unwrap_err();
         assert_eq!(err, LeaderClaimError::DuplicatedVoucherNullifier);
     }

@@ -15,7 +15,12 @@ use lb_core::{
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         ops::channel::{ChannelId, MsgId, config::Keys, inscribe::Inscription},
         traits::Hashable as _,
-        transactions::{Ops, hash::TxHash, mantle_tx::MantleTx, states::Unverified},
+        transactions::{
+            Ops,
+            hash::TxHash,
+            mantle_tx::{MantleTx as _, RawMantleTx},
+            states::Unverified,
+        },
     },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
@@ -34,9 +39,9 @@ use super::{
         sign_tx as build_sign_tx,
     },
     types::{
-        Error, Event, InscriptionInfo, PendingTx, PublishResult, SequencerChannelView,
-        SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource, TxStatus, TxStatusUpdate,
-        WithdrawArg,
+        Error, Event, FundingConfig, InscriptionInfo, PendingTx, PublishResult,
+        SequencerChannelView, SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource,
+        TxStatus, TxStatusUpdate, WithdrawArg,
     },
 };
 use crate::{adapter, adapter::BoxStream};
@@ -75,9 +80,9 @@ pub struct ZoneSequencer<Node> {
     // operations that depend on cached on-chain state (inscription turn
     // check, atomic withdraw nonce, channel config) so they fail-fast with
     // `Error::Unavailable` during reconnect rather than building txs from
-    // stale state. With funding configured it also gates every publish-type
-    // operation (funding needs the node); a fresh `Event::Ready` is emitted
-    // when the reconnect completes.
+    // stale state. It also gates every publish-type operation (funding needs
+    // the node); a fresh `Event::Ready` is emitted when the reconnect
+    // completes.
     pub(super) connected: bool,
 
     // Resubmission
@@ -169,10 +174,10 @@ pub(super) enum ActorRequest {
     PrepareTx {
         ops: Ops,
         data: Inscription,
-        response_tx: oneshot::Sender<Result<(MantleTx, MsgId, Ed25519Signature), Error>>,
+        response_tx: oneshot::Sender<Result<(RawMantleTx, MsgId, Ed25519Signature), Error>>,
     },
     SignTx {
-        tx: MantleTx,
+        tx: RawMantleTx,
         response_tx: oneshot::Sender<Result<Ed25519Signature, Error>>,
     },
 }
@@ -187,13 +192,14 @@ where
         channel_id: ChannelId,
         signing_key: Ed25519Key,
         node: Node,
+        funding: FundingConfig,
         checkpoint: Option<SequencerCheckpoint>,
     ) -> Self {
         Self::init_with_config(
             channel_id,
             signing_key,
             node,
-            SequencerConfig::default(),
+            SequencerConfig::new(funding),
             checkpoint,
         )
     }
@@ -293,8 +299,7 @@ where
     /// one. Methods on the handle mutate state directly on the drive task
     /// and return the resulting [`SequencerCheckpoint`] inline, so the
     /// caller can persist the publish + checkpoint atomically. Publish-type
-    /// methods await one funding round-trip first when
-    /// [`SequencerConfig::funding`] is set.
+    /// methods await one funding round-trip first.
     pub const fn handle(&mut self) -> SequencerHandle<'_, Node> {
         SequencerHandle::new(self)
     }
@@ -556,14 +561,13 @@ where
         }
     }
 
-    /// With funding configured, building a transaction requires a round-trip
-    /// to the node's wallet — fail fast with [`Error::Unavailable`] while
-    /// disconnected instead of surfacing an HTTP error from the fund call.
-    /// A fresh [`Event::Ready`] is emitted once the reconnect completes, so
-    /// callers have a positive signal to retry. Fee-less sequencers
-    /// (`funding: None`) keep the accept-locally-while-disconnected contract.
+    /// Building a transaction requires a round-trip to the node's wallet —
+    /// fail fast with [`Error::Unavailable`] while disconnected instead of
+    /// surfacing an HTTP error from the fund call. A fresh [`Event::Ready`]
+    /// is emitted once the reconnect completes, so callers have a positive
+    /// signal to retry.
     const fn ensure_fundable(&self) -> Result<(), Error> {
-        if self.config.funding.is_some() && !self.connected {
+        if !self.connected {
             return Err(Error::Unavailable {
                 reason: "node disconnected; funding a transaction requires a connected node",
             });
@@ -595,7 +599,7 @@ where
         let parent = self.compute_publish_parent();
         let (signed_tx, new_msg_id) = create_inscribe_tx(
             &self.node,
-            self.config.funding.as_ref(),
+            &self.config.funding,
             self.channel_id,
             &self.signing_key,
             data.clone(),
@@ -800,7 +804,7 @@ where
 
         let signed_tx = create_channel_config_tx(
             &self.node,
-            self.config.funding.as_ref(),
+            &self.config.funding,
             self.channel_id,
             signing_keys,
             keys,
@@ -891,7 +895,7 @@ where
         &self,
         ops: Ops,
         data: Inscription,
-    ) -> Result<(MantleTx, MsgId, Ed25519Signature), Error> {
+    ) -> Result<(RawMantleTx, MsgId, Ed25519Signature), Error> {
         self.ensure_ready()?;
         let parent = self.compute_publish_parent();
         Ok(build_prepare_tx(
@@ -903,7 +907,7 @@ where
         ))
     }
 
-    pub(super) fn do_sign_tx(&self, tx: &MantleTx) -> Result<Ed25519Signature, Error> {
+    pub(super) fn do_sign_tx(&self, tx: &RawMantleTx) -> Result<Ed25519Signature, Error> {
         self.ensure_ready()?;
         Ok(build_sign_tx(tx.hash(), &self.signing_key))
     }

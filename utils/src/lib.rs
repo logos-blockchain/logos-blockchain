@@ -1,5 +1,4 @@
 pub mod bounded;
-pub mod fisheryates;
 pub mod math;
 pub mod net;
 pub mod noop_service;

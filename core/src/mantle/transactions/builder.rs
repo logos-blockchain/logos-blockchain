@@ -10,11 +10,8 @@ use crate::{
         GasConstants, Note, NoteId, Op, Utxo, Value,
         gas::{GasCost, GasOverflow},
         ledger::{BoundedUtxos, Inputs, Outputs},
-        ops::{
-            channel::{ChannelId, withdraw::ChannelWithdrawOp},
-            transfer::TransferOp,
-        },
-        transactions::mantle_tx::{MantleTx, MantleTxContext},
+        ops::{channel::ChannelId, transfer::TransferOp},
+        transactions::mantle_tx::{MantleTx as _, MantleTxContext, RawMantleTx},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
@@ -52,7 +49,7 @@ impl From<(BoundedError, BoundedTag)> for TxBuilderError {
     }
 }
 
-/// Builds a [`MantleTx`] incrementally.
+/// Builds a [`RawMantleTx`] incrementally.
 ///
 /// The builder is intentionally free of any [`MantleTxContext`]: gas prices are
 /// tip-dependent, so the context is supplied as a parameter to the fee-aware
@@ -62,7 +59,7 @@ impl From<(BoundedError, BoundedTag)> for TxBuilderError {
 /// HTTP) to be funded against a freshly fetched context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MantleTxBuilder {
-    mantle_tx: MantleTx,
+    mantle_tx: RawMantleTx,
     ledger_inputs: BoundedUtxos,
     pending_transfer: TransferOp,
     // Maps a Proof to its Op by the Op Index
@@ -80,7 +77,7 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            mantle_tx: MantleTx([].into()),
+            mantle_tx: RawMantleTx([].into()),
             ledger_inputs: BoundedUtxos::default(),
             pending_transfer: TransferOp::new(Inputs::empty(), Outputs::empty()),
             channel_multi_sig_proofs: HashMap::new(),
@@ -101,17 +98,6 @@ impl MantleTxBuilder {
                 .map_err(|err| TxBuilderError::from((err, BoundedTag::Ops)))?;
         }
         Ok(self)
-    }
-
-    pub fn push_channel_withdraw(
-        self,
-        op: ChannelWithdrawOp,
-        proof: ChannelMultiSigProof,
-    ) -> Result<Self, TxBuilderError> {
-        let mut builder = self.push_op(Op::ChannelWithdraw(op))?;
-        let index = builder.mantle_tx.ops().len() - 1;
-        builder.channel_multi_sig_proofs.insert(index, proof);
-        Ok(builder)
     }
 
     pub fn add_ledger_input(self, utxo: Utxo) -> Result<Self, TxBuilderError> {
@@ -234,8 +220,8 @@ impl MantleTxBuilder {
     }
 
     /// Predicts the minimum gas cost of the transaction once signed.
-    /// See [`MantleTx::minimum_total_gas_cost`] to understand why this is only
-    /// a minimum, not an exact cost.
+    /// See [`RawMantleTx::minimum_total_gas_cost`] to understand why this is
+    /// only a minimum, not an exact cost.
     pub fn minimum_gas_cost<G: GasConstants>(
         &self,
         context: &MantleTxContext,
@@ -302,7 +288,7 @@ impl MantleTxBuilder {
 
     // TODO: Change this to a `Result` if genesis tx already contains max number of
     // ops.
-    pub fn build(mut self) -> Result<MantleTx, TxBuilderError> {
+    pub fn build(mut self) -> Result<RawMantleTx, TxBuilderError> {
         if !self.pending_transfer.is_empty() {
             self.mantle_tx
                 .0
@@ -326,6 +312,7 @@ mod tests {
                 channel::{
                     deposit::{DepositOp, Metadata},
                     inscribe::InscriptionOp,
+                    withdraw::ChannelWithdrawOp,
                 },
                 leader_claim::LeaderClaimOp,
                 sdp::{SDPDeclareOp, SDPWithdrawOp},
