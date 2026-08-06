@@ -1,5 +1,7 @@
 mod difficulty;
 
+use std::num::NonZeroU64;
+
 use lb_core::{
     crypto::Hash,
     mantle::{
@@ -46,10 +48,6 @@ pub struct PowState {
     /// independent of the node's header-id type.
     block_slots: HashTrieMapSync<Hash, Slot>,
 }
-
-/// Errors that can occur while applying `PoW` state transitions.
-#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
-pub enum Error {}
 
 impl Default for PowState {
     fn default() -> Self {
@@ -160,7 +158,6 @@ impl PowState {
     /// from the rewards collected during `previous_epoch`.
     pub(crate) fn try_apply_header(
         &self,
-        _config: (),
         previous_epoch: &EpochState,
         next_epoch: &EpochState,
     ) -> Self {
@@ -188,16 +185,19 @@ pub trait ClaimPoWConstants {
     /// Numerator of the per-epoch payout rate.
     const RATE_NUM: u64 = 0;
     /// Denominator scale of the per-epoch payout rate.
-    const RATE_DEN: u64 = 100;
+    const RATE_DEN: u64 = 1;
     /// Expected number of reward claims per block.
-    const TARGET_CLAIM_PER_BLOCK: u64 = 0;
+    const TARGET_CLAIM_PER_BLOCK: u64 = 1;
     /// Expected number of blocks per epoch.
-    const EXPECTED_BLOCKS_PER_EPOCH: u64 = 0;
+    const EXPECTED_BLOCKS_PER_EPOCH: u64 = 1;
 
     /// Full denominator of the per-epoch payout rate.
     #[must_use]
-    fn denominator() -> u64 {
-        Self::RATE_DEN * Self::TARGET_CLAIM_PER_BLOCK * Self::EXPECTED_BLOCKS_PER_EPOCH
+    fn denominator() -> NonZeroU64 {
+        NonZeroU64::new(
+            Self::RATE_DEN * Self::TARGET_CLAIM_PER_BLOCK * Self::EXPECTED_BLOCKS_PER_EPOCH,
+        )
+        .expect("Static values should compute a valid Denominator")
     }
 }
 
@@ -222,8 +222,9 @@ impl ClaimPoWConstants for ClaimPoWDisabledConstants {
 pub fn compute_epoch_pow_reward<Constants: ClaimPoWConstants>(
     pow_reward_pool: PowReward,
 ) -> PowReward {
-    let reward = u128::from(pow_reward_pool) * u128::from(Constants::RATE_NUM)
-        / u128::from(Constants::denominator());
+    let denominator = u64::from(Constants::denominator());
+    let reward =
+        u128::from(pow_reward_pool) * u128::from(Constants::RATE_NUM) / u128::from(denominator);
     PowReward::try_from(reward).unwrap_or(PowReward::MAX)
 }
 
@@ -261,10 +262,6 @@ mod tests {
         const EXPECTED_BLOCKS_PER_EPOCH: u64 = 10;
     }
 
-    /// The trait's own defaults, with nothing overridden.
-    struct DefaultTraitConstants;
-    impl ClaimPoWConstants for DefaultTraitConstants {}
-
     const BLOCK_A: Hash = [1u8; 32];
     const BLOCK_B: Hash = [2u8; 32];
 
@@ -278,27 +275,6 @@ mod tests {
         assert_ne!(state.reward_difficulty(), PowTarget::default());
         assert!(state.nullifiers().is_empty());
         assert!(state.block_slots().is_empty());
-    }
-
-    #[test]
-    fn claim_pow_disabled_constants_denominator_is_never_zero() {
-        // `try_apply_header` always refills through `ClaimPoWDisabledConstants`.
-        // If its denominator were ever zero, every epoch transition would
-        // panic inside `compute_epoch_pow_reward` (division by zero) - as it
-        // used to before RATE_DEN/TARGET_CLAIM_PER_BLOCK/
-        // EXPECTED_BLOCKS_PER_EPOCH were fixed to `1`.
-        assert_ne!(ClaimPoWDisabledConstants::denominator(), 0);
-    }
-
-    #[test]
-    #[should_panic(expected = "attempt to divide by zero")]
-    fn trait_default_constants_denominator_is_unsafe() {
-        // The trait's bare defaults (RATE_DEN=100, TARGET_CLAIM_PER_BLOCK=0,
-        // EXPECTED_BLOCKS_PER_EPOCH=0) yield a zero denominator. Any new
-        // `ClaimPoWConstants` impl MUST override TARGET_CLAIM_PER_BLOCK and
-        // EXPECTED_BLOCKS_PER_EPOCH to a nonzero value, or claiming panics.
-        // Pinned here so the footgun is caught by a test, not a crash.
-        let _ = compute_epoch_pow_reward::<DefaultTraitConstants>(1_000);
     }
 
     #[test]
@@ -424,7 +400,7 @@ mod tests {
         state.add_reward_refill_rewards(500);
         let same_epoch = epoch_state(3);
 
-        let unchanged = state.try_apply_header((), &same_epoch, &same_epoch);
+        let unchanged = state.try_apply_header(&same_epoch, &same_epoch);
 
         assert_eq!(unchanged, state);
         assert_eq!(unchanged.reward_pool(), POW_REWARD_POOL_GENESIS);
@@ -438,7 +414,7 @@ mod tests {
         let later = epoch_state(5);
 
         // `next_epoch` behind `previous_epoch`, e.g. a stale/reorged branch.
-        let unchanged = state.try_apply_header((), &later, &earlier);
+        let unchanged = state.try_apply_header(&later, &earlier);
 
         assert_eq!(unchanged, state);
     }
@@ -451,7 +427,7 @@ mod tests {
         let previous = epoch_state(0);
         let next = epoch_state(1);
 
-        drop(state.try_apply_header((), &previous, &next));
+        drop(state.try_apply_header(&previous, &next));
 
         assert_eq!(state, original);
     }
@@ -463,7 +439,7 @@ mod tests {
         let previous = epoch_state(0);
         let next = epoch_state(1);
 
-        let new_state = state.try_apply_header((), &previous, &next);
+        let new_state = state.try_apply_header(&previous, &next);
 
         assert_eq!(new_state.reward_pool(), POW_REWARD_POOL_GENESIS + 500);
     }
@@ -479,7 +455,7 @@ mod tests {
         let previous = epoch_state(0);
         let next = epoch_state(1);
 
-        let new_state = state.try_apply_header((), &previous, &next);
+        let new_state = state.try_apply_header(&previous, &next);
 
         assert_eq!(new_state.reward_pool(), POW_REWARD_POOL_GENESIS + 1_000_000);
         assert_eq!(new_state.epoch_reward(), 0);
@@ -492,7 +468,7 @@ mod tests {
         let previous = epoch_state(0);
         let next = epoch_state(5);
 
-        let new_state = state.try_apply_header((), &previous, &next);
+        let new_state = state.try_apply_header(&previous, &next);
 
         assert_eq!(new_state.reward_pool(), POW_REWARD_POOL_GENESIS + 500);
     }
@@ -504,12 +480,12 @@ mod tests {
         let mut state = PowState::new();
         state.add_reward_refill_rewards(200);
         let same = epoch_state(2);
-        let mut state = state.try_apply_header((), &same, &same);
+        let mut state = state.try_apply_header(&same, &same);
 
         state.add_reward_refill_rewards(300);
         let previous = epoch_state(2);
         let next = epoch_state(3);
-        let new_state = state.try_apply_header((), &previous, &next);
+        let new_state = state.try_apply_header(&previous, &next);
 
         assert_eq!(new_state.reward_pool(), POW_REWARD_POOL_GENESIS + 500);
     }
@@ -633,7 +609,7 @@ mod tests {
         let mut state = PowState::new();
         state.update_from_claim_execution_result(&claim_result(0, nullifier));
 
-        let new_state = state.try_apply_header((), &epoch_state(0), &epoch_state(1));
+        let new_state = state.try_apply_header(&epoch_state(0), &epoch_state(1));
 
         assert!(new_state.nullifiers().contains(&nullifier));
     }

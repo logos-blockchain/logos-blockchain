@@ -103,8 +103,8 @@ pub enum ClaimPowRewardError {
     InvalidPoWRewardTicket,
     #[error("Ticket was already claimed")]
     DoubleClaimed,
-    #[error("Out of window slot ({slot:?})")]
-    OutOfWindowSlot { slot: Slot },
+    #[error("Out of window slot ({slot:?}) vs block slot ({current_slot:?})")]
+    OutOfWindowSlot { slot: Slot, current_slot: Slot },
     #[error("Missing block ({block_id:?})")]
     MissingBlock { block_id: Hash },
 }
@@ -158,10 +158,16 @@ impl ClaimPoWRewardVerificationContext<'_> {
         };
 
         let Some(slot_gap) = self.current_block_slot.checked_sub(block_slot) else {
-            return Err(ClaimPowRewardError::OutOfWindowSlot { slot: block_slot });
+            return Err(ClaimPowRewardError::OutOfWindowSlot {
+                slot: block_slot,
+                current_slot: self.current_block_slot,
+            });
         };
         if slot_gap > Slot::from(WINDOW) {
-            return Err(ClaimPowRewardError::OutOfWindowSlot { slot: block_slot });
+            return Err(ClaimPowRewardError::OutOfWindowSlot {
+                slot: block_slot,
+                current_slot: self.current_block_slot,
+            });
         }
         Ok(())
     }
@@ -345,7 +351,7 @@ mod tests {
         // (as the previous `<=` comparison did) strands the last reward.
         let nullifiers = rpds::HashTrieSetSync::new_sync();
         let ctx = validation_context(&nullifiers, 10, 10);
-        assert_eq!(ctx.pow_reward_enabled(), Ok(()));
+        assert_eq!(ctx.are_pow_reward_enabled(), Ok(()));
     }
 
     #[test]
@@ -353,7 +359,7 @@ mod tests {
         let nullifiers = rpds::HashTrieSetSync::new_sync();
         let ctx = validation_context(&nullifiers, 10, 9);
         assert_eq!(
-            ctx.pow_reward_enabled(),
+            ctx.are_pow_reward_enabled(),
             Err(ClaimPowRewardError::InsufficientPoolBalance {
                 pool: 9,
                 reward: 10,
@@ -368,7 +374,7 @@ mod tests {
         let nullifiers = rpds::HashTrieSetSync::new_sync();
         let ctx = validation_context(&nullifiers, 0, 1_000);
         assert_eq!(
-            ctx.pow_reward_enabled(),
+            ctx.are_pow_reward_enabled(),
             Err(ClaimPowRewardError::EmptyRewards)
         );
     }
@@ -467,7 +473,8 @@ mod tests {
         assert_eq!(
             ctx.accept_claim::<10>(CLAIM_BLOCK_HASH),
             Err(ClaimPowRewardError::OutOfWindowSlot {
-                slot: Slot::from(39u64)
+                slot: Slot::from(39u64),
+                current_slot: Slot::from(50),
             })
         );
     }
@@ -482,7 +489,8 @@ mod tests {
         assert_eq!(
             ctx.accept_claim::<10>(CLAIM_BLOCK_HASH),
             Err(ClaimPowRewardError::OutOfWindowSlot {
-                slot: Slot::from(51u64)
+                slot: Slot::from(51u64),
+                current_slot: Slot::from(50),
             })
         );
     }

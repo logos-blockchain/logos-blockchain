@@ -39,8 +39,6 @@ pub enum Error {
     Channel(#[from] channel::Error),
     #[error(transparent)]
     Leader(#[from] leader::Error),
-    #[error(transparent)]
-    Pow(#[from] pow::Error),
     #[error("Sdp ledger error: {0:?}")]
     Sdp(#[from] SdpLedgerError),
     #[error(transparent)]
@@ -157,7 +155,7 @@ impl LedgerState {
             self.sdp
                 .try_apply_header(&config.sdp_config, last_epoch_state, epoch_state)?;
         self.sdp = new_sdp;
-        self.pow = self.pow.try_apply_header((), last_epoch_state, epoch_state);
+        self.pow = self.pow.try_apply_header(last_epoch_state, epoch_state);
         Ok((self, effect))
     }
 

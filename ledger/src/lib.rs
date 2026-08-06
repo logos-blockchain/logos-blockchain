@@ -245,7 +245,16 @@ impl LedgerState {
         // block's id is known — unlike a proposer's direct
         // `try_apply_header` call for a block still being built.
         state.mantle_ledger.add_seen_block(block_id.into(), slot);
-        let (state, tx_events) = state.try_apply_contents::<_, _, Constants>(config, txs)?;
+        let (mut state, tx_events) = state.try_apply_contents::<_, _, Constants>(config, txs)?;
+        state.update_pow_difficulty(
+            // count all claimed rewards
+            tx_events
+                .iter()
+                .filter(|TxEvent { payload, .. }| {
+                    matches!(payload, TxEventPayload::PoWRewardClaimed { .. })
+                })
+                .count() as u64,
+        );
         let events = header_events
             .into_iter()
             .map(Into::into)
@@ -472,15 +481,6 @@ impl LedgerState {
         // Accumulate storage gas consumed so the storage market can update the
         // price at the next epoch rotation.
         self = self.add_storage_gas_consumed(total_block_storage_gas)?;
-        self.update_pow_difficulty(
-            // count all claimed rewards
-            tx_events
-                .iter()
-                .filter(|TxEvent { payload, .. }| {
-                    matches!(payload, TxEventPayload::PoWRewardClaimed { .. })
-                })
-                .count() as u64,
-        );
         Ok((self, tx_events))
     }
 
@@ -2069,32 +2069,44 @@ mod tests {
             }
         }
 
-        fn apply_empty_block(state: LedgerState, config: &Config) -> LedgerState {
-            state
-                .try_apply_contents::<_, HeaderId, MainnetGasConstants>(
-                    config,
-                    std::iter::empty::<&SignedMantleTx<Preverified>>(),
-                )
-                .expect("empty block should apply")
-                .0
+        /// Read the reward difficulty of a block's committed state.
+        fn difficulty_at(ledger: &Ledger<HeaderId>, id: HeaderId) -> PowTarget {
+            ledger
+                .state(&id)
+                .expect("block state should exist")
+                .mantle_ledger
+                .pow
+                .reward_difficulty()
         }
 
         #[test]
         fn difficulty_eases_on_each_applied_block_without_claims() {
+            // The retarget runs in `try_update`, on the canonical block-apply
+            // path, once the block's contents have applied successfully.
             // `PoWDifficultySettings`: q = 9/10, T = 100. An empty block is
             // the largest easing step, a factor of P/F = 10/9 per block:
             //   900 -> 10·100·900/(9·100) = 1000 -> 1000000/900 = 1111.
-            let (state, config) = pow_ledger_state(900);
+            let test_utxo = utxo();
+            let (mut test_ledger, genesis) = ledger(&[test_utxo], config());
+            test_ledger
+                .states
+                .get_mut(&genesis)
+                .expect("genesis state should exist")
+                .mantle_ledger
+                .pow
+                .set_reward_difficulty(PowTarget::from(900u64));
 
-            let state = apply_empty_block(state, &config);
+            let block_1 = update_ledger(&mut test_ledger, genesis, 1, test_utxo)
+                .expect("empty block should apply");
             assert_eq!(
-                state.mantle_ledger.pow.reward_difficulty(),
+                difficulty_at(&test_ledger, block_1),
                 PowTarget::from(1_000u64)
             );
 
-            let state = apply_empty_block(state, &config);
+            let block_2 = update_ledger(&mut test_ledger, block_1, 2, test_utxo)
+                .expect("empty block should apply");
             assert_eq!(
-                state.mantle_ledger.pow.reward_difficulty(),
+                difficulty_at(&test_ledger, block_2),
                 PowTarget::from(1_111u64)
             );
         }
@@ -2102,9 +2114,8 @@ mod tests {
         #[test]
         fn difficulty_hardens_when_claims_exceed_the_target() {
             // Exercises the `LedgerState` plumbing directly with a claim
-            // count (claim txs cannot yet enter a block, see
-            // `claim_tx_is_rejected_at_preverification`): 2T claims shrink
-            // the target, 1000 -> 10·100·1000/(1·200 + 9·100) = 909.
+            // count: 2T claims shrink the target,
+            // 1000 -> 10·100·1000/(1·200 + 9·100) = 909.
             let (mut state, _config) = pow_ledger_state(1_000);
 
             state.update_pow_difficulty(200);
@@ -2121,13 +2132,14 @@ mod tests {
             // absorbing state for the controller, with no ticket ever able
             // to satisfy it), and the per-block retarget moves it: an empty
             // block (no claims) eases the target upward.
-            let config = config();
-            let state = LedgerState::from_utxos([utxo()], &config);
-            let genesis_difficulty = state.mantle_ledger.pow.reward_difficulty();
+            let test_utxo = utxo();
+            let (mut test_ledger, genesis) = ledger(&[test_utxo], config());
+            let genesis_difficulty = difficulty_at(&test_ledger, genesis);
             assert_ne!(genesis_difficulty, Fr::ZERO);
 
-            let state = apply_empty_block(state, &config);
-            assert!(state.mantle_ledger.pow.reward_difficulty() > genesis_difficulty);
+            let block_1 = update_ledger(&mut test_ledger, genesis, 1, test_utxo)
+                .expect("empty block should apply");
+            assert!(difficulty_at(&test_ledger, block_1) > genesis_difficulty);
         }
 
         fn claim_tx() -> SignedMantleTx<Preverified> {
