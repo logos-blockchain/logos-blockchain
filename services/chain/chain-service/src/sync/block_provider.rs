@@ -596,7 +596,7 @@ mod tests {
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };
-    use lb_cryptarchia_engine::Config;
+    use lb_cryptarchia_engine::{Config, average_slots_for_blocks};
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey};
     use lb_storage_service::{
@@ -1133,6 +1133,7 @@ mod tests {
                     NonZero::new(1).unwrap(),
                     slot_activation_coeff,
                     1f64.try_into().expect("1 > 0"),
+                    average_slots_for_blocks(10.try_into().unwrap(), slot_activation_coeff),
                 ),
                 lb_cryptarchia_engine::State::Bootstrapping,
                 0.into(),

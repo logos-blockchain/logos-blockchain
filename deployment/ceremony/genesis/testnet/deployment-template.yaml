@@ -27,6 +27,7 @@ cryptarchia:
     numerator: 1
     denominator: 30
   learning_rate: 1.0
+  window_absorption_parameter: 10
   sdp_config:
     service_params:
       BN:

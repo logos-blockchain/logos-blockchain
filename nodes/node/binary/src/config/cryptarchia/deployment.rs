@@ -19,6 +19,8 @@ pub struct Settings {
     pub security_param: NonZeroU32,
     pub slot_activation_coeff: NonNegativeRatio,
     pub learning_rate: NonNegativeF64,
+    /// `W`, the uncle reference window in expected block-intervals.
+    pub window_absorption_parameter: NonZeroU32,
     pub sdp_config: SdpConfig,
     pub gossipsub_protocol: String,
     pub genesis_block: GenesisBlock,
@@ -52,7 +54,25 @@ impl Settings {
             self.security_param,
             self.slot_activation_coeff,
             self.learning_rate,
+            self.uncle_reference_window(),
         )
+    }
+
+    /// Derives the uncle reference window `w_u` from
+    /// the window absorption parameter `W` and the slot activation coeff `f`.
+    ///
+    /// # Panics
+    /// If `W` exceeds `0.6k`, which would put `w_u` outside the
+    /// finalization window.
+    #[must_use]
+    fn uncle_reference_window(&self) -> NonZero<u64> {
+        let max = (0.6 * f64::from(self.security_param.get())).floor() as u32;
+        assert!(
+            self.window_absorption_parameter.get() <= max,
+            "window_absorption_parameter must be at most floor(0.6 * security_param) = {max}",
+        );
+
+        average_slots_for_blocks(self.window_absorption_parameter, self.slot_activation_coeff)
     }
 }
 

@@ -708,6 +708,7 @@ pub mod tests {
             NonZero::new(security_param).unwrap(),
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
+            NonZero::new(100).unwrap(), // W = 10 at f = 1/10
         )
     }
 

@@ -138,6 +138,7 @@ mod tests {
             security_param,
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
+            NonZero::new(100).unwrap(), // W = 10 at f = 1/10
         );
         let epoch_config = lb_cryptarchia_engine::EpochConfig {
             epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
@@ -270,6 +271,7 @@ mod tests {
             security_param,
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
+            NonZero::new(100).unwrap(), // W = 10 at f = 1/10
         );
         let epoch_config = lb_cryptarchia_engine::EpochConfig {
             epoch_stake_distribution_stabilization: 1.try_into().unwrap(),

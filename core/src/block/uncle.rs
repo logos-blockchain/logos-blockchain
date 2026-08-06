@@ -1,12 +1,10 @@
 use lb_codec::BinaryCodec;
+use lb_cryptarchia_engine::MAX_UNCLES;
 use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
 use crate::header::Header;
-
-/// Maximum number of uncles a block may reference.
-pub const MAX_UNCLES: usize = 4;
 
 /// Signed headers of the uncles referenced by a block.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
