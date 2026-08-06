@@ -13,7 +13,10 @@
 //! non-finalized channel view through its events. Before emitting
 //! [`sequencer::Event::Ready`], the instance backfills the finalized history
 //! it has not seen yet: from genesis on a cold start, or from the restored
-//! [`sequencer::SequencerCheckpoint`]'s slot when resuming.
+//! [`sequencer::SequencerCheckpoint`]'s slot when resuming. Construction
+//! still requires a [`sequencer::FundingConfig`]; for a read-only instance
+//! pass a placeholder — funding is only exercised by publish-type calls,
+//! which such a sequencer never makes.
 //!
 //! The sequencer talks to a Logos node through the [`adapter`] module's
 //! [`adapter::Node`] trait; an HTTP implementation is provided as
