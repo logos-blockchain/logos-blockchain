@@ -811,7 +811,6 @@ async fn start_named_sequencer_with_config(
         runtime.task,
         runtime.events,
         runtime.checkpoint_rx,
-        runtime.ready_rx,
         runtime.channel_view_rx,
         runtime.turn_to_write_rx,
         runtime.tx_status_rx,

@@ -129,14 +129,6 @@ impl CommonHttpClient {
         }
     }
 
-    #[must_use]
-    pub fn new_with_client(client: Client, basic_auth: Option<BasicAuthCredentials>) -> Self {
-        Self {
-            client: Arc::new(client),
-            basic_auth,
-        }
-    }
-
     pub async fn post<Req, Res>(&self, request_url: Url, request_body: &Req) -> Result<Res, Error>
     where
         Req: Serialize + ?Sized + Send + Sync,

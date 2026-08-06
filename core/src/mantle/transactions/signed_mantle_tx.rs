@@ -7,7 +7,7 @@ use crate::{
     mantle::{
         RawMantleTx, Value, VerificationError,
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow},
-        ledger::{VerifiableOperation, verification_mode::StandardMode},
+        ledger::{PreverifiableOperation, VerifiableOperation, verification_mode::StandardMode},
         ops::{
             Op, OpProof,
             channel::{
@@ -136,8 +136,10 @@ impl SignedMantleTx<Unverified> {
                 .map_err(VerificationError::ChannelVerificationError),
             (Op::SDPDeclare(op), OpProof::ZkAndEd25519Sigs(proof)) => {
                 let context = SDPDeclarePreverificationContext { tx_hash_view };
-                <SDPDeclareOp as VerifiableOperation<StandardMode>>::preverify(op, proof, &context)
-                    .map_err(VerificationError::SDPVerificationError)
+                <SDPDeclareOp as PreverifiableOperation<StandardMode>>::preverify(
+                    op, proof, &context,
+                )
+                .map_err(VerificationError::SDPVerificationError)
             }
             (Op::SDPWithdraw(op), OpProof::ZkSig(proof)) => op
                 .preverify(proof, &())

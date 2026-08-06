@@ -160,12 +160,6 @@ impl Channels {
         self.channel_notes.contains(note_id)
     }
 
-    /// Returns the channel owning `note_id`, if it is a channel note.
-    #[must_use]
-    pub fn get_channel(&self, note_id: &NoteId) -> Option<ChannelId> {
-        self.channel_notes.get(note_id).copied()
-    }
-
     /// Returns `true` if `note_id` is a channel note owned by `channel_id`.
     #[must_use]
     pub(crate) fn is_channel_note_of(&self, note_id: &NoteId, channel_id: &ChannelId) -> bool {

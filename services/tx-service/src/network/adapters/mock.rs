@@ -11,7 +11,6 @@ use overwatch::services::{ServiceData, relay::OutboundRelay};
 use crate::network::NetworkAdapter;
 
 pub const MOCK_PUB_SUB_TOPIC: &str = "MockPubSubTopic";
-pub const MOCK_CONTENT_TOPIC: &str = "MockContentTopic";
 pub const MOCK_TX_CONTENT_TOPIC: MockContentTopic = MockContentTopic::new("Mock", 1, "Tx");
 
 const LOG_TARGET: &str = mempool::network::ROOT;

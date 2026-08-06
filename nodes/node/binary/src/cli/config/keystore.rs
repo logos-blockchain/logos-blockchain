@@ -126,19 +126,6 @@ impl Keystore {
             })
     }
 
-    pub fn get_all_ed25519(&self) -> impl Iterator<Item = (KeyId, UnsecuredEd25519Key)> + '_ {
-        self.secret_keys
-            .values()
-            .filter_map(|generic_key| match generic_key {
-                Key::Ed25519(inner_key) => {
-                    let id = key_id(generic_key);
-                    let unsecured = inner_key.clone().into_unsecured();
-                    Some((id, unsecured))
-                }
-                Key::Zk(_) => None,
-            })
-    }
-
     pub fn generate_ed25519(&mut self, title: impl Into<KeyTitle>) -> (KeyId, UnsecuredEd25519Key) {
         let title = title.into();
         let secure_key = Ed25519Key::generate(&mut OsRng);

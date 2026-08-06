@@ -8,8 +8,8 @@ use crate::{
     mantle::{
         channel::Channels,
         ledger::{
-            self, ExecutableOperation, Inputs, Outputs, ProvableOperation, Utxo, Utxos,
-            VerifiableOperation, verification_mode,
+            self, ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation,
+            Utxo, Utxos, VerifiableOperation, verification_mode,
         },
         ops::OpId,
         transactions::hash::TxHashView,
@@ -88,15 +88,14 @@ impl ProvableOperation for TransferOp {
     type Proof = ZkSignature;
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for TransferOp {
-    type PreverificationContext<'a> = ();
-    type VerificationContext<'a> = TransferValidationContext<'a>;
+impl PreverifiableOperation<verification_mode::StandardMode> for TransferOp {
+    type Context<'a> = ();
     type Error = TransferError;
 
     fn preverify(
         &self,
         _proof: &Self::Proof,
-        _context: &Self::PreverificationContext<'_>,
+        _context: &Self::Context<'_>,
     ) -> Result<(), Self::Error> {
         // Ensure the inputs is non-empty
         if self.inputs.is_empty() {
@@ -108,12 +107,13 @@ impl VerifiableOperation<verification_mode::StandardMode> for TransferOp {
 
         Ok(())
     }
+}
 
-    fn verify(
-        &self,
-        proof: &Self::Proof,
-        context: &Self::VerificationContext<'_>,
-    ) -> Result<(), Self::Error> {
+impl VerifiableOperation<verification_mode::StandardMode> for TransferOp {
+    type Context<'a> = TransferValidationContext<'a>;
+    type Error = TransferError;
+
+    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
         // Validate Inputs
         self.inputs.validate_not_in_channel(
             context.locked_notes,

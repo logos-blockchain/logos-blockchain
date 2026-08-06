@@ -81,7 +81,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                     }));
                 }
             }
-            Err(gossipsub::PublishError::InsufficientPeers) if retry_count < MAX_RETRY => {
+            Err(gossipsub::PublishError::NoPeersSubscribedToTopic) if retry_count < MAX_RETRY => {
                 let wait = exp_backoff(retry_count);
                 tracing::trace!(
                     target: LOG_TARGET,

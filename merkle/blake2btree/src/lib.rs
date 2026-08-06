@@ -5,7 +5,7 @@ use blake2::{Digest as _, digest::typenum::U32};
 pub use lb_dynamic_merkle::{DynamicMerkleTree, MerkleNode, MerklePath};
 use lb_dynamic_merkle::{MerkleHasher, empty_subtree_root};
 pub use lb_merkle_tree::Error;
-use lb_merkle_tree::{CompressedMerkleTree, LeafExtractor, MerkleTree};
+use lb_merkle_tree::{LeafExtractor, MerkleTree};
 
 pub type Hasher = blake2::Blake2b<U32>;
 
@@ -64,9 +64,6 @@ where
 /// from being reordered, and their position is recorded for future insertions.
 /// Updating an item replaces its leaf with another one, keeping its position.
 pub type Blake2bTree<Key, Item> = MerkleTree<Key, Item, Blake2bLeaf>;
-
-/// Compressed form of a [`Blake2bTree`].
-pub type CompressedBlake2bTree<Key, Item> = CompressedMerkleTree<Key, Item>;
 
 #[cfg(test)]
 mod tests {
