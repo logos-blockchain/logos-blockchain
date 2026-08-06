@@ -158,14 +158,10 @@ impl ClaimPoWRewardVerificationContext<'_> {
         };
 
         let Some(slot_gap) = self.current_block_slot.checked_sub(block_slot) else {
-            return Err(ClaimPowRewardError::OutOfWindowSlot {
-                slot: block_slot,
-            });
+            return Err(ClaimPowRewardError::OutOfWindowSlot { slot: block_slot });
         };
-        if slot_gap > WINDOW {
-            return Err(ClaimPowRewardError::OutOfWindowSlot {
-                slot: block_slot,
-            });
+        if slot_gap > Slot::from(WINDOW) {
+            return Err(ClaimPowRewardError::OutOfWindowSlot { slot: block_slot });
         }
         Ok(())
     }
