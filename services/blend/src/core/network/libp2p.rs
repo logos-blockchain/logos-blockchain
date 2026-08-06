@@ -13,6 +13,7 @@ use super::NetworkAdapter;
 pub struct Libp2pAdapter<RuntimeServiceId> {
     network_relay:
         OutboundRelay<<NetworkService<Libp2p, RuntimeServiceId> as ServiceData>::Message>,
+    settings: Libp2pBroadcastSettings,
 }
 
 /// Settings used to broadcast messages to the network service that uses libp2p
@@ -25,24 +26,28 @@ pub struct Libp2pBroadcastSettings {
 #[async_trait::async_trait]
 impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for Libp2pAdapter<RuntimeServiceId> {
     type Backend = Libp2p;
-    type BroadcastSettings = Libp2pBroadcastSettings;
+    type Settings = Libp2pBroadcastSettings;
 
     fn new(
         network_relay: OutboundRelay<
             <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
         >,
+        settings: Self::Settings,
     ) -> Self {
-        Self { network_relay }
+        Self {
+            network_relay,
+            settings,
+        }
     }
 
     /// Broadcast an unencrypted message to the network by publishing the
     /// message under the configured gossipsub topic.
-    async fn broadcast(&self, message: Vec<u8>, broadcast_settings: Self::BroadcastSettings) {
+    async fn broadcast(&self, message: Vec<u8>) {
         if let Err((e, _)) = self
             .network_relay
             .send(NetworkMsg::Process(Command::PubSub(
                 PubSubCommand::Broadcast {
-                    topic: broadcast_settings.topic.clone(),
+                    topic: self.settings.topic.clone(),
                     message: message.into_boxed_slice(),
                 },
             )))

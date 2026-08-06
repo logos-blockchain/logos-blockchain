@@ -30,6 +30,7 @@ where
     pub async fn new<NetworkService>(
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
         node_id: NodeId,
+        network_settings: Adapter::Settings,
     ) -> Result<Self, Error>
     where
         NetworkService:
@@ -43,7 +44,7 @@ where
         )
         .await?;
         let relay = overwatch_handle.relay::<NetworkService>().await?;
-        let adapter = Adapter::new(relay);
+        let adapter = Adapter::new(relay, network_settings);
         Ok(Self {
             adapter,
             node_id,
@@ -60,13 +61,7 @@ where
 {
     pub async fn handle_inbound_message<Message>(&self, message: Message) -> Result<(), Error>
     where
-        Message: MessageComponents<
-                NodeId,
-                Payload: Into<Vec<u8>>,
-                BroadcastSettings: Into<Adapter::BroadcastSettings>,
-            > + Send
-            + Sync
-            + 'static,
+        Message: MessageComponents<NodeId, Payload: Into<Vec<u8>>> + Send + Sync + 'static,
     {
         match message.try_into_network_info_request() {
             Ok(reply) => {
@@ -77,10 +72,7 @@ where
                 Ok(())
             }
             Err(message) => {
-                let (payload, broadcast_settings) = message.into_components();
-                self.adapter
-                    .broadcast(payload.into(), broadcast_settings.into())
-                    .await;
+                self.adapter.broadcast(message.into_payload().into()).await;
                 Ok(())
             }
         }
@@ -123,7 +115,7 @@ pub mod tests {
             // Create the BroadcastMode
             let mut mode = BroadcastMode::<TestNetworkAdapter, (), RuntimeServiceId>::new::<
                 TestNetworkService,
-            >(app.handle(), ())
+            >(app.handle(), (), ())
             .await
             .unwrap();
 
@@ -143,7 +135,7 @@ pub mod tests {
             // Check if the mode can be created again.
             let mut mode = BroadcastMode::<TestNetworkAdapter, (), RuntimeServiceId>::new::<
                 TestNetworkService,
-            >(app.handle(), ())
+            >(app.handle(), (), ())
             .await
             .unwrap();
             mode.handle_inbound_message(TestMessage(b"world".to_vec()))
@@ -245,12 +237,13 @@ pub mod tests {
     #[async_trait::async_trait]
     impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for TestNetworkAdapter {
         type Backend = TestNetworkBackend;
-        type BroadcastSettings = ();
+        type Settings = ();
 
         fn new(
             relay: OutboundRelay<
                 <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
             >,
+            (): Self::Settings,
         ) -> Self {
             let (broadcasted_messages_sender, broadcasted_messages_receiver) = mpsc::channel(100);
             Self {
@@ -260,7 +253,7 @@ pub mod tests {
             }
         }
 
-        async fn broadcast(&self, message: Vec<u8>, _: Self::BroadcastSettings) {
+        async fn broadcast(&self, message: Vec<u8>) {
             debug!("Broadcasting message: {message:?}");
             self.relay
                 .send(NetworkMsg::Process(message.clone()))
@@ -278,10 +271,9 @@ pub mod tests {
 
     impl<NodeId> MessageComponents<NodeId> for TestMessage {
         type Payload = Vec<u8>;
-        type BroadcastSettings = ();
 
-        fn into_components(self) -> (Self::Payload, Self::BroadcastSettings) {
-            (self.0, ())
+        fn into_payload(self) -> Self::Payload {
+            self.0
         }
 
         fn try_into_network_info_request(

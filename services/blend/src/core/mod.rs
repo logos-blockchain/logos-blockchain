@@ -46,10 +46,7 @@ use lb_blend::{
     },
 };
 use lb_chain_service::{Epoch, api::CryptarchiaServiceData};
-use lb_core::{
-    codec::{DeserializeOp as _, SerializeOp as _},
-    sdp::ActivityMetadata,
-};
+use lb_core::sdp::ActivityMetadata;
 use lb_key_management_system_service::{
     api::KmsServiceApi,
     keys::{KeyOperators, PublicKeyEncoding},
@@ -75,7 +72,6 @@ use overwatch::{
     },
 };
 use rand::{RngCore, SeedableRng as _, seq::SliceRandom as _};
-use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tracing::{debug, error, info};
 
@@ -137,12 +133,12 @@ pub struct BlendService<
     Network: NetworkAdapter<RuntimeServiceId>,
     StateStorage: RecoveryBackendTrait<
             RuntimeServiceId,
-            State = RecoveryServiceState<Backend::Settings, Network::BroadcastSettings>,
+            State = RecoveryServiceState<Backend::Settings, Network::Settings>,
         > + Send
         + Sync,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    last_saved_state: Option<ServiceState<Backend::Settings, Network::BroadcastSettings>>,
+    last_saved_state: Option<ServiceState<Backend::Settings, Network::Settings>>,
     _phantom: PhantomData<(
         Backend,
         SdpService,
@@ -185,14 +181,14 @@ where
     Network: NetworkAdapter<RuntimeServiceId>,
     StateStorage: RecoveryBackendTrait<
             RuntimeServiceId,
-            State = RecoveryServiceState<Backend::Settings, Network::BroadcastSettings>,
+            State = RecoveryServiceState<Backend::Settings, Network::Settings>,
         > + Send
         + Sync,
 {
-    type Settings = StartingBlendConfig<Backend::Settings>;
-    type State = RecoveryServiceState<Backend::Settings, Network::BroadcastSettings>;
+    type Settings = StartingBlendConfig<Backend::Settings, Network::Settings>;
+    type State = RecoveryServiceState<Backend::Settings, Network::Settings>;
     type StateOperator = RecoveryOperator<StateStorage>;
-    type Message = ServiceMessage<Network::BroadcastSettings, NodeId>;
+    type Message = ServiceMessage<NodeId>;
 }
 
 #[async_trait]
@@ -225,7 +221,7 @@ impl<
 where
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Send + Sync,
     NodeId: membership::node_id::TryFrom + Clone + Debug + Send + Eq + Hash + Sync + 'static,
-    Network: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash + Unpin> + Send + Sync,
+    Network: NetworkAdapter<RuntimeServiceId> + Send + Sync,
     ProofsGenerator:
         CoreAndLeaderProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>> + Send,
     SdpService: ServiceData<Message = SdpMessage> + Send,
@@ -235,7 +231,7 @@ where
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
     StateStorage: RecoveryBackendTrait<
             RuntimeServiceId,
-            State = RecoveryServiceState<Backend::Settings, Network::BroadcastSettings>,
+            State = RecoveryServiceState<Backend::Settings, Network::Settings>,
         > + Send
         + Sync,
     RuntimeServiceId: AsServiceId<NetworkService<Network::Backend, RuntimeServiceId>>
@@ -312,7 +308,7 @@ where
                 .relay::<NetworkService<_, _>>()
                 .await
                 .expect("Relay with network service should be available.");
-            Network::new(network_relay)
+            Network::new(network_relay, blend_config.network.clone())
         }
         .await;
 
@@ -483,9 +479,9 @@ async fn initialize<
     overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     kms_adapter: KmsAdapter,
     sdp_relay: &OutboundRelay<SdpMessage>,
-    mut last_saved_state: Option<ServiceState<Backend::Settings, NetAdapter::BroadcastSettings>>,
+    mut last_saved_state: Option<ServiceState<Backend::Settings, NetAdapter::Settings>>,
     state_updater: StateUpdater<
-        Option<RecoveryServiceState<Backend::Settings, NetAdapter::BroadcastSettings>>,
+        Option<RecoveryServiceState<Backend::Settings, NetAdapter::Settings>>,
     >,
 ) -> (
     impl Stream<Item = EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, KmsAdapter::CorePoQGenerator>>>
@@ -499,19 +495,15 @@ async fn initialize<
         ProofsGenerator,
         ProofsVerifier,
     >,
-    ServiceState<Backend::Settings, NetAdapter::BroadcastSettings>,
-    SchedulerWrapper<
-        BlakeRng,
-        ProcessedMessage<NetAdapter::BroadcastSettings>,
-        EncapsulatedMessageWithVerifiedPublicHeader,
-    >,
+    ServiceState<Backend::Settings, NetAdapter::Settings>,
+    SchedulerWrapper<BlakeRng, ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
     Backend,
     BlakeRng,
 )
 where
     NodeId: Clone + Debug + Eq + Hash + Send + 'static,
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
-    NetAdapter: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash + Unpin>,
+    NetAdapter: NetworkAdapter<RuntimeServiceId>,
     ProofsGenerator: CoreAndLeaderProofsGenerator<KmsAdapter::CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
     // To avoid bubbling up generics everywhere in the configs (current Overwatch limitation), we
@@ -747,9 +739,7 @@ async fn run_event_loop<
     CorePoQGenerator,
     RuntimeServiceId,
 >(
-    mut inbound_relay: impl Stream<Item = ServiceMessage<NetAdapter::BroadcastSettings, NodeId>>
-    + Send
-    + Unpin,
+    mut inbound_relay: impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin,
     blend_messages: &mut (
              impl Stream<Item = (EncapsulatedMessageWithVerifiedSignature, Epoch)>
              + Send
@@ -768,7 +758,7 @@ async fn run_event_loop<
     sdp_relay: &OutboundRelay<SdpMessage>,
     mut message_scheduler: EpochMessageScheduler<
         Rng,
-        ProcessedMessage<NetAdapter::BroadcastSettings>,
+        ProcessedMessage,
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
     rng: &mut Rng,
@@ -779,28 +769,17 @@ async fn run_event_loop<
         ProofsVerifier,
     >,
     mut current_epoch_info: CoreEpochPublicInfo<NodeId>,
-    mut recovery_checkpoint: ServiceState<Backend::Settings, NetAdapter::BroadcastSettings>,
+    mut recovery_checkpoint: ServiceState<Backend::Settings, NetAdapter::Settings>,
 ) -> (
     CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
-    OldEpochMessageScheduler<Rng, ProcessedMessage<NetAdapter::BroadcastSettings>>,
+    OldEpochMessageScheduler<Rng, ProcessedMessage>,
     OldEpochBlendingTokenCollector,
 )
 where
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync + Send,
-    NetAdapter: NetworkAdapter<
-            RuntimeServiceId,
-            BroadcastSettings: Serialize
-                                   + for<'de> Deserialize<'de>
-                                   + Debug
-                                   + Eq
-                                   + Hash
-                                   + Clone
-                                   + Send
-                                   + Sync
-                                   + Unpin,
-        > + Sync,
+    NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator> + Send,
     CorePoQGenerator: Send + Sync,
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
@@ -811,9 +790,8 @@ where
     let mut old_epoch_crypto_processor: Option<
         CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
     > = None;
-    let mut old_epoch_message_scheduler: Option<
-        OldEpochMessageScheduler<Rng, ProcessedMessage<NetAdapter::BroadcastSettings>>,
-    > = None;
+    let mut old_epoch_message_scheduler: Option<OldEpochMessageScheduler<Rng, ProcessedMessage>> =
+        None;
     let mut latest_secret_pol_info: Option<PolEpochInfo> = None;
 
     loop {
@@ -825,8 +803,10 @@ where
             Some(msg) = inbound_relay.next() => {
                 match msg {
                     ServiceMessage::Blend(message_payload) => {
-                        // We serialize here, outside of the handler function, so that we can serialize only once for all replicas.
-                        let serialized_data_message = NetworkMessage::<NetAdapter::BroadcastSettings>::to_bytes(&message_payload).expect("NetworkMessage should be able to be serialized");
+                        // The Blend payload is exactly the message bytes: where a
+                        // receiving node republishes them is its own configuration,
+                        // so nothing about the destination travels with them.
+                        let serialized_data_message = message_payload;
 
                         let message_copies = blend_config.data_replication_factor.checked_add(1).unwrap();
                         for _ in 0..message_copies {
@@ -925,10 +905,7 @@ async fn retire<
     mut backend: Backend,
     network_adapter: NetAdapter,
     sdp_relay: OutboundRelay<SdpMessage>,
-    mut message_scheduler: OldEpochMessageScheduler<
-        Rng,
-        ProcessedMessage<NetAdapter::BroadcastSettings>,
-    >,
+    mut message_scheduler: OldEpochMessageScheduler<Rng, ProcessedMessage>,
     mut rng: Rng,
     mut blending_token_collector: OldEpochBlendingTokenCollector,
     crypto_processor: CoreCryptographicProcessor<
@@ -941,19 +918,7 @@ async fn retire<
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Send + Sync,
-    NetAdapter: NetworkAdapter<
-            RuntimeServiceId,
-            BroadcastSettings: Serialize
-                                   + for<'de> Deserialize<'de>
-                                   + Debug
-                                   + Eq
-                                   + Hash
-                                   + Clone
-                                   + Send
-                                   + Sync
-                                   + Unpin,
-        > + Send
-        + Sync,
+    NetAdapter: NetworkAdapter<RuntimeServiceId> + Send + Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator> + Send,
     CorePoQGenerator: Send + Sync,
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
@@ -994,8 +959,8 @@ async fn handle_epoch_event<
     ProofsGenerator,
     ProofsVerifier,
     Backend,
+    NetworkSettings,
     Rng,
-    BroadcastSettings,
     CorePoQGenerator,
     RuntimeServiceId,
 >(
@@ -1009,11 +974,11 @@ async fn handle_epoch_event<
     >,
     current_scheduler: EpochMessageScheduler<
         Rng,
-        ProcessedMessage<BroadcastSettings>,
+        ProcessedMessage,
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
     current_epoch_info: CoreEpochPublicInfo<NodeId>,
-    current_recovery_checkpoint: ServiceState<Backend::Settings, BroadcastSettings>,
+    current_recovery_checkpoint: ServiceState<Backend::Settings, NetworkSettings>,
     backend: &mut Backend,
     sdp_relay: &OutboundRelay<SdpMessage>,
     current_secret_info: &mut Option<PolEpochInfo>,
@@ -1023,7 +988,7 @@ async fn handle_epoch_event<
     ProofsGenerator,
     ProofsVerifier,
     Backend::Settings,
-    BroadcastSettings,
+    NetworkSettings,
     CorePoQGenerator,
 >
 where
@@ -1031,7 +996,6 @@ where
     Rng: rand::Rng + Clone + Unpin,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
-    BroadcastSettings: Debug + Clone + Send + Sync + Unpin,
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
 {
     match event {
@@ -1204,7 +1168,7 @@ enum HandleEpochEventOutput<
     ProofsGenerator,
     ProofsVerifier,
     BackendSettings,
-    BroadcastSettings,
+    NetworkSettings,
     CorePoQGenerator,
 > {
     Transitioning {
@@ -1214,28 +1178,28 @@ enum HandleEpochEventOutput<
             CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
         new_scheduler: EpochMessageScheduler<
             Rng,
-            ProcessedMessage<BroadcastSettings>,
+            ProcessedMessage,
             EncapsulatedMessageWithVerifiedPublicHeader,
         >,
-        old_scheduler: OldEpochMessageScheduler<Rng, ProcessedMessage<BroadcastSettings>>,
+        old_scheduler: OldEpochMessageScheduler<Rng, ProcessedMessage>,
         new_epoch_info: CoreEpochPublicInfo<NodeId>,
-        new_recovery_checkpoint: ServiceState<BackendSettings, BroadcastSettings>,
+        new_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
     },
     TransitionCompleted {
         current_crypto_processor:
             CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
         current_scheduler: EpochMessageScheduler<
             Rng,
-            ProcessedMessage<BroadcastSettings>,
+            ProcessedMessage,
             EncapsulatedMessageWithVerifiedPublicHeader,
         >,
         current_epoch_info: CoreEpochPublicInfo<NodeId>,
-        new_recovery_checkpoint: ServiceState<BackendSettings, BroadcastSettings>,
+        new_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
     },
     Retiring {
         old_crypto_processor:
             CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
-        old_scheduler: OldEpochMessageScheduler<Rng, ProcessedMessage<BroadcastSettings>>,
+        old_scheduler: OldEpochMessageScheduler<Rng, ProcessedMessage>,
         old_token_collector: OldEpochBlendingTokenCollector,
     },
 }
@@ -1254,7 +1218,7 @@ async fn handle_serialized_local_data_message<
     NodeId,
     Rng,
     BackendSettings,
-    BroadcastSettings,
+    NetworkSettings,
     ProofsGenerator,
     ProofsVerifier,
     CorePoQGenerator,
@@ -1268,17 +1232,15 @@ async fn handle_serialized_local_data_message<
     >,
     scheduler: &mut EpochMessageScheduler<
         Rng,
-        ProcessedMessage<BroadcastSettings>,
+        ProcessedMessage,
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
-    current_recovery_checkpoint: ServiceState<BackendSettings, BroadcastSettings>,
-) -> ServiceState<BackendSettings, BroadcastSettings>
+    current_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
+) -> ServiceState<BackendSettings, NetworkSettings>
 where
     NodeId: Eq + Hash + Send + 'static,
     Rng: RngCore + Clone + Send + Unpin,
     BackendSettings: Clone + Send + Sync,
-    BroadcastSettings:
-        Serialize + for<'de> Deserialize<'de> + Debug + Hash + Eq + Clone + Send + Sync + Unpin,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
@@ -1325,11 +1287,9 @@ where
                 fully_decapsulated_message.payload_type() == PayloadType::Data,
                 "Locally-generated and fully-decapsulated message should be a data message."
             );
-            let deserialized_data_message =
-                NetworkMessage::from_bytes(fully_decapsulated_message.payload_body())
-                    .expect("Locally-generated and serialized message should be deserializable.");
-            tracing::trace!(target: LOG_TARGET, "Locally generated data message {deserialized_data_message:?} had all the {} layers addressed to this same node. Propagating only the fully decapsulated message.", blending_tokens.len());
-            ProcessedMessage::from(deserialized_data_message)
+            let data_message: NetworkMessage = fully_decapsulated_message.payload_body().to_vec();
+            tracing::trace!(target: LOG_TARGET, "Locally generated data message of {} bytes had all the {} layers addressed to this same node. Propagating only the fully decapsulated message.", data_message.len(), blending_tokens.len());
+            ProcessedMessage::from(data_message)
         }
         DecapsulatedMessageType::Incompleted(remaining_encapsulated_message) => {
             tracing::trace!(target: LOG_TARGET, "Locally generated data message had the outermost {} layers addressed to this same node. Propagating only the remaining encapsulated layers.", blending_tokens.len());
@@ -1373,8 +1333,8 @@ where
 fn handle_incoming_blend_message<
     NodeId,
     Rng,
-    BroadcastSettings,
     BackendSettings,
+    NetworkSettings,
     ProofsGenerator,
     ProofsVerifier,
     CorePoQGenerator,
@@ -1382,12 +1342,10 @@ fn handle_incoming_blend_message<
     (validated_encapsulated_message, epoch): (EncapsulatedMessageWithVerifiedSignature, Epoch),
     scheduler: &mut EpochMessageScheduler<
         Rng,
-        ProcessedMessage<BroadcastSettings>,
+        ProcessedMessage,
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
-    old_epoch_scheduler: Option<
-        &mut OldEpochMessageScheduler<Rng, ProcessedMessage<BroadcastSettings>>,
-    >,
+    old_epoch_scheduler: Option<&mut OldEpochMessageScheduler<Rng, ProcessedMessage>>,
     cryptographic_processor: &CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1397,12 +1355,11 @@ fn handle_incoming_blend_message<
     old_epoch_cryptographic_processor: Option<
         &CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
     >,
-    current_recovery_checkpoint: ServiceState<BackendSettings, BroadcastSettings>,
-) -> ServiceState<BackendSettings, BroadcastSettings>
+    current_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
+) -> ServiceState<BackendSettings, NetworkSettings>
 where
     NodeId: 'static,
     Rng: RngCore + Clone + Send + Unpin,
-    BroadcastSettings: Serialize + for<'de> Deserialize<'de> + Debug + Eq + Hash + Clone + Send,
     BackendSettings: Clone,
     ProofsVerifier: ProofsVerifierTrait,
 {
@@ -1481,13 +1438,12 @@ where
 fn handle_incoming_blend_message_from_old_epoch<
     Rng,
     NodeId,
-    BroadcastSettings,
     ProofsGenerator,
     ProofsVerifier,
     CorePoQGenerator,
 >(
     validated_encapsulated_message: EncapsulatedMessageWithVerifiedSignature,
-    scheduler: &mut OldEpochMessageScheduler<Rng, ProcessedMessage<BroadcastSettings>>,
+    scheduler: &mut OldEpochMessageScheduler<Rng, ProcessedMessage>,
     cryptographic_processor: &CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1497,7 +1453,6 @@ fn handle_incoming_blend_message_from_old_epoch<
     blending_token_collector: &mut OldEpochBlendingTokenCollector,
 ) where
     NodeId: 'static,
-    BroadcastSettings: Serialize + for<'de> Deserialize<'de> + Debug + Eq + Hash + Clone + Send,
     ProofsVerifier: ProofsVerifierTrait,
 {
     match cryptographic_processor
@@ -1529,8 +1484,8 @@ fn handle_incoming_blend_message_from_old_epoch<
 /// and the collected tokens.
 fn handle_decapsulated_incoming_message_from_current_epoch<
     Rng,
-    BroadcastSettings,
     BackendSettings,
+    NetworkSettings,
     NodeId,
     CorePoQGenerator,
     ProofsGenerator,
@@ -1539,19 +1494,18 @@ fn handle_decapsulated_incoming_message_from_current_epoch<
     multi_layer_decapsulation_output: MultiLayerDecapsulationOutput,
     scheduler: &mut EpochMessageScheduler<
         Rng,
-        ProcessedMessage<BroadcastSettings>,
+        ProcessedMessage,
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
-    current_recovery_checkpoint: ServiceState<BackendSettings, BroadcastSettings>,
+    current_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
     cryptographic_processor: &CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
         ProofsGenerator,
         ProofsVerifier,
     >,
-) -> ServiceState<BackendSettings, BroadcastSettings>
+) -> ServiceState<BackendSettings, NetworkSettings>
 where
-    BroadcastSettings: Serialize + for<'de> Deserialize<'de> + Debug + Eq + Hash + Clone + Send,
     BackendSettings: Clone,
     ProofsVerifier: ProofsVerifierTrait,
 {
@@ -1584,25 +1538,24 @@ where
 /// It updates the recovery checkpoint by storing the collected tokens.
 fn handle_decapsulated_incoming_message_from_old_epoch<
     Rng,
-    BroadcastSettings,
     BackendSettings,
+    NetworkSettings,
     NodeId,
     CorePoQGenerator,
     ProofsGenerator,
     ProofsVerifier,
 >(
     multi_layer_decapsulation_output: MultiLayerDecapsulationOutput,
-    scheduler: &mut OldEpochMessageScheduler<Rng, ProcessedMessage<BroadcastSettings>>,
-    recovery_checkpoint: ServiceState<BackendSettings, BroadcastSettings>,
+    scheduler: &mut OldEpochMessageScheduler<Rng, ProcessedMessage>,
+    recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
     old_cryptographic_processor: &CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
         ProofsGenerator,
         ProofsVerifier,
     >,
-) -> ServiceState<BackendSettings, BroadcastSettings>
+) -> ServiceState<BackendSettings, NetworkSettings>
 where
-    BroadcastSettings: Serialize + for<'de> Deserialize<'de> + Debug + Eq + Hash + Clone + Send,
     BackendSettings: Clone,
     ProofsVerifier: ProofsVerifierTrait,
 {
@@ -1628,14 +1581,13 @@ where
     reason = "TODO: address this in a dedicated refactor"
 )]
 fn schedule_decapsulated_incoming_message<
-    BroadcastSettings,
     NodeId,
     CorePoQGenerator,
     ProofsGenerator,
     ProofsVerifier,
 >(
     multi_layer_decapsulation_output: MultiLayerDecapsulationOutput,
-    scheduler: &mut impl ProcessedMessageScheduler<ProcessedMessage<BroadcastSettings>>,
+    scheduler: &mut impl ProcessedMessageScheduler<ProcessedMessage>,
     cryptographic_processor: &CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1643,11 +1595,10 @@ fn schedule_decapsulated_incoming_message<
         ProofsVerifier,
     >,
 ) -> (
-    Option<ProcessedMessage<BroadcastSettings>>,
+    Option<ProcessedMessage>,
     impl Iterator<Item = BlendingToken>,
 )
 where
-    BroadcastSettings: Serialize + for<'de> Deserialize<'de> + Debug + Eq + Hash + Clone + Send,
     ProofsVerifier: ProofsVerifierTrait,
 {
     let (blending_tokens, decapsulated_message_type) =
@@ -1665,24 +1616,15 @@ where
                     tracing::trace!(target: LOG_TARGET, "Discarding received cover message.");
                     (None, blending_tokens.into_iter())
                 }
-                (PayloadType::Data, serialized_data_message) => {
-                    tracing::trace!(target: LOG_TARGET, "Processing a fully decapsulated data message.");
-                    match NetworkMessage::from_bytes(&serialized_data_message) {
-                        Ok(deserialized_network_message) => {
-                            tracing::trace!(
-                                target: LOG_TARGET,
-                                "Fully decapsulated and deserialized processed data message: {deserialized_network_message:?}"
-                            );
-                            let processed_message =
-                                ProcessedMessage::from(deserialized_network_message);
-                            scheduler.schedule_processed_message(processed_message.clone());
-                            (Some(processed_message), blending_tokens.into_iter())
-                        }
-                        Err(e) => {
-                            tracing::warn!(target: LOG_TARGET, "Unrecognized data message from blend backend. Dropping: {e:?}");
-                            (None, blending_tokens.into_iter())
-                        }
-                    }
+                (PayloadType::Data, data_message) => {
+                    tracing::trace!(
+                        target: LOG_TARGET,
+                        "Processing a fully decapsulated data message of {} bytes.",
+                        data_message.len()
+                    );
+                    let processed_message = ProcessedMessage::from(data_message);
+                    scheduler.schedule_processed_message(processed_message.clone());
+                    (Some(processed_message), blending_tokens.into_iter())
                 }
             }
         }
@@ -1728,10 +1670,7 @@ async fn handle_release_round<
     RoundInfo {
         data_messages,
         release_type,
-    }: RoundInfo<
-        ProcessedMessage<NetAdapter::BroadcastSettings>,
-        EncapsulatedMessageWithVerifiedPublicHeader,
-    >,
+    }: RoundInfo<ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
     cryptographic_processor: &mut CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1741,15 +1680,15 @@ async fn handle_release_round<
     rng: &mut Rng,
     backend: &Backend,
     network_adapter: &NetAdapter,
-    current_recovery_checkpoint: ServiceState<Backend::Settings, NetAdapter::BroadcastSettings>,
-) -> ServiceState<Backend::Settings, NetAdapter::BroadcastSettings>
+    current_recovery_checkpoint: ServiceState<Backend::Settings, NetAdapter::Settings>,
+) -> ServiceState<Backend::Settings, NetAdapter::Settings>
 where
     NodeId: Eq + Hash + 'static,
     Rng: RngCore + Send,
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
-    NetAdapter: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash> + Sync,
+    NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
 {
     let (processed_messages, should_generate_cover_message) =
         release_type.map_or_else(|| (vec![], false), RoundReleaseType::into_components);
@@ -1819,7 +1758,7 @@ where
 }
 
 async fn handle_release_round_for_old_epoch<NodeId, Rng, Backend, NetAdapter, RuntimeServiceId>(
-    processed_messages_to_release: Vec<ProcessedMessage<NetAdapter::BroadcastSettings>>,
+    processed_messages_to_release: Vec<ProcessedMessage>,
     rng: &mut Rng,
     backend: &Backend,
     network_adapter: &NetAdapter,
@@ -1828,7 +1767,7 @@ async fn handle_release_round_for_old_epoch<NodeId, Rng, Backend, NetAdapter, Ru
     NodeId: Eq + Hash + 'static,
     Rng: RngCore + Send,
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
-    NetAdapter: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash> + Sync,
+    NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
 {
     let mut futures = build_futures_to_release_processed_messages(
         processed_messages_to_release,
@@ -1880,18 +1819,16 @@ fn build_futures_to_release_processed_messages<
     NetAdapter,
     RuntimeServiceId,
 >(
-    processed_messages_to_release: Vec<ProcessedMessage<NetAdapter::BroadcastSettings>>,
+    processed_messages_to_release: Vec<ProcessedMessage>,
     backend: &'fut Backend,
     network_adapter: &'fut NetAdapter,
-    mut state_updater: Option<
-        &mut ServiceStateUpdater<Backend::Settings, NetAdapter::BroadcastSettings>,
-    >,
+    mut state_updater: Option<&mut ServiceStateUpdater<Backend::Settings, NetAdapter::Settings>>,
     epoch: Epoch,
 ) -> Vec<BoxFuture<'fut, ()>>
 where
     NodeId: Eq + Hash + 'static,
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
-    NetAdapter: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash> + Sync,
+    NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
 {
     processed_messages_to_release
         .into_iter()
@@ -1912,10 +1849,9 @@ where
         .map(
             |processed_message_to_release| -> BoxFuture<'fut, ()> {
                 match processed_message_to_release {
-                    ProcessedMessage::Network(NetworkMessage {
-                        broadcast_settings,
-                        message,
-                    }) => network_adapter.broadcast(message, broadcast_settings).boxed(),
+                    ProcessedMessage::Network(message) => {
+                        network_adapter.broadcast(message).boxed()
+                    }
                     ProcessedMessage::Encapsulated(encapsulated_message) => {
                         backend.publish(*encapsulated_message, epoch).boxed()
                     }
@@ -1933,7 +1869,7 @@ where
 async fn generate_and_try_to_decapsulate_cover_message<
     NodeId,
     BackendSettings,
-    BroadcastSettings,
+    NetworkSettings,
     ProofsGenerator,
     ProofsVerifier,
     CorePoQGenerator,
@@ -1944,12 +1880,11 @@ async fn generate_and_try_to_decapsulate_cover_message<
         ProofsGenerator,
         ProofsVerifier,
     >,
-    state_updater: &mut state::StateUpdater<BackendSettings, BroadcastSettings>,
+    state_updater: &mut state::StateUpdater<BackendSettings, NetworkSettings>,
 ) -> Option<EncapsulatedMessage>
 where
     NodeId: Eq + Hash + 'static,
     BackendSettings: Sync,
-    BroadcastSettings: Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {

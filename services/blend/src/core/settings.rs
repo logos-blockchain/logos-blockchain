@@ -9,8 +9,9 @@ use serde::{Deserialize, Serialize};
 use crate::settings::TimingSettings;
 
 #[derive(Clone, Debug)]
-pub struct StartingBlendConfig<BackendSettings> {
+pub struct StartingBlendConfig<BackendSettings, NetworkSettings> {
     pub backend: BackendSettings,
+    pub network: NetworkSettings,
     pub scheduler: SchedulerSettings,
     pub time: TimingSettings,
     pub zk: ZkSettings,
@@ -67,7 +68,9 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
     }
 }
 
-impl<BackendSettings> StorageRecoverySettings for StartingBlendConfig<BackendSettings> {
+impl<BackendSettings, NetworkSettings> StorageRecoverySettings
+    for StartingBlendConfig<BackendSettings, NetworkSettings>
+{
     const RECOVERY_KEY_SUFFIX: &'static [u8] = b"blend/core";
 
     fn recovery_data(&self) -> &RecoveryData {

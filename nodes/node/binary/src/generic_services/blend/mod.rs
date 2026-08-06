@@ -21,10 +21,11 @@ pub(crate) mod pol;
 pub type BlendCoreRecoveryBackend<RuntimeServiceId> = StorageRecoveryBackend<
     lb_blend_service::core::CoreServiceState<
         lb_blend_service::core::backends::libp2p::Libp2pBlendBackendSettings,
-        <lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId> as lb_blend_service::core::network::NetworkAdapter<RuntimeServiceId>>::BroadcastSettings,
+        <lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId> as lb_blend_service::core::network::NetworkAdapter<RuntimeServiceId>>::Settings,
     >,
     lb_blend_service::core::settings::StartingBlendConfig<
         lb_blend_service::core::backends::libp2p::Libp2pBlendBackendSettings,
+        BlendBroadcastSettings<RuntimeServiceId>,
     >,
     RocksBackend,
     RuntimeServiceId,
@@ -66,15 +67,14 @@ impl LeaderProofsGenerator for MockLeaderProofsGenerator {
 }
 
 pub type BlendEdgeService<RuntimeServiceId> = lb_blend_service::edge::BlendService<
-        lb_blend_service::edge::backends::libp2p::Libp2pBlendBackend,
-        PeerId,
-        <lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId> as lb_blend_service::core::network::NetworkAdapter<RuntimeServiceId>>::BroadcastSettings,
-        RealLeaderProofsGenerator,
-        NtpTimeBackend,
-        CryptarchiaService<RuntimeServiceId>,
-        PolInfoProvider,
-        RuntimeServiceId
-    >;
+    lb_blend_service::edge::backends::libp2p::Libp2pBlendBackend,
+    PeerId,
+    RealLeaderProofsGenerator,
+    NtpTimeBackend,
+    CryptarchiaService<RuntimeServiceId>,
+    PolInfoProvider,
+    RuntimeServiceId,
+>;
 pub type BlendService<RuntimeServiceId> = lb_blend_service::BlendService<
     BlendCoreService<RuntimeServiceId>,
     BlendEdgeService<RuntimeServiceId>,
@@ -83,4 +83,4 @@ pub type BlendService<RuntimeServiceId> = lb_blend_service::BlendService<
 >;
 
 pub type BlendBroadcastSettings<RuntimeServiceId> =
-    <lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId> as lb_blend_service::core::network::NetworkAdapter<RuntimeServiceId>>::BroadcastSettings;
+    <lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId> as lb_blend_service::core::network::NetworkAdapter<RuntimeServiceId>>::Settings;

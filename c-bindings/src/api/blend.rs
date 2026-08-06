@@ -5,10 +5,7 @@ use lb_core::{
     sdp::{self, Locator},
 };
 use lb_groth16::fr_from_bytes;
-use lb_node::{
-    RuntimeServiceId,
-    generic_services::blend::{BlendBroadcastSettings, BlendService},
-};
+use lb_node::{RuntimeServiceId, generic_services::blend::BlendService};
 
 use crate::{
     LogosBlockchainNode,
@@ -94,7 +91,6 @@ pub unsafe extern "C" fn blend_join_as_core_node(
     let result: StatusResult<sdp::DeclarationId> = node.get_runtime_handle().block_on(async {
         lb_api_service::http::blend::blend_join_network::<
             BlendService<RuntimeServiceId>,
-            BlendBroadcastSettings<RuntimeServiceId>,
             RuntimeServiceId,
         >(node.get_overwatch_handle(), locator, locked_note_id)
         .await
