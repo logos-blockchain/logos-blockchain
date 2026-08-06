@@ -4454,7 +4454,6 @@ dependencies = [
  "hex",
  "logos-blockchain-blend-proofs",
  "logos-blockchain-codec",
- "logos-blockchain-codec-macros",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
