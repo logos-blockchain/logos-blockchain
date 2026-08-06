@@ -121,9 +121,12 @@ where
     ///
     /// For an existing channel the sequencer's signing key must be on the
     /// channel's current accredited list (at any position) and the channel's
-    /// `configuration_threshold` must be 1 — collecting signatures from other
-    /// key holders is not supported. This overwrites the entire key list —
-    /// include the sequencer's own key if it should remain authorized.
+    /// `configuration_threshold` must be 1 — this one-shot helper does not
+    /// collect signatures from other key holders. Multi-sig channels are
+    /// reconfigured by collecting the signatures out-of-band and submitting
+    /// the fully-signed transaction via [`Self::submit_signed_tx`]. This
+    /// overwrites the entire key list — include the sequencer's own key if
+    /// it should remain authorized.
     ///
     /// `posting_timeframe` and `posting_timeout` control round-robin
     /// sequencer rotation (see Mantle spec). Pass `0` for both to keep a

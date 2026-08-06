@@ -806,8 +806,11 @@ where
             Some(channel) => {
                 if channel.configuration_threshold != 1 {
                     return Err(Error::Network(format!(
-                        "channel config update needs {} signatures; only single-signer \
-                         (configuration_threshold 1) updates are supported",
+                        "channel config update needs {} signatures; this one-shot \
+                         helper only supports single-signer channels \
+                         (configuration_threshold 1) — collect the signatures \
+                         out-of-band and submit the fully-signed transaction via \
+                         `submit_signed_tx` instead",
                         channel.configuration_threshold
                     )));
                 }
