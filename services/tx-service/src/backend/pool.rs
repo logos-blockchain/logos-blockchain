@@ -125,10 +125,7 @@ where
             .map_err(|e| MempoolError::StorageError(format!("{e:?}")))?;
 
         self.removed_items.remove(&key);
-        self.by_prefix
-            .entry(key.key_prefix())
-            .or_default()
-            .push(key.clone());
+        self.index_by_prefix(&key);
         self.pending_items.insert(key);
         self.last_item_timestamp = timestamp;
         tracing::debug!(
@@ -183,17 +180,7 @@ where
 
         for key in keys {
             self.pending_items.shift_remove(key);
-            if let Entry::Occupied(mut bucket) = self.by_prefix.entry(key.key_prefix()) {
-                // Bucket order is irrelevant — only reference order matters, and
-                // that comes from a block proposal — so a swap-remove is fine to avoid shifting
-                // remaining elements around.)
-                if let Some(position) = bucket.get().iter().position(|held| held == key) {
-                    bucket.get_mut().swap_remove(position);
-                }
-                if bucket.get().is_empty() {
-                    bucket.remove();
-                }
-            }
+            self.unindex_by_prefix(key);
             self.removed_items.insert(key.clone(), removed_at);
         }
         log_removed_items(removed_count, self.pending_items.len());
@@ -283,7 +270,7 @@ where
 impl<BlockId, Item, Key, Storage, RuntimeServiceId>
     Mempool<BlockId, Item, Key, Storage, RuntimeServiceId>
 where
-    Key: Hash + Eq + Ord + Clone + Send + Sync + PrefixedKey + 'static,
+    Key: Hash + Eq + Ord + Clone + Send + Sync + PrefixedKey<Prefix: Eq + Hash> + 'static,
     Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
     BlockId: Hash + Eq + Copy + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
     Storage:
@@ -291,6 +278,34 @@ where
     Storage::Error: Debug,
     RuntimeServiceId: Send + Sync,
 {
+    /// Record `key` in the prefix index, under the prefix a block proposal
+    /// would use to refer to it.
+    fn index_by_prefix(&mut self, key: &Key) {
+        self.by_prefix
+            .entry(key.key_prefix())
+            .or_default()
+            .push(key.clone());
+    }
+
+    /// Drop `key` from the prefix index, dropping the bucket with it once it
+    /// holds nothing.
+    fn unindex_by_prefix(&mut self, key: &Key) {
+        let Entry::Occupied(mut bucket) = self.by_prefix.entry(key.key_prefix()) else {
+            return;
+        };
+
+        // Bucket order is irrelevant — only reference order matters, and that
+        // comes from a block proposal — so a swap-remove is fine to avoid
+        // shifting the remaining elements around.
+        if let Some(position) = bucket.get().iter().position(|held| held == key) {
+            bucket.get_mut().swap_remove(position);
+        }
+
+        if bucket.get().is_empty() {
+            bucket.remove();
+        }
+    }
+
     async fn prune_removed_items(&mut self) {
         let now = current_timestamp_millis();
         let grace_period_millis = REMOVED_ITEM_GRACE_PERIOD.as_millis() as u64;
