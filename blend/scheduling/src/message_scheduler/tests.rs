@@ -4,6 +4,7 @@ use core::{
 };
 
 use futures::{StreamExt as _, task::noop_waker_ref};
+use lb_blend_proofs::quota::Quota;
 use lb_cryptarchia_engine::Epoch;
 use lb_utils::blake_rng::BlakeRng;
 use rand::SeedableRng as _;
@@ -262,7 +263,7 @@ async fn rotate_epoch_carries_over_queued_data_messages() {
     // Rotating into a new epoch must not silently drop the queued data messages.
     let (new_scheduler, _old_scheduler) = scheduler.rotate_epoch(
         EpochInfo {
-            core_quota: 1,
+            core_quota: Quota::new::<1>(),
             epoch: Epoch::new(0),
         },
         Settings::default(),

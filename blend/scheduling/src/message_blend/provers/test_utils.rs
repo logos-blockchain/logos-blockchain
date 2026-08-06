@@ -1,7 +1,7 @@
 use futures::future::ready;
 use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
 use lb_blend_proofs::quota::{
-    self, VerifiedProofOfQuota,
+    self, KeyIndex, Quota, VerifiedProofOfQuota,
     fixtures::{valid_proof_of_core_quota_inputs, valid_proof_of_leadership_quota_inputs},
     inputs::prove::{
         PrivateInputs, PublicInputs as PoQPublicInputs,
@@ -27,7 +27,7 @@ pub const fn poq_public_inputs_from_epoch_public_inputs_and_signing_key(
 }
 
 pub fn valid_proof_of_quota_inputs(
-    core_quota: u64,
+    core_quota: Quota,
 ) -> (PoQVerificationInputsMinusSigningKey, ProofOfCoreQuotaInputs) {
     let (PoQPublicInputs { core, leader, .. }, private_inputs) = valid_proof_of_core_quota_inputs(
         Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE])
@@ -42,7 +42,7 @@ pub fn valid_proof_of_quota_inputs(
 }
 
 pub fn valid_proof_of_leader_inputs(
-    leader_quota: u64,
+    leader_quota: Quota,
 ) -> (
     PoQVerificationInputsMinusSigningKey,
     ProofOfLeadershipQuotaInputs,
@@ -73,7 +73,7 @@ impl CoreProofOfQuotaGenerator for CorePoQGeneratorFromPrivateCoreQuotaInputs {
     fn generate_poq(
         &self,
         public_inputs: &PoQPublicInputs,
-        key_index: u64,
+        key_index: KeyIndex,
     ) -> impl Future<Output = Result<(VerifiedProofOfQuota, ZkHash), quota::Error>> + Send + Sync
     {
         ready(VerifiedProofOfQuota::new(

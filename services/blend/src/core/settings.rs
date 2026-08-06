@@ -2,6 +2,7 @@ use std::num::NonZeroU64;
 
 use lb_core::blend::core_quota;
 use lb_key_management_system_service::{backend::preload::KeyId, keys::UnsecuredEd25519Key};
+use lb_poq::Quota;
 use lb_services_utils::overwatch::{RecoveryData, StorageRecoverySettings};
 use lb_utils::math::NonNegativeF64;
 use serde::{Deserialize, Serialize};
@@ -40,20 +41,26 @@ pub struct RunningBlendConfig<BackendSettings> {
 }
 
 impl<BackendSettings> RunningBlendConfig<BackendSettings> {
-    pub fn epoch_core_quota(&self, membership_size: usize) -> u64 {
+    pub fn epoch_core_quota(&self, membership_size: usize) -> Quota {
         self.scheduler
             .cover
             .epoch_core_quota(self.num_blend_layers, &self.time, membership_size)
     }
 
-    pub const fn epoch_leadership_quota(&self) -> u64 {
+    pub const fn epoch_leadership_quota(&self) -> Quota {
         let num_blend_layers = self.num_blend_layers.get();
         let additional_encapsulations = num_blend_layers
             .checked_mul(self.data_replication_factor)
             .expect("Overflow when computing total replication factor.");
-        num_blend_layers
+        let quota = num_blend_layers
             .checked_add(additional_encapsulations)
-            .expect("Overflow when computing leadership quota.")
+            .expect("Overflow when computing leadership quota.");
+        match Quota::try_new(quota) {
+            Ok(quota) => quota,
+            Err(_) => {
+                panic!("Leadership Quota must fit within the width the `PoQ` circuit allows.")
+            }
+        }
     }
 
     pub(super) const fn scheduler_settings(
@@ -106,7 +113,7 @@ impl CoverTrafficSettings {
         num_blend_layers: NonZeroU64,
         timings: &TimingSettings,
         membership_size: usize,
-    ) -> u64 {
+    ) -> Quota {
         core_quota(
             timings.rounds_per_epoch,
             self.message_frequency_per_round,

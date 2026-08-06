@@ -636,7 +636,7 @@ where
                     current_epoch_public_info.epoch,
                     &current_epoch_public_info.poq_leadership_public_inputs.pol_epoch_nonce,
                     current_epoch_public_info.membership.size() as u64,
-                    current_epoch_public_info.poq_core_public_inputs.quota,
+                    current_epoch_public_info.poq_core_public_inputs.quota.get(),
                     blend_config.activity_threshold_sensitivity,
                 ).expect("Reward epoch info must be created successfully. Panicking since the service cannot continue with this epoch")
             ),

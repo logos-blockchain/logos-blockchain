@@ -8,7 +8,7 @@ use std::str::FromStr as _;
 use lb_pol::LotteryConstants;
 use lb_utils::math::NonNegativeRatio;
 use logos_blockchain_poq::{
-    PoQBlendInputsData, PoQChainInputsData, PoQCommonInputsData, PoQWalletInputsData,
+    KeyIndex, PoQBlendInputsData, PoQChainInputsData, PoQCommonInputsData, PoQWalletInputsData,
     PoQWitnessInputs, Quota,
 };
 use num_bigint::BigUint;
@@ -24,7 +24,7 @@ fn lottery() -> (lb_groth16::Fr, lb_groth16::Fr) {
         .compute_lottery_values(5000)
 }
 
-fn common_data(selector: bool, key_index: u64) -> PoQCommonInputsData {
+fn common_data(selector: bool, key_index: KeyIndex) -> PoQCommonInputsData {
     PoQCommonInputsData {
         core_quota: QUOTA,
         leader_quota: QUOTA,
@@ -45,7 +45,7 @@ fn common_data(selector: bool, key_index: u64) -> PoQCommonInputsData {
     clippy::too_many_lines,
     reason = "Benchmark fixture with hardcoded data"
 )]
-pub fn core_node_inputs(key_index: u64) -> PoQWitnessInputs {
+pub fn core_node_inputs(key_index: KeyIndex) -> PoQWitnessInputs {
     let (lottery_0, lottery_1) = lottery();
     let chain_data = PoQChainInputsData {
         core_root: BigUint::from_str(
@@ -165,7 +165,7 @@ pub fn core_node_inputs(key_index: u64) -> PoQWitnessInputs {
     clippy::too_many_lines,
     reason = "Benchmark fixture with hardcoded data"
 )]
-pub fn leader_inputs(key_index: u64) -> PoQWitnessInputs {
+pub fn leader_inputs(key_index: KeyIndex) -> PoQWitnessInputs {
     let (lottery_0, lottery_1) = lottery();
     let chain_data = PoQChainInputsData {
         core_root: BigUint::from_str(

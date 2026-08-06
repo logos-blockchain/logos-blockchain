@@ -2,7 +2,7 @@ use lb_groth16::{AdditiveGroup as _, Fr, Groth16Input, Groth16InputDeser};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    PoQChainInputsData, PoQCommonInputsData,
+    PoQChainInputsData, PoQCommonInputsData, Quota,
     blend_inputs::{PoQBlendInputs, PoQBlendInputsData, PoQBlendInputsJson},
     chain_inputs::{PoQChainInputs, PoQChainInputsJson},
     common_inputs::{PoQCommonInputs, PoQCommonInputsJson},
@@ -111,8 +111,8 @@ pub struct PoQVerifierInput {
 
 pub struct PoQVerifierInputData {
     pub key_nullifier: Fr,
-    pub core_quota: u64,
-    pub leader_quota: u64,
+    pub core_quota: Quota,
+    pub leader_quota: Quota,
     pub core_root: Fr,
     pub k_part_one: Fr,
     pub k_part_two: Fr,
@@ -174,12 +174,12 @@ impl PoQVerifierInput {
 impl From<PoQVerifierInputData> for PoQVerifierInput {
     fn from(value: PoQVerifierInputData) -> Self {
         Self {
-            core_quota: Groth16Input::new(value.core_quota.into()),
+            core_quota: value.core_quota.into(),
             core_root: value.core_root.into(),
             k_part_one: value.k_part_one.into(),
             k_part_two: value.k_part_two.into(),
             key_nullifier: value.key_nullifier.into(),
-            leader_quota: Groth16Input::new(value.leader_quota.into()),
+            leader_quota: value.leader_quota.into(),
             pol_epoch_nonce: value.pol_epoch_nonce.into(),
             pol_ledger_aged: value.pol_ledger_aged.into(),
             pol_t0: Groth16Input::new(value.lottery_0),

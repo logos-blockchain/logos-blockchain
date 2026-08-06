@@ -3,7 +3,7 @@ use lb_utils::math::NonNegativeRatio;
 use num_bigint::BigUint;
 
 use crate::quota::{
-    Ed25519PublicKey,
+    Ed25519PublicKey, Quota,
     inputs::prove::{
         PublicInputs,
         private::{ProofOfCoreQuotaInputs, ProofOfLeadershipQuotaInputs},
@@ -19,7 +19,7 @@ use crate::quota::{
 )]
 pub fn valid_proof_of_core_quota_inputs(
     signing_key: Ed25519PublicKey,
-    core_quota: u64,
+    core_quota: Quota,
 ) -> (PublicInputs, ProofOfCoreQuotaInputs) {
     let (lottery_0, lottery_1) =
         LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
@@ -37,7 +37,7 @@ pub fn valid_proof_of_core_quota_inputs(
         leader: LeaderInputs {
             pol_epoch_nonce: BigUint::from(1u64).into(),
             pol_ledger_aged: BigUint::from(1u64).into(),
-            message_quota: 1,
+            message_quota: Quota::new::<1>(),
             lottery_0,
             lottery_1,
         },
@@ -144,7 +144,7 @@ pub fn valid_proof_of_core_quota_inputs(
 )]
 pub fn valid_proof_of_leadership_quota_inputs(
     signing_key: Ed25519PublicKey,
-    leader_quota: u64,
+    leader_quota: Quota,
 ) -> (PublicInputs, ProofOfLeadershipQuotaInputs) {
     let (lottery_0, lottery_1) =
         LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
@@ -168,7 +168,7 @@ pub fn valid_proof_of_leadership_quota_inputs(
         },
         core: CoreInputs {
             zk_root: BigUint::from(1u64).into(),
-            quota: 1,
+            quota: Quota::new::<1>(),
         },
     };
 

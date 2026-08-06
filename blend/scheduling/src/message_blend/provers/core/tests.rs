@@ -1,3 +1,4 @@
+use lb_blend_proofs::quota::Quota;
 use lb_blend_proofs::selection::inputs::VerifyInputs;
 use lb_cryptarchia_engine::Epoch;
 use test_log::test;
@@ -13,7 +14,7 @@ use crate::message_blend::provers::{
 
 #[test(tokio::test)]
 async fn proof_generation() {
-    let core_quota = 10;
+    let core_quota = Quota::new::<10>();
     let (public_inputs, private_inputs) = valid_proof_of_quota_inputs(core_quota);
 
     let mut core_proofs_generator = RealCoreProofsGenerator::new(
@@ -27,7 +28,7 @@ async fn proof_generation() {
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(private_inputs.clone()),
     );
 
-    for _ in 0..core_quota {
+    for _ in 0..core_quota.get() {
         let proof = core_proofs_generator.get_next_proof().await.unwrap();
         let verified_proof_of_quota = proof
             .proof_of_quota

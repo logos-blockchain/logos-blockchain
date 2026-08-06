@@ -1,4 +1,5 @@
 use futures::stream::repeat;
+use lb_blend_proofs::quota::Quota;
 use lb_blend_proofs::selection::inputs::VerifyInputs;
 use lb_cryptarchia_engine::Epoch;
 use test_log::test;
@@ -15,7 +16,7 @@ use crate::message_blend::provers::{
 
 #[test(tokio::test)]
 async fn proof_generation() {
-    let core_quota = 10;
+    let core_quota = Quota::new::<10>();
     let (core_public_inputs, core_private_inputs) = valid_proof_of_quota_inputs(core_quota);
 
     let mut core_and_leader_proofs_generator = RealCoreAndLeaderProofsGenerator::new(
@@ -29,7 +30,7 @@ async fn proof_generation() {
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs),
     );
 
-    for _ in 0..core_quota {
+    for _ in 0..core_quota.get() {
         let proof = core_and_leader_proofs_generator
             .get_next_core_proof()
             .await
@@ -61,7 +62,7 @@ async fn proof_generation() {
             .is_none()
     );
 
-    let leadership_quota = 15;
+    let leadership_quota = Quota::new::<15>();
     let (leadership_public_inputs, leadership_private_inputs) =
         valid_proof_of_leader_inputs(leadership_quota);
 
@@ -77,7 +78,7 @@ async fn proof_generation() {
     core_and_leader_proofs_generator
         .set_epoch_private(Box::pin(repeat(leadership_private_inputs)), Epoch::new(0));
 
-    for _ in 0..leadership_quota {
+    for _ in 0..leadership_quota.get() {
         let proof = core_and_leader_proofs_generator
             .get_next_leader_proof()
             .await
@@ -106,8 +107,8 @@ async fn proof_generation() {
 
 #[test(tokio::test)]
 async fn epoch_private_info() {
-    let core_quota = 10;
-    let leadership_quota = 15;
+    let core_quota = Quota::new::<10>();
+    let leadership_quota = Quota::new::<15>();
     let (core_public_inputs, core_private_inputs) = valid_proof_of_quota_inputs(core_quota);
     let (leadership_public_inputs, leadership_private_inputs) =
         valid_proof_of_leader_inputs(leadership_quota);

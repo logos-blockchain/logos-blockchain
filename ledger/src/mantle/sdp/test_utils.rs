@@ -5,7 +5,7 @@ use lb_blend_crypto::merkle::MerkleTree;
 use lb_blend_message::reward::{BlendingToken, BlendingTokenEvaluation};
 use lb_blend_proofs::{
     quota::{
-        VerifiedProofOfQuota,
+        Quota, VerifiedProofOfQuota,
         inputs::prove::{
             PrivateInputs, PublicInputs,
             private::ProofOfCoreQuotaInputs,
@@ -50,8 +50,10 @@ pub fn generate_activity_proof(
         SINGLE_NODE_SNAPSHOT_SIZE,
     );
     let num_blend_layers = blend_params.num_blend_layers.get();
-    let message_quota =
-        num_blend_layers + (num_blend_layers * blend_params.data_replication_factor);
+    let message_quota = Quota::try_new(
+        num_blend_layers + (num_blend_layers * blend_params.data_replication_factor),
+    )
+    .expect("Leader Quota must fit within the width the `PoQ` circuit allows.");
     // Match `RewardsParameters::leader_inputs(target_epoch_state)`: the target
     // snapshot's `proof_verifier` was constructed with these values, so any
     // proof must reproduce them exactly.
@@ -84,7 +86,7 @@ pub fn generate_activity_proof(
         core: core_inputs,
         leader: leader_inputs,
     };
-    for message_release_index in 0u64.. {
+    for message_release_index in public_inputs.core.quota.values_range() {
         let private_inputs = PrivateInputs::new_proof_of_core_quota_inputs(
             message_release_index,
             ProofOfCoreQuotaInputs {

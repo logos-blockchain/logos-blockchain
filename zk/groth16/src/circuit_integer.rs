@@ -64,6 +64,38 @@ impl<const BITS: u8> CircuitInteger<BITS> {
         }
     }
 
+    /// Subtracts `rhs`, returning [`None`] on underflow.
+    ///
+    /// The result cannot exceed `self`, so it always fits in `BITS` bits and
+    /// needs no range check.
+    #[must_use]
+    pub const fn checked_sub(self, rhs: Self) -> Option<Self> {
+        // const `map` is not yet stable, so we cannot write
+        // `self.0.checked_sub(rhs).map(Self)`.
+        match self.0.checked_sub(rhs.0) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+
+    /// Subtracts `rhs`, saturating at zero.
+    ///
+    /// As with [`Self::checked_sub`], the result cannot exceed `self`.
+    #[must_use]
+    pub const fn saturating_sub(self, rhs: Self) -> Self {
+        Self(self.0.saturating_sub(rhs.0))
+    }
+
+    /// Every value in `0..self`.
+    pub fn values_range(self) -> impl Iterator<Item = Self> {
+        (0..self.0).map(Self)
+    }
+
+    /// Every value in `start..self`, empty if `start` is not below `self`.
+    pub fn values_range_from(self, start: Self) -> impl Iterator<Item = Self> {
+        (start.0..self.0).map(Self)
+    }
+
     #[must_use]
     pub const fn get(self) -> u64 {
         self.0
@@ -137,6 +169,37 @@ mod tests {
         );
         assert!(Twenty::try_new(Twenty::MAX + 1).is_err());
         assert_eq!(Twenty::ZERO.get(), 0);
+    }
+
+    #[test]
+    fn subtraction_stays_within_the_width() {
+        assert_eq!(
+            Twenty::new::<5>().checked_sub(Twenty::new::<2>()),
+            Some(Twenty::new::<3>())
+        );
+        assert_eq!(Twenty::ZERO.checked_sub(Twenty::new::<1>()), None);
+    }
+
+    #[test]
+    fn iterating_a_bound_yields_in_range_values() {
+        assert_eq!(
+            Twenty::new::<3>().values_range().collect::<Vec<_>>(),
+            vec![Twenty::ZERO, Twenty::new::<1>(), Twenty::new::<2>()]
+        );
+        assert_eq!(
+            Twenty::new::<3>()
+                .values_range_from(Twenty::new::<1>())
+                .collect::<Vec<_>>(),
+            vec![Twenty::new::<1>(), Twenty::new::<2>()]
+        );
+        // An out-of-order range is empty rather than a panic.
+        assert!(
+            Twenty::new::<1>()
+                .values_range_from(Twenty::new::<3>())
+                .next()
+                .is_none()
+        );
+        assert_eq!(CircuitInteger::<1>::new::<1>().values_range().count(), 1);
     }
 
     #[test]

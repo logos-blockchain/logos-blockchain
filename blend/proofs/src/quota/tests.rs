@@ -5,7 +5,8 @@ use lb_key_management_system_keys::keys::UnsecuredZkKey;
 
 use crate::{
     quota::{
-        DOMAIN_SEPARATION_TAG_FR, ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, VerifiedProofOfQuota,
+        DOMAIN_SEPARATION_TAG_FR, ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, KeyIndex, Quota,
+        VerifiedProofOfQuota,
         fixtures::{valid_proof_of_core_quota_inputs, valid_proof_of_leadership_quota_inputs},
         inputs::prove::{
             PrivateInputs, PublicInputs,
@@ -31,12 +32,12 @@ fn secret_selection_randomness_dst_encoding() {
 fn valid_proof_of_core_quota() {
     let (public_inputs, private_inputs) = valid_proof_of_core_quota_inputs(
         Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-        1,
+        Quota::new::<1>(),
     );
 
     let (proof, secret_selection_randomness) = VerifiedProofOfQuota::new(
         &public_inputs,
-        PrivateInputs::new_proof_of_core_quota_inputs(0, private_inputs),
+        PrivateInputs::new_proof_of_core_quota_inputs(KeyIndex::new::<0>(), private_inputs),
     )
     .unwrap();
 
@@ -56,12 +57,12 @@ fn same_key_nullifier_for_different_public_keys() {
     let key_2: Ed25519PublicKey =
         Ed25519PublicKey::from_bytes(&[250; ED25519_PUBLIC_KEY_SIZE]).unwrap();
 
-    let (public_inputs_key_1, private_inputs_key_1) = valid_proof_of_core_quota_inputs(key_1, 1);
-    let (public_inputs_key_2, private_inputs_key_2) = valid_proof_of_core_quota_inputs(key_2, 1);
+    let (public_inputs_key_1, private_inputs_key_1) = valid_proof_of_core_quota_inputs(key_1, Quota::new::<1>());
+    let (public_inputs_key_2, private_inputs_key_2) = valid_proof_of_core_quota_inputs(key_2, Quota::new::<1>());
 
     let (proof_key_1, _) = VerifiedProofOfQuota::new(
         &public_inputs_key_1,
-        PrivateInputs::new_proof_of_core_quota_inputs(0, private_inputs_key_1),
+        PrivateInputs::new_proof_of_core_quota_inputs(KeyIndex::new::<0>(), private_inputs_key_1),
     )
     .unwrap();
     let verified_proof_of_quota_1 = proof_key_1
@@ -70,7 +71,7 @@ fn same_key_nullifier_for_different_public_keys() {
         .unwrap();
     let (proof_key_2, _) = VerifiedProofOfQuota::new(
         &public_inputs_key_2,
-        PrivateInputs::new_proof_of_core_quota_inputs(0, private_inputs_key_2),
+        PrivateInputs::new_proof_of_core_quota_inputs(KeyIndex::new::<0>(), private_inputs_key_2),
     )
     .unwrap();
     let verified_proof_of_quota_2 = proof_key_2
@@ -88,12 +89,12 @@ fn same_key_nullifier_for_different_public_keys() {
 fn valid_proof_of_leadership_quota() {
     let (public_inputs, private_inputs) = valid_proof_of_leadership_quota_inputs(
         Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
-        1,
+        Quota::new::<1>(),
     );
 
     let (proof, secret_selection_randomness) = VerifiedProofOfQuota::new(
         &public_inputs,
-        PrivateInputs::new_proof_of_leadership_quota_inputs(0, private_inputs),
+        PrivateInputs::new_proof_of_leadership_quota_inputs(KeyIndex::new::<0>(), private_inputs),
     )
     .unwrap();
 
@@ -123,11 +124,11 @@ fn generate_inputs<const INPUTS: usize>() -> PoQInputs<INPUTS> {
         MerkleTree::new(keys.clone().map(|(_, pk)| pk.into_inner()).to_vec()).unwrap();
     let public_inputs = {
         let core_inputs = CoreInputs {
-            quota: 1,
+            quota: Quota::new::<1>(),
             zk_root: merkle_tree.root(),
         };
         let leader_inputs = LeaderInputs {
-            message_quota: 1,
+            message_quota: Quota::new::<1>(),
             pol_epoch_nonce: ZkHash::ZERO,
             pol_ledger_aged: ZkHash::ZERO,
             lottery_0: Fr::ZERO,
@@ -164,7 +165,7 @@ fn poq_interaction_single_key() {
     for secret_input in secret_inputs {
         let (poq, _) = VerifiedProofOfQuota::new(
             &public_inputs,
-            PrivateInputs::new_proof_of_core_quota_inputs(0, secret_input),
+            PrivateInputs::new_proof_of_core_quota_inputs(KeyIndex::new::<0>(), secret_input),
         )
         .unwrap();
         poq.into_inner().verify(&public_inputs).unwrap();
@@ -181,7 +182,7 @@ fn poq_interaction_two_keys() {
     for secret_input in secret_inputs {
         let (poq, _) = VerifiedProofOfQuota::new(
             &public_inputs,
-            PrivateInputs::new_proof_of_core_quota_inputs(0, secret_input),
+            PrivateInputs::new_proof_of_core_quota_inputs(KeyIndex::new::<0>(), secret_input),
         )
         .unwrap();
         poq.into_inner().verify(&public_inputs).unwrap();
@@ -198,7 +199,7 @@ fn poq_interaction_three_keys() {
     for secret_input in secret_inputs {
         let (poq, _) = VerifiedProofOfQuota::new(
             &public_inputs,
-            PrivateInputs::new_proof_of_core_quota_inputs(0, secret_input),
+            PrivateInputs::new_proof_of_core_quota_inputs(KeyIndex::new::<0>(), secret_input),
         )
         .unwrap();
         poq.into_inner().verify(&public_inputs).unwrap();
@@ -215,7 +216,7 @@ fn poq_interaction_four_keys() {
     for secret_input in secret_inputs {
         let (poq, _) = VerifiedProofOfQuota::new(
             &public_inputs,
-            PrivateInputs::new_proof_of_core_quota_inputs(0, secret_input),
+            PrivateInputs::new_proof_of_core_quota_inputs(KeyIndex::new::<0>(), secret_input),
         )
         .unwrap();
         poq.into_inner().verify(&public_inputs).unwrap();
@@ -232,7 +233,7 @@ fn poq_interaction_one_hundred_keys() {
     for secret_input in secret_inputs {
         let (poq, _) = VerifiedProofOfQuota::new(
             &public_inputs,
-            PrivateInputs::new_proof_of_core_quota_inputs(0, secret_input),
+            PrivateInputs::new_proof_of_core_quota_inputs(KeyIndex::new::<0>(), secret_input),
         )
         .unwrap();
         poq.into_inner().verify(&public_inputs).unwrap();
@@ -250,7 +251,7 @@ fn same_key_different_indices() {
     } = PoQInputs {
         public_inputs: PublicInputs {
             core: CoreInputs {
-                quota: 2,
+                quota: Quota::new::<2>(),
                 zk_root: merkle_tree.root(),
             },
             leader: LeaderInputs::default(),
@@ -266,7 +267,7 @@ fn same_key_different_indices() {
 
     let (poq_index_0, _) = VerifiedProofOfQuota::new(
         &public_inputs,
-        PrivateInputs::new_proof_of_core_quota_inputs(0, secret_inputs[0].clone()),
+        PrivateInputs::new_proof_of_core_quota_inputs(KeyIndex::new::<0>(), secret_inputs[0].clone()),
     )
     .unwrap();
     let key_nullifier_poq_index_0 = poq_index_0
@@ -277,7 +278,7 @@ fn same_key_different_indices() {
 
     let (poq_index_1, _) = VerifiedProofOfQuota::new(
         &public_inputs,
-        PrivateInputs::new_proof_of_core_quota_inputs(1, secret_inputs[0].clone()),
+        PrivateInputs::new_proof_of_core_quota_inputs(KeyIndex::new::<1>(), secret_inputs[0].clone()),
     )
     .unwrap();
     let key_nullifier_poq_index_1 = poq_index_1
@@ -302,7 +303,7 @@ fn different_keys_same_index() {
     } = PoQInputs {
         public_inputs: PublicInputs {
             core: CoreInputs {
-                quota: 1,
+                quota: Quota::new::<1>(),
                 zk_root: merkle_tree.root(),
             },
             leader: LeaderInputs::default(),
@@ -326,7 +327,7 @@ fn different_keys_same_index() {
 
     let (poq_key_1, _) = VerifiedProofOfQuota::new(
         &public_inputs_key_1,
-        PrivateInputs::new_proof_of_core_quota_inputs(0, secret_inputs[0].clone()),
+        PrivateInputs::new_proof_of_core_quota_inputs(KeyIndex::new::<0>(), secret_inputs[0].clone()),
     )
     .unwrap();
     let key_nullifier_poq_key_1 = poq_key_1
@@ -337,7 +338,7 @@ fn different_keys_same_index() {
 
     let (poq_key_2, _) = VerifiedProofOfQuota::new(
         &public_inputs_key_2,
-        PrivateInputs::new_proof_of_core_quota_inputs(0, secret_inputs[0].clone()),
+        PrivateInputs::new_proof_of_core_quota_inputs(KeyIndex::new::<0>(), secret_inputs[0].clone()),
     )
     .unwrap();
     let key_nullifier_poq_key_2 = poq_key_2

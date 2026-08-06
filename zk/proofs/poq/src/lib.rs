@@ -270,7 +270,7 @@ mod tests {
                 BigUint::from(654_321u32).into(),
             ),
             selector: false,
-            index: 2,
+            index: KeyIndex::new::<2>(),
         };
 
         let witness_inputs =
@@ -283,12 +283,12 @@ mod tests {
         // Test that verifying with the reconstructed inputs inside the verifier context
         // works.
         let recomputed_verify_inputs = PoQVerifierInputData {
-            core_quota: common_data.core_quota.get(),
+            core_quota: common_data.core_quota,
             core_root: chain_data.core_root,
             k_part_one: common_data.message_key.0,
             k_part_two: common_data.message_key.1,
             key_nullifier,
-            leader_quota: common_data.leader_quota.get(),
+            leader_quota: common_data.leader_quota,
             pol_epoch_nonce: chain_data.pol_epoch_nonce,
             pol_ledger_aged: chain_data.pol_ledger_aged,
             lottery_0: chain_data.lottery_0,
@@ -330,7 +330,7 @@ mod tests {
                 BigUint::from(654_321u32).into(),
             ),
             selector: true,
-            index: 2,
+            index: KeyIndex::new::<2>(),
         };
         let wallet_data = PoQWalletInputsData {
             slot: 3_934_028_363,
@@ -489,12 +489,12 @@ mod tests {
         // Test that verifying with the reconstructed inputs inside the verifier context
         // works.
         let recomputed_verify_inputs = PoQVerifierInputData {
-            core_quota: common_data.core_quota.get(),
+            core_quota: common_data.core_quota,
             core_root: chain_data.core_root,
             k_part_one: common_data.message_key.0,
             k_part_two: common_data.message_key.1,
             key_nullifier,
-            leader_quota: common_data.leader_quota.get(),
+            leader_quota: common_data.leader_quota,
             pol_epoch_nonce: chain_data.pol_epoch_nonce,
             pol_ledger_aged: chain_data.pol_ledger_aged,
             lottery_0: chain_data.lottery_0,

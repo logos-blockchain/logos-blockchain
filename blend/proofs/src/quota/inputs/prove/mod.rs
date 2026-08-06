@@ -1,4 +1,4 @@
-use lb_groth16::{CircuitIntegerOutOfRange, fr_from_bytes};
+use lb_groth16::fr_from_bytes;
 use lb_poq::{
     PoQBlendInputsData, PoQChainInputsData, PoQCommonInputsData, PoQWalletInputsData,
     PoQWitnessInputs,
@@ -19,10 +19,8 @@ pub(crate) struct Inputs {
     pub private: PrivateInputs,
 }
 
-impl TryFrom<Inputs> for PoQWitnessInputs {
-    type Error = CircuitIntegerOutOfRange;
-
-    fn try_from(value: Inputs) -> Result<Self, Self::Error> {
+impl From<Inputs> for PoQWitnessInputs {
+    fn from(value: Inputs) -> Self {
         let (signing_key_first_half, signing_key_second_half) =
             split_ephemeral_signing_key(value.public.signing_key);
         let chain_input_data = PoQChainInputsData {
@@ -33,9 +31,9 @@ impl TryFrom<Inputs> for PoQWitnessInputs {
             lottery_1: value.public.leader.lottery_1,
         };
         let common_input_data = PoQCommonInputsData {
-            core_quota: value.public.core.quota.try_into()?,
-            index: value.private.key_index.try_into()?,
-            leader_quota: value.public.leader.message_quota.try_into()?,
+            core_quota: value.public.core.quota,
+            index: value.private.key_index,
+            leader_quota: value.public.leader.message_quota,
             message_key: (
                 fr_from_bytes(&signing_key_first_half[..]).expect(
                     "First half of signing public key does not represent a valid `Fr` point.",
@@ -46,11 +44,11 @@ impl TryFrom<Inputs> for PoQWitnessInputs {
             ),
             selector: value.private.selector,
         };
-        Ok(witness_input_for_proof_type(
+        witness_input_for_proof_type(
             chain_input_data,
             common_input_data,
             value.private.proof_type,
-        ))
+        )
     }
 }
 
