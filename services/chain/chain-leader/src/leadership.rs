@@ -65,10 +65,7 @@ where
             .check_winning_with_key(key_id.clone(), utxo, &public_inputs)
             .await
         {
-            Ok(winning) => {
-                winning_utxos += 1;
-                winning
-            }
+            Ok(winning) => winning,
             Err(e) => {
                 metrics::consensus_proposals_create_failed("leadership_check");
                 tracing::error!(
@@ -81,6 +78,7 @@ where
         };
 
         if winning {
+            winning_utxos += 1;
             tracing::debug!(
                 target: LOG_TARGET,
                 "leader for slot {:?}, {:?}/{:?}",
