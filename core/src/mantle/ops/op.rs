@@ -173,10 +173,10 @@ impl BinaryDecode for Op {
     }
 }
 
-const fn gas_cost_of<Profile, Op>(_op: &Op) -> Gas
+const fn gas_cost_of<Op, Profile>(_op: &Op) -> Gas
 where
-    Profile: GasProfile,
     Op: OperationGas<Profile>,
+    Profile: GasProfile,
 {
     Op::GAS_COST
 }
@@ -204,7 +204,7 @@ impl Op {
     }
 
     #[must_use]
-    pub const fn execution_gas<Profile: GasProfile>(&self) -> Gas {
+    pub const fn gas_cost<Profile: GasProfile>(&self) -> Gas {
         match self {
             Self::ChannelInscribe(op) => gas_cost_of(op),
             Self::ChannelConfig(op) => gas_cost_of(op),
