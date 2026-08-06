@@ -355,6 +355,7 @@ pub fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
         security_param,
         NonNegativeRatio::new(1, 10.try_into().unwrap()),
         1.0.try_into().unwrap(),
+        NonZero::new(100).unwrap(), // W = 10 at f = 1/10
     );
     let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 

@@ -3,6 +3,9 @@ use std::num::NonZero;
 use lb_pol::LotteryConstants;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 
+/// `MAX_UNCLES`, the maximum number of uncles a block may reference.
+pub const MAX_UNCLES: usize = 4;
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Config {
     /// The `k` parameter in the Common Prefix property.
@@ -13,6 +16,9 @@ pub struct Config {
     /// `f`, the rate of occupied slots
     slot_activation_coeff: NonNegativeRatio,
     stake_inference_learning_rate: NonNegativeF64,
+    /// `w_u`, the maximum number of slots by which a referenced uncle may
+    /// precede the block referencing it.
+    uncle_reference_window: NonZero<u64>,
     /// Lottery approximation constants computed from `slot_activation_coeff`
     #[serde(skip)]
     lottery_constants: LotteryConstants,
@@ -28,6 +34,7 @@ impl<'de> serde::Deserialize<'de> for Config {
             security_param: NonZero<u32>,
             slot_activation_coeff: NonNegativeRatio,
             stake_inference_learning_rate: NonNegativeF64,
+            uncle_reference_window: NonZero<u64>,
         }
 
         let raw = RawConfig::deserialize(deserializer)?;
@@ -36,6 +43,7 @@ impl<'de> serde::Deserialize<'de> for Config {
             security_param: raw.security_param,
             slot_activation_coeff: raw.slot_activation_coeff,
             stake_inference_learning_rate: raw.stake_inference_learning_rate,
+            uncle_reference_window: raw.uncle_reference_window,
             lottery_constants: LotteryConstants::new(raw.slot_activation_coeff),
         })
     }
@@ -47,13 +55,20 @@ impl Config {
         security_param: NonZero<u32>,
         slot_activation_coeff: NonNegativeRatio,
         stake_inference_learning_rate: NonNegativeF64,
+        uncle_reference_window: NonZero<u64>,
     ) -> Self {
         Self {
             security_param,
             slot_activation_coeff,
             stake_inference_learning_rate,
+            uncle_reference_window,
             lottery_constants: LotteryConstants::new(slot_activation_coeff),
         }
+    }
+
+    #[must_use]
+    pub const fn uncle_reference_window(&self) -> NonZero<u64> {
+        self.uncle_reference_window
     }
 
     #[must_use]
@@ -122,6 +137,7 @@ mod tests {
             NonZero::new(10).unwrap(),
             NonNegativeRatio::new(1, 5.try_into().unwrap()),
             0.1.try_into().unwrap(),
+            NonZero::new(50).unwrap(), // W = 10 at f = 1/5
         );
         assert_eq!(config.security_param(), NonZero::new(10).unwrap());
         assert_eq!(config.base_period_length(), NonZero::new(50).unwrap());

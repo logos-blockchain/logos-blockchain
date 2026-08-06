@@ -11,7 +11,7 @@ use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 use lb_utils::bounded::{BoundedError, BoundedVec, UpperBoundedVec};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-pub use uncle::{MAX_UNCLES, SignedHeader, UncleHeaders};
+pub use uncle::{SignedHeader, UncleHeaders};
 
 use crate::{
     codec::{DeserializeOp as _, SerializeOp as _},
@@ -831,6 +831,7 @@ mod tests {
     #[test]
     fn maximum_proposal_matches_the_specified_size() {
         use lb_codec::BinaryEncode as _;
+        use lb_cryptarchia_engine::MAX_UNCLES;
 
         const SPECIFIED_MAX_PROPOSAL_SIZE: usize = 10000;
 
