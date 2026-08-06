@@ -12,15 +12,21 @@ use crate::{Fr, Groth16Input};
 /// The bound is an invariant of the type: every value of
 /// `CircuitInteger<BITS>` fits in `BITS` bits, so conversions into circuit
 /// inputs are infallible. Constants are checked when they are compiled
-/// ([`Self::new_const`]); only values that are genuinely unknown until runtime
-/// need [`Self::new`].
+/// ([`Self::new`]); only values that are genuinely unknown until runtime
+/// need [`Self::try_new`].
 ///
 /// Circuits are expected to alias this type at the width of the signal they
 /// feed, so that widening or narrowing a signal is a one-line change that
 /// surfaces every invalidated constant as a build failure.
-#[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "u64", into = "u64")]
 pub struct CircuitInteger<const BITS: u8>(u64);
+
+impl<const BITS: u8> Default for CircuitInteger<BITS> {
+    fn default() -> Self {
+        Self::new::<0>()
+    }
+}
 
 impl<const BITS: u8> CircuitInteger<BITS> {
     /// Widths outside `1..=64` cannot be represented by the backing store.
