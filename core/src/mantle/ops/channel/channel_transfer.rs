@@ -7,8 +7,8 @@ use crate::{
         TxHash,
         channel::{Channels, Error},
         ledger::{
-            ExecutableOperation, Inputs, Outputs, ProvableOperation, Utxo, Utxos,
-            VerifiableOperation, verification_mode,
+            ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation, Utxo,
+            Utxos, VerifiableOperation, verification_mode,
         },
         ops::{
             OpId,
@@ -59,27 +59,27 @@ impl ProvableOperation for ChannelTransferOp {
     type Proof = ChannelMultiSigProof;
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for ChannelTransferOp {
-    type PreverificationContext<'a> = ();
-    type VerificationContext<'a> = ChannelTransferValidationContext<'a>;
+impl PreverifiableOperation<verification_mode::StandardMode> for ChannelTransferOp {
+    type Context<'a> = ();
     type Error = Error;
 
     fn preverify(
         &self,
         _proof: &Self::Proof,
-        _context: &Self::PreverificationContext<'_>,
+        _context: &Self::Context<'_>,
     ) -> Result<(), Self::Error> {
         // Check that the outputs are valid
         self.outputs.validate()?;
 
         Ok(())
     }
+}
 
-    fn verify(
-        &self,
-        proof: &Self::Proof,
-        context: &Self::VerificationContext<'_>,
-    ) -> Result<(), Self::Error> {
+impl VerifiableOperation<verification_mode::StandardMode> for ChannelTransferOp {
+    type Context<'a> = ChannelTransferValidationContext<'a>;
+    type Error = Error;
+
+    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
         verify_channel_multi_sig(
             &self.channel_id,
             proof,
