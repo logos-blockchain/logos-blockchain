@@ -41,7 +41,7 @@ impl Default for PoQVerificationInputsMinusSigningKey {
             leader: LeaderInputs {
                 pol_ledger_aged: ZkHash::default(),
                 pol_epoch_nonce: ZkHash::default(),
-                message_quota: Quota::new::<1>(),
+                message_quota: Quota::ONE,
                 lottery_0: Fr::ZERO,
                 lottery_1: Fr::ZERO,
             },

@@ -198,7 +198,7 @@ mod tests {
         // ceil(log2(10 + 1))
         assert_eq!(token_count_bit_len(core_quota, num_core_nodes).unwrap(), 4);
 
-        let core_quota: Quota = Quota::new::<0>();
+        let core_quota: Quota = Quota::ZERO;
         // ceil(log2(0 + 1))
         assert_eq!(token_count_bit_len(core_quota, num_core_nodes).unwrap(), 0);
     }
