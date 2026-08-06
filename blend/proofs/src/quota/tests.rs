@@ -57,8 +57,10 @@ fn same_key_nullifier_for_different_public_keys() {
     let key_2: Ed25519PublicKey =
         Ed25519PublicKey::from_bytes(&[250; ED25519_PUBLIC_KEY_SIZE]).unwrap();
 
-    let (public_inputs_key_1, private_inputs_key_1) = valid_proof_of_core_quota_inputs(key_1, Quota::new::<1>());
-    let (public_inputs_key_2, private_inputs_key_2) = valid_proof_of_core_quota_inputs(key_2, Quota::new::<1>());
+    let (public_inputs_key_1, private_inputs_key_1) =
+        valid_proof_of_core_quota_inputs(key_1, Quota::new::<1>());
+    let (public_inputs_key_2, private_inputs_key_2) =
+        valid_proof_of_core_quota_inputs(key_2, Quota::new::<1>());
 
     let (proof_key_1, _) = VerifiedProofOfQuota::new(
         &public_inputs_key_1,
@@ -267,7 +269,10 @@ fn same_key_different_indices() {
 
     let (poq_index_0, _) = VerifiedProofOfQuota::new(
         &public_inputs,
-        PrivateInputs::new_proof_of_core_quota_inputs(KeyIndex::new::<0>(), secret_inputs[0].clone()),
+        PrivateInputs::new_proof_of_core_quota_inputs(
+            KeyIndex::new::<0>(),
+            secret_inputs[0].clone(),
+        ),
     )
     .unwrap();
     let key_nullifier_poq_index_0 = poq_index_0
@@ -278,7 +283,10 @@ fn same_key_different_indices() {
 
     let (poq_index_1, _) = VerifiedProofOfQuota::new(
         &public_inputs,
-        PrivateInputs::new_proof_of_core_quota_inputs(KeyIndex::new::<1>(), secret_inputs[0].clone()),
+        PrivateInputs::new_proof_of_core_quota_inputs(
+            KeyIndex::new::<1>(),
+            secret_inputs[0].clone(),
+        ),
     )
     .unwrap();
     let key_nullifier_poq_index_1 = poq_index_1
@@ -327,7 +335,10 @@ fn different_keys_same_index() {
 
     let (poq_key_1, _) = VerifiedProofOfQuota::new(
         &public_inputs_key_1,
-        PrivateInputs::new_proof_of_core_quota_inputs(KeyIndex::new::<0>(), secret_inputs[0].clone()),
+        PrivateInputs::new_proof_of_core_quota_inputs(
+            KeyIndex::new::<0>(),
+            secret_inputs[0].clone(),
+        ),
     )
     .unwrap();
     let key_nullifier_poq_key_1 = poq_key_1
@@ -338,7 +349,10 @@ fn different_keys_same_index() {
 
     let (poq_key_2, _) = VerifiedProofOfQuota::new(
         &public_inputs_key_2,
-        PrivateInputs::new_proof_of_core_quota_inputs(KeyIndex::new::<0>(), secret_inputs[0].clone()),
+        PrivateInputs::new_proof_of_core_quota_inputs(
+            KeyIndex::new::<0>(),
+            secret_inputs[0].clone(),
+        ),
     )
     .unwrap();
     let key_nullifier_poq_key_2 = poq_key_2

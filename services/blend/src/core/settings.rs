@@ -58,6 +58,8 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
         match Quota::try_new(quota) {
             Ok(quota) => quota,
             Err(_) => {
+                // Not using `expect` to keep the function a `const`, so this panics at compile
+                // time if called in a const context.
                 panic!("Leadership Quota must fit within the width the `PoQ` circuit allows.")
             }
         }

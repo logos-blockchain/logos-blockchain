@@ -3,7 +3,10 @@ use core::fmt::{self, Debug, Formatter};
 use lb_groth16::{Fr, fr_to_bytes};
 use serde::{Deserialize, Serialize};
 
-use crate::{ZkHash, quota::{Ed25519PublicKey, Quota}};
+use crate::{
+    ZkHash,
+    quota::{Ed25519PublicKey, Quota},
+};
 
 /// Public inputs for all types of Proof of Quota. Spec: <https://lip.logos.co/blockchain/raw/proof-of-quota.html#public-values>.
 #[derive(Clone, Copy)]

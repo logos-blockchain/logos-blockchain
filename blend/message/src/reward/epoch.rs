@@ -22,12 +22,12 @@ impl EpochInfo {
         epoch: Epoch,
         pol_epoch_nonce: &ZkHash,
         num_core_nodes: u64,
-        core_quota: Quota,
+        node_core_quota: Quota,
         activity_threshold_sensitivity: u64,
     ) -> Result<Self, Error> {
         let epoch_randomness = (*pol_epoch_nonce).into();
         let token_evaluation = BlendingTokenEvaluation::new(
-            core_quota,
+            node_core_quota,
             num_core_nodes,
             activity_threshold_sensitivity,
         )?;
@@ -54,11 +54,11 @@ pub struct BlendingTokenEvaluation {
 
 impl BlendingTokenEvaluation {
     pub fn new(
-        core_quota: Quota,
+        node_core_quota: Quota,
         num_core_nodes: u64,
         activity_threshold_sensitivity: u64,
     ) -> Result<Self, Error> {
-        let expected_token_count_bit_len = token_count_bit_len(core_quota, num_core_nodes)?;
+        let expected_token_count_bit_len = token_count_bit_len(node_core_quota, num_core_nodes)?;
         let activity_threshold = activity_threshold(
             expected_token_count_bit_len,
             num_core_nodes,
@@ -127,8 +127,8 @@ pub enum Error {
 
 /// The number of bits that can represent the maximum number of blending
 /// tokens generated during a single epoch.
-pub fn token_count_bit_len(core_quota: Quota, num_core_nodes: u64) -> Result<u64, Error> {
-    let total_core_quota = core_quota
+pub fn token_count_bit_len(node_core_quota: Quota, num_core_nodes: u64) -> Result<u64, Error> {
+    let total_core_quota = node_core_quota
         .get()
         .checked_mul(num_core_nodes)
         .ok_or(Error::TotalCoreQuotaTooLarge(u64::MAX))?;
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_token_evaluation() {
-        let evaluation = BlendingTokenEvaluation::new(Quota::new::<200>(), 2, 1).unwrap();
+        let evaluation = BlendingTokenEvaluation::new(Quota::new::<2000>(), 2, 1).unwrap();
         // token_count_bit_len = ceil(log2((2000*2) + 1)) = 12
         // token_count_byte_len = ceil(token_count_bit_len / 8) = 2
         assert_eq!(evaluation.token_count_byte_len, 2);

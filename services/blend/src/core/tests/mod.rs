@@ -13,7 +13,7 @@ use lb_chain_service::Epoch;
 use lb_core::{crypto::ZkHash, sdp::ActivityMetadata};
 use lb_groth16::AdditiveGroup as _;
 use lb_key_management_system_service::keys::Ed25519Key;
-use lb_poq::CORE_MERKLE_TREE_HEIGHT;
+use lb_poq::{CORE_MERKLE_TREE_HEIGHT, Quota};
 use lb_utils::blake_rng::BlakeRng;
 use rand::SeedableRng as _;
 
@@ -1635,7 +1635,7 @@ async fn test_initialize_recovers_matching_saved_state() {
         ServiceState::with_epoch(initial_epoch, token_collector, None, state_updater.clone())
             .unwrap();
     let mut updater = saved_state.start_updating();
-    updater.consume_core_quota(5);
+    updater.consume_core_quota(Quota::new::<5>());
     let saved_state = updater.commit_changes();
 
     let (
@@ -1667,7 +1667,7 @@ async fn test_initialize_recovers_matching_saved_state() {
 
     assert_eq!(
         recovered_checkpoint.spent_quota(),
-        5,
+        Quota::new::<5>(),
         "Matching epoch: spent_quota should be restored from saved state"
     );
     assert_eq!(recovered_checkpoint.last_seen_epoch(), initial_epoch);
@@ -1705,7 +1705,7 @@ async fn test_initialize_recovers_matching_saved_state() {
     )
     .unwrap();
     let mut updater = stale_state.start_updating();
-    updater.consume_core_quota(42);
+    updater.consume_core_quota(Quota::new::<42>());
     let stale_state = updater.commit_changes();
 
     let (
@@ -1737,7 +1737,7 @@ async fn test_initialize_recovers_matching_saved_state() {
 
     assert_eq!(
         recovered_checkpoint2.spent_quota(),
-        0,
+        Quota::ZERO,
         "Mismatched epoch: spent_quota should be 0 for fresh state"
     );
     assert_eq!(

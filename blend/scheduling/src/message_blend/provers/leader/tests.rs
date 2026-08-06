@@ -1,8 +1,7 @@
 use core::time::Duration;
 
 use futures::stream::repeat;
-use lb_blend_proofs::quota::Quota;
-use lb_blend_proofs::selection::inputs::VerifyInputs;
+use lb_blend_proofs::{quota::Quota, selection::inputs::VerifyInputs};
 use lb_cryptarchia_engine::Epoch;
 use test_log::test;
 use tokio::time::timeout;
