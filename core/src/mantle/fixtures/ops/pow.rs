@@ -1,16 +1,24 @@
-use lb_core_macros::nom_wire_fixtures;
+use lb_codec::codec_fixtures;
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 
-use crate::mantle::ops::pow::{ClaimPowRewardOp, PowNullifier};
+use crate::mantle::ops::{
+    NoOpProof,
+    pow::{ClaimPowRewardOp, PowNullifier},
+};
 
-nom_wire_fixtures!(
+codec_fixtures!(
+    NoOpProof,
+    NoOpProof {} => ""
+);
+
+codec_fixtures!(
     PowNullifier,
     Fr::ZERO.into() => "0000000000000000000000000000000000000000000000000000000000000000",
     Fr::ONE.into() => "0100000000000000000000000000000000000000000000000000000000000000",
 );
 
-nom_wire_fixtures!(
+codec_fixtures!(
     ClaimPowRewardOp,
     ClaimPowRewardOp {
         epoch_nonce: Fr::ZERO,

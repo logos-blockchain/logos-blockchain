@@ -139,7 +139,7 @@ impl BinaryEncode for Op {
             Self::SDPActive(op) => op.encoded_length(),
             Self::LeaderClaim(op) => op.encoded_length(),
             Self::Transfer(op) => op.encoded_length(),
-            Self::ClaimPoWReward(op) => op.encoded_legth(),
+            Self::ClaimPowReward(op) => op.encoded_length(),
         };
         self.code().encoded_length().checked_add(payload).unwrap()
     }
@@ -157,7 +157,7 @@ impl BinaryEncode for Op {
             Self::SDPActive(op) => op.encode_into(out),
             Self::LeaderClaim(op) => op.encode_into(out),
             Self::Transfer(op) => op.encode_into(out),
-            Self::ClaimPoWReward(op) => op.encode_into(out),
+            Self::ClaimPowReward(op) => op.encode_into(out),
         }
     }
 }
@@ -196,9 +196,8 @@ impl BinaryDecode for Op {
                 LeaderClaimOp::decode(input, &()).map(|(rest, op)| (rest, Self::LeaderClaim(op)))
             }
             TRANSFER => TransferOp::decode(input, &()).map(|(rest, op)| (rest, Self::Transfer(op))),
-            CLAIM_POW_REWARD => {
-                ClaimPowRewardOp::decode(input, &()).map(|(rest, op)| (rest, Self::ClaimPowReward(op)))
-            }
+            CLAIM_POW_REWARD => ClaimPowRewardOp::decode(input, &())
+                .map(|(rest, op)| (rest, Self::ClaimPowReward(op))),
             other => Err(DecodeError::unknown_discriminant::<Self>(u64::from(other))),
         }
     }
@@ -267,13 +266,35 @@ pub struct ZkAndEd25519Proof {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoOpProof;
+
+impl BinaryEncode for NoOpProof {
+    fn encoded_length(&self) -> usize {
+        0
+    }
+
+    fn encode_into(&self, _out: &mut Vec<u8>) {}
+}
+
+impl BinaryDecode for NoOpProof {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        _context: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        Ok((input, Self))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OpProof {
     Ed25519Sig(Ed25519Signature),
     ZkSig(ZkSignature),
     ZkAndEd25519Sigs(ZkAndEd25519Proof),
     PoC(Groth16LeaderClaimProof),
     ChannelMultiSigProof(ChannelMultiSigProof),
-    None,
+    None(NoOpProof),
 }
 
 /// Mantle reference test-vector generators.

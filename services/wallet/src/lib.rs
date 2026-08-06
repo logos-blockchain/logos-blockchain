@@ -20,7 +20,7 @@ use lb_core::{
         gas::{GasCost, GasOverflow, MainnetGasConstants},
         ledger::Inputs,
         ops::{
-            ZkAndEd25519Proof,
+            NoOpProof, ZkAndEd25519Proof,
             channel::{ChannelId, config::ChannelConfigOp, inscribe::InscriptionOp},
             leader_claim::{
                 LeaderClaimOp, RewardsRoot, VoucherCm, VoucherNullifier, VoucherSecret,
@@ -956,7 +956,7 @@ where
                     Self::sign_transfer(tx_hash, transfer_op.inputs.clone(), kms, &tip_leader)
                         .await?
                 }
-                Op::ClaimPowReward(_) => OpProof::None,
+                Op::ClaimPowReward(_) => OpProof::None(NoOpProof),
             };
             ops_proofs.try_push(proof)?;
         }

@@ -2,7 +2,11 @@ use lb_codec::{BinaryDecodeExt as _, BinaryEncode as _, DecodeError};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 
 use crate::{
-    mantle::{Op, OpProof, ops::ZkAndEd25519Proof, transactions::OpsProofs},
+    mantle::{
+        Op, OpProof,
+        ops::{NoOpProof, ZkAndEd25519Proof},
+        transactions::OpsProofs,
+    },
     proofs::{
         channel_multi_sig_proof::ChannelMultiSigProof, leader_claim_proof::Groth16LeaderClaimProof,
     },
@@ -60,7 +64,7 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> Result<(&'a [u8], OpProof), 
             ChannelMultiSigProof::decode(input)
                 .map(|(rest, proof)| (rest, OpProof::ChannelMultiSigProof(proof)))
         }
-        Op::ClaimPowReward(_) => Ok((input, OpProof::None)),
+        Op::ClaimPowReward(_) => Ok((input, OpProof::None(NoOpProof))),
     }
 }
 
@@ -76,7 +80,7 @@ fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
             }
             OpProof::ZkSig(sig) => sig.encode_to_vec(),
             OpProof::PoC(poc) => poc.encode_to_vec(),
-            OpProof::None => Vec::with_capacity(0),
+            OpProof::None(pow) => pow.encode_to_vec(),
         }
     } else {
         panic!("Mismatch between proof type and operation type");

@@ -1,24 +1,29 @@
 use std::collections::HashMap;
 
 use ark_ff::Zero as _;
-use lb_core_macros::NomCodec;
+use lb_codec::BinaryCodec;
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::{Fr, fr_from_mod_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use nom::AsBytes as _;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
     crypto::{Hash, ZkDigest as _, ZkHash, ZkHasher},
     events::TxEvent,
-    mantle::ledger::Operation,
+    mantle::{
+        ledger::{
+            ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
+            verification_mode,
+        },
+        ops::NoOpProof,
+    },
 };
 
 pub type PowTarget = Fr;
 pub type PowReward = u64;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct PowNullifier(#[serde(with = "serde_fr")] ZkHash);
 
 pub type PuzzleTicket = PowNullifier;
@@ -35,7 +40,7 @@ impl From<PowNullifier> for ZkHash {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct ClaimPowRewardOp {
     #[serde(with = "serde_fr")]
     pub epoch_nonce: ZkHash,
@@ -48,7 +53,7 @@ impl ClaimPowRewardOp {
     pub fn get_puzzle_ticket(&self) -> PuzzleTicket {
         PowNullifier(ZkHasher::digest(&[
             self.epoch_nonce,
-            fr_from_mod_bytes(self.block_hash.as_bytes()),
+            fr_from_mod_bytes(&self.block_hash),
             *self.public_key.as_fr(),
         ]))
     }
@@ -75,7 +80,7 @@ pub enum ClaimPowRewardError {
     MissingBlock { block_id: Hash },
 }
 
-pub struct ClaimPoWRewardValidationContext<'a> {
+pub struct ClaimPoWRewardVerificationContext<'a> {
     // As per spec
     pub current_block_height: u64,
     pub reward_difficulty: PowTarget,
@@ -88,7 +93,7 @@ pub struct ClaimPoWRewardValidationContext<'a> {
     pub blocks_height: HashMap<Hash, u64>,
 }
 
-impl ClaimPoWRewardValidationContext<'_> {
+impl ClaimPoWRewardVerificationContext<'_> {
     /// Claiming must be enabled for this block context (pool can cover the
     /// reward)
     fn pow_reward_enabled(&self) -> Result<(), ClaimPowRewardError> {
@@ -173,28 +178,47 @@ pub struct ClaimPoWRewardExecutionContext {
     _phantom: std::marker::PhantomData<()>, // fake content to be removed
 }
 
-impl Operation<ClaimPoWRewardValidationContext<'_>> for ClaimPowRewardOp {
-    type ExecutionContext<'a>
-        = ClaimPoWRewardExecutionContext
-    where
-        Self: 'a;
+impl ProvableOperation for ClaimPowRewardOp {
+    type Proof = NoOpProof;
+}
+
+impl PreverifiableOperation<verification_mode::StandardMode> for ClaimPowRewardOp {
+    type Context<'a> = ();
     type Error = ClaimPowRewardError;
 
-    fn validate(&self, ctx: &ClaimPoWRewardValidationContext<'_>) -> Result<(), Self::Error> {
-        ctx.pow_reward_enabled()?;
-        // TODO Plug constant window
-        ctx.accept_claim::<100>(self.block_hash)?;
-        ctx.validate_current_epoch_nonce(self.epoch_nonce)?;
-        let puzzle_ticket = self.get_puzzle_ticket();
-        ctx.validate_difficulty_reward(puzzle_ticket)?;
-        ctx.validate_double_claiming(puzzle_ticket)?;
+    fn preverify(
+        &self,
+        _proof: &Self::Proof,
+        _context: &Self::Context<'_>,
+    ) -> Result<(), Self::Error> {
         Ok(())
     }
+}
 
-    fn execute(
+impl VerifiableOperation<verification_mode::StandardMode> for ClaimPowRewardOp {
+    type Context<'a> = ClaimPoWRewardVerificationContext<'a>;
+    type Error = ClaimPowRewardError;
+
+    fn verify(&self, _proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+        context.pow_reward_enabled()?;
+        // TODO Plug constant window
+        context.accept_claim::<100>(self.block_hash)?;
+        context.validate_current_epoch_nonce(self.epoch_nonce)?;
+        let puzzle_ticket = self.get_puzzle_ticket();
+        context.validate_difficulty_reward(puzzle_ticket)?;
+        context.validate_double_claiming(puzzle_ticket)?;
+        Ok(())
+    }
+}
+
+impl ExecutableOperation for ClaimPowRewardOp {
+    type Context<'a> = ClaimPoWRewardExecutionContext;
+    type Error = ClaimPowRewardError;
+
+    fn execute<'a>(
         &self,
-        _ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
-        unreachable!("Execution for ClaimPowReward is not integrated yet")
+        _context: Self::Context<'a>,
+    ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
+        todo!("Execution for ClaimPowReward is not integrated yet")
     }
 }
