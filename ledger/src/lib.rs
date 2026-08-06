@@ -2116,18 +2116,18 @@ mod tests {
         }
 
         #[test]
-        fn difficulty_from_unseeded_genesis_is_stuck_at_zero() {
-            // Pins the genesis gap: `PowState::new` leaves the difficulty at
-            // zero, and zero is an absorbing state for the controller, so
-            // no block can ever move it (and no ticket can ever satisfy a
-            // zero target). Genesis must seed a real initial difficulty
-            // before claiming can function.
+        fn difficulty_is_seeded_at_genesis_and_the_controller_can_move_it() {
+            // Genesis seeds a nonzero initial difficulty (zero would be an
+            // absorbing state for the controller, with no ticket ever able
+            // to satisfy it), and the per-block retarget moves it: an empty
+            // block (no claims) eases the target upward.
             let config = config();
             let state = LedgerState::from_utxos([utxo()], &config);
-            assert_eq!(state.mantle_ledger.pow.reward_difficulty(), Fr::ZERO);
+            let genesis_difficulty = state.mantle_ledger.pow.reward_difficulty();
+            assert_ne!(genesis_difficulty, Fr::ZERO);
 
             let state = apply_empty_block(state, &config);
-            assert_eq!(state.mantle_ledger.pow.reward_difficulty(), Fr::ZERO);
+            assert!(state.mantle_ledger.pow.reward_difficulty() > genesis_difficulty);
         }
 
         fn claim_tx() -> SignedMantleTx<Preverified> {
@@ -2139,12 +2139,25 @@ mod tests {
 
         #[test]
         fn claim_tx_validation_rejects_disabled_rewards() {
-            // End-to-end through `try_apply_tx`: at unseeded genesis the
-            // epoch reward is zero, so the claim fails the §5.6 safety
-            // cutoff. This exercises the full wiring: preverification, the
-            // stateful `ClaimPowReward` arm and the helper-built context.
+            // End-to-end through `try_apply_tx`: with `sigma_e` forced to
+            // zero the claim fails the §5.6 safety cutoff. This exercises
+            // the full wiring: preverification, the stateful
+            // `ClaimPowReward` arm and the helper-built context.
+            struct DisabledConstants;
+            impl ClaimPoWConstants for DisabledConstants {
+                const RATE_NUM: u64 = 0;
+                const RATE_DEN: u64 = 1;
+                const TARGET_CLAIM_PER_BLOCK: u64 = 1;
+                const EXPECTED_BLOCKS_PER_EPOCH: u64 = 1;
+            }
+
             let config = config();
-            let state = LedgerState::from_utxos([utxo()], &config);
+            let mut state = LedgerState::from_utxos([utxo()], &config);
+            state
+                .mantle_ledger
+                .pow
+                .add_rewards_to_pool::<DisabledConstants>();
+            assert_eq!(state.mantle_ledger.pow.epoch_reward(), 0);
 
             let err = state
                 .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&config, &claim_tx())
@@ -2199,12 +2212,17 @@ mod tests {
             // helper-built validation context (pool, window, epoch nonce,
             // difficulty, double-claim) and execution.
             let (state, config) = claim_accepting_state();
+            let pool_before = state.mantle_ledger.pow.reward_pool();
+            let epoch_reward = state.mantle_ledger.pow.epoch_reward();
 
             let (state, _balance, events) = state
                 .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&config, &claim_tx())
                 .expect("claim should validate and execute");
 
-            assert_eq!(state.mantle_ledger.pow.reward_pool(), 990);
+            assert_eq!(
+                state.mantle_ledger.pow.reward_pool(),
+                pool_before - epoch_reward
+            );
             assert!(
                 state
                     .mantle_ledger
@@ -2215,7 +2233,7 @@ mod tests {
             let expected_utxo = Utxo {
                 op_id: claim_op().op_id(),
                 output_index: 0,
-                note: Note::new(10, claim_op().public_key),
+                note: Note::new(epoch_reward, claim_op().public_key),
             };
             assert_eq!(
                 state
@@ -2258,6 +2276,8 @@ mod tests {
             // from the pool, records the nullifier, inserts the reward note
             // into the UTXO set and emits the claim event.
             let (state, config) = pow_ledger_state(1_000);
+            let pool_before = state.mantle_ledger.pow.reward_pool();
+            let epoch_reward = state.mantle_ledger.pow.epoch_reward();
             let op = claim_op();
             let tx_hash = TxHash::from([9u8; 32]);
 
@@ -2271,7 +2291,10 @@ mod tests {
                 )
                 .expect("claim execution should succeed");
 
-            assert_eq!(state.mantle_ledger.pow.reward_pool(), 990);
+            assert_eq!(
+                state.mantle_ledger.pow.reward_pool(),
+                pool_before - epoch_reward
+            );
             assert!(
                 state
                     .mantle_ledger
@@ -2283,7 +2306,7 @@ mod tests {
             let expected_utxo = Utxo {
                 op_id: op.op_id(),
                 output_index: 0,
-                note: Note::new(10, op.public_key),
+                note: Note::new(epoch_reward, op.public_key),
             };
             assert_eq!(
                 state
@@ -2315,6 +2338,8 @@ mod tests {
             // here to document that the guard lives in validation, not
             // execution.
             let (state, config) = pow_ledger_state(1_000);
+            let pool_before = state.mantle_ledger.pow.reward_pool();
+            let epoch_reward = state.mantle_ledger.pow.epoch_reward();
             let op = Op::ClaimPowReward(claim_op());
             let tx_hash = TxHash::from([9u8; 32]);
 
@@ -2337,7 +2362,10 @@ mod tests {
                 )
                 .expect("second claim currently also succeeds (no validation)");
 
-            assert_eq!(state.mantle_ledger.pow.reward_pool(), 980);
+            assert_eq!(
+                state.mantle_ledger.pow.reward_pool(),
+                pool_before - 2 * epoch_reward
+            );
         }
 
         #[test]
@@ -2347,6 +2375,7 @@ mod tests {
             // to the PoW refill and the pool is unchanged after crediting.
             let config = config();
             let mut state = LedgerState::from_utxos([utxo()], &config);
+            let pool_before = state.mantle_ledger.pow.reward_pool();
 
             state = state
                 .compute_block_rewards(1_000.into(), 0.into())
@@ -2356,7 +2385,7 @@ mod tests {
                 .mantle_ledger
                 .pow
                 .add_rewards_to_pool::<TestPoolConstants>();
-            assert_eq!(state.mantle_ledger.pow.reward_pool(), 0);
+            assert_eq!(state.mantle_ledger.pow.reward_pool(), pool_before);
         }
     }
 }

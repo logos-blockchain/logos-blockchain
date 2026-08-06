@@ -58,8 +58,9 @@ impl Default for PowState {
 }
 
 impl PowState {
-    /// Create an empty `PoW` state with no rewards, no claims and default
-    /// difficulty.
+    /// Create the genesis `PoW` state: pool and per-claim reward seeded from
+    /// the genesis endowment, initial difficulty derived from them, and no
+    /// claims or seen blocks yet.
     #[must_use]
     pub fn new() -> Self {
         // TODO: Setup values when decided
@@ -268,10 +269,13 @@ mod tests {
     const BLOCK_B: Hash = [2u8; 32];
 
     #[test]
-    fn new_state_starts_empty() {
+    fn new_state_starts_with_genesis_values() {
         let state = PowState::new();
-        assert_eq!(state.reward_pool(), 0);
-        assert_eq!(state.epoch_reward(), 0);
+        assert_eq!(state.reward_pool(), POW_REWARD_POOL_GENESIS);
+        assert_eq!(state.epoch_reward(), POW_EPOCH_REWARD_POOL_GENESIS);
+        // The initial difficulty is seeded too — a zero target would be an
+        // absorbing state no claim could ever satisfy.
+        assert_ne!(state.reward_difficulty(), PowTarget::default());
         assert!(state.nullifiers().is_empty());
         assert!(state.block_slots().is_empty());
     }
@@ -340,8 +344,11 @@ mod tests {
         state.add_reward_refill_rewards(1_000);
         state.add_rewards_to_pool::<TestConstants>();
 
-        assert_eq!(state.reward_pool(), 1_000);
-        assert_eq!(state.epoch_reward(), 10);
+        assert_eq!(state.reward_pool(), POW_REWARD_POOL_GENESIS + 1_000);
+        assert_eq!(
+            state.epoch_reward(),
+            (POW_REWARD_POOL_GENESIS + 1_000) / 100
+        );
     }
 
     #[test]
@@ -351,7 +358,7 @@ mod tests {
         state.add_reward_refill_rewards(600);
         state.add_rewards_to_pool::<TestConstants>();
 
-        assert_eq!(state.reward_pool(), 1_000);
+        assert_eq!(state.reward_pool(), POW_REWARD_POOL_GENESIS + 1_000);
     }
 
     #[test]
@@ -363,8 +370,11 @@ mod tests {
         // anything further to the pool.
         state.add_rewards_to_pool::<TestConstants>();
 
-        assert_eq!(state.reward_pool(), 1_000);
-        assert_eq!(state.epoch_reward(), 10);
+        assert_eq!(state.reward_pool(), POW_REWARD_POOL_GENESIS + 1_000);
+        assert_eq!(
+            state.epoch_reward(),
+            (POW_REWARD_POOL_GENESIS + 1_000) / 100
+        );
     }
 
     #[test]
@@ -372,13 +382,19 @@ mod tests {
         let mut state = PowState::new();
         state.add_reward_refill_rewards(1_000);
         state.add_rewards_to_pool::<TestConstants>();
-        assert_eq!(state.epoch_reward(), 10);
+        assert_eq!(
+            state.epoch_reward(),
+            (POW_REWARD_POOL_GENESIS + 1_000) / 100
+        );
 
         state.add_reward_refill_rewards(9_000);
         state.add_rewards_to_pool::<TestConstants>();
 
-        assert_eq!(state.reward_pool(), 10_000);
-        assert_eq!(state.epoch_reward(), 100);
+        assert_eq!(state.reward_pool(), POW_REWARD_POOL_GENESIS + 10_000);
+        assert_eq!(
+            state.epoch_reward(),
+            (POW_REWARD_POOL_GENESIS + 10_000) / 100
+        );
     }
 
     #[test]
@@ -411,7 +427,7 @@ mod tests {
         let unchanged = state.try_apply_header((), &same_epoch, &same_epoch);
 
         assert_eq!(unchanged, state);
-        assert_eq!(unchanged.reward_pool(), 0);
+        assert_eq!(unchanged.reward_pool(), POW_REWARD_POOL_GENESIS);
     }
 
     #[test]
@@ -449,14 +465,15 @@ mod tests {
 
         let new_state = state.try_apply_header((), &previous, &next);
 
-        assert_eq!(new_state.reward_pool(), 500);
+        assert_eq!(new_state.reward_pool(), POW_REWARD_POOL_GENESIS + 500);
     }
 
     #[test]
     fn try_apply_header_leaves_reward_claiming_disabled() {
         // `try_apply_header` currently always refills through
         // `ClaimPoWDisabledConstants` (claiming isn't activated yet), so
-        // `epoch_reward` stays zero even though the pool is well funded.
+        // `epoch_reward` is zeroed at the first transition even though the
+        // pool is well funded.
         let mut state = PowState::new();
         state.add_reward_refill_rewards(1_000_000);
         let previous = epoch_state(0);
@@ -464,7 +481,7 @@ mod tests {
 
         let new_state = state.try_apply_header((), &previous, &next);
 
-        assert_eq!(new_state.reward_pool(), 1_000_000);
+        assert_eq!(new_state.reward_pool(), POW_REWARD_POOL_GENESIS + 1_000_000);
         assert_eq!(new_state.epoch_reward(), 0);
     }
 
@@ -477,7 +494,7 @@ mod tests {
 
         let new_state = state.try_apply_header((), &previous, &next);
 
-        assert_eq!(new_state.reward_pool(), 500);
+        assert_eq!(new_state.reward_pool(), POW_REWARD_POOL_GENESIS + 500);
     }
 
     #[test]
@@ -494,7 +511,7 @@ mod tests {
         let next = epoch_state(3);
         let new_state = state.try_apply_header((), &previous, &next);
 
-        assert_eq!(new_state.reward_pool(), 500);
+        assert_eq!(new_state.reward_pool(), POW_REWARD_POOL_GENESIS + 500);
     }
 
     #[test]
@@ -522,14 +539,15 @@ mod tests {
         let mut state = PowState::new();
         state.add_reward_refill_rewards(1_000);
         state.add_rewards_to_pool::<TestConstants>();
-        assert_eq!(state.reward_pool(), 1_000);
-        assert_eq!(state.epoch_reward(), 10);
+        let epoch_reward = (POW_REWARD_POOL_GENESIS + 1_000) / 100;
+        assert_eq!(state.reward_pool(), POW_REWARD_POOL_GENESIS + 1_000);
+        assert_eq!(state.epoch_reward(), epoch_reward);
 
         let nullifier = PowNullifier::from(Fr::ONE);
         let nullifiers = HashTrieSetSync::new_sync().insert(nullifier);
         let context = ClaimPoWRewardExecutionContext {
             reward_pool: 990,
-            epoch_reward: 10,
+            epoch_reward,
             nullifiers: nullifiers.clone(),
             tx_hash: TxHash::from([7u8; 32]),
             utxos: Utxos::new(),
@@ -541,7 +559,7 @@ mod tests {
         assert_eq!(state.nullifiers(), &nullifiers);
         assert!(state.nullifiers().contains(&nullifier));
         // Unrelated fields are left untouched by this update.
-        assert_eq!(state.epoch_reward(), 10);
+        assert_eq!(state.epoch_reward(), epoch_reward);
     }
 
     /// Build a claim execution result that drains the pool to `reward_pool`,
@@ -567,9 +585,12 @@ mod tests {
         let mut state = PowState::new();
         state.add_reward_refill_rewards(1_000);
         state.add_rewards_to_pool::<TestConstants>();
-        assert_eq!(state.epoch_reward(), 10);
+        assert_eq!(
+            state.epoch_reward(),
+            (POW_REWARD_POOL_GENESIS + 1_000) / 100
+        );
 
-        // One claim of sigma_e=10 drains the pool to 990.
+        // Claims drain the pool down to 990.
         state.update_from_claim_execution_result(&claim_result(990, PowNullifier::from(Fr::ONE)));
         state.add_rewards_to_pool::<TestConstants>();
         assert_eq!(state.epoch_reward(), 9);
