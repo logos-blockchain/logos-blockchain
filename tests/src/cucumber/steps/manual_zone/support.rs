@@ -11,7 +11,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use futures::StreamExt as _;
 use lb_common_http_client::{CommonHttpClient, Slot};
 use lb_core::mantle::{
     Note, Op, OpProof, RawMantleTx, Utxo, Value,
@@ -40,9 +39,7 @@ use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, ZkPublicKe
 use lb_node::SignedMantleTx;
 use lb_testing_framework::NodeHttpClient;
 use lb_zone_sdk::{
-    ZoneMessage,
     adapter::NodeHttpClient as ZoneNodeHttpClient,
-    indexer::ZoneIndexer,
     sequencer::{ZoneSequencer, channel_inscriptions},
 };
 use rand::{Rng as _, thread_rng};
@@ -73,9 +70,12 @@ fn finalized_inscriptions(finalized: &[FinalizedTx]) -> impl Iterator<Item = &In
             FinalizedOp::Deposit(_) | FinalizedOp::Withdraw(_) => None,
         })
 }
-use crate::common::{
-    chain::wait_for_transactions_inclusion, mantle_inscription::make_inscription,
-    wallet::build_wallet_funded_transfer,
+use crate::{
+    common::{
+        chain::wait_for_transactions_inclusion, mantle_inscription::make_inscription,
+        wallet::build_wallet_funded_transfer,
+    },
+    cucumber::world::ZoneReaderConfig,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -966,42 +966,55 @@ pub async fn wait_for_turn_to_write(
     })?
 }
 
-/// Collects indexed block payloads until all expected messages have appeared.
-///
-/// The returned order is the order observed from the indexer, which lets
-/// assertions decide whether ordering matters for the scenario.
-pub async fn collect_indexed_messages(
-    indexer: &ZoneIndexer<ZoneNodeHttpClient>,
-    expected_messages: &[Inscription],
-    duration: Duration,
-) -> Result<Vec<Inscription>, ZoneTestError> {
-    let expected: HashSet<Inscription> = expected_messages.iter().cloned().collect();
-    let mut seen: HashSet<Inscription> = HashSet::new();
-    let mut ordered: Vec<Inscription> = Vec::new();
+/// Replays the channel's finalized history by cold-starting a fresh
+/// read-only sequencer: a random signing key that is not part of the channel
+/// rotation, so the instance can never publish or repost anything —
+/// inscription posting is turn-gated. Finalized txs are collected from the
+/// backfill events until the sequencer reports `Ready`, then the instance is
+/// dropped; each call observes a fresh snapshot up to the LIB at connect
+/// time.
+pub async fn replay_finalized_history(
+    reader: &ZoneReaderConfig,
+) -> Result<Vec<FinalizedTx>, ZoneTestError> {
+    let node = ZoneNodeHttpClient::new(CommonHttpClient::new(None), reader.node_url.clone());
+    // Placeholder funding: the reader never publishes (random key, posting is
+    // turn-gated), so the funding wallet is never exercised.
+    let funding = FundingConfig {
+        funding_pk: lb_groth16::Fr::from(1u64).into(),
+        max_tx_fee: GasCost::new(u64::MAX),
+        priority_fee: FundingConfig::DEFAULT_PRIORITY_FEE,
+    };
+    let mut sequencer = ZoneSequencer::init(reader.channel_id, keygen(), node, funding, None);
 
-    poll_zone_indexer_until(
-        indexer,
-        duration,
-        || ZoneTestError::IndexerTimeout,
-        |message| {
-            let ZoneMessage::Block(block) = message else {
-                return None;
-            };
-
-            if expected.contains(&block.data) && seen.insert(block.data.clone()) {
-                ordered.push(block.data.clone());
+    timeout(Duration::from_mins(3), async {
+        let mut finalized = Vec::new();
+        loop {
+            match sequencer.next_event().await {
+                Event::BlocksProcessed {
+                    finalized: batch, ..
+                } => finalized.extend(batch),
+                Event::Ready => return finalized,
+                Event::MempoolPending(_) | Event::TurnNotification { .. } => {}
             }
-
-            (seen == expected).then(|| ordered.clone())
-        },
-    )
+        }
+    })
     .await
+    .map_err(|_| ZoneTestError::IndexerTimeout)
 }
 
-/// Replays the indexer stream until it exactly matches the expected message
-/// sequence without duplicates.
-pub async fn collect_indexed_messages_exactly_once(
-    indexer: &ZoneIndexer<ZoneNodeHttpClient>,
+/// Ordered inscription payloads within a finalized-history replay.
+pub fn replayed_inscription_payloads(history: &[FinalizedTx]) -> Vec<Inscription> {
+    finalized_inscriptions(history)
+        .map(|info| info.payload.clone())
+        .collect()
+}
+
+/// Collects indexed block payloads until all expected messages have appeared.
+///
+/// The returned order is the finalized on-chain order, which lets assertions
+/// decide whether ordering matters for the scenario.
+pub async fn collect_indexed_messages(
+    reader: &ZoneReaderConfig,
     expected_messages: &[Inscription],
     duration: Duration,
 ) -> Result<Vec<Inscription>, ZoneTestError> {
@@ -1009,34 +1022,42 @@ pub async fn collect_indexed_messages_exactly_once(
 
     timeout(duration, async {
         loop {
-            let mut ordered = Vec::new();
-            let mut cursor = None;
-
-            loop {
-                let stream = indexer.next_messages(cursor).await.map_err(|error| {
-                    ZoneTestError::Indexer {
-                        message: error.to_string(),
-                    }
-                })?;
-                futures::pin_mut!(stream);
-
-                let mut saw_message = false;
-
-                while let Some((message, slot)) = stream.next().await {
-                    saw_message = true;
-                    cursor = Some(slot);
-
-                    if let ZoneMessage::Block(block) = message
-                        && expected.contains(&block.data)
-                    {
-                        ordered.push(block.data);
-                    }
-                }
-
-                if !saw_message {
-                    break;
+            let payloads = replayed_inscription_payloads(&replay_finalized_history(reader).await?);
+            let mut seen: HashSet<Inscription> = HashSet::new();
+            let mut ordered: Vec<Inscription> = Vec::new();
+            for payload in payloads {
+                if expected.contains(&payload) && seen.insert(payload.clone()) {
+                    ordered.push(payload);
                 }
             }
+
+            if seen == expected {
+                return Ok(ordered);
+            }
+
+            sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .map_err(|_| ZoneTestError::IndexerTimeout)?
+}
+
+/// Replays the finalized history until it exactly matches the expected
+/// message sequence without duplicates.
+pub async fn collect_indexed_messages_exactly_once(
+    reader: &ZoneReaderConfig,
+    expected_messages: &[Inscription],
+    duration: Duration,
+) -> Result<Vec<Inscription>, ZoneTestError> {
+    let expected: HashSet<Inscription> = expected_messages.iter().cloned().collect();
+
+    timeout(duration, async {
+        loop {
+            let ordered: Vec<Inscription> =
+                replayed_inscription_payloads(&replay_finalized_history(reader).await?)
+                    .into_iter()
+                    .filter(|payload| expected.contains(payload))
+                    .collect();
 
             if ordered == expected_messages {
                 return Ok(ordered);
@@ -1049,26 +1070,26 @@ pub async fn collect_indexed_messages_exactly_once(
     .map_err(|_| ZoneTestError::IndexerTimeout)?
 }
 
-/// Waits until the indexer returns exactly `expected_count` copies of one
-/// payload after a short settle period.
+/// Waits until the finalized history contains exactly `expected_count` copies
+/// of one payload after a short settle period.
 ///
 /// This intentionally counts duplicate payload bytes, which is required for
 /// shared-payload zone tests where each inscription has the same data but a
 /// distinct transaction lineage.
 pub async fn wait_for_exact_indexed_payload_count(
-    indexer: &ZoneIndexer<ZoneNodeHttpClient>,
+    reader: &ZoneReaderConfig,
     expected_payload: Inscription,
     expected_count: usize,
     duration: Duration,
 ) -> Result<(), ZoneTestError> {
     timeout(duration, async {
         loop {
-            let count = count_indexed_payload(indexer, expected_payload.clone()).await?;
+            let count = count_indexed_payload(reader, &expected_payload).await?;
 
             if count >= expected_count {
                 sleep(Duration::from_secs(30)).await;
 
-                let final_count = count_indexed_payload(indexer, expected_payload.clone()).await?;
+                let final_count = count_indexed_payload(reader, &expected_payload).await?;
                 if final_count == expected_count {
                     return Ok(());
                 }
@@ -1088,116 +1109,71 @@ pub async fn wait_for_exact_indexed_payload_count(
 }
 
 async fn count_indexed_payload(
-    indexer: &ZoneIndexer<ZoneNodeHttpClient>,
-    expected_payload: Inscription,
+    reader: &ZoneReaderConfig,
+    expected_payload: &Inscription,
 ) -> Result<usize, ZoneTestError> {
-    let mut count = 0;
-    let mut cursor = None;
-
-    loop {
-        let stream =
-            indexer
-                .next_messages(cursor)
-                .await
-                .map_err(|error| ZoneTestError::Indexer {
-                    message: error.to_string(),
-                })?;
-        futures::pin_mut!(stream);
-
-        let mut saw_message = false;
-
-        while let Some((message, slot)) = stream.next().await {
-            saw_message = true;
-            cursor = Some(slot);
-            if let ZoneMessage::Block(block) = message
-                && block.data == expected_payload
-            {
-                count += 1;
-            }
-        }
-
-        if !saw_message {
-            return Ok(count);
-        }
-    }
+    Ok(
+        replayed_inscription_payloads(&replay_finalized_history(reader).await?)
+            .iter()
+            .filter(|payload| *payload == expected_payload)
+            .count(),
+    )
 }
 
-/// Waits until the zone indexer observes the expected channel deposit,
-/// including its amount.
+/// Waits until the finalized channel history contains the expected channel
+/// deposit, including its amount.
 pub async fn wait_for_deposit(
-    indexer: &ZoneIndexer<ZoneNodeHttpClient>,
+    reader: &ZoneReaderConfig,
     expected: &DepositOp,
     expected_amount: Value,
     duration: Duration,
 ) -> Result<(), ZoneTestError> {
-    poll_zone_indexer_until(
-        indexer,
-        duration,
-        || ZoneTestError::IndexerTimeout,
-        |message| match message {
-            ZoneMessage::Deposit(deposit)
-                if deposit.inputs == expected.inputs
-                    && deposit.amount == expected_amount
-                    && deposit.metadata() == expected.metadata.as_slice() =>
-            {
-                Some(())
-            }
-            _ => None,
-        },
+    poll_replayed_history_until(reader, duration, ZoneTestError::IndexerTimeout, |op| {
+        matches!(op, FinalizedOp::Deposit(deposit)
+            if deposit.inputs == expected.inputs
+                && deposit.amount == expected_amount
+                && deposit.metadata == expected.metadata)
+    })
+    .await
+}
+
+/// Waits until the finalized channel history contains the expected withdraw.
+pub async fn wait_for_withdraw(
+    reader: &ZoneReaderConfig,
+    expected: &ChannelWithdrawOp,
+    timeout_duration: Duration,
+) -> Result<(), ZoneTestError> {
+    poll_replayed_history_until(
+        reader,
+        timeout_duration,
+        ZoneTestError::WithdrawTimeout,
+        |op| matches!(op, FinalizedOp::Withdraw(withdraw) if withdraw.op.inputs == expected.inputs),
     )
     .await
 }
 
-async fn poll_zone_indexer_until<T>(
-    indexer: &ZoneIndexer<ZoneNodeHttpClient>,
+async fn poll_replayed_history_until(
+    reader: &ZoneReaderConfig,
     duration: Duration,
-    timeout_error: impl FnOnce() -> ZoneTestError,
-    mut predicate: impl FnMut(&ZoneMessage) -> Option<T>,
-) -> Result<T, ZoneTestError> {
+    timeout_error: ZoneTestError,
+    mut predicate: impl FnMut(&FinalizedOp) -> bool,
+) -> Result<(), ZoneTestError> {
     timeout(duration, async {
-        let mut cursor = None;
-
         loop {
-            let stream =
-                indexer
-                    .next_messages(cursor)
-                    .await
-                    .map_err(|error| ZoneTestError::Indexer {
-                        message: error.to_string(),
-                    })?;
-            futures::pin_mut!(stream);
-
-            while let Some((message, slot)) = stream.next().await {
-                cursor = Some(slot);
-
-                if let Some(result) = predicate(&message) {
-                    return Ok(result);
-                }
+            let history = replay_finalized_history(reader).await?;
+            if history
+                .iter()
+                .flat_map(|tx| tx.ops.iter())
+                .any(&mut predicate)
+            {
+                return Ok(());
             }
 
             sleep(Duration::from_millis(500)).await;
         }
     })
     .await
-    .map_err(|_| timeout_error())?
-}
-
-/// Waits until the zone indexer observes the expected channel withdraw.
-pub async fn wait_for_withdraw(
-    indexer: &ZoneIndexer<ZoneNodeHttpClient>,
-    expected: &ChannelWithdrawOp,
-    timeout_duration: Duration,
-) -> Result<(), ZoneTestError> {
-    poll_zone_indexer_until(
-        indexer,
-        timeout_duration,
-        || ZoneTestError::WithdrawTimeout,
-        |message| match message {
-            ZoneMessage::Withdraw(withdraw) if withdraw.inputs == expected.inputs => Some(()),
-            _ => None,
-        },
-    )
-    .await
+    .map_err(|_| timeout_error)?
 }
 
 /// Waits until the sequencer's event stream surfaces the expected deposit

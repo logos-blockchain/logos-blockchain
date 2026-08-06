@@ -197,6 +197,12 @@ where
     Ok((signed_tx, msg_id))
 }
 
+/// Build and fund a `ChannelConfig` transaction.
+///
+/// `signer` is the sequencer's signing key paired with its index in the
+/// channel's *current* (pre-update) `accredited_keys` — that is the list the
+/// ledger verifies the signature against. Pass `None` for an unclaimed
+/// channel, whose configuration requires no signatures.
 #[expect(
     clippy::too_many_arguments,
     reason = "mirrors the channel config op fields plus the funding context"
@@ -205,7 +211,7 @@ pub(super) async fn create_channel_config_tx<Node>(
     node: &Node,
     funding: &FundingConfig,
     channel_id: ChannelId,
-    signing_keys: &[&Ed25519Key],
+    signer: Option<(ChannelKeyIndex, &Ed25519Key)>,
     keys: Keys,
     posting_timeframe: SlotTimeframe,
     posting_timeout: SlotTimeout,
@@ -228,15 +234,11 @@ where
         fund_ops(node, funding, vec![Op::ChannelConfig(config_op)]).await?;
 
     let tx_hash = config_tx.hash();
-    let signatures = signing_keys
-        .iter()
-        .enumerate()
+    let signatures = signer
         .map(|(index, key)| {
-            IndexedSignature::new(
-                index as ChannelKeyIndex,
-                key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
-            )
+            IndexedSignature::new(index, key.sign_payload(tx_hash.as_signing_bytes().as_ref()))
         })
+        .into_iter()
         .collect::<Vec<_>>()
         .try_into()
         .unwrap();
