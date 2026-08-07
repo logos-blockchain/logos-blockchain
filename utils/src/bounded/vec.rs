@@ -53,6 +53,26 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
         Ok(Self::new_unchecked(Vec::with_capacity(capacity)))
     }
 
+    /// Constructs an empty vector with exactly `CAPACITY` pre-allocated slots,
+    /// with the bounds enforced at **compile time**.
+    ///
+    /// Panics at compile time when `CAPACITY > MAX` or when `MIN > 0` (since
+    /// the resulting vector would be immediately below the minimum bound).
+    #[must_use]
+    pub fn with_const_capacity<const CAPACITY: usize>() -> Self {
+        const {
+            assert!(
+                MIN == 0,
+                "Cannot construct empty BoundedVec when MIN > 0"
+            );
+            assert!(
+                CAPACITY <= MAX,
+                "Requested capacity exceeds BoundedVec MAX"
+            );
+        }
+        Self::new_unchecked(Vec::with_capacity(CAPACITY))
+    }
+
     /// Returns the number of elements in the vector.
     #[must_use]
     pub const fn len(&self) -> usize {
@@ -730,6 +750,14 @@ mod tests {
             mapped.as_slice(),
             &[MyNewType(10), MyNewType(20), MyNewType(30), MyNewType(40),]
         );
+    }
+
+    #[test]
+    fn with_const_capacity_succeeds() {
+        type V = BoundedVec<u32, 0, 10>;
+        let v = V::with_const_capacity::<5>();
+        assert_eq!(v.len(), 0);
+        assert!(v.as_inner().capacity() >= 5);
     }
 
     #[test]
