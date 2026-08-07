@@ -18,7 +18,7 @@ use lb_core::{
     proofs::leader_proof::{self, LeaderPublic},
     sdp::Declarations,
 };
-use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
 use lb_groth16::{Fr, fr_from_bytes};
 use lb_utxotree::MerklePath;
 
@@ -449,6 +449,7 @@ impl LedgerState {
         self,
         slot: Slot,
         proof: &LeaderProof,
+        uncle_slots: &UncleSlots,
         sdp: &SdpLedger,
         config: &Config,
     ) -> Result<Self, LedgerError<Id>>
@@ -456,12 +457,12 @@ impl LedgerState {
         LeaderProof: leader_proof::LeaderProof,
     {
         // First, synthesize epoch state for `slot` before update the ledger state.
-        // Then, apply the proof and update the nonce. Finally, increment block density
-        // since this function is called for a new block.
+        // Then, apply the proof and update the nonce. Finally, mark the occupied
+        // slots since this function is called for a new block.
         Ok(self
             .update_epoch_state_and_apply_proof(slot, proof, sdp, config)?
             .update_nonce(&proof.entropy(), slot)
-            .increment_block_density(slot))
+            .mark_occupied_slots(slot, uncle_slots))
     }
 
     /// Synthesizes the epoch state for `slot` and apply the proof.
@@ -528,10 +529,9 @@ impl LedgerState {
         Self { nonce, ..self }
     }
 
-    // TODO: Count distinct occupied slots, including the countable uncles.
-    fn increment_block_density(self, slot: Slot) -> Self {
+    fn mark_occupied_slots(self, slot: Slot, uncle_slots: &UncleSlots) -> Self {
         let mut block_density = self.block_density.clone();
-        block_density.increment_block_density(slot);
+        block_density.mark_occupied_slots(slot, uncle_slots);
         Self {
             block_density,
             ..self
@@ -893,6 +893,7 @@ pub mod tests {
             parent,
             slot,
             &proof,
+            &UncleSlots::default(),
             std::iter::empty::<&SignedMantleTx<Preverified>>(),
         )?;
         ledger.commit_update(id, state);
@@ -1883,6 +1884,7 @@ pub mod tests {
             .try_apply_header::<DummyProof, HeaderId>(
                 slot,
                 &proof,
+                &UncleSlots::default(),
                 &SdpLedger::new(0.into()),
                 &config,
             )
@@ -1910,6 +1912,7 @@ pub mod tests {
             .try_apply_header::<DummyProof, HeaderId>(
                 slot,
                 &proof,
+                &UncleSlots::default(),
                 &SdpLedger::new(0.into()),
                 &config,
             )

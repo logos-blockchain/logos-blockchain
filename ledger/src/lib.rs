@@ -30,7 +30,7 @@ use lb_core::{
     },
     proofs::leader_proof,
 };
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{Slot, UncleSlots};
 use lb_groth16::{AdditiveGroup as _, Fr};
 use mantle::LedgerState as MantleLedger;
 use rpds::HashTrieMapSync;
@@ -143,6 +143,7 @@ where
         parent_id: Id,
         slot: Slot,
         proof: &LeaderProof,
+        uncle_slots: &UncleSlots,
         txs: impl Iterator<Item = &'tx Tx>,
     ) -> Result<(Id, LedgerState, Events), LedgerError<Id>>
     where
@@ -158,6 +159,7 @@ where
         let (new_state, events) = parent_state.clone().try_update::<_, _, _, Constants>(
             slot,
             proof,
+            uncle_slots,
             txs,
             &self.config,
         )?;
@@ -212,6 +214,7 @@ impl LedgerState {
         self,
         slot: Slot,
         proof: &LeaderProof,
+        uncle_slots: &UncleSlots,
         txs: impl Iterator<Item = &'tx Tx>,
         config: &Config,
     ) -> Result<(Self, Events), LedgerError<Id>>
@@ -220,7 +223,7 @@ impl LedgerState {
         LeaderProof: leader_proof::LeaderProof,
         Constants: GasConstants,
     {
-        let (state, header_events) = self.try_apply_header(slot, proof, config)?;
+        let (state, header_events) = self.try_apply_header(slot, proof, uncle_slots, config)?;
         let (state, tx_events) = state.try_apply_contents::<_, _, Constants>(config, txs)?;
         let events = header_events
             .into_iter()
@@ -239,6 +242,7 @@ impl LedgerState {
         self,
         slot: Slot,
         proof: &LeaderProof,
+        uncle_slots: &UncleSlots,
         config: &Config,
     ) -> Result<(Self, Vec<HeaderEvent>), LedgerError<Id>>
     where
@@ -250,6 +254,7 @@ impl LedgerState {
             .try_apply_header::<LeaderProof, Id>(
                 slot,
                 proof,
+                uncle_slots,
                 // TODO: threading SDP here because EpochState is currently embedded in
                 // CryptarchiaLedger.
                 // In the future, we will pull EpochState up into LedgerState.
@@ -1011,6 +1016,7 @@ mod tests {
                 genesis_id,
                 Slot::from(1u64),
                 &proof,
+                &UncleSlots::default(),
                 std::iter::once(&tx),
             )
             .unwrap();
