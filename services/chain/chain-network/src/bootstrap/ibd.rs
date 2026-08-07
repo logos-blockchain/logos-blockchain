@@ -359,7 +359,7 @@ mod tests {
         block::Proposal,
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
-    use lb_cryptarchia_engine::{EpochConfig, Slot};
+    use lb_cryptarchia_engine::{EpochConfig, Slot, UncleSlots};
     use lb_ledger::{
         LedgerState,
         mantle::sdp::{ServiceRewardsParameters, rewards},
@@ -672,7 +672,7 @@ mod tests {
 
             self.cryptarchia
                 .consensus
-                .receive_block(block.id, block.parent, block.slot)
+                .receive_block(block.id, block.parent, block.slot, UncleSlots::default())
                 .map_err(|e| {
                     self.process_block_failures.fetch_add(1, Ordering::SeqCst);
                     Error::BlockProcessing(ChainError::InvalidBlock(format!(
@@ -930,6 +930,7 @@ mod tests {
             lb_cryptarchia_engine::State::Bootstrapping,
             0.into(),
             0,
+            UncleSlots::default(),
         )
     }
 

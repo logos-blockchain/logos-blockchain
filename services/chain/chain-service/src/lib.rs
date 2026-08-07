@@ -33,7 +33,7 @@ use lb_core::{
     },
     sdp::{Declaration, DeclarationId},
 };
-use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks};
+use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
 pub use lb_ledger::EpochState;
 use lb_ledger::LedgerState;
@@ -293,6 +293,10 @@ pub struct Cryptarchia {
 impl Cryptarchia {
     /// Initialize a new [`Cryptarchia`] instance.
     #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "TODO: define Lib struct to reduce args"
+    )]
     pub fn from_lib(
         lib_id: HeaderId,
         lib_ledger_state: LedgerState,
@@ -301,6 +305,7 @@ impl Cryptarchia {
         state: State,
         lib_slot: Slot,
         lib_length: u64,
+        lib_uncle_slots: UncleSlots,
     ) -> Self {
         Self {
             consensus: <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
@@ -309,6 +314,7 @@ impl Cryptarchia {
                 state,
                 lib_slot,
                 lib_length,
+                lib_uncle_slots,
             ),
             ledger: <lb_ledger::Ledger<_>>::new(lib_id, lib_ledger_state, ledger_config),
             genesis_id,
@@ -396,7 +402,7 @@ impl Cryptarchia {
 
         let (pruned_blocks, reorged_blocks) = self
             .consensus
-            .receive_block(id, parent, slot)
+            .receive_block(id, parent, slot, block.uncle_headers().slots())
             .map_err(|err| match err {
                 lb_cryptarchia_engine::Error::ParentMissing(parent) => Error::ParentMissing {
                     parent,
@@ -881,6 +887,7 @@ where
             state,
             recovery_state.lib_block_slot,
             recovery_state.lib_block_length,
+            recovery_state.lib_block_uncle_slots.clone(),
         );
 
         // Stream the already applied state.
