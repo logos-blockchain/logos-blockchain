@@ -471,6 +471,7 @@ where
                                 slot,
                                 proof,
                                 &signing_key,
+                                &cryptarchia_api,
                                 &relays,
                                 tip_state,
                                 &ledger_config,
@@ -575,13 +576,22 @@ where
 {
     #[instrument(
         level = "debug",
-        skip(relays, ledger_state, ledger_config, proof, signing_key)
+        skip(
+            relays,
+            ledger_state,
+            ledger_config,
+            cryptarchia_api,
+            proof,
+            signing_key
+        )
     )]
+    #[expect(clippy::too_many_arguments, reason = "Need all args")]
     async fn propose_block(
         parent: HeaderId,
         slot: Slot,
         proof: Groth16LeaderProof,
         signing_key: &Ed25519Key,
+        cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
         relays: &CryptarchiaConsensusRelays<
             BlendService,
             Mempool,
@@ -660,8 +670,16 @@ where
         let valid_tx_stream = stream::iter(valid_txs);
         let txs = txs_for_block(valid_tx_stream).await;
 
-        // TODO: Select uncles.
-        let block = Block::create(parent, slot, UncleHeaders::empty(), proof, txs, signing_key)?;
+        let uncle_headers = cryptarchia_api
+            .select_uncles(parent, slot)
+            .await
+            .unwrap_or_else(|err| {
+                error!(target: LOG_TARGET, ?slot, %err, "failed to select uncles");
+                // A proposal without uncles is still valid
+                UncleHeaders::empty()
+            });
+
+        let block = Block::create(parent, slot, uncle_headers, proof, txs, signing_key)?;
 
         info!(
             "proposed block {:?} with {} transactions ({} removed)",
