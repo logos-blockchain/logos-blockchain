@@ -84,6 +84,9 @@ jobs:
       - &check_peer_success
         name: Stop if another Cucumber OS has already passed
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' }}
+        # Peer coordination is best-effort. If it is unavailable, this lane
+        # must continue and establish its own test result.
+        continue-on-error: true
         uses: ./.github/actions/check-peer-success
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
