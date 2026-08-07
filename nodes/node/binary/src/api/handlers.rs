@@ -2028,11 +2028,20 @@ pub mod wallet {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroUsize;
+    use std::{num::NonZeroUsize, sync::Arc};
 
+    use axum::{body, http::StatusCode};
+    use lb_api_service::http::DynError;
     use lb_chain_service::{CryptarchiaInfo, Slot};
-    use lb_core::header::HeaderId;
+    use lb_core::{
+        header::HeaderId,
+        mantle::{
+            channel::{ChannelState, SlotTimeframe, SlotTimeout},
+            ops::channel::{Ed25519PublicKey, MsgId, config::Keys},
+        },
+    };
 
+    use super::channel_response;
     use crate::api::{
         errors::BlocksStreamWindowError, handlers::resolve_blocks_stream_window,
         queries::BlocksStreamRequest,
@@ -2064,6 +2073,57 @@ mod tests {
             tip: HeaderId::from([3; 32]),
             state: lb_chain_service::State::Online,
         }
+    }
+
+    fn channel_state() -> ChannelState {
+        let accredited_keys: Keys =
+            [Ed25519PublicKey::from_bytes(&[0; 32]).expect("test public key should be valid")]
+                .into();
+
+        ChannelState {
+            accredited_keys: Arc::new(accredited_keys),
+            configuration_threshold: 1,
+            tip_message: MsgId::root(),
+            tip_slot: Slot::default(),
+            tip_sequencer: 0,
+            tip_sequencer_starting_slot: Slot::default(),
+            posting_timeframe: SlotTimeframe::from(0),
+            posting_timeout: SlotTimeout::from(0),
+            transfer_threshold: 1,
+        }
+    }
+
+    #[test]
+    fn channel_response_returns_ok_for_existing_channel() {
+        let response = channel_response(Ok(Some(channel_state())));
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn channel_response_returns_typed_not_found_for_missing_channel() {
+        let response = channel_response(Ok(None));
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let body: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be valid JSON");
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "code": StatusCode::NOT_FOUND.as_u16(),
+                "message": "Channel not found",
+            })
+        );
+    }
+
+    #[test]
+    fn channel_response_returns_internal_error_for_backend_failure() {
+        let response = channel_response(Err(DynError::from("channel backend failed".to_owned())));
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     fn request(
