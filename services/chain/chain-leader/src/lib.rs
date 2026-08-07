@@ -609,9 +609,23 @@ where
 
         let tx_stream: Pin<Box<_>> = Box::pin(txs_stream);
 
+        let uncle_headers = cryptarchia_api
+            .select_uncles(parent, slot)
+            .await
+            .unwrap_or_else(|err| {
+                error!(target: LOG_TARGET, ?slot, %err, "failed to select uncles");
+                // A proposal without uncles is still valid
+                UncleHeaders::empty()
+            });
+
         (ledger_state, _) = ledger_state
             .clone()
-            .try_apply_header::<Groth16LeaderProof, HeaderId>(slot, &proof, ledger_config)?;
+            .try_apply_header::<Groth16LeaderProof, HeaderId>(
+                slot,
+                &proof,
+                &uncle_headers.slots(),
+                ledger_config,
+            )?;
 
         // Collect all candidate transactions up front so the ones that fail can
         // be retried across multiple rounds.
@@ -669,15 +683,6 @@ where
 
         let valid_tx_stream = stream::iter(valid_txs);
         let txs = txs_for_block(valid_tx_stream).await;
-
-        let uncle_headers = cryptarchia_api
-            .select_uncles(parent, slot)
-            .await
-            .unwrap_or_else(|err| {
-                error!(target: LOG_TARGET, ?slot, %err, "failed to select uncles");
-                // A proposal without uncles is still valid
-                UncleHeaders::empty()
-            });
 
         let block = Block::create(parent, slot, uncle_headers, proof, txs, signing_key)?;
 

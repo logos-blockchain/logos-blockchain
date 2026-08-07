@@ -403,6 +403,7 @@ impl Cryptarchia {
                 parent,
                 slot,
                 header.leader_proof(),
+                &block.uncle_headers().slots(),
                 block.transactions_iter(),
             )
             .map_err(|err| match err {
