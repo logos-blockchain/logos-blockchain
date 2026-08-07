@@ -139,12 +139,7 @@ impl ClaimPoWRewardVerificationContext<'_> {
         if self.epoch_pow_reward.is_zero() {
             return Err(ClaimPowRewardError::EmptyRewards);
         }
-        if self.epoch_reward_pool < self.epoch_pow_reward {
-            return Err(ClaimPowRewardError::InsufficientPoolBalance {
-                pool: self.epoch_reward_pool,
-                reward: self.epoch_pow_reward,
-            });
-        }
+        self.validate_enough_funds_in_pool()?;
         Ok(())
     }
 
@@ -220,6 +215,17 @@ impl ClaimPoWRewardVerificationContext<'_> {
         }
         Ok(())
     }
+
+    /// Validate enough funds available
+    const fn validate_enough_funds_in_pool(&self) -> Result<(), ClaimPowRewardError> {
+        if self.epoch_reward_pool < self.epoch_pow_reward {
+            return Err(ClaimPowRewardError::InsufficientPoolBalance {
+                pool: self.epoch_reward_pool,
+                reward: self.epoch_pow_reward,
+            });
+        }
+        Ok(())
+    }
 }
 
 impl OpId for ClaimPowRewardOp {
@@ -247,8 +253,12 @@ pub struct ClaimPoWRewardExecutionContext {
 
 impl ClaimPoWRewardExecutionContext {
     /// Deduct the paid-out `epoch_reward` from the `reward_pool`.
+    /// This should always pass if the verification does it job, but
+    /// double-checking is no problem
     const fn decrement_reward_pool(&mut self) {
-        self.reward_pool = self.reward_pool.saturating_sub(self.epoch_reward);
+        self.reward_pool = self.reward_pool.checked_sub(self.epoch_reward).expect(
+            "Pool funding is check in validation so this computation should always be valid",
+        );
     }
 }
 
@@ -275,7 +285,6 @@ impl VerifiableOperation<verification_mode::StandardMode> for ClaimPowRewardOp {
 
     fn verify(&self, _proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
         context.are_pow_reward_enabled()?;
-        // TODO Plug constant window
         context.accept_claim::<{ SLOT_WINDOW }>(self.block_hash)?;
         context.validate_current_epoch_nonce(self.epoch_nonce)?;
         let puzzle_ticket = self.get_puzzle_ticket();
@@ -631,21 +640,21 @@ mod tests {
     }
 
     #[test]
-    fn execute_saturates_when_pool_cannot_cover_the_reward() {
-        // Validation (`pow_reward_enabled`) is the real guard; execution
-        // saturates defensively rather than underflow the pool.
+    #[should_panic(expected = "Pool funding is check in validation")]
+    fn execute_panics_when_pool_cannot_cover_the_reward() {
+        // Verification (`validate_enough_funds_in_pool`) is the guard that
+        // keeps uncoverable claims out of blocks — a builder must never
+        // include one. Execution treats a shortfall as a broken invariant
+        // and aborts loudly rather than minting a reward note the pool
+        // cannot back.
         let op = claim_op(CURRENT_EPOCH);
-        let (ctx, _events) = op
-            .execute(ClaimPoWRewardExecutionContext {
-                reward_pool: 5,
-                epoch_reward: 10,
-                nullifiers: HashTrieMapSync::new_sync(),
-                tx_hash: TxHash::from([11u8; 32]),
-                utxos: Utxos::new(),
-                block_slots: std::iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
-            })
-            .expect("claim execution should succeed");
-
-        assert_eq!(ctx.reward_pool, 0);
+        drop(op.execute(ClaimPoWRewardExecutionContext {
+            reward_pool: 5,
+            epoch_reward: 10,
+            nullifiers: HashTrieMapSync::new_sync(),
+            tx_hash: TxHash::from([11u8; 32]),
+            utxos: Utxos::new(),
+            block_slots: std::iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
+        }));
     }
 }
