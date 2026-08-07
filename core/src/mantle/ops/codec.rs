@@ -12,7 +12,7 @@ use crate::{
     },
 };
 
-pub fn decode_ops_proofs<'a>(
+pub fn decode_op_proofs<'a>(
     input: &'a [u8],
     ops: &[Op],
 ) -> Result<(&'a [u8], OpProofs), DecodeError> {
@@ -87,7 +87,7 @@ fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
     }
 }
 
-pub fn encode_ops_proofs(proofs: &[OpProof], ops: &[Op]) -> Vec<u8> {
+pub fn encode_op_proofs(proofs: &[OpProof], ops: &[Op]) -> Vec<u8> {
     let mut bytes = Vec::new();
     for (proof, op) in proofs.iter().zip(ops.iter()) {
         bytes.extend(encode_op_proof(proof, op));

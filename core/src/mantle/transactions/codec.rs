@@ -5,7 +5,7 @@ use lb_key_management_system_keys::keys::ED25519_SIGNATURE_SIZE;
 use crate::{
     mantle::{
         MantleTransaction, Op,
-        ops::codec::{decode_ops_proofs, encode_ops_proofs},
+        ops::codec::{decode_op_proofs, encode_op_proofs},
         transactions::{
             mantle_tx::{MantleTx as _, MantleTxGasContext, RawMantleTx},
             states::{Unverified, VerificationState},
@@ -19,7 +19,7 @@ pub fn decode_signed_mantle_tx(
 ) -> Result<(&[u8], MantleTransaction<Unverified>), DecodeError> {
     // MantleTransaction = MantleTx OpProofs
     let (input, mantle_tx) = RawMantleTx::decode(input)?;
-    let (input, ops_proofs) = decode_ops_proofs(input, mantle_tx.ops())?;
+    let (input, ops_proofs) = decode_op_proofs(input, mantle_tx.ops())?;
 
     let signed_tx = MantleTransaction::new(mantle_tx, ops_proofs);
 
@@ -30,7 +30,7 @@ pub fn decode_signed_mantle_tx(
 pub fn encode_signed_mantle_tx<State: VerificationState>(tx: &MantleTransaction<State>) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(tx.mantle_tx().encode());
-    bytes.extend(encode_ops_proofs(tx.ops_proofs(), tx.mantle_tx().ops()));
+    bytes.extend(encode_op_proofs(tx.ops_proofs(), tx.mantle_tx().ops()));
     bytes
 }
 
