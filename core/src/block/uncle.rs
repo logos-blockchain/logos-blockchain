@@ -1,5 +1,5 @@
 use lb_codec::BinaryCodec;
-use lb_cryptarchia_engine::MAX_UNCLES;
+use lb_cryptarchia_engine::{MAX_UNCLES, Slot, UncleSlots};
 use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
@@ -19,6 +19,15 @@ impl UncleHeaders {
     #[must_use]
     pub const fn empty() -> Self {
         Self(UpperBoundedVec::new_unchecked(Vec::new()))
+    }
+
+    /// The slots the carried headers occupy.
+    #[must_use]
+    pub fn slots(&self) -> UncleSlots {
+        let slots: Vec<Slot> = self.0.iter().map(|uncle| uncle.header.slot()).collect();
+        slots
+            .try_into()
+            .expect("one slot per header, so the same bound holds")
     }
 
     #[must_use]

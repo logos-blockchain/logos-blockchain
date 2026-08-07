@@ -442,7 +442,8 @@ where
                 let known_branch = branches.get(known)?;
                 branches.lca(known_branch, target_branch)
             })
-            .max_by_key(Branch::length)
+            .max_by_key(|branch| branch.length())
+            .cloned()
     }
 
     async fn find_max_slot_immutable_block(
@@ -596,7 +597,7 @@ mod tests {
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };
-    use lb_cryptarchia_engine::Config;
+    use lb_cryptarchia_engine::{Config, UncleSlots};
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, UnsecuredZkKey};
     use lb_storage_service::{
@@ -885,7 +886,7 @@ mod tests {
 
                 if i > 0 {
                     self.cryptarchia
-                        .receive_block(*header_id, *prev_header, *slot)
+                        .receive_block(*header_id, *prev_header, *slot, UncleSlots::default())
                         .expect("Failed to add block to cryptarchia");
                 }
 
@@ -922,7 +923,7 @@ mod tests {
             slot: Slot,
         ) {
             self.cryptarchia
-                .receive_block(header_id, prev_header, slot)
+                .receive_block(header_id, prev_header, slot, UncleSlots::default())
                 .expect("Failed to add block to cryptarchia");
 
             self.store_block_in_storage(block, header_id, slot).await;
@@ -1138,6 +1139,7 @@ mod tests {
                 lb_cryptarchia_engine::State::Bootstrapping,
                 0.into(),
                 0,
+                UncleSlots::default(),
             )
         }
     }

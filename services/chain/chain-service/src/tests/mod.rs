@@ -16,7 +16,7 @@ use lb_core::{
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic, check_winning},
     sdp::ServiceParameters,
 };
-use lb_cryptarchia_engine::{EpochConfig, Slot};
+use lb_cryptarchia_engine::{EpochConfig, Slot, UncleSlots};
 use lb_cryptarchia_sync::HeaderId;
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
@@ -62,6 +62,7 @@ fn cryptarchia_switch_to_online() {
         lb_cryptarchia_engine::State::Bootstrapping,
         Slot::new(0),
         0,
+        UncleSlots::default(),
     );
 
     // Add 3 new blocks to the chain
@@ -141,6 +142,7 @@ async fn get_block_ids_from_memory_and_storage() {
         lb_cryptarchia_engine::State::Online,
         Slot::genesis(),
         0,
+        UncleSlots::default(),
     );
 
     // Add 2 blocks (not finalized yet since k=3)
@@ -329,6 +331,7 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedMantleTx<Preverifie
         lb_cryptarchia_engine::State::Online,
         Slot::genesis(),
         0,
+        UncleSlots::default(),
     );
     let block =
         try_build_block(&cryptarchia, cryptarchia.tip(), utxo, &zk_key, Slot::new(1)).unwrap();
