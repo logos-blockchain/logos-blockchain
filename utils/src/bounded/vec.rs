@@ -44,11 +44,8 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
     /// after construction), but pre-allocates space so that at least
     /// `capacity` elements can be pushed without reallocation.
     pub fn with_capacity(capacity: usize) -> Result<Self, BoundedError> {
-        if capacity < MIN {
-            return Err(BoundedError::TooFewItems { count: capacity, min: MIN });
-        }
-        if capacity > MAX {
-            return Err(BoundedError::TooManyItems { count: capacity, max: MAX });
+        if capacity < MIN || capacity > MAX {
+            return Err(BoundedError::CapacityOutOfBounds { min: MIN, max: MAX, capacity });
         }
         Ok(Self::new_unchecked(Vec::with_capacity(capacity)))
     }
@@ -436,7 +433,7 @@ mod tests {
         let mut bv = TestBoundedVectorMin2::try_from(vec![1, 2, 3, 4]).unwrap();
         assert_eq!(
             bv.try_push(5),
-            Err(BoundedError::TooManyItems { count: 5, max: 4 })
+            Err(BoundedError::CapacityOutOfBounds { min: 0, max: 4, capacity: 5 })
         );
         // The failed push must not have mutated the vector.
         assert_eq!(bv.as_slice(), &[1, 2, 3, 4]);
@@ -471,11 +468,11 @@ mod tests {
     fn try_from_rejects_input_above_max() {
         assert_eq!(
             TestBoundedVectorMin2::try_from(vec![1, 2, 3, 4, 5]),
-            Err(BoundedError::TooManyItems { count: 5, max: 4 })
+            Err(BoundedError::CapacityOutOfBounds { min: 0, max: 4, capacity: 5 })
         );
         assert_eq!(
             TestBoundedVectorMin0::try_from(vec![1, 2, 3, 4, 5]),
-            Err(BoundedError::TooManyItems { count: 5, max: 4 })
+            Err(BoundedError::CapacityOutOfBounds { min: 0, max: 4, capacity: 5 })
         );
     }
 
@@ -662,7 +659,7 @@ mod tests {
     fn try_from_iter_rejects_items_above_maximum() {
         let result = TestBoundedVectorMin0::try_from_iter([1, 2, 3, 4, 5]);
 
-        assert_eq!(result, Err(BoundedError::TooManyItems { count: 5, max: 4 }));
+        assert_eq!(result, Err(BoundedError::CapacityOutOfBounds { min: 0, max: 4, capacity: 5 }));
     }
 
     #[test]
@@ -781,7 +778,7 @@ mod tests {
         type V = BoundedVec<u32, 0, 4>;
         assert!(matches!(
             V::with_capacity(5),
-            Err(BoundedError::TooManyItems { count: 5, max: 4 })
+            Err(BoundedError::CapacityOutOfBounds { min: 0, max: 4, capacity: 5 })
         ));
     }
 
@@ -790,7 +787,7 @@ mod tests {
         type V = BoundedVec<u32, 3, 8>;
         assert!(matches!(
             V::with_capacity(2),
-            Err(BoundedError::TooFewItems { count: 2, min: 3 })
+            Err(BoundedError::CapacityOutOfBounds { min: 3, max: 8, capacity: 2 })
         ));
     }
 
