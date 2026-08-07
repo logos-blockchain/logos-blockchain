@@ -56,7 +56,7 @@ pub struct ApiHeader {
     pub id: HeaderId,
     pub parent_block: HeaderId,
     pub slot: Slot,
-    pub block_root: ContentId,
+    pub body_root: ContentId,
     pub proof_of_leadership: Groth16LeaderProof,
 }
 

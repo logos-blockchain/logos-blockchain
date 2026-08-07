@@ -17,7 +17,9 @@ use lb_chain_service::{
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
-    block::{Block, BlockTransactions, Error as BlockError, MAX_BLOCK_TRANSACTIONS_SIZE},
+    block::{
+        Block, BlockTransactions, Error as BlockError, MAX_BLOCK_TRANSACTIONS_SIZE, UncleHeaders,
+    },
     header::HeaderId,
     mantle::{
         SignedMantleTx,
@@ -658,7 +660,8 @@ where
         let valid_tx_stream = stream::iter(valid_txs);
         let txs = txs_for_block(valid_tx_stream).await;
 
-        let block = Block::create(parent, slot, proof, txs, signing_key)?;
+        // TODO: Select uncles.
+        let block = Block::create(parent, slot, UncleHeaders::empty(), proof, txs, signing_key)?;
 
         info!(
             "proposed block {:?} with {} transactions ({} removed)",

@@ -1,18 +1,21 @@
 mod deser;
 mod fixtures;
 pub mod genesis;
+mod uncle;
 
 use core::fmt::Debug;
 
 use bytes::Bytes;
-use lb_codec::BinaryCodec;
+use lb_codec::{BinaryCodec, BinaryEncode as _};
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 use lb_utils::bounded::{BoundedError, BoundedVec, UpperBoundedVec};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+pub use uncle::{MAX_UNCLES, SignedHeader, UncleHeaders};
 
 use crate::{
     codec::{DeserializeOp as _, SerializeOp as _},
+    crypto::{Digest as _, Hasher},
     header::{ContentId, Header, HeaderId},
     mantle::{
         traits::{Hashable, StorageSize},
@@ -48,8 +51,8 @@ pub enum Error {
     Serialisation(#[from] crate::codec::Error),
     #[error("Signature error.")]
     Signature,
-    #[error("Block root mismatch: calculated content does not match header")]
-    BlockRootMismatch,
+    #[error("Body root mismatch: calculated body does not match header")]
+    BodyRootMismatch,
     #[error("Signing key does not match the leader key in proof of leadership")]
     KeyMismatch,
     #[error("Validation error: {0}")]
@@ -63,6 +66,7 @@ pub enum Error {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
 pub struct Proposal {
     pub header: Header,
+    pub uncle_headers: UncleHeaders,
     pub references: References,
     pub signature: Ed25519Signature,
 }
@@ -98,6 +102,7 @@ impl References {
 pub struct Block<Tx> {
     header: Header,
     signature: Ed25519Signature,
+    uncle_headers: UncleHeaders,
     transactions: BlockTransactions<Tx>,
 }
 
@@ -113,13 +118,19 @@ where
         struct RawBlock<Tx> {
             header: Header,
             signature: Ed25519Signature,
+            uncle_headers: UncleHeaders,
             transactions: BlockTransactions<Tx>,
         }
 
         let raw = RawBlock::<Tx>::deserialize(deserializer)?;
 
-        Self::reconstruct(raw.header, raw.transactions, raw.signature)
-            .map_err(serde::de::Error::custom)
+        Self::reconstruct(
+            raw.header,
+            raw.uncle_headers,
+            raw.transactions,
+            raw.signature,
+        )
+        .map_err(serde::de::Error::custom)
     }
 }
 
@@ -127,6 +138,11 @@ impl Proposal {
     #[must_use]
     pub const fn header(&self) -> &Header {
         &self.header
+    }
+
+    #[must_use]
+    pub const fn uncle_headers(&self) -> &UncleHeaders {
+        &self.uncle_headers
     }
 
     #[must_use]
@@ -157,6 +173,7 @@ impl<Tx> Block<Tx> {
     pub fn create(
         parent_block: HeaderId,
         slot: Slot,
+        uncle_headers: UncleHeaders,
         proof_of_leadership: Groth16LeaderProof,
         transactions: BlockTransactions<Tx>,
         signing_key: &Ed25519Key,
@@ -175,9 +192,13 @@ impl<Tx> Block<Tx> {
             return Err(Error::KeyMismatch);
         }
 
-        // 3. Block root & header
-        let block_root = Self::calculate_content_id(transactions.as_slice());
-        let header = Header::new(parent_block, block_root, slot, proof_of_leadership);
+        // 3. Body root & header
+        let header = Header::new(
+            parent_block,
+            body_root(&uncle_headers, transactions.as_slice()),
+            slot,
+            proof_of_leadership,
+        );
 
         // 4. Signature over the header
         let signature = header.sign(signing_key)?;
@@ -186,6 +207,7 @@ impl<Tx> Block<Tx> {
         let block = Self {
             header,
             signature,
+            uncle_headers,
             transactions,
         };
 
@@ -197,6 +219,7 @@ impl<Tx> Block<Tx> {
 
     pub fn reconstruct(
         header: Header,
+        uncle_headers: UncleHeaders,
         transactions: BlockTransactions<Tx>,
         signature: Ed25519Signature,
     ) -> Result<Self, Error>
@@ -206,6 +229,7 @@ impl<Tx> Block<Tx> {
         let block = Self {
             header,
             signature,
+            uncle_headers,
             transactions,
         };
         let block = block.into_verified()?;
@@ -225,8 +249,8 @@ impl<Tx> Block<Tx> {
         // 2. Size is ok
         self.validate_total_transactions_size()?;
 
-        // 3. Block root matches transactions merkle hash
-        self.validate_block_root()?;
+        // 3. Body root matches the carried uncle headers and transactions
+        self.validate_body_root()?;
 
         // 4. Signature is valid over the header bytes
         let leader_public_key = self.header.leader_proof().leader_key();
@@ -264,29 +288,25 @@ impl<Tx> Block<Tx> {
         Ok(total)
     }
 
-    fn validate_block_root(&self) -> Result<(), Error>
+    fn validate_body_root(&self) -> Result<(), Error>
     where
         Tx: Hashable<Hash = TxHash>,
     {
-        let calculated_content_id = Self::calculate_content_id(&self.transactions);
-        if self.header.block_root() != &calculated_content_id {
-            return Err(Error::BlockRootMismatch);
+        if self.header.body_root() != &body_root(&self.uncle_headers, &self.transactions) {
+            return Err(Error::BodyRootMismatch);
         }
 
         Ok(())
     }
 
-    fn calculate_content_id(transactions: &[Tx]) -> ContentId
-    where
-        Tx: Hashable<Hash = TxHash>,
-    {
-        let root_hash = merkle::calculate_block_root(transactions);
-        ContentId::from(root_hash)
-    }
-
     #[must_use]
     pub const fn header(&self) -> &Header {
         &self.header
+    }
+
+    #[must_use]
+    pub const fn uncle_headers(&self) -> &UncleHeaders {
+        &self.uncle_headers
     }
 
     #[must_use]
@@ -316,10 +336,31 @@ impl<Tx> Block<Tx> {
     {
         Proposal {
             header: self.header,
+            uncle_headers: self.uncle_headers,
             references: References::from_block_transactions(&self.transactions),
             signature: self.signature,
         }
     }
+}
+
+/// The commitment to a block body: its uncle headers and its txs
+#[must_use]
+pub fn body_root<Tx: Hashable<Hash = TxHash>>(
+    uncle_headers: &UncleHeaders,
+    transactions: &[Tx],
+) -> ContentId {
+    let mut h = Hasher::new();
+    h.update(b"BODY_ROOT_V1");
+    h.update(uncle_headers_hash(uncle_headers));
+    h.update(merkle::calculate_transactions_root(transactions));
+    ContentId::from(<[u8; 32]>::from(h.finalize()))
+}
+
+fn uncle_headers_hash(uncle_headers: &UncleHeaders) -> [u8; 32] {
+    let mut h = Hasher::new();
+    h.update(b"UNCLE_HEADERS_V1");
+    h.update(uncle_headers.encode_to_vec());
+    h.finalize().into()
 }
 
 impl<Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize>
@@ -465,6 +506,7 @@ mod tests {
         let valid_block = Block::create(
             parent_block,
             slot,
+            UncleHeaders::empty(),
             proof_of_leadership,
             transactions.clone(),
             &valid_signing_key,
@@ -474,16 +516,25 @@ mod tests {
         let header = valid_block.header().clone();
         let valid_signature = *valid_block.signature();
 
-        let _reconstructed_block =
-            Block::reconstruct(header.clone(), transactions.clone(), valid_signature)
-                .expect("Should reconstruct block with valid signature");
+        let _reconstructed_block = Block::reconstruct(
+            header.clone(),
+            UncleHeaders::empty(),
+            transactions.clone(),
+            valid_signature,
+        )
+        .expect("Should reconstruct block with valid signature");
 
         let wrong_signing_key = Ed25519Key::from_bytes(&[1u8; 32]);
         let invalid_signature = header
             .sign(&wrong_signing_key)
             .expect("Signing should work");
 
-        let invalid_block_result = Block::reconstruct(header, transactions, invalid_signature);
+        let invalid_block_result = Block::reconstruct(
+            header,
+            UncleHeaders::empty(),
+            transactions,
+            invalid_signature,
+        );
 
         assert!(
             invalid_block_result.is_err(),
@@ -502,6 +553,7 @@ mod tests {
         let _valid_block: Block<RawMantleTx> = Block::create(
             parent_block,
             slot,
+            UncleHeaders::empty(),
             proof_of_leadership.clone(),
             transactions,
             &signing_key,
@@ -512,6 +564,7 @@ mod tests {
         let _valid_block: Block<RawMantleTx> = Block::create(
             parent_block,
             slot,
+            UncleHeaders::empty(),
             proof_of_leadership,
             transactions,
             &signing_key,
@@ -551,6 +604,7 @@ mod tests {
         let proposal = Block::create(
             parent_block,
             Slot::from(42u64),
+            UncleHeaders::empty(),
             create_proof(),
             transactions,
             &signing_key,
@@ -571,6 +625,7 @@ mod tests {
         let block = Block::create(
             parent_block,
             Slot::from(42u64),
+            UncleHeaders::empty(),
             create_proof(),
             BlockTransactions::<RawMantleTx>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap(),
             &signing_key,
@@ -595,6 +650,7 @@ mod tests {
         #[derive(Serialize)]
         struct LegacyProposal {
             header: Header,
+            uncle_headers: UncleHeaders,
             references: LegacyReferences,
             signature: Ed25519Signature,
         }
@@ -603,6 +659,7 @@ mod tests {
         let proposal = Block::create(
             [0u8; 32].into(),
             Slot::from(42u64),
+            UncleHeaders::empty(),
             create_proof(),
             BlockTransactions::<RawMantleTx>::empty(),
             &signing_key,
@@ -611,6 +668,7 @@ mod tests {
         .to_proposal();
         let legacy = LegacyProposal {
             header: proposal.header.clone(),
+            uncle_headers: proposal.uncle_headers.clone(),
             references: LegacyReferences {
                 mempool_transactions: vec![TxHashPrefix::default(); MAX_BLOCK_TRANSACTIONS + 1],
             },
@@ -658,6 +716,7 @@ mod tests {
         let _valid_block: Block<RawMantleTx> = Block::create(
             parent_block,
             slot,
+            UncleHeaders::empty(),
             proof_of_leadership.clone(),
             transactions,
             &signing_key,
@@ -669,6 +728,7 @@ mod tests {
         let _valid_block = Block::create(
             parent_block,
             slot,
+            UncleHeaders::empty(),
             proof_of_leadership.clone(),
             transactions,
             &signing_key,
@@ -681,6 +741,7 @@ mod tests {
         let invalid_transaction_inputs_result = Block::create(
             parent_block,
             slot,
+            UncleHeaders::empty(),
             proof_of_leadership,
             oversized,
             &signing_key,
@@ -715,8 +776,15 @@ mod tests {
         // Build a syntactically valid non-genesis block first.
         let txs = BlockTransactions::<RawMantleTx>::empty();
         let key = Ed25519Key::from_bytes(&[0; 32]);
-        let block_result =
-            Block::create(parent_block, Slot::from(0u64), proof, txs, &key).unwrap_err();
+        let block_result = Block::create(
+            parent_block,
+            Slot::from(0u64),
+            UncleHeaders::empty(),
+            proof,
+            txs,
+            &key,
+        )
+        .unwrap_err();
 
         assert!(
             matches!(block_result, Error::Validation(msg) if msg == "expected non-genesis slot")
@@ -734,6 +802,7 @@ mod tests {
         let valid = Block::create(
             parent_block,
             Slot::from(1u64),
+            UncleHeaders::empty(),
             proof.clone(),
             BlockTransactions::<RawMantleTx>::empty(),
             &key,
@@ -744,7 +813,7 @@ mod tests {
         // consistent.
         let genesis_header = Header::new(
             parent_block,
-            *valid.header().block_root(),
+            *valid.header().body_root(),
             Slot::genesis(),
             proof,
         );
@@ -754,6 +823,7 @@ mod tests {
 
         let err = Block::reconstruct(
             genesis_header,
+            UncleHeaders::empty(),
             BlockTransactions::<RawMantleTx>::empty(),
             genesis_signature,
         )
@@ -762,21 +832,22 @@ mod tests {
         assert!(matches!(err, Error::Validation(msg) if msg == "expected non-genesis slot"));
     }
 
-    /// The specification fixes the maximum proposal at 8,555 bytes. It reaches
-    /// that as `header (299) || references (8192) || signature (64)` with the
-    /// reference count in the header; this implementation reaches the same
-    /// total as `header (297) || references (2 + 8192) || signature (64)`,
-    /// carrying the count as the reference list's own length prefix.
+    /// The specification fixes the maximum proposal at 10,000 bytes:
+    /// `header (297) || uncle_headers (1 + MAX_UNCLES * 361)
+    /// || references (2 + 8192) || signature (64)`.
     #[test]
     fn maximum_proposal_matches_the_specified_size() {
         use lb_codec::BinaryEncode as _;
 
-        const SPECIFIED_MAX_PROPOSAL_SIZE: usize = 8555;
+        const SPECIFIED_MAX_PROPOSAL_SIZE: usize = 10000;
 
+        let proof = create_proof();
+        let uncle = signed_uncle(1, &proof);
         let proposal = Block::create(
             [0u8; 32].into(),
             Slot::from(42u64),
-            create_proof(),
+            UncleHeaders::new(std::array::from_fn::<_, MAX_UNCLES, _>(|_| uncle.clone())),
+            proof,
             BlockTransactions::<RawMantleTx>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap(),
             &Ed25519Key::from_bytes(&[0; 32]),
         )
@@ -785,5 +856,107 @@ mod tests {
 
         assert_eq!(proposal.encoded_length(), SPECIFIED_MAX_PROPOSAL_SIZE);
         assert_eq!(proposal.encode().len(), SPECIFIED_MAX_PROPOSAL_SIZE);
+    }
+
+    #[test]
+    fn body_root_accepts_carried_uncle_headers() {
+        let proof = create_proof();
+        let uncles = UncleHeaders::new([signed_uncle(1, &proof), signed_uncle(2, &proof)]);
+
+        block_with_uncles(uncles, proof)
+            .into_verified()
+            .expect("the carried headers are the ones the body root commits to");
+    }
+
+    #[test]
+    fn body_root_rejects_dropped_uncle_header() {
+        let proof = create_proof();
+        let uncles = UncleHeaders::new([signed_uncle(1, &proof)]);
+        let mut block = block_with_uncles(uncles, proof);
+
+        block.uncle_headers = UncleHeaders::empty();
+
+        assert!(matches!(
+            block.into_verified(),
+            Err(Error::BodyRootMismatch)
+        ));
+    }
+
+    #[test]
+    fn body_root_rejects_substituted_uncle_header() {
+        let proof = create_proof();
+        let uncles = UncleHeaders::new([signed_uncle(1, &proof)]);
+        let mut block = block_with_uncles(uncles, proof.clone());
+
+        // Same count, but a different header than the one committed to.
+        block.uncle_headers = UncleHeaders::new([signed_uncle(2, &proof)]);
+
+        assert!(matches!(
+            block.into_verified(),
+            Err(Error::BodyRootMismatch)
+        ));
+    }
+
+    #[test]
+    fn body_root_rejects_reordered_uncle_headers() {
+        let proof = create_proof();
+        let (first, second) = (signed_uncle(1, &proof), signed_uncle(2, &proof));
+        let mut block =
+            block_with_uncles(UncleHeaders::new([first.clone(), second.clone()]), proof);
+
+        block.uncle_headers = UncleHeaders::new([second, first]);
+
+        assert!(matches!(
+            block.into_verified(),
+            Err(Error::BodyRootMismatch)
+        ));
+    }
+
+    #[test]
+    fn body_root_rejects_tampered_uncle_signature() {
+        let proof = create_proof();
+        let uncle = signed_uncle(1, &proof);
+        let mut block = block_with_uncles(UncleHeaders::new([uncle.clone()]), proof);
+
+        // Replace only the signature, leaving the header it signs untouched.
+        let other_signature = uncle
+            .header()
+            .sign(&Ed25519Key::from_bytes(&[1; 32]))
+            .expect("header signing should succeed");
+        block.uncle_headers =
+            UncleHeaders::new([SignedHeader::new(uncle.header().clone(), other_signature)]);
+
+        assert!(matches!(
+            block.into_verified(),
+            Err(Error::BodyRootMismatch)
+        ));
+    }
+
+    fn signed_uncle(slot: u64, proof: &Groth16LeaderProof) -> SignedHeader {
+        let header = Header::new(
+            HeaderId::from([9u8; 32]),
+            ContentId::from([9u8; 32]),
+            Slot::from(slot),
+            proof.clone(),
+        );
+        let signature = header
+            .sign(&Ed25519Key::from_bytes(&[0; 32]))
+            .expect("header signing should succeed");
+        SignedHeader::new(header, signature)
+    }
+
+    fn block_with_uncles(
+        uncle_headers: UncleHeaders,
+        proof: Groth16LeaderProof,
+    ) -> Block<RawMantleTx> {
+        Block::create(
+            [0u8; 32].into(),
+            Slot::from(42u64),
+            uncle_headers,
+            proof,
+            BlockTransactions::empty(),
+            &Ed25519Key::from_bytes(&[0; 32]),
+        )
+        .expect("block creation should succeed")
     }
 }

@@ -497,6 +497,7 @@ impl LedgerState {
         Self { nonce, ..self }
     }
 
+    // TODO: Count distinct occupied slots, including the countable uncles.
     fn increment_block_density(self, slot: Slot) -> Self {
         let mut block_density = self.block_density.clone();
         block_density.increment_block_density(slot);

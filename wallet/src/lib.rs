@@ -2292,6 +2292,7 @@ mod tests {
         let source_block = Block::create(
             HeaderId::from([0; 32]),
             Slot::from(1),
+            lb_core::block::UncleHeaders::empty(),
             test_leader_proof(),
             source_transactions,
             &Ed25519Key::from_bytes(&[0; 32]),

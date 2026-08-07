@@ -262,7 +262,7 @@ mod tests {
                 id: HeaderId::from([seed; 32]),
                 parent_block: HeaderId::from([seed.saturating_sub(1); 32]),
                 slot: Slot::from(u64::from(seed)),
-                block_root: ContentId::from([0; 32]),
+                body_root: ContentId::from([0; 32]),
                 proof_of_leadership: Groth16LeaderProof::genesis(),
             },
             transactions: txs,
