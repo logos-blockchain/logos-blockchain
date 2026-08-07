@@ -1,4 +1,4 @@
-use lb_blend_proofs::quota::{self, VerifiedProofOfQuota, inputs::prove::PublicInputs};
+use lb_blend_proofs::quota::{self, KeyIndex, VerifiedProofOfQuota, inputs::prove::PublicInputs};
 use lb_core::crypto::ZkHash;
 
 pub mod crypto;
@@ -12,7 +12,7 @@ pub trait CoreProofOfQuotaGenerator {
     fn generate_poq(
         &self,
         public_inputs: &PublicInputs,
-        key_index: u64,
+        key_index: KeyIndex,
     ) -> impl Future<Output = Result<(VerifiedProofOfQuota, ZkHash), quota::Error>> + Send + Sync;
 }
 

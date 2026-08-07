@@ -3,7 +3,7 @@ use lb_utils::math::NonNegativeRatio;
 use num_bigint::BigUint;
 
 use crate::quota::{
-    Ed25519PublicKey,
+    Ed25519PublicKey, Quota,
     inputs::prove::{
         PublicInputs,
         private::{ProofOfCoreQuotaInputs, ProofOfLeadershipQuotaInputs, ProofOfWorkQuotaInputs},
@@ -19,7 +19,7 @@ use crate::quota::{
 )]
 pub fn valid_proof_of_core_quota_inputs(
     signing_key: Ed25519PublicKey,
-    core_quota: u64,
+    core_quota: Quota,
 ) -> (PublicInputs, ProofOfCoreQuotaInputs) {
     let (lottery_0, lottery_1) =
         LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
@@ -36,13 +36,13 @@ pub fn valid_proof_of_core_quota_inputs(
         leader: LeaderInputs {
             pol_epoch_nonce: BigUint::from(1u64).into(),
             pol_ledger_aged: BigUint::from(1u64).into(),
-            message_quota: 1,
+            message_quota: Quota::ONE,
             lottery_0,
             lottery_1,
         },
         pow: PowInputs {
             pow_blend_difficulty: BigUint::from(1u64).into(),
-            pow_quota: 1,
+            pow_quota: Quota::new::<1>(),
         },
     };
 
@@ -147,7 +147,7 @@ pub fn valid_proof_of_core_quota_inputs(
 )]
 pub fn valid_proof_of_leadership_quota_inputs(
     signing_key: Ed25519PublicKey,
-    leader_quota: u64,
+    leader_quota: Quota,
 ) -> (PublicInputs, ProofOfLeadershipQuotaInputs) {
     let (lottery_0, lottery_1) =
         LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
@@ -171,11 +171,11 @@ pub fn valid_proof_of_leadership_quota_inputs(
         },
         core: CoreInputs {
             zk_root: BigUint::from(1u64).into(),
-            quota: 1,
+            quota: Quota::ONE,
         },
         pow: PowInputs {
             pow_blend_difficulty: BigUint::from(1u64).into(),
-            pow_quota: 1,
+            pow_quota: Quota::new::<1>(),
         },
     };
 
@@ -332,7 +332,7 @@ pub fn valid_proof_of_leadership_quota_inputs(
 #[must_use]
 pub fn valid_proof_of_work_quota_inputs(
     signing_key: Ed25519PublicKey,
-    pow_quota: u64,
+    pow_quota: Quota,
 ) -> (PublicInputs, ProofOfWorkQuotaInputs) {
     let public_inputs = PublicInputs {
         signing_key,
@@ -349,7 +349,7 @@ pub fn valid_proof_of_work_quota_inputs(
                 .parse::<BigUint>()
                 .unwrap()
                 .into(),
-            quota: 10,
+            quota: Quota::new::<10>(),
         },
         leader: LeaderInputs {
             pol_epoch_nonce:
@@ -362,7 +362,7 @@ pub fn valid_proof_of_work_quota_inputs(
                     .parse::<BigUint>()
                     .unwrap()
                     .into(),
-            message_quota: 15,
+            message_quota: Quota::new::<15>(),
             lottery_0: "148409079361904587837471709956458430342187235603420891378597419711486680"
                 .parse::<BigUint>()
                 .unwrap()

@@ -1,7 +1,7 @@
 use lb_groth16::fr_from_bytes;
 use lb_poq::{
-    PoQBlendInputsData, PoQChainInputsData, PoQCommonInputsData, PoQInputsFromDataError,
-    PoQPowInputsData, PoQWalletInputsData, PoQWitnessInputs,
+    PoQBlendInputsData, PoQChainInputsData, PoQCommonInputsData, PoQPowInputsData,
+    PoQWalletInputsData, PoQWitnessInputs,
 };
 
 use crate::quota::inputs::{
@@ -21,10 +21,8 @@ pub(crate) struct Inputs {
     pub private: PrivateInputs,
 }
 
-impl TryFrom<Inputs> for PoQWitnessInputs {
-    type Error = PoQInputsFromDataError;
-
-    fn try_from(value: Inputs) -> Result<Self, Self::Error> {
+impl From<Inputs> for PoQWitnessInputs {
+    fn from(value: Inputs) -> Self {
         let (signing_key_first_half, signing_key_second_half) =
             split_ephemeral_signing_key(value.public.signing_key);
         let chain_input_data = PoQChainInputsData {
@@ -62,7 +60,7 @@ fn witness_input_for_proof_type(
     chain_input_data: PoQChainInputsData,
     common_input_data: PoQCommonInputsData,
     proof_type: ProofType,
-) -> Result<PoQWitnessInputs, PoQInputsFromDataError> {
+) -> PoQWitnessInputs {
     match proof_type {
         ProofType::CoreQuota(core_quota_private_inputs) => {
             let ProofOfCoreQuotaInputs {

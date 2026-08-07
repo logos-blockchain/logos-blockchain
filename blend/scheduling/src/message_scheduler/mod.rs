@@ -83,7 +83,7 @@ where
                 // multiple of the layer count, and that last emission would fail
                 // with `NoMoreProofOfQuotas`. Flooring keeps the scheduled count
                 // within what the quota can actually satisfy.
-                message_count: epoch_info.core_quota / u64::from(settings.num_blend_layers),
+                message_count: epoch_info.core_quota.get() / u64::from(settings.num_blend_layers),
             },
             rng.clone(),
             Box::new(round_clock.clone()) as RoundClock,

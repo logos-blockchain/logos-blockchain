@@ -6,7 +6,7 @@ use lb_blend_message::{
     crypto::proofs::PoQVerificationInputsMinusSigningKey, encap::ProofsVerifier,
 };
 use lb_blend_proofs::{
-    quota::{self, ProofOfQuota, VerifiedProofOfQuota, inputs::prove::PublicInputs},
+    quota::{self, KeyIndex, ProofOfQuota, VerifiedProofOfQuota, inputs::prove::PublicInputs},
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
 use lb_core::crypto::ZkHash;
@@ -27,7 +27,7 @@ impl CoreProofOfQuotaGenerator for MockCorePoQGenerator {
     fn generate_poq(
         &self,
         _public_inputs: &PublicInputs,
-        _key_index: u64,
+        _key_index: KeyIndex,
     ) -> impl Future<Output = Result<(VerifiedProofOfQuota, ZkHash), quota::Error>> + Send + Sync
     {
         use lb_groth16::AdditiveGroup as _;

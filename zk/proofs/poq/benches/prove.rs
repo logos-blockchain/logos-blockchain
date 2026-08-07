@@ -2,13 +2,13 @@
 //!
 //! Run with `cargo bench -p logos-blockchain-poq --bench prove`.
 
-use logos_blockchain_poq::prove;
+use logos_blockchain_poq::{KeyIndex, prove};
 
 mod common;
 
 /// Key index the generation benchmarks prove for. Any index within the fixture
 /// quota behaves the same, the circuit is fixed size.
-const KEY_INDEX: u64 = 6;
+const KEY_INDEX: KeyIndex = KeyIndex::new::<6>();
 
 fn main() {
     divan::main();

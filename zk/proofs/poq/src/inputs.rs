@@ -2,7 +2,7 @@ use lb_groth16::{AdditiveGroup as _, Fr, Groth16Input, Groth16InputDeser};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    PoQChainInputsData, PoQCommonInputsData,
+    PoQChainInputsData, PoQCommonInputsData, Quota,
     blend_inputs::{PoQBlendInputs, PoQBlendInputsData, PoQBlendInputsJson},
     chain_inputs::{PoQChainInputs, PoQChainInputsJson},
     common_inputs::{PoQCommonInputs, PoQCommonInputsJson},
@@ -21,46 +21,49 @@ pub struct PoQWitnessInputs {
 }
 
 impl PoQWitnessInputs {
+    #[must_use]
     pub fn from_leader_data(
         chain: PoQChainInputsData,
         common: PoQCommonInputsData,
         wallet: PoQWalletInputsData,
-    ) -> Result<Self, <PoQChainInputs as TryFrom<PoQChainInputsData>>::Error> {
-        Ok(Self {
-            chain: chain.try_into()?,
-            common: common.try_into()?,
+    ) -> Self {
+        Self {
+            chain: chain.into(),
+            common: common.into(),
             blend: Self::unused_blend_inputs(),
             wallet: wallet.into(),
             pow: Self::unused_pow_inputs(),
-        })
+        }
     }
 
+    #[must_use]
     pub fn from_core_node_data(
         chain: PoQChainInputsData,
         common: PoQCommonInputsData,
         blend: PoQBlendInputsData,
-    ) -> Result<Self, <PoQChainInputs as TryFrom<PoQChainInputsData>>::Error> {
-        Ok(Self {
-            chain: chain.try_into()?,
-            common: common.try_into()?,
+    ) -> Self {
+        Self {
+            chain: chain.into(),
+            common: common.into(),
             blend: blend.into(),
             wallet: Self::unused_wallet_inputs(),
             pow: Self::unused_pow_inputs(),
-        })
+        }
     }
 
+    #[must_use]
     pub fn from_pow_data(
         chain: PoQChainInputsData,
         common: PoQCommonInputsData,
         pow: PoQPowInputsData,
-    ) -> Result<Self, <PoQChainInputs as TryFrom<PoQChainInputsData>>::Error> {
-        Ok(Self {
-            chain: chain.try_into()?,
-            common: common.try_into()?,
+    ) -> Self {
+        Self {
+            chain: chain.into(),
+            common: common.into(),
             blend: Self::unused_blend_inputs(),
             wallet: Self::unused_wallet_inputs(),
             pow: pow.into(),
-        })
+        }
     }
 
     fn unused_blend_inputs() -> PoQBlendInputs {
@@ -147,10 +150,10 @@ pub struct PoQVerifierInput {
 
 pub struct PoQVerifierInputData {
     pub key_nullifier: Fr,
-    pub core_quota: u64,
-    pub leader_quota: u64,
+    pub core_quota: Quota,
+    pub leader_quota: Quota,
     pub core_root: Fr,
-    pub pow_quota: u64,
+    pub pow_quota: Quota,
     pub k_part_one: Fr,
     pub k_part_two: Fr,
     pub pow_blend_difficulty: Fr,
@@ -218,13 +221,13 @@ impl PoQVerifierInput {
 impl From<PoQVerifierInputData> for PoQVerifierInput {
     fn from(value: PoQVerifierInputData) -> Self {
         Self {
-            core_quota: Groth16Input::new(value.core_quota.into()),
+            core_quota: value.core_quota.into(),
             core_root: value.core_root.into(),
             k_part_one: value.k_part_one.into(),
             k_part_two: value.k_part_two.into(),
             key_nullifier: value.key_nullifier.into(),
-            leader_quota: Groth16Input::new(value.leader_quota.into()),
-            pow_quota: Groth16Input::new(value.pow_quota.into()),
+            leader_quota: value.leader_quota.into(),
+            pow_quota: value.pow_quota.into(),
             pow_blend_difficulty: value.pow_blend_difficulty.into(),
             pol_epoch_nonce: value.pol_epoch_nonce.into(),
             pol_ledger_aged: value.pol_ledger_aged.into(),

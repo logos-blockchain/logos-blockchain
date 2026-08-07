@@ -6,7 +6,7 @@ use std::{fmt::Debug, num::NonZeroU64};
 use lb_blend_message::{
     encap::ProofsVerifier as ProofsVerifierTrait, reward::BlendingTokenEvaluation,
 };
-use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
+use lb_blend_proofs::quota::{Quota, inputs::prove::public::LeaderInputs};
 use lb_core::{
     blend::core_quota,
     mantle::{Utxo, Value},
@@ -241,7 +241,7 @@ impl RewardsParameters {
     fn core_quota_and_token_evaluation(
         &self,
         num_core_nodes: u64,
-    ) -> Result<(u64, BlendingTokenEvaluation), lb_blend_message::reward::Error> {
+    ) -> Result<(Quota, BlendingTokenEvaluation), lb_blend_message::reward::Error> {
         let core_quota = core_quota(
             self.rounds_per_epoch,
             self.message_frequency_per_round,
@@ -260,7 +260,9 @@ impl RewardsParameters {
 
     fn leader_inputs(&self, epoch_state: &EpochState) -> LeaderInputs {
         let num_blend_layers = self.num_blend_layers.get();
-        let message_quota = num_blend_layers + (num_blend_layers * self.data_replication_factor);
+        let message_quota =
+            Quota::try_new(num_blend_layers + (num_blend_layers * self.data_replication_factor))
+                .expect("Leader Quota must fit within the width the `PoQ` circuit allows.");
         LeaderInputs {
             pol_ledger_aged: epoch_state.utxos.root(),
             pol_epoch_nonce: epoch_state.nonce,
@@ -327,7 +329,7 @@ mod tests {
     #[test]
     fn test_blend_no_reward_calculated_after_epoch0() {
         // Create epoch0 with providers
-        let params = create_blend_rewards_params(864_000, 1);
+        let params = create_blend_rewards_params(86_400, 1);
         let epoch0 = create_epoch_state(
             &[create_provider_id(1), create_provider_id(2)],
             ServiceType::BlendNetwork,
@@ -359,7 +361,7 @@ mod tests {
     fn test_rewards_with_no_activity_proofs() {
         // Create a reward tracker, and update epoch from 0 to 1.
         let config = create_service_parameters();
-        let params = create_blend_rewards_params(864_000, 1);
+        let params = create_blend_rewards_params(86_400, 1);
         let epoch0 = create_epoch_state(
             &[create_provider_id(1), create_provider_id(2)],
             ServiceType::BlendNetwork,
@@ -390,7 +392,7 @@ mod tests {
         // Create a reward tracker, accumulate epoch income during epoch 0,
         // and update epoch from 0 to 1.
         let config = create_service_parameters();
-        let params = create_blend_rewards_params(864_000, 1);
+        let params = create_blend_rewards_params(86_400, 1);
         let epoch0 = create_epoch_state(
             &[provider1, provider2, provider3, provider4],
             ServiceType::BlendNetwork,
@@ -494,7 +496,7 @@ mod tests {
 
         // Create a reward tracker, and update epoch from 0 to 1.
         let config = create_service_parameters();
-        let params = create_blend_rewards_params(864_000, 1);
+        let params = create_blend_rewards_params(86_400, 1);
         let epoch0 =
             create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0.into(), Fr::ZERO);
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
@@ -546,7 +548,7 @@ mod tests {
 
         // Create a reward tracker, and update epoch from 0 to 1.
         let config = create_service_parameters();
-        let params = create_blend_rewards_params(864_000, 1);
+        let params = create_blend_rewards_params(86_400, 1);
         let epoch0 =
             create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0.into(), Fr::ZERO);
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
@@ -588,7 +590,7 @@ mod tests {
         let unknown = create_provider_id(2);
 
         let config = create_service_parameters();
-        let params = create_blend_rewards_params(864_000, 1);
+        let params = create_blend_rewards_params(86_400, 1);
         // Only provider1 is in the snapshot.
         let epoch0 =
             create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0.into(), Fr::ZERO);
@@ -623,7 +625,7 @@ mod tests {
         // Create a reward tracker, and update epoch from 0 to 1.
         let config = create_service_parameters();
         // Set minimum network size to 2
-        let params = create_blend_rewards_params(864_000, 2);
+        let params = create_blend_rewards_params(86_400, 2);
         let epoch0 =
             create_epoch_state(&[provider1], ServiceType::BlendNetwork, 0.into(), Fr::ZERO);
         let epoch1 = new_epoch_state_with_same_snapshot(1, 1, &epoch0);
@@ -669,7 +671,7 @@ mod tests {
 
         let config = create_service_parameters();
         // minimum_network_size = 2
-        let params = create_blend_rewards_params(864_000, 2);
+        let params = create_blend_rewards_params(86_400, 2);
 
         // Epoch 0: 2 providers — meets minimum.
         let epoch0 = create_epoch_state(
@@ -745,7 +747,7 @@ mod tests {
 
         let config = create_service_parameters();
         // minimum_network_size = 2
-        let params = create_blend_rewards_params(864_000, 2);
+        let params = create_blend_rewards_params(86_400, 2);
 
         // Epoch 0: 1 provider — less than minimum.
         let epoch0 =
@@ -817,7 +819,7 @@ mod tests {
     #[should_panic(expected = "must be greater than")]
     fn test_blend_update_epoch_panics_on_same_epoch() {
         let config = create_service_parameters();
-        let params = create_blend_rewards_params(864_000, 1);
+        let params = create_blend_rewards_params(86_400, 1);
         let epoch0 = create_epoch_state(
             &[create_provider_id(1)],
             ServiceType::BlendNetwork,
@@ -837,7 +839,7 @@ mod tests {
     #[should_panic(expected = "must be greater than")]
     fn test_blend_update_epoch_panics_on_decreasing_epoch() {
         let config = create_service_parameters();
-        let params = create_blend_rewards_params(864_000, 1);
+        let params = create_blend_rewards_params(86_400, 1);
         let epoch0 = create_epoch_state(
             &[create_provider_id(1)],
             ServiceType::BlendNetwork,
@@ -859,7 +861,7 @@ mod tests {
     fn test_blend_multi_epoch_jump() {
         let provider1 = create_provider_id(1);
         let config = create_service_parameters();
-        let params = create_blend_rewards_params(864_000, 1);
+        let params = create_blend_rewards_params(86_400, 1);
 
         // Accumulate income during epoch 0 (funds future target epoch 0),
         // and update epoch from 0 to 1.

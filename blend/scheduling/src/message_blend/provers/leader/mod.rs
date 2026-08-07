@@ -66,7 +66,7 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
             proofs_stream: Box::pin(create_proof_stream(
                 settings.public_inputs,
                 winning_pol_info_stream,
-                buffer_size(settings.public_inputs.leader.message_quota as usize),
+                buffer_size(settings.public_inputs.leader.message_quota.get() as usize),
             )),
         }
     }
@@ -100,7 +100,7 @@ fn create_proof_stream(
     // to each message + encapsulation layer is up to the scheduler.
     Buffered::new(
         winning_pol_info_stream.flat_map(move |slot_inputs| {
-            stream::iter(0..message_quota).map(move |message_release_index| {
+            stream::iter(message_quota.values_range()).map(move |message_release_index| {
                 let slot_inputs = slot_inputs.clone();
 
                 // Spawn eagerly here (outside `async move`) so the blocking task starts as

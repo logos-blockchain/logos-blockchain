@@ -9,7 +9,7 @@
 use std::sync::LazyLock;
 
 use divan::counter::ItemsCount;
-use logos_blockchain_poq::{PoQProof, PoQVerifierInput, batch_verify, prove, verify};
+use logos_blockchain_poq::{KeyIndex, PoQProof, PoQVerifierInput, batch_verify, prove, verify};
 
 mod common;
 
@@ -26,12 +26,16 @@ const PROOF_POOL_SIZE: usize = BATCH_SIZES[BATCH_SIZES.len() - 1];
 /// node actually verifies.
 static CORE_PROOFS: LazyLock<Vec<(PoQProof, PoQVerifierInput)>> = LazyLock::new(|| {
     (0..PROOF_POOL_SIZE as u64)
-        .map(|key_index| prove(common::core_node_inputs(key_index)).unwrap())
+        .map(|key_index| {
+            let key_index =
+                KeyIndex::try_new(key_index).expect("Proof pool size fits in a key index.");
+            prove(common::core_node_inputs(key_index)).unwrap()
+        })
         .collect()
 });
 
 static LEADER_PROOF: LazyLock<(PoQProof, PoQVerifierInput)> =
-    LazyLock::new(|| prove(common::leader_inputs(6)).unwrap());
+    LazyLock::new(|| prove(common::leader_inputs(KeyIndex::new::<6>())).unwrap());
 
 fn main() {
     divan::main();

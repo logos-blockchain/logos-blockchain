@@ -1,3 +1,4 @@
+mod circuit_integer;
 mod curve;
 mod from_json_error;
 mod proof;
@@ -15,6 +16,7 @@ use std::error::Error;
 pub use ark_bn254::{Bn254, Fr};
 pub use ark_ff::{AdditiveGroup, Field};
 use ark_ff::{BigInteger as _, PrimeField};
+pub use circuit_integer::{CircuitInteger, CircuitIntegerOutOfRange};
 use num_bigint::BigUint;
 pub use verifier::{groth16_batch_verify, groth16_verify};
 

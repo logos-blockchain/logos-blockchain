@@ -2,13 +2,7 @@ use lb_groth16::{Fr, Groth16Input, Groth16InputDeser};
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    PoQInputsFromDataError::PowQuotaMoreThan20Bits,
-    chain_inputs::{
-        PoQInputsFromDataError,
-        PoQInputsFromDataError::{CoreQuotaMoreThan20Bits, LeaderQuotaMoreThan20Bits},
-    },
-};
+use crate::{KeyIndex, Quota};
 
 #[derive(Copy, Clone)]
 pub struct PoQCommonInputs {
@@ -32,12 +26,12 @@ pub enum PoQSelector {
 
 #[derive(Clone, Copy)]
 pub struct PoQCommonInputsData {
-    pub core_quota: u64,
-    pub leader_quota: u64,
-    pub pow_quota: u64,
+    pub core_quota: Quota,
+    pub leader_quota: Quota,
+    pub pow_quota: Quota,
     pub message_key: (Fr, Fr),
     pub selector: PoQSelector,
-    pub index: u64,
+    pub index: KeyIndex,
     pub pow_difficulty: Fr,
 }
 
@@ -82,9 +76,8 @@ impl From<&PoQCommonInputs> for PoQCommonInputsJson {
     }
 }
 
-impl TryFrom<PoQCommonInputsData> for PoQCommonInputs {
-    type Error = PoQInputsFromDataError;
-    fn try_from(
+impl From<PoQCommonInputsData> for PoQCommonInputs {
+    fn from(
         PoQCommonInputsData {
             core_quota,
             leader_quota,
@@ -94,28 +87,16 @@ impl TryFrom<PoQCommonInputsData> for PoQCommonInputs {
             index,
             pow_difficulty,
         }: PoQCommonInputsData,
-    ) -> Result<Self, Self::Error> {
-        let leader_quota_bits = leader_quota.checked_ilog2().map_or(0, |v| v + 1);
-        if leader_quota_bits > 20 {
-            return Err(LeaderQuotaMoreThan20Bits);
-        }
-        let core_quota_bits = core_quota.checked_ilog2().map_or(0, |v| v + 1);
-        if core_quota_bits > 20 {
-            return Err(CoreQuotaMoreThan20Bits);
-        }
-        let pow_quota_bits = pow_quota.checked_ilog2().map_or(0, |v| v + 1);
-        if pow_quota_bits > 20 {
-            return Err(PowQuotaMoreThan20Bits);
-        }
-        Ok(Self {
-            core_quota: Groth16Input::new(Fr::from(BigUint::from(core_quota))),
-            leader_quota: Groth16Input::new(Fr::from(BigUint::from(leader_quota))),
-            pow_quota: Groth16Input::new(Fr::from(BigUint::from(pow_quota))),
+    ) -> Self {
+        Self {
+            core_quota: core_quota.into(),
+            leader_quota: leader_quota.into(),
+            pow_quota: pow_quota.into(),
             key_part_one: message_key.0.into(),
             key_part_two: message_key.1.into(),
             selector: Groth16Input::new(Fr::from(BigUint::from(selector as u8))),
-            index: Groth16Input::new(Fr::from(BigUint::from(index))),
+            index: index.into(),
             pow_difficulty: pow_difficulty.into(),
-        })
+        }
     }
 }

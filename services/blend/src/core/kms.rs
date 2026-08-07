@@ -11,7 +11,7 @@ use lb_key_management_system_service::{
     operators::blend::poq::PoQOperator,
 };
 use lb_log_targets::blend;
-use lb_poq::CorePathAndSelectors;
+use lb_poq::{CorePathAndSelectors, KeyIndex};
 use overwatch::services::AsServiceId;
 use tokio::sync::oneshot;
 
@@ -71,7 +71,7 @@ where
     fn generate_poq(
         &self,
         public_inputs: &PublicInputs,
-        key_index: u64,
+        key_index: KeyIndex,
     ) -> impl Future<Output = Result<(VerifiedProofOfQuota, ZkHash), quota::Error>> + Send + Sync
     {
         tracing::trace!(
@@ -103,7 +103,7 @@ async fn generate_kms_poq<RuntimeServiceId>(
     kms_api: KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
     key_id: KeyId,
     public_inputs: &PublicInputs,
-    key_index: u64,
+    key_index: KeyIndex,
     core_path_and_selectors: &CorePathAndSelectors,
 ) -> Result<(VerifiedProofOfQuota, ZkHash), quota::Error>
 where

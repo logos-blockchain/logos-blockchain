@@ -8,14 +8,14 @@ use std::{
 
 use async_trait::async_trait;
 use futures::Stream;
-use indexmap::IndexSet;
+use indexmap::{IndexMap, IndexSet};
 use lb_core::mantle::transactions::hash::PrefixedKey;
 use lb_log_targets::mempool;
 use serde::{Deserialize, Serialize};
 
 use super::Status;
 use crate::{
-    backend::{MemPool, MempoolError, RecoverableMempool},
+    backend::{MemPool, MempoolError, RecoverableMempool, evictor::Evictor},
     metrics,
     storage::MempoolStorageAdapter,
 };
@@ -23,12 +23,41 @@ use crate::{
 const REMOVED_ITEM_GRACE_PERIOD: Duration = Duration::from_mins(10);
 const LOG_TARGET: &str = mempool::POOL;
 
+/// Default time a pending transaction may stay in the pool before eviction.
+pub const DEFAULT_TX_TTL: Duration = Duration::from_hours(24);
+
+/// Settings for the [`Mempool`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MempoolSettings {
+    /// How long a pending transaction is allowed to stay in the pool before
+    /// it is evicted. `None` disables expiry-based eviction.
+    #[serde(default = "default_tx_ttl")]
+    pub tx_ttl: Option<Duration>,
+}
+
+impl Default for MempoolSettings {
+    fn default() -> Self {
+        Self {
+            tx_ttl: default_tx_ttl(),
+        }
+    }
+}
+
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "Serde default for an `Option` field."
+)]
+const fn default_tx_ttl() -> Option<Duration> {
+    Some(DEFAULT_TX_TTL)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PoolRecoveryState<Key>
 where
     Key: Hash + Eq + Ord,
 {
-    pub pending_items: IndexSet<Key>,
+    /// Pending item keys mapped to their insertion timestamp in milliseconds.
+    pub pending_items: IndexMap<Key, u64>,
     pub removed_items: BTreeMap<Key, u64>,
     pub last_item_timestamp: u64,
 }
@@ -48,6 +77,7 @@ where
     by_prefix: HashMap<Key::Prefix, Vec<Key>>,
     removed_items: BTreeMap<Key, u64>,
     last_item_timestamp: u64,
+    evictor: Evictor<Key>,
     storage_adapter: Storage,
     _phantom: std::marker::PhantomData<(BlockId, Item, RuntimeServiceId)>,
 }
@@ -66,7 +96,7 @@ where
             .field("removed_items", &self.removed_items)
             .field("last_item_timestamp", &self.last_item_timestamp)
             .field("storage_adapter", &"<StorageAdapter>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -89,18 +119,19 @@ where
     Storage::Error: Debug,
     RuntimeServiceId: Send + Sync,
 {
-    type Settings = ();
+    type Settings = MempoolSettings;
     type Item = Item;
     type Key = Key;
     type BlockId = BlockId;
     type Storage = Storage;
 
-    fn new(_settings: Self::Settings, storage: Self::Storage) -> Self {
+    fn new(settings: Self::Settings, storage: Self::Storage) -> Self {
         Self {
             pending_items: IndexSet::new(),
             by_prefix: HashMap::new(),
             removed_items: BTreeMap::new(),
             last_item_timestamp: 0,
+            evictor: Evictor::new(&settings),
             storage_adapter: storage,
             _phantom: std::marker::PhantomData,
         }
@@ -126,6 +157,7 @@ where
 
         self.removed_items.remove(&key);
         self.index_by_prefix(&key);
+        self.evictor.on_add(key.clone(), timestamp);
         self.pending_items.insert(key);
         self.last_item_timestamp = timestamp;
         tracing::debug!(
@@ -175,17 +207,19 @@ where
     async fn remove(&mut self, keys: &[Self::Key]) {
         self.prune_removed_items().await;
 
-        let removed_count = keys.len();
         let removed_at = current_timestamp_millis();
 
-        for key in keys {
-            self.pending_items.shift_remove(key);
-            self.unindex_by_prefix(key);
-            self.removed_items.insert(key.clone(), removed_at);
-        }
-        log_removed_items(removed_count, self.pending_items.len());
+        self.retire(keys.iter().cloned(), removed_at, "removed");
 
-        metrics::mempool_transactions_removed(removed_count);
+        // `remove` is called once per applied canonical block, so it doubles
+        // as the periodic trigger for eviction — without it the pool has no
+        // clock.
+        self.retire(
+            self.evictor.select_evictions(removed_at),
+            removed_at,
+            "evicted",
+        );
+
         metrics::mempool_transactions_pending(self.pending_items.len());
     }
 
@@ -235,21 +269,21 @@ where
 
     fn save(&self) -> Self::RecoveryState {
         PoolRecoveryState {
-            pending_items: self.pending_items.clone(),
+            pending_items: self.evictor.save(),
             removed_items: self.removed_items.clone(),
             last_item_timestamp: self.last_item_timestamp,
         }
     }
 
     fn recover(
-        _settings: <Self as MemPool>::Settings,
+        settings: <Self as MemPool>::Settings,
         state: Self::RecoveryState,
         storage: <Self as MemPool>::Storage,
     ) -> Self {
         // `by_prefix` is derived, so it is rebuilt rather than restored.
         let mut by_prefix: HashMap<Key::Prefix, Vec<Key>> =
             HashMap::with_capacity(state.pending_items.len());
-        for key in &state.pending_items {
+        for key in state.pending_items.keys() {
             by_prefix
                 .entry(key.key_prefix())
                 .or_default()
@@ -257,10 +291,11 @@ where
         }
 
         Self {
-            pending_items: state.pending_items,
+            pending_items: state.pending_items.keys().cloned().collect(),
             by_prefix,
             removed_items: state.removed_items,
             last_item_timestamp: state.last_item_timestamp,
+            evictor: Evictor::recover(&settings, state.pending_items),
             storage_adapter: storage,
             _phantom: std::marker::PhantomData,
         }
@@ -306,6 +341,22 @@ where
         }
     }
 
+    /// The single exit for pending items: every removal — included in a
+    /// block or evicted — goes through here so the evictor stays in sync.
+    fn retire(&mut self, keys: impl IntoIterator<Item = Key>, at: u64, cause: &str) {
+        let mut count = 0usize;
+        for key in keys {
+            self.pending_items.shift_remove(&key);
+            self.unindex_by_prefix(&key);
+            self.evictor.on_remove(&key);
+            self.removed_items.insert(key, at);
+            count += 1;
+        }
+
+        log_retired_items(count, cause, self.pending_items.len());
+        metrics::mempool_transactions_removed(count);
+    }
+
     async fn prune_removed_items(&mut self) {
         let now = current_timestamp_millis();
         let grace_period_millis = REMOVED_ITEM_GRACE_PERIOD.as_millis() as u64;
@@ -339,16 +390,16 @@ fn current_timestamp_millis() -> u64 {
         .as_millis() as u64
 }
 
-fn log_removed_items(removed_count: usize, pending_items: usize) {
-    if removed_count == 0 {
+fn log_retired_items(count: usize, cause: &str, pending_items: usize) {
+    if count == 0 {
         tracing::trace!(
             target: LOG_TARGET,
-            "Removed {removed_count} items from mempool; pending_items={pending_items}"
+            "{cause}: 0 items from mempool; pending_items={pending_items}"
         );
     } else {
         tracing::debug!(
             target: LOG_TARGET,
-            "Removed {removed_count} items from mempool; pending_items={pending_items}"
+            "{cause}: {count} items from mempool; pending_items={pending_items}"
         );
     }
 }

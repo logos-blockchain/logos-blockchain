@@ -30,18 +30,19 @@ pub struct PoQVerificationInputsMinusSigningKey {
 #[cfg(test)]
 impl Default for PoQVerificationInputsMinusSigningKey {
     fn default() -> Self {
+        use lb_blend_proofs::quota::Quota;
         use lb_core::crypto::ZkHash;
         use lb_groth16::{AdditiveGroup as _, Fr};
 
         Self {
             core: CoreInputs {
                 zk_root: ZkHash::default(),
-                quota: 1,
+                quota: Quota::ONE,
             },
             leader: LeaderInputs {
                 pol_ledger_aged: ZkHash::default(),
                 pol_epoch_nonce: ZkHash::default(),
-                message_quota: 1,
+                message_quota: Quota::ONE,
                 lottery_0: Fr::ZERO,
                 lottery_1: Fr::ZERO,
             },

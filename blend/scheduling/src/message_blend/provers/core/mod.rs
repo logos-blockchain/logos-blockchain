@@ -5,7 +5,10 @@ use futures::stream::{self, Stream, StreamExt as _};
 use lb_blend_message::crypto::{
     key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
 };
-use lb_blend_proofs::{quota::inputs::prove::PublicInputs, selection::VerifiedProofOfSelection};
+use lb_blend_proofs::{
+    quota::{KeyIndex, Quota, inputs::prove::PublicInputs},
+    selection::VerifiedProofOfSelection,
+};
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use lb_log_targets::blend;
@@ -33,7 +36,7 @@ pub trait CoreProofsGenerator<PoQGenerator>: Sized {
 }
 
 pub struct RealCoreProofsGenerator<PoQGenerator> {
-    remaining_quota: u64,
+    remaining_quota: Quota,
     pub(super) settings: ProofsGeneratorSettings,
     proofs_stream: Pin<Box<dyn Stream<Item = BlendLayerProof> + Send + Sync>>,
     _phantom: PhantomData<PoQGenerator>,
@@ -49,7 +52,7 @@ where
             proofs_stream: Box::pin(create_proof_stream(
                 settings.public_inputs,
                 proof_of_quota_generator,
-                0,
+                KeyIndex::ZERO,
                 buffer_size(settings.encapsulation_layers.get() as usize),
             )),
             remaining_quota: settings.public_inputs.core.quota,
@@ -60,7 +63,7 @@ where
 
     async fn get_next_proof(&mut self) -> Option<BlendLayerProof> {
         let start = Instant::now();
-        let Some(remaining_quota) = self.remaining_quota.checked_sub(1) else {
+        let Some(remaining_quota) = self.remaining_quota.checked_sub(Quota::ONE) else {
             tracing::warn!(target: LOG_TARGET, "Core quota exhausted. No proof is generated.");
             return None;
         };
@@ -77,7 +80,7 @@ where
 fn create_proof_stream<Generator>(
     public_inputs: PoQVerificationInputsMinusSigningKey,
     proof_of_quota_generator: Generator,
-    starting_key_index: u64,
+    starting_key_index: KeyIndex,
     buffer_size: usize,
 ) -> impl Stream<Item = BlendLayerProof> + Send
 where
@@ -92,7 +95,7 @@ where
 
     let quota = public_inputs.core.quota;
     Buffered::new(
-        stream::iter(starting_key_index..quota)
+        stream::iter(quota.values_range_from(starting_key_index))
         .map(move |key_index| {
             let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
             let proof_of_quota_generator = proof_of_quota_generator.clone();

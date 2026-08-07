@@ -12,12 +12,13 @@ use std::error::Error;
 pub use blend_inputs::{
     CORE_MERKLE_TREE_HEIGHT, CorePathAndSelectors, PoQBlendInputs, PoQBlendInputsData,
 };
-pub use chain_inputs::{PoQChainInputs, PoQChainInputsData, PoQInputsFromDataError};
+pub use chain_inputs::{PoQChainInputs, PoQChainInputsData};
 pub use common_inputs::{PoQCommonInputs, PoQCommonInputsData, PoQSelector};
 pub use inputs::{PoQVerifierInput, PoQVerifierInputData, PoQWitnessInputs};
 use lb_circuits_prover::Prover as _;
 use lb_groth16::{
-    CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser, groth16_batch_verify,
+    CircuitInteger, CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser,
+    groth16_batch_verify,
 };
 use lb_log_targets::proofs;
 pub use lb_pol::AGED_NOTE_MERKLE_TREE_HEIGHT;
@@ -29,6 +30,16 @@ use crate::inputs::PoQVerifierInputJson;
 
 pub type PoQProof = CompressedGroth16Proof;
 pub type ProveError = lbp_error::Error;
+
+/// Width, in bits, of the quota signals in the `PoQ` circuit.
+pub const QUOTA_BITS: u8 = 20;
+
+/// A messaging quota, constrained to the width the `PoQ` circuit expects.
+pub type Quota = CircuitInteger<QUOTA_BITS>;
+
+/// An index into the keys covered by a quota, which the circuit constrains to
+/// the same width.
+pub type KeyIndex = Quota;
 
 const LOG_TARGET: &str = proofs::POQ;
 
@@ -259,15 +270,15 @@ mod tests {
             .into(),
         };
         let common_data = PoQCommonInputsData {
-            core_quota: 10,
-            leader_quota: 15,
-            pow_quota: 20,
+            core_quota: Quota::new::<15>(),
+            leader_quota: Quota::new::<10>(),
+            pow_quota: Quota::new::<20>(),
             message_key: (
                 BigUint::from(123_456u32).into(),
                 BigUint::from(654_321u32).into(),
             ),
             selector: PoQSelector::Core,
-            index: 9,
+            index: KeyIndex::new::<9>(),
             pow_difficulty: BigUint::from_str(
                 "2334035772366381927456001473031809359552034265892309520954243351196711606017",
             )
@@ -276,7 +287,7 @@ mod tests {
         };
 
         let witness_inputs =
-            PoQWitnessInputs::from_core_node_data(chain_data, common_data, blend_data).unwrap();
+            PoQWitnessInputs::from_core_node_data(chain_data, common_data, blend_data);
         let (proof, inputs) = prove(witness_inputs).unwrap();
         let key_nullifier = inputs.key_nullifier.into_inner();
         // Test that verifying with the inputs returned by `prove` works.
@@ -327,15 +338,15 @@ mod tests {
             lottery_1,
         };
         let common_data = PoQCommonInputsData {
-            core_quota: 15,
-            leader_quota: 10,
-            pow_quota: 5,
+            core_quota: Quota::new::<15>(),
+            leader_quota: Quota::new::<10>(),
+            pow_quota: Quota::new::<5>(),
             message_key: (
                 BigUint::from(123_456u32).into(),
                 BigUint::from(654_321u32).into(),
             ),
             selector: PoQSelector::Leader,
-            index: 2,
+            index: KeyIndex::new::<2>(),
             pow_difficulty: BigUint::from_str(
                 "2334035772366381927456001473031809359552034265892309520954243351196711606017",
             )
@@ -490,7 +501,7 @@ mod tests {
         };
 
         let witness_inputs =
-            PoQWitnessInputs::from_leader_data(chain_data, common_data, wallet_data).unwrap();
+            PoQWitnessInputs::from_leader_data(chain_data, common_data, wallet_data);
         let (proof, inputs) = prove(witness_inputs).unwrap();
         let key_nullifier = inputs.key_nullifier.into_inner();
         // Test that verifying with the inputs returned by `prove` works.
@@ -545,15 +556,15 @@ mod tests {
             .into(),
         };
         let common_data = PoQCommonInputsData {
-            core_quota: 10,
-            leader_quota: 15,
-            pow_quota: 20,
+            core_quota: Quota::new::<10>(),
+            leader_quota: Quota::new::<15>(),
+            pow_quota: Quota::new::<20>(),
             message_key: (
                 BigUint::from(123_456u32).into(),
                 BigUint::from(654_321u32).into(),
             ),
             selector: PoQSelector::Pow,
-            index: 8,
+            index: KeyIndex::new::<8>(),
             pow_difficulty: BigUint::from_str(
                 "10631870504716456348838861774188160492563879712126054449569633827216160699117",
             )
@@ -573,8 +584,7 @@ mod tests {
             .into(),
         };
 
-        let witness_inputs =
-            PoQWitnessInputs::from_pow_data(chain_data, common_data, pow_data).unwrap();
+        let witness_inputs = PoQWitnessInputs::from_pow_data(chain_data, common_data, pow_data);
         let (proof, inputs) = prove(witness_inputs).unwrap();
         let key_nullifier = inputs.key_nullifier.into_inner();
         // Test that verifying with the inputs returned by `prove` works.

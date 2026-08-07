@@ -281,6 +281,7 @@ mod tests {
     use lb_core::crypto::ZkHash;
     use lb_groth16::Fr;
     use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
+    use lb_poq::Quota;
 
     use crate::{
         core::processor::{CoreCryptographicProcessor, DecapsulatedMessageType, Error},
@@ -295,13 +296,13 @@ mod tests {
 
         PoQVerificationInputsMinusSigningKey {
             core: CoreInputs {
-                quota: 1,
+                quota: Quota::ONE,
                 zk_root: ZkHash::ZERO,
             },
             leader: LeaderInputs {
                 pol_ledger_aged: ZkHash::ZERO,
                 pol_epoch_nonce: ZkHash::ZERO,
-                message_quota: 1,
+                message_quota: Quota::ONE,
                 lottery_0: Fr::ZERO,
                 lottery_1: Fr::ZERO,
             },

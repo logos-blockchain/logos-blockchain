@@ -6,7 +6,7 @@ use zeroize::ZeroizeOnDrop;
 use crate::{
     CorePathAndSelectors, ZkHash,
     quota::{
-        SelectionRandomnessSecretInput,
+        KeyIndex, SelectionRandomnessSecretInput,
         inputs::prove::{PublicInputs, public::LeaderInputs},
     },
 };
@@ -15,7 +15,7 @@ use crate::{
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Inputs {
-    pub key_index: u64,
+    pub key_index: KeyIndex,
     pub selector: PoQSelector,
     pub proof_type: ProofType,
 }
@@ -23,7 +23,7 @@ pub struct Inputs {
 impl Inputs {
     #[must_use]
     pub fn new_proof_of_core_quota_inputs(
-        key_index: u64,
+        key_index: KeyIndex,
         proof_of_core_quota_inputs: ProofOfCoreQuotaInputs,
     ) -> Self {
         let proof_type: ProofType = proof_of_core_quota_inputs.into();
@@ -36,7 +36,7 @@ impl Inputs {
 
     #[must_use]
     pub fn new_proof_of_leadership_quota_inputs(
-        key_index: u64,
+        key_index: KeyIndex,
         proof_of_leadership_quota_inputs: ProofOfLeadershipQuotaInputs,
     ) -> Self {
         let proof_type: ProofType = proof_of_leadership_quota_inputs.into();
@@ -49,7 +49,7 @@ impl Inputs {
 
     #[must_use]
     pub fn new_proof_of_work_quota_inputs(
-        key_index: u64,
+        key_index: KeyIndex,
         proof_of_work_quota_inputs: ProofOfWorkQuotaInputs,
     ) -> Self {
         let proof_type: ProofType = proof_of_work_quota_inputs.into();

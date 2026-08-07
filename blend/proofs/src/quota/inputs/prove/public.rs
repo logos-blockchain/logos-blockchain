@@ -3,7 +3,10 @@ use core::fmt::{self, Debug, Formatter};
 use lb_groth16::{AdditiveGroup as _, Fr, fr_to_bytes};
 use serde::{Deserialize, Serialize};
 
-use crate::{ZkHash, quota::Ed25519PublicKey};
+use crate::{
+    ZkHash,
+    quota::{Ed25519PublicKey, Quota},
+};
 
 /// Public inputs for all types of Proof of Quota. Spec: <https://lip.logos.co/blockchain/raw/proof-of-quota.html#public-values>.
 #[derive(Clone, Copy)]
@@ -44,7 +47,7 @@ impl Default for Inputs {
 pub struct CoreInputs {
     #[serde(with = "lb_groth16::serde::serde_fr")]
     pub zk_root: ZkHash,
-    pub quota: u64,
+    pub quota: Quota,
 }
 
 impl Debug for CoreInputs {
@@ -63,7 +66,7 @@ pub struct LeaderInputs {
     pub pol_ledger_aged: ZkHash,
     #[serde(with = "lb_groth16::serde::serde_fr")]
     pub pol_epoch_nonce: ZkHash,
-    pub message_quota: u64,
+    pub message_quota: Quota,
     #[serde(with = "lb_groth16::serde::serde_fr")]
     pub lottery_0: Fr,
     #[serde(with = "lb_groth16::serde::serde_fr")]
@@ -93,7 +96,7 @@ impl Debug for LeaderInputs {
 pub struct PowInputs {
     #[serde(with = "lb_groth16::serde::serde_fr")]
     pub pow_blend_difficulty: ZkHash,
-    pub pow_quota: u64,
+    pub pow_quota: Quota,
 }
 
 impl PowInputs {
@@ -108,7 +111,7 @@ impl PowInputs {
     pub const fn unwired_placeholder() -> Self {
         Self {
             pow_blend_difficulty: ZkHash::ZERO,
-            pow_quota: 0,
+            pow_quota: Quota::ZERO,
         }
     }
 }
