@@ -37,8 +37,7 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
     /// Constructs an empty vector with at least the specified capacity.
     ///
     /// The `capacity` must be within the `[MIN, MAX]` bounds; returns
-    /// [`BoundedError::TooFewItems`] when `capacity < MIN` and
-    /// [`BoundedError::TooManyItems`] when `capacity > MAX`.
+    /// [`BoundedError::CapacityOutOfBounds`] when `capacity` is outside this range.
     ///
     /// This does **not** change the length of the vector (it is still zero
     /// after construction), but pre-allocates space so that at least
