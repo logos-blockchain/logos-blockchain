@@ -67,8 +67,8 @@ pub struct ApiHeaderSerializer {
     parent_block: HeaderId,
     #[serde(getter = "Header::slot")]
     slot: Slot,
-    #[serde(getter = "Header::block_root")]
-    block_root: ContentId,
+    #[serde(getter = "Header::body_root")]
+    body_root: ContentId,
     #[serde(getter = "Header::leader_proof")]
     proof_of_leadership: Groth16LeaderProof,
 }

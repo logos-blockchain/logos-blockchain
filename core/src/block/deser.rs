@@ -4,7 +4,7 @@ mod tests {
     use lb_key_management_system_keys::keys::Ed25519Key;
 
     use crate::{
-        block::{Block, BlockTransactions, tests::create_proof},
+        block::{Block, BlockTransactions, UncleHeaders, tests::create_proof},
         mantle::RawMantleTx,
     };
 
@@ -13,6 +13,7 @@ mod tests {
         Block::create(
             [0u8; 32].into(),
             Slot::from(1u64),
+            UncleHeaders::empty(),
             create_proof(),
             BlockTransactions::empty(),
             &signing_key,
@@ -75,17 +76,20 @@ mod tests {
         const VERSION: usize = 1;
         const PARENT_BLOCK: usize = 32;
         const SLOT: usize = 8;
-        const BLOCK_ROOT: usize = 32;
+        const BODY_ROOT: usize = 32;
         const POL_PROOF: usize = 128;
         const ENTROPY_CONTRIBUTION: usize = 32;
         const LEADER_KEY: usize = 32;
         const VOUCHER_CM: usize = 32;
         const SIGNATURE: usize = 64;
         const TX_COUNT: usize = 8; // u64 Vec length (genuinely variable)
+        // bincode uses 8-byte for a length prefix, unlike the wire codec.
+        const UNCLE_HEADERS_COUNT: usize = 8;
         const EXPECTED: usize = VERSION
             + PARENT_BLOCK
             + SLOT
-            + BLOCK_ROOT
+            + BODY_ROOT
+            + UNCLE_HEADERS_COUNT
             + POL_PROOF
             + ENTROPY_CONTRIBUTION
             + LEADER_KEY

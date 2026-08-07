@@ -317,7 +317,7 @@ pub fn api_block(
             id: header_id(id),
             parent_block: header_id(parent),
             slot: slot.into(),
-            block_root: ContentId::from([0; 32]),
+            body_root: ContentId::from([0; 32]),
             proof_of_leadership: Groth16LeaderProof::genesis(),
         },
         transactions,

@@ -7,7 +7,7 @@ use lb_utils::bounded::{BoundedError, UpperBoundedVec};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    block::{Block, BlockTransactions},
+    block::{Block, BlockTransactions, UncleHeaders},
     header::Header,
     mantle::{
         Note, Op, OpProof, SignedMantleTx,
@@ -135,10 +135,11 @@ impl<'de> Deserialize<'de> for GenesisBlock {
         let block = Block {
             header: raw.header,
             signature: raw.signature,
+            uncle_headers: UncleHeaders::empty(),
             transactions: raw.transactions,
         };
         block
-            .validate_block_root()
+            .validate_body_root()
             .map_err(serde::de::Error::custom)?;
 
         Ok(Self(block))
@@ -159,6 +160,7 @@ impl GenesisBlock {
         Self(Block {
             header,
             signature,
+            uncle_headers: UncleHeaders::empty(),
             transactions,
         })
     }
@@ -1880,18 +1882,18 @@ mod tests {
     }
 
     #[test]
-    fn genesis_block_deserialize_rejects_block_root_mismatch() {
+    fn genesis_block_deserialize_rejects_body_root_mismatch() {
         let block = GenesisBlockBuilder::new()
             .with_genesis_tx(make_genesis_tx(vec![]))
             .build();
 
         let mut value = serde_json::to_value(&block).expect("to_value should work");
-        value["header"]["block_root"] = serde_json::json!("00".repeat(32));
+        value["header"]["body_root"] = serde_json::json!("00".repeat(32));
 
         let err = serde_json::from_value::<GenesisBlock>(value).unwrap_err();
         assert!(
             err.to_string()
-                .contains("Block root mismatch: calculated content does not match header"),
+                .contains("Body root mismatch: calculated body does not match header"),
             "unexpected error: {err}"
         );
     }

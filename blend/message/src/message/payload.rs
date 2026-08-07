@@ -5,7 +5,7 @@ use serde_with::serde_as;
 
 use crate::Error;
 
-pub const MAX_PAYLOAD_BODY_SIZE: usize = 8555;
+pub const MAX_PAYLOAD_BODY_SIZE: usize = 10000;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[repr(u8)]

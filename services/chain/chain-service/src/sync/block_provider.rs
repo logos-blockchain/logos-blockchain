@@ -586,7 +586,7 @@ mod tests {
 
     use futures::StreamExt as _;
     use lb_core::{
-        block::BlockTransactions,
+        block::{BlockTransactions, UncleHeaders},
         codec::DeserializeOp as _,
         crypto::ZkHasher,
         events::Events,
@@ -906,6 +906,7 @@ mod tests {
             Block::create(
                 prev_header,
                 slot,
+                UncleHeaders::empty(),
                 self.proof.clone(),
                 BlockTransactions::empty(),
                 &dummy_signing_key,
