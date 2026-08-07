@@ -43,7 +43,7 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
     /// after construction), but pre-allocates space so that at least
     /// `capacity` elements can be pushed without reallocation.
     pub fn with_capacity(capacity: usize) -> Result<Self, BoundedError> {
-        if capacity < MIN || capacity > MAX {
+        if MIN > 0 || capacity > MAX {
             return Err(BoundedError::CapacityOutOfBounds { min: MIN, max: MAX, capacity });
         }
         Ok(Self::new_unchecked(Vec::with_capacity(capacity)))
@@ -432,7 +432,7 @@ mod tests {
         let mut bv = TestBoundedVectorMin2::try_from(vec![1, 2, 3, 4]).unwrap();
         assert_eq!(
             bv.try_push(5),
-            Err(BoundedError::CapacityOutOfBounds { min: 0, max: 4, capacity: 5 })
+            Err(BoundedError::TooManyItems { count: 5, max: 4 })
         );
         // The failed push must not have mutated the vector.
         assert_eq!(bv.as_slice(), &[1, 2, 3, 4]);
@@ -467,11 +467,11 @@ mod tests {
     fn try_from_rejects_input_above_max() {
         assert_eq!(
             TestBoundedVectorMin2::try_from(vec![1, 2, 3, 4, 5]),
-            Err(BoundedError::CapacityOutOfBounds { min: 0, max: 4, capacity: 5 })
+            Err(BoundedError::TooManyItems { count: 5, max: 4 })
         );
         assert_eq!(
             TestBoundedVectorMin0::try_from(vec![1, 2, 3, 4, 5]),
-            Err(BoundedError::CapacityOutOfBounds { min: 0, max: 4, capacity: 5 })
+            Err(BoundedError::TooManyItems { count: 5, max: 4 })
         );
     }
 
@@ -658,7 +658,7 @@ mod tests {
     fn try_from_iter_rejects_items_above_maximum() {
         let result = TestBoundedVectorMin0::try_from_iter([1, 2, 3, 4, 5]);
 
-        assert_eq!(result, Err(BoundedError::CapacityOutOfBounds { min: 0, max: 4, capacity: 5 }));
+        assert_eq!(result, Err(BoundedError::TooManyItems { count: 5, max: 4 }));
     }
 
     #[test]
@@ -756,9 +756,10 @@ mod tests {
         assert!(v.as_inner().capacity() >= 5);
     }
 
+
     #[test]
     fn with_capacity_within_bounds_succeeds() {
-        type V = BoundedVec<u32, 2, 10>;
+        type V = BoundedVec<u32, 0, 10>;
         let v = V::with_capacity(5).unwrap();
         assert_eq!(v.len(), 0);
         assert!(v.as_inner().capacity() >= 5);
@@ -782,11 +783,11 @@ mod tests {
     }
 
     #[test]
-    fn with_capacity_below_min_returns_error() {
-        type V = BoundedVec<u32, 3, 8>;
+    fn with_capacity_rejects_nonzero_min() {
+        type V = BoundedVec<u32, 2, 10>;
         assert!(matches!(
-            V::with_capacity(2),
-            Err(BoundedError::CapacityOutOfBounds { min: 3, max: 8, capacity: 2 })
+            V::with_capacity(5),
+            Err(BoundedError::CapacityOutOfBounds { min: 2, max: 10, capacity: 5 })
         ));
     }
 
