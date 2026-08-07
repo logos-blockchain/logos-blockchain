@@ -24,7 +24,7 @@ const REMOVED_ITEM_GRACE_PERIOD: Duration = Duration::from_mins(10);
 const LOG_TARGET: &str = mempool::POOL;
 
 /// Default time a pending transaction may stay in the pool before eviction.
-pub const DEFAULT_TX_TTL: Duration = Duration::from_hours(1);
+pub const DEFAULT_TX_TTL: Duration = Duration::from_hours(24);
 
 /// Settings for the [`Mempool`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

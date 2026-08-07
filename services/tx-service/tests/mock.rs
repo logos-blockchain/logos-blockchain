@@ -359,6 +359,7 @@ async fn expired_tx_is_evicted_on_next_sweep() {
 
     let old_tx = sample_removed_tx();
     let old_tx_id = old_tx.id();
+    let old_tx_prefix = old_tx_id.key_prefix();
 
     let fresh_tx = MockTransaction::new(MockMessage {
         payload: "fresh".to_owned(),
@@ -387,12 +388,19 @@ async fn expired_tx_is_evicted_on_next_sweep() {
 
     assert_eq!(pool.pending_item_count(), 2);
     assert_eq!(pool.status(&[old_tx_id]), vec![Status::Pending]);
+    assert_eq!(
+        pool.keys_by_prefix(&old_tx_prefix)
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![old_tx_id]
+    );
 
     pool.remove(&[]).await;
 
     assert_eq!(pool.pending_item_count(), 1);
     assert_eq!(pool.status(&[old_tx_id]), vec![Status::Unknown]);
     assert_eq!(pool.status(&[fresh_tx_id]), vec![Status::Pending]);
+    assert!(pool.keys_by_prefix(&old_tx_prefix).next().is_none());
 
     let pending_after_eviction = pool
         .view([0; 32].into())
