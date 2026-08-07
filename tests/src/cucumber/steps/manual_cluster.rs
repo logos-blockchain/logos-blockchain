@@ -404,6 +404,7 @@ pub async fn insert_started_node_info<S: BuildHasher>(
             chain_info: HashMap::new(),
             wallet_info,
             runtime_dir: std::path::PathBuf::new(),
+            slots_per_epoch: None,
             immediate_start: world.network_immediate_start(logical_node_name),
         },
     );

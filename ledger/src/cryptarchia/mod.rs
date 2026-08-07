@@ -9,7 +9,10 @@ use lb_core::{
     events::TxEvent,
     mantle::{
         NoteId, Utxo, Value,
-        gas::{Gas, GasConstants, GasCost, GasOverflow, GasPrice},
+        gas::{
+            Gas, GasConstants, GasCost, GasOverflow, GasPrice,
+            STORAGE_PRICE_MAX_INCREASE_DENOMINATOR, STORAGE_PRICE_MAX_INCREASE_NUMERATOR,
+        },
         ledger::ExecutableOperation as _,
         ops::transfer::TransferOp,
         traits::GenesisTx,
@@ -30,25 +33,14 @@ use crate::{
     mantle::sdp::SdpLedger,
 };
 
-// corresponds to the denominator of q
-const EXECUTION_MARKET_EMA_DENOMINATOR: u128 = 10;
-// Corresponds to the numerator of q
-const EXECUTION_MARKET_EMA_PREV_WEIGHT: u128 = 9;
-// Corresponds to 7 * G_target because the numerator is 1 + phi (G_avg -
-// G_target)
-const EXECUTION_MARKET_BASE_FEE_NUMERATOR: u128 = 11_177_110;
-// Corresponds to 8 * G_target because the denominator is 1 + phi (G_avg -
-// // G_target)
-const EXECUTION_MARKET_BASE_FEE_DENOMINATOR: u128 = 12_773_840;
-
 // Corresponds to the denominator of 1/beta
 const STORAGE_MARKET_EMA_DENOMINATOR: u128 = 2;
 // Corresponds to the denominator of 1+ alpha and 1-alpha
-const STORAGE_MARKET_CLAMP_DENOMINATOR: u128 = 8;
+const STORAGE_MARKET_CLAMP_DENOMINATOR: u128 = STORAGE_PRICE_MAX_INCREASE_DENOMINATOR;
 // Corresponds to the numerator of 1-alpha
 const STORAGE_MARKET_CLAMP_DOWN_NUMERATOR: u128 = 7;
 // Corresponds to the numerator of 1+alpha
-const STORAGE_MARKET_CLAMP_UP_NUMERATOR: u128 = 9;
+const STORAGE_MARKET_CLAMP_UP_NUMERATOR: u128 = STORAGE_PRICE_MAX_INCREASE_NUMERATOR;
 
 pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
 use super::{Balance, Config, LedgerError, mantle};
@@ -387,19 +379,12 @@ impl LedgerState {
 
     #[must_use]
     pub fn update_execution_market(self, block_execution_gas_consumed: Gas) -> Self {
-        // First update the `average_execution_gas`
-        let avg_numerator = u128::from(block_execution_gas_consumed.into_inner())
-            + EXECUTION_MARKET_EMA_PREV_WEIGHT
-                * u128::from(self.average_execution_gas.into_inner());
-        let new_average_execution_gas: Gas =
-            ((avg_numerator / EXECUTION_MARKET_EMA_DENOMINATOR) as Value).into();
-
-        // Then update the `execution_base_fee` using the new average
-        let fee_numerator = u128::from(self.execution_base_fee.into_inner())
-            * (EXECUTION_MARKET_BASE_FEE_NUMERATOR
-                + u128::from(new_average_execution_gas.into_inner()));
-        let new_base_fee =
-            (fee_numerator.div_ceil(EXECUTION_MARKET_BASE_FEE_DENOMINATOR) as Value).into();
+        let (new_base_fee, new_average_execution_gas) =
+            lb_core::mantle::gas::update_execution_market_for_ledger(
+                self.execution_base_fee,
+                self.average_execution_gas,
+                block_execution_gas_consumed,
+            );
 
         Self {
             average_execution_gas: new_average_execution_gas,
@@ -568,6 +553,12 @@ impl LedgerState {
     #[must_use]
     pub const fn execution_base_fee(&self) -> &GasPrice {
         &self.execution_base_fee
+    }
+
+    #[must_use]
+    /// Returns the current execution EMA used by the execution market.
+    pub const fn average_execution_gas(&self) -> Gas {
+        self.average_execution_gas
     }
 
     #[must_use]

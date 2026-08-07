@@ -825,6 +825,7 @@ async fn step_wait_all_nodes_responsive(
         .values()
         .map(|node| {
             let fut = verify_reponsive_and_network_ready_with_timeout(
+                world,
                 &node.started_node.client,
                 &node.name,
                 &node.started_node.name,
@@ -858,7 +859,7 @@ async fn step_node_is_at_height(
 
     let mut count = 0usize;
     loop {
-        poll_all_nodes_and_update_consensus_cache(&step.value, &mut world.nodes_info).await?;
+        poll_all_nodes_and_update_consensus_cache(world, &step.value).await?;
         let best_height = world.node_best_height(&node_name)?.unwrap_or_default();
         if best_height >= height {
             info!(
@@ -896,7 +897,7 @@ async fn step_node_is_exactly_at_height(
     node_name: String,
     height: u64,
 ) -> StepResult {
-    poll_all_nodes_and_update_consensus_cache(&step.value, &mut world.nodes_info).await?;
+    poll_all_nodes_and_update_consensus_cache(world, &step.value).await?;
     let node_height = world.node_best_height(&node_name)?.unwrap_or_default();
     if node_height != height {
         return Err(StepError::StepFail {

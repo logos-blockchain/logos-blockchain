@@ -505,7 +505,8 @@ async fn all_local_nodes_match_sync_target(
             return false;
         };
 
-        let Ok(consensus) = node_info.started_node.client.consensus_info().await else {
+        let client = node_info.started_node.client.clone();
+        let Ok(consensus) = world.consensus_info(&node_name, &client).await else {
             return false;
         };
         if SyncTargetStats::from_cryptarchia_info(&consensus.cryptarchia_info) != target.stats {
@@ -757,6 +758,10 @@ pub async fn start_node(
         .wallet_info
         .extend(wallet_info.iter().map(|(k, v)| (k.clone(), v.clone())));
 
+    let slots_per_epoch = load_run_config(&node_runtime_dir.join("deployment.yaml"))
+        .ok()
+        .map(|settings| settings.cryptarchia.slots_per_epoch());
+
     let client = started_node.client.clone();
     // Move `started_node` into the world's NodeInfo (no clone required)
     world.nodes_info.insert(
@@ -768,6 +773,7 @@ pub async fn start_node(
             chain_info: HashMap::default(),
             wallet_info,
             runtime_dir: node_runtime_dir,
+            slots_per_epoch,
             immediate_start,
         },
     );
@@ -793,6 +799,7 @@ pub async fn start_node(
     if !immediate_start {
         let cluster = world.local_cluster.as_ref().expect("local cluster checked");
         ensure_node_ready(
+            world,
             cluster,
             &client,
             node_name,
@@ -808,7 +815,7 @@ pub async fn start_node(
     }
 
     if world.node_snapshot_on_startup.is_some() {
-        match client.consensus_info().await {
+        match world.consensus_info(node_name, &client).await {
             Ok(info) => {
                 info!(
                     target: TARGET,
@@ -908,6 +915,7 @@ pub async fn restart_node(world: &CucumberWorld, step: &str, node_name: &str) ->
         warn!(target: TARGET, "Step `{step}` error: {e}");
     })?;
     ensure_node_ready(
+        world,
         cluster,
         &client,
         node_name,
@@ -1089,7 +1097,12 @@ fn load_run_config(path: &Path) -> Result<DeploymentSettings, StepError> {
 
 // Ensure this node is ready, and achieved `Mode::OnLine` if it is a bootstrap
 // node.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Readiness needs the node, cluster, and startup policy context."
+)]
 async fn ensure_node_ready(
+    world: &CucumberWorld,
     cluster: &LbcManualCluster,
     client: &NodeHttpClient,
     node_name: &str,
@@ -1112,7 +1125,7 @@ async fn ensure_node_ready(
     })
     .await?;
 
-    verify_reponsive_and_network_ready(client, node_name, started_node_name).await?;
+    verify_reponsive_and_network_ready(world, client, node_name, started_node_name).await?;
 
     if !is_bootstrap_node && require_all_peers_mode_online_at_startup.is_none()
         || join_external_network
@@ -1121,6 +1134,7 @@ async fn ensure_node_ready(
     }
 
     verify_online(
+        world,
         client,
         node_name,
         started_node_name,
@@ -1131,6 +1145,7 @@ async fn ensure_node_ready(
 }
 
 async fn verify_online(
+    world: &CucumberWorld,
     client: &NodeHttpClient,
     node_name: &str,
     started_node_name: &str,
@@ -1141,7 +1156,7 @@ async fn verify_online(
     let mut count = 0usize;
     loop {
         let mut mode_online = false;
-        match client.consensus_info().await {
+        match world.consensus_info(node_name, client).await {
             Ok(val) => {
                 if matches!(val.phase, PhaseTag::Following) {
                     mode_online = true;
@@ -1197,11 +1212,13 @@ pub async fn wait_all_nodes_responive(
 }
 
 async fn verify_reponsive_and_network_ready(
+    world: &CucumberWorld,
     client: &NodeHttpClient,
     node_name: &str,
     started_node_name: &str,
 ) -> StepResult {
     verify_reponsive_and_network_ready_with_timeout(
+        world,
         client,
         node_name,
         started_node_name,
@@ -1216,6 +1233,7 @@ async fn verify_reponsive_and_network_ready(
     reason = "Singular fn with multiple branches to handle different events and futures."
 )]
 pub async fn verify_reponsive_and_network_ready_with_timeout(
+    world: &CucumberWorld,
     client: &NodeHttpClient,
     node_name: &str,
     started_node_name: &str,
@@ -1228,7 +1246,7 @@ pub async fn verify_reponsive_and_network_ready_with_timeout(
 
     loop {
         can_provide_consensus_info = false;
-        match client.consensus_info().await {
+        match world.consensus_info(node_name, client).await {
             Ok(_) => {
                 can_provide_consensus_info = true;
             }
@@ -1436,15 +1454,15 @@ fn tips_aligned_at_min_difference(
 }
 
 async fn fetch_and_update_chain_info(
+    world: &mut CucumberWorld,
     step: &str,
-    nodes_info: &mut HashMap<String, NodeInfo>,
     nodes_chain_info: &mut HashMap<String, ChainInfoMap>,
 ) -> Result<(u64, u64, Vec<u64>), StepError> {
-    poll_all_nodes_and_update_consensus_cache(step, nodes_info).await?;
+    poll_all_nodes_and_update_consensus_cache(world, step).await?;
 
-    let mut best_node_heights: Vec<u64> = Vec::with_capacity(nodes_info.len());
+    let mut best_node_heights: Vec<u64> = Vec::with_capacity(world.nodes_info.len());
 
-    for node_info in nodes_info.values() {
+    for node_info in world.nodes_info.values() {
         let max_height = node_info.best_height().unwrap_or_default();
         best_node_heights.push(max_height);
 
@@ -1540,7 +1558,7 @@ pub async fn nodes_converged(
     let mut count = 0usize;
     loop {
         let (all_nodes_min, diff, peer_heights) =
-            fetch_and_update_chain_info(step, &mut world.nodes_info, &mut nodes_chain_info).await?;
+            fetch_and_update_chain_info(world, step, &mut nodes_chain_info).await?;
         let (status, anchor_hashes) =
             tips_aligned_at_min_difference(&nodes_chain_info, all_nodes_min);
 
@@ -1608,18 +1626,15 @@ pub async fn ensure_all_nodes_agree_on_lib(
 
     loop {
         let snapshots = try_join_all(world.nodes_info.values().map(async |node| {
-            let consensus = node.started_node.client.consensus_info().await?;
-            Ok::<_, StepError>((
-                node.name.clone(),
-                consensus.cryptarchia_info.height,
-                consensus.cryptarchia_info.lib.encode_hex::<String>(),
-            ))
+            let client = node.started_node.client.clone();
+            let consensus = world.consensus_info(&node.name, &client).await?;
+            Ok::<_, StepError>((node.name.clone(), client, consensus.cryptarchia_info))
         }))
         .await?;
 
         let libs = snapshots
             .iter()
-            .map(|(_, _, lib)| lib.clone())
+            .map(|(_, _, consensus)| consensus.lib.encode_hex::<String>())
             .collect::<HashSet<_>>();
 
         if libs.len() == 1 {
@@ -1632,7 +1647,17 @@ pub async fn ensure_all_nodes_agree_on_lib(
         }
 
         if count.is_multiple_of(50) {
-            let status = format_lib_agreement_status(&snapshots);
+            let status_snapshots = snapshots
+                .iter()
+                .map(|(node_name, _, consensus)| {
+                    (
+                        node_name.clone(),
+                        consensus.height,
+                        consensus.lib.encode_hex::<String>(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let status = format_lib_agreement_status(&status_snapshots);
 
             info!(
                 target: TARGET,
@@ -1642,7 +1667,17 @@ pub async fn ensure_all_nodes_agree_on_lib(
         }
 
         if start.elapsed() >= time_out {
-            let status = format_lib_agreement_status(&snapshots);
+            let status_snapshots = snapshots
+                .iter()
+                .map(|(node_name, _, consensus)| {
+                    (
+                        node_name.clone(),
+                        consensus.height,
+                        consensus.lib.encode_hex::<String>(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let status = format_lib_agreement_status(&status_snapshots);
 
             return Err(StepError::StepFail {
                 message: format!(
@@ -1664,18 +1699,21 @@ fn format_lib_agreement_status(snapshots: &[(String, u64, String)]) -> String {
         .join(", ")
 }
 
-pub async fn poll_all_nodes_and_update_consensus_cache<S: ::std::hash::BuildHasher>(
+pub async fn poll_all_nodes_and_update_consensus_cache(
+    world: &mut CucumberWorld,
     step: &str,
-    nodes_info: &mut HashMap<String, NodeInfo, S>,
 ) -> Result<(), StepError> {
     use futures_util::future::join_all;
 
-    let nodes = nodes_info.values().collect::<Vec<&NodeInfo>>();
+    let nodes = world
+        .nodes_info
+        .values()
+        .map(|node| (node.name.clone(), node.started_node.client.clone()))
+        .collect::<Vec<_>>();
 
     // Query every node, but do not fail-fast on the first error.
-    let info_futures = nodes.iter().map(async |node| {
-        let node_name = node.name.clone();
-        let result = node.started_node.client.consensus_info().await;
+    let info_futures = nodes.iter().map(async |(node_name, client)| {
+        let result = world.consensus_info(node_name, client).await;
         (node_name, result)
     });
 
@@ -1687,7 +1725,7 @@ pub async fn poll_all_nodes_and_update_consensus_cache<S: ::std::hash::BuildHash
     for (node_name, result) in results {
         match result {
             Ok(info) => snapshots.push(ConsensusSnapshot {
-                node_name,
+                node_name: node_name.clone(),
                 height: info.cryptarchia_info.height,
                 header_hash: info.cryptarchia_info.tip.encode_hex(),
             }),
@@ -1695,8 +1733,11 @@ pub async fn poll_all_nodes_and_update_consensus_cache<S: ::std::hash::BuildHash
                 // If both `consensus_info` and `network_info` fail, assume the node is no
                 // longer responsive.
                 if let Err(e2) = poll_network_info(
-                    nodes_info.get_mut(&node_name).expect("Failed to get node"),
-                    &node_name,
+                    world
+                        .nodes_info
+                        .get_mut(node_name)
+                        .expect("Failed to get node"),
+                    node_name,
                     5,
                 )
                 .await
@@ -1711,7 +1752,7 @@ pub async fn poll_all_nodes_and_update_consensus_cache<S: ::std::hash::BuildHash
                     target: TARGET,
                     "Step `{step}` error: node `{node_name}` did not respond with consensus_info: {e}",
                 );
-                failed_nodes.push(node_name);
+                failed_nodes.push(node_name.clone());
             }
         }
     }
@@ -1734,7 +1775,8 @@ pub async fn poll_all_nodes_and_update_consensus_cache<S: ::std::hash::BuildHash
     }
 
     for snap in &snapshots {
-        let node = nodes_info
+        let node = world
+            .nodes_info
             .get_mut(&snap.node_name)
             .ok_or(StepError::LogicalError {
                 message: format!(
@@ -1879,7 +1921,8 @@ pub(crate) async fn get_cryptarchia_info_all_nodes(world: &CucumberWorld, step: 
         let Some(node_info) = world.nodes_info.get(&node_name) else {
             continue;
         };
-        match node_info.started_node.client.consensus_info().await {
+        let client = node_info.started_node.client.clone();
+        match world.consensus_info(&node_name, &client).await {
             Ok(consensus) => {
                 let mode = if matches!(consensus.phase, PhaseTag::Following) {
                     "Online"

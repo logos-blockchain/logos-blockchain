@@ -163,6 +163,46 @@ pub async fn prepared_transaction_tip_absorbed_fee_increase(
     Ok(())
 }
 
+/// Checks that a policy-funded quote actually projected at least one storage
+/// price boundary and raised the storage price used for funding.
+pub fn fee_quote_projects_across_storage_boundary(
+    world: &CucumberWorld,
+    step: &Step,
+    transaction_alias: &str,
+) -> StepResult {
+    let quote = world.resolve_prepared_fee_quote(transaction_alias)?;
+
+    if quote.storage_boundaries_crossed < 1 {
+        return Err(StepError::StepFail {
+            message: format!(
+                "Step `{}` error: fee quote `{transaction_alias}` crossed {} storage boundaries; expected at least one",
+                step.value, quote.storage_boundaries_crossed,
+            ),
+        });
+    }
+
+    if quote.projected_prices.storage_gas_price <= quote.live_prices.storage_gas_price {
+        return Err(StepError::StepFail {
+            message: format!(
+                "Step `{}` error: fee quote `{transaction_alias}` projected storage gas price {} from live price {}; expected an increase",
+                step.value,
+                quote.projected_prices.storage_gas_price,
+                quote.live_prices.storage_gas_price,
+            ),
+        });
+    }
+
+    info!(
+        target: TARGET,
+        "Fee quote `{transaction_alias}` projects {} storage boundary/ies and storage gas price {} -> {}",
+        quote.storage_boundaries_crossed,
+        quote.live_prices.storage_gas_price,
+        quote.projected_prices.storage_gas_price,
+    );
+
+    Ok(())
+}
+
 /// Replays the recorded prices through the spec's price calculation and
 /// checks the node reported the same price after every block.
 pub fn execution_prices_follow_spec_reference(world: &CucumberWorld, step: &Step) -> StepResult {

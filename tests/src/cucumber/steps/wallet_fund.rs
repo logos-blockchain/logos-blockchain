@@ -4,7 +4,7 @@
 
 use cucumber::{gherkin::Step, when};
 use lb_core::mantle::{
-    Note, Op, OpProof, SignedMantleTx,
+    EpochHeadroom, Note, Op, OpProof, SignedMantleTx,
     gas::GasCost,
     ops::channel::{
         ChannelId, MsgId,
@@ -13,7 +13,10 @@ use lb_core::mantle::{
     traits::Hashable as _,
     transactions::{builder::MantleTxBuilder, mantle_tx::MantleTx as _},
 };
-use lb_http_api_common::bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody};
+use lb_http_api_common::bodies::wallet::{
+    fee::WalletFeePolicy,
+    fund::{WalletFundRequestBody, WalletFundResponseBody},
+};
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use lb_testing_framework::NodeHttpClient;
 use tracing::info;
@@ -23,6 +26,65 @@ use crate::cucumber::{
     steps::TARGET,
     world::CucumberWorld,
 };
+
+fn parse_epoch_headroom(value: &str) -> Result<EpochHeadroom, StepError> {
+    serde_json::from_str(value).map_err(|source| StepError::InvalidArgument {
+        message: format!("invalid epoch headroom `{value}`: {source}"),
+    })
+}
+
+/// Prepare a policy-funded transaction through `/wallet/fund`, retaining the
+/// exact signed transaction and the quote for submission and assertions later
+/// in the scenario.
+#[when(
+    expr = "I prepare a wallet-funded transaction with epoch headroom {string} via node {string} as {string}"
+)]
+async fn step_prepare_wallet_funded_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    epoch_headroom: String,
+    node_name: String,
+    transaction_alias: String,
+) -> StepResult {
+    let funding_wallet = world.funding_wallet(&node_name)?;
+    let funding_pk = funding_wallet.public_key()?;
+    let client = world.resolve_node_http_client(&node_name)?;
+    let headroom = parse_epoch_headroom(&epoch_headroom)?;
+
+    // A one-LGO self-output keeps this a real funded transaction while making
+    // the step independent of any additional recipient wallet configuration.
+    let tx_builder = MantleTxBuilder::new()
+        .add_ledger_output(Note::new(1, funding_pk))
+        .map_err(|source| StepError::LogicalError {
+            message: format!(
+                "Step `{}` error: failed to add wallet-funded output: {source}",
+                step.value
+            ),
+        })?;
+
+    let mut response =
+        fund_via_node_with_policy(&client, step, tx_builder, funding_pk, headroom).await?;
+    let quote = response
+        .fee_quote
+        .take()
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!(
+                "Step `{}` error: policy-funded transaction returned no fee quote",
+                step.value
+            ),
+        })?;
+    let signed_tx = signed_tx_from_fund_response(response, step)?;
+
+    world.remember_prepared_transaction(transaction_alias.clone(), signed_tx);
+    world.remember_prepared_fee_quote(transaction_alias.clone(), quote);
+
+    info!(
+        target: TARGET,
+        "Prepared wallet-funded transaction `{transaction_alias}` with {headroom:?} epoch headroom via node `{node_name}`"
+    );
+
+    Ok(())
+}
 
 /// Fund a payment transaction from the node's wallet: the fund endpoint must
 /// pull wallet inputs to cover the output, append the fee transfer and return
@@ -200,9 +262,62 @@ async fn fund_via_node(
             funding_public_keys: vec![funding_pk],
             max_tx_fee: GasCost::new(u64::MAX),
             priority_fee: 0,
+            fee_policy: None,
         })
         .await
         .map_err(|source| StepError::StepFail {
             message: format!("Step `{}` error: fund request failed: {source}", step.value),
+        })
+}
+
+async fn fund_via_node_with_policy(
+    client: &NodeHttpClient,
+    step: &Step,
+    tx_builder: MantleTxBuilder,
+    funding_pk: ZkPublicKey,
+    epoch_headroom: EpochHeadroom,
+) -> Result<WalletFundResponseBody, StepError> {
+    client
+        .fund_tx(WalletFundRequestBody {
+            tip: None,
+            tx_builder,
+            change_public_key: funding_pk,
+            funding_public_keys: vec![funding_pk],
+            max_tx_fee: GasCost::new(u64::MAX),
+            priority_fee: 0,
+            fee_policy: Some(WalletFeePolicy {
+                epoch_headroom: Some(epoch_headroom),
+                priority_fee: 0,
+            }),
+        })
+        .await
+        .map_err(|source| StepError::StepFail {
+            message: format!(
+                "Step `{}` error: policy fund request failed: {source}",
+                step.value
+            ),
+        })
+}
+
+fn signed_tx_from_fund_response(
+    response: WalletFundResponseBody,
+    step: &Step,
+) -> Result<SignedMantleTx<lb_core::mantle::transactions::states::Preverified>, StepError> {
+    let Some(transfer_proof) = response.transfer_proof else {
+        return Err(StepError::LogicalError {
+            message: format!(
+                "Step `{}` error: policy-funded transaction must return a transfer proof",
+                step.value
+            ),
+        });
+    };
+
+    SignedMantleTx::new(response.funded_tx, [transfer_proof].into())
+        .preverify()
+        .map_err(|source| StepError::LogicalError {
+            message: format!(
+                "Step `{}` error: policy-funded transaction proof failed preverification: {source}",
+                step.value
+            ),
         })
 }

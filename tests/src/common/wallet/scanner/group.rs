@@ -136,25 +136,28 @@ pub fn build_fork_group_scanner_configs(
         }
     }
 
+    let epoch_observer = world.node_epoch_observer();
     let selector: SharedBestNodeSelector = Arc::new(
-        |representative_wallet_name,
-         group_nodes,
-         node_clients,
-         wallet_to_node,
-         group_id,
-         mut last_msg| {
+        move |representative_wallet_name,
+              group_nodes,
+              node_clients,
+              wallet_to_node,
+              group_id,
+              last_msg| {
+            let epoch_observer = epoch_observer.clone();
             Box::pin(async move {
                 let node_to_group = node_clients
                     .keys()
                     .map(|node_name| (node_name.clone(), group_id.clone()))
                     .collect::<BTreeMap<_, _>>();
                 get_best_node_info_from_clients(
+                    epoch_observer.clone(),
                     &representative_wallet_name,
                     &wallet_to_node,
                     &node_to_group,
                     &group_nodes,
                     &node_clients,
-                    Some(&mut last_msg),
+                    Some(last_msg),
                 )
                 .await
             })

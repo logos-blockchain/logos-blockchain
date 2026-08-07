@@ -706,6 +706,7 @@ pub(crate) fn transfer_funds_sync(
                 funding_public_keys,
                 recipient_public_key,
                 amount,
+                None,
             )
             .await
             .map(|tip_response| tip_response.response)
@@ -970,6 +971,7 @@ pub(crate) fn channel_deposit_with_notes_sync(
                 change_public_key,
                 funding_public_keys,
                 0,
+                None,
             )
             .await
             .map_err(|error| {
@@ -1472,6 +1474,7 @@ pub(crate) fn wallet_fund_tx_sync(
                 request.change_public_key,
                 request.funding_public_keys,
                 request.priority_fee,
+                Some(request.max_tx_fee),
             )
             .await
             .map_err(|error| {
@@ -1531,6 +1534,7 @@ pub(crate) fn wallet_fund_tx_sync(
             tip,
             funded_tx,
             transfer_proof,
+            fee_quote: None,
         })
     })
 }

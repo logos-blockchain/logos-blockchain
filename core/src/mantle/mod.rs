@@ -9,7 +9,10 @@ pub mod transactions;
 mod channel_notes;
 mod fixtures;
 
-pub use gas::{GasCalculator, GasConstants};
+pub use gas::{
+    EpochHeadroom, EpochHeadroomError, ExecutionProjection, ExecutionProjectionModel,
+    FeeHorizonQuote, FeePolicy, GasCalculator, GasConstants,
+};
 pub use ledger::{Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof};
 pub use transactions::{

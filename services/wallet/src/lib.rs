@@ -1,4 +1,5 @@
 pub mod api;
+pub mod fee;
 mod states;
 
 use std::{collections::HashMap, num::NonZeroU64, time::Duration};
@@ -16,7 +17,8 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        NoteId, Op, OpProof, SignedMantleTx, TxHash, Utxo, Value, VerificationError,
+        FeeHorizonQuote, FeePolicy, NoteId, Op, OpProof, SignedMantleTx, TxHash, Utxo, Value,
+        VerificationError,
         gas::{GasCost, GasOverflow, MainnetGasConstants},
         ledger::Inputs,
         ops::{
@@ -115,6 +117,9 @@ pub enum WalletServiceError {
     #[error(transparent)]
     GasOverflow(#[from] GasOverflow),
 
+    #[error(transparent)]
+    FeeProjection(#[from] fee::FeeProjectionError),
+
     #[error("Transaction fee exceeded the configured max fee. tx_fee={tx_fee} > max_fee={max_fee}")]
     TxFeeExceedsMaxFee { max_fee: GasCost, tx_fee: GasCost },
 
@@ -159,7 +164,17 @@ pub enum WalletMsg {
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
         priority_fee: Value,
+        max_tx_fee: Option<GasCost>,
         resp_tx: Sender<Result<TipResponse<MantleTxBuilder>, WalletServiceError>>,
+    },
+    FundTxWithPolicy {
+        tip: Option<HeaderId>,
+        tx_builder: MantleTxBuilder,
+        change_pk: ZkPublicKey,
+        funding_pks: Vec<ZkPublicKey>,
+        policy: FeePolicy,
+        max_tx_fee: Option<GasCost>,
+        resp_tx: Sender<Result<TipResponse<FundedTx>, WalletServiceError>>,
     },
     BuildLeaderClaimTx {
         tip: HeaderId,
@@ -204,6 +219,15 @@ pub enum WalletMsg {
     },
 }
 
+/// A transaction funded against projected prices and its diagnostic quote.
+#[derive(Debug)]
+pub struct FundedTx {
+    /// Transaction builder funded against the projected context.
+    pub tx_builder: MantleTxBuilder,
+    /// Diagnostic quote corresponding to the funding state and policy.
+    pub fee_quote: FeeHorizonQuote,
+}
+
 #[derive(Debug)]
 pub struct TipResponse<R> {
     pub tip: HeaderId,
@@ -244,6 +268,7 @@ impl WalletMsg {
         match self {
             Self::GetBalance { tip, .. }
             | Self::FundTx { tip, .. }
+            | Self::FundTxWithPolicy { tip, .. }
             | Self::SignTx { tip, .. }
             | Self::GetLeaderAgedNotes { tip, .. }
             | Self::GetClaimableVouchers { tip, .. }
@@ -536,6 +561,7 @@ where
                 change_pk,
                 funding_pks,
                 priority_fee,
+                max_tx_fee,
                 resp_tx,
             } => {
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
@@ -572,6 +598,23 @@ where
                     }
                 };
 
+                if let Some(max_fee) = max_tx_fee {
+                    let tx_fee = match funded.tx_fee() {
+                        Ok(tx_fee) => tx_fee,
+                        Err(err) => {
+                            Self::send_err(resp_tx, WalletServiceError::from(err));
+                            return;
+                        }
+                    };
+                    if tx_fee > max_fee {
+                        Self::send_err(
+                            resp_tx,
+                            WalletServiceError::TxFeeExceedsMaxFee { max_fee, tx_fee },
+                        );
+                        return;
+                    }
+                }
+
                 let funded_notes: Vec<NoteId> = funded.consumed_or_locked_notes().collect();
                 state.reserve_pending_notes(funded_notes.iter().copied());
 
@@ -584,6 +627,96 @@ where
                 {
                     state.release_pending_notes(funded_notes);
                     debug!(target: LOG_TARGET, "Failed to respond to FundTx");
+                }
+            }
+            WalletMsg::FundTxWithPolicy {
+                tip,
+                tx_builder,
+                change_pk,
+                funding_pks,
+                policy,
+                max_tx_fee,
+                resp_tx,
+            } => {
+                let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
+                    Ok(tip) => tip,
+                    Err(err) => {
+                        Self::send_err(resp_tx, err);
+                        return;
+                    }
+                };
+                let ledger = match Self::ledger_state_at(tip, cryptarchia).await {
+                    Ok(ledger) => ledger,
+                    Err(err) => {
+                        Self::send_err(resp_tx, err);
+                        return;
+                    }
+                };
+                let consensus_config = &epoch_config.consensus_config;
+                let projection = match fee::resolve(
+                    tip,
+                    &ledger,
+                    &epoch_config.epoch_config,
+                    consensus_config,
+                    &policy,
+                ) {
+                    Ok(projection) => projection,
+                    Err(err) => {
+                        Self::send_err(resp_tx, WalletServiceError::from(err));
+                        return;
+                    }
+                };
+                let funded = match state.fund_tx::<MainnetGasConstants>(
+                    tip,
+                    &tx_builder,
+                    change_pk,
+                    funding_pks,
+                    &projection.projected_context,
+                    policy.priority_fee,
+                ) {
+                    Ok(funded) => funded,
+                    Err(err) => {
+                        Self::send_err(resp_tx, WalletServiceError::from(err));
+                        return;
+                    }
+                };
+                let quote = match projection.finalize(&funded, policy.priority_fee) {
+                    Ok(quote) => quote,
+                    Err(err) => {
+                        Self::send_err(resp_tx, WalletServiceError::from(err));
+                        return;
+                    }
+                };
+                if let Some(max_fee) = max_tx_fee {
+                    let tx_fee = match funded.tx_fee() {
+                        Ok(tx_fee) => tx_fee,
+                        Err(err) => {
+                            Self::send_err(resp_tx, WalletServiceError::from(err));
+                            return;
+                        }
+                    };
+                    if tx_fee > max_fee {
+                        Self::send_err(
+                            resp_tx,
+                            WalletServiceError::TxFeeExceedsMaxFee { max_fee, tx_fee },
+                        );
+                        return;
+                    }
+                }
+                let funded_notes: Vec<NoteId> = funded.consumed_or_locked_notes().collect();
+                state.reserve_pending_notes(funded_notes.iter().copied());
+                if resp_tx
+                    .send(Ok(TipResponse {
+                        tip,
+                        response: FundedTx {
+                            tx_builder: funded,
+                            fee_quote: quote,
+                        },
+                    }))
+                    .is_err()
+                {
+                    state.release_pending_notes(funded_notes);
+                    debug!(target: LOG_TARGET, "Failed to respond to FundTxWithPolicy");
                 }
             }
             WalletMsg::BuildLeaderClaimTx {

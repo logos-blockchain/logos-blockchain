@@ -8,7 +8,7 @@ use lb_core::{
     mantle::{
         SignedMantleTx, Value,
         channel::ChannelState,
-        gas::GasCost,
+        gas::{EpochHeadroom, GasCost},
         ledger::{Inputs, Outputs},
         ops::channel::{
             ChannelId, MsgId, deposit::Metadata, inscribe::Inscription, withdraw::ChannelWithdrawOp,
@@ -139,11 +139,19 @@ pub struct FundingConfig {
     /// Execution tip paid on top of the mandatory fee when funding a
     /// transaction. [`Self::max_tx_fee`] caps the total.
     pub priority_fee: Value,
+    /// Number of future epochs whose mandatory fee changes should be covered
+    /// when funding a transaction.
+    pub epoch_headroom: EpochHeadroom,
 }
 
 impl FundingConfig {
     /// Default execution tip.
     pub const DEFAULT_PRIORITY_FEE: Value = 200;
+    /// Default fee horizon used by Zone SDK transactions.
+    pub const DEFAULT_EPOCH_HEADROOM: EpochHeadroom = match EpochHeadroom::from_tenths(10) {
+        Ok(headroom) => headroom,
+        Err(_) => panic!("1.0 epoch is a valid fee horizon"),
+    };
 }
 
 /// Configuration for the zone sequencer.

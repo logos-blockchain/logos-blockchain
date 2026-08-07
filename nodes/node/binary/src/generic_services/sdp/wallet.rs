@@ -55,6 +55,7 @@ where
                 config.funding_pk,
                 vec![config.funding_pk],
                 0,
+                Some(config.max_tx_fee),
             )
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
@@ -96,6 +97,7 @@ where
                 config.funding_pk,
                 vec![config.funding_pk],
                 0,
+                Some(config.max_tx_fee),
             )
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
@@ -137,6 +139,7 @@ where
                 config.funding_pk,
                 vec![config.funding_pk],
                 0,
+                Some(config.max_tx_fee),
             )
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;

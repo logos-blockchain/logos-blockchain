@@ -1,7 +1,7 @@
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Note, SignedMantleTx, Value,
+        FeePolicy, Note, SignedMantleTx, Value,
         gas::GasCost,
         ops::leader_claim::{RewardsRoot, VoucherCm},
         transactions::{
@@ -25,7 +25,7 @@ use overwatch::{
 use tokio::sync::oneshot::{self, error::RecvError};
 
 use crate::{
-    ClaimableVoucherInfo, TipResponse, UtxoWithKeyId, WalletMsg, WalletServiceError,
+    ClaimableVoucherInfo, FundedTx, TipResponse, UtxoWithKeyId, WalletMsg, WalletServiceError,
     WalletServiceSettings,
 };
 
@@ -134,6 +134,10 @@ where
         Ok(rx.await??)
     }
 
+    /// Funds a builder using live gas prices.
+    ///
+    /// When supplied, `max_tx_fee` is enforced before any funding notes are
+    /// reserved by the wallet service.
     pub async fn fund_tx(
         &self,
         tip: Option<HeaderId>,
@@ -141,6 +145,7 @@ where
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
         priority_fee: Value,
+        max_tx_fee: Option<GasCost>,
     ) -> Result<TipResponse<MantleTxBuilder>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
@@ -151,6 +156,34 @@ where
                 change_pk,
                 funding_pks,
                 priority_fee,
+                max_tx_fee,
+                resp_tx,
+            })
+            .await?;
+
+        Ok(rx.await??)
+    }
+
+    /// Funds a builder using projected mandatory prices and returns its quote.
+    pub async fn fund_tx_with_policy(
+        &self,
+        tip: Option<HeaderId>,
+        tx_builder: MantleTxBuilder,
+        change_pk: ZkPublicKey,
+        funding_pks: Vec<ZkPublicKey>,
+        policy: FeePolicy,
+        max_tx_fee: Option<GasCost>,
+    ) -> Result<TipResponse<FundedTx>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+
+        self.relay
+            .send(WalletMsg::FundTxWithPolicy {
+                tip,
+                tx_builder,
+                change_pk,
+                funding_pks,
+                policy,
+                max_tx_fee,
                 resp_tx,
             })
             .await?;
@@ -193,6 +226,10 @@ where
         Ok(rx.await??)
     }
 
+    /// Builds, funds, and signs a legacy live-price transfer.
+    ///
+    /// When supplied, `max_tx_fee` is enforced before any funding notes are
+    /// reserved by the wallet service.
     pub async fn transfer_funds(
         &self,
         tip: Option<HeaderId>,
@@ -200,13 +237,59 @@ where
         funding_pks: Vec<ZkPublicKey>,
         recipient_pk: ZkPublicKey,
         amount: Value,
+        max_tx_fee: Option<GasCost>,
     ) -> Result<TipResponse<SignedMantleTx<Preverified>>, WalletApiError> {
         let mantle_tx_builder =
             MantleTxBuilder::new().add_ledger_output(Note::new(amount, recipient_pk))?;
         let funded_tx_builder = self
-            .fund_tx(tip, mantle_tx_builder, change_pk, funding_pks, 0)
+            .fund_tx(
+                tip,
+                mantle_tx_builder,
+                change_pk,
+                funding_pks,
+                0,
+                max_tx_fee,
+            )
             .await?;
         self.sign_tx(tip, funded_tx_builder.response).await
+    }
+
+    /// Builds, funds, and signs a transfer using a fee policy and returns its
+    /// quote. The optional fee limit is enforced before funding notes are
+    /// reserved by the wallet service.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The public wallet operation keeps its existing argument layout while adding the optional fee limit."
+    )]
+    pub async fn transfer_funds_with_policy(
+        &self,
+        tip: Option<HeaderId>,
+        change_pk: ZkPublicKey,
+        funding_pks: Vec<ZkPublicKey>,
+        recipient_pk: ZkPublicKey,
+        amount: Value,
+        policy: FeePolicy,
+        max_tx_fee: Option<GasCost>,
+    ) -> Result<TipResponse<(SignedMantleTx<Preverified>, FundedTx)>, WalletApiError> {
+        let mantle_tx_builder =
+            MantleTxBuilder::new().add_ledger_output(Note::new(amount, recipient_pk))?;
+        let funded = self
+            .fund_tx_with_policy(
+                tip,
+                mantle_tx_builder,
+                change_pk,
+                funding_pks,
+                policy,
+                max_tx_fee,
+            )
+            .await?;
+        let signed = self
+            .sign_tx(Some(funded.tip), funded.response.tx_builder.clone())
+            .await?;
+        Ok(TipResponse {
+            tip: signed.tip,
+            response: (signed.response, funded.response),
+        })
     }
 
     pub async fn sign_tx(

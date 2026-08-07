@@ -222,7 +222,7 @@ Feature: Zone SDK
   Scenario: Concurrent multi-sequencer publishing converges without duplicates
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 3           | 100000       |
+      | 1             | 3           | 1000000      |
     And I have a cluster with capacity of 1 nodes
     And I start nodes with wallet and sequencer resources:
       | node_name | account_index | wallet_name | connected_to | sequencers          |
@@ -232,7 +232,7 @@ Feature: Zone SDK
       | SEQ_B |
       | SEQ_C |
     When node "NODE_1" is at height 1 in 120 seconds
-    And wallet "WALLET_1A" sends 150 notes of 1500 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+    And wallet "WALLET_1A" sends 200 notes of 3000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
     And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
     And I start zone sequencer "SEQ_A" with indexer
     When I stop zone sequencer "SEQ_A"

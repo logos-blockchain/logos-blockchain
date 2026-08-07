@@ -269,6 +269,7 @@ impl adapter::Node for MockNode {
                 lb_common_http_client::Error::Server(format!("mock funding failed: {e:?}"))
             })?,
             transfer_proof: None,
+            fee_quote: None,
         })
     }
 }
@@ -281,6 +282,7 @@ pub fn funding_config() -> crate::sequencer::FundingConfig {
         funding_pk: lb_groth16::Fr::from(1u64).into(),
         max_tx_fee: GasCost::new(u64::MAX),
         priority_fee: crate::sequencer::FundingConfig::DEFAULT_PRIORITY_FEE,
+        epoch_headroom: crate::sequencer::FundingConfig::DEFAULT_EPOCH_HEADROOM,
     }
 }
 

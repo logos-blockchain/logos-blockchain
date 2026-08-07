@@ -203,7 +203,7 @@ pub async fn transaction_is_not_included_in_seconds(
 
     let included = timeout(Duration::from_secs(timeout_seconds), async {
         loop {
-            if transaction_is_in_chain(&node, tx_hash).await {
+            if transaction_is_in_chain(world, &node_name, &node, tx_hash).await {
                 break true;
             }
 
@@ -225,10 +225,12 @@ pub async fn transaction_is_not_included_in_seconds(
 }
 
 async fn transaction_is_in_chain(
+    world: &CucumberWorld,
+    node_name: &str,
     client: &lb_testing_framework::NodeHttpClient,
     tx_hash: TxHash,
 ) -> bool {
-    let Ok(consensus) = client.consensus_info().await else {
+    let Ok(consensus) = world.consensus_info(node_name, client).await else {
         return false;
     };
 

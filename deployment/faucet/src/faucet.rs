@@ -72,6 +72,8 @@ impl Faucet {
             funding_public_keys: vec![self.faucet_pk],
             recipient_public_key: recipient_pk,
             amount: amount_to_send,
+            fee_policy: None,
+            max_tx_fee: None,
         };
 
         self.http_client

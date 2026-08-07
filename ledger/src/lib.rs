@@ -17,7 +17,7 @@ use lb_core::{
     events::{Events, HeaderEvent, TxEvent, TxEventPayload},
     mantle::{
         NoteId, Op, Utxo, Value, VerificationError,
-        gas::{Gas, GasConstants, GasCost, GasOverflow},
+        gas::{EXECUTION_GAS_TARGET, Gas, GasConstants, GasCost, GasOverflow},
         ledger::ExecutableOperation as _,
         ops::{
             channel::{
@@ -80,7 +80,7 @@ const BLEND_REWARD_SHARE_DENOMINATOR: u128 = 10;
 // (blend+leadership)
 const POW_REWARD_SHARE_NUMERATOR: u128 = 0;
 const POW_REWARD_SHARE_DENOMINATOR: u128 = 4;
-const EXECUTION_GAS_LIMIT: Gas = Gas::new(3_193_460);
+const EXECUTION_GAS_LIMIT: Gas = Gas::new(2 * EXECUTION_GAS_TARGET.into_inner());
 
 // While individual notes are constrained to be `u64`, intermediate calculations
 // may overflow, so we use `i128` to avoid that and to easily represent negative
@@ -320,6 +320,12 @@ impl LedgerState {
             execution_base_gas_price: *self.cryptarchia_ledger.execution_base_fee(),
             storage_gas_price: *self.cryptarchia_ledger.storage_gas_price(),
         }
+    }
+
+    #[must_use]
+    /// Returns the execution EMA at this ledger state.
+    pub const fn average_execution_gas(&self) -> Gas {
+        self.cryptarchia_ledger.average_execution_gas()
     }
 
     /// total estimated stake and on the average of fees consumed per block over

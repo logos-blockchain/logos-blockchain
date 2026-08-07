@@ -367,6 +367,8 @@ pub async fn submit_node_wallet_transfer(
         funding_public_keys: vec![wallet.public_key()?],
         recipient_public_key: receiver_public_key,
         amount,
+        fee_policy: None,
+        max_tx_fee: None,
     };
     world.submit_funding_wallet_transaction(&wallet, body).await
 }
@@ -418,6 +420,8 @@ pub async fn create_and_submit_transaction_hashes_with_utxo_cache(
                     funding_public_keys: vec![wallet.public_key()?],
                     recipient_public_key: *receiver_pk,
                     amount: *value,
+                    fee_policy: None,
+                    max_tx_fee: None,
                 };
                 let tx_hash = world
                     .submit_funding_wallet_transaction(&wallet, body)

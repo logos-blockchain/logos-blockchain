@@ -5,9 +5,7 @@ use std::{
 
 use lb_core::mantle::ops::channel::inscribe::Inscription;
 
-use super::support::{
-    DiscardedPayloads, ZoneTestError, replay_finalized_history, replayed_inscription_payloads,
-};
+use super::support::{DiscardedPayloads, ZoneTestError, indexed_inscription_payloads};
 use crate::cucumber::{
     error::{StepError, StepResult},
     world::ZoneReaderConfig,
@@ -26,7 +24,7 @@ pub(super) async fn wait_for_indexer_unordered(
         }
 
         let seen: HashSet<Inscription> =
-            replayed_inscription_payloads(&replay_finalized_history(reader).await?)
+            indexed_inscription_payloads(&reader.finalized_history().await)
                 .into_iter()
                 .filter(|payload| expected.contains(payload))
                 .collect();
@@ -44,7 +42,7 @@ pub(super) async fn scan_indexer_for_payloads(
     expected: &HashSet<Inscription>,
 ) -> Result<Vec<Inscription>, ZoneTestError> {
     Ok(
-        replayed_inscription_payloads(&replay_finalized_history(reader).await?)
+        indexed_inscription_payloads(&reader.finalized_history().await)
             .into_iter()
             .filter(|payload| expected.contains(payload))
             .collect(),
@@ -66,7 +64,7 @@ pub(super) async fn wait_until_sorted_conflict_settles(
         }
 
         let mut on_chain: Vec<Inscription> = Vec::new();
-        for payload in replayed_inscription_payloads(&replay_finalized_history(reader).await?) {
+        for payload in indexed_inscription_payloads(&reader.finalized_history().await) {
             if expected.contains(&payload) && !on_chain.contains(&payload) {
                 on_chain.push(payload);
             }

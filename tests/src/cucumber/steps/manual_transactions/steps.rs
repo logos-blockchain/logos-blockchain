@@ -92,6 +92,24 @@ async fn step_do_coin_split(
         wallet.node_name
     );
 
+    // Dependent steps may need to spend one of the newly-created outputs. A
+    // submission alone does not make those outputs visible to the tracked
+    // wallet, especially while several scenarios are running concurrently.
+    wait_for_wallet_submitted_transactions_inclusion(world, &wallet_name, Duration::from_mins(3))
+        .await?;
+    wait_for_wallet_output_state(
+        world,
+        &step.value,
+        wallet_name.clone(),
+        Some(&number_of_outputs),
+        None,
+        Some(&(number_of_outputs as u64 * output_value)),
+        None,
+        180,
+        WalletOutputState::Available,
+    )
+    .await?;
+
     Ok(())
 }
 

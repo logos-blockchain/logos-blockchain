@@ -83,6 +83,34 @@ Feature: Fees
     Then transaction "BUFFERED" is included on node "NODE_1" in 60 seconds
     Then I stop all nodes
 
+  @fees_ci
+  Scenario: Fee horizon keeps a funded transaction valid across an epoch price increase
+    Given the cluster uses cryptarchia security parameter 3
+    And I have deployment config override "time.slot_duration" as "seconds(1)"
+    And I have deployment config override "cryptarchia.slot_activation_coeff.numerator" as "1"
+    And I have deployment config override "cryptarchia.slot_activation_coeff.denominator" as "2"
+    And the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 1           | 10000        |
+      | 2             | 1           | 10000        |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet resources:
+      | node_name | account_index | wallet_name | connected_to |
+      | NODE_1    | 1             | WALLET_1A   |              |
+      | NODE_1    | 2             | WALLET_2A   |              |
+    When node "NODE_1" is at height 1 in 180 seconds
+    And I prepare a wallet-funded transaction with epoch headroom "2.0" via node "NODE_1" as "HORIZON_TX"
+    Then fee quote for "HORIZON_TX" projects across a storage price boundary
+    When I submit an exactly funded self-transfer from wallet "WALLET_1A" via node "NODE_1" as "TRAFFIC_A"
+    And I submit an exactly funded self-transfer from wallet "WALLET_2A" via node "NODE_1" as "TRAFFIC_B"
+    And I record per-block gas prices on node "NODE_1" for 65 slots in 180 seconds
+    Then recorded gas prices cross a 60-slot epoch boundary
+    And recorded storage gas prices respond to network usage
+    And I query cryptarchia info for all nodes
+    When I submit prepared transaction "HORIZON_TX" via node "NODE_1"
+    Then transaction "HORIZON_TX" is included on node "NODE_1" in 60 seconds
+    Then I stop all nodes
+
   # The fee rule at its exact boundary: balance == fee is included and
   # debited precisely; one unit short is never included (and today is
   # silently dropped, with no rejection signal to the user).

@@ -75,7 +75,7 @@ use crate::{
         chain::wait_for_transactions_inclusion, mantle_inscription::make_inscription,
         wallet::build_wallet_funded_transfer,
     },
-    cucumber::world::ZoneReaderConfig,
+    cucumber::world::{CucumberWorld, ZoneReaderConfig},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -966,44 +966,43 @@ pub async fn wait_for_turn_to_write(
     })?
 }
 
-/// Replays the channel's finalized history by cold-starting a fresh
-/// read-only sequencer: a random signing key that is not part of the channel
-/// rotation, so the instance can never publish or repost anything —
-/// inscription posting is turn-gated. Finalized txs are collected from the
-/// backfill events until the sequencer reports `Ready`, then the instance is
-/// dropped; each call observes a fresh snapshot up to the LIB at connect
-/// time.
-pub async fn replay_finalized_history(
-    reader: &ZoneReaderConfig,
-) -> Result<Vec<FinalizedTx>, ZoneTestError> {
-    let node = ZoneNodeHttpClient::new(CommonHttpClient::new(None), reader.node_url.clone());
+/// Starts the persistent read-only observer used by zone indexer assertions.
+///
+/// A random signing key is intentionally used so this observer is not an
+/// authorized channel sequencer and cannot publish or repost inscriptions.
+/// The task remains connected for the scenario and appends every finalized
+/// batch to the shared history. Keeping one observer alive avoids repeatedly
+/// cold-starting a sequencer, opening block streams, and replaying immutable
+/// history while several scenarios run concurrently.
+pub fn start_persistent_zone_indexer(channel_id: ChannelId, node_url: Url) -> ZoneReaderConfig {
+    let node = ZoneNodeHttpClient::new(CommonHttpClient::new(None), node_url.clone());
     // Placeholder funding: the reader never publishes (random key, posting is
     // turn-gated), so the funding wallet is never exercised.
     let funding = FundingConfig {
         funding_pk: lb_groth16::Fr::from(1u64).into(),
         max_tx_fee: GasCost::new(u64::MAX),
         priority_fee: FundingConfig::DEFAULT_PRIORITY_FEE,
+        epoch_headroom: FundingConfig::DEFAULT_EPOCH_HEADROOM,
     };
-    let mut sequencer = ZoneSequencer::init(reader.channel_id, keygen(), node, funding, None);
-
-    timeout(Duration::from_mins(3), async {
-        let mut finalized = Vec::new();
+    let mut sequencer = ZoneSequencer::init(channel_id, keygen(), node, funding, None);
+    let finalized_history = Arc::new(tokio::sync::RwLock::new(Vec::new()));
+    let observer_history = Arc::clone(&finalized_history);
+    let task = tokio::spawn(async move {
         loop {
             match sequencer.next_event().await {
                 Event::BlocksProcessed {
                     finalized: batch, ..
-                } => finalized.extend(batch),
-                Event::Ready => return finalized,
-                Event::MempoolPending(_) | Event::TurnNotification { .. } => {}
+                } => observer_history.write().await.extend(batch),
+                Event::Ready | Event::MempoolPending(_) | Event::TurnNotification { .. } => {}
             }
         }
-    })
-    .await
-    .map_err(|_| ZoneTestError::IndexerTimeout)
+    });
+
+    ZoneReaderConfig::new(channel_id, node_url, finalized_history, task)
 }
 
-/// Ordered inscription payloads within a finalized-history replay.
-pub fn replayed_inscription_payloads(history: &[FinalizedTx]) -> Vec<Inscription> {
+/// Ordered inscription payloads within a finalized-history snapshot.
+pub fn indexed_inscription_payloads(history: &[FinalizedTx]) -> Vec<Inscription> {
     finalized_inscriptions(history)
         .map(|info| info.payload.clone())
         .collect()
@@ -1022,7 +1021,7 @@ pub async fn collect_indexed_messages(
 
     timeout(duration, async {
         loop {
-            let payloads = replayed_inscription_payloads(&replay_finalized_history(reader).await?);
+            let payloads = indexed_inscription_payloads(&reader.finalized_history().await);
             let mut seen: HashSet<Inscription> = HashSet::new();
             let mut ordered: Vec<Inscription> = Vec::new();
             for payload in payloads {
@@ -1042,8 +1041,8 @@ pub async fn collect_indexed_messages(
     .map_err(|_| ZoneTestError::IndexerTimeout)?
 }
 
-/// Replays the finalized history until it exactly matches the expected
-/// message sequence without duplicates.
+/// Reads the persistent finalized history until it exactly matches the
+/// expected message sequence without duplicates.
 pub async fn collect_indexed_messages_exactly_once(
     reader: &ZoneReaderConfig,
     expected_messages: &[Inscription],
@@ -1054,7 +1053,7 @@ pub async fn collect_indexed_messages_exactly_once(
     timeout(duration, async {
         loop {
             let ordered: Vec<Inscription> =
-                replayed_inscription_payloads(&replay_finalized_history(reader).await?)
+                indexed_inscription_payloads(&reader.finalized_history().await)
                     .into_iter()
                     .filter(|payload| expected.contains(payload))
                     .collect();
@@ -1113,7 +1112,7 @@ async fn count_indexed_payload(
     expected_payload: &Inscription,
 ) -> Result<usize, ZoneTestError> {
     Ok(
-        replayed_inscription_payloads(&replay_finalized_history(reader).await?)
+        indexed_inscription_payloads(&reader.finalized_history().await)
             .iter()
             .filter(|payload| *payload == expected_payload)
             .count(),
@@ -1128,7 +1127,7 @@ pub async fn wait_for_deposit(
     expected_amount: Value,
     duration: Duration,
 ) -> Result<(), ZoneTestError> {
-    poll_replayed_history_until(reader, duration, ZoneTestError::IndexerTimeout, |op| {
+    poll_indexed_history_until(reader, duration, ZoneTestError::IndexerTimeout, |op| {
         matches!(op, FinalizedOp::Deposit(deposit)
             if deposit.inputs == expected.inputs
                 && deposit.amount == expected_amount
@@ -1143,7 +1142,7 @@ pub async fn wait_for_withdraw(
     expected: &ChannelWithdrawOp,
     timeout_duration: Duration,
 ) -> Result<(), ZoneTestError> {
-    poll_replayed_history_until(
+    poll_indexed_history_until(
         reader,
         timeout_duration,
         ZoneTestError::WithdrawTimeout,
@@ -1152,7 +1151,7 @@ pub async fn wait_for_withdraw(
     .await
 }
 
-async fn poll_replayed_history_until(
+async fn poll_indexed_history_until(
     reader: &ZoneReaderConfig,
     duration: Duration,
     timeout_error: ZoneTestError,
@@ -1160,7 +1159,7 @@ async fn poll_replayed_history_until(
 ) -> Result<(), ZoneTestError> {
     timeout(duration, async {
         loop {
-            let history = replay_finalized_history(reader).await?;
+            let history = reader.finalized_history().await;
             if history
                 .iter()
                 .flat_map(|tx| tx.ops.iter())
@@ -1274,17 +1273,18 @@ pub async fn ensure_zone_transactions_included(
 /// Walks back from LIB until every expected zone transaction is found in the
 /// finalized chain.
 pub async fn wait_for_transactions_finalized(
-    node_url: Url,
+    world: &CucumberWorld,
+    node_name: &str,
+    node: &NodeHttpClient,
     tx_hashes: &[InscriptionId],
     duration: Duration,
 ) -> Result<(), ZoneTestError> {
-    let client = CommonHttpClient::new(None);
     let expected: HashSet<_> = tx_hashes.iter().copied().collect();
 
     timeout(duration, async {
         loop {
-            let info = client
-                .consensus_info(node_url.clone())
+            let info = world
+                .consensus_info(node_name, node)
                 .await
                 .map_err(|error| ZoneTestError::Consensus {
                     message: error.to_string(),
@@ -1293,12 +1293,12 @@ pub async fn wait_for_transactions_finalized(
             let mut found = HashSet::new();
             let mut current = info.cryptarchia_info.lib;
 
-            while let Some(block) = client
-                .get_block_by_id(node_url.clone(), current)
-                .await
-                .map_err(|error| ZoneTestError::Block {
-                    message: error.to_string(),
-                })?
+            while let Some(block) =
+                node.block(&current)
+                    .await
+                    .map_err(|error| ZoneTestError::Block {
+                        message: error.to_string(),
+                    })?
             {
                 for tx in &block.transactions {
                     let hash = tx.mantle_tx().hash();
@@ -1324,14 +1324,16 @@ pub async fn wait_for_transactions_finalized(
 /// Waits for LIB movement after a restart so stale-checkpoint scenarios can
 /// distinguish old local state from new canonical chain progress.
 pub async fn wait_for_lib_advance(
+    world: &CucumberWorld,
+    node_name: &str,
     client: &NodeHttpClient,
     initial_lib_slot: Slot,
     duration: Duration,
 ) -> Result<(), ZoneTestError> {
     timeout(duration, async {
         loop {
-            let info = client
-                .consensus_info()
+            let info = world
+                .consensus_info(node_name, client)
                 .await
                 .map_err(|error| ZoneTestError::Consensus {
                     message: error.to_string(),
@@ -1493,6 +1495,7 @@ async fn build_funded_custom_tx(
             change_public_key: funding_pk,
             funding_public_keys: vec![funding_pk],
             max_tx_fee: GasCost::new(u64::MAX),
+            fee_policy: None,
         })
         .await
         .map_err(|error| ZoneTestError::SubmitCustomTx {

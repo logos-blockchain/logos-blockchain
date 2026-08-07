@@ -181,7 +181,11 @@ async fn minimum_node_height(world: &CucumberWorld) -> Result<u64, StepError> {
 
     for node_name in world.all_node_names() {
         let client = world.resolve_node_http_client(&node_name)?;
-        let height = client.consensus_info().await?.cryptarchia_info.height;
+        let height = world
+            .consensus_info(&node_name, &client)
+            .await?
+            .cryptarchia_info
+            .height;
         min_height = Some(min_height.map_or(height, |current: u64| current.min(height)));
     }
 

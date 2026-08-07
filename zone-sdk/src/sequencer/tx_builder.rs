@@ -19,7 +19,7 @@ use lb_core::{
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
-use lb_http_api_common::bodies::wallet::fund::WalletFundRequestBody;
+use lb_http_api_common::bodies::wallet::{fee::WalletFeePolicy, fund::WalletFundRequestBody};
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 
 use super::types::{Error, FundingConfig};
@@ -49,7 +49,13 @@ where
             change_public_key: funding.funding_pk,
             funding_public_keys: vec![funding.funding_pk],
             max_tx_fee: funding.max_tx_fee,
-            priority_fee: funding.priority_fee,
+            // The policy's priority fee is deliberately used instead of the
+            // legacy top-level field: the node rejects ambiguous requests.
+            priority_fee: 0,
+            fee_policy: Some(WalletFeePolicy {
+                epoch_headroom: Some(funding.epoch_headroom),
+                priority_fee: funding.priority_fee,
+            }),
         })
         .await
         .map_err(|e| Error::Network(format!("funding failed: {e}")))?;

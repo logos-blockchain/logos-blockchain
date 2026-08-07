@@ -11,6 +11,7 @@ use std::{
 
 use cucumber::World;
 use derivative::Derivative;
+use lb_chain_service::{ChainServiceInfo, CryptarchiaInfo};
 use lb_core::{
     codec::DeserializeOp as _,
     header::HeaderId,
@@ -25,7 +26,9 @@ use lb_core::{
         },
     },
 };
-use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
+use lb_http_api_common::bodies::wallet::{
+    fee::WalletFeeQuote, transfer_funds::WalletTransferFundsRequestBody,
+};
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_node::config::RunConfig;
@@ -38,8 +41,8 @@ use testing_framework_core::{
     scenario::{PeerSelection, Scenario, StartedNode},
     topology::DeploymentSeed,
 };
-use tokio::task::JoinHandle;
-use tracing::warn;
+use tokio::{sync::RwLock, task::JoinHandle};
+use tracing::{info, warn};
 
 use crate::{
     BIN_PATH_RELEASE,
@@ -59,7 +62,8 @@ use crate::{
         fee_reserve::{SCENARIO_FEE_ACCOUNT_NAME, ScenarioFeeState},
         steps::{
             manual_zone::runner::{
-                Event, InscriptionId, SequencerCheckpoint, SequencerClient, TxStatusUpdate,
+                Event, FinalizedTx, InscriptionId, SequencerCheckpoint, SequencerClient,
+                TxStatusUpdate,
             },
             tokio_console::profile::TokioConsoleProfile,
         },
@@ -73,6 +77,72 @@ type ScenarioBuilderWith = ScenarioBuilder;
 type ConsensusLiveness = workloads::ConsensusLiveness;
 pub type SharedTrackedWallets = Arc<Mutex<TrackedWallets>>;
 pub type SharedObservedTransactionHashes = Arc<Mutex<HashSet<TxHash>>>;
+pub type SharedNodeEpochObservations = Arc<Mutex<HashMap<String, u64>>>;
+
+#[derive(Clone)]
+pub struct NodeEpochObserver {
+    slots_per_epoch: Arc<HashMap<String, u64>>,
+    observations: SharedNodeEpochObservations,
+}
+
+impl NodeEpochObserver {
+    pub async fn consensus_info(
+        &self,
+        node_name: &str,
+        client: &NodeHttpClient,
+    ) -> Result<ChainServiceInfo, lb_common_http_client::Error> {
+        let consensus = client.consensus_info().await?;
+        self.observe(node_name, client, &consensus.cryptarchia_info)
+            .await;
+        Ok(consensus)
+    }
+
+    pub async fn observe(
+        &self,
+        node_name: &str,
+        client: &NodeHttpClient,
+        consensus: &CryptarchiaInfo,
+    ) {
+        let Some(slots_per_epoch) = self.slots_per_epoch.get(node_name).copied() else {
+            return;
+        };
+
+        let epoch = consensus.slot.into_inner() / slots_per_epoch;
+        let changed = {
+            let mut observations = self
+                .observations
+                .lock()
+                .expect("node epoch diagnostics mutex poisoned");
+            if observations.get(node_name).copied() == Some(epoch) {
+                false
+            } else {
+                observations.insert(node_name.to_owned(), epoch);
+                true
+            }
+        };
+
+        if !changed {
+            return;
+        }
+
+        match client.gas_prices(Some(consensus.tip)).await {
+            Ok(prices) => info!(
+                target: TARGET,
+                "{node_name} reached epoch {epoch} at slot {} / height {} (storage gas price {}, execution gas price {})",
+                consensus.slot.into_inner(),
+                consensus.height,
+                prices.storage_gas_price.into_inner(),
+                prices.execution_base_gas_price.into_inner(),
+            ),
+            Err(error) => info!(
+                target: TARGET,
+                "{node_name} reached epoch {epoch} at slot {} / height {} (gas prices unavailable: {error})",
+                consensus.slot.into_inner(),
+                consensus.height,
+            ),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DeployerKind {
@@ -184,17 +254,46 @@ pub struct ZoneSequencerStartup {
     pub passive_republish_orphans: bool,
 }
 
-/// Connection info for the read-only channel observer of the "zone indexer"
-/// steps.
+/// Persistent read-only channel observer used by the "zone indexer" steps.
 ///
-/// Each assertion cold-starts a fresh `ZoneSequencer` from this config with a
-/// random signing key that is not part of the channel rotation — such a
-/// sequencer can never publish or repost (inscription posting is turn-gated),
-/// it only replays and observes finalized history.
-#[derive(Clone)]
+/// The observer owns one cold-started `ZoneSequencer` task for the lifetime of
+/// the scenario. It continuously records finalized history so assertions can
+/// take cheap, consistent snapshots without repeatedly opening block streams
+/// or replaying the chain from genesis.
 pub struct ZoneReaderConfig {
     pub channel_id: ChannelId,
     pub node_url: Url,
+    finalized_history: Arc<RwLock<Vec<FinalizedTx>>>,
+    task: Option<JoinHandle<()>>,
+}
+
+impl ZoneReaderConfig {
+    pub(crate) const fn new(
+        channel_id: ChannelId,
+        node_url: Url,
+        finalized_history: Arc<RwLock<Vec<FinalizedTx>>>,
+        task: JoinHandle<()>,
+    ) -> Self {
+        Self {
+            channel_id,
+            node_url,
+            finalized_history,
+            task: Some(task),
+        }
+    }
+
+    /// Returns a snapshot of finalized channel transactions observed so far.
+    pub async fn finalized_history(&self) -> Vec<FinalizedTx> {
+        self.finalized_history.read().await.clone()
+    }
+}
+
+impl Drop for ZoneReaderConfig {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
 }
 
 #[derive(Default)]
@@ -905,8 +1004,13 @@ pub struct CucumberWorld {
     pub submission_outcomes: HashMap<String, Result<(), String>>,
     /// Manual: Exact signed transactions prepared for later submission.
     pub prepared_transactions: HashMap<String, SignedMantleTx<Preverified>>,
+    /// Manual: Fee quotes returned while preparing policy-funded transactions.
+    pub prepared_fee_quotes: HashMap<String, WalletFeeQuote>,
     /// Manual: Transaction hashes observed in blocks by the wallet scanner.
     pub observed_transaction_hashes: SharedObservedTransactionHashes,
+    /// Manual: Last epoch observed for each node by existing consensus-info
+    /// queries. This is diagnostic state, not a background tracker.
+    pub node_epoch_observations: SharedNodeEpochObservations,
     /// Manual: Background wallet scanner diagnostics state.
     pub wallet_scanner_state: SharedWalletScannerState,
     /// Manual: Background wallet scanner runtime.
@@ -1100,9 +1204,17 @@ impl Debug for CucumberWorld {
             .field("submitted_transactions", &self.submitted_transactions.len())
             .field("submission_outcomes", &self.submission_outcomes.len())
             .field("prepared_transactions", &self.prepared_transactions.len())
+            .field("prepared_fee_quotes", &self.prepared_fee_quotes.len())
             .field(
                 "observed_transaction_hashes",
                 &self.observed_transaction_hashes_len(),
+            )
+            .field(
+                "node_epoch_observations",
+                &self
+                    .node_epoch_observations
+                    .lock()
+                    .map_or(0, |observations| observations.len()),
             )
             .field(
                 "wallet_scanner_groups",
@@ -1320,6 +1432,8 @@ pub struct NodeInfo {
     /// The node's runtime directory where all its runtime artifacts will be
     /// collected
     pub runtime_dir: PathBuf,
+    /// Effective number of slots in one epoch for this node, when known.
+    pub slots_per_epoch: Option<u64>,
     /// Whether this node is only expected to be network ready after startup and
     /// not `Mode::OnLine`
     pub immediate_start: bool,
@@ -1345,6 +1459,49 @@ impl NodeInfo {
 }
 
 impl CucumberWorld {
+    #[must_use]
+    pub fn node_epoch_observer(&self) -> NodeEpochObserver {
+        NodeEpochObserver {
+            slots_per_epoch: Arc::new(
+                self.nodes_info
+                    .iter()
+                    .filter_map(|(node_name, node)| {
+                        node.slots_per_epoch
+                            .filter(|slots| *slots > 0)
+                            .map(|slots| (node_name.clone(), slots))
+                    })
+                    .collect(),
+            ),
+            observations: Arc::clone(&self.node_epoch_observations),
+        }
+    }
+
+    /// Query a local node's Cryptarchia info and feed the result through the
+    /// epoch diagnostics while the query is already in flight.
+    pub async fn consensus_info(
+        &self,
+        node_name: &str,
+        client: &NodeHttpClient,
+    ) -> Result<ChainServiceInfo, lb_common_http_client::Error> {
+        self.node_epoch_observer()
+            .consensus_info(node_name, client)
+            .await
+    }
+
+    /// Log an epoch transition observed while Cucumber is already querying
+    /// `/cryptarchia/info`. Gas prices are fetched only for a newly observed
+    /// epoch, so this adds no background task or polling loop.
+    pub async fn observe_node_epoch(
+        &self,
+        node_name: &str,
+        client: &NodeHttpClient,
+        consensus: &CryptarchiaInfo,
+    ) {
+        self.node_epoch_observer()
+            .observe(node_name, client, consensus)
+            .await;
+    }
+
     /// Return the stable deployment seed for this manual-cluster scenario,
     /// generating it on first use.
     pub fn manual_cluster_deployment_seed(&mut self) -> DeploymentSeed {
@@ -1998,6 +2155,19 @@ impl CucumberWorld {
             .cloned()
             .ok_or(StepError::LogicalError {
                 message: format!("Prepared transaction alias '{alias}' not found in world state"),
+            })
+    }
+
+    pub fn remember_prepared_fee_quote(&mut self, alias: String, quote: WalletFeeQuote) {
+        self.prepared_fee_quotes.insert(alias, quote);
+    }
+
+    pub fn resolve_prepared_fee_quote(&self, alias: &str) -> Result<WalletFeeQuote, StepError> {
+        self.prepared_fee_quotes
+            .get(alias)
+            .cloned()
+            .ok_or(StepError::LogicalError {
+                message: format!("Prepared fee quote alias '{alias}' not found in world state"),
             })
     }
 

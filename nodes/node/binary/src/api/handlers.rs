@@ -997,6 +997,7 @@ where
                 req.change_public_key,
                 req.funding_public_keys,
                 0,
+                Some(req.max_tx_fee),
             )
             .await?;
 
@@ -1598,6 +1599,7 @@ where
 
 pub mod wallet {
     use lb_http_api_common::bodies::wallet::{
+        fee::WalletFeeQuote,
         fund::{WalletFundRequestBody, WalletFundResponseBody},
         sign::{
             WalletSignTxEd25519RequestBody, WalletSignTxEd25519ResponseBody,
@@ -1700,7 +1702,8 @@ pub mod wallet {
     post,
     path = paths::wallet::TRANSACTIONS_TRANSFER_FUNDS,
     responses(
-        (status = 200, description = "Make transfer"),
+        (status = 201, description = "Make transfer"),
+        (status = 400, description = "Invalid or negative epoch_headroom, epoch_headroom above 100.0, fee projection overflow, or max_tx_fee_exceeded", body = ErrorBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
     )]
@@ -1754,21 +1757,39 @@ pub mod wallet {
             WalletApi::<WalletService, RuntimeServiceId>::new(wallet_relay)
         };
 
-        let transfer_funds = wallet_api
-            .transfer_funds(
-                body.tip,
-                body.change_public_key,
-                body.funding_public_keys,
-                body.recipient_public_key,
-                body.amount,
-            )
-            .await;
+        let transfer_funds = if let Some(policy) = body.fee_policy {
+            wallet_api
+                .transfer_funds_with_policy(
+                    body.tip,
+                    body.change_public_key,
+                    body.funding_public_keys,
+                    body.recipient_public_key,
+                    body.amount,
+                    policy.into(),
+                    body.max_tx_fee,
+                )
+                .await
+                .map(|response| {
+                    let (transaction, funded) = response.response;
+                    let fee_quote: WalletFeeQuote = funded.fee_quote.into();
+                    Ok::<_, overwatch::DynError>((transaction, Some(fee_quote)))
+                })
+        } else {
+            wallet_api
+                .transfer_funds(
+                    body.tip,
+                    body.change_public_key,
+                    body.funding_public_keys,
+                    body.recipient_public_key,
+                    body.amount,
+                    body.max_tx_fee,
+                )
+                .await
+                .map(|response| Ok((response.response, None)))
+        };
 
         match transfer_funds {
-            Ok(lb_wallet_service::TipResponse {
-                response: transaction,
-                ..
-            }) => {
+            Ok(Ok((transaction, fee_quote))) => {
                 // Submit to mempool
                 if let Err(e) = mempool::add_tx::<
                     Libp2pNetworkBackend,
@@ -1787,9 +1808,14 @@ pub mod wallet {
                     return ApiError::Internal(e).into_response();
                 }
 
-                WalletTransferFundsResponseBody::from(transaction).into_response()
+                WalletTransferFundsResponseBody {
+                    hash: transaction.mantle_tx().hash(),
+                    fee_quote,
+                }
+                .into_response()
             }
-            Err(error) => ApiError::internal(error).into_response(),
+            Ok(Err(error)) => ApiError::Internal(error).into_response(),
+            Err(error) => ApiError::from(error).into_response(),
         }
     }
 
@@ -1918,6 +1944,7 @@ pub mod wallet {
         path = paths::wallet::FUND,
         responses(
             (status = 200, description = "Funded transaction with fee transfer proof"),
+            (status = 400, description = "Invalid or negative headroom, headroom above 100.0, fee projection overflow, max transaction fee exceeded, or ambiguous priority_fee and fee_policy", body = ErrorBody),
             (status = 500, description = "Internal server error", body = ErrorBody),
         )
     )]
@@ -1963,28 +1990,56 @@ pub mod wallet {
                 >,
             >,
     {
+        if req.fee_policy.is_some() && req.priority_fee != 0 {
+            return ApiError::BadRequest(
+                "ambiguous_fee_policy: priority_fee and fee_policy.priority_fee cannot both be supplied"
+                    .to_owned(),
+            )
+            .into_response();
+        }
+
         make_request_and_return_response!(async {
             let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
-                handle.relay::<WalletService>().await?,
+                handle
+                    .relay::<WalletService>()
+                    .await
+                    .map_err(ApiError::internal)?,
             );
 
-            let lb_wallet_service::TipResponse {
-                tip,
-                response: funded_tx_builder,
-            } = wallet
-                .fund_tx(
-                    req.tip,
-                    req.tx_builder,
-                    req.change_public_key,
-                    req.funding_public_keys,
-                    req.priority_fee,
-                )
-                .await?;
+            let (tip, funded_tx_builder, fee_quote) = if let Some(policy) = req.fee_policy {
+                let lb_wallet_service::TipResponse { tip, response } = wallet
+                    .fund_tx_with_policy(
+                        req.tip,
+                        req.tx_builder,
+                        req.change_public_key,
+                        req.funding_public_keys,
+                        policy.into(),
+                        Some(req.max_tx_fee),
+                    )
+                    .await?;
+                let fee_quote = response.fee_quote;
+                (tip, response.tx_builder, Some(fee_quote.into()))
+            } else {
+                let lb_wallet_service::TipResponse {
+                    tip,
+                    response: funded_tx_builder,
+                } = wallet
+                    .fund_tx(
+                        req.tip,
+                        req.tx_builder,
+                        req.change_public_key,
+                        req.funding_public_keys,
+                        req.priority_fee,
+                        Some(req.max_tx_fee),
+                    )
+                    .await?;
+                (tip, funded_tx_builder, None)
+            };
 
-            let tx_fee = funded_tx_builder.tx_fee()?;
+            let tx_fee = funded_tx_builder.tx_fee().map_err(ApiError::internal)?;
             if tx_fee > req.max_tx_fee {
-                return Err(overwatch::DynError::from(format!(
-                    "tx_fee({tx_fee}) exceeds max_tx_fee({})",
+                return Err(ApiError::BadRequest(format!(
+                    "max_tx_fee_exceeded: tx_fee({tx_fee}) exceeds max_tx_fee({})",
                     req.max_tx_fee
                 )));
             }
@@ -1997,20 +2052,24 @@ pub mod wallet {
                 .map(|utxo| utxo.note.pk)
                 .collect();
 
-            let funded_tx = funded_tx_builder.build()?;
+            let funded_tx = funded_tx_builder.build().map_err(ApiError::internal)?;
             let transfer_proof = if funding_note_pks.is_empty() {
                 None
             } else {
                 let tx_hash = funded_tx.hash();
                 Some(OpProof::ZkSig(
-                    wallet.sign_tx_with_zk(tx_hash, funding_note_pks).await?,
+                    wallet
+                        .sign_tx_with_zk(tx_hash, funding_note_pks)
+                        .await
+                        .map_err(ApiError::from)?,
                 ))
             };
 
-            Ok::<_, DynError>(WalletFundResponseBody {
+            Ok::<_, ApiError>(WalletFundResponseBody {
                 tip,
                 funded_tx,
                 transfer_proof,
+                fee_quote,
             })
         })
     }

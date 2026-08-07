@@ -233,6 +233,23 @@ async fn step_prepared_transaction_tip_absorbed_fee_increase(
     .await
 }
 
+#[then(expr = "fee quote for {string} projects across a storage price boundary")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "cucumber step entrypoints must take `&mut World`"
+)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "cucumber step parameters are generated as owned strings"
+)]
+fn step_fee_quote_projects_across_storage_boundary(
+    world: &mut CucumberWorld,
+    step: &Step,
+    transaction_alias: String,
+) -> StepResult {
+    assertions::fee_quote_projects_across_storage_boundary(world, step, &transaction_alias)
+}
+
 #[then(
     expr = "wallet {string} is debited exactly the fee of transaction {string} in {int} seconds"
 )]

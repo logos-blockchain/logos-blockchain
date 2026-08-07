@@ -6,14 +6,14 @@ use std::{
 use hex::ToHex as _;
 use lb_chain_service::CryptarchiaInfo;
 use lb_testing_framework::{NodeHttpClient, is_truthy_env};
-use tokio::{
-    task::JoinSet,
-    time::{Instant, sleep, timeout},
-};
+use tokio::time::{Instant, sleep, timeout};
 use tracing::{info, warn};
 
 use crate::cucumber::{
-    defaults::CUCUMBER_VERBOSE_CONSOLE, error::StepError, wallet::TARGET, world::CucumberWorld,
+    defaults::CUCUMBER_VERBOSE_CONSOLE,
+    error::StepError,
+    wallet::TARGET,
+    world::{CucumberWorld, NodeEpochObserver},
 };
 
 const BEST_NODE_SELECTION_TIMEOUT: Duration = Duration::from_mins(3);
@@ -174,6 +174,7 @@ pub async fn determine_best_node(
         .collect::<BTreeMap<_, _>>();
 
     determine_best_node_from_clients(
+        world.node_epoch_observer(),
         wallet_node_name,
         &node_to_group,
         &candidates,
@@ -199,6 +200,7 @@ pub async fn get_best_node_info(
 }
 
 pub async fn get_best_node_info_from_clients(
+    epoch_observer: NodeEpochObserver,
     representative_wallet_name: &str,
     wallet_to_node: &BTreeMap<String, String>,
     node_to_group: &BTreeMap<String, String>,
@@ -215,6 +217,7 @@ pub async fn get_best_node_info_from_clients(
         })?;
 
     determine_best_node_from_clients(
+        epoch_observer,
         wallet_node_name,
         node_to_group,
         group_nodes,
@@ -252,10 +255,8 @@ async fn resolve_selected_best_node<'a>(
             ),
         })?;
 
-    let consensus = node_info
-        .started_node
-        .client
-        .consensus_info()
+    let consensus = world
+        .consensus_info(&selected.node_name, &node_info.started_node.client)
         .await
         .map_err(|_| StepError::LogicalError {
             message: "No available nodes to query for UTXOs".to_owned(),
@@ -281,10 +282,8 @@ async fn resolve_cached_best_node<'a>(
         });
     };
 
-    let consensus = node_info
-        .started_node
-        .client
-        .consensus_info()
+    let consensus = world
+        .consensus_info(&selected.node_name, &node_info.started_node.client)
         .await
         .map_err(|_| StepError::LogicalError {
             message: "No available nodes to query for UTXOs".to_owned(),
@@ -356,6 +355,7 @@ fn resolve_candidate_nodes(
     reason = "The owned-client adapter intentionally mirrors the existing best-node polling logic."
 )]
 async fn determine_best_node_from_clients(
+    epoch_observer: NodeEpochObserver,
     wallet_node_name: &str,
     node_to_group: &BTreeMap<String, String>,
     group_nodes: &[String],
@@ -387,7 +387,12 @@ async fn determine_best_node_from_clients(
 
     loop {
         let (mut ordered_snapshots, mut unreachable) =
-            collect_ordered_group_snapshots_from_clients(&candidates, node_clients).await;
+            collect_ordered_group_snapshots_from_clients(
+                &epoch_observer,
+                &candidates,
+                node_clients,
+            )
+            .await;
         unreachable.sort();
         if !unreachable.is_empty() {
             warn!(
@@ -489,12 +494,13 @@ async fn determine_best_node_from_clients(
 }
 
 async fn collect_ordered_group_snapshots_from_clients(
+    epoch_observer: &NodeEpochObserver,
     candidates: &[String],
     node_clients: &BTreeMap<String, NodeHttpClient>,
 ) -> (Vec<NodeConsensusSnapshot>, Vec<String>) {
     let mut snapshots = Vec::with_capacity(candidates.len());
     let mut unreachable = Vec::new();
-    let mut jobs = JoinSet::new();
+    let mut jobs = Vec::with_capacity(candidates.len());
 
     for node_name in candidates {
         let Some(client) = node_clients.get(node_name) else {
@@ -504,8 +510,13 @@ async fn collect_ordered_group_snapshots_from_clients(
 
         let node_name = node_name.clone();
         let client = client.clone();
-        jobs.spawn(async move {
-            match timeout(BEST_NODE_QUERY_TIMEOUT, client.consensus_info()).await {
+        jobs.push(async move {
+            match timeout(
+                BEST_NODE_QUERY_TIMEOUT,
+                epoch_observer.consensus_info(&node_name, &client),
+            )
+            .await
+            {
                 Ok(Ok(consensus)) => Some(NodeConsensusSnapshot {
                     node_name,
                     consensus: consensus.cryptarchia_info,
@@ -515,10 +526,12 @@ async fn collect_ordered_group_snapshots_from_clients(
         });
     }
 
-    while let Some(result) = jobs.join_next().await {
-        if let Ok(Some(snapshot)) = result {
-            snapshots.push(snapshot);
-        }
+    for snapshot in futures_util::future::join_all(jobs)
+        .await
+        .into_iter()
+        .flatten()
+    {
+        snapshots.push(snapshot);
     }
     snapshots.sort_by(|a, b| a.node_name.cmp(&b.node_name));
 

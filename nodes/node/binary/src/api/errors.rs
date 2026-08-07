@@ -4,6 +4,7 @@ use axum::{
 };
 use http::StatusCode;
 use lb_api_service::http::DynError;
+use lb_wallet_service::{WalletServiceError, api::WalletApiError};
 use serde::Serialize;
 
 #[derive(Debug, thiserror::Error)]
@@ -27,6 +28,22 @@ impl ApiError {
 
     pub fn internal_message(message: impl Into<String>) -> Self {
         Self::Internal(DynError::from(message.into()))
+    }
+}
+
+impl From<WalletApiError> for ApiError {
+    fn from(error: WalletApiError) -> Self {
+        match error {
+            WalletApiError::Wallet(WalletServiceError::TxFeeExceedsMaxFee { max_fee, tx_fee }) => {
+                Self::BadRequest(format!(
+                    "max_tx_fee_exceeded: tx_fee({tx_fee}) exceeds max_tx_fee({max_fee})"
+                ))
+            }
+            WalletApiError::Wallet(WalletServiceError::FeeProjection(error)) => {
+                Self::BadRequest(format!("fee_projection_error: {error}"))
+            }
+            error => Self::Internal(DynError::from(error.to_string())),
+        }
     }
 }
 
@@ -137,6 +154,7 @@ impl IntoResponse for BlocksStreamHandlerError {
 mod tests {
     use axum::body;
     use http::header::CONTENT_TYPE;
+    use lb_wallet_service::fee::FeeProjectionError;
 
     use super::*;
 
@@ -161,6 +179,25 @@ mod tests {
         for (error, expected_status) in cases {
             assert_eq!(error.into_response().status(), expected_status);
         }
+    }
+
+    #[test]
+    fn max_fee_error_is_a_client_error_with_a_stable_prefix() {
+        let error = ApiError::from(WalletApiError::Wallet(
+            WalletServiceError::TxFeeExceedsMaxFee {
+                max_fee: 100.into(),
+                tx_fee: 101.into(),
+            },
+        ));
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn fee_projection_overflow_is_a_client_error() {
+        let error = ApiError::from(WalletApiError::Wallet(WalletServiceError::FeeProjection(
+            FeeProjectionError::SlotOverflow,
+        )));
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
     }
 
     async fn envelope_of(response: Response) -> (StatusCode, serde_json::Value) {

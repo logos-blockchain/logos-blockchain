@@ -125,7 +125,7 @@ async fn fetch_lib_snapshots(world: &CucumberWorld) -> Result<Vec<LibSnapshot>, 
     let mut snapshots = Vec::with_capacity(node_names.len());
     for node_name in node_names {
         let client = world.resolve_node_http_client(&node_name)?;
-        let consensus = client.consensus_info().await?;
+        let consensus = world.consensus_info(&node_name, &client).await?;
         let lib_height = resolve_lib_height(world, &node_name, &consensus.cryptarchia_info).await?;
 
         snapshots.push(LibSnapshot {

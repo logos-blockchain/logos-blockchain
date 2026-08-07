@@ -811,9 +811,8 @@ fn exported_utxo(utxo: &Utxo) -> Result<ExportedUtxo, StepError> {
 
 async fn best_known_wallet_node_height(world: &CucumberWorld, wallet: &WalletInfo) -> Option<u64> {
     let node = world.nodes_info.get(&wallet.node_name)?;
-    node.started_node
-        .client
-        .consensus_info()
+    world
+        .consensus_info(&wallet.node_name, &node.started_node.client)
         .await
         .ok()
         .map(|info| info.cryptarchia_info.height)
@@ -1485,7 +1484,12 @@ async fn wait_for_n_blocks_or_warn(
     let best_node_info = get_best_node_info(world, &wallet_names[0], Some(&mut last_msg)).await?;
     let node = world
         .resolve_node_http_client(&best_node_info.best_node_for_wallet(world, &wallet_names[0])?)?;
-    let start_height = node.consensus_info().await?.cryptarchia_info.height;
+    let best_node_name = best_node_info.best_node_for_wallet(world, &wallet_names[0])?;
+    let start_height = world
+        .consensus_info(&best_node_name, &node)
+        .await?
+        .cryptarchia_info
+        .height;
     let start = Instant::now();
     loop {
         sleep(Duration::from_secs(1)).await;
@@ -1494,7 +1498,14 @@ async fn wait_for_n_blocks_or_warn(
         let node = world.resolve_node_http_client(
             &best_node_info.best_node_for_wallet(world, &wallet_names[0])?,
         )?;
-        let height = node.consensus_info().await?.cryptarchia_info.height;
+        let height = world
+            .consensus_info(
+                &best_node_info.best_node_for_wallet(world, &wallet_names[0])?,
+                &node,
+            )
+            .await?
+            .cryptarchia_info
+            .height;
         if height >= start_height + blocks_to_wait {
             return Ok(());
         }

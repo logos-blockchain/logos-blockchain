@@ -30,9 +30,9 @@ use super::{
         ZoneAccountBalances, ZoneDeposit, build_zone_deposit, ensure_zone_transactions_included,
         keygen, publish_atomic_zone_withdraw, publish_message_with_retry, sequencer_config,
         sequencer_config_with_pending_submit_depth, start_balance_aware_policy,
-        start_custom_republish_policy, start_republish_lineage_policy, start_sequencer_event_loop,
-        start_sorted_conflict_policy, submit_atomic_zone_deposit, submit_zone_deposit,
-        submit_zone_withdraw,
+        start_custom_republish_policy, start_persistent_zone_indexer,
+        start_republish_lineage_policy, start_sequencer_event_loop, start_sorted_conflict_policy,
+        submit_atomic_zone_deposit, submit_zone_deposit, submit_zone_withdraw,
     },
     tables::{ConcurrentZoneMessageRow, ZoneNodeResourcesRow, group_zone_messages_by_sequencer},
 };
@@ -54,7 +54,7 @@ use crate::{
             },
         },
         wallet::sync::current_available_utxos_for_wallet,
-        world::{CucumberWorld, WalletInfo, ZoneReaderConfig},
+        world::{CucumberWorld, WalletInfo},
     },
 };
 
@@ -607,10 +607,8 @@ pub(super) fn initialize_zone_indexer(
 ) -> StepResult {
     let sequencer_alias = sequencer_alias.as_ref();
     let node_url = log_step_error(step, world.zone_node_url_for_sequencer(sequencer_alias))?;
-    let indexer = ZoneReaderConfig {
-        channel_id: world.zone.sequencer_channel_id(sequencer_alias)?,
-        node_url,
-    };
+    let indexer =
+        start_persistent_zone_indexer(world.zone.sequencer_channel_id(sequencer_alias)?, node_url);
 
     world.zone.set_indexer(indexer);
 
@@ -753,6 +751,7 @@ fn sequencer_funding(
         funding_pk,
         max_tx_fee: GasCost::new(u64::MAX),
         priority_fee: ZONE_TEST_PRIORITY_FEE,
+        epoch_headroom: FundingConfig::DEFAULT_EPOCH_HEADROOM,
     })
 }
 
@@ -781,6 +780,8 @@ async fn start_named_sequencer_with_config(
     let sequencer_alias = sequencer_alias.as_ref().to_owned();
     let signing_key =
         log_step_error(step, world.zone.sequencer_signing_key(&sequencer_alias))?.clone();
+    let node_name =
+        log_step_error(step, world.zone.sequencer_node_name(&sequencer_alias))?.to_owned();
     let node_client = log_step_error(
         step,
         world.zone_node_http_client_for_sequencer(&sequencer_alias),
@@ -797,8 +798,14 @@ async fn start_named_sequencer_with_config(
     let runtime = start_sequencer_runtime(sequencer, mode);
     let mut ready_rx = runtime.ready_rx.clone();
 
-    if let Err(error) =
-        wait_for_sequencer_ready(&sequencer_alias, &node_client, &mut ready_rx).await
+    if let Err(error) = wait_for_sequencer_ready(
+        world,
+        &sequencer_alias,
+        &node_name,
+        &node_client,
+        &mut ready_rx,
+    )
+    .await
     {
         runtime.task.abort();
         return Err(error);
@@ -820,12 +827,18 @@ async fn start_named_sequencer_with_config(
 }
 
 async fn wait_for_sequencer_ready(
+    world: &CucumberWorld,
     sequencer_alias: &str,
+    node_name: &str,
     node_client: &NodeHttpClient,
     ready_rx: &mut tokio::sync::watch::Receiver<bool>,
 ) -> StepResult {
     timeout(SEQUENCER_READY_TIMEOUT, async {
-        let mut last_height = node_client.consensus_info().await?.cryptarchia_info.height;
+        let mut last_height = world
+            .consensus_info(node_name, node_client)
+            .await?
+            .cryptarchia_info
+            .height;
 
         loop {
             let poll = timeout(SEQUENCER_READY_POLL_TIMEOUT, async {
@@ -850,8 +863,8 @@ async fn wait_for_sequencer_ready(
             )
             .await;
 
-            last_height = node_client
-                .consensus_info()
+            last_height = world
+                .consensus_info(node_name, node_client)
                 .await?
                 .cryptarchia_info
                 .height

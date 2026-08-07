@@ -222,8 +222,9 @@ async fn step_zone_lib_advances(
     timeout_seconds: u64,
 ) -> StepResult {
     let client = log_step_error(step, world.zone_node_http_client())?;
-    let initial_lib_slot = client
-        .consensus_info()
+    let node_name = world.zone.node_name()?.to_owned();
+    let initial_lib_slot = world
+        .consensus_info(&node_name, &client)
         .await
         .map_err(|error| StepError::LogicalError {
             message: format!("Failed to fetch zone consensus info: {error}"),
@@ -232,6 +233,8 @@ async fn step_zone_lib_advances(
         .lib_slot;
 
     wait_for_lib_advance(
+        world,
+        &node_name,
         &client,
         initial_lib_slot,
         Duration::from_secs(timeout_seconds),
@@ -1299,10 +1302,13 @@ async fn step_all_zone_messages_are_finalized(
         });
     }
 
-    let node_url = log_step_error(step, world.zone_node_url())?;
+    let node_name = world.zone.node_name()?.to_owned();
+    let node = log_step_error(step, world.zone_node_http_client())?;
 
     wait_for_transactions_finalized(
-        node_url,
+        world,
+        &node_name,
+        &node,
         &inscription_ids,
         Duration::from_secs(timeout_seconds),
     )
@@ -1457,11 +1463,18 @@ async fn step_zone_transaction_is_finalized(
     timeout_seconds: u64,
 ) -> StepResult {
     let tx_hash = world.resolve_submitted_transaction(&transaction_alias)?;
-    let node_url = log_step_error(step, world.zone_node_url())?;
+    let node_name = world.zone.node_name()?.to_owned();
+    let node = log_step_error(step, world.zone_node_http_client())?;
 
-    wait_for_transactions_finalized(node_url, &[tx_hash], Duration::from_secs(timeout_seconds))
-        .await
-        .map_err(|error| zone_step_error(step, &error))
+    wait_for_transactions_finalized(
+        world,
+        &node_name,
+        &node,
+        &[tx_hash],
+        Duration::from_secs(timeout_seconds),
+    )
+    .await
+    .map_err(|error| zone_step_error(step, &error))
 }
 
 #[cucumber::then(expr = "the zone indexer returns finalized deposit {string} in {int} seconds")]

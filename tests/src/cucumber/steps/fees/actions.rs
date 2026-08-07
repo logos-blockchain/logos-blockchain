@@ -355,6 +355,8 @@ pub async fn concurrently_fund_transfers(
             funding_public_keys,
             recipient_public_key: recipient.public_key(),
             amount: request.amount,
+            fee_policy: None,
+            max_tx_fee: None,
         };
 
         prepared.push((request.alias, client, transfer));
