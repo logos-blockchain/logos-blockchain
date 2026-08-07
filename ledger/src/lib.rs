@@ -366,9 +366,10 @@ impl LedgerState {
         )
         .checked_add(total_fee_tip)?;
 
-        let pow_reward = (reward_numerator * POW_REWARD_SHARE_NUMERATOR
+        let pow_reward: PowReward = ((reward_numerator * POW_REWARD_SHARE_NUMERATOR)
             / (reward_denominator * POW_REWARD_SHARE_DENOMINATOR))
-            as PowReward;
+            .try_into()
+            .map_err(|_e| GasOverflow)?;
 
         self.mantle_ledger.leaders = self
             .mantle_ledger

@@ -1,10 +1,9 @@
-use std::collections::HashMap;
-
 use ark_ff::Zero as _;
 use lb_codec::{BinaryCodec, BinaryEncode as _};
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::{Fr, fr_from_mod_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
+use rpds::HashTrieMapSync;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -124,12 +123,12 @@ pub struct ClaimPoWRewardVerificationContext<'a> {
     /// `R_PoW`: current balance of the `PoW` reward pool.
     pub epoch_reward_pool: PowReward,
     /// Nonce of the current epoch.
-    pub current_epoch_nonce: Epoch,
+    pub current_epoch: Epoch,
     /// Nonce of the previous epoch, also accepted for claims.
-    pub previous_epoch_nonce: Epoch,
+    pub previous_epoch: Epoch,
     /// Slots of known blocks, used to check the claim's block is within
     /// the acceptance window.
-    pub blocks_slot: HashMap<Hash, Slot>,
+    pub blocks_slot: HashTrieMapSync<Hash, Slot>,
 }
 
 impl ClaimPoWRewardVerificationContext<'_> {
@@ -178,14 +177,14 @@ impl ClaimPoWRewardVerificationContext<'_> {
         claim_epoch_nonce: ZkHash,
     ) -> Result<(), ClaimPowRewardError> {
         let previous_epoch_nonce = ZkHasher::digest(&[fr_from_mod_bytes(
-            &self.previous_epoch_nonce.into_inner().to_le_bytes(),
+            &self.previous_epoch.into_inner().to_le_bytes(),
         )]);
         if claim_epoch_nonce == previous_epoch_nonce {
             return Ok(());
         }
 
         let current_epoch_nonce = ZkHasher::digest(&[fr_from_mod_bytes(
-            &self.current_epoch_nonce.into_inner().to_le_bytes(),
+            &self.current_epoch.into_inner().to_le_bytes(),
         )]);
         if claim_epoch_nonce == current_epoch_nonce {
             return Ok(());
@@ -193,7 +192,7 @@ impl ClaimPoWRewardVerificationContext<'_> {
 
         Err(ClaimPowRewardError::MismatchEpochNonce {
             claim: claim_epoch_nonce,
-            accepted: (self.previous_epoch_nonce, self.current_epoch_nonce),
+            accepted: (self.previous_epoch, self.current_epoch),
         })
     }
 
@@ -338,9 +337,9 @@ mod tests {
             pow_nullifiers: nullifiers,
             epoch_pow_reward,
             epoch_reward_pool,
-            current_epoch_nonce: 0.into(),
-            previous_epoch_nonce: 0.into(),
-            blocks_slot: HashMap::new(),
+            current_epoch: 0.into(),
+            previous_epoch: 0.into(),
+            blocks_slot: HashTrieMapSync::new_sync(),
         }
     }
 
@@ -408,9 +407,9 @@ mod tests {
             pow_nullifiers: nullifiers,
             epoch_pow_reward: 10,
             epoch_reward_pool: 1_000,
-            current_epoch_nonce: CURRENT_EPOCH.into(),
-            previous_epoch_nonce: PREVIOUS_EPOCH.into(),
-            blocks_slot: HashMap::from([(CLAIM_BLOCK_HASH, Slot::from(45u64))]),
+            current_epoch: CURRENT_EPOCH.into(),
+            previous_epoch: PREVIOUS_EPOCH.into(),
+            blocks_slot: std::iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
         }
     }
 
@@ -444,12 +443,14 @@ mod tests {
         let mut ctx = accepting_context(&nullifiers);
 
         // Gap of zero: the claim's block is the current block.
-        ctx.blocks_slot.insert(CLAIM_BLOCK_HASH, Slot::from(50u64));
+        ctx.blocks_slot
+            .insert_mut(CLAIM_BLOCK_HASH, Slot::from(50u64));
         assert_eq!(ctx.accept_claim::<10>(CLAIM_BLOCK_HASH), Ok(()));
 
         // Gap exactly equal to the window is still inside it (§5.1.1:
         // `0 <= current - anchor <= WINDOW`, measured in slots).
-        ctx.blocks_slot.insert(CLAIM_BLOCK_HASH, Slot::from(40u64));
+        ctx.blocks_slot
+            .insert_mut(CLAIM_BLOCK_HASH, Slot::from(40u64));
         assert_eq!(ctx.accept_claim::<10>(CLAIM_BLOCK_HASH), Ok(()));
     }
 
@@ -469,7 +470,8 @@ mod tests {
         let nullifiers = rpds::HashTrieSetSync::new_sync();
         let mut ctx = accepting_context(&nullifiers);
         // Gap of WINDOW + 1: one slot too old.
-        ctx.blocks_slot.insert(CLAIM_BLOCK_HASH, Slot::from(39u64));
+        ctx.blocks_slot
+            .insert_mut(CLAIM_BLOCK_HASH, Slot::from(39u64));
         assert_eq!(
             ctx.accept_claim::<10>(CLAIM_BLOCK_HASH),
             Err(ClaimPowRewardError::OutOfWindowSlot {
@@ -485,7 +487,8 @@ mod tests {
         let mut ctx = accepting_context(&nullifiers);
         // The claim's block is ahead of the current slot (negative gap),
         // e.g. a hash from a competing, longer branch.
-        ctx.blocks_slot.insert(CLAIM_BLOCK_HASH, Slot::from(51u64));
+        ctx.blocks_slot
+            .insert_mut(CLAIM_BLOCK_HASH, Slot::from(51u64));
         assert_eq!(
             ctx.accept_claim::<10>(CLAIM_BLOCK_HASH),
             Err(ClaimPowRewardError::OutOfWindowSlot {

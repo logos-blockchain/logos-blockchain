@@ -1,7 +1,6 @@
-use std::collections::HashMap;
-
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
+use rpds::HashTrieMapSync;
 
 use crate::{
     crypto::Hash,
@@ -57,11 +56,11 @@ pub trait OperationVerificationHelper {
     ) -> Result<Ed25519PublicKey, VerificationError>;
 
     // `PoW` claim validation inputs, one per
-    // [`ClaimPoWRewardValidationContext`] field. The current epoch comes from
+    // [`ClaimPoWRewardVerificationContext`] field. The current epoch comes from
     // [`Self::get_epoch`] and the current block slot from
     // [`Self::get_block_slot`].
     //
-    // [`ClaimPoWRewardValidationContext`]: crate::mantle::ops::pow::ClaimPoWRewardValidationContext
+    // [`ClaimPoWRewardVerificationContext`]: crate::mantle::ops::pow::ClaimPoWRewardVerificationContext
 
     /// `d_reward`: the reward difficulty a puzzle ticket must be strictly
     /// below.
@@ -82,7 +81,7 @@ pub trait OperationVerificationHelper {
 
     /// Slots of the blocks a claim may anchor to, keyed by block hash;
     /// used for the window-of-acceptance check.
-    fn get_blocks_slot(&self) -> HashMap<Hash, Slot>;
+    fn get_blocks_slot(&self) -> HashTrieMapSync<Hash, Slot>;
 }
 
 #[cfg(test)]
@@ -90,7 +89,7 @@ pub mod test_utils {
     use std::collections::HashMap;
 
     use lb_cryptarchia_engine::{Epoch, Slot};
-    use rpds::HashTrieSetSync;
+    use rpds::{HashTrieMapSync, HashTrieSetSync};
 
     use crate::{
         crypto::Hash,
@@ -124,7 +123,7 @@ pub mod test_utils {
         epoch_pow_reward: PowReward,
         pow_reward_pool: PowReward,
         previous_epoch: Epoch,
-        blocks_slot: HashMap<Hash, Slot>,
+        blocks_slot: HashTrieMapSync<Hash, Slot>,
     }
 
     impl TestOperationVerificationHelper {
@@ -152,7 +151,7 @@ pub mod test_utils {
                 epoch_pow_reward: 0,
                 pow_reward_pool: 0,
                 previous_epoch: Epoch::from(0u32),
-                blocks_slot: HashMap::new(),
+                blocks_slot: HashTrieMapSync::new_sync(),
             }
         }
 
@@ -303,7 +302,7 @@ pub mod test_utils {
             self.previous_epoch
         }
 
-        fn get_blocks_slot(&self) -> HashMap<Hash, Slot> {
+        fn get_blocks_slot(&self) -> HashTrieMapSync<Hash, Slot> {
             self.blocks_slot.clone()
         }
     }

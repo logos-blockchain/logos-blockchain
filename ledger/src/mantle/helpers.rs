@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use lb_core::{
     crypto::Hash,
     mantle::{
@@ -17,7 +15,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
-use rpds::HashTrieSetSync;
+use rpds::{HashTrieMapSync, HashTrieSetSync};
 
 use crate::mantle::LedgerState;
 
@@ -152,12 +150,7 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
         Epoch::from(self.get_epoch().into_inner().saturating_sub(1))
     }
 
-    fn get_blocks_slot(&self) -> HashMap<Hash, Slot> {
-        self.ledger_state
-            .pow
-            .block_slots()
-            .iter()
-            .map(|(block_hash, slot)| (*block_hash, *slot))
-            .collect()
+    fn get_blocks_slot(&self) -> HashTrieMapSync<Hash, Slot> {
+        self.ledger_state.pow.block_slots().clone()
     }
 }
