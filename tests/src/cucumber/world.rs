@@ -33,7 +33,6 @@ use lb_testing_framework::{
     LbcEnv, LbcK8sManualCluster, LbcManualCluster, NodeHttpClient, ScenarioBuilder,
     ScenarioBuilderExt as _, configs::wallet::WalletAccount, env::set_default_env, workloads,
 };
-use lb_zone_sdk::{adapter::NodeHttpClient as ZoneNodeHttpClient, indexer::ZoneIndexer};
 use reqwest::Url;
 use testing_framework_core::{
     scenario::{PeerSelection, Scenario, StartedNode},
@@ -185,10 +184,23 @@ pub struct ZoneSequencerStartup {
     pub passive_republish_orphans: bool,
 }
 
+/// Connection info for the read-only channel observer of the "zone indexer"
+/// steps.
+///
+/// Each assertion cold-starts a fresh `ZoneSequencer` from this config with a
+/// random signing key that is not part of the channel rotation — such a
+/// sequencer can never publish or repost (inscription posting is turn-gated),
+/// it only replays and observes finalized history.
+#[derive(Clone)]
+pub struct ZoneReaderConfig {
+    pub channel_id: ChannelId,
+    pub node_url: Url,
+}
+
 #[derive(Default)]
 pub struct ZoneState {
     node_name: Option<String>,
-    indexer: Option<ZoneIndexer<ZoneNodeHttpClient>>,
+    indexer: Option<ZoneReaderConfig>,
     sequencers: HashMap<String, ZoneSequencerIdentity>,
     runtimes: HashMap<String, ZoneSequencerRuntime>,
     default_sequencer_alias: Option<String>,
@@ -712,11 +724,11 @@ impl ZoneState {
             })
     }
 
-    pub fn set_indexer(&mut self, indexer: ZoneIndexer<ZoneNodeHttpClient>) {
+    pub fn set_indexer(&mut self, indexer: ZoneReaderConfig) {
         self.indexer = Some(indexer);
     }
 
-    pub fn indexer(&self) -> Result<&ZoneIndexer<ZoneNodeHttpClient>, StepError> {
+    pub fn indexer(&self) -> Result<&ZoneReaderConfig, StepError> {
         self.indexer.as_ref().ok_or(StepError::LogicalError {
             message: "Zone indexer is not initialized".to_owned(),
         })

@@ -37,18 +37,17 @@ pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
 ///
 /// [`NodeHttpClient`] implements it over the node's HTTP API. Custom backends
 /// (e.g. an embedded node reached over a different transport) implement this
-/// trait externally and are passed to the generic entry points
-/// [`ZoneSequencer::init`](crate::sequencer::ZoneSequencer::init) and
-/// [`ZoneIndexer::new`](crate::indexer::ZoneIndexer::new) — no registration
-/// beyond the `impl` is needed.
+/// trait externally and are passed to the generic entry point
+/// [`ZoneSequencer::init`](crate::sequencer::ZoneSequencer::init) — no
+/// registration beyond the `impl` is needed.
 ///
 /// Only the primitive methods — each a single node API call — must be
 /// implemented. The `zone_messages_*` methods are compositions of those
 /// primitives and come with default implementations; override them only to
 /// serve the same message vocabulary more efficiently.
 ///
-/// Those entry points additionally require `Clone + Send + Sync + 'static`
-/// (sequencer) and `Clone + Sync` (indexer) on the implementation.
+/// The entry point additionally requires `Clone + Send + Sync + 'static` on
+/// the implementation.
 ///
 /// Every foreign type appearing in these signatures is re-exported in
 /// [`crate::node_types`], so an implementation only needs to depend on this
@@ -433,15 +432,14 @@ mod tests {
 
     /// Pins the public backend contract: an external [`Node`] implementation
     /// (here [`MockNode`], which is not [`NodeHttpClient`]) satisfies the
-    /// bounds of both generic entry points. If a bound is ever added to the
-    /// constructors, this stops compiling and the trait docs must be updated
+    /// bounds of the generic entry point. If a bound is ever added to the
+    /// constructor, this stops compiling and the trait docs must be updated
     /// alongside it.
     #[tokio::test]
-    async fn external_backend_plugs_into_sequencer_and_indexer() {
+    async fn external_backend_plugs_into_sequencer() {
         use lb_key_management_system_service::keys::Ed25519Key;
 
         use crate::{
-            indexer::ZoneIndexer,
             sequencer::ZoneSequencer,
             test_support::{MockNode, funding_config},
         };
@@ -449,7 +447,6 @@ mod tests {
         let channel_id = ChannelId::from([0; 32]);
         let node = MockNode::default();
 
-        let _indexer = ZoneIndexer::new(channel_id, node.clone());
         let _sequencer = ZoneSequencer::init(
             channel_id,
             Ed25519Key::from_bytes(&[0; 32]),
