@@ -23,7 +23,7 @@ use derivative::Derivative;
 use futures::{Stream, TryStreamExt as _};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
-    block::{Block, genesis::GenesisBlock},
+    block::{Block, UncleHeaders, genesis::GenesisBlock},
     events::Events,
     header::HeaderId,
     mantle::{
@@ -199,6 +199,12 @@ pub enum Query {
     GetBlockEvents {
         id: HeaderId,
         reply_channel: oneshot::Sender<Option<Events>>,
+    },
+    /// Selects uncles for a new block extending `parent` at `slot`.
+    SelectUncles {
+        parent: HeaderId,
+        slot: Slot,
+        reply_channel: oneshot::Sender<UncleHeaders>,
     },
     /// Subscribe to be notified when the chain becomes online mode.
     /// Since chain never goes back after entering online,
