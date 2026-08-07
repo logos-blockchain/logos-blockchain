@@ -709,6 +709,7 @@ impl LedgerState {
                         nullifiers: self.mantle_ledger.pow.nullifiers().clone(),
                         tx_hash: *tx_hash,
                         utxos: self.cryptarchia_ledger.latest_utxos().clone(),
+                        block_slots: self.mantle_ledger.pow.block_slots().clone(),
                     })
                     .map_err(mantle::Error::ClaimPow)?;
                 self.mantle_ledger
@@ -2241,7 +2242,7 @@ mod tests {
                     .mantle_ledger
                     .pow
                     .nullifiers()
-                    .contains(&claim_op().get_puzzle_ticket())
+                    .contains_key(&claim_op().get_puzzle_ticket())
             );
             let expected_utxo = Utxo {
                 op_id: claim_op().op_id(),
@@ -2288,7 +2289,14 @@ mod tests {
             // The execution path (`try_apply_op`): the claim drains sigma_e
             // from the pool, records the nullifier, inserts the reward note
             // into the UTXO set and emits the claim event.
-            let (state, config) = pow_ledger_state(1_000);
+            let (mut state, config) = pow_ledger_state(1_000);
+            // Execution reads the anchor block's slot from the seen-block
+            // map (validation, skipped here, guarantees its presence), so
+            // record it directly.
+            state
+                .mantle_ledger
+                .pow
+                .add_seen_block_slots(claim_op().block_hash, Slot::from(0u64));
             let pool_before = state.mantle_ledger.pow.reward_pool();
             let epoch_reward = state.mantle_ledger.pow.epoch_reward();
             let op = claim_op();
@@ -2313,7 +2321,7 @@ mod tests {
                     .mantle_ledger
                     .pow
                     .nullifiers()
-                    .contains(&op.get_puzzle_ticket())
+                    .contains_key(&op.get_puzzle_ticket())
             );
 
             let expected_utxo = Utxo {
@@ -2350,7 +2358,14 @@ mod tests {
             // path directly therefore pays the same solution twice — pinned
             // here to document that the guard lives in validation, not
             // execution.
-            let (state, config) = pow_ledger_state(1_000);
+            let (mut state, config) = pow_ledger_state(1_000);
+            // Execution reads the anchor block's slot from the seen-block
+            // map (validation, skipped here, guarantees its presence), so
+            // record it directly.
+            state
+                .mantle_ledger
+                .pow
+                .add_seen_block_slots(claim_op().block_hash, Slot::from(0u64));
             let pool_before = state.mantle_ledger.pow.reward_pool();
             let epoch_reward = state.mantle_ledger.pow.epoch_reward();
             let op = Op::ClaimPowReward(claim_op());

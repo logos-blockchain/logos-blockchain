@@ -115,8 +115,9 @@ pub struct ClaimPoWRewardVerificationContext<'a> {
     pub current_block_slot: Slot,
     /// `d_reward`: current reward difficulty a puzzle ticket must meet.
     pub reward_difficulty: PowTarget,
-    /// Nullifiers of already-claimed `PoW` solutions.
-    pub pow_nullifiers: &'a rpds::HashTrieSetSync<PowNullifier>,
+    /// Nullifiers of already-claimed `PoW` solutions, mapped to the slot
+    /// they were claimed at.
+    pub pow_nullifiers: &'a HashTrieMapSync<PowNullifier, Slot>,
     // needed not in spec yet
     /// `sigma_e`: reward amount per claim for the current epoch.
     pub epoch_pow_reward: PowReward,
@@ -214,7 +215,7 @@ impl ClaimPoWRewardVerificationContext<'_> {
         &self,
         puzzle_ticket: PuzzleTicket,
     ) -> Result<(), ClaimPowRewardError> {
-        if self.pow_nullifiers.contains(&puzzle_ticket) {
+        if self.pow_nullifiers.contains_key(&puzzle_ticket) {
             return Err(ClaimPowRewardError::DoubleClaimed);
         }
         Ok(())
@@ -235,11 +236,13 @@ pub struct ClaimPoWRewardExecutionContext {
     /// `sigma_e`: reward amount paid out by this claim.
     pub epoch_reward: PowReward,
     /// Nullifiers of already-claimed `PoW` solutions.
-    pub nullifiers: rpds::HashTrieSetSync<PowNullifier>,
+    pub nullifiers: HashTrieMapSync<PowNullifier, Slot>,
     /// Hash of the transaction carrying this claim.
     pub tx_hash: TxHash,
     /// Unspent transaction outputs, extended with the reward note.
     pub utxos: Utxos,
+    /// Recorded block slots
+    pub block_slots: HashTrieMapSync<Hash, Slot>,
 }
 
 impl ClaimPoWRewardExecutionContext {
@@ -290,9 +293,13 @@ impl ExecutableOperation for ClaimPowRewardOp {
         &self,
         mut context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
+        let slot = context
+            .block_slots
+            .get(&self.block_hash)
+            .expect("Existence should be check in verification");
         // add the nullifier to the set
         let nullifier = self.get_puzzle_ticket();
-        context.nullifiers.insert_mut(nullifier);
+        context.nullifiers.insert_mut(nullifier, *slot);
         // create output note
         let note = Note::new(context.epoch_reward, self.public_key);
         let op_id = self.op_id();
@@ -327,7 +334,7 @@ mod tests {
     use super::*;
 
     fn validation_context(
-        nullifiers: &rpds::HashTrieSetSync<PowNullifier>,
+        nullifiers: &HashTrieMapSync<PowNullifier, Slot>,
         epoch_pow_reward: PowReward,
         epoch_reward_pool: PowReward,
     ) -> ClaimPoWRewardVerificationContext<'_> {
@@ -348,14 +355,14 @@ mod tests {
         // Spec §5.6: claiming is enabled when `pow_reward_pool >= sigma_e`.
         // A pool exactly equal to the reward must be claimable; rejecting it
         // (as the previous `<=` comparison did) strands the last reward.
-        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let nullifiers = HashTrieMapSync::new_sync();
         let ctx = validation_context(&nullifiers, 10, 10);
         assert_eq!(ctx.are_pow_reward_enabled(), Ok(()));
     }
 
     #[test]
     fn pow_reward_enabled_rejects_pool_below_the_reward() {
-        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let nullifiers = HashTrieMapSync::new_sync();
         let ctx = validation_context(&nullifiers, 10, 9);
         assert_eq!(
             ctx.are_pow_reward_enabled(),
@@ -370,7 +377,7 @@ mod tests {
     fn pow_reward_enabled_rejects_zero_reward() {
         // sigma_e == 0 is the safety cutoff: claims are rejected outright,
         // regardless of the pool balance.
-        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let nullifiers = HashTrieMapSync::new_sync();
         let ctx = validation_context(&nullifiers, 0, 1_000);
         assert_eq!(
             ctx.are_pow_reward_enabled(),
@@ -398,7 +405,7 @@ mod tests {
     /// A context that accepts `claim_op(CURRENT_EPOCH)`: funded pool,
     /// permissive difficulty, claim block a few slots back.
     fn accepting_context(
-        nullifiers: &rpds::HashTrieSetSync<PowNullifier>,
+        nullifiers: &HashTrieMapSync<PowNullifier, Slot>,
     ) -> ClaimPoWRewardVerificationContext<'_> {
         ClaimPoWRewardVerificationContext {
             current_block_slot: Slot::from(50u64),
@@ -439,7 +446,7 @@ mod tests {
 
     #[test]
     fn accept_claim_accepts_blocks_inside_the_window() {
-        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let nullifiers = HashTrieMapSync::new_sync();
         let mut ctx = accepting_context(&nullifiers);
 
         // Gap of zero: the claim's block is the current block.
@@ -456,7 +463,7 @@ mod tests {
 
     #[test]
     fn accept_claim_rejects_unknown_block() {
-        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let nullifiers = HashTrieMapSync::new_sync();
         let ctx = accepting_context(&nullifiers);
         let unknown = [9u8; 32];
         assert_eq!(
@@ -467,7 +474,7 @@ mod tests {
 
     #[test]
     fn accept_claim_rejects_block_beyond_the_window() {
-        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let nullifiers = HashTrieMapSync::new_sync();
         let mut ctx = accepting_context(&nullifiers);
         // Gap of WINDOW + 1: one slot too old.
         ctx.blocks_slot
@@ -483,7 +490,7 @@ mod tests {
 
     #[test]
     fn accept_claim_rejects_block_from_the_future() {
-        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let nullifiers = HashTrieMapSync::new_sync();
         let mut ctx = accepting_context(&nullifiers);
         // The claim's block is ahead of the current slot (negative gap),
         // e.g. a hash from a competing, longer branch.
@@ -500,7 +507,7 @@ mod tests {
 
     #[test]
     fn validate_accepts_claim_with_current_epoch_nonce() {
-        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let nullifiers = HashTrieMapSync::new_sync();
         let ctx = accepting_context(&nullifiers);
         assert_eq!(claim_op(CURRENT_EPOCH).verify(&NoOpProof, &ctx), Ok(()));
     }
@@ -509,14 +516,14 @@ mod tests {
     fn validate_accepts_claim_with_previous_epoch_nonce() {
         // Spec §5.3 step 3: a solution mined just before an epoch boundary
         // stays claimable, so the previous epoch's nonce is also accepted.
-        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let nullifiers = HashTrieMapSync::new_sync();
         let ctx = accepting_context(&nullifiers);
         assert_eq!(claim_op(PREVIOUS_EPOCH).verify(&NoOpProof, &ctx), Ok(()));
     }
 
     #[test]
     fn validate_rejects_claim_with_stale_epoch_nonce() {
-        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let nullifiers = HashTrieMapSync::new_sync();
         let ctx = accepting_context(&nullifiers);
         let op = claim_op(PREVIOUS_EPOCH - 1);
         assert_eq!(
@@ -530,7 +537,7 @@ mod tests {
 
     #[test]
     fn validate_rejects_ticket_above_the_reward_difficulty() {
-        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let nullifiers = HashTrieMapSync::new_sync();
         let mut ctx = accepting_context(&nullifiers);
         // The hardest possible target: only a ticket of exactly zero would
         // pass, and this op's ticket is not zero.
@@ -546,7 +553,7 @@ mod tests {
         // Spec §5.3: the check is the strict `puzzle_ticket <
         // difficulty_reward`, so a ticket exactly on the target does not
         // qualify.
-        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let nullifiers = HashTrieMapSync::new_sync();
         let op = claim_op(CURRENT_EPOCH);
         let mut ctx = accepting_context(&nullifiers);
         ctx.reward_difficulty = op.get_puzzle_ticket().into();
@@ -559,7 +566,8 @@ mod tests {
     #[test]
     fn validate_rejects_already_claimed_ticket() {
         let op = claim_op(CURRENT_EPOCH);
-        let nullifiers = rpds::HashTrieSetSync::new_sync().insert(op.get_puzzle_ticket());
+        let nullifiers =
+            HashTrieMapSync::new_sync().insert(op.get_puzzle_ticket(), Slot::from(45u64));
         let ctx = accepting_context(&nullifiers);
         assert_eq!(
             op.verify(&NoOpProof, &ctx),
@@ -577,14 +585,19 @@ mod tests {
             .execute(ClaimPoWRewardExecutionContext {
                 reward_pool: 1_000,
                 epoch_reward,
-                nullifiers: rpds::HashTrieSetSync::new_sync(),
+                nullifiers: HashTrieMapSync::new_sync(),
                 tx_hash,
                 utxos: Utxos::new(),
+                block_slots: std::iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
             })
             .expect("claim execution should succeed");
 
-        // The spent solution is recorded and the pool pays out sigma_e.
-        assert!(ctx.nullifiers.contains(&op.get_puzzle_ticket()));
+        // The spent solution is recorded against the anchor block's slot,
+        // and the pool pays out sigma_e.
+        assert_eq!(
+            ctx.nullifiers.get(&op.get_puzzle_ticket()),
+            Some(&Slot::from(45u64))
+        );
         assert_eq!(ctx.reward_pool, 990);
 
         // The reward note lands in the UTXO set, payable to the op's key
@@ -626,9 +639,10 @@ mod tests {
             .execute(ClaimPoWRewardExecutionContext {
                 reward_pool: 5,
                 epoch_reward: 10,
-                nullifiers: rpds::HashTrieSetSync::new_sync(),
+                nullifiers: HashTrieMapSync::new_sync(),
                 tx_hash: TxHash::from([11u8; 32]),
                 utxos: Utxos::new(),
+                block_slots: std::iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
             })
             .expect("claim execution should succeed");
 

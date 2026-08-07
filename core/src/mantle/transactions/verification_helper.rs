@@ -67,7 +67,7 @@ pub trait OperationVerificationHelper {
     fn get_pow_reward_difficulty(&self) -> PowTarget;
 
     /// Nullifiers of already-claimed `PoW` solutions.
-    fn get_pow_nullifiers(&self) -> &rpds::HashTrieSetSync<PowNullifier>;
+    fn get_pow_nullifiers(&self) -> &HashTrieMapSync<PowNullifier, Slot>;
 
     /// `sigma_e`: reward amount per claim for the current epoch.
     fn get_epoch_pow_reward(&self) -> PowReward;
@@ -119,7 +119,7 @@ pub mod test_utils {
         nullifiers: HashTrieSetSync<VoucherNullifier>,
         claimable_vouchers_root: RewardsRoot,
         pow_reward_difficulty: PowTarget,
-        pow_nullifiers: HashTrieSetSync<PowNullifier>,
+        pow_nullifiers: HashTrieMapSync<PowNullifier, Slot>,
         epoch_pow_reward: PowReward,
         pow_reward_pool: PowReward,
         previous_epoch: Epoch,
@@ -147,7 +147,7 @@ pub mod test_utils {
                 nullifiers: HashTrieSetSync::new_sync(),
                 claimable_vouchers_root: RewardsRoot::default(),
                 pow_reward_difficulty: PowTarget::default(),
-                pow_nullifiers: HashTrieSetSync::new_sync(),
+                pow_nullifiers: HashTrieMapSync::new_sync(),
                 epoch_pow_reward: 0,
                 pow_reward_pool: 0,
                 previous_epoch: Epoch::from(0u32),
@@ -187,7 +187,10 @@ pub mod test_utils {
         }
 
         #[must_use]
-        pub fn with_pow_nullifiers(mut self, nullifiers: HashTrieSetSync<PowNullifier>) -> Self {
+        pub fn with_pow_nullifiers(
+            mut self,
+            nullifiers: HashTrieMapSync<PowNullifier, Slot>,
+        ) -> Self {
             self.pow_nullifiers = nullifiers;
             self
         }
@@ -286,7 +289,7 @@ pub mod test_utils {
             self.pow_reward_difficulty
         }
 
-        fn get_pow_nullifiers(&self) -> &HashTrieSetSync<PowNullifier> {
+        fn get_pow_nullifiers(&self) -> &HashTrieMapSync<PowNullifier, Slot> {
             &self.pow_nullifiers
         }
 

@@ -134,7 +134,7 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
         self.ledger_state.pow.reward_difficulty()
     }
 
-    fn get_pow_nullifiers(&self) -> &HashTrieSetSync<PowNullifier> {
+    fn get_pow_nullifiers(&self) -> &HashTrieMapSync<PowNullifier, Slot> {
         self.ledger_state.pow.nullifiers()
     }
 

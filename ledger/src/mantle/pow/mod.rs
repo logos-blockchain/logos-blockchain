@@ -13,7 +13,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::serde::serde_fr;
-use rpds::{HashTrieMapSync, HashTrieSetSync};
+use rpds::HashTrieMapSync;
 
 use crate::{
     EpochState,
@@ -40,7 +40,9 @@ pub struct PowState {
     /// `reward_pool` at the next epoch boundary.
     refill_rewards: PowReward,
     /// Spent `PoW` solutions, retained only for the acceptance
-    nullifiers: HashTrieSetSync<PowNullifier>,
+    /// Values are the **claimed** slot used to trim after the validation window
+    /// expires.
+    nullifiers: HashTrieMapSync<PowNullifier, Slot>,
     /// Slots of recently seen blocks by hash, retained for the
     /// window-of-acceptance check and pruned as they age out of
     /// [`SLOT_WINDOW`]. Keyed by the wire-format block hash — the same
@@ -70,7 +72,7 @@ impl PowState {
                 PowTarget::from(POW_EPOCH_REWARD_POOL_GENESIS),
             ),
             refill_rewards: 0,
-            nullifiers: HashTrieSetSync::new_sync(),
+            nullifiers: HashTrieMapSync::new_sync(),
             block_slots: HashTrieMapSync::new_sync(),
         }
     }
@@ -89,7 +91,7 @@ impl PowState {
 
     /// Nullifiers of already-claimed `PoW` solutions.
     #[must_use]
-    pub const fn nullifiers(&self) -> &HashTrieSetSync<PowNullifier> {
+    pub const fn nullifiers(&self) -> &HashTrieMapSync<PowNullifier, Slot> {
         &self.nullifiers
     }
 
@@ -144,14 +146,23 @@ impl PowState {
     /// retained (§5.1.1).
     pub(crate) fn prune_seen_block_slots(&mut self, current: Slot) {
         let cutoff = current.saturating_sub(Slot::from(SLOT_WINDOW));
-        let prunable: Vec<Hash> = self
+        self.block_slots = self
             .block_slots
-            .iter()
-            .filter_map(|(id, slot)| (*slot < cutoff).then_some(*id))
+            .into_iter()
+            .filter_map(|(&hash, &slot)| (slot >= cutoff).then_some((hash, slot)))
             .collect();
-        for id in prunable {
-            self.block_slots.remove_mut(&id);
-        }
+    }
+
+    /// Drop seen nullifiers that have aged out of the acceptance window: the
+    /// window check rejects them regardless, so they no longer need to be
+    /// retained (§5.1.1).
+    pub(crate) fn prune_nullifiers_by_slots(&mut self, current: Slot) {
+        let cutoff = current.saturating_sub(Slot::from(SLOT_WINDOW));
+        self.nullifiers = self
+            .nullifiers
+            .into_iter()
+            .filter_map(|(&nullifier, &slot)| (slot >= cutoff).then_some((nullifier, slot)))
+            .collect();
     }
 
     /// Apply an epoch transition: on epoch change, refill the reward pool
@@ -511,6 +522,39 @@ mod tests {
     }
 
     #[test]
+    fn nullifiers_are_pruned_once_they_age_out_of_the_window() {
+        // Spent solutions are retained only for `SLOT_WINDOW`: once their
+        // claim slot ages out, the window check rejects any reuse anyway, so
+        // the nullifier can be dropped (§5.1.1).
+        let old_nullifier = PowNullifier::from(Fr::ONE);
+        let recent_nullifier = PowNullifier::from(Fr::from(2u64));
+        let nullifiers = HashTrieMapSync::new_sync()
+            .insert(old_nullifier, Slot::from(5u64))
+            .insert(recent_nullifier, Slot::from(5 + SLOT_WINDOW));
+        let mut state = PowState::new();
+        state.update_from_claim_execution_result(&ClaimPoWRewardExecutionContext {
+            reward_pool: state.reward_pool(),
+            epoch_reward: 0,
+            nullifiers,
+            tx_hash: TxHash::from([7u8; 32]),
+            utxos: Utxos::new(),
+            block_slots: HashTrieMapSync::new_sync(),
+        });
+
+        // A claim slot exactly `SLOT_WINDOW` back sits on the cutoff and must
+        // survive, matching the inclusive window check.
+        state.prune_nullifiers_by_slots(Slot::from(5 + SLOT_WINDOW));
+        assert!(state.nullifiers().contains_key(&old_nullifier));
+        assert!(state.nullifiers().contains_key(&recent_nullifier));
+
+        // One slot further, the old nullifier is strictly outside the window
+        // and is dropped; the recent one remains.
+        state.prune_nullifiers_by_slots(Slot::from(5 + SLOT_WINDOW + 1));
+        assert!(!state.nullifiers().contains_key(&old_nullifier));
+        assert!(state.nullifiers().contains_key(&recent_nullifier));
+    }
+
+    #[test]
     fn update_from_claim_execution_result_replaces_pool_and_nullifiers() {
         let mut state = PowState::new();
         state.add_reward_refill_rewards(1_000);
@@ -520,20 +564,21 @@ mod tests {
         assert_eq!(state.epoch_reward(), epoch_reward);
 
         let nullifier = PowNullifier::from(Fr::ONE);
-        let nullifiers = HashTrieSetSync::new_sync().insert(nullifier);
+        let nullifiers = HashTrieMapSync::new_sync().insert(nullifier, Slot::from(7u64));
         let context = ClaimPoWRewardExecutionContext {
             reward_pool: 990,
             epoch_reward,
             nullifiers: nullifiers.clone(),
             tx_hash: TxHash::from([7u8; 32]),
             utxos: Utxos::new(),
+            block_slots: HashTrieMapSync::new_sync(),
         };
 
         state.update_from_claim_execution_result(&context);
 
         assert_eq!(state.reward_pool(), 990);
         assert_eq!(state.nullifiers(), &nullifiers);
-        assert!(state.nullifiers().contains(&nullifier));
+        assert!(state.nullifiers().contains_key(&nullifier));
         // Unrelated fields are left untouched by this update.
         assert_eq!(state.epoch_reward(), epoch_reward);
     }
@@ -547,9 +592,10 @@ mod tests {
         ClaimPoWRewardExecutionContext {
             reward_pool,
             epoch_reward: 0,
-            nullifiers: HashTrieSetSync::new_sync().insert(nullifier),
+            nullifiers: HashTrieMapSync::new_sync().insert(nullifier, Slot::from(7u64)),
             tx_hash: TxHash::from([7u8; 32]),
             utxos: Utxos::new(),
+            block_slots: HashTrieMapSync::new_sync(),
         }
     }
 
@@ -611,7 +657,7 @@ mod tests {
 
         let new_state = state.try_apply_header(&epoch_state(0), &epoch_state(1));
 
-        assert!(new_state.nullifiers().contains(&nullifier));
+        assert!(new_state.nullifiers().contains_key(&nullifier));
     }
 
     #[test]
