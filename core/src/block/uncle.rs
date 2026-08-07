@@ -4,7 +4,7 @@ use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
-use crate::header::Header;
+use crate::header::{Header, HeaderId};
 
 /// Signed headers of the uncles referenced by a block.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
@@ -28,6 +28,14 @@ impl UncleHeaders {
         slots
             .try_into()
             .expect("one slot per header, so the same bound holds")
+    }
+
+    pub fn ids(&self) -> impl Iterator<Item = HeaderId> {
+        self.0.iter().map(|uncle| uncle.header.id())
+    }
+
+    pub fn parents(&self) -> impl Iterator<Item = HeaderId> {
+        self.0.iter().map(|uncle| uncle.header.parent())
     }
 
     #[must_use]

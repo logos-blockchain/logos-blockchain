@@ -71,12 +71,13 @@ fn cryptarchia_switch_to_online() {
     while block_ids.len() < 4 {
         // TODO: Use a mock proof system instead of expensive real proof generation,
         // by refactoring `Cryptarchia`.
-        let block = try_build_block(
+        let (block, _) = try_build_block(
             &cryptarchia,
             *block_ids.last().unwrap(),
             utxo,
             &zk_key,
             slot,
+            UncleHeaders::empty(),
         )
         .expect("should find a winning slot");
 
@@ -149,7 +150,15 @@ async fn get_block_ids_from_memory_and_storage() {
     let mut slot = Slot::genesis().strict_add(1.into());
     let mut block_ids = vec![genesis_id];
     for _ in 0..2 {
-        let block = try_build_block(&cryptarchia, cryptarchia.tip(), utxo, &zk_key, slot).unwrap();
+        let (block, _) = try_build_block(
+            &cryptarchia,
+            cryptarchia.tip(),
+            utxo,
+            &zk_key,
+            slot,
+            UncleHeaders::empty(),
+        )
+        .unwrap();
         process_block(
             &mut cryptarchia,
             block.clone(),
@@ -194,7 +203,15 @@ async fn get_block_ids_from_memory_and_storage() {
     // Add 3 more blocks.
     // Now G, b1 are in storage, and b2~5 are in memory.
     for _ in 0..3 {
-        let block = try_build_block(&cryptarchia, cryptarchia.tip(), utxo, &zk_key, slot).unwrap();
+        let (block, _) = try_build_block(
+            &cryptarchia,
+            cryptarchia.tip(),
+            utxo,
+            &zk_key,
+            slot,
+            UncleHeaders::empty(),
+        )
+        .unwrap();
         process_block(
             &mut cryptarchia,
             block.clone(),
@@ -333,8 +350,15 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedMantleTx<Preverifie
         0,
         UncleSlots::default(),
     );
-    let block =
-        try_build_block(&cryptarchia, cryptarchia.tip(), utxo, &zk_key, Slot::new(1)).unwrap();
+    let (block, _) = try_build_block(
+        &cryptarchia,
+        cryptarchia.tip(),
+        utxo,
+        &zk_key,
+        Slot::new(1),
+        UncleHeaders::empty(),
+    )
+    .unwrap();
 
     (cryptarchia, block)
 }
@@ -393,7 +417,8 @@ pub fn try_build_block(
     utxo: Utxo,
     key: &ZkKey,
     start_slot: Slot,
-) -> Option<Block<SignedMantleTx<Preverified>>> {
+    uncle_headers: UncleHeaders,
+) -> Option<(Block<SignedMantleTx<Preverified>>, Ed25519Key)> {
     let start_slot: u64 = start_slot.into();
     for slot in start_slot..=(start_slot + 1000) {
         let epoch_state = cryptarchia.epoch_state_for_slot(slot.into()).unwrap();
@@ -426,17 +451,16 @@ pub fn try_build_block(
         )
         .unwrap();
 
-        return Some(
-            Block::create(
-                parent,
-                slot.into(),
-                UncleHeaders::empty(),
-                proof,
-                BlockTransactions::empty(),
-                &signing_key,
-            )
-            .unwrap(),
-        );
+        let block = Block::create(
+            parent,
+            slot.into(),
+            uncle_headers,
+            proof,
+            BlockTransactions::empty(),
+            &signing_key,
+        )
+        .unwrap();
+        return Some((block, signing_key));
     }
 
     None
