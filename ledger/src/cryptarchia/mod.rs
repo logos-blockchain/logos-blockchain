@@ -459,10 +459,41 @@ impl LedgerState {
         // Then, apply the proof and update the nonce. Finally, increment block density
         // since this function is called for a new block.
         Ok(self
-            .update_epoch_state(slot, sdp, config)?
-            .try_apply_proof(slot, proof, config)?
+            .update_epoch_state_and_apply_proof(slot, proof, sdp, config)?
             .update_nonce(&proof.entropy(), slot)
             .increment_block_density(slot))
+    }
+
+    /// Synthesizes the epoch state for `slot` and apply the proof.
+    fn update_epoch_state_and_apply_proof<LeaderProof, Id>(
+        self,
+        slot: Slot,
+        proof: &LeaderProof,
+        sdp: &SdpLedger,
+        config: &Config,
+    ) -> Result<Self, LedgerError<Id>>
+    where
+        LeaderProof: leader_proof::LeaderProof,
+    {
+        self.update_epoch_state(slot, sdp, config)?
+            .try_apply_proof(slot, proof, config)
+    }
+
+    /// Verifies a leadership proof for a block at `slot` whose parent is the
+    /// block this state belongs to, leaving the state untouched.
+    pub fn verify_proof_of_leadership<LeaderProof, Id>(
+        &self,
+        slot: Slot,
+        proof: &LeaderProof,
+        sdp: &SdpLedger,
+        config: &Config,
+    ) -> Result<(), LedgerError<Id>>
+    where
+        LeaderProof: leader_proof::LeaderProof,
+    {
+        self.clone()
+            .update_epoch_state_and_apply_proof(slot, proof, sdp, config)?;
+        Ok(())
     }
 
     pub fn try_apply_transfer<Id, Profile: GasProfile>(

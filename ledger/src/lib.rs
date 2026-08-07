@@ -314,6 +314,25 @@ impl LedgerState {
         ))
     }
 
+    /// Verifies a leadership proof for a block at `slot` whose parent is the
+    /// block this state belongs to, leaving the state untouched.
+    pub fn verify_proof_of_leadership<LeaderProof, Id>(
+        &self,
+        slot: Slot,
+        proof: &LeaderProof,
+        config: &Config,
+    ) -> Result<(), LedgerError<Id>>
+    where
+        LeaderProof: leader_proof::LeaderProof,
+    {
+        self.cryptarchia_ledger.verify_proof_of_leadership(
+            slot,
+            proof,
+            &self.mantle_ledger.sdp,
+            config,
+        )
+    }
+
     #[must_use]
     pub const fn get_gas_prices(&self) -> GasPrices {
         GasPrices {

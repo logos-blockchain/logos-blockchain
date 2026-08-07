@@ -9,6 +9,7 @@ pub mod storage;
 mod sync;
 #[cfg(test)]
 mod tests;
+mod uncle;
 
 use core::fmt::Debug;
 use std::{
@@ -65,6 +66,7 @@ pub use crate::{
     service::phases::PhaseTag,
     states::CryptarchiaConsensusState,
     sync::config::{BlockProviderConfig, SyncConfig},
+    uncle::UncleError,
 };
 use crate::{
     bootstrap::state::choose_engine_state,
@@ -115,6 +117,8 @@ pub enum Error {
     ParentIdNotFound(HeaderId),
     #[error("Awaiting genesis time")]
     AwaitingGenesisTime,
+    #[error("Invalid uncle {uncle}: {reason}")]
+    InvalidUncle { uncle: HeaderId, reason: UncleError },
 }
 
 struct InitializedCryptarchia {
@@ -387,6 +391,9 @@ impl Cryptarchia {
                 current_slot,
             });
         }
+
+        // A block is valid only if every uncle it carries is valid.
+        self.verify_uncles(block)?;
 
         // A block number of this block if it's applied to the chain.
         let (_, state, events) = self
