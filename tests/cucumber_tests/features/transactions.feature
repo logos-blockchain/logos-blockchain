@@ -482,3 +482,60 @@ Feature: Transactions
     Then transaction "GOOD_TX" is included on node "NODE_1" in 120 seconds
     And transaction "BAD_TX" is not included in 30 seconds
     Then I stop all nodes
+
+  Scenario: Continuous wallet funding survives natural forks without reusing in-flight notes
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 2           | 250000       |
+      | 2             | 2           | 250000       |
+      | 3             | 2           | 250000       |
+    And I have a cluster with capacity of 3 nodes
+    And no nodes are declared as blend providers
+    And we use IBD peers
+    And I have deployment config override "time.slot_duration" as "seconds(1)"
+    And I have deployment config override "cryptarchia.slot_activation_coeff.numerator" as "1"
+    And I have deployment config override "cryptarchia.slot_activation_coeff.denominator" as "2"
+    And I start nodes with wallet resources:
+      | node_name | account_index | wallet_name | connected_to |
+      | NODE_1    | 1             | WALLET_1A   |              |
+      | NODE_2    | 2             | WALLET_2A   | NODE_1       |
+      | NODE_3    | 3             | WALLET_3A   | NODE_1       |
+    When node "NODE_1" is at height 2 in 240 seconds
+    And wallet "WALLET_1A" sends 10 notes of 22000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+    And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 240 seconds
+    And I fund 200 transactions paying 100 LGO from node "NODE_1" wallet to wallet "WALLET_2A" retrying every 1 seconds for 600 seconds each as prefix "SOAK"
+    Then all transactions with prefix "SOAK" are finalized on node "NODE_1" in 900 seconds
+    And I stop all nodes
+
+  Scenario: Wallet double-hands a note after restart
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 2           | 25000        |
+      | 4             | 2           | 25000        |
+    And I have a cluster with capacity of 2 nodes
+    And no nodes are declared as blend providers
+    And we use IBD peers
+    And I have deployment config override "time.slot_duration" as "seconds(1)"
+    And I have deployment config override "cryptarchia.slot_activation_coeff.numerator" as "1"
+    And I have deployment config override "cryptarchia.slot_activation_coeff.denominator" as "2"
+    And I start nodes with wallet resources:
+      | node_name | account_index | wallet_name | connected_to |
+      | NODE_1    | 1             | WALLET_1A   | NODE_4       |
+      | NODE_4    | 4             | WALLET_4A   |              |
+    When node "NODE_1" is at height 2 in 240 seconds
+    And wallet "WALLET_1A" sends 1 notes of 9000 LGO to node "NODE_1" funding wallet as "TOPUP_A"
+    And wallet "WALLET_1A" sends 1 notes of 8000 LGO to node "NODE_1" funding wallet as "TOPUP_B"
+    And transaction "TOPUP_A" is included on node "NODE_1" in 240 seconds
+    And transaction "TOPUP_B" is included on node "NODE_1" in 240 seconds
+    When I stop node "NODE_4"
+    And I fund a transaction paying 100 LGO from node "NODE_1" wallet to wallet "WALLET_4A" as "DH_1"
+    And transaction "DH_1" is included on node "NODE_1" in 240 seconds
+    And node "NODE_1" alone reaches height 8 in 240 seconds
+    When I stop node "NODE_1"
+    And I restart node "NODE_4"
+    And node "NODE_4" alone reaches height 14 in 300 seconds
+    When I restart node "NODE_1"
+    And node "NODE_1" is at height 14 in 240 seconds
+    And I fund a transaction paying 150 LGO from node "NODE_1" wallet to wallet "WALLET_4A" as "DH_2"
+    Then all transactions with prefix "DH" are finalized on node "NODE_1" in 300 seconds
+    And I stop all nodes

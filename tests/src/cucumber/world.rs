@@ -1933,6 +1933,20 @@ impl CucumberWorld {
         self.submitted_transactions.insert(alias, tx_hash);
     }
 
+    /// All remembered submitted transactions whose alias starts with `prefix`,
+    /// sorted by alias for deterministic reporting.
+    #[must_use]
+    pub fn submitted_transactions_with_prefix(&self, prefix: &str) -> Vec<(String, TxHash)> {
+        let mut txs: Vec<_> = self
+            .submitted_transactions
+            .iter()
+            .filter(|(alias, _)| alias.starts_with(prefix))
+            .map(|(alias, tx_hash)| (alias.clone(), *tx_hash))
+            .collect();
+        txs.sort();
+        txs
+    }
+
     pub fn remember_submission_outcome(&mut self, alias: String, outcome: Result<(), String>) {
         self.submission_outcomes.insert(alias, outcome);
     }

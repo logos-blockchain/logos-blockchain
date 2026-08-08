@@ -2,9 +2,12 @@
 //! transaction from the node's wallet, assemble the returned proofs and
 //! submit the result to the mempool.
 
-use cucumber::{gherkin::Step, when};
+use std::{collections::HashSet, time::Duration};
+
+use cucumber::{gherkin::Step, then, when};
+use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
-    Note, Op, OpProof, SignedMantleTx,
+    Note, Op, OpProof, SignedMantleTx, TxHash,
     gas::GasCost,
     ops::channel::{
         ChannelId, MsgId,
@@ -18,10 +21,13 @@ use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use lb_testing_framework::NodeHttpClient;
 use tracing::info;
 
-use crate::cucumber::{
-    error::{StepError, StepResult},
-    steps::TARGET,
-    world::CucumberWorld,
+use crate::{
+    common::chain::{scan_chain_until, wait_for_transactions_inclusion},
+    cucumber::{
+        error::{StepError, StepResult},
+        steps::TARGET,
+        world::CucumberWorld,
+    },
 };
 
 /// Fund a payment transaction from the node's wallet: the fund endpoint must
@@ -38,10 +44,30 @@ async fn step_fund_payment_transaction(
     receiver_wallet_name: String,
     transaction_alias: String,
 ) -> StepResult {
-    let receiver_pk = world.resolve_wallet(&receiver_wallet_name)?.public_key()?;
-    let funding_wallet = world.funding_wallet(&node_name)?;
+    fund_and_submit_payment(
+        world,
+        step,
+        amount,
+        &node_name,
+        &receiver_wallet_name,
+        transaction_alias,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn fund_and_submit_payment(
+    world: &mut CucumberWorld,
+    step: &Step,
+    amount: u64,
+    node_name: &str,
+    receiver_wallet_name: &str,
+    transaction_alias: String,
+) -> Result<TxHash, StepError> {
+    let receiver_pk = world.resolve_wallet(receiver_wallet_name)?.public_key()?;
+    let funding_wallet = world.funding_wallet(node_name)?;
     let funding_pk = funding_wallet.public_key()?;
-    let client = world.resolve_node_http_client(&node_name)?;
+    let client = world.resolve_node_http_client(node_name)?;
 
     let tx_builder = MantleTxBuilder::new()
         .add_ledger_output(Note::new(amount, receiver_pk))
@@ -88,6 +114,290 @@ async fn step_fund_payment_transaction(
         target: TARGET,
         "Submitted funded payment `{transaction_alias}` of {amount} LGO from node `{node_name}` wallet"
     );
+
+    Ok(tx_hash)
+}
+
+/// Serially fund and submit `count` payments from the node's wallet, waiting
+/// for each transaction to be included before funding the next — the cadence
+/// of a sequencer funding continuously inside the non-finalized window.
+/// Aliases are `{prefix}_1..{prefix}_{count}`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "argument count mirrors the step expression"
+)]
+#[when(
+    expr = "I fund {int} transactions paying {int} LGO from node {string} wallet to wallet {string} waiting {int} seconds each as prefix {string}"
+)]
+async fn step_fund_payment_transactions_serially(
+    world: &mut CucumberWorld,
+    step: &Step,
+    count: u32,
+    amount: u64,
+    node_name: String,
+    receiver_wallet_name: String,
+    timeout_seconds: u64,
+    prefix: String,
+) -> StepResult {
+    for i in 1..=count {
+        let alias = format!("{prefix}_{i}");
+        let tx_hash = fund_and_submit_payment(
+            world,
+            step,
+            amount,
+            &node_name,
+            &receiver_wallet_name,
+            alias.clone(),
+        )
+        .await?;
+
+        let client = world.resolve_node_http_client(&node_name)?;
+        let included = wait_for_transactions_inclusion(
+            &client,
+            &[tx_hash],
+            Duration::from_secs(timeout_seconds),
+        )
+        .await;
+        if !included {
+            return Err(StepError::LogicalError {
+                message: format!(
+                    "Transaction `{alias}` was not included on node `{node_name}` within {timeout_seconds} seconds"
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// Continuously fund and submit `count` payments without waiting for
+/// inclusion. The funding wallet is expected to be under-provisioned: a fund
+/// call that fails (typically insufficient funds while all notes are
+/// reserved or in flight) is retried until it succeeds or the per-transaction
+/// deadline passes. Pacing therefore comes from note scarcity — the moment a
+/// reservation is released, the next retry grabs that exact note, which makes
+/// every wrongful (fork-time) release convert into a note reuse.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "argument count mirrors the step expression"
+)]
+#[when(
+    expr = "I fund {int} transactions paying {int} LGO from node {string} wallet to wallet {string} retrying every {int} seconds for {int} seconds each as prefix {string}"
+)]
+async fn step_fund_payment_transactions_with_retry(
+    world: &mut CucumberWorld,
+    step: &Step,
+    count: u32,
+    amount: u64,
+    node_name: String,
+    receiver_wallet_name: String,
+    retry_seconds: u64,
+    timeout_seconds: u64,
+    prefix: String,
+) -> StepResult {
+    for i in 1..=count {
+        let alias = format!("{prefix}_{i}");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_seconds);
+
+        loop {
+            match fund_and_submit_payment(
+                world,
+                step,
+                amount,
+                &node_name,
+                &receiver_wallet_name,
+                alias.clone(),
+            )
+            .await
+            {
+                Ok(_) => break,
+                Err(error) => {
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err(StepError::LogicalError {
+                            message: format!(
+                                "Funding `{alias}` kept failing for {timeout_seconds} seconds; last error: {error}"
+                            ),
+                        });
+                    }
+                    info!(
+                        target: TARGET,
+                        "Funding `{alias}` failed ({error}); retrying in {retry_seconds}s"
+                    );
+                    tokio::time::sleep(Duration::from_secs(retry_seconds)).await;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Wait for a single node to reach a height, polling only that node — usable
+/// while other cluster nodes are deliberately stopped (the regular height
+/// step health-checks every node and fails on intentionally-down peers).
+#[when(expr = "node {string} alone reaches height {int} in {int} seconds")]
+#[then(expr = "node {string} alone reaches height {int} in {int} seconds")]
+async fn step_node_alone_reaches_height(
+    world: &mut CucumberWorld,
+    step: &Step,
+    node_name: String,
+    height: u64,
+    timeout_seconds: u64,
+) -> StepResult {
+    let client = world.resolve_node_http_client(&node_name)?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_seconds);
+
+    loop {
+        let current = match client.consensus_info().await {
+            Ok(info) => info.cryptarchia_info.height,
+            Err(_) => 0,
+        };
+        if current >= height {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(StepError::LogicalError {
+                message: format!(
+                    "Step `{}` error: node `{node_name}` did not reach height {height} within {timeout_seconds} seconds (currently {current})",
+                    step.value
+                ),
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// Every remembered transaction whose alias starts with `prefix` is
+/// FINALIZED on the given node within the shared deadline: all of them found
+/// in one walk of the immutable chain at or below LIB. Finalization is
+/// branch-independent, so two transactions spending the same note can never
+/// both satisfy this — unlike tip-inclusion checks, which can be fooled by
+/// observing different momentary views.
+#[expect(clippy::needless_pass_by_ref_mut, reason = "Required by Cucumber")]
+#[when(
+    expr = "all transactions with prefix {string} are finalized on node {string} in {int} seconds"
+)]
+#[then(
+    expr = "all transactions with prefix {string} are finalized on node {string} in {int} seconds"
+)]
+async fn step_transactions_with_prefix_finalized(
+    world: &mut CucumberWorld,
+    step: &Step,
+    prefix: String,
+    node_name: String,
+    timeout_seconds: u64,
+) -> StepResult {
+    let transactions = world.submitted_transactions_with_prefix(&prefix);
+    if transactions.is_empty() {
+        return Err(StepError::LogicalError {
+            message: format!(
+                "Step `{}` error: no submitted transactions with prefix `{prefix}`",
+                step.value
+            ),
+        });
+    }
+    let expected: HashSet<TxHash> = transactions.iter().map(|(_, tx_hash)| *tx_hash).collect();
+
+    // Distinct fund calls must yield distinct transactions: identical intents
+    // are separated by their funded inputs. Two aliases sharing a hash means
+    // the wallet reused a note and thereby merged two payments into one tx.
+    if expected.len() != transactions.len() {
+        return Err(StepError::LogicalError {
+            message: format!(
+                "Step `{}` error: {} submissions with prefix `{prefix}` produced only {} distinct transactions — the wallet reused a note and merged payments",
+                step.value,
+                transactions.len(),
+                expected.len()
+            ),
+        });
+    }
+
+    let client = world.resolve_node_http_client(&node_name)?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_seconds);
+
+    loop {
+        if let Ok(consensus) = client.consensus_info().await {
+            let mut scanned_blocks = HashSet::new();
+            let mut found = HashSet::new();
+            let all_found = scan_chain_until(
+                consensus.cryptarchia_info.lib,
+                &mut scanned_blocks,
+                async |header_id| client.block(&header_id).await.ok().flatten(),
+                |block: &ApiBlock| {
+                    for tx in &block.transactions {
+                        let hash = tx.hash();
+                        if expected.contains(&hash) {
+                            found.insert(hash);
+                        }
+                    }
+                    (found == expected).then_some(())
+                },
+            )
+            .await
+            .is_some();
+
+            if all_found {
+                return Ok(());
+            }
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            let aliases: Vec<&str> = transactions
+                .iter()
+                .map(|(alias, _)| alias.as_str())
+                .collect();
+            return Err(StepError::LogicalError {
+                message: format!(
+                    "Not all transactions with prefix `{prefix}` were finalized on node `{node_name}` within {timeout_seconds} seconds: {aliases:?}"
+                ),
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// Every remembered transaction whose alias starts with `prefix` is included
+/// on the given node within the shared deadline.
+#[expect(clippy::needless_pass_by_ref_mut, reason = "Required by Cucumber")]
+#[when(
+    expr = "all transactions with prefix {string} are included on node {string} in {int} seconds"
+)]
+#[then(
+    expr = "all transactions with prefix {string} are included on node {string} in {int} seconds"
+)]
+async fn step_transactions_with_prefix_included(
+    world: &mut CucumberWorld,
+    step: &Step,
+    prefix: String,
+    node_name: String,
+    timeout_seconds: u64,
+) -> StepResult {
+    let transactions = world.submitted_transactions_with_prefix(&prefix);
+    if transactions.is_empty() {
+        return Err(StepError::LogicalError {
+            message: format!(
+                "Step `{}` error: no submitted transactions with prefix `{prefix}`",
+                step.value
+            ),
+        });
+    }
+
+    let client = world.resolve_node_http_client(&node_name)?;
+    let tx_hashes: Vec<TxHash> = transactions.iter().map(|(_, tx_hash)| *tx_hash).collect();
+    let included =
+        wait_for_transactions_inclusion(&client, &tx_hashes, Duration::from_secs(timeout_seconds))
+            .await;
+    if !included {
+        let aliases: Vec<&str> = transactions
+            .iter()
+            .map(|(alias, _)| alias.as_str())
+            .collect();
+        return Err(StepError::LogicalError {
+            message: format!(
+                "Not all transactions with prefix `{prefix}` were included on node `{node_name}` within {timeout_seconds} seconds: {aliases:?}"
+            ),
+        });
+    }
 
     Ok(())
 }
