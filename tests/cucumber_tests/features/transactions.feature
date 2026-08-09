@@ -483,12 +483,13 @@ Feature: Transactions
     And transaction "BAD_TX" is not included in 30 seconds
     Then I stop all nodes
 
+  @transactions_ci
   Scenario: Continuous wallet funding survives natural forks without reusing in-flight notes
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 2           | 250000       |
-      | 2             | 2           | 250000       |
-      | 3             | 2           | 250000       |
+      | 1             | 2           | 450000       |
+      | 2             | 2           | 450000       |
+      | 3             | 2           | 450000       |
     And I have a cluster with capacity of 3 nodes
     And no nodes are declared as blend providers
     And we use IBD peers
@@ -501,12 +502,13 @@ Feature: Transactions
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
       | NODE_3    | 3             | WALLET_3A   | NODE_1       |
     When node "NODE_1" is at height 2 in 240 seconds
-    And wallet "WALLET_1A" sends 10 notes of 22000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+    And wallet "WALLET_1A" sends 10 notes of 40000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
     And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 240 seconds
     And I fund 200 transactions paying 100 LGO from node "NODE_1" wallet to wallet "WALLET_2A" retrying every 1 seconds for 600 seconds each as prefix "SOAK"
     Then all transactions with prefix "SOAK" are finalized on node "NODE_1" in 900 seconds
     And I stop all nodes
 
+  @local_transactions
   Scenario: Wallet double-hands a note after restart
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
