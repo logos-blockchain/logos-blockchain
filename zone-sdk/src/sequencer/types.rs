@@ -23,6 +23,11 @@ const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const DEFAULT_PUBLISH_CHANNEL_CAPACITY: usize = 256;
 const DEFAULT_MAX_LOCAL_TX_TRACKING: usize = 10_000;
+/// Blocks a posted-but-unlanded tx may age before it is rebuilt with a fresh
+/// `/wallet/fund` call. Kept large: a stuck tx (its funding note double-handed
+/// by the node wallet during the non-finalized window) can never land, but a
+/// merely-slow tx must not be re-funded needlessly.
+const DEFAULT_STALE_REFUND_BLOCKS: u64 = 30;
 
 /// Inscription identifier.
 pub type InscriptionId = TxHash;
@@ -155,6 +160,9 @@ pub struct SequencerConfig {
     pub min_slots_remaining_in_turn: u64,
     pub max_pending_publish_depth: usize,
     pub max_local_tx_tracking: usize,
+    /// Rebuild a posted tx with a fresh `/wallet/fund` call once it has been
+    /// unlanded for this many blocks (0 disables re-funding).
+    pub stale_refund_blocks: u64,
     /// Fund transactions from the node's wallet before signing.
     pub funding: FundingConfig,
 }
@@ -170,6 +178,7 @@ impl SequencerConfig {
             min_slots_remaining_in_turn: 1,
             max_pending_publish_depth: 10,
             max_local_tx_tracking: DEFAULT_MAX_LOCAL_TX_TRACKING,
+            stale_refund_blocks: DEFAULT_STALE_REFUND_BLOCKS,
             funding,
         }
     }

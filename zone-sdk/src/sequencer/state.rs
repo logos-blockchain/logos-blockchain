@@ -18,6 +18,29 @@ use super::types::{
     AtomicWithdrawInfo, ChannelUpdateTx, InscriptionInfo, PendingTx, TxSource, WithdrawInfo,
 };
 
+/// A pending tx that has been unlanded (measured in block height) long enough
+/// to rebuild with a fresh `/wallet/fund` call. The channel ops are kept as-is,
+/// so op ids ([`MsgId`]/`config.id()`) — and thus lineage — are preserved; only
+/// the funding inputs and the `TxHash` change.
+pub enum StaleRefund {
+    /// A plain inscription from [`TxState::pending`] (re-inserted via
+    /// [`TxState::submit_inscription`] with its stored intent). Atomic bundles
+    /// are excluded (their withdraws cannot be reconstructed by the rebuild).
+    Inscription {
+        tx_hash: TxHash,
+        parent_msg: MsgId,
+        this_msg: MsgId,
+        payload: Inscription,
+        signed_tx: SignedMantleTx<Unverified>,
+    },
+    /// An opaque tx (config / raw) from [`TxState::pending_other`] (re-inserted
+    /// via [`TxState::submit_other`], which recomputes lineage from the tx).
+    Other {
+        tx_hash: TxHash,
+        signed_tx: SignedMantleTx<Unverified>,
+    },
+}
+
 /// Result of channel update detection — the linear block-level delta
 /// between two canonical chains.
 ///
@@ -51,6 +74,9 @@ struct PendingOtherTx {
     /// Submission order, for picking the newest chain restart among
     /// config-led atomic bundles (see [`TxState::publish_parent`]).
     seq: u64,
+    /// Block height at which the stale-refund sweep first observed this tx.
+    /// `None` until the first sweep stamps it.
+    first_seen_block: Option<u64>,
 }
 
 fn opaque_lineage(
@@ -95,6 +121,10 @@ pub struct PendingInscription {
     pub payload: Inscription,
     pub withdraws: Option<Vec<WithdrawInfo>>,
     pub posted: bool,
+    /// Block height at which the stale-refund sweep first observed this tx.
+    /// `None` until the first sweep stamps it; used to age a
+    /// posted-but-unlanded tx for timeout-based re-funding.
+    pub first_seen_block: Option<u64>,
 }
 
 /// Transaction state tracker.
@@ -249,8 +279,58 @@ impl TxState {
                 payload,
                 withdraws,
                 posted: false,
+                first_seen_block: None,
             },
         );
+    }
+
+    /// Stamp not-yet-seen pending txs (inscriptions and opaque/config) with the
+    /// current block height `now`, and collect the ones unlanded for more than
+    /// `threshold` blocks.
+    ///
+    /// These are candidates for timeout-based re-funding: their funding note
+    /// may have been double-handed by the node wallet during the
+    /// non-finalized window, so the tx can never land and byte-identical
+    /// resubmission cannot recover it. Aging is lazy (stamped on the sweep,
+    /// not at submission) to avoid threading the block height through every
+    /// insertion path — precision is unnecessary since `threshold` is
+    /// large.
+    pub fn collect_stale_for_refund(&mut self, now: u64, threshold: u64) -> Vec<StaleRefund> {
+        let mut stale = Vec::new();
+        for p in self.pending.values_mut() {
+            match p.first_seen_block {
+                None => p.first_seen_block = Some(now),
+                // Only plain inscriptions: a bundle's withdraws cannot be
+                // reconstructed by the plain-inscription rebuild.
+                Some(seen)
+                    if p.posted
+                        && p.withdraws.is_none()
+                        && now.saturating_sub(seen) > threshold =>
+                {
+                    stale.push(StaleRefund::Inscription {
+                        tx_hash: p.tx_hash,
+                        parent_msg: p.parent_msg,
+                        this_msg: p.this_msg,
+                        payload: p.payload.clone(),
+                        signed_tx: p.signed_tx.clone(),
+                    });
+                }
+                Some(_) => {}
+            }
+        }
+        for (hash, p) in &mut self.pending_other {
+            match p.first_seen_block {
+                None => p.first_seen_block = Some(now),
+                Some(seen) if now.saturating_sub(seen) > threshold => {
+                    stale.push(StaleRefund::Other {
+                        tx_hash: *hash,
+                        signed_tx: p.signed_tx.clone(),
+                    });
+                }
+                Some(_) => {}
+            }
+        }
+        stale
     }
 
     /// Track an inscription observed on the canonical channel (ours or
@@ -289,6 +369,7 @@ impl TxState {
                 payload,
                 withdraws,
                 posted: true,
+                first_seen_block: None,
             },
         );
     }
@@ -329,6 +410,7 @@ impl TxState {
                 last_msg,
                 is_atomic_bundle,
                 seq,
+                first_seen_block: None,
             },
         );
         last_msg

@@ -252,6 +252,78 @@ where
     Ok(SignedMantleTx::new(config_tx, ops_proofs))
 }
 
+/// Rebuild a signed tx with fresh funding: drop its trailing fee transfer,
+/// re-fund the same channel ops, and re-sign each over the new funded hash.
+///
+/// The channel ops are unchanged, so op ids ([`MsgId`]/`config.id()`) are
+/// preserved — only the funding inputs (and thus the `TxHash`) change. Used to
+/// recover a tx whose funding note was double-handed by the node wallet and
+/// can no longer land. Single-signer only (`own_key_index`): multi-sig configs
+/// and atomic-withdraw bundles cannot be re-signed unilaterally.
+pub(super) async fn rebuild_and_refund<Node>(
+    node: &Node,
+    funding: &FundingConfig,
+    signing_key: &Ed25519Key,
+    own_key_index: Option<ChannelKeyIndex>,
+    signed_tx: &SignedMantleTx<Unverified>,
+) -> Result<SignedMantleTx<Unverified>, Error>
+where
+    Node: adapter::Node + Sync,
+{
+    // Keep the channel ops; funding appends a fresh fee transfer.
+    let channel_ops: Vec<Op> = signed_tx
+        .mantle_tx()
+        .ops()
+        .iter()
+        .filter(|op| !matches!(op, Op::Transfer(_)))
+        .cloned()
+        .collect();
+
+    let (funded_tx, transfer_proof) = fund_ops(node, funding, channel_ops).await?;
+    let new_hash = funded_tx.hash();
+
+    // Re-sign every channel op over the new funded hash, in op order; the fee
+    // transfer's proof is appended by `attach_transfer_proof`.
+    let mut proofs = OpsProofs::empty();
+    for op in funded_tx.ops() {
+        match op {
+            Op::ChannelInscribe(_) => proofs
+                .try_push(OpProof::Ed25519Sig(sign_tx(new_hash, signing_key)))
+                .map_err(|e| Error::Network(format!("too many operation proofs: {e:?}")))?,
+            Op::ChannelConfig(_) => {
+                let signatures = own_key_index
+                    .map(|idx| {
+                        IndexedSignature::new(
+                            idx,
+                            signing_key.sign_payload(new_hash.as_signing_bytes().as_ref()),
+                        )
+                    })
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .map_err(|e| {
+                        Error::Network(format!("multi-sig proof assembly failed: {e:?}"))
+                    })?;
+                let proof = ChannelMultiSigProof::try_new(signatures).map_err(|e| {
+                    Error::Network(format!("multi-sig proof assembly failed: {e:?}"))
+                })?;
+                proofs
+                    .try_push(OpProof::ChannelMultiSigProof(proof))
+                    .map_err(|e| Error::Network(format!("too many operation proofs: {e:?}")))?;
+            }
+            Op::Transfer(_) => {}
+            other => {
+                return Err(Error::Network(format!(
+                    "cannot re-fund tx with unsupported op: {other:?}"
+                )));
+            }
+        }
+    }
+
+    let ops_proofs = attach_transfer_proof(&funded_tx, proofs, transfer_proof)?;
+    Ok(SignedMantleTx::new(funded_tx, ops_proofs))
+}
+
 pub(super) fn prepare_tx(
     mut ops: Ops,
     channel_id: ChannelId,
