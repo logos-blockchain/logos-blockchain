@@ -235,6 +235,7 @@ async fn step_fund_payment_transactions_with_retry(
 /// Wait for a single node to reach a height, polling only that node — usable
 /// while other cluster nodes are deliberately stopped (the regular height
 /// step health-checks every node and fails on intentionally-down peers).
+#[expect(clippy::needless_pass_by_ref_mut, reason = "Required by Cucumber")]
 #[when(expr = "node {string} alone reaches height {int} in {int} seconds")]
 #[then(expr = "node {string} alone reaches height {int} in {int} seconds")]
 async fn step_node_alone_reaches_height(
