@@ -1009,7 +1009,7 @@ where
 /// against the local mempool.
 ///
 /// A reference is only the leading bytes of a transaction hash, so it may match
-/// several mempool transactions. `header.block_root` still commits to the full
+/// several mempool transactions. `header.body_root` still commits to the full
 /// hashes, so at most one combination of candidates can reproduce it — and
 /// `Block::reconstruct` is what checks that, so the first combination that
 /// reconstructs *is* the match.
