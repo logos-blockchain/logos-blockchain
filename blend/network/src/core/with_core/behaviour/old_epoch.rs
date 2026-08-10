@@ -6,9 +6,7 @@ use std::{
 };
 
 use either::Either;
-use lb_blend_message::encap::validated::{
-    EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
-};
+use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
 use lb_cryptarchia_engine::Epoch;
 use lb_log_targets::blend;
 use libp2p::{
@@ -67,14 +65,14 @@ impl OldEpoch {
     /// an error without sending the message.
     pub(super) fn publish_message_with_validated_header(
         &mut self,
-        message: EncapsulatedMessageWithVerifiedPublicHeader,
+        message: &EncapsulatedMessageWithVerifiedPublicHeader,
         intended_epoch: Epoch,
     ) -> Result<(), SendError> {
         if self.epoch != intended_epoch {
             return Err(SendError::InvalidEpoch);
         }
         forward_validated_message_and_update_cache(
-            &(message.into()),
+            message,
             self.negotiated_peers.iter(),
             &mut self.events,
             &mut self.message_cache,
@@ -82,14 +80,14 @@ impl OldEpoch {
         )
     }
 
-    /// Forward an encapsulated message with a validated signature to all
+    /// Forward an encapsulated message with a verified public header to all
     /// negotiated peers, except the specified one.
     ///
     /// If the specified epoch does not match the current epoch, it returns
     /// an error without sending the message.
-    pub(super) fn forward_message_with_validated_signature(
+    pub(super) fn forward_message_with_verified_public_header(
         &mut self,
-        message: &EncapsulatedMessageWithVerifiedSignature,
+        message: &EncapsulatedMessageWithVerifiedPublicHeader,
         except: PeerId,
         intended_epoch: Epoch,
     ) -> Result<(), SendError> {

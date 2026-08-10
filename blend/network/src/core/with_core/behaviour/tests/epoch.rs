@@ -2,6 +2,7 @@ use core::time::Duration;
 
 use either::Either;
 use futures::StreamExt as _;
+use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
 use lb_blend_scheduling::membership::Membership;
 use lb_cryptarchia_engine::Epoch;
 use lb_libp2p::{NetworkBehaviour as _, SwarmEvent};
@@ -53,7 +54,7 @@ async fn publish_message() {
     let test_message = TestEncapsulatedMessageWithEpoch::new(epoch, b"msg");
     let result = dialer
         .behaviour_mut()
-        .publish_message_with_validated_header(test_message.clone(), epoch);
+        .publish_message_with_validated_header(&test_message, epoch);
     assert_eq!(result, Err(SendError::NoPeers));
 
     // Establish a connection for the new epoch.
@@ -62,7 +63,7 @@ async fn publish_message() {
     // Now we can send the message successfully.
     dialer
         .behaviour_mut()
-        .publish_message_with_validated_header(test_message.clone(), epoch)
+        .publish_message_with_validated_header(&test_message, epoch)
         .unwrap();
     loop {
         select! {
@@ -80,7 +81,7 @@ async fn publish_message() {
     assert_eq!(
         dialer
             .behaviour_mut()
-            .publish_message_with_validated_header(test_message.clone(), 1.into()),
+            .publish_message_with_validated_header(&test_message, 1.into()),
         Err(SendError::DuplicateMessage)
     );
 }
@@ -211,7 +212,7 @@ async fn forward_message() {
     let test_message = TestEncapsulatedMessageWithEpoch::new(old_epoch, b"msg");
     sender
         .behaviour_mut()
-        .publish_message_with_validated_header(test_message.clone(), old_epoch)
+        .publish_message_with_validated_header(&test_message, old_epoch)
         .unwrap();
 
     // We expect that the message goes through the forwarder and receiver1
@@ -223,7 +224,7 @@ async fn forward_message() {
                 if let SwarmEvent::Behaviour(Event::Message { message, epoch, sender }) = event {
                     assert_eq!(message.id(), test_message.id());
                     forwarder.behaviour_mut()
-                        .forward_message_with_validated_signature(&message, sender, epoch)
+                        .forward_message_with_verified_public_header(&EncapsulatedMessageWithVerifiedPublicHeader::from_message_unchecked((*message).into()), sender, epoch)
                         .unwrap();
                 }
             }
@@ -249,7 +250,7 @@ async fn forward_message() {
     let test_message = TestEncapsulatedMessageWithEpoch::new(new_epoch, b"msg");
     sender
         .behaviour_mut()
-        .publish_message_with_validated_header(test_message.clone(), new_epoch)
+        .publish_message_with_validated_header(&test_message, new_epoch)
         .unwrap();
 
     // We expect that the message goes through the forwarder and receiver2.
@@ -260,7 +261,7 @@ async fn forward_message() {
                 if let SwarmEvent::Behaviour(Event::Message { message, epoch, sender }) = event {
                     assert_eq!(message.id(), test_message.id());
                     forwarder.behaviour_mut()
-                        .forward_message_with_validated_signature(&message, sender, epoch)
+                        .forward_message_with_verified_public_header(&EncapsulatedMessageWithVerifiedPublicHeader::from_message_unchecked((*message).into()), sender, epoch)
                         .unwrap();
                 }
             }
@@ -351,7 +352,7 @@ async fn old_epoch_message_not_forwarded_back_to_sender() {
     let test_message = TestEncapsulatedMessageWithEpoch::new(old_epoch, b"msg");
     sender
         .behaviour_mut()
-        .publish_message_with_validated_header(test_message.clone(), old_epoch)
+        .publish_message_with_validated_header(&test_message, old_epoch)
         .unwrap();
 
     // Forwarder receives the message via the old epoch and forwards it,
@@ -363,7 +364,7 @@ async fn old_epoch_message_not_forwarded_back_to_sender() {
                 if let SwarmEvent::Behaviour(Event::Message { message, epoch, sender: msg_sender }) = forwarder_event {
                     assert_eq!(message.id(), test_message.id());
                     forwarder.behaviour_mut()
-                        .forward_message_with_validated_signature(&message, msg_sender, epoch)
+                        .forward_message_with_verified_public_header(&EncapsulatedMessageWithVerifiedPublicHeader::from_message_unchecked((*message).into()), msg_sender, epoch)
                         .unwrap();
                 }
             }
@@ -426,7 +427,7 @@ async fn publish_to_invalid_epoch_returns_error() {
     let test_message = TestEncapsulatedMessageWithEpoch::new(999.into(), b"invalid-epoch");
     let result = dialer
         .behaviour_mut()
-        .publish_message_with_validated_header(test_message.clone(), 999.into());
+        .publish_message_with_validated_header(&test_message, 999.into());
     assert_eq!(result, Err(SendError::InvalidEpoch));
 }
 
@@ -457,11 +458,9 @@ async fn forward_to_invalid_epoch_returns_error() {
     // Attempt to forward a message to an invalid epoch.
     let test_message = TestEncapsulatedMessageWithEpoch::new(999.into(), b"invalid-epoch");
     let fake_sender = *listener.local_peer_id();
-    let sig_verified: lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedSignature =
-        (*test_message).clone().into();
     let result = dialer
         .behaviour_mut()
-        .forward_message_with_validated_signature(&sig_verified, fake_sender, 999.into());
+        .forward_message_with_verified_public_header(&test_message, fake_sender, 999.into());
     assert_eq!(result, Err(SendError::InvalidEpoch));
 }
 
@@ -493,7 +492,7 @@ async fn event_message_carries_epoch_number() {
     let test_message = TestEncapsulatedMessageWithEpoch::new(epoch, b"epoch-check");
     dialer
         .behaviour_mut()
-        .publish_message_with_validated_header(test_message.clone(), epoch)
+        .publish_message_with_validated_header(&test_message, epoch)
         .unwrap();
 
     loop {

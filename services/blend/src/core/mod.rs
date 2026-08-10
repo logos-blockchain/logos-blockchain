@@ -18,12 +18,8 @@ use lb_blend::{
         Error as MessageError, PayloadType,
         crypto::proofs::PoQVerificationInputsMinusSigningKey,
         encap::{
-            ProofsVerifier as ProofsVerifierTrait,
-            encapsulated::EncapsulatedMessage,
-            validated::{
-                EncapsulatedMessageWithVerifiedPublicHeader,
-                EncapsulatedMessageWithVerifiedSignature,
-            },
+            ProofsVerifier as ProofsVerifierTrait, encapsulated::EncapsulatedMessage,
+            validated::EncapsulatedMessageWithVerifiedPublicHeader,
         },
         reward::{
             self, ActivityProof, BlendingToken, EpochBlendingTokenCollector,
@@ -78,6 +74,7 @@ use tracing::{debug, error, info};
 
 use crate::{
     core::{
+        backends::BackendEpochInfo,
         kms::{KmsPoQAdapter, PreloadKMSBackendCorePoQGenerator},
         processor::{
             CoreCryptographicProcessor, DecapsulatedMessageType, Error,
@@ -130,7 +127,7 @@ pub struct BlendService<
     StateStorage,
     RuntimeServiceId,
 > where
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
     Network: NetworkAdapter<RuntimeServiceId>,
     StateStorage: RecoveryBackendTrait<
             RuntimeServiceId,
@@ -178,7 +175,7 @@ impl<
         RuntimeServiceId,
     >
 where
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
     Network: NetworkAdapter<RuntimeServiceId>,
     StateStorage: RecoveryBackendTrait<
             RuntimeServiceId,
@@ -220,7 +217,7 @@ impl<
         RuntimeServiceId,
     >
 where
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Send + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
     NodeId: membership::node_id::TryFrom + Clone + Debug + Send + Eq + Hash + Sync + 'static,
     Network: NetworkAdapter<RuntimeServiceId> + Send + Sync,
     ProofsGenerator:
@@ -503,10 +500,10 @@ async fn initialize<
 )
 where
     NodeId: Clone + Debug + Eq + Hash + Send + 'static,
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId>,
     ProofsGenerator: CoreAndLeaderProofsGenerator<KmsAdapter::CorePoQGenerator>,
-    ProofsVerifier: ProofsVerifierTrait,
+    ProofsVerifier: ProofsVerifierTrait + Clone,
     // To avoid bubbling up generics everywhere in the configs (current Overwatch limitation), we
     // know the final key ID type is a `String`, so we constraint the trait impl here instead.
     KmsAdapter: KmsPoQAdapter<RuntimeServiceId, KeyId = String, CorePoQGenerator: Clone + Send + Sync>
@@ -682,10 +679,13 @@ where
     let backend = Backend::new(
         blend_config.clone(),
         overwatch_handle,
-        (
-            current_epoch_public_info.membership.clone(),
-            current_epoch_public_info.epoch,
-        ),
+        BackendEpochInfo {
+            membership: current_epoch_public_info.membership.clone(),
+            epoch: current_epoch_public_info.epoch,
+            // The backend verifies the `PoQ` of every message it receives before
+            // relaying it, so it needs its own verifier for the epoch.
+            proofs_verifier: crypto_processor.verifier().clone(),
+        },
         BlakeRng::from_entropy(),
     );
 
@@ -743,7 +743,7 @@ async fn run_event_loop<
 >(
     mut inbound_relay: impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin,
     blend_messages: &mut (
-             impl Stream<Item = (EncapsulatedMessageWithVerifiedSignature, Epoch)>
+             impl Stream<Item = (EncapsulatedMessageWithVerifiedPublicHeader, Epoch)>
              + Send
              + Unpin
              + 'static
@@ -780,11 +780,11 @@ async fn run_event_loop<
 where
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync + Send,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync + Send,
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator> + Send,
     CorePoQGenerator: Send + Sync,
-    ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync,
     RuntimeServiceId: Sync + Send,
 {
     // An optional crypto processor to handle the old epoch during transition
@@ -896,7 +896,7 @@ async fn retire<
     CorePoQGenerator,
     RuntimeServiceId,
 >(
-    mut blend_messages: impl Stream<Item = EncapsulatedMessageWithVerifiedSignature>
+    mut blend_messages: impl Stream<Item = EncapsulatedMessageWithVerifiedPublicHeader>
     + Unpin
     + Send
     + 'static,
@@ -919,7 +919,7 @@ async fn retire<
 ) where
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Send + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Send + Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator> + Send,
     CorePoQGenerator: Send + Sync,
@@ -997,8 +997,8 @@ where
     NodeId: Eq + Hash + Clone + Send,
     Rng: rand::Rng + Clone + Unpin,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
-    ProofsVerifier: ProofsVerifierTrait,
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
+    ProofsVerifier: ProofsVerifierTrait + Clone,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
 {
     match event {
         EpochEvent::NewEpoch(MaybeEmptyCoreEpochInfo::NonEmpty(core_epoch_info)) => {
@@ -1019,10 +1019,6 @@ where
             .expect("Reward epoch info must be created successfully. Panicking since the service cannot continue with this epoch");
             let (new_epoch_blending_token_collector, old_epoch_blending_token_collector) =
                 current_epoch_blending_token_collector.rotate_epoch(&new_reward_epoch_info);
-
-            backend
-                .rotate_epoch((new_epoch_info.membership.clone(), new_epoch_info.epoch))
-                .await;
 
             let new_scheduler_epoch_info = SchedulerEpochInfo {
                 core_quota: settings.epoch_core_quota(new_epoch_info.membership.size()),
@@ -1085,6 +1081,14 @@ where
                 }
             };
 
+            backend
+                .rotate_epoch(BackendEpochInfo {
+                    membership: new_epoch_info.membership.clone(),
+                    epoch: new_epoch_info.epoch,
+                    proofs_verifier: new_processor.verifier().clone(),
+                })
+                .await;
+
             let (new_scheduler, old_scheduler) = current_scheduler
                 .rotate_epoch(new_scheduler_epoch_info, settings.scheduler_settings());
             HandleEpochEventOutput::Transitioning {
@@ -1140,12 +1144,12 @@ where
 }
 
 /// Handles [`EpochEvent::TransitionPeriodExpired`].
-async fn handle_epoch_transition_expired<Backend, NodeId, Rng, RuntimeServiceId>(
+async fn handle_epoch_transition_expired<Backend, NodeId, Rng, ProofsVerifier, RuntimeServiceId>(
     backend: &mut Backend,
     blending_token_collector: OldEpochBlendingTokenCollector,
     sdp_relay: &OutboundRelay<SdpMessage>,
 ) where
-    Backend: BlendBackend<NodeId, Rng, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId>,
     NodeId: Eq + Hash + Clone + Send,
 {
     compute_and_submit_activity_proof(blending_token_collector, sdp_relay).await;
@@ -1328,11 +1332,12 @@ where
     state_updater.commit_changes()
 }
 
-/// Processes an incoming Blend message (with verified signature) received
-/// from a core or edge peer.
+/// Processes an incoming Blend message received from a core or edge peer.
 ///
-/// Decapsulation is attempted with the current or old epoch's cryptographic
-/// processor depending on the epoch the message is coming from.
+/// The backend has already verified the message's whole public header — `PoQ`
+/// included, which is what gated it from being relayed to the rest of the
+/// network — so all that is left here is to decapsulate it with the current or
+/// old epoch's cryptographic processor, depending on the epoch it comes from.
 fn handle_incoming_blend_message<
     NodeId,
     Rng,
@@ -1342,7 +1347,7 @@ fn handle_incoming_blend_message<
     ProofsVerifier,
     CorePoQGenerator,
 >(
-    (validated_encapsulated_message, epoch): (EncapsulatedMessageWithVerifiedSignature, Epoch),
+    (verified_message, epoch): (EncapsulatedMessageWithVerifiedPublicHeader, Epoch),
     scheduler: &mut EpochMessageScheduler<
         Rng,
         ProcessedMessage,
@@ -1367,11 +1372,7 @@ where
     ProofsVerifier: ProofsVerifierTrait,
 {
     if epoch == cryptographic_processor.epoch() {
-        let Some(output) = try_validate_and_decapsulate(
-            validated_encapsulated_message,
-            cryptographic_processor,
-            epoch,
-        ) else {
+        let Some(output) = try_decapsulate(verified_message, cryptographic_processor, epoch) else {
             return current_recovery_checkpoint;
         };
         handle_decapsulated_incoming_message_from_current_epoch(
@@ -1383,11 +1384,8 @@ where
     } else if let Some(old_cryptographic_processor) = old_epoch_cryptographic_processor
         && epoch == old_cryptographic_processor.epoch()
     {
-        let Some(output) = try_validate_and_decapsulate(
-            validated_encapsulated_message,
-            old_cryptographic_processor,
-            epoch,
-        ) else {
+        let Some(output) = try_decapsulate(verified_message, old_cryptographic_processor, epoch)
+        else {
             return current_recovery_checkpoint;
         };
         handle_decapsulated_incoming_message_from_old_epoch(
@@ -1403,11 +1401,10 @@ where
     }
 }
 
-/// Validates the `PoQ` of a received message and attempts recursive
-/// decapsulation. Returns `None` if validation or decapsulation fails (already
-/// logged).
-fn try_validate_and_decapsulate<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>(
-    message: EncapsulatedMessageWithVerifiedSignature,
+/// Attempts recursive decapsulation of a message whose `PoQ` has already been
+/// verified. Returns `None` if decapsulation fails (already logged).
+fn try_decapsulate<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>(
+    message: EncapsulatedMessageWithVerifiedPublicHeader,
     processor: &CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1419,11 +1416,7 @@ fn try_validate_and_decapsulate<NodeId, CorePoQGenerator, ProofsGenerator, Proof
 where
     ProofsVerifier: ProofsVerifierTrait,
 {
-    let Ok(validated_message) = processor.validate_message_poq(message) else {
-        tracing::debug!(target: LOG_TARGET, "Received message for epoch {epoch} failed PoQ validation. Ignoring...");
-        return None;
-    };
-    match processor.decapsulate_message_recursive(validated_message) {
+    match processor.decapsulate_message_recursive(message) {
         Ok(output) => Some(output),
         Err(e) => {
             if matches!(e, MessageError::PrivateHeaderDeserializationFailed) {
@@ -1445,7 +1438,7 @@ fn handle_incoming_blend_message_from_old_epoch<
     ProofsVerifier,
     CorePoQGenerator,
 >(
-    validated_encapsulated_message: EncapsulatedMessageWithVerifiedSignature,
+    verified_message: EncapsulatedMessageWithVerifiedPublicHeader,
     scheduler: &mut OldEpochMessageScheduler<Rng, ProcessedMessage>,
     cryptographic_processor: &CoreCryptographicProcessor<
         NodeId,
@@ -1458,25 +1451,17 @@ fn handle_incoming_blend_message_from_old_epoch<
     NodeId: 'static,
     ProofsVerifier: ProofsVerifierTrait,
 {
-    match cryptographic_processor
-        .validate_message_poq(validated_encapsulated_message)
-        .and_then(|message_with_verified_header| {
-            cryptographic_processor.decapsulate_message_recursive(message_with_verified_header)
-        }) {
-        Ok(output) => {
-            let (_, blending_tokens) =
-                schedule_decapsulated_incoming_message(output, scheduler, cryptographic_processor);
-            for blending_token in blending_tokens {
-                blending_token_collector.collect(blending_token);
-            }
-        }
-        Err(e) => {
-            if matches!(e, MessageError::PrivateHeaderDeserializationFailed) {
-                tracing::trace!(target: LOG_TARGET, "Failed to decapsulate received message from old epoch due to deserialization error. This can happen when the message was intended for another node or when the message is malformed. Ignoring...");
-            } else {
-                tracing::debug!(target: LOG_TARGET, "Failed to decapsulate received message from old epoch: {e:?}");
-            }
-        }
+    let Some(output) = try_decapsulate(
+        verified_message,
+        cryptographic_processor,
+        cryptographic_processor.epoch(),
+    ) else {
+        return;
+    };
+    let (_, blending_tokens) =
+        schedule_decapsulated_incoming_message(output, scheduler, cryptographic_processor);
+    for blending_token in blending_tokens {
+        blending_token_collector.collect(blending_token);
     }
 }
 
@@ -1688,7 +1673,7 @@ async fn handle_release_round<
 where
     NodeId: Eq + Hash + 'static,
     Rng: RngCore + Send,
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
@@ -1760,7 +1745,14 @@ where
     state_updater.commit_changes()
 }
 
-async fn handle_release_round_for_old_epoch<NodeId, Rng, Backend, NetAdapter, RuntimeServiceId>(
+async fn handle_release_round_for_old_epoch<
+    NodeId,
+    Rng,
+    Backend,
+    NetAdapter,
+    ProofsVerifier,
+    RuntimeServiceId,
+>(
     processed_messages_to_release: Vec<ProcessedMessage>,
     rng: &mut Rng,
     backend: &Backend,
@@ -1769,7 +1761,7 @@ async fn handle_release_round_for_old_epoch<NodeId, Rng, Backend, NetAdapter, Ru
 ) where
     NodeId: Eq + Hash + 'static,
     Rng: RngCore + Send,
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
 {
     let mut futures = build_futures_to_release_processed_messages(
@@ -1820,6 +1812,7 @@ fn build_futures_to_release_processed_messages<
     NodeId,
     Backend,
     NetAdapter,
+    ProofsVerifier,
     RuntimeServiceId,
 >(
     processed_messages_to_release: Vec<ProcessedMessage>,
@@ -1830,7 +1823,7 @@ fn build_futures_to_release_processed_messages<
 ) -> Vec<BoxFuture<'fut, ()>>
 where
     NodeId: Eq + Hash + 'static,
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
 {
     processed_messages_to_release

@@ -42,9 +42,7 @@ async fn message_sending_and_reception() {
     let test_message_id = test_message.id();
     dialing_swarm
         .behaviour_mut()
-        .publish_message_with_validated_signature_to_current_epoch(
-            &test_message.as_ref().clone().into(),
-        )
+        .publish_message_with_validated_header_to_current_epoch(test_message.as_ref())
         .unwrap();
 
     loop {
@@ -90,9 +88,7 @@ async fn message_sending_and_reception() {
     assert_eq!(
         dialing_swarm
             .behaviour_mut()
-            .publish_message_with_validated_signature_to_current_epoch(
-                &test_message.as_ref().clone().into()
-            ),
+            .publish_message_with_validated_header_to_current_epoch(test_message.as_ref()),
         Err(SendError::DuplicateMessage)
     );
 }
@@ -221,9 +217,7 @@ async fn duplicate_message_received_from_same_peer() {
     let test_message = TestEncapsulatedMessage::new(b"msg");
     dialing_swarm
         .behaviour_mut()
-        .publish_message_with_validated_signature_to_current_epoch(
-            &test_message.as_ref().clone().into(),
-        )
+        .publish_message_with_validated_header_to_current_epoch(test_message.as_ref())
         .unwrap();
 
     // Poll both swarms until the first message is fully received by the listener.
@@ -307,15 +301,11 @@ async fn duplicate_message_received_from_different_peers() {
     let test_message = TestEncapsulatedMessage::new(b"msg");
     dialing_swarm_1
         .behaviour_mut()
-        .publish_message_with_validated_signature_to_current_epoch(
-            &test_message.as_ref().clone().into(),
-        )
+        .publish_message_with_validated_header_to_current_epoch(test_message.as_ref())
         .unwrap();
     dialing_swarm_2
         .behaviour_mut()
-        .publish_message_with_validated_signature_to_current_epoch(
-            &test_message.as_ref().clone().into(),
-        )
+        .publish_message_with_validated_header_to_current_epoch(test_message.as_ref())
         .unwrap();
 
     // Verify that the message is bubbled up to the swarm only once
@@ -406,9 +396,7 @@ async fn message_already_forwarded_silently_ignored_when_received_from_peer() {
     // Node A forwards X to Node B. In Node A's cache X is now `Forwarded`.
     node_a
         .behaviour_mut()
-        .publish_message_with_validated_signature_to_current_epoch(
-            &test_message.as_ref().clone().into(),
-        )
+        .publish_message_with_validated_header_to_current_epoch(test_message.as_ref())
         .unwrap();
 
     // Wait until Node B has received the message.
@@ -483,9 +471,7 @@ async fn duplicate_message_in_old_epoch_disconnects_peer_without_swarm_notificat
     // Sender publishes X. Receiver marks it as `Processed` in its cache.
     sender
         .behaviour_mut()
-        .publish_message_with_validated_signature_to_current_epoch(
-            &test_message.as_ref().clone().into(),
-        )
+        .publish_message_with_validated_header_to_current_epoch(test_message.as_ref())
         .unwrap();
 
     loop {
@@ -671,7 +657,7 @@ async fn spammy_old_epoch_peer_does_not_affect_current_epoch() {
     let test_message = TestEncapsulatedMessageWithEpoch::new(1.into(), b"after-spam");
     sender
         .behaviour_mut()
-        .publish_message_with_validated_header(test_message.clone(), 1.into())
+        .publish_message_with_validated_header(&test_message, 1.into())
         .unwrap();
 
     loop {
@@ -715,9 +701,7 @@ async fn duplicate_message_from_old_epoch_after_epoch_rotation_is_suppressed() {
     let test_message = TestEncapsulatedMessage::new(b"msg");
     sender_a
         .behaviour_mut()
-        .publish_message_with_validated_signature_to_current_epoch(
-            &test_message.as_ref().clone().into(),
-        )
+        .publish_message_with_validated_header_to_current_epoch(test_message.as_ref())
         .unwrap();
 
     loop {
@@ -746,9 +730,7 @@ async fn duplicate_message_from_old_epoch_after_epoch_rotation_is_suppressed() {
     // cache, receiver must NOT emit a second `Message` event.
     sender_b
         .behaviour_mut()
-        .publish_message_with_validated_signature_to_current_epoch(
-            &test_message.as_ref().clone().into(),
-        )
+        .publish_message_with_validated_header_to_current_epoch(test_message.as_ref())
         .unwrap();
 
     let mut duplicate_message_received = false;

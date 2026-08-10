@@ -829,7 +829,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     /// peers in the specified epoch.
     pub fn publish_message_with_validated_header(
         &mut self,
-        message: EncapsulatedMessageWithVerifiedPublicHeader,
+        message: &EncapsulatedMessageWithVerifiedPublicHeader,
         intended_epoch: Epoch,
     ) -> Result<(), SendError> {
         if self.current_epoch_info.1 != intended_epoch {
@@ -838,32 +838,37 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
             };
             return old_epoch.publish_message_with_validated_header(message, intended_epoch);
         }
-        self.forward_maybe_excluding(&message.into(), None)
-    }
-
-    /// Publish an already-encapsulated message with a valid public header
-    /// signature to all connected peers in the current epoch.
-    pub fn publish_message_with_validated_signature_to_current_epoch(
-        &mut self,
-        message: &EncapsulatedMessageWithVerifiedSignature,
-    ) -> Result<(), SendError> {
         self.forward_maybe_excluding(message, None)
     }
 
-    /// Forwards a message with a valid public header signature to all
-    /// non-spammy peers in the specified epoch, except the
-    /// [`except`] peer.
+    /// Publish an already-encapsulated and validated message to all connected
+    /// peers in the current epoch.
+    #[cfg(test)]
+    fn publish_message_with_validated_header_to_current_epoch(
+        &mut self,
+        message: &EncapsulatedMessageWithVerifiedPublicHeader,
+    ) -> Result<(), SendError> {
+        self.publish_message_with_validated_header(message, self.current_epoch_info.1)
+    }
+
+    /// Forwards a message with a verified public header to all non-spammy peers
+    /// in the specified epoch, except the [`except`] peer.
     ///
     /// If the epoch is the previous epoch, the message is forwarded to the
     /// peers in the old epoch. Otherwise, it is forwarded to the peers in
     /// the current epoch.
     ///
+    /// The input type is [`EncapsulatedMessageWithVerifiedPublicHeader`]
+    /// because a message received from a peer is relayed only after the Blend
+    /// service has verified its `PoQ`. The behaviour itself only verifies the
+    /// public header signature, so it cannot produce such a value on its own.
+    ///
     /// Returns [`Error::NoPeers`] if there are no connected peers that support
     /// the blend protocol, and [`Error::InvalidEpoch`] if the provided
     /// epoch does not match neither the current epoch nor the old epoch.
-    pub fn forward_message_with_validated_signature(
+    pub fn forward_message_with_verified_public_header(
         &mut self,
-        message: &EncapsulatedMessageWithVerifiedSignature,
+        message: &EncapsulatedMessageWithVerifiedPublicHeader,
         except: PeerId,
         intended_epoch: Epoch,
     ) -> Result<(), SendError> {
@@ -871,7 +876,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
             let Some(old_epoch) = &mut self.old_epoch else {
                 return Err(SendError::InvalidEpoch);
             };
-            return old_epoch.forward_message_with_validated_signature(
+            return old_epoch.forward_message_with_verified_public_header(
                 message,
                 except,
                 intended_epoch,
@@ -883,7 +888,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
 
     fn forward_maybe_excluding(
         &mut self,
-        message: &EncapsulatedMessageWithVerifiedSignature,
+        message: &EncapsulatedMessageWithVerifiedPublicHeader,
         excluded_peer: Option<PeerId>,
     ) -> Result<(), SendError> {
         tracing::trace!(

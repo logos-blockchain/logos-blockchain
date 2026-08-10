@@ -70,6 +70,17 @@ mod imp {
     pub fn inbound_messages_dropped(count: u64) {
         lb_tracing::increase_counter_u64!(blend_inbound_messages_dropped_total, count);
     }
+
+    /// Reports incoming messages that were dropped because their `PoQ` could
+    /// not be verified, and that were therefore neither relayed to the rest of
+    /// the network nor processed locally.
+    pub fn inbound_message_poq_verification_err(message_type: InboundMessageType) {
+        lb_tracing::increase_counter_u64!(
+            blend_inbound_messages_poq_verification_failed_total,
+            1,
+            message_type = message_type.to_str()
+        );
+    }
 }
 
 pub use imp::*;

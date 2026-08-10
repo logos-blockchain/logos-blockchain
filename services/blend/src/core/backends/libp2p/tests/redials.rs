@@ -10,10 +10,15 @@ use tokio::{
     time::{self, sleep, sleep_until},
 };
 
-use crate::core::backends::libp2p::{
-    core_swarm_test_utils::{SwarmExt as _, new_nodes_with_empty_address, update_nodes},
-    swarm::BlendSwarmMessage,
-    tests::utils::{BlendBehaviourBuilder, SwarmBuilder, TestSwarm, build_membership},
+use crate::core::backends::{
+    BackendEpochInfo,
+    libp2p::{
+        core_swarm_test_utils::{SwarmExt as _, new_nodes_with_empty_address, update_nodes},
+        swarm::BlendSwarmMessage,
+        tests::utils::{
+            BlendBehaviourBuilder, SwarmBuilder, TestProofsVerifier, TestSwarm, build_membership,
+        },
+    },
 };
 
 #[test(tokio::test)]
@@ -317,7 +322,11 @@ async fn core_epoch_rotation_clears_pending_retries() {
     assert_eq!(dialing_swarm.pending_retries_count(), 1);
 
     // Trigger a new epoch via the swarm message channel.
-    let new_epoch_info = (Membership::new_without_local(&[]), 2.into());
+    let new_epoch_info = BackendEpochInfo {
+        membership: Membership::new_without_local(&[]),
+        epoch: 2.into(),
+        proofs_verifier: TestProofsVerifier::accepting(),
+    };
     swarm_message_sender
         .send(BlendSwarmMessage::StartNewEpoch(new_epoch_info))
         .await
@@ -391,7 +400,11 @@ async fn core_does_not_give_up_below_minimum_peering_degree() {
     // peers to reach the minimum degree.
     let new_membership = build_membership(&nodes, Some(*dialing_swarm.local_peer_id()));
     swarm_message_sender
-        .send(BlendSwarmMessage::StartNewEpoch((new_membership, 2.into())))
+        .send(BlendSwarmMessage::StartNewEpoch(BackendEpochInfo {
+            membership: new_membership,
+            epoch: 2.into(),
+            proofs_verifier: TestProofsVerifier::accepting(),
+        }))
         .await
         .unwrap();
 

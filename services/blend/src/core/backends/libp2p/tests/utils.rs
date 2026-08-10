@@ -5,13 +5,17 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt as _, stream::pending};
 use lb_blend::{
     message::{
-        crypto::key_ext::Ed25519SecretKeyExt as _,
-        encap::validated::EncapsulatedMessageWithVerifiedSignature,
+        crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
+        encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
     },
     network::core::{
         Config, NetworkBehaviour,
         with_core::behaviour::{Config as CoreToCoreConfig, IntervalStreamProvider},
         with_edge::behaviour::Config as CoreToEdgeConfig,
+    },
+    proofs::{
+        quota::{ProofOfQuota, VerifiedProofOfQuota},
+        selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
     },
     scheduling::membership::{Membership, Node},
 };
@@ -41,13 +45,55 @@ use crate::{
     test_utils::PROTOCOL_NAME,
 };
 
-pub type InnerSwarm = BlendSwarm<BlakeRng, TestObservationWindowProvider>;
+/// A `PoQ` verifier for the swarm tests, which either accepts or rejects every
+/// proof it is handed. The proof systems themselves are exercised elsewhere;
+/// here we only care about what the swarm does with the verification outcome.
+#[derive(Debug, Clone, Copy)]
+pub struct TestProofsVerifier {
+    accepts: bool,
+}
+
+impl TestProofsVerifier {
+    pub const fn accepting() -> Self {
+        Self { accepts: true }
+    }
+}
+
+impl ProofsVerifier for TestProofsVerifier {
+    type Error = ();
+
+    fn new(_public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
+        Self { accepts: true }
+    }
+
+    fn verify_proof_of_quota(
+        &self,
+        proof: ProofOfQuota,
+        _signing_key: &lb_key_management_system_service::keys::Ed25519PublicKey,
+    ) -> Result<VerifiedProofOfQuota, Self::Error> {
+        self.accepts
+            .then(|| VerifiedProofOfQuota::from_proof_of_quota_unchecked(proof))
+            .ok_or(())
+    }
+
+    fn verify_proof_of_selection(
+        &self,
+        proof: ProofOfSelection,
+        _inputs: &VerifyInputs,
+    ) -> Result<VerifiedProofOfSelection, Self::Error> {
+        self.accepts
+            .then(|| VerifiedProofOfSelection::from_proof_of_selection_unchecked(proof))
+            .ok_or(())
+    }
+}
+
+pub type InnerSwarm = BlendSwarm<BlakeRng, TestObservationWindowProvider, TestProofsVerifier>;
 
 pub struct TestSwarm {
     pub swarm: InnerSwarm,
-    pub swarm_message_sender: mpsc::Sender<BlendSwarmMessage>,
+    pub swarm_message_sender: mpsc::Sender<BlendSwarmMessage<TestProofsVerifier>>,
     pub incoming_message_receiver:
-        broadcast::Receiver<(EncapsulatedMessageWithVerifiedSignature, Epoch)>,
+        broadcast::Receiver<(EncapsulatedMessageWithVerifiedPublicHeader, Epoch)>,
 }
 
 /// Generates `count` nodes with randomly generated identities and empty
@@ -93,23 +139,30 @@ pub fn build_membership(
 
 pub struct SwarmBuilder {
     identity: Keypair,
-    public_info: BackendEpochInfo<PeerId>,
+    public_info: BackendEpochInfo<PeerId, TestProofsVerifier>,
     max_dial_attempts: Option<NonZeroU64>,
     peering_degree_check_clock: Option<Pin<Box<dyn Stream<Item = ()> + Send>>>,
 }
 
 impl SwarmBuilder {
     pub fn new(identity: Keypair, membership: &[Node<PeerId>]) -> Self {
-        let public_info = (
-            build_membership(membership, Some(identity.public().into())),
-            1.into(),
-        );
+        let public_info = BackendEpochInfo {
+            membership: build_membership(membership, Some(identity.public().into())),
+            epoch: 1.into(),
+            proofs_verifier: TestProofsVerifier::accepting(),
+        };
         Self {
             identity,
             public_info,
             max_dial_attempts: None,
             peering_degree_check_clock: None,
         }
+    }
+
+    /// Makes this swarm reject the `PoQ` of every message it receives.
+    pub const fn with_rejecting_proofs_verifier(mut self) -> Self {
+        self.public_info.proofs_verifier = TestProofsVerifier { accepts: false };
+        self
     }
 
     pub fn with_max_dial_attempts(mut self, max_dial_attempts: NonZeroU64) -> Self {

@@ -2,9 +2,9 @@ use core::{convert::Infallible, num::NonZeroU64, task::Waker};
 use std::collections::VecDeque;
 
 use either::Either;
-use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedSignature;
+use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
 use lb_blend_scheduling::{
-    deserialize_encapsulated_message, serialize_encapsulated_message_with_verified_signature,
+    deserialize_encapsulated_message, serialize_encapsulated_message_with_verified_public_header,
 };
 use lb_cryptarchia_engine::Epoch;
 use libp2p::{
@@ -17,14 +17,18 @@ use crate::core::with_core::{
     error::{ReceiveError, SendError},
 };
 
-/// Forwards a message with a valid signature to the given peer connections, if
-/// it hasn't been forwarded already.
+/// Forwards a message with a verified public header to the given peer
+/// connections, if it hasn't been forwarded already.
 ///
 /// The message cache is also updated accordingly to mark the sent message as
 /// processed if it was sent to at least one peer, or to ignore it if it has
 /// already been forwarded before.
+///
+/// The input type is [`EncapsulatedMessageWithVerifiedPublicHeader`] because a
+/// message is relayed to the rest of the network only after its `PoQ` has been
+/// verified, which happens in the Blend service.
 pub fn forward_validated_message_and_update_cache<'epoch, PeerConnections>(
-    message: &EncapsulatedMessageWithVerifiedSignature,
+    message: &EncapsulatedMessageWithVerifiedPublicHeader,
     peer_connections: PeerConnections,
     events_queue: &'epoch mut VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     message_cache: &'epoch mut MessageCache,
@@ -42,7 +46,7 @@ where
         return Err(SendError::NoPeers);
     }
 
-    let serialized_message = serialize_encapsulated_message_with_verified_signature(message);
+    let serialized_message = serialize_encapsulated_message_with_verified_public_header(message);
 
     peer_connections.for_each(|(peer_id, connection_id)| {
         tracing::trace!("Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver message.");
@@ -95,7 +99,7 @@ pub fn handle_received_serialized_encapsulated_message_and_update_cache(
         return Ok(());
     }
 
-    // Verify the message public header
+    // Verify the message signature
     let validated_message = deserialized_encapsulated_message
         .verify_header_signature()
         .map_err(|_| ReceiveError::InvalidHeaderSignature)?;
