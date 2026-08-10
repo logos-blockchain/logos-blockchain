@@ -35,6 +35,7 @@ use lb_ledger::LedgerState;
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
+use lb_tracing::info_with_id;
 use lb_tx_service::{
     TxMempoolService,
     backend::{MemPool, RecoverableMempool},
@@ -716,11 +717,12 @@ where
         let block = Block::create(parent, slot, proof, txs, signing_key)?;
         log_sdp_activity_selected_for_proposal(&block, &ledger_state);
 
-        info!(
-            "proposed block {:?} with {} transactions ({} removed)",
-            block.header().id(),
-            block.transactions_iter().len(),
-            invalid_tx_hashes.len()
+        info_with_id!(
+            block.header().id().as_ref(),
+            "proposed block {header_id:?} with {tx_count} transactions ({removed_count} removed)",
+            header_id = block.header().id(),
+            tx_count = block.transactions_iter().len(),
+            removed_count = invalid_tx_hashes.len()
         );
 
         Ok(block)
