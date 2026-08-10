@@ -199,6 +199,17 @@ impl OldEpoch {
             .is_some_and(|&id| id == *connection_id)
     }
 
+    /// Returns the connection with the given peer, if it is negotiated in the
+    /// old epoch.
+    pub(super) fn negotiated_connection_with_peer(
+        &self,
+        peer_id: PeerId,
+    ) -> Option<(PeerId, ConnectionId)> {
+        self.negotiated_peers
+            .get(&peer_id)
+            .map(|connection_id| (peer_id, *connection_id))
+    }
+
     /// Returns the peer IDs of all negotiated peers in the old epoch.
     pub fn negotiated_peer_ids(&self) -> impl Iterator<Item = &PeerId> {
         self.negotiated_peers.keys()

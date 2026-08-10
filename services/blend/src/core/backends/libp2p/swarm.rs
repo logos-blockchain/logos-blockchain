@@ -23,7 +23,7 @@ use lb_blend::{
         with_core::{
             behaviour::{
                 ConnectionUpgradeFailureReason, Event as CoreToCoreEvent, IntervalStreamProvider,
-                NegotiatedPeerState,
+                NegotiatedPeerState, SpamReason,
             },
             error::SendError,
         },
@@ -79,6 +79,19 @@ fn share_epoch_verifier<ProofsVerifier>(
     }
 }
 
+enum PoQVerificationOutcome {
+    Verified(Box<VerifiedInboundMessage>),
+    Rejected(InboundMessageSource),
+}
+
+/// An inbound message whose public header has been fully verified, ready to be
+/// relayed and handed to the service.
+struct VerifiedInboundMessage {
+    message: EncapsulatedMessageWithVerifiedPublicHeader,
+    epoch: Epoch,
+    source: InboundMessageSource,
+}
+
 /// Where an inbound message came from, which decides the set of peers it is
 /// relayed to once its public header has been verified.
 #[derive(Debug, Clone, Copy)]
@@ -97,14 +110,6 @@ impl InboundMessageSource {
             Self::Edge => metrics::InboundMessageType::Edge,
         }
     }
-}
-
-/// An inbound message whose public header has been fully verified, ready to be
-/// relayed and handed to the service.
-struct VerifiedInboundMessage {
-    message: EncapsulatedMessageWithVerifiedPublicHeader,
-    epoch: Epoch,
-    source: InboundMessageSource,
 }
 
 #[derive(Debug)]
@@ -151,7 +156,7 @@ impl DialAttempt {
 
 type PendingRetries = FuturesUnordered<Pin<Box<dyn Future<Output = (PeerId, DialAttempt)> + Send>>>;
 type PendingPoQVerifications =
-    FuturesUnordered<Pin<Box<dyn Future<Output = Option<VerifiedInboundMessage>> + Send>>>;
+    FuturesUnordered<Pin<Box<dyn Future<Output = Option<PoQVerificationOutcome>> + Send>>>;
 type FullMembershipRetry = Option<Pin<Box<dyn Future<Output = ()> + Send>>>;
 
 pub struct BlendSwarm<Rng, ObservationWindowProvider, ProofsVerifier>
@@ -593,9 +598,15 @@ where
                 self.handle_event(event);
                 predicate_matched
             }
-            Some(verified_message) = self.pending_poq_verifications.next() => {
-                if let Some(verified_message) = verified_message {
-                    self.handle_verified_inbound_message(verified_message);
+            Some(outcome) = self.pending_poq_verifications.next() => {
+                match outcome {
+                    Some(PoQVerificationOutcome::Verified(verified_message)) => {
+                        self.handle_verified_inbound_message(*verified_message);
+                    }
+                    Some(PoQVerificationOutcome::Rejected(source)) => {
+                        self.handle_failed_public_header_verification(source);
+                    }
+                    None => {}
                 }
                 false
             }
@@ -821,15 +832,17 @@ where
             .await;
 
             match verification_result {
-                Ok(Ok(message)) => Some(VerifiedInboundMessage {
-                    message,
-                    epoch,
-                    source,
-                }),
+                Ok(Ok(message)) => Some(PoQVerificationOutcome::Verified(Box::new(
+                    VerifiedInboundMessage {
+                        message,
+                        epoch,
+                        source,
+                    },
+                ))),
                 Ok(Err(e)) => {
                     tracing::debug!(target: LOG_TARGET, "Dropping message from {source:?} for epoch {epoch:?}: its public header failed verification: {e}. Neither relaying nor processing it.");
                     metrics::inbound_message_poq_verification_err(message_type);
-                    None
+                    Some(PoQVerificationOutcome::Rejected(source))
                 }
                 Err(e) => {
                     tracing::error!(target: LOG_TARGET, "Dropping message from {source:?} for epoch {epoch:?}: its public header verification task failed to complete: {e:?}.");
@@ -848,6 +861,20 @@ where
         } else {
             self.old_epoch_proofs_verifier.as_ref()
         }
+    }
+
+    fn handle_failed_public_header_verification(&mut self, source: InboundMessageSource) {
+        let InboundMessageSource::Core(peer_id) = source else {
+            tracing::trace!(target: LOG_TARGET, "Skip blocking edge peer {source:?} because of an invalid PoQ sent.");
+            return;
+        };
+        tracing::debug!(target: LOG_TARGET, "Blocking core peer {peer_id:?}: it sent a message whose public header failed verification.");
+
+        self.swarm
+            .behaviour_mut()
+            .blend
+            .with_core_mut()
+            .close_spammy_connection_with_peer(peer_id, SpamReason::InvalidProofOfQuota);
     }
 
     /// Relays a message whose public header has just been verified and hands it

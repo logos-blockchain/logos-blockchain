@@ -145,6 +145,7 @@ pub enum SpamReason {
     UndeserializableMessage,
     DuplicateMessage,
     InvalidHeaderSignature,
+    InvalidProofOfQuota,
     TooManyMessages,
 }
 
@@ -686,6 +687,41 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
                 },
             );
         }
+    }
+
+    /// Mark the connection with the given peer as malicious and instruct its
+    /// connection handler to drop the substream, whether the connection belongs
+    /// to the current epoch or to the one being transitioned away from.
+    ///
+    /// Used for spam that this behaviour cannot detect on its own — an invalid
+    /// `PoQ`, which only the swarm can verify — so the peer is identified by ID
+    /// alone. Returns whether a connection with the peer was found.
+    pub fn close_spammy_connection_with_peer(
+        &mut self,
+        peer_id: PeerId,
+        reason: SpamReason,
+    ) -> bool {
+        if let Some(RemotePeerConnectionDetails { connection_id, .. }) =
+            self.negotiated_peers.get(&peer_id)
+        {
+            self.close_spammy_connection((peer_id, *connection_id), reason);
+            return true;
+        }
+        // The old epoch keeps no per-peer state beyond the connection, so there
+        // is nothing to mark: closing the substream is all we can do here. The
+        // swarm blocks the peer regardless of which epoch it was talking on.
+        if let Some(old_epoch) = &mut self.old_epoch
+            && let Some(connection) = old_epoch.negotiated_connection_with_peer(peer_id)
+        {
+            tracing::debug!(
+                target: LOG_TARGET,
+                "Closing old epoch connection {:?} with spammy peer {peer_id:?} for reason {reason:?}.",
+                connection.1
+            );
+            self.close_connection(connection);
+            return true;
+        }
+        false
     }
 
     /// Mark the connection with the sender of a malformed message as malicious
