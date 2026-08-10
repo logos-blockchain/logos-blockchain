@@ -75,7 +75,7 @@ impl ProvableOperation for DepositOp {
 }
 
 impl OperationGas<MainnetGasProfile> for DepositOp {
-    const GAS_CONSTANT: Gas = Gas::new(590);
+    const GAS_COST: Gas = Gas::new(590);
 }
 
 impl PreverifiableOperation<verification_mode::StandardMode> for DepositOp {

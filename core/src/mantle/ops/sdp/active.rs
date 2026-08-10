@@ -36,7 +36,7 @@ impl ProvableOperation for SDPActiveOp {
 }
 
 impl OperationGas<MainnetGasProfile> for SDPActiveOp {
-    const GAS_CONSTANT: Gas = Gas::new(590);
+    const GAS_COST: Gas = Gas::new(590);
 }
 
 impl PreverifiableOperation<verification_mode::StandardMode> for SDPActiveOp {

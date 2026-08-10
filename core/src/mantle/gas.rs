@@ -141,7 +141,7 @@ impl private::Sealed for MainnetGasProfile {}
 impl GasProfile for MainnetGasProfile {}
 
 pub trait OperationGas<Profile: GasProfile> {
-    const GAS_CONSTANT: Gas;
+    const GAS_COST: Gas;
 }
 
 pub trait SignedOperationExecutionGas {
@@ -153,6 +153,6 @@ pub trait SignedOperationExecutionGas {
     where
         Self: OperationGas<Profile>,
     {
-        Self::GAS_CONSTANT.checked_mul(self.gas_multiplier())
+        Self::GAS_COST.checked_mul(self.gas_multiplier())
     }
 }

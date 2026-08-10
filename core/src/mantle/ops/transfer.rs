@@ -92,7 +92,7 @@ impl ProvableOperation for TransferOp {
 }
 
 impl OperationGas<MainnetGasProfile> for TransferOp {
-    const GAS_CONSTANT: Gas = Gas::new(590);
+    const GAS_COST: Gas = Gas::new(590);
 }
 
 impl PreverifiableOperation<verification_mode::StandardMode> for TransferOp {

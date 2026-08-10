@@ -60,7 +60,7 @@ impl ProvableOperation for ChannelConfigOp {
 }
 
 impl OperationGas<MainnetGasProfile> for ChannelConfigOp {
-    const GAS_CONSTANT: Gas = Gas::new(56);
+    const GAS_COST: Gas = Gas::new(56);
 }
 
 impl PreverifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {

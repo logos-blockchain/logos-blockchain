@@ -55,7 +55,7 @@ impl ProvableOperation for ChannelWithdrawOp {
 }
 
 impl OperationGas<MainnetGasProfile> for ChannelWithdrawOp {
-    const GAS_CONSTANT: Gas = Gas::new(56);
+    const GAS_COST: Gas = Gas::new(56);
 }
 
 impl PreverifiableOperation<verification_mode::StandardMode> for ChannelWithdrawOp {

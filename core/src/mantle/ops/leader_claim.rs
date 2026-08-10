@@ -187,7 +187,7 @@ impl ProvableOperation for LeaderClaimOp {
 }
 
 impl OperationGas<MainnetGasProfile> for LeaderClaimOp {
-    const GAS_CONSTANT: Gas = Gas::new(580);
+    const GAS_COST: Gas = Gas::new(580);
 }
 
 impl PreverifiableOperation<verification_mode::StandardMode> for LeaderClaimOp {

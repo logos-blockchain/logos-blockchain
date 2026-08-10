@@ -91,7 +91,7 @@ impl ProvableOperation for InscriptionOp {
 }
 
 impl OperationGas<MainnetGasProfile> for InscriptionOp {
-    const GAS_CONSTANT: Gas = Gas::new(56);
+    const GAS_COST: Gas = Gas::new(56);
 }
 
 impl PreverifiableOperation<verification_mode::StandardMode> for InscriptionOp {

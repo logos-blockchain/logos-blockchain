@@ -101,5 +101,5 @@ where
     State: VerificationState,
     Mode: VerificationMode,
 {
-    const GAS_CONSTANT: Gas = T::GAS_CONSTANT;
+    const GAS_COST: Gas = T::GAS_COST;
 }

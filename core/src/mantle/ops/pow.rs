@@ -268,7 +268,7 @@ impl ProvableOperation for ClaimPowRewardOp {
 }
 
 impl OperationGas<MainnetGasProfile> for ClaimPowRewardOp {
-    const GAS_CONSTANT: Gas = Gas::new(1);
+    const GAS_COST: Gas = Gas::new(1);
 }
 
 impl PreverifiableOperation<verification_mode::StandardMode> for ClaimPowRewardOp {

@@ -211,7 +211,7 @@ where
     Profile: GasProfile,
     Op: OperationGas<Profile>,
 {
-    Op::GAS_CONSTANT
+    Op::GAS_COST
 }
 
 // We just check that the enum discriminant tag is encoded correctly, so a
