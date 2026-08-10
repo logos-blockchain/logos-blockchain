@@ -45,25 +45,19 @@ use crate::{
     test_utils::PROTOCOL_NAME,
 };
 
-/// A `PoQ` verifier for the swarm tests, which either accepts or rejects every
-/// proof it is handed. The proof systems themselves are exercised elsewhere;
-/// here we only care about what the swarm does with the verification outcome.
+/// A `PoQ` verifier for the swarm tests, which accepts every proof it is
+/// handed.
+///
+/// What a node does with a *failed* verification is decided by the behaviour,
+/// so it is tested there rather than here.
 #[derive(Debug, Clone, Copy)]
-pub struct TestProofsVerifier {
-    accepts: bool,
-}
-
-impl TestProofsVerifier {
-    pub const fn accepting() -> Self {
-        Self { accepts: true }
-    }
-}
+pub struct TestProofsVerifier;
 
 impl ProofsVerifier for TestProofsVerifier {
     type Error = ();
 
     fn new(_public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
-        Self { accepts: true }
+        Self
     }
 
     fn verify_proof_of_quota(
@@ -71,9 +65,7 @@ impl ProofsVerifier for TestProofsVerifier {
         proof: ProofOfQuota,
         _signing_key: &lb_key_management_system_service::keys::Ed25519PublicKey,
     ) -> Result<VerifiedProofOfQuota, Self::Error> {
-        self.accepts
-            .then(|| VerifiedProofOfQuota::from_proof_of_quota_unchecked(proof))
-            .ok_or(())
+        Ok(VerifiedProofOfQuota::from_proof_of_quota_unchecked(proof))
     }
 
     fn verify_proof_of_selection(
@@ -81,9 +73,9 @@ impl ProofsVerifier for TestProofsVerifier {
         proof: ProofOfSelection,
         _inputs: &VerifyInputs,
     ) -> Result<VerifiedProofOfSelection, Self::Error> {
-        self.accepts
-            .then(|| VerifiedProofOfSelection::from_proof_of_selection_unchecked(proof))
-            .ok_or(())
+        Ok(VerifiedProofOfSelection::from_proof_of_selection_unchecked(
+            proof,
+        ))
     }
 }
 
@@ -149,7 +141,7 @@ impl SwarmBuilder {
         let public_info = BackendEpochInfo {
             membership: build_membership(membership, Some(identity.public().into())),
             epoch: 1.into(),
-            proofs_verifier: TestProofsVerifier::accepting(),
+            proofs_verifier: TestProofsVerifier,
         };
         Self {
             identity,
@@ -157,12 +149,6 @@ impl SwarmBuilder {
             max_dial_attempts: None,
             peering_degree_check_clock: None,
         }
-    }
-
-    /// Makes this swarm reject the `PoQ` of every message it receives.
-    pub const fn with_rejecting_proofs_verifier(mut self) -> Self {
-        self.public_info.proofs_verifier = TestProofsVerifier { accepts: false };
-        self
     }
 
     pub fn with_max_dial_attempts(mut self, max_dial_attempts: NonZeroU64) -> Self {
@@ -181,7 +167,11 @@ impl SwarmBuilder {
     ) -> TestSwarm
     where
         BehaviourConstructor:
-            FnOnce(PeerId, Membership<PeerId>) -> BlendBehaviour<TestObservationWindowProvider>,
+            FnOnce(
+                PeerId,
+                Membership<PeerId>,
+            )
+                -> BlendBehaviour<TestObservationWindowProvider, TestProofsVerifier>,
     {
         let (swarm_message_sender, swarm_message_receiver) = mpsc::channel(100);
         let (incoming_message_sender, incoming_message_receiver) = broadcast::channel(100);
@@ -213,6 +203,7 @@ pub struct BlendBehaviourBuilder {
     membership: Membership<PeerId>,
     observation_window: Option<(Duration, RangeInclusive<u64>)>,
     peering_degree: Option<RangeInclusive<usize>>,
+    proofs_verifier: TestProofsVerifier,
 }
 
 impl BlendBehaviourBuilder {
@@ -222,6 +213,7 @@ impl BlendBehaviourBuilder {
             membership,
             observation_window: None,
             peering_degree: None,
+            proofs_verifier: TestProofsVerifier,
         }
     }
 
@@ -239,7 +231,7 @@ impl BlendBehaviourBuilder {
         self
     }
 
-    pub fn build(self) -> BlendBehaviour<TestObservationWindowProvider> {
+    pub fn build(self) -> BlendBehaviour<TestObservationWindowProvider, TestProofsVerifier> {
         let observation_window_values = self
             .observation_window
             .unwrap_or((Duration::from_secs(1), u64::MIN..=u64::MAX));
@@ -265,6 +257,7 @@ impl BlendBehaviourBuilder {
                     interval: observation_window_values.0,
                 },
                 (self.membership, 1.into()),
+                self.proofs_verifier,
                 self.peer_id,
                 PROTOCOL_NAME,
             ),
@@ -314,7 +307,7 @@ pub trait SwarmExt: libp2p_swarm_test::SwarmExt {
 }
 
 #[async_trait]
-impl SwarmExt for Swarm<BlendBehaviour<TestObservationWindowProvider>> {
+impl SwarmExt for Swarm<BlendBehaviour<TestObservationWindowProvider, TestProofsVerifier>> {
     async fn listen_and_return_membership_entry(
         &mut self,
         addr: Option<Multiaddr>,

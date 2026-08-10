@@ -12,7 +12,7 @@ use test_log::test;
 use tokio::{select, time::sleep};
 
 use crate::core::{
-    tests::utils::{TestEncapsulatedMessageWithEpoch, TestSwarm},
+    tests::utils::{TestEncapsulatedMessageWithEpoch, TestProofsVerifier, TestSwarm},
     with_core::{
         behaviour::{
             Event,
@@ -42,12 +42,14 @@ async fn publish_message() {
     // Start a new epoch before sending any message through the connection.
     epoch = Epoch::new(epoch.into_inner() + 1);
     let memberships = build_memberships(&[&dialer, &listener]);
-    dialer
-        .behaviour_mut()
-        .start_new_epoch((memberships[0].clone(), epoch));
-    listener
-        .behaviour_mut()
-        .start_new_epoch((memberships[1].clone(), epoch));
+    dialer.behaviour_mut().start_new_epoch(
+        (memberships[0].clone(), epoch),
+        TestProofsVerifier::accepting(),
+    );
+    listener.behaviour_mut().start_new_epoch(
+        (memberships[1].clone(), epoch),
+        TestProofsVerifier::accepting(),
+    );
 
     // Send a message but expect [`Error::NoPeers`]
     // because we haven't establish connections for the new epoch.
@@ -138,7 +140,10 @@ async fn fully_negotiated_racing_epoch_transition_is_ignored() {
 
     // The epoch transition fires while the handler's `FullyNegotiated` is still
     // in flight. `start_new_epoch` clears the pending-upgrade map.
-    behaviour.start_new_epoch((Membership::new_without_local(&[]), Epoch::new(1)));
+    behaviour.start_new_epoch(
+        (Membership::new_without_local(&[]), Epoch::new(1)),
+        TestProofsVerifier::accepting(),
+    );
     assert!(
         behaviour.connections_waiting_upgrade.is_empty(),
         "start_new_epoch must clear the pending-upgrade map"
@@ -197,15 +202,18 @@ async fn forward_message() {
     // - New epoch:           forwarder -> receiver2
     let new_epoch = Epoch::new(old_epoch.into_inner() + 1);
     let memberships = build_memberships(&[&sender, &forwarder, &receiver1, &receiver2]);
-    forwarder
-        .behaviour_mut()
-        .start_new_epoch((memberships[1].clone(), new_epoch));
-    receiver1
-        .behaviour_mut()
-        .start_new_epoch((memberships[2].clone(), new_epoch));
-    receiver2
-        .behaviour_mut()
-        .start_new_epoch((memberships[3].clone(), new_epoch));
+    forwarder.behaviour_mut().start_new_epoch(
+        (memberships[1].clone(), new_epoch),
+        TestProofsVerifier::accepting(),
+    );
+    receiver1.behaviour_mut().start_new_epoch(
+        (memberships[2].clone(), new_epoch),
+        TestProofsVerifier::accepting(),
+    );
+    receiver2.behaviour_mut().start_new_epoch(
+        (memberships[3].clone(), new_epoch),
+        TestProofsVerifier::accepting(),
+    );
     forwarder.connect_and_wait_for_upgrade(&mut receiver2).await;
 
     // The sender publishes a message built with the old epoch to the forwarder.
@@ -240,9 +248,10 @@ async fn forward_message() {
 
     // Now we start the new epoch for the sender as well.
     // Also, connect the sender to the forwarder for the new epoch.
-    sender
-        .behaviour_mut()
-        .start_new_epoch((memberships[0].clone(), new_epoch));
+    sender.behaviour_mut().start_new_epoch(
+        (memberships[0].clone(), new_epoch),
+        TestProofsVerifier::accepting(),
+    );
     sender.connect_and_wait_for_upgrade(&mut forwarder).await;
 
     // The sender publishes a new message built with the new epoch to the
@@ -293,12 +302,14 @@ async fn finish_epoch_transition() {
     // Start a new epoch.
     epoch = Epoch::new(epoch.into_inner() + 1);
     let memberships = build_memberships(&[&dialer, &listener]);
-    dialer
-        .behaviour_mut()
-        .start_new_epoch((memberships[0].clone(), epoch));
-    listener
-        .behaviour_mut()
-        .start_new_epoch((memberships[1].clone(), epoch));
+    dialer.behaviour_mut().start_new_epoch(
+        (memberships[0].clone(), epoch),
+        TestProofsVerifier::accepting(),
+    );
+    listener.behaviour_mut().start_new_epoch(
+        (memberships[1].clone(), epoch),
+        TestProofsVerifier::accepting(),
+    );
 
     // Finish the transition period
     dialer.behaviour_mut().finish_epoch_transition();
@@ -344,9 +355,10 @@ async fn old_epoch_message_not_forwarded_back_to_sender() {
     // connections move into the forwarder's old epoch.
     let new_epoch = Epoch::new(old_epoch.into_inner() + 1);
     let memberships = build_memberships(&[&sender, &forwarder, &receiver]);
-    forwarder
-        .behaviour_mut()
-        .start_new_epoch((memberships[1].clone(), new_epoch));
+    forwarder.behaviour_mut().start_new_epoch(
+        (memberships[1].clone(), new_epoch),
+        TestProofsVerifier::accepting(),
+    );
 
     // Sender publishes a message for the old epoch.
     let test_message = TestEncapsulatedMessageWithEpoch::new(old_epoch, b"msg");
@@ -415,12 +427,14 @@ async fn publish_to_invalid_epoch_returns_error() {
 
     // Start the first epoch and connect.
     let memberships = build_memberships(&[&dialer, &listener]);
-    dialer
-        .behaviour_mut()
-        .start_new_epoch((memberships[0].clone(), epoch));
-    listener
-        .behaviour_mut()
-        .start_new_epoch((memberships[1].clone(), epoch));
+    dialer.behaviour_mut().start_new_epoch(
+        (memberships[0].clone(), epoch),
+        TestProofsVerifier::accepting(),
+    );
+    listener.behaviour_mut().start_new_epoch(
+        (memberships[1].clone(), epoch),
+        TestProofsVerifier::accepting(),
+    );
     dialer.connect_and_wait_for_upgrade(&mut listener).await;
 
     // Attempt to publish to an epoch that neither matches the current nor old.
@@ -447,12 +461,14 @@ async fn forward_to_invalid_epoch_returns_error() {
 
     // Start the first epoch and connect.
     let memberships = build_memberships(&[&dialer, &listener]);
-    dialer
-        .behaviour_mut()
-        .start_new_epoch((memberships[0].clone(), epoch));
-    listener
-        .behaviour_mut()
-        .start_new_epoch((memberships[1].clone(), epoch));
+    dialer.behaviour_mut().start_new_epoch(
+        (memberships[0].clone(), epoch),
+        TestProofsVerifier::accepting(),
+    );
+    listener.behaviour_mut().start_new_epoch(
+        (memberships[1].clone(), epoch),
+        TestProofsVerifier::accepting(),
+    );
     dialer.connect_and_wait_for_upgrade(&mut listener).await;
 
     // Attempt to forward a message to an invalid epoch.
@@ -480,12 +496,14 @@ async fn event_message_carries_epoch_number() {
     // Start epoch 1 and connect.
     let epoch = Epoch::new(1);
     let memberships = build_memberships(&[&dialer, &listener]);
-    dialer
-        .behaviour_mut()
-        .start_new_epoch((memberships[0].clone(), epoch));
-    listener
-        .behaviour_mut()
-        .start_new_epoch((memberships[1].clone(), epoch));
+    dialer.behaviour_mut().start_new_epoch(
+        (memberships[0].clone(), epoch),
+        TestProofsVerifier::accepting(),
+    );
+    listener.behaviour_mut().start_new_epoch(
+        (memberships[1].clone(), epoch),
+        TestProofsVerifier::accepting(),
+    );
     dialer.connect_and_wait_for_upgrade(&mut listener).await;
 
     // Send a message for epoch 1.
@@ -538,9 +556,10 @@ async fn start_new_epoch_moves_peers_to_old_epoch() {
 
     // Start a new epoch.
     let memberships = build_memberships(&[&node_a, &node_b, &node_c]);
-    node_a
-        .behaviour_mut()
-        .start_new_epoch((memberships[0].clone(), 1.into()));
+    node_a.behaviour_mut().start_new_epoch(
+        (memberships[0].clone(), 1.into()),
+        TestProofsVerifier::accepting(),
+    );
 
     // After epoch transition: current negotiated_peers must be empty
     // and old_epoch must exist.
@@ -580,9 +599,10 @@ async fn finish_epoch_transition_emits_peer_disconnected_for_old_epoch_peers() {
 
     // Start a new epoch to move current peers into old epoch.
     let memberships = build_memberships(&[&node_a, &node_b, &node_c]);
-    node_a
-        .behaviour_mut()
-        .start_new_epoch((memberships[0].clone(), 1.into()));
+    node_a.behaviour_mut().start_new_epoch(
+        (memberships[0].clone(), 1.into()),
+        TestProofsVerifier::accepting(),
+    );
 
     // Finish the transition; this should close all old epoch connections.
     node_a.behaviour_mut().finish_epoch_transition();
@@ -631,12 +651,14 @@ async fn consecutive_epoch_transitions_replace_old_epoch() {
 
     // First epoch transition: move the current peer into old epoch.
     let memberships = build_memberships(&[&dialer, &listener]);
-    dialer
-        .behaviour_mut()
-        .start_new_epoch((memberships[0].clone(), 1.into()));
-    listener
-        .behaviour_mut()
-        .start_new_epoch((memberships[1].clone(), 1.into()));
+    dialer.behaviour_mut().start_new_epoch(
+        (memberships[0].clone(), 1.into()),
+        TestProofsVerifier::accepting(),
+    );
+    listener.behaviour_mut().start_new_epoch(
+        (memberships[1].clone(), 1.into()),
+        TestProofsVerifier::accepting(),
+    );
     assert!(dialer.behaviour().old_epoch.is_some());
 
     // Re-establish a connection for epoch 1 so there is something to move
@@ -647,12 +669,14 @@ async fn consecutive_epoch_transitions_replace_old_epoch() {
     // Second epoch transition: old epoch from epoch 0 gets stopped
     // and current peers from epoch 1 move into old epoch.
     let memberships = build_memberships(&[&dialer, &listener]);
-    dialer
-        .behaviour_mut()
-        .start_new_epoch((memberships[0].clone(), 2.into()));
-    listener
-        .behaviour_mut()
-        .start_new_epoch((memberships[1].clone(), 2.into()));
+    dialer.behaviour_mut().start_new_epoch(
+        (memberships[0].clone(), 2.into()),
+        TestProofsVerifier::accepting(),
+    );
+    listener.behaviour_mut().start_new_epoch(
+        (memberships[1].clone(), 2.into()),
+        TestProofsVerifier::accepting(),
+    );
     assert!(dialer.behaviour().old_epoch.is_some());
     assert_eq!(
         dialer.behaviour().negotiated_peers.len(),
@@ -712,18 +736,22 @@ async fn epoch_transition_reboots_peering_degree() {
 
     // Start epoch transition - all current peers move to old epoch.
     let memberships = build_memberships(&[&node_a, &node_b, &node_c, &node_d]);
-    node_a
-        .behaviour_mut()
-        .start_new_epoch((memberships[0].clone(), 1.into()));
-    node_b
-        .behaviour_mut()
-        .start_new_epoch((memberships[1].clone(), 1.into()));
-    node_c
-        .behaviour_mut()
-        .start_new_epoch((memberships[2].clone(), 1.into()));
-    node_d
-        .behaviour_mut()
-        .start_new_epoch((memberships[3].clone(), 1.into()));
+    node_a.behaviour_mut().start_new_epoch(
+        (memberships[0].clone(), 1.into()),
+        TestProofsVerifier::accepting(),
+    );
+    node_b.behaviour_mut().start_new_epoch(
+        (memberships[1].clone(), 1.into()),
+        TestProofsVerifier::accepting(),
+    );
+    node_c.behaviour_mut().start_new_epoch(
+        (memberships[2].clone(), 1.into()),
+        TestProofsVerifier::accepting(),
+    );
+    node_d.behaviour_mut().start_new_epoch(
+        (memberships[3].clone(), 1.into()),
+        TestProofsVerifier::accepting(),
+    );
 
     // After transition, new epoch has no peers, so all slots are available.
     assert_eq!(

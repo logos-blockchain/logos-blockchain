@@ -9,7 +9,9 @@ use test_log::test;
 use tokio::{select, time::sleep};
 
 use crate::core::{
-    tests::utils::{TestEncapsulatedMessage, TestEncapsulatedMessageWithEpoch, TestSwarm},
+    tests::utils::{
+        TestEncapsulatedMessage, TestEncapsulatedMessageWithEpoch, TestProofsVerifier, TestSwarm,
+    },
     with_core::{
         behaviour::{
             Event, NegotiatedPeerState, SpamReason,
@@ -51,7 +53,7 @@ async fn message_sending_and_reception() {
             listening_event = listening_swarm.select_next_some() => {
                 if let SwarmEvent::Behaviour(Event::Message { message, sender, .. }) = listening_event {
                     assert_eq!(sender, *dialing_swarm.local_peer_id());
-                    assert_eq!(*message, test_message.clone().into_inner().into());
+                    assert_eq!(*message, test_message.clone().into_inner());
                     break;
                 }
             }
@@ -378,6 +380,64 @@ async fn invalid_signature_message_received() {
     }
 }
 
+/// A message whose `PoQ` does not verify is never reported to the swarm — so it
+/// can never be relayed — and its sender is marked as spammy and disconnected,
+/// exactly like a peer sending a message with an invalid signature.
+#[test(tokio::test)]
+async fn invalid_proof_of_quota_message_received() {
+    let (mut identities, nodes) = new_nodes_with_empty_address(2);
+    let mut dialing_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id).with_membership(&nodes).build()
+    });
+    // The receiving side rejects every `PoQ` it is handed.
+    let mut listening_swarm = TestSwarm::new(&identities.next().unwrap(), |id| {
+        BehaviourBuilder::new(id)
+            .with_membership(&nodes)
+            .with_rejecting_proofs_verifier()
+            .build()
+    });
+
+    listening_swarm.listen().with_memory_addr_external().await;
+    dialing_swarm
+        .connect_and_wait_for_upgrade(&mut listening_swarm)
+        .await;
+
+    // The message is well-formed and correctly signed: only its `PoQ` fails.
+    let test_message = TestEncapsulatedMessage::new(b"invalid-poq");
+    dialing_swarm
+        .behaviour_mut()
+        .publish_message_with_validated_header_to_current_epoch(test_message.as_ref())
+        .unwrap();
+
+    let mut events_to_match = 2u8;
+    loop {
+        select! {
+            _ = dialing_swarm.select_next_some() => {}
+            listening_swarm_event = listening_swarm.select_next_some() => {
+                match listening_swarm_event {
+                    SwarmEvent::Behaviour(Event::Message { .. }) => {
+                        panic!("A message whose PoQ failed to verify must not be reported to the swarm");
+                    }
+                    SwarmEvent::Behaviour(Event::PeerDisconnected(peer_id, peer_state)) => {
+                        assert_eq!(peer_id, *dialing_swarm.local_peer_id());
+                        assert_eq!(peer_state, NegotiatedPeerState::Spammy(SpamReason::InvalidProofOfQuota));
+                        events_to_match -= 1;
+                    }
+                    SwarmEvent::ConnectionClosed { peer_id, endpoint, .. } => {
+                        assert_eq!(peer_id, *dialing_swarm.local_peer_id());
+                        assert!(endpoint.is_listener());
+                        events_to_match -= 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if events_to_match == 0 {
+            break;
+        }
+    }
+}
+
 #[test(tokio::test)]
 async fn message_already_forwarded_silently_ignored_when_received_from_peer() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
@@ -489,9 +549,10 @@ async fn duplicate_message_in_old_epoch_disconnects_peer_without_swarm_notificat
     // epoch together with the existing message cache (which contains X as
     // `Processed`).
     let memberships = build_memberships(&[&sender, &receiver]);
-    receiver
-        .behaviour_mut()
-        .start_new_epoch((memberships[1].clone(), 1.into()));
+    receiver.behaviour_mut().start_new_epoch(
+        (memberships[1].clone(), 1.into()),
+        TestProofsVerifier::accepting(),
+    );
 
     // Wait long enough so that the connection monitor does not fire
     // `TooManyMessages` instead.
@@ -556,9 +617,10 @@ async fn undeserializable_message_in_old_epoch_closes_connection_without_swarm_n
     // Receiver starts a new epoch. Sender's connection moves to the old
     // epoch.
     let memberships = build_memberships(&[&sender, &receiver]);
-    receiver
-        .behaviour_mut()
-        .start_new_epoch((memberships[1].clone(), 1.into()));
+    receiver.behaviour_mut().start_new_epoch(
+        (memberships[1].clone(), 1.into()),
+        TestProofsVerifier::accepting(),
+    );
 
     // Sender sends garbage data over the old-epoch connection.
     sender
@@ -615,14 +677,16 @@ async fn spammy_old_epoch_peer_does_not_affect_current_epoch() {
     // Receiver starts a new epoch. Sender's connection moves to the old
     // epoch.
     let memberships = build_memberships(&[&sender, &receiver]);
-    receiver
-        .behaviour_mut()
-        .start_new_epoch((memberships[1].clone(), 1.into()));
+    receiver.behaviour_mut().start_new_epoch(
+        (memberships[1].clone(), 1.into()),
+        TestProofsVerifier::accepting(),
+    );
 
     // Re-connect for the new epoch.
-    sender
-        .behaviour_mut()
-        .start_new_epoch((memberships[0].clone(), 1.into()));
+    sender.behaviour_mut().start_new_epoch(
+        (memberships[0].clone(), 1.into()),
+        TestProofsVerifier::accepting(),
+    );
     sender.connect_and_wait_for_upgrade(&mut receiver).await;
 
     // Sender sends garbage over the old-epoch connection. This should
@@ -720,9 +784,10 @@ async fn duplicate_message_from_old_epoch_after_epoch_rotation_is_suppressed() {
     // as `Processed` is transferred into the old epoch object,
     // alongside the connections to both sender_a and sender_b.
     let memberships = build_memberships(&[&sender_a, &sender_b, &receiver]);
-    receiver
-        .behaviour_mut()
-        .start_new_epoch((memberships[2].clone(), 1.into()));
+    receiver.behaviour_mut().start_new_epoch(
+        (memberships[2].clone(), 1.into()),
+        TestProofsVerifier::accepting(),
+    );
 
     // Sender B sends the identical message X through its (still-open)
     // connection to receiver. From receiver's point of view this connection

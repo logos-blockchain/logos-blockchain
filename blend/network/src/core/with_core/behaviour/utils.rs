@@ -1,8 +1,10 @@
 use core::{convert::Infallible, num::NonZeroU64, task::Waker};
-use std::collections::VecDeque;
+use std::{collections::VecDeque, sync::Arc};
 
 use either::Either;
-use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
+use lb_blend_message::encap::{
+    ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader,
+};
 use lb_blend_scheduling::{
     deserialize_encapsulated_message, serialize_encapsulated_message_with_verified_public_header,
 };
@@ -12,9 +14,12 @@ use libp2p::{
     swarm::{ConnectionId, NotifyHandler, ToSwarm},
 };
 
-use crate::core::with_core::{
-    behaviour::{Event, handler::FromBehaviour, message_cache::MessageCache},
-    error::{ReceiveError, SendError},
+use crate::core::{
+    poq_verification::{PendingPoQVerifications, spawn_poq_verification},
+    with_core::{
+        behaviour::{Event, handler::FromBehaviour, message_cache::MessageCache},
+        error::{ReceiveError, SendError},
+    },
 };
 
 /// Forwards a message with a verified public header to the given peer
@@ -64,8 +69,8 @@ where
     Ok(())
 }
 
-/// Validates the signature of a received message, and notifies the swarm about
-/// it if it hasn't been processed already.
+/// Validates the signature of a received message and dispatches the
+/// verification of its `PoQ`, if it hasn't been processed already.
 ///
 /// The message cache is updated accordingly to mark the message as processed if
 /// it is valid and hasn't been processed before, or to ignore it if it has
@@ -73,15 +78,26 @@ where
 /// received message from the same peer, it is also ignored and an error is
 /// returned to avoid processing the same message multiple times from the same
 /// peer, which could be a sign of a malicious peer.
-pub fn handle_received_serialized_encapsulated_message_and_update_cache(
+///
+/// The message is only reported to the swarm once its `PoQ` verifies, which
+/// happens off the task polling this behaviour. Marking it as processed before
+/// the outcome is known is deliberate: the verdict depends only on the message
+/// and the epoch's verifier, so a copy arriving from another peer in the
+/// meantime would get the same answer and need not be verified again.
+#[expect(clippy::too_many_arguments, reason = "categorize args")]
+pub fn handle_received_serialized_encapsulated_message_and_update_cache<Verifier>(
     serialized_message: &[u8],
     message_cache: &mut MessageCache,
-    sender: PeerId,
-    events_queue: &mut VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
+    (sender, connection_id): (PeerId, ConnectionId),
+    pending_verifications: &mut PendingPoQVerifications,
     waker: &mut Option<Waker>,
     epoch: Epoch,
     num_blend_layers: NonZeroU64,
-) -> Result<(), ReceiveError> {
+    proofs_verifier: &Arc<Verifier>,
+) -> Result<(), ReceiveError>
+where
+    Verifier: ProofsVerifier + Send + Sync + 'static,
+{
     // Deserialize the message.
     let deserialized_encapsulated_message =
         deserialize_encapsulated_message(serialized_message, &num_blend_layers)
@@ -104,17 +120,18 @@ pub fn handle_received_serialized_encapsulated_message_and_update_cache(
         .verify_header_signature()
         .map_err(|_| ReceiveError::InvalidHeaderSignature)?;
 
-    // Notify the swarm about the received message, so that it can be further
-    // processed by the core protocol module.
     message_cache.mark_message_as_processed(&validated_message);
-    events_queue.push_back(ToSwarm::GenerateEvent(Event::Message {
-        message: Box::new(validated_message),
-        sender,
+
+    // Verify the `PoQ` before the message is reported to the swarm, and hence
+    // before it can be relayed any further.
+    spawn_poq_verification(
+        pending_verifications,
+        validated_message,
+        (sender, connection_id),
         epoch,
-    }));
-    if let Some(waker) = waker.take() {
-        waker.wake();
-    }
+        proofs_verifier,
+        waker,
+    );
 
     Ok(())
 }

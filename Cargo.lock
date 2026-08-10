@@ -4050,6 +4050,7 @@ dependencies = [
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-libp2p",
  "logos-blockchain-log-targets",
+ "logos-blockchain-utils",
  "test-log",
  "tokio",
  "tokio-stream",

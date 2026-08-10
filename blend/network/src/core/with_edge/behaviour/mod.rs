@@ -3,13 +3,18 @@ use std::{
     collections::{HashSet, VecDeque},
     convert::Infallible,
     mem,
+    sync::Arc,
     task::{Context, Poll, Waker},
     time::Duration,
 };
 
 use either::Either;
-use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedSignature;
+use futures::StreamExt as _;
+use lb_blend_message::encap::{
+    ProofsVerifier as ProofsVerifierTrait, validated::EncapsulatedMessageWithVerifiedPublicHeader,
+};
 use lb_blend_scheduling::{deserialize_encapsulated_message, membership::Membership};
+use lb_cryptarchia_engine::Epoch;
 use lb_log_targets::blend;
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol,
@@ -21,7 +26,10 @@ use libp2p::{
     },
 };
 
-use crate::core::with_edge::behaviour::handler::{ConnectionHandler, FromBehaviour, ToBehaviour};
+use crate::core::{
+    poq_verification::{PendingPoQVerifications, PoQVerificationOutcome, spawn_poq_verification},
+    with_edge::behaviour::handler::{ConnectionHandler, FromBehaviour, ToBehaviour},
+};
 
 mod handler;
 
@@ -39,9 +47,9 @@ const LOG_TARGET: &str = blend::network::core::edge::BEHAVIOUR;
 )]
 #[derive(Debug)]
 pub enum Event {
-    /// A message received from one of the edge peers, after its signature
-    /// has been verified.
-    Message(EncapsulatedMessageWithVerifiedSignature),
+    /// A message received from one of the edge peers, after its whole public
+    /// header — signature and `PoQ` — has been verified.
+    Message(EncapsulatedMessageWithVerifiedPublicHeader),
     #[cfg(test)]
     NegotiatedConnection { peer: PeerId },
 }
@@ -59,12 +67,22 @@ pub struct Config {
 
 /// A [`NetworkBehaviour`]:
 /// - receives messages from edge nodes and forwards them to the swarm.
-pub struct Behaviour {
+pub struct Behaviour<ProofsVerifier> {
     /// Queue of events to yield to the swarm.
     events: VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     /// Waker that handles polling
     waker: Option<Waker>,
     current_membership: Membership<PeerId>,
+    /// The epoch the messages received from edge nodes belong to, needed to
+    /// pick them up again once their `PoQ` has been verified.
+    current_epoch: Epoch,
+    /// Verifier for the `PoQ`s of the messages received from edge nodes.
+    ///
+    /// Shared rather than owned because a handle to it is passed to the
+    /// blocking pool for every message received.
+    proofs_verifier: Arc<ProofsVerifier>,
+    /// `PoQ` verifications currently running on the blocking pool.
+    pending_poq_verifications: PendingPoQVerifications,
     // Timeout to close connection with an edge node if a message is not received on time.
     connection_timeout: Duration,
     upgraded_edge_peers: HashSet<(PeerId, ConnectionId)>,
@@ -74,17 +92,21 @@ pub struct Behaviour {
     num_blend_layers: NonZeroU64,
 }
 
-impl Behaviour {
+impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     #[must_use]
     pub fn new(
         config: &Config,
-        current_epoch_info: Membership<PeerId>,
+        current_epoch_info: (Membership<PeerId>, Epoch),
+        proofs_verifier: ProofsVerifier,
         protocol_name: StreamProtocol,
     ) -> Self {
         Self {
             events: VecDeque::new(),
             waker: None,
-            current_membership: current_epoch_info,
+            current_membership: current_epoch_info.0,
+            current_epoch: current_epoch_info.1,
+            proofs_verifier: Arc::new(proofs_verifier),
+            pending_poq_verifications: PendingPoQVerifications::new(),
             connection_timeout: config.connection_timeout,
             upgraded_edge_peers: HashSet::with_capacity(config.max_incoming_connections),
             max_incoming_connections: config.max_incoming_connections,
@@ -94,8 +116,14 @@ impl Behaviour {
         }
     }
 
-    pub(crate) fn start_new_epoch(&mut self, new_epoch_info: Membership<PeerId>) {
-        self.current_membership = new_epoch_info;
+    pub(crate) fn start_new_epoch(
+        &mut self,
+        new_epoch_info: (Membership<PeerId>, Epoch),
+        new_proofs_verifier: ProofsVerifier,
+    ) {
+        self.current_membership = new_epoch_info.0;
+        self.current_epoch = new_epoch_info.1;
+        self.proofs_verifier = Arc::new(new_proofs_verifier);
         // Close all the connections without waiting for the transition period,
         // so that edge nodes can retry with the new membership.
         let peers = mem::take(&mut self.upgraded_edge_peers);
@@ -157,7 +185,13 @@ impl Behaviour {
         self.current_membership.size() >= self.minimum_network_size.get()
     }
 
-    fn handle_received_serialized_encapsulated_message(&mut self, serialized_message: &[u8]) {
+    fn handle_received_serialized_encapsulated_message(
+        &mut self,
+        serialized_message: &[u8],
+        connection: (PeerId, ConnectionId),
+    ) where
+        ProofsVerifier: ProofsVerifierTrait + Send + Sync + 'static,
+    {
         let Ok(deserialized_encapsulated_message) =
             deserialize_encapsulated_message(serialized_message, &self.num_blend_layers)
         else {
@@ -171,13 +205,45 @@ impl Behaviour {
             return;
         };
 
-        self.events
-            .push_back(ToSwarm::GenerateEvent(Event::Message(validated_message)));
-        self.try_wake();
+        // Verify the `PoQ` before the message is reported to the swarm, and hence
+        // before it can be published to the core nodes.
+        spawn_poq_verification(
+            &mut self.pending_poq_verifications,
+            validated_message,
+            connection,
+            self.current_epoch,
+            &self.proofs_verifier,
+            &mut self.waker,
+        );
+    }
+
+    /// Acts on a completed `PoQ` verification.
+    ///
+    /// Unlike a core peer, an edge node is not blocked when it fails: it holds
+    /// no peering slot, and its connection is closed after the single message
+    /// it came to deliver anyway.
+    fn handle_poq_verification_outcome(&mut self, outcome: PoQVerificationOutcome) {
+        match outcome {
+            PoQVerificationOutcome::Verified { message, .. } => {
+                self.events
+                    .push_back(ToSwarm::GenerateEvent(Event::Message(*message)));
+                self.try_wake();
+            }
+            PoQVerificationOutcome::Failed {
+                sender,
+                connection_id,
+            } => {
+                tracing::debug!(target: LOG_TARGET, "Dropping message from edge peer {sender:?}: its PoQ failed to verify.");
+                self.close_substream((sender, connection_id));
+            }
+        }
     }
 }
 
-impl NetworkBehaviour for Behaviour {
+impl<ProofsVerifier> NetworkBehaviour for Behaviour<ProofsVerifier>
+where
+    ProofsVerifier: ProofsVerifierTrait + Send + Sync + 'static,
+{
     type ConnectionHandler = Either<ConnectionHandler, DummyConnectionHandler>;
     type ToSwarm = Event;
 
@@ -248,7 +314,10 @@ impl NetworkBehaviour for Behaviour {
     ) {
         match event {
             Either::Left(ToBehaviour::Message(message)) => {
-                self.handle_received_serialized_encapsulated_message(&message);
+                self.handle_received_serialized_encapsulated_message(
+                    &message,
+                    (peer_id, connection_id),
+                );
             }
             Either::Left(ToBehaviour::SubstreamOpened) => {
                 self.handle_negotiated_connection((peer_id, connection_id));
@@ -264,10 +333,20 @@ impl NetworkBehaviour for Behaviour {
         cx: &mut Context<'_>,
     ) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
         if let Some(event) = self.events.pop_front() {
-            Poll::Ready(event)
-        } else {
-            self.waker = Some(cx.waker().clone());
-            Poll::Pending
+            return Poll::Ready(event);
         }
+
+        // Verifications complete off this task, so their outcome is picked up
+        // here: this is where a message becomes visible to the swarm, and hence
+        // publishable to the core nodes.
+        while let Poll::Ready(Some(outcome)) = self.pending_poq_verifications.poll_next_unpin(cx) {
+            self.handle_poq_verification_outcome(outcome);
+            if let Some(event) = self.events.pop_front() {
+                return Poll::Ready(event);
+            }
+        }
+
+        self.waker = Some(cx.waker().clone());
+        Poll::Pending
     }
 }

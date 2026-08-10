@@ -6,13 +6,14 @@ use std::{
     collections::{HashMap, VecDeque, hash_map::Entry},
     convert::Infallible,
     ops::RangeInclusive,
+    sync::Arc,
     task::{Context, Poll, Waker},
 };
 
 use either::Either;
-use futures::Stream;
-use lb_blend_message::encap::validated::{
-    EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
+use futures::{Stream, StreamExt as _};
+use lb_blend_message::encap::{
+    ProofsVerifier as ProofsVerifierTrait, validated::EncapsulatedMessageWithVerifiedPublicHeader,
 };
 use lb_blend_scheduling::membership::Membership;
 use lb_cryptarchia_engine::Epoch;
@@ -28,19 +29,22 @@ use libp2p::{
     },
 };
 
-use crate::core::with_core::{
-    behaviour::{
-        handler::{
-            ConnectionHandler, FromBehaviour, ToBehaviour, conn_maintenance::ConnectionMonitor,
+use crate::core::{
+    poq_verification::{PendingPoQVerifications, PoQVerificationOutcome},
+    with_core::{
+        behaviour::{
+            handler::{
+                ConnectionHandler, FromBehaviour, ToBehaviour, conn_maintenance::ConnectionMonitor,
+            },
+            message_cache::MessageCache,
+            old_epoch::OldEpoch,
+            utils::{
+                forward_validated_message_and_update_cache,
+                handle_received_serialized_encapsulated_message_and_update_cache,
+            },
         },
-        message_cache::MessageCache,
-        old_epoch::OldEpoch,
-        utils::{
-            forward_validated_message_and_update_cache,
-            handle_received_serialized_encapsulated_message_and_update_cache,
-        },
+        error::{ReceiveError, SendError},
     },
-    error::{ReceiveError, SendError},
 };
 
 mod handler;
@@ -96,7 +100,7 @@ impl RemotePeerConnectionDetails {
 /// propagates messages from the Blend service to the rest of the Blend network.
 ///
 /// The public header signature and uniqueness of incoming messages is validated according to the [Blend specification](https://lip.logos.co/blockchain/raw/blend-protocol.html) before the message is propagated to the swarm and to the Blend service.
-pub struct Behaviour<ObservationWindowClockProvider> {
+pub struct Behaviour<ObservationWindowClockProvider, ProofsVerifier> {
     /// Tracks connections between this node and other core nodes.
     ///
     /// Only connections with other core nodes that are established before the
@@ -119,6 +123,14 @@ pub struct Behaviour<ObservationWindowClockProvider> {
     message_cache: MessageCache,
     observation_window_clock_provider: ObservationWindowClockProvider,
     current_epoch_info: (Membership<PeerId>, Epoch),
+    /// Verifier for the `PoQ`s of the messages received in the current epoch.
+    ///
+    /// Shared rather than owned because a handle to it is passed to the
+    /// blocking pool for every message received.
+    proofs_verifier: Arc<ProofsVerifier>,
+    /// `PoQ` verifications currently running on the blocking pool, for messages
+    /// of either the current or the outgoing epoch.
+    pending_poq_verifications: PendingPoQVerifications,
     /// The [minimum, maximum] peering degree of this node.
     peering_degree: RangeInclusive<usize>,
     local_peer_id: PeerId,
@@ -130,7 +142,7 @@ pub struct Behaviour<ObservationWindowClockProvider> {
     num_blend_layers: NonZeroU64,
     /// States for processing messages from the old epoch
     /// before the transition period has passed.
-    old_epoch: Option<OldEpoch>,
+    old_epoch: Option<OldEpoch<ProofsVerifier>>,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -147,6 +159,19 @@ pub enum SpamReason {
     InvalidHeaderSignature,
     InvalidProofOfQuota,
     TooManyMessages,
+}
+
+impl SpamReason {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::UndeserializableMessage => "undeserializable_message",
+            Self::DuplicateMessage => "duplicate_message",
+            Self::InvalidHeaderSignature => "invalid_header_signature",
+            Self::InvalidProofOfQuota => "invalid_proof_of_quota",
+            Self::TooManyMessages => "too_many_messages",
+        }
+    }
 }
 
 impl NegotiatedPeerState {
@@ -190,10 +215,10 @@ struct ConnectionUpgradeFailure {
 
 #[derive(Debug)]
 pub enum Event {
-    /// A message received from one of the core peers, after its public header
-    /// signature has been verified.
+    /// A message received from one of the core peers, after its whole public
+    /// header — signature and `PoQ` — has been verified.
     Message {
-        message: Box<EncapsulatedMessageWithVerifiedSignature>,
+        message: Box<EncapsulatedMessageWithVerifiedPublicHeader>,
         sender: PeerId,
         epoch: Epoch,
     },
@@ -226,12 +251,15 @@ pub enum Event {
     },
 }
 
-impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
+impl<ObservationWindowClockProvider, ProofsVerifier>
+    Behaviour<ObservationWindowClockProvider, ProofsVerifier>
+{
     #[must_use]
     pub fn new(
         config: &Config,
         observation_window_clock_provider: ObservationWindowClockProvider,
         epoch_info: (Membership<PeerId>, Epoch),
+        proofs_verifier: ProofsVerifier,
         local_peer_id: PeerId,
         protocol_name: StreamProtocol,
     ) -> Self {
@@ -242,6 +270,8 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
             observation_window_clock_provider,
             message_cache: MessageCache::new_with_peer_capacity(epoch_info.0.size()),
             current_epoch_info: epoch_info,
+            proofs_verifier: Arc::new(proofs_verifier),
+            pending_poq_verifications: PendingPoQVerifications::new(),
             peering_degree: config.peering_degree.clone(),
             connections_waiting_upgrade: HashMap::new(),
             local_peer_id,
@@ -252,7 +282,11 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
         }
     }
 
-    pub(crate) fn start_new_epoch(&mut self, new_epoch_info: (Membership<PeerId>, Epoch)) {
+    pub(crate) fn start_new_epoch(
+        &mut self,
+        new_epoch_info: (Membership<PeerId>, Epoch),
+        new_proofs_verifier: ProofsVerifier,
+    ) {
         let current_epoch_number = self.current_epoch_info.1;
 
         // Close any connections that were still waiting to be upgraded: they
@@ -265,6 +299,8 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
             self.close_connection(connection);
         }
         self.current_epoch_info = new_epoch_info;
+        let current_epoch_proofs_verifier =
+            mem::replace(&mut self.proofs_verifier, Arc::new(new_proofs_verifier));
 
         self.stop_old_epoch();
 
@@ -276,6 +312,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
             mem::take(&mut self.message_cache),
             current_epoch_number,
             self.num_blend_layers,
+            current_epoch_proofs_verifier,
         ));
 
         tracing::debug!(target: LOG_TARGET, "Started a new epoch by passing negotiated peers and exchanged message IDs to the old epoch. Now, no negotiated peers in the current epoch.");
@@ -689,41 +726,6 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
         }
     }
 
-    /// Mark the connection with the given peer as malicious and instruct its
-    /// connection handler to drop the substream, whether the connection belongs
-    /// to the current epoch or to the one being transitioned away from.
-    ///
-    /// Used for spam that this behaviour cannot detect on its own — an invalid
-    /// `PoQ`, which only the swarm can verify — so the peer is identified by ID
-    /// alone. Returns whether a connection with the peer was found.
-    pub fn close_spammy_connection_with_peer(
-        &mut self,
-        peer_id: PeerId,
-        reason: SpamReason,
-    ) -> bool {
-        if let Some(RemotePeerConnectionDetails { connection_id, .. }) =
-            self.negotiated_peers.get(&peer_id)
-        {
-            self.close_spammy_connection((peer_id, *connection_id), reason);
-            return true;
-        }
-        // The old epoch keeps no per-peer state beyond the connection, so there
-        // is nothing to mark: closing the substream is all we can do here. The
-        // swarm blocks the peer regardless of which epoch it was talking on.
-        if let Some(old_epoch) = &mut self.old_epoch
-            && let Some(connection) = old_epoch.negotiated_connection_with_peer(peer_id)
-        {
-            tracing::debug!(
-                target: LOG_TARGET,
-                "Closing old epoch connection {:?} with spammy peer {peer_id:?} for reason {reason:?}.",
-                connection.1
-            );
-            self.close_connection(connection);
-            return true;
-        }
-        false
-    }
-
     /// Mark the connection with the sender of a malformed message as malicious
     /// and instruct its connection handler to drop the substream.
     fn close_spammy_connection(
@@ -879,8 +881,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
 
     /// Publish an already-encapsulated and validated message to all connected
     /// peers in the current epoch.
-    #[cfg(test)]
-    fn publish_message_with_validated_header_to_current_epoch(
+    pub fn publish_message_with_validated_header_to_current_epoch(
         &mut self,
         message: &EncapsulatedMessageWithVerifiedPublicHeader,
     ) -> Result<(), SendError> {
@@ -953,6 +954,44 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
         )
     }
 
+    /// Acts on a completed `PoQ` verification: a message that verified is
+    /// reported to the swarm, and a peer that could not prove its quota is
+    /// marked as spammy and disconnected, exactly like any other spammer this
+    /// behaviour detects.
+    fn handle_poq_verification_outcome(&mut self, outcome: PoQVerificationOutcome) {
+        match outcome {
+            PoQVerificationOutcome::Verified {
+                message,
+                sender,
+                epoch,
+            } => {
+                self.events
+                    .push_back(ToSwarm::GenerateEvent(Event::Message {
+                        message,
+                        sender,
+                        epoch,
+                    }));
+            }
+            PoQVerificationOutcome::Failed {
+                sender,
+                connection_id,
+            } => {
+                self.close_spammy_connection(
+                    (sender, connection_id),
+                    SpamReason::InvalidProofOfQuota,
+                );
+            }
+        }
+    }
+}
+
+/// The part of the behaviour that needs to verify the `PoQ` of the messages it
+/// receives, and so requires a usable verifier.
+impl<ObservationWindowClockProvider, ProofsVerifier>
+    Behaviour<ObservationWindowClockProvider, ProofsVerifier>
+where
+    ProofsVerifier: ProofsVerifierTrait + Send + Sync + 'static,
+{
     fn handle_received_serialized_encapsulated_message(
         &mut self,
         serialized_message: &[u8],
@@ -964,6 +1003,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
             match old_epoch.handle_received_serialized_encapsulated_message(
                 serialized_message,
                 (from_peer_id, from_connection_id),
+                &mut self.pending_poq_verifications,
             ) {
                 Ok(handled) => {
                     if handled {
@@ -979,11 +1019,12 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
         if let Err(receive_error) = handle_received_serialized_encapsulated_message_and_update_cache(
             serialized_message,
             &mut self.message_cache,
-            from_peer_id,
-            &mut self.events,
+            (from_peer_id, from_connection_id),
+            &mut self.pending_poq_verifications,
             &mut self.waker,
             self.current_epoch_info.1,
             self.num_blend_layers,
+            &self.proofs_verifier,
         ) {
             tracing::debug!(target: LOG_TARGET, "Failed to handle message from the current epoch: {receive_error:?}");
             let spam_reason = match receive_error {
@@ -1006,10 +1047,12 @@ fn update_connection_id_and_direction(
     existing_connection.connection_id = new_connection_id;
 }
 
-impl<ObservationWindowClockProvider> NetworkBehaviour for Behaviour<ObservationWindowClockProvider>
+impl<ObservationWindowClockProvider, ProofsVerifier> NetworkBehaviour
+    for Behaviour<ObservationWindowClockProvider, ProofsVerifier>
 where
     ObservationWindowClockProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
         + 'static,
+    ProofsVerifier: ProofsVerifierTrait + Send + Sync + 'static,
 {
     type ConnectionHandler = Either<
         ConnectionHandler<ObservationWindowClockProvider::IntervalStream>,
@@ -1245,6 +1288,16 @@ where
 
         if let Some(event) = self.events.pop_front() {
             return Poll::Ready(event);
+        }
+
+        // Verifications complete off this task, so their outcome is picked up
+        // here: this is where a message becomes visible to the swarm, and hence
+        // relayable, and where a peer that failed to prove its quota is dropped.
+        while let Poll::Ready(Some(outcome)) = self.pending_poq_verifications.poll_next_unpin(cx) {
+            self.handle_poq_verification_outcome(outcome);
+            if let Some(event) = self.events.pop_front() {
+                return Poll::Ready(event);
+            }
         }
 
         self.waker = Some(cx.waker().clone());

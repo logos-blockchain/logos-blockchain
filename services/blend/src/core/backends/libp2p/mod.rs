@@ -61,7 +61,7 @@ impl<Rng, ProofsVerifier, RuntimeServiceId>
     for Libp2pBlendBackend<ProofsVerifier>
 where
     Rng: RngCore + Clone + Send + 'static,
-    ProofsVerifier: ProofsVerifierTrait + Send + Sync + 'static,
+    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
     type Settings = Libp2pBlendBackendSettings;
 

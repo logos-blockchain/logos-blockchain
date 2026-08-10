@@ -2,11 +2,14 @@ use std::{
     collections::{HashMap, VecDeque, hash_map::Entry},
     convert::Infallible,
     num::NonZeroU64,
+    sync::Arc,
     task::{Context, Poll, Waker},
 };
 
 use either::Either;
-use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
+use lb_blend_message::encap::{
+    ProofsVerifier as ProofsVerifierTrait, validated::EncapsulatedMessageWithVerifiedPublicHeader,
+};
 use lb_cryptarchia_engine::Epoch;
 use lb_log_targets::blend;
 use libp2p::{
@@ -14,39 +17,45 @@ use libp2p::{
     swarm::{ConnectionId, NotifyHandler, ToSwarm},
 };
 
-use crate::core::with_core::{
-    behaviour::{
-        Event,
-        handler::FromBehaviour,
-        message_cache::MessageCache,
-        utils::{
-            forward_validated_message_and_update_cache,
-            handle_received_serialized_encapsulated_message_and_update_cache,
+use crate::core::{
+    poq_verification::PendingPoQVerifications,
+    with_core::{
+        behaviour::{
+            Event,
+            handler::FromBehaviour,
+            message_cache::MessageCache,
+            utils::{
+                forward_validated_message_and_update_cache,
+                handle_received_serialized_encapsulated_message_and_update_cache,
+            },
         },
+        error::{ReceiveError, SendError},
     },
-    error::{ReceiveError, SendError},
 };
 
 const LOG_TARGET: &str = blend::network::core::core::behaviour::OLD;
 
 /// Defines behaviours for processing messages from the old epoch
 /// until the epoch transition period has passed.
-pub struct OldEpoch {
+pub struct OldEpoch<ProofsVerifier> {
     negotiated_peers: HashMap<PeerId, ConnectionId>,
     events: VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     waker: Option<Waker>,
     message_cache: MessageCache,
     epoch: Epoch,
     num_blend_layers: NonZeroU64,
+    /// Verifier for the `PoQ`s of the messages still arriving for this epoch.
+    proofs_verifier: Arc<ProofsVerifier>,
 }
 
-impl OldEpoch {
+impl<ProofsVerifier> OldEpoch<ProofsVerifier> {
     #[must_use]
     pub const fn new(
         negotiated_peers: HashMap<PeerId, ConnectionId>,
         message_cache: MessageCache,
         epoch: Epoch,
         num_blend_layers: NonZeroU64,
+        proofs_verifier: Arc<ProofsVerifier>,
     ) -> Self {
         Self {
             negotiated_peers,
@@ -55,6 +64,7 @@ impl OldEpoch {
             waker: None,
             epoch,
             num_blend_layers,
+            proofs_verifier,
         }
     }
 
@@ -133,43 +143,6 @@ impl OldEpoch {
         Ok(())
     }
 
-    /// Handles a message received from a peer.
-    ///
-    /// # Returns
-    /// - [`Ok(false)`] if the connection is not part of the epoch.
-    /// - [`Ok(true)`] if the message was successfully processed and forwarded.
-    /// - [`Err(Error)`] if the message is invalid or has already been
-    ///   exchanged.
-    pub(super) fn handle_received_serialized_encapsulated_message(
-        &mut self,
-        serialized_message: &[u8],
-        (from_peer_id, from_connection_id): (PeerId, ConnectionId),
-    ) -> Result<bool, ReceiveError> {
-        if !self.is_negotiated(&(from_peer_id, from_connection_id)) {
-            return Ok(false);
-        }
-
-        handle_received_serialized_encapsulated_message_and_update_cache(
-            serialized_message,
-            &mut self.message_cache,
-            from_peer_id,
-            &mut self.events,
-            &mut self.waker,
-            self.epoch,
-            self.num_blend_layers,
-        ).inspect_err(|receive_error| {
-            tracing::debug!(target: LOG_TARGET, "Failed to handle message from the old epoch: {receive_error:?}. Closing connection with spammy peer.");
-            self.events.push_back(ToSwarm::NotifyHandler {
-                peer_id: from_peer_id,
-                handler: NotifyHandler::One(from_connection_id),
-                event: Either::Left(FromBehaviour::CloseSubstreams),
-            });
-            self.try_wake();
-        })?;
-
-        Ok(true)
-    }
-
     /// Stops the old epoch by returning any events still queued, followed by
     /// the events to close all the substreams in the old epoch.
     ///
@@ -197,17 +170,6 @@ impl OldEpoch {
         self.negotiated_peers
             .get(peer_id)
             .is_some_and(|&id| id == *connection_id)
-    }
-
-    /// Returns the connection with the given peer, if it is negotiated in the
-    /// old epoch.
-    pub(super) fn negotiated_connection_with_peer(
-        &self,
-        peer_id: PeerId,
-    ) -> Option<(PeerId, ConnectionId)> {
-        self.negotiated_peers
-            .get(&peer_id)
-            .map(|connection_id| (peer_id, *connection_id))
     }
 
     /// Returns the peer IDs of all negotiated peers in the old epoch.
@@ -249,5 +211,51 @@ impl OldEpoch {
             self.waker = Some(cx.waker().clone());
             Poll::Pending
         }
+    }
+}
+
+/// The part of the old epoch that needs to verify the `PoQ` of the messages
+/// still arriving for it, and so requires a usable verifier.
+impl<ProofsVerifier> OldEpoch<ProofsVerifier>
+where
+    ProofsVerifier: ProofsVerifierTrait + Send + Sync + 'static,
+{
+    /// Handles a message received from a peer.
+    ///
+    /// # Returns
+    /// - [`Ok(false)`] if the connection is not part of the epoch.
+    /// - [`Ok(true)`] if the message was successfully processed and forwarded.
+    /// - [`Err(Error)`] if the message is invalid or has already been
+    ///   exchanged.
+    pub(super) fn handle_received_serialized_encapsulated_message(
+        &mut self,
+        serialized_message: &[u8],
+        (from_peer_id, from_connection_id): (PeerId, ConnectionId),
+        pending_verifications: &mut PendingPoQVerifications,
+    ) -> Result<bool, ReceiveError> {
+        if !self.is_negotiated(&(from_peer_id, from_connection_id)) {
+            return Ok(false);
+        }
+
+        handle_received_serialized_encapsulated_message_and_update_cache(
+            serialized_message,
+            &mut self.message_cache,
+            (from_peer_id, from_connection_id),
+            pending_verifications,
+            &mut self.waker,
+            self.epoch,
+            self.num_blend_layers,
+            &self.proofs_verifier,
+        ).inspect_err(|receive_error| {
+            tracing::debug!(target: LOG_TARGET, "Failed to handle message from the old epoch: {receive_error:?}. Closing connection with spammy peer.");
+            self.events.push_back(ToSwarm::NotifyHandler {
+                peer_id: from_peer_id,
+                handler: NotifyHandler::One(from_connection_id),
+                event: Either::Left(FromBehaviour::CloseSubstreams),
+            });
+            self.try_wake();
+        })?;
+
+        Ok(true)
     }
 }

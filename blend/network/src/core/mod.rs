@@ -1,3 +1,4 @@
+pub mod poq_verification;
 pub mod with_core;
 pub mod with_edge;
 
@@ -20,9 +21,9 @@ use crate::core::{
 /// A composed behaviour that wraps the two sub-behaviours for dealing with core
 /// and edge nodes.
 #[derive(lb_libp2p::NetworkBehaviour)]
-pub struct NetworkBehaviour<ObservationWindowClockProvider> {
-    with_core: CoreToCoreBehaviour<ObservationWindowClockProvider>,
-    with_edge: CoreToEdgeBehaviour,
+pub struct NetworkBehaviour<ObservationWindowClockProvider, ProofsVerifier> {
+    with_core: CoreToCoreBehaviour<ObservationWindowClockProvider, ProofsVerifier>,
+    with_edge: CoreToEdgeBehaviour<ProofsVerifier>,
 }
 
 pub struct Config {
@@ -30,11 +31,16 @@ pub struct Config {
     pub with_edge: CoreToEdgeConfig,
 }
 
-impl<ObservationWindowClockProvider> NetworkBehaviour<ObservationWindowClockProvider> {
+impl<ObservationWindowClockProvider, ProofsVerifier>
+    NetworkBehaviour<ObservationWindowClockProvider, ProofsVerifier>
+where
+    ProofsVerifier: Clone,
+{
     pub fn new(
         config: &Config,
         observation_window_clock_provider: ObservationWindowClockProvider,
         current_epoch_info: (Membership<PeerId>, Epoch),
+        proofs_verifier: ProofsVerifier,
         local_peer_id: PeerId,
         protocol_name: StreamProtocol,
     ) -> Self {
@@ -43,37 +49,47 @@ impl<ObservationWindowClockProvider> NetworkBehaviour<ObservationWindowClockProv
                 &config.with_core,
                 observation_window_clock_provider,
                 current_epoch_info.clone(),
+                proofs_verifier.clone(),
                 local_peer_id,
                 protocol_name.clone(),
             ),
             with_edge: CoreToEdgeBehaviour::new(
                 &config.with_edge,
-                current_epoch_info.0,
+                current_epoch_info,
+                proofs_verifier,
                 protocol_name,
             ),
         }
     }
 
-    pub fn start_new_epoch(&mut self, new_epoch_info: (Membership<PeerId>, Epoch)) {
-        self.with_core_mut().start_new_epoch(new_epoch_info.clone());
-        self.with_edge_mut().start_new_epoch(new_epoch_info.0);
+    pub fn start_new_epoch(
+        &mut self,
+        new_epoch_info: (Membership<PeerId>, Epoch),
+        new_proofs_verifier: ProofsVerifier,
+    ) {
+        self.with_core_mut()
+            .start_new_epoch(new_epoch_info.clone(), new_proofs_verifier.clone());
+        self.with_edge_mut()
+            .start_new_epoch(new_epoch_info, new_proofs_verifier);
     }
 
-    pub const fn with_core(&self) -> &CoreToCoreBehaviour<ObservationWindowClockProvider> {
+    pub const fn with_core(
+        &self,
+    ) -> &CoreToCoreBehaviour<ObservationWindowClockProvider, ProofsVerifier> {
         &self.with_core
     }
 
     pub const fn with_core_mut(
         &mut self,
-    ) -> &mut CoreToCoreBehaviour<ObservationWindowClockProvider> {
+    ) -> &mut CoreToCoreBehaviour<ObservationWindowClockProvider, ProofsVerifier> {
         &mut self.with_core
     }
 
-    pub const fn with_edge(&self) -> &CoreToEdgeBehaviour {
+    pub const fn with_edge(&self) -> &CoreToEdgeBehaviour<ProofsVerifier> {
         &self.with_edge
     }
 
-    pub const fn with_edge_mut(&mut self) -> &mut CoreToEdgeBehaviour {
+    pub const fn with_edge_mut(&mut self) -> &mut CoreToEdgeBehaviour<ProofsVerifier> {
         &mut self.with_edge
     }
 

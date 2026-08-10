@@ -1,12 +1,10 @@
 use core::{
-    mem,
     num::{NonZeroU64, NonZeroUsize},
     ops::{Deref, RangeInclusive},
     pin::Pin,
 };
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
     time::Duration,
 };
 
@@ -14,16 +12,14 @@ use futures::{Stream, StreamExt as _, future::OptionFuture, stream::FuturesUnord
 use lb_blend::{
     message::encap::{
         ProofsVerifier as ProofsVerifierTrait,
-        validated::{
-            EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
-        },
+        validated::EncapsulatedMessageWithVerifiedPublicHeader,
     },
     network::core::{
         NetworkBehaviourEvent,
         with_core::{
             behaviour::{
                 ConnectionUpgradeFailureReason, Event as CoreToCoreEvent, IntervalStreamProvider,
-                NegotiatedPeerState, SpamReason,
+                NegotiatedPeerState,
             },
             error::SendError,
         },
@@ -33,7 +29,6 @@ use lb_blend::{
 };
 use lb_chain_service::Epoch;
 use lb_libp2p::{DialOpts, SwarmEvent};
-use lb_utils::tokio::task::spawn_blocking;
 use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder, swarm::dial_opts::PeerCondition};
 use rand::RngCore;
 use tokio::{
@@ -62,55 +57,6 @@ use crate::{
 /// peers are already at their maximum peering degree — would re-dial the whole
 /// (rejecting) membership at event-loop speed, wasting CPU and flooding logs.
 const FULL_MEMBERSHIP_RETRY_DELAY: Duration = Duration::from_mins(1);
-
-/// Wraps an epoch's verifier in an [`Arc`] so it can be handed to the blocking
-/// pool once per inbound message without cloning the verifier itself.
-fn share_epoch_verifier<ProofsVerifier>(
-    BackendEpochInfo {
-        membership,
-        epoch,
-        proofs_verifier,
-    }: BackendEpochInfo<PeerId, ProofsVerifier>,
-) -> BackendEpochInfo<PeerId, Arc<ProofsVerifier>> {
-    BackendEpochInfo {
-        membership,
-        epoch,
-        proofs_verifier: Arc::new(proofs_verifier),
-    }
-}
-
-enum PoQVerificationOutcome {
-    Verified(Box<VerifiedInboundMessage>),
-    Rejected(InboundMessageSource),
-}
-
-/// An inbound message whose public header has been fully verified, ready to be
-/// relayed and handed to the service.
-struct VerifiedInboundMessage {
-    message: EncapsulatedMessageWithVerifiedPublicHeader,
-    epoch: Epoch,
-    source: InboundMessageSource,
-}
-
-/// Where an inbound message came from, which decides the set of peers it is
-/// relayed to once its public header has been verified.
-#[derive(Debug, Clone, Copy)]
-enum InboundMessageSource {
-    /// A core peer, so the message is forwarded to every *other* core peer.
-    Core(PeerId),
-    /// An edge node, which has no core peer to exclude, so the message is
-    /// published to every core peer.
-    Edge,
-}
-
-impl InboundMessageSource {
-    const fn metrics_type(self) -> metrics::InboundMessageType {
-        match self {
-            Self::Core(_) => metrics::InboundMessageType::Core,
-            Self::Edge => metrics::InboundMessageType::Edge,
-        }
-    }
-}
 
 #[derive(Debug)]
 pub enum BlendSwarmMessage<ProofsVerifier> {
@@ -155,24 +101,19 @@ impl DialAttempt {
 }
 
 type PendingRetries = FuturesUnordered<Pin<Box<dyn Future<Output = (PeerId, DialAttempt)> + Send>>>;
-type PendingPoQVerifications =
-    FuturesUnordered<Pin<Box<dyn Future<Output = Option<PoQVerificationOutcome>> + Send>>>;
 type FullMembershipRetry = Option<Pin<Box<dyn Future<Output = ()> + Send>>>;
 
 pub struct BlendSwarm<Rng, ObservationWindowProvider, ProofsVerifier>
 where
     ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
         + 'static,
+    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
-    swarm: Swarm<BlendBehaviour<ObservationWindowProvider>>,
+    swarm: Swarm<BlendBehaviour<ObservationWindowProvider, ProofsVerifier>>,
     swarm_messages_receiver: mpsc::Receiver<BlendSwarmMessage<ProofsVerifier>>,
     incoming_message_sender:
         broadcast::Sender<(EncapsulatedMessageWithVerifiedPublicHeader, Epoch)>,
-    current_epoch_info: BackendEpochInfo<PeerId, Arc<ProofsVerifier>>,
-    /// Verifier for the messages still arriving for the previous epoch, kept
-    /// until the epoch transition period is over.
-    old_epoch_proofs_verifier: Option<Arc<ProofsVerifier>>,
-    pending_poq_verifications: PendingPoQVerifications,
+    current_epoch_info: BackendEpochInfo<PeerId, ProofsVerifier>,
     rng: Rng,
     max_dial_attempts_per_connection: NonZeroU64,
     ongoing_dials: HashMap<PeerId, DialAttempt>,
@@ -203,7 +144,7 @@ where
             &'c BlendConfig<Libp2pBlendBackendSettings>,
             &'c Membership<PeerId>,
         )> + 'static,
-    ProofsVerifier: ProofsVerifierTrait + Send + Sync + 'static,
+    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
     pub(super) fn new(
         SwarmParams {
@@ -228,6 +169,7 @@ where
                         current_epoch_info.membership.clone(),
                         current_epoch_info.epoch,
                     ),
+                    current_epoch_info.proofs_verifier.clone(),
                 )
             })
             .expect("Blend Behaviour should be built")
@@ -249,9 +191,7 @@ where
             swarm,
             swarm_messages_receiver,
             incoming_message_sender,
-            current_epoch_info: share_epoch_verifier(current_epoch_info),
-            old_epoch_proofs_verifier: None,
-            pending_poq_verifications: FuturesUnordered::new(),
+            current_epoch_info,
             rng,
             max_dial_attempts_per_connection: config.backend.max_dial_attempts_per_peer,
             ongoing_dials: HashMap::with_capacity(
@@ -275,7 +215,7 @@ where
     Rng: RngCore,
     ObservationWindowProvider:
         IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>,
-    ProofsVerifier: ProofsVerifierTrait + Send + Sync + 'static,
+    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
     /// Dial random peers from the membership list,
     /// excluding the peers with a negotiated connection in the ongoing epoch,
@@ -375,8 +315,10 @@ where
 
     fn handle_disconnected_peer(&mut self, peer_id: PeerId, peer_state: NegotiatedPeerState) {
         tracing::trace!(target: LOG_TARGET, "Peer {peer_id} disconnected with state {peer_state:?}.");
-        if peer_state.is_spammy() {
+        if let NegotiatedPeerState::Spammy(reason) = peer_state {
+            tracing::debug!(target: LOG_TARGET, "Blocking spammy peer {peer_id} for reason {reason:?}.");
             self.swarm.behaviour_mut().blocked_peers.block_peer(peer_id);
+            metrics::core_peer_blocked(reason.as_str());
         }
         self.check_and_dial_new_peers_except(&HashSet::from([peer_id]));
     }
@@ -413,9 +355,10 @@ where
     fn handle_blend_core_behaviour_event(&mut self, blend_event: CoreToCoreEvent) {
         match blend_event {
             lb_blend::network::core::with_core::behaviour::Event::Message { message, sender, epoch } => {
-                // The behaviour has verified the public header signature; the PoQ is
-                // verified before the message is relayed any further (in a separate task).
-                self.spawn_message_public_header_verification(*message, epoch, InboundMessageSource::Core(sender));
+                // Forward message received from node to all other core nodes.
+                self.forward_received_core_message(&message, sender, epoch);
+                // Bubble up to service for decapsulation and delaying.
+                self.report_message_to_service(*message, epoch, metrics::InboundMessageType::Core);
             }
             lb_blend::network::core::with_core::behaviour::Event::UnhealthyPeer(peer_id) => {
                 self.handle_unhealthy_peer(peer_id);
@@ -473,7 +416,10 @@ where
         clippy::cognitive_complexity,
         reason = "TODO: address this in a dedicated refactor"
     )]
-    fn handle_event(&mut self, event: SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider>>) {
+    fn handle_event(
+        &mut self,
+        event: SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider, ProofsVerifier>>,
+    ) {
         match event {
             SwarmEvent::ConnectionEstablished { peer_id, .. }
             | SwarmEvent::ConnectionClosed { peer_id, .. } => {
@@ -544,24 +490,20 @@ where
                 self.handle_publish_swarm_message(&message, epoch);
             }
             BlendSwarmMessage::StartNewEpoch(new_epoch_info) => {
-                let previous_epoch_info = mem::replace(
-                    &mut self.current_epoch_info,
-                    share_epoch_verifier(new_epoch_info),
+                self.current_epoch_info = new_epoch_info;
+                self.swarm.behaviour_mut().blend.start_new_epoch(
+                    (
+                        self.current_epoch_info.membership.clone(),
+                        self.current_epoch_info.epoch,
+                    ),
+                    self.current_epoch_info.proofs_verifier.clone(),
                 );
-                // Messages for the previous epoch keep arriving during the transition
-                // period, so its verifier is kept around until the transition completes.
-                self.old_epoch_proofs_verifier = Some(previous_epoch_info.proofs_verifier);
-                self.swarm.behaviour_mut().blend.start_new_epoch((
-                    self.current_epoch_info.membership.clone(),
-                    self.current_epoch_info.epoch,
-                ));
                 self.ongoing_dials.clear();
                 self.pending_retries.clear();
                 self.pending_full_membership_retry = None;
                 self.check_and_dial_new_peers();
             }
             BlendSwarmMessage::CompleteEpochTransition => {
-                self.old_epoch_proofs_verifier = None;
                 self.swarm.behaviour_mut().blend.finish_epoch_transition();
             }
             BlendSwarmMessage::GetNetworkInfo { reply } => {
@@ -586,7 +528,8 @@ where
         swarm_event_match_predicate: Predicate,
     ) -> bool
     where
-        Predicate: Fn(&SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider>>) -> bool,
+        Predicate:
+            Fn(&SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider, ProofsVerifier>>) -> bool,
     {
         tokio::select! {
             Some(msg) = self.swarm_messages_receiver.recv() => {
@@ -597,18 +540,6 @@ where
                 let predicate_matched = swarm_event_match_predicate(&event);
                 self.handle_event(event);
                 predicate_matched
-            }
-            Some(outcome) = self.pending_poq_verifications.next() => {
-                match outcome {
-                    Some(PoQVerificationOutcome::Verified(verified_message)) => {
-                        self.handle_verified_inbound_message(*verified_message);
-                    }
-                    Some(PoQVerificationOutcome::Rejected(source)) => {
-                        self.handle_failed_public_header_verification(source);
-                    }
-                    None => {}
-                }
-                false
             }
             Some((peer_id, dial_attempt)) = self.pending_retries.next() => {
                 self.execute_retry(peer_id, dial_attempt);
@@ -636,7 +567,8 @@ where
     #[cfg(test)]
     pub async fn poll_next_until<Predicate>(&mut self, swarm_event_match_predicate: Predicate)
     where
-        Predicate: Fn(&SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider>>) -> bool + Copy,
+        Predicate: Fn(&SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider, ProofsVerifier>>) -> bool
+            + Copy,
     {
         loop {
             if self.poll_next_and_match(swarm_event_match_predicate).await {
@@ -651,7 +583,7 @@ impl<Rng, ObservationWindowProvider, ProofsVerifier>
 where
     ObservationWindowProvider:
         IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>,
-    ProofsVerifier: ProofsVerifierTrait + Send + Sync + 'static,
+    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
     /// It tries to dial the specified peer.
     ///
@@ -792,132 +724,15 @@ where
         }
     }
 
-    /// Dispatches the verification of an inbound message's `PoQ` to the
-    /// blocking pool, to be relayed and reported once (and only if) it
-    /// verifies.
-    ///
-    /// This is what gates the message from being relayed any further: the
-    /// behaviour only verifies the public header *signature*, and an
-    /// [`EncapsulatedMessageWithVerifiedPublicHeader`] is the only thing the
-    /// forwarding functions accept, so a message that fails to verify — or that
-    /// belongs to an epoch we no longer have a verifier for — can neither be
-    /// relayed nor reported to the service.
-    ///
-    /// The verification is a Groth16 proof check: running it inline would stall
-    /// this task, which is also servicing every other peer's stream, the dial
-    /// retries and the peering-degree maintenance. Relaying therefore resumes
-    /// in [`Self::handle_verified_inbound_message`] once the result comes
-    /// back.
-    fn spawn_message_public_header_verification(
-        &self,
-        message: EncapsulatedMessageWithVerifiedSignature,
-        epoch: Epoch,
-        source: InboundMessageSource,
-    ) {
-        let message_type = source.metrics_type();
-
-        let Some(verifier) = self.proofs_verifier_for_epoch(epoch) else {
-            tracing::debug!(target: LOG_TARGET, "Dropping message from {source:?} for epoch {epoch:?}: no verifier available for that epoch.");
-            metrics::inbound_message_poq_verification_err(message_type);
-            return;
-        };
-
-        let verifier = Arc::clone(verifier);
-        self.pending_poq_verifications.push(Box::pin(async move {
-            let verification_result = spawn_blocking("logos/blend/verify-public-header", move || {
-                message
-                    .verify_proof_of_quota(&*verifier)
-                    .map_err(|e| format!("{e:?}"))
-            })
-            .await;
-
-            match verification_result {
-                Ok(Ok(message)) => Some(PoQVerificationOutcome::Verified(Box::new(
-                    VerifiedInboundMessage {
-                        message,
-                        epoch,
-                        source,
-                    },
-                ))),
-                Ok(Err(e)) => {
-                    tracing::debug!(target: LOG_TARGET, "Dropping message from {source:?} for epoch {epoch:?}: its public header failed verification: {e}. Neither relaying nor processing it.");
-                    metrics::inbound_message_poq_verification_err(message_type);
-                    Some(PoQVerificationOutcome::Rejected(source))
-                }
-                Err(e) => {
-                    tracing::error!(target: LOG_TARGET, "Dropping message from {source:?} for epoch {epoch:?}: its public header verification task failed to complete: {e:?}.");
-                    None
-                }
-            }
-        }));
-    }
-
-    /// The verifier for the epoch a received message belongs to, if we still
-    /// hold one. Anything that is neither the current nor the epoch we are
-    /// transitioning away from cannot be verified.
-    fn proofs_verifier_for_epoch(&self, epoch: Epoch) -> Option<&Arc<ProofsVerifier>> {
-        if epoch == self.current_epoch_info.epoch {
-            Some(&self.current_epoch_info.proofs_verifier)
-        } else {
-            self.old_epoch_proofs_verifier.as_ref()
-        }
-    }
-
-    fn handle_failed_public_header_verification(&mut self, source: InboundMessageSource) {
-        let InboundMessageSource::Core(peer_id) = source else {
-            tracing::trace!(target: LOG_TARGET, "Skip blocking edge peer {source:?} because of an invalid PoQ sent.");
-            return;
-        };
-        tracing::debug!(target: LOG_TARGET, "Blocking core peer {peer_id:?}: it sent a message whose public header failed verification.");
-
-        self.swarm
-            .behaviour_mut()
-            .blend
-            .with_core_mut()
-            .close_spammy_connection_with_peer(peer_id, SpamReason::InvalidProofOfQuota);
-    }
-
-    /// Relays a message whose public header has just been verified and hands it
-    /// to the service.
-    fn handle_verified_inbound_message(
-        &mut self,
-        VerifiedInboundMessage {
-            message,
-            epoch,
-            source,
-        }: VerifiedInboundMessage,
-    ) {
-        match source {
-            // Forward message received from node to all other core nodes.
-            InboundMessageSource::Core(sender) => {
-                self.forward_received_core_message(&message, sender, epoch);
-            }
-            // Forward message received from edge node to all the core nodes.
-            InboundMessageSource::Edge => self.publish_received_edge_message(&message, epoch),
-        }
-        // Bubble up to service for decapsulation and delaying.
-        self.report_message_to_service(message, epoch, source.metrics_type());
-    }
-
-    fn publish_received_edge_message(
-        &mut self,
-        msg: &EncapsulatedMessageWithVerifiedPublicHeader,
-        epoch: Epoch,
-    ) {
+    fn publish_received_edge_message(&mut self, msg: &EncapsulatedMessageWithVerifiedPublicHeader) {
         if let Err(e) = self
             .swarm
             .behaviour_mut()
             .blend
             .with_core_mut()
-            .publish_message_with_validated_header(msg, epoch)
+            .publish_message_with_validated_header_to_current_epoch(msg)
         {
-            // `InvalidEpoch` is expected here: verification runs off this task, so the
-            // epoch transition it belonged to can complete before the result comes back.
-            if matches!(e, SendError::InvalidEpoch) {
-                tracing::trace!(target: LOG_TARGET, "Dropping message for epoch {epoch:?}, which is no longer served, after its public header was verified.");
-            } else {
-                tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
-            }
+            tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
             metrics::outbound_publish_err();
         } else {
             metrics::outbound_publish_ok();
@@ -994,17 +809,16 @@ where
         tracing::trace!(target: LOG_TARGET, "Peer {peer_id} is healthy again");
     }
 
-    fn handle_blend_edge_behaviour_event(&self, blend_event: CoreToEdgeEvent) {
+    fn handle_blend_edge_behaviour_event(&mut self, blend_event: CoreToEdgeEvent) {
         match blend_event {
-            lb_blend::network::core::with_edge::behaviour::Event::Message(message) => {
-                // Edge nodes only ever send messages for the current epoch.
-                let epoch = self.current_epoch_info.epoch;
-                // The behaviour has verified the public header signature; the PoQ is
-                // verified before the message is relayed any further, off this task.
-                self.spawn_message_public_header_verification(
-                    message,
-                    epoch,
-                    InboundMessageSource::Edge,
+            lb_blend::network::core::with_edge::behaviour::Event::Message(msg) => {
+                // Forward message received from edge node to all the core nodes.
+                self.publish_received_edge_message(&msg);
+                // Bubble up to service for decapsulation and delaying.
+                self.report_message_to_service(
+                    msg,
+                    self.current_epoch_info.epoch,
+                    metrics::InboundMessageType::Edge,
                 );
             }
         }
@@ -1036,7 +850,7 @@ where
     Rng: RngCore,
     ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
         + 'static,
-    ProofsVerifier: ProofsVerifierTrait + Send + Sync + 'static,
+    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
     #[cfg(test)]
     #[expect(clippy::too_many_arguments, reason = "necessary for testing")]
@@ -1055,8 +869,11 @@ where
         peering_degree_check_clock: PeeringDegreeCheckClock,
     ) -> Self
     where
-        BehaviourConstructor:
-            FnOnce(PeerId, Membership<PeerId>) -> BlendBehaviour<ObservationWindowProvider>,
+        BehaviourConstructor: FnOnce(
+            PeerId,
+            Membership<PeerId>,
+        )
+            -> BlendBehaviour<ObservationWindowProvider, ProofsVerifier>,
         PeeringDegreeCheckClock: Stream<Item = ()> + Send + 'static,
     {
         use crate::test_utils::memory_test_swarm;
@@ -1064,9 +881,7 @@ where
         let membership = current_epoch_info.membership.clone();
         Self {
             incoming_message_sender,
-            current_epoch_info: share_epoch_verifier(current_epoch_info),
-            old_epoch_proofs_verifier: None,
-            pending_poq_verifications: FuturesUnordered::new(),
+            current_epoch_info,
             max_dial_attempts_per_connection,
             ongoing_dials: HashMap::new(),
             pending_retries: FuturesUnordered::new(),
@@ -1091,8 +906,9 @@ impl<Rng, ObservationWindowProvider, ProofsVerifier> Deref
 where
     ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
         + 'static,
+    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
-    type Target = Swarm<BlendBehaviour<ObservationWindowProvider>>;
+    type Target = Swarm<BlendBehaviour<ObservationWindowProvider, ProofsVerifier>>;
 
     fn deref(&self) -> &Self::Target {
         &self.swarm
@@ -1107,6 +923,7 @@ impl<Rng, ObservationWindowProvider, ProofsVerifier> core::ops::DerefMut
 where
     ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
         + 'static,
+    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.swarm

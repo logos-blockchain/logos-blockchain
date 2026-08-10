@@ -325,7 +325,7 @@ async fn core_epoch_rotation_clears_pending_retries() {
     let new_epoch_info = BackendEpochInfo {
         membership: Membership::new_without_local(&[]),
         epoch: 2.into(),
-        proofs_verifier: TestProofsVerifier::accepting(),
+        proofs_verifier: TestProofsVerifier,
     };
     swarm_message_sender
         .send(BlendSwarmMessage::StartNewEpoch(new_epoch_info))
@@ -403,7 +403,7 @@ async fn core_does_not_give_up_below_minimum_peering_degree() {
         .send(BlendSwarmMessage::StartNewEpoch(BackendEpochInfo {
             membership: new_membership,
             epoch: 2.into(),
-            proofs_verifier: TestProofsVerifier::accepting(),
+            proofs_verifier: TestProofsVerifier,
         }))
         .await
         .unwrap();
