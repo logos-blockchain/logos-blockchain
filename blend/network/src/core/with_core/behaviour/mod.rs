@@ -1003,7 +1003,7 @@ where
             match old_epoch.handle_received_serialized_encapsulated_message(
                 serialized_message,
                 (from_peer_id, from_connection_id),
-                &mut self.pending_poq_verifications,
+                &self.pending_poq_verifications,
             ) {
                 Ok(handled) => {
                     if handled {
@@ -1020,7 +1020,7 @@ where
             serialized_message,
             &mut self.message_cache,
             (from_peer_id, from_connection_id),
-            &mut self.pending_poq_verifications,
+            &self.pending_poq_verifications,
             &mut self.waker,
             self.current_epoch_info.1,
             self.num_blend_layers,

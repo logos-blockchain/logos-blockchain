@@ -43,7 +43,7 @@ pub enum PoQVerificationOutcome {
 /// peer's stream, so the message is only acted upon once the outcome is polled
 /// out of `pending_verifications`.
 pub fn spawn_poq_verification<Verifier>(
-    pending_verifications: &mut PendingPoQVerifications,
+    pending_verifications: &PendingPoQVerifications,
     message: EncapsulatedMessageWithVerifiedSignature,
     (sender, connection_id): (PeerId, ConnectionId),
     epoch: Epoch,

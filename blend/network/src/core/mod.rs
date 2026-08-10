@@ -1,6 +1,7 @@
-pub mod poq_verification;
 pub mod with_core;
 pub mod with_edge;
+
+mod poq_verification;
 
 #[cfg(test)]
 mod tests;

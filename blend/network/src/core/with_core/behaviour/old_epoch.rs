@@ -231,7 +231,7 @@ where
         &mut self,
         serialized_message: &[u8],
         (from_peer_id, from_connection_id): (PeerId, ConnectionId),
-        pending_verifications: &mut PendingPoQVerifications,
+        pending_verifications: &PendingPoQVerifications,
     ) -> Result<bool, ReceiveError> {
         if !self.is_negotiated(&(from_peer_id, from_connection_id)) {
             return Ok(false);

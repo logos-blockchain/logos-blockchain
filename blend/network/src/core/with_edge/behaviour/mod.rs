@@ -208,7 +208,7 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
         // Verify the `PoQ` before the message is reported to the swarm, and hence
         // before it can be published to the core nodes.
         spawn_poq_verification(
-            &mut self.pending_poq_verifications,
+            &self.pending_poq_verifications,
             validated_message,
             connection,
             self.current_epoch,

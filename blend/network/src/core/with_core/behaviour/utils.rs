@@ -89,7 +89,7 @@ pub fn handle_received_serialized_encapsulated_message_and_update_cache<Verifier
     serialized_message: &[u8],
     message_cache: &mut MessageCache,
     (sender, connection_id): (PeerId, ConnectionId),
-    pending_verifications: &mut PendingPoQVerifications,
+    pending_verifications: &PendingPoQVerifications,
     waker: &mut Option<Waker>,
     epoch: Epoch,
     num_blend_layers: NonZeroU64,
