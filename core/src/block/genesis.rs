@@ -117,6 +117,7 @@ impl<'de> Deserialize<'de> for GenesisBlock {
         struct RawGenesisBlock {
             header: Header,
             signature: Ed25519Signature,
+            uncle_headers: UncleHeaders,
             transactions: BlockTransactions<GenesisTx>,
         }
 
@@ -124,6 +125,12 @@ impl<'de> Deserialize<'de> for GenesisBlock {
 
         if raw.header.slot() != Slot::genesis() {
             return Err(serde::de::Error::custom("expected genesis slot"));
+        }
+
+        if !raw.uncle_headers.is_empty() {
+            return Err(serde::de::Error::custom(
+                "genesis block must not reference uncles",
+            ));
         }
 
         if raw.transactions.len() != 1 {
@@ -135,7 +142,7 @@ impl<'de> Deserialize<'de> for GenesisBlock {
         let block = Block {
             header: raw.header,
             signature: raw.signature,
-            uncle_headers: UncleHeaders::empty(),
+            uncle_headers: raw.uncle_headers,
             transactions: raw.transactions,
         };
         block
