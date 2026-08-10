@@ -379,6 +379,7 @@ mod mantle_test_vectors {
             // ChannelConfig (0x10)
             Op::ChannelConfig(ChannelConfigOp {
                 channel: ChannelId::from([7u8; 32]),
+                parent: MsgId::root(),
                 keys: Keys::try_from(vec![ed25519_pk(8), ed25519_pk(9)]).unwrap(),
                 posting_timeframe: SlotTimeframe::from(10u32),
                 posting_timeout: SlotTimeout::from(11u32),

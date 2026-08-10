@@ -517,4 +517,7 @@ pub enum FinalizedOp {
     /// inscription+withdraw bundle (the bundling is implicit via the parent
     /// [`FinalizedTx::tx_hash`]).
     Withdraw(WithdrawInfo),
+    /// A config on the channel. `parent_msg`/`this_msg` are config-lineage
+    /// ids, not message-lineage ids, and the payload is empty.
+    Config(InscriptionInfo),
 }

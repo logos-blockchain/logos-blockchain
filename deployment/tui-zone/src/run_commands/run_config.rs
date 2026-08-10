@@ -5,7 +5,7 @@ use lb_core::{
     mantle::{
         Op, OpProof, SignedMantleTx,
         ops::channel::{
-            ChannelId, ChannelKeyIndex,
+            ChannelId, ChannelKeyIndex, MsgId,
             config::{ChannelConfigOp, Keys},
         },
         traits::Hashable as _,
@@ -98,6 +98,7 @@ pub(crate) async fn run_config_prepare(args: ConfigPrepareArgs) -> RunResult<()>
         channel_state.ok_or_else(|| format!("channel state not found for {channel_id}"))?;
     let config_op = build_config_op(
         channel_id,
+        channel_state.config_tip_hash,
         authorized_keys.clone(),
         args.posting_timeframe,
         args.posting_timeout,
@@ -352,6 +353,7 @@ fn authorized_keys_for_paths(
 
 fn build_config_op(
     channel_id: ChannelId,
+    parent: MsgId,
     authorized_keys: Vec<Ed25519PublicKey>,
     posting_timeframe: u32,
     posting_timeout: u32,
@@ -360,6 +362,7 @@ fn build_config_op(
 ) -> RunResult<ChannelConfigOp> {
     Ok(ChannelConfigOp {
         channel: channel_id,
+        parent,
         keys: Keys::try_from(authorized_keys)?,
         posting_timeframe: posting_timeframe.into(),
         posting_timeout: posting_timeout.into(),

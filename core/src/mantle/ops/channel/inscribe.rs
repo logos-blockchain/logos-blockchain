@@ -163,6 +163,7 @@ impl ExecutableOperation for InscriptionOp {
                 accredited_keys: Keys::from(self.signer).into(),
                 configuration_threshold: 1,
                 tip_message: MsgId::root(),
+                config_tip_hash: MsgId::root(),
                 tip_slot: context.block_slot,
                 tip_sequencer: 0,
                 tip_sequencer_starting_slot: context.block_slot,

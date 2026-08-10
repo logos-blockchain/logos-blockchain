@@ -202,13 +202,14 @@ pub async fn query_channel_state(
 pub fn print_channel_state(label: &str, channel_id: &ChannelId, state: Option<&ChannelState>) {
     match state {
         Some(state) => println!(
-            "{} {label}: channel_id={} accredited_keys={} configuration_threshold={} transfer_threshold={} tip_message={}",
+            "{} {label}: channel_id={} accredited_keys={} configuration_threshold={} transfer_threshold={} tip_message={} config_tip_hash={}",
             timestamp(),
             hex::encode(channel_id.as_ref()),
             state.accredited_keys.len(),
             state.configuration_threshold,
             state.transfer_threshold,
-            hex::encode(state.tip_message.as_ref())
+            hex::encode(state.tip_message.as_ref()),
+            hex::encode(state.config_tip_hash.as_ref())
         ),
         None => println!(
             "{} {label}: channel_id={} channel_state=missing",

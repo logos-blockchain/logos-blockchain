@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 
 use lb_common_http_client::{ProcessedBlockEvent, Slot};
-use lb_core::mantle::channel::ChannelState;
+use lb_core::mantle::{channel::ChannelState, ops::channel::MsgId, traits::Hashable as _};
 use tracing::{debug, error, warn};
 
 use super::{
@@ -470,7 +470,7 @@ where
         &mut self,
         result: BlockEventResult,
     ) -> (ChannelUpdate, Vec<FinalizedTx>, Vec<InscriptionInfo>) {
-        let channel_update = match result.channel_update {
+        let mut channel_update = match result.channel_update {
             Some(update) => {
                 Self::log_channel_update(&update);
 
@@ -493,6 +493,31 @@ where
                 adopted: Vec::new(),
             },
         };
+
+        // Shed pending configs superseded on the config lineage on every
+        // block: a foreign config landing alone moves no message lineage and
+        // reports no update, but still invalidates a pending config of ours.
+        let stale_configs = match (self.state.as_mut(), self.current_tip) {
+            (Some(s), Some(tip)) => {
+                let config_tip = self
+                    .channel_state
+                    .as_ref()
+                    .map_or_else(MsgId::root, |channel| channel.config_tip_hash);
+                s.shed_stale_pending_configs(tip, config_tip)
+            }
+            _ => Vec::new(),
+        };
+        let seen: HashSet<_> = channel_update
+            .orphaned
+            .iter()
+            .map(ChannelUpdateTx::tx_hash)
+            .collect();
+        for tx in stale_configs {
+            if !seen.contains(&tx.mantle_tx().hash()) {
+                channel_update.orphaned.push(ChannelUpdateTx::Custom(tx));
+            }
+        }
+
         (
             channel_update,
             result.finalized_items,
@@ -604,7 +629,7 @@ mod tests {
             ops::{
                 OpProof,
                 channel::{
-                    ChannelId, MsgId,
+                    ChannelId,
                     config::{ChannelConfigOp, Keys},
                     deposit::DepositOp,
                     inscribe::{Inscription, InscriptionOp},
@@ -612,7 +637,7 @@ mod tests {
                 },
             },
             traits::Hashable as _,
-            transactions::{Ops, OpsProofs, mantle_tx::MantleTx as _},
+            transactions::{Ops, OpsProofs, mantle_tx::MantleTx as _, states::Unverified},
         },
     };
     use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
@@ -832,13 +857,12 @@ mod tests {
         );
     }
 
-    /// A `submit_signed_tx` bundle whose last tip-advancing op is a config
-    /// must chain subsequent publishes off the config's id — even when the
-    /// caller passes the inscription's id as `msg_id`. Otherwise the next
-    /// publish claims the same channel position as the bundle and the two
-    /// race, permanently invalidating one side.
+    /// A `submit_signed_tx` bundle chains subsequent publishes off its last
+    /// inscription — the config in it moves only the config lineage.
+    /// Otherwise the next publish claims the same channel position as the
+    /// bundle and the two race, permanently invalidating one side.
     #[tokio::test]
-    async fn publish_after_bundle_chains_on_the_bundle_config_tip() {
+    async fn publish_after_bundle_chains_on_the_bundle_inscription_tip() {
         let channel_id = ChannelId::from([0; 32]);
         let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
         let node = MockNode::default();
@@ -864,6 +888,7 @@ mod tests {
         };
         let config = ChannelConfigOp {
             channel: channel_id,
+            parent: MsgId::root(),
             keys: Keys::try_from(vec![sequencer_key.public_key()]).unwrap(),
             posting_timeframe: SlotTimeframe::from(0u32),
             posting_timeout: SlotTimeout::from(0u32),
@@ -871,21 +896,19 @@ mod tests {
             transfer_threshold: 1,
         };
         let inscribe_msg = inscribe.id();
-        let config_msg = config.id();
         let bundle = unverified_tx_with_ops(vec![
             Op::ChannelInscribe(inscribe),
             Op::ChannelConfig(config),
         ]);
 
-        // The caller passes the *inscription's* id — the mistake this guards.
         let (result, _cp) = sequencer
             .handle()
             .submit_signed_tx(bundle, inscribe_msg)
             .expect("bundle submit should be accepted");
         assert_eq!(
             result.tx.inscription().this_msg,
-            config_msg,
-            "the bundle's resulting tip is its config op"
+            inscribe_msg,
+            "the bundle's resulting tip is its inscription"
         );
 
         let (published, _cp) = sequencer
@@ -895,26 +918,27 @@ mod tests {
             .expect("publish after bundle should be accepted");
         assert_eq!(
             published.tx.inscription().parent_msg,
-            config_msg,
-            "the next publish must chain after the pending bundle's config tip"
+            inscribe_msg,
+            "the next publish must chain after the pending bundle's inscription"
         );
     }
 
     #[tokio::test]
-    async fn config_only_block_sheds_pending_and_advances_checkpoint() {
+    async fn config_only_block_keeps_pending_inscription_and_message_tip() {
         let channel_id = ChannelId::from([0; 32]);
         let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
 
         let config_op = ChannelConfigOp {
             channel: channel_id,
+            parent: MsgId::root(),
             keys: Keys::try_from(vec![Ed25519Key::from_bytes(&[0; 32]).public_key()]).unwrap(),
             posting_timeframe: SlotTimeframe::from(0u32),
             posting_timeout: SlotTimeout::from(0u32),
             configuration_threshold: 1,
             transfer_threshold: 1,
         };
-        let config_msg = config_op.id();
         let config_tx = unverified_tx_with_ops(vec![Op::ChannelConfig(config_op)]);
+        let config_hash = config_tx.mantle_tx().hash();
         let config_block = api_block(2, 1, 2, vec![config_tx]);
 
         // Second connection (the config block) is gated behind `up` so it
@@ -949,7 +973,8 @@ mod tests {
             }
         }
 
-        let publish = client.publish(b"cut-by-config".into());
+        let mut status_rx = client.subscribe_tx_status();
+        let publish = client.publish(b"survives-config".into());
         let (result, _checkpoint) =
             tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 tokio::select! {
@@ -961,8 +986,11 @@ mod tests {
             .expect("publish must resolve")
             .expect("publish should be accepted after Ready");
         let p_hash = result.inscription_id();
+        let p_msg = result.tx.inscription().this_msg;
 
-        // Keep driving between the toggles so the down-edge is observed.
+        // Keep driving between the toggles so the down-edge is observed. The
+        // config block is recognized by the `OnChain` status of its tx; the
+        // `BlocksProcessed` that follows it carries the state to assert on.
         up_tx.send(false).unwrap();
         let (checkpoint, update) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let toggle = async {
@@ -970,13 +998,19 @@ mod tests {
                 up_tx.send(true).unwrap();
             };
             let drive = async {
+                let mut config_on_chain = false;
                 loop {
-                    if let Event::BlocksProcessed {
-                        checkpoint,
-                        channel_update,
-                        ..
-                    } = sequencer.next_event().await
-                        && !channel_update.orphaned.is_empty()
+                    let event = sequencer.next_event().await;
+                    while let Ok(update) = status_rx.try_recv() {
+                        config_on_chain |= update.tx_hash == config_hash
+                            && matches!(update.status, TxStatus::OnChain(_));
+                    }
+                    if config_on_chain
+                        && let Event::BlocksProcessed {
+                            checkpoint,
+                            channel_update,
+                            ..
+                        } = event
                     {
                         return (checkpoint, channel_update);
                     }
@@ -986,20 +1020,20 @@ mod tests {
             out
         })
         .await
-        .expect("the config-only block must surface the shed orphan");
+        .expect("the config-only block must be processed");
 
         assert!(
-            update.orphaned.iter().any(|tx| tx.tx_hash() == p_hash),
-            "cut-off pending inscription must be emitted as orphaned; got {:?}",
+            update.orphaned.is_empty(),
+            "a config-only block must not orphan the pending inscription; got {:?}",
             update.orphaned
         );
         assert_eq!(
-            checkpoint.last_msg_id, config_msg,
-            "checkpoint must use the config tip as last_msg_id"
+            checkpoint.last_msg_id, p_msg,
+            "the config must not move the message tip"
         );
         assert!(
-            checkpoint.pending_txs.iter().all(|(h, _)| *h != p_hash),
-            "the shed inscription must be removed from pending state"
+            checkpoint.pending_txs.iter().any(|(h, _)| *h == p_hash),
+            "the pending inscription must survive the config block"
         );
     }
 
@@ -1340,6 +1374,11 @@ mod tests {
             .await
             .expect("config update from an accredited non-leading key must build");
 
+        assert_eq!(
+            config_op_of(&signed_tx).parent,
+            MsgId::root(),
+            "parent must equal the channel's config tip"
+        );
         let OpProof::ChannelMultiSigProof(proof) = signed_tx
             .ops_proofs()
             .iter()
@@ -1392,6 +1431,11 @@ mod tests {
             panic!("config op must carry a multi-sig proof");
         };
         assert!(proof.signatures().is_empty());
+        assert_eq!(
+            config_op_of(&signed_tx).parent,
+            MsgId::root(),
+            "claiming an unclaimed channel must be rooted at ZERO"
+        );
     }
 
     /// A sequencer whose key is not on the current accredited list cannot
@@ -1450,6 +1494,62 @@ mod tests {
         assert!(
             error.to_string().contains("single-signer"),
             "unexpected error: {error}"
+        );
+    }
+
+    fn config_op_of(tx: &SignedMantleTx<Unverified>) -> ChannelConfigOp {
+        tx.mantle_tx()
+            .ops()
+            .iter()
+            .find_map(|op| match op {
+                Op::ChannelConfig(config) => Some(config.clone()),
+                _ => None,
+            })
+            .expect("tx should carry a config op")
+    }
+
+    /// Consecutive configs chain on the config lineage: the first one claims
+    /// the mined config tip (ZERO on an unclaimed channel) and the second
+    /// takes the first, still pending, as its parent.
+    #[tokio::test]
+    async fn consecutive_channel_configs_chain_on_pending_config() {
+        let own_key = Ed25519Key::from_bytes(&[7; 32]);
+        let mut sequencer = ready_sequencer_with_channel(None, own_key.clone()).await;
+
+        let (_receipt, first_tx) = sequencer
+            .handle()
+            .channel_config(
+                Keys::new_unchecked(vec![own_key.public_key()]),
+                SlotTimeframe::from(0u32),
+                SlotTimeout::from(0u32),
+                1,
+                1,
+            )
+            .await
+            .expect("first config should be accepted");
+        let (_receipt, second_tx) = sequencer
+            .handle()
+            .channel_config(
+                Keys::new_unchecked(vec![own_key.public_key()]),
+                SlotTimeframe::from(1u32),
+                SlotTimeout::from(0u32),
+                1,
+                1,
+            )
+            .await
+            .expect("second config should be accepted");
+
+        let first = config_op_of(&first_tx);
+        let second = config_op_of(&second_tx);
+        assert_eq!(
+            first.parent,
+            MsgId::root(),
+            "the config claiming an unclaimed channel must be rooted at ZERO"
+        );
+        assert_eq!(
+            second.parent,
+            first.id(),
+            "a config still in flight must be the parent of the next one"
         );
     }
 }

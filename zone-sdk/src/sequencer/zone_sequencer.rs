@@ -821,10 +821,24 @@ where
             }
         };
 
+        // The configuration extends the channel's config lineage: the mined
+        // config tip, walked through any config of ours still in flight.
+        let config_tip = self
+            .channel_state
+            .as_ref()
+            .map_or_else(MsgId::root, |channel| channel.config_tip_hash);
+        // Safe to unwrap — `ensure_ready` checks state.
+        let parent = self
+            .state
+            .as_ref()
+            .unwrap()
+            .config_publish_parent(config_tip);
+
         let signed_tx = create_channel_config_tx(
             &self.node,
             &self.config.funding,
             self.channel_id,
+            parent,
             signer,
             keys,
             posting_timeframe,
@@ -874,10 +888,10 @@ where
         let id = tx.mantle_tx().hash();
         let derived_tip = track_pending_tx(state, tx.clone(), self.channel_id);
         let parent_msg = self.last_msg_id;
-        // The tip the tx leaves behind is defined by its ops (the last
-        // tip-advancing one — e.g. a config after an inscribe resets it), so
-        // the caller's `msg_id` is only a fallback for txs without one.
-        let new_tip = derived_tip.unwrap_or(msg_id);
+        // The tip the tx leaves behind is defined by its inscriptions (the
+        // last one); a tx without any — e.g. a pure config — leaves the tip
+        // unchanged, whatever the caller's `msg_id` claims.
+        let new_tip = derived_tip.unwrap_or(self.last_msg_id);
         if new_tip != msg_id {
             warn!(target: TARGET,
                 "submit_signed_tx: caller msg_id {:?} is not the tx's resulting channel tip {:?}; \

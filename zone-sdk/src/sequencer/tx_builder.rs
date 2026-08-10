@@ -211,6 +211,7 @@ pub(super) async fn create_channel_config_tx<Node>(
     node: &Node,
     funding: &FundingConfig,
     channel_id: ChannelId,
+    parent: MsgId,
     signer: Option<(ChannelKeyIndex, &Ed25519Key)>,
     keys: Keys,
     posting_timeframe: SlotTimeframe,
@@ -223,6 +224,7 @@ where
 {
     let config_op = ChannelConfigOp {
         channel: channel_id,
+        parent,
         keys,
         posting_timeframe,
         posting_timeout,

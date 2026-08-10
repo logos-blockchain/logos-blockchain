@@ -964,6 +964,26 @@ mod tests {
             .0
     }
 
+    fn create_config_tx(
+        config_op: ChannelConfigOp,
+        signing_key: &Ed25519Key,
+    ) -> SignedMantleTx<Preverified> {
+        let config_tx_hash = RawMantleTx([Op::ChannelConfig(config_op.clone())].into()).hash();
+        let config_proof = ChannelMultiSigProof::try_new(
+            [IndexedSignature::new(
+                0,
+                signing_key.sign_payload(config_tx_hash.as_signing_bytes().as_ref()),
+            )]
+            .into(),
+        )
+        .unwrap();
+
+        create_signed_tx(
+            Op::ChannelConfig(config_op),
+            &Key::MultiSequencer(config_proof),
+        )
+    }
+
     #[expect(clippy::too_many_arguments, reason = "test fn")]
     fn apply_and_add_utxo_and_activity(
         ledger: &mut Ledger<HeaderId>,
@@ -1110,6 +1130,7 @@ mod tests {
 
         let config_op = ChannelConfigOp {
             channel: channel_id,
+            parent: MsgId::root(),
             keys: verifying_key.into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
@@ -1154,6 +1175,252 @@ mod tests {
             verifying_key.into()
         );
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_jit_config_requires_zero_parent() {
+        let test_config = config();
+        let state = LedgerState::from_utxos([utxo()], &test_config);
+        let (signing_key, verifying_key) = create_test_keys();
+        let channel_id = ChannelId::from([0u8; 32]);
+
+        // The channel doesn't exist yet, so any parent but ZERO is dangling
+        let dangling_config = ChannelConfigOp {
+            channel: channel_id,
+            parent: MsgId::from([1; 32]),
+            keys: verifying_key.into(),
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
+            configuration_threshold: 1,
+            transfer_threshold: 1,
+        };
+        let dangling_tx = create_config_tx(dangling_config.clone(), &signing_key);
+        let result = state
+            .clone()
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &dangling_tx);
+        assert!(matches!(
+            result,
+            Err(LedgerError::VerificationError(
+                VerificationError::ChannelVerificationError(
+                    mantle::channel::Error::InvalidParent { .. }
+                )
+            ))
+        ));
+
+        // The same configuration rooted at ZERO creates the channel
+        let rooted_config = ChannelConfigOp {
+            parent: MsgId::root(),
+            ..dangling_config
+        };
+        let rooted_tx = create_config_tx(rooted_config.clone(), &signing_key);
+        let (new_state, _, _) = state
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &rooted_tx)
+            .unwrap();
+        let channel = new_state
+            .mantle_ledger
+            .channels()
+            .channels
+            .get(&channel_id)
+            .unwrap();
+        assert_eq!(channel.config_tip_hash, rooted_config.id());
+        assert_eq!(channel.tip_message, MsgId::root());
+    }
+
+    #[test]
+    fn test_channel_config_valid_after_inscriptions() {
+        let test_config = config();
+        let mut state = LedgerState::from_utxos([utxo()], &test_config);
+        let (signing_key, verifying_key) = create_test_keys();
+        let channel_id = ChannelId::from([0u8; 32]);
+
+        // Create the channel, its config tip stays ZERO
+        let first_inscribe = InscriptionOp {
+            channel_id,
+            inscription: [1, 2, 3].into(),
+            parent: MsgId::root(),
+            signer: verifying_key,
+        };
+        let mut tip = first_inscribe.id();
+        let first_tx = create_signed_tx(
+            Op::ChannelInscribe(first_inscribe),
+            &Key::Ed25519(signing_key.clone()),
+        );
+        state = state
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &first_tx)
+            .unwrap()
+            .0;
+
+        // Sign a configuration against the current config tip
+        let config_op = ChannelConfigOp {
+            channel: channel_id,
+            parent: MsgId::root(),
+            keys: verifying_key.into(),
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
+            configuration_threshold: 1,
+            transfer_threshold: 1,
+        };
+        let config_tx = create_config_tx(config_op.clone(), &signing_key);
+
+        // Inscriptions keep extending the channel, none of them moves the config tip
+        for byte in [4u8, 5, 6] {
+            let inscribe = InscriptionOp {
+                channel_id,
+                inscription: [byte].into(),
+                parent: tip,
+                signer: verifying_key,
+            };
+            tip = inscribe.id();
+            let tx = create_signed_tx(
+                Op::ChannelInscribe(inscribe),
+                &Key::Ed25519(signing_key.clone()),
+            );
+            state = state
+                .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &tx)
+                .unwrap()
+                .0;
+        }
+
+        // The configuration is still valid and leaves the message tip untouched
+        let (new_state, _, _) = state
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &config_tx)
+            .unwrap();
+        let channel = new_state
+            .mantle_ledger
+            .channels()
+            .channels
+            .get(&channel_id)
+            .unwrap();
+        assert_eq!(channel.config_tip_hash, config_op.id());
+        assert_eq!(channel.tip_message, tip);
+    }
+
+    #[test]
+    fn test_channel_config_rejected_after_later_config() {
+        let test_config = config();
+        let mut state = LedgerState::from_utxos([utxo()], &test_config);
+        let (signing_key, verifying_key) = create_test_keys();
+        let channel_id = ChannelId::from([0u8; 32]);
+
+        // C1 creates the channel, C2 supersedes it
+        let config1 = ChannelConfigOp {
+            channel: channel_id,
+            parent: MsgId::root(),
+            keys: verifying_key.into(),
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
+            configuration_threshold: 1,
+            transfer_threshold: 1,
+        };
+        let config1_tx = create_config_tx(config1.clone(), &signing_key);
+        state = state
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &config1_tx)
+            .unwrap()
+            .0;
+        let config2 = ChannelConfigOp {
+            parent: config1.id(),
+            ..config1.clone()
+        };
+        let config2_tx = create_config_tx(config2, &signing_key);
+        state = state
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &config2_tx)
+            .unwrap()
+            .0;
+
+        // The superseded configuration cannot be re-included after a
+        // reorganization abandons its block
+        let result = state
+            .clone()
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &config1_tx);
+        assert!(matches!(
+            result,
+            Err(LedgerError::VerificationError(
+                VerificationError::ChannelVerificationError(
+                    mantle::channel::Error::InvalidParent { .. }
+                )
+            ))
+        ));
+
+        // Neither can a sibling extending the same superseded parent
+        let sibling = ChannelConfigOp {
+            parent: config1.id(),
+            posting_timeframe: 1.into(),
+            ..config1
+        };
+        let sibling_tx = create_config_tx(sibling, &signing_key);
+        let result =
+            state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &sibling_tx);
+        assert!(matches!(
+            result,
+            Err(LedgerError::VerificationError(
+                VerificationError::ChannelVerificationError(
+                    mantle::channel::Error::InvalidParent { .. }
+                )
+            ))
+        ));
+    }
+
+    #[test]
+    fn test_inscription_valid_after_config() {
+        let test_config = config();
+        let mut state = LedgerState::from_utxos([utxo()], &test_config);
+        let (signing_key, verifying_key) = create_test_keys();
+        let channel_id = ChannelId::from([0u8; 32]);
+
+        // Create the channel, the message tip is now I1
+        let first_inscribe = InscriptionOp {
+            channel_id,
+            inscription: [1, 2, 3].into(),
+            parent: MsgId::root(),
+            signer: verifying_key,
+        };
+        let first_tx = create_signed_tx(
+            Op::ChannelInscribe(first_inscribe.clone()),
+            &Key::Ed25519(signing_key.clone()),
+        );
+        state = state
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &first_tx)
+            .unwrap()
+            .0;
+
+        // A configuration keeping the signer accredited executes
+        let config_op = ChannelConfigOp {
+            channel: channel_id,
+            parent: MsgId::root(),
+            keys: verifying_key.into(),
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
+            configuration_threshold: 1,
+            transfer_threshold: 1,
+        };
+        let config_tx = create_config_tx(config_op.clone(), &signing_key);
+        state = state
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &config_tx)
+            .unwrap()
+            .0;
+
+        // An inscription signed before the configuration still extends I1
+        let second_inscribe = InscriptionOp {
+            channel_id,
+            inscription: [4, 5, 6].into(),
+            parent: first_inscribe.id(),
+            signer: verifying_key,
+        };
+        let second_tx = create_signed_tx(
+            Op::ChannelInscribe(second_inscribe.clone()),
+            &Key::Ed25519(signing_key),
+        );
+        let (new_state, _, _) = state
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &second_tx)
+            .unwrap();
+        let channel = new_state
+            .mantle_ledger
+            .channels()
+            .channels
+            .get(&channel_id)
+            .unwrap();
+        assert_eq!(channel.tip_message, second_inscribe.id());
+        assert_eq!(channel.config_tip_hash, config_op.id());
     }
 
     #[test]
@@ -1615,6 +1882,7 @@ mod tests {
 
         let config_op = ChannelConfigOp {
             channel: channel1,
+            parent: MsgId::root(),
             keys: [vk3, vk4].into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
@@ -1625,14 +1893,14 @@ mod tests {
         let inscribe_op3 = InscriptionOp {
             channel_id: channel1,
             inscription: [7, 8, 9].into(),
-            parent: config_op.id(),
+            parent: inscribe_op1.id(),
             signer: vk3,
         };
 
         let ops = vec![
             Op::ChannelInscribe(inscribe_op1),
             Op::ChannelInscribe(inscribe_op2),
-            Op::ChannelConfig(config_op),
+            Op::ChannelConfig(config_op.clone()),
             Op::ChannelInscribe(inscribe_op3.clone()),
         ];
         let config_tx = RawMantleTx(Ops::new_unchecked(ops.clone()));
@@ -1684,6 +1952,16 @@ mod tests {
                 .unwrap()
                 .tip_message,
             inscribe_op3.id()
+        );
+        assert_eq!(
+            result
+                .mantle_ledger
+                .channels()
+                .channels
+                .get(&channel1)
+                .unwrap()
+                .config_tip_hash,
+            config_op.id()
         );
     }
 

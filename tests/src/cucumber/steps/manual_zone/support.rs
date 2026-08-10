@@ -67,7 +67,7 @@ fn finalized_inscriptions(finalized: &[FinalizedTx]) -> impl Iterator<Item = &In
         .flat_map(|tx| tx.ops.iter())
         .filter_map(|op| match op {
             FinalizedOp::Inscription(info) => Some(info),
-            FinalizedOp::Deposit(_) | FinalizedOp::Withdraw(_) => None,
+            FinalizedOp::Deposit(_) | FinalizedOp::Withdraw(_) | FinalizedOp::Config(_) => None,
         })
 }
 use crate::{
