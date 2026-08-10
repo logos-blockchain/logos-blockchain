@@ -25,38 +25,6 @@ use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use super::types::{Error, FundingConfig};
 use crate::adapter;
 
-/// Assemble the ops for a transaction, funding it from the node's wallet.
-///
-/// The node appends a fee transfer (paid from `funding.funding_pk`, change
-/// back to it) and returns the proof for that transfer; all other ops must
-/// be proven by the caller over the funded transaction hash.
-pub(super) async fn fund_ops<Node>(
-    node: &Node,
-    funding: &FundingConfig,
-    ops: Vec<Op>,
-) -> Result<(RawMantleTx, Option<OpProof>), Error>
-where
-    Node: adapter::Node + Sync,
-{
-    let tx_builder = MantleTxBuilder::new()
-        .extend_ops(ops)
-        .map_err(|e| Error::Network(format!("too many ops in transaction: {e:?}")))?;
-    let response = node
-        .fund_tx(WalletFundRequestBody {
-            // Fund against the node's latest tip.
-            tip: None,
-            tx_builder,
-            change_public_key: funding.funding_pk,
-            funding_public_keys: vec![funding.funding_pk],
-            max_tx_fee: funding.max_tx_fee,
-            priority_fee: funding.priority_fee,
-        })
-        .await
-        .map_err(|e| Error::Network(format!("funding failed: {e}")))?;
-
-    Ok((response.funded_tx, response.transfer_proof))
-}
-
 /// Append the fee transfer's proof to the channel-op proofs, matching the
 /// funded transaction's op layout (funding appends the transfer as the last
 /// op).
@@ -160,130 +128,40 @@ pub(super) fn find_own_key_index(
         .ok_or_else(|| Error::Network("sequencer key not in channel accredited_keys".into()))
 }
 
-pub(super) async fn create_inscribe_tx<Node>(
-    node: &Node,
-    funding: &FundingConfig,
-    channel_id: ChannelId,
-    signing_key: &Ed25519Key,
-    inscription: Inscription,
-    parent: MsgId,
-) -> Result<(SignedMantleTx<Unverified>, MsgId), Error>
-where
-    Node: adapter::Node + Sync,
-{
-    let signer = signing_key.public_key();
-
-    let inscribe_op = InscriptionOp {
-        channel_id,
-        inscription,
-        parent,
-        signer,
-    };
-    let msg_id = inscribe_op.id();
-
-    let (inscribe_tx, transfer_proof) =
-        fund_ops(node, funding, vec![Op::ChannelInscribe(inscribe_op)]).await?;
-
-    let tx_hash = inscribe_tx.hash();
-    let signature = sign_tx(tx_hash, signing_key);
-    let ops_proofs = attach_transfer_proof(
-        &inscribe_tx,
-        [OpProof::Ed25519Sig(signature)].into(),
-        transfer_proof,
-    )?;
-
-    let signed_tx = SignedMantleTx::new(inscribe_tx, ops_proofs);
-
-    Ok((signed_tx, msg_id))
-}
-
-/// Build and fund a `ChannelConfig` transaction.
+/// Fund a pre-built channel-op builder and sign each channel op over the
+/// funded hash. Returns the signed tx together with the **pre-funding**
+/// builder (the channel ops without the fee transfer), which the caller stores
+/// so a later stale-refund can re-fund the exact same ops with fresh inputs —
+/// no need to reverse-engineer which op is the fee out of the funded tx.
 ///
-/// `signer` is the sequencer's signing key paired with its index in the
-/// channel's *current* (pre-update) `accredited_keys` — that is the list the
-/// ledger verifies the signature against. Pass `None` for an unclaimed
-/// channel, whose configuration requires no signatures.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "mirrors the channel config op fields plus the funding context"
-)]
-pub(super) async fn create_channel_config_tx<Node>(
-    node: &Node,
-    funding: &FundingConfig,
-    channel_id: ChannelId,
-    signer: Option<(ChannelKeyIndex, &Ed25519Key)>,
-    keys: Keys,
-    posting_timeframe: SlotTimeframe,
-    posting_timeout: SlotTimeout,
-    configuration_threshold: u16,
-    transfer_threshold: u16,
-) -> Result<SignedMantleTx<Unverified>, Error>
-where
-    Node: adapter::Node + Sync,
-{
-    let config_op = ChannelConfigOp {
-        channel: channel_id,
-        keys,
-        posting_timeframe,
-        posting_timeout,
-        configuration_threshold,
-        transfer_threshold,
-    };
-
-    let (config_tx, transfer_proof) =
-        fund_ops(node, funding, vec![Op::ChannelConfig(config_op)]).await?;
-
-    let tx_hash = config_tx.hash();
-    let signatures = signer
-        .map(|(index, key)| {
-            IndexedSignature::new(index, key.sign_payload(tx_hash.as_signing_bytes().as_ref()))
-        })
-        .into_iter()
-        .collect::<Vec<_>>()
-        .try_into()
-        .unwrap();
-    let proof = ChannelMultiSigProof::try_new(signatures).unwrap();
-    let ops_proofs = attach_transfer_proof(
-        &config_tx,
-        [OpProof::ChannelMultiSigProof(proof)].into(),
-        transfer_proof,
-    )?;
-
-    Ok(SignedMantleTx::new(config_tx, ops_proofs))
-}
-
-/// Rebuild a signed tx with fresh funding: drop its trailing fee transfer,
-/// re-fund the same channel ops, and re-sign each over the new funded hash.
-///
-/// The channel ops are unchanged, so op ids ([`MsgId`]/`config.id()`) are
-/// preserved — only the funding inputs (and thus the `TxHash`) change. Used to
-/// recover a tx whose funding note was double-handed by the node wallet and
-/// can no longer land. Single-signer only (`own_key_index`): multi-sig configs
-/// and atomic-withdraw bundles cannot be re-signed unilaterally.
-pub(super) async fn rebuild_and_refund<Node>(
+/// Single-signer only: inscriptions sign `Ed25519`, configs sign a one-index
+/// `ChannelMultiSigProof` (`own_key_index`); other ops are rejected.
+pub(super) async fn fund_and_sign<Node>(
     node: &Node,
     funding: &FundingConfig,
     signing_key: &Ed25519Key,
     own_key_index: Option<ChannelKeyIndex>,
-    signed_tx: &SignedMantleTx<Unverified>,
-) -> Result<SignedMantleTx<Unverified>, Error>
+    builder: MantleTxBuilder,
+) -> Result<(SignedMantleTx<Unverified>, MantleTxBuilder), Error>
 where
     Node: adapter::Node + Sync,
 {
-    // Keep the channel ops; funding appends a fresh fee transfer.
-    let channel_ops: Vec<Op> = signed_tx
-        .mantle_tx()
-        .ops()
-        .iter()
-        .filter(|op| !matches!(op, Op::Transfer(_)))
-        .cloned()
-        .collect();
-
-    let (funded_tx, transfer_proof) = fund_ops(node, funding, channel_ops).await?;
+    let pre_fund = builder.clone();
+    let response = node
+        .fund_tx(WalletFundRequestBody {
+            tip: None,
+            tx_builder: builder,
+            change_public_key: funding.funding_pk,
+            funding_public_keys: vec![funding.funding_pk],
+            max_tx_fee: funding.max_tx_fee,
+            priority_fee: funding.priority_fee,
+        })
+        .await
+        .map_err(|e| Error::Network(format!("funding failed: {e}")))?;
+    let funded_tx = response.funded_tx;
+    let transfer_proof = response.transfer_proof;
     let new_hash = funded_tx.hash();
 
-    // Re-sign every channel op over the new funded hash, in op order; the fee
-    // transfer's proof is appended by `attach_transfer_proof`.
     let mut proofs = OpsProofs::empty();
     for op in funded_tx.ops() {
         match op {
@@ -314,14 +192,87 @@ where
             Op::Transfer(_) => {}
             other => {
                 return Err(Error::Network(format!(
-                    "cannot re-fund tx with unsupported op: {other:?}"
+                    "cannot fund/sign tx with unsupported op: {other:?}"
                 )));
             }
         }
     }
 
     let ops_proofs = attach_transfer_proof(&funded_tx, proofs, transfer_proof)?;
-    Ok(SignedMantleTx::new(funded_tx, ops_proofs))
+    Ok((SignedMantleTx::new(funded_tx, ops_proofs), pre_fund))
+}
+
+pub(super) async fn create_inscribe_tx<Node>(
+    node: &Node,
+    funding: &FundingConfig,
+    channel_id: ChannelId,
+    signing_key: &Ed25519Key,
+    inscription: Inscription,
+    parent: MsgId,
+) -> Result<(SignedMantleTx<Unverified>, MsgId, MantleTxBuilder), Error>
+where
+    Node: adapter::Node + Sync,
+{
+    let inscribe_op = InscriptionOp {
+        channel_id,
+        inscription,
+        parent,
+        signer: signing_key.public_key(),
+    };
+    let msg_id = inscribe_op.id();
+
+    let builder = MantleTxBuilder::new()
+        .extend_ops(vec![Op::ChannelInscribe(inscribe_op)])
+        .map_err(|e| Error::Network(format!("too many ops in transaction: {e:?}")))?;
+    let (signed_tx, builder) = fund_and_sign(node, funding, signing_key, None, builder).await?;
+
+    Ok((signed_tx, msg_id, builder))
+}
+
+/// Build and fund a `ChannelConfig` transaction.
+///
+/// `signer` is the sequencer's signing key paired with its index in the
+/// channel's *current* (pre-update) `accredited_keys` — that is the list the
+/// ledger verifies the signature against. Pass `None` for an unclaimed
+/// channel, whose configuration requires no signatures.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the channel config op fields plus the funding context"
+)]
+pub(super) async fn create_channel_config_tx<Node>(
+    node: &Node,
+    funding: &FundingConfig,
+    channel_id: ChannelId,
+    signing_key: &Ed25519Key,
+    own_key_index: Option<ChannelKeyIndex>,
+    keys: Keys,
+    posting_timeframe: SlotTimeframe,
+    posting_timeout: SlotTimeout,
+    configuration_threshold: u16,
+    transfer_threshold: u16,
+) -> Result<(SignedMantleTx<Unverified>, MantleTxBuilder), Error>
+where
+    Node: adapter::Node + Sync,
+{
+    let config_op = ChannelConfigOp {
+        channel: channel_id,
+        keys,
+        posting_timeframe,
+        posting_timeout,
+        configuration_threshold,
+        transfer_threshold,
+    };
+
+    let builder = MantleTxBuilder::new()
+        .extend_ops(vec![Op::ChannelConfig(config_op)])
+        .map_err(|e| Error::Network(format!("too many ops in transaction: {e:?}")))?;
+
+    // `own_key_index == None` is an unclaimed channel, whose config needs no
+    // signature; `signing_key` is then unused.
+    let (signed_tx, builder) =
+        fund_and_sign(node, funding, signing_key, own_key_index, builder).await?;
+
+    Ok((signed_tx, builder))
 }
 
 pub(super) fn prepare_tx(

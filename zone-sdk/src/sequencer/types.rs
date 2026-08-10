@@ -281,7 +281,9 @@ pub enum Event {
 ///
 /// This enum tracks the lifecycle of a specific transaction hash, not a
 /// publish intent. Republishing after an orphan or any other retry produces a
-/// new tx hash and therefore a new lifecycle.
+/// new tx hash and therefore a new lifecycle. A tx hash is not a stable
+/// identity for a published message: it can change due to refund or
+/// republishing.
 ///
 /// Typical flows:
 /// - Plain success: `AcceptedLocally -> PendingMempool -> OnChain(_) ->

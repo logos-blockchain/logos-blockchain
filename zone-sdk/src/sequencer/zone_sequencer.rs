@@ -35,8 +35,8 @@ use super::{
     slot_clock::SlotClock,
     state::{BlockChannelTx, StaleRefund, TxState},
     tx_builder::{
-        create_channel_config_tx, create_inscribe_tx, prepare_tx as build_prepare_tx,
-        rebuild_and_refund, sign_tx as build_sign_tx,
+        create_channel_config_tx, create_inscribe_tx, fund_and_sign,
+        prepare_tx as build_prepare_tx, sign_tx as build_sign_tx,
     },
     types::{
         Error, Event, FundingConfig, InscriptionInfo, PendingTx, PublishResult,
@@ -598,7 +598,7 @@ where
         self.ensure_fundable()?;
 
         let parent = self.compute_publish_parent();
-        let (signed_tx, new_msg_id) = create_inscribe_tx(
+        let (signed_tx, new_msg_id, builder) = create_inscribe_tx(
             &self.node,
             &self.config.funding,
             self.channel_id,
@@ -627,6 +627,7 @@ where
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
         state.submit_inscription(signed_tx.clone(), parent, new_msg_id, data);
+        state.store_own_builder(id, builder);
         self.last_msg_id = new_msg_id;
         self.queue_tx_status(id, TxStatus::AcceptedLocally);
 
@@ -676,11 +677,14 @@ where
                 return;
             }
         };
+        let Some(tip) = self.current_tip else {
+            return;
+        };
 
         let funding = self.config.funding.clone();
         let own_key_index = self.own_key_index;
         let stale = match self.state.as_mut() {
-            Some(state) => state.collect_stale_for_refund(now, threshold),
+            Some(state) => state.collect_stale_for_refund(now, threshold, tip),
             None => return,
         };
 
@@ -689,9 +693,10 @@ where
         }
     }
 
-    /// Rebuild one stale entry with fresh funding and swap it into the pending
-    /// set under its new `TxHash` (same op ids, so lineage is preserved). The
-    /// rebuilt tx is `!posted`, so the following `resubmit_pending` posts it.
+    /// Rebuild one stale entry by re-funding its stored pre-funding builder and
+    /// swap it into the pending set under its new `TxHash` (same op ids, so
+    /// lineage is preserved). The rebuilt tx is `!posted`, so the following
+    /// `resubmit_pending` posts it.
     async fn refund_one_stale(
         &mut self,
         funding: &FundingConfig,
@@ -699,23 +704,23 @@ where
         s: StaleRefund,
     ) {
         let (StaleRefund::Inscription {
-            tx_hash, signed_tx, ..
+            tx_hash, builder, ..
         }
         | StaleRefund::Other {
-            tx_hash, signed_tx, ..
+            tx_hash, builder, ..
         }) = &s;
         let old_hash = *tx_hash;
 
-        let rebuilt = match rebuild_and_refund(
+        let (rebuilt, builder) = match fund_and_sign(
             &self.node,
             funding,
             &self.signing_key,
             own_key_index,
-            signed_tx,
+            builder.clone(),
         )
         .await
         {
-            Ok(tx) => tx,
+            Ok(res) => res,
             Err(e) => {
                 warn!(target: TARGET, "Failed to re-fund stale tx {}: {e}", hex::encode(old_hash.0));
                 return;
@@ -738,6 +743,7 @@ where
                 state.submit_other(rebuilt, self.channel_id);
             }
         }
+        state.store_own_builder(new_hash, builder);
         info!(
             target: TARGET,
             "Re-funded stale tx {} -> {}",
@@ -900,7 +906,7 @@ where
         // against. Signature collection for `configuration_threshold > 1` is
         // out of scope, so reject it early instead of submitting a
         // transaction that can only die at block assembly.
-        let signer = match &self.channel_state {
+        let own_key_index = match &self.channel_state {
             None => None,
             Some(channel) => {
                 if channel.configuration_threshold != 1 {
@@ -916,15 +922,16 @@ where
                 let index = self.own_key_index.ok_or_else(|| {
                     Error::Network("sequencer key not in channel accredited_keys".into())
                 })?;
-                Some((index, &self.signing_key))
+                Some(index)
             }
         };
 
-        let signed_tx = create_channel_config_tx(
+        let (signed_tx, builder) = create_channel_config_tx(
             &self.node,
             &self.config.funding,
             self.channel_id,
-            signer,
+            &self.signing_key,
+            own_key_index,
             keys,
             posting_timeframe,
             posting_timeout,
@@ -937,6 +944,7 @@ where
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
         state.submit_other(signed_tx.clone(), self.channel_id);
+        state.store_own_builder(tx_hash, builder);
         self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
 
         info!(target: TARGET, "Submitted channel_config transaction {}", hex::encode(tx_hash.0));

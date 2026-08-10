@@ -743,25 +743,19 @@ Feature: Zone SDK
     And the zone indexer returns all zone messages exactly once in any order in 600 seconds
     And I stop all nodes
 
-  # LOCAL-ONLY: zone-sdk counterpart of the "Wallet double-hands after restart"
-  # transactions test. A node restart wipes the wallet's note reservations
-  # (in-memory), so a reorged-out inscription's note is handed to the next
-  # publish — one inscription then wedges (InexistingNote) and byte-identical
-  # resubmission can never land it. On this branch the sequencer's stale-refund
-  # sweep rebuilds it with a fresh /wallet/fund call and it finalizes; with
-  # stale_refund_blocks = 0 the wedged inscription never finalizes (red).
-  # Untagged: not in the @zone_ci suite. Needs validation of the sequencer
-  # reconnect-and-republish path across a node restart.
+  @zone_ci
   Scenario: Zone sequencer re-funds a double-handed inscription after node restart
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
       | 1             | 2           | 12500        |
       | 4             | 4           | 25000        |
     And I have a cluster with capacity of 2 nodes
+    # NODE_4 is only a fork-provider; SEQ_B is registered but never started, so
+    # the table's "at least one sequencer" rule is satisfied without running one
     And I start nodes with wallet and sequencer resources:
       | node_name | account_index | wallet_name | connected_to | sequencers |
       | NODE_1    | 1             | WALLET_1A   | NODE_4       | SEQ_A      |
-      | NODE_4    | 4             | WALLET_4A   |              |            |
+      | NODE_4    | 4             | WALLET_4A   |              | SEQ_B      |
     When node "NODE_1" is at height 2 in 240 seconds
     # Starve the funding wallet to two distinct notes so the reused note is
     # deterministic (largest-first selection picks 9000 for both publishes)
@@ -791,6 +785,5 @@ Feature: Zone SDK
     And sequencer "SEQ_A" submits the following zone messages without waiting for inclusion:
       | alias | data      |
       | MSG_2 | message 2 |
-    Then all zone messages are finalized in 600 seconds
-    And the zone indexer returns all zone messages exactly once in any order in 600 seconds
+    Then the zone indexer returns all zone messages exactly once in any order in 600 seconds
     And I stop all nodes
