@@ -1036,50 +1036,54 @@ where
                 };
             };
 
-            let new_processor = match CoreCryptographicProcessor::try_new_with_core_condition_check(
-                new_epoch_info.membership.clone(),
-                settings.minimum_network_size,
-                EpochCryptographicProcessorSettings {
-                    non_ephemeral_encryption_key: settings
-                        .non_ephemeral_signing_key
-                        .derive_x25519(),
-                    num_blend_layers: settings.num_blend_layers,
-                },
-                PoQVerificationInputsMinusSigningKey {
-                    core: new_epoch_info.poq_core_public_inputs,
-                    leader: new_epoch_info.poq_leadership_public_inputs,
-                    pow: PowInputs::unwired_placeholder(),
-                },
-                core_poq_generator,
-                new_epoch_info.epoch,
-            ) {
-                Ok(mut new_processor) => {
-                    if current_secret_info
-                        .as_ref()
-                        .is_some_and(|secret| secret.epoch == new_epoch_info.epoch)
-                    {
-                        // We consume the stream by `take()`ing only if the epochs match.
-                        let current_secret_info = current_secret_info
-                            .take()
-                            .expect("Secret PoL info presence checked above.");
-                        new_processor.set_epoch_private(
-                            current_secret_info.winning_pol_info_stream,
-                            new_epoch_info.epoch,
-                        );
+            let new_processor: CoreCryptographicProcessor<_, _, _, ProofsVerifier> =
+                match CoreCryptographicProcessor::try_new_with_core_condition_check(
+                    new_epoch_info.membership.clone(),
+                    settings.minimum_network_size,
+                    EpochCryptographicProcessorSettings {
+                        non_ephemeral_encryption_key: settings
+                            .non_ephemeral_signing_key
+                            .derive_x25519(),
+                        num_blend_layers: settings.num_blend_layers,
+                    },
+                    PoQVerificationInputsMinusSigningKey {
+                        core: new_epoch_info.poq_core_public_inputs,
+                        leader: new_epoch_info.poq_leadership_public_inputs,
+                        pow: PowInputs::unwired_placeholder(),
+                    },
+                    core_poq_generator,
+                    new_epoch_info.epoch,
+                ) {
+                    Ok(mut new_processor) => {
+                        if current_secret_info
+                            .as_ref()
+                            .is_some_and(|secret| secret.epoch == new_epoch_info.epoch)
+                        {
+                            // We consume the stream by `take()`ing only if the epochs match.
+                            let current_secret_info = current_secret_info
+                                .take()
+                                .expect("Secret PoL info presence checked above.");
+                            new_processor.set_epoch_private(
+                                current_secret_info.winning_pol_info_stream,
+                                new_epoch_info.epoch,
+                            );
+                        }
+                        new_processor
                     }
-                    new_processor
-                }
-                Err(e @ (Error::LocalIsNotCoreNode | Error::NetworkIsTooSmall(_))) => {
-                    tracing::info!(target: LOG_TARGET, "New membership does not satisfy the core node condition: {e:?}");
-                    return HandleEpochEventOutput::Retiring {
-                        old_crypto_processor: current_cryptographic_processor,
-                        old_scheduler: current_scheduler
-                            .rotate_epoch(new_scheduler_epoch_info, settings.scheduler_settings())
-                            .1,
-                        old_token_collector: old_epoch_blending_token_collector,
-                    };
-                }
-            };
+                    Err(e @ (Error::LocalIsNotCoreNode | Error::NetworkIsTooSmall(_))) => {
+                        tracing::info!(target: LOG_TARGET, "New membership does not satisfy the core node condition: {e:?}");
+                        return HandleEpochEventOutput::Retiring {
+                            old_crypto_processor: current_cryptographic_processor,
+                            old_scheduler: current_scheduler
+                                .rotate_epoch(
+                                    new_scheduler_epoch_info,
+                                    settings.scheduler_settings(),
+                                )
+                                .1,
+                            old_token_collector: old_epoch_blending_token_collector,
+                        };
+                    }
+                };
 
             backend
                 .rotate_epoch(BackendEpochInfo {

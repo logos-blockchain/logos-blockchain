@@ -1,6 +1,6 @@
 mod utils;
 
-use futures::stream::repeat;
+use futures::{StreamExt as _, stream::repeat};
 use lb_blend::{
     message::reward::{ActivityProof, BlendingToken, EpochBlendingTokenCollector},
     proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
@@ -1124,7 +1124,7 @@ async fn complete_old_epoch_after_main_loop_done() {
         .await;
 
         retire(
-            blend_message_stream,
+            blend_message_stream.map(|(msg, _)| msg),
             remaining_epoch_stream,
             backend,
             TestNetworkAdapter,
@@ -1271,7 +1271,7 @@ async fn stop_on_empty_epoch() {
         .await;
 
         retire(
-            blend_message_stream,
+            blend_message_stream.map(|(msg, _)| msg),
             remaining_epoch_stream,
             backend,
             TestNetworkAdapter,
@@ -1407,7 +1407,7 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
         .await;
 
         retire(
-            blend_message_stream,
+            blend_message_stream.map(|(msg, _)| msg),
             remaining_epoch_stream,
             backend,
             TestNetworkAdapter,
