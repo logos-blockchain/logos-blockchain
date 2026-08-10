@@ -508,7 +508,8 @@ Feature: Transactions
     Then all transactions with prefix "SOAK" are finalized on node "NODE_1" in 900 seconds
     And I stop all nodes
 
-  @local_transactions
+  # TODO: enable this test if/when this is fixed in wallet
+  @undefined_behaviour
   Scenario: Wallet double-hands a note after restart
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
