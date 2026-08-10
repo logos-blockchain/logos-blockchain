@@ -42,7 +42,7 @@ macro_rules! info_with_id {
         });
 
         let current_span = Span::current();
-        current_span.set_parent(parent_context);
+        let _ = current_span.set_parent(parent_context);
 
         tracing::info!(
             trace_id = %trace_id,
