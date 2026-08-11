@@ -31,7 +31,7 @@ use lb_http_api_common::{
     paths::{
         BLEND_JOIN_NETWORK, BLOCK_EVENTS, BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM,
         BLOCKS_STREAM, CHANNEL, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_CLAIM_VOUCHERS,
-        MANTLE_GAS_PRICES, MEMPOOL_ADD_TX, SDP_POST_DECLARATION, TIME_INFO,
+        MANTLE_GAS_PRICES, MEMPOOL_ADD_TX, NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
         wallet::{BALANCE, FUND, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
@@ -295,6 +295,14 @@ impl CommonHttpClient {
             .join(SDP_POST_DECLARATION.trim_start_matches('/'))
             .map_err(Error::Url)?;
         self.post(request_url, declaration).await
+    }
+
+    /// Get the version of the node, e.g. `0.1.2 (abcdefaa)`.
+    pub async fn get_node_version(&self, base_url: Url) -> Result<String, Error> {
+        let request_url = base_url
+            .join(NODE_VERSION.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.get::<(), String>(request_url, None).await
     }
 
     /// Get consensus info (tip, height, etc.)

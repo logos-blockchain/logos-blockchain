@@ -5,6 +5,7 @@ use utoipa::OpenApi;
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        crate::api::handlers::version,
         crate::api::handlers::mantle_metrics,
         crate::api::handlers::mantle_status,
         crate::api::handlers::cryptarchia_info,

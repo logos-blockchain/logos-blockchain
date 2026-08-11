@@ -474,6 +474,21 @@ where
     >(&handle, items))
 }
 
+#[utoipa::path(
+    get,
+    path = paths::NODE_VERSION,
+    responses(
+        (status = 200, description = "Version of the running node, e.g. `0.1.2 (abcdefaa)`", body = String),
+    )
+)]
+#[expect(
+    clippy::unused_async,
+    reason = "Axum handlers are required to be async."
+)]
+pub async fn version() -> Response {
+    Json(crate::version::node_version()).into_response()
+}
+
 #[derive(Deserialize)]
 pub struct CryptarchiaInfoQuery {
     from: Option<HeaderId>,

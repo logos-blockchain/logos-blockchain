@@ -17,6 +17,7 @@ pub const SDP_POST_DECLARATION: &str = "/sdp/declaration";
 pub const SDP_POST_ACTIVITY: &str = "/sdp/activity";
 pub const SDP_POST_WITHDRAWAL: &str = "/sdp/withdrawal";
 pub const SDP_POST_SET_DECLARATION_ID: &str = "/sdp/set-declaration-id";
+pub const NODE_VERSION: &str = "/version";
 pub const LEADER_CLAIM: &str = "/leader/claim";
 pub const LEADER_CLAIM_VOUCHERS: &str = "/leader/claim/vouchers";
 
