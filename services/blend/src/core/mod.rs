@@ -1664,6 +1664,7 @@ async fn handle_release_round<
 >(
     RoundInfo {
         data_messages,
+        old_epoch_data_messages,
         release_type,
     }: RoundInfo<ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
     cryptographic_processor: &mut CoreCryptographicProcessor<
@@ -1672,6 +1673,7 @@ async fn handle_release_round<
         ProofsGenerator,
         ProofsVerifier,
     >,
+    old_epoch: Option<Epoch>,
     rng: &mut Rng,
     backend: &Backend,
     network_adapter: &NetAdapter,
@@ -1709,6 +1711,25 @@ where
             },
         ).collect::<Vec<_>>();
 
+    // Data messages left over from the previous epoch go out on this same release
+    // round, but addressed to the old epoch's peers and tagged with the old epoch,
+    // because their `PoQ` only verifies against that epoch's public inputs. They
+    // are not tracked in this epoch's recovery state and do not consume this
+    // epoch's core quota, since they neither spend it nor reach current-epoch
+    // peers. Once the transition period has expired there is no old epoch left to
+    // publish to, so whatever remains is dropped here.
+    let old_epoch_data_count = old_epoch_data_messages.len();
+    let old_epoch_data_messages_relay_futures = old_epoch
+        .map(|old_epoch| {
+            old_epoch_data_messages
+                .into_iter()
+                .map(|data_message_to_blend| -> BoxFuture<'_, ()> {
+                    backend.publish(data_message_to_blend, old_epoch).boxed()
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
     let processed_messages_relay_futures = build_futures_to_release_processed_messages(
         processed_messages,
         backend,
@@ -1719,6 +1740,7 @@ where
 
     let mut message_futures = data_messages_relay_futures
         .into_iter()
+        .chain(old_epoch_data_messages_relay_futures)
         .chain(processed_messages_relay_futures)
         .collect::<Vec<_>>();
 
@@ -1747,7 +1769,12 @@ where
 
     // Release all messages concurrently, and wait for all of them to be sent.
     join_all(message_futures).await;
-    log_release_window_summary(data_count, processed_count, cover_count);
+    log_release_window_summary(
+        data_count,
+        old_epoch_data_count,
+        processed_count,
+        cover_count,
+    );
 
     state_updater.commit_changes()
 }
@@ -1786,16 +1813,21 @@ async fn handle_release_round_for_old_epoch<
     log_old_epoch_release_summary(num_futures);
 }
 
-fn log_release_window_summary(data_count: usize, processed_count: usize, cover_count: usize) {
-    if data_count > 0 || processed_count > 0 {
+fn log_release_window_summary(
+    data_count: usize,
+    old_epoch_data_count: usize,
+    processed_count: usize,
+    cover_count: usize,
+) {
+    if data_count > 0 || old_epoch_data_count > 0 || processed_count > 0 {
         tracing::debug!(
             target: LOG_TARGET,
-            "Sent out {data_count} data, {processed_count} processed and {cover_count} cover messages at this release window."
+            "Sent out {data_count} data, {old_epoch_data_count} old epoch data, {processed_count} processed and {cover_count} cover messages at this release window."
         );
     } else {
         tracing::trace!(
             target: LOG_TARGET,
-            "Sent out {data_count} data, {processed_count} processed and {cover_count} cover messages at this release window."
+            "Sent out {data_count} data, {old_epoch_data_count} old epoch data, {processed_count} processed and {cover_count} cover messages at this release window."
         );
     }
 }

@@ -50,6 +50,11 @@ pub struct EpochMessageScheduler<Rng, ProcessedMessage, DataMessage> {
     release_delayer: EpochProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>,
     /// The queue of data messages that are stored in between rounds.
     data_messages: Vec<DataMessage>,
+    /// Data messages inherited from the previous epoch, which had been queued
+    /// there but not released before it ended. They ride this scheduler's
+    /// release rounds so that the node keeps a single release schedule, but
+    /// they belong to the old epoch when it comes to publishing them.
+    old_epoch_data_messages: Vec<DataMessage>,
     /// The multi-consumer stream forked on each sub-stream.
     round_clock: RoundClock,
 }
@@ -100,6 +105,7 @@ where
             cover_traffic,
             release_delayer,
             data_messages: Vec::new(),
+            old_epoch_data_messages: Vec::new(),
             round_clock: Box::new(round_clock) as RoundClock,
         }
     }
@@ -118,16 +124,16 @@ where
             data_messages,
             ..
         } = self;
-        // Data messages queued in the current epoch but not yet released must be
-        // carried over to the new epoch's scheduler. Otherwise they would be
-        // silently dropped here (the `OldEpochMessageScheduler` only releases
-        // processed messages), and only re-sent on a full service restart from
-        // the recovery checkpoint. Re-queueing through `queue_data_message` also
-        // keeps the new epoch's cover-traffic accounting consistent.
+        // Data messages queued in the current epoch but not yet released are carried
+        // over to the new epoch's scheduler, so the node keeps a single release
+        // schedule. They are kept apart from the new epoch's own data messages
+        // because they were encapsulated with the old epoch's `PoQ`, which only
+        // verifies against that epoch's public inputs: publishing them under the new
+        // epoch's number would make the receiver reject the proof and close us as a
+        // spammer. They go out to the old epoch's peers instead, and are dropped once
+        // the transition period expires and those peers are gone.
         let mut new_scheduler = Self::new(new_epoch_info, release_delayer.rng().clone(), settings);
-        for message in data_messages {
-            new_scheduler.queue_data_message(message);
-        }
+        new_scheduler.old_epoch_data_messages = data_messages;
         (new_scheduler, OldEpochMessageScheduler(release_delayer))
     }
 
@@ -152,6 +158,7 @@ impl<Rng, ProcessedMessage, DataMessage> EpochMessageScheduler<Rng, ProcessedMes
             cover_traffic,
             release_delayer,
             data_messages,
+            old_epoch_data_messages: Vec::new(),
             round_clock,
         }
     }
@@ -187,6 +194,7 @@ where
             release_delayer,
             round_clock,
             data_messages,
+            old_epoch_data_messages,
         } = &mut *self;
 
         // We do not return anything if a new round has not elapsed.
@@ -209,7 +217,7 @@ where
             // If none of the sub-streams is ready, we return `Ready` if we have data messages to
             // release at this round. Else, we return `Pending`.
             (Poll::Pending, Poll::Pending) => {
-                if data_messages.is_empty() {
+                if data_messages.is_empty() && old_epoch_data_messages.is_empty() {
                     // Awake to trigger a new round clock tick.
                     cx.waker().wake_by_ref();
                     return Poll::Pending;
@@ -231,11 +239,13 @@ where
         // Safe to take now: every path from here on emits the data messages.
         let round_info = RoundInfo {
             data_messages: take(data_messages),
+            old_epoch_data_messages: take(old_epoch_data_messages),
             release_type,
         };
         trace!(
             target: LOG_TARGET,
             data_messages = round_info.data_messages.len(),
+            old_epoch_data_messages = round_info.old_epoch_data_messages.len(),
             release_type = ?round_info.release_type,
             "emitting new round info"
         );

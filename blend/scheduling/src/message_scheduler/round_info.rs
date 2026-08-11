@@ -38,6 +38,11 @@ impl Display for Round {
 pub struct RoundInfo<ProcessedMessage, DataMessage> {
     /// The list of data messages to be released. This can happen at any round.
     pub data_messages: Vec<DataMessage>,
+    /// Data messages that were queued in the previous epoch but not released
+    /// before it ended. They are released on the same round as everything else,
+    /// but must be published to the old epoch's peers under the old epoch's
+    /// number, since that is what their `PoQ` verifies against.
+    pub old_epoch_data_messages: Vec<DataMessage>,
     /// Additional "types" of this round.
     pub release_type: Option<RoundReleaseType<ProcessedMessage>>,
 }

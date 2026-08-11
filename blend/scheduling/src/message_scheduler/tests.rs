@@ -73,6 +73,7 @@ async fn no_substream_ready_with_data_messages() {
         scheduler.poll_next_unpin(&mut cx),
         Poll::Ready(Some(RoundInfo {
             data_messages: vec![1, 2],
+            old_epoch_data_messages: vec![],
             release_type: None
         }))
     );
@@ -106,6 +107,7 @@ async fn cover_traffic_substream_ready() {
         scheduler.poll_next_unpin(&mut cx),
         Poll::Ready(Some(RoundInfo {
             data_messages: vec![1],
+            old_epoch_data_messages: vec![],
             release_type: Some(RoundReleaseType::OnlyCoverMessage)
         }))
     );
@@ -137,6 +139,7 @@ async fn release_delayer_substream_ready() {
         scheduler.poll_next_unpin(&mut cx),
         Poll::Ready(Some(RoundInfo {
             data_messages: vec![2],
+            old_epoch_data_messages: vec![],
             release_type: Some(RoundReleaseType::OnlyProcessedMessages(vec![1]))
         }))
     );
@@ -169,6 +172,7 @@ async fn both_substreams_ready() {
         scheduler.poll_next_unpin(&mut cx),
         Poll::Ready(Some(RoundInfo {
             data_messages: vec![],
+            old_epoch_data_messages: vec![],
             release_type: Some(RoundReleaseType::ProcessedAndCoverMessages(vec![1]))
         }))
     );
@@ -208,6 +212,7 @@ async fn round_change() {
         scheduler.poll_next_unpin(&mut cx),
         Poll::Ready(Some(RoundInfo {
             data_messages: vec![],
+            old_epoch_data_messages: vec![],
             release_type: Some(RoundReleaseType::OnlyCoverMessage)
         }))
     );
@@ -222,6 +227,7 @@ async fn round_change() {
         scheduler.poll_next_unpin(&mut cx),
         Poll::Ready(Some(RoundInfo {
             data_messages: vec![3],
+            old_epoch_data_messages: vec![],
             release_type: None
         }))
     );
@@ -236,6 +242,7 @@ async fn round_change() {
         scheduler.poll_next_unpin(&mut cx),
         Poll::Ready(Some(RoundInfo {
             data_messages: vec![],
+            old_epoch_data_messages: vec![],
             release_type: Some(RoundReleaseType::OnlyProcessedMessages(vec![()]))
         }))
     );
@@ -243,7 +250,7 @@ async fn round_change() {
 }
 
 #[tokio::test]
-async fn rotate_epoch_carries_over_queued_data_messages() {
+async fn rotate_epoch_carries_over_queued_data_messages_as_old_epoch_ones() {
     let rng = BlakeRng::from_entropy();
     let rounds = [Round::from(0)];
     let scheduler = EpochMessageScheduler::<_, (), u32>::with_test_values(
@@ -260,7 +267,9 @@ async fn rotate_epoch_carries_over_queued_data_messages() {
         vec![1, 2],
     );
 
-    // Rotating into a new epoch must not silently drop the queued data messages.
+    // Rotating into a new epoch must not silently drop the queued data messages,
+    // but it must not treat them as the new epoch's own either: they carry the old
+    // epoch's `PoQ`, so they have to be published under the old epoch's number.
     let (new_scheduler, _old_scheduler) = scheduler.rotate_epoch(
         EpochInfo {
             core_quota: Quota::ONE,
@@ -269,5 +278,76 @@ async fn rotate_epoch_carries_over_queued_data_messages() {
         Settings::default(),
     );
 
-    assert_eq!(new_scheduler.data_messages, vec![1, 2]);
+    assert!(new_scheduler.data_messages.is_empty());
+    assert_eq!(new_scheduler.old_epoch_data_messages, vec![1, 2]);
+}
+
+#[tokio::test]
+async fn old_epoch_data_messages_are_released_on_the_same_round() {
+    let rng = BlakeRng::from_entropy();
+    let rounds = [Round::from(0)];
+    let mut scheduler = EpochMessageScheduler::<_, (), u32>::with_test_values(
+        // No cover messages to emit, tick will yield round `0`.
+        EpochCoverTraffic::with_test_values(Box::new(iter(rounds)), 0, 1.into(), rng.clone(), 0),
+        // Round `1` scheduled, so round `0` is not a release round for processed
+        // messages.
+        EpochProcessedMessageDelayer::with_test_values(
+            NonZeroU64::try_from(1).unwrap(),
+            1u128.into(),
+            rng,
+            Box::new(iter(rounds)),
+            vec![],
+        ),
+        Box::new(iter(rounds)),
+        vec![1],
+    );
+    scheduler.old_epoch_data_messages = vec![2, 3];
+    let mut cx = Context::from_waker(noop_waker_ref());
+
+    // Both queues drain in the same round info, so the node keeps a single release
+    // schedule across the transition.
+    assert_eq!(
+        scheduler.poll_next_unpin(&mut cx),
+        Poll::Ready(Some(RoundInfo {
+            data_messages: vec![1],
+            old_epoch_data_messages: vec![2, 3],
+            release_type: None
+        }))
+    );
+    assert!(scheduler.data_messages.is_empty());
+    assert!(scheduler.old_epoch_data_messages.is_empty());
+}
+
+#[tokio::test]
+async fn old_epoch_data_messages_alone_trigger_a_release() {
+    let rng = BlakeRng::from_entropy();
+    let rounds = [Round::from(0)];
+    let mut scheduler = EpochMessageScheduler::<_, (), u32>::with_test_values(
+        // No cover messages to emit, tick will yield round `0`.
+        EpochCoverTraffic::with_test_values(Box::new(iter(rounds)), 0, 1.into(), rng.clone(), 0),
+        // Round `1` scheduled, so round `0` is not a release round for processed
+        // messages.
+        EpochProcessedMessageDelayer::with_test_values(
+            NonZeroU64::try_from(1).unwrap(),
+            1u128.into(),
+            rng,
+            Box::new(iter(rounds)),
+            vec![],
+        ),
+        Box::new(iter(rounds)),
+        vec![],
+    );
+    // Nothing of our own to send, only leftovers from the previous epoch. They must
+    // still be flushed, else they would sit here until the transition expires.
+    scheduler.old_epoch_data_messages = vec![1];
+    let mut cx = Context::from_waker(noop_waker_ref());
+
+    assert_eq!(
+        scheduler.poll_next_unpin(&mut cx),
+        Poll::Ready(Some(RoundInfo {
+            data_messages: vec![],
+            old_epoch_data_messages: vec![1],
+            release_type: None
+        }))
+    );
 }
