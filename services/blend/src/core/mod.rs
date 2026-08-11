@@ -223,7 +223,7 @@ where
     ProofsGenerator:
         CoreAndLeaderProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>> + Send,
     SdpService: ServiceData<Message = SdpMessage> + Send,
-    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync,
+    ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
     ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
@@ -503,7 +503,7 @@ where
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId>,
     ProofsGenerator: CoreAndLeaderProofsGenerator<KmsAdapter::CorePoQGenerator>,
-    ProofsVerifier: ProofsVerifierTrait + Clone,
+    ProofsVerifier: ProofsVerifierTrait,
     // To avoid bubbling up generics everywhere in the configs (current Overwatch limitation), we
     // know the final key ID type is a `String`, so we constraint the trait impl here instead.
     KmsAdapter: KmsPoQAdapter<RuntimeServiceId, KeyId = String, CorePoQGenerator: Clone + Send + Sync>
@@ -587,6 +587,12 @@ where
         current_epoch_public_info
     );
 
+    let current_epoch_poq_verification_inputs = PoQVerificationInputsMinusSigningKey {
+        core: current_epoch_public_info.poq_core_public_inputs,
+        leader: current_epoch_public_info.poq_leadership_public_inputs,
+        pow: PowInputs::unwired_placeholder(),
+    };
+
     let crypto_processor = CoreCryptographicProcessor::<
         _,
         KmsAdapter::CorePoQGenerator,
@@ -599,11 +605,7 @@ where
             non_ephemeral_encryption_key: blend_config.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: blend_config.num_blend_layers,
         },
-        PoQVerificationInputsMinusSigningKey {
-            core: current_epoch_public_info.poq_core_public_inputs,
-            leader: current_epoch_public_info.poq_leadership_public_inputs,
-            pow: PowInputs::unwired_placeholder(),
-        },
+        current_epoch_poq_verification_inputs,
         current_epoch_core_poq_generator
             .expect("Core PoQ generator must be present at startup: the proxy service only launches CoreMode when the node is part of the core membership."),
         current_epoch_public_info.epoch,
@@ -684,7 +686,7 @@ where
             epoch: current_epoch_public_info.epoch,
             // The backend verifies the `PoQ` of every message it receives before
             // relaying it, so it needs its own verifier for the epoch.
-            proofs_verifier: crypto_processor.verifier().clone(),
+            proofs_verifier: ProofsVerifier::new(current_epoch_poq_verification_inputs),
         },
         BlakeRng::from_entropy(),
     );
@@ -784,7 +786,7 @@ where
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator> + Send,
     CorePoQGenerator: Send + Sync,
-    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync,
+    ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     RuntimeServiceId: Sync + Send,
 {
     // An optional crypto processor to handle the old epoch during transition
@@ -997,7 +999,7 @@ where
     NodeId: Eq + Hash + Clone + Send,
     Rng: rand::Rng + Clone + Unpin,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
-    ProofsVerifier: ProofsVerifierTrait + Clone,
+    ProofsVerifier: ProofsVerifierTrait,
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
 {
     match event {
@@ -1019,6 +1021,19 @@ where
             .expect("Reward epoch info must be created successfully. Panicking since the service cannot continue with this epoch");
             let (new_epoch_blending_token_collector, old_epoch_blending_token_collector) =
                 current_epoch_blending_token_collector.rotate_epoch(&new_reward_epoch_info);
+
+            let new_poq_verification_inputs = PoQVerificationInputsMinusSigningKey {
+                core: new_epoch_info.poq_core_public_inputs,
+                leader: new_epoch_info.poq_leadership_public_inputs,
+                pow: PowInputs::unwired_placeholder(),
+            };
+            backend
+                .rotate_epoch(BackendEpochInfo {
+                    membership: new_epoch_info.membership.clone(),
+                    epoch: new_epoch_info.epoch,
+                    proofs_verifier: ProofsVerifier::new(new_poq_verification_inputs),
+                })
+                .await;
 
             let new_scheduler_epoch_info = SchedulerEpochInfo {
                 core_quota: settings.epoch_core_quota(new_epoch_info.membership.size()),
@@ -1046,11 +1061,7 @@ where
                             .derive_x25519(),
                         num_blend_layers: settings.num_blend_layers,
                     },
-                    PoQVerificationInputsMinusSigningKey {
-                        core: new_epoch_info.poq_core_public_inputs,
-                        leader: new_epoch_info.poq_leadership_public_inputs,
-                        pow: PowInputs::unwired_placeholder(),
-                    },
+                    new_poq_verification_inputs,
                     core_poq_generator,
                     new_epoch_info.epoch,
                 ) {
@@ -1084,14 +1095,6 @@ where
                         };
                     }
                 };
-
-            backend
-                .rotate_epoch(BackendEpochInfo {
-                    membership: new_epoch_info.membership.clone(),
-                    epoch: new_epoch_info.epoch,
-                    proofs_verifier: new_processor.verifier().clone(),
-                })
-                .await;
 
             let (new_scheduler, old_scheduler) = current_scheduler
                 .rotate_epoch(new_scheduler_epoch_info, settings.scheduler_settings());
