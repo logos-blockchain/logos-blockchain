@@ -138,23 +138,9 @@ where
         .flat_map(BlockChannelTx::infos)
         .cloned()
         .collect();
-    // Configs yield no lineage entries, but their txs still need `OnChain`
-    // status events: surface them with their config-lineage ids.
-    for tx in &event.block.transactions {
-        let tx_hash = tx.mantle_tx().hash();
-        for op in tx.mantle_tx().ops() {
-            if let Op::ChannelConfig(config) = op
-                && config.channel == channel_id
-            {
-                mined_inscriptions.push(InscriptionInfo {
-                    tx_hash,
-                    parent_msg: config.parent,
-                    this_msg: config.id(),
-                    payload: [].into(),
-                });
-            }
-        }
-    }
+    let config_entries =
+        mined_config_entries(&event.block.transactions, channel_id, &mined_inscriptions);
+    mined_inscriptions.extend(config_entries);
 
     // Mirror this block's inscriptions into the pending set BEFORE
     // `process_block`, so on-branch entries land in the block's safe set and
@@ -271,6 +257,36 @@ pub fn channel_inscriptions(
         }
     }
     entries
+}
+
+/// Configs yield no lineage entries, but their txs still need `OnChain`
+/// status events: one entry per config-carrying tx, with its config-lineage
+/// ids. Status is keyed on the tx, so a tx already covered by an inscription
+/// entry in `mined` needs nothing more.
+fn mined_config_entries(
+    transactions: &[SignedMantleTx<Unverified>],
+    channel_id: ChannelId,
+    mined: &[InscriptionInfo],
+) -> Vec<InscriptionInfo> {
+    transactions
+        .iter()
+        .filter_map(|tx| {
+            let tx_hash = tx.mantle_tx().hash();
+            if mined.iter().any(|info| info.tx_hash == tx_hash) {
+                return None;
+            }
+            let config = tx.mantle_tx().ops().iter().find_map(|op| match op {
+                Op::ChannelConfig(config) if config.channel == channel_id => Some(config),
+                _ => None,
+            })?;
+            Some(InscriptionInfo {
+                tx_hash,
+                parent_msg: config.parent,
+                this_msg: config.id(),
+                payload: [].into(),
+            })
+        })
+        .collect()
 }
 
 /// Convert a shed pending entry into a [`ChannelUpdateTx`] for surfacing to

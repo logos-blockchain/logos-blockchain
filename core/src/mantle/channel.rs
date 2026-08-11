@@ -108,8 +108,8 @@ pub struct ChannelState {
                                      * configuration */
 
     // Message Ordering
-    pub tip_message: MsgId,        // last message of the channel
-    pub config_tip_hash: MsgId,    // last configuration of the channel
+    pub tip_message: MsgId,     // last message of the channel
+    pub config_tip_hash: MsgId, // last configuration of the channel
 
     // Decentralized Sequencing
     pub tip_slot: Slot,

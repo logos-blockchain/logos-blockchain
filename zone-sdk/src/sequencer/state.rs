@@ -713,7 +713,15 @@ impl TxState {
             .pending_other
             .iter()
             .filter(|(hash, entry)| {
+                // `config_tip` comes from the node's tip, which can be ahead
+                // of the blocks we processed: an entry whose own config IS
+                // the tip landed on chain, even if we have not seen its
+                // block yet and it is therefore not in the safe set.
+                let landed = entry
+                    .last_config
+                    .is_some_and(|last_config| landable.contains(&last_config));
                 !safe.contains(*hash)
+                    && !landed
                     && entry
                         .config_parent
                         .is_some_and(|parent| !landable.contains(&parent))
@@ -820,36 +828,6 @@ impl TxState {
         let channel_tip = self.channel_tip_at(tip);
         let tail = self.pending_publish_tail(channel_tip);
         tail.unwrap_or(channel_tip)
-    }
-
-    /// Derive the config publish parent: the mined config tip extended
-    /// through the unique chain of pending configs, so consecutive configs
-    /// chain instead of contesting the same slot. Stops at a contested or
-    /// missing link.
-    #[must_use]
-    pub fn config_publish_parent(&self, config_tip: MsgId) -> MsgId {
-        let mut current = config_tip;
-        // Bounded by the pending population: a longer walk would mean a
-        // cycle in (possibly inconsistent) pending lineage data.
-        for _ in 0..=self.pending_other.len() {
-            let mut candidate: Option<MsgId> = None;
-            for entry in self.pending_other.values() {
-                if entry.config_parent == Some(current)
-                    && let Some(last_config) = entry.last_config
-                    && last_config != current
-                {
-                    if candidate.is_some() && candidate != Some(last_config) {
-                        return current;
-                    }
-                    candidate = Some(last_config);
-                }
-            }
-            match candidate {
-                Some(next) => current = next,
-                None => return current,
-            }
-        }
-        current
     }
 
     /// Walk local pending lineage from `from_msg` to find the tail,
@@ -1364,11 +1342,7 @@ mod tests {
 
         let (bundle, inscribe_msg, _config_msg) = bundle_tx(MsgId::root(), 1);
         let derived = state.submit_other(bundle, channel_id);
-        assert_eq!(
-            derived,
-            Some(inscribe_msg),
-            "bundle tip is its inscription"
-        );
+        assert_eq!(derived, Some(inscribe_msg), "bundle tip is its inscription");
 
         assert_eq!(
             state.publish_parent(tip),
@@ -1596,41 +1570,6 @@ mod tests {
         (tx, config_msg)
     }
 
-    /// Consecutive pending configs chain: the next config's parent is the
-    /// tail of the unique pending config chain, not the mined config tip.
-    #[test]
-    fn config_publish_parent_chains_through_pending_configs() {
-        let genesis = header_id(0);
-        let channel_id = ChannelId::from([0u8; 32]);
-        let mut state = TxState::new(genesis, MsgId::root());
-
-        assert_eq!(state.config_publish_parent(MsgId::root()), MsgId::root());
-
-        let (c1, c1_msg) = config_tx(MsgId::root(), 1);
-        state.submit_other(c1, channel_id);
-        assert_eq!(state.config_publish_parent(MsgId::root()), c1_msg);
-
-        let (c2, c2_msg) = config_tx(c1_msg, 2);
-        state.submit_other(c2, channel_id);
-        assert_eq!(state.config_publish_parent(MsgId::root()), c2_msg);
-    }
-
-    /// Two pending configs contesting the same parent stop the walk before
-    /// the conflict.
-    #[test]
-    fn config_publish_parent_stops_at_contested_position() {
-        let genesis = header_id(0);
-        let channel_id = ChannelId::from([0u8; 32]);
-        let mut state = TxState::new(genesis, MsgId::root());
-
-        let (c1, _) = config_tx(MsgId::root(), 1);
-        let (c2, _) = config_tx(MsgId::root(), 2);
-        state.submit_other(c1, channel_id);
-        state.submit_other(c2, channel_id);
-
-        assert_eq!(state.config_publish_parent(MsgId::root()), MsgId::root());
-    }
-
     /// A landed config supersedes a pending config whose parent no longer
     /// reaches the config tip; a pending config chained on the new tip
     /// survives.
@@ -1684,6 +1623,27 @@ mod tests {
         // The config lands on-branch, so it enters the block's safe set.
         state.process_block(tip, genesis, genesis, vec![config_hash], vec![]);
 
+        assert!(state.shed_stale_pending_configs(tip, config_msg).is_empty());
+        assert!(state.pending_other_contains(&config_hash));
+    }
+
+    /// The config tip is read from the node, which can be ahead of the blocks
+    /// we processed. A config of ours that already moved that tip landed on
+    /// chain, so it must survive even before its block reaches our safe set.
+    #[test]
+    fn shed_stale_pending_configs_keeps_config_that_moved_the_tip() {
+        let genesis = header_id(0);
+        let tip = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![]);
+
+        let (config, config_msg) = config_tx(MsgId::root(), 1);
+        let config_hash = config.mantle_tx().hash();
+        state.submit_other(config, channel_id);
+
+        // The node reports our config as the tip while its block is still
+        // unprocessed here, so nothing put it in the safe set.
         assert!(state.shed_stale_pending_configs(tip, config_msg).is_empty());
         assert!(state.pending_other_contains(&config_hash));
     }

@@ -1508,11 +1508,13 @@ mod tests {
             .expect("tx should carry a config op")
     }
 
-    /// Consecutive configs chain on the config lineage: the first one claims
-    /// the mined config tip (ZERO on an unclaimed channel) and the second
-    /// takes the first, still pending, as its parent.
+    /// A configuration extends the mined config tip, never a config of ours
+    /// still in flight: the proof is built for the mined key set, so pairing
+    /// it with a pending config's id would produce a tx the ledger can only
+    /// reject. Two configs issued back to back contest the same slot and the
+    /// loser is shed once the winner lands.
     #[tokio::test]
-    async fn consecutive_channel_configs_chain_on_pending_config() {
+    async fn consecutive_channel_configs_claim_the_mined_config_tip() {
         let own_key = Ed25519Key::from_bytes(&[7; 32]);
         let mut sequencer = ready_sequencer_with_channel(None, own_key.clone()).await;
 
@@ -1547,9 +1549,8 @@ mod tests {
             "the config claiming an unclaimed channel must be rooted at ZERO"
         );
         assert_eq!(
-            second.parent,
-            first.id(),
-            "a config still in flight must be the parent of the next one"
+            second.parent, first.parent,
+            "a config in flight must not become the parent of the next one"
         );
     }
 }
