@@ -36,7 +36,7 @@ Most of the template content is the same or very similar to what is in `release-
 
 ## Release preparation
 
-- [ ] Checkout and pull the release branch, it should contain the bot generated commit updating the deployment settings as its `HEAD`
+- [ ] Checkout and pull the release branch. If the previous section about genesis creation was followed, it should contain the bot generated commit updating the deployment settings as its `HEAD`
 - [ ] Bump the Cargo workspace version to match the new release version `X.Y.Z`
 - [ ] Re-generate the workspace `Cargo.lock` file with `cargo update -w`
 - [ ] Verify the `Cargo.lock` is now up to date with `cargo update -w --locked`
@@ -91,7 +91,7 @@ Most of the template content is the same or very similar to what is in `release-
 
 - [ ] Verify the Logos Blockchain tools Docker image was properly built and pushed to the [GitHub container registry][logos-tools-image-container-registry]
 - [ ] Wait for the new Docker image to be built after the release is published. It must have the `X.Y.Z` tag.
-- [ ] Checkout `testnet` branch again and change the `deployment/compose.static.yml` symlink to now point to `compose.run.yml` with `ln -s -f compose.run.yml deployment/compose.static.yml`
+- [ ] Checkout `testnet` branch again and change the `deployment/compose.static.yml` symlink to now point to `compose.run.yml` with `ln -s -f compose.run.yml deployment/compose.static.yml`. If this release included previous state cleanup, the new symlink should replace the previous `compose.setup.yml`, otherwise this should be a no-op.
 - [ ] Update `deployment/.env.testnet` file to contain `NODE_IMAGE_LABEL=X.Y.Z` set to version being released
 - [ ] Commit and push the changes to trigger environment re-deployment
 - [ ] Wait around 1 minute for deployment to be updated. Environment is now live.
