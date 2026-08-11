@@ -98,6 +98,8 @@ pub enum WalletOp {
     Lock(NoteId),
     /// Create the reward note.
     LeaderClaim(Utxo),
+    /// Create the reward note.
+    ClaimPoW(Utxo),
     /// Drop the deposited notes from the wallet and insert the channel notes
     /// they are re-created as. The re-created notes keep the same key, so they
     /// remain eligible for `PoL`, but are gated out of wallet-driven spending.
@@ -138,7 +140,9 @@ impl WalletBlock {
                 WalletOp::ChannelDeposit(op) => op.inputs.iter().copied().collect::<Vec<_>>(),
                 WalletOp::ChannelTransfer(op) => op.inputs.iter().copied().collect::<Vec<_>>(),
                 WalletOp::Lock(note_id) => vec![*note_id],
-                WalletOp::ChannelWithdraw(_) | WalletOp::LeaderClaim(_) => Vec::new(),
+                WalletOp::ChannelWithdraw(_) | WalletOp::LeaderClaim(_) | WalletOp::ClaimPoW(_) => {
+                    Vec::new()
+                }
             })
             .collect()
     }
@@ -417,7 +421,7 @@ impl WalletState {
                             locked_notes.insert_mut(*note_id);
                         }
                     }
-                    WalletOp::LeaderClaim(utxo) => {
+                    WalletOp::LeaderClaim(utxo) | WalletOp::ClaimPoW(utxo) => {
                         insert_utxo_if_owned(*utxo, known_keys, &mut utxos, &mut pk_index);
                     }
                 }
@@ -595,6 +599,7 @@ fn transform_op(op: &Op, event: Option<TxEventPayload>) -> Option<WalletOp> {
             TxEventPayload::Deposit { .. } => {
                 panic!("event for LeaderClaim op must be LeaderRewardClaimed")
             }
+            TxEventPayload::PoWRewardClaimed { utxo, .. } => Some(WalletOp::ClaimPoW(utxo)),
         },
         Op::ClaimPowReward(_) => {
             // TODO: something to track here?

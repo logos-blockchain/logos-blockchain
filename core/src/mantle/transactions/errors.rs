@@ -51,4 +51,6 @@ pub enum VerificationError {
     SDPVerificationError(crate::mantle::ops::sdp::SdpError),
     #[error("LeaderClaim verification error: {0}")]
     LeaderClaimVerificationError(crate::mantle::ops::leader_claim::LeaderClaimError),
+    #[error("ClaimPoWReward verification error: {0}")]
+    ClaimPowRewardError(crate::mantle::ops::pow::ClaimPowRewardError),
 }
