@@ -212,7 +212,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                         self.pending_dials.remove(&connection_id);
                     }
                     error => {
-                        tracing::error!(
+                        tracing::debug!(
                             target: LOG_TARGET,
                             "Failed to connect to peer: {peer_id:?} {connection_id:?} due to: {error}"
                         );
