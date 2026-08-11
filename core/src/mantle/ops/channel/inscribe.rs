@@ -12,10 +12,15 @@ use crate::{
     crypto::{Digest as _, Hasher},
     events::TxEvent,
     mantle::{
+        Value,
         channel::{ChannelState, Channels, Error},
-        ledger::{ExecutableOperation, ProvableOperation, VerifiableOperation, verification_mode},
-        ops::channel::config::Keys,
-        transactions::hash::TxHashView,
+        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        ledger::{
+            ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
+            verification_mode, verification_mode::VerificationMode,
+        },
+        ops::{SignedOp, channel::config::Keys},
+        transactions::{hash::TxHashView, states::VerificationState},
     },
 };
 
@@ -25,11 +30,33 @@ use crate::{
 pub const MAX_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 7 / 8;
 pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
 
+mod serde_inscription {
+    use serde::{Deserializer, Serializer};
+
+    use super::{Inscription, MAX_BYTES};
+
+    pub fn serialize<S>(inscription: &Inscription, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        lb_utils::serde::serde_bytes_slice::serialize(inscription, serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Inscription, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        lb_utils::serde::serde_bytes_slice::deserialize_bounded::<Inscription, MAX_BYTES, D>(
+            deserializer,
+        )
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain
-    #[serde(with = "lb_utils::serde::serde_bytes_slice")]
+    #[serde(with = "serde_inscription")]
     pub inscription: Inscription,
     /// Enforce that this inscription comes after this tx
     pub parent: MsgId,
@@ -63,15 +90,18 @@ impl ProvableOperation for InscriptionOp {
     type Proof = Ed25519Signature;
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for InscriptionOp {
-    type PreverificationContext<'a> = InscriptionPreverificationContext<'a>;
-    type VerificationContext<'a> = InscriptionValidationContext<'a>;
+impl OperationGas<MainnetGasProfile> for InscriptionOp {
+    const GAS_COST: Gas = Gas::new(56);
+}
+
+impl PreverifiableOperation<verification_mode::StandardMode> for InscriptionOp {
+    type Context<'a> = InscriptionPreverificationContext<'a>;
     type Error = Error;
 
     fn preverify(
         &self,
         proof: &Self::Proof,
-        context: &Self::PreverificationContext<'_>,
+        context: &Self::Context<'_>,
     ) -> Result<(), Self::Error> {
         // Check the signature
         self.signer
@@ -80,12 +110,13 @@ impl VerifiableOperation<verification_mode::StandardMode> for InscriptionOp {
 
         Ok(())
     }
+}
 
-    fn verify(
-        &self,
-        _proof: &Self::Proof,
-        context: &Self::VerificationContext<'_>,
-    ) -> Result<(), Self::Error> {
+impl VerifiableOperation<verification_mode::StandardMode> for InscriptionOp {
+    type Context<'a> = InscriptionValidationContext<'a>;
+    type Error = Error;
+
+    fn verify(&self, _proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
         // Check if the channel exist otherwise the inscription is valid only if and
         // only if parent == ZERO
         if let Some(channel) = context.channels.channels.get(&self.channel_id).cloned() {
@@ -161,6 +192,14 @@ impl ExecutableOperation for InscriptionOp {
             },
         );
         Ok((context, Vec::new()))
+    }
+}
+
+impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
+    for SignedOp<InscriptionOp, State, Mode>
+{
+    fn gas_multiplier(&self) -> Value {
+        1
     }
 }
 

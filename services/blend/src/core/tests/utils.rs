@@ -6,13 +6,7 @@ use futures::Stream;
 use lb_blend::{
     message::{
         crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
-        encap::{
-            ProofsVerifier,
-            validated::{
-                EncapsulatedMessageWithVerifiedPublicHeader,
-                EncapsulatedMessageWithVerifiedSignature,
-            },
-        },
+        encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
         reward,
     },
     proofs::{
@@ -20,7 +14,7 @@ use lb_blend::{
             ProofOfQuota, VerifiedProofOfQuota,
             inputs::prove::{
                 private::ProofOfLeadershipQuotaInputs,
-                public::{CoreInputs, LeaderInputs},
+                public::{CoreInputs, LeaderInputs, PowInputs},
             },
         },
         selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
@@ -150,16 +144,18 @@ pub struct TestBlendBackend {
 }
 
 #[async_trait]
-impl<NodeId, Rng> BlendBackend<NodeId, Rng, RuntimeServiceId> for TestBlendBackend
+impl<NodeId, Rng, ProofsVerifier> BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId>
+    for TestBlendBackend
 where
     NodeId: Send + 'static,
+    ProofsVerifier: Send + 'static,
 {
     type Settings = ();
 
     fn new(
         _service_config: BlendConfig<Self::Settings>,
         _overwatch_handle: OverwatchHandle<RuntimeServiceId>,
-        _current_epoch_info: BackendEpochInfo<NodeId>,
+        _current_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>,
         _rng: Rng,
     ) -> Self {
         let (event_sender, _) = broadcast::channel(CHANNEL_SIZE);
@@ -173,11 +169,14 @@ where
         _intended_epoch: Epoch,
     ) {
     }
-    async fn rotate_epoch(&mut self, new_epoch_info: BackendEpochInfo<NodeId>) {
+
+    async fn rotate_epoch(&mut self, new_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>) {
         // Notify tests that the backend rotated to a new epoch, carrying the new
         // epoch and membership size so tests can assert the new membership was
         // propagated to the backend.
-        let (membership, epoch) = new_epoch_info;
+        let BackendEpochInfo {
+            membership, epoch, ..
+        } = new_epoch_info;
         // Ignore send errors: not all tests subscribe to backend events, and
         // `rotate_epoch` is also called right before a retirement (no subscriber).
         let _ = self.event_sender.send(TestBlendBackendEvent::EpochRotated {
@@ -195,7 +194,8 @@ where
 
     fn listen_to_incoming_messages(
         &mut self,
-    ) -> Pin<Box<dyn Stream<Item = (EncapsulatedMessageWithVerifiedSignature, Epoch)> + Send>> {
+    ) -> Pin<Box<dyn Stream<Item = (EncapsulatedMessageWithVerifiedPublicHeader, Epoch)> + Send>>
+    {
         unimplemented!()
     }
 
@@ -245,17 +245,18 @@ pub struct TestNetworkAdapter;
 #[async_trait]
 impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for TestNetworkAdapter {
     type Backend = TestNetworkBackend;
-    type BroadcastSettings = ();
+    type Settings = ();
 
     fn new(
         _network_relay: OutboundRelay<
             <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
         >,
+        _settings: Self::Settings,
     ) -> Self {
         Self
     }
 
-    async fn broadcast(&self, _message: Vec<u8>, _broadcast_settings: Self::BroadcastSettings) {}
+    async fn broadcast(&self, _message: Vec<u8>) {}
 }
 
 pub struct TestNetworkBackend {
@@ -291,18 +292,18 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for TestNetworkBackend {
 }
 
 #[expect(clippy::type_complexity, reason = "a test utility")]
-pub fn dummy_overwatch_resources<BackendSettings, BroadcastSettings, RuntimeServiceId>() -> (
+pub fn dummy_overwatch_resources<BackendSettings, NetworkSettings, RuntimeServiceId>() -> (
     OverwatchHandle<RuntimeServiceId>,
     mpsc::Receiver<OverwatchCommand<RuntimeServiceId>>,
-    StateUpdater<Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>>,
-    watch::Receiver<Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>>,
+    StateUpdater<Option<RecoveryServiceState<BackendSettings, NetworkSettings>>>,
+    watch::Receiver<Option<RecoveryServiceState<BackendSettings, NetworkSettings>>>,
 ) {
     let (cmd_sender, cmd_receiver) = mpsc::channel(CHANNEL_SIZE);
     let handle =
         OverwatchHandle::<RuntimeServiceId>::new(tokio::runtime::Handle::current(), cmd_sender);
     let (state_sender, state_receiver) = watch::channel(None);
     let state_updater = StateUpdater::<
-        Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
+        Option<RecoveryServiceState<BackendSettings, NetworkSettings>>,
     >::new(Arc::new(state_sender));
 
     (handle, cmd_receiver, state_updater, state_receiver)
@@ -329,11 +330,28 @@ pub fn new_crypto_processor<CorePoQGenerator>(
         PoQVerificationInputsMinusSigningKey {
             core: epoch_info.poq_core_public_inputs,
             leader: epoch_info.poq_leadership_public_inputs,
+            pow: PowInputs::unwired_placeholder(),
         },
         core_poq_generator,
         epoch_info.epoch,
     )
     .expect("crypto processor must be created successfully")
+}
+
+/// The [`BackendEpochInfo`] the service hands to the backend for an epoch,
+/// including the `PoQ` verifier the backend uses to check received messages.
+pub fn backend_epoch_info(
+    public_info: &CoreEpochPublicInfo<NodeId>,
+) -> BackendEpochInfo<NodeId, MockProofsVerifier> {
+    BackendEpochInfo {
+        membership: public_info.membership.clone(),
+        epoch: public_info.epoch,
+        proofs_verifier: MockProofsVerifier::new(PoQVerificationInputsMinusSigningKey {
+            core: public_info.poq_core_public_inputs,
+            leader: public_info.poq_leadership_public_inputs,
+            pow: PowInputs::unwired_placeholder(),
+        }),
+    }
 }
 
 pub fn new_epoch_info<BackendSettings>(

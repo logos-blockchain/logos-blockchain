@@ -13,10 +13,11 @@ use cryptarchia::LedgerState as CryptarchiaLedger;
 pub use cryptarchia::{EpochState, UtxoTree};
 use lb_core::{
     block::BlockNumber,
-    events::{Events, HeaderEvent, TxEvent},
+    crypto::Hash as BlockHash,
+    events::{Events, HeaderEvent, TxEvent, TxEventPayload},
     mantle::{
         NoteId, Op, Utxo, Value, VerificationError,
-        gas::{Gas, GasConstants, GasCost, GasOverflow},
+        gas::{Gas, GasCost, GasOverflow, GasProfile},
         ledger::ExecutableOperation as _,
         ops::{
             channel::{
@@ -24,6 +25,7 @@ use lb_core::{
                 deposit::DepositExecutionContext, withdraw::WithdrawExecutionContext,
             },
             leader_claim::LeaderClaimExecutionContext,
+            pow::{ClaimPoWRewardExecutionContext, PowReward},
         },
         traits::{GenesisTx, MantleTxWithProofs, PreverifiedMantleTx},
         transactions::{GasPrices, MantleTxGasContext, hash::TxHash, mantle_tx::MantleTxContext},
@@ -72,6 +74,12 @@ const LEADER_REWARD_SHARE_DENOMINATOR: u128 = 10;
 const BLEND_REWARD_SHARE_NUMERATOR: u128 = 6;
 
 const BLEND_REWARD_SHARE_DENOMINATOR: u128 = 10;
+
+// `POW` related rewards
+// TODO: Activate this, currently is 0 based to keep original behaviour
+// (blend+leadership)
+const POW_REWARD_SHARE_NUMERATOR: u128 = 0;
+const POW_REWARD_SHARE_DENOMINATOR: u128 = 4;
 const EXECUTION_GAS_LIMIT: Gas = Gas::new(3_193_460);
 
 // While individual notes are constrained to be `u64`, intermediate calculations
@@ -125,7 +133,14 @@ impl<Id> Ledger<Id>
 where
     Id: Eq + Hash + Copy,
 {
-    pub fn new(id: Id, state: LedgerState, config: Config) -> Self {
+    pub fn new(id: Id, mut state: LedgerState, config: Config) -> Self
+    where
+        Id: Into<BlockHash>,
+    {
+        // Record the root block among the recently seen blocks, so early
+        // `PoW` reward claims can anchor to it. Later blocks are recorded
+        // as they are applied in `try_update`.
+        state.mantle_ledger.add_seen_block(id.into(), state.slot());
         Self {
             states: HashTrieMapSync::new_sync().insert(id, state),
             config,
@@ -137,7 +152,7 @@ where
     ///
     /// On success, a new [`LedgerState`] is returned, which can then be
     /// committed by calling [`Self::commit_update`].
-    pub fn prepare_update<'tx, Tx, LeaderProof, Constants>(
+    pub fn prepare_update<'tx, Tx, LeaderProof, Profile>(
         &self,
         id: Id,
         parent_id: Id,
@@ -148,14 +163,16 @@ where
     where
         Tx: PreverifiedMantleTx<Context = GasPrices> + 'tx,
         LeaderProof: leader_proof::LeaderProof,
-        Constants: GasConstants,
+        Profile: GasProfile,
+        Id: Into<BlockHash>,
     {
         let parent_state = self
             .states
             .get(&parent_id)
             .ok_or(LedgerError::ParentNotFound(parent_id))?;
 
-        let (new_state, events) = parent_state.clone().try_update::<_, _, _, Constants>(
+        let (new_state, events) = parent_state.clone().try_update::<_, _, _, Profile>(
+            id,
             slot,
             proof,
             txs,
@@ -208,8 +225,9 @@ pub struct LedgerState {
 }
 
 impl LedgerState {
-    fn try_update<'tx, Tx, LeaderProof, Id, Constants>(
+    fn try_update<'tx, Tx, LeaderProof, Id, Profile>(
         self,
+        block_id: Id,
         slot: Slot,
         proof: &LeaderProof,
         txs: impl Iterator<Item = &'tx Tx>,
@@ -218,10 +236,25 @@ impl LedgerState {
     where
         Tx: PreverifiedMantleTx<Context = GasPrices> + 'tx,
         LeaderProof: leader_proof::LeaderProof,
-        Constants: GasConstants,
+        Profile: GasProfile,
+        Id: Into<BlockHash>,
     {
-        let (state, header_events) = self.try_apply_header(slot, proof, config)?;
-        let (state, tx_events) = state.try_apply_contents::<_, _, Constants>(config, txs)?;
+        let (mut state, header_events) = self.try_apply_header(slot, proof, config)?;
+        // Record the applied block among the recently seen blocks `PoW`
+        // claims may anchor to. This is the canonical apply path, where the
+        // block's id is known — unlike a proposer's direct
+        // `try_apply_header` call for a block still being built.
+        state.mantle_ledger.add_seen_block(block_id.into(), slot);
+        let (mut state, tx_events) = state.try_apply_contents::<_, _, Profile>(config, txs)?;
+        state.update_pow_difficulty(
+            // count all claimed rewards
+            tx_events
+                .iter()
+                .filter(|TxEvent { payload, .. }| {
+                    matches!(payload, TxEventPayload::PoWRewardClaimed { .. })
+                })
+                .count() as u64,
+        );
         let events = header_events
             .into_iter()
             .map(Into::into)
@@ -333,12 +366,18 @@ impl LedgerState {
         )
         .checked_add(total_fee_tip)?;
 
+        let pow_reward: PowReward = ((reward_numerator * POW_REWARD_SHARE_NUMERATOR)
+            / (reward_denominator * POW_REWARD_SHARE_DENOMINATOR))
+            .try_into()
+            .map_err(|_e| GasOverflow)?;
+
         self.mantle_ledger.leaders = self
             .mantle_ledger
             .leaders
             .add_pending_rewards(leader_reward.into_inner());
 
         self.mantle_ledger.sdp.add_blend_income(blend_reward);
+        self.mantle_ledger.pow.add_reward_refill_rewards(pow_reward);
 
         Ok(self)
     }
@@ -373,7 +412,7 @@ impl LedgerState {
     }
 
     /// Apply the contents of an update to the ledger state.
-    pub fn try_apply_contents<'tx, Tx, Id, Constants: GasConstants>(
+    pub fn try_apply_contents<'tx, Tx, Id, Profile: GasProfile>(
         mut self,
         config: &Config,
         txs: impl Iterator<Item = &'tx Tx>,
@@ -390,7 +429,7 @@ impl LedgerState {
         for tx in txs {
             let balance;
             let events;
-            (self, balance, events) = self.try_apply_tx::<_, _, Constants>(config, tx)?;
+            (self, balance, events) = self.try_apply_tx::<_, _, Profile>(config, tx)?;
             tx_events.extend(events);
 
             let gas_prices = GasPrices {
@@ -398,7 +437,7 @@ impl LedgerState {
                 storage_gas_price: *self.cryptarchia_ledger.storage_gas_price(),
             };
             // Check the transaction is balanced
-            let total_gas_cost = tx.total_gas_cost::<Constants>(&gas_prices)?;
+            let total_gas_cost = tx.total_gas_cost::<Profile>(&gas_prices)?;
             tracing::debug!(
                 balance,
                 total_gas_cost = total_gas_cost.into_inner(),
@@ -415,7 +454,7 @@ impl LedgerState {
 
             // Update the total of fee burned and tipped in the block
             let tx_fee_burned = GasCost::calculate(
-                tx.execution_gas_consumption::<Constants>(&gas_prices)?,
+                tx.execution_gas_consumption::<Profile>(&gas_prices)?,
                 gas_prices.execution_base_gas_price,
             )?
             .checked_add(tx.storage_gas_cost(&gas_prices)?)?;
@@ -424,7 +463,7 @@ impl LedgerState {
             total_fee_burned = total_fee_burned.checked_add(tx_fee_burned)?;
             total_fee_tip = total_fee_tip.checked_add(tx_fee_tip)?;
             total_block_execution_gas = total_block_execution_gas
-                .checked_add(tx.execution_gas_consumption::<Constants>(&gas_prices)?)?;
+                .checked_add(tx.execution_gas_consumption::<Profile>(&gas_prices)?)?;
             total_block_storage_gas =
                 total_block_storage_gas.checked_add(tx.storage_gas_consumption(&gas_prices)?)?;
 
@@ -545,7 +584,7 @@ impl LedgerState {
         clippy::too_many_lines,
         reason = "This will be refactored in an upcoming PR."
     )]
-    fn try_apply_op<Id, Constants: GasConstants>(
+    fn try_apply_op<Id, Profile: GasProfile>(
         mut self,
         op: &Op,
         config: &Config,
@@ -654,10 +693,29 @@ impl LedgerState {
                 let events;
                 (self.cryptarchia_ledger, transfer_balance, events) =
                     self.cryptarchia_ledger
-                        .try_apply_transfer::<_, Constants>(op)?;
+                        .try_apply_transfer::<_, Profile>(op)?;
                 balance = balance
                     .checked_add(transfer_balance)
                     .ok_or(LedgerError::BalanceOverflow)?;
+                tx_events.extend(events);
+            }
+            Op::ClaimPowReward(claim_pow_reward) => {
+                let (result, events) = claim_pow_reward
+                    .execute(ClaimPoWRewardExecutionContext {
+                        reward_pool: self.mantle_ledger.pow.reward_pool(),
+                        // TODO: check correctness of epoch reward, as it should be from the op
+                        // specified epoch
+                        epoch_reward: self.mantle_ledger.pow.epoch_reward(),
+                        nullifiers: self.mantle_ledger.pow.nullifiers().clone(),
+                        tx_hash: *tx_hash,
+                        utxos: self.cryptarchia_ledger.latest_utxos().clone(),
+                        block_slots: self.mantle_ledger.pow.block_slots().clone(),
+                    })
+                    .map_err(mantle::Error::ClaimPow)?;
+                self.mantle_ledger
+                    .pow
+                    .update_from_claim_execution_result(&result);
+                self.cryptarchia_ledger = self.cryptarchia_ledger.update_utxos(result.utxos);
                 tx_events.extend(events);
             }
         }
@@ -682,7 +740,7 @@ impl LedgerState {
     ///
     /// If any operation fails verification or execution, returns a
     /// [`LedgerError`] describing the failure.
-    fn try_apply_tx<'tx, Tx, Id, Constants: GasConstants>(
+    fn try_apply_tx<'tx, Tx, Id, Profile: GasProfile>(
         mut self,
         config: &Config,
         tx: &'tx Tx,
@@ -704,7 +762,7 @@ impl LedgerState {
             let Some(op) = verified_ops.next(&helper).transpose()? else {
                 break;
             };
-            (self, balance, tx_events) = self.try_apply_op::<_, Constants>(
+            (self, balance, tx_events) = self.try_apply_op::<_, Profile>(
                 op,
                 config,
                 verified_ops.tx_hash_view().tx_hash(),
@@ -715,16 +773,19 @@ impl LedgerState {
 
         Ok((self, balance, tx_events))
     }
+
+    fn update_pow_difficulty(&mut self, claims_in_block: u64) {
+        self.mantle_ledger.pow.update_difficulty(claims_in_block);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use cryptarchia::tests::{config, generate_proof, utxo};
     use lb_core::{
-        events::TxEventPayload,
         mantle::{
-            GasCalculator as _, Note, OpProof, RawMantleTx, SignedMantleTx,
-            gas::MainnetGasConstants,
+            Note, OpProof, RawMantleTx, SignedMantleTx, TxGasCalculator as _,
+            gas::MainnetGasProfile,
             ledger::{Inputs, Outputs, Utxos, VerifiableOperation as _},
             ops::{
                 OpId as _,
@@ -898,7 +959,7 @@ mod tests {
             &Key::Ed25519(signing_key.clone()),
         );
         ledger_state
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(config, &tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(config, &tx)
             .unwrap()
             .0
     }
@@ -968,7 +1029,7 @@ mod tests {
 
         let default_gas_prices = GasPrices::default();
         let fees = tx
-            .total_gas_cost::<MainnetGasConstants>(&default_gas_prices)
+            .total_gas_cost::<MainnetGasProfile>(&default_gas_prices)
             .unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
 
@@ -987,7 +1048,7 @@ mod tests {
 
         let new_id = [1; 32];
         let (_, state, events) = ledger
-            .prepare_update::<_, _, MainnetGasConstants>(
+            .prepare_update::<_, _, MainnetGasProfile>(
                 new_id,
                 genesis_id,
                 Slot::from(1u64),
@@ -1026,7 +1087,7 @@ mod tests {
         };
 
         let tx = create_signed_tx(Op::ChannelInscribe(inscribe_op), &Key::Ed25519(signing_key));
-        let result = state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &tx);
+        let result = state.try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &tx);
         assert!(result.is_ok());
 
         let (new_state, _, events) = result.unwrap();
@@ -1071,7 +1132,7 @@ mod tests {
             Op::ChannelConfig(config_op),
             &Key::MultiSequencer(config_proof),
         );
-        let result = state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &tx);
+        let result = state.try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &tx);
         assert!(result.is_ok());
 
         let (new_state, _, events) = result.unwrap();
@@ -1127,8 +1188,7 @@ mod tests {
         };
         let ops = vec![Op::ChannelDeposit(deposit.clone())];
         let tx = create_multi_signed_tx(ops, vec![&Key::Zk(sk)]);
-        let result =
-            ledger_state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &tx);
+        let result = ledger_state.try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &tx);
         let (new_state, balance, events) = result.unwrap();
         // The deposited note is consumed and re-created as a channel note under
         // a new NoteId.
@@ -1206,7 +1266,7 @@ mod tests {
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
         let tx = create_multi_signed_tx(deposit_ops, vec![&Key::Zk(sk)]);
         ledger_state = ledger_state
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &tx)
             .unwrap()
             .0;
 
@@ -1240,7 +1300,7 @@ mod tests {
         );
 
         let result =
-            ledger_state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &signed_tx);
+            ledger_state.try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &signed_tx);
         assert!(result.is_ok());
 
         let (new_state, tx_balance, events) = result.unwrap();
@@ -1281,7 +1341,7 @@ mod tests {
         let deposit_tx =
             create_multi_signed_tx(vec![Op::ChannelDeposit(deposit)], vec![&Key::Zk(sk)]);
         ledger_state = ledger_state
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &deposit_tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &deposit_tx)
             .unwrap()
             .0;
 
@@ -1307,15 +1367,15 @@ mod tests {
             vec![&Key::MultiSequencer(withdraw_proof)],
         );
         ledger_state = ledger_state
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &signed_withdraw)
+            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &signed_withdraw)
             .unwrap()
             .0;
 
         assert!(!ledger_state.latest_utxos().contains(&utxo.id()));
 
         // Replaying the signed deposit fails: its input no longer exists.
-        let result = ledger_state
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &deposit_tx);
+        let result =
+            ledger_state.try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &deposit_tx);
         assert!(result.is_err());
     }
 
@@ -1345,7 +1405,7 @@ mod tests {
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
         let tx = create_multi_signed_tx(deposit_ops, vec![&Key::Zk(sk)]);
         ledger_state = ledger_state
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &tx)
             .unwrap()
             .0;
         // The deposit re-created the note as a channel note
@@ -1380,7 +1440,7 @@ mod tests {
 
         let err = ledger_state
             .clone()
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &signed_tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &signed_tx)
             .unwrap_err();
         assert_eq!(
             err,
@@ -1418,7 +1478,7 @@ mod tests {
             &Key::Ed25519(signing_key.clone()),
         );
         state = state
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &first_tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &first_tx)
             .unwrap()
             .0;
 
@@ -1437,7 +1497,7 @@ mod tests {
         );
         let result = state
             .clone()
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &second_tx);
+            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &second_tx);
         assert!(matches!(
             result,
             Err(LedgerError::VerificationError(
@@ -1461,7 +1521,7 @@ mod tests {
             &Key::Ed25519(signing_key),
         );
         let empty_result =
-            state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &empty_tx);
+            state.try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &empty_tx);
         assert!(matches!(
             empty_result,
             Err(LedgerError::VerificationError(
@@ -1494,7 +1554,7 @@ mod tests {
             &Key::Ed25519(signing_key),
         );
         state = state
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &first_tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &first_tx)
             .unwrap()
             .0;
 
@@ -1510,8 +1570,7 @@ mod tests {
             Op::ChannelInscribe(second_inscribe),
             &Key::Ed25519(unauthorized_signing_key),
         );
-        let result =
-            state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &second_tx);
+        let result = state.try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &second_tx);
         assert!(matches!(
             result,
             Err(LedgerError::VerificationError(
@@ -1596,7 +1655,7 @@ mod tests {
         );
 
         let result = state
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &tx)
             .unwrap()
             .0;
 
@@ -1738,7 +1797,7 @@ mod tests {
         );
         // Pays 2925 fees = 2705 execution base fee + 0 execution tip + 220 storage
         let fees = tx
-            .total_gas_cost::<MainnetGasConstants>(&ledger.get_gas_prices())
+            .total_gas_cost::<MainnetGasProfile>(&ledger.get_gas_prices())
             .unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk])
@@ -1747,7 +1806,7 @@ mod tests {
 
         let result = ledger
             .clone()
-            .try_apply_contents::<_, HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));
+            .try_apply_contents::<_, HeaderId, MainnetGasProfile>(&config, std::iter::once(&tx));
         // The `unwrap` should succeed because the user pays at least the base fee of
         // 2705
         result.unwrap();
@@ -1755,7 +1814,7 @@ mod tests {
         ledger.cryptarchia_ledger = ledger.cryptarchia_ledger.set_execution_base_fee(10.into());
 
         let err = ledger
-            .try_apply_contents::<_, HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx))
+            .try_apply_contents::<_, HeaderId, MainnetGasProfile>(&config, std::iter::once(&tx))
             .unwrap_err();
         // The transaction should be rejected because the price indicated for execution
         // doesn't cover the base fee that cost 27 050
@@ -1779,7 +1838,7 @@ mod tests {
         // The tx pays 794 fees = 590 execution base fee + 0 execution tip + 204
         // storage
         let fees = tx
-            .total_gas_cost::<MainnetGasConstants>(&ledger.get_gas_prices())
+            .total_gas_cost::<MainnetGasProfile>(&ledger.get_gas_prices())
             .unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
         let tx = create_tx(
@@ -1792,7 +1851,7 @@ mod tests {
 
         let result = ledger
             .clone()
-            .try_apply_contents::<_, HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));
+            .try_apply_contents::<_, HeaderId, MainnetGasProfile>(&config, std::iter::once(&tx));
         // The `unwrap` should succeed because the user pays at least the base fee of
         // 794
         let (no_priority_fee_ledger, events) = result.unwrap();
@@ -1810,7 +1869,7 @@ mod tests {
         .unwrap();
 
         let result = ledger
-            .try_apply_contents::<_, HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));
+            .try_apply_contents::<_, HeaderId, MainnetGasProfile>(&config, std::iter::once(&tx));
         // The `unwrap` should succeed because the user pays at least the base fee of
         // 794
         let (priority_fee_ledger, events) = result.unwrap();
@@ -1852,7 +1911,7 @@ mod tests {
         assert!(storage_gas.into_inner() > 0);
 
         let (applied, _) = ledger
-            .try_apply_contents::<_, HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx))
+            .try_apply_contents::<_, HeaderId, MainnetGasProfile>(&config, std::iter::once(&tx))
             .unwrap();
 
         // Storage gas consumed by the tx should be accumulated in the ledger
@@ -1958,5 +2017,389 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(err, LeaderClaimError::DuplicatedVoucherNullifier);
+    }
+
+    mod pow {
+        use lb_core::{
+            crypto::{ZkDigest as _, ZkHasher},
+            mantle::ops::{
+                NoOpProof,
+                pow::{ClaimPowRewardError, ClaimPowRewardOp, PowTarget},
+            },
+        };
+        use lb_groth16::{AdditiveGroup as _, fr_from_mod_bytes};
+
+        use super::*;
+        use crate::mantle::pow::ClaimPoWConstants;
+
+        /// A payout rate of `1/100`: `sigma_e = pool / 100`, used to give the
+        /// `PoW` state a nonzero per-claim reward in tests.
+        struct TestPoolConstants;
+        impl ClaimPoWConstants for TestPoolConstants {
+            const RATE_NUM: u64 = 1;
+            const RATE_DEN: u64 = 1;
+            const TARGET_CLAIM_PER_BLOCK: u64 = 10;
+            const EXPECTED_BLOCKS_PER_EPOCH: u64 = 10;
+        }
+
+        /// A ledger state with a funded `PoW` pool (1000, `sigma_e` = 10) and
+        /// a seeded reward difficulty.
+        fn pow_ledger_state(reward_difficulty: u64) -> (LedgerState, Config) {
+            let config = config();
+            let mut state = LedgerState::from_utxos([utxo()], &config);
+            state.mantle_ledger.pow.add_reward_refill_rewards(1_000);
+            state
+                .mantle_ledger
+                .pow
+                .add_rewards_to_pool::<TestPoolConstants>();
+            state
+                .mantle_ledger
+                .pow
+                .set_reward_difficulty(PowTarget::from(reward_difficulty));
+            (state, config)
+        }
+
+        fn claim_op() -> ClaimPowRewardOp {
+            ClaimPowRewardOp {
+                // The nonce `validate_current_epoch_nonce` accepts for epoch
+                // 0, the current epoch of a fresh test ledger.
+                epoch_nonce: ZkHasher::digest(&[fr_from_mod_bytes(&0u32.to_le_bytes())]),
+                block_hash: [1u8; 32],
+                public_key: ZkPublicKey::new(Fr::from(42u64)),
+            }
+        }
+
+        /// Read the reward difficulty of a block's committed state.
+        fn difficulty_at(ledger: &Ledger<HeaderId>, id: HeaderId) -> PowTarget {
+            ledger
+                .state(&id)
+                .expect("block state should exist")
+                .mantle_ledger
+                .pow
+                .reward_difficulty()
+        }
+
+        #[test]
+        fn difficulty_eases_on_each_applied_block_without_claims() {
+            // The retarget runs in `try_update`, on the canonical block-apply
+            // path, once the block's contents have applied successfully.
+            // `PoWDifficultySettings`: q = 9/10, T = 100. An empty block is
+            // the largest easing step, a factor of P/F = 10/9 per block:
+            //   900 -> 10·100·900/(9·100) = 1000 -> 1000000/900 = 1111.
+            let test_utxo = utxo();
+            let (mut test_ledger, genesis) = ledger(&[test_utxo], config());
+            test_ledger
+                .states
+                .get_mut(&genesis)
+                .expect("genesis state should exist")
+                .mantle_ledger
+                .pow
+                .set_reward_difficulty(PowTarget::from(900u64));
+
+            let block_1 = update_ledger(&mut test_ledger, genesis, 1, test_utxo)
+                .expect("empty block should apply");
+            assert_eq!(
+                difficulty_at(&test_ledger, block_1),
+                PowTarget::from(1_000u64)
+            );
+
+            let block_2 = update_ledger(&mut test_ledger, block_1, 2, test_utxo)
+                .expect("empty block should apply");
+            assert_eq!(
+                difficulty_at(&test_ledger, block_2),
+                PowTarget::from(1_111u64)
+            );
+        }
+
+        #[test]
+        fn difficulty_hardens_when_claims_exceed_the_target() {
+            // Exercises the `LedgerState` plumbing directly with a claim
+            // count: 2T claims shrink the target,
+            // 1000 -> 10·100·1000/(1·200 + 9·100) = 909.
+            let (mut state, _config) = pow_ledger_state(1_000);
+
+            state.update_pow_difficulty(200);
+
+            assert_eq!(
+                state.mantle_ledger.pow.reward_difficulty(),
+                PowTarget::from(909u64)
+            );
+        }
+
+        #[test]
+        fn difficulty_is_seeded_at_genesis_and_the_controller_can_move_it() {
+            // Genesis seeds a nonzero initial difficulty (zero would be an
+            // absorbing state for the controller, with no ticket ever able
+            // to satisfy it), and the per-block retarget moves it: an empty
+            // block (no claims) eases the target upward.
+            let test_utxo = utxo();
+            let (mut test_ledger, genesis) = ledger(&[test_utxo], config());
+            let genesis_difficulty = difficulty_at(&test_ledger, genesis);
+            assert_ne!(genesis_difficulty, Fr::ZERO);
+
+            let block_1 = update_ledger(&mut test_ledger, genesis, 1, test_utxo)
+                .expect("empty block should apply");
+            assert!(difficulty_at(&test_ledger, block_1) > genesis_difficulty);
+        }
+
+        fn claim_tx() -> SignedMantleTx<Preverified> {
+            let mantle_tx = RawMantleTx([Op::ClaimPowReward(claim_op())].into());
+            SignedMantleTx::new(mantle_tx, [OpProof::None(NoOpProof)].into())
+                .preverify()
+                .expect("claim op with OpProof::None should pass preverification")
+        }
+
+        #[test]
+        fn claim_tx_validation_rejects_disabled_rewards() {
+            // End-to-end through `try_apply_tx`: with `sigma_e` forced to
+            // zero the claim fails the §5.6 safety cutoff. This exercises
+            // the full wiring: preverification, the stateful
+            // `ClaimPowReward` arm and the helper-built context.
+            struct DisabledConstants;
+            impl ClaimPoWConstants for DisabledConstants {
+                const RATE_NUM: u64 = 0;
+                const RATE_DEN: u64 = 1;
+                const TARGET_CLAIM_PER_BLOCK: u64 = 1;
+                const EXPECTED_BLOCKS_PER_EPOCH: u64 = 1;
+            }
+
+            let config = config();
+            let mut state = LedgerState::from_utxos([utxo()], &config);
+            state
+                .mantle_ledger
+                .pow
+                .add_rewards_to_pool::<DisabledConstants>();
+            assert_eq!(state.mantle_ledger.pow.epoch_reward(), 0);
+
+            let err = state
+                .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&config, &claim_tx())
+                .expect_err("claim should fail validation");
+
+            assert!(matches!(
+                err,
+                LedgerError::VerificationError(VerificationError::ClaimPowRewardError(
+                    ClaimPowRewardError::EmptyRewards
+                ))
+            ));
+        }
+
+        #[test]
+        fn claim_tx_validation_rejects_unknown_anchor_block() {
+            // With a funded pool the claim advances to the window-of-
+            // acceptance check, which fails because the anchor block is not
+            // among the ledger's recently seen blocks.
+            let (state, config) = pow_ledger_state(1_000);
+
+            let err = state
+                .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&config, &claim_tx())
+                .expect_err("claim should fail validation");
+
+            assert!(matches!(
+                err,
+                LedgerError::VerificationError(VerificationError::ClaimPowRewardError(
+                    ClaimPowRewardError::MissingBlock { block_id }
+                )) if block_id == claim_op().block_hash
+            ));
+        }
+
+        /// A funded state where `claim_tx()` passes full validation: max
+        /// difficulty (every ticket wins) and the anchor block recorded as
+        /// seen at the current slot.
+        fn claim_accepting_state() -> (LedgerState, Config) {
+            let (mut state, config) = pow_ledger_state(1_000);
+            state
+                .mantle_ledger
+                .pow
+                .set_reward_difficulty(-PowTarget::ONE);
+            state
+                .mantle_ledger
+                .pow
+                .add_seen_block_slots(claim_op().block_hash, Slot::from(0u64));
+            (state, config)
+        }
+
+        #[test]
+        fn claim_tx_end_to_end_pays_the_reward() {
+            // The full §5.3 pipeline through `try_apply_tx`: preverification,
+            // helper-built validation context (pool, window, epoch nonce,
+            // difficulty, double-claim) and execution.
+            let (state, config) = claim_accepting_state();
+            let pool_before = state.mantle_ledger.pow.reward_pool();
+            let epoch_reward = state.mantle_ledger.pow.epoch_reward();
+
+            let (state, _balance, events) = state
+                .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&config, &claim_tx())
+                .expect("claim should validate and execute");
+
+            assert_eq!(
+                state.mantle_ledger.pow.reward_pool(),
+                pool_before - epoch_reward
+            );
+            assert!(
+                state
+                    .mantle_ledger
+                    .pow
+                    .nullifiers()
+                    .contains_key(&claim_op().get_puzzle_ticket())
+            );
+            let expected_utxo = Utxo {
+                op_id: claim_op().op_id(),
+                output_index: 0,
+                note: Note::new(epoch_reward, claim_op().public_key),
+            };
+            assert_eq!(
+                state
+                    .cryptarchia_ledger
+                    .latest_utxos()
+                    .get(&expected_utxo.id()),
+                Some(expected_utxo)
+            );
+            assert_eq!(events.len(), 1);
+            assert!(matches!(
+                &events[0].payload,
+                TxEventPayload::PoWRewardClaimed { .. }
+            ));
+        }
+
+        #[test]
+        fn claim_tx_double_claim_is_rejected() {
+            // Replaying the same solution is caught by the nullifier check
+            // during tx-level validation.
+            let (state, config) = claim_accepting_state();
+            let (state, _, _) = state
+                .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&config, &claim_tx())
+                .expect("first claim should succeed");
+
+            let err = state
+                .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&config, &claim_tx())
+                .expect_err("second claim should be rejected");
+
+            assert!(matches!(
+                err,
+                LedgerError::VerificationError(VerificationError::ClaimPowRewardError(
+                    ClaimPowRewardError::DoubleClaimed
+                ))
+            ));
+        }
+
+        #[test]
+        fn claim_execution_pays_the_reward_and_updates_the_ledger() {
+            // The execution path (`try_apply_op`): the claim drains sigma_e
+            // from the pool, records the nullifier, inserts the reward note
+            // into the UTXO set and emits the claim event.
+            let (mut state, config) = pow_ledger_state(1_000);
+            // Execution reads the anchor block's slot from the seen-block
+            // map (validation, skipped here, guarantees its presence), so
+            // record it directly.
+            state
+                .mantle_ledger
+                .pow
+                .add_seen_block_slots(claim_op().block_hash, Slot::from(0u64));
+            let pool_before = state.mantle_ledger.pow.reward_pool();
+            let epoch_reward = state.mantle_ledger.pow.epoch_reward();
+            let op = claim_op();
+            let tx_hash = TxHash::from([9u8; 32]);
+
+            let (state, _balance, events) = state
+                .try_apply_op::<HeaderId, MainnetGasProfile>(
+                    &Op::ClaimPowReward(op.clone()),
+                    &config,
+                    &tx_hash,
+                    0,
+                    Vec::new(),
+                )
+                .expect("claim execution should succeed");
+
+            assert_eq!(
+                state.mantle_ledger.pow.reward_pool(),
+                pool_before - epoch_reward
+            );
+            assert!(
+                state
+                    .mantle_ledger
+                    .pow
+                    .nullifiers()
+                    .contains_key(&op.get_puzzle_ticket())
+            );
+
+            let expected_utxo = Utxo {
+                op_id: op.op_id(),
+                output_index: 0,
+                note: Note::new(epoch_reward, op.public_key),
+            };
+            assert_eq!(
+                state
+                    .cryptarchia_ledger
+                    .latest_utxos()
+                    .get(&expected_utxo.id()),
+                Some(expected_utxo)
+            );
+
+            assert_eq!(events.len(), 1);
+            assert!(matches!(
+                &events[0],
+                TxEvent {
+                    tx_hash: event_tx_hash,
+                    payload: TxEventPayload::PoWRewardClaimed { .. },
+                    ..
+                } if *event_tx_hash == tx_hash
+            ));
+        }
+
+        #[test]
+        fn claim_execution_alone_has_no_double_claim_guard() {
+            // `try_apply_op` is execute-only by design (like the other op
+            // arms): the double-claim check lives in
+            // `ClaimPowRewardOp::validate`, which `try_apply_tx` runs via
+            // `verify_stateful_op` before execution (see
+            // `claim_tx_double_claim_is_rejected`). Calling the execution
+            // path directly therefore pays the same solution twice — pinned
+            // here to document that the guard lives in validation, not
+            // execution.
+            let (mut state, config) = pow_ledger_state(1_000);
+            // Execution reads the anchor block's slot from the seen-block
+            // map (validation, skipped here, guarantees its presence), so
+            // record it directly.
+            state
+                .mantle_ledger
+                .pow
+                .add_seen_block_slots(claim_op().block_hash, Slot::from(0u64));
+            let pool_before = state.mantle_ledger.pow.reward_pool();
+            let epoch_reward = state.mantle_ledger.pow.epoch_reward();
+            let op = Op::ClaimPowReward(claim_op());
+            let tx_hash = TxHash::from([9u8; 32]);
+
+            let (state, _, _) = state
+                .try_apply_op::<HeaderId, MainnetGasProfile>(&op, &config, &tx_hash, 0, Vec::new())
+                .expect("first claim should succeed");
+            let (state, _, _) = state
+                .try_apply_op::<HeaderId, MainnetGasProfile>(&op, &config, &tx_hash, 0, Vec::new())
+                .expect("second claim currently also succeeds (no validation)");
+
+            assert_eq!(
+                state.mantle_ledger.pow.reward_pool(),
+                pool_before - 2 * epoch_reward
+            );
+        }
+
+        #[test]
+        fn block_fees_do_not_refill_the_pow_pool_while_the_share_is_zero() {
+            // Pins that `POW_REWARD_SHARE_NUMERATOR` is still 0: block fees
+            // are split between leaders and blend only, so nothing accrues
+            // to the PoW refill and the pool is unchanged after crediting.
+            let config = config();
+            let mut state = LedgerState::from_utxos([utxo()], &config);
+            let pool_before = state.mantle_ledger.pow.reward_pool();
+
+            state = state
+                .compute_block_rewards(1_000.into(), 0.into())
+                .expect("reward computation should succeed");
+
+            state
+                .mantle_ledger
+                .pow
+                .add_rewards_to_pool::<TestPoolConstants>();
+            assert_eq!(state.mantle_ledger.pow.reward_pool(), pool_before);
+        }
     }
 }

@@ -15,7 +15,7 @@ use lb_core::{
     events::{Event, Events, HeaderEvent, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
-        GasConstants, NoteId, TxHash, Utxo, Value,
+        GasProfile, NoteId, TxHash, Utxo, Value,
         ops::{
             Op, OpId as _,
             channel::{
@@ -98,6 +98,8 @@ pub enum WalletOp {
     Lock(NoteId),
     /// Create the reward note.
     LeaderClaim(Utxo),
+    /// Create the reward note.
+    ClaimPoW(Utxo),
     /// Drop the deposited notes from the wallet and insert the channel notes
     /// they are re-created as. The re-created notes keep the same key, so they
     /// remain eligible for `PoL`, but are gated out of wallet-driven spending.
@@ -138,7 +140,9 @@ impl WalletBlock {
                 WalletOp::ChannelDeposit(op) => op.inputs.iter().copied().collect::<Vec<_>>(),
                 WalletOp::ChannelTransfer(op) => op.inputs.iter().copied().collect::<Vec<_>>(),
                 WalletOp::Lock(note_id) => vec![*note_id],
-                WalletOp::ChannelWithdraw(_) | WalletOp::LeaderClaim(_) => Vec::new(),
+                WalletOp::ChannelWithdraw(_) | WalletOp::LeaderClaim(_) | WalletOp::ClaimPoW(_) => {
+                    Vec::new()
+                }
             })
             .collect()
     }
@@ -230,7 +234,7 @@ impl WalletState {
     /// Funds the transaction so its excess balance is exactly
     /// `priority_fee` above the mandatory fee — the excess is the
     /// transaction's execution tip. `0` funds to the exact minimum.
-    pub fn fund_tx<G: GasConstants>(
+    pub fn fund_tx<G: GasProfile>(
         &self,
         tx_builder: &MantleTxBuilder,
         change_pk: ZkPublicKey,
@@ -417,7 +421,7 @@ impl WalletState {
                             locked_notes.insert_mut(*note_id);
                         }
                     }
-                    WalletOp::LeaderClaim(utxo) => {
+                    WalletOp::LeaderClaim(utxo) | WalletOp::ClaimPoW(utxo) => {
                         insert_utxo_if_owned(*utxo, known_keys, &mut utxos, &mut pk_index);
                     }
                 }
@@ -595,7 +599,12 @@ fn transform_op(op: &Op, event: Option<TxEventPayload>) -> Option<WalletOp> {
             TxEventPayload::Deposit { .. } => {
                 panic!("event for LeaderClaim op must be LeaderRewardClaimed")
             }
+            TxEventPayload::PoWRewardClaimed { utxo, .. } => Some(WalletOp::ClaimPoW(utxo)),
         },
+        Op::ClaimPowReward(_) => {
+            // TODO: something to track here?
+            None
+        }
         // `Op::SDPWithdraw` is ignored here — the note will be unlocked
         // after the delay and the corresponding event will be handled by
         // [`HeaderOp::from`].
@@ -782,7 +791,7 @@ where
         clippy::too_many_arguments,
         reason = "thin passthrough to `WalletState::fund_tx` plus the tip"
     )]
-    pub fn fund_tx<G: GasConstants>(
+    pub fn fund_tx<G: GasProfile>(
         &self,
         tip: HeaderId,
         tx_builder: &MantleTxBuilder,
@@ -864,7 +873,7 @@ mod tests {
         mantle::{
             Note, OpProof, RawMantleTx, SignedMantleTx,
             channel::Channels,
-            gas::MainnetGasConstants as Gas,
+            gas::MainnetGasProfile as Gas,
             ledger::{Inputs, Outputs},
             ops::channel::{
                 ChannelId, MsgId,

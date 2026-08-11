@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
     Note, Op, SignedMantleTx, Utxo,
-    gas::{GasCalculator as _, MainnetGasConstants},
+    gas::{MainnetGasProfile, TxGasCalculator as _},
     traits::Hashable as _,
     transactions::{
         GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext,
@@ -157,7 +157,7 @@ pub fn self_transfer_paying_fee_at(
     let fee_for_output = |output_value: u64| {
         i128::from(
             builder_with_output(output_value)
-                .minimum_gas_cost::<MainnetGasConstants>(&context)
+                .minimum_gas_cost::<MainnetGasProfile>(&context)
                 .expect("gas cost should calculate")
                 .into_inner(),
         )
@@ -199,7 +199,7 @@ pub fn self_transfer_paying_fee_at(
 
     assert_eq!(
         builder
-            .funding_delta::<MainnetGasConstants>(&context)
+            .funding_delta::<MainnetGasProfile>(&context)
             .expect("funding delta should calculate"),
         tip,
         "the built transaction must carry exactly the requested tip"
@@ -284,7 +284,7 @@ pub fn fee_surplus_at<State: VerificationState>(
 ) -> Result<i128, String> {
     let paid = net_balance_against(genesis_utxos, tx)?;
     let required = tx
-        .total_gas_cost::<MainnetGasConstants>(prices)
+        .total_gas_cost::<MainnetGasProfile>(prices)
         .map_err(|source| format!("transaction gas cost calculation failed: {source}"))?;
 
     Ok(i128::from(paid) - i128::from(required.into_inner()))

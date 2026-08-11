@@ -11,7 +11,7 @@ use test_log::test;
 use tokio::{select, time::sleep};
 
 use crate::core::{
-    tests::utils::TestSwarm,
+    tests::utils::{TestProofsVerifier, TestSwarm},
     with_edge::behaviour::tests::utils::{BehaviourBuilder, StreamBehaviourExt as _},
 };
 
@@ -42,7 +42,9 @@ async fn start_new_epoch_closes_all_edge_connections() {
         id: core_membership_peer,
         public_key: Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
     }]);
-    blend_swarm.behaviour_mut().start_new_epoch(new_membership);
+    blend_swarm
+        .behaviour_mut()
+        .start_new_epoch((new_membership, 0.into()), TestProofsVerifier::accepting());
 
     assert_eq!(
         blend_swarm.behaviour().upgraded_edge_peers.len(),
@@ -116,7 +118,9 @@ async fn epoch_transition_updates_membership_for_new_connections() {
         id: other_core_peer,
         public_key: Ed25519PublicKey::from_bytes(&[0; _]).unwrap(),
     }]);
-    blend_swarm.behaviour_mut().start_new_epoch(new_membership);
+    blend_swarm
+        .behaviour_mut()
+        .start_new_epoch((new_membership, 0.into()), TestProofsVerifier::accepting());
 
     // Now edge_swarm should be able to connect and upgrade.
     let _stream = edge_swarm

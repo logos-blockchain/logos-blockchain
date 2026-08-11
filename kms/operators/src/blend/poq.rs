@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use lb_blend_proofs::{
     CorePathAndSelectors,
     quota::{
-        self, VerifiedProofOfQuota,
+        self, KeyIndex, VerifiedProofOfQuota,
         inputs::prove::{PrivateInputs, PublicInputs, private::ProofOfCoreQuotaInputs},
     },
 };
@@ -22,7 +22,7 @@ const LOG_TARGET: &str = kms::operators::BLEND_POQ;
 pub struct PoQOperator {
     core_path_and_selectors: CorePathAndSelectors,
     public_inputs: PublicInputs,
-    key_index: u64,
+    key_index: KeyIndex,
     response_channel: oneshot::Sender<Result<(VerifiedProofOfQuota, Fr), quota::Error>>,
 }
 
@@ -37,7 +37,7 @@ impl PoQOperator {
     pub const fn new(
         core_path_and_selectors: CorePathAndSelectors,
         public_inputs: PublicInputs,
-        key_index: u64,
+        key_index: KeyIndex,
         response_channel: oneshot::Sender<Result<(VerifiedProofOfQuota, Fr), quota::Error>>,
     ) -> Self {
         Self {

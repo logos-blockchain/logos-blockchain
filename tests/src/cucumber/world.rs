@@ -33,10 +33,9 @@ use lb_testing_framework::{
     LbcEnv, LbcK8sManualCluster, LbcManualCluster, NodeHttpClient, ScenarioBuilder,
     ScenarioBuilderExt as _, configs::wallet::WalletAccount, env::set_default_env, workloads,
 };
-use lb_zone_sdk::{adapter::NodeHttpClient as ZoneNodeHttpClient, indexer::ZoneIndexer};
 use reqwest::Url;
 use testing_framework_core::{
-    scenario::{NodeControlCapability, PeerSelection, Scenario, StartedNode},
+    scenario::{PeerSelection, Scenario, StartedNode},
     topology::DeploymentSeed,
 };
 use tokio::task::JoinHandle;
@@ -167,7 +166,6 @@ pub struct ZoneSequencerRuntime {
     task: JoinHandle<()>,
     events: tokio::sync::broadcast::Receiver<Event>,
     checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
-    ready_rx: tokio::sync::watch::Receiver<bool>,
     channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
     turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
     tx_status_rx: Option<tokio::sync::broadcast::Receiver<TxStatusUpdate>>,
@@ -186,10 +184,23 @@ pub struct ZoneSequencerStartup {
     pub passive_republish_orphans: bool,
 }
 
+/// Connection info for the read-only channel observer of the "zone indexer"
+/// steps.
+///
+/// Each assertion cold-starts a fresh `ZoneSequencer` from this config with a
+/// random signing key that is not part of the channel rotation — such a
+/// sequencer can never publish or repost (inscription posting is turn-gated),
+/// it only replays and observes finalized history.
+#[derive(Clone)]
+pub struct ZoneReaderConfig {
+    pub channel_id: ChannelId,
+    pub node_url: Url,
+}
+
 #[derive(Default)]
 pub struct ZoneState {
     node_name: Option<String>,
-    indexer: Option<ZoneIndexer<ZoneNodeHttpClient>>,
+    indexer: Option<ZoneReaderConfig>,
     sequencers: HashMap<String, ZoneSequencerIdentity>,
     runtimes: HashMap<String, ZoneSequencerRuntime>,
     default_sequencer_alias: Option<String>,
@@ -275,12 +286,6 @@ impl ZoneState {
             })
     }
 
-    pub fn default_sequencer_signing_key(&self) -> Result<&Ed25519Key, StepError> {
-        let alias = self.default_sequencer_alias()?.to_owned();
-
-        self.sequencer_signing_key(&alias)
-    }
-
     pub fn sequencer_channel_id(&self, alias: &str) -> Result<ChannelId, StepError> {
         self.sequencers
             .get(alias)
@@ -288,12 +293,6 @@ impl ZoneState {
             .ok_or(StepError::LogicalError {
                 message: format!("Zone sequencer '{alias}' is not registered"),
             })
-    }
-
-    pub fn default_channel_id(&self) -> Result<ChannelId, StepError> {
-        let alias = self.default_sequencer_alias()?.to_owned();
-
-        self.sequencer_channel_id(&alias)
     }
 
     #[must_use]
@@ -608,7 +607,6 @@ impl ZoneState {
         sequencer_task: JoinHandle<()>,
         sequencer_events: tokio::sync::broadcast::Receiver<Event>,
         checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
-        ready_rx: tokio::sync::watch::Receiver<bool>,
         channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
         turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
         tx_status_rx: tokio::sync::broadcast::Receiver<TxStatusUpdate>,
@@ -625,25 +623,12 @@ impl ZoneState {
                 task: sequencer_task,
                 events: sequencer_events,
                 checkpoint_rx,
-                ready_rx,
                 channel_view_rx,
                 turn_to_write_rx,
                 tx_status_rx: Some(tx_status_rx),
                 discarded_payloads,
             },
         );
-    }
-
-    pub fn sequencer_ready_rx(
-        &self,
-        alias: &str,
-    ) -> Result<tokio::sync::watch::Receiver<bool>, StepError> {
-        self.runtimes
-            .get(alias)
-            .map(|runtime| runtime.ready_rx.clone())
-            .ok_or(StepError::LogicalError {
-                message: format!("Zone sequencer '{alias}' is not running"),
-            })
     }
 
     pub fn sequencer_channel_view_rx(
@@ -739,11 +724,11 @@ impl ZoneState {
             })
     }
 
-    pub fn set_indexer(&mut self, indexer: ZoneIndexer<ZoneNodeHttpClient>) {
+    pub fn set_indexer(&mut self, indexer: ZoneReaderConfig) {
         self.indexer = Some(indexer);
     }
 
-    pub fn indexer(&self) -> Result<&ZoneIndexer<ZoneNodeHttpClient>, StepError> {
+    pub fn indexer(&self) -> Result<&ZoneReaderConfig, StepError> {
         self.indexer.as_ref().ok_or(StepError::LogicalError {
             message: "Zone indexer is not initialized".to_owned(),
         })
@@ -1649,19 +1634,6 @@ impl CucumberWorld {
             .map_err(|source| StepError::ScenarioBuild { source })
     }
 
-    /// Build a scenario for compose deployment based on the current world
-    /// configuration. This performs necessary preflight checks and returns
-    /// a built scenario ready for deployment.
-    pub fn build_compose_scenario(
-        &self,
-    ) -> Result<Scenario<LbcEnv, NodeControlCapability>, StepError> {
-        let builder = self.make_builder_for_deployer(DeployerKind::Compose)?;
-        builder
-            .enable_node_control()
-            .build()
-            .map_err(|source| StepError::ScenarioBuild { source })
-    }
-
     /// Build a scenario for k8s deployment based on the current world
     /// configuration.
     pub fn build_k8s_scenario(&self) -> Result<Scenario<LbcEnv>, StepError> {
@@ -1865,15 +1837,6 @@ impl CucumberWorld {
         self.nodes_info.keys().cloned().collect::<Vec<_>>()
     }
 
-    pub fn any_started_node(&self) -> Result<&NodeInfo, StepError> {
-        self.nodes_info
-            .values()
-            .next()
-            .ok_or_else(|| StepError::LogicalError {
-                message: "No started nodes available in world".to_owned(),
-            })
-    }
-
     /// Helper to resolve all user wallet names to the actual wallet
     /// information.
     #[must_use]
@@ -1883,20 +1846,6 @@ impl CucumberWorld {
             .filter(|w| matches!(w.wallet_type, WalletType::User { .. }))
             .cloned()
             .collect::<Vec<_>>()
-    }
-
-    /// Helper to resolve all funding wallet names to the actual wallet
-    /// information.
-    #[must_use]
-    pub fn all_funding_wallets(&self) -> Vec<WalletInfo> {
-        let mut wallets = self
-            .wallet_info
-            .values()
-            .filter(|wallet| wallet.is_node_funding_wallet())
-            .cloned()
-            .collect::<Vec<_>>();
-        wallets.sort_by(|left, right| left.wallet_name.cmp(&right.wallet_name));
-        wallets
     }
 
     /// Helper to resolve all node-owned wallet keys.
@@ -1982,6 +1931,20 @@ impl CucumberWorld {
 
     pub fn remember_submitted_transaction(&mut self, alias: String, tx_hash: TxHash) {
         self.submitted_transactions.insert(alias, tx_hash);
+    }
+
+    /// All remembered submitted transactions whose alias starts with `prefix`,
+    /// sorted by alias for deterministic reporting.
+    #[must_use]
+    pub fn submitted_transactions_with_prefix(&self, prefix: &str) -> Vec<(String, TxHash)> {
+        let mut txs: Vec<_> = self
+            .submitted_transactions
+            .iter()
+            .filter(|(alias, _)| alias.starts_with(prefix))
+            .map(|(alias, tx_hash)| (alias.clone(), *tx_hash))
+            .collect();
+        txs.sort();
+        txs
     }
 
     pub fn remember_submission_outcome(&mut self, alias: String, outcome: Result<(), String>) {

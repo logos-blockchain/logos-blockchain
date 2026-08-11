@@ -27,7 +27,7 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        gas::MainnetGasConstants,
+        gas::MainnetGasProfile,
         traits::{MantleTxWithProofs, PreverifiedMantleTx},
         transactions::GasPrices,
     },
@@ -379,7 +379,7 @@ impl Cryptarchia {
         // A block number of this block if it's applied to the chain.
         let (_, state, events) = self
             .ledger
-            .prepare_update::<_, _, MainnetGasConstants>(
+            .prepare_update::<_, _, MainnetGasProfile>(
                 id,
                 parent,
                 slot,

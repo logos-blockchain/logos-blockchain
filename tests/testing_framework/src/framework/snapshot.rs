@@ -37,14 +37,6 @@ impl NodeStateSnapshotStore {
             .save_node_dirs(snapshot_name, node_name, runtime_dir, &NODE_STATE_SUBDIRS)
     }
 
-    /// Resolve a node-state source to a validated startup directory.
-    ///
-    /// The returned directory contains the `db` subdirectory expected by a
-    /// Logos node process.
-    pub fn prepare_source_dir(&self, source: &NodeStateSource) -> Result<PathBuf, DynError> {
-        self.store.prepare_node_dir(source, &NODE_STATE_SUBDIRS)
-    }
-
     /// Restore node state from `source` into an existing runtime directory.
     ///
     /// This clears and replaces only the `db` subdirectory.

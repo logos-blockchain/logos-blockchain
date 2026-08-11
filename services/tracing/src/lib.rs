@@ -1,9 +1,7 @@
 use std::{
-    fmt::{Debug, Display, Formatter},
-    io::Write,
+    fmt::{Debug, Display},
     marker::PhantomData,
     path::PathBuf,
-    sync::{Arc, Mutex},
 };
 
 use lb_log_targets::tracing as log_targets_tracing;
@@ -26,7 +24,7 @@ use overwatch::{
     },
 };
 use serde::{Deserialize, Serialize};
-use tracing::{Level, warn};
+use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
     EnvFilter, filter::LevelFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _,
@@ -99,78 +97,6 @@ impl LoggerLayers {
         self.add_layer(layer);
         self.guards.push(guard);
     }
-}
-
-/// This is a wrapper around a writer to allow cloning which is
-/// required by contract by Overwatch for a configuration struct
-#[derive(Clone)]
-pub struct SharedWriter {
-    inner: Arc<Mutex<dyn Write + Send + Sync>>,
-}
-
-impl Write for SharedWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.inner
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                warn!(
-                    target: LOG_TARGET,
-                    "Tracing writer mutex poisoned on write, recovering"
-                );
-                poisoned.into_inner()
-            })
-            .write(buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.inner
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                warn!(
-                    target: LOG_TARGET,
-                    "Tracing writer mutex poisoned on flush, recovering"
-                );
-                poisoned.into_inner()
-            })
-            .flush()
-    }
-}
-
-impl SharedWriter {
-    pub fn new<W: Write + Send + Sync + 'static>(writer: W) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(writer)),
-        }
-    }
-
-    #[must_use]
-    pub fn to_inner(&self) -> Arc<Mutex<dyn Write + Send + Sync>> {
-        Arc::clone(&self.inner)
-    }
-
-    pub fn from_inner(inner: Arc<Mutex<dyn Write + Send + Sync>>) -> Self {
-        Self { inner }
-    }
-}
-
-impl Debug for SharedWriter {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SharedWriter").finish()
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum LoggerLayer {
-    Gelf(GelfConfig),
-    File(FileConfig),
-    Loki(LokiConfig),
-    Otlp(OtlpLoggingConfig),
-    Stdout,
-    Stderr,
-    #[serde(skip)]
-    Writer(SharedWriter),
-    // do not collect logs
-    None,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

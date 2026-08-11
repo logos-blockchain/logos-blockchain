@@ -185,7 +185,7 @@ pub mod fund {
 pub mod sign {
     use lb_core::mantle::transactions::hash::TxHash;
     use lb_key_management_system_keys::keys::{
-        Ed25519Key, ZkPublicKey, ZkSignature, secured_key::SecuredKey,
+        Ed25519Key, ZkPublicKeys, ZkSignature, secured_key::SecuredKey,
     };
     use serde::{Deserialize, Serialize};
 
@@ -203,7 +203,7 @@ pub mod sign {
     #[derive(Serialize, Deserialize)]
     pub struct WalletSignTxZkRequestBody {
         pub tx_hash: TxHash,
-        pub pks: Vec<ZkPublicKey>,
+        pub pks: ZkPublicKeys,
     }
 
     #[derive(Serialize, Deserialize)]

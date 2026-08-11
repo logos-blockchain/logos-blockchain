@@ -93,6 +93,7 @@ pub fn minimum_signed_mantle_tx_size(tx: &RawMantleTx, context: &MantleTxGasCont
 
             // ZkSigProof = ZkSignature = Groth16
             Op::ChannelDeposit(_) => COMPRESSED_PROOF_SIZE,
+            Op::ClaimPowReward(_) => 0, // no proof
         })
         .sum::<usize>();
 
@@ -104,7 +105,10 @@ mod tests {
     use std::collections::HashMap;
 
     use ark_ff::AdditiveGroup as _;
-    use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
+    use lb_blend_proofs::{
+        quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
+        selection::VerifiedProofOfSelection,
+    };
     use lb_groth16::{CompressedGroth16Proof, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey};
     use lb_utils::bounded::BoundedError;
@@ -575,7 +579,8 @@ mod tests {
         let blend_proof = ActivityProof {
             epoch: 42.into(),
             signing_key: signing_key.public_key(),
-            proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0u8; 160]).into(),
+            proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0u8; PROOF_OF_QUOTA_SIZE])
+                .into(),
             proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0u8; 32]).into(),
         };
 
@@ -631,7 +636,8 @@ mod tests {
         let blend_proof = ActivityProof {
             epoch: u32::MAX.into(),
             signing_key: signing_key.public_key(),
-            proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0u8; 160]).into(),
+            proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0u8; PROOF_OF_QUOTA_SIZE])
+                .into(),
             proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0u8; 32]).into(),
         };
 

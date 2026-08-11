@@ -12,10 +12,7 @@ use lb_blend::{
             ProofsVerifier as ProofsVerifierTrait,
             decapsulated::{DecapsulatedMessage, DecapsulationOutput},
             encapsulated::EncapsulatedMessage,
-            validated::{
-                EncapsulatedMessageWithVerifiedPublicHeader,
-                EncapsulatedMessageWithVerifiedSignature,
-            },
+            validated::EncapsulatedMessageWithVerifiedPublicHeader,
         },
         reward::BlendingToken,
     },
@@ -147,14 +144,6 @@ where
         message.verify_public_header(self.verifier())
     }
 
-    /// Validate the `PoQ` of an [`EncapsulatedMessageWithVerifiedSignature`].
-    pub fn validate_message_poq(
-        &self,
-        message: EncapsulatedMessageWithVerifiedSignature,
-    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, InnerError> {
-        message.verify_proof_of_quota(self.verifier())
-    }
-
     /// Semantically similar to the underlying
     /// [`EpochCryptographicProcessor::decapsulate_message`], but it does not
     /// stop after decapsulating the outermost layer. It stops only when a layer
@@ -271,7 +260,7 @@ mod tests {
         proofs::{
             quota::{
                 VerifiedProofOfQuota,
-                inputs::prove::public::{CoreInputs, LeaderInputs},
+                inputs::prove::public::{CoreInputs, LeaderInputs, PowInputs},
             },
             selection::{self, VerifiedProofOfSelection},
         },
@@ -281,6 +270,7 @@ mod tests {
     use lb_core::crypto::ZkHash;
     use lb_groth16::Fr;
     use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
+    use lb_poq::Quota;
 
     use crate::{
         core::processor::{CoreCryptographicProcessor, DecapsulatedMessageType, Error},
@@ -295,16 +285,17 @@ mod tests {
 
         PoQVerificationInputsMinusSigningKey {
             core: CoreInputs {
-                quota: 1,
+                quota: Quota::ONE,
                 zk_root: ZkHash::ZERO,
             },
             leader: LeaderInputs {
                 pol_ledger_aged: ZkHash::ZERO,
                 pol_epoch_nonce: ZkHash::ZERO,
-                message_quota: 1,
+                message_quota: Quota::ONE,
                 lottery_0: Fr::ZERO,
                 lottery_1: Fr::ZERO,
             },
+            pow: PowInputs::unwired_placeholder(),
         }
     }
 

@@ -8,7 +8,6 @@ use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
 use lb_utils::bounded::{BoundedError, UpperBoundedVec};
 use lb_utxotree::UtxoTree;
-use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -52,25 +51,26 @@ pub trait ProvableOperation {
     type Proof;
 }
 
-// TODO: Specific proof type check?
-pub trait VerifiableOperation<Mode: verification_mode::VerificationMode>:
+pub trait PreverifiableOperation<Mode: verification_mode::VerificationMode>:
     ProvableOperation
 {
-    type PreverificationContext<'a>;
-    type VerificationContext<'a>;
+    type Context<'a>;
     type Error;
 
     fn preverify(
         &self,
         proof: &Self::Proof,
-        context: &Self::PreverificationContext<'_>,
+        context: &Self::Context<'_>,
     ) -> Result<(), Self::Error>;
+}
 
-    fn verify(
-        &self,
-        proof: &Self::Proof,
-        context: &Self::VerificationContext<'_>,
-    ) -> Result<(), Self::Error>;
+pub trait VerifiableOperation<Mode: verification_mode::VerificationMode>:
+    ProvableOperation
+{
+    type Context<'a>;
+    type Error;
+
+    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error>;
 }
 
 pub trait ExecutableOperation {
@@ -84,11 +84,17 @@ pub trait ExecutableOperation {
 }
 
 pub trait Operation<Mode: verification_mode::VerificationMode>:
-    VerifiableOperation<Mode> + ExecutableOperation
+    ProvableOperation + PreverifiableOperation<Mode> + VerifiableOperation<Mode> + ExecutableOperation
 {
 }
-impl<T: VerifiableOperation<Mode> + ExecutableOperation, Mode: verification_mode::VerificationMode>
-    Operation<Mode> for T
+
+impl<
+    T: ProvableOperation
+        + PreverifiableOperation<Mode>
+        + VerifiableOperation<Mode>
+        + ExecutableOperation,
+    Mode: verification_mode::VerificationMode,
+> Operation<Mode> for T
 {
 }
 
@@ -475,11 +481,6 @@ impl Note {
     pub const fn new(value: Value, pk: ZkPublicKey) -> Self {
         Self { value, pk }
     }
-
-    #[must_use]
-    pub fn as_fr_components(&self) -> [Fr; 2] {
-        [BigUint::from(self.value).into(), *self.pk.as_fr()]
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -528,6 +529,8 @@ impl Utxo {
 #[cfg(test)]
 mod test {
     use std::str::FromStr as _;
+
+    use num_bigint::BigUint;
 
     use super::*;
 

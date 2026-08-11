@@ -27,6 +27,8 @@ pub mod fixtures;
 
 // Cannot depend on `key-management-system-keys` crate here due to circular
 // dependency.
+pub use lb_poq::{KeyIndex, Quota};
+
 pub(crate) type Ed25519PublicKey = VerifyingKey;
 pub(crate) const ED25519_PUBLIC_KEY_SIZE: usize = PUBLIC_KEY_LENGTH;
 
@@ -163,8 +165,7 @@ impl VerifiedProofOfQuota {
             private: private_inputs,
             public: *public_inputs,
         }
-        .try_into()
-        .map_err(|e| Error::InvalidInput(Box::new(e)))?;
+        .into();
         let (proof, PoQVerifierInput { key_nullifier, .. }) =
             prove(witness_inputs).map_err(Error::ProofGeneration)?;
         let secret_selection_randomness =
@@ -251,6 +252,10 @@ pub enum SelectionRandomnessSecretInput {
         note_secret_key: ZkHash,
         slot_number: u64,
     },
+    Pow {
+        pow_sk: ZkHash,
+        epoch_nonce: ZkHash,
+    },
 }
 const DOMAIN_SEPARATION_TAG: [u8; 23] = *b"SELECTION_RANDOMNESS_V1";
 static DOMAIN_SEPARATION_TAG_FR: LazyLock<ZkHash> = LazyLock::new(|| {
@@ -260,7 +265,7 @@ static DOMAIN_SEPARATION_TAG_FR: LazyLock<ZkHash> = LazyLock::new(|| {
 // As per Proof of Quota spec: <https://lip.logos.co/blockchain/raw/proof-of-quota.html>.
 fn generate_secret_selection_randomness(
     input: &SelectionRandomnessSecretInput,
-    key_index: u64,
+    key_index: KeyIndex,
 ) -> ZkHash {
     let (first_element, second_element) = match input {
         SelectionRandomnessSecretInput::Core { sk, epoch_nonce } => (sk, (*epoch_nonce)),
@@ -268,6 +273,10 @@ fn generate_secret_selection_randomness(
             note_secret_key,
             slot_number,
         } => (note_secret_key, (*slot_number).into()),
+        SelectionRandomnessSecretInput::Pow {
+            pow_sk,
+            epoch_nonce,
+        } => (pow_sk, (*epoch_nonce)),
     };
     [
         *DOMAIN_SEPARATION_TAG_FR,

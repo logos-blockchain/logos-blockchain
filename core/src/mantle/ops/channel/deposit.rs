@@ -6,13 +6,19 @@ use serde::{Deserialize, Serialize};
 use crate::{
     events::{DepositRecreatedNotes, TxEvent, TxEventPayload},
     mantle::{
+        Value,
         channel::{Channels, Error},
+        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
-            ExecutableOperation, Inputs, InputsError, Outputs, ProvableOperation, Utxos,
-            VerifiableOperation, verification_mode,
+            ExecutableOperation, Inputs, InputsError, Outputs, PreverifiableOperation,
+            ProvableOperation, Utxos, VerifiableOperation, verification_mode,
+            verification_mode::VerificationMode,
         },
-        ops::{OpId, channel::ChannelId},
-        transactions::hash::{TxHash, TxHashView},
+        ops::{OpId, SignedOp, channel::ChannelId},
+        transactions::{
+            hash::{TxHash, TxHashView},
+            states::VerificationState,
+        },
     },
     sdp::locked_notes::LockedNotes,
 };
@@ -68,24 +74,28 @@ impl ProvableOperation for DepositOp {
     type Proof = ZkSignature;
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for DepositOp {
-    type PreverificationContext<'a> = ();
-    type VerificationContext<'a> = DepositValidationContext<'a>;
+impl OperationGas<MainnetGasProfile> for DepositOp {
+    const GAS_COST: Gas = Gas::new(590);
+}
+
+impl PreverifiableOperation<verification_mode::StandardMode> for DepositOp {
+    type Context<'a> = ();
     type Error = Error;
 
     fn preverify(
         &self,
         _proof: &Self::Proof,
-        _context: &Self::PreverificationContext<'_>,
+        _context: &Self::Context<'_>,
     ) -> Result<(), Self::Error> {
         Ok(())
     }
+}
 
-    fn verify(
-        &self,
-        proof: &Self::Proof,
-        context: &Self::VerificationContext<'_>,
-    ) -> Result<(), Self::Error> {
+impl VerifiableOperation<verification_mode::StandardMode> for DepositOp {
+    type Context<'a> = DepositValidationContext<'a>;
+    type Error = Error;
+
+    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
         // Check that the channel exist
         if !context.channels.channels.contains_key(&self.channel_id) {
             return Err(Error::ChannelNotFound {
@@ -149,5 +159,13 @@ impl ExecutableOperation for DepositOp {
         .collect();
 
         Ok((context, events))
+    }
+}
+
+impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
+    for SignedOp<DepositOp, State, Mode>
+{
+    fn gas_multiplier(&self) -> Value {
+        1
     }
 }

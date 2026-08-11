@@ -180,7 +180,8 @@ impl ScannerAccounting {
                 | Op::ChannelConfig(_)
                 | Op::ChannelInscribe(_)
                 | Op::SDPActive(_)
-                | Op::LeaderClaim(_) => {}
+                | Op::LeaderClaim(_)
+                | Op::ClaimPowReward(_) => {}
             }
         }
     }

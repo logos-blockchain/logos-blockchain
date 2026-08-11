@@ -19,7 +19,7 @@ use lb_node::config::{
         EpochConfig, ServiceParameters, Settings as CryptarchiaDeploymentSettings,
     },
     deployment::DeploymentSettings,
-    mempool::deployment::Settings as MempoolDeploymentSettings,
+    mempool::deployment::{Settings as MempoolDeploymentSettings, default_tx_ttl},
     network::deployment::Settings as NetworkDeploymentSettings,
     time::deployment::Settings as TimeDeploymentSettings,
 };
@@ -149,6 +149,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
         },
         mempool: MempoolDeploymentSettings {
             pubsub_topic: MEMPOOL_TOPIC.to_owned(),
+            tx_ttl: default_tx_ttl(),
         },
     }
 }

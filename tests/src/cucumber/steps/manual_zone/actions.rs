@@ -12,7 +12,6 @@ use lb_key_management_system_service::keys::Ed25519Key;
 use lb_testing_framework::NodeHttpClient;
 use lb_zone_sdk::{
     adapter::NodeHttpClient as ZoneNodeHttpClient,
-    indexer::ZoneIndexer,
     sequencer::{FundingConfig, ZoneSequencer},
 };
 use tokio::{
@@ -55,7 +54,7 @@ use crate::{
             },
         },
         wallet::sync::current_available_utxos_for_wallet,
-        world::{CucumberWorld, WalletInfo},
+        world::{CucumberWorld, WalletInfo, ZoneReaderConfig},
     },
 };
 
@@ -608,10 +607,10 @@ pub(super) fn initialize_zone_indexer(
 ) -> StepResult {
     let sequencer_alias = sequencer_alias.as_ref();
     let node_url = log_step_error(step, world.zone_node_url_for_sequencer(sequencer_alias))?;
-    let indexer = ZoneIndexer::new(
-        world.zone.sequencer_channel_id(sequencer_alias)?,
-        ZoneNodeHttpClient::new(CommonHttpClient::new(None), node_url),
-    );
+    let indexer = ZoneReaderConfig {
+        channel_id: world.zone.sequencer_channel_id(sequencer_alias)?,
+        node_url,
+    };
 
     world.zone.set_indexer(indexer);
 
@@ -811,7 +810,6 @@ async fn start_named_sequencer_with_config(
         runtime.task,
         runtime.events,
         runtime.checkpoint_rx,
-        runtime.ready_rx,
         runtime.channel_view_rx,
         runtime.turn_to_write_rx,
         runtime.tx_status_rx,

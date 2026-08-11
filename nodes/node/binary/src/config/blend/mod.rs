@@ -1,6 +1,7 @@
 use lb_blend_service::{
     core::{
         backends::libp2p::Libp2pBlendBackendSettings as Libp2pCoreBlendBackendSettings,
+        network::libp2p::Libp2pBroadcastSettings,
         settings::{
             CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings,
             StartingBlendConfig as BlendCoreSettings, ZkSettings,
@@ -43,8 +44,12 @@ impl ServiceConfig {
         time_deployment: &TimeDeploymentSettings,
         cryptarchia_deployment: &CryptarchiaDeploymentSettings,
     ) -> (
-        BlendSettings<Libp2pCoreBlendBackendSettings, Libp2pEdgeBlendBackendSettings>,
-        BlendCoreSettings<Libp2pCoreBlendBackendSettings>,
+        BlendSettings<
+            Libp2pCoreBlendBackendSettings,
+            Libp2pEdgeBlendBackendSettings,
+            Libp2pBroadcastSettings,
+        >,
+        BlendCoreSettings<Libp2pCoreBlendBackendSettings, Libp2pBroadcastSettings>,
         BlendEdgeSettings<Libp2pEdgeBlendBackendSettings>,
     ) {
         let slots_per_epoch = cryptarchia_deployment.slots_per_epoch();
@@ -54,6 +59,7 @@ impl ServiceConfig {
         let blend_service_settings = BlendSettings::<
             Libp2pCoreBlendBackendSettings,
             Libp2pEdgeBlendBackendSettings,
+            Libp2pBroadcastSettings,
         > {
             common: CommonSettings {
                 non_ephemeral_signing_key_id: self.user.non_ephemeral_signing_key_id,
@@ -73,6 +79,9 @@ impl ServiceConfig {
                 data_replication_factor: self.deployment.common.data_replication_factor,
             },
             core: CoreSettings {
+                network: Libp2pBroadcastSettings {
+                    topic: cryptarchia_deployment.gossipsub_protocol.clone(),
+                },
                 backend: Libp2pCoreBlendBackendSettings {
                     core_peering_degree: self.user.core.backend.core_peering_degree,
                     listening_address: self.user.core.backend.listening_address,
@@ -131,7 +140,7 @@ impl ServiceConfig {
                 },
             },
         };
-        let blend_core_settings: BlendCoreSettings<_> = blend_service_settings.clone().into();
+        let blend_core_settings: BlendCoreSettings<_, _> = blend_service_settings.clone().into();
         let blend_edge_settings: BlendEdgeSettings<_> = blend_service_settings.clone().into();
         (
             blend_service_settings,

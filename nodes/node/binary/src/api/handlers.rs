@@ -27,6 +27,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Op, OpProof, SignedMantleTx, TxHash,
+        channel::ChannelState,
         ops::channel::ChannelId,
         traits::Hashable,
         transactions::{
@@ -624,23 +625,16 @@ where
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
-pub async fn blend_info<BlendService, BroadcastSettings, RuntimeServiceId>(
+pub async fn blend_info<BlendService, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
 ) -> Response
 where
     BlendService: ServiceData<
-            Message = ProxyServiceMessage<
-                lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>,
-            >,
+            Message = ProxyServiceMessage<lb_blend_service::message::ServiceMessage<PeerId>>,
         > + 'static,
-    BroadcastSettings: Send + 'static,
     RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
 {
-    make_request_and_return_response!(blend::blend_info::<
-        BlendService,
-        BroadcastSettings,
-        RuntimeServiceId,
-    >(&handle))
+    make_request_and_return_response!(blend::blend_info::<BlendService, RuntimeServiceId>(&handle))
 }
 
 #[utoipa::path(
@@ -652,24 +646,21 @@ where
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
-pub async fn blend_join_network<BlendService, BroadcastSettings, RuntimeServiceId>(
+pub async fn blend_join_network<BlendService, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(req): Json<JoinBlendRequestBody>,
 ) -> Response
 where
     BlendService: ServiceData<
-            Message = ProxyServiceMessage<
-                lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>,
-            >,
+            Message = ProxyServiceMessage<lb_blend_service::message::ServiceMessage<PeerId>>,
         > + 'static,
-    BroadcastSettings: Send + 'static,
     RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
 {
-    make_request_and_return_response!(blend::blend_join_network::<
-        BlendService,
-        BroadcastSettings,
-        RuntimeServiceId,
-    >(&handle, req.locator, req.locked_note_id))
+    make_request_and_return_response!(blend::blend_join_network::<BlendService, RuntimeServiceId>(
+        &handle,
+        req.locator,
+        req.locked_note_id
+    ))
 }
 
 #[utoipa::path(
@@ -915,6 +906,7 @@ where
     path = paths::CHANNEL,
     responses(
         (status = 200, description = "Channel state"),
+        (status = 404, description = "Channel not found", body = ErrorBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -926,7 +918,15 @@ where
     RuntimeServiceId:
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
-    make_request_and_return_response!(mantle::channel::<RuntimeServiceId>(&handle, id))
+    channel_response(mantle::channel_state::<RuntimeServiceId>(&handle, id).await)
+}
+
+fn channel_response(result: Result<Option<ChannelState>, DynError>) -> Response {
+    match result {
+        Ok(Some(channel)) => (StatusCode::OK, Json(channel)).into_response(),
+        Ok(None) => ApiError::NotFound("Channel not found".into()).into_response(),
+        Err(error) => ApiError::Internal(error).into_response(),
+    }
 }
 
 #[utoipa::path(
@@ -2018,11 +2018,20 @@ pub mod wallet {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroUsize;
+    use std::{num::NonZeroUsize, sync::Arc};
 
+    use axum::{body, http::StatusCode};
+    use lb_api_service::http::DynError;
     use lb_chain_service::{CryptarchiaInfo, Slot};
-    use lb_core::header::HeaderId;
+    use lb_core::{
+        header::HeaderId,
+        mantle::{
+            channel::{ChannelState, SlotTimeframe, SlotTimeout},
+            ops::channel::{Ed25519PublicKey, MsgId, config::Keys},
+        },
+    };
 
+    use super::channel_response;
     use crate::api::{
         errors::BlocksStreamWindowError, handlers::resolve_blocks_stream_window,
         queries::BlocksStreamRequest,
@@ -2054,6 +2063,57 @@ mod tests {
             tip: HeaderId::from([3; 32]),
             state: lb_chain_service::State::Online,
         }
+    }
+
+    fn channel_state() -> ChannelState {
+        let accredited_keys: Keys =
+            [Ed25519PublicKey::from_bytes(&[0; 32]).expect("test public key should be valid")]
+                .into();
+
+        ChannelState {
+            accredited_keys: Arc::new(accredited_keys),
+            configuration_threshold: 1,
+            tip_message: MsgId::root(),
+            tip_slot: Slot::default(),
+            tip_sequencer: 0,
+            tip_sequencer_starting_slot: Slot::default(),
+            posting_timeframe: SlotTimeframe::from(0),
+            posting_timeout: SlotTimeout::from(0),
+            transfer_threshold: 1,
+        }
+    }
+
+    #[test]
+    fn channel_response_returns_ok_for_existing_channel() {
+        let response = channel_response(Ok(Some(channel_state())));
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn channel_response_returns_typed_not_found_for_missing_channel() {
+        let response = channel_response(Ok(None));
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let body: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be valid JSON");
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "code": StatusCode::NOT_FOUND.as_u16(),
+                "message": "Channel not found",
+            })
+        );
+    }
+
+    #[test]
+    fn channel_response_returns_internal_error_for_backend_failure() {
+        let response = channel_response(Err(DynError::from("channel backend failed".to_owned())));
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     fn request(

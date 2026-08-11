@@ -72,3 +72,4 @@ time:
   slot_duration: '1.000000000'
 mempool:
   pubsub_topic: /logos-blockchain/mempool/X.Y.Z
+  tx_ttl: '86400.000000000'

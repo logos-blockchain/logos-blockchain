@@ -16,7 +16,7 @@ use crate::{
     header::{ContentId, Header, HeaderId},
     mantle::{
         traits::{Hashable, StorageSize},
-        transactions::hash::TxHash,
+        transactions::hash::{TxHash, TxHashPrefix},
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderProof as _},
     utils::merkle,
@@ -27,6 +27,18 @@ const MAX_BLOCK_TRANSACTIONS: usize = 1024;
 /// The maximum total size of all transactions in a block, in bytes (2 MiB).
 /// Note: This is not the total block size.
 pub const MAX_BLOCK_TRANSACTIONS_SIZE: usize = 1024 * 1024 * 2;
+
+/// The most mempool transactions that may share a single reference prefix
+/// before a proposal is treated as unreconstructable.
+pub const MAX_CANDIDATES_PER_REFERENCE: usize = 8;
+
+/// The most candidate combinations a validator will try while resolving a
+/// proposal's references.
+///
+/// With `N_comb = product(|C_i|)` over the per-reference candidate sets, this
+/// bounds reconstruction work so that prefix collisions stay a cost problem
+/// rather than a verification-time denial-of-service vector.
+pub const MAX_RECONSTRUCTION_COMBINATIONS: usize = 32;
 
 pub type BlockNumber = u64;
 
@@ -55,8 +67,8 @@ pub struct Proposal {
     pub signature: Ed25519Signature,
 }
 
-/// Transaction hashes referenced by a block proposal.
-pub type BlockTransactionReferences = UpperBoundedVec<TxHash, MAX_BLOCK_TRANSACTIONS>;
+/// Transaction-hash prefixes referenced by a block proposal.
+pub type BlockTransactionReferences = UpperBoundedVec<TxHashPrefix, MAX_BLOCK_TRANSACTIONS>;
 
 /// References to transactions that are included in a block proposal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
@@ -75,7 +87,8 @@ impl References {
         Tx: Hashable<Hash = TxHash>,
     {
         Self {
-            mempool_transactions: transactions.map_ref(|transaction| Tx::hash(transaction)),
+            mempool_transactions: transactions
+                .map_ref(|transaction| Tx::hash(transaction).prefix()),
         }
     }
 }
@@ -121,8 +134,9 @@ impl Proposal {
         &self.references
     }
 
+    /// The reference prefixes carried by this proposal, in block order.
     #[must_use]
-    pub fn mempool_transactions(&self) -> &[TxHash] {
+    pub fn mempool_transactions(&self) -> &[TxHashPrefix] {
         &self.references.mempool_transactions
     }
 
@@ -520,7 +534,7 @@ mod tests {
     }
 
     #[test]
-    fn proposal_references_preserve_transaction_hashes_and_order() {
+    fn proposal_references_preserve_transaction_hash_prefixes_and_order() {
         let parent_block = [0u8; 32].into();
         let signing_key = Ed25519Key::from_bytes(&[0; 32]);
         let transactions = BlockTransactions::<IndexedTestMantleTx>::try_from(vec![
@@ -529,7 +543,10 @@ mod tests {
             IndexedTestMantleTx { index: 3 },
         ])
         .unwrap();
-        let expected_hashes: Vec<_> = transactions.iter().map(IndexedTestMantleTx::hash).collect();
+        let expected_prefixes: Vec<_> = transactions
+            .iter()
+            .map(|transaction| IndexedTestMantleTx::hash(transaction).prefix())
+            .collect();
 
         let proposal = Block::create(
             parent_block,
@@ -541,7 +558,10 @@ mod tests {
         .unwrap()
         .to_proposal();
 
-        assert_eq!(proposal.mempool_transactions(), expected_hashes.as_slice());
+        assert_eq!(
+            proposal.mempool_transactions(),
+            expected_prefixes.as_slice()
+        );
     }
 
     #[test]
@@ -569,7 +589,7 @@ mod tests {
     fn proposal_deserialization_rejects_excess_transaction_references() {
         #[derive(Serialize)]
         struct LegacyReferences {
-            mempool_transactions: Vec<TxHash>,
+            mempool_transactions: Vec<TxHashPrefix>,
         }
 
         #[derive(Serialize)]
@@ -592,7 +612,7 @@ mod tests {
         let legacy = LegacyProposal {
             header: proposal.header.clone(),
             references: LegacyReferences {
-                mempool_transactions: vec![TxHash::from([0u8; 32]); MAX_BLOCK_TRANSACTIONS + 1],
+                mempool_transactions: vec![TxHashPrefix::default(); MAX_BLOCK_TRANSACTIONS + 1],
             },
             signature: *proposal.signature(),
         };
@@ -740,5 +760,30 @@ mod tests {
         .expect_err("genesis slot must be rejected by reconstruct path");
 
         assert!(matches!(err, Error::Validation(msg) if msg == "expected non-genesis slot"));
+    }
+
+    /// The specification fixes the maximum proposal at 8,555 bytes. It reaches
+    /// that as `header (299) || references (8192) || signature (64)` with the
+    /// reference count in the header; this implementation reaches the same
+    /// total as `header (297) || references (2 + 8192) || signature (64)`,
+    /// carrying the count as the reference list's own length prefix.
+    #[test]
+    fn maximum_proposal_matches_the_specified_size() {
+        use lb_codec::BinaryEncode as _;
+
+        const SPECIFIED_MAX_PROPOSAL_SIZE: usize = 8555;
+
+        let proposal = Block::create(
+            [0u8; 32].into(),
+            Slot::from(42u64),
+            create_proof(),
+            BlockTransactions::<RawMantleTx>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap(),
+            &Ed25519Key::from_bytes(&[0; 32]),
+        )
+        .expect("valid block")
+        .to_proposal();
+
+        assert_eq!(proposal.encoded_length(), SPECIFIED_MAX_PROPOSAL_SIZE);
+        assert_eq!(proposal.encode().len(), SPECIFIED_MAX_PROPOSAL_SIZE);
     }
 }

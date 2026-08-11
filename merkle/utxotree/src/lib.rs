@@ -6,7 +6,7 @@ use std::{fmt, marker::PhantomData};
 use ark_ff::AdditiveGroup;
 // TODO: Change `DynamicMerkleTree` back to private once we adopt MMR for vouchers in the
 // wallet service.
-pub use lb_dynamic_merkle::{DynamicMerkleTree, MerkleNode, MerklePath};
+pub use lb_dynamic_merkle::{DynamicMerkleTree, MerkleNode, MerklePath, TREE_HEIGHT_EXCEPT_ROOT};
 use lb_dynamic_merkle::{MerkleHasher, empty_subtree_root};
 pub use lb_merkle_tree::Error;
 use lb_merkle_tree::{CompressedMerkleTree, LeafExtractor, MerkleTree, RecoveryError};

@@ -1,5 +1,6 @@
 use std::num::NonZeroU64;
 
+use lb_blend_proofs::quota::Quota;
 use lb_utils::math::NonNegativeF64;
 
 #[must_use]
@@ -8,7 +9,7 @@ pub fn core_quota(
     message_frequency_per_round: NonNegativeF64,
     num_blend_layers: NonZeroU64,
     membership_size: usize,
-) -> u64 {
+) -> Quota {
     // `C`: Expected number of cover messages that are generated during an epoch by
     // the core nodes.
     let expected_number_of_epoch_messages =
@@ -17,6 +18,8 @@ pub fn core_quota(
     // `Q_c`: Messaging allowance that can be used by a core node during a single
     // epoch. We assume `R_c` to be `0` for now, hence `Q_c = ceil(C * (ß_c
     // + 0 * ß_c)) / N = ceil(C * ß_c) / N`.
-    ((expected_number_of_epoch_messages * num_blend_layers.get() as f64) / membership_size as f64)
-        .ceil() as u64
+    (((expected_number_of_epoch_messages * num_blend_layers.get() as f64) / membership_size as f64)
+        .ceil() as u64)
+        .try_into()
+        .expect("Core Quota must fit within the width the `PoQ` circuit allows.")
 }

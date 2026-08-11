@@ -50,7 +50,7 @@ use super::handlers::{
     mantle_status, mempool_view, time_info, transaction, wallet,
 };
 use crate::{
-    BlendBroadcastSettings, BlendService, TracingService, WalletService,
+    BlendService, TracingService, WalletService,
     api::{
         handlers::{
             blend_join_network, channel, channel_deposit, leader_claim, post_activity,
@@ -244,13 +244,11 @@ where
             )
             .route(
                 paths::BLEND_NETWORK_INFO,
-                routing::get(blend_info::<BlendService, BlendBroadcastSettings, RuntimeServiceId>),
+                routing::get(blend_info::<BlendService, RuntimeServiceId>),
             )
             .route(
                 paths::BLEND_JOIN_NETWORK,
-                routing::post(
-                    blend_join_network::<BlendService, BlendBroadcastSettings, RuntimeServiceId>,
-                ),
+                routing::post(blend_join_network::<BlendService, RuntimeServiceId>),
             )
             .route(
                 paths::MEMPOOL_ADD_TX,

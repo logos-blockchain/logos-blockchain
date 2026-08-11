@@ -210,9 +210,12 @@ mod test {
 
     use futures::{StreamExt as _, stream::repeat};
     use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
-    use lb_blend_proofs::quota::inputs::prove::{
-        private::ProofOfLeadershipQuotaInputs,
-        public::{CoreInputs, LeaderInputs},
+    use lb_blend_proofs::quota::{
+        Quota,
+        inputs::prove::{
+            private::ProofOfLeadershipQuotaInputs,
+            public::{CoreInputs, LeaderInputs, PowInputs},
+        },
     };
     use lb_core::crypto::ZkHash;
     use lb_cryptarchia_engine::Epoch;
@@ -233,7 +236,7 @@ mod test {
     #[tokio::test]
     async fn set_epoch_private() {
         let leader_inputs = LeaderInputs {
-            message_quota: 1,
+            message_quota: Quota::ONE,
             pol_epoch_nonce: ZkHash::ZERO,
             pol_ledger_aged: ZkHash::ZERO,
             lottery_0: Fr::ZERO,
@@ -253,10 +256,11 @@ mod test {
                 }]),
                 PoQVerificationInputsMinusSigningKey {
                     core: CoreInputs {
-                        quota: 1,
+                        quota: Quota::ONE,
                         zk_root: ZkHash::ZERO,
                     },
                     leader: leader_inputs,
+                    pow: PowInputs::unwired_placeholder(),
                 },
                 MockCorePoQGenerator,
                 Epoch::new(0),

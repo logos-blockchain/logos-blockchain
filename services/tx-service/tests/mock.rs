@@ -3,16 +3,20 @@ use std::{
     convert::Infallible,
     pin::Pin,
     sync::{Arc, Mutex, atomic::AtomicBool},
+    time::Duration,
 };
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _, stream};
-use indexmap::IndexSet;
+use indexmap::IndexMap;
 use lb_core::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
     codec::{DeserializeOp as _, SerializeOp as _},
     header::HeaderId,
-    mantle::mock::{MockTransaction, MockTxId},
+    mantle::{
+        mock::{MockTransaction, MockTxId},
+        transactions::hash::{PrefixedKey as _, TxHashPrefix},
+    },
 };
 use lb_network_service::{
     NetworkService,
@@ -33,7 +37,8 @@ use lb_utils::noop_service::NoService;
 use logos_blockchain_tx_service::{
     MempoolMsg, TxMempoolSettings,
     backend::{
-        MemPool as _, Mempool, MempoolError, PoolRecoveryState, RecoverableMempool as _, Status,
+        MemPool as _, Mempool, MempoolError, MempoolSettings, PoolRecoveryState,
+        RecoverableMempool as _, Status,
     },
     network::adapters::mock::{MOCK_TX_CONTENT_TOPIC, MockAdapter},
     storage::{MempoolStorageAdapter, adapters::rocksdb::RocksStorageAdapter},
@@ -47,8 +52,8 @@ use overwatch_derive::*;
 use tempfile::TempDir;
 
 type MockRecoveryBackend = StorageRecoveryBackend<
-    TxMempoolState<PoolRecoveryState<MockTxId>, (), ()>,
-    TxMempoolSettings<(), ()>,
+    TxMempoolState<PoolRecoveryState<MockTxId>, MempoolSettings, ()>,
+    TxMempoolSettings<MempoolSettings, ()>,
     RocksBackend,
     RuntimeServiceId,
 >;
@@ -96,7 +101,7 @@ fn mock_pool_node_settings(
             network: NetworkConfig {
                 backend: MockConfig {
                     predefined_messages,
-                    duration: tokio::time::Duration::from_millis(100),
+                    duration: Duration::from_millis(100),
                     seed: 0,
                     version: 1,
                     weights: None,
@@ -108,7 +113,7 @@ fn mock_pool_node_settings(
                 column_family: None,
             },
             mockpool: TxMempoolSettings {
-                pool: (),
+                pool: MempoolSettings::default(),
                 network_adapter: (),
                 recovery_data: RecoveryData::default(),
             },
@@ -163,14 +168,14 @@ async fn pending_txs(
         .await
 }
 
-async fn txs_by_hashes(
+async fn txs_by_prefix(
     mempool_outbound: &OutboundRelay<<MockMempoolService as ServiceData>::Message>,
-    hashes: Vec<MockTxId>,
+    prefix: TxHashPrefix,
 ) -> Vec<MockTransaction<MockMessage>> {
     let (reply_channel, reply) = tokio::sync::oneshot::channel();
     mempool_outbound
-        .send(MempoolMsg::GetTransactionsByHashes {
-            hashes,
+        .send(MempoolMsg::GetTransactionsByPrefix {
+            prefix,
             reply_channel,
         })
         .await
@@ -178,9 +183,10 @@ async fn txs_by_hashes(
 
     reply
         .await
-        .expect("mempool should reply to tx lookup")
-        .expect("tx lookup should succeed")
-        .into_found()
+        .expect("mempool should reply to prefix lookup")
+        .expect("prefix lookup should succeed")
+        .collect::<Vec<_>>()
+        .await
 }
 
 #[derive(Clone, Default)]
@@ -278,7 +284,7 @@ impl MempoolStorageAdapter<RuntimeServiceId> for FailingStorageAdapter {
 #[test]
 fn test_mock_pool_recovery_state() {
     let recovery_state = PoolRecoveryState::<MockTxId> {
-        pending_items: IndexSet::new(),
+        pending_items: IndexMap::new(),
         removed_items: BTreeMap::new(),
         last_item_timestamp: 1_234_567_890,
     };
@@ -296,6 +302,136 @@ fn test_mock_pool_recovery_state() {
     );
 }
 
+const fn ttl_settings(tx_ttl: Duration) -> MempoolSettings {
+    MempoolSettings {
+        tx_ttl: Some(tx_ttl),
+    }
+}
+
+const TEST_TX_TTL: Duration = Duration::from_hours(1);
+
+/// Build a pool holding one pending tx whose insertion timestamp is backdated
+/// to the unix epoch, so it is expired for any reasonable TTL.
+async fn pool_with_backdated_tx(
+    settings: MempoolSettings,
+) -> (
+    Mempool<
+        HeaderId,
+        MockTransaction<MockMessage>,
+        MockTxId,
+        InMemoryStorageAdapter,
+        RuntimeServiceId,
+    >,
+    MockTransaction<MockMessage>,
+) {
+    let storage = InMemoryStorageAdapter::default();
+    let mut pool = Mempool::<
+        HeaderId,
+        MockTransaction<MockMessage>,
+        MockTxId,
+        InMemoryStorageAdapter,
+        RuntimeServiceId,
+    >::new(settings, storage.clone());
+
+    let tx = sample_removed_tx();
+    let tx_id = tx.id();
+
+    pool.add_item(tx_id, tx.clone())
+        .await
+        .expect("tx should be added");
+
+    let mut saved_state = pool.save();
+    saved_state.pending_items.insert(tx_id, 0);
+
+    (Mempool::recover(settings, saved_state, storage), tx)
+}
+
+#[tokio::test]
+async fn expired_tx_is_evicted_on_next_sweep() {
+    let storage = InMemoryStorageAdapter::default();
+    let mut pool = Mempool::<
+        HeaderId,
+        MockTransaction<MockMessage>,
+        MockTxId,
+        InMemoryStorageAdapter,
+        RuntimeServiceId,
+    >::new(ttl_settings(TEST_TX_TTL), storage.clone());
+
+    let old_tx = sample_removed_tx();
+    let old_tx_id = old_tx.id();
+    let old_tx_prefix = old_tx_id.key_prefix();
+
+    let fresh_tx = MockTransaction::new(MockMessage {
+        payload: "fresh".to_owned(),
+        content_topic: MOCK_TX_CONTENT_TOPIC,
+        version: 0,
+        timestamp: 1,
+    });
+    let fresh_tx_id = fresh_tx.id();
+
+    pool.add_item(old_tx_id, old_tx.clone())
+        .await
+        .expect("old tx should be added");
+    pool.add_item(fresh_tx_id, fresh_tx.clone())
+        .await
+        .expect("fresh tx should be added");
+
+    let mut saved_state = pool.save();
+    saved_state.pending_items.insert(old_tx_id, 0);
+    let mut pool = Mempool::<
+        HeaderId,
+        MockTransaction<MockMessage>,
+        MockTxId,
+        InMemoryStorageAdapter,
+        RuntimeServiceId,
+    >::recover(ttl_settings(TEST_TX_TTL), saved_state, storage);
+
+    assert_eq!(pool.pending_item_count(), 2);
+    assert_eq!(pool.status(&[old_tx_id]), vec![Status::Pending]);
+    assert_eq!(
+        pool.keys_by_prefix(&old_tx_prefix)
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![old_tx_id]
+    );
+
+    pool.remove(&[]).await;
+
+    assert_eq!(pool.pending_item_count(), 1);
+    assert_eq!(pool.status(&[old_tx_id]), vec![Status::Unknown]);
+    assert_eq!(pool.status(&[fresh_tx_id]), vec![Status::Pending]);
+    assert!(pool.keys_by_prefix(&old_tx_prefix).next().is_none());
+
+    let pending_after_eviction = pool
+        .view([0; 32].into())
+        .await
+        .expect("pending view should load")
+        .collect::<Vec<_>>()
+        .await;
+    assert_eq!(pending_after_eviction, vec![fresh_tx]);
+
+    let fetched_after_eviction = pool
+        .get_items_by_keys([old_tx_id])
+        .await
+        .expect("evicted tx should still be fetchable during grace period")
+        .collect::<Vec<_>>()
+        .await;
+    assert_eq!(fetched_after_eviction, vec![old_tx]);
+}
+
+#[tokio::test]
+async fn expired_tx_is_not_evicted_when_ttl_is_disabled() {
+    let (mut pool, tx) = pool_with_backdated_tx(MempoolSettings { tx_ttl: None }).await;
+    let tx_id = tx.id();
+
+    for _ in 0..10 {
+        pool.remove(&[]).await;
+    }
+
+    assert_eq!(pool.pending_item_count(), 1);
+    assert_eq!(pool.status(&[tx_id]), vec![Status::Pending]);
+}
+
 #[tokio::test]
 async fn storage_failure_does_not_mark_tx_pending() {
     let mut pool = Mempool::<
@@ -304,7 +440,7 @@ async fn storage_failure_does_not_mark_tx_pending() {
         MockTxId,
         FailingStorageAdapter,
         RuntimeServiceId,
-    >::new((), FailingStorageAdapter);
+    >::new(MempoolSettings::default(), FailingStorageAdapter);
 
     let tx = sample_removed_tx();
     let tx_id = tx.id();
@@ -329,7 +465,7 @@ async fn removed_items_are_not_pending_but_still_fetchable() {
         MockTxId,
         InMemoryStorageAdapter,
         RuntimeServiceId,
-    >::new((), storage.clone());
+    >::new(MempoolSettings::default(), storage.clone());
 
     let tx = sample_removed_tx();
     let tx_id = tx.id();
@@ -381,7 +517,7 @@ async fn removed_items_remain_fetchable_after_recovery() {
         MockTxId,
         InMemoryStorageAdapter,
         RuntimeServiceId,
-    >::new((), storage.clone());
+    >::new(MempoolSettings::default(), storage.clone());
 
     let tx = sample_removed_tx();
     let tx_id = tx.id();
@@ -401,7 +537,7 @@ async fn removed_items_remain_fetchable_after_recovery() {
         MockTxId,
         InMemoryStorageAdapter,
         RuntimeServiceId,
-    >::recover((), saved_state, storage);
+    >::recover(MempoolSettings::default(), saved_state, storage);
 
     assert_eq!(recovered_pool.pending_item_count(), 0);
     assert_eq!(recovered_pool.status(&[tx_id]), vec![Status::Unknown]);
@@ -524,68 +660,6 @@ fn mempool_view_preserves_receive_order() {
 }
 
 #[test]
-fn get_transactions_by_hashes_preserves_request_order() {
-    run_with_mock_pool_node(Vec::new(), |settings, _temp_dir| {
-        let app = OverwatchRunner::<MockPoolNode>::run(settings, None)
-            .map_err(|e| eprintln!("Error encountered: {e}"))
-            .unwrap();
-
-        drop(
-            app.runtime()
-                .handle()
-                .block_on(app.handle().start_all_services()),
-        );
-
-        let mempool_outbound = app
-            .runtime()
-            .handle()
-            .block_on(async { app.handle().relay::<MockMempoolService>().await.unwrap() });
-
-        let first_tx = MockTransaction::new(MockMessage {
-            payload: "first".to_owned(),
-            content_topic: MOCK_TX_CONTENT_TOPIC,
-            version: 0,
-            timestamp: 1,
-        });
-
-        let second_tx = MockTransaction::new(MockMessage {
-            payload: "second".to_owned(),
-            content_topic: MOCK_TX_CONTENT_TOPIC,
-            version: 0,
-            timestamp: 2,
-        });
-
-        app.runtime()
-            .handle()
-            .block_on(add_tx(&mempool_outbound, first_tx.clone()))
-            .expect("first tx should be added");
-
-        app.runtime()
-            .handle()
-            .block_on(add_tx(&mempool_outbound, second_tx.clone()))
-            .expect("second tx should be added");
-
-        let requested_txs = if first_tx.id() < second_tx.id() {
-            vec![second_tx, first_tx]
-        } else {
-            vec![first_tx, second_tx]
-        };
-
-        let requested_hashes = requested_txs.iter().map(MockTransaction::id).collect();
-
-        let fetched_txs = app
-            .runtime()
-            .handle()
-            .block_on(txs_by_hashes(&mempool_outbound, requested_hashes));
-
-        assert_eq!(fetched_txs, requested_txs);
-
-        drop(app.runtime().handle().block_on(app.handle().shutdown()));
-        app.blocking_wait_finished();
-    });
-}
-
-#[test]
 fn test_mock_mempool() {
     let exist = Arc::new(AtomicBool::new(false));
     let exist2 = Arc::clone(&exist);
@@ -637,7 +711,7 @@ fn test_mock_mempool() {
 
             // try to wait all ops to be stored in mempool
             loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
                 let (mtx, mrx) = tokio::sync::oneshot::channel();
                 mempool_outbound
                     .send(MempoolMsg::View {
@@ -663,7 +737,7 @@ fn test_mock_mempool() {
         });
 
         while !exist2.load(std::sync::atomic::Ordering::SeqCst) {
-            std::thread::sleep(std::time::Duration::from_millis(200));
+            std::thread::sleep(Duration::from_millis(200));
         }
 
         drop(app.runtime().handle().block_on(app.handle().shutdown()));
@@ -676,7 +750,7 @@ fn test_mock_mempool() {
         })
         .expect("Should load recovery data from storage.");
         let recovery_settings = TxMempoolSettings {
-            pool: (),
+            pool: MempoolSettings::default(),
             network_adapter: (),
             recovery_data,
         };
@@ -688,5 +762,89 @@ fn test_mock_mempool() {
             .expect("Recovery state should exist.");
         assert_eq!(recovered_state.pool().unwrap().pending_items.len(), 2);
         assert!(recovered_state.pool().unwrap().last_item_timestamp > 0);
+    });
+}
+
+/// The prefix index is derived state, so the risk is that it drifts out of
+/// sync with the pending set. These drive the real service message end to end:
+/// index lookup, storage fetch, stream.
+#[test]
+fn prefix_lookup_tracks_the_pending_set() {
+    run_with_mock_pool_node(Vec::new(), |settings, _temp_dir| {
+        let app = OverwatchRunner::<MockPoolNode>::run(settings, None)
+            .map_err(|e| eprintln!("Error encountered: {e}"))
+            .unwrap();
+
+        drop(
+            app.runtime()
+                .handle()
+                .block_on(app.handle().start_all_services()),
+        );
+
+        let mempool_outbound = app
+            .runtime()
+            .handle()
+            .block_on(async { app.handle().relay::<MockMempoolService>().await.unwrap() });
+
+        let tx = MockTransaction::new(MockMessage {
+            payload: "indexed".to_owned(),
+            content_topic: MOCK_TX_CONTENT_TOPIC,
+            version: 0,
+            timestamp: 1,
+        });
+        let prefix = tx.id().key_prefix();
+
+        // Unknown prefix resolves to nothing.
+        assert!(
+            app.runtime()
+                .handle()
+                .block_on(txs_by_prefix(&mempool_outbound, prefix))
+                .is_empty(),
+            "a prefix with no transaction must resolve to no candidates"
+        );
+
+        app.runtime()
+            .handle()
+            .block_on(add_tx(&mempool_outbound, tx.clone()))
+            .expect("tx should be added");
+
+        assert_eq!(
+            app.runtime()
+                .handle()
+                .block_on(txs_by_prefix(&mempool_outbound, prefix)),
+            vec![tx.clone()],
+            "an added transaction must be reachable through its hash prefix"
+        );
+
+        // A prefix that no transaction carries stays empty.
+        let absent = TxHashPrefix([0xFFu8; 8]);
+        if absent != prefix {
+            assert!(
+                app.runtime()
+                    .handle()
+                    .block_on(txs_by_prefix(&mempool_outbound, absent))
+                    .is_empty(),
+                "an unrelated prefix must not pick up candidates"
+            );
+        }
+
+        app.runtime().handle().block_on(async {
+            mempool_outbound
+                .send(MempoolMsg::Remove { ids: vec![tx.id()] })
+                .await
+                .unwrap();
+        });
+
+        // Removal must evict from the index, not just the pending set.
+        assert!(
+            app.runtime()
+                .handle()
+                .block_on(txs_by_prefix(&mempool_outbound, prefix))
+                .is_empty(),
+            "a removed transaction must no longer be reachable through its prefix"
+        );
+
+        drop(app.runtime().handle().block_on(app.handle().shutdown()));
+        app.blocking_wait_finished();
     });
 }

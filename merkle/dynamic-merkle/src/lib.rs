@@ -258,7 +258,7 @@ impl<Hash: Copy> Node<Hash> {
     /// Computes the Merkle path for the item at the given index.
     /// The path is ordered from leaf to root (excluded).
     /// Returns `None` if the index does not exist or has been removed.
-    fn path<H>(self: &Arc<Self>, index: usize) -> Option<MerklePath<Hash>>
+    fn path<H>(self: &Arc<Self>, index: usize) -> Option<Vec<MerkleNode<Hash>>>
     where
         H: MerkleHasher<Hash = Hash>,
     {
@@ -274,18 +274,22 @@ impl<Hash: Copy> Node<Hash> {
                 if index < left.capacity() {
                     // Going down left subtree, store right sibling hash
                     let mut path = left.path::<H>(index)?;
-                    assert!(path.len() < TREE_HEIGHT_EXCEPT_ROOT, "Path length exceeded");
+                    if path.len() >= TREE_HEIGHT_EXCEPT_ROOT {
+                        return None;
+                    }
                     path.push(MerkleNode::Right(right.value::<H>()));
                     Some(path)
                 } else {
                     // Going down right subtree, store left sibling hash
                     let mut path = right.path::<H>(index - left.capacity())?;
-                    assert!(path.len() < TREE_HEIGHT_EXCEPT_ROOT, "Path length exceeded");
+                    if path.len() >= TREE_HEIGHT_EXCEPT_ROOT {
+                        return None;
+                    }
                     path.push(MerkleNode::Left(left.value::<H>()));
                     Some(path)
                 }
             }
-            Self::Leaf { value: Some(_) } => Some(MerklePath::new()),
+            Self::Leaf { value: Some(_) } => Some(Vec::new()),
             Self::Leaf { value: None } | Self::Empty { .. } => None,
         }
     }
@@ -475,14 +479,7 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
     /// Returns `None` if the index does not exist or has been removed.
     #[must_use]
     pub fn path(&self, index: usize) -> Option<MerklePath<H::Hash>> {
-        self.root.path::<H>(index).inspect(|path| {
-            assert_eq!(
-                path.len(),
-                TREE_HEIGHT_EXCEPT_ROOT,
-                "Path length({}) must be {TREE_HEIGHT_EXCEPT_ROOT}",
-                path.len()
-            );
-        })
+        self.root.path::<H>(index)?.try_into().ok()
     }
 
     /// Rebuilds a tree placing each leaf hash at its given index, representing
@@ -657,7 +654,7 @@ impl<T> MerkleNode<T> {
 }
 
 /// A Merkle path consisting of sibling nodes from leaf to root (excluded).
-pub type MerklePath<T> = Vec<MerkleNode<T>>;
+pub type MerklePath<T> = [MerkleNode<T>; TREE_HEIGHT_EXCEPT_ROOT];
 
 #[cfg(test)]
 mod test_fr {

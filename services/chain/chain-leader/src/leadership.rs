@@ -1,6 +1,7 @@
 use std::{
     fmt::{Debug, Display},
     sync::Arc,
+    time::Instant,
 };
 
 use futures::{StreamExt as _, stream};
@@ -57,6 +58,7 @@ where
     Wallet: WalletServiceData,
     RuntimeServiceId: Debug + Display + Sync + AsServiceId<Wallet>,
 {
+    let (mut non_winning_utxos, mut winning_utxos, start) = (0usize, 0usize, Instant::now());
     for UtxoWithKeyId { utxo, key_id } in utxos {
         let public_inputs = public_inputs_for_slot(epoch_state, slot, latest_tree);
         let winning = match kms
@@ -76,7 +78,9 @@ where
         };
 
         if winning {
+            winning_utxos += 1;
             tracing::debug!(
+                target: LOG_TARGET,
                 "leader for slot {:?}, {:?}/{:?}",
                 slot,
                 utxo.note.value,
@@ -142,14 +146,18 @@ where
                 }
             }
         } else {
-            tracing::trace!(
-                "Not a leader for slot {:?}, {:?}/{:?}",
-                slot,
-                utxo.note.value,
-                epoch_state.total_stake()
-            );
+            non_winning_utxos += 1;
         }
     }
+
+    tracing::trace!(
+        target: LOG_TARGET,
+        "Leadership scan completed in {:.2?} - slot: {}, eligible: {}, winning: {winning_utxos}, \
+        non winning: {non_winning_utxos}",
+        start.elapsed(),
+        slot.into_inner(),
+        utxos.len(),
+    );
 
     Ok(None)
 }

@@ -103,11 +103,6 @@ impl PublicHeader {
     pub const fn signature_mut(&mut self) -> &mut Ed25519Signature {
         &mut self.signature
     }
-
-    #[cfg(test)]
-    pub const fn proof_of_quota_mut(&mut self) -> &mut ProofOfQuota {
-        &mut self.proof_of_quota
-    }
 }
 
 impl BinaryEncode for PublicHeader {

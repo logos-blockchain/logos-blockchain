@@ -4,12 +4,12 @@ use std::{cmp::Ordering, collections::HashSet};
 
 use lb_core::mantle::{
     Note, Op, Utxo,
-    gas::MainnetGasConstants,
+    gas::MainnetGasProfile,
     ledger::{Inputs, Outputs},
     ops::transfer::TransferOp,
     transactions::{MantleTxBuilder, MantleTxContext},
 };
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_service::keys::{MAX_ZK_SIGNING_KEYS, ZkPublicKey};
 use lb_mmr::MerkleMountainRange;
 use lb_wallet::{WalletError, WalletState};
 use rpds::{HashTrieMapSync, HashTrieSetSync};
@@ -25,7 +25,7 @@ pub fn fund_builder_from_wallet_source(
     tx_builder: &MantleTxBuilder,
     context: &MantleTxContext,
 ) -> Result<MantleTxBuilder, WalletError> {
-    wallet_state_from_utxos(source.available_utxos().to_vec()).fund_tx::<MainnetGasConstants>(
+    wallet_state_from_utxos(source.available_utxos().to_vec()).fund_tx::<MainnetGasProfile>(
         tx_builder,
         source.public_key(),
         [source.public_key()],
@@ -181,7 +181,7 @@ pub fn extend_wallet_funding_inputs(
     tx_builder: &MantleTxBuilder,
     funding_utxos: &[Utxo],
 ) -> Result<MantleTxBuilder, WalletError> {
-    if funding_utxos.len() <= super::signing::ZKSIGN_MAX_INPUTS {
+    if funding_utxos.len() <= MAX_ZK_SIGNING_KEYS {
         return tx_builder
             .clone()
             .extend_ledger_inputs(funding_utxos.iter().copied())
@@ -201,7 +201,7 @@ fn evaluate_funding_inputs(
         return Ok(WalletFundingOutcome::NeedsMoreInputs);
     }
 
-    if selected_inputs.len() <= super::signing::ZKSIGN_MAX_INPUTS {
+    if selected_inputs.len() <= MAX_ZK_SIGNING_KEYS {
         return evaluate_standard_funding_inputs(tx_builder, selected_inputs, change_pk, context);
     }
 
@@ -222,13 +222,13 @@ fn evaluate_standard_funding_inputs(
     let funded_builder = extend_wallet_funding_inputs(tx_builder, selected_inputs)?;
 
     match funded_builder
-        .funding_delta::<MainnetGasConstants>(context)?
+        .funding_delta::<MainnetGasProfile>(context)?
         .cmp(&0)
     {
         Ordering::Less => Ok(WalletFundingOutcome::NeedsMoreInputs),
         Ordering::Equal => Ok(WalletFundingOutcome::Funded(funded_builder)),
         Ordering::Greater => Ok(funded_builder
-            .return_change::<MainnetGasConstants>(context, change_pk, 0)?
+            .return_change::<MainnetGasProfile>(context, change_pk, 0)?
             .map_or(
                 WalletFundingOutcome::NeedsMoreInputs,
                 WalletFundingOutcome::Funded,
@@ -242,9 +242,7 @@ fn build_chunked_funded_tx(
     change_pk: ZkPublicKey,
     context: &MantleTxContext,
 ) -> Result<Option<MantleTxBuilder>, WalletError> {
-    if funding_utxos.len() <= super::signing::ZKSIGN_MAX_INPUTS
-        || !tx_builder.ledger_inputs().is_empty()
-    {
+    if funding_utxos.len() <= MAX_ZK_SIGNING_KEYS || !tx_builder.ledger_inputs().is_empty() {
         return Ok(None);
     }
 
@@ -315,14 +313,14 @@ fn with_transfer_input_chunks(
     tx_builder: &MantleTxBuilder,
     funding_utxos: &[Utxo],
 ) -> Result<MantleTxBuilder, WalletError> {
-    let final_chunk_len = match funding_utxos.len() % super::signing::ZKSIGN_MAX_INPUTS {
-        0 => super::signing::ZKSIGN_MAX_INPUTS,
+    let final_chunk_len = match funding_utxos.len() % MAX_ZK_SIGNING_KEYS {
+        0 => MAX_ZK_SIGNING_KEYS,
         remainder => remainder,
     };
     let split_index = funding_utxos.len() - final_chunk_len;
 
     let mut builder = tx_builder.clone();
-    for chunk in funding_utxos[..split_index].chunks(super::signing::ZKSIGN_MAX_INPUTS) {
+    for chunk in funding_utxos[..split_index].chunks(MAX_ZK_SIGNING_KEYS) {
         builder = builder.push_op(Op::Transfer(TransferOp::new(
             Inputs::try_new(chunk.iter().map(Utxo::id).collect::<Vec<_>>())?,
             Outputs::empty(),
@@ -356,7 +354,7 @@ fn funding_delta_for_chunked_builder(
 ) -> Result<i128, WalletError> {
     let gas_cost = u128::from(
         tx_builder
-            .minimum_gas_cost::<MainnetGasConstants>(context)?
+            .minimum_gas_cost::<MainnetGasProfile>(context)?
             .into_inner(),
     );
     Ok(i128::try_from(input_sum)
@@ -403,7 +401,7 @@ mod tests {
             .expect("inscription test builder should fit op bounds");
         assert_eq!(
             tx_builder
-                .funding_delta::<MainnetGasConstants>(&context)
+                .funding_delta::<MainnetGasProfile>(&context)
                 .expect("zero-gas inscription funding delta should calculate"),
             0
         );
@@ -424,7 +422,7 @@ mod tests {
         assert_eq!(funded_builder.ledger_inputs(), &[funding_utxo]);
         assert_eq!(
             funded_builder
-                .funding_delta::<MainnetGasConstants>(&context)
+                .funding_delta::<MainnetGasProfile>(&context)
                 .expect("funded inscription delta should calculate"),
             0
         );

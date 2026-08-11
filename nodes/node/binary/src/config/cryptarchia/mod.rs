@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use lb_blend_service::core::network::libp2p::Libp2pBroadcastSettings;
 use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
 use lb_core::sdp::ServiceParameters;
 use lb_cryptarchia_engine::EpochConfig;
@@ -31,7 +30,7 @@ impl ServiceConfig {
     ) -> (
         lb_chain_service::CryptarchiaSettings,
         lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
-        lb_chain_leader_service::LeaderSettings<Libp2pBroadcastSettings>,
+        lb_chain_leader_service::LeaderSettings,
     ) {
         let ledger_config = lb_ledger::Config {
             consensus_config: self.deployment.consensus_config(),
@@ -140,9 +139,6 @@ impl ServiceConfig {
             },
         };
         let chain_leader_settings = lb_chain_leader_service::LeaderSettings {
-            blend_broadcast_settings: Libp2pBroadcastSettings {
-                topic: self.deployment.gossipsub_protocol,
-            },
             config: ledger_config,
             wallet_config: lb_chain_leader_service::LeaderWalletConfig {
                 funding_pk: self.user.leader.wallet.funding_pk,

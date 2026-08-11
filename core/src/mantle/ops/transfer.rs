@@ -6,13 +6,16 @@ use thiserror::Error;
 use crate::{
     events::TxEvent,
     mantle::{
+        Value,
         channel::Channels,
+        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
-            self, ExecutableOperation, Inputs, Outputs, ProvableOperation, Utxo, Utxos,
-            VerifiableOperation, verification_mode,
+            self, ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation,
+            Utxo, Utxos, VerifiableOperation, verification_mode,
+            verification_mode::VerificationMode,
         },
-        ops::OpId,
-        transactions::hash::TxHashView,
+        ops::{OpId, SignedOp},
+        transactions::{hash::TxHashView, states::VerificationState},
     },
     sdp::locked_notes::LockedNotes,
 };
@@ -88,15 +91,18 @@ impl ProvableOperation for TransferOp {
     type Proof = ZkSignature;
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for TransferOp {
-    type PreverificationContext<'a> = ();
-    type VerificationContext<'a> = TransferValidationContext<'a>;
+impl OperationGas<MainnetGasProfile> for TransferOp {
+    const GAS_COST: Gas = Gas::new(590);
+}
+
+impl PreverifiableOperation<verification_mode::StandardMode> for TransferOp {
+    type Context<'a> = ();
     type Error = TransferError;
 
     fn preverify(
         &self,
         _proof: &Self::Proof,
-        _context: &Self::PreverificationContext<'_>,
+        _context: &Self::Context<'_>,
     ) -> Result<(), Self::Error> {
         // Ensure the inputs is non-empty
         if self.inputs.is_empty() {
@@ -108,12 +114,13 @@ impl VerifiableOperation<verification_mode::StandardMode> for TransferOp {
 
         Ok(())
     }
+}
 
-    fn verify(
-        &self,
-        proof: &Self::Proof,
-        context: &Self::VerificationContext<'_>,
-    ) -> Result<(), Self::Error> {
+impl VerifiableOperation<verification_mode::StandardMode> for TransferOp {
+    type Context<'a> = TransferValidationContext<'a>;
+    type Error = TransferError;
+
+    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
         // Validate Inputs
         self.inputs.validate_not_in_channel(
             context.locked_notes,
@@ -144,6 +151,14 @@ impl ExecutableOperation for TransferOp {
         // Add outputs from the ledger
         utxos = self.outputs.execute(utxos, self);
         Ok((utxos, Vec::new()))
+    }
+}
+
+impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
+    for SignedOp<TransferOp, State, Mode>
+{
+    fn gas_multiplier(&self) -> Value {
+        1
     }
 }
 

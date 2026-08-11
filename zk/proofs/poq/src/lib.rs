@@ -2,6 +2,7 @@ mod blend_inputs;
 mod chain_inputs;
 mod common_inputs;
 mod inputs;
+mod pow_inputs;
 mod verification_key;
 mod wallet_inputs;
 mod witness;
@@ -11,15 +12,17 @@ use std::error::Error;
 pub use blend_inputs::{
     CORE_MERKLE_TREE_HEIGHT, CorePathAndSelectors, PoQBlendInputs, PoQBlendInputsData,
 };
-pub use chain_inputs::{PoQChainInputs, PoQChainInputsData, PoQInputsFromDataError};
-pub use common_inputs::{PoQCommonInputs, PoQCommonInputsData};
+pub use chain_inputs::{PoQChainInputs, PoQChainInputsData};
+pub use common_inputs::{PoQCommonInputs, PoQCommonInputsData, PoQSelector};
 pub use inputs::{PoQVerifierInput, PoQVerifierInputData, PoQWitnessInputs};
 use lb_circuits_prover::Prover as _;
 use lb_groth16::{
-    CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser, groth16_batch_verify,
+    CircuitInteger, CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser,
+    groth16_batch_verify,
 };
 use lb_log_targets::proofs;
 pub use lb_pol::AGED_NOTE_MERKLE_TREE_HEIGHT;
+pub use pow_inputs::{PoQPowInputs, PoQPowInputsData};
 use tracing::error;
 pub use wallet_inputs::{AgedNotePathAndSelectors, PoQWalletInputs, PoQWalletInputsData};
 
@@ -27,6 +30,16 @@ use crate::inputs::PoQVerifierInputJson;
 
 pub type PoQProof = CompressedGroth16Proof;
 pub type ProveError = lbp_error::Error;
+
+/// Width, in bits, of the quota signals in the `PoQ` circuit.
+pub const QUOTA_BITS: u8 = 20;
+
+/// A messaging quota, constrained to the width the `PoQ` circuit expects.
+pub type Quota = CircuitInteger<QUOTA_BITS>;
+
+/// An index into the keys covered by a quota, which the circuit constrains to
+/// the same width.
+pub type KeyIndex = Quota;
 
 const LOG_TARGET: &str = proofs::POQ;
 
@@ -141,129 +154,140 @@ mod tests {
     fn test_core_node_full_flow() {
         let blend_data = PoQBlendInputsData {
             core_sk: BigUint::from_str(
-                "8905547699320869461831852104817789469875723637735901345741281588946310324235",
+                "12667207762918681737213577433372645554941956657477853383508894204444641435708",
             )
             .unwrap()
             .into(),
             core_path_and_selectors: [
                 (
-                    "16869616652852667189559016717243338331068120739649173884502336155264218010727",
+                    "7495929195953210541208591724669352166258167386402673863836582332959049741998",
+                    true,
+                ),
+                (
+                    "8777307683015870709408351814333112152804794621246499110711643849444602886454",
                     false,
                 ),
                 (
-                    "13091718879067163858034522323644176312242009811093736972498389939059085177974",
-                    true,
-                ),
-                (
-                    "5615497624396623086866765843762273938268745340944523291991473843820399587958",
-                    true,
-                ),
-                (
-                    "12252618726807031528274527895794936410875679656522675436955173925070564886479",
-                    true,
-                ),
-                (
-                    "15676171816835539786276219242768254181009067816239948700832551985003974594975",
+                    "2036778247346771710692375429289939913839125337381038976370669720942761418159",
                     false,
                 ),
                 (
-                    "19704272158800036501582000538191584664181486372889137807570676877252162790252",
+                    "5150238042344629386129384874056943525919076545561275756461664527118718260316",
                     false,
                 ),
                 (
-                    "17220466132075642970726646606687934619880159579542773841528618335448239077575",
+                    "4936482837140898160990313117063047116523911033722639295600657041261330950251",
+                    true,
+                ),
+                (
+                    "8937835534203757508211957478554582398600683099364069427807070320868647534222",
                     false,
                 ),
                 (
-                    "19568444328548325046015987107341253380027495775774622463368229855377989226290",
-                    true,
-                ),
-                (
-                    "21061581629256637244739982573784550742652688800467757972406229545047035347638",
+                    "20952980496079374121937279088975994236259798048934859728621453910938508315429",
                     false,
                 ),
                 (
-                    "21518036264660447465371694976644098419156368727076924435365409888210990153413",
-                    true,
-                ),
-                (
-                    "18601741813400480889163627600644403937577783284065467384061180740490941766846",
-                    true,
-                ),
-                (
-                    "3276819021875171213616879397115905648698624783190949445325727117619871062684",
+                    "3127567055231452038159138967497074106547716639376277019791213152208715502108",
                     false,
                 ),
                 (
-                    "16346413070923069365311460658994366491438423790174305844846934643885739701955",
+                    "4156278452715681991545944691699148599903237834447534444828105997249209183668",
+                    true,
+                ),
+                (
+                    "18179601246737692255359026481063507429449403349479564041630890140769203876921",
+                    true,
+                ),
+                (
+                    "20437752904871274044354648385284243748143753378271484669957282746297202768728",
                     false,
                 ),
                 (
-                    "18052187374311288196723181314946958960293262462466262108812751192264820802527",
-                    true,
-                ),
-                (
-                    "18798652887540222143344482340074977888006884307412611551550673334473344453748",
+                    "20964128655175295722279612439890819641847965870342369257222152533521036200042",
                     false,
                 ),
                 (
-                    "6340439308577685187208962346420910386234054724707742363615331612477333766009",
+                    "8529481264681700999783095712819666338972397694516091342589511693767349600946",
                     true,
                 ),
                 (
-                    "6116045944554536720728524915454748535792176096846806949818056548601205224613",
+                    "11390366370077994090069924023908925478862142650386311632070176411828525668517",
                     true,
                 ),
                 (
-                    "7495766221993429009053819635630800227825524659472307268648873524676590491716",
+                    "5917548759338686071972714539493044537194763096388397090814246211223906547270",
+                    false,
+                ),
+                (
+                    "20167409213677086350276694709897905285253180362287004012973310966314090006733",
                     true,
                 ),
                 (
-                    "4135588845309195152336413092515000771731525447810984287718633658115964724154",
-                    true,
+                    "2263236988262202014904251664760262847563737954962247776121488194923407644186",
+                    false,
                 ),
                 (
-                    "16515196782727402790941217652547735699069943062019512321107139568403168848690",
-                    true,
+                    "19725021492526941122134445491655907123723766494432771594886452496452660956448",
+                    false,
+                ),
+                (
+                    "5142311427791207713153244085802613121123367252788982353300919738927631606801",
+                    false,
+                ),
+                (
+                    "9162839441909107733910143825064550229009975662836406280871655871464192283628",
+                    false,
                 ),
             ]
             .map(|(value, selector)| (BigUint::from_str(value).unwrap().into(), selector)),
         };
-        let (lottery_0, lottery_1) =
-            LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
-                .compute_lottery_values(5000);
         let chain_data = PoQChainInputsData {
             core_root: BigUint::from_str(
-                "12497635102173390657108276580981678137198622257613601634363274282193270703654",
+                "8648439177578503276872559887462337398415999326614652623958174178821393732006",
             )
             .unwrap()
             .into(),
             pol_ledger_aged: BigUint::from_str(
-                "3285301153701124106247898475175231377413013906491501039690975241845353257824",
+                "17215820411670358459256686882934231030146782155124511326026608377144127196093",
             )
             .unwrap()
             .into(),
             pol_epoch_nonce: BigUint::from_str(
-                "12441952563111122190593710132868692987264877387856913250622883462242318292882",
+                "16164570534004466859325445480705051126415612717114918921927075731584584730308",
             )
             .unwrap()
             .into(),
-            lottery_0,
-            lottery_1,
+            lottery_0: BigUint::from_str(
+                "148409079361904587837471709956458430342187235603420891378597419711486680",
+            )
+            .unwrap()
+            .into(),
+            lottery_1: BigUint::from_str(
+                "21888242871336145414933615591437256729835795974444825699352339602896135814447",
+            )
+            .unwrap()
+            .into(),
         };
         let common_data = PoQCommonInputsData {
-            core_quota: 15,
-            leader_quota: 10,
+            core_quota: Quota::new::<15>(),
+            leader_quota: Quota::new::<10>(),
+            pow_quota: Quota::new::<20>(),
             message_key: (
                 BigUint::from(123_456u32).into(),
                 BigUint::from(654_321u32).into(),
             ),
-            selector: false,
-            index: 2,
+            selector: PoQSelector::Core,
+            index: KeyIndex::new::<9>(),
+            pow_difficulty: BigUint::from_str(
+                "2334035772366381927456001473031809359552034265892309520954243351196711606017",
+            )
+            .unwrap()
+            .into(),
         };
 
         let witness_inputs =
-            PoQWitnessInputs::from_core_node_data(chain_data, common_data, blend_data).unwrap();
+            PoQWitnessInputs::from_core_node_data(chain_data, common_data, blend_data);
         let (proof, inputs) = prove(witness_inputs).unwrap();
         let key_nullifier = inputs.key_nullifier.into_inner();
         // Test that verifying with the inputs returned by `prove` works.
@@ -278,6 +302,8 @@ mod tests {
             k_part_two: common_data.message_key.1,
             key_nullifier,
             leader_quota: common_data.leader_quota,
+            pow_quota: common_data.pow_quota,
+            pow_blend_difficulty: common_data.pow_difficulty,
             pol_epoch_nonce: chain_data.pol_epoch_nonce,
             pol_ledger_aged: chain_data.pol_ledger_aged,
             lottery_0: chain_data.lottery_0,
@@ -312,14 +338,20 @@ mod tests {
             lottery_1,
         };
         let common_data = PoQCommonInputsData {
-            core_quota: 15,
-            leader_quota: 10,
+            core_quota: Quota::new::<15>(),
+            leader_quota: Quota::new::<10>(),
+            pow_quota: Quota::new::<5>(),
             message_key: (
                 BigUint::from(123_456u32).into(),
                 BigUint::from(654_321u32).into(),
             ),
-            selector: true,
-            index: 2,
+            selector: PoQSelector::Leader,
+            index: KeyIndex::new::<2>(),
+            pow_difficulty: BigUint::from_str(
+                "2334035772366381927456001473031809359552034265892309520954243351196711606017",
+            )
+            .unwrap()
+            .into(),
         };
         let wallet_data = PoQWalletInputsData {
             slot: 3_934_028_363,
@@ -461,7 +493,7 @@ mod tests {
                 ),
             ]
             .map(|(value, selector)| (BigUint::from_str(value).unwrap().into(), selector)),
-            secret_key: BigUint::from_str(
+            pol_secret_key: BigUint::from_str(
                 "14029017592631272654768426994822986470491530234220356957377918534745805708829",
             )
             .unwrap()
@@ -469,7 +501,7 @@ mod tests {
         };
 
         let witness_inputs =
-            PoQWitnessInputs::from_leader_data(chain_data, common_data, wallet_data).unwrap();
+            PoQWitnessInputs::from_leader_data(chain_data, common_data, wallet_data);
         let (proof, inputs) = prove(witness_inputs).unwrap();
         let key_nullifier = inputs.key_nullifier.into_inner();
         // Test that verifying with the inputs returned by `prove` works.
@@ -484,6 +516,91 @@ mod tests {
             k_part_two: common_data.message_key.1,
             key_nullifier,
             leader_quota: common_data.leader_quota,
+            pow_quota: common_data.pow_quota,
+            pow_blend_difficulty: common_data.pow_difficulty,
+            pol_epoch_nonce: chain_data.pol_epoch_nonce,
+            pol_ledger_aged: chain_data.pol_ledger_aged,
+            lottery_0: chain_data.lottery_0,
+            lottery_1: chain_data.lottery_1,
+        };
+        assert!(verify(&proof, recomputed_verify_inputs.into()).unwrap());
+    }
+
+    #[test]
+    fn test_pow_full_flow() {
+        let chain_data = PoQChainInputsData {
+            core_root: BigUint::from_str(
+                "7196120816867742764244305920813414287385070139349175831448761050095304066684",
+            )
+            .unwrap()
+            .into(),
+            pol_ledger_aged: BigUint::from_str(
+                "12901234158445930888471913831760642108627105440164948073754288938400615804116",
+            )
+            .unwrap()
+            .into(),
+            pol_epoch_nonce: BigUint::from_str(
+                "10612486568558363932403470969435464905237449260307875593547304337083779862075",
+            )
+            .unwrap()
+            .into(),
+            lottery_0: BigUint::from_str(
+                "148409079361904587837471709956458430342187235603420891378597419711486680",
+            )
+            .unwrap()
+            .into(),
+            lottery_1: BigUint::from_str(
+                "21888242871336145414933615591437256729835795974444825699352339602896135814447",
+            )
+            .unwrap()
+            .into(),
+        };
+        let common_data = PoQCommonInputsData {
+            core_quota: Quota::new::<10>(),
+            leader_quota: Quota::new::<15>(),
+            pow_quota: Quota::new::<20>(),
+            message_key: (
+                BigUint::from(123_456u32).into(),
+                BigUint::from(654_321u32).into(),
+            ),
+            selector: PoQSelector::Pow,
+            index: KeyIndex::new::<8>(),
+            pow_difficulty: BigUint::from_str(
+                "10631870504716456348838861774188160492563879712126054449569633827216160699117",
+            )
+            .unwrap()
+            .into(),
+        };
+        let pow_data = PoQPowInputsData {
+            pow_secret_key: BigUint::from_str(
+                "10044758699144566038746293679996441958807939592793641056821682251877616662024",
+            )
+            .unwrap()
+            .into(),
+            block_hash: BigUint::from_str(
+                "17412116459874055221726429396167151400213699852365025340176158516975240665302",
+            )
+            .unwrap()
+            .into(),
+        };
+
+        let witness_inputs = PoQWitnessInputs::from_pow_data(chain_data, common_data, pow_data);
+        let (proof, inputs) = prove(witness_inputs).unwrap();
+        let key_nullifier = inputs.key_nullifier.into_inner();
+        // Test that verifying with the inputs returned by `prove` works.
+        assert!(verify(&proof, inputs).unwrap());
+
+        // Test that verifying with the reconstructed inputs inside the verifier context
+        // works.
+        let recomputed_verify_inputs = PoQVerifierInputData {
+            core_quota: common_data.core_quota,
+            core_root: chain_data.core_root,
+            k_part_one: common_data.message_key.0,
+            k_part_two: common_data.message_key.1,
+            key_nullifier,
+            leader_quota: common_data.leader_quota,
+            pow_quota: common_data.pow_quota,
+            pow_blend_difficulty: common_data.pow_difficulty,
             pol_epoch_nonce: chain_data.pol_epoch_nonce,
             pol_ledger_aged: chain_data.pol_ledger_aged,
             lottery_0: chain_data.lottery_0,

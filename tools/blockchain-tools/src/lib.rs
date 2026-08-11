@@ -1,5 +1,5 @@
 pub mod genesis;
-use serde_yml::Value;
+use serde_yaml::Value;
 
 /// Deep-merge `overwrite` into `input`. Mappings are merged recursively;
 /// any other type is replaced wholesale by the overwrite value.
@@ -26,7 +26,7 @@ pub fn overwrite_yaml(input: Value, overwrite: Value) -> Value {
     reason = "Necessary documentation"
 )]
 /// Convert a dot-notation `"some.nested.key=value"` string into a nested
-/// [`serde_yml::Value`] mapping. The value portion is parsed as YAML so
+/// [`serde_yaml::Value`] mapping. The value portion is parsed as YAML so
 /// integers, booleans, quoted strings, etc. are typed correctly.
 ///
 /// # Errors
@@ -38,12 +38,12 @@ pub fn value_from_dotted_kv(s: &str) -> Result<Value, String> {
         .split_once('=')
         .ok_or_else(|| format!("missing '=' separator in override: {s}"))?;
 
-    let leaf: Value = serde_yml::from_str(raw_value)
+    let leaf: Value = serde_yaml::from_str(raw_value)
         .map_err(|e| format!("invalid YAML value '{raw_value}': {e}"))?;
 
     // Wrap the leaf in nested mappings, innermost key first (right-to-left fold).
     let nested = key_path.split('.').rev().fold(leaf, |acc, key| {
-        let mut map = serde_yml::Mapping::new();
+        let mut map = serde_yaml::Mapping::new();
         map.insert(Value::String(key.to_owned()), acc);
         Value::Mapping(map)
     });
@@ -58,14 +58,14 @@ mod tests {
     #[test]
     fn dotted_kv_single_key() {
         let v = value_from_dotted_kv("foo=bar").unwrap();
-        let expected: Value = serde_yml::from_str("foo: bar").unwrap();
+        let expected: Value = serde_yaml::from_str("foo: bar").unwrap();
         assert_eq!(v, expected);
     }
 
     #[test]
     fn dotted_kv_nested() {
         let v = value_from_dotted_kv("a.b.c=42").unwrap();
-        let expected: Value = serde_yml::from_str("a:\n  b:\n    c: 42").unwrap();
+        let expected: Value = serde_yaml::from_str("a:\n  b:\n    c: 42").unwrap();
         assert_eq!(v, expected);
     }
 
@@ -76,10 +76,10 @@ mod tests {
 
     #[test]
     fn overwrite_yaml_merges_nested() {
-        let base: Value = serde_yml::from_str("a:\n  x: 1\n  y: 2").unwrap();
-        let patch: Value = serde_yml::from_str("a:\n  y: 99\n  z: 3").unwrap();
+        let base: Value = serde_yaml::from_str("a:\n  x: 1\n  y: 2").unwrap();
+        let patch: Value = serde_yaml::from_str("a:\n  y: 99\n  z: 3").unwrap();
         let result = overwrite_yaml(base, patch);
-        let expected: Value = serde_yml::from_str("a:\n  x: 1\n  y: 99\n  z: 3").unwrap();
+        let expected: Value = serde_yaml::from_str("a:\n  x: 1\n  y: 99\n  z: 3").unwrap();
         assert_eq!(result, expected);
     }
 }

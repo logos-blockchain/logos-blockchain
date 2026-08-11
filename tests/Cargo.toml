@@ -21,7 +21,6 @@ lb-mmr      = { workspace = true }
 lb-utxotree = { workspace = true }
 
 [dependencies]
-async-trait                      = { workspace = true }
 axum                             = { features = ["http1", "json", "tokio"], workspace = true }
 bincode                          = { workspace = true }
 cucumber                         = { features = ["macros", "output-junit"], workspace = true }

@@ -17,10 +17,10 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         NoteId, Op, OpProof, SignedMantleTx, TxHash, Utxo, Value, VerificationError,
-        gas::{GasCost, GasOverflow, MainnetGasConstants},
+        gas::{GasCost, GasOverflow, MainnetGasProfile},
         ledger::Inputs,
         ops::{
-            ZkAndEd25519Proof,
+            NoOpProof, ZkAndEd25519Proof,
             channel::{ChannelId, config::ChannelConfigOp, inscribe::InscriptionOp},
             leader_claim::{
                 LeaderClaimOp, RewardsRoot, VoucherCm, VoucherNullifier, VoucherSecret,
@@ -39,8 +39,8 @@ use lb_key_management_system_service::{
     api::{KmsServiceApi, KmsServiceData},
     backend::{KMSBackend, preload::PreloadKMSBackend},
     keys::{
-        Ed25519Key, KeyOperators, PayloadEncoding, SignatureEncoding, ZkPublicKey, ZkSignature,
-        secured_key::SecuredKey,
+        Ed25519Key, KeyOperators, PayloadEncoding, SignatureEncoding, ZkPublicKey, ZkPublicKeys,
+        ZkSignature, secured_key::SecuredKey,
     },
     operators::zk::voucher::UnsafeVoucherOperator,
 };
@@ -181,7 +181,7 @@ pub enum WalletMsg {
     },
     SignTxWithZk {
         tx_hash: TxHash,
-        pks: Vec<ZkPublicKey>,
+        pks: ZkPublicKeys,
         resp_tx: Sender<Result<ZkSignature, WalletServiceError>>,
     },
     GetLeaderAgedNotes {
@@ -557,7 +557,7 @@ where
                     }
                 };
 
-                let funded = match state.fund_tx::<MainnetGasConstants>(
+                let funded = match state.fund_tx::<MainnetGasProfile>(
                     tip,
                     &tx_builder,
                     change_pk,
@@ -956,6 +956,7 @@ where
                     Self::sign_transfer(tx_hash, transfer_op.inputs.clone(), kms, &tip_leader)
                         .await?
                 }
+                Op::ClaimPowReward(_) => OpProof::None(NoOpProof),
             };
             ops_proofs.try_push(proof)?;
         }
@@ -995,6 +996,7 @@ where
         pks: impl IntoIterator<Item = ZkPublicKey>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<ZkSignature, WalletServiceError> {
+        let pks = ZkPublicKeys::try_from_iter(pks)?;
         // Use hex-encoded public key as key_id for now
         let key_ids: Vec<_> = pks
             .into_iter()
@@ -1265,7 +1267,7 @@ where
             pk: request.funding_pk,
         }))?;
 
-        let funded_tx_builder = state.fund_tx::<MainnetGasConstants>(
+        let funded_tx_builder = state.fund_tx::<MainnetGasProfile>(
             request.tip,
             &tx_builder,
             request.funding_pk,
@@ -1297,7 +1299,7 @@ where
     ) -> Result<SignedMantleTx<Preverified>, WalletServiceError> {
         let context = ledger.tx_context();
         let net_balance = funded_tx_builder.net_balance();
-        let gas_cost = funded_tx_builder.minimum_gas_cost::<MainnetGasConstants>(&context)?;
+        let gas_cost = funded_tx_builder.minimum_gas_cost::<MainnetGasProfile>(&context)?;
         debug!(
             target: LOG_TARGET,
             net_balance,

@@ -12,13 +12,8 @@
     crane.url = "github:ipetkov/crane";
 
     # Must stay in sync with the lbc-* tags in Cargo.toml.
-    # Pinned to the commit right after the v0.5.3 tag (127626881faa975aa8e9868422cf6bbb08fcb512):
-    # the tag itself predates the CI job that registers its Nix hashes in
-    # circuits-nix-hashes.json, so building directly off the tag fails with
-    # `attribute '"0.5.3"' missing`. This commit adds that entry without
-    # otherwise changing the source.
     logos-blockchain-circuits = {
-      url = "github:logos-blockchain/logos-blockchain-circuits/2846ee7a4cfa24458bb8063412ab2e753b344d2f";
+      url = "github:logos-blockchain/logos-blockchain-circuits/v0.5.5";
     };
 
     # Must stay in sync with the rust-rapidsnark rev in Cargo.toml.
