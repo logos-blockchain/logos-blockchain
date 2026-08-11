@@ -310,8 +310,12 @@ async fn duplicate_message_received_from_different_peers() {
         .publish_message_with_validated_header_to_current_epoch(test_message.as_ref())
         .unwrap();
 
-    // Verify that the message is bubbled up to the swarm only once
-    let mut received_message_count = 0u8;
+    // Both copies are reported to the swarm: nothing enters the message cache
+    // until a `PoQ` verifies, so the second copy cannot be recognised as a
+    // duplicate before it has been verified in its own right. What must not
+    // happen twice is the relay, so each report is forwarded on as the swarm
+    // would, and only the first one is expected to go out.
+    let mut forward_results = Vec::new();
     loop {
         select! {
             () = sleep(Duration::from_secs(5)) => {
@@ -320,13 +324,30 @@ async fn duplicate_message_received_from_different_peers() {
             _ = dialing_swarm_1.select_next_some() => {}
             _ = dialing_swarm_2.select_next_some() => {}
             listening_event = listening_swarm.select_next_some() => {
-                if let SwarmEvent::Behaviour(Event::Message { .. }) = listening_event {
-                    received_message_count += 1;
+                if let SwarmEvent::Behaviour(Event::Message { message, sender, epoch }) = listening_event {
+                    forward_results.push(
+                        listening_swarm
+                            .behaviour_mut()
+                            .forward_message_with_verified_public_header(&message, sender, epoch),
+                    );
                 }
             }
         }
     }
-    assert_eq!(received_message_count, 1);
+
+    let (relayed, rejected): (Vec<_>, Vec<_>) =
+        forward_results.iter().partition(|result| result.is_ok());
+    assert_eq!(
+        relayed.len(),
+        1,
+        "The message must be relayed exactly once, no matter how many peers sent it"
+    );
+    assert!(
+        rejected
+            .iter()
+            .all(|result| **result == Err(SendError::DuplicateMessage)),
+        "Every further copy must be rejected as a duplicate, got {rejected:?}"
+    );
 }
 
 #[test(tokio::test)]
