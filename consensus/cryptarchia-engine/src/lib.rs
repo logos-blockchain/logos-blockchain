@@ -5,7 +5,7 @@ mod fixtures;
 
 use core::{fmt::Debug, hash::Hash};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     num::NonZero,
 };
 
@@ -647,40 +647,64 @@ where
 
     /// Selects uncles for a new block extending `parent` at `slot`.
     ///
-    /// ```text
-    ///          |---- window ------|
-    ///          |                  |
-    /// b1 .. -- b3 -- b4 -- b5 -- b6 <- adding b7
-    ///  |       |           |
-    ///  |       |           |-----f3
-    ///  |       |---- f2 -- f21
-    ///  |------------ f1
-    /// ```
+    /// First, this function filters candidates which meet all of the following
+    /// conditions:
+    /// - An uncle is the 1st block of a fork off the chain of `parent`.
+    /// - An uncle's slot is `< slot`.
+    /// - An uncle's parent slot is within the uncle reference window.
+    ///   - `0 < slot - uncle.parent.slot <= w_u`.
+    /// - An uncle's slot is not already occupied by the ancestors of `parent`
+    ///   (including `parent` itself) and their uncles.
     ///
-    /// `f2` and `f3` are selected because their parents are in the window and
-    /// each is the first block of its fork. `f1` is not a valid uncle even
-    /// though it is in the window, because its parent `b1` is older than the
-    /// window: `0 < slot - uncle_parent_slot <= w_u`.
+    /// After that,
+    /// - All uncle candidates are ordered by `(parent.slot, slot, id)`.
+    /// - The first [`MAX_UNCLES`] uncles are selected.
+    /// - But, if an uncle's slot is already taken by another uncle selected
+    ///   earlier, the uncle is excluded.
+    ///
+    /// # Example
+    /// ```text
+    ///          |---------------------- window -------------------------|
+    ///          |                                                       |
+    /// - b1(1) - b2(2) ------ b3(4, uncle_slots=[3]) -- b4(6)           <- adding b5(9)
+    ///    |       |            |                         |----------------- u9(9)
+    ///    |       |            |                         |---u7(7)--u8(8)
+    ///    |       |            |----------------------------------- u6(8)
+    ///    |       |            |------------------- u5(5)
+    ///    |       |-------------------------------- u4(5)
+    ///    |       |---------- u3(4)
+    ///    |       |---- u2(3)
+    ///    |------ u1(2)
+    /// ```
+    /// Only `[u4, u6, u7]` are selected.
+    /// - u1's parent is out of the window.
+    /// - u2's slot(3) is already occupied by b3's uncle.
+    /// - u3's slot(4) is already occupied by b3.
+    /// - u5's slot is already taken by u4 selected earlier.
+    /// - u8 is not the 1st block of a fork.
+    /// - u9's slot(9) is not smaller than the slot(9) of the new block.
     pub fn select_uncles(&self, parent: &Branch<Id>, slot: Slot) -> Vec<&Branch<Id>>
     where
         Id: Ord,
     {
-        // An uncle must satisfy `0 < slot - uncle_slot <= w_u`, so the window is
-        // `[window_start, slot)`.
         let window_start =
             u64::from(slot).saturating_sub(self.config.uncle_reference_window().get());
 
-        let (ancestor_ids, occupied_slots) = self.collect_chain_within_window(parent, window_start);
-        let mut candidates =
-            self.uncle_candidates(slot, window_start, &ancestor_ids, &occupied_slots);
+        let (ancestors, occupied_slots) = self.collect_chain_within_window(parent, window_start);
+        let mut candidates = self.uncle_candidates(slot, window_start, &ancestors, &occupied_slots);
 
-        // Oldest first, because the slot window moves and the oldest candidates
-        // are the clostest to expiring.
-        // One uncle per slot, breaking ties by smaller ID.
-        candidates.sort_unstable_by_key(|uncle| (uncle.slot, uncle.id));
-        candidates.dedup_by_key(|uncle| uncle.slot);
-        candidates.truncate(MAX_UNCLES);
+        // Oldest parent first, because the slot window moves and the oldest candidates
+        // are the closest to expiring.
+        // One uncle per slot, breaking ties by the uncle's slot and ID.
         candidates
+            .sort_unstable_by_key(|(parent_slot, uncle)| (*parent_slot, uncle.slot, uncle.id));
+        let mut selected_slots = HashSet::new();
+        candidates
+            .into_iter()
+            .filter(|(_, uncle)| selected_slots.insert(uncle.slot))
+            .take(MAX_UNCLES)
+            .map(|(_, uncle)| uncle)
+            .collect()
     }
 
     /// Within the window, collects the ancestors of `parent` (including itself)
@@ -693,15 +717,15 @@ where
         &self,
         parent: &Branch<Id>,
         window_start: u64,
-    ) -> (HashSet<Id>, HashSet<Slot>) {
-        let mut ancestor_ids = HashSet::new();
+    ) -> (HashMap<Id, Slot>, HashSet<Slot>) {
+        let mut ancestors = HashMap::new();
         let mut occupied_slots = HashSet::new();
         let mut ancestor = Some(parent);
         while let Some(block) = ancestor {
             if block.slot.into_inner() < window_start {
                 break;
             }
-            ancestor_ids.insert(block.id);
+            ancestors.insert(block.id, block.slot);
             occupied_slots.insert(block.slot);
             occupied_slots.extend(
                 block
@@ -712,33 +736,35 @@ where
             );
             ancestor = self.branches.parent(block);
         }
-        (ancestor_ids, occupied_slots)
+        (ancestors, occupied_slots)
     }
 
     /// Collects uncle candidates by walking back all branches in the tree,
     /// to find the 1st block of each fork that meets the criteria.
+    ///
+    /// Each uncle candidate is returned with its parent's slot.
     ///
     /// Complexity: `O(n_forks * window_size)`
     fn uncle_candidates(
         &self,
         slot: Slot,
         window_start: u64,
-        ancestor_ids: &HashSet<Id>,
+        ancestors: &HashMap<Id, Slot>,
         occupied_slots: &HashSet<Slot>,
-    ) -> Vec<&Branch<Id>> {
-        let mut candidates: Vec<&Branch<Id>> = Vec::new();
+    ) -> Vec<(Slot, &Branch<Id>)> {
+        let mut candidates: Vec<(Slot, &Branch<Id>)> = Vec::new();
         for branch_tip in self.branches.branches() {
             let mut current = Some(branch_tip);
             while let Some(block) = current {
                 // Reached the chain of `parent` or the window's end.
-                if block.slot.into_inner() < window_start || ancestor_ids.contains(&block.id) {
+                if block.slot.into_inner() < window_start || ancestors.contains_key(&block.id) {
                     break;
                 }
                 if block.slot < slot
-                    && ancestor_ids.contains(&block.parent)
+                    && let Some(parent_slot) = ancestors.get(&block.parent)
                     && !occupied_slots.contains(&block.slot)
                 {
-                    candidates.push(block);
+                    candidates.push((*parent_slot, block));
                 }
                 current = self.branches.parent(block);
             }
@@ -1538,178 +1564,303 @@ pub mod tests {
             [(7.into(), hash(&7u64))].into(),
         );
     }
+}
 
-    #[test]
-    fn select_uncles_picks_oldest_first_blocks_of_forks() {
-        // g(0) -- b1(1) -- b2(3) -- b3(6; uncles=[4]) -- b4(8) <- adding b5(9)
-        //          |        |        |------------ u4(7) candidate
-        //          |        |-- u2(4)                    slot 4 already referenced by b3
-        //          |        |---- u5(5)                  candidate
-        //          |-- u1(2)                             candidate
-        //          |    |-------- d1(5)                  not the first block of a fork
-        //          |-- u3(2)                             candidate, same slot as u1
-        let g = hash(&0u64);
-        let [b1, b2, b3, b4] = [1u64, 2, 3, 4].map(|i| hash(&i));
-        let [u1, u2, u3, u4, u5, d1] = [20u64, 21, 22, 23, 24, 25].map(|i| hash(&i));
+#[cfg(test)]
+mod uncle_tests {
+    use std::num::NonZero;
 
-        let mut engine = Cryptarchia::from_lib(
-            g,
-            config_with(10),
-            State::Bootstrapping,
-            0.into(),
-            0,
-            UncleSlots::default(),
-        );
-        for (id, parent, slot, uncle_slots) in [
-            (b1, g, 1u64, UncleSlots::default()),
-            (b2, b1, 3, UncleSlots::default()),
-            (b3, b2, 6, [Slot::from(4u64)].into()),
-            (b4, b3, 8, UncleSlots::default()),
-            (u1, b1, 2, UncleSlots::default()),
-            (u3, b1, 2, UncleSlots::default()),
-            (d1, u1, 5, UncleSlots::default()),
-            (u2, b2, 4, UncleSlots::default()),
-            (u5, b2, 5, UncleSlots::default()),
-            (u4, b3, 7, UncleSlots::default()),
-        ] {
-            engine
-                .receive_block(id, parent, slot.into(), uncle_slots)
-                .expect("test block to be applied successfully.");
-        }
-        assert_eq!(engine.tip(), b4);
+    use lb_utils::math::NonNegativeRatio;
 
-        let selected: Vec<_> = engine
-            .select_uncles(engine.tip_branch(), 9.into())
-            .iter()
-            .map(|uncle| uncle.id())
-            .collect();
-        // Ties on the same slot are broken by the smaller ID.
-        assert_eq!(selected, [u1.min(u3), u5, u4]);
-    }
+    use crate::{Config, Cryptarchia, Slot, State, UncleSlots};
 
     #[test]
     fn select_uncles_honors_the_window() {
-        // g(0) -- a(8) -- b1(10)     <- adding b2(11)
-        //  |       |-- u9(9)         candidate
-        //  |       |------- u11(11)  not strictly older than the proposal slot
-        //  |-- u7(7)                 older than the window
-        //  |---- u8(8)               in the window, but its parent `g` is older
-        //                            (not a valid uncle)
-        let g = hash(&0u64);
-        let [a, b1, u7, u8, u9, u11] = [1u64, 2, 20, 21, 22, 23].map(|i| hash(&i));
-
-        // With `w_u = 3`, a proposal at slot 11 can only reference [8, 11).
-        let config = Config::new(
-            NonZero::new(10).unwrap(),
-            NonNegativeRatio::new(1, 10.try_into().unwrap()),
-            1f64.try_into().expect("1 > 0"),
-            NonZero::new(3).unwrap(),
-        );
-        let mut engine = Cryptarchia::from_lib(
+        //           |----- window ------|
+        //           |                   |
+        // g(0) ----- b1(8) -- b2(10)     <- adding b2(11)
+        //  |          |-- u3(9)
+        //  |          |------------------- u4(11)
+        //  |-- u1(7)
+        //  |-------- u2(8)
+        //
+        // Only u3 is selected. Other uncles are excluded because of the following
+        // reasons:
+        // - u1's parent is older than the window.
+        // - u2's parent is older than the window.
+        // - u4 is out of the window.
+        let [g, b1, b2, u1, u2, u3, u4] = [0u64, 1, 2, 3, 4, 5, 6];
+        let window = 3;
+        let engine = build_tree(
+            window,
             g,
-            config,
-            State::Bootstrapping,
-            0.into(),
-            0,
-            UncleSlots::default(),
+            [
+                (b1, g, 8.into()),
+                (b2, b1, 10.into()),
+                (u1, g, 7.into()),
+                (u2, g, 8.into()),
+                (u3, b1, 9.into()),
+                (u4, b1, 11.into()),
+            ],
         );
-        for (id, parent, slot) in [
-            (a, g, 8u64),
-            (b1, a, 10),
-            (u7, g, 7),
-            (u8, g, 8),
-            (u9, a, 9),
-            (u11, a, 11),
-        ] {
-            engine
-                .receive_block(id, parent, slot.into(), UncleSlots::default())
-                .expect("test block to be applied successfully.");
-        }
-        assert_eq!(engine.tip(), b1);
 
         let selected: Vec<_> = engine
-            .select_uncles(engine.tip_branch(), 11.into())
+            .select_uncles(engine.branches().get(&b2).unwrap(), 11.into())
             .iter()
             .map(|uncle| uncle.id())
             .collect();
-        assert_eq!(selected, [u9]);
+        assert_eq!(selected, [u3]);
     }
 
     #[test]
     fn select_uncles_selects_nothing_with_the_minimum_window() {
-        // g(0) -- b1(9)              <- adding b2(11)
-        //  |       |-- u10(10)       its parent is below the window
-        //  |                         (not a valid uncle)
-        //  |----- u9(9)              older than the window
+        //              |-- window ---|
+        //              |             |
+        // g(0) -- b1(9) -- b2(10)     <- adding b2(11)
+        //          |        |----------- u3(11)
+        //          |
+        //  |       |------ u2(10)
+        //  |
+        //  |----- u1(9)
         //
         // With `w_u = 1`, a proposal at slot 11 can only reference slot 10.
-        // Unless the chain has a block at exactly slot 10, the windowed walk
-        // collects no ancestor, so no candidate can pass the parent check; and
-        // if it has one, its own slot occupies the only referenceable slot.
-        // Either way, nothing is ever selected.
-        let g = hash(&0u64);
-        let [b1, u9, u10] = [1u64, 20, 21].map(|i| hash(&i));
-
-        let config = Config::new(
-            NonZero::new(10).unwrap(),
-            NonNegativeRatio::new(1, 10.try_into().unwrap()),
-            1f64.try_into().expect("1 > 0"),
-            NonZero::new(1).unwrap(),
-        );
-        let mut engine = Cryptarchia::from_lib(
+        // It means that no uncle can be selected.
+        let [g, b1, b2, u1, u2, u3] = [0u64, 1, 2, 3, 4, 5];
+        let window = 1;
+        let engine = build_tree(
+            window,
             g,
-            config,
-            State::Bootstrapping,
-            0.into(),
-            0,
-            UncleSlots::default(),
+            [
+                (b1, g, 9.into()),
+                (b2, b1, 10.into()),
+                (u1, g, 9.into()),
+                (u2, b1, 10.into()),
+                (u3, b2, 11.into()),
+            ],
         );
-        for (id, parent, slot) in [(b1, g, 9u64), (u9, g, 9), (u10, b1, 10)] {
-            engine
-                .receive_block(id, parent, slot.into(), UncleSlots::default())
-                .expect("test block to be applied successfully.");
-        }
 
-        let parent = engine.branches().get(&b1).unwrap();
-        assert!(engine.select_uncles(parent, 11.into()).is_empty());
+        assert!(
+            engine
+                .select_uncles(engine.branches().get(&b1).unwrap(), 11.into())
+                .is_empty()
+        );
     }
 
     #[test]
     fn select_uncles_takes_at_most_max_uncles() {
+        //  |----------------- window -------------------|
+        //  |                                            |
         // g(0) ----------------------------------- b1(6)  <- adding b2(7)
         //  |
-        //  |- f1(1) - f2(2) - f3(3) - f4(4) - f5(5)
-        let g = hash(&0u64);
-        let b1 = hash(&1u64);
-
-        let mut engine = Cryptarchia::from_lib(
+        //  |- u1(1)
+        //  |-------- u2(2)
+        //  |--------------- u3(3)
+        //  |--------------------- u4(4)
+        //  |--------------------------- u5(5)
+        //
+        // u1~u4 are selected. u5 is excluded because of `MAX_UNCLES=4`.
+        let [g, b1, u1, u2, u3, u4, u5] = [0u64, 1, 2, 3, 4, 5, 6];
+        let window = 10;
+        let engine = build_tree(
+            window,
             g,
-            config_with(10),
+            [
+                (b1, g, 6.into()),
+                (u1, g, 1.into()),
+                (u2, g, 2.into()),
+                (u3, g, 3.into()),
+                (u4, g, 4.into()),
+                (u5, g, 5.into()),
+            ],
+        );
+
+        let selected: Vec<_> = engine
+            .select_uncles(engine.branches().get(&b1).unwrap(), 7.into())
+            .iter()
+            .map(|uncle| uncle.id())
+            .collect();
+        assert_eq!(selected, [u1, u2, u3, u4]);
+    }
+
+    #[test]
+    fn select_uncles_takes_only_first_block_of_forks() {
+        //  |----------------- window -------------------|
+        //  |                                            |
+        // g(0) ----------------------------------- b1(6)  <- adding b2(7)
+        //  |
+        //  |- u1(1) -- u2(2)
+        //
+        // Only u1 is selected. u2 is excluded because it is not the first
+        // block of the fork.
+        let [g, b1, u1, u2] = [0u64, 1u64, 2, 3];
+        let window = 10;
+        let engine = build_tree(
+            window,
+            g,
+            [(b1, g, 6.into()), (u1, g, 1.into()), (u2, u1, 2.into())],
+        );
+
+        let selected: Vec<_> = engine
+            .select_uncles(engine.branches().get(&b1).unwrap(), 7.into())
+            .iter()
+            .map(|uncle| uncle.id())
+            .collect();
+        assert_eq!(selected, [u1]);
+    }
+
+    #[test]
+    fn select_uncles_skips_occupied_slots() {
+        //        |------------------- window ------------------|
+        //        |                                             |
+        // g(0) -- b1(5) -- b3(7, uncle_slots=[6]) -- b4(8)     <- adding b5(10)
+        //           |       |                         |---u4(9)
+        //           |       |
+        //           |       |----------------------- u3(8)
+        //           |
+        //           |-- u1(6)
+        //           |-- u2(7)
+        //
+        // Only u4 is selected. Other uncles' slots are already occupied:
+        // - u1's slot 6 is occupied by b3's uncle slot.
+        // - u2's slot 7 is occupied by b3.
+        // - u3's slot 8 is occupied by b4.
+
+        let [g, b1, b3, b4, u1, u2, u3, u4] = [0u64, 1, 2, 3, 4, 5, 6, 7];
+        let window = 5;
+        let engine = build_tree_with_uncle_slots(
+            window,
+            g,
+            [
+                (b1, g, 5.into(), UncleSlots::default()),
+                (b3, b1, 7.into(), [6u64.into()].into()),
+                (b4, b3, 8.into(), UncleSlots::default()),
+                (u1, b1, 6.into(), UncleSlots::default()),
+                (u2, b1, 7.into(), UncleSlots::default()),
+                (u3, b3, 8.into(), UncleSlots::default()),
+                (u4, b4, 9.into(), UncleSlots::default()),
+            ],
+        );
+
+        let selected: Vec<_> = engine
+            .select_uncles(engine.branches().get(&b4).unwrap(), 10.into())
+            .iter()
+            .map(|uncle| uncle.id())
+            .collect();
+        assert_eq!(selected, [u4]);
+    }
+
+    #[test]
+    fn select_uncles_takes_one_uncle_per_slot() {
+        // |----------- window -----------|
+        // |                              |
+        // g(0) -- b1(6) --- b2(8)         <- adding b3(11)
+        //          |        |-------u3(10)
+        //          |        |--- u2(9)
+        //          |--------------- u1(10)
+        //
+        // [u1, u2] are selected. u3's slot is colliding with u1's slot.
+        let [g, b1, b2, u1, u2, u3] = [0u64, 1u64, 2, 3, 4, 5];
+        let window = 15;
+        let engine = build_tree(
+            window,
+            g,
+            [
+                (b1, g, 6.into()),
+                (b2, b1, 8.into()),
+                (u1, b1, 10.into()),
+                (u2, b2, 9.into()),
+                (u3, b2, 10.into()),
+            ],
+        );
+
+        let selected: Vec<_> = engine
+            .select_uncles(engine.branches().get(&b2).unwrap(), 11.into())
+            .iter()
+            .map(|uncle| uncle.id())
+            .collect();
+        assert_eq!(selected, [u1, u2]);
+    }
+
+    #[test]
+    fn select_uncles_ordering() {
+        // |-------------------- window ------------------|
+        // |                                              |
+        // g(0) -- b1(3) -- b2(4)                         <-- adding b3(8)
+        //          |         |------------------- u4(7)
+        //          |         |------------------- u3(7)
+        //          |--------------------- u1(6)
+        //          |--------------- u2(5)
+        //
+        // The order of the selected uncles should be: [u2, u1, u3].
+        // - The parent slot(3) of u1 and u2 is smaller than the parent slot(4) of u3
+        //   and u4.
+        // - u2's slot(5) is smaller than u1's slot(6).
+        // - u3's ID(3) is smaller than u4's ID(4).
+        let [g, b1, b2, u1, u2, u3, u4] = [0u64, 1u64, 2, 3, 4, 5, 6];
+        let window = 10;
+        let engine = build_tree(
+            window,
+            g,
+            [
+                (b1, g, 3.into()),
+                (b2, b1, 4.into()),
+                (u1, b1, 6.into()),
+                (u2, b1, 5.into()),
+                (u3, b2, 7.into()),
+                (u4, b2, 7.into()),
+            ],
+        );
+
+        let selected: Vec<_> = engine
+            .select_uncles(engine.branches().get(&b2).unwrap(), 8.into())
+            .iter()
+            .map(|uncle| uncle.id())
+            .collect();
+        assert_eq!(selected, [u2, u1, u3]);
+    }
+
+    #[must_use]
+    fn config(uncle_reference_window: u64) -> Config {
+        Config::new(
+            NonZero::new(10).unwrap(),
+            NonNegativeRatio::new(1, 10.try_into().unwrap()),
+            1f64.try_into().expect("1 > 0"),
+            uncle_reference_window.try_into().unwrap(),
+        )
+    }
+
+    type HeaderId = u64;
+
+    fn build_tree(
+        uncle_reference_window: u64,
+        genesis: HeaderId,
+        blocks: impl IntoIterator<Item = (HeaderId, HeaderId, Slot)>,
+    ) -> Cryptarchia<HeaderId> {
+        build_tree_with_uncle_slots(
+            uncle_reference_window,
+            genesis,
+            blocks
+                .into_iter()
+                .map(|(id, parent, slot)| (id, parent, slot, UncleSlots::default())),
+        )
+    }
+
+    fn build_tree_with_uncle_slots(
+        uncle_reference_window: u64,
+        genesis: HeaderId,
+        blocks: impl IntoIterator<Item = (HeaderId, HeaderId, Slot, UncleSlots)>,
+    ) -> Cryptarchia<HeaderId> {
+        let mut engine = Cryptarchia::from_lib(
+            genesis,
+            config(uncle_reference_window),
             State::Bootstrapping,
             0.into(),
             0,
             UncleSlots::default(),
         );
-        engine
-            .receive_block(b1, g, 6.into(), UncleSlots::default())
-            .expect("test block to be applied successfully.");
-        for slot in 1u64..=5 {
-            engine
-                .receive_block(hash(&(20 + slot)), g, slot.into(), UncleSlots::default())
-                .expect("test block to be applied successfully.");
+        for (id, parent, slot, uncle_slots) in blocks {
+            engine.receive_block(id, parent, slot, uncle_slots).unwrap();
         }
-
-        let selected: Vec<_> = engine
-            .select_uncles(engine.tip_branch(), 7.into())
-            .iter()
-            .map(|uncle| uncle.slot())
-            .collect();
-        // The oldest `MAX_UNCLES` candidates win; the one at slot 5 is dropped.
-        assert_eq!(
-            selected,
-            (1u64..=crate::MAX_UNCLES as u64)
-                .map(Slot::from)
-                .collect::<Vec<_>>()
-        );
+        engine
     }
 }
