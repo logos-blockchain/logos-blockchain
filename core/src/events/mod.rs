@@ -172,3 +172,88 @@ impl TryFrom<Events> for Bytes {
         events.to_bytes()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use lb_groth16::Fr;
+    use num_bigint::BigUint;
+
+    use super::*;
+
+    /// A deposit note with distinct, non-default id/value/pk so the round-trip
+    /// exercises every field rather than zero-valued defaults.
+    fn deposit_note(seed: u64, value: Value) -> DepositNote {
+        DepositNote {
+            note_id: NoteId::from(Fr::from(BigUint::from(seed))),
+            value,
+            pk: ZkPublicKey::from(Fr::from(BigUint::from(
+                seed.wrapping_mul(97).wrapping_add(3),
+            ))),
+        }
+    }
+
+    /// A `Deposit` payload carrying several notes must survive the events codec
+    /// round-trip. The wallet reads these notes off the block-events endpoint,
+    /// so a broken `DepositNote` (de)serialization would silently drop the
+    /// per-note value/pk data that channel-note tracking depends on.
+    #[test]
+    fn deposit_event_notes_survive_codec_round_trip() {
+        let expected_notes = vec![
+            deposit_note(11, 1),
+            deposit_note(22, 10_000),
+            deposit_note(33, u64::MAX),
+        ];
+        let notes: DepositRecreatedNotes = expected_notes
+            .clone()
+            .try_into()
+            .expect("note count is within the input bound");
+
+        let tx_hash = TxHash([1u8; 32]);
+        let op_id: Hash = [2u8; 32];
+        let channel_id = ChannelId::from([7u8; 32]);
+        let amount: Value = 424_242;
+        let metadata: Metadata = vec![9u8, 8, 7]
+            .try_into()
+            .expect("metadata is within the size bound");
+
+        let events = Events::from(Event::Tx(TxEvent::new(
+            tx_hash,
+            op_id,
+            TxEventPayload::Deposit {
+                channel_id,
+                amount,
+                metadata: metadata.clone(),
+                notes,
+            },
+        )));
+
+        let bytes: Bytes = events.try_into().expect("events serialize");
+        let decoded = Events::try_from(bytes).expect("events deserialize");
+
+        let mut iter = decoded.iter();
+        let event = iter.next().expect("one event round-trips");
+        assert!(iter.next().is_none(), "exactly one event round-trips");
+
+        let Event::Tx(TxEvent {
+            tx_hash: decoded_tx_hash,
+            op_id: decoded_op_id,
+            payload:
+                TxEventPayload::Deposit {
+                    channel_id: decoded_channel_id,
+                    amount: decoded_amount,
+                    metadata: decoded_metadata,
+                    notes: decoded_notes,
+                },
+        }) = event
+        else {
+            panic!("expected a deposit Tx event, got {event:?}");
+        };
+
+        assert_eq!(*decoded_tx_hash, tx_hash);
+        assert_eq!(*decoded_op_id, op_id);
+        assert_eq!(*decoded_channel_id, channel_id);
+        assert_eq!(*decoded_amount, amount);
+        assert_eq!(decoded_metadata.as_slice(), metadata.as_slice());
+        assert_eq!(decoded_notes.as_slice(), expected_notes.as_slice());
+    }
+}
