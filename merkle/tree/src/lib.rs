@@ -276,8 +276,8 @@ where
 pub enum RecoveryError {
     #[error("compressed Merkle tree position {position} exceeds capacity {capacity}")]
     PositionOutOfBounds { position: usize, capacity: usize },
-    #[error("compressed Merkle tree contains duplicate keys")]
-    DuplicateKey,
+    #[error("compressed Merkle tree contains a duplicate key at position {position}")]
+    DuplicateKey { position: usize },
 }
 
 impl<Key, Item, Leaf> TryFrom<CompressedMerkleTree<Key, Item>> for MerkleTree<Key, Item, Leaf>
@@ -299,7 +299,9 @@ where
                 });
             }
             if !keys.insert(key) {
-                return Err(RecoveryError::DuplicateKey);
+                return Err(RecoveryError::DuplicateKey {
+                    position: *position,
+                });
             }
         }
 

@@ -493,7 +493,7 @@ mod tests {
 
         let error = serde_json::from_str::<Blake2bTree<TestLeaf, TestLeaf>>(&serialized)
             .expect_err("duplicate logical keys must be rejected");
-        assert!(error.to_string().contains("duplicate keys"));
+        assert!(error.to_string().contains("duplicate key at position 1"));
     }
 
     #[test]

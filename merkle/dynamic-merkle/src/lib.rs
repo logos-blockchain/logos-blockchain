@@ -93,9 +93,9 @@ enum Node<Hash> {
         left_subtree_size: usize,
         height: usize,
     },
-    // An empty inner node, representing an unexpanded empty subtree, to avoid
-    // allocating a full subtree when not necessary.
-    // Can only be found in the right subtree of an inner node.
+    // An unexpanded, fully-empty subtree. Height zero represents one empty
+    // leaf position; larger heights compactly represent multiple empty
+    // leaves, avoiding allocations for ranges that are not occupied.
     Empty {
         height: usize,
     },
@@ -106,17 +106,7 @@ enum Node<Hash> {
 }
 
 fn hash<H: MerkleHasher>(left: &Node<H::Hash>, right: &Node<H::Hash>) -> H::Hash {
-    let left = match left {
-        Node::Inner { value, .. } => *value,
-        Node::Leaf { value } => (*value).unwrap_or(H::EMPTY_VALUE),
-        Node::Empty { height } => H::empty_subtree_root(*height),
-    };
-    let right = match right {
-        Node::Inner { value, .. } => *value,
-        Node::Leaf { value } => (*value).unwrap_or(H::EMPTY_VALUE),
-        Node::Empty { height } => H::empty_subtree_root(*height),
-    };
-    H::compress(&left, &right)
+    H::compress(&left.value::<H>(), &right.value::<H>())
 }
 
 impl<Hash> Node<Hash> {
@@ -315,13 +305,19 @@ impl<Hash: Copy> Node<Hash> {
 /// A dynamic persistent Merkle tree that supports insertion and removal of
 /// leaf hashes.
 ///
-/// Removed leaves are replaced with an empty leaf node, which prevents
-/// the whole tree reordering and their position is recorded for future
-/// insertions. Compared to a MPT, the height of this tree is predictable and
-/// bounded by the number of items, for example allowing for efficient and
-/// simple proof of memberships for `PoL`.
+/// Removed leaves are replaced with an explicit `Leaf { value: None }`, which
+/// prevents reordering of the whole tree; their positions are recorded for
+/// future insertions. Sparse recovery represents missing ranges structurally
+/// with `Node::Empty` instead of creating one empty leaf per missing position.
+/// Positions freed by removal remain tracked in `holes` for the tree's
+/// existing serialization and bookkeeping behavior. Compared to a MPT, the
+/// height of this tree is predictable and bounded by the number of items, for
+/// example allowing for efficient and simple proof of memberships for `PoL`.
 pub struct DynamicMerkleTree<H: MerkleHasher> {
     root: Arc<Node<H::Hash>>,
+    // Explicit empty leaves created by remove(). Sparse gaps are represented
+    // by Node::Empty in root instead; keep this set for removal bookkeeping
+    // and the existing serialized representation.
     holes: RedBlackTreeSetSync<usize>,
     _hasher: PhantomData<H>,
 }
@@ -378,8 +374,12 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
     /// Inserts the leaf hash `value` at the lowest available position and
     /// returns the updated tree together with the index it was assigned.
     ///
-    /// Positions freed by [`remove`](Self::remove) are reused before the tree
-    /// grows, so the smallest free index is always chosen.
+    /// The lowest available position is derived from the tree structure, so
+    /// this works for both implicit empty ranges from sparse recovery and
+    /// explicit empty leaves created by [`remove`](Self::remove). Positions
+    /// freed by removal are reused before the tree grows, so the smallest free
+    /// index is always chosen. If the selected position is in `holes`, it is
+    /// removed from that bookkeeping set.
     ///
     /// The original tree is left unchanged (the structure is persistent).
     ///
@@ -412,9 +412,10 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
 
     /// Removes the leaf at `index`, returning the updated tree.
     ///
-    /// The leaf is replaced with an empty one and its position is recorded as a
-    /// hole for reuse by a future [`insert`](Self::insert); the tree is not
-    /// otherwise restructured. The original tree is left unchanged.
+    /// The leaf is replaced with an explicit empty leaf and its position is
+    /// recorded as a hole for reuse by a future [`insert`](Self::insert); the
+    /// tree is not otherwise restructured. The original tree is left
+    /// unchanged.
     ///
     /// # Panics
     ///
@@ -485,7 +486,10 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
     }
 
     /// Rebuilds a tree placing each leaf hash at its given index, representing
-    /// gaps as implicit empty subtrees.
+    /// gaps as implicit empty subtrees rather than explicit holes. Those gaps
+    /// are therefore stored as `Node::Empty` ranges in the tree structure;
+    /// the `holes` set remains reserved for positions explicitly freed by
+    /// [`remove`](Self::remove).
     ///
     /// The values must be yielded in strictly increasing index order; this is
     /// the inverse of enumerating a tree's occupied positions and is meant
@@ -510,9 +514,24 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
         }
     }
 
+    /// Builds the subtree whose first absolute leaf position is
+    /// `subtree_start`.
+    ///
+    /// A subtree of `height` covers the half-open range
+    /// `[subtree_start, subtree_start + 2^height)`. Thus, `subtree_capacity =
+    /// 2^height` is the width of this subtree, not an absolute index bound,
+    /// and `midpoint = subtree_start + subtree_capacity / 2` divides the range
+    /// into equal left and right halves.
+    ///
+    /// The iterator must yield entries in strictly increasing absolute
+    /// position order. At `height == 0`, this subtree represents exactly one
+    /// leaf position, so the consumed item must have `position ==
+    /// subtree_start`. The function consumes only entries belonging to the
+    /// current subtree and represents unoccupied ranges with
+    /// [`Node::Empty`] instead of materializing individual empty leaves.
     fn build_sparse_subtree<I>(
         items: &mut std::iter::Peekable<I>,
-        start: usize,
+        subtree_start: usize,
         height: usize,
     ) -> Arc<Node<H::Hash>>
     where
@@ -521,29 +540,32 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
         let Some(&(position, _)) = items.peek() else {
             return Arc::new(Node::Empty { height });
         };
-        let capacity = 1usize << height;
+        let subtree_capacity = 1usize << height;
         assert!(
-            position >= start && position - start < capacity,
+            position >= subtree_start && position - subtree_start < subtree_capacity,
             "indices must be strictly increasing and within bounds"
         );
         if height == 0 {
             let (position, value) = items.next().expect("peeked item must be available");
-            assert_eq!(position, start, "indices must be strictly increasing");
+            assert_eq!(
+                position, subtree_start,
+                "indices must be strictly increasing"
+            );
             return Arc::new(Node::new(value));
         }
 
-        let midpoint = start + (capacity / 2);
+        let midpoint = subtree_start + (subtree_capacity / 2);
         let left = if items
             .peek()
             .is_some_and(|(position, _)| *position < midpoint)
         {
-            Self::build_sparse_subtree(items, start, height - 1)
+            Self::build_sparse_subtree(items, subtree_start, height - 1)
         } else {
             Arc::new(Node::Empty { height: height - 1 })
         };
         let right = if items
             .peek()
-            .is_some_and(|(position, _)| *position < start + capacity)
+            .is_some_and(|(position, _)| *position < subtree_start + subtree_capacity)
         {
             Self::build_sparse_subtree(items, midpoint, height - 1)
         } else {
