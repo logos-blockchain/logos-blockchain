@@ -19,6 +19,7 @@ futures                          = { workspace = true }
 hex                              = { workspace = true }
 lb-blend                         = { workspace = true }
 lb-chain-service                 = { workspace = true }
+lb-chain-service-common          = { workspace = true }
 lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { workspace = true }
 lb-groth16                       = { workspace = true }

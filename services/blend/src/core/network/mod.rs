@@ -1,4 +1,5 @@
 pub mod libp2p;
+pub mod traced_libp2p;
 
 use std::fmt::Debug;
 
