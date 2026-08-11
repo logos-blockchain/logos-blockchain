@@ -92,7 +92,7 @@ Most of the template content is the same or very similar to what is in `release.
 
 - [ ] Verify the Logos Blockchain tools Docker image was properly built and pushed to the [GitHub container registry][logos-tools-image-container-registry]
 - [ ] Wait for the new Docker image to be built after the release is published. It must have the `X.Y.Z-rc.N` tag.
-- [ ] Checkout `devnet` branch again and change the `deployment/compose.static.yml` symlink to now point to `compose.run.yml` with `ln -s -f compose.run.yml deployment/compose.static.yml`. If this release included previous state cleanup, the new symlink should replace the previous `compose.setup.yml`, otherwise this should be a no-op.
+- [ ] Checkout `devnet` branch again and change the `compose.static.yml` symlink to now point to `deployment/compose.run.yml` with `ln -sf deployment/compose.run.yml compose.static.yml`. If this release included previous state cleanup, the new symlink should replace the previous `deployment/compose.setup.yml`, otherwise this should be a no-op.
 - [ ] Update `deployment/.env.devnet` file to contain `NODE_IMAGE_LABEL=X.Y.Z-rc.N` set to version being released
 - [ ] Commit and push the changes to trigger environment re-deployment
 - [ ] Wait around 1 minute for deployment to be updated. Environment is now live.
