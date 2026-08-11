@@ -49,7 +49,10 @@ const LOG_TARGET: &str = blend::network::core::edge::BEHAVIOUR;
 pub enum Event {
     /// A message received from one of the edge peers, after its whole public
     /// header — signature and `PoQ` — has been verified.
-    Message(EncapsulatedMessageWithVerifiedPublicHeader),
+    Message {
+        message: EncapsulatedMessageWithVerifiedPublicHeader,
+        epoch: Epoch,
+    },
     #[cfg(test)]
     NegotiatedConnection { peer: PeerId },
 }
@@ -224,9 +227,12 @@ impl<ProofsVerifier> Behaviour<ProofsVerifier> {
     /// it came to deliver anyway.
     fn handle_poq_verification_outcome(&mut self, outcome: PoQVerificationOutcome) {
         match outcome {
-            PoQVerificationOutcome::Verified { message, .. } => {
+            PoQVerificationOutcome::Verified { message, epoch, .. } => {
                 self.events
-                    .push_back(ToSwarm::GenerateEvent(Event::Message(*message)));
+                    .push_back(ToSwarm::GenerateEvent(Event::Message {
+                        message: *message,
+                        epoch,
+                    }));
                 self.try_wake();
             }
             PoQVerificationOutcome::Failed {

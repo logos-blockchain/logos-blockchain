@@ -42,7 +42,7 @@ async fn receive_valid_message() {
         select! {
             _ = edge_swarm.select_next_some() => {}
             core_swarm_event = core_swarm.select_next_some() => {
-                if let SwarmEvent::Behaviour(Event::Message(received_message)) = core_swarm_event {
+                if let SwarmEvent::Behaviour(Event::Message { message: received_message, .. }) = core_swarm_event {
                     assert_eq!(received_message, message.into_inner());
                     break;
                 }
@@ -83,7 +83,7 @@ async fn reject_message_with_invalid_proof_of_quota() {
             _ = edge_swarm.select_next_some() => {}
             core_swarm_event = core_swarm.select_next_some() => {
                 assert!(
-                    !matches!(core_swarm_event, SwarmEvent::Behaviour(Event::Message(_))),
+                    !matches!(core_swarm_event, SwarmEvent::Behaviour(Event::Message { .. })),
                     "A message whose PoQ failed to verify must not be reported to the swarm"
                 );
             }
@@ -121,7 +121,7 @@ async fn reject_message_with_unexpected_layer_count() {
             _ = edge_swarm.select_next_some() => {}
             core_swarm_event = core_swarm.select_next_some() => {
                 match core_swarm_event {
-                    SwarmEvent::Behaviour(Event::Message(_)) => {
+                    SwarmEvent::Behaviour(Event::Message { .. }) => {
                         panic!("No `Message` event should be generated for a message with an unexpected number of layers.");
                     }
                     SwarmEvent::ConnectionClosed { peer_id, .. } => {
@@ -189,7 +189,7 @@ async fn receive_malformed_message() {
             _ = edge_swarm.select_next_some() => {}
             core_swarm_event = core_swarm.select_next_some() => {
                 match core_swarm_event {
-                    SwarmEvent::Behaviour(Event::Message(_)) => {
+                    SwarmEvent::Behaviour(Event::Message { .. }) => {
                         panic!("No `Message` event should be generated for an invalid message received.");
                     }
                     SwarmEvent::ConnectionClosed { peer_id, .. } => {

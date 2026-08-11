@@ -724,15 +724,25 @@ where
         }
     }
 
-    fn publish_received_edge_message(&mut self, msg: &EncapsulatedMessageWithVerifiedPublicHeader) {
+    fn publish_received_edge_message(
+        &mut self,
+        msg: &EncapsulatedMessageWithVerifiedPublicHeader,
+        epoch: Epoch,
+    ) {
         if let Err(e) = self
             .swarm
             .behaviour_mut()
             .blend
             .with_core_mut()
-            .publish_message_with_validated_header_to_current_epoch(msg)
+            .publish_message_with_validated_header(msg, epoch)
         {
-            tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
+            // `InvalidEpoch` is expected: the message is verified off-task, so its
+            // epoch can stop being served before the outcome comes back.
+            if matches!(e, SendError::InvalidEpoch) {
+                tracing::trace!(target: LOG_TARGET, "Dropping message received from an edge node for epoch {epoch:?}, which is no longer served.");
+            } else {
+                tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
+            }
             metrics::outbound_publish_err();
         } else {
             metrics::outbound_publish_ok();
@@ -811,15 +821,14 @@ where
 
     fn handle_blend_edge_behaviour_event(&mut self, blend_event: CoreToEdgeEvent) {
         match blend_event {
-            lb_blend::network::core::with_edge::behaviour::Event::Message(msg) => {
+            lb_blend::network::core::with_edge::behaviour::Event::Message { message, epoch } => {
+                // The epoch is the one the message was verified under, which is not
+                // necessarily the current one, so it is used for both the peers it goes
+                // to and the processor the service decapsulates it with.
                 // Forward message received from edge node to all the core nodes.
-                self.publish_received_edge_message(&msg);
+                self.publish_received_edge_message(&message, epoch);
                 // Bubble up to service for decapsulation and delaying.
-                self.report_message_to_service(
-                    msg,
-                    self.current_epoch_info.epoch,
-                    metrics::InboundMessageType::Edge,
-                );
+                self.report_message_to_service(message, epoch, metrics::InboundMessageType::Edge);
             }
         }
     }
