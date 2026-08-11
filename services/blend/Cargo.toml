@@ -20,6 +20,7 @@ hex                              = { workspace = true }
 lb-blend                         = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-core                          = { workspace = true }
+lb-codec                         = { workspace = true }
 lb-cryptarchia-engine            = { workspace = true }
 lb-groth16                       = { workspace = true }
 lb-key-management-system-service = { features = ["unsafe"], workspace = true }

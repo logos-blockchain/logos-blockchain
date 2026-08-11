@@ -1,7 +1,7 @@
 use lb_blend_service::{
     core::{
         backends::libp2p::Libp2pBlendBackendSettings as Libp2pCoreBlendBackendSettings,
-        network::libp2p::Libp2pBroadcastSettings,
+        network::traced_libp2p::Libp2pBroadcastSettings,
         settings::{
             CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings,
             StartingBlendConfig as BlendCoreSettings, ZkSettings,

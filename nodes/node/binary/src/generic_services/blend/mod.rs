@@ -21,7 +21,7 @@ pub(crate) mod pol;
 pub type BlendCoreRecoveryBackend<RuntimeServiceId> = StorageRecoveryBackend<
     lb_blend_service::core::CoreServiceState<
         lb_blend_service::core::backends::libp2p::Libp2pBlendBackendSettings,
-        <lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId> as lb_blend_service::core::network::NetworkAdapter<RuntimeServiceId>>::Settings,
+        <lb_blend_service::core::network::traced_libp2p::Libp2pAdapter<RuntimeServiceId> as lb_blend_service::core::network::NetworkAdapter<RuntimeServiceId>>::Settings,
     >,
     lb_blend_service::core::settings::StartingBlendConfig<
         lb_blend_service::core::backends::libp2p::Libp2pBlendBackendSettings,
@@ -34,7 +34,7 @@ pub type BlendCoreRecoveryBackend<RuntimeServiceId> = StorageRecoveryBackend<
 pub type BlendCoreService<RuntimeServiceId> = lb_blend_service::core::BlendService<
     lb_blend_service::core::backends::libp2p::Libp2pBlendBackend,
     PeerId,
-    lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId>,
+    lb_blend_service::core::network::traced_libp2p::Libp2pAdapter<RuntimeServiceId>,
     SdpService<RuntimeServiceId>,
     RealCoreAndLeaderProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>,
     RealProofsVerifier,
@@ -83,4 +83,4 @@ pub type BlendService<RuntimeServiceId> = lb_blend_service::BlendService<
 >;
 
 pub type BlendBroadcastSettings<RuntimeServiceId> =
-    <lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId> as lb_blend_service::core::network::NetworkAdapter<RuntimeServiceId>>::Settings;
+    <lb_blend_service::core::network::traced_libp2p::Libp2pAdapter<RuntimeServiceId> as lb_blend_service::core::network::NetworkAdapter<RuntimeServiceId>>::Settings;
