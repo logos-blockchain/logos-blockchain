@@ -965,6 +965,16 @@ impl<ObservationWindowClockProvider, ProofsVerifier>
                 sender,
                 epoch,
             } => {
+                // Only now that the `PoQ` has verified may the message claim its
+                // nullifier in the cache, so a copy arriving later is not verified
+                // again. It goes into the cache of the epoch it verified against.
+                if epoch == self.current_epoch_info.1 {
+                    self.message_cache.mark_message_as_processed(&message);
+                } else if let Some(old_epoch) = &mut self.old_epoch
+                    && epoch == old_epoch.epoch()
+                {
+                    old_epoch.mark_message_as_processed(&message);
+                }
                 self.events
                     .push_back(ToSwarm::GenerateEvent(Event::Message {
                         message,

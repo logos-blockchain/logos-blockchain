@@ -79,11 +79,11 @@ where
 /// returned to avoid processing the same message multiple times from the same
 /// peer, which could be a sign of a malicious peer.
 ///
-/// The message is only reported to the swarm once its `PoQ` verifies, which
-/// happens off the task polling this behaviour. Marking it as processed before
-/// the outcome is known is deliberate: the verdict depends only on the message
-/// and the epoch's verifier, so a copy arriving from another peer in the
-/// meantime would get the same answer and need not be verified again.
+/// The message is only reported to the swarm — and only entered into the
+/// message cache — once its `PoQ` verifies, which happens off the task polling
+/// this behaviour. Entering it any earlier would let anyone claim a nullifier
+/// by replaying someone else's `PoQ` under their own signing key, suppressing
+/// the genuine message that carries it.
 #[expect(clippy::too_many_arguments, reason = "categorize args")]
 pub fn handle_received_serialized_encapsulated_message_and_update_cache<Verifier>(
     serialized_message: &[u8],
@@ -120,10 +120,8 @@ where
         .verify_header_signature()
         .map_err(|_| ReceiveError::InvalidHeaderSignature)?;
 
-    message_cache.mark_message_as_processed(&validated_message);
-
-    // Verify the `PoQ` before the message is reported to the swarm, and hence
-    // before it can be relayed any further.
+    // Verify the `PoQ` before the message is reported to the swarm, entered into
+    // the cache, and hence before it can be relayed any further.
     spawn_poq_verification(
         pending_verifications,
         validated_message,

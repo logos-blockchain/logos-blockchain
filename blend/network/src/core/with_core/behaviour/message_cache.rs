@@ -3,10 +3,7 @@ use std::collections::{HashMap, HashSet, hash_map::Entry};
 use lb_blend_message::{
     MessageIdentifier,
     encap::{
-        encapsulated::EncapsulatedMessage,
-        validated::{
-            EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
-        },
+        encapsulated::EncapsulatedMessage, validated::EncapsulatedMessageWithVerifiedPublicHeader,
     },
 };
 use libp2p::PeerId;
@@ -68,12 +65,15 @@ impl MessageCache {
     /// This means that we have received and validated the message, but we
     /// haven't forwarded it to our peers yet.
     ///
-    /// The function takes an `EncapsulatedMessageWithVerifiedSignature` as
-    /// input, since we want to mark the message as processed only after
-    /// validating it.
+    /// The function takes an `EncapsulatedMessageWithVerifiedPublicHeader` as
+    /// input because the cache is keyed by the `PoQ` key nullifier, which is
+    /// only meaningful once the `PoQ` it comes from has been verified. Marking
+    /// an unverified message would let anyone claim a nullifier by replaying
+    /// someone else's `PoQ` under their own signing key, which suppresses the
+    /// genuine message carrying it.
     pub fn mark_message_as_processed(
         &mut self,
-        message: &EncapsulatedMessageWithVerifiedSignature,
+        message: &EncapsulatedMessageWithVerifiedPublicHeader,
     ) {
         // Forwarded messages are also considered received (i.e. we ignore them if we
         // receive them later on), so we only mark the message as received if it
@@ -162,10 +162,7 @@ impl MessageCache {
 #[cfg(test)]
 mod tests {
     use lb_blend_message::encap::{
-        encapsulated::EncapsulatedMessage,
-        validated::{
-            EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
-        },
+        encapsulated::EncapsulatedMessage, validated::EncapsulatedMessageWithVerifiedPublicHeader,
     };
     use libp2p::PeerId;
 
@@ -178,12 +175,6 @@ mod tests {
         TestEncapsulatedMessage::new(payload).into_inner()
     }
 
-    fn make_signature_verified(
-        message: &EncapsulatedMessageWithVerifiedPublicHeader,
-    ) -> EncapsulatedMessageWithVerifiedSignature {
-        message.clone().into()
-    }
-
     fn make_raw(payload: &[u8]) -> EncapsulatedMessage {
         make_verified(payload).into()
     }
@@ -194,7 +185,7 @@ mod tests {
         let msg = make_verified(b"fw-not-downgraded");
 
         cache.mark_message_as_forwarded(&msg);
-        cache.mark_message_as_processed(&make_signature_verified(&msg));
+        cache.mark_message_as_processed(&msg);
 
         assert_eq!(
             cache.message_status(&msg.id()),
@@ -208,7 +199,7 @@ mod tests {
         let mut cache = MessageCache::new();
         let msg = make_verified(b"proc-upgraded");
 
-        cache.mark_message_as_processed(&make_signature_verified(&msg));
+        cache.mark_message_as_processed(&msg);
         assert_eq!(
             cache.message_status(&msg.id()),
             Some(&MessageStatus::Processed)
@@ -228,7 +219,7 @@ mod tests {
         let proc_msg = make_verified(b"processed");
         let fwd_msg = make_verified(b"forwarded");
 
-        cache.mark_message_as_processed(&make_signature_verified(&proc_msg));
+        cache.mark_message_as_processed(&proc_msg);
         cache.mark_message_as_forwarded(&fwd_msg);
 
         let raw_proc: EncapsulatedMessage = proc_msg.into();
@@ -249,7 +240,7 @@ mod tests {
         let mut cache = MessageCache::new();
         let msg = make_verified(b"only-processed");
 
-        cache.mark_message_as_processed(&make_signature_verified(&msg));
+        cache.mark_message_as_processed(&msg);
         let raw: EncapsulatedMessage = msg.into();
 
         assert!(

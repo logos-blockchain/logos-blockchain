@@ -172,6 +172,21 @@ impl<ProofsVerifier> OldEpoch<ProofsVerifier> {
             .is_some_and(|&id| id == *connection_id)
     }
 
+    /// The epoch this is serving.
+    #[must_use]
+    pub const fn epoch(&self) -> Epoch {
+        self.epoch
+    }
+
+    /// Marks a message whose `PoQ` verified against this epoch's verifier as
+    /// processed, so a copy arriving later is not verified again.
+    pub fn mark_message_as_processed(
+        &mut self,
+        message: &EncapsulatedMessageWithVerifiedPublicHeader,
+    ) {
+        self.message_cache.mark_message_as_processed(message);
+    }
+
     /// Returns the peer IDs of all negotiated peers in the old epoch.
     pub fn negotiated_peer_ids(&self) -> impl Iterator<Item = &PeerId> {
         self.negotiated_peers.keys()
