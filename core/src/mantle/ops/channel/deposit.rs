@@ -4,7 +4,7 @@ use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    events::{DepositRecreatedNotes, TxEvent, TxEventPayload},
+    events::{DepositNote, DepositRecreatedNotes, TxEvent, TxEventPayload},
     mantle::{
         channel::{Channels, Error},
         ledger::{
@@ -128,12 +128,18 @@ impl ExecutableOperation for DepositOp {
         // Add the re-created notes to the ledger and register them as channel
         // notes.
         context.utxos = outputs.execute(context.utxos, self);
-        let mut note_ids = DepositRecreatedNotes::default();
+        let mut notes = DepositRecreatedNotes::default();
         for utxo in outputs.utxos(self) {
             context.channels = context
                 .channels
                 .register_channel_note(&utxo.id(), &self.channel_id)?;
-            note_ids.try_push(utxo.id()).map_err(InputsError::from)?;
+            notes
+                .try_push(DepositNote {
+                    note_id: utxo.id(),
+                    value: utxo.note.value,
+                    pk: utxo.note.pk,
+                })
+                .map_err(InputsError::from)?;
         }
 
         let events = std::iter::once(TxEvent::new(
@@ -143,7 +149,7 @@ impl ExecutableOperation for DepositOp {
                 channel_id: self.channel_id,
                 amount: amount_deposited,
                 metadata: self.metadata.clone(),
-                notes: note_ids,
+                notes,
             },
         ))
         .collect();

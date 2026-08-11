@@ -783,6 +783,7 @@ impl LedgerState {
 mod tests {
     use cryptarchia::tests::{config, generate_proof, utxo};
     use lb_core::{
+        events::DepositNote,
         mantle::{
             GasCalculator as _, Note, OpProof, RawMantleTx, SignedMantleTx,
             gas::MainnetGasConstants,
@@ -1238,7 +1239,14 @@ mod tests {
         assert_eq!(*event_channel_id, deposit.channel_id);
         assert_eq!(*amount, utxo.note.value);
         assert_eq!(*metadata, deposit.metadata);
-        assert_eq!(notes.as_slice(), &[deposited]);
+        assert_eq!(
+            notes.as_slice(),
+            &[DepositNote {
+                note_id: deposited,
+                value: utxo.note.value,
+                pk: utxo.note.pk,
+            }]
+        );
     }
 
     #[test]

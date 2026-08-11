@@ -1,4 +1,6 @@
 use bytes::Bytes;
+use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -6,7 +8,7 @@ use crate::{
     crypto::Hash,
     mantle::{
         NoteId, Utxo, Value,
-        ledger::BoundedInputs,
+        ledger::MAX_TRANSACTION_INPUTS,
         ops::{
             channel::{ChannelId, deposit::Metadata},
             leader_claim::VoucherNullifier,
@@ -98,9 +100,22 @@ impl TxEvent {
     }
 }
 
+/// A single channel note a deposit re-created from one of its inputs.
+///
+/// Carries the data a wallet needs to track and later select the note: its id,
+/// value, and owning public key. The public key is the depositor's — a deposit
+/// re-creates each input note unchanged inside the channel — so a withdrawal
+/// client can tell which key must authorize spending it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DepositNote {
+    pub note_id: NoteId,
+    pub value: Value,
+    pub pk: ZkPublicKey,
+}
+
 // A deposit re-creates one channel note per input, so the notes it emits carry
 // the same bound as its inputs.
-pub type DepositRecreatedNotes = BoundedInputs;
+pub type DepositRecreatedNotes = UpperBoundedVec<DepositNote, MAX_TRANSACTION_INPUTS>;
 
 /// Event payloads emitted while processing a transaction
 #[derive(Debug, Clone, Serialize, Deserialize)]
