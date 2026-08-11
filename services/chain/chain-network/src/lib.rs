@@ -30,6 +30,7 @@ use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
 use lb_time_service::{TimeService, TimeServiceMessage};
+use lb_tracing::info_with_id;
 use lb_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
@@ -660,6 +661,7 @@ where
 
         match Self::apply_block_with_future_block_retry(block, relays).await {
             Ok(()) => {
+                info_with_id!(block_id.as_ref(), "applying block");
                 metrics::consensus_observe_apply_block_ok(started_at.elapsed());
                 orphan_downloader.remove_orphan(&block_id);
                 trace!(counter.consensus_processed_blocks = 1);
