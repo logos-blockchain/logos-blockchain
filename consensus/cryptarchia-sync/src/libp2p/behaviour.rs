@@ -31,9 +31,13 @@ use crate::{
     messages::{GetTipResponse, SerialisedBlock},
 };
 
-type SendingBlocksRequestsFuture = BoxFuture<'static, Result<BlocksRequestStream, ChainSyncError>>;
+/// Resolves to `None` when the request failed; the error is delivered to the
+/// requester through the reply channel by [`Downloader::send_download_request`].
+type SendingBlocksRequestsFuture = BoxFuture<'static, Option<BlocksRequestStream>>;
 
-type SendingTipRequestFuture = BoxFuture<'static, Result<TipRequestStream, ChainSyncError>>;
+/// Resolves to `None` when the request failed; the error is delivered to the
+/// requester through the reply channel by [`Downloader::send_tip_request`].
+type SendingTipRequestFuture = BoxFuture<'static, Option<TipRequestStream>>;
 
 type ReceivingBlocksResponsesFuture = BoxFuture<'static, Result<(), ChainSyncError>>;
 
@@ -429,10 +433,6 @@ impl NetworkBehaviour for Behaviour {
             .on_connection_handler_event(peer_id, conn_id, event);
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: address this in a dedicated refactor"
-    )]
     fn poll(
         &mut self,
         cx: &mut Context<'_>,
@@ -444,26 +444,16 @@ impl NetworkBehaviour for Behaviour {
         }
 
         if let Poll::Ready(Some(result)) = self.sending_block_requests.poll_next_unpin(cx) {
-            match result {
-                Ok(request_stream) => {
-                    self.handle_blocks_request_available(request_stream);
-                }
-                Err(e) => {
-                    debug!("Error while processing block download request: {}", e);
-                }
+            if let Some(request_stream) = result {
+                self.handle_blocks_request_available(request_stream);
             }
 
             return Poll::Pending;
         }
 
         if let Poll::Ready(Some(result)) = self.sending_tip_requests.poll_next_unpin(cx) {
-            match result {
-                Ok(request_stream) => {
-                    self.handle_tip_request_available(request_stream);
-                }
-                Err(e) => {
-                    debug!("Error while processing tip request: {}", e);
-                }
+            if let Some(request_stream) = result {
+                self.handle_tip_request_available(request_stream);
             }
 
             return Poll::Pending;
