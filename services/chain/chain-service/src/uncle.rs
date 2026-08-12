@@ -19,6 +19,13 @@ use crate::{Cryptarchia, Error};
 impl Cryptarchia {
     /// Verifies every uncle carried by the block against the chain the block
     /// extends.
+    ///
+    /// # Rules
+    /// - Each uncle's slot must be older than the block's slot.
+    /// - Each uncle must not be on the chain that the block extends.
+    /// - Each uncle's parent must be on the chain the block extends, within the
+    ///   uncle reference window.
+    /// - Each uncle's header signature and `PoL` must be valid.
     pub(crate) fn verify_uncles<Tx>(&self, block: &Block<Tx>) -> Result<(), Error> {
         if block.uncle_headers().is_empty() {
             return Ok(());
@@ -35,10 +42,7 @@ impl Cryptarchia {
                 info: Box::new(self.info()),
             })?;
 
-        // Each uncle must be strictly older than the block. The window rule
-        // `0 < slot - uncle_parent_slot <= w_u` is enforced by the ancestry
-        // verification below, and it implies that the uncle itself is also
-        // within the window since an uncle is newer than its parent.
+        // Each uncle's slot must be older than the block's slot.
         for uncle in block.uncle_headers().iter() {
             if uncle.header().slot() >= slot {
                 return Err(Error::InvalidUncle {
@@ -48,6 +52,8 @@ impl Cryptarchia {
             }
         }
 
+        // Each uncle's parent must be on the chain the block extends, within the
+        // uncle reference window.
         let uncle_reference_window = self
             .ledger
             .config()
@@ -57,6 +63,7 @@ impl Cryptarchia {
         let window_start = slot.into_inner().saturating_sub(uncle_reference_window);
         self.verify_uncles_ancestry(block.uncle_headers(), parent, window_start)?;
 
+        // Each uncle's header signature and `PoL` must be valid.
         for uncle in block.uncle_headers().iter() {
             self.verify_uncle_proofs(uncle)
                 .map_err(|reason| Error::InvalidUncle {
@@ -67,9 +74,10 @@ impl Cryptarchia {
         Ok(())
     }
 
-    /// Verifies that no uncle is on the chain of `parent` while the parent of
-    /// every uncle is, within the window:
-    /// `0 < slot - uncle.parent.slot <= w_u`.
+    /// Verifies the following rules:
+    /// - Each uncle must not be on the chain that the block extends.
+    /// - Each uncle's parent must be on the chain the block extends, within the
+    ///   uncle reference window.
     fn verify_uncles_ancestry(
         &self,
         uncle_headers: &UncleHeaders,
@@ -79,12 +87,11 @@ impl Cryptarchia {
         let uncles: HashSet<_> = uncle_headers.ids().collect();
         let uncle_parents: HashSet<_> = uncle_headers.parents().collect();
 
+        // Walk back the chain from the block's parent to the window boundary,
+        // collecting the uncle parents that are found during the walk-back.
         let mut found_uncle_parents = HashSet::new();
         let mut current = Some(parent);
         while let Some(block) = current {
-            // The walk is bounded by the window: only the ancestors within it
-            // can be uncle parents, and any on-chain uncle is newer than its
-            // in-window parent, so nothing below can affect the verdict.
             if block.slot().into_inner() < window_start {
                 break;
             }
@@ -103,7 +110,7 @@ impl Cryptarchia {
             current = self.consensus.branches().get(&block.parent());
         }
 
-        // Return an error if any uncle's parent was not found on the chain.
+        // Return an error if any uncle's parent was not found during the walk-back.
         for uncle in uncle_headers.iter() {
             if !found_uncle_parents.contains(&uncle.header().parent()) {
                 return Err(Error::InvalidUncle {
