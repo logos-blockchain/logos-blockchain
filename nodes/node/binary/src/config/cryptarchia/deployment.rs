@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use lb_chain_service::Epoch;
 use lb_core::{
     block::genesis::GenesisBlock,
+    mantle::ops::pow::PowTarget,
     sdp::{InactivityPeriod, MinStake, ServiceType},
 };
 use lb_cryptarchia_engine::{
@@ -95,6 +96,8 @@ pub struct PoWConfig {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BlendPoWConfig {
+    #[serde(with = "lb_groth16::serde::serde_fr")]
+    pub base_difficulty: PowTarget,
     pub target_transactions_per_block: NonZeroU64,
     pub max_step: NonZeroU64,
     pub damping_num: NonZeroU64,

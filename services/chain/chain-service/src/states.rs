@@ -182,6 +182,7 @@ mod tests {
             faucet_pk: None,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
+                    base_difficulty: 1u64.into(),
                     damping_den_offset: 0,
                     damping_num: 1.try_into().unwrap(),
                     max_step: 1.try_into().unwrap(),
@@ -322,6 +323,7 @@ mod tests {
             faucet_pk: None,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
+                    base_difficulty: 1u64.into(),
                     damping_den_offset: 0,
                     damping_num: 1.try_into().unwrap(),
                     max_step: 1.try_into().unwrap(),

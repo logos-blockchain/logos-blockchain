@@ -1,4 +1,5 @@
-pub(crate) mod difficulty;
+pub(crate) mod blend_difficulty;
+mod difficulty;
 
 use std::num::NonZeroU64;
 

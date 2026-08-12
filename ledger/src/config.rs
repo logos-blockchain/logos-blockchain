@@ -1,5 +1,6 @@
 use std::num::{NonZero, NonZeroU64};
 
+use lb_core::mantle::ops::pow::PowTarget;
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_pol::LotteryConstants;
@@ -102,6 +103,10 @@ pub struct PoWConfig {
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct BlendPoWConfig {
+    /// `BLEND_DIFFICULTY_BASE`: the threshold in effect at exactly the
+    /// reference load, and the threshold the chain starts from at genesis.
+    #[serde(with = "lb_groth16::serde::serde_fr")]
+    pub base_difficulty: PowTarget,
     pub target_transactions_per_block: NonZeroU64,
     pub max_step: NonZeroU64,
     pub damping_num: NonZeroU64,
@@ -111,6 +116,22 @@ pub struct BlendPoWConfig {
     // For an integer number of steps, `blend_damping_den_offset` would be 0, so the fraction would
     // be `blend_damping_num`/`blend_damping_num`.
     pub damping_den_offset: u64,
+}
+
+impl BlendPoWConfig {
+    /// The damping exponent `alpha = a / b <= 1`, as the pair `(a, b)`.
+    ///
+    /// Both are exponents applied to big integers, so they must stay small —
+    /// `alpha` is a simple fraction such as `1/2`, not a high-precision ratio.
+    #[must_use]
+    pub fn damping_exponent(&self) -> (u32, u32) {
+        let numerator = self.damping_num.get();
+        let denominator = numerator.strict_add(self.damping_den_offset);
+        (
+            u32::try_from(numerator).expect("damping numerator must be a small integer"),
+            u32::try_from(denominator).expect("damping denominator must be a small integer"),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -175,6 +196,7 @@ mod tests {
             faucet_pk: None,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
+                    base_difficulty: 1u64.into(),
                     damping_den_offset: 0,
                     damping_num: 1.try_into().unwrap(),
                     max_step: 1.try_into().unwrap(),
@@ -235,6 +257,7 @@ mod tests {
             faucet_pk: None,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
+                    base_difficulty: 1u64.into(),
                     damping_den_offset: 0,
                     damping_num: 1.try_into().unwrap(),
                     max_step: 1.try_into().unwrap(),
@@ -304,6 +327,7 @@ mod tests {
             faucet_pk: None,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
+                    base_difficulty: 1u64.into(),
                     damping_den_offset: 0,
                     damping_num: 1.try_into().unwrap(),
                     max_step: 1.try_into().unwrap(),

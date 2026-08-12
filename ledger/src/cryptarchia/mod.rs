@@ -29,12 +29,7 @@ use crate::{
         stake::{PRECISION, StakeInference},
         tx_density::TxDensity,
     },
-    mantle::{
-        pow::difficulty::{
-            BlendPoWDifficultySettings, compute_new_blend_difficulty, genesis_blend_difficulty,
-        },
-        sdp::SdpLedger,
-    },
+    mantle::{pow::blend_difficulty::compute_epoch_blend_difficulty, sdp::SdpLedger},
 };
 
 // corresponds to the denominator of q
@@ -71,9 +66,11 @@ pub struct EpochState {
     pub nonce: Fr,
     /// `d_blend`: the Blend `PoW` difficulty for this epoch.
     ///
-    /// Retargeted once per epoch from the average number of transactions per
-    /// block of the last epoch that closed before the snapshot, and frozen at
-    /// the same slot as [`Self::nonce`].
+    /// Set once per epoch from the transaction load of the last epoch that
+    /// closed before the snapshot — the baseline divided down by the load, so
+    /// a busier chain admits fewer `PoW`-backed Blend messages — and frozen at
+    /// the same slot as [`Self::nonce`]. See
+    /// [`compute_epoch_blend_difficulty`] for the controller.
     #[serde(with = "lb_groth16::serde::serde_fr")]
     pub blend_pow_difficulty: PowTarget,
     /// stake distribution snapshot taken at the beginning of the epoch
@@ -112,10 +109,11 @@ impl EpochState {
                 ledger.tx_density.last_closed_epoch_totals();
             (
                 ledger.nonce,
-                compute_new_blend_difficulty::<BlendPoWDifficultySettings>(
+                compute_epoch_blend_difficulty(
                     txs_in_previous_epoch,
                     blocks_in_previous_epoch,
                     ledger.epoch_state.blend_pow_difficulty,
+                    &config.pow_config.blend,
                 ),
             )
         } else {
@@ -160,7 +158,7 @@ impl EpochState {
 
     /// `d_blend`: the Blend `PoW` difficulty in effect for this epoch.
     #[must_use]
-    pub const fn pow_difficulty(&self) -> PowTarget {
+    pub const fn blend_pow_difficulty(&self) -> PowTarget {
         self.blend_pow_difficulty
     }
 
@@ -720,7 +718,7 @@ impl LedgerState {
             next_epoch_state: EpochState {
                 epoch: 1.into(),
                 nonce,
-                blend_pow_difficulty: genesis_blend_difficulty(),
+                blend_pow_difficulty: config.pow_config.blend.base_difficulty,
                 utxos: utxos.clone(),
                 total_stake,
                 lottery_0,
@@ -730,7 +728,7 @@ impl LedgerState {
             epoch_state: EpochState {
                 epoch: 0.into(),
                 nonce,
-                blend_pow_difficulty: genesis_blend_difficulty(),
+                blend_pow_difficulty: config.pow_config.blend.base_difficulty,
                 utxos,
                 total_stake,
                 lottery_0,
@@ -1018,6 +1016,17 @@ pub mod tests {
                 },
             },
             faucet_pk: None,
+            // `alpha = 1/2`, `T_tx = 10`, `k = 4`, with a baseline that is a
+            // perfect square so the reference load lands on it exactly.
+            pow_config: crate::config::PoWConfig {
+                blend: crate::config::BlendPoWConfig {
+                    base_difficulty: PowTarget::from(1_000_000u64),
+                    target_transactions_per_block: NonZeroU64::new(10).unwrap(),
+                    max_step: NonZeroU64::new(4).unwrap(),
+                    damping_num: NonZeroU64::new(1).unwrap(),
+                    damping_den_offset: 1,
+                },
+            },
         }
     }
 
@@ -1043,7 +1052,7 @@ pub mod tests {
         let epoch_state = EpochState {
             epoch: 0.into(),
             nonce: Fr::ZERO,
-            blend_pow_difficulty: genesis_blend_difficulty(),
+            blend_pow_difficulty: config.pow_config.blend.base_difficulty,
             utxos: utxos.clone(),
             total_stake,
             lottery_0,
@@ -1053,7 +1062,7 @@ pub mod tests {
         let next_epoch_state = EpochState {
             epoch: 1.into(),
             nonce: Fr::ZERO,
-            blend_pow_difficulty: genesis_blend_difficulty(),
+            blend_pow_difficulty: config.pow_config.blend.base_difficulty,
             utxos: utxos.clone(),
             total_stake,
             lottery_0,
@@ -1390,8 +1399,9 @@ pub mod tests {
 
         let sdp = SdpLedger::new(0.into());
         let mut state = genesis_state(&[utxo()]);
+        let blend_config = &config.pow_config.blend;
         let genesis_difficulty = state.epoch_state.blend_pow_difficulty;
-        assert_eq!(genesis_difficulty, genesis_blend_difficulty());
+        assert_eq!(genesis_difficulty, blend_config.base_difficulty);
 
         // Epoch 0: three blocks carrying 12 transactions in total.
         for (slot, txs) in [(10u64, 3u64), (20, 5), (70, 4)] {
@@ -1402,7 +1412,8 @@ pub mod tests {
         }
 
         // Epoch 0 -> 1. No epoch had closed yet while epoch 1's difficulty was
-        // open for snapshotting, so it retargets from zero demand.
+        // open for snapshotting, so it saw no load at all and eased by the
+        // full clamp step.
         state = state
             .update_epoch_state::<HeaderId>(100.into(), &sdp, &config)
             .unwrap();
@@ -1411,7 +1422,7 @@ pub mod tests {
         let epoch_1_difficulty = state.epoch_state.blend_pow_difficulty;
         assert_eq!(
             epoch_1_difficulty,
-            compute_new_blend_difficulty::<BlendPoWDifficultySettings>(0, 0, genesis_difficulty)
+            compute_epoch_blend_difficulty(0, 0, genesis_difficulty, blend_config)
         );
 
         // Epoch 1, with blocks on both sides of epoch 2's snapshot slot.
@@ -1422,24 +1433,30 @@ pub mod tests {
             state.record_block_txs(txs);
         }
 
-        // Epoch 1 -> 2: epoch 2's difficulty retargets epoch 1's by the
-        // average of the epoch that closed before the snapshot opened —
-        // epoch 0's 12 transactions over 3 blocks. Epoch 1's own, much
-        // busier, blocks do not enter it: its totals only close when it
-        // does, a full epoch after the snapshot was taken.
+        // Epoch 1 -> 2: epoch 2's difficulty comes from the load of the epoch
+        // that closed before the snapshot opened — epoch 0's 12 transactions
+        // over 3 blocks, four tenths of the reference load, so the threshold
+        // eases to BASE / sqrt(0.4). Epoch 1's own, much busier, blocks do
+        // not enter it: its totals only close when it does, a full epoch
+        // after the snapshot was taken.
         state = state
             .update_epoch_state::<HeaderId>(200.into(), &sdp, &config)
             .unwrap();
         assert_eq!(state.epoch_state.epoch, 2);
         assert_eq!(
             state.epoch_state.blend_pow_difficulty,
-            compute_new_blend_difficulty::<BlendPoWDifficultySettings>(12, 3, epoch_1_difficulty)
+            compute_epoch_blend_difficulty(12, 3, epoch_1_difficulty, blend_config)
+        );
+        assert_eq!(
+            state.epoch_state.blend_pow_difficulty,
+            PowTarget::from(1_581_138u64)
         );
     }
 
     #[test]
-    fn blend_difficulty_reads_a_skipped_epoch_as_zero_demand() {
+    fn blend_difficulty_reads_a_skipped_epoch_as_no_load() {
         let config = config();
+        let blend_config = &config.pow_config.blend;
         let sdp = SdpLedger::new(0.into());
         let mut state = genesis_state(&[utxo()]);
 
@@ -1457,12 +1474,12 @@ pub mod tests {
         state.record_block_txs(7);
         assert_eq!(state.epoch_state.epoch, 2);
         let epoch_2_difficulty = state.epoch_state.blend_pow_difficulty;
-        assert_eq!(epoch_2_difficulty, genesis_blend_difficulty());
+        assert_eq!(epoch_2_difficulty, blend_config.base_difficulty);
 
         // Epoch 2 -> 3: the epoch that closed last is the skipped epoch 1,
-        // which produced no block at all, so epoch 3 retargets from zero
-        // demand — epoch 0's 1000 transactions were closed one epoch too
-        // early to be read.
+        // which produced no block at all, so epoch 3 sees no load and eases
+        // by the full clamp step — epoch 0's 1000 transactions were closed
+        // one epoch too early to be read.
         state = state
             .update_epoch_state::<HeaderId>(230.into(), &sdp, &config)
             .unwrap();
@@ -1473,7 +1490,7 @@ pub mod tests {
         assert_eq!(state.epoch_state.epoch, 3);
         assert_eq!(
             state.epoch_state.blend_pow_difficulty,
-            compute_new_blend_difficulty::<BlendPoWDifficultySettings>(0, 0, epoch_2_difficulty)
+            compute_epoch_blend_difficulty(0, 0, epoch_2_difficulty, blend_config)
         );
     }
 

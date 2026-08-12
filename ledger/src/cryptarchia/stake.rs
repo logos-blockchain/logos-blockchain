@@ -199,6 +199,15 @@ mod tests {
                 },
             },
             faucet_pk: None,
+            pow_config: crate::config::PoWConfig {
+                blend: crate::config::BlendPoWConfig {
+                    base_difficulty: 1u64.into(),
+                    target_transactions_per_block: 1.try_into().unwrap(),
+                    max_step: 1.try_into().unwrap(),
+                    damping_num: 1.try_into().unwrap(),
+                    damping_den_offset: 0,
+                },
+            },
         }
     }
 

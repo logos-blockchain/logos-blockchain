@@ -58,6 +58,14 @@ const SDP_EPOCH: Epoch = Epoch::new(0);
 const MIN_STAKE_THRESHOLD: u64 = 1;
 const MIN_STAKE_TIMESTAMP: u64 = 0;
 const LEARNING_RATE: f64 = 0.1;
+// TODO: calibrate. The Blend `PoW` threshold at the reference load is TBD in
+// the spec; the damping exponent (alpha = 1/2) and the per-epoch clamp (4x)
+// follow the spec's own examples.
+const BLEND_POW_BASE_DIFFICULTY: u64 = 1_000_000;
+const BLEND_POW_TARGET_TXS_PER_BLOCK: u64 = 10;
+const BLEND_POW_MAX_STEP: u64 = 4;
+const BLEND_POW_DAMPING_NUM: u64 = 1;
+const BLEND_POW_DAMPING_DEN_OFFSET: u64 = 1;
 
 const MEMPOOL_TOPIC: &str = "mantle_e2e_tests";
 const DEFAULT_PROTOCOL_NAMESPACE: &str = "integration/logos-blockchain";
@@ -143,6 +151,16 @@ pub fn e2e_deployment_settings_with_genesis_block(
             genesis_block: GenesisBlock::genesis(genesis_tx),
             learning_rate: LEARNING_RATE.try_into().expect("1 > 0"),
             faucet_pk: None,
+            pow_config: lb_node::config::cryptarchia::deployment::PoWConfig {
+                blend: lb_node::config::cryptarchia::deployment::BlendPoWConfig {
+                    base_difficulty: BLEND_POW_BASE_DIFFICULTY.into(),
+                    target_transactions_per_block: NonZero::new(BLEND_POW_TARGET_TXS_PER_BLOCK)
+                        .unwrap(),
+                    max_step: NonZero::new(BLEND_POW_MAX_STEP).unwrap(),
+                    damping_num: NonZero::new(BLEND_POW_DAMPING_NUM).unwrap(),
+                    damping_den_offset: BLEND_POW_DAMPING_DEN_OFFSET,
+                },
+            },
         },
         time: TimeDeploymentSettings {
             slot_duration: Duration::from_secs(slot_duration_in_secs),

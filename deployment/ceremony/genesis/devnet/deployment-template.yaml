@@ -27,6 +27,16 @@ cryptarchia:
     numerator: 1
     denominator: 30
   learning_rate: 1.0
+  pow_config:
+    blend:
+      # TODO: calibrate. `base_difficulty` is the threshold at the reference
+      # load of `target_transactions_per_block`; damping alpha = 1/2 and a
+      # per-epoch clamp of 4x follow the spec's own examples.
+      base_difficulty: '40420f0000000000000000000000000000000000000000000000000000000000'
+      target_transactions_per_block: 10
+      max_step: 4
+      damping_num: 1
+      damping_den_offset: 1
   sdp_config:
     service_params:
       BN:
