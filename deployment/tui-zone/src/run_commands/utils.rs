@@ -7,7 +7,7 @@ use std::{
 use chrono::{DateTime, Utc};
 use lb_codec::BinaryDecodeExt as _;
 use lb_core::mantle::{
-    Note, SignedMantleTx, Utxo, Value,
+    EpochHeadroom, Note, SignedMantleTx, Utxo, Value,
     channel::ChannelState,
     ledger::{Inputs, Outputs},
     ops::{
@@ -338,11 +338,12 @@ pub fn build_deposit_op(
 
 /// Build the sequencer funding config from CLI args.
 pub fn funding_config(args: &NodeKeyArgs) -> RunResult<FundingConfig> {
+    let epoch_headroom: EpochHeadroom = serde_json::from_str(&args.epoch_headroom)?;
     Ok(FundingConfig {
         funding_pk: decode_zk_public_key_hex(&args.funding_pk)?,
         max_tx_fee: args.max_tx_fee.into(),
         priority_fee: args.priority_fee,
-        epoch_headroom: FundingConfig::DEFAULT_EPOCH_HEADROOM,
+        epoch_headroom,
     })
 }
 

@@ -25,7 +25,7 @@ use lb_core::{
     },
 };
 use lb_cryptarchia_engine::{
-    Config as ConsensusConfig, Epoch, EpochConfig, Slot, average_slots_for_blocks,
+    Config as ConsensusConfig, EpochConfig, Slot, average_slots_for_blocks,
 };
 use lb_ledger::LedgerState;
 use thiserror::Error;
@@ -36,9 +36,6 @@ pub enum FeeProjectionError {
     /// The slot horizon could not be represented as a slot.
     #[error("fee-horizon slot arithmetic overflow")]
     SlotOverflow,
-    /// The projected slot could not be represented as an epoch.
-    #[error("fee-horizon epoch arithmetic overflow")]
-    EpochOverflow,
     /// A projected price or fee exceeded the supported integer range.
     #[error("fee projection arithmetic overflow")]
     ArithmeticOverflow,
@@ -104,9 +101,8 @@ pub fn resolve(
             .checked_add(horizon_slots)
             .ok_or(FeeProjectionError::SlotOverflow)?,
     );
-    let valid_until_epoch: Epoch = (u64::from(valid_until_slot) / slots_per_epoch)
-        .try_into()
-        .map_err(|_| FeeProjectionError::EpochOverflow)?;
+    let valid_until_epoch =
+        epoch_config.epoch(valid_until_slot, consensus_config.base_period_length());
     let storage_boundaries_crossed = count_storage_boundaries(
         u64::from(prepared_at_slot),
         u64::from(valid_until_slot),
@@ -138,12 +134,7 @@ pub fn resolve(
         storage_gas_price: projected_storage,
     };
     let live_context = ledger.tx_context();
-    let projected_context = MantleTxContext {
-        gas_context: live_context
-            .gas_context
-            .with_gas_prices(projected_prices.clone()),
-        leader_reward_amount: live_context.leader_reward_amount,
-    };
+    let projected_context = live_context.clone_with_live_prices(&projected_prices);
     let quote = FeeHorizonQuote {
         epoch_headroom: headroom,
         prepared_at_tip: tip,

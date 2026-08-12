@@ -197,6 +197,13 @@ pub enum EpochHeadroomError {
     TooLarge,
 }
 
+/// Parses decimal epoch headroom into exact integer tenths, truncating rather
+/// than rounding any precision beyond the first decimal digit.
+///
+/// This intentionally avoids a floating-point parser because the public
+/// semantics require decimal truncation (`1.39 -> 1.3`) and post-truncation
+/// range checks, including scientific notation, without binary floating-point
+/// rounding changing the result.
 fn parse_decimal_tenths(value: &str) -> Result<u16, EpochHeadroomError> {
     if value.is_empty() {
         return Err(EpochHeadroomError::Invalid);

@@ -111,6 +111,10 @@ pub struct NodeKeyArgs {
         env = "PRIORITY_FEE"
     )]
     pub priority_fee: u64,
+
+    /// Future epoch headroom used when funding Zone SDK transactions.
+    #[arg(long, default_value = "1.0", env = "EPOCH_HEADROOM")]
+    pub epoch_headroom: String,
 }
 
 #[derive(Args, Debug)]

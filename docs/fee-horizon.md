@@ -19,8 +19,10 @@ valid_until_slot = s + horizon_slots
 ```
 
 The upward rounding is intentional: a request never receives less elapsed time
-than requested. The resulting slot is authoritative; an epoch value in the
-quote is only metadata.
+than requested. `valid_until_slot` is only the inclusive endpoint of the fee
+projection interval, used to count covered storage boundaries and derive quote
+metadata. It is not a transaction TTL and does not make the transaction invalid
+after that slot. The epoch value in the quote is likewise metadata.
 
 ## Storage projection
 
