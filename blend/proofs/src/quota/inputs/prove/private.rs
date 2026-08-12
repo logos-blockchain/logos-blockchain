@@ -85,7 +85,7 @@ impl Inputs {
                 }
             }
             ProofType::PowQuota(pow_quota_private_inputs) => SelectionRandomnessSecretInput::Pow {
-                pow_sk: pow_quota_private_inputs.pow_sk,
+                pow_nonce: pow_quota_private_inputs.pow_nonce,
                 epoch_nonce: *pol_epoch_nonce,
             },
         }
@@ -150,8 +150,7 @@ impl From<ProofOfLeadershipQuotaInputs> for ProofType {
 
 #[derive(Clone, PartialEq, Eq, ZeroizeOnDrop)]
 pub struct ProofOfWorkQuotaInputs {
-    pub pow_sk: ZkHash,
-    pub pow_block_hash: ZkHash,
+    pub pow_nonce: ZkHash,
 }
 
 impl From<ProofOfWorkQuotaInputs> for ProofType {
