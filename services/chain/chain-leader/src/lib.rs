@@ -21,7 +21,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         SignedMantleTx,
-        gas::MainnetGasConstants,
+        gas::MainnetGasProfile,
         traits::{Hashable, MantleTxWithProofs, StorageSize},
         transactions::{hash::TxHash, states::Preverified},
     },
@@ -619,7 +619,7 @@ where
             for tx in pending {
                 match ledger_state
                     .clone()
-                    .try_apply_contents::<_, HeaderId, MainnetGasConstants>(
+                    .try_apply_contents::<_, HeaderId, MainnetGasProfile>(
                         ledger_config,
                         iter::once(&tx),
                     ) {

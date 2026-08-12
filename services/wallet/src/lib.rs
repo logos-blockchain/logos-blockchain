@@ -19,7 +19,7 @@ use lb_core::{
     mantle::{
         FeeHorizonQuote, FeePolicy, NoteId, Op, OpProof, SignedMantleTx, TxHash, Utxo, Value,
         VerificationError,
-        gas::{GasCost, GasOverflow, MainnetGasConstants},
+        gas::{GasCost, GasOverflow, MainnetGasProfile},
         ledger::Inputs,
         ops::{
             NoOpProof, ZkAndEd25519Proof,
@@ -583,7 +583,7 @@ where
                     }
                 };
 
-                let funded = match state.fund_tx::<MainnetGasConstants>(
+                let funded = match state.fund_tx::<MainnetGasProfile>(
                     tip,
                     &tx_builder,
                     change_pk,
@@ -666,7 +666,7 @@ where
                         return;
                     }
                 };
-                let funded = match state.fund_tx::<MainnetGasConstants>(
+                let funded = match state.fund_tx::<MainnetGasProfile>(
                     tip,
                     &tx_builder,
                     change_pk,
@@ -1400,7 +1400,7 @@ where
             pk: request.funding_pk,
         }))?;
 
-        let funded_tx_builder = state.fund_tx::<MainnetGasConstants>(
+        let funded_tx_builder = state.fund_tx::<MainnetGasProfile>(
             request.tip,
             &tx_builder,
             request.funding_pk,
@@ -1432,7 +1432,7 @@ where
     ) -> Result<SignedMantleTx<Preverified>, WalletServiceError> {
         let context = ledger.tx_context();
         let net_balance = funded_tx_builder.net_balance();
-        let gas_cost = funded_tx_builder.minimum_gas_cost::<MainnetGasConstants>(&context)?;
+        let gas_cost = funded_tx_builder.minimum_gas_cost::<MainnetGasProfile>(&context)?;
         debug!(
             target: LOG_TARGET,
             net_balance,

@@ -6,13 +6,7 @@ use futures::Stream;
 use lb_blend::{
     message::{
         crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
-        encap::{
-            ProofsVerifier,
-            validated::{
-                EncapsulatedMessageWithVerifiedPublicHeader,
-                EncapsulatedMessageWithVerifiedSignature,
-            },
-        },
+        encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
         reward,
     },
     proofs::{
@@ -150,16 +144,18 @@ pub struct TestBlendBackend {
 }
 
 #[async_trait]
-impl<NodeId, Rng> BlendBackend<NodeId, Rng, RuntimeServiceId> for TestBlendBackend
+impl<NodeId, Rng, ProofsVerifier> BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId>
+    for TestBlendBackend
 where
     NodeId: Send + 'static,
+    ProofsVerifier: Send + 'static,
 {
     type Settings = ();
 
     fn new(
         _service_config: BlendConfig<Self::Settings>,
         _overwatch_handle: OverwatchHandle<RuntimeServiceId>,
-        _current_epoch_info: BackendEpochInfo<NodeId>,
+        _current_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>,
         _rng: Rng,
     ) -> Self {
         let (event_sender, _) = broadcast::channel(CHANNEL_SIZE);
@@ -173,11 +169,14 @@ where
         _intended_epoch: Epoch,
     ) {
     }
-    async fn rotate_epoch(&mut self, new_epoch_info: BackendEpochInfo<NodeId>) {
+
+    async fn rotate_epoch(&mut self, new_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>) {
         // Notify tests that the backend rotated to a new epoch, carrying the new
         // epoch and membership size so tests can assert the new membership was
         // propagated to the backend.
-        let (membership, epoch) = new_epoch_info;
+        let BackendEpochInfo {
+            membership, epoch, ..
+        } = new_epoch_info;
         // Ignore send errors: not all tests subscribe to backend events, and
         // `rotate_epoch` is also called right before a retirement (no subscriber).
         let _ = self.event_sender.send(TestBlendBackendEvent::EpochRotated {
@@ -195,7 +194,8 @@ where
 
     fn listen_to_incoming_messages(
         &mut self,
-    ) -> Pin<Box<dyn Stream<Item = (EncapsulatedMessageWithVerifiedSignature, Epoch)> + Send>> {
+    ) -> Pin<Box<dyn Stream<Item = (EncapsulatedMessageWithVerifiedPublicHeader, Epoch)> + Send>>
+    {
         unimplemented!()
     }
 
@@ -336,6 +336,22 @@ pub fn new_crypto_processor<CorePoQGenerator>(
         epoch_info.epoch,
     )
     .expect("crypto processor must be created successfully")
+}
+
+/// The [`BackendEpochInfo`] the service hands to the backend for an epoch,
+/// including the `PoQ` verifier the backend uses to check received messages.
+pub fn backend_epoch_info(
+    public_info: &CoreEpochPublicInfo<NodeId>,
+) -> BackendEpochInfo<NodeId, MockProofsVerifier> {
+    BackendEpochInfo {
+        membership: public_info.membership.clone(),
+        epoch: public_info.epoch,
+        proofs_verifier: MockProofsVerifier::new(PoQVerificationInputsMinusSigningKey {
+            core: public_info.poq_core_public_inputs,
+            leader: public_info.poq_leadership_public_inputs,
+            pow: PowInputs::unwired_placeholder(),
+        }),
+    }
 }
 
 pub fn new_epoch_info<BackendSettings>(

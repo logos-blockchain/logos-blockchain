@@ -7,11 +7,14 @@ use super::{SDPActiveOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
+        Value,
+        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
-            VerifiableOperation, verification_mode,
+            VerifiableOperation, verification_mode, verification_mode::VerificationMode,
         },
-        transactions::hash::TxHashView,
+        ops::SignedOp,
+        transactions::{hash::TxHashView, states::VerificationState},
     },
 };
 
@@ -30,6 +33,10 @@ pub struct SDPActiveExecutionContext {
 
 impl ProvableOperation for SDPActiveOp {
     type Proof = ZkSignature;
+}
+
+impl OperationGas<MainnetGasProfile> for SDPActiveOp {
+    const GAS_COST: Gas = Gas::new(590);
 }
 
 impl PreverifiableOperation<verification_mode::StandardMode> for SDPActiveOp {
@@ -108,5 +115,13 @@ impl ExecutableOperation for SDPActiveOp {
         );
 
         Ok((context, Vec::new()))
+    }
+}
+
+impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
+    for SignedOp<SDPActiveOp, State, Mode>
+{
+    fn gas_multiplier(&self) -> Value {
+        1
     }
 }

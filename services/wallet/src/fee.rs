@@ -20,7 +20,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         EpochHeadroom, ExecutionProjection, ExecutionProjectionModel, FeeHorizonQuote, FeePolicy,
-        gas::{self, EXECUTION_GAS_TARGET, GasCost, GasPrice, MainnetGasConstants},
+        gas::{self, EXECUTION_GAS_TARGET, GasCost, GasPrice, MainnetGasProfile},
         transactions::{GasPrices, MantleTxBuilder, MantleTxContext},
     },
 };
@@ -62,10 +62,9 @@ impl FeeProjection {
         let live_context = self
             .projected_context
             .clone_with_live_prices(&self.quote.live_prices);
-        let mandatory_fee_live =
-            tx_builder.minimum_gas_cost::<MainnetGasConstants>(&live_context)?;
+        let mandatory_fee_live = tx_builder.minimum_gas_cost::<MainnetGasProfile>(&live_context)?;
         let mandatory_fee_projected =
-            tx_builder.minimum_gas_cost::<MainnetGasConstants>(&self.projected_context)?;
+            tx_builder.minimum_gas_cost::<MainnetGasProfile>(&self.projected_context)?;
         let total_fee = mandatory_fee_projected
             .checked_add(GasCost::new(priority_fee))
             .map_err(|_| FeeProjectionError::ArithmeticOverflow)?;

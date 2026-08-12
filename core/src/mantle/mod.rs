@@ -11,7 +11,7 @@ mod fixtures;
 
 pub use gas::{
     EpochHeadroom, EpochHeadroomError, ExecutionProjection, ExecutionProjectionModel,
-    FeeHorizonQuote, FeePolicy, GasCalculator, GasConstants,
+    FeeHorizonQuote, FeePolicy, GasProfile, TxGasCalculator,
 };
 pub use ledger::{Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof};

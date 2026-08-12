@@ -4,7 +4,7 @@ use std::{cmp::Ordering, collections::HashSet};
 
 use lb_core::mantle::{
     Note, Op, Utxo,
-    gas::MainnetGasConstants,
+    gas::MainnetGasProfile,
     ledger::{Inputs, Outputs},
     ops::transfer::TransferOp,
     transactions::{MantleTxBuilder, MantleTxContext},
@@ -25,7 +25,7 @@ pub fn fund_builder_from_wallet_source(
     tx_builder: &MantleTxBuilder,
     context: &MantleTxContext,
 ) -> Result<MantleTxBuilder, WalletError> {
-    wallet_state_from_utxos(source.available_utxos().to_vec()).fund_tx::<MainnetGasConstants>(
+    wallet_state_from_utxos(source.available_utxos().to_vec()).fund_tx::<MainnetGasProfile>(
         tx_builder,
         source.public_key(),
         [source.public_key()],
@@ -222,13 +222,13 @@ fn evaluate_standard_funding_inputs(
     let funded_builder = extend_wallet_funding_inputs(tx_builder, selected_inputs)?;
 
     match funded_builder
-        .funding_delta::<MainnetGasConstants>(context)?
+        .funding_delta::<MainnetGasProfile>(context)?
         .cmp(&0)
     {
         Ordering::Less => Ok(WalletFundingOutcome::NeedsMoreInputs),
         Ordering::Equal => Ok(WalletFundingOutcome::Funded(funded_builder)),
         Ordering::Greater => Ok(funded_builder
-            .return_change::<MainnetGasConstants>(context, change_pk, 0)?
+            .return_change::<MainnetGasProfile>(context, change_pk, 0)?
             .map_or(
                 WalletFundingOutcome::NeedsMoreInputs,
                 WalletFundingOutcome::Funded,
@@ -354,7 +354,7 @@ fn funding_delta_for_chunked_builder(
 ) -> Result<i128, WalletError> {
     let gas_cost = u128::from(
         tx_builder
-            .minimum_gas_cost::<MainnetGasConstants>(context)?
+            .minimum_gas_cost::<MainnetGasProfile>(context)?
             .into_inner(),
     );
     Ok(i128::try_from(input_sum)
@@ -401,7 +401,7 @@ mod tests {
             .expect("inscription test builder should fit op bounds");
         assert_eq!(
             tx_builder
-                .funding_delta::<MainnetGasConstants>(&context)
+                .funding_delta::<MainnetGasProfile>(&context)
                 .expect("zero-gas inscription funding delta should calculate"),
             0
         );
@@ -422,7 +422,7 @@ mod tests {
         assert_eq!(funded_builder.ledger_inputs(), &[funding_utxo]);
         assert_eq!(
             funded_builder
-                .funding_delta::<MainnetGasConstants>(&context)
+                .funding_delta::<MainnetGasProfile>(&context)
                 .expect("funded inscription delta should calculate"),
             0
         );

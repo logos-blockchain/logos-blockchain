@@ -12,6 +12,7 @@ use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
         Note, TxHash, Utxo, Value,
+        gas::{Gas, MainnetGasProfile, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
             VerifiableOperation, verification_mode,
@@ -264,6 +265,10 @@ impl ClaimPoWRewardExecutionContext {
 
 impl ProvableOperation for ClaimPowRewardOp {
     type Proof = NoOpProof;
+}
+
+impl OperationGas<MainnetGasProfile> for ClaimPowRewardOp {
+    const GAS_COST: Gas = Gas::new(1);
 }
 
 impl PreverifiableOperation<verification_mode::StandardMode> for ClaimPowRewardOp {

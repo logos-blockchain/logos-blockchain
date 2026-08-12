@@ -8,21 +8,24 @@ use crate::core::{
 };
 
 #[derive(NetworkBehaviour)]
-pub struct BlendBehaviour<ObservationWindowProvider> {
-    pub blend: lb_blend::network::core::NetworkBehaviour<ObservationWindowProvider>,
+pub struct BlendBehaviour<ObservationWindowProvider, ProofsVerifier> {
+    pub blend: lb_blend::network::core::NetworkBehaviour<ObservationWindowProvider, ProofsVerifier>,
     pub blocked_peers: libp2p::allow_block_list::Behaviour<BlockedPeers>,
 }
 
-impl<ObservationWindowProvider> BlendBehaviour<ObservationWindowProvider>
+impl<ObservationWindowProvider, ProofsVerifier>
+    BlendBehaviour<ObservationWindowProvider, ProofsVerifier>
 where
     ObservationWindowProvider: for<'c> From<(
         &'c BlendConfig<Libp2pBlendBackendSettings>,
         &'c Membership<PeerId>,
     )>,
+    ProofsVerifier: Clone,
 {
     pub fn new(
         config: &BlendConfig<Libp2pBlendBackendSettings>,
         current_membership_info: (Membership<PeerId>, Epoch),
+        proofs_verifier: ProofsVerifier,
     ) -> Self {
         let observation_window_interval_provider =
             ObservationWindowProvider::from((config, &current_membership_info.0));
@@ -50,6 +53,7 @@ where
                 },
                 observation_window_interval_provider,
                 current_membership_info,
+                proofs_verifier,
                 config.peer_id(),
                 config.backend.protocol_name.clone().into_inner(),
             ),

@@ -5,13 +5,17 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt as _, stream::pending};
 use lb_blend::{
     message::{
-        crypto::key_ext::Ed25519SecretKeyExt as _,
-        encap::validated::EncapsulatedMessageWithVerifiedSignature,
+        crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
+        encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
     },
     network::core::{
         Config, NetworkBehaviour,
         with_core::behaviour::{Config as CoreToCoreConfig, IntervalStreamProvider},
         with_edge::behaviour::Config as CoreToEdgeConfig,
+    },
+    proofs::{
+        quota::{ProofOfQuota, VerifiedProofOfQuota},
+        selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
     },
     scheduling::membership::{Membership, Node},
 };
@@ -41,13 +45,47 @@ use crate::{
     test_utils::PROTOCOL_NAME,
 };
 
-pub type InnerSwarm = BlendSwarm<BlakeRng, TestObservationWindowProvider>;
+/// A `PoQ` verifier for the swarm tests, which accepts every proof it is
+/// handed.
+///
+/// What a node does with a *failed* verification is decided by the behaviour,
+/// so it is tested there rather than here.
+#[derive(Debug, Clone, Copy)]
+pub struct TestProofsVerifier;
+
+impl ProofsVerifier for TestProofsVerifier {
+    type Error = ();
+
+    fn new(_public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
+        Self
+    }
+
+    fn verify_proof_of_quota(
+        &self,
+        proof: ProofOfQuota,
+        _signing_key: &lb_key_management_system_service::keys::Ed25519PublicKey,
+    ) -> Result<VerifiedProofOfQuota, Self::Error> {
+        Ok(VerifiedProofOfQuota::from_proof_of_quota_unchecked(proof))
+    }
+
+    fn verify_proof_of_selection(
+        &self,
+        proof: ProofOfSelection,
+        _inputs: &VerifyInputs,
+    ) -> Result<VerifiedProofOfSelection, Self::Error> {
+        Ok(VerifiedProofOfSelection::from_proof_of_selection_unchecked(
+            proof,
+        ))
+    }
+}
+
+pub type InnerSwarm = BlendSwarm<BlakeRng, TestObservationWindowProvider, TestProofsVerifier>;
 
 pub struct TestSwarm {
     pub swarm: InnerSwarm,
-    pub swarm_message_sender: mpsc::Sender<BlendSwarmMessage>,
+    pub swarm_message_sender: mpsc::Sender<BlendSwarmMessage<TestProofsVerifier>>,
     pub incoming_message_receiver:
-        broadcast::Receiver<(EncapsulatedMessageWithVerifiedSignature, Epoch)>,
+        broadcast::Receiver<(EncapsulatedMessageWithVerifiedPublicHeader, Epoch)>,
 }
 
 /// Generates `count` nodes with randomly generated identities and empty
@@ -93,17 +131,18 @@ pub fn build_membership(
 
 pub struct SwarmBuilder {
     identity: Keypair,
-    public_info: BackendEpochInfo<PeerId>,
+    public_info: BackendEpochInfo<PeerId, TestProofsVerifier>,
     max_dial_attempts: Option<NonZeroU64>,
     peering_degree_check_clock: Option<Pin<Box<dyn Stream<Item = ()> + Send>>>,
 }
 
 impl SwarmBuilder {
     pub fn new(identity: Keypair, membership: &[Node<PeerId>]) -> Self {
-        let public_info = (
-            build_membership(membership, Some(identity.public().into())),
-            1.into(),
-        );
+        let public_info = BackendEpochInfo {
+            membership: build_membership(membership, Some(identity.public().into())),
+            epoch: 1.into(),
+            proofs_verifier: TestProofsVerifier,
+        };
         Self {
             identity,
             public_info,
@@ -128,7 +167,11 @@ impl SwarmBuilder {
     ) -> TestSwarm
     where
         BehaviourConstructor:
-            FnOnce(PeerId, Membership<PeerId>) -> BlendBehaviour<TestObservationWindowProvider>,
+            FnOnce(
+                PeerId,
+                Membership<PeerId>,
+            )
+                -> BlendBehaviour<TestObservationWindowProvider, TestProofsVerifier>,
     {
         let (swarm_message_sender, swarm_message_receiver) = mpsc::channel(100);
         let (incoming_message_sender, incoming_message_receiver) = broadcast::channel(100);
@@ -160,6 +203,7 @@ pub struct BlendBehaviourBuilder {
     membership: Membership<PeerId>,
     observation_window: Option<(Duration, RangeInclusive<u64>)>,
     peering_degree: Option<RangeInclusive<usize>>,
+    proofs_verifier: TestProofsVerifier,
 }
 
 impl BlendBehaviourBuilder {
@@ -169,6 +213,7 @@ impl BlendBehaviourBuilder {
             membership,
             observation_window: None,
             peering_degree: None,
+            proofs_verifier: TestProofsVerifier,
         }
     }
 
@@ -186,7 +231,7 @@ impl BlendBehaviourBuilder {
         self
     }
 
-    pub fn build(self) -> BlendBehaviour<TestObservationWindowProvider> {
+    pub fn build(self) -> BlendBehaviour<TestObservationWindowProvider, TestProofsVerifier> {
         let observation_window_values = self
             .observation_window
             .unwrap_or((Duration::from_secs(1), u64::MIN..=u64::MAX));
@@ -212,6 +257,7 @@ impl BlendBehaviourBuilder {
                     interval: observation_window_values.0,
                 },
                 (self.membership, 1.into()),
+                self.proofs_verifier,
                 self.peer_id,
                 PROTOCOL_NAME,
             ),
@@ -261,7 +307,7 @@ pub trait SwarmExt: libp2p_swarm_test::SwarmExt {
 }
 
 #[async_trait]
-impl SwarmExt for Swarm<BlendBehaviour<TestObservationWindowProvider>> {
+impl SwarmExt for Swarm<BlendBehaviour<TestObservationWindowProvider, TestProofsVerifier>> {
     async fn listen_and_return_membership_entry(
         &mut self,
         addr: Option<Multiaddr>,

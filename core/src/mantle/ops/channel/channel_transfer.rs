@@ -4,17 +4,18 @@ use serde::{Deserialize, Serialize};
 use crate::{
     events::TxEvent,
     mantle::{
-        TxHash,
+        TxHash, Value,
         channel::{Channels, Error},
+        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation, Utxo,
-            Utxos, VerifiableOperation, verification_mode,
+            Utxos, VerifiableOperation, verification_mode, verification_mode::VerificationMode,
         },
         ops::{
-            OpId,
+            OpId, SignedOp,
             channel::{ChannelId, verification::verify_channel_multi_sig},
         },
-        transactions::{OperationVerificationHelper, hash::TxHashView},
+        transactions::{OperationVerificationHelper, hash::TxHashView, states::VerificationState},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
     sdp::locked_notes::LockedNotes,
@@ -56,7 +57,13 @@ pub struct ChannelTransferExecutionContext {
 }
 
 impl ProvableOperation for ChannelTransferOp {
+    // `SignedOperationExecutionGas::gas_multiplier` below reads this proof's
+    // signature count. If this changes, update that too.
     type Proof = ChannelMultiSigProof;
+}
+
+impl OperationGas<MainnetGasProfile> for ChannelTransferOp {
+    const GAS_COST: Gas = Gas::new(56);
 }
 
 impl PreverifiableOperation<verification_mode::StandardMode> for ChannelTransferOp {
@@ -166,5 +173,15 @@ impl ExecutableOperation for ChannelTransferOp {
         }
 
         Ok((context, Vec::new()))
+    }
+}
+
+impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
+    for SignedOp<ChannelTransferOp, State, Mode>
+{
+    fn gas_multiplier(&self) -> Value {
+        let signature_count = self.proof().signatures().len();
+        Value::try_from(signature_count)
+            .expect("Channel multi-signature proofs are bound to u16::MAX signatures.")
     }
 }
