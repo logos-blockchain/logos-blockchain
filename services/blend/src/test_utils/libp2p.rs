@@ -39,10 +39,6 @@ impl TestEncapsulatedMessage {
             .unwrap(),
         )
     }
-
-    pub fn into_inner(self) -> EncapsulatedMessageWithVerifiedPublicHeader {
-        self.0
-    }
 }
 
 impl Deref for TestEncapsulatedMessage {

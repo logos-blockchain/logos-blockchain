@@ -6,13 +6,16 @@ use thiserror::Error;
 use crate::{
     events::TxEvent,
     mantle::{
+        Value,
         channel::Channels,
+        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             self, ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation,
             Utxo, Utxos, VerifiableOperation, verification_mode,
+            verification_mode::VerificationMode,
         },
-        ops::OpId,
-        transactions::hash::TxHashView,
+        ops::{OpId, SignedOp},
+        transactions::{hash::TxHashView, states::VerificationState},
     },
     sdp::locked_notes::LockedNotes,
 };
@@ -86,6 +89,10 @@ impl ProvableOperation for TransferOp {
     type Proof = ZkSignature;
 }
 
+impl OperationGas<MainnetGasProfile> for TransferOp {
+    const GAS_COST: Gas = Gas::new(590);
+}
+
 impl PreverifiableOperation<verification_mode::StandardMode> for TransferOp {
     type Context<'a> = ();
     type Error = TransferError;
@@ -140,6 +147,14 @@ impl ExecutableOperation for TransferOp {
         // Add outputs from the ledger
         utxos = self.outputs.execute(utxos, self);
         Ok((utxos, Vec::new()))
+    }
+}
+
+impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
+    for SignedOp<TransferOp, State, Mode>
+{
+    fn gas_multiplier(&self) -> Value {
+        1
     }
 }
 

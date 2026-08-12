@@ -41,8 +41,8 @@ async fn detect_spammy_peer() {
     // Send two messages when only one was expected.
     dialing_swarm
         .behaviour_mut()
-        .publish_message_with_validated_signature_to_current_epoch(
-            &TestEncapsulatedMessage::new(b"msg1").into_inner().into(),
+        .publish_message_with_validated_header_to_current_epoch(
+            TestEncapsulatedMessage::new(b"msg1").as_ref(),
         )
         .unwrap();
     // Using `force_send_message_to_current_epoch_peer` because otherwise we won't

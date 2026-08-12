@@ -4,15 +4,21 @@ use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    events::{DepositRecreatedNotes, TxEvent, TxEventPayload},
+    events::{DepositNote, DepositRecreatedNotes, TxEvent, TxEventPayload},
     mantle::{
+        Value,
         channel::{Channels, Error},
+        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             ExecutableOperation, Inputs, InputsError, Outputs, PreverifiableOperation,
             ProvableOperation, Utxos, VerifiableOperation, verification_mode,
+            verification_mode::VerificationMode,
         },
-        ops::{OpId, channel::ChannelId},
-        transactions::hash::{TxHash, TxHashView},
+        ops::{OpId, SignedOp, channel::ChannelId},
+        transactions::{
+            hash::{TxHash, TxHashView},
+            states::VerificationState,
+        },
     },
     sdp::locked_notes::LockedNotes,
 };
@@ -66,6 +72,10 @@ pub struct DepositExecutionContext {
 
 impl ProvableOperation for DepositOp {
     type Proof = ZkSignature;
+}
+
+impl OperationGas<MainnetGasProfile> for DepositOp {
+    const GAS_COST: Gas = Gas::new(590);
 }
 
 impl PreverifiableOperation<verification_mode::StandardMode> for DepositOp {
@@ -131,12 +141,18 @@ impl ExecutableOperation for DepositOp {
         // Add the re-created notes to the ledger and register them as channel
         // notes.
         context.utxos = outputs.execute(context.utxos, self);
-        let mut note_ids = DepositRecreatedNotes::default();
+        let mut notes = DepositRecreatedNotes::default();
         for utxo in outputs.utxos(self) {
             context.channels = context
                 .channels
                 .register_channel_note(&utxo.id(), &self.channel_id)?;
-            note_ids.try_push(utxo.id()).map_err(InputsError::from)?;
+            notes
+                .try_push(DepositNote {
+                    note_id: utxo.id(),
+                    value: utxo.note.value,
+                    pk: utxo.note.pk,
+                })
+                .map_err(InputsError::from)?;
         }
 
         let events = std::iter::once(TxEvent::new(
@@ -146,12 +162,20 @@ impl ExecutableOperation for DepositOp {
                 channel_id: self.channel_id,
                 amount: amount_deposited,
                 metadata: self.metadata.clone(),
-                notes: note_ids,
+                notes,
             },
         ))
         .collect();
 
         Ok((context, events))
+    }
+}
+
+impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
+    for SignedOp<DepositOp, State, Mode>
+{
+    fn gas_multiplier(&self) -> Value {
+        1
     }
 }
 

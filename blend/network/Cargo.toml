@@ -25,7 +25,9 @@ lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-libp2p                     = { workspace = true }
 lb-log-targets                = { workspace = true }
+lb-utils                      = { features = ["tokio", "tokio-task-names"], workspace = true }
 libp2p                        = { workspace = true }
+tokio                         = { workspace = true }
 tracing                       = { workspace = true }
 
 [dev-dependencies]

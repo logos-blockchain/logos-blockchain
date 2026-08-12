@@ -240,7 +240,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        events::TxEventPayload,
+        events::{DepositNote, TxEventPayload},
         mantle::{
             Note, Utxo, Value,
             ledger::Utxos,
@@ -423,7 +423,14 @@ mod tests {
         assert_eq!(*event_channel_id, deposit_op.channel_id);
         assert_eq!(*amount, utxo.note.value);
         assert_eq!(*metadata, deposit_op.metadata);
-        assert_eq!(notes.clone().into_inner(), vec![deposited]);
+        assert_eq!(
+            notes.clone().into_inner(),
+            vec![DepositNote {
+                note_id: deposited,
+                value: utxo.note.value,
+                pk: utxo.note.pk,
+            }]
+        );
     }
 
     #[test]

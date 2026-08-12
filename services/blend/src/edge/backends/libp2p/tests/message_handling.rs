@@ -70,9 +70,9 @@ async fn edge_message_propagation() {
     let (swarm_2_received_message, swarm_2_message_epoch) =
         core_swarm_2_incoming_message_receiver.recv().await.unwrap();
 
-    assert_eq!(swarm_1_received_message, message.clone().into());
+    assert_eq!(swarm_1_received_message, message.clone());
     assert_eq!(swarm_1_message_epoch, 1);
-    assert_eq!(swarm_2_received_message, message.clone().into());
+    assert_eq!(swarm_2_received_message, message.clone());
     assert_eq!(swarm_2_message_epoch, 1);
 }
 
@@ -137,19 +137,19 @@ async fn replication_factor() {
                 break;
             }
             swarm_1_received_message = core_swarm_1_incoming_message_receiver.recv() => {
-                assert_eq!(swarm_1_received_message.unwrap().0, message.clone().into());
+                assert_eq!(swarm_1_received_message.unwrap().0, message.clone());
                 assert!(!swarm_1_message_received);
                 received_messages += 1;
                 swarm_1_message_received = true;
             }
             swarm_2_received_message = core_swarm_2_incoming_message_receiver.recv() => {
-                assert_eq!(swarm_2_received_message.unwrap().0, message.clone().into());
+                assert_eq!(swarm_2_received_message.unwrap().0, message.clone());
                 assert!(!swarm_2_message_received);
                 received_messages += 1;
                 swarm_2_message_received = true;
             }
             swarm_3_received_message = core_swarm_3_incoming_message_receiver.recv() => {
-                assert_eq!(swarm_3_received_message.unwrap().0, message.clone().into());
+                assert_eq!(swarm_3_received_message.unwrap().0, message.clone());
                 assert!(!swarm_3_message_received);
                 received_messages += 1;
                 swarm_3_message_received = true;

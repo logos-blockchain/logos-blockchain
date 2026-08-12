@@ -6,13 +6,20 @@ use core::{
 use std::time::Duration;
 
 use lb_blend_message::{
-    MessageIdentifier, PayloadType, crypto::key_ext::Ed25519SecretKeyExt as _,
-    encap::validated::EncapsulatedMessageWithVerifiedPublicHeader, input::EncapsulationInput,
+    MessageIdentifier, PayloadType,
+    crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
+    encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
+    input::EncapsulationInput,
 };
-use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
+use lb_blend_proofs::{
+    quota::{ProofOfQuota, VerifiedProofOfQuota},
+    selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
+};
 use lb_blend_scheduling::message_blend::provers::BlendLayerProof;
 use lb_cryptarchia_engine::Epoch;
-use lb_key_management_system_keys::keys::{Ed25519Signature, UnsecuredEd25519Key};
+use lb_key_management_system_keys::keys::{
+    Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key,
+};
 use lb_libp2p::{NetworkBehaviour, ed25519, upgrade::Version};
 use libp2p::{
     PeerId, StreamProtocol, Swarm, Transport as _, core::transport::MemoryTransport,
@@ -21,6 +28,52 @@ use libp2p::{
 use libp2p_swarm_test::SwarmExt as _;
 
 pub const PROTOCOL_NAME: StreamProtocol = StreamProtocol::new("/blend/core-behaviour/test");
+
+/// A `PoQ` verifier for the behaviour tests, which either accepts or rejects
+/// every proof it is handed. The proof system itself is exercised elsewhere;
+/// here we only care about what a behaviour does with the verification outcome.
+#[derive(Debug, Clone, Copy)]
+pub struct TestProofsVerifier {
+    accepts: bool,
+}
+
+impl TestProofsVerifier {
+    pub const fn accepting() -> Self {
+        Self { accepts: true }
+    }
+
+    pub const fn rejecting() -> Self {
+        Self { accepts: false }
+    }
+}
+
+impl ProofsVerifier for TestProofsVerifier {
+    type Error = ();
+
+    fn new(_public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
+        Self::accepting()
+    }
+
+    fn verify_proof_of_quota(
+        &self,
+        proof: ProofOfQuota,
+        _signing_key: &Ed25519PublicKey,
+    ) -> Result<VerifiedProofOfQuota, Self::Error> {
+        self.accepts
+            .then(|| VerifiedProofOfQuota::from_proof_of_quota_unchecked(proof))
+            .ok_or(())
+    }
+
+    fn verify_proof_of_selection(
+        &self,
+        proof: ProofOfSelection,
+        _inputs: &VerifyInputs,
+    ) -> Result<VerifiedProofOfSelection, Self::Error> {
+        self.accepts
+            .then(|| VerifiedProofOfSelection::from_proof_of_selection_unchecked(proof))
+            .ok_or(())
+    }
+}
 
 /// `ß_max` used by the test messages, matching the `BehaviourBuilder` default.
 const NUM_BLEND_LAYERS: u64 = 3;

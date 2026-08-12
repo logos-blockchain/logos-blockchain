@@ -12,10 +12,7 @@ use lb_blend::{
             ProofsVerifier as ProofsVerifierTrait,
             decapsulated::{DecapsulatedMessage, DecapsulationOutput},
             encapsulated::EncapsulatedMessage,
-            validated::{
-                EncapsulatedMessageWithVerifiedPublicHeader,
-                EncapsulatedMessageWithVerifiedSignature,
-            },
+            validated::EncapsulatedMessageWithVerifiedPublicHeader,
         },
         reward::BlendingToken,
     },
@@ -145,14 +142,6 @@ where
         message: EncapsulatedMessage,
     ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, InnerError> {
         message.verify_public_header(self.verifier())
-    }
-
-    /// Validate the `PoQ` of an [`EncapsulatedMessageWithVerifiedSignature`].
-    pub fn validate_message_poq(
-        &self,
-        message: EncapsulatedMessageWithVerifiedSignature,
-    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, InnerError> {
-        message.verify_proof_of_quota(self.verifier())
     }
 
     /// Semantically similar to the underlying

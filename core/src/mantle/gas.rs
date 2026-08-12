@@ -107,18 +107,18 @@ impl Display for GasCost {
     }
 }
 
-pub trait GasCalculator {
+pub trait TxGasCalculator {
     type Context;
 
     /// Returns the gas cost of this operation.
-    fn total_gas_cost<Constants: GasConstants>(
+    fn total_gas_cost<Profile: GasProfile>(
         &self,
         context: &Self::Context,
     ) -> Result<GasCost, GasOverflow>;
 
     fn storage_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow>;
 
-    fn execution_gas_consumption<Constants: GasConstants>(
+    fn execution_gas_consumption<Profile: GasProfile>(
         &self,
         context: &Self::Context,
     ) -> Result<Gas, GasOverflow>;
@@ -130,80 +130,29 @@ pub trait GasCalculator {
 #[error("Gas overflow")]
 pub struct GasOverflow;
 
-impl<T: GasCalculator> GasCalculator for &T {
-    type Context = T::Context;
-
-    fn total_gas_cost<Constants: GasConstants>(
-        &self,
-        context: &Self::Context,
-    ) -> Result<GasCost, GasOverflow> {
-        T::total_gas_cost::<Constants>(self, context)
-    }
-
-    fn storage_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow> {
-        T::storage_gas_cost(self, context)
-    }
-
-    fn execution_gas_consumption<Constants: GasConstants>(
-        &self,
-        context: &Self::Context,
-    ) -> Result<Gas, GasOverflow> {
-        T::execution_gas_consumption::<Constants>(self, context)
-    }
-
-    fn storage_gas_consumption(&self, context: &Self::Context) -> Result<Gas, GasOverflow> {
-        T::storage_gas_consumption(self, context)
-    }
+mod private {
+    pub trait Sealed {}
 }
 
-pub trait GasConstants {
-    /// Verify the proof of ownership and relative balance.
-    const TRANSFER: Gas;
+pub trait GasProfile: private::Sealed {}
 
-    /// Verify the inscription signature.
-    const CHANNEL_INSCRIBE: Gas;
+pub struct MainnetGasProfile;
+impl private::Sealed for MainnetGasProfile {}
+impl GasProfile for MainnetGasProfile {}
 
-    /// Verify the administrator signature.
-    const CHANNEL_CONFIG: Gas;
-
-    /// Verify the deposit signature.
-    const CHANNEL_DEPOSIT: Gas;
-
-    /// Verify the withdrawal signature.
-    const CHANNEL_WITHDRAW: Gas;
-
-    /// Verify the transfer signature.
-    const CHANNEL_TRANSFER: Gas;
-
-    /// Verify the proof of ownership.
-    const SDP_DECLARE: Gas;
-
-    /// Verify the proof of ownership.
-    const SDP_WITHDRAW: Gas;
-
-    /// Store the active message.
-    const SDP_ACTIVE: Gas;
-
-    /// Consume a reward ticket.
-    const LEADER_CLAIM: Gas;
-
-    /// Claim a `PoW` reward
-    const CLAIM_POW_REWARD: Gas;
+pub trait OperationGas<Profile: GasProfile> {
+    const GAS_COST: Gas;
 }
 
-pub struct MainnetGasConstants;
+pub trait SignedOperationExecutionGas {
+    /// The factor `execution_gas` scales the operation's base gas cost by.
+    fn gas_multiplier(&self) -> Value;
 
-impl GasConstants for MainnetGasConstants {
-    const TRANSFER: Gas = Gas(590);
-    const CHANNEL_INSCRIBE: Gas = Gas(56);
-    const CHANNEL_CONFIG: Gas = Gas(56);
-    const CHANNEL_DEPOSIT: Gas = Gas(590);
-    const CHANNEL_WITHDRAW: Gas = Gas(56);
-    const CHANNEL_TRANSFER: Gas = Gas(56);
-    const SDP_DECLARE: Gas = Gas(646);
-    const SDP_WITHDRAW: Gas = Gas(590);
-    const SDP_ACTIVE: Gas = Gas(590);
-    const LEADER_CLAIM: Gas = Gas(580);
-    // TODO: Fix this value once decided
-    const CLAIM_POW_REWARD: Gas = Gas(1);
+    /// Calculates the execution gas.
+    fn execution_gas<Profile: GasProfile>(&self) -> Result<Gas, GasOverflow>
+    where
+        Self: OperationGas<Profile>,
+    {
+        Self::GAS_COST.checked_mul(self.gas_multiplier())
+    }
 }
