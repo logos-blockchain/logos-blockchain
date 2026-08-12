@@ -29,9 +29,6 @@ cryptarchia:
   learning_rate: 0.5
   pow_config:
     blend:
-      # TODO: calibrate. `base_difficulty` is the threshold at the reference
-      # load of `target_transactions_per_block`; damping alpha = 1/2 and a
-      # per-epoch clamp of 4x follow the spec's own examples.
       base_difficulty: '40420f0000000000000000000000000000000000000000000000000000000000'
       target_transactions_per_block: 10
       max_step: 4

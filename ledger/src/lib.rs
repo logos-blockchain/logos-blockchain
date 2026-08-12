@@ -250,8 +250,10 @@ impl LedgerState {
         // block that is actually applied, contents included, belongs in the
         // epoch's average.
         let mut txs_in_block = 0u64;
-        let (mut state, tx_events) = state
-            .try_apply_contents::<_, _, Profile>(config, txs.inspect(|_| txs_in_block += 1))?;
+        let (mut state, tx_events) = state.try_apply_contents::<_, _, Profile>(
+            config,
+            txs.inspect(|_| txs_in_block = txs_in_block.saturating_add(1)),
+        )?;
         state.cryptarchia_ledger.record_block_txs(txs_in_block);
         state.update_pow_reward_difficulty(
             // count all claimed rewards

@@ -7,23 +7,11 @@
 //! boundary and consumed later, at the nonce snapshot slot of the epoch after
 //! that.
 
-/// Totals accumulated over a single epoch.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-struct EpochTotals {
-    blocks: u64,
-    txs: u64,
-}
-
-impl EpochTotals {
-    const fn record_block(&mut self, txs_in_block: u64) {
-        self.blocks = self.blocks.saturating_add(1);
-        self.txs = self.txs.saturating_add(txs_in_block);
-    }
-}
+use serde::{Deserialize, Serialize};
 
 /// The rolling block and transaction counts of the epoch being extended and of
 /// the last epoch that closed.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TxDensity {
     /// Totals of the epoch the ledger is currently extending, still growing
     /// with every applied block.
@@ -42,17 +30,73 @@ impl TxDensity {
     /// Close the current epoch's totals and start counting a new epoch.
     ///
     /// Called once per epoch crossed, so that epochs skipped entirely (no
-    /// block was produced in them) close as empty and are read as zero
-    /// demand.
+    /// block was produced in them) close as empty and are read as no load.
     pub(super) const fn close_epoch(&mut self) {
         self.last_closed_epoch = self.current_epoch;
         self.current_epoch = EpochTotals { blocks: 0, txs: 0 };
     }
 
-    /// The totals — `(transactions, blocks)` — of the last closed epoch, the
-    /// observation the Blend difficulty retarget is computed from.
-    pub(super) const fn last_closed_epoch_totals(&self) -> (u64, u64) {
-        (self.last_closed_epoch.txs, self.last_closed_epoch.blocks)
+    /// The load of the last closed epoch — the observation the Blend
+    /// difficulty retarget reads.
+    pub(crate) const fn last_closed_epoch_load(&self) -> ClosedEpochLoad {
+        ClosedEpochLoad {
+            transactions: self.last_closed_epoch.txs,
+            blocks: self.last_closed_epoch.blocks,
+        }
+    }
+}
+
+/// The transaction load of a single epoch that has *closed*.
+///
+/// The retarget must never read an epoch that is still being extended — its
+/// totals would still be growing, and a difficulty derived from them would
+/// depend on when it was read. Only [`TxDensity::close_epoch`] can put an
+/// epoch's counts into this type, so passing an open epoch to the controller
+/// does not compile rather than silently mis-targeting the difficulty. Naming
+/// the two counts also keeps them from being transposed at the call site,
+/// where as bare integers they are indistinguishable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClosedEpochLoad {
+    transactions: u64,
+    blocks: u64,
+}
+
+impl ClosedEpochLoad {
+    /// Transactions carried by the whole epoch.
+    pub const fn transactions(self) -> u64 {
+        self.transactions
+    }
+
+    /// Blocks the epoch produced. Zero for an epoch that was skipped entirely.
+    pub const fn blocks(self) -> u64 {
+        self.blocks
+    }
+}
+
+#[cfg(test)]
+impl ClosedEpochLoad {
+    /// Test-only: stand in for an epoch closed by the ledger, so the
+    /// controller can be exercised over loads a test does not have to
+    /// accumulate block by block.
+    pub const fn new(transactions: u64, blocks: u64) -> Self {
+        Self {
+            transactions,
+            blocks,
+        }
+    }
+}
+
+/// Totals accumulated over a single epoch.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct EpochTotals {
+    blocks: u64,
+    txs: u64,
+}
+
+impl EpochTotals {
+    const fn record_block(&mut self, txs_in_block: u64) {
+        self.blocks = self.blocks.saturating_add(1);
+        self.txs = self.txs.saturating_add(txs_in_block);
     }
 }
 
@@ -63,16 +107,19 @@ mod tests {
     #[test]
     fn totals_accumulate_until_the_epoch_closes() {
         let mut density = TxDensity::default();
-        assert_eq!(density.last_closed_epoch_totals(), (0, 0));
+        assert_eq!(density.last_closed_epoch_load(), ClosedEpochLoad::new(0, 0));
 
         density.record_block(3);
         density.record_block(0);
         density.record_block(7);
         // Still open: nothing is observable yet.
-        assert_eq!(density.last_closed_epoch_totals(), (0, 0));
+        assert_eq!(density.last_closed_epoch_load(), ClosedEpochLoad::new(0, 0));
 
         density.close_epoch();
-        assert_eq!(density.last_closed_epoch_totals(), (10, 3));
+        assert_eq!(
+            density.last_closed_epoch_load(),
+            ClosedEpochLoad::new(10, 3)
+        );
     }
 
     #[test]
@@ -81,7 +128,7 @@ mod tests {
         density.record_block(5);
         density.close_epoch();
         density.record_block(100);
-        assert_eq!(density.last_closed_epoch_totals(), (5, 1));
+        assert_eq!(density.last_closed_epoch_load(), ClosedEpochLoad::new(5, 1));
     }
 
     #[test]
@@ -92,6 +139,6 @@ mod tests {
         density.record_block(5);
         density.close_epoch();
         density.close_epoch();
-        assert_eq!(density.last_closed_epoch_totals(), (0, 0));
+        assert_eq!(density.last_closed_epoch_load(), ClosedEpochLoad::new(0, 0));
     }
 }

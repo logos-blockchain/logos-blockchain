@@ -7,59 +7,42 @@
 //! means real traffic already supplies an anonymity set, so `PoW` entry can be
 //! rate-limited harder; thin load eases the threshold so `PoW`-backed messages
 //! come in and build the anonymity set.
-//!
-//! The controller is parallel to the reward-difficulty retarget in
-//! [`super::difficulty`], but is driven by a transaction count rather than a
-//! claim rate, and moves once per epoch rather than once per block.
 
 use lb_core::mantle::ops::pow::PowTarget;
 use lb_groth16::{Field as _, fr_to_bytes};
 use num_bigint::BigUint;
 
-use crate::config::BlendPoWConfig;
+use crate::{config::BlendPoWConfig, cryptarchia::tx_density::ClosedEpochLoad};
 
-/// Retarget `d_blend` from a whole epoch's transaction load.
-///
-/// With `load = avg_txs_per_block / T_tx` and a damping exponent
-/// `alpha = a / b <= 1`, the new threshold is the baseline divided down by the
-/// load — smaller target, harder puzzle, as load rises:
-///
-/// ```text
-/// d_blend = BASE / load^alpha, clamped to [previous / k, previous * k]
-/// ```
-///
-/// The response is deliberately gentle: sub-linear in the load (at
-/// `alpha = 1/2`, quadrupling the transaction count only halves the
-/// threshold), averaged over a whole epoch, and bounded per epoch by the
-/// `max_step` factor `k`. An adversary stuffing blocks to shrink the anonymity
-/// set therefore has to pay for it every epoch, for a small and capped effect.
-///
-/// An epoch that carried no transactions at all — including an epoch with no
-/// blocks — is read as no observed load and eases the threshold as far as this
-/// epoch's clamp allows.
 pub fn compute_epoch_blend_difficulty(
-    txs_in_epoch: u64,
-    blocks_in_epoch: u64,
+    load: ClosedEpochLoad,
     previous_difficulty: PowTarget,
     config: &BlendPoWConfig,
 ) -> PowTarget {
-    // The arithmetic happens on plain integers: `PowTarget` is a field
-    // element, whose division (multiplication by the modular inverse) does not
-    // compute a ratio.
-    let previous = BigUint::from_bytes_le(&fr_to_bytes(&previous_difficulty));
+    let previous_difficulty = BigUint::from(previous_difficulty);
+    let numerator = BigUint::from(load.transactions());
+    let max_step = BigUint::from(config.max_step.get());
+
+    let clamp_upper_bound = previous_difficulty * max_step;
+
+    if numerator == BigUint::ZERO {
+        return clamp_upper_bound; // no load observed: as easy as this epoch's clamp allows
+    }
+
+    let clamp_lower_bound = previous_difficulty / max_step;
+
+    let lo = previous_difficulty / config.max_step.get();
+
     let max_step = BigUint::from(config.max_step.get());
     // Bound the change to at most a factor of `k` in either direction.
     let low = &previous / &max_step;
     let high = previous * max_step;
 
-    // `load` is kept exactly as the ratio `numerator / denominator`
-    // (they are equal at the reference load); no division is performed here.
-    let numerator = BigUint::from(txs_in_epoch);
     if numerator == BigUint::ZERO {
         // No load observed: as easy as this epoch's clamp allows.
         return into_target(high);
     }
-    let denominator = BigUint::from(config.target_transactions_per_block.get()) * blocks_in_epoch;
+    let denominator = BigUint::from(config.target_transactions_per_block.get()) * load.blocks();
 
     // target = BASE / load^alpha
     //        = (BASE^b * denominator^a // numerator^a)^(1/b)
@@ -105,7 +88,11 @@ mod tests {
         // so the threshold is the baseline itself.
         let config = config();
         assert_eq!(
-            compute_epoch_blend_difficulty(70, 7, config.base_difficulty, &config),
+            compute_epoch_blend_difficulty(
+                ClosedEpochLoad::new(70, 7),
+                config.base_difficulty,
+                &config
+            ),
             config.base_difficulty
         );
     }
@@ -115,7 +102,11 @@ mod tests {
         // At alpha = 1/2, quadrupling the load only halves the threshold.
         let config = config();
         assert_eq!(
-            compute_epoch_blend_difficulty(280, 7, config.base_difficulty, &config),
+            compute_epoch_blend_difficulty(
+                ClosedEpochLoad::new(280, 7),
+                config.base_difficulty,
+                &config
+            ),
             PowTarget::from(500_000u64)
         );
     }
@@ -127,7 +118,11 @@ mod tests {
         // the clamp does not bind.
         let config = config();
         assert_eq!(
-            compute_epoch_blend_difficulty(20, 8, config.base_difficulty, &config),
+            compute_epoch_blend_difficulty(
+                ClosedEpochLoad::new(20, 8),
+                config.base_difficulty,
+                &config
+            ),
             PowTarget::from(2_000_000u64)
         );
     }
@@ -137,7 +132,11 @@ mod tests {
         // Nothing observed: the threshold moves to the top of the clamp.
         let config = config();
         assert_eq!(
-            compute_epoch_blend_difficulty(0, 7, PowTarget::from(1_000u64), &config),
+            compute_epoch_blend_difficulty(
+                ClosedEpochLoad::new(0, 7),
+                PowTarget::from(1_000u64),
+                &config
+            ),
             PowTarget::from(4_000u64)
         );
     }
@@ -148,7 +147,11 @@ mod tests {
         // divide by the empty block count.
         let config = config();
         assert_eq!(
-            compute_epoch_blend_difficulty(0, 0, PowTarget::from(1_000u64), &config),
+            compute_epoch_blend_difficulty(
+                ClosedEpochLoad::new(0, 0),
+                PowTarget::from(1_000u64),
+                &config
+            ),
             PowTarget::from(4_000u64)
         );
     }
@@ -159,12 +162,20 @@ mod tests {
         // A flood far past the clamp: the threshold falls by the factor k and
         // no further, so the anonymity set can shrink only gradually.
         assert_eq!(
-            compute_epoch_blend_difficulty(1_000_000, 7, config.base_difficulty, &config),
+            compute_epoch_blend_difficulty(
+                ClosedEpochLoad::new(1_000_000, 7),
+                config.base_difficulty,
+                &config
+            ),
             PowTarget::from(250_000u64)
         );
         // And symmetrically upwards on a near-empty epoch.
         assert_eq!(
-            compute_epoch_blend_difficulty(1, 7, config.base_difficulty, &config),
+            compute_epoch_blend_difficulty(
+                ClosedEpochLoad::new(1, 7),
+                config.base_difficulty,
+                &config
+            ),
             PowTarget::from(4_000_000u64)
         );
     }
@@ -176,7 +187,11 @@ mod tests {
         // while the clamp bounds how far one epoch may travel towards it.
         let config = config();
         assert_eq!(
-            compute_epoch_blend_difficulty(1_000_000, 7, PowTarget::from(1_000u64), &config),
+            compute_epoch_blend_difficulty(
+                ClosedEpochLoad::new(1_000_000, 7),
+                PowTarget::from(1_000u64),
+                &config
+            ),
             PowTarget::from(4_000u64)
         );
     }
@@ -191,11 +206,11 @@ mod tests {
         };
         let previous = PowTarget::from(1_234u64);
         assert_eq!(
-            compute_epoch_blend_difficulty(9_999, 7, previous, &config),
+            compute_epoch_blend_difficulty(ClosedEpochLoad::new(9_999, 7), previous, &config),
             previous
         );
         assert_eq!(
-            compute_epoch_blend_difficulty(0, 7, previous, &config),
+            compute_epoch_blend_difficulty(ClosedEpochLoad::new(0, 7), previous, &config),
             previous
         );
     }
@@ -209,7 +224,11 @@ mod tests {
             ..config()
         };
         assert_eq!(
-            compute_epoch_blend_difficulty(280, 7, config.base_difficulty, &config),
+            compute_epoch_blend_difficulty(
+                ClosedEpochLoad::new(280, 7),
+                config.base_difficulty,
+                &config
+            ),
             PowTarget::from(250_000u64)
         );
     }
@@ -222,7 +241,7 @@ mod tests {
         let config = config();
         let max_target = -PowTarget::ONE;
         assert_eq!(
-            compute_epoch_blend_difficulty(0, 7, max_target, &config),
+            compute_epoch_blend_difficulty(ClosedEpochLoad::new(0, 7), max_target, &config),
             max_target
         );
     }
@@ -236,7 +255,8 @@ mod tests {
             base_difficulty: base,
             ..config()
         };
-        let retargeted = compute_epoch_blend_difficulty(280, 7, base, &config);
+        let retargeted =
+            compute_epoch_blend_difficulty(ClosedEpochLoad::new(280, 7), base, &config);
         // Quadruple load at alpha = 1/2: half the baseline, up to the flooring
         // of the square root.
         let expected = PowTarget::from(BigUint::from(1u8) << 249);

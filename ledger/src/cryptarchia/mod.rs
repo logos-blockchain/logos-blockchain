@@ -1,6 +1,6 @@
 mod block_density;
 mod stake;
-mod tx_density;
+pub(crate) mod tx_density;
 
 use std::sync::{Arc, LazyLock};
 
@@ -105,13 +105,10 @@ impl EpochState {
     fn update_from_ledger(self, ledger: &LedgerState, sdp: &SdpLedger, config: &Config) -> Self {
         let nonce_snapshot_slot = config.nonce_snapshot(self.epoch);
         let (nonce, blend_pow_difficulty) = if ledger.slot < nonce_snapshot_slot {
-            let (txs_in_previous_epoch, blocks_in_previous_epoch) =
-                ledger.tx_density.last_closed_epoch_totals();
             (
                 ledger.nonce,
                 compute_epoch_blend_difficulty(
-                    txs_in_previous_epoch,
-                    blocks_in_previous_epoch,
+                    ledger.tx_density.last_closed_epoch_load(),
                     ledger.epoch_state.blend_pow_difficulty,
                     &config.pow_config.blend,
                 ),
@@ -831,6 +828,7 @@ pub mod tests {
     use super::*;
     use crate::{
         Ledger,
+        cryptarchia::tx_density::ClosedEpochLoad,
         leader_proof::LeaderProof,
         mantle::sdp::{
             ServiceRewardsParameters,
@@ -1422,7 +1420,11 @@ pub mod tests {
         let epoch_1_difficulty = state.epoch_state.blend_pow_difficulty;
         assert_eq!(
             epoch_1_difficulty,
-            compute_epoch_blend_difficulty(0, 0, genesis_difficulty, blend_config)
+            compute_epoch_blend_difficulty(
+                ClosedEpochLoad::new(0, 0),
+                genesis_difficulty,
+                blend_config
+            )
         );
 
         // Epoch 1, with blocks on both sides of epoch 2's snapshot slot.
@@ -1445,11 +1447,97 @@ pub mod tests {
         assert_eq!(state.epoch_state.epoch, 2);
         assert_eq!(
             state.epoch_state.blend_pow_difficulty,
-            compute_epoch_blend_difficulty(12, 3, epoch_1_difficulty, blend_config)
+            compute_epoch_blend_difficulty(
+                ClosedEpochLoad::new(12, 3),
+                epoch_1_difficulty,
+                blend_config
+            )
         );
         assert_eq!(
             state.epoch_state.blend_pow_difficulty,
             PowTarget::from(1_581_138u64)
+        );
+    }
+
+    #[test]
+    fn blend_difficulty_counts_only_the_branch_it_is_read_from() {
+        // The block and transaction counters live in the per-block
+        // `LedgerState`, which `Ledger::prepare_update` derives from a clone of
+        // the parent's. Competing branches therefore accumulate independently,
+        // and reading the difficulty at a tip counts exactly the blocks on that
+        // tip's ancestry — no unwinding is needed when a re-org picks a
+        // different tip.
+        let config = config();
+        let blend_config = &config.pow_config.blend;
+        let sdp = SdpLedger::new(0.into());
+
+        // A common ancestor carrying 4 transactions, in epoch 0.
+        let mut ancestor = genesis_state(&[utxo()]);
+        ancestor = ancestor
+            .update_epoch_state::<HeaderId>(10.into(), &sdp, &config)
+            .unwrap();
+        ancestor.record_block_txs(4);
+
+        // Two competing blocks for the same slot, each built on its own clone
+        // of the ancestor's state.
+        let mut busy_branch = ancestor.clone();
+        busy_branch = busy_branch
+            .update_epoch_state::<HeaderId>(20.into(), &sdp, &config)
+            .unwrap();
+        busy_branch.record_block_txs(96);
+
+        let mut quiet_branch = ancestor;
+        quiet_branch = quiet_branch
+            .update_epoch_state::<HeaderId>(20.into(), &sdp, &config)
+            .unwrap();
+        quiet_branch.record_block_txs(6);
+
+        // Carry both branches past the epoch-0 close and the epoch-2 snapshot.
+        let advance = |mut state: LedgerState| {
+            for slot in [100u64, 110, 200] {
+                state = state
+                    .update_epoch_state::<HeaderId>(slot.into(), &sdp, &config)
+                    .unwrap();
+                state.record_block_txs(0);
+            }
+            state
+        };
+        let busy_branch = advance(busy_branch);
+        let quiet_branch = advance(quiet_branch);
+
+        // Both branches enter epoch 1 with the same difficulty: no epoch had
+        // closed when epoch 1's value was snapshotted, so both eased by the
+        // full clamp step from the baseline.
+        let epoch_1_difficulty = compute_epoch_blend_difficulty(
+            ClosedEpochLoad::new(0, 0),
+            blend_config.base_difficulty,
+            blend_config,
+        );
+
+        // Each tip's epoch 2 then reads its own epoch 0: 100 transactions over
+        // two blocks on one branch, 10 over two on the other. The shared
+        // ancestor's 4 transactions are counted once on each — never twice, and
+        // never leaked from the branch that lost.
+        assert_eq!(
+            busy_branch.epoch_state.blend_pow_difficulty,
+            compute_epoch_blend_difficulty(
+                ClosedEpochLoad::new(100, 2),
+                epoch_1_difficulty,
+                blend_config
+            )
+        );
+        assert_eq!(
+            quiet_branch.epoch_state.blend_pow_difficulty,
+            compute_epoch_blend_difficulty(
+                ClosedEpochLoad::new(10, 2),
+                epoch_1_difficulty,
+                blend_config
+            )
+        );
+        // The busier branch admits fewer `PoW`-backed messages.
+        assert!(
+            busy_branch.epoch_state.blend_pow_difficulty
+                < quiet_branch.epoch_state.blend_pow_difficulty
         );
     }
 
@@ -1490,7 +1578,11 @@ pub mod tests {
         assert_eq!(state.epoch_state.epoch, 3);
         assert_eq!(
             state.epoch_state.blend_pow_difficulty,
-            compute_epoch_blend_difficulty(0, 0, epoch_2_difficulty, blend_config)
+            compute_epoch_blend_difficulty(
+                ClosedEpochLoad::new(0, 0),
+                epoch_2_difficulty,
+                blend_config
+            )
         );
     }
 
