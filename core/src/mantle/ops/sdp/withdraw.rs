@@ -36,6 +36,7 @@ pub struct SDPWithdrawExecutionContext {
 
 impl ProvableOperation for SDPWithdrawOp {
     type Proof = ZkSignature;
+    const CODE: u8 = 0x21;
 }
 
 impl OperationGas<MainnetGasProfile> for SDPWithdrawOp {

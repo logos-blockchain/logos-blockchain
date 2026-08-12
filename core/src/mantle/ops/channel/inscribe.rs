@@ -88,6 +88,7 @@ pub struct InscriptionExecutionContext {
 
 impl ProvableOperation for InscriptionOp {
     type Proof = Ed25519Signature;
+    const CODE: u8 = 0x11;
 }
 
 impl OperationGas<MainnetGasProfile> for InscriptionOp {

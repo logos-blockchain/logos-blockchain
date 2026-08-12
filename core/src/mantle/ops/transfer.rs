@@ -87,6 +87,7 @@ pub struct TransferValidationContext<'a> {
 
 impl ProvableOperation for TransferOp {
     type Proof = ZkSignature;
+    const CODE: u8 = 0x00;
 }
 
 impl OperationGas<MainnetGasProfile> for TransferOp {

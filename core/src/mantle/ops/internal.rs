@@ -4,31 +4,33 @@ use super::{
     Op,
     channel::{config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp},
     leader_claim::LeaderClaimOp,
-    op_codes,
     sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
     serde_::OpWire,
     transfer::TransferOp,
 };
-use crate::mantle::ops::{
-    channel::{channel_transfer::ChannelTransferOp, withdraw::ChannelWithdrawOp},
-    pow::ClaimPowRewardOp,
+use crate::mantle::{
+    ledger::ProvableOperation as _,
+    ops::{
+        channel::{channel_transfer::ChannelTransferOp, withdraw::ChannelWithdrawOp},
+        pow::ClaimPowRewardOp,
+    },
 };
 
 /// Core set of supported Mantle operations and their serialization behaviour.
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum OpSer<'a> {
-    ChannelInscribe(OpWire<{ op_codes::INSCRIBE }, &'a InscriptionOp>),
-    ChannelConfig(OpWire<{ op_codes::CHANNEL_CONFIG }, &'a ChannelConfigOp>),
-    ChannelDeposit(OpWire<{ op_codes::CHANNEL_DEPOSIT }, &'a DepositOp>),
-    ChannelWithdraw(OpWire<{ op_codes::CHANNEL_WITHDRAW }, &'a ChannelWithdrawOp>),
-    ChannelTransfer(OpWire<{ op_codes::CHANNEL_TRANSFER }, &'a ChannelTransferOp>),
-    SDPDeclare(OpWire<{ op_codes::SDP_DECLARE }, &'a SDPDeclareOp>),
-    SDPWithdraw(OpWire<{ op_codes::SDP_WITHDRAW }, &'a SDPWithdrawOp>),
-    SDPActive(OpWire<{ op_codes::SDP_ACTIVE }, &'a SDPActiveOp>),
-    LeaderClaim(OpWire<{ op_codes::LEADER_CLAIM }, &'a LeaderClaimOp>),
-    Transfer(OpWire<{ op_codes::TRANSFER }, &'a TransferOp>),
-    ClaimPowReward(OpWire<{ op_codes::CLAIM_POW_REWARD }, &'a ClaimPowRewardOp>),
+    ChannelInscribe(OpWire<{ InscriptionOp::CODE }, &'a InscriptionOp>),
+    ChannelConfig(OpWire<{ ChannelConfigOp::CODE }, &'a ChannelConfigOp>),
+    ChannelDeposit(OpWire<{ DepositOp::CODE }, &'a DepositOp>),
+    ChannelWithdraw(OpWire<{ ChannelWithdrawOp::CODE }, &'a ChannelWithdrawOp>),
+    ChannelTransfer(OpWire<{ ChannelTransferOp::CODE }, &'a ChannelTransferOp>),
+    SDPDeclare(OpWire<{ SDPDeclareOp::CODE }, &'a SDPDeclareOp>),
+    SDPWithdraw(OpWire<{ SDPWithdrawOp::CODE }, &'a SDPWithdrawOp>),
+    SDPActive(OpWire<{ SDPActiveOp::CODE }, &'a SDPActiveOp>),
+    LeaderClaim(OpWire<{ LeaderClaimOp::CODE }, &'a LeaderClaimOp>),
+    Transfer(OpWire<{ TransferOp::CODE }, &'a TransferOp>),
+    ClaimPowReward(OpWire<{ ClaimPowRewardOp::CODE }, &'a ClaimPowRewardOp>),
 }
 
 impl<'a> From<&'a Op> for OpSer<'a> {
@@ -53,17 +55,17 @@ impl<'a> From<&'a Op> for OpSer<'a> {
 #[derive(Deserialize)]
 #[serde(untagged)]
 pub enum OpDe {
-    ChannelInscribe(OpWire<{ op_codes::INSCRIBE }, InscriptionOp>),
-    ChannelConfig(OpWire<{ op_codes::CHANNEL_CONFIG }, ChannelConfigOp>),
-    ChannelDeposit(OpWire<{ op_codes::CHANNEL_DEPOSIT }, DepositOp>),
-    ChannelWithdraw(OpWire<{ op_codes::CHANNEL_WITHDRAW }, ChannelWithdrawOp>),
-    ChannelTransfer(OpWire<{ op_codes::CHANNEL_TRANSFER }, ChannelTransferOp>),
-    SDPDeclare(OpWire<{ op_codes::SDP_DECLARE }, SDPDeclareOp>),
-    SDPWithdraw(OpWire<{ op_codes::SDP_WITHDRAW }, SDPWithdrawOp>),
-    SDPActive(OpWire<{ op_codes::SDP_ACTIVE }, SDPActiveOp>),
-    LeaderClaim(OpWire<{ op_codes::LEADER_CLAIM }, LeaderClaimOp>),
-    Transfer(OpWire<{ op_codes::TRANSFER }, TransferOp>),
-    ClaimPoWReward(OpWire<{ op_codes::CLAIM_POW_REWARD }, ClaimPowRewardOp>),
+    ChannelInscribe(OpWire<{ InscriptionOp::CODE }, InscriptionOp>),
+    ChannelConfig(OpWire<{ ChannelConfigOp::CODE }, ChannelConfigOp>),
+    ChannelDeposit(OpWire<{ DepositOp::CODE }, DepositOp>),
+    ChannelWithdraw(OpWire<{ ChannelWithdrawOp::CODE }, ChannelWithdrawOp>),
+    ChannelTransfer(OpWire<{ ChannelTransferOp::CODE }, ChannelTransferOp>),
+    SDPDeclare(OpWire<{ SDPDeclareOp::CODE }, SDPDeclareOp>),
+    SDPWithdraw(OpWire<{ SDPWithdrawOp::CODE }, SDPWithdrawOp>),
+    SDPActive(OpWire<{ SDPActiveOp::CODE }, SDPActiveOp>),
+    LeaderClaim(OpWire<{ LeaderClaimOp::CODE }, LeaderClaimOp>),
+    Transfer(OpWire<{ TransferOp::CODE }, TransferOp>),
+    ClaimPoWReward(OpWire<{ ClaimPowRewardOp::CODE }, ClaimPowRewardOp>),
 }
 
 impl From<OpDe> for Op {

@@ -6,6 +6,7 @@ use crate::{
     mantle::{
         GasProfile,
         gas::{Gas, OperationGas},
+        ledger::ProvableOperation as _,
         ops::{
             OPERATION_ID_V1,
             channel::{
@@ -14,7 +15,6 @@ use crate::{
             },
             internal::{OpDe, OpSer},
             leader_claim::LeaderClaimOp,
-            op_codes,
             pow::ClaimPowRewardOp,
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferOp,
@@ -140,33 +140,33 @@ impl BinaryDecode for Op {
         let (input, opcode) = u8::decode(input, &())?;
 
         match opcode {
-            op_codes::INSCRIBE => InscriptionOp::decode(input, &())
+            InscriptionOp::CODE => InscriptionOp::decode(input, &())
                 .map(|(rest, op)| (rest, Self::ChannelInscribe(op))),
-            op_codes::CHANNEL_CONFIG => ChannelConfigOp::decode(input, &())
+            ChannelConfigOp::CODE => ChannelConfigOp::decode(input, &())
                 .map(|(rest, op)| (rest, Self::ChannelConfig(op))),
-            op_codes::CHANNEL_DEPOSIT => {
+            DepositOp::CODE => {
                 DepositOp::decode(input, &()).map(|(rest, op)| (rest, Self::ChannelDeposit(op)))
             }
-            op_codes::CHANNEL_WITHDRAW => ChannelWithdrawOp::decode(input, &())
+            ChannelWithdrawOp::CODE => ChannelWithdrawOp::decode(input, &())
                 .map(|(rest, op)| (rest, Self::ChannelWithdraw(op))),
-            op_codes::CHANNEL_TRANSFER => ChannelTransferOp::decode(input, &())
+            ChannelTransferOp::CODE => ChannelTransferOp::decode(input, &())
                 .map(|(rest, op)| (rest, Self::ChannelTransfer(op))),
-            op_codes::SDP_DECLARE => {
+            SDPDeclareOp::CODE => {
                 SDPDeclareOp::decode(input, &()).map(|(rest, op)| (rest, Self::SDPDeclare(op)))
             }
-            op_codes::SDP_WITHDRAW => {
+            SDPWithdrawOp::CODE => {
                 SDPWithdrawOp::decode(input, &()).map(|(rest, op)| (rest, Self::SDPWithdraw(op)))
             }
-            op_codes::SDP_ACTIVE => {
+            SDPActiveOp::CODE => {
                 SDPActiveOp::decode(input, &()).map(|(rest, op)| (rest, Self::SDPActive(op)))
             }
-            op_codes::LEADER_CLAIM => {
+            LeaderClaimOp::CODE => {
                 LeaderClaimOp::decode(input, &()).map(|(rest, op)| (rest, Self::LeaderClaim(op)))
             }
-            op_codes::TRANSFER => {
+            TransferOp::CODE => {
                 TransferOp::decode(input, &()).map(|(rest, op)| (rest, Self::Transfer(op)))
             }
-            op_codes::CLAIM_POW_REWARD => ClaimPowRewardOp::decode(input, &())
+            ClaimPowRewardOp::CODE => ClaimPowRewardOp::decode(input, &())
                 .map(|(rest, op)| (rest, Self::ClaimPowReward(op))),
             other => Err(DecodeError::unknown_discriminant::<Self>(u64::from(other))),
         }
@@ -222,17 +222,17 @@ impl Op {
 
     const fn code(&self) -> u8 {
         match self {
-            Self::ChannelInscribe(_) => op_codes::INSCRIBE,
-            Self::ChannelConfig(_) => op_codes::CHANNEL_CONFIG,
-            Self::ChannelDeposit(_) => op_codes::CHANNEL_DEPOSIT,
-            Self::ChannelWithdraw(_) => op_codes::CHANNEL_WITHDRAW,
-            Self::ChannelTransfer(_) => op_codes::CHANNEL_TRANSFER,
-            Self::SDPDeclare(_) => op_codes::SDP_DECLARE,
-            Self::SDPWithdraw(_) => op_codes::SDP_WITHDRAW,
-            Self::SDPActive(_) => op_codes::SDP_ACTIVE,
-            Self::LeaderClaim(_) => op_codes::LEADER_CLAIM,
-            Self::Transfer(_) => op_codes::TRANSFER,
-            Self::ClaimPowReward(_) => op_codes::CLAIM_POW_REWARD,
+            Self::ChannelInscribe(_) => InscriptionOp::CODE,
+            Self::ChannelConfig(_) => ChannelConfigOp::CODE,
+            Self::ChannelDeposit(_) => DepositOp::CODE,
+            Self::ChannelWithdraw(_) => ChannelWithdrawOp::CODE,
+            Self::ChannelTransfer(_) => ChannelTransferOp::CODE,
+            Self::SDPDeclare(_) => SDPDeclareOp::CODE,
+            Self::SDPWithdraw(_) => SDPWithdrawOp::CODE,
+            Self::SDPActive(_) => SDPActiveOp::CODE,
+            Self::LeaderClaim(_) => LeaderClaimOp::CODE,
+            Self::Transfer(_) => TransferOp::CODE,
+            Self::ClaimPowReward(_) => ClaimPowRewardOp::CODE,
         }
     }
 }

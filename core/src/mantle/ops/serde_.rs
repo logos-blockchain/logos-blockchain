@@ -25,6 +25,8 @@ impl<'de, const CODE: u8> Deserialize<'de> for ConstU8<CODE> {
 }
 
 /// Shared `{ opcode, payload }` wire shape used in both directions.
+// TODO: If `Inner` is always a ProvableOperation, then we can leverage `: ProvableOperation` toOp
+//  satisfy the `CODE`.
 #[derive(Serialize, Deserialize)]
 pub struct OpWire<const CODE: u8, Inner> {
     opcode: ConstU8<CODE>,

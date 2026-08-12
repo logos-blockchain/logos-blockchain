@@ -265,6 +265,7 @@ impl ClaimPoWRewardExecutionContext {
 
 impl ProvableOperation for ClaimPowRewardOp {
     type Proof = NoOpProof;
+    const CODE: u8 = 0x40;
 }
 
 impl OperationGas<MainnetGasProfile> for ClaimPowRewardOp {

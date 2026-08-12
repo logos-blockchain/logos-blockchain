@@ -72,6 +72,7 @@ pub struct DepositExecutionContext {
 
 impl ProvableOperation for DepositOp {
     type Proof = ZkSignature;
+    const CODE: u8 = 0x12;
 }
 
 impl OperationGas<MainnetGasProfile> for DepositOp {
