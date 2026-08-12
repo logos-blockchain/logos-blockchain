@@ -1,8 +1,8 @@
 use futures::stream;
-use libp2p::{PeerId, Stream, StreamProtocol};
+use libp2p::{PeerId, StreamProtocol};
 use libp2p_stream::Control;
 use tokio::{sync::oneshot, time, time::Duration};
-use tracing::{debug, error, warn};
+use tracing::{error, warn};
 
 use crate::{
     DownloadBlocksRequest, GetTipResponse,
@@ -19,64 +19,36 @@ use crate::{
 pub struct Downloader;
 
 impl Downloader {
-    /// Open a stream to the peer and send the tip request.
-    ///
-    /// On failure the error is delivered to the requester through
-    /// `reply_sender` and `None` is returned, so the caller never sees the
-    /// error itself.
     pub async fn send_tip_request(
         peer_id: PeerId,
         control: &mut Control,
         protocol_name: StreamProtocol,
         reply_sender: oneshot::Sender<Result<GetTipResponse, ChainSyncError>>,
-    ) -> Option<TipRequestStream> {
+    ) -> Result<TipRequestStream, ChainSyncError> {
+        let mut stream = open_stream(peer_id, control, protocol_name).await?;
+
         let tip_request = RequestMessage::GetTip;
-        match Self::open_and_send(peer_id, control, protocol_name, &tip_request).await {
-            Ok(stream) => Some(TipRequestStream::new(peer_id, stream, reply_sender)),
-            Err(e) => {
-                if let Err(unsent) = reply_sender.send(Err(e)) {
-                    debug!("Requester is gone; discarding tip request failure: {unsent:?}");
-                }
-                None
-            }
-        }
+        send_message(peer_id, &mut stream, &tip_request).await?;
+
+        let request_stream = TipRequestStream::new(peer_id, stream, reply_sender);
+        Ok(request_stream)
     }
 
-    /// Open a stream to the peer and send the blocks download request.
-    ///
-    /// On failure the error is delivered to the requester through
-    /// `reply_sender` as a single-item stream and `None` is returned, so the
-    /// caller never sees the error itself.
     pub async fn send_download_request(
         peer_id: PeerId,
         mut control: Control,
         request: DownloadBlocksRequest,
         protocol_name: StreamProtocol,
         reply_sender: oneshot::Sender<BoxedStream<Result<SerialisedBlock, ChainSyncError>>>,
-    ) -> Option<BlocksRequestStream> {
-        let download_request = RequestMessage::DownloadBlocksRequest(request);
-        match Self::open_and_send(peer_id, &mut control, protocol_name, &download_request).await {
-            Ok(stream) => Some(BlocksRequestStream::new(peer_id, stream, reply_sender)),
-            Err(e) => {
-                let error_stream: BoxedStream<Result<SerialisedBlock, ChainSyncError>> =
-                    Box::new(stream::iter([Err(e.clone())]));
-                if reply_sender.send(error_stream).is_err() {
-                    debug!("Requester is gone; discarding block download failure: {e}");
-                }
-                None
-            }
-        }
-    }
+    ) -> Result<BlocksRequestStream, ChainSyncError> {
+        let mut stream = open_stream(peer_id, &mut control, protocol_name).await?;
 
-    async fn open_and_send(
-        peer_id: PeerId,
-        control: &mut Control,
-        protocol_name: StreamProtocol,
-        request: &RequestMessage,
-    ) -> Result<Stream, ChainSyncError> {
-        let mut stream = open_stream(peer_id, control, protocol_name).await?;
-        send_message(peer_id, &mut stream, request).await?;
-        Ok(stream)
+        let download_request = RequestMessage::DownloadBlocksRequest(request);
+
+        send_message(peer_id, &mut stream, &download_request).await?;
+
+        let request_stream = BlocksRequestStream::new(peer_id, stream, reply_sender);
+        Ok(request_stream)
     }
 
     pub async fn receive_tip(

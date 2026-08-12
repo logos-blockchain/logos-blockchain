@@ -31,14 +31,9 @@ use crate::{
     messages::{GetTipResponse, SerialisedBlock},
 };
 
-/// Resolves to `None` when the request failed; the error is delivered to the
-/// requester through the reply channel by
-/// [`Downloader::send_download_request`].
-type SendingBlocksRequestsFuture = BoxFuture<'static, Option<BlocksRequestStream>>;
+type SendingBlocksRequestsFuture = BoxFuture<'static, Result<BlocksRequestStream, ChainSyncError>>;
 
-/// Resolves to `None` when the request failed; the error is delivered to the
-/// requester through the reply channel by [`Downloader::send_tip_request`].
-type SendingTipRequestFuture = BoxFuture<'static, Option<TipRequestStream>>;
+type SendingTipRequestFuture = BoxFuture<'static, Result<TipRequestStream, ChainSyncError>>;
 
 type ReceivingBlocksResponsesFuture = BoxFuture<'static, Result<(), ChainSyncError>>;
 
@@ -449,16 +444,26 @@ impl NetworkBehaviour for Behaviour {
         }
 
         if let Poll::Ready(Some(result)) = self.sending_block_requests.poll_next_unpin(cx) {
-            if let Some(request_stream) = result {
-                self.handle_blocks_request_available(request_stream);
+            match result {
+                Ok(request_stream) => {
+                    self.handle_blocks_request_available(request_stream);
+                }
+                Err(e) => {
+                    debug!("Error while processing block download request: {}", e);
+                }
             }
 
             return Poll::Pending;
         }
 
         if let Poll::Ready(Some(result)) = self.sending_tip_requests.poll_next_unpin(cx) {
-            if let Some(request_stream) = result {
-                self.handle_tip_request_available(request_stream);
+            match result {
+                Ok(request_stream) => {
+                    self.handle_tip_request_available(request_stream);
+                }
+                Err(e) => {
+                    debug!("Error while processing tip request: {}", e);
+                }
             }
 
             return Poll::Pending;
