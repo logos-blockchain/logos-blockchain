@@ -8,10 +8,15 @@ use futures::{StreamExt as _, future::join_all};
 use lb_common_http_client::ApiBlock;
 use lb_core::{
     header::HeaderId,
-    mantle::{traits::Hashable as _, transactions::GasPrices},
+    mantle::{
+        SignedMantleTx,
+        gas::{GasCost, MainnetGasProfile, TxGasCalculator as _},
+        traits::Hashable as _,
+        transactions::{GasPrices, builder::MantleTxBuilder},
+    },
 };
 use lb_http_api_common::{
-    bodies::wallet::transfer_funds::WalletTransferFundsRequestBody,
+    bodies::wallet::{fund::WalletFundRequestBody, transfer_funds::WalletTransferFundsRequestBody},
     queries::{BlockFilter, BlockSortOrder, BlocksStreamQuery},
 };
 use lb_testing_framework::{NodeHttpClient, configs::wallet::WalletAccount};
@@ -23,7 +28,7 @@ use crate::{
     cucumber::{
         error::{StepError, StepResult},
         steps::TARGET,
-        world::{CucumberWorld, WalletType},
+        world::{CucumberWorld, PreparedPriorityFee, WalletType},
     },
 };
 
@@ -59,6 +64,129 @@ pub async fn prepare_self_transfer_with_tip(
         prices.execution_base_gas_price, prices.storage_gas_price,
     );
 
+    world.remember_prepared_transaction(transaction_alias, signed_tx);
+
+    Ok(())
+}
+
+/// Funds a self-transfer through `/wallet/fund` with a percentage reserve,
+/// keeps it unsigned by the caller, and records the initial fee arithmetic at
+/// the exact funding tip for the epoch-crossing assertion.
+pub async fn prepare_wallet_funded_self_transfer_with_priority_fee(
+    world: &mut CucumberWorld,
+    step: &Step,
+    wallet_name: &str,
+    node_name: &str,
+    transaction_alias: String,
+    priority_fee_percent: u64,
+) -> StepResult {
+    let account = user_wallet_account(world, step, wallet_name)?;
+    let client = world.resolve_node_http_client(node_name)?;
+    let funding_pk = account.public_key();
+    let response = client
+        .fund_tx(WalletFundRequestBody {
+            tip: None,
+            tx_builder: MantleTxBuilder::new(),
+            change_public_key: funding_pk,
+            funding_public_keys: vec![funding_pk],
+            max_tx_fee: GasCost::new(u64::MAX),
+            priority_fee_percent,
+        })
+        .await
+        .map_err(|source| StepError::StepFail {
+            message: format!(
+                "Step `{}` error: percentage-funded transaction request failed: {source}",
+                step.value
+            ),
+        })?;
+    let prices_at_funding_tip = client
+        .gas_prices(Some(response.tip))
+        .await
+        .map_err(|source| StepError::StepFail {
+            message: format!(
+                "Step `{}` error: gas prices at funding tip request failed: {source}",
+                step.value
+            ),
+        })?;
+    let prices = GasPrices {
+        execution_base_gas_price: prices_at_funding_tip.execution_base_gas_price,
+        storage_gas_price: prices_at_funding_tip.storage_gas_price,
+    };
+
+    let transfer_proof = response
+        .transfer_proof
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!(
+                "Step `{}` error: percentage-funded self-transfer did not return a transfer proof",
+                step.value
+            ),
+        })?;
+    let signed_tx = SignedMantleTx::new(response.funded_tx, [transfer_proof].into())
+        .preverify()
+        .map_err(|source| StepError::StepFail {
+            message: format!(
+                "Step `{}` error: percentage-funded self-transfer failed verification: {source}",
+                step.value
+            ),
+        })?;
+    let initial_mandatory_fee = signed_tx
+        .total_gas_cost::<MainnetGasProfile>(&prices)
+        .map_err(|source| StepError::StepFail {
+            message: format!(
+                "Step `{}` error: initial mandatory fee calculation failed: {source}",
+                step.value
+            ),
+        })?
+        .into_inner();
+    let initial_reserve =
+        fee_spec::priority_fee_amount(initial_mandatory_fee, priority_fee_percent).map_err(
+            |message| StepError::StepFail {
+                message: format!("Step `{}` error: {message}", step.value),
+            },
+        )?;
+    let funded_fee = fee_spec::net_balance_against(&world.genesis_block_utxos, &signed_tx)
+        .map_err(|message| StepError::StepFail {
+            message: format!("Step `{}` error: {message}", step.value),
+        })?;
+    let expected_funded_fee = initial_mandatory_fee
+        .checked_add(initial_reserve)
+        .ok_or_else(|| StepError::StepFail {
+            message: format!(
+                "Step `{}` error: funded fee arithmetic overflowed",
+                step.value
+            ),
+        })?;
+    if funded_fee != expected_funded_fee {
+        return Err(StepError::StepFail {
+            message: format!(
+                "Step `{}` error: funded fee {funded_fee} does not equal mandatory fee \
+                 {initial_mandatory_fee} plus {priority_fee_percent}% reserve {initial_reserve}",
+                step.value
+            ),
+        });
+    }
+
+    info!(
+        target: TARGET,
+        "Prepared wallet-funded self-transfer `{transaction_alias}` ({:?}) from wallet \
+         '{wallet_name}' with {priority_fee_percent}% reserve: mandatory={initial_mandatory_fee}, \
+         reserve={initial_reserve}, funded={funded_fee}, prices execution={} storage={}",
+        signed_tx.hash(),
+        prices.execution_base_gas_price.into_inner(),
+        prices.storage_gas_price.into_inner(),
+    );
+
+    world.remember_prepared_priority_fee(
+        transaction_alias.clone(),
+        PreparedPriorityFee {
+            percent: priority_fee_percent,
+            initial_mandatory_fee,
+            initial_reserve,
+            funded_fee,
+            initial_execution_price: prices.execution_base_gas_price.into_inner(),
+            initial_storage_price: prices.storage_gas_price.into_inner(),
+        },
+    );
     world.remember_prepared_transaction(transaction_alias, signed_tx);
 
     Ok(())

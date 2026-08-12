@@ -46,6 +46,17 @@ pub const SPEC_BASE_FEE_DENOMINATOR: u128 = 12_773_840;
 /// Gas Cost Determination v1.5.1: a transfer costs 590 gas.
 pub const SPEC_TRANSFER_GAS: u64 = 590;
 
+/// Computes a percentage reserve with checked widened arithmetic and integer
+/// ceiling, matching the transaction funding rule.
+pub fn priority_fee_amount(mandatory_fee: u64, priority_fee_percent: u64) -> Result<u64, String> {
+    let numerator = u128::from(mandatory_fee)
+        .checked_mul(u128::from(priority_fee_percent))
+        .and_then(|value| value.checked_add(99))
+        .ok_or_else(|| "priority fee percentage arithmetic overflowed".to_owned())?;
+    u64::try_from(numerator / 100)
+        .map_err(|_| "priority fee percentage result does not fit in u64".to_owned())
+}
+
 /// The spec's execution price update, written out from the spec document.
 #[derive(Debug, Clone)]
 pub struct ExecutionMarketReference {

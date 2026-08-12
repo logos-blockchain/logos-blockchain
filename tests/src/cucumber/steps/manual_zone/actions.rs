@@ -64,7 +64,7 @@ const SEQUENCER_READY_TIMEOUT: Duration = Duration::from_mins(2);
 const SEQUENCER_READY_POLL_TIMEOUT: Duration = Duration::from_secs(10);
 const SEQUENCER_READY_HEIGHT_ADVANCE_TIMEOUT: Duration = Duration::from_secs(30);
 const ZONE_SECURITY_PARAM: u32 = 5;
-const ZONE_TEST_PRIORITY_FEE: u64 = 400;
+const ZONE_TEST_PRIORITY_FEE_PERCENT: u64 = 12;
 
 pub(super) enum DriveMode {
     Passive {
@@ -752,7 +752,7 @@ fn sequencer_funding(
     Ok(FundingConfig {
         funding_pk,
         max_tx_fee: GasCost::new(u64::MAX),
-        priority_fee: ZONE_TEST_PRIORITY_FEE,
+        priority_fee_percent: ZONE_TEST_PRIORITY_FEE_PERCENT,
     })
 }
 

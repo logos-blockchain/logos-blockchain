@@ -139,41 +139,47 @@ impl MantleTxBuilder {
         Ok(self)
     }
 
-    /// `priority_fee` is deliberately left unreturned: the resulting excess
-    /// balance above the mandatory fee is the transaction's execution tip.
+    /// Return a positive change output while reserving the requested
+    /// percentage of the final transaction's mandatory fee. The dummy output
+    /// makes the mandatory fee calculation include the change output before
+    /// the percentage is calculated.
     pub fn return_change<G: GasProfile>(
         self,
         context: &MantleTxContext,
         change_pk: ZkPublicKey,
-        priority_fee: Value,
+        priority_fee_percent: u64,
     ) -> Result<Option<Self>, TxBuilderError> {
-        // Calculate the funding delta with a dummy change note to account for
-        // the gas cost increase from adding the output
-        let delta_with_change = self.with_dummy_change_note()?.funding_delta::<G>(context)?;
-        let delta_target = i128::from(priority_fee);
+        // Calculate the mandatory fee with a dummy change note so the reserve
+        // is based on the final transaction shape.
+        let candidate = self.with_dummy_change_note()?;
+        let mandatory_fee = candidate.minimum_gas_cost::<G>(context)?.into_inner();
+        let priority_fee_amount = Self::priority_fee_amount(mandatory_fee, priority_fee_percent)?;
+        let required_fee = mandatory_fee
+            .checked_add(priority_fee_amount)
+            .ok_or(GasOverflow)?;
+        let available_change = self.net_balance() - i128::from(required_fee);
 
-        match delta_with_change.cmp(&delta_target) {
-            Ordering::Less | Ordering::Equal => {
-                // NOTE: the `Equal` is important here since we
-                // cannot create zero-valued outputs.
-
-                // The increase in cost due to the change note means
-                // we have insufficient funds, need more UTXO's.
+        match available_change.cmp(&1) {
+            Ordering::Less => {
+                // The change output would be zero-valued or unaffordable, so
+                // the caller must try a larger set of funding inputs.
                 Ok(None)
             }
-            Ordering::Greater => {
-                // We have enough balance to cover the increase in cost from the change
-                // note. Use return_change which properly accounts for the gas cost
-                // increase from adding the change output.
-                let change = u64::try_from(delta_with_change - delta_target)
-                    .expect("Positive delta must fit in u64");
-
+            Ordering::Equal | Ordering::Greater => {
+                let change = u64::try_from(available_change).expect("change must fit in u64");
                 let tx_with_change = self.add_ledger_output(Note {
                     value: change,
                     pk: change_pk,
                 })?;
 
-                assert_eq!(tx_with_change.funding_delta::<G>(context)?, delta_target);
+                let final_mandatory_fee =
+                    tx_with_change.minimum_gas_cost::<G>(context)?.into_inner();
+                let final_priority_fee_amount =
+                    Self::priority_fee_amount(final_mandatory_fee, priority_fee_percent)?;
+                let final_required_fee = final_mandatory_fee
+                    .checked_add(final_priority_fee_amount)
+                    .ok_or(GasOverflow)?;
+                assert_eq!(tx_with_change.net_balance(), i128::from(final_required_fee));
 
                 Ok(Some(tx_with_change))
             }
@@ -251,6 +257,34 @@ impl MantleTxBuilder {
         context: &MantleTxContext,
     ) -> Result<i128, TxBuilderError> {
         Ok(self.net_balance() - i128::from(self.minimum_gas_cost::<G>(context)?.into_inner()))
+    }
+
+    /// Returns the balance remaining after the mandatory fee and the
+    /// percentage-based priority fee reserve.
+    pub fn funding_delta_with_priority_fee<G: GasProfile>(
+        &self,
+        context: &MantleTxContext,
+        priority_fee_percent: u64,
+    ) -> Result<i128, TxBuilderError> {
+        let mandatory_fee = self.minimum_gas_cost::<G>(context)?.into_inner();
+        let priority_fee_amount = Self::priority_fee_amount(mandatory_fee, priority_fee_percent)?;
+        let required_fee = mandatory_fee
+            .checked_add(priority_fee_amount)
+            .ok_or(GasOverflow)?;
+        Ok(self.net_balance() - i128::from(required_fee))
+    }
+
+    /// Calculates the priority fee amount for a mandatory fee using integer
+    /// arithmetic, rounding up to the next whole fee unit.
+    fn priority_fee_amount(
+        mandatory_fee: Value,
+        priority_fee_percent: u64,
+    ) -> Result<Value, TxBuilderError> {
+        let numerator = u128::from(mandatory_fee)
+            .checked_mul(u128::from(priority_fee_percent))
+            .and_then(|value| value.checked_add(99))
+            .ok_or(GasOverflow)?;
+        Value::try_from(numerator / 100).map_err(|_| GasOverflow.into())
     }
 
     /// Returns all note IDs already consumed or locked by this transaction,
@@ -662,5 +696,14 @@ mod tests {
             "should contain transfer input"
         );
         assert_eq!(consumed_or_locked.len(), 4);
+    }
+
+    #[test]
+    fn priority_fee_percentage_rounds_up_without_a_cap() {
+        assert_eq!(MantleTxBuilder::priority_fee_amount(0, 12).unwrap(), 0);
+        assert_eq!(MantleTxBuilder::priority_fee_amount(1, 12).unwrap(), 1);
+        assert_eq!(MantleTxBuilder::priority_fee_amount(8, 12).unwrap(), 1);
+        assert_eq!(MantleTxBuilder::priority_fee_amount(9, 12).unwrap(), 2);
+        assert_eq!(MantleTxBuilder::priority_fee_amount(100, 101).unwrap(), 101);
     }
 }

@@ -158,7 +158,9 @@ pub enum WalletMsg {
         tx_builder: MantleTxBuilder,
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
-        priority_fee: Value,
+        /// Percentage of the final mandatory fee reserved as a priority-fee
+        /// reserve; only the unused reserve becomes the effective tip.
+        priority_fee_percent: u64,
         resp_tx: Sender<Result<TipResponse<MantleTxBuilder>, WalletServiceError>>,
     },
     BuildLeaderClaimTx {
@@ -535,7 +537,7 @@ where
                 tx_builder,
                 change_pk,
                 funding_pks,
-                priority_fee,
+                priority_fee_percent,
                 resp_tx,
             } => {
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
@@ -563,7 +565,7 @@ where
                     change_pk,
                     funding_pks,
                     &context,
-                    priority_fee,
+                    priority_fee_percent,
                 ) {
                     Ok(funded) => funded,
                     Err(err) => {

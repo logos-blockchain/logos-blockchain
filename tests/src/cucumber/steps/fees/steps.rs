@@ -198,6 +198,29 @@ async fn step_prepare_self_transfer_with_tip(
     .await
 }
 
+#[when(
+    expr = "I prepare a wallet-funded self-transfer with priority fee percentage {int} from \
+            wallet {string} via node {string} as {string}"
+)]
+async fn step_prepare_wallet_funded_self_transfer_with_priority_fee(
+    world: &mut CucumberWorld,
+    step: &Step,
+    priority_fee_percent: u64,
+    wallet_name: String,
+    node_name: String,
+    transaction_alias: String,
+) -> StepResult {
+    actions::prepare_wallet_funded_self_transfer_with_priority_fee(
+        world,
+        step,
+        &wallet_name,
+        &node_name,
+        transaction_alias,
+        priority_fee_percent,
+    )
+    .await
+}
+
 #[when(expr = "I submit prepared transaction {string} via node {string}")]
 async fn step_submit_prepared_transaction(
     world: &mut CucumberWorld,
@@ -228,6 +251,31 @@ async fn step_prepared_transaction_tip_absorbed_fee_increase(
         step,
         &transaction_alias,
         original_tip,
+        &node_name,
+    )
+    .await
+}
+
+#[then(
+    expr = "transaction {string} prepared with a {int}% priority fee reserve remains funded \
+            with a smaller reserve at current prices on node {string}"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "cucumber step entrypoints must take `&mut World`"
+)]
+async fn step_prepared_transaction_percentage_reserve_absorbed_fee_increase(
+    world: &mut CucumberWorld,
+    step: &Step,
+    transaction_alias: String,
+    configured_percent: u64,
+    node_name: String,
+) -> StepResult {
+    assertions::prepared_transaction_percentage_reserve_absorbed_fee_increase(
+        world,
+        step,
+        &transaction_alias,
+        configured_percent,
         &node_name,
     )
     .await
