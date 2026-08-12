@@ -510,8 +510,11 @@ mod pol_tests {
     use lb_cryptarchia_engine::EpochConfig;
     use lb_groth16::{Fr, fr_from_bytes_unchecked};
     use lb_key_management_system_service::keys::{UnsecuredZkKey, ZkKey};
-    use lb_ledger::mantle::sdp::{
-        Config as SdpConfig, ServiceRewardsParameters, rewards::blend::RewardsParameters,
+    use lb_ledger::{
+        config::{BlendPoWConfig, PoWConfig},
+        mantle::sdp::{
+            Config as SdpConfig, ServiceRewardsParameters, rewards::blend::RewardsParameters,
+        },
     };
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
     use lb_wallet_service::{WalletMsg, WalletServiceSettings};
@@ -758,6 +761,14 @@ mod pol_tests {
                 },
             },
             faucet_pk: None,
+            pow_config: PoWConfig {
+                blend: BlendPoWConfig {
+                    damping_den_offset: 0,
+                    damping_num: 1.try_into().unwrap(),
+                    max_step: 1.try_into().unwrap(),
+                    target_transactions_per_block: 1.try_into().unwrap(),
+                },
+            },
         }
     }
 

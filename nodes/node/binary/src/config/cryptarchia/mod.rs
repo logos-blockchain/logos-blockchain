@@ -68,6 +68,18 @@ impl ServiceConfig {
                     blend: blend_rewards_params,
                 },
             },
+            pow_config: lb_ledger::config::PoWConfig {
+                blend: lb_ledger::config::BlendPoWConfig {
+                    damping_den_offset: self.deployment.pow_config.blend.damping_den_offset,
+                    damping_num: self.deployment.pow_config.blend.damping_num,
+                    max_step: self.deployment.pow_config.blend.max_step,
+                    target_transactions_per_block: self
+                        .deployment
+                        .pow_config
+                        .blend
+                        .target_transactions_per_block,
+                },
+            },
         };
 
         let chain_service_settings = lb_chain_service::CryptarchiaSettings {

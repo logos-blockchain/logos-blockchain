@@ -1,4 +1,4 @@
-mod config;
+pub mod config;
 // The ledger is split into two modules:
 // - `cryptarchia`: the base functionalities needed by the Cryptarchia consensus
 //   algorithm, including a minimal UTxO model.
