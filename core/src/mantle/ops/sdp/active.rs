@@ -35,6 +35,7 @@ pub struct SDPActiveExecutionContext {
 
 impl ProvableOperation for SDPActiveOp {
     type Proof = ZkSignature;
+    const CODE: u8 = 0x22;
 }
 
 impl OperationGas<MainnetGasProfile> for SDPActiveOp {

@@ -50,6 +50,7 @@ pub mod verification_mode {
 
 pub trait ProvableOperation {
     type Proof;
+    const CODE: u8; // TODO: Compile time check that this is unique across all operations?
 }
 
 pub trait PreverifiableOperation<Mode: verification_mode::VerificationMode>:

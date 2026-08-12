@@ -187,6 +187,7 @@ pub struct LeaderClaimExecutionContext {
 
 impl ProvableOperation for LeaderClaimOp {
     type Proof = Groth16LeaderClaimProof;
+    const CODE: u8 = 0x30;
 }
 
 impl OperationGas<MainnetGasProfile> for LeaderClaimOp {

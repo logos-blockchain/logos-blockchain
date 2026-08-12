@@ -54,6 +54,7 @@ impl ProvableOperation for ChannelWithdrawOp {
     // `SignedOperationExecutionGas::gas_multiplier` below reads this proof's
     // signature count. If this changes, update that too.
     type Proof = ChannelMultiSigProof;
+    const CODE: u8 = 0x13;
 }
 
 impl OperationGas<MainnetGasProfile> for ChannelWithdrawOp {

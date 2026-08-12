@@ -159,6 +159,7 @@ pub struct SDPDeclareExecutionContext {
 
 impl ProvableOperation for SDPDeclareOp {
     type Proof = ZkAndEd25519Proof;
+    const CODE: u8 = 0x20;
 }
 
 impl OperationGas<MainnetGasProfile> for SDPDeclareOp {
