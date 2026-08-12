@@ -1288,6 +1288,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        block::SignedHeader,
         header::HeaderId,
         mantle::{
             CryptarchiaParameter, GenesisTime, NoteId,
@@ -1792,6 +1793,7 @@ mod tests {
         let decoded: GenesisBlock = serde_json::from_str(&json).expect("genesis block deserialize");
 
         assert_eq!(decoded.header().slot(), Slot::genesis());
+        assert!(decoded.uncle_headers().is_empty());
         assert_eq!(decoded.transactions_iter().len(), 1);
         assert_eq!(decoded.header().id(), block.header().id());
     }
@@ -1810,6 +1812,30 @@ mod tests {
         let err = serde_json::from_value::<GenesisBlock>(value).unwrap_err();
         assert!(
             err.to_string().contains("expected genesis slot"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn genesis_block_deserialize_rejects_nonempty_uncle_references() {
+        // Build a valid genesis block first.
+        let block = GenesisBlockBuilder::new()
+            .with_genesis_tx(make_genesis_tx(vec![]))
+            .build();
+
+        // Reference an uncle, which is not allowed in a genesis block.
+        let mut value = serde_json::to_value(&block).expect("to_value should work");
+        let uncle = serde_json::to_value(SignedHeader::new(
+            block.header().clone(),
+            *block.signature(),
+        ))
+        .expect("to_value should work");
+        value["uncle_headers"] = serde_json::Value::Array(vec![uncle]);
+
+        let err = serde_json::from_value::<GenesisBlock>(value).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("genesis block must not reference uncles"),
             "unexpected error: {err}"
         );
     }
