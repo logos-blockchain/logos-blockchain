@@ -32,7 +32,8 @@ use crate::{
 };
 
 /// Resolves to `None` when the request failed; the error is delivered to the
-/// requester through the reply channel by [`Downloader::send_download_request`].
+/// requester through the reply channel by
+/// [`Downloader::send_download_request`].
 type SendingBlocksRequestsFuture = BoxFuture<'static, Option<BlocksRequestStream>>;
 
 /// Resolves to `None` when the request failed; the error is delivered to the
@@ -433,6 +434,10 @@ impl NetworkBehaviour for Behaviour {
             .on_connection_handler_event(peer_id, conn_id, event);
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     fn poll(
         &mut self,
         cx: &mut Context<'_>,
