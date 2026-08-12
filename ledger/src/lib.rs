@@ -245,8 +245,15 @@ impl LedgerState {
         // block's id is known — unlike a proposer's direct
         // `try_apply_header` call for a block still being built.
         state.mantle_ledger.add_seen_block(block_id.into(), slot);
-        let (mut state, tx_events) = state.try_apply_contents::<_, _, Profile>(config, txs)?;
-        state.update_pow_difficulty(
+        // Count the block's transactions into the epoch totals the Blend `PoW`
+        // difficulty is retargeted from, for the same reason as above: only a
+        // block that is actually applied, contents included, belongs in the
+        // epoch's average.
+        let mut txs_in_block = 0u64;
+        let (mut state, tx_events) = state
+            .try_apply_contents::<_, _, Profile>(config, txs.inspect(|_| txs_in_block += 1))?;
+        state.cryptarchia_ledger.record_block_txs(txs_in_block);
+        state.update_pow_reward_difficulty(
             // count all claimed rewards
             tx_events
                 .iter()
@@ -774,7 +781,7 @@ impl LedgerState {
         Ok((self, balance, tx_events))
     }
 
-    fn update_pow_difficulty(&mut self, claims_in_block: u64) {
+    fn update_pow_reward_difficulty(&mut self, claims_in_block: u64) {
         self.mantle_ledger.pow.update_difficulty(claims_in_block);
     }
 }
@@ -2126,7 +2133,7 @@ mod tests {
             // 1000 -> 10·100·1000/(1·200 + 9·100) = 909.
             let (mut state, _config) = pow_ledger_state(1_000);
 
-            state.update_pow_difficulty(200);
+            state.update_pow_reward_difficulty(200);
 
             assert_eq!(
                 state.mantle_ledger.pow.reward_difficulty(),

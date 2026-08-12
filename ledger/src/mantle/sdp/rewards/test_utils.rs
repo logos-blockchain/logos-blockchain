@@ -49,6 +49,7 @@ pub fn create_epoch_state(
         total_stake: 0,
         lottery_0: Fr::ZERO,
         lottery_1: Fr::ZERO,
+        blend_pow_difficulty: Fr::ZERO,
         active_declarations: Arc::new(active_declarations),
     }
 }

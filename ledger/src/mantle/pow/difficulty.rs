@@ -19,10 +19,71 @@ impl PoWDifficultyConstants for PoWDifficultySettings {
     const TARGET_CLAIMS_PER_BLOCK: u64 = 100;
 }
 
+/// Constants for the epoch-scoped Blend `PoW` difficulty.
+///
+/// Same controller as [`PoWDifficultySettings`], but stepped once per epoch
+/// instead of once per block, and driven by the average number of
+/// transactions per block rather than by the claims accepted in a single
+/// block. `TARGET_CLAIMS_PER_BLOCK` is therefore read here as the target
+/// number of *transactions* per block the Blend difficulty calibrates to.
+pub struct BlendPoWDifficultySettings;
+
+// TODO: change settings when decided
+impl PoWDifficultyConstants for BlendPoWDifficultySettings {
+    const EMA_SMOOTHING_FACTOR: u64 = 9;
+    const EMA_SMOOTHING_PRECISION: u64 = 10;
+    const TARGET_CLAIMS_PER_BLOCK: u64 = 100;
+}
+
+/// The Blend `PoW` difficulty in effect until the first epoch average has
+/// been observed and finalized.
+// TODO: Setup value when decided.
+const BLEND_POW_DIFFICULTY_GENESIS: u64 = 1_000_000;
+
+/// The genesis Blend `PoW` difficulty, in effect for the epochs whose average
+/// transactions per block cannot be observed yet.
+pub fn genesis_blend_difficulty() -> PowTarget {
+    PowTarget::from(BLEND_POW_DIFFICULTY_GENESIS)
+}
+
 pub fn compute_new_reward_difficulty<Constants: PoWDifficultyConstants>(
     claims_accepted_in_block: u64,
     current_block_reward_target: PowTarget,
 ) -> PowTarget {
+    // A single block's count is the observation, i.e. the degenerate average
+    // of `claims_accepted_in_block` over one block.
+    retarget::<Constants>(claims_accepted_in_block, 1, current_block_reward_target)
+}
+
+/// Retarget the Blend difficulty for one epoch, from the total number of
+/// transactions and of blocks observed over a whole, closed epoch.
+///
+/// An epoch with no blocks at all is read as zero demand, which eases the
+/// difficulty by the largest step the smoothing factor allows — exactly what
+/// an empty block does to the reward difficulty.
+pub fn compute_new_blend_difficulty<Constants: PoWDifficultyConstants>(
+    txs_in_epoch: u64,
+    blocks_in_epoch: u64,
+    current_blend_target: PowTarget,
+) -> PowTarget {
+    retarget::<Constants>(txs_in_epoch, blocks_in_epoch.max(1), current_blend_target)
+}
+
+/// The shared EMA controller.
+///
+/// The fresh observation is the rational `observed_count / observed_blocks`,
+/// kept as a fraction throughout so that an average below one per block is
+/// not truncated to zero. `observed_blocks` must be non-zero.
+fn retarget<Constants: PoWDifficultyConstants>(
+    observed_count: u64,
+    observed_blocks: u64,
+    current_block_reward_target: PowTarget,
+) -> PowTarget {
+    debug_assert!(
+        observed_blocks > 0,
+        "the observation window must span at least one block"
+    );
+
     // (P - F): the weight of the fresh observation, with q = F / P.
     let observation_weight = Constants::EMA_SMOOTHING_PRECISION
         .checked_sub(Constants::EMA_SMOOTHING_FACTOR)
@@ -37,17 +98,22 @@ pub fn compute_new_reward_difficulty<Constants: PoWDifficultyConstants>(
     // Per block: normalize the count by the target that produced it, then
     // smooth (EMA, smoothing q ~ window N), reconstructing the previous
     // estimate from the previous target (assumed calibrated to T claims):
-    //     demand_est = (1 - q) * (claims_in_block / current_target)
+    //     demand_est = (1 - q) * (observed_count / observed_blocks
+    //                             / current_target)
     //                + q * (TARGET_CLAIMS_PER_BLOCK / current_target)
     // The estimate is kept as a fraction: claims are astronomically smaller
     // than the target, so dividing first would truncate the demand to zero.
-    let demand_estimate_numerator = (BigUint::from(observation_weight) * claims_accepted_in_block
-        + BigUint::from(Constants::EMA_SMOOTHING_FACTOR) * Constants::TARGET_CLAIMS_PER_BLOCK)
-        // Zero only when F == 0 (no smoothing) and the block had no claims;
+    // Both terms are scaled by `observed_blocks` so that the per-block
+    // average stays exact rather than being floored to an integer.
+    let demand_estimate_numerator = (BigUint::from(observation_weight) * observed_count
+        + BigUint::from(Constants::EMA_SMOOTHING_FACTOR)
+            * Constants::TARGET_CLAIMS_PER_BLOCK
+            * observed_blocks)
+        // Zero only when F == 0 (no smoothing) and nothing was observed;
         // floored to avoid dividing by zero below.
         .max(BigUint::from(1u8));
     let demand_estimate_denominator =
-        current_block_reward_target * Constants::EMA_SMOOTHING_PRECISION;
+        current_block_reward_target * Constants::EMA_SMOOTHING_PRECISION * observed_blocks;
 
     // Set the next target so the smoothed demand yields T claims:
     //     new_target = TARGET_CLAIMS_PER_BLOCK / demand_est
@@ -210,5 +276,40 @@ mod tests {
             const TARGET_CLAIMS_PER_BLOCK: u64 = 10;
         }
         let _ = compute_new_reward_difficulty::<BrokenConstants>(10, PowTarget::from(1_000u64));
+    }
+
+    #[test]
+    fn blend_difficulty_matches_the_per_block_controller_on_the_average() {
+        // An epoch of 7 blocks carrying 140 transactions averages 20 per
+        // block: the epoch-scoped retarget must land exactly where the
+        // per-block one lands when fed that average directly.
+        assert_eq!(
+            compute_new_blend_difficulty::<TestConstants>(140, 7, PowTarget::from(1_000u64)),
+            compute_new_reward_difficulty::<TestConstants>(20, PowTarget::from(1_000u64))
+        );
+    }
+
+    #[test]
+    fn blend_difficulty_keeps_fractional_averages() {
+        // 3 transactions over 6 blocks is half a transaction per block —
+        // truncating the average to an integer would read it as zero and
+        // ease the target as if the epoch had been empty. It must instead
+        // sit strictly between the on-average-zero and the one-per-block
+        // results.
+        let target = PowTarget::from(1_000u64);
+        let half = compute_new_blend_difficulty::<TestConstants>(3, 6, target);
+        assert!(half < compute_new_blend_difficulty::<TestConstants>(0, 6, target));
+        assert!(half > compute_new_blend_difficulty::<TestConstants>(6, 6, target));
+    }
+
+    #[test]
+    fn blend_difficulty_reads_an_empty_epoch_as_zero_demand() {
+        // No blocks at all: nothing can be averaged, so the epoch counts as
+        // zero demand and eases the target exactly like an empty block.
+        let target = PowTarget::from(1_000u64);
+        assert_eq!(
+            compute_new_blend_difficulty::<TestConstants>(0, 0, target),
+            compute_new_reward_difficulty::<TestConstants>(0, target)
+        );
     }
 }

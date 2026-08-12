@@ -550,6 +550,7 @@ mod pol_tests {
         let epoch_state = EpochState {
             epoch: 1.into(),
             nonce: Fr::from(999u64),
+            blend_pow_difficulty: Fr::from(0u64),
             utxos: aged_tree.clone(),
             total_stake,
             lottery_0,
@@ -642,6 +643,7 @@ mod pol_tests {
         let epoch_state = EpochState {
             epoch: 1.into(),
             nonce: Fr::from(999u64),
+            blend_pow_difficulty: Fr::from(0u64),
             utxos: aged_tree,
             total_stake,
             lottery_0,

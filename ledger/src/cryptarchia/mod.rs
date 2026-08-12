@@ -1,5 +1,6 @@
 mod block_density;
 mod stake;
+mod tx_density;
 
 use std::sync::{Arc, LazyLock};
 
@@ -11,7 +12,7 @@ use lb_core::{
         NoteId, Utxo, Value,
         gas::{Gas, GasCost, GasOverflow, GasPrice, GasProfile},
         ledger::ExecutableOperation as _,
-        ops::transfer::TransferOp,
+        ops::{pow::PowTarget, transfer::TransferOp},
         traits::GenesisTx,
         transactions::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
     },
@@ -26,8 +27,14 @@ use crate::{
     cryptarchia::{
         block_density::BlockDensity,
         stake::{PRECISION, StakeInference},
+        tx_density::TxDensity,
     },
-    mantle::sdp::SdpLedger,
+    mantle::{
+        pow::difficulty::{
+            BlendPoWDifficultySettings, compute_new_blend_difficulty, genesis_blend_difficulty,
+        },
+        sdp::SdpLedger,
+    },
 };
 
 // corresponds to the denominator of q
@@ -62,6 +69,13 @@ pub struct EpochState {
     /// the beginning of the epoch
     #[serde(with = "lb_groth16::serde::serde_fr")]
     pub nonce: Fr,
+    /// `d_blend`: the Blend `PoW` difficulty for this epoch.
+    ///
+    /// Retargeted once per epoch from the average number of transactions per
+    /// block of the last epoch that closed before the snapshot, and frozen at
+    /// the same slot as [`Self::nonce`].
+    #[serde(with = "lb_groth16::serde::serde_fr")]
+    pub blend_pow_difficulty: PowTarget,
     /// stake distribution snapshot taken at the beginning of the epoch
     /// (in practice, this is equivalent to the utxos the are spendable at the
     /// beginning of the epoch)
@@ -93,10 +107,19 @@ pub struct EpochState {
 impl EpochState {
     fn update_from_ledger(self, ledger: &LedgerState, sdp: &SdpLedger, config: &Config) -> Self {
         let nonce_snapshot_slot = config.nonce_snapshot(self.epoch);
-        let nonce = if ledger.slot < nonce_snapshot_slot {
-            ledger.nonce
+        let (nonce, blend_pow_difficulty) = if ledger.slot < nonce_snapshot_slot {
+            let (txs_in_previous_epoch, blocks_in_previous_epoch) =
+                ledger.tx_density.last_closed_epoch_totals();
+            (
+                ledger.nonce,
+                compute_new_blend_difficulty::<BlendPoWDifficultySettings>(
+                    txs_in_previous_epoch,
+                    blocks_in_previous_epoch,
+                    ledger.epoch_state.blend_pow_difficulty,
+                ),
+            )
         } else {
-            self.nonce
+            (self.nonce, self.blend_pow_difficulty)
         };
 
         // The active-declarations snapshot is frozen at the same slot as the
@@ -116,6 +139,7 @@ impl EpochState {
         Self {
             epoch: self.epoch,
             nonce,
+            blend_pow_difficulty,
             utxos,
             total_stake: self.total_stake,
             lottery_0: self.lottery_0,
@@ -132,6 +156,12 @@ impl EpochState {
     #[must_use]
     pub const fn nonce(&self) -> &Fr {
         &self.nonce
+    }
+
+    /// `d_blend`: the Blend `PoW` difficulty in effect for this epoch.
+    #[must_use]
+    pub const fn pow_difficulty(&self) -> PowTarget {
+        self.blend_pow_difficulty
     }
 
     #[must_use]
@@ -173,6 +203,8 @@ pub struct LedgerState {
     pub epoch_state: EpochState,
     #[derivative(PartialEq = "ignore")]
     block_density: BlockDensity,
+    // per-epoch block and transaction counts, used to retarget the Blend PoW difficulty
+    tx_density: TxDensity,
     // Using an Arc wrapper here as this can be completely shared among instances of LedgerState
     #[derivative(PartialEq = "ignore")]
     stake_inference: Arc<StakeInference>,
@@ -264,6 +296,11 @@ impl LedgerState {
                 "epoch transition"
             );
             let block_density = BlockDensity::new(new_epoch, config);
+            // The epoch that just ended is now complete: hand its block and
+            // transaction totals over as the observation the Blend difficulty
+            // retarget will read, once the next nonce snapshot opens.
+            let mut tx_density = self.tx_density;
+            tx_density.close_epoch();
             // TODO: Refactor: Have the unified update logic for all fields in `EpochState`.
             // `epoch` and `utxos` are updated by `EpochState::update_from_ledger`,
             // but `total_stake` and lottery values are updated here.
@@ -278,6 +315,9 @@ impl LedgerState {
             let next_epoch_state = EpochState {
                 epoch: next_epoch_state_epoch,
                 nonce: self.nonce,
+                // Carries the difficulty in effect until the retarget for the
+                // next epoch is computed and frozen at its nonce snapshot.
+                blend_pow_difficulty: epoch_state.blend_pow_difficulty,
                 utxos: self.utxos.clone(),
                 total_stake,
                 lottery_0,
@@ -299,6 +339,7 @@ impl LedgerState {
                 next_epoch_state,
                 epoch_state,
                 block_density,
+                tx_density,
                 storage_gas_consumed_in_epoch: 0.into(),
                 storage_gas_ema: new_ema,
                 storage_gas_price: new_price,
@@ -334,6 +375,14 @@ impl LedgerState {
                 (new_price, new_ema) = update_storage_market(new_price, 0.into(), new_ema);
             }
 
+            // Close the epoch that ended plus every epoch skipped over, so the
+            // last closed totals describe the epoch that actually preceded
+            // `new_epoch` — empty, if that epoch produced no block at all.
+            let mut tx_density = self.tx_density;
+            for _ in u32::from(current_epoch)..u32::from(new_epoch) {
+                tx_density.close_epoch();
+            }
+
             tracing::warn!(
                 old_epoch = ?current_epoch,
                 new_epoch = ?new_epoch,
@@ -347,6 +396,10 @@ impl LedgerState {
             let epoch_state = EpochState {
                 epoch: new_epoch,
                 nonce: self.nonce,
+                // Too many epochs were skipped for a snapshot to have been
+                // taken for `new_epoch`, so the last known difficulty carries
+                // over unretargeted, like the rest of the state does here.
+                blend_pow_difficulty: self.epoch_state.blend_pow_difficulty,
                 utxos: self.utxos.clone(),
                 total_stake,
                 lottery_0,
@@ -361,6 +414,7 @@ impl LedgerState {
             let next_epoch_state = EpochState {
                 epoch: next_epoch_state_epoch,
                 nonce: self.nonce,
+                blend_pow_difficulty: epoch_state.blend_pow_difficulty,
                 utxos: self.utxos.clone(),
                 total_stake,
                 lottery_0,
@@ -377,6 +431,7 @@ impl LedgerState {
                 next_epoch_state,
                 epoch_state,
                 block_density,
+                tx_density,
                 storage_gas_consumed_in_epoch: 0.into(),
                 storage_gas_ema: new_ema,
                 storage_gas_price: new_price,
@@ -495,6 +550,17 @@ impl LedgerState {
 
         let nonce: Fr = hasher.finalize();
         Self { nonce, ..self }
+    }
+
+    /// Count a block, and the number of transactions it carried, into the
+    /// current epoch's totals.
+    ///
+    /// Called from the canonical apply path only, once the block's contents
+    /// are known — unlike [`Self::increment_block_density`], which runs while
+    /// the header is applied and so also counts the headers a proposer
+    /// applies to a throwaway state for a block it is still building.
+    pub(crate) const fn record_block_txs(&mut self, txs_in_block: u64) {
+        self.tx_density.record_block(txs_in_block);
     }
 
     fn increment_block_density(self, slot: Slot) -> Self {
@@ -654,6 +720,7 @@ impl LedgerState {
             next_epoch_state: EpochState {
                 epoch: 1.into(),
                 nonce,
+                blend_pow_difficulty: genesis_blend_difficulty(),
                 utxos: utxos.clone(),
                 total_stake,
                 lottery_0,
@@ -663,6 +730,7 @@ impl LedgerState {
             epoch_state: EpochState {
                 epoch: 0.into(),
                 nonce,
+                blend_pow_difficulty: genesis_blend_difficulty(),
                 utxos,
                 total_stake,
                 lottery_0,
@@ -670,6 +738,7 @@ impl LedgerState {
                 active_declarations: Arc::new(Declarations::default()),
             },
             block_density,
+            tx_density: TxDensity::default(),
             stake_inference,
             fee_window: [0.into(); 120],
             average_execution_gas: 0.into(),
@@ -974,6 +1043,7 @@ pub mod tests {
         let epoch_state = EpochState {
             epoch: 0.into(),
             nonce: Fr::ZERO,
+            blend_pow_difficulty: genesis_blend_difficulty(),
             utxos: utxos.clone(),
             total_stake,
             lottery_0,
@@ -983,6 +1053,7 @@ pub mod tests {
         let next_epoch_state = EpochState {
             epoch: 1.into(),
             nonce: Fr::ZERO,
+            blend_pow_difficulty: genesis_blend_difficulty(),
             utxos: utxos.clone(),
             total_stake,
             lottery_0,
@@ -1000,6 +1071,7 @@ pub mod tests {
             fee_window: [0.into(); 120],
             average_execution_gas: 0.into(),
             block_density,
+            tx_density: TxDensity::default(),
             execution_base_fee: GENESIS_EXECUTION_GAS_PRICE,
             storage_gas_ema: 0.into(),
             storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
@@ -1304,6 +1376,104 @@ pub mod tests {
                 .block_density
                 .period_range(),
             &(200.into()..=259.into())
+        );
+    }
+
+    #[test]
+    fn blend_difficulty_retargets_from_the_closed_epoch_average() {
+        let config = config();
+        assert_eq!(config.epoch_length(), 100);
+        // The Blend difficulty is snapshotted with the nonce: at slot 60 for
+        // epoch 1, at slot 160 for epoch 2.
+        assert_eq!(config.nonce_snapshot(1.into()), 60.into());
+        assert_eq!(config.nonce_snapshot(2.into()), 160.into());
+
+        let sdp = SdpLedger::new(0.into());
+        let mut state = genesis_state(&[utxo()]);
+        let genesis_difficulty = state.epoch_state.blend_pow_difficulty;
+        assert_eq!(genesis_difficulty, genesis_blend_difficulty());
+
+        // Epoch 0: three blocks carrying 12 transactions in total.
+        for (slot, txs) in [(10u64, 3u64), (20, 5), (70, 4)] {
+            state = state
+                .update_epoch_state::<HeaderId>(slot.into(), &sdp, &config)
+                .unwrap();
+            state.record_block_txs(txs);
+        }
+
+        // Epoch 0 -> 1. No epoch had closed yet while epoch 1's difficulty was
+        // open for snapshotting, so it retargets from zero demand.
+        state = state
+            .update_epoch_state::<HeaderId>(100.into(), &sdp, &config)
+            .unwrap();
+        state.record_block_txs(2);
+        assert_eq!(state.epoch_state.epoch, 1);
+        let epoch_1_difficulty = state.epoch_state.blend_pow_difficulty;
+        assert_eq!(
+            epoch_1_difficulty,
+            compute_new_blend_difficulty::<BlendPoWDifficultySettings>(0, 0, genesis_difficulty)
+        );
+
+        // Epoch 1, with blocks on both sides of epoch 2's snapshot slot.
+        for (slot, txs) in [(110u64, 100u64), (170, 100)] {
+            state = state
+                .update_epoch_state::<HeaderId>(slot.into(), &sdp, &config)
+                .unwrap();
+            state.record_block_txs(txs);
+        }
+
+        // Epoch 1 -> 2: epoch 2's difficulty retargets epoch 1's by the
+        // average of the epoch that closed before the snapshot opened —
+        // epoch 0's 12 transactions over 3 blocks. Epoch 1's own, much
+        // busier, blocks do not enter it: its totals only close when it
+        // does, a full epoch after the snapshot was taken.
+        state = state
+            .update_epoch_state::<HeaderId>(200.into(), &sdp, &config)
+            .unwrap();
+        assert_eq!(state.epoch_state.epoch, 2);
+        assert_eq!(
+            state.epoch_state.blend_pow_difficulty,
+            compute_new_blend_difficulty::<BlendPoWDifficultySettings>(12, 3, epoch_1_difficulty)
+        );
+    }
+
+    #[test]
+    fn blend_difficulty_reads_a_skipped_epoch_as_zero_demand() {
+        let config = config();
+        let sdp = SdpLedger::new(0.into());
+        let mut state = genesis_state(&[utxo()]);
+
+        // A single busy block in epoch 0, then no block at all in epoch 1.
+        state = state
+            .update_epoch_state::<HeaderId>(10.into(), &sdp, &config)
+            .unwrap();
+        state.record_block_txs(1_000);
+
+        // Epoch 0 -> 2. Epoch 2's snapshot slot (160) has already passed
+        // unused, so its difficulty carries over unretargeted.
+        state = state
+            .update_epoch_state::<HeaderId>(222.into(), &sdp, &config)
+            .unwrap();
+        state.record_block_txs(7);
+        assert_eq!(state.epoch_state.epoch, 2);
+        let epoch_2_difficulty = state.epoch_state.blend_pow_difficulty;
+        assert_eq!(epoch_2_difficulty, genesis_blend_difficulty());
+
+        // Epoch 2 -> 3: the epoch that closed last is the skipped epoch 1,
+        // which produced no block at all, so epoch 3 retargets from zero
+        // demand — epoch 0's 1000 transactions were closed one epoch too
+        // early to be read.
+        state = state
+            .update_epoch_state::<HeaderId>(230.into(), &sdp, &config)
+            .unwrap();
+        state.record_block_txs(7);
+        state = state
+            .update_epoch_state::<HeaderId>(300.into(), &sdp, &config)
+            .unwrap();
+        assert_eq!(state.epoch_state.epoch, 3);
+        assert_eq!(
+            state.epoch_state.blend_pow_difficulty,
+            compute_new_blend_difficulty::<BlendPoWDifficultySettings>(0, 0, epoch_2_difficulty)
         );
     }
 

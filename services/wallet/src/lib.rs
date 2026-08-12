@@ -608,7 +608,8 @@ where
                     funding_pk,
                     max_tx_fee,
                 };
-                let response = Self::build_leader_claim_tx(request, ledger, state, kms).await;
+                let response =
+                    Box::pin(Self::build_leader_claim_tx(request, ledger, state, kms)).await;
 
                 match response {
                     Ok(built_tx) => {
