@@ -20,6 +20,7 @@ use crate::mantle::{
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum OpSer<'a> {
+    Transfer(OpWire<{ TransferOp::CODE }, &'a TransferOp>),
     ChannelInscribe(OpWire<{ InscriptionOp::CODE }, &'a InscriptionOp>),
     ChannelConfig(OpWire<{ ChannelConfigOp::CODE }, &'a ChannelConfigOp>),
     ChannelDeposit(OpWire<{ DepositOp::CODE }, &'a DepositOp>),
@@ -29,13 +30,13 @@ pub enum OpSer<'a> {
     SDPWithdraw(OpWire<{ SDPWithdrawOp::CODE }, &'a SDPWithdrawOp>),
     SDPActive(OpWire<{ SDPActiveOp::CODE }, &'a SDPActiveOp>),
     LeaderClaim(OpWire<{ LeaderClaimOp::CODE }, &'a LeaderClaimOp>),
-    Transfer(OpWire<{ TransferOp::CODE }, &'a TransferOp>),
     ClaimPowReward(OpWire<{ ClaimPowRewardOp::CODE }, &'a ClaimPowRewardOp>),
 }
 
 impl<'a> From<&'a Op> for OpSer<'a> {
     fn from(value: &'a Op) -> Self {
         match value {
+            Op::Transfer(op) => Self::Transfer(OpWire::new(op)),
             Op::ChannelInscribe(op) => Self::ChannelInscribe(OpWire::new(op)),
             Op::ChannelConfig(op) => Self::ChannelConfig(OpWire::new(op)),
             Op::ChannelDeposit(op) => Self::ChannelDeposit(OpWire::new(op)),
@@ -45,7 +46,6 @@ impl<'a> From<&'a Op> for OpSer<'a> {
             Op::SDPWithdraw(op) => Self::SDPWithdraw(OpWire::new(op)),
             Op::SDPActive(op) => Self::SDPActive(OpWire::new(op)),
             Op::LeaderClaim(op) => Self::LeaderClaim(OpWire::new(op)),
-            Op::Transfer(op) => Self::Transfer(OpWire::new(op)),
             Op::ClaimPowReward(op) => Self::ClaimPowReward(OpWire::new(op)),
         }
     }
@@ -55,8 +55,9 @@ impl<'a> From<&'a Op> for OpSer<'a> {
 #[derive(Deserialize)]
 #[serde(untagged)]
 pub enum OpDe {
-    ChannelInscribe(OpWire<{ InscriptionOp::CODE }, InscriptionOp>),
+    Transfer(OpWire<{ TransferOp::CODE }, TransferOp>),
     ChannelConfig(OpWire<{ ChannelConfigOp::CODE }, ChannelConfigOp>),
+    ChannelInscribe(OpWire<{ InscriptionOp::CODE }, InscriptionOp>),
     ChannelDeposit(OpWire<{ DepositOp::CODE }, DepositOp>),
     ChannelWithdraw(OpWire<{ ChannelWithdrawOp::CODE }, ChannelWithdrawOp>),
     ChannelTransfer(OpWire<{ ChannelTransferOp::CODE }, ChannelTransferOp>),
@@ -64,15 +65,15 @@ pub enum OpDe {
     SDPWithdraw(OpWire<{ SDPWithdrawOp::CODE }, SDPWithdrawOp>),
     SDPActive(OpWire<{ SDPActiveOp::CODE }, SDPActiveOp>),
     LeaderClaim(OpWire<{ LeaderClaimOp::CODE }, LeaderClaimOp>),
-    Transfer(OpWire<{ TransferOp::CODE }, TransferOp>),
-    ClaimPoWReward(OpWire<{ ClaimPowRewardOp::CODE }, ClaimPowRewardOp>),
+    ClaimPowReward(OpWire<{ ClaimPowRewardOp::CODE }, ClaimPowRewardOp>),
 }
 
 impl From<OpDe> for Op {
     fn from(value: OpDe) -> Self {
         match value {
-            OpDe::ChannelInscribe(w) => Self::ChannelInscribe(w.into_op()),
+            OpDe::Transfer(w) => Self::Transfer(w.into_op()),
             OpDe::ChannelConfig(w) => Self::ChannelConfig(w.into_op()),
+            OpDe::ChannelInscribe(w) => Self::ChannelInscribe(w.into_op()),
             OpDe::ChannelDeposit(w) => Self::ChannelDeposit(w.into_op()),
             OpDe::ChannelWithdraw(w) => Self::ChannelWithdraw(w.into_op()),
             OpDe::ChannelTransfer(w) => Self::ChannelTransfer(w.into_op()),
@@ -80,8 +81,7 @@ impl From<OpDe> for Op {
             OpDe::SDPWithdraw(w) => Self::SDPWithdraw(w.into_op()),
             OpDe::SDPActive(w) => Self::SDPActive(w.into_op()),
             OpDe::LeaderClaim(w) => Self::LeaderClaim(w.into_op()),
-            OpDe::Transfer(w) => Self::Transfer(w.into_op()),
-            OpDe::ClaimPoWReward(w) => Self::ClaimPowReward(w.into_op()),
+            OpDe::ClaimPowReward(w) => Self::ClaimPowReward(w.into_op()),
         }
     }
 }
