@@ -776,7 +776,7 @@ async fn run_event_loop<
     mut recovery_checkpoint: ServiceState<Backend::Settings, NetAdapter::Settings>,
 ) -> (
     CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
-    OldEpochMessageScheduler<Rng, ProcessedMessage>,
+    OldEpochMessageScheduler<Rng, ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
     OldEpochBlendingTokenCollector,
 )
 where
@@ -794,8 +794,13 @@ where
     let mut old_epoch_crypto_processor: Option<
         CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
     > = None;
-    let mut old_epoch_message_scheduler: Option<OldEpochMessageScheduler<Rng, ProcessedMessage>> =
-        None;
+    let mut old_epoch_message_scheduler: Option<
+        OldEpochMessageScheduler<
+            Rng,
+            ProcessedMessage,
+            EncapsulatedMessageWithVerifiedPublicHeader,
+        >,
+    > = None;
     let mut latest_secret_pol_info: Option<PolEpochInfo> = None;
 
     loop {
@@ -829,7 +834,7 @@ where
             Some(round_info) = message_scheduler.next() => {
                 recovery_checkpoint = handle_release_round(round_info, &mut crypto_processor, rng, backend, network_adapter, recovery_checkpoint).await;
             }
-            Some((Some(processed_messages_to_release), previous_epoch)) = async {
+            Some((Some(round_info), previous_epoch)) = async {
                 match (&mut old_epoch_message_scheduler, old_epoch) {
                     (Some(old_scheduler), Some(old_epoch)) => {
                         Some((old_scheduler.next().await, old_epoch))
@@ -837,7 +842,7 @@ where
                     _ => None
                 }
             } => {
-                handle_release_round_for_old_epoch(processed_messages_to_release, rng, backend, network_adapter, previous_epoch).await;
+                handle_release_round_for_old_epoch(round_info, rng, backend, network_adapter, previous_epoch).await;
             }
             Some(pol_secret_info) = secret_pol_info_stream.next() => {
                 if current_epoch_info.epoch == pol_secret_info.epoch {
@@ -857,7 +862,7 @@ where
                         crypto_processor = new_crypto_processor;
                         old_epoch_crypto_processor = Some(old_crypto_processor);
                         message_scheduler = new_scheduler;
-                        old_epoch_message_scheduler = Some(old_scheduler);
+                        old_epoch_message_scheduler = Some(*old_scheduler);
                         current_epoch_info = new_epoch_info;
                         recovery_checkpoint = new_recovery_checkpoint;
                     },
@@ -875,7 +880,7 @@ where
                         tracing::info!(target: LOG_TARGET, "Exiting from the main event loop");
                         return (
                             old_crypto_processor,
-                            old_scheduler,
+                            *old_scheduler,
                             old_token_collector,
                         );
                     },
@@ -909,7 +914,11 @@ async fn retire<
     mut backend: Backend,
     network_adapter: NetAdapter,
     sdp_relay: OutboundRelay<SdpMessage>,
-    mut message_scheduler: OldEpochMessageScheduler<Rng, ProcessedMessage>,
+    mut message_scheduler: OldEpochMessageScheduler<
+        Rng,
+        ProcessedMessage,
+        EncapsulatedMessageWithVerifiedPublicHeader,
+    >,
     mut rng: Rng,
     mut blending_token_collector: OldEpochBlendingTokenCollector,
     crypto_processor: CoreCryptographicProcessor<
@@ -933,8 +942,8 @@ async fn retire<
             Some(incoming_message) = blend_messages.next() => {
                 handle_incoming_blend_message_from_old_epoch(incoming_message, &mut message_scheduler, &crypto_processor, &mut blending_token_collector);
             }
-            Some(processed_messages_to_release) = message_scheduler.next() => {
-                handle_release_round_for_old_epoch(processed_messages_to_release, &mut rng, &backend, &network_adapter, crypto_processor.epoch()).await;
+            Some(round_info) = message_scheduler.next() => {
+                handle_release_round_for_old_epoch(round_info, &mut rng, &backend, &network_adapter, crypto_processor.epoch()).await;
             }
             Some(EpochEvent::TransitionPeriodExpired) = remaining_epoch_stream.next() => {
                 handle_epoch_transition_expired(&mut backend, blending_token_collector, &sdp_relay).await;
@@ -1044,9 +1053,11 @@ where
                 tracing::info!(target: LOG_TARGET, "Local node is not part of new membership. Retiring from core.");
                 return HandleEpochEventOutput::Retiring {
                     old_crypto_processor: current_cryptographic_processor,
-                    old_scheduler: current_scheduler
-                        .rotate_epoch(new_scheduler_epoch_info, settings.scheduler_settings())
-                        .1,
+                    old_scheduler: Box::new(
+                        current_scheduler
+                            .rotate_epoch(new_scheduler_epoch_info, settings.scheduler_settings())
+                            .1,
+                    ),
                     old_token_collector: old_epoch_blending_token_collector,
                 };
             };
@@ -1085,12 +1096,14 @@ where
                         tracing::info!(target: LOG_TARGET, "New membership does not satisfy the core node condition: {e:?}");
                         return HandleEpochEventOutput::Retiring {
                             old_crypto_processor: current_cryptographic_processor,
-                            old_scheduler: current_scheduler
-                                .rotate_epoch(
-                                    new_scheduler_epoch_info,
-                                    settings.scheduler_settings(),
-                                )
-                                .1,
+                            old_scheduler: Box::new(
+                                current_scheduler
+                                    .rotate_epoch(
+                                        new_scheduler_epoch_info,
+                                        settings.scheduler_settings(),
+                                    )
+                                    .1,
+                            ),
                             old_token_collector: old_epoch_blending_token_collector,
                         };
                     }
@@ -1102,7 +1115,7 @@ where
                 new_crypto_processor: new_processor,
                 old_crypto_processor: current_cryptographic_processor,
                 new_scheduler,
-                old_scheduler,
+                old_scheduler: Box::new(old_scheduler),
                 new_recovery_checkpoint: ServiceState::with_epoch(
                     new_epoch_info.epoch,
                     new_epoch_blending_token_collector,
@@ -1129,7 +1142,7 @@ where
                 current_epoch_blending_token_collector.rotate_epoch(&new_reward_epoch_info);
             HandleEpochEventOutput::Retiring {
                 old_crypto_processor: current_cryptographic_processor,
-                old_scheduler: current_scheduler.consume(),
+                old_scheduler: Box::new(current_scheduler.consume()),
                 old_token_collector: old_epoch_blending_token_collector,
             }
         }
@@ -1195,7 +1208,13 @@ enum HandleEpochEventOutput<
             ProcessedMessage,
             EncapsulatedMessageWithVerifiedPublicHeader,
         >,
-        old_scheduler: OldEpochMessageScheduler<Rng, ProcessedMessage>,
+        old_scheduler: Box<
+            OldEpochMessageScheduler<
+                Rng,
+                ProcessedMessage,
+                EncapsulatedMessageWithVerifiedPublicHeader,
+            >,
+        >,
         new_epoch_info: CoreEpochPublicInfo<NodeId>,
         new_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
     },
@@ -1213,7 +1232,13 @@ enum HandleEpochEventOutput<
     Retiring {
         old_crypto_processor:
             CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
-        old_scheduler: OldEpochMessageScheduler<Rng, ProcessedMessage>,
+        old_scheduler: Box<
+            OldEpochMessageScheduler<
+                Rng,
+                ProcessedMessage,
+                EncapsulatedMessageWithVerifiedPublicHeader,
+            >,
+        >,
         old_token_collector: OldEpochBlendingTokenCollector,
     },
 }
@@ -1360,7 +1385,13 @@ fn handle_incoming_blend_message<
         ProcessedMessage,
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
-    old_epoch_scheduler: Option<&mut OldEpochMessageScheduler<Rng, ProcessedMessage>>,
+    old_epoch_scheduler: Option<
+        &mut OldEpochMessageScheduler<
+            Rng,
+            ProcessedMessage,
+            EncapsulatedMessageWithVerifiedPublicHeader,
+        >,
+    >,
     cryptographic_processor: &CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1446,7 +1477,11 @@ fn handle_incoming_blend_message_from_old_epoch<
     CorePoQGenerator,
 >(
     verified_message: EncapsulatedMessageWithVerifiedPublicHeader,
-    scheduler: &mut OldEpochMessageScheduler<Rng, ProcessedMessage>,
+    scheduler: &mut OldEpochMessageScheduler<
+        Rng,
+        ProcessedMessage,
+        EncapsulatedMessageWithVerifiedPublicHeader,
+    >,
     cryptographic_processor: &CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1541,7 +1576,11 @@ fn handle_decapsulated_incoming_message_from_old_epoch<
     ProofsVerifier,
 >(
     multi_layer_decapsulation_output: MultiLayerDecapsulationOutput,
-    scheduler: &mut OldEpochMessageScheduler<Rng, ProcessedMessage>,
+    scheduler: &mut OldEpochMessageScheduler<
+        Rng,
+        ProcessedMessage,
+        EncapsulatedMessageWithVerifiedPublicHeader,
+    >,
     recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
     old_cryptographic_processor: &CoreCryptographicProcessor<
         NodeId,
@@ -1760,7 +1799,10 @@ async fn handle_release_round_for_old_epoch<
     ProofsVerifier,
     RuntimeServiceId,
 >(
-    processed_messages_to_release: Vec<ProcessedMessage>,
+    RoundInfo {
+        data_messages,
+        release_type,
+    }: RoundInfo<ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
     rng: &mut Rng,
     backend: &Backend,
     network_adapter: &NetAdapter,
@@ -1771,19 +1813,39 @@ async fn handle_release_round_for_old_epoch<
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
 {
-    let mut futures = build_futures_to_release_processed_messages(
-        processed_messages_to_release,
-        backend,
-        network_adapter,
-        None,
-        epoch,
-    );
+    // The old epoch never generates cover traffic, so the cover flag is always
+    // `false` here.
+    let (processed_messages, _) =
+        release_type.map_or_else(|| (vec![], false), RoundReleaseType::into_components);
+    let (data_count, processed_count) = (data_messages.len(), processed_messages.len());
+
+    // Data messages the epoch left unreleased carry its `PoQ`, which only verifies
+    // against that epoch's public inputs, so they are published under the old
+    // epoch's number and therefore to the peers still negotiated for it. They are
+    // not tracked in the new epoch's recovery state, which was reset on rotation,
+    // and they do not consume the new epoch's core quota, since they neither spend
+    // it nor reach current-epoch peers.
+    let data_messages_relay_futures =
+        data_messages
+            .into_iter()
+            .map(|data_message_to_blend| -> BoxFuture<'_, ()> {
+                backend.publish(data_message_to_blend, epoch).boxed()
+            });
+
+    let mut futures = data_messages_relay_futures
+        .chain(build_futures_to_release_processed_messages(
+            processed_messages,
+            backend,
+            network_adapter,
+            None,
+            epoch,
+        ))
+        .collect::<Vec<_>>();
     futures.shuffle(rng);
 
     // Release all messages concurrently, and wait for all of them to be sent.
-    let num_futures = futures.len();
     join_all(futures).await;
-    log_old_epoch_release_summary(num_futures);
+    log_old_epoch_release_summary(data_count, processed_count);
 }
 
 fn log_release_window_summary(data_count: usize, processed_count: usize, cover_count: usize) {
@@ -1800,16 +1862,16 @@ fn log_release_window_summary(data_count: usize, processed_count: usize, cover_c
     }
 }
 
-fn log_old_epoch_release_summary(num_futures: usize) {
-    if num_futures > 0 {
+fn log_old_epoch_release_summary(data_count: usize, processed_count: usize) {
+    if data_count > 0 || processed_count > 0 {
         tracing::debug!(
             target: LOG_TARGET,
-            "Sent out {num_futures} processed messages at this release window for the old epoch"
+            "Sent out {data_count} data and {processed_count} processed messages at this release window for the old epoch"
         );
     } else {
         tracing::trace!(
             target: LOG_TARGET,
-            "Sent out {num_futures} processed messages at this release window for the old epoch"
+            "Sent out {data_count} data and {processed_count} processed messages at this release window for the old epoch"
         );
     }
 }

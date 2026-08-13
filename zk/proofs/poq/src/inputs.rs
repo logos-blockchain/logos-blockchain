@@ -86,8 +86,7 @@ impl PoQWitnessInputs {
 
     fn unused_pow_inputs() -> PoQPowInputs {
         PoQPowInputs::from(PoQPowInputsData {
-            pow_secret_key: Fr::ZERO,
-            block_hash: Fr::ZERO,
+            pow_nonce: Fr::ZERO,
         })
     }
 }

@@ -75,6 +75,9 @@ impl PreverifiableOperation<verification_mode::StandardMode> for ChannelTransfer
         _proof: &Self::Proof,
         _context: &Self::Context<'_>,
     ) -> Result<(), Self::Error> {
+        // Ensure the inputs is non-empty
+        self.inputs.preverify()?;
+
         // Check that the outputs are valid
         self.outputs.validate()?;
 
@@ -183,5 +186,45 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionG
         let signature_count = self.proof().signatures().len();
         Value::try_from(signature_count)
             .expect("Channel multi-signature proofs are bound to u16::MAX signatures.")
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use lb_key_management_system_keys::keys::ZkPublicKey;
+
+    use super::*;
+    use crate::mantle::{Note, ledger::InputsError};
+
+    #[test]
+    fn test_preverify_rejects_empty_inputs() {
+        let channel_transfer = ChannelTransferOp {
+            channel_id: ChannelId::from([0u8; 32]),
+            inputs: Inputs::empty(),
+            outputs: Outputs::new([Note::new(100, ZkPublicKey::zero())]),
+        };
+        let proof = ChannelMultiSigProof::try_new([].into()).unwrap();
+
+        assert_eq!(
+            channel_transfer.preverify(&proof, &()),
+            Err(Error::Inputs(InputsError::EmptyInputs))
+        );
+    }
+
+    // An empty input list paired with an empty output list is trivially
+    // balanced, so the emptiness check is what rejects it.
+    #[test]
+    fn test_preverify_rejects_empty_inputs_and_outputs() {
+        let channel_transfer = ChannelTransferOp {
+            channel_id: ChannelId::from([0u8; 32]),
+            inputs: Inputs::empty(),
+            outputs: Outputs::empty(),
+        };
+        let proof = ChannelMultiSigProof::try_new([].into()).unwrap();
+
+        assert_eq!(
+            channel_transfer.preverify(&proof, &()),
+            Err(Error::Inputs(InputsError::EmptyInputs))
+        );
     }
 }

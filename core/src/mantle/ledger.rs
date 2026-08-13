@@ -113,6 +113,8 @@ pub enum InputsError {
     ChannelNote(NoteId),
     #[error("Note is not a channel note of the expected channel: {0:?}")]
     NotAChannelNote(NoteId),
+    #[error("Inputs cannot be empty")]
+    EmptyInputs,
     #[error("Inputs contain try to double spend the same NoteId")]
     DoubleSpend,
     #[error("Sum of input values overflows")]
@@ -299,6 +301,13 @@ impl Inputs {
 
     pub fn iter(&self) -> impl Iterator<Item = &NoteId> {
         <&Self as IntoIterator>::into_iter(self)
+    }
+
+    pub const fn preverify(&self) -> Result<(), InputsError> {
+        if self.is_empty() {
+            return Err(InputsError::EmptyInputs);
+        }
+        Ok(())
     }
 
     /// Validates that every input is spendable as a regular note: unique,

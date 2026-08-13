@@ -72,8 +72,6 @@ pub enum TransferError {
     Inputs(#[from] ledger::InputsError),
     #[error("Outputs error: {0}")]
     Outputs(#[from] ledger::OutputsError),
-    #[error("The Transfer Operation doesn't have any input")]
-    NoInputTransfer,
     #[error("Applying this transaction would cause a balance overflow")]
     BalanceOverflow,
     #[error("Invalid transfer ZkSignature")]
@@ -105,9 +103,7 @@ impl PreverifiableOperation<verification_mode::StandardMode> for TransferOp {
         _context: &Self::Context<'_>,
     ) -> Result<(), Self::Error> {
         // Ensure the inputs is non-empty
-        if self.inputs.is_empty() {
-            return Err(TransferError::NoInputTransfer);
-        }
+        self.inputs.preverify()?;
 
         // Validate Outputs
         self.outputs.validate()?;
@@ -164,11 +160,27 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionG
 
 #[cfg(test)]
 mod test {
+    use lb_groth16::CompressedGroth16Proof;
     use lb_poseidon2::Fr;
     use num_bigint::BigUint;
 
     use super::*;
     use crate::mantle::{Note, NoteId};
+
+    #[test]
+    fn test_preverify_rejects_empty_inputs() {
+        let pk = ZkPublicKey::from(Fr::from(BigUint::from(0u8)));
+        let transfer = TransferOp {
+            inputs: Inputs::empty(),
+            outputs: Outputs::new([Note::new(100, pk)]),
+        };
+        let proof = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
+
+        assert_eq!(
+            transfer.preverify(&proof, &()),
+            Err(TransferError::Inputs(ledger::InputsError::EmptyInputs))
+        );
+    }
 
     #[test]
     fn test_utxos_and_utxo_by_index() {
