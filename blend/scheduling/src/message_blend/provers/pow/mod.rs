@@ -1,13 +1,16 @@
 use core::{num::NonZeroU64, pin::Pin};
 
 use async_trait::async_trait;
-use futures::stream::{self, Stream, StreamExt as _};
+use futures::{
+    FutureExt as _,
+    stream::{self, Stream, StreamExt as _},
+};
 use lb_blend_message::crypto::{
     key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
 };
 use lb_blend_proofs::{
     quota::{
-        Quota, VerifiedProofOfQuota,
+        VerifiedProofOfQuota,
         inputs::prove::{PrivateInputs, PublicInputs, private::ProofOfWorkQuotaInputs},
         pow::{PowTarget, solve_puzzle},
     },
@@ -17,7 +20,7 @@ use lb_core::crypto::ZkHash;
 use lb_groth16::{AdditiveGroup as _, fr_to_bytes};
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use lb_log_targets::blend;
-use lb_utils::tokio::task::spawn_blocking;
+use lb_utils::tokio::{stream::Buffered, task::spawn_blocking};
 use rand::rngs::OsRng;
 use tokio::time::Instant;
 
@@ -41,7 +44,7 @@ const LOG_TARGET: &str = blend::scheduling::proofs::POW;
 pub trait PowProofsGenerator: Sized {
     /// Instantiate a new generator for the duration of an epoch.
     fn new(settings: ProofsGeneratorSettings) -> Self;
-    /// Get the next PoW proof.
+    /// Get the next `PoW` proof.
     async fn get_next_proof(&mut self) -> Option<BlendLayerProof>;
 }
 
@@ -98,11 +101,11 @@ fn create_proof_stream(
     // nullifiers too. How the stream's proofs map onto messages is the caller's
     // business: a quota below the number of encapsulations in a message simply
     // means a message spans more than one solution.
-    Box::pin(
+    Box::pin(Buffered::new(
         solution_stream(epoch_nonce, difficulty).flat_map(move |solution| {
             stream::iter(per_solution_quota.values_range()).map(move |message_release_index| {
                 let solution = solution.clone();
-
+                
                 let task = spawn_blocking("logos/blend/pow-poq-blocking", move || {
                     let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
                     let (proof_of_quota, secret_selection_randomness) = VerifiedProofOfQuota::new(
@@ -133,17 +136,19 @@ fn create_proof_stream(
                     pow_proof
                 }
             })
-        })
-        .buffered(buffer_size),
-    )
+        }),
+        buffer_size,
+    ))
 }
 
-/// An endless stream of puzzle solutions, each mined as the stream is polled.
+/// An endless stream of puzzle solutions.
 fn solution_stream(
     epoch_nonce: ZkHash,
     difficulty: PowTarget,
 ) -> impl Stream<Item = ProofOfWorkQuotaInputs> + Send {
-    stream::repeat(()).then(move |()| mine_solution(epoch_nonce, difficulty))
+    stream::unfold((), move |()| {
+        mine_solution(epoch_nonce, difficulty).map(|solution| Some((solution, ())))
+    })
 }
 
 /// Number of candidate nonces a single blocking search round tries.
@@ -161,8 +166,11 @@ const CANDIDATES_PER_SEARCH_ROUND: NonZeroU64 = NonZeroU64::new(1 << 16u8).unwra
 /// otherwise this never returns.
 async fn mine_solution(epoch_nonce: ZkHash, difficulty: PowTarget) -> ProofOfWorkQuotaInputs {
     let start = Instant::now();
-    for round in 1u64.. {
-        let solution = spawn_blocking("logos/blend/pow-puzzle-search-round", move || {
+    let mut rounds: u64 = 0;
+
+    loop {
+        rounds = rounds.saturating_add(1);
+        let round_outcome = spawn_blocking("logos/blend/pow-puzzle-search-round", move || {
             solve_puzzle(
                 epoch_nonce,
                 difficulty,
@@ -173,11 +181,9 @@ async fn mine_solution(epoch_nonce: ZkHash, difficulty: PowTarget) -> ProofOfWor
         .await
         .expect("PoW puzzle search round should not fail.");
 
-        if let Some(solution) = solution {
-            tracing::trace!(target: LOG_TARGET, "Found a Blend PoW solution after {round} round(s) of {CANDIDATES_PER_SEARCH_ROUND} candidates in {:?} ms.", start.elapsed().as_millis());
-            return solution;
+        if let Some(solution) = round_outcome {
+            tracing::trace!(target: LOG_TARGET, "Found a Blend PoW solution after {rounds} round(s) of {CANDIDATES_PER_SEARCH_ROUND} candidates in {} ms.", start.elapsed().as_millis());
+            break solution;
         }
     }
-    tracing::trace!(target: LOG_TARGET, "No Blend PoW solution after {CANDIDATES_PER_SEARCH_ROUND} attempted rounds. Yielding back to the runtime and starting over if needed.");
-    unreachable!("The search range is unbounded, so the loop only exits with a solution.");
 }
