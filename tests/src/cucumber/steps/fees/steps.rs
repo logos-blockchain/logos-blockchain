@@ -199,7 +199,7 @@ async fn step_prepare_self_transfer_with_tip(
 }
 
 #[when(
-    expr = "I prepare a wallet-funded self-transfer with priority fee percentage {int} from \
+    expr = "I prepare a wallet-funded self-transfer with a {int}% priority fee reserve from \
             wallet {string} via node {string} as {string}"
 )]
 async fn step_prepare_wallet_funded_self_transfer_with_priority_fee(

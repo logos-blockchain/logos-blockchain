@@ -70,7 +70,7 @@ Feature: Fees
       | NODE_1    | 2             | WALLET_2A   |              |
       | NODE_1    | 3             | WALLET_3A   |              |
     When node "NODE_1" is at height 1 in 180 seconds
-    And I prepare a wallet-funded self-transfer with priority fee percentage 50 from wallet "WALLET_3A" via node "NODE_1" as "BUFFERED"
+    And I prepare a wallet-funded self-transfer with a 50% priority fee reserve from wallet "WALLET_3A" via node "NODE_1" as "BUFFERED"
     And I submit an exactly funded self-transfer from wallet "WALLET_1A" via node "NODE_1" as "TRAFFIC_A"
     And I submit an exactly funded self-transfer from wallet "WALLET_2A" via node "NODE_1" as "TRAFFIC_B"
     And I record per-block gas prices on node "NODE_1" for 125 slots in 300 seconds
