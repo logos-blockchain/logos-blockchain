@@ -68,7 +68,6 @@ mod tests {
     use std::{collections::HashMap, sync::Arc};
 
     use lb_core::sdp::MinStake;
-    use lb_cryptarchia_engine::average_slots_for_blocks;
     use lb_utils::math::NonNegativeRatio;
 
     use super::*;
@@ -180,7 +179,7 @@ mod tests {
                 SECURITY_PARAM.try_into().unwrap(),
                 slot_activation_coeff,
                 LEARNING_RATE.try_into().unwrap(),
-                average_slots_for_blocks(10.try_into().unwrap(), slot_activation_coeff),
+                10.try_into().unwrap(),
             ),
             // Not used in the tests
             sdp_config: crate::mantle::sdp::Config {
