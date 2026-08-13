@@ -1,6 +1,6 @@
 use core::fmt::{self, Debug, Formatter};
 
-use lb_groth16::{Field as _, Fr, fr_to_bytes};
+use lb_groth16::{AdditiveGroup as _, Fr, fr_to_bytes};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -108,13 +108,10 @@ impl PowInputs {
     /// definition so they cannot drift apart.
     // TODO: Remove once the PoW quota parameters are sourced from the chain.
     #[must_use]
-    pub fn unwired_placeholder() -> Self {
-        /// `ß_max`: the number of blending operations a message carries.
-        const BLEND_LAYERS: u64 = 3;
-
+    pub const fn unwired_placeholder() -> Self {
         Self {
-            pow_blend_difficulty: -ZkHash::ONE,
-            pow_quota: Quota::new::<BLEND_LAYERS>(),
+            pow_blend_difficulty: ZkHash::ZERO,
+            pow_quota: Quota::ZERO,
         }
     }
 }

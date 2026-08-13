@@ -2,7 +2,6 @@ use core::{num::NonZeroU64, pin::Pin};
 
 use async_trait::async_trait;
 use futures::{
-    FutureExt as _,
     stream::{self, Stream, StreamExt as _},
 };
 use lb_blend_message::crypto::{
@@ -146,18 +145,8 @@ fn solution_stream(
     epoch_nonce: ZkHash,
     difficulty: PowTarget,
 ) -> impl Stream<Item = ProofOfWorkQuotaInputs> + Send {
-    stream::unfold((), move |()| {
-        mine_solution(epoch_nonce, difficulty).map(|solution| Some((solution, ())))
-    })
+    stream::repeat(()).then(move |()| mine_solution(epoch_nonce, difficulty))
 }
-
-/// Number of candidate nonces a single blocking search round tries.
-///
-/// The search occupies a blocking thread for as long as it runs, so it is
-/// broken into rounds: between them the task returns to the runtime, which is
-/// what lets a generator that is dropped mid-search stop being mined for. The
-/// bound only has to keep a round short relative to an epoch.
-const CANDIDATES_PER_SEARCH_ROUND: NonZeroU64 = NonZeroU64::new(1 << 16u8).unwrap();
 
 /// Searches for a puzzle solution, one blocking round at a time, until it finds
 /// one.
@@ -165,6 +154,14 @@ const CANDIDATES_PER_SEARCH_ROUND: NonZeroU64 = NonZeroU64::new(1 << 16u8).unwra
 /// The caller must have established that `difficulty` is satisfiable;
 /// otherwise this never returns.
 async fn mine_solution(epoch_nonce: ZkHash, difficulty: PowTarget) -> ProofOfWorkQuotaInputs {
+    /// Number of candidate nonces a single blocking search round tries.
+    ///
+    /// The search occupies a blocking thread for as long as it runs, so it is
+    /// broken into rounds: between them the task returns to the runtime, which is
+    /// what lets a generator that is dropped mid-search stop being mined for. The
+    /// bound only has to keep a round short relative to an epoch.
+    const CANDIDATES_PER_SEARCH_ROUND: NonZeroU64 = NonZeroU64::new(1 << 16u8).unwrap();
+
     let start = Instant::now();
     let mut rounds: u64 = 0;
 

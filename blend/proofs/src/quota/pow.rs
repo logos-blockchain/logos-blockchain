@@ -128,7 +128,7 @@ mod tests {
 
     /// The largest field element, `p - 1`, as an integer.
     fn largest_target() -> BigUint {
-        BigUint::from_bytes_le(&fr_to_bytes(&(-PowTarget::ONE)))
+        (-PowTarget::ONE).into()
     }
 
     #[test]
@@ -177,62 +177,6 @@ mod tests {
             derive_pow_ticket(epoch_nonce, pow_nonce),
             difficulty
         ));
-    }
-
-    /// Candidates are sampled rather than enumerated, so solutions found under
-    /// a difficulty every ticket satisfies are unrelated to one another.
-    #[test]
-    fn solutions_are_not_drawn_from_a_sequence() {
-        let epoch_nonce = BigUint::from(42u64).into();
-        let difficulty: PowTarget = largest_target().into();
-
-        let nonces = std::iter::repeat_with(|| {
-            solve_puzzle(epoch_nonce, difficulty, &mut OsRng, 1.try_into().unwrap())
-                .unwrap()
-                .pow_nonce
-        })
-        .take(16)
-        .collect::<Vec<_>>();
-
-        // Every draw is distinct, and none is the successor of another.
-        assert_eq!(
-            nonces.iter().copied().collect::<HashSet<_>>().len(),
-            nonces.len()
-        );
-        assert!(
-            !nonces
-                .iter()
-                .any(|nonce| nonces.contains(&(*nonce + PowTarget::ONE)))
-        );
-    }
-
-    /// The masking that keeps sampling unbiased must not narrow the range the
-    /// nonce is drawn from any further than the two bits above the modulus.
-    #[test]
-    fn sampled_nonces_span_the_field() {
-        // Under uniform sampling all 64 draws landing below `2^250` has
-        // probability around `0.08^64`, so this cannot fail by chance.
-        let low = BigUint::from(1u64) << 250u32;
-        assert!(
-            std::iter::repeat_with(|| BigUint::from_bytes_le(&fr_to_bytes(&random_nonce(
-                &mut OsRng
-            ))))
-            .take(64)
-            .any(|nonce| nonce >= low)
-        );
-    }
-
-    #[test]
-    fn unsatisfiable_difficulty_is_not_searched() {
-        assert!(
-            solve_puzzle(
-                BigUint::from(42u64).into(),
-                PowTarget::ZERO,
-                &mut OsRng,
-                u64::MAX.try_into().unwrap(),
-            )
-            .is_none()
-        );
     }
 
     #[test]

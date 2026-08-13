@@ -1283,6 +1283,8 @@ where
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
+    // TODO: Change this to encapsulated differently depending on the type of
+    // payload.
     let Ok(wrapped_message) = cryptographic_processor
         .encapsulate_block_proposal_payload(serialized_local_data_message)
         .await
@@ -1323,10 +1325,7 @@ where
         // If all the layers are peeled off locally, then we are left with the initial data message.
         DecapsulatedMessageType::Completed(fully_decapsulated_message) => {
             assert!(
-                matches!(
-                    fully_decapsulated_message.payload_type().is_data_message(),
-                    true
-                ),
+                fully_decapsulated_message.payload_type().is_data_message(),
                 "Locally-generated and fully-decapsulated message should be a data message."
             );
             let data_message: NetworkMessage = fully_decapsulated_message.payload_body().to_vec();

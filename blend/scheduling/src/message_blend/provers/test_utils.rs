@@ -73,8 +73,6 @@ pub fn valid_proof_of_leader_inputs(
     )
 }
 
-/// Public inputs whose `PoW` branch is satisfiable, so that a generator mining
-/// against them finds a solution the circuit accepts.
 pub fn valid_proof_of_work_inputs(pow_quota: Quota) -> PoQVerificationInputsMinusSigningKey {
     let (
         PoQPublicInputs {
