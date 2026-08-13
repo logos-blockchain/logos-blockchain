@@ -21,34 +21,15 @@ use lb_utils::tokio::task::spawn_blocking;
 use rand::rngs::OsRng;
 use tokio::time::Instant;
 
-use crate::message_blend::provers::{BlendLayerProof, ProofsGeneratorSettings};
+use crate::message_blend::{
+    buffer_size,
+    provers::{BlendLayerProof, ProofsGeneratorSettings},
+};
 
 #[cfg(test)]
 mod tests;
 
 const LOG_TARGET: &str = blend::scheduling::proofs::POW;
-
-/// Number of candidate nonces a single blocking search round tries.
-///
-/// The search occupies a blocking thread for as long as it runs, so it is
-/// broken into rounds: between them the task returns to the runtime, which is
-/// what lets a generator that is dropped mid-search stop being mined for. The
-/// bound only has to keep a round short relative to an epoch — at the spec's
-/// reference rate of tens of microseconds per candidate this is seconds of
-/// work, and a difficulty that needs more than one round is the normal case.
-const CANDIDATES_PER_SEARCH_ROUND: NonZeroU64 = NonZeroU64::new(1 << 16).unwrap();
-
-/// How many proofs to keep in flight, as a multiple of the per-solution quota.
-///
-/// One quota's worth is what a consumer draws before the next solution has to
-/// be mined, so buffering two keeps the following solution's proofs coming
-/// while the current one's are handed out.
-const BUFFERED_SOLUTIONS: usize = 2;
-
-/// The number of proofs the stream keeps in flight for a given quota.
-const fn buffer_size(pow_quota: Quota) -> usize {
-    (pow_quota.get() as usize).saturating_mul(BUFFERED_SOLUTIONS)
-}
 
 /// A `PoQ` generator that deals only with proof of work backed proofs.
 ///
@@ -59,13 +40,8 @@ const fn buffer_size(pow_quota: Quota) -> usize {
 #[async_trait]
 pub trait PowProofsGenerator: Sized {
     /// Instantiate a new generator for the duration of an epoch.
-    ///
-    /// The epoch's `PoW` public inputs — the Blend difficulty the puzzle is
-    /// solved against and the per-solution quota — are carried by `settings`.
     fn new(settings: ProofsGeneratorSettings) -> Self;
-    /// Get the next proof of work backed proof, mining a fresh solution
-    /// whenever the previous one's quota is used up. It returns `None` if the
-    /// epoch's `PoW` public inputs admit no proof at all.
+    /// Get the next PoW proof.
     async fn get_next_proof(&mut self) -> Option<BlendLayerProof>;
 }
 
@@ -81,7 +57,7 @@ impl PowProofsGenerator for RealPowProofsGenerator {
             settings,
             proofs_stream: create_proof_stream(
                 settings.public_inputs,
-                buffer_size(settings.public_inputs.pow.pow_quota),
+                buffer_size(settings.public_inputs.pow.pow_quota.get() as usize),
             ),
         }
     }
@@ -103,24 +79,16 @@ fn create_proof_stream(
 ) -> Pin<Box<dyn Stream<Item = BlendLayerProof> + Send>> {
     let difficulty = public_inputs.pow.pow_blend_difficulty;
     // No ticket is below zero, so the puzzle has no solution and there is
-    // nothing to mine for. This is checked once here rather than per search
-    // round, so that an epoch whose inputs disable the branch costs nothing
-    // instead of spinning a blocking thread that can never succeed.
+    // nothing to mine for.
     if difficulty == PowTarget::ZERO {
-        tracing::warn!(target: LOG_TARGET, "Blend PoW difficulty is zero, so no puzzle solution exists. No PoW proof will be generated for this epoch.");
+        tracing::debug!(target: LOG_TARGET, "Blend PoW difficulty is zero, so no puzzle solution exists. No PoW proof will be generated for this epoch.");
         return Box::pin(stream::empty());
     }
 
-    // A quota of zero admits no key index, so no solution can be turned into a
-    // proof and the search would run forever without ever yielding one.
     let per_solution_quota = public_inputs.pow.pow_quota;
-    if per_solution_quota == Quota::ZERO {
-        tracing::warn!(target: LOG_TARGET, "Blend PoW quota is zero, so no solution can be spent. No PoW proof will be generated for this epoch.");
-        return Box::pin(stream::empty());
-    }
 
     let epoch_nonce = public_inputs.leader.pol_epoch_nonce;
-    tracing::debug!(target: LOG_TARGET, "Generating PoW quota proofs, {per_solution_quota} per solution, with public inputs: {public_inputs:?}.");
+    tracing::debug!(target: LOG_TARGET, "Generating PoW quota proofs with public inputs: {public_inputs:?}.");
 
     // Each solution yields exactly `per_solution_quota` proofs, indexed
     // `0..per_solution_quota`, and a fresh solution is mined when they run out.
@@ -130,22 +98,11 @@ fn create_proof_stream(
     // nullifiers too. How the stream's proofs map onto messages is the caller's
     // business: a quota below the number of encapsulations in a message simply
     // means a message spans more than one solution.
-    //
-    // Unlike the core and leadership streams, this one is not pre-polled: a
-    // granted quota is going to be spent, whereas the `PoW` branch may never be
-    // asked for a proof, and a puzzle search occupies a blocking thread for as
-    // long as it runs. Mining therefore starts on the first request and never
-    // runs more than one solution ahead of the proofs actually consumed.
     Box::pin(
         solution_stream(epoch_nonce, difficulty).flat_map(move |solution| {
             stream::iter(per_solution_quota.values_range()).map(move |message_release_index| {
                 let solution = solution.clone();
 
-                // Spawn eagerly here (outside `async move`) so the blocking task starts as
-                // soon as the stream buffer slot is filled, not when the future is first polled.
-                // Without this, `spawn_blocking` would only be called when `FuturesOrdered`
-                // first polls the future — which only happens when the consumer polls the
-                // stream — causing avoidable latency when the consumer is idle.
                 let task = spawn_blocking("logos/blend/pow-poq-blocking", move || {
                     let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
                     let (proof_of_quota, secret_selection_randomness) = VerifiedProofOfQuota::new(
@@ -189,6 +146,14 @@ fn solution_stream(
     stream::repeat(()).then(move |()| mine_solution(epoch_nonce, difficulty))
 }
 
+/// Number of candidate nonces a single blocking search round tries.
+///
+/// The search occupies a blocking thread for as long as it runs, so it is
+/// broken into rounds: between them the task returns to the runtime, which is
+/// what lets a generator that is dropped mid-search stop being mined for. The
+/// bound only has to keep a round short relative to an epoch.
+const CANDIDATES_PER_SEARCH_ROUND: NonZeroU64 = NonZeroU64::new(1 << 16u8).unwrap();
+
 /// Searches for a puzzle solution, one blocking round at a time, until it finds
 /// one.
 ///
@@ -212,7 +177,7 @@ async fn mine_solution(epoch_nonce: ZkHash, difficulty: PowTarget) -> ProofOfWor
             tracing::trace!(target: LOG_TARGET, "Found a Blend PoW solution after {round} round(s) of {CANDIDATES_PER_SEARCH_ROUND} candidates in {:?} ms.", start.elapsed().as_millis());
             return solution;
         }
-        tracing::trace!(target: LOG_TARGET, "No Blend PoW solution after {round} round(s) of {CANDIDATES_PER_SEARCH_ROUND} candidates ({:?} ms elapsed). Searching on.", start.elapsed().as_millis());
     }
+    tracing::trace!(target: LOG_TARGET, "No Blend PoW solution after {CANDIDATES_PER_SEARCH_ROUND} attempted rounds. Yielding back to the runtime and starting over if needed.");
     unreachable!("The search range is unbounded, so the loop only exits with a solution.");
 }

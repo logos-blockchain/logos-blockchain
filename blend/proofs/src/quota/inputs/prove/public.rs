@@ -106,13 +106,6 @@ impl PowInputs {
     /// These are public inputs, so a prover and the verifier checking its
     /// proofs must use identical values. Every call site shares this single
     /// definition so they cannot drift apart.
-    ///
-    /// The difficulty is `p - 1`, the largest field element, so every ticket
-    /// but one satisfies it and a solution costs a single hash to find. The
-    /// quota is the spec's `Q_W = ß_max`, one message per solution, at the
-    /// `ß_max` the protocol is specified with; a deployment blending a
-    /// different number of layers is not wrong, it just spends a solution over
-    /// a different fraction of a message.
     // TODO: Remove once the PoW quota parameters are sourced from the chain.
     #[must_use]
     pub fn unwired_placeholder() -> Self {

@@ -1324,8 +1324,8 @@ where
         DecapsulatedMessageType::Completed(fully_decapsulated_message) => {
             assert!(
                 matches!(
-                    fully_decapsulated_message.payload_type(),
-                    PayloadType::BlockProposal | PayloadType::Transaction
+                    fully_decapsulated_message.payload_type().is_data_message(),
+                    true
                 ),
                 "Locally-generated and fully-decapsulated message should be a data message."
             );
@@ -1663,10 +1663,7 @@ where
                     scheduler.schedule_processed_message(processed_message.clone());
                     (Some(processed_message), blending_tokens.into_iter())
                 }
-                // TODO: Submit the transaction to the local mempool as well as
-                // broadcasting it, as the spec requires. Nothing generates this
-                // payload type yet, so the path is unreachable until a sender
-                // for it exists.
+                // TODO: Submit the tx to the mempool.
                 (PayloadType::Transaction, transaction) => {
                     tracing::warn!(
                         target: LOG_TARGET,

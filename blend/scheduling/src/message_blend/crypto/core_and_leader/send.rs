@@ -201,14 +201,6 @@ where
     }
 
     /// The `PoQ` branch each payload type draws its layer proofs from.
-    ///
-    /// A verifier cannot tell the branches apart and the protocol does not tie
-    /// one to a payload type, so this is only which of its own allowances the
-    /// sender spends: cover traffic is what a declared core node's quota exists
-    /// for, a block proposal is what a won leader election entitles its holder
-    /// to send, and a transaction is the message any participant may send —
-    /// including one holding neither stake nor a declaration, whose only
-    /// allowance is the one a puzzle solution buys.
     async fn next_proof_for(&mut self, payload_type: PayloadType) -> Option<BlendLayerProof> {
         match payload_type {
             PayloadType::Cover => self.proofs_generator.get_next_core_proof().await,

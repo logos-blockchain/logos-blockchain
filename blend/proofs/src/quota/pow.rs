@@ -31,10 +31,6 @@ static DOMAIN_SEPARATION_TAG_FR: LazyLock<ZkHash> = LazyLock::new(|| {
 
 /// Derives the puzzle ticket of a candidate nonce, exactly as the circuit
 /// does: `zkhash(BLEND_POW_V1, pol_epoch_nonce, pow_nonce)`.
-///
-/// The puzzle takes no block reference. The circuit cannot establish that a
-/// value is the hash of a canonical block, so the only time-dependent input is
-/// the epoch nonce, and a solution is bound to an epoch and to nothing finer.
 #[must_use]
 pub fn derive_pow_ticket(epoch_nonce: ZkHash, pow_nonce: ZkHash) -> ZkHash {
     [*DOMAIN_SEPARATION_TAG_FR, epoch_nonce, pow_nonce].hash()
@@ -58,16 +54,6 @@ pub fn is_winning_ticket(ticket: ZkHash, difficulty: PowTarget) -> bool {
 /// to the runtime between rounds. A zero `difficulty` admits no ticket at all,
 /// so it returns immediately rather than spending the budget on a search that
 /// cannot succeed.
-///
-/// Every candidate is sampled afresh rather than enumerated from a starting
-/// point, as the spec requires. The nonce stands in the secret key position of
-/// the key nullifier derivation, so it has to remain secret and unguessable: a
-/// prover walking a range would let anyone who learns one of its nonces derive
-/// the neighbouring ones, and two provers walking from the same point would
-/// collide on nullifiers and have one of their messages discarded as a
-/// duplicate.
-///
-/// `rng` must therefore be cryptographically secure.
 #[must_use]
 pub fn solve_puzzle<Rng>(
     epoch_nonce: ZkHash,
@@ -91,11 +77,15 @@ where
 
 /// A field element sampled uniformly from `[0, p-1]`.
 ///
-/// Reducing 256 random bits modulo `p` would not be uniform: `p` lies between
-/// `2^253` and `2^254`, so `2^256` covers it four times with a remainder, and
-/// the residues inside that remainder would come up a quarter more often than
-/// the rest. Masking the draw down to 254 bits and resampling whenever it lands
-/// at or above `p` costs about a third of an extra draw and leaves no bias.
+/// Reducing 256 random bits modulo `p` would not be uniform: `2^256` is `5p`
+/// plus a remainder, so the residues inside that remainder have six preimages
+/// against the other five and would come up a fifth more often. Resampling
+/// instead of reducing removes the bias, and masking the draw first is what
+/// makes that cheap: `p` lies between `2^253` and `2^254`, so a full-width draw
+/// lands below `p` only 19% of the time — over five draws per nonce — whereas
+/// clearing the two bits above `2^254` excludes no value of the field and
+/// raises that to 76%, about a third of an extra draw. This runs once per
+/// mining candidate, so the difference is the search's throughput.
 fn random_nonce<Rng>(rng: &mut Rng) -> ZkHash
 where
     Rng: RngCore + ?Sized,

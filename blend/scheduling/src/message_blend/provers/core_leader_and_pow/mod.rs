@@ -23,10 +23,6 @@ const LOG_TARGET: &str = blend::scheduling::proofs::CORE_LEADER_AND_POW;
 /// is therefore available to a node whose core and leadership quotas are
 /// exhausted or were never granted. The three branches are indistinguishable to
 /// a verifier, so which one backs a given message is a local decision.
-///
-/// The core and leadership methods are declared here rather than inherited, so
-/// that the two traits are free to diverge: a generator serving all three
-/// branches may come to want a different shape from one serving two.
 #[async_trait]
 pub trait CoreLeaderAndPowProofsGenerator<CorePoQGenerator>: Sized {
     /// Instantiate a new generator for the duration of an epoch.
