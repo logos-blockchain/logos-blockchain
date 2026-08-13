@@ -9,7 +9,9 @@ use lb_core::{
             channel::{ChannelId, MsgId, inscribe::Inscription},
         },
         traits::Hashable as _,
-        transactions::{hash::TxHash, mantle_tx::MantleTx as _, states::Unverified},
+        transactions::{
+            MantleTxBuilder, hash::TxHash, mantle_tx::MantleTx as _, states::Unverified,
+        },
     },
 };
 use rpds::HashTrieSetSync;
@@ -17,6 +19,31 @@ use rpds::HashTrieSetSync;
 use super::types::{
     AtomicWithdrawInfo, ChannelUpdateTx, InscriptionInfo, PendingTx, TxSource, WithdrawInfo,
 };
+
+/// A pending tx this sequencer published that has been unlanded (in block
+/// height) long enough, and is not adopted on the canonical tip, to rebuild
+/// with a fresh `/wallet/fund` call. The rebuild re-funds the stored
+/// pre-funding [`MantleTxBuilder`] — the exact channel ops — so op ids
+/// ([`MsgId`]/`config.id()`) and thus lineage are preserved; only the funding
+/// inputs and the `TxHash` change. No fee-op stripping is involved.
+pub enum StaleRefund {
+    /// A plain inscription from [`TxState::pending`] (re-inserted via
+    /// [`TxState::submit_inscription`] with its stored intent). Atomic bundles
+    /// are excluded (their withdraws cannot be reconstructed by the rebuild).
+    Inscription {
+        tx_hash: TxHash,
+        parent_msg: MsgId,
+        this_msg: MsgId,
+        payload: Inscription,
+        builder: MantleTxBuilder,
+    },
+    /// An opaque tx (config / raw) from [`TxState::pending_other`] (re-inserted
+    /// via [`TxState::submit_other`], which recomputes lineage from the tx).
+    Other {
+        tx_hash: TxHash,
+        builder: MantleTxBuilder,
+    },
+}
 
 /// Result of channel update detection — the linear block-level delta
 /// between two canonical chains.
@@ -51,6 +78,9 @@ struct PendingOtherTx {
     /// Submission order, for picking the newest chain restart among
     /// config-led atomic bundles (see [`TxState::publish_parent`]).
     seq: u64,
+    /// Block height at which the stale-refund sweep first observed this tx.
+    /// `None` until the first sweep stamps it.
+    first_seen_block: Option<u64>,
 }
 
 fn opaque_lineage(
@@ -95,6 +125,10 @@ pub struct PendingInscription {
     pub payload: Inscription,
     pub withdraws: Option<Vec<WithdrawInfo>>,
     pub posted: bool,
+    /// Block height at which the stale-refund sweep first observed this tx.
+    /// `None` until the first sweep stamps it; used to age a
+    /// posted-but-unlanded tx for timeout-based re-funding.
+    pub first_seen_block: Option<u64>,
 }
 
 /// Transaction state tracker.
@@ -106,6 +140,13 @@ pub struct TxState {
     /// Opaque pending txs (`channel_config`, raw `submit_signed_tx`):
     /// retried byte-identically until finalized or shed.
     pending_other: HashMap<TxHash, PendingOtherTx>,
+    /// Pre-funding builders for txs this sequencer published itself
+    /// (inscriptions and configs), keyed by their funded `TxHash`. Only these
+    /// are eligible for stale-refund — the builder holds the exact channel ops
+    /// so a rebuild re-funds them without stripping. Observed txs (other
+    /// sequencers') and raw `submit_signed_tx` custom txs are absent here and
+    /// are never re-funded (not ours to re-fund).
+    own_builders: HashMap<TxHash, MantleTxBuilder>,
     /// Bounded insertion-ordered tx hashes accepted locally by this sequencer
     /// runtime or restored from its checkpoint.
     local_txs: VecDeque<TxHash>,
@@ -180,6 +221,7 @@ impl TxState {
             pending: HashMap::new(),
             pending_by_parent: HashMap::new(),
             pending_other: HashMap::new(),
+            own_builders: HashMap::new(),
             local_txs: VecDeque::new(),
             block_states,
             parent_map: HashMap::new(),
@@ -249,8 +291,106 @@ impl TxState {
                 payload,
                 withdraws,
                 posted: false,
+                first_seen_block: None,
             },
         );
+    }
+
+    /// Record the pre-funding builder for a tx this sequencer published, so a
+    /// later stale-refund can re-fund the same channel ops. Only own
+    /// inscriptions and configs call this; observed and custom txs never
+    /// do.
+    pub fn store_own_builder(&mut self, tx_hash: TxHash, builder: MantleTxBuilder) {
+        self.own_builders.insert(tx_hash, builder);
+    }
+
+    /// Collect our own pending txs that are (a) **not** adopted on the
+    /// canonical `tip` and (b) have been continuously off-tip for more than
+    /// `threshold` blocks — the ones a timeout-based re-fund should
+    /// rebuild.
+    ///
+    /// A tx included/visible on `tip` is landing fine, so its off-tip clock is
+    /// reset (`first_seen_block = None`) and it is never refunded — only
+    /// genuinely stuck txs (funding note double-handed, so byte-identical
+    /// resubmission can never land) qualify. `now` is the current block
+    /// height; aging is measured in blocks. Only txs with a stored builder
+    /// (`own_builders`) are eligible.
+    pub fn collect_stale_for_refund(
+        &mut self,
+        now: u64,
+        threshold: u64,
+        tip: HeaderId,
+    ) -> Vec<StaleRefund> {
+        let safe = self
+            .block_states
+            .get(&tip)
+            .cloned()
+            .unwrap_or_else(HashTrieSetSync::new_sync);
+        // Refund candidates are exactly the on-branch, not-yet-on-chain txs —
+        // the same lineage suffix `pending_txs` reposts and `shed` keeps. An
+        // off-branch tx (e.g. its `MsgId` already landed under a different hash
+        // after a refund) is left to shedding, never re-funded. Age is measured
+        // continuously off-tip: any tx not currently a candidate resets its clock.
+        let channel_tip = self.channel_tip_at(tip);
+        let candidates: HashSet<TxHash> = self
+            .collect_pending_suffix(channel_tip)
+            .into_iter()
+            .map(|i| i.tx_hash)
+            .filter(|h| !safe.contains(h))
+            .collect();
+        let mut stale = Vec::new();
+
+        for p in self.pending.values_mut() {
+            if !candidates.contains(&p.tx_hash) {
+                p.first_seen_block = None;
+                continue;
+            }
+            // Only own plain inscriptions with a stored builder; a bundle's
+            // withdraws cannot be reconstructed by the plain-inscription rebuild.
+            let Some(builder) = self.own_builders.get(&p.tx_hash).cloned() else {
+                continue;
+            };
+            if p.withdraws.is_some() {
+                continue;
+            }
+            match p.first_seen_block {
+                None => p.first_seen_block = Some(now),
+                Some(seen) if now.saturating_sub(seen) > threshold => {
+                    stale.push(StaleRefund::Inscription {
+                        tx_hash: p.tx_hash,
+                        parent_msg: p.parent_msg,
+                        this_msg: p.this_msg,
+                        payload: p.payload.clone(),
+                        builder,
+                    });
+                }
+                Some(_) => {}
+            }
+        }
+
+        // Opaque/config txs have no inscription lineage suffix; rely on
+        // `shed_off_branch_pending_other` for off-branch removal and gate on the
+        // safe set here.
+        for (hash, p) in &mut self.pending_other {
+            if safe.contains(hash) {
+                p.first_seen_block = None;
+                continue;
+            }
+            let Some(builder) = self.own_builders.get(hash).cloned() else {
+                continue;
+            };
+            match p.first_seen_block {
+                None => p.first_seen_block = Some(now),
+                Some(seen) if now.saturating_sub(seen) > threshold => {
+                    stale.push(StaleRefund::Other {
+                        tx_hash: *hash,
+                        builder,
+                    });
+                }
+                Some(_) => {}
+            }
+        }
+        stale
     }
 
     /// Track an inscription observed on the canonical channel (ours or
@@ -289,6 +429,7 @@ impl TxState {
                 payload,
                 withdraws,
                 posted: true,
+                first_seen_block: None,
             },
         );
     }
@@ -329,6 +470,7 @@ impl TxState {
                 last_msg,
                 is_atomic_bundle,
                 seq,
+                first_seen_block: None,
             },
         );
         last_msg
@@ -744,6 +886,7 @@ impl TxState {
 
     /// Remove a pending inscription and return its signed tx.
     pub fn remove_pending(&mut self, tx_hash: &TxHash) -> Option<SignedMantleTx<Unverified>> {
+        self.own_builders.remove(tx_hash);
         if let Some(removed) = self.pending.remove(tx_hash) {
             if let Some(children) = self.pending_by_parent.get_mut(&removed.parent_msg) {
                 children.retain(|h| h != tx_hash);

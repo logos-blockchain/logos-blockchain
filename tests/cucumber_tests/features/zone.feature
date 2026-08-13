@@ -742,3 +742,48 @@ Feature: Zone SDK
     Then zone transaction "CONFIG_BA" is included in 180 seconds
     And the zone indexer returns all zone messages exactly once in any order in 600 seconds
     And I stop all nodes
+
+  @zone_ci
+  Scenario: Zone sequencer re-funds a double-handed inscription after node restart
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 2           | 12500        |
+      | 4             | 4           | 25000        |
+    And I have a cluster with capacity of 2 nodes
+    # NODE_4 is only a fork-provider; SEQ_B is registered but never started, so
+    # the table's "at least one sequencer" rule is satisfied without running one
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers |
+      | NODE_1    | 1             | WALLET_1A   | NODE_4       | SEQ_A      |
+      | NODE_4    | 4             | WALLET_4A   |              | SEQ_B      |
+    When node "NODE_1" is at height 2 in 240 seconds
+    # Starve the funding wallet to two distinct notes so the reused note is
+    # deterministic (largest-first selection picks 9000 for both publishes)
+    And I drain all node "NODE_1" wallets into "WALLET_1A"
+    And wallet "WALLET_1A" has 14000 or more LGO in 240 seconds
+    And wallet "WALLET_1A" sends 1 notes of 9000 LGO to node "NODE_1" funding wallet as "TOPUP_A"
+    And wallet "WALLET_1A" sends 1 notes of 8000 LGO to node "NODE_1" funding wallet as "TOPUP_B"
+    And transaction "TOPUP_A" is included on node "NODE_1" in 240 seconds
+    And transaction "TOPUP_B" is included on node "NODE_1" in 240 seconds
+    And I start zone sequencer "SEQ_A" with indexer
+    # Isolate NODE_4 before MSG_1 exists so its branch can never carry it
+    When I stop node "NODE_4"
+    And sequencer "SEQ_A" submits the following zone messages without waiting for inclusion:
+      | alias | data      |
+      | MSG_1 | message 1 |
+    And node "NODE_1" alone reaches height 8 in 240 seconds
+    # NODE_1 down wipes its wallet reservations; NODE_4 out-builds it blind
+    When I stop node "NODE_1"
+    And I restart node "NODE_4"
+    And node "NODE_4" alone reaches height 14 in 300 seconds
+    # NODE_1 rejoins, adopts NODE_4's longer branch, orphans MSG_1; SEQ_A
+    # reconnects and republishes MSG_1 byte-identically (its note is free again)
+    When I restart node "NODE_1"
+    And node "NODE_1" is at height 14 in 240 seconds
+    # The next publish double-hands MSG_1's note; the wedged inscription can
+    # only finalize via the sequencer's stale-refund rebuild
+    And sequencer "SEQ_A" submits the following zone messages without waiting for inclusion:
+      | alias | data      |
+      | MSG_2 | message 2 |
+    Then the zone indexer returns all zone messages exactly once in any order in 600 seconds
+    And I stop all nodes
