@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use lb_core::{
     block::genesis::GenesisBlock,
-    mantle::{Note, traits::GenesisTx as _},
+    mantle::{GenesisTime, Note, traits::GenesisTx as _},
     sdp::{Locator, ServiceType},
 };
 use lb_key_management_system_service::keys::{Key, ZkKey};
@@ -37,6 +37,7 @@ pub fn apply_wallet_genesis_overrides(
     wallet_accounts: &[(ZkKey, u64)],
     key_id_for_preload_backend: impl Fn(&Key) -> String,
     test_context: Option<&str>,
+    genesis_time: GenesisTime,
 ) -> GenesisBlock {
     if wallet_accounts.is_empty() {
         return genesis_block.clone();
@@ -92,7 +93,7 @@ pub fn apply_wallet_genesis_overrides(
     }
 
     let genesis_block =
-        create_genesis_block_with_declarations(transfer_op, providers, test_context);
+        create_genesis_block_with_declarations(transfer_op, providers, test_context, genesis_time);
 
     for general in general_configs {
         for (secret_key, _) in wallet_accounts {

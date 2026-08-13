@@ -1,9 +1,14 @@
 use std::{
-    collections::HashMap, error::Error, num::NonZeroU32, path::PathBuf, sync::Arc, time::Duration,
+    collections::{HashMap, HashSet},
+    error::Error,
+    num::NonZeroU32,
+    path::PathBuf,
+    sync::{Arc, LazyLock, Mutex},
+    time::Duration,
 };
 
 use lb_config::kms::key_id_for_preload_backend;
-use lb_core::block::genesis::GenesisBlock;
+use lb_core::{block::genesis::GenesisBlock, mantle::GenesisTime};
 use lb_node::config::{RunConfig, deployment::DeploymentSettings};
 use lb_utils::math::NonNegativeRatio;
 use rand::{Rng, SeedableRng as _};
@@ -28,6 +33,31 @@ const DEFAULT_SLOT_TIME_IN_SECS: u64 = 1;
 const DEFAULT_ACTIVE_SLOT_COEFF: NonNegativeRatio =
     NonNegativeRatio::new(1, NonZeroU32::new(10).unwrap());
 const DEFAULT_SECURITY_PARAM: NonZeroU32 = NonZeroU32::new(20).unwrap();
+
+static RESERVED_AUTOMATIC_GENESIS_TIMES: LazyLock<Mutex<HashSet<GenesisTime>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// Reserves a near-current genesis second for a new automatically configured
+/// deployment in this process.
+#[must_use]
+pub fn resolve_automatic_genesis_time() -> GenesisTime {
+    let requested = time::OffsetDateTime::now_utc()
+        .try_into()
+        .expect("current time should fit in GenesisTime");
+    let mut reserved = RESERVED_AUTOMATIC_GENESIS_TIMES
+        .lock()
+        .expect("automatic genesis time reservation lock should not be poisoned");
+
+    let mut candidate = requested;
+    while !reserved.insert(candidate) {
+        let next = time::OffsetDateTime::from(candidate) + time::Duration::seconds(1);
+        candidate = next
+            .try_into()
+            .expect("automatic genesis time should fit in GenesisTime");
+    }
+
+    candidate
+}
 
 #[derive(Debug, Error)]
 pub enum TopologyBuildError {
@@ -85,6 +115,8 @@ pub struct TopologyConfig {
     pub wallet_config: WalletConfig,
     pub scenario_base_dir: PathBuf,
     pub genesis_block: Option<GenesisBlock>,
+    requested_genesis_time: Option<GenesisTime>,
+    genesis_time: Option<GenesisTime>,
     pub slot_duration: Option<Duration>,
     pub active_slot_coeff: NonNegativeRatio,
     pub security_param: NonZeroU32,
@@ -120,6 +152,19 @@ impl TopologyConfig {
     pub fn with_test_context(mut self, test_context: Option<String>) -> Self {
         self.test_context = test_context;
         self
+    }
+
+    #[must_use]
+    pub const fn with_genesis_time(mut self, genesis_time: GenesisTime) -> Self {
+        self.requested_genesis_time = Some(genesis_time);
+        self
+    }
+
+    /// Returns the genesis time resolved while building this deployment.
+    #[must_use]
+    pub const fn genesis_time(&self) -> GenesisTime {
+        self.genesis_time
+            .expect("genesis time is available only on a built deployment")
     }
 
     #[must_use]
@@ -167,6 +212,8 @@ impl Default for TopologyConfig {
             wallet_config: WalletConfig::default(),
             scenario_base_dir: std::env::temp_dir(),
             genesis_block: None,
+            requested_genesis_time: None,
+            genesis_time: None,
             slot_duration: Some(Duration::from_secs(DEFAULT_SLOT_TIME_IN_SECS)),
             active_slot_coeff: DEFAULT_ACTIVE_SLOT_COEFF,
             security_param: DEFAULT_SECURITY_PARAM,
@@ -253,7 +300,19 @@ impl DeploymentBuilder {
         self
     }
 
+    #[must_use]
+    pub const fn with_genesis_time(mut self, genesis_time: GenesisTime) -> Self {
+        self.config.requested_genesis_time = Some(genesis_time);
+        self
+    }
+
     pub fn build(mut self) -> Result<DeploymentPlan, TopologyBuildError> {
+        let genesis_time = self
+            .config
+            .requested_genesis_time
+            .unwrap_or_else(resolve_automatic_genesis_time);
+        self.config.genesis_time = Some(genesis_time);
+
         self.config.wallet_config.validate(
             self.config.allow_multiple_genesis_tokens,
             self.config.allow_zero_value_genesis_tokens,
@@ -279,6 +338,7 @@ impl DeploymentBuilder {
             self.config.blend_core_nodes,
             self.config.network_params.as_ref(),
             self.config.test_context.as_deref(),
+            genesis_time,
         );
 
         let wallet_accounts = self
@@ -296,6 +356,7 @@ impl DeploymentBuilder {
             &wallet_accounts,
             key_id_for_preload_backend,
             self.config.test_context.as_deref(),
+            genesis_time,
         );
 
         let nodes = build_node_plans(node_count, &ids, &node_configs)?;
@@ -394,5 +455,41 @@ impl DeploymentProvider<DeploymentPlan> for DeploymentBuilder {
         builder
             .build()
             .map_err(|error| Box::new(error) as DynTopologyError)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn automatic_genesis_times_are_unique_within_a_process() {
+        let first = DeploymentBuilder::new(TopologyConfig::empty())
+            .build()
+            .expect("first deployment should build");
+        let second = DeploymentBuilder::new(TopologyConfig::empty())
+            .build()
+            .expect("second deployment should build");
+
+        assert_ne!(
+            first.config().genesis_time(),
+            second.config().genesis_time()
+        );
+    }
+
+    #[test]
+    fn explicit_genesis_times_can_be_shared() {
+        let genesis_time = GenesisTime::new(1_000);
+        let first = DeploymentBuilder::new(TopologyConfig::empty())
+            .with_genesis_time(genesis_time)
+            .build()
+            .expect("first deployment should build");
+        let second = DeploymentBuilder::new(TopologyConfig::empty())
+            .with_genesis_time(genesis_time)
+            .build()
+            .expect("second deployment should build");
+
+        assert_eq!(first.config().genesis_time(), genesis_time);
+        assert_eq!(second.config().genesis_time(), genesis_time);
     }
 }

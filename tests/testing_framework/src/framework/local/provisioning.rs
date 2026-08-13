@@ -636,6 +636,7 @@ fn plan_local_node_config(
             base_consensus,
             base_time,
             descriptors.config.test_context.as_deref(),
+            descriptors.config.genesis_time(),
         )
         .map_err(|source| -> DynError { source.into() })?;
 

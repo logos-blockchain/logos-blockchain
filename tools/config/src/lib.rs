@@ -17,7 +17,7 @@ use std::sync::LazyLock;
 use blend::GeneralBlendConfig;
 use lb_core::{
     block::genesis::GenesisBlock,
-    mantle::traits::GenesisTx as _,
+    mantle::{GenesisTime, traits::GenesisTx as _},
     sdp::{Locator, ServiceType},
 };
 use lb_node::config::KmsConfig;
@@ -59,8 +59,14 @@ pub struct GeneralConfig {
 pub fn create_general_configs(
     n_nodes: usize,
     test_context: Option<&str>,
+    genesis_time: GenesisTime,
 ) -> (Vec<GeneralConfig>, GenesisBlock) {
-    create_general_configs_with_network(n_nodes, &NetworkParams::default(), test_context)
+    create_general_configs_with_network(
+        n_nodes,
+        &NetworkParams::default(),
+        test_context,
+        genesis_time,
+    )
 }
 
 #[must_use]
@@ -68,8 +74,15 @@ pub fn create_general_configs_with_network(
     n_nodes: usize,
     network_params: &NetworkParams,
     test_context: Option<&str>,
+    genesis_time: GenesisTime,
 ) -> (Vec<GeneralConfig>, GenesisBlock) {
-    create_general_configs_with_blend_core_subset(n_nodes, n_nodes, network_params, test_context)
+    create_general_configs_with_blend_core_subset(
+        n_nodes,
+        n_nodes,
+        network_params,
+        test_context,
+        genesis_time,
+    )
 }
 
 #[must_use]
@@ -78,6 +91,7 @@ pub fn create_general_configs_with_blend_core_subset(
     n_blend_core_nodes: usize,
     network_params: &NetworkParams,
     test_context: Option<&str>,
+    genesis_time: GenesisTime,
 ) -> (Vec<GeneralConfig>, GenesisBlock) {
     assert!(
         n_blend_core_nodes <= n_nodes,
@@ -99,6 +113,7 @@ pub fn create_general_configs_with_blend_core_subset(
         network_params,
         SHORT_PROLONGED_BOOTSTRAP_PERIOD,
         test_context,
+        genesis_time,
     )
 }
 
@@ -110,6 +125,7 @@ pub fn create_general_configs_from_ids(
     network_params: &NetworkParams,
     prolonged_bootstrap_period: Duration,
     test_context: Option<&str>,
+    genesis_time: GenesisTime,
 ) -> (Vec<GeneralConfig>, GenesisBlock) {
     let n_nodes = ids.len();
 
@@ -126,8 +142,12 @@ pub fn create_general_configs_from_ids(
         ids.len()
     );
 
-    let (consensus_configs, genesis_block) =
-        consensus::create_consensus_configs(ids, prolonged_bootstrap_period, test_context);
+    let (consensus_configs, genesis_block) = consensus::create_consensus_configs(
+        ids,
+        prolonged_bootstrap_period,
+        test_context,
+        genesis_time,
+    );
     let network_configs = network::create_network_configs(ids, network_params);
     let api_configs = api::create_api_configs(ids);
     let blend_configs = blend::create_blend_configs(ids, blend_ports);
@@ -150,8 +170,12 @@ pub fn create_general_configs_from_ids(
         .collect();
     let binding = genesis_block.genesis_tx();
     let transfer_op = binding.genesis_transfer();
-    let genesis_block_with_declarations =
-        create_genesis_block_with_declarations(transfer_op.clone(), providers, test_context);
+    let genesis_block_with_declarations = create_genesis_block_with_declarations(
+        transfer_op.clone(),
+        providers,
+        test_context,
+        genesis_time,
+    );
     let sdp_configs = create_sdp_configs(&genesis_block_with_declarations.genesis_tx(), n_nodes);
     let kms_configs = create_kms_configs(&blend_configs, &consensus_configs, None);
 

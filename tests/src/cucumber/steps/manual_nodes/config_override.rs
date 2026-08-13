@@ -620,13 +620,16 @@ mod tests {
         create_general_configs, deployment::e2e_deployment_settings_with_genesis_block,
         node::create_node_user_config,
     };
+    use lb_core::mantle::GenesisTime;
     use lb_libp2p::Multiaddr;
 
     use super::*;
     use crate::add_strings;
 
     fn test_run_config(test_context: &str) -> RunConfig {
-        let (configs, genesis_block) = create_general_configs(1, Some(test_context));
+        let genesis_time = GenesisTime::try_from(OffsetDateTime::now_utc())
+            .expect("current time should fit in GenesisTime");
+        let (configs, genesis_block) = create_general_configs(1, Some(test_context), genesis_time);
         let deployment = e2e_deployment_settings_with_genesis_block(&genesis_block);
         let user = create_node_user_config(
             configs

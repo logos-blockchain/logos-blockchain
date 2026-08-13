@@ -1,4 +1,5 @@
 use lb_config::kms::key_id_for_preload_backend;
+use lb_core::mantle::GenesisTime;
 use lb_key_management_system_service::keys::Key;
 use lb_libp2p::Multiaddr;
 use lb_node::config::KmsConfig;
@@ -27,6 +28,7 @@ pub enum DynamicConfigBuildError {
     Tracing,
 }
 
+#[expect(clippy::too_many_arguments, reason = "need all args")]
 pub fn create_node_config_for_node(
     id: [u8; 32],
     network_port: u16,
@@ -35,8 +37,10 @@ pub fn create_node_config_for_node(
     base_consensus: &GeneralConsensusConfig,
     time_config: &GeneralTimeConfig,
     test_context: Option<&str>,
+    genesis_time: GenesisTime,
 ) -> Result<Config, DynamicConfigBuildError> {
-    let consensus_config = build_consensus_config_for_node(id, base_consensus, test_context)?;
+    let consensus_config =
+        build_consensus_config_for_node(id, base_consensus, test_context, genesis_time)?;
 
     let blend_config = node_configs::blend::create_blend_configs(&[id], &[blend_port])
         .into_iter()
@@ -81,11 +85,13 @@ fn build_consensus_config_for_node(
     id: [u8; 32],
     base: &GeneralConsensusConfig,
     test_context: Option<&str>,
+    genesis_time: GenesisTime,
 ) -> Result<GeneralConsensusConfig, DynamicConfigBuildError> {
     let (mut configs, _) = node_configs::consensus::create_consensus_configs(
         &[id],
         SHORT_PROLONGED_BOOTSTRAP_PERIOD,
         test_context,
+        genesis_time,
     );
     let mut config = configs.pop().ok_or(DynamicConfigBuildError::Consensus)?;
     config.blend_note.clone_from(&base.blend_note);

@@ -6,10 +6,11 @@ use std::{
 
 use cucumber::{gherkin::Step, given, then, when};
 use lb_common_http_client::CommonHttpClient;
-use lb_core::codec::DeserializeOp as _;
+use lb_core::{codec::DeserializeOp as _, mantle::GenesisTime};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_testing_framework::USER_CONFIG_FILE;
+use time::Duration as TimeDuration;
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
@@ -69,6 +70,47 @@ use crate::{
 const PUBLIC_CRYPTARCHIA_ENDPOINT: &str = "public_cryptarchia_endpoint";
 const PUBLIC_CRYPTARCHIA_ENDPOINT_USERNAME: &str = "username";
 const PUBLIC_CRYPTARCHIA_ENDPOINT_PASSWORD: &str = "password";
+
+#[given(expr = "the chain starts {int} seconds after the scenario starts")]
+#[when(expr = "the chain starts {int} seconds after the scenario starts")]
+fn step_chain_starts_after_scenario(
+    world: &mut CucumberWorld,
+    step: &Step,
+    seconds: i64,
+) -> StepResult {
+    if seconds < 0 {
+        return Err(StepError::InvalidArgument {
+            message: format!("step `{}` requires a non-negative offset", step.value),
+        });
+    }
+
+    let started_at = world
+        .scenario_started_at
+        .ok_or_else(|| StepError::LogicalError {
+            message: "scenario start time is unavailable".to_owned(),
+        })?;
+    let genesis_time =
+        GenesisTime::try_from(started_at + TimeDuration::seconds(seconds)).map_err(|error| {
+            StepError::InvalidArgument {
+                message: format!("step `{}` has an invalid genesis time: {error}", step.value),
+            }
+        })?;
+    if let Some(existing_genesis_time) = world.genesis_time
+        && !world.nodes_info.is_empty()
+        && existing_genesis_time != genesis_time
+    {
+        return Err(StepError::LogicalError {
+            message: "cannot change genesis time after nodes have started".to_owned(),
+        });
+    }
+
+    world.set_genesis_time(genesis_time);
+    if world.nodes_info.is_empty() && world.manual_cluster_spec.is_some() {
+        rebuild_pending_local_manual_cluster(world)?;
+    }
+
+    Ok(())
+}
 
 #[given(expr = "I have a cluster with capacity of {int} nodes")]
 #[when(expr = "I have a cluster with capacity of {int} nodes")]

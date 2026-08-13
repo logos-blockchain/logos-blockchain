@@ -1,5 +1,4 @@
 use core::time::Duration;
-use std::sync::OnceLock;
 
 use lb_codec::BinaryEncode as _;
 use lb_core::{
@@ -24,7 +23,6 @@ use lb_key_management_system_service::keys::{
 };
 use lb_node::{Hashable as _, SignedMantleTx};
 use num_bigint::BigUint;
-use time::OffsetDateTime;
 
 use crate::unique::unique_test_context;
 
@@ -87,16 +85,6 @@ pub struct ServiceNote {
     pub output_index: usize,
 }
 
-static GENESIS_TIME: OnceLock<GenesisTime> = OnceLock::new();
-
-fn get_or_init_genesis_time() -> GenesisTime {
-    *GENESIS_TIME.get_or_init(|| {
-        OffsetDateTime::now_utc()
-            .try_into()
-            .expect("should fit in GenesisTime")
-    })
-}
-
 pub struct BaseConsensusMaterial {
     pub regular_note_keys: Vec<ZkKey>,
     pub blend_notes: Vec<ServiceNote>,
@@ -104,15 +92,18 @@ pub struct BaseConsensusMaterial {
     pub utxos: Vec<Utxo>,
 }
 
-fn inscription_for_current_test(test_context: Option<&str>) -> InscriptionOp {
+fn inscription_for_current_test(
+    test_context: Option<&str>,
+    genesis_time: GenesisTime,
+) -> InscriptionOp {
     let chain_id = unique_test_context(test_context);
-    println!("Genesis inscription: {chain_id}");
+    println!("Genesis inscription: {chain_id}, genesis_time: {genesis_time:?}");
     InscriptionOp {
         channel_id: ChannelId::from(EMPTY_CHANNEL_ID),
         inscription: Inscription::new_unchecked(
             CryptarchiaParameter {
                 chain_id,
-                genesis_time: get_or_init_genesis_time(),
+                genesis_time,
                 epoch_nonce: Fr::ZERO,
             }
             .encode_to_vec(),
@@ -123,7 +114,11 @@ fn inscription_for_current_test(test_context: Option<&str>) -> InscriptionOp {
 }
 
 #[must_use]
-pub fn create_genesis_block(utxos: &[Utxo], test_context: Option<&str>) -> GenesisBlock {
+pub fn create_genesis_block(
+    utxos: &[Utxo],
+    test_context: Option<&str>,
+    genesis_time: GenesisTime,
+) -> GenesisBlock {
     // Create transfer op with the utxos as outputs
     let mut outputs = utxos.iter().map(|u| u.note);
     #[expect(
@@ -142,7 +137,7 @@ pub fn create_genesis_block(utxos: &[Utxo], test_context: Option<&str>) -> Genes
         panic!("No outputs provided for genesis block")
     };
 
-    let inscription = inscription_for_current_test(test_context);
+    let inscription = inscription_for_current_test(test_context, genesis_time);
 
     genesis_builder
         .set_inscription(inscription)
@@ -155,9 +150,10 @@ pub fn create_consensus_configs(
     ids: &[[u8; 32]],
     prolonged_bootstrap_period: Duration,
     test_context: Option<&str>,
+    genesis_time: GenesisTime,
 ) -> (Vec<GeneralConsensusConfig>, GenesisBlock) {
     let material = create_base_consensus_material(ids);
-    let genesis_block = create_genesis_block(&material.utxos, test_context);
+    let genesis_block = create_genesis_block(&material.utxos, test_context, genesis_time);
 
     (
         material
@@ -282,8 +278,9 @@ pub fn create_genesis_block_with_declarations(
     transfer_op: TransferOp,
     providers: Vec<ProviderInfo>,
     test_context: Option<&str>,
+    genesis_time: GenesisTime,
 ) -> GenesisBlock {
-    let inscription = inscription_for_current_test(test_context);
+    let inscription = inscription_for_current_test(test_context, genesis_time);
     let transfer_id = transfer_op.op_id();
 
     let mut ops = vec![Op::Transfer(transfer_op), Op::ChannelInscribe(inscription)];

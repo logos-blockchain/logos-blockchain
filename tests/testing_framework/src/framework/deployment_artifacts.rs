@@ -98,6 +98,7 @@ fn deployment_settings(
         transfer_op,
         providers,
         topology.config.test_context.as_deref(),
+        topology.config().genesis_time(),
     );
 
     Ok(deployment_settings_for_topology(

@@ -29,7 +29,7 @@ use cucumber::{
 use lb_testing_framework::{
     hash_str, is_truthy_env, reap_all_stale_port_blocks, record_system_monitor_event,
     register_system_monitor_output_file, release_reserved_port_block,
-    unregister_system_monitor_output_file,
+    resolve_automatic_genesis_time, unregister_system_monitor_output_file,
 };
 use logos_blockchain_tests::cucumber::{
     defaults::{
@@ -40,6 +40,7 @@ use logos_blockchain_tests::cucumber::{
     },
     world::{CucumberWorld, DeployerKind},
 };
+use time::OffsetDateTime;
 
 type ScenarioAttempts = Arc<Mutex<HashMap<String, u8>>>;
 
@@ -228,6 +229,8 @@ fn prepare_world_for_scenario(
     scenario_name: &str,
 ) {
     world.set_deployer(deployer);
+    world.set_scenario_started_at(OffsetDateTime::now_utc());
+    world.set_genesis_time(resolve_automatic_genesis_time());
 
     if let Err(err) = world.preflight(deployer) {
         println!("Preflight failed for scenario '{scenario_name}': {err}");
