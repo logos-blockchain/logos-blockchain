@@ -1,9 +1,7 @@
 use core::{num::NonZeroU64, pin::Pin};
 
 use async_trait::async_trait;
-use futures::{
-    stream::{self, Stream, StreamExt as _},
-};
+use futures::stream::{self, Stream, StreamExt as _};
 use lb_blend_message::crypto::{
     key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
 };
@@ -104,7 +102,7 @@ fn create_proof_stream(
         solution_stream(epoch_nonce, difficulty).flat_map(move |solution| {
             stream::iter(per_solution_quota.values_range()).map(move |message_release_index| {
                 let solution = solution.clone();
-                
+
                 let task = spawn_blocking("logos/blend/pow-poq-blocking", move || {
                     let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
                     let (proof_of_quota, secret_selection_randomness) = VerifiedProofOfQuota::new(
@@ -157,9 +155,9 @@ async fn mine_solution(epoch_nonce: ZkHash, difficulty: PowTarget) -> ProofOfWor
     /// Number of candidate nonces a single blocking search round tries.
     ///
     /// The search occupies a blocking thread for as long as it runs, so it is
-    /// broken into rounds: between them the task returns to the runtime, which is
-    /// what lets a generator that is dropped mid-search stop being mined for. The
-    /// bound only has to keep a round short relative to an epoch.
+    /// broken into rounds: between them the task returns to the runtime, which
+    /// is what lets a generator that is dropped mid-search stop being mined
+    /// for. The bound only has to keep a round short relative to an epoch.
     const CANDIDATES_PER_SEARCH_ROUND: NonZeroU64 = NonZeroU64::new(1 << 16u8).unwrap();
 
     let start = Instant::now();

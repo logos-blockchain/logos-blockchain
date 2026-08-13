@@ -109,10 +109,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use const_hex::FromHex as _;
-    use lb_groth16::{AdditiveGroup as _, Field as _, fr_from_bytes_unchecked, fr_to_bytes};
+    use lb_groth16::{Field as _, fr_from_bytes_unchecked, fr_to_bytes};
     use num_bigint::BigUint;
     use rand::rngs::OsRng;
 
@@ -121,8 +119,7 @@ mod tests {
         fixtures::valid_proof_of_work_quota_inputs,
         inputs::prove::{PublicInputs, private::ProofOfWorkQuotaInputs},
         pow::{
-            DOMAIN_SEPARATION_TAG_FR, PowTarget, derive_pow_ticket, is_winning_ticket,
-            random_nonce, solve_puzzle,
+            DOMAIN_SEPARATION_TAG_FR, PowTarget, derive_pow_ticket, is_winning_ticket, solve_puzzle,
         },
     };
 
