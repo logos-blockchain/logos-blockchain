@@ -1819,11 +1819,16 @@ mod uncle_tests {
         assert_eq!(selected, [u2, u1, u3]);
     }
 
+    /// A config whose uncle reference window `floor(W/f)` is exactly
+    /// `uncle_reference_window` slots, by picking an `f` just below 1.
     #[must_use]
-    fn config(uncle_reference_window: u64) -> Config {
+    fn config(uncle_reference_window: u32) -> Config {
         Config::new(
             NonZero::new(10).unwrap(),
-            NonNegativeRatio::new(1, 10.try_into().unwrap()),
+            NonNegativeRatio::new(
+                uncle_reference_window + 1,
+                (uncle_reference_window + 2).try_into().unwrap(),
+            ),
             1f64.try_into().expect("1 > 0"),
             uncle_reference_window.try_into().unwrap(),
         )
@@ -1832,7 +1837,7 @@ mod uncle_tests {
     type HeaderId = u64;
 
     fn build_tree(
-        uncle_reference_window: u64,
+        uncle_reference_window: u32,
         genesis: HeaderId,
         blocks: impl IntoIterator<Item = (HeaderId, HeaderId, Slot)>,
     ) -> Cryptarchia<HeaderId> {
@@ -1846,7 +1851,7 @@ mod uncle_tests {
     }
 
     fn build_tree_with_uncle_slots(
-        uncle_reference_window: u64,
+        uncle_reference_window: u32,
         genesis: HeaderId,
         blocks: impl IntoIterator<Item = (HeaderId, HeaderId, Slot, UncleSlots)>,
     ) -> Cryptarchia<HeaderId> {
