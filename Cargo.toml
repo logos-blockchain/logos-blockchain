@@ -50,6 +50,7 @@ members = [
   "kms/operators",
   "ledger",
   "libp2p",
+  "lsql",
   "merkle/blake2btree",
   "merkle/dynamic-merkle",
   "merkle/tree",
@@ -254,6 +255,7 @@ reqwest                            = { default-features = false, version = "0.12
 rocksdb                            = { default-features = false, version = "0.24" }
 rpds                               = { default-features = false, version = "1" }
 rs-merkle-tree                     = { default-features = false, version = "0.1" }
+rusqlite                           = { default-features = false, version = "0.35" }
 tar                                = { default-features = false, version = "0.4.46" }
 # Must stay in sync with the rust-rapidsnark flake input in flake.nix.
 rust-rapidsnark       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git", rev = "e91187f8ccb5bbfc7bb00dac88169112428da78f" } # feat/nixify

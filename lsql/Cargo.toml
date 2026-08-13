@@ -1,0 +1,31 @@
+[package]
+categories  = { workspace = true }
+description = "Logos blockchain λSQL - replicated SQLite state over a zone channel"
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-lsql"
+publish     = false
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+bincode                          = { workspace = true }
+blake2                           = { workspace = true }
+lb-key-management-system-service = { workspace = true }
+lb-log-targets                   = { workspace = true }
+lb-utils                         = { workspace = true }
+lb-zone-sdk                      = { workspace = true }
+reqwest                          = { workspace = true }
+rusqlite                         = { features = ["bundled", "functions", "hooks"], workspace = true }
+serde                            = { features = ["derive"], workspace = true }
+thiserror                        = { workspace = true }
+tokio                            = { features = ["macros", "rt", "sync", "time"], workspace = true }
+tracing                          = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

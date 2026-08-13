@@ -7,6 +7,7 @@ log_target_modules! {
     blend,
     http_client,
     kms,
+    lsql,
     libp2p,
     mantle,
     mempool,
