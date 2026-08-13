@@ -48,31 +48,23 @@ impl Settings {
         .get()
     }
 
+    /// # Panics
+    /// If `W` exceeds `0.6k`, which would put the uncle reference window
+    /// outside the finalization window.
     #[must_use]
     pub fn consensus_config(&self) -> ConsensusConfig {
-        ConsensusConfig::new(
-            self.security_param,
-            self.slot_activation_coeff,
-            self.learning_rate,
-            self.uncle_reference_window(),
-        )
-    }
-
-    /// Derives the uncle reference window `w_u` from
-    /// the window absorption parameter `W` and the slot activation coeff `f`.
-    ///
-    /// # Panics
-    /// If `W` exceeds `0.6k`, which would put `w_u` outside the
-    /// finalization window.
-    #[must_use]
-    fn uncle_reference_window(&self) -> NonZero<u64> {
         let max = (0.6 * f64::from(self.security_param.get())).floor() as u32;
         assert!(
             self.window_absorption_parameter.get() <= max,
             "window_absorption_parameter must be at most floor(0.6 * security_param) = {max}",
         );
 
-        average_slots_for_blocks(self.window_absorption_parameter, self.slot_activation_coeff)
+        ConsensusConfig::new(
+            self.security_param,
+            self.slot_activation_coeff,
+            self.learning_rate,
+            self.window_absorption_parameter,
+        )
     }
 }
 
