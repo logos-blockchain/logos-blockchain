@@ -449,7 +449,7 @@ impl NetworkBehaviour for Behaviour {
                     self.handle_blocks_request_available(request_stream);
                 }
                 Err(e) => {
-                    debug!("Error while processing block download request: {}", e);
+                    error!("Error while processing block download request: {}", e);
                 }
             }
 
@@ -462,7 +462,7 @@ impl NetworkBehaviour for Behaviour {
                     self.handle_tip_request_available(request_stream);
                 }
                 Err(e) => {
-                    debug!("Error while processing tip request: {}", e);
+                    error!("Error while processing tip request: {}", e);
                 }
             }
 
