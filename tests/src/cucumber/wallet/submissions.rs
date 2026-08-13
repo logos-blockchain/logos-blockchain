@@ -8,7 +8,7 @@ use std::{collections::HashSet, time::Duration};
 use lb_core::mantle::{
     SignedMantleTx, TxGasCalculator as _, TxHash, Utxo,
     gas::MainnetGasProfile,
-    transactions::{OpsProofs, states::Preverified},
+    transactions::{GasPrices, OpsProofs, states::Preverified},
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -21,9 +21,10 @@ use crate::{
         chain,
         wallet::{
             PreparedWalletTransaction, PreparedWalletTransactionWorkItem, SignedWalletTransaction,
-            WalletFundingResources, WalletFundingSource, WalletInputSelectionStrategy,
-            WalletReservedInputs, WalletTransactionError, WalletTransactionIntent, WalletUtxos,
-            finalize_prepared_wallet_transaction, prepare_wallet_transaction_work_item,
+            TransactionFeePolicy, WalletFundingResources, WalletFundingSource,
+            WalletInputSelectionStrategy, WalletReservedInputs, WalletTransactionError,
+            WalletTransactionIntent, WalletUtxos, finalize_prepared_wallet_transaction,
+            prepare_wallet_transaction_work_item,
         },
     },
     cucumber::{
@@ -108,6 +109,7 @@ pub(crate) async fn reserve_user_wallet_transaction_submission_with_utxo_cache(
     sender_wallet_name: &str,
     receivers: &[(ZkPublicKey, u64)],
     available_utxos: &mut WalletUtxos,
+    gas_prices: Option<GasPrices>,
 ) -> Result<ReservedUserWalletSubmission, StepError> {
     let reserved = reserve_user_wallet_transaction_submission(
         world,
@@ -117,6 +119,7 @@ pub(crate) async fn reserve_user_wallet_transaction_submission_with_utxo_cache(
         Some(available_utxos),
         None,
         WalletInputSelectionStrategy::LargestFirst,
+        gas_prices,
     )
     .await?;
     apply_reserved_inputs_to_utxo_cache(available_utxos, reserved.reserved_inputs());
@@ -222,6 +225,7 @@ async fn get_best_n_nodes_for_submissions(
 pub(crate) async fn submit_signed_user_wallet_submissions_concurrently(
     world: &mut CucumberWorld,
     signed_submissions: Vec<SignedUserWalletSubmission>,
+    fee_policy: Option<&TransactionFeePolicy>,
 ) -> Result<Vec<(String, TxHash)>, StepError> {
     if signed_submissions.is_empty() {
         return Ok(Vec::new());
@@ -231,6 +235,7 @@ pub(crate) async fn submit_signed_user_wallet_submissions_concurrently(
         world,
         &signed_submissions,
         &same_tip_nodes[0].1,
+        fee_policy,
     )
     .await?;
 
@@ -325,6 +330,7 @@ async fn validate_signed_submissions_against_live_prices(
     world: &CucumberWorld,
     signed_submissions: &[SignedUserWalletSubmission],
     client: &NodeHttpClient,
+    fee_policy: Option<&TransactionFeePolicy>,
 ) -> Result<(), StepError> {
     let consensus = client
         .consensus_info()
@@ -332,7 +338,7 @@ async fn validate_signed_submissions_against_live_prices(
         .map_err(|source| StepError::StepFail {
             message: format!("live fee validation consensus query failed: {source}"),
         })?;
-    if let Some(policy) = &world.transaction_fee_policy {
+    if let Some(policy) = fee_policy {
         let current_epoch =
             consensus.cryptarchia_info.slot.into_inner() / world.slots_per_epoch.get();
         let valid_through_epoch = u64::from(policy.horizon.valid_through_epoch.into_inner());
@@ -353,7 +359,7 @@ async fn validate_signed_submissions_against_live_prices(
     for submission in signed_submissions {
         let required_fee = submission
             .signed_tx()
-            .total_gas_cost::<MainnetGasProfile>(&lb_core::mantle::transactions::GasPrices {
+            .total_gas_cost::<MainnetGasProfile>(&GasPrices {
                 execution_base_gas_price: prices.execution_base_gas_price,
                 storage_gas_price: prices.storage_gas_price,
             })
@@ -362,15 +368,12 @@ async fn validate_signed_submissions_against_live_prices(
             })?
             .into_inner();
         if submission.paid_fee() < required_fee {
-            let (prepared_at_epoch, valid_through_epoch) = world
-                .transaction_fee_policy
-                .as_ref()
-                .map_or((0, 0), |policy| {
-                    (
-                        policy.horizon.prepared_at_epoch.into_inner(),
-                        policy.horizon.valid_through_epoch.into_inner(),
-                    )
-                });
+            let (prepared_at_epoch, valid_through_epoch) = fee_policy.map_or((0, 0), |policy| {
+                (
+                    policy.horizon.prepared_at_epoch.into_inner(),
+                    policy.horizon.valid_through_epoch.into_inner(),
+                )
+            });
             return Err(StepError::FeeHorizonExpired {
                 paid_fee: submission.paid_fee(),
                 required_fee,
@@ -387,13 +390,10 @@ async fn validate_signed_submissions_against_live_prices(
 /// consensus tip; the final submission validation still checks live gas prices.
 pub(crate) async fn validate_fee_horizon_after_wallet_batch(
     world: &CucumberWorld,
+    policy: &TransactionFeePolicy,
     wallet_name: &str,
     prepared_count: usize,
 ) -> Result<(), StepError> {
-    let Some(policy) = &world.transaction_fee_policy else {
-        return Ok(());
-    };
-
     let (_, _, consensus) = sanitize_best_node_info(world, wallet_name, None).await?;
     let current_epoch = consensus.slot.into_inner() / world.slots_per_epoch.get();
     let valid_through_epoch = u64::from(policy.horizon.valid_through_epoch.into_inner());
@@ -734,6 +734,7 @@ pub(crate) async fn prepare_user_wallet_transaction_submission_with_change_and_s
         in_memory_available_utxos,
         change_public_key,
         input_selection_strategy,
+        None,
     )
     .await?;
     let ReservedUserWalletSubmission { wallet, submission } = reserved;
@@ -746,6 +747,7 @@ pub(crate) async fn prepare_user_wallet_transaction_submission_with_change_and_s
     Ok(PreparedUserWalletSubmission { wallet, submission })
 }
 
+#[expect(clippy::too_many_arguments, reason = "Transaction reservation inputs")]
 async fn reserve_user_wallet_transaction_submission(
     world: &mut CucumberWorld,
     step: &str,
@@ -754,6 +756,7 @@ async fn reserve_user_wallet_transaction_submission(
     in_memory_available_utxos: Option<&WalletUtxos>,
     change_public_key: Option<ZkPublicKey>,
     input_selection_strategy: WalletInputSelectionStrategy,
+    gas_prices: Option<GasPrices>,
 ) -> Result<ReservedUserWalletSubmission, StepError> {
     let wallet = world.resolve_wallet(sender_wallet_name).inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step);
@@ -797,8 +800,8 @@ async fn reserve_user_wallet_transaction_submission(
         input_selection_strategy,
     );
 
-    let transaction_intent = if let Some(policy) = &world.transaction_fee_policy {
-        transaction_intent.with_fee_policy(policy.clone())
+    let transaction_intent = if let Some(gas_prices) = gas_prices {
+        transaction_intent.with_gas_prices(gas_prices)
     } else {
         transaction_intent
     };

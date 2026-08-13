@@ -11,13 +11,10 @@ use lb_core::mantle::{
 use lb_key_management_system_service::keys::ZkPublicKey;
 
 use super::error::WalletTransactionError;
-use crate::common::wallet::TransactionFeePolicy;
-
 pub struct WalletTransactionIntent {
     tx_builder: MantleTxBuilder,
     context: MantleTxContext,
     sender_output_total: u64,
-    fee_policy: Option<TransactionFeePolicy>,
 }
 
 impl WalletTransactionIntent {
@@ -31,7 +28,6 @@ impl WalletTransactionIntent {
             tx_builder,
             context,
             sender_output_total,
-            fee_policy: None,
         }
     }
 
@@ -70,26 +66,8 @@ impl WalletTransactionIntent {
     }
 
     #[must_use]
-    pub fn with_fee_policy(mut self, policy: TransactionFeePolicy) -> Self {
-        self = self.with_gas_prices(policy.horizon.ceiling_prices.clone());
-        self.fee_policy = Some(policy);
-        self
-    }
-
-    pub(super) fn into_parts(
-        self,
-    ) -> (
-        MantleTxBuilder,
-        MantleTxContext,
-        u64,
-        Option<TransactionFeePolicy>,
-    ) {
-        (
-            self.tx_builder,
-            self.context,
-            self.sender_output_total,
-            self.fee_policy,
-        )
+    pub(super) fn into_parts(self) -> (MantleTxBuilder, MantleTxContext, u64) {
+        (self.tx_builder, self.context, self.sender_output_total)
     }
 }
 

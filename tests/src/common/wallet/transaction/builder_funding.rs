@@ -16,8 +16,8 @@ use rpds::{HashTrieMapSync, HashTrieSetSync};
 
 use super::intent::WalletTransactionIntent;
 use crate::common::wallet::{
-    TransactionFeePolicy, WalletFundingOutcome, WalletFundingPlan, WalletFundingResources,
-    WalletFundingSource, WalletFundingUtxos, WalletInputSelectionStrategy, WalletSelectedInputs,
+    WalletFundingOutcome, WalletFundingPlan, WalletFundingResources, WalletFundingSource,
+    WalletFundingUtxos, WalletInputSelectionStrategy, WalletSelectedInputs,
 };
 
 pub fn fund_builder_from_wallet_source(
@@ -67,16 +67,9 @@ pub fn wallet_state_from_utxos(utxos: Vec<Utxo>) -> WalletState {
 pub(super) fn fund_wallet_transaction(
     intent: WalletTransactionIntent,
     resources: WalletFundingResources,
-) -> Result<
-    (
-        MantleTxBuilder,
-        MantleTxContext,
-        Option<TransactionFeePolicy>,
-    ),
-    WalletError,
-> {
+) -> Result<(MantleTxBuilder, MantleTxContext), WalletError> {
     let (sender, fee_sponsor) = resources.into_parts();
-    let (tx_builder, context, sender_output_total, fee_policy) = intent.into_parts();
+    let (tx_builder, context, sender_output_total) = intent.into_parts();
 
     let funded_builder = match fee_sponsor {
         None => {
@@ -97,7 +90,7 @@ pub(super) fn fund_wallet_transaction(
         )?,
     };
 
-    Ok((funded_builder, context, fee_policy))
+    Ok((funded_builder, context))
 }
 
 fn fund_unsponsored_wallet_transaction(

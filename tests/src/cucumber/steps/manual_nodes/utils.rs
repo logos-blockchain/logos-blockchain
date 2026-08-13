@@ -1094,7 +1094,9 @@ fn prepare_config_patch(
 
     apply_user_config_overrides(config, user_config_overrides)?;
     apply_deployment_config_overrides(config, deployment_config_overrides)?;
-    remove_external_scenario_wallet_keys(config, scenario_wallet_key_ids);
+    if join_external_network {
+        remove_external_scenario_wallet_keys(config, scenario_wallet_key_ids);
+    }
     Ok(())
 }
 

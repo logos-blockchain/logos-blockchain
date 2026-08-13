@@ -64,6 +64,7 @@ pub enum ManualCommand {
         num_transactions: usize,
         value: u64,
         cycles: usize,
+        epochs_headroom: u32,
     },
     CoinSplitAllUserWallets {
         splits_per_wallet: usize,
@@ -78,6 +79,7 @@ pub enum ManualCommand {
         cycles: usize,
         num_transactions: usize,
         value: u64,
+        epochs_headroom: u32,
     },
     FaucetFundsAllUserWallets {
         rounds: usize,
@@ -260,6 +262,7 @@ fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
                 num_transactions: parse_usize_field(&parts, "num_transactions")?,
                 value: parse_u64_field(&parts, "value")?,
                 cycles: parse_usize_field(&parts, "cycles")?,
+                epochs_headroom: parse_u32_field(&parts, "epochs_headroom")?,
             })
         }
         "COIN_SPLIT_ALL_USER_WALLETS" => Ok(ManualCommand::CoinSplitAllUserWallets {
@@ -278,6 +281,7 @@ fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
                 cycles: parse_usize_field(&parts, "cycles")?,
                 num_transactions: parse_usize_field(&parts, "num_transactions")?,
                 value: parse_u64_field(&parts, "value")?,
+                epochs_headroom: parse_u32_field(&parts, "epochs_headroom")?,
             })
         }
         "FAUCET_ALL_USER_WALLETS" => Ok(ManualCommand::FaucetFundsAllUserWallets {
@@ -316,6 +320,13 @@ fn parse_quoted_field(parts: &[String], key: &str) -> Result<String, StepError> 
 fn parse_u64_field(parts: &[String], key: &str) -> Result<u64, StepError> {
     let raw = parse_number_field(parts, key)?;
     raw.parse::<u64>().map_err(|_| StepError::InvalidArgument {
+        message: format!("Invalid value for '{key}': '{raw}'"),
+    })
+}
+
+fn parse_u32_field(parts: &[String], key: &str) -> Result<u32, StepError> {
+    let raw = parse_number_field(parts, key)?;
+    raw.parse::<u32>().map_err(|_| StepError::InvalidArgument {
         message: format!("Invalid value for '{key}': '{raw}'"),
     })
 }
@@ -577,7 +588,7 @@ mod tests {
 
     fn assert_continuous_round_robin_user_wallets_command() {
         let command = parse_ok(
-            "CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs 10, coin_split_value 100, num_transactions 4, value 50, cycles 3",
+            "CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs 10, coin_split_value 100, num_transactions 4, value 50, cycles 3, epochs_headroom 2",
         );
 
         assert!(matches!(
@@ -588,11 +599,13 @@ mod tests {
                 num_transactions,
                 value,
                 cycles,
+                epochs_headroom,
             } if coin_split_outputs == 10
                 && coin_split_value == 100
                 && num_transactions == 4
                 && value == 50
                 && cycles == 3
+                && epochs_headroom == 2
         ));
     }
 
@@ -644,7 +657,7 @@ mod tests {
 
     fn assert_continuous_next_wallet_user_wallets_command() {
         let command = parse_ok(
-            "CONTINUOUS_NEXT_WALLET_USER_WALLETS, cycles 3, num_transactions 30, value 100",
+            "CONTINUOUS_NEXT_WALLET_USER_WALLETS, cycles 3, num_transactions 30, value 100, epochs_headroom 2",
         );
 
         assert!(matches!(
@@ -653,7 +666,8 @@ mod tests {
                 cycles,
                 num_transactions,
                 value,
-            } if cycles == 3 && num_transactions == 30 && value == 100
+                epochs_headroom,
+            } if cycles == 3 && num_transactions == 30 && value == 100 && epochs_headroom == 2
         ));
     }
 
@@ -738,6 +752,7 @@ mod tests {
                 num_transactions: 0,
                 value: 0,
                 cycles: 0,
+                epochs_headroom: 0,
             },
             ManualCommand::CoinSplitAllUserWallets {
                 splits_per_wallet: 0,
@@ -752,6 +767,7 @@ mod tests {
                 cycles: 0,
                 num_transactions: 0,
                 value: 0,
+                epochs_headroom: 0,
             },
             ManualCommand::FaucetFundsAllUserWallets { rounds: 0 },
             ManualCommand::FaucetFundsAllFundingWallets { rounds: 0 },

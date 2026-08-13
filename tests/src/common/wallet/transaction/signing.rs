@@ -11,7 +11,7 @@ use lb_core::mantle::{
 use lb_key_management_system_service::keys::ZkKey;
 
 use super::{error::WalletTransactionError, signed::SignedWalletTransaction};
-use crate::common::wallet::{TransactionFeePolicy, WalletReservedInputs};
+use crate::common::wallet::WalletReservedInputs;
 
 pub(super) type WalletTransferSigners = HashMap<NoteId, ZkKey>;
 
@@ -21,7 +21,6 @@ pub(super) fn sign_prepared_wallet_transaction(
     tx_hash: TxHash,
     transfer_proofs: OpsProofs,
     reserved_inputs: WalletReservedInputs,
-    fee_policy: Option<&TransactionFeePolicy>,
     leading_op_proofs: OpsProofs,
 ) -> Result<SignedWalletTransaction, WalletTransactionError> {
     let gas_prices = context.gas_context.get_gas_prices();
@@ -59,7 +58,6 @@ pub(super) fn sign_prepared_wallet_transaction(
         reserved_inputs,
         paid_fee,
         mandatory_fee_at_preparation,
-        fee_policy,
     ))
 }
 

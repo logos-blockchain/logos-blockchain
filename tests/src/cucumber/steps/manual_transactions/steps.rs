@@ -691,7 +691,6 @@ async fn step_continuous_user_wallets(
     cycles: usize,
     epochs_headroom: u32,
 ) -> StepResult {
-    world.transaction_epochs_headroom = epochs_headroom;
     info!(
         target: TARGET,
         "Starting continuous user wallet transactions: coin_split_outputs={coin_split_outputs}, coin_split_value={coin_split_value}, transactions={transactions}, value={value}, cycles={cycles}"
@@ -735,7 +734,6 @@ async fn step_continuous_user_wallets_with_timeout(
     timeout_seconds: u64,
     epochs_headroom: u32,
 ) -> StepResult {
-    world.transaction_epochs_headroom = epochs_headroom;
     timeout(
         Duration::from_secs(timeout_seconds),
         step_continuous_user_wallets(
@@ -816,7 +814,6 @@ async fn step_perform_stress_continuous_cycles_next_user_wallet(
     value: u64,
     epochs_headroom: u32,
 ) -> StepResult {
-    world.transaction_epochs_headroom = epochs_headroom;
     execute_continuous_next_wallet_user_wallet(
         world,
         &step.value,
@@ -824,6 +821,7 @@ async fn step_perform_stress_continuous_cycles_next_user_wallet(
             cycles,
             num_transactions,
             value,
+            epochs_headroom,
         },
     )
     .await

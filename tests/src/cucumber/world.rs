@@ -44,8 +44,7 @@ use tracing::warn;
 use crate::{
     BIN_PATH_RELEASE,
     common::wallet::{
-        TrackedWalletKeys, TrackedWalletKeysBySource, TrackedWallets, TransactionFeePolicy,
-        WalletDiagnostics,
+        TrackedWalletKeys, TrackedWalletKeysBySource, TrackedWallets, WalletDiagnostics,
         scanner::{
             ScannerSeed, SharedWalletScannerState, WalletScannerRuntime, WalletScannerState,
             build_fork_group_scanner_configs, start_wallet_scanners, wait_for_scanner_catch_up,
@@ -897,12 +896,6 @@ pub struct CucumberWorld {
     pub node_provisioned_wallet_pks: HashSet<ZkPublicKey>,
     /// Manual: Scenario-level fee sponsor configuration and accounting.
     pub fee_state: ScenarioFeeState,
-    /// Fee policy shared by all transactions prepared in the current
-    /// long-running cycle.
-    pub transaction_fee_policy: Option<TransactionFeePolicy>,
-    /// Explicitly configured epoch headroom for long-running transactions.
-    /// Zero means use the live fee prices without epoch projection.
-    pub transaction_epochs_headroom: u32,
     /// Manual: Scenario-local wallet read model.
     ///
     /// This shared state contains wallet balances/UTXOs observed during a test
@@ -1112,11 +1105,6 @@ impl Debug for CucumberWorld {
                 &self.node_provisioned_wallet_pks.len(),
             )
             .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
-            .field("transaction_fee_policy", &self.transaction_fee_policy)
-            .field(
-                "transaction_epochs_headroom",
-                &self.transaction_epochs_headroom,
-            )
             .field("wallets", &"SharedTrackedWallets")
             .field("submitted_transactions", &self.submitted_transactions.len())
             .field("submission_outcomes", &self.submission_outcomes.len())
