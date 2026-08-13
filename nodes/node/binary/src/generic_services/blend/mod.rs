@@ -4,7 +4,7 @@ use lb_blend::{
     proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
     scheduling::message_blend::provers::{
         BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
-        core_and_leader::RealCoreAndLeaderProofsGenerator,
+        core_leader_and_pow::RealCoreLeaderAndPowProofsGenerator,
         leader::{LeaderProofsGenerator, RealLeaderProofsGenerator},
     },
 };
@@ -36,7 +36,7 @@ pub type BlendCoreService<RuntimeServiceId> = lb_blend_service::core::BlendServi
     PeerId,
     lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId>,
     SdpService<RuntimeServiceId>,
-    RealCoreAndLeaderProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>,
+    RealCoreLeaderAndPowProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>,
     RealProofsVerifier,
     NtpTimeBackend,
     CryptarchiaService<RuntimeServiceId>,

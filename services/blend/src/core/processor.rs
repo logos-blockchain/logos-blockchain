@@ -23,7 +23,7 @@ use lb_blend::{
                 EpochCryptographicProcessorSettings,
                 core_and_leader::send_and_receive::EpochCryptographicProcessor,
             },
-            provers::core_and_leader::CoreAndLeaderProofsGenerator,
+            provers::core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
         },
     },
 };
@@ -44,7 +44,7 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
 impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
     CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
 where
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
     pub fn try_new_with_core_condition_check(

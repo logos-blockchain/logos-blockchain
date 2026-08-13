@@ -13,6 +13,7 @@ use lb_blend::{
     scheduling::message_blend::provers::{
         BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
         core_and_leader::CoreAndLeaderProofsGenerator,
+        core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
     },
 };
 use lb_chain_service::Epoch;
@@ -43,6 +44,15 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
     }
 
     async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof> {
+        Some(mock_blend_proof())
+    }
+}
+
+#[async_trait]
+impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
+    for MockCoreAndLeaderProofsGenerator
+{
+    async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {
         Some(mock_blend_proof())
     }
 }

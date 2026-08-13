@@ -1,6 +1,6 @@
 use core::fmt::{self, Debug, Formatter};
 
-use lb_groth16::{AdditiveGroup as _, Fr, fr_to_bytes};
+use lb_groth16::{Field as _, Fr, fr_to_bytes};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -106,12 +106,22 @@ impl PowInputs {
     /// These are public inputs, so a prover and the verifier checking its
     /// proofs must use identical values. Every call site shares this single
     /// definition so they cannot drift apart.
+    ///
+    /// Both values are deliberately as permissive as the circuit allows, so
+    /// that the branch is usable before the chain supplies its parameters:
+    ///
+    /// - the difficulty is `p - 1`, the largest field element, so every ticket
+    ///   but one satisfies it and a solution costs a single hash to find;
+    /// - the quota is the widest the circuit's 20-bit index signal admits, so
+    ///   it never binds before the chain-sourced value does. The spec sets `Q_W
+    ///   = ß_max`, one message per solution, which is a per-deployment value
+    ///   this constant cannot see.
     // TODO: Remove once the PoW quota parameters are sourced from the chain.
     #[must_use]
-    pub const fn unwired_placeholder() -> Self {
+    pub fn unwired_placeholder() -> Self {
         Self {
-            pow_blend_difficulty: ZkHash::ZERO,
-            pow_quota: Quota::ZERO,
+            pow_blend_difficulty: -ZkHash::ONE,
+            pow_quota: Quota::new::<{ Quota::MAX }>(),
         }
     }
 }

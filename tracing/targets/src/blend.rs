@@ -18,7 +18,9 @@ log_targets! {
         DELAY,
         proofs::CORE,
         proofs::CORE_AND_LEADER,
+        proofs::CORE_LEADER_AND_POW,
         proofs::LEADER,
+        proofs::POW,
     },
     service::{
         CORE,
