@@ -112,6 +112,46 @@ fn step_chain_starts_after_scenario(
     Ok(())
 }
 
+#[then(expr = "the configured genesis time has not passed for {int} seconds")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
+async fn step_genesis_time_has_not_passed(
+    world: &mut CucumberWorld,
+    step: &Step,
+    seconds: u64,
+) -> StepResult {
+    let genesis_time = world.genesis_time.ok_or_else(|| StepError::LogicalError {
+        message: "the scenario has no configured genesis time".to_owned(),
+    })?;
+    let genesis_datetime = time::OffsetDateTime::from(genesis_time);
+    let timeout = Duration::from_secs(seconds);
+    let started_waiting = Instant::now();
+
+    loop {
+        let now = time::OffsetDateTime::now_utc();
+        if now >= genesis_datetime {
+            return Err(StepError::StepFail {
+                message: format!(
+                    "Step `{}` failed: configured genesis time {genesis_datetime} had passed at {now}",
+                    step.value
+                ),
+            });
+        }
+
+        if started_waiting.elapsed() >= timeout {
+            info!(
+                target: TARGET,
+                "Configured genesis time {genesis_datetime} remained in the future for {seconds} seconds"
+            );
+            return Ok(());
+        }
+
+        sleep(Duration::from_millis(250)).await;
+    }
+}
+
 #[given(expr = "I have a cluster with capacity of {int} nodes")]
 #[when(expr = "I have a cluster with capacity of {int} nodes")]
 fn step_manual_cluster(world: &mut CucumberWorld, step: &Step, nodes_count: usize) -> StepResult {

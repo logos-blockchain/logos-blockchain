@@ -5050,7 +5050,6 @@ dependencies = [
  "libp2p",
  "logos-blockchain-api-service",
  "logos-blockchain-chain-service",
- "logos-blockchain-codec",
  "logos-blockchain-common-http-client",
  "logos-blockchain-config",
  "logos-blockchain-core",
