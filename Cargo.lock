@@ -4562,8 +4562,8 @@ dependencies = [
  "logos-blockchain-poseidon2",
  "num-bigint",
  "rand 0.8.6",
- "rpds",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
