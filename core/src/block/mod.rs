@@ -351,16 +351,9 @@ pub fn body_root<Tx: Hashable<Hash = TxHash>>(
 ) -> ContentId {
     let mut h = Hasher::new();
     h.update(b"BODY_ROOT_V1");
-    h.update(uncle_headers_hash(uncle_headers));
+    h.update(uncle_headers.encode_to_vec());
     h.update(merkle::calculate_transactions_root(transactions));
     ContentId::from(<[u8; 32]>::from(h.finalize()))
-}
-
-fn uncle_headers_hash(uncle_headers: &UncleHeaders) -> [u8; 32] {
-    let mut h = Hasher::new();
-    h.update(b"UNCLE_HEADERS_V1");
-    h.update(uncle_headers.encode_to_vec());
-    h.finalize().into()
 }
 
 impl<Tx: Clone + Eq + Serialize + DeserializeOwned + Hashable<Hash = TxHash> + StorageSize>

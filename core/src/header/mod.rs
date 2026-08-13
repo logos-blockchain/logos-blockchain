@@ -326,10 +326,9 @@ fn test_serde() {
 /// leaves)`, where the Merkle tree pads the leaf set to the next power of two
 /// with all-zero leaves and hashes inner nodes as `blake2b256(left || right)`.
 ///
-/// `body_root = blake2b256( b"BODY_ROOT_V1" || blake2b256( b"UNCLE_HEADERS_V1"
-/// || uncle_headers ) || transactions_root )`, where `uncle_headers` is the
-/// list encoding: a 1-byte little-endian element count followed by that many
-/// fixed 361-byte entries.
+/// `body_root = blake2b256( b"BODY_ROOT_V1" || uncle_headers ||
+/// transactions_root )`, where `uncle_headers` is the list encoding: a 1-byte
+/// little-endian element count followed by that many fixed 361-byte entries.
 ///
 /// `HeaderId (block_id) = blake2b256( b"BLOCK_ID_V1" || bedrock_version (1B)
 /// ||` `parent_block (32B) || slot_le (8B) || body_root (32B) ||
@@ -537,8 +536,7 @@ mod body_root_test_vectors {
             "transactions_root = Merkle( blake2b256(b\"MANTLE_TXHASH_V1\" || tx_bytes) leaves )"
         );
         println!(
-            "body_root  = blake2b256( b\"BODY_ROOT_V1\" || blake2b256( b\"UNCLE_HEADERS_V1\" || \
-             uncle_headers ) || transactions_root )"
+            "body_root  = blake2b256( b\"BODY_ROOT_V1\" || uncle_headers || transactions_root )"
         );
         println!(
             "block_id   = blake2b256( b\"BLOCK_ID_V1\" || bedrock_version || parent_block || \
