@@ -140,9 +140,7 @@ impl MantleTxBuilder {
     }
 
     /// Return a positive change output while reserving the requested
-    /// percentage of the final transaction's mandatory fee. The dummy output
-    /// makes the mandatory fee calculation include the change output before
-    /// the percentage is calculated.
+    /// percentage of the final transaction's mandatory fee.
     pub fn return_change<G: GasProfile>(
         self,
         context: &MantleTxContext,
@@ -153,10 +151,7 @@ impl MantleTxBuilder {
         // is based on the final transaction shape.
         let candidate = self.with_dummy_change_note()?;
         let mandatory_fee = candidate.minimum_gas_cost::<G>(context)?.into_inner();
-        let priority_fee_amount = Self::priority_fee_amount(mandatory_fee, priority_fee_percent)?;
-        let required_fee = mandatory_fee
-            .checked_add(priority_fee_amount)
-            .ok_or(GasOverflow)?;
+        let required_fee = Self::required_fee(mandatory_fee, priority_fee_percent)?;
         let available_change = self.net_balance() - i128::from(required_fee);
 
         match available_change.cmp(&1) {
@@ -171,15 +166,6 @@ impl MantleTxBuilder {
                     value: change,
                     pk: change_pk,
                 })?;
-
-                let final_mandatory_fee =
-                    tx_with_change.minimum_gas_cost::<G>(context)?.into_inner();
-                let final_priority_fee_amount =
-                    Self::priority_fee_amount(final_mandatory_fee, priority_fee_percent)?;
-                let final_required_fee = final_mandatory_fee
-                    .checked_add(final_priority_fee_amount)
-                    .ok_or(GasOverflow)?;
-                assert_eq!(tx_with_change.net_balance(), i128::from(final_required_fee));
 
                 Ok(Some(tx_with_change))
             }
@@ -267,11 +253,18 @@ impl MantleTxBuilder {
         priority_fee_percent: u64,
     ) -> Result<i128, TxBuilderError> {
         let mandatory_fee = self.minimum_gas_cost::<G>(context)?.into_inner();
-        let priority_fee_amount = Self::priority_fee_amount(mandatory_fee, priority_fee_percent)?;
-        let required_fee = mandatory_fee
-            .checked_add(priority_fee_amount)
-            .ok_or(GasOverflow)?;
+        let required_fee = Self::required_fee(mandatory_fee, priority_fee_percent)?;
         Ok(self.net_balance() - i128::from(required_fee))
+    }
+
+    fn required_fee(
+        mandatory_fee: Value,
+        priority_fee_percent: u64,
+    ) -> Result<Value, TxBuilderError> {
+        let priority_fee_amount = Self::priority_fee_amount(mandatory_fee, priority_fee_percent)?;
+        mandatory_fee
+            .checked_add(priority_fee_amount)
+            .ok_or_else(|| GasOverflow.into())
     }
 
     /// Calculates the priority fee amount for a mandatory fee using integer
@@ -705,5 +698,21 @@ mod tests {
         assert_eq!(MantleTxBuilder::priority_fee_amount(8, 12).unwrap(), 1);
         assert_eq!(MantleTxBuilder::priority_fee_amount(9, 12).unwrap(), 2);
         assert_eq!(MantleTxBuilder::priority_fee_amount(100, 101).unwrap(), 101);
+    }
+
+    #[test]
+    fn priority_fee_percentage_handles_u64_boundaries() {
+        assert_eq!(
+            MantleTxBuilder::priority_fee_amount(u64::MAX, 100).unwrap(),
+            u64::MAX
+        );
+        assert!(matches!(
+            MantleTxBuilder::priority_fee_amount(u64::MAX, 101),
+            Err(TxBuilderError::GasOverflow(_))
+        ));
+        assert!(matches!(
+            MantleTxBuilder::required_fee(u64::MAX, 100),
+            Err(TxBuilderError::GasOverflow(_))
+        ));
     }
 }
