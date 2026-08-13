@@ -1,7 +1,57 @@
 pub mod stream;
 
 pub mod task {
-    use tokio::{runtime::Handle, task::JoinHandle};
+    use core::{
+        pin::Pin,
+        task::{Context, Poll},
+    };
+
+    use tokio::{
+        runtime::Handle,
+        task::{JoinError, JoinHandle},
+    };
+
+    /// A [`JoinHandle`] that cancels its task when dropped.
+    ///
+    /// A plain handle *detaches* on drop, so work started for a consumer that
+    /// has since gone away runs to completion anyway. Wrapping the handle ties
+    /// the task's lifetime to the interest in its result, which is what lets a
+    /// dropped future or stream stop paying for a computation nobody will read.
+    /// Awaiting is unchanged; only the drop behaviour differs.
+    ///
+    /// Cancellation takes effect at the task's next await point, so a task is
+    /// stopped *between* the pieces of blocking work it awaits rather than
+    /// inside them: a [`spawn_blocking`] closure that has already started
+    /// cannot be interrupted, and wrapping its handle only keeps one that has
+    /// not started yet from starting at all.
+    pub struct CancellableHandle<T>(JoinHandle<T>);
+
+    impl<T> CancellableHandle<T> {
+        #[must_use]
+        pub const fn new(handle: JoinHandle<T>) -> Self {
+            Self(handle)
+        }
+    }
+
+    impl<T> From<JoinHandle<T>> for CancellableHandle<T> {
+        fn from(handle: JoinHandle<T>) -> Self {
+            Self::new(handle)
+        }
+    }
+
+    impl<T> Drop for CancellableHandle<T> {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+
+    impl<T> Future for CancellableHandle<T> {
+        type Output = Result<T, JoinError>;
+
+        fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+            Pin::new(&mut self.0).poll(context)
+        }
+    }
 
     #[expect(
         unexpected_cfgs,

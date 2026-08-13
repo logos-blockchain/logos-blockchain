@@ -1,13 +1,16 @@
 use core::{num::NonZeroU64, pin::Pin};
 
 use async_trait::async_trait;
-use futures::stream::{self, Stream, StreamExt as _};
+use futures::{
+    future::join_all,
+    stream::{self, Stream, StreamExt as _},
+};
 use lb_blend_message::crypto::{
     key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
 };
 use lb_blend_proofs::{
     quota::{
-        VerifiedProofOfQuota,
+        Quota, VerifiedProofOfQuota,
         inputs::prove::{PrivateInputs, PublicInputs, private::ProofOfWorkQuotaInputs},
         pow::{PowTarget, solve_puzzle},
     },
@@ -17,14 +20,14 @@ use lb_core::crypto::ZkHash;
 use lb_groth16::{AdditiveGroup as _, fr_to_bytes};
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use lb_log_targets::blend;
-use lb_utils::tokio::{stream::Buffered, task::spawn_blocking};
+use lb_utils::tokio::{
+    stream::Buffered,
+    task::{CancellableHandle, spawn, spawn_blocking},
+};
 use rand::rngs::OsRng;
 use tokio::time::Instant;
 
-use crate::message_blend::{
-    buffer_size,
-    provers::{BlendLayerProof, ProofsGeneratorSettings},
-};
+use crate::message_blend::provers::{BlendLayerProof, ProofsGeneratorSettings};
 
 #[cfg(test)]
 mod tests;
@@ -55,10 +58,7 @@ impl PowProofsGenerator for RealPowProofsGenerator {
     fn new(settings: ProofsGeneratorSettings) -> Self {
         Self {
             settings,
-            proofs_stream: create_proof_stream(
-                settings.public_inputs,
-                buffer_size(settings.public_inputs.pow.pow_quota.get() as usize),
-            ),
+            proofs_stream: create_proof_stream(settings.public_inputs),
         }
     }
 
@@ -75,8 +75,9 @@ impl PowProofsGenerator for RealPowProofsGenerator {
 
 fn create_proof_stream(
     public_inputs: PoQVerificationInputsMinusSigningKey,
-    buffer_size: usize,
 ) -> Pin<Box<dyn Stream<Item = BlendLayerProof> + Send>> {
+    const BUFFER_SIZE: usize = 2;
+
     let difficulty = public_inputs.pow.pow_blend_difficulty;
     // No ticket is below zero, so the puzzle has no solution and there is
     // nothing to mine for.
@@ -85,65 +86,77 @@ fn create_proof_stream(
         return Box::pin(stream::empty());
     }
 
+    // A zero quota admits no key index, so a solution buys nothing. Without
+    // this the stream would mine solution after solution, map each to an empty
+    // run of proofs, and never yield or end, hanging the caller instead of
+    // telling it no proof is available.
     let per_solution_quota = public_inputs.pow.pow_quota;
+    if per_solution_quota == Quota::ZERO {
+        tracing::debug!(target: LOG_TARGET, "Blend PoW quota is zero, so no solution can be spent. No PoW proof will be generated for this epoch.");
+        return Box::pin(stream::empty());
+    }
 
     let epoch_nonce = public_inputs.leader.pol_epoch_nonce;
     tracing::debug!(target: LOG_TARGET, "Generating PoW quota proofs with public inputs: {public_inputs:?}.");
 
-    // Each solution yields exactly `per_solution_quota` proofs, indexed
-    // `0..per_solution_quota`, and a fresh solution is mined when they run out.
-    // The key nullifier is a function of the (nonce, index) pair, so the proofs
-    // of one solution get distinct nullifiers, and successive solutions are
-    // mined from independently sampled nonces and therefore get distinct
-    // nullifiers too. How the stream's proofs map onto messages is the caller's
-    // business: a quota below the number of encapsulations in a message simply
-    // means a message spans more than one solution.
-    Box::pin(Buffered::new(
-        solution_stream(epoch_nonce, difficulty).flat_map(move |solution| {
-            stream::iter(per_solution_quota.values_range()).map(move |message_release_index| {
-                let solution = solution.clone();
+    // One item of this stream is one solution: its puzzle search, and the
+    // `per_solution_quota` proofs that solution buys, indexed
+    // `0..per_solution_quota`. The key nullifier is a function of the (nonce,
+    // index) pair, so the proofs of one solution get distinct nullifiers, and
+    // successive solutions are mined from independently sampled nonces and
+    // therefore get distinct nullifiers too. How the proofs map onto messages is
+    // the caller's business: a quota below the number of encapsulations in a
+    // message simply means a message spans more than one solution.
+    Box::pin(
+        Buffered::new(
+            stream::repeat_with(move || {
+                let poq_generation_task = CancellableHandle::new(spawn("logos/blend/pow-solution-proofs", async move {
+                    let solution = mine_solution(epoch_nonce, difficulty).await;
 
-                let task = spawn_blocking("logos/blend/pow-poq-blocking", move || {
-                    let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
-                    let (proof_of_quota, secret_selection_randomness) = VerifiedProofOfQuota::new(
-                        &PublicInputs {
-                            signing_key: ephemeral_signing_key.public_key().into_inner(),
-                            core: public_inputs.core,
-                            leader: public_inputs.leader,
-                            pow: public_inputs.pow,
-                        },
-                        PrivateInputs::new_proof_of_work_quota_inputs(
-                            message_release_index,
-                            solution,
-                        ),
-                    )
-                    .expect("PoW PoQ proof creation should not fail.");
-                    let proof_of_selection = VerifiedProofOfSelection::new(secret_selection_randomness);
-                    BlendLayerProof {
-                        proof_of_quota,
-                        proof_of_selection,
-                        ephemeral_signing_key,
-                    }
-                });
+                    join_all(per_solution_quota.values_range().map(move |message_release_index| {
+                        let solution = solution.clone();
 
-                async move {
-                    let pow_proof = task.await.expect("Spawning task for PoW proof generation should not fail.");
+                        CancellableHandle::new(spawn_blocking("logos/blend/pow-poq-blocking", move || {
+                            let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
+                            let (proof_of_quota, secret_selection_randomness) = VerifiedProofOfQuota::new(
+                                &PublicInputs {
+                                    signing_key: ephemeral_signing_key.public_key().into_inner(),
+                                    core: public_inputs.core,
+                                    leader: public_inputs.leader,
+                                    pow: public_inputs.pow,
+                                },
+                                PrivateInputs::new_proof_of_work_quota_inputs(
+                                    message_release_index,
+                                    solution,
+                                ),
+                            )
+                            .expect("PoW PoQ proof creation should not fail.");
+                            let proof_of_selection = VerifiedProofOfSelection::new(secret_selection_randomness);
+                            let pow_proof = BlendLayerProof {
+                                proof_of_quota,
+                                proof_of_selection,
+                                ephemeral_signing_key,
+                            };
 
-                    tracing::trace!(target: LOG_TARGET, "Generated PoW PoQ within the stream for message release index {message_release_index:?} with key nullifier {:?} and public key {:?}.", hex::encode(fr_to_bytes(&pow_proof.proof_of_quota.key_nullifier())), pow_proof.ephemeral_signing_key.public_key());
-                    pow_proof
-                }
-            })
-        }),
-        buffer_size,
-    ))
-}
+                            tracing::trace!(target: LOG_TARGET, "Generated PoW PoQ within the stream for message release index {message_release_index:?} with key nullifier {:?} and public key {:?}.", hex::encode(fr_to_bytes(&pow_proof.proof_of_quota.key_nullifier())), pow_proof.ephemeral_signing_key.public_key());
+                            pow_proof
+                        }))
+                    }))
+                    .await
+                    .into_iter()
+                    .map(|pow_proof| pow_proof.expect("Spawning task for PoW proof generation should not fail."))
+                    .collect::<Vec<_>>()
+                }));
 
-/// An endless stream of puzzle solutions.
-fn solution_stream(
-    epoch_nonce: ZkHash,
-    difficulty: PowTarget,
-) -> impl Stream<Item = ProofOfWorkQuotaInputs> + Send {
-    stream::repeat(()).then(move |()| mine_solution(epoch_nonce, difficulty))
+                async move { poq_generation_task.await.expect("PoW solution proving task should not fail.") }
+            }),
+            // This case is different than the other proofs.
+            // Because the PoW mining happens once for all encapsulations (all key indices), we buffer only one item in advance, so we have all the `indices` proofs ready when the consumer polls the stream.
+            // We will probably change the logic also in the other proof generators so that each item of the stream would be the full set of proofs, since they are all required and to be consumed anyway.
+            BUFFER_SIZE,
+        )
+        .flat_map(stream::iter),
+    )
 }
 
 /// Searches for a puzzle solution, one blocking round at a time, until it finds
@@ -165,14 +178,17 @@ async fn mine_solution(epoch_nonce: ZkHash, difficulty: PowTarget) -> ProofOfWor
 
     loop {
         rounds = rounds.saturating_add(1);
-        let round_outcome = spawn_blocking("logos/blend/pow-puzzle-search-round", move || {
-            solve_puzzle(
-                epoch_nonce,
-                difficulty,
-                &mut OsRng,
-                CANDIDATES_PER_SEARCH_ROUND,
-            )
-        })
+        let round_outcome = CancellableHandle::new(spawn_blocking(
+            "logos/blend/pow-puzzle-search-round",
+            move || {
+                solve_puzzle(
+                    epoch_nonce,
+                    difficulty,
+                    &mut OsRng,
+                    CANDIDATES_PER_SEARCH_ROUND,
+                )
+            },
+        ))
         .await
         .expect("PoW puzzle search round should not fail.");
 

@@ -1,3 +1,4 @@
+use core::time::Duration;
 use std::collections::HashSet;
 
 use lb_blend_proofs::{
@@ -5,8 +6,9 @@ use lb_blend_proofs::{
     selection::inputs::VerifyInputs,
 };
 use lb_cryptarchia_engine::Epoch;
-use lb_groth16::{AdditiveGroup as _, Fr};
+use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
 use test_log::test;
+use tokio::time::timeout;
 
 use crate::message_blend::provers::{
     ProofsGeneratorSettings,
@@ -83,4 +85,26 @@ async fn no_proof_when_the_puzzle_has_no_solution() {
     })));
 
     assert!(pow_proofs_generator.get_next_proof().await.is_none());
+}
+
+/// A solvable puzzle whose solutions buy no key index must give up rather than
+/// mine forever: every solution maps to an empty run of proofs, so a stream
+/// that did not stop here would never yield and never end.
+#[test(tokio::test)]
+async fn no_proof_when_a_solution_cannot_be_spent() {
+    let mut pow_proofs_generator = RealPowProofsGenerator::new(settings(Some(PowInputs {
+        // The largest field element: every ticket is a solution.
+        pow_blend_difficulty: -Fr::ONE,
+        pow_quota: Quota::ZERO,
+    })));
+
+    assert!(
+        timeout(
+            Duration::from_secs(5),
+            pow_proofs_generator.get_next_proof()
+        )
+        .await
+        .expect("Generation must give up rather than hang.")
+        .is_none()
+    );
 }

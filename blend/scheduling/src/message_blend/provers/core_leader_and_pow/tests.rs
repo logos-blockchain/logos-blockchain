@@ -64,7 +64,14 @@ async fn pow_proof_generation() {
 #[test(tokio::test)]
 async fn core_proofs_are_delegated() {
     let core_quota = Quota::ONE;
-    let (public_inputs, core_private_inputs) = valid_proof_of_quota_inputs(core_quota);
+    let (public_inputs, core_private_inputs) = {
+        let (mut public_inputs, private_inputs) = valid_proof_of_quota_inputs(core_quota);
+        // The wrapped `PoW` generator starts mining as soon as it is built, and
+        // the core fixture's difficulty is far too hard to ever solve. A zero
+        // quota switches the branch off, which is what this test wants anyway.
+        public_inputs.pow.pow_quota = Quota::ZERO;
+        (public_inputs, private_inputs)
+    };
 
     let mut generator = RealCoreLeaderAndPowProofsGenerator::new(
         ProofsGeneratorSettings {

@@ -3,10 +3,22 @@
 //!
 //! The branch admits a prover that holds neither stake nor an SDP declaration:
 //! its admission right is a puzzle solution, a private nonce whose ticket falls
-//! below the epoch's Blend difficulty. Spec: <https://lip.logos.co/blockchain/raw/proof-of-quota.html#constraints>.
+//! below the epoch's Blend difficulty.
 //!
-//! The derivation here mirrors the circuit's, so that a solution found outside
-//! the circuit is one the circuit accepts.
+//! Spec: the branch is added to the Proof of Quota by
+//! <https://github.com/logos-co/logos-lips/pull/400> (revisions 1.2.0 and
+//! 1.3.0 of `proof-of-quota.md`), which is the authority for everything in this
+//! module until it lands. The published page at
+//! <https://lip.logos.co/blockchain/raw/proof-of-quota.html> still describes
+//! the two-branch construction and does not define the `PoW` target, quota,
+//! nonce or ticket derivation.
+//!
+//! The circuit, in contrast, already implements the branch: circuits v0.5.6
+//! carries the `pow_nonce` witness the derivation below is written against, and
+//! [`crate::quota::fixtures::valid_proof_of_work_quota_inputs`] is a solution
+//! taken from that circuit's own tests. The tests here check this module's
+//! ticket against that fixture, so the derivation is pinned to the circuit
+//! rather than only to prose.
 
 use core::num::NonZeroU64;
 use std::sync::LazyLock;
@@ -130,7 +142,7 @@ mod tests {
 
     #[test]
     fn pow_ticket_dst_encoding() {
-        // Blend spec: <https://lip.logos.co/blockchain/raw/proof-of-quota.html>
+        // Blend spec: <https://github.com/logos-co/logos-lips/pull/400>
         assert_eq!(
             *DOMAIN_SEPARATION_TAG_FR,
             fr_from_bytes_unchecked(&<[u8; 12]>::from_hex("0x424c454e445f504f575f5631").unwrap()),
