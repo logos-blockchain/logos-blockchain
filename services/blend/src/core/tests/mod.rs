@@ -84,7 +84,7 @@ async fn test_handle_incoming_blend_message() {
     );
     let payload = vec![];
     let msg = processor
-        .encapsulate_data_payload(&payload)
+        .encapsulate_block_proposal_payload(&payload)
         .await
         .expect("encapsulation must succeed");
 
@@ -183,7 +183,7 @@ async fn test_handle_incoming_blend_message() {
     // Check that a new message built with the new processor is decapsulated
     // with the new processor and scheduled in the new scheduler.
     let msg = new_processor
-        .encapsulate_data_payload(&payload)
+        .encapsulate_block_proposal_payload(&payload)
         .await
         .expect("encapsulation must succeed");
     let recovery_checkpoint = handle_incoming_blend_message(
@@ -229,7 +229,7 @@ async fn test_handle_incoming_blend_message() {
         (),
     );
     let msg = future_processor
-        .encapsulate_data_payload(&payload)
+        .encapsulate_block_proposal_payload(&payload)
         .await
         .expect("encapsulation must succeed");
     let recovery_checkpoint = handle_incoming_blend_message(
@@ -320,11 +320,11 @@ async fn test_duplicate_decapsulated_replica_handled_gracefully() {
     // distinct encapsulated messages (different identifiers) that the swarm
     // would forward independently — exactly the replicas the service produces.
     let replica_a = processor
-        .encapsulate_data_payload(&payload)
+        .encapsulate_block_proposal_payload(&payload)
         .await
         .expect("encapsulation must succeed");
     let replica_b = processor
-        .encapsulate_data_payload(&payload)
+        .encapsulate_block_proposal_payload(&payload)
         .await
         .expect("encapsulation must succeed");
     assert_ne!(
@@ -407,7 +407,7 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
 
     let payload = vec![];
     let msg = processor_0
-        .encapsulate_data_payload(&payload)
+        .encapsulate_block_proposal_payload(&payload)
         .await
         .expect("encapsulation must succeed");
 
@@ -1487,13 +1487,13 @@ async fn test_proof_generator_epoch_binding() {
     // Build a message with epoch 0 proofs.
     let payload = vec![];
     let msg_0 = generator_0
-        .encapsulate_data_payload(&payload)
+        .encapsulate_block_proposal_payload(&payload)
         .await
         .expect("encapsulation with epoch 0 must succeed");
 
     // Build a message with epoch 1 proofs.
     let msg_1 = generator_1
-        .encapsulate_data_payload(&payload)
+        .encapsulate_block_proposal_payload(&payload)
         .await
         .expect("encapsulation with epoch 1 must succeed");
 

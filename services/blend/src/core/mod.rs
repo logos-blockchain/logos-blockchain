@@ -1284,7 +1284,7 @@ where
     ProofsVerifier: ProofsVerifierTrait,
 {
     let Ok(wrapped_message) = cryptographic_processor
-        .encapsulate_data_payload(serialized_local_data_message)
+        .encapsulate_block_proposal_payload(serialized_local_data_message)
         .await
         .inspect_err(|e| {
             tracing::error!(target: LOG_TARGET, "Failed to wrap message: {e:?}");
@@ -1323,7 +1323,10 @@ where
         // If all the layers are peeled off locally, then we are left with the initial data message.
         DecapsulatedMessageType::Completed(fully_decapsulated_message) => {
             assert!(
-                fully_decapsulated_message.payload_type() == PayloadType::Data,
+                matches!(
+                    fully_decapsulated_message.payload_type(),
+                    PayloadType::BlockProposal | PayloadType::Transaction
+                ),
                 "Locally-generated and fully-decapsulated message should be a data message."
             );
             let data_message: NetworkMessage = fully_decapsulated_message.payload_body().to_vec();
@@ -1650,7 +1653,7 @@ where
                     tracing::trace!(target: LOG_TARGET, "Discarding received cover message.");
                     (None, blending_tokens.into_iter())
                 }
-                (PayloadType::Data, data_message) => {
+                (PayloadType::BlockProposal, data_message) => {
                     tracing::trace!(
                         target: LOG_TARGET,
                         "Processing a fully decapsulated data message of {} bytes.",
@@ -1659,6 +1662,18 @@ where
                     let processed_message = ProcessedMessage::from(data_message);
                     scheduler.schedule_processed_message(processed_message.clone());
                     (Some(processed_message), blending_tokens.into_iter())
+                }
+                // TODO: Submit the transaction to the local mempool as well as
+                // broadcasting it, as the spec requires. Nothing generates this
+                // payload type yet, so the path is unreachable until a sender
+                // for it exists.
+                (PayloadType::Transaction, transaction) => {
+                    tracing::warn!(
+                        target: LOG_TARGET,
+                        "Discarding a fully decapsulated transaction message of {} bytes: mempool submission is not wired yet.",
+                        transaction.len()
+                    );
+                    (None, blending_tokens.into_iter())
                 }
             }
         }

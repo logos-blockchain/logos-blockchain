@@ -68,7 +68,7 @@ where
     NodeId: Eq + Hash + 'static,
     ProofsGenerator: LeaderProofsGenerator,
 {
-    pub async fn encapsulate_data_payload(
+    pub async fn encapsulate_block_proposal_payload(
         &mut self,
         payload: &[u8],
     ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
@@ -126,7 +126,7 @@ where
 
         Ok(EncapsulatedMessageWithVerifiedPublicHeader::try_new(
             &inputs,
-            PayloadType::Data,
+            PayloadType::BlockProposal,
             validated_payload,
             self.num_blend_layers.get() as usize,
         )

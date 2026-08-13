@@ -4,7 +4,6 @@ use test_log::test;
 
 use crate::message_blend::provers::{
     ProofsGeneratorSettings,
-    core_and_leader::CoreAndLeaderProofsGenerator as _,
     core_leader_and_pow::{
         CoreLeaderAndPowProofsGenerator as _, RealCoreLeaderAndPowProofsGenerator,
     },

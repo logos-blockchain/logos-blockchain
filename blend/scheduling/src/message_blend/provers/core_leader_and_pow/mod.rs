@@ -6,7 +6,7 @@ use crate::message_blend::{
     CoreProofOfQuotaGenerator,
     provers::{
         BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
-        core_and_leader::{CoreAndLeaderProofsGenerator, RealCoreAndLeaderProofsGenerator},
+        core_and_leader::{CoreAndLeaderProofsGenerator as _, RealCoreAndLeaderProofsGenerator},
         pow::{PowProofsGenerator as _, RealPowProofsGenerator},
     },
 };
@@ -18,19 +18,41 @@ const LOG_TARGET: &str = blend::scheduling::proofs::CORE_LEADER_AND_POW;
 
 /// Proof generator for all three `PoQ` variants.
 ///
-/// It extends [`CoreAndLeaderProofsGenerator`] with the proof of work branch,
-/// which needs neither stake nor an SDP declaration and is therefore available
-/// to a node whose core and leadership quotas are exhausted or were never
-/// granted. The three branches are indistinguishable to a verifier, so which
-/// one backs a given message is a local decision.
+/// It covers the same ground as the core and leadership generator plus the
+/// proof of work branch, which needs neither stake nor an SDP declaration and
+/// is therefore available to a node whose core and leadership quotas are
+/// exhausted or were never granted. The three branches are indistinguishable to
+/// a verifier, so which one backs a given message is a local decision.
+///
+/// The core and leadership methods are declared here rather than inherited, so
+/// that the two traits are free to diverge: a generator serving all three
+/// branches may come to want a different shape from one serving two.
 #[async_trait]
-pub trait CoreLeaderAndPowProofsGenerator<CorePoQGenerator>:
-    CoreAndLeaderProofsGenerator<CorePoQGenerator>
-{
+pub trait CoreLeaderAndPowProofsGenerator<CorePoQGenerator>: Sized {
+    /// Instantiate a new generator for the duration of an epoch.
+    fn new(
+        settings: ProofsGeneratorSettings,
+        core_proof_of_quota_generator: CorePoQGenerator,
+    ) -> Self;
+    /// Notify the proof generator about the stream of winning `PoL` slots for
+    /// an epoch (one item per winning slot). After this is provided for a
+    /// new epoch, the generator can provide leadership `PoQ` variants,
+    /// pulling a fresh slot for each data message so each gets a distinct
+    /// key nullifier.
+    fn set_epoch_private(
+        &mut self,
+        winning_pol_info_stream: WinningPolInfoStream,
+        reference_epoch: Epoch,
+    );
+    /// Request a new core proof from the prover. It returns `None` if the
+    /// maximum core quota has already been reached for this epoch.
+    async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof>;
+    /// Request a new leadership proof from the prover. It returns `None` if no
+    /// secret `PoL` info has been provided for the current epoch or if all the
+    /// winning slots for the current epoch have been used up.
+    async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof>;
     /// Request a new proof of work backed proof from the prover. It returns
-    /// `None` if the epoch's `PoW` public inputs admit no proof, which is the
-    /// case when the puzzle has no solution or when one solution cannot cover
-    /// a whole message.
+    /// `None` if the epoch's `PoW` public inputs admit no proof at all.
     async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof>;
 }
 
@@ -40,7 +62,7 @@ pub struct RealCoreLeaderAndPowProofsGenerator<CorePoQGenerator> {
 }
 
 #[async_trait]
-impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
+impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
     for RealCoreLeaderAndPowProofsGenerator<CorePoQGenerator>
 where
     CorePoQGenerator: CoreProofOfQuotaGenerator + Clone + Send + Sync + 'static,
@@ -81,14 +103,7 @@ where
             .get_next_leader_proof()
             .await
     }
-}
 
-#[async_trait]
-impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
-    for RealCoreLeaderAndPowProofsGenerator<CorePoQGenerator>
-where
-    CorePoQGenerator: CoreProofOfQuotaGenerator + Clone + Send + Sync + 'static,
-{
     async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {
         let proof = self.pow_proofs_generator.get_next_proof().await?;
         tracing::trace!(

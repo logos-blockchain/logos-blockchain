@@ -11,7 +11,8 @@
 use core::num::NonZeroU64;
 use std::sync::LazyLock;
 
-use lb_groth16::{AdditiveGroup as _, Field as _, Fr, fr_from_bytes};
+use lb_groth16::{AdditiveGroup as _, Fr, fr_from_bytes};
+use rand::RngCore;
 
 use crate::{ZkHash, ZkHashExt as _, quota::inputs::prove::private::ProofOfWorkQuotaInputs};
 
@@ -50,7 +51,7 @@ pub fn is_winning_ticket(ticket: ZkHash, difficulty: PowTarget) -> bool {
 }
 
 /// Searches for a nonce whose ticket satisfies `difficulty`, trying `attempts`
-/// candidates from `starting_nonce` onwards.
+/// candidates drawn from `rng`.
 ///
 /// Returns [`None`] when the budget is exhausted without a hit, so the caller
 /// keeps control of how long a single search runs and can hand its thread back
@@ -58,43 +59,80 @@ pub fn is_winning_ticket(ticket: ZkHash, difficulty: PowTarget) -> bool {
 /// so it returns immediately rather than spending the budget on a search that
 /// cannot succeed.
 ///
-/// `starting_nonce` must be sampled with full entropy. The nonce stands in the
-/// secret key position of the key nullifier derivation, so two provers starting
-/// from the same nonce derive colliding nullifiers and the network discards one
-/// of their messages as a duplicate.
+/// Every candidate is sampled afresh rather than enumerated from a starting
+/// point, as the spec requires. The nonce stands in the secret key position of
+/// the key nullifier derivation, so it has to remain secret and unguessable: a
+/// prover walking a range would let anyone who learns one of its nonces derive
+/// the neighbouring ones, and two provers walking from the same point would
+/// collide on nullifiers and have one of their messages discarded as a
+/// duplicate.
+///
+/// `rng` must therefore be cryptographically secure.
 #[must_use]
-pub fn solve_puzzle(
+pub fn solve_puzzle<Rng>(
     epoch_nonce: ZkHash,
     difficulty: PowTarget,
-    starting_nonce: ZkHash,
+    rng: &mut Rng,
     attempts: NonZeroU64,
-) -> Option<ProofOfWorkQuotaInputs> {
+) -> Option<ProofOfWorkQuotaInputs>
+where
+    Rng: RngCore + ?Sized,
+{
     if difficulty == PowTarget::ZERO {
         return None;
     }
 
-    let mut pow_nonce = starting_nonce;
-    for _ in 0..attempts.get() {
-        if is_winning_ticket(derive_pow_ticket(epoch_nonce, pow_nonce), difficulty) {
-            return Some(ProofOfWorkQuotaInputs { pow_nonce });
+    (0..attempts.get()).find_map(|_| {
+        let pow_nonce = random_nonce(rng);
+        is_winning_ticket(derive_pow_ticket(epoch_nonce, pow_nonce), difficulty)
+            .then_some(ProofOfWorkQuotaInputs { pow_nonce })
+    })
+}
+
+/// A field element sampled uniformly from `[0, p-1]`.
+///
+/// Reducing 256 random bits modulo `p` would not be uniform: `p` lies between
+/// `2^253` and `2^254`, so `2^256` covers it four times with a remainder, and
+/// the residues inside that remainder would come up a quarter more often than
+/// the rest. Masking the draw down to 254 bits and resampling whenever it lands
+/// at or above `p` costs about a third of an extra draw and leaves no bias.
+fn random_nonce<Rng>(rng: &mut Rng) -> ZkHash
+where
+    Rng: RngCore + ?Sized,
+{
+    /// Clears the two bits above the 254 the modulus fits in.
+    const TOP_BYTE_MASK: u8 = 0b0011_1111;
+
+    loop {
+        let mut bytes = [0u8; size_of::<ZkHash>()];
+        rng.fill_bytes(&mut bytes);
+        *bytes
+            .last_mut()
+            .expect("A nonce is wider than a single byte.") &= TOP_BYTE_MASK;
+        // `fr_from_bytes` rejects anything at or above the modulus, which is
+        // exactly the rejection this sampling needs.
+        if let Ok(nonce) = fr_from_bytes(&bytes) {
+            return nonce;
         }
-        pow_nonce += ZkHash::ONE;
     }
-    None
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use const_hex::FromHex as _;
     use lb_groth16::{AdditiveGroup as _, Field as _, fr_from_bytes_unchecked, fr_to_bytes};
     use num_bigint::BigUint;
+    use rand::rngs::OsRng;
 
     use crate::quota::{
         ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, Quota,
         fixtures::valid_proof_of_work_quota_inputs,
         inputs::prove::{PublicInputs, private::ProofOfWorkQuotaInputs},
         pow::{
-            DOMAIN_SEPARATION_TAG_FR, PowTarget, derive_pow_ticket, is_winning_ticket, solve_puzzle,
+            DOMAIN_SEPARATION_TAG_FR, PowTarget, derive_pow_ticket, is_winning_ticket,
+            random_nonce, solve_puzzle,
         },
     };
 
@@ -140,7 +178,7 @@ mod tests {
         let ProofOfWorkQuotaInputs { pow_nonce } = solve_puzzle(
             epoch_nonce,
             difficulty,
-            BigUint::from(1u64).into(),
+            &mut OsRng,
             1_000_000.try_into().unwrap(),
         )
         .unwrap();
@@ -151,22 +189,46 @@ mod tests {
         ));
     }
 
+    /// Candidates are sampled rather than enumerated, so solutions found under
+    /// a difficulty every ticket satisfies are unrelated to one another.
     #[test]
-    fn every_ticket_satisfies_the_largest_difficulty() {
+    fn solutions_are_not_drawn_from_a_sequence() {
         let epoch_nonce = BigUint::from(42u64).into();
         let difficulty: PowTarget = largest_target().into();
 
-        // The first candidate tried is a solution, whatever it is.
-        let starting_nonce = BigUint::from(7u64).into();
+        let nonces = std::iter::repeat_with(|| {
+            solve_puzzle(epoch_nonce, difficulty, &mut OsRng, 1.try_into().unwrap())
+                .unwrap()
+                .pow_nonce
+        })
+        .take(16)
+        .collect::<Vec<_>>();
+
+        // Every draw is distinct, and none is the successor of another.
         assert_eq!(
-            solve_puzzle(
-                epoch_nonce,
-                difficulty,
-                starting_nonce,
-                1.try_into().unwrap()
-            )
-            .map(|inputs| inputs.pow_nonce),
-            Some(starting_nonce)
+            nonces.iter().copied().collect::<HashSet<_>>().len(),
+            nonces.len()
+        );
+        assert!(
+            !nonces
+                .iter()
+                .any(|nonce| nonces.contains(&(*nonce + PowTarget::ONE)))
+        );
+    }
+
+    /// The masking that keeps sampling unbiased must not narrow the range the
+    /// nonce is drawn from any further than the two bits above the modulus.
+    #[test]
+    fn sampled_nonces_span_the_field() {
+        // Under uniform sampling all 64 draws landing below `2^250` has
+        // probability around `0.08^64`, so this cannot fail by chance.
+        let low = BigUint::from(1u64) << 250u32;
+        assert!(
+            std::iter::repeat_with(|| BigUint::from_bytes_le(&fr_to_bytes(&random_nonce(
+                &mut OsRng
+            ))))
+            .take(64)
+            .any(|nonce| nonce >= low)
         );
     }
 
@@ -176,7 +238,7 @@ mod tests {
             solve_puzzle(
                 BigUint::from(42u64).into(),
                 PowTarget::ZERO,
-                BigUint::from(1u64).into(),
+                &mut OsRng,
                 u64::MAX.try_into().unwrap(),
             )
             .is_none()
@@ -191,7 +253,7 @@ mod tests {
             solve_puzzle(
                 BigUint::from(42u64).into(),
                 BigUint::from(1u64).into(),
-                BigUint::from(1u64).into(),
+                &mut OsRng,
                 10.try_into().unwrap(),
             )
             .is_none()

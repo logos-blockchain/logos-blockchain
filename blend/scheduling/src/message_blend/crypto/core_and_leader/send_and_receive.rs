@@ -17,7 +17,7 @@ use crate::{
             EncapsulatedMessageWithVerifiedPublicHeader, EpochCryptographicProcessorSettings,
             core_and_leader::send::EpochCryptographicProcessor as SenderEpochCryptographicProcessor,
         },
-        provers::core_and_leader::CoreAndLeaderProofsGenerator,
+        provers::core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
     },
 };
 
@@ -36,7 +36,7 @@ pub struct EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator
 impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
     EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
 where
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
     #[must_use]

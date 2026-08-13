@@ -14,17 +14,14 @@ use lb_blend_proofs::{
     selection::VerifiedProofOfSelection,
 };
 use lb_core::crypto::ZkHash;
-use lb_groth16::{AdditiveGroup as _, fr_from_mod_bytes, fr_to_bytes};
+use lb_groth16::{AdditiveGroup as _, fr_to_bytes};
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use lb_log_targets::blend;
 use lb_utils::tokio::task::spawn_blocking;
-use rand::{RngCore as _, rngs::OsRng};
+use rand::rngs::OsRng;
 use tokio::time::Instant;
 
-use crate::message_blend::{
-    buffer_size,
-    provers::{BlendLayerProof, ProofsGeneratorSettings},
-};
+use crate::message_blend::provers::{BlendLayerProof, ProofsGeneratorSettings};
 
 #[cfg(test)]
 mod tests;
@@ -40,6 +37,18 @@ const LOG_TARGET: &str = blend::scheduling::proofs::POW;
 /// reference rate of tens of microseconds per candidate this is seconds of
 /// work, and a difficulty that needs more than one round is the normal case.
 const CANDIDATES_PER_SEARCH_ROUND: NonZeroU64 = NonZeroU64::new(1 << 16).unwrap();
+
+/// How many proofs to keep in flight, as a multiple of the per-solution quota.
+///
+/// One quota's worth is what a consumer draws before the next solution has to
+/// be mined, so buffering two keeps the following solution's proofs coming
+/// while the current one's are handed out.
+const BUFFERED_SOLUTIONS: usize = 2;
+
+/// The number of proofs the stream keeps in flight for a given quota.
+const fn buffer_size(pow_quota: Quota) -> usize {
+    (pow_quota.get() as usize).saturating_mul(BUFFERED_SOLUTIONS)
+}
 
 /// A `PoQ` generator that deals only with proof of work backed proofs.
 ///
@@ -72,8 +81,7 @@ impl PowProofsGenerator for RealPowProofsGenerator {
             settings,
             proofs_stream: create_proof_stream(
                 settings.public_inputs,
-                settings.encapsulation_layers,
-                buffer_size(settings.encapsulation_layers.get() as usize),
+                buffer_size(settings.public_inputs.pow.pow_quota),
             ),
         }
     }
@@ -91,7 +99,6 @@ impl PowProofsGenerator for RealPowProofsGenerator {
 
 fn create_proof_stream(
     public_inputs: PoQVerificationInputsMinusSigningKey,
-    proofs_per_solution: NonZeroU64,
     buffer_size: usize,
 ) -> Pin<Box<dyn Stream<Item = BlendLayerProof> + Send>> {
     let difficulty = public_inputs.pow.pow_blend_difficulty;
@@ -104,26 +111,25 @@ fn create_proof_stream(
         return Box::pin(stream::empty());
     }
 
-    // One solution has to cover a whole message, so the circuit's per-solution
-    // quota must admit an index for each of the message's encapsulations. If it
-    // does not, no amount of mining helps: the proofs would be rejected by
-    // every verifier, so none are generated.
-    let Some(per_solution_quota) =
-        quota_for_one_message(public_inputs.pow.pow_quota, proofs_per_solution)
-    else {
-        tracing::error!(target: LOG_TARGET, "Blend PoW quota {} is smaller than the {proofs_per_solution} encapsulations of a single message. No PoW proof will be generated for this epoch.", public_inputs.pow.pow_quota);
+    // A quota of zero admits no key index, so no solution can be turned into a
+    // proof and the search would run forever without ever yielding one.
+    let per_solution_quota = public_inputs.pow.pow_quota;
+    if per_solution_quota == Quota::ZERO {
+        tracing::warn!(target: LOG_TARGET, "Blend PoW quota is zero, so no solution can be spent. No PoW proof will be generated for this epoch.");
         return Box::pin(stream::empty());
-    };
+    }
 
     let epoch_nonce = public_inputs.leader.pol_epoch_nonce;
     tracing::debug!(target: LOG_TARGET, "Generating PoW quota proofs, {per_solution_quota} per solution, with public inputs: {public_inputs:?}.");
 
-    // Each solution yields exactly `per_solution_quota` proofs (one original
-    // data message's worth of encapsulations), indexed `0..per_solution_quota`.
-    // The key nullifier is a function of the (nonce, message index) pair, so
-    // the proofs of one solution get distinct nullifiers, and consecutive
-    // messages are mined against distinct nonces and therefore get distinct
-    // nullifiers too.
+    // Each solution yields exactly `per_solution_quota` proofs, indexed
+    // `0..per_solution_quota`, and a fresh solution is mined when they run out.
+    // The key nullifier is a function of the (nonce, index) pair, so the proofs
+    // of one solution get distinct nullifiers, and successive solutions are
+    // mined from independently sampled nonces and therefore get distinct
+    // nullifiers too. How the stream's proofs map onto messages is the caller's
+    // business: a quota below the number of encapsulations in a message simply
+    // means a message spans more than one solution.
     //
     // Unlike the core and leadership streams, this one is not pre-polled: a
     // granted quota is going to be spent, whereas the `PoW` branch may never be
@@ -175,16 +181,6 @@ fn create_proof_stream(
     )
 }
 
-/// The number of keys one solution must cover, or [`None`] if the epoch's
-/// per-solution quota cannot cover a whole message.
-fn quota_for_one_message(
-    pow_quota: Quota,
-    encapsulations_per_message: NonZeroU64,
-) -> Option<Quota> {
-    let needed = Quota::try_new(encapsulations_per_message.get()).ok()?;
-    (needed <= pow_quota).then_some(needed)
-}
-
 /// An endless stream of puzzle solutions, each mined as the stream is polled.
 fn solution_stream(
     epoch_nonce: ZkHash,
@@ -201,15 +197,11 @@ fn solution_stream(
 async fn mine_solution(epoch_nonce: ZkHash, difficulty: PowTarget) -> ProofOfWorkQuotaInputs {
     let start = Instant::now();
     for round in 1u64.. {
-        // Each round restarts from a freshly sampled nonce rather than
-        // continuing the previous one, so that a solution never reveals how
-        // long the search took.
-        let starting_nonce = random_nonce();
         let solution = spawn_blocking("logos/blend/pow-puzzle-search-round", move || {
             solve_puzzle(
                 epoch_nonce,
                 difficulty,
-                starting_nonce,
+                &mut OsRng,
                 CANDIDATES_PER_SEARCH_ROUND,
             )
         })
@@ -223,11 +215,4 @@ async fn mine_solution(epoch_nonce: ZkHash, difficulty: PowTarget) -> ProofOfWor
         tracing::trace!(target: LOG_TARGET, "No Blend PoW solution after {round} round(s) of {CANDIDATES_PER_SEARCH_ROUND} candidates ({:?} ms elapsed). Searching on.", start.elapsed().as_millis());
     }
     unreachable!("The search range is unbounded, so the loop only exits with a solution.");
-}
-
-/// A uniformly sampled starting point for a puzzle search.
-fn random_nonce() -> ZkHash {
-    let mut bytes = [0u8; size_of::<ZkHash>()];
-    OsRng.fill_bytes(&mut bytes);
-    fr_from_mod_bytes(&bytes)
 }

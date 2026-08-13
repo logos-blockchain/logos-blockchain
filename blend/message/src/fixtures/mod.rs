@@ -41,7 +41,12 @@ fn full_length_body(prefix: &[u8]) -> PaddedPayloadBody {
     PaddedPayloadBody::try_from(body).expect("body is exactly the maximum size")
 }
 
-codec_fixtures!(PayloadType, Self::Cover => "00", Self::Data => "01");
+codec_fixtures!(
+    PayloadType,
+    Self::Cover => "00",
+    Self::BlockProposal => "01",
+    Self::Transaction => "02"
+);
 
 codec_fixtures!(
     PaddedPayloadBody,
@@ -51,7 +56,7 @@ codec_fixtures!(
 codec_fixtures!(
     Payload,
     Self::new(
-        PayloadType::Data,
+        PayloadType::BlockProposal,
         full_length_body(&[4u8, 5, 6]),
     ) => include_str!("payload.hex")
 );
@@ -59,7 +64,7 @@ codec_fixtures!(
 codec_fixtures!(
     EncapsulatedPayload,
     Self::initialize(&Payload::new(
-        PayloadType::Data,
+        PayloadType::BlockProposal,
         full_length_body(&[7u8, 8, 9]),
     )) => include_str!("encapsulated_payload.hex")
 );
@@ -155,7 +160,7 @@ fn wire_fixture_message() -> EncapsulatedMessageWithVerifiedPublicHeader {
         (
             EncapsulatedPart::try_initialize(
                 &inputs,
-                PayloadType::Data,
+                PayloadType::BlockProposal,
                 payload_body,
                 inputs.len(),
             )

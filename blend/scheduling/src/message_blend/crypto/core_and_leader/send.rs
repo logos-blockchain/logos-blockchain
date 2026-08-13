@@ -17,27 +17,10 @@ use crate::{
         },
         provers::{
             BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
-            core_and_leader::CoreAndLeaderProofsGenerator,
             core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
         },
     },
 };
-
-/// The `PoQ` branch backing every layer of an encapsulated message.
-///
-/// A verifier cannot tell the branches apart, and the protocol does not tie a
-/// branch to a payload type, so this is only the sender's choice of which of
-/// its own allowances to spend.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProofBranch {
-    /// `Q_C`: the allowance of a node declared through the SDP.
-    CoreQuota,
-    /// `Q_L`: the allowance of a won leader election.
-    LeadershipQuota,
-    /// `Q_W`: the allowance bought by a puzzle solution, which needs neither
-    /// stake nor a declaration.
-    ProofOfWork,
-}
 
 /// [`EpochCryptographicProcessor`] is responsible for only wrapping
 /// cover and data messages for the message indistinguishability.
@@ -77,7 +60,7 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator>
 impl<NodeId, CorePoQGenerator, ProofsGenerator>
     EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator>
 where
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
 {
     #[must_use]
     pub fn new(
@@ -130,33 +113,22 @@ where
         &mut self,
         payload: &[u8],
     ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
-        self.encapsulate_payload(PayloadType::Cover, payload, ProofBranch::CoreQuota)
-            .await
+        self.encapsulate_payload(PayloadType::Cover, payload).await
     }
 
-    pub async fn encapsulate_data_payload(
+    pub async fn encapsulate_block_proposal_payload(
         &mut self,
         payload: &[u8],
     ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
-        self.encapsulate_payload(PayloadType::Data, payload, ProofBranch::LeadershipQuota)
+        self.encapsulate_payload(PayloadType::BlockProposal, payload)
             .await
     }
 
-    /// As [`Self::encapsulate_cover_payload`] and
-    /// [`Self::encapsulate_data_payload`], but backing every layer with a proof
-    /// of work solution instead of with a granted quota.
-    ///
-    /// The proof of work branch needs neither stake nor an SDP declaration, so
-    /// this is the path available to a node whose core and leadership quotas
-    /// are exhausted or were never granted. The branches are indistinguishable
-    /// to a verifier and the protocol does not tie a branch to a payload type,
-    /// so which one to use is a local decision.
-    pub async fn encapsulate_payload_with_pow(
+    pub async fn encapsulate_transaction_payload(
         &mut self,
-        payload_type: PayloadType,
         payload: &[u8],
     ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
-        self.encapsulate_payload(payload_type, payload, ProofBranch::ProofOfWork)
+        self.encapsulate_payload(PayloadType::Transaction, payload)
             .await
     }
 
@@ -168,14 +140,13 @@ where
         &mut self,
         payload_type: PayloadType,
         payload: &[u8],
-        proof_branch: ProofBranch,
     ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
         // We validate the payload early on so we don't generate proofs unnecessarily.
         let validated_payload = PaddedPayloadBody::try_from(payload)?;
         let mut proofs = Vec::with_capacity(self.num_blend_layers.get() as usize);
 
         for _ in 0..self.num_blend_layers.into() {
-            let Some(proof) = self.next_proof_from(proof_branch).await else {
+            let Some(proof) = self.next_proof_for(payload_type).await else {
                 return Err(Error::ProofNotAvailable);
             };
             proofs.push(proof);
@@ -229,11 +200,20 @@ where
         .expect("Number of encapsulation inputs is in `1..=num_blend_layers`."))
     }
 
-    async fn next_proof_from(&mut self, proof_branch: ProofBranch) -> Option<BlendLayerProof> {
-        match proof_branch {
-            ProofBranch::CoreQuota => self.proofs_generator.get_next_core_proof().await,
-            ProofBranch::LeadershipQuota => self.proofs_generator.get_next_leader_proof().await,
-            ProofBranch::ProofOfWork => self.proofs_generator.get_next_pow_proof().await,
+    /// The `PoQ` branch each payload type draws its layer proofs from.
+    ///
+    /// A verifier cannot tell the branches apart and the protocol does not tie
+    /// one to a payload type, so this is only which of its own allowances the
+    /// sender spends: cover traffic is what a declared core node's quota exists
+    /// for, a block proposal is what a won leader election entitles its holder
+    /// to send, and a transaction is the message any participant may send —
+    /// including one holding neither stake nor a declaration, whose only
+    /// allowance is the one a puzzle solution buys.
+    async fn next_proof_for(&mut self, payload_type: PayloadType) -> Option<BlendLayerProof> {
+        match payload_type {
+            PayloadType::Cover => self.proofs_generator.get_next_core_proof().await,
+            PayloadType::BlockProposal => self.proofs_generator.get_next_leader_proof().await,
+            PayloadType::Transaction => self.proofs_generator.get_next_pow_proof().await,
         }
     }
 }

@@ -145,7 +145,7 @@ static FIXTURE: LazyLock<(EncapsulatedMessage, RealProofsVerifier)> = LazyLock::
 
     let message: EncapsulatedMessage = EncapsulatedMessageWithVerifiedPublicHeader::try_new(
         &[input],
-        PayloadType::Data,
+        PayloadType::BlockProposal,
         PaddedPayloadBody::try_from(b"public header verification benchmark".to_vec())
             .expect("body fits in the payload"),
         NUM_BLEND_LAYERS,

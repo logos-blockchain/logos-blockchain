@@ -16,12 +16,12 @@ use crate::message_blend::provers::{
     },
 };
 
-const ENCAPSULATION_LAYERS: u64 = 3;
+const POW_QUOTA: u64 = 2;
 
 /// Settings whose `PoW` public inputs are the fixture's, except for those
 /// given here.
 fn settings(pow_overrides: Option<PowInputs>) -> ProofsGeneratorSettings {
-    let mut public_inputs = valid_proof_of_work_inputs(Quota::new::<ENCAPSULATION_LAYERS>());
+    let mut public_inputs = valid_proof_of_work_inputs(Quota::new::<POW_QUOTA>());
     if let Some(pow_overrides) = pow_overrides {
         public_inputs.pow = pow_overrides;
     }
@@ -30,7 +30,10 @@ fn settings(pow_overrides: Option<PowInputs>) -> ProofsGeneratorSettings {
         local_node_index: None,
         membership_size: 1,
         public_inputs,
-        encapsulation_layers: ENCAPSULATION_LAYERS.try_into().unwrap(),
+        // Deliberately more encapsulations than one solution's quota covers:
+        // a message spanning several solutions is the generator's business,
+        // not an error.
+        encapsulation_layers: (POW_QUOTA + 1).try_into().unwrap(),
         epoch: Epoch::new(0),
     }
 }
@@ -40,10 +43,10 @@ async fn proof_generation() {
     let settings = settings(None);
     let mut pow_proofs_generator = RealPowProofsGenerator::new(settings);
 
-    // Two messages' worth of proofs, so that the second message is proved from
-    // a solution mined after the first one's quota ran out.
+    // More than one solution's worth of proofs, so that the later ones come
+    // from a solution mined after the first one's quota ran out.
     let mut key_nullifiers = HashSet::new();
-    for _ in 0..2 * ENCAPSULATION_LAYERS {
+    for _ in 0..2 * POW_QUOTA {
         let proof = pow_proofs_generator.get_next_proof().await.unwrap();
         let verified_proof_of_quota = proof
             .proof_of_quota
@@ -76,19 +79,19 @@ async fn proof_generation() {
 async fn no_proof_when_the_puzzle_has_no_solution() {
     let mut pow_proofs_generator = RealPowProofsGenerator::new(settings(Some(PowInputs {
         pow_blend_difficulty: Fr::ZERO,
-        pow_quota: Quota::new::<ENCAPSULATION_LAYERS>(),
+        pow_quota: Quota::new::<POW_QUOTA>(),
     })));
 
     assert!(pow_proofs_generator.get_next_proof().await.is_none());
 }
 
 #[test(tokio::test)]
-async fn no_proof_when_a_solution_cannot_cover_a_whole_message() {
+async fn no_proof_when_a_solution_cannot_be_spent() {
     let mut pow_proofs_generator = RealPowProofsGenerator::new(settings(Some(PowInputs {
         // The largest field element: every ticket is a solution.
         pow_blend_difficulty: -Fr::ONE,
-        // One key short of the encapsulations a single message needs.
-        pow_quota: Quota::new::<{ ENCAPSULATION_LAYERS - 1 }>(),
+        // No key index is below zero, so a solution buys nothing.
+        pow_quota: Quota::ZERO,
     })));
 
     assert!(pow_proofs_generator.get_next_proof().await.is_none());

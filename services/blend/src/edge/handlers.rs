@@ -118,7 +118,7 @@ where
     pub async fn handle_message_to_blend(&mut self, message: Vec<u8>) {
         let Ok(message) = self
             .cryptographic_processor
-            .encapsulate_data_payload(&message)
+            .encapsulate_block_proposal_payload(&message)
             .await
             .inspect_err(|e| {
                 tracing::error!(target: LOG_TARGET, "Failed to encapsulate message: {e:?}");
