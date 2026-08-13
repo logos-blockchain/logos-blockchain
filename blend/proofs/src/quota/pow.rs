@@ -110,7 +110,7 @@ where
 #[cfg(test)]
 mod tests {
     use const_hex::FromHex as _;
-    use lb_groth16::{Field as _, fr_from_bytes_unchecked, fr_to_bytes};
+    use lb_groth16::{Field as _, fr_from_bytes_unchecked};
     use num_bigint::BigUint;
     use rand::rngs::OsRng;
 
