@@ -37,7 +37,7 @@ use lb_http_api_common::{
     queries::BlocksStreamQuery,
     settings::default_max_body_size,
 };
-use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey};
 use lb_log_targets::http_client;
 use log::warn;
 use reqwest::{Client, ClientBuilder, RequestBuilder, StatusCode, Url};
@@ -65,7 +65,16 @@ pub struct ApiHeader {
 #[derive(Clone, Debug, Deserialize)]
 pub struct ApiBlock {
     pub header: ApiHeader,
+    pub uncle_headers: Vec<ApiSignedHeader>,
     pub transactions: Vec<SignedMantleTx<Unverified>>,
+}
+
+/// Client-side signed header representation matching the server's
+/// `ApiSignedHeader`.
+#[derive(Clone, Debug, Deserialize)]
+pub struct ApiSignedHeader {
+    pub header: ApiHeader,
+    pub signature: Ed25519Signature,
 }
 
 /// Processed block event from the block stream.

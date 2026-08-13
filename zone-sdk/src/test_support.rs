@@ -330,6 +330,7 @@ pub fn api_block(
             body_root: ContentId::from([0; 32]),
             proof_of_leadership: Groth16LeaderProof::genesis(),
         },
+        uncle_headers: Vec::new(),
         transactions,
     }
 }
