@@ -36,7 +36,7 @@ Most of the template content is the same or very similar to what is in `release-
 
 ## Release preparation
 
-- [ ] Checkout and pull the release branch, it should contain the bot generated commit updating the deployment settings as its `HEAD`
+- [ ] Checkout and pull the release branch. If the previous section about genesis creation was followed, it should contain the bot generated commit updating the deployment settings as its `HEAD`
 - [ ] Bump the Cargo workspace version to match the new release version `X.Y.Z`
 - [ ] Re-generate the workspace `Cargo.lock` file with `cargo update -w`
 - [ ] Verify the `Cargo.lock` is now up to date with `cargo update -w --locked`
@@ -61,7 +61,7 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Enter the [logos-blockchain-module] repository locally.
 - [ ] Branch out from the latest `master` commit with a release branch named `release/X.Y.Z`. If this is not the first release candidate for this version, HARD reset the branch on top of `master` and force-push the new tip
 - [ ] Bump the `logos-blockchain.url` input in the `flake.nix` file: `logos-blockchain.url = "github:logos-blockchain/logos-blockchain?ref=X.Y.Z";`
-- [ ] Set the version to `X.Y.ZN` inside the `metadata.json` file
+- [ ] Set the version to `X.Y.Z` inside the `metadata.json` file
 - [ ] Re-generate the `flake.lock` file using the command `nix flake lock`
 - [ ] Commit the changes and tag them with `X.Y.Z`
 - [ ] Push the commit and the tag
@@ -70,7 +70,7 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Navigate to the `submodules/logos-blockchain-module` directory and checkout the `X.Y.Z` tag
 - [ ] Commit the changes to the [logos-modules-release] repository
 - [ ] Create a PR for the blockchain module version changes and merge it to the master
-- [ ] Manually trigger the [logos-blockchain-module-workflow] workflow without the `Force build` option selected from the `master` branch
+- [ ] Manually trigger the [logos-blockchain-module-workflow] workflow without the `Force build` option selected from the `main` branch
 - [ ] Post the link to the workflow run to this issue for easier review
 - [ ] Wait for the workflow to complete before moving on to the next step
 - [ ] Manually trigger the [node-docker-build-workflow] from the `X.Y.Z` tag
@@ -91,7 +91,7 @@ Most of the template content is the same or very similar to what is in `release-
 
 - [ ] Verify the Logos Blockchain tools Docker image was properly built and pushed to the [GitHub container registry][logos-tools-image-container-registry]
 - [ ] Wait for the new Docker image to be built after the release is published. It must have the `X.Y.Z` tag.
-- [ ] Checkout `testnet` branch again and change the `deployment/compose.static.yml` symlink to now point to `compose.run.yml` with `ln -s -f compose.run.yml deployment/compose.static.yml`
+- [ ] Checkout `testnet` branch again and change the `compose.static.yml` symlink to now point to `deployment/compose.run.yml` with `ln -sf deployment/compose.run.yml compose.static.yml`. If this release included previous state cleanup, the new symlink should replace the previous `deployment/compose.setup.yml`, otherwise this should be a no-op.
 - [ ] Update `deployment/.env.testnet` file to contain `NODE_IMAGE_LABEL=X.Y.Z` set to version being released
 - [ ] Commit and push the changes to trigger environment re-deployment
 - [ ] Wait around 1 minute for deployment to be updated. Environment is now live.

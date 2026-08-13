@@ -338,7 +338,7 @@ pub fn valid_proof_of_work_quota_inputs(
         signing_key,
         pow: PowInputs {
             pow_blend_difficulty:
-                "10631870504716456348838861774188160492563879712126054449569633827216160699117"
+                "7307645623635891000975073080611364918652241089593094038602315450313682586647"
                     .parse::<BigUint>()
                     .unwrap()
                     .into(),
@@ -353,7 +353,7 @@ pub fn valid_proof_of_work_quota_inputs(
         },
         leader: LeaderInputs {
             pol_epoch_nonce:
-                "10612486568558363932403470969435464905237449260307875593547304337083779862075"
+                "5779062543709643602359575259921843591751163665099108688062852589955136526730"
                     .parse::<BigUint>()
                     .unwrap()
                     .into(),
@@ -376,15 +376,10 @@ pub fn valid_proof_of_work_quota_inputs(
     };
 
     let private_inputs = ProofOfWorkQuotaInputs {
-        pow_sk: "10044758699144566038746293679996441958807939592793641056821682251877616662024"
+        pow_nonce: "8318022370165553442216839943484122030260070116638890232845602179807800819633"
             .parse::<BigUint>()
             .unwrap()
             .into(),
-        pow_block_hash:
-            "17412116459874055221726429396167151400213699852365025340176158516975240665302"
-                .parse::<BigUint>()
-                .unwrap()
-                .into(),
     };
 
     (public_inputs, private_inputs)

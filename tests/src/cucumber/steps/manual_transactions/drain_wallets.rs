@@ -6,7 +6,7 @@ use std::{
 
 use lb_core::mantle::{
     Note, Utxo,
-    gas::{GasCost, MainnetGasConstants},
+    gas::{GasCost, MainnetGasProfile},
     ledger::MAX_TRANSACTION_INPUTS,
     transactions::{
         GENESIS_EXECUTION_GAS_PRICE, GasPrices, MantleTxBuilder, MantleTxContext,
@@ -479,7 +479,7 @@ fn finalize_fee(builder: &MantleTxBuilder) -> Result<u64, StepError> {
         ..MantleTxContext::default()
     };
     builder
-        .minimum_gas_cost::<MainnetGasConstants>(&context)
+        .minimum_gas_cost::<MainnetGasProfile>(&context)
         .map(GasCost::into_inner)
         .map_err(|error| StepError::LogicalError {
             message: error.to_string(),

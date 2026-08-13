@@ -12,12 +12,16 @@ use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
         Note, Utxo, Value,
+        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
-            VerifiableOperation, verification_mode,
+            VerifiableOperation, verification_mode, verification_mode::VerificationMode,
         },
-        ops::OpId,
-        transactions::hash::{TxHash, TxHashView},
+        ops::{OpId, SignedOp},
+        transactions::{
+            hash::{TxHash, TxHashView},
+            states::VerificationState,
+        },
     },
     proofs::leader_claim_proof::{
         Groth16LeaderClaimProof, LeaderClaimProof as _, LeaderClaimPublic,
@@ -182,6 +186,10 @@ impl ProvableOperation for LeaderClaimOp {
     type Proof = Groth16LeaderClaimProof;
 }
 
+impl OperationGas<MainnetGasProfile> for LeaderClaimOp {
+    const GAS_COST: Gas = Gas::new(580);
+}
+
 impl PreverifiableOperation<verification_mode::StandardMode> for LeaderClaimOp {
     type Context<'a> = LeaderClaimPreverificationContext<'a>;
     type Error = LeaderClaimError;
@@ -263,6 +271,14 @@ impl ExecutableOperation for LeaderClaimOp {
                 },
             )],
         ))
+    }
+}
+
+impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
+    for SignedOp<LeaderClaimOp, State, Mode>
+{
+    fn gas_multiplier(&self) -> Value {
+        1
     }
 }
 

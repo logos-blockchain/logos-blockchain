@@ -8,7 +8,7 @@ use crate::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
     crypto::{Digest as _, Hasher},
     mantle::{
-        GasConstants, Op, SignedMantleTx, TxHash, Value,
+        GasProfile, Op, SignedMantleTx, TxHash, Value,
         channel::Channels,
         gas::{Gas, GasCost, GasOverflow},
         ops::{
@@ -31,12 +31,12 @@ impl RawMantleTx {
     /// Predicts the minimum total gas cost of the transaction once signed.
     ///
     /// See [`minimum_signed_mantle_tx_size`] for why this doesn't implement
-    /// [`crate::mantle::GasCalculator`] which calculates an exact gas cost.
-    pub fn minimum_total_gas_cost<Constants: GasConstants>(
+    /// [`crate::mantle::TxGasCalculator`] which calculates an exact gas cost.
+    pub fn minimum_total_gas_cost<Profile: GasProfile>(
         &self,
         context: &MantleTxGasContext,
     ) -> Result<GasCost, GasOverflow> {
-        let execution_gas = self.minimum_execution_gas_consumption::<Constants>(context)?;
+        let execution_gas = self.minimum_execution_gas_consumption::<Profile>(context)?;
         let execution_gas_cost =
             GasCost::calculate(execution_gas, context.gas_prices.execution_base_gas_price)?;
         let storage_gas_cost = self.minimum_storage_gas_cost(context)?;
@@ -46,13 +46,13 @@ impl RawMantleTx {
 
     /// Predicts the minimum execution gas the transaction will consume once
     /// signed.
-    pub fn minimum_execution_gas_consumption<Constants: GasConstants>(
+    pub fn minimum_execution_gas_consumption<Profile: GasProfile>(
         &self,
         context: &MantleTxGasContext,
     ) -> Result<Gas, GasOverflow> {
         self.ops()
             .iter()
-            .map(|op| contextual_op_execution_gas::<Constants>(op, context))
+            .map(|op| contextual_op_execution_gas::<Profile>(op, context))
             .try_fold(Gas::from(0), |total, gas| total.checked_add(gas?))
     }
 
@@ -117,7 +117,7 @@ impl StorageSize for RawMantleTx {
     }
 }
 
-fn contextual_op_execution_gas<Constants: GasConstants>(
+fn contextual_op_execution_gas<Profile: GasProfile>(
     op: &Op,
     context: &MantleTxGasContext,
 ) -> Result<Gas, GasOverflow> {
@@ -133,10 +133,10 @@ fn contextual_op_execution_gas<Constants: GasConstants>(
         Op::ChannelTransfer(operation) => context
             .transfer_threshold(&operation.channel_id)
             .unwrap_or(0),
-        _ => return Ok(op.execution_gas::<Constants>()),
+        _ => return Ok(op.execution_gas::<Profile>()),
     };
 
-    op.execution_gas::<Constants>()
+    op.execution_gas::<Profile>()
         .checked_mul(Value::from(multiplier))
 }
 

@@ -253,7 +253,7 @@ pub enum SelectionRandomnessSecretInput {
         slot_number: u64,
     },
     Pow {
-        pow_sk: ZkHash,
+        pow_nonce: ZkHash,
         epoch_nonce: ZkHash,
     },
 }
@@ -274,9 +274,9 @@ fn generate_secret_selection_randomness(
             slot_number,
         } => (note_secret_key, (*slot_number).into()),
         SelectionRandomnessSecretInput::Pow {
-            pow_sk,
+            pow_nonce,
             epoch_nonce,
-        } => (pow_sk, (*epoch_nonce)),
+        } => (pow_nonce, (*epoch_nonce)),
     };
     [
         *DOMAIN_SEPARATION_TAG_FR,

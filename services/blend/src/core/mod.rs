@@ -18,12 +18,8 @@ use lb_blend::{
         Error as MessageError, PayloadType,
         crypto::proofs::PoQVerificationInputsMinusSigningKey,
         encap::{
-            ProofsVerifier as ProofsVerifierTrait,
-            encapsulated::EncapsulatedMessage,
-            validated::{
-                EncapsulatedMessageWithVerifiedPublicHeader,
-                EncapsulatedMessageWithVerifiedSignature,
-            },
+            ProofsVerifier as ProofsVerifierTrait, encapsulated::EncapsulatedMessage,
+            validated::EncapsulatedMessageWithVerifiedPublicHeader,
         },
         reward::{
             self, ActivityProof, BlendingToken, EpochBlendingTokenCollector,
@@ -78,6 +74,7 @@ use tracing::{debug, error, info};
 
 use crate::{
     core::{
+        backends::BackendEpochInfo,
         kms::{KmsPoQAdapter, PreloadKMSBackendCorePoQGenerator},
         processor::{
             CoreCryptographicProcessor, DecapsulatedMessageType, Error,
@@ -130,7 +127,7 @@ pub struct BlendService<
     StateStorage,
     RuntimeServiceId,
 > where
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
     Network: NetworkAdapter<RuntimeServiceId>,
     StateStorage: RecoveryBackendTrait<
             RuntimeServiceId,
@@ -178,7 +175,7 @@ impl<
         RuntimeServiceId,
     >
 where
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
     Network: NetworkAdapter<RuntimeServiceId>,
     StateStorage: RecoveryBackendTrait<
             RuntimeServiceId,
@@ -220,13 +217,13 @@ impl<
         RuntimeServiceId,
     >
 where
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Send + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
     NodeId: membership::node_id::TryFrom + Clone + Debug + Send + Eq + Hash + Sync + 'static,
     Network: NetworkAdapter<RuntimeServiceId> + Send + Sync,
     ProofsGenerator:
         CoreAndLeaderProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>> + Send,
     SdpService: ServiceData<Message = SdpMessage> + Send,
-    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync,
+    ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
     ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
@@ -503,7 +500,7 @@ async fn initialize<
 )
 where
     NodeId: Clone + Debug + Eq + Hash + Send + 'static,
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId>,
     ProofsGenerator: CoreAndLeaderProofsGenerator<KmsAdapter::CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
@@ -590,6 +587,12 @@ where
         current_epoch_public_info
     );
 
+    let current_epoch_poq_verification_inputs = PoQVerificationInputsMinusSigningKey {
+        core: current_epoch_public_info.poq_core_public_inputs,
+        leader: current_epoch_public_info.poq_leadership_public_inputs,
+        pow: PowInputs::unwired_placeholder(),
+    };
+
     let crypto_processor = CoreCryptographicProcessor::<
         _,
         KmsAdapter::CorePoQGenerator,
@@ -602,11 +605,7 @@ where
             non_ephemeral_encryption_key: blend_config.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: blend_config.num_blend_layers,
         },
-        PoQVerificationInputsMinusSigningKey {
-            core: current_epoch_public_info.poq_core_public_inputs,
-            leader: current_epoch_public_info.poq_leadership_public_inputs,
-            pow: PowInputs::unwired_placeholder(),
-        },
+        current_epoch_poq_verification_inputs,
         current_epoch_core_poq_generator
             .expect("Core PoQ generator must be present at startup: the proxy service only launches CoreMode when the node is part of the core membership."),
         current_epoch_public_info.epoch,
@@ -682,10 +681,13 @@ where
     let backend = Backend::new(
         blend_config.clone(),
         overwatch_handle,
-        (
-            current_epoch_public_info.membership.clone(),
-            current_epoch_public_info.epoch,
-        ),
+        BackendEpochInfo {
+            membership: current_epoch_public_info.membership.clone(),
+            epoch: current_epoch_public_info.epoch,
+            // The backend verifies the `PoQ` of every message it receives before
+            // relaying it, so it needs its own verifier for the epoch.
+            proofs_verifier: ProofsVerifier::new(current_epoch_poq_verification_inputs),
+        },
         BlakeRng::from_entropy(),
     );
 
@@ -743,7 +745,7 @@ async fn run_event_loop<
 >(
     mut inbound_relay: impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin,
     blend_messages: &mut (
-             impl Stream<Item = (EncapsulatedMessageWithVerifiedSignature, Epoch)>
+             impl Stream<Item = (EncapsulatedMessageWithVerifiedPublicHeader, Epoch)>
              + Send
              + Unpin
              + 'static
@@ -774,13 +776,13 @@ async fn run_event_loop<
     mut recovery_checkpoint: ServiceState<Backend::Settings, NetAdapter::Settings>,
 ) -> (
     CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
-    OldEpochMessageScheduler<Rng, ProcessedMessage>,
+    OldEpochMessageScheduler<Rng, ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
     OldEpochBlendingTokenCollector,
 )
 where
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync + Send,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync + Send,
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator> + Send,
     CorePoQGenerator: Send + Sync,
@@ -792,8 +794,13 @@ where
     let mut old_epoch_crypto_processor: Option<
         CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
     > = None;
-    let mut old_epoch_message_scheduler: Option<OldEpochMessageScheduler<Rng, ProcessedMessage>> =
-        None;
+    let mut old_epoch_message_scheduler: Option<
+        OldEpochMessageScheduler<
+            Rng,
+            ProcessedMessage,
+            EncapsulatedMessageWithVerifiedPublicHeader,
+        >,
+    > = None;
     let mut latest_secret_pol_info: Option<PolEpochInfo> = None;
 
     loop {
@@ -827,7 +834,7 @@ where
             Some(round_info) = message_scheduler.next() => {
                 recovery_checkpoint = handle_release_round(round_info, &mut crypto_processor, rng, backend, network_adapter, recovery_checkpoint).await;
             }
-            Some((Some(processed_messages_to_release), previous_epoch)) = async {
+            Some((Some(round_info), previous_epoch)) = async {
                 match (&mut old_epoch_message_scheduler, old_epoch) {
                     (Some(old_scheduler), Some(old_epoch)) => {
                         Some((old_scheduler.next().await, old_epoch))
@@ -835,7 +842,7 @@ where
                     _ => None
                 }
             } => {
-                handle_release_round_for_old_epoch(processed_messages_to_release, rng, backend, network_adapter, previous_epoch).await;
+                handle_release_round_for_old_epoch(round_info, rng, backend, network_adapter, previous_epoch).await;
             }
             Some(pol_secret_info) = secret_pol_info_stream.next() => {
                 if current_epoch_info.epoch == pol_secret_info.epoch {
@@ -855,7 +862,7 @@ where
                         crypto_processor = new_crypto_processor;
                         old_epoch_crypto_processor = Some(old_crypto_processor);
                         message_scheduler = new_scheduler;
-                        old_epoch_message_scheduler = Some(old_scheduler);
+                        old_epoch_message_scheduler = Some(*old_scheduler);
                         current_epoch_info = new_epoch_info;
                         recovery_checkpoint = new_recovery_checkpoint;
                     },
@@ -873,7 +880,7 @@ where
                         tracing::info!(target: LOG_TARGET, "Exiting from the main event loop");
                         return (
                             old_crypto_processor,
-                            old_scheduler,
+                            *old_scheduler,
                             old_token_collector,
                         );
                     },
@@ -896,7 +903,7 @@ async fn retire<
     CorePoQGenerator,
     RuntimeServiceId,
 >(
-    mut blend_messages: impl Stream<Item = EncapsulatedMessageWithVerifiedSignature>
+    mut blend_messages: impl Stream<Item = EncapsulatedMessageWithVerifiedPublicHeader>
     + Unpin
     + Send
     + 'static,
@@ -907,7 +914,11 @@ async fn retire<
     mut backend: Backend,
     network_adapter: NetAdapter,
     sdp_relay: OutboundRelay<SdpMessage>,
-    mut message_scheduler: OldEpochMessageScheduler<Rng, ProcessedMessage>,
+    mut message_scheduler: OldEpochMessageScheduler<
+        Rng,
+        ProcessedMessage,
+        EncapsulatedMessageWithVerifiedPublicHeader,
+    >,
     mut rng: Rng,
     mut blending_token_collector: OldEpochBlendingTokenCollector,
     crypto_processor: CoreCryptographicProcessor<
@@ -919,7 +930,7 @@ async fn retire<
 ) where
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Send + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Send + Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator> + Send,
     CorePoQGenerator: Send + Sync,
@@ -931,8 +942,8 @@ async fn retire<
             Some(incoming_message) = blend_messages.next() => {
                 handle_incoming_blend_message_from_old_epoch(incoming_message, &mut message_scheduler, &crypto_processor, &mut blending_token_collector);
             }
-            Some(processed_messages_to_release) = message_scheduler.next() => {
-                handle_release_round_for_old_epoch(processed_messages_to_release, &mut rng, &backend, &network_adapter, crypto_processor.epoch()).await;
+            Some(round_info) = message_scheduler.next() => {
+                handle_release_round_for_old_epoch(round_info, &mut rng, &backend, &network_adapter, crypto_processor.epoch()).await;
             }
             Some(EpochEvent::TransitionPeriodExpired) = remaining_epoch_stream.next() => {
                 handle_epoch_transition_expired(&mut backend, blending_token_collector, &sdp_relay).await;
@@ -998,7 +1009,7 @@ where
     Rng: rand::Rng + Clone + Unpin,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
 {
     match event {
         EpochEvent::NewEpoch(MaybeEmptyCoreEpochInfo::NonEmpty(core_epoch_info)) => {
@@ -1020,8 +1031,17 @@ where
             let (new_epoch_blending_token_collector, old_epoch_blending_token_collector) =
                 current_epoch_blending_token_collector.rotate_epoch(&new_reward_epoch_info);
 
+            let new_poq_verification_inputs = PoQVerificationInputsMinusSigningKey {
+                core: new_epoch_info.poq_core_public_inputs,
+                leader: new_epoch_info.poq_leadership_public_inputs,
+                pow: PowInputs::unwired_placeholder(),
+            };
             backend
-                .rotate_epoch((new_epoch_info.membership.clone(), new_epoch_info.epoch))
+                .rotate_epoch(BackendEpochInfo {
+                    membership: new_epoch_info.membership.clone(),
+                    epoch: new_epoch_info.epoch,
+                    proofs_verifier: ProofsVerifier::new(new_poq_verification_inputs),
+                })
                 .await;
 
             let new_scheduler_epoch_info = SchedulerEpochInfo {
@@ -1033,57 +1053,61 @@ where
                 tracing::info!(target: LOG_TARGET, "Local node is not part of new membership. Retiring from core.");
                 return HandleEpochEventOutput::Retiring {
                     old_crypto_processor: current_cryptographic_processor,
-                    old_scheduler: current_scheduler
-                        .rotate_epoch(new_scheduler_epoch_info, settings.scheduler_settings())
-                        .1,
+                    old_scheduler: Box::new(
+                        current_scheduler
+                            .rotate_epoch(new_scheduler_epoch_info, settings.scheduler_settings())
+                            .1,
+                    ),
                     old_token_collector: old_epoch_blending_token_collector,
                 };
             };
 
-            let new_processor = match CoreCryptographicProcessor::try_new_with_core_condition_check(
-                new_epoch_info.membership.clone(),
-                settings.minimum_network_size,
-                EpochCryptographicProcessorSettings {
-                    non_ephemeral_encryption_key: settings
-                        .non_ephemeral_signing_key
-                        .derive_x25519(),
-                    num_blend_layers: settings.num_blend_layers,
-                },
-                PoQVerificationInputsMinusSigningKey {
-                    core: new_epoch_info.poq_core_public_inputs,
-                    leader: new_epoch_info.poq_leadership_public_inputs,
-                    pow: PowInputs::unwired_placeholder(),
-                },
-                core_poq_generator,
-                new_epoch_info.epoch,
-            ) {
-                Ok(mut new_processor) => {
-                    if current_secret_info
-                        .as_ref()
-                        .is_some_and(|secret| secret.epoch == new_epoch_info.epoch)
-                    {
-                        // We consume the stream by `take()`ing only if the epochs match.
-                        let current_secret_info = current_secret_info
-                            .take()
-                            .expect("Secret PoL info presence checked above.");
-                        new_processor.set_epoch_private(
-                            current_secret_info.winning_pol_info_stream,
-                            new_epoch_info.epoch,
-                        );
+            let new_processor: CoreCryptographicProcessor<_, _, _, ProofsVerifier> =
+                match CoreCryptographicProcessor::try_new_with_core_condition_check(
+                    new_epoch_info.membership.clone(),
+                    settings.minimum_network_size,
+                    EpochCryptographicProcessorSettings {
+                        non_ephemeral_encryption_key: settings
+                            .non_ephemeral_signing_key
+                            .derive_x25519(),
+                        num_blend_layers: settings.num_blend_layers,
+                    },
+                    new_poq_verification_inputs,
+                    core_poq_generator,
+                    new_epoch_info.epoch,
+                ) {
+                    Ok(mut new_processor) => {
+                        if current_secret_info
+                            .as_ref()
+                            .is_some_and(|secret| secret.epoch == new_epoch_info.epoch)
+                        {
+                            // We consume the stream by `take()`ing only if the epochs match.
+                            let current_secret_info = current_secret_info
+                                .take()
+                                .expect("Secret PoL info presence checked above.");
+                            new_processor.set_epoch_private(
+                                current_secret_info.winning_pol_info_stream,
+                                new_epoch_info.epoch,
+                            );
+                        }
+                        new_processor
                     }
-                    new_processor
-                }
-                Err(e @ (Error::LocalIsNotCoreNode | Error::NetworkIsTooSmall(_))) => {
-                    tracing::info!(target: LOG_TARGET, "New membership does not satisfy the core node condition: {e:?}");
-                    return HandleEpochEventOutput::Retiring {
-                        old_crypto_processor: current_cryptographic_processor,
-                        old_scheduler: current_scheduler
-                            .rotate_epoch(new_scheduler_epoch_info, settings.scheduler_settings())
-                            .1,
-                        old_token_collector: old_epoch_blending_token_collector,
-                    };
-                }
-            };
+                    Err(e @ (Error::LocalIsNotCoreNode | Error::NetworkIsTooSmall(_))) => {
+                        tracing::info!(target: LOG_TARGET, "New membership does not satisfy the core node condition: {e:?}");
+                        return HandleEpochEventOutput::Retiring {
+                            old_crypto_processor: current_cryptographic_processor,
+                            old_scheduler: Box::new(
+                                current_scheduler
+                                    .rotate_epoch(
+                                        new_scheduler_epoch_info,
+                                        settings.scheduler_settings(),
+                                    )
+                                    .1,
+                            ),
+                            old_token_collector: old_epoch_blending_token_collector,
+                        };
+                    }
+                };
 
             let (new_scheduler, old_scheduler) = current_scheduler
                 .rotate_epoch(new_scheduler_epoch_info, settings.scheduler_settings());
@@ -1091,7 +1115,7 @@ where
                 new_crypto_processor: new_processor,
                 old_crypto_processor: current_cryptographic_processor,
                 new_scheduler,
-                old_scheduler,
+                old_scheduler: Box::new(old_scheduler),
                 new_recovery_checkpoint: ServiceState::with_epoch(
                     new_epoch_info.epoch,
                     new_epoch_blending_token_collector,
@@ -1118,7 +1142,7 @@ where
                 current_epoch_blending_token_collector.rotate_epoch(&new_reward_epoch_info);
             HandleEpochEventOutput::Retiring {
                 old_crypto_processor: current_cryptographic_processor,
-                old_scheduler: current_scheduler.consume(),
+                old_scheduler: Box::new(current_scheduler.consume()),
                 old_token_collector: old_epoch_blending_token_collector,
             }
         }
@@ -1140,12 +1164,12 @@ where
 }
 
 /// Handles [`EpochEvent::TransitionPeriodExpired`].
-async fn handle_epoch_transition_expired<Backend, NodeId, Rng, RuntimeServiceId>(
+async fn handle_epoch_transition_expired<Backend, NodeId, Rng, ProofsVerifier, RuntimeServiceId>(
     backend: &mut Backend,
     blending_token_collector: OldEpochBlendingTokenCollector,
     sdp_relay: &OutboundRelay<SdpMessage>,
 ) where
-    Backend: BlendBackend<NodeId, Rng, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId>,
     NodeId: Eq + Hash + Clone + Send,
 {
     compute_and_submit_activity_proof(blending_token_collector, sdp_relay).await;
@@ -1184,7 +1208,13 @@ enum HandleEpochEventOutput<
             ProcessedMessage,
             EncapsulatedMessageWithVerifiedPublicHeader,
         >,
-        old_scheduler: OldEpochMessageScheduler<Rng, ProcessedMessage>,
+        old_scheduler: Box<
+            OldEpochMessageScheduler<
+                Rng,
+                ProcessedMessage,
+                EncapsulatedMessageWithVerifiedPublicHeader,
+            >,
+        >,
         new_epoch_info: CoreEpochPublicInfo<NodeId>,
         new_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
     },
@@ -1202,7 +1232,13 @@ enum HandleEpochEventOutput<
     Retiring {
         old_crypto_processor:
             CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
-        old_scheduler: OldEpochMessageScheduler<Rng, ProcessedMessage>,
+        old_scheduler: Box<
+            OldEpochMessageScheduler<
+                Rng,
+                ProcessedMessage,
+                EncapsulatedMessageWithVerifiedPublicHeader,
+            >,
+        >,
         old_token_collector: OldEpochBlendingTokenCollector,
     },
 }
@@ -1328,11 +1364,12 @@ where
     state_updater.commit_changes()
 }
 
-/// Processes an incoming Blend message (with verified signature) received
-/// from a core or edge peer.
+/// Processes an incoming Blend message received from a core or edge peer.
 ///
-/// Decapsulation is attempted with the current or old epoch's cryptographic
-/// processor depending on the epoch the message is coming from.
+/// The backend has already verified the message's whole public header — `PoQ`
+/// included, which is what gated it from being relayed to the rest of the
+/// network — so all that is left here is to decapsulate it with the current or
+/// old epoch's cryptographic processor, depending on the epoch it comes from.
 fn handle_incoming_blend_message<
     NodeId,
     Rng,
@@ -1342,13 +1379,19 @@ fn handle_incoming_blend_message<
     ProofsVerifier,
     CorePoQGenerator,
 >(
-    (validated_encapsulated_message, epoch): (EncapsulatedMessageWithVerifiedSignature, Epoch),
+    (verified_message, epoch): (EncapsulatedMessageWithVerifiedPublicHeader, Epoch),
     scheduler: &mut EpochMessageScheduler<
         Rng,
         ProcessedMessage,
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
-    old_epoch_scheduler: Option<&mut OldEpochMessageScheduler<Rng, ProcessedMessage>>,
+    old_epoch_scheduler: Option<
+        &mut OldEpochMessageScheduler<
+            Rng,
+            ProcessedMessage,
+            EncapsulatedMessageWithVerifiedPublicHeader,
+        >,
+    >,
     cryptographic_processor: &CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1367,11 +1410,7 @@ where
     ProofsVerifier: ProofsVerifierTrait,
 {
     if epoch == cryptographic_processor.epoch() {
-        let Some(output) = try_validate_and_decapsulate(
-            validated_encapsulated_message,
-            cryptographic_processor,
-            epoch,
-        ) else {
+        let Some(output) = try_decapsulate(verified_message, cryptographic_processor, epoch) else {
             return current_recovery_checkpoint;
         };
         handle_decapsulated_incoming_message_from_current_epoch(
@@ -1383,11 +1422,8 @@ where
     } else if let Some(old_cryptographic_processor) = old_epoch_cryptographic_processor
         && epoch == old_cryptographic_processor.epoch()
     {
-        let Some(output) = try_validate_and_decapsulate(
-            validated_encapsulated_message,
-            old_cryptographic_processor,
-            epoch,
-        ) else {
+        let Some(output) = try_decapsulate(verified_message, old_cryptographic_processor, epoch)
+        else {
             return current_recovery_checkpoint;
         };
         handle_decapsulated_incoming_message_from_old_epoch(
@@ -1403,11 +1439,10 @@ where
     }
 }
 
-/// Validates the `PoQ` of a received message and attempts recursive
-/// decapsulation. Returns `None` if validation or decapsulation fails (already
-/// logged).
-fn try_validate_and_decapsulate<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>(
-    message: EncapsulatedMessageWithVerifiedSignature,
+/// Attempts recursive decapsulation of a message whose `PoQ` has already been
+/// verified. Returns `None` if decapsulation fails (already logged).
+fn try_decapsulate<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>(
+    message: EncapsulatedMessageWithVerifiedPublicHeader,
     processor: &CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1419,11 +1454,7 @@ fn try_validate_and_decapsulate<NodeId, CorePoQGenerator, ProofsGenerator, Proof
 where
     ProofsVerifier: ProofsVerifierTrait,
 {
-    let Ok(validated_message) = processor.validate_message_poq(message) else {
-        tracing::debug!(target: LOG_TARGET, "Received message for epoch {epoch} failed PoQ validation. Ignoring...");
-        return None;
-    };
-    match processor.decapsulate_message_recursive(validated_message) {
+    match processor.decapsulate_message_recursive(message) {
         Ok(output) => Some(output),
         Err(e) => {
             if matches!(e, MessageError::PrivateHeaderDeserializationFailed) {
@@ -1445,8 +1476,12 @@ fn handle_incoming_blend_message_from_old_epoch<
     ProofsVerifier,
     CorePoQGenerator,
 >(
-    validated_encapsulated_message: EncapsulatedMessageWithVerifiedSignature,
-    scheduler: &mut OldEpochMessageScheduler<Rng, ProcessedMessage>,
+    verified_message: EncapsulatedMessageWithVerifiedPublicHeader,
+    scheduler: &mut OldEpochMessageScheduler<
+        Rng,
+        ProcessedMessage,
+        EncapsulatedMessageWithVerifiedPublicHeader,
+    >,
     cryptographic_processor: &CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1458,25 +1493,17 @@ fn handle_incoming_blend_message_from_old_epoch<
     NodeId: 'static,
     ProofsVerifier: ProofsVerifierTrait,
 {
-    match cryptographic_processor
-        .validate_message_poq(validated_encapsulated_message)
-        .and_then(|message_with_verified_header| {
-            cryptographic_processor.decapsulate_message_recursive(message_with_verified_header)
-        }) {
-        Ok(output) => {
-            let (_, blending_tokens) =
-                schedule_decapsulated_incoming_message(output, scheduler, cryptographic_processor);
-            for blending_token in blending_tokens {
-                blending_token_collector.collect(blending_token);
-            }
-        }
-        Err(e) => {
-            if matches!(e, MessageError::PrivateHeaderDeserializationFailed) {
-                tracing::trace!(target: LOG_TARGET, "Failed to decapsulate received message from old epoch due to deserialization error. This can happen when the message was intended for another node or when the message is malformed. Ignoring...");
-            } else {
-                tracing::debug!(target: LOG_TARGET, "Failed to decapsulate received message from old epoch: {e:?}");
-            }
-        }
+    let Some(output) = try_decapsulate(
+        verified_message,
+        cryptographic_processor,
+        cryptographic_processor.epoch(),
+    ) else {
+        return;
+    };
+    let (_, blending_tokens) =
+        schedule_decapsulated_incoming_message(output, scheduler, cryptographic_processor);
+    for blending_token in blending_tokens {
+        blending_token_collector.collect(blending_token);
     }
 }
 
@@ -1549,7 +1576,11 @@ fn handle_decapsulated_incoming_message_from_old_epoch<
     ProofsVerifier,
 >(
     multi_layer_decapsulation_output: MultiLayerDecapsulationOutput,
-    scheduler: &mut OldEpochMessageScheduler<Rng, ProcessedMessage>,
+    scheduler: &mut OldEpochMessageScheduler<
+        Rng,
+        ProcessedMessage,
+        EncapsulatedMessageWithVerifiedPublicHeader,
+    >,
     recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
     old_cryptographic_processor: &CoreCryptographicProcessor<
         NodeId,
@@ -1688,7 +1719,7 @@ async fn handle_release_round<
 where
     NodeId: Eq + Hash + 'static,
     Rng: RngCore + Send,
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
@@ -1760,8 +1791,18 @@ where
     state_updater.commit_changes()
 }
 
-async fn handle_release_round_for_old_epoch<NodeId, Rng, Backend, NetAdapter, RuntimeServiceId>(
-    processed_messages_to_release: Vec<ProcessedMessage>,
+async fn handle_release_round_for_old_epoch<
+    NodeId,
+    Rng,
+    Backend,
+    NetAdapter,
+    ProofsVerifier,
+    RuntimeServiceId,
+>(
+    RoundInfo {
+        data_messages,
+        release_type,
+    }: RoundInfo<ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
     rng: &mut Rng,
     backend: &Backend,
     network_adapter: &NetAdapter,
@@ -1769,22 +1810,42 @@ async fn handle_release_round_for_old_epoch<NodeId, Rng, Backend, NetAdapter, Ru
 ) where
     NodeId: Eq + Hash + 'static,
     Rng: RngCore + Send,
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
 {
-    let mut futures = build_futures_to_release_processed_messages(
-        processed_messages_to_release,
-        backend,
-        network_adapter,
-        None,
-        epoch,
-    );
+    // The old epoch never generates cover traffic, so the cover flag is always
+    // `false` here.
+    let (processed_messages, _) =
+        release_type.map_or_else(|| (vec![], false), RoundReleaseType::into_components);
+    let (data_count, processed_count) = (data_messages.len(), processed_messages.len());
+
+    // Data messages the epoch left unreleased carry its `PoQ`, which only verifies
+    // against that epoch's public inputs, so they are published under the old
+    // epoch's number and therefore to the peers still negotiated for it. They are
+    // not tracked in the new epoch's recovery state, which was reset on rotation,
+    // and they do not consume the new epoch's core quota, since they neither spend
+    // it nor reach current-epoch peers.
+    let data_messages_relay_futures =
+        data_messages
+            .into_iter()
+            .map(|data_message_to_blend| -> BoxFuture<'_, ()> {
+                backend.publish(data_message_to_blend, epoch).boxed()
+            });
+
+    let mut futures = data_messages_relay_futures
+        .chain(build_futures_to_release_processed_messages(
+            processed_messages,
+            backend,
+            network_adapter,
+            None,
+            epoch,
+        ))
+        .collect::<Vec<_>>();
     futures.shuffle(rng);
 
     // Release all messages concurrently, and wait for all of them to be sent.
-    let num_futures = futures.len();
     join_all(futures).await;
-    log_old_epoch_release_summary(num_futures);
+    log_old_epoch_release_summary(data_count, processed_count);
 }
 
 fn log_release_window_summary(data_count: usize, processed_count: usize, cover_count: usize) {
@@ -1801,16 +1862,16 @@ fn log_release_window_summary(data_count: usize, processed_count: usize, cover_c
     }
 }
 
-fn log_old_epoch_release_summary(num_futures: usize) {
-    if num_futures > 0 {
+fn log_old_epoch_release_summary(data_count: usize, processed_count: usize) {
+    if data_count > 0 || processed_count > 0 {
         tracing::debug!(
             target: LOG_TARGET,
-            "Sent out {num_futures} processed messages at this release window for the old epoch"
+            "Sent out {data_count} data and {processed_count} processed messages at this release window for the old epoch"
         );
     } else {
         tracing::trace!(
             target: LOG_TARGET,
-            "Sent out {num_futures} processed messages at this release window for the old epoch"
+            "Sent out {data_count} data and {processed_count} processed messages at this release window for the old epoch"
         );
     }
 }
@@ -1820,6 +1881,7 @@ fn build_futures_to_release_processed_messages<
     NodeId,
     Backend,
     NetAdapter,
+    ProofsVerifier,
     RuntimeServiceId,
 >(
     processed_messages_to_release: Vec<ProcessedMessage>,
@@ -1830,7 +1892,7 @@ fn build_futures_to_release_processed_messages<
 ) -> Vec<BoxFuture<'fut, ()>>
 where
     NodeId: Eq + Hash + 'static,
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
 {
     processed_messages_to_release

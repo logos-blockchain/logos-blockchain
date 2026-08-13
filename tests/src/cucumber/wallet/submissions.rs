@@ -6,8 +6,8 @@
 use std::{collections::HashSet, time::Duration};
 
 use lb_core::mantle::{
-    GasCalculator as _, SignedMantleTx, TxHash, Utxo,
-    gas::MainnetGasConstants,
+    SignedMantleTx, TxGasCalculator as _, TxHash, Utxo,
+    gas::MainnetGasProfile,
     transactions::{OpsProofs, states::Preverified},
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
@@ -353,7 +353,7 @@ async fn validate_signed_submissions_against_live_prices(
     for submission in signed_submissions {
         let required_fee = submission
             .signed_tx()
-            .total_gas_cost::<MainnetGasConstants>(&lb_core::mantle::transactions::GasPrices {
+            .total_gas_cost::<MainnetGasProfile>(&lb_core::mantle::transactions::GasPrices {
                 execution_base_gas_price: prices.execution_base_gas_price,
                 storage_gas_price: prices.storage_gas_price,
             })

@@ -32,7 +32,7 @@ pub type BlendCoreRecoveryBackend<RuntimeServiceId> = StorageRecoveryBackend<
 >;
 
 pub type BlendCoreService<RuntimeServiceId> = lb_blend_service::core::BlendService<
-    lb_blend_service::core::backends::libp2p::Libp2pBlendBackend,
+    lb_blend_service::core::backends::libp2p::Libp2pBlendBackend<RealProofsVerifier>,
     PeerId,
     lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId>,
     SdpService<RuntimeServiceId>,
