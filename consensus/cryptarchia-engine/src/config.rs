@@ -139,11 +139,11 @@ mod tests {
             NonZero::new(10).unwrap(),
             NonNegativeRatio::new(1, 5.try_into().unwrap()),
             0.1.try_into().unwrap(),
-            NonZero::new(10).unwrap(),
+            NonZero::new(12).unwrap(),
         );
         assert_eq!(config.security_param(), NonZero::new(10).unwrap());
         assert_eq!(config.base_period_length(), NonZero::new(50).unwrap());
-        assert_eq!(config.uncle_reference_window(), NonZero::new(50).unwrap());
+        assert_eq!(config.uncle_reference_window(), NonZero::new(60).unwrap());
         assert_eq!(config.s_gen(), NonZero::new(12).unwrap());
         assert_eq!(
             config.stake_inference_learning_rate().mul(10.0).floor() as u64,

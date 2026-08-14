@@ -1133,7 +1133,7 @@ mod tests {
                     NonZero::new(1).unwrap(),
                     slot_activation_coeff,
                     1f64.try_into().expect("1 > 0"),
-                    10.try_into().unwrap(),
+                    12.try_into().unwrap(),
                 ),
                 lb_cryptarchia_engine::State::Bootstrapping,
                 0.into(),

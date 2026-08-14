@@ -91,7 +91,7 @@ mod tests {
                 5.try_into().unwrap(),
                 NonNegativeRatio::new(1, 2.try_into().unwrap()),
                 1f64.try_into().unwrap(),
-                20.try_into().unwrap(), // W = 10 at f = 1/2
+                12.try_into().unwrap(),
             ),
             // not used in the tests
             sdp_config: crate::mantle::sdp::Config {
