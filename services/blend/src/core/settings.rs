@@ -47,6 +47,10 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
             .epoch_core_quota(self.num_blend_layers, &self.time, membership_size)
     }
 
+    pub const fn epoch_pow_quota(&self) -> Quota {
+        self.epoch_leadership_quota()
+    }
+
     pub const fn epoch_leadership_quota(&self) -> Quota {
         let num_blend_layers = self.num_blend_layers.get();
         let additional_encapsulations = num_blend_layers

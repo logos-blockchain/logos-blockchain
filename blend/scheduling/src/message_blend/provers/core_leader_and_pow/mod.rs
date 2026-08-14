@@ -50,6 +50,12 @@ pub trait CoreLeaderAndPowProofsGenerator<CorePoQGenerator>: Sized {
     /// Request a new proof of work backed proof from the prover. It returns
     /// `None` if the epoch's `PoW` public inputs admit no proof at all.
     async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof>;
+    /// Stop the background work this generator is performing for its epoch.
+    ///
+    /// Called on the outgoing generator at an epoch rotation: it stays alive
+    /// through the transition period to verify messages still in flight, but
+    /// must not go on mining for an epoch that has ended.
+    fn stop_proof_generation(&mut self);
 }
 
 pub struct RealCoreLeaderAndPowProofsGenerator<CorePoQGenerator> {
@@ -98,6 +104,12 @@ where
         self.core_and_leader_proofs_generator
             .get_next_leader_proof()
             .await
+    }
+
+    fn stop_proof_generation(&mut self) {
+        // Only the `PoW` branch mines in the background; the other two produce
+        // a proof when one is asked for and idle otherwise.
+        self.pow_proofs_generator.stop();
     }
 
     async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {

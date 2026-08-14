@@ -893,7 +893,10 @@ mod tests {
     use lb_key_management_system_keys::keys::{
         Ed25519Key, Ed25519Signature, UnsecuredZkKey, ZkSignature,
     };
-    use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards};
+    use lb_ledger::{
+        config::{BlendPoWConfig, PoWConfig},
+        mantle::sdp::{ServiceRewardsParameters, rewards},
+    };
     use lb_pol::LotteryConstants;
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
     use lb_utxotree::UtxoTree;
@@ -1892,6 +1895,15 @@ mod tests {
                 },
             },
             faucet_pk: None,
+            pow_config: PoWConfig {
+                blend: BlendPoWConfig {
+                    base_difficulty_exponent: 19,
+                    damping_den_offset: 0,
+                    damping_num: 1.try_into().unwrap(),
+                    max_step: 1.try_into().unwrap(),
+                    target_transactions_per_block: 1.try_into().unwrap(),
+                },
+            },
         }
     }
 

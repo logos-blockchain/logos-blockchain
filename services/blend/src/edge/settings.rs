@@ -31,6 +31,10 @@ pub struct RunningBlendConfig<BackendSettings> {
 }
 
 impl<BackendSettings> RunningBlendConfig<BackendSettings> {
+    pub const fn epoch_pow_quota(&self) -> Quota {
+        self.epoch_leadership_quota()
+    }
+
     pub const fn epoch_leadership_quota(&self) -> Quota {
         let num_blend_layers = self.num_blend_layers.get();
         let additional_encapsulations = num_blend_layers

@@ -425,7 +425,10 @@ where
             pol_ledger_aged: current_public_epoch_info.aged,
             message_quota: settings.epoch_leadership_quota(),
         },
-        pow: PowInputs::unwired_placeholder(),
+        pow: PowInputs {
+            pow_blend_difficulty: current_public_epoch_info.pow_difficulty,
+            pow_quota: settings.epoch_pow_quota(),
+        },
     };
 
     debug!(target: LOG_TARGET, "Creating new handler for epoch {:?}", current_public_epoch_info.epoch);

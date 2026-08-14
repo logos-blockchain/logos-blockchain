@@ -46,6 +46,15 @@ pub trait PowProofsGenerator: Sized {
     fn new(settings: ProofsGeneratorSettings) -> Self;
     /// Get the next `PoW` proof.
     async fn get_next_proof(&mut self) -> Option<BlendLayerProof>;
+    /// Stop mining for this epoch, abandoning any search in flight.
+    ///
+    /// Unlike the other two branches, this one performs unbounded background
+    /// work: it mines continuously so a proof is ready when one is asked for.
+    /// That work is worthless once the epoch it is bound to has passed — a
+    /// solution is ground against that epoch's nonce and judged against that
+    /// epoch's threshold — so a generator kept alive to verify late messages
+    /// must be told to stop paying for it.
+    fn stop(&mut self);
 }
 
 pub struct RealPowProofsGenerator {
@@ -60,6 +69,15 @@ impl PowProofsGenerator for RealPowProofsGenerator {
             settings,
             proofs_stream: create_proof_stream(settings.public_inputs),
         }
+    }
+
+    fn stop(&mut self) {
+        // Dropping the stream drops the `CancellableHandle`s inside it, which
+        // abort the search round and the proving tasks they own. The search
+        // runs in bounded rounds precisely so it returns to the runtime often
+        // enough to be abandoned here.
+        self.proofs_stream = Box::pin(stream::empty());
+        tracing::debug!(target: LOG_TARGET, "Stopped PoW proof generation for this epoch.");
     }
 
     async fn get_next_proof(&mut self) -> Option<BlendLayerProof> {

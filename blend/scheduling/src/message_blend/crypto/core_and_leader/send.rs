@@ -101,6 +101,11 @@ where
         self.proofs_generator
             .set_epoch_private(winning_pol_info_stream, target_epoch);
     }
+
+    /// Stop generating proofs for this processor's epoch.
+    pub fn stop_proof_generation(&mut self) {
+        self.proofs_generator.stop_proof_generation();
+    }
 }
 
 impl<NodeId, CorePoQGenerator, ProofsGenerator>
@@ -266,7 +271,7 @@ mod test {
                         zk_root: ZkHash::ZERO,
                     },
                     leader: leader_inputs,
-                    pow: PowInputs::unwired_placeholder(),
+                    pow: PowInputs::disabled(),
                 },
                 MockCorePoQGenerator,
                 Epoch::new(0),

@@ -28,9 +28,10 @@ use crate::{
             MockKmsAdapter, MockProofsVerifier, NodeId, TestBlendBackend, TestBlendBackendEvent,
             TestNetworkAdapter, backend_epoch_info, dummy_overwatch_resources,
             dummy_pol_private_inputs, new_crypto_processor, new_epoch_info, new_membership,
-            new_stream, recorded_set_epoch_private_calls, reset_set_epoch_private_calls,
-            reward_epoch_info, scheduler_epoch_info, scheduler_settings, sdp_relay, settings,
-            timing_settings, wait_for_blend_backend_event,
+            new_stream, recorded_set_epoch_private_calls, recorded_stop_proof_generation_calls,
+            reset_set_epoch_private_calls, reset_stop_proof_generation_calls, reward_epoch_info,
+            scheduler_epoch_info, scheduler_settings, sdp_relay, settings, timing_settings,
+            wait_for_blend_backend_event,
         },
     },
     epoch::{CoreEpochInfo, CoreEpochPublicInfo},
@@ -46,6 +47,7 @@ fn test_blend_epoch_state(
     membership_info: MembershipInfo<NodeId>,
 ) -> BlendEpochState<NodeId> {
     BlendEpochState {
+        pow_difficulty: ZkHash::ZERO,
         epoch: epoch.into(),
         nonce: ZkHash::ZERO,
         aged: ZkHash::ZERO,
@@ -860,6 +862,20 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
     )
     .await;
     recorded_set_epoch_private_calls()
+}
+
+/// An epoch rotation must stop the outgoing epoch's proof generation.
+///
+/// The outgoing processor is kept for the transition period so messages still
+/// in flight from its epoch can be decapsulated, but its generators are done:
+/// a `PoW` solution is ground against one epoch's nonce and judged against
+/// that epoch's threshold, so mining for an epoch that has ended produces
+/// nothing usable while occupying a core for the whole period.
+#[test_log::test(tokio::test)]
+async fn test_handle_epoch_event_stops_old_epoch_proof_generation() {
+    reset_stop_proof_generation_calls();
+    let _calls = transition_to_new_epoch_with_secret(1.into()).await;
+    assert_eq!(recorded_stop_proof_generation_calls(), 1);
 }
 
 /// On an epoch change, if secret `PoL` info for the *new* epoch is already

@@ -696,6 +696,7 @@ mod tests {
         EpochState {
             epoch,
             nonce: NONCE,
+            blend_pow_difficulty: Fr::ZERO,
             utxos: UtxoTree::default(),
             total_stake: 100,
             lottery_0: LOTTERY_0,
@@ -720,6 +721,7 @@ mod tests {
         EpochState {
             epoch,
             nonce: NONCE,
+            blend_pow_difficulty: Fr::ZERO,
             utxos: UtxoTree::default(),
             total_stake: 100,
             lottery_0: LOTTERY_0,

@@ -1,3 +1,4 @@
+pub(crate) mod blend_difficulty;
 mod difficulty;
 
 use std::num::NonZeroU64;
@@ -256,6 +257,7 @@ mod tests {
         EpochState {
             epoch: epoch.into(),
             nonce: Fr::ZERO,
+            blend_pow_difficulty: PowTarget::ZERO,
             utxos: UtxoTree::default(),
             total_stake: 0,
             lottery_0: Fr::ZERO,

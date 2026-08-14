@@ -330,7 +330,7 @@ pub fn new_crypto_processor<CorePoQGenerator>(
         PoQVerificationInputsMinusSigningKey {
             core: epoch_info.poq_core_public_inputs,
             leader: epoch_info.poq_leadership_public_inputs,
-            pow: PowInputs::unwired_placeholder(),
+            pow: PowInputs::disabled(),
         },
         core_poq_generator,
         epoch_info.epoch,
@@ -349,7 +349,7 @@ pub fn backend_epoch_info(
         proofs_verifier: MockProofsVerifier::new(PoQVerificationInputsMinusSigningKey {
             core: public_info.poq_core_public_inputs,
             leader: public_info.poq_leadership_public_inputs,
-            pow: PowInputs::unwired_placeholder(),
+            pow: PowInputs::disabled(),
         }),
     }
 }
@@ -361,6 +361,7 @@ pub fn new_epoch_info<BackendSettings>(
 ) -> CoreEpochPublicInfo<NodeId> {
     let core_quota = settings.epoch_core_quota(membership.size());
     CoreEpochPublicInfo {
+        poq_pow_public_inputs: PowInputs::disabled(),
         epoch,
         membership,
         poq_core_public_inputs: CoreInputs {
@@ -420,6 +421,25 @@ thread_local! {
     static SET_EPOCH_PRIVATE_CALLS: RefCell<Vec<Epoch>> = const { RefCell::new(Vec::new()) };
 }
 
+thread_local! {
+    /// Counts the calls to
+    /// [`MockCoreAndLeaderProofsGenerator::stop_proof_generation`], so tests
+    /// can assert that an epoch rotation stops the outgoing epoch's proof
+    /// generation. Test-isolated for the same reason as above.
+    static STOP_PROOF_GENERATION_CALLS: RefCell<usize> = const { RefCell::new(0) };
+}
+
+/// Clears the count of `stop_proof_generation` calls.
+pub fn reset_stop_proof_generation_calls() {
+    STOP_PROOF_GENERATION_CALLS.with(|calls| *calls.borrow_mut() = 0);
+}
+
+/// How many times `stop_proof_generation` has been called since the last
+/// reset.
+pub fn recorded_stop_proof_generation_calls() -> usize {
+    STOP_PROOF_GENERATION_CALLS.with(|calls| *calls.borrow())
+}
+
 /// Clears the record of `set_epoch_private` calls. Call before the code under
 /// test to isolate the calls of interest.
 pub fn reset_set_epoch_private_calls() {
@@ -447,6 +467,10 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
 
     fn set_epoch_private(&mut self, _: WinningPolInfoStream, target_epoch: Epoch) {
         SET_EPOCH_PRIVATE_CALLS.with(|calls| calls.borrow_mut().push(target_epoch));
+    }
+
+    fn stop_proof_generation(&mut self) {
+        STOP_PROOF_GENERATION_CALLS.with(|calls| *calls.borrow_mut() += 1);
     }
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {

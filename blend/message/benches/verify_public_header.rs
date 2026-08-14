@@ -117,9 +117,7 @@ static FIXTURE: LazyLock<(EncapsulatedMessage, RealProofsVerifier)> = LazyLock::
             lottery_0: full_width_value(1003),
             lottery_1: full_width_value(1004),
         },
-        // The `PoW` quota parameters are not plumbed through from the chain
-        // yet; the shared placeholder keeps prover and verifier in step.
-        pow: PowInputs::unwired_placeholder(),
+        pow: PowInputs::disabled(),
     };
     let private_inputs = ProofOfCoreQuotaInputs {
         core_sk: prover_secret_key.into_inner(),

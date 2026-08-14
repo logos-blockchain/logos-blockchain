@@ -523,6 +523,7 @@ where
                       lottery_1,
                       membership_info,
                       nonce,
+                      pow_difficulty,
                   }| {
                 // This can be empty in case of an empty membership set.
                 let Some(ZkInfo {
@@ -554,6 +555,10 @@ where
                             message_quota: config.epoch_leadership_quota(),
                             lottery_0,
                             lottery_1,
+                        },
+                        poq_pow_public_inputs: PowInputs {
+                            pow_blend_difficulty: pow_difficulty,
+                            pow_quota: config.epoch_pow_quota(),
                         },
                     },
                     core_poq_generator,
@@ -590,7 +595,7 @@ where
     let current_epoch_poq_verification_inputs = PoQVerificationInputsMinusSigningKey {
         core: current_epoch_public_info.poq_core_public_inputs,
         leader: current_epoch_public_info.poq_leadership_public_inputs,
-        pow: PowInputs::unwired_placeholder(),
+        pow: current_epoch_public_info.poq_pow_public_inputs,
     };
 
     let crypto_processor = CoreCryptographicProcessor::<
@@ -1017,6 +1022,10 @@ where
                 core_poq_generator: new_core_poq_generator,
                 public: new_epoch_info,
             } = *core_epoch_info;
+            // Once a new epoch starts, old epoch's PoW work is useless, so we drop the PoW
+            // proof generator for the epoch transition period.
+            let mut current_cryptographic_processor = current_cryptographic_processor;
+            current_cryptographic_processor.stop_proof_generation();
             let (_, _, _, _, current_epoch_blending_token_collector, _, state_updater) =
                 current_recovery_checkpoint.into_components();
 
@@ -1034,7 +1043,7 @@ where
             let new_poq_verification_inputs = PoQVerificationInputsMinusSigningKey {
                 core: new_epoch_info.poq_core_public_inputs,
                 leader: new_epoch_info.poq_leadership_public_inputs,
-                pow: PowInputs::unwired_placeholder(),
+                pow: new_epoch_info.poq_pow_public_inputs,
             };
             backend
                 .rotate_epoch(BackendEpochInfo {

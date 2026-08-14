@@ -170,6 +170,7 @@ async fn handle_new_secret_epoch_info_recreates_handler() {
 
 fn test_blend_epoch_state(epoch: Epoch, membership: Membership<NodeId>) -> BlendEpochState<NodeId> {
     BlendEpochState {
+        pow_difficulty: ZkHash::ZERO,
         epoch,
         nonce: Fr::ZERO,
         aged: Fr::ZERO,

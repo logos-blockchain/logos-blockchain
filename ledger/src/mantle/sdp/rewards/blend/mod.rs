@@ -6,7 +6,10 @@ use std::{fmt::Debug, num::NonZeroU64};
 use lb_blend_message::{
     encap::ProofsVerifier as ProofsVerifierTrait, reward::BlendingTokenEvaluation,
 };
-use lb_blend_proofs::quota::{Quota, inputs::prove::public::LeaderInputs};
+use lb_blend_proofs::quota::{
+    Quota,
+    inputs::prove::public::{LeaderInputs, PowInputs},
+};
 use lb_core::{
     blend::core_quota,
     mantle::{Utxo, Value},
@@ -258,17 +261,28 @@ impl RewardsParameters {
         ))
     }
 
-    fn leader_inputs(&self, epoch_state: &EpochState) -> LeaderInputs {
+    fn encapsulations_per_message(&self) -> Quota {
         let num_blend_layers = self.num_blend_layers.get();
-        let message_quota =
-            Quota::try_new(num_blend_layers + (num_blend_layers * self.data_replication_factor))
-                .expect("Leader Quota must fit within the width the `PoQ` circuit allows.");
+        Quota::try_new(num_blend_layers + (num_blend_layers * self.data_replication_factor))
+            .expect("Quota must fit within the width the `PoQ` circuit allows.")
+    }
+
+    fn leader_inputs(&self, epoch_state: &EpochState) -> LeaderInputs {
         LeaderInputs {
             pol_ledger_aged: epoch_state.utxos.root(),
             pol_epoch_nonce: epoch_state.nonce,
-            message_quota,
+            message_quota: self.encapsulations_per_message(),
             lottery_0: epoch_state.lottery_0,
             lottery_1: epoch_state.lottery_1,
+        }
+    }
+
+    /// The epoch's proof of work public inputs: the threshold the chain fixed
+    /// for this epoch, and `Q_W = ß_max`, so one solution buys one message.
+    fn pow_inputs(&self, epoch_state: &EpochState) -> PowInputs {
+        PowInputs {
+            pow_blend_difficulty: epoch_state.blend_pow_difficulty,
+            pow_quota: self.encapsulations_per_message(),
         }
     }
 }

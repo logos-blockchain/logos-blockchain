@@ -1,4 +1,4 @@
-use core::num::{NonZero, NonZeroU32};
+use core::num::{NonZero, NonZeroU32, NonZeroU64};
 use std::collections::HashMap;
 
 use lb_chain_service::Epoch;
@@ -26,6 +26,7 @@ pub struct Settings {
     pub genesis_block: GenesisBlock,
     #[serde(default)]
     pub faucet_pk: Option<ZkPublicKey>,
+    pub pow_config: PoWConfig,
 }
 
 impl Settings {
@@ -87,4 +88,19 @@ pub struct SdpConfig {
 pub struct ServiceParameters {
     pub inactivity_period: InactivityPeriod,
     pub epoch: Epoch,
+}
+
+// The same as `lb_ledger::config::PoWConfig`.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PoWConfig {
+    pub blend: BlendPoWConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BlendPoWConfig {
+    pub base_difficulty_exponent: u32,
+    pub target_transactions_per_block: NonZeroU64,
+    pub max_step: NonZeroU64,
+    pub damping_num: NonZeroU32,
+    pub damping_den_offset: u32,
 }
