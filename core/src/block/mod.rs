@@ -49,18 +49,25 @@ pub type BlockNumber = u64;
 pub enum Error {
     #[error("Failed to serialize: {0}")]
     Serialisation(#[from] crate::codec::Error),
-    #[error("Signature error.")]
-    Signature,
+    #[error("Failed to verify header alone: {0}")]
+    Header(#[from] HeaderError),
     #[error("Body root mismatch: calculated body does not match header")]
     BodyRootMismatch,
     #[error("Signing key does not match the leader key in proof of leadership")]
     KeyMismatch,
-    #[error("Validation error: {0}")]
-    Validation(String),
     #[error(transparent)]
     BoundedError(#[from] BoundedError),
     #[error("Total storage size {size} exceeds maximum of {max} bytes")]
     ContentTooBig { size: usize, max: usize },
+}
+
+/// Why a header fails the checks that need the header alone.
+#[derive(Debug, thiserror::Error)]
+pub enum HeaderError {
+    #[error("Expected a non-genesis slot")]
+    GenesisSlot,
+    #[error("Signature error.")]
+    Signature,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
@@ -183,7 +190,7 @@ impl<Tx> Block<Tx> {
     {
         // 1. Non-genesis blocks only
         if slot == Slot::genesis() {
-            return Err(Error::Validation("expected non-genesis slot".to_owned()));
+            return Err(HeaderError::GenesisSlot.into());
         }
 
         // 2. Expected leader public key
@@ -241,24 +248,14 @@ impl<Tx> Block<Tx> {
     where
         Tx: Hashable<Hash = TxHash> + StorageSize,
     {
-        // 1. Non-genesis blocks only
-        if self.header.slot() == Slot::genesis() {
-            return Err(Error::Validation("expected non-genesis slot".to_owned()));
-        }
+        // 1. Checks that need the header alone
+        verify_header_alone(&self.header, &self.signature)?;
 
         // 2. Size is ok
         self.validate_total_transactions_size()?;
 
         // 3. Body root matches the carried uncle headers and transactions
         self.validate_body_root()?;
-
-        // 4. Signature is valid over the header bytes
-        let leader_public_key = self.header.leader_proof().leader_key();
-        let header_bytes = self.header.to_bytes()?;
-
-        leader_public_key
-            .verify(&header_bytes, &self.signature)
-            .map_err(|_| Error::Signature)?;
 
         Ok(self)
     }
@@ -341,6 +338,28 @@ impl<Tx> Block<Tx> {
             signature: self.signature,
         }
     }
+}
+
+/// The checks that the header and the signature over it settle on their own:
+/// the header's slot must not be the genesis one, and the signature must verify
+/// by the leader key.
+///
+/// This does not check `body_root` because it commits to a body this function
+/// does not have. It should be checked separately by the caller.
+pub fn verify_header_alone(
+    header: &Header,
+    signature: &Ed25519Signature,
+) -> Result<(), HeaderError> {
+    if header.slot() == Slot::genesis() {
+        return Err(HeaderError::GenesisSlot);
+    }
+
+    let header_bytes = header.to_bytes().map_err(|_| HeaderError::Signature)?;
+    header
+        .leader_proof()
+        .leader_key()
+        .verify(&header_bytes, signature)
+        .map_err(|_| HeaderError::Signature)
 }
 
 /// The commitment to a block body: its uncle headers and its txs
@@ -779,9 +798,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(
-            matches!(block_result, Error::Validation(msg) if msg == "expected non-genesis slot")
-        );
+        assert!(matches!(
+            block_result,
+            Error::Header(HeaderError::GenesisSlot)
+        ));
     }
 
     #[test]
@@ -822,7 +842,7 @@ mod tests {
         )
         .expect_err("genesis slot must be rejected by reconstruct path");
 
-        assert!(matches!(err, Error::Validation(msg) if msg == "expected non-genesis slot"));
+        assert!(matches!(err, Error::Header(HeaderError::GenesisSlot)));
     }
 
     /// The specification fixes the maximum proposal at 10,000 bytes:
