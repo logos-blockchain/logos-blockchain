@@ -40,7 +40,6 @@ use logos_blockchain_tests::cucumber::{
     },
     world::{CucumberWorld, DeployerKind},
 };
-use time::OffsetDateTime;
 
 type ScenarioAttempts = Arc<Mutex<HashMap<String, u8>>>;
 
@@ -229,7 +228,6 @@ fn prepare_world_for_scenario(
     scenario_name: &str,
 ) {
     world.set_deployer(deployer);
-    world.set_scenario_started_at(OffsetDateTime::now_utc());
     world.set_genesis_time(resolve_automatic_genesis_time());
 
     if let Err(err) = world.preflight(deployer) {

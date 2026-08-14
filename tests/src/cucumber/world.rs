@@ -38,7 +38,6 @@ use testing_framework_core::{
     scenario::{PeerSelection, Scenario, StartedNode},
     topology::DeploymentSeed,
 };
-use time::OffsetDateTime;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
@@ -842,8 +841,6 @@ pub struct CucumberWorld {
     pub deployer: Option<DeployerKind>,
     /// A unique per-scenario context string used to isolate runtime resources.
     pub test_context: Option<String>,
-    /// Wall-clock instant at which this Cucumber scenario was initialized.
-    pub scenario_started_at: Option<OffsetDateTime>,
     /// Resolved genesis time for this Cucumber scenario attempt. It is set in
     /// the scenario hook and reused by every deployment build or rebuild.
     pub genesis_time: Option<GenesisTime>,
@@ -1052,7 +1049,6 @@ impl Debug for CucumberWorld {
         f.debug_struct("CucumberWorld")
             .field("deployer", &format!("{:?}", self.deployer))
             .field("test_context", &format!("{:?}", self.test_context))
-            .field("scenario_started_at", &self.scenario_started_at)
             .field("genesis_time", &self.genesis_time)
             .field("scenario_base_dir", &self.scenario_base_dir)
             .field("spec", &format!("{:?}", self.spec))
@@ -1406,10 +1402,6 @@ impl CucumberWorld {
 
     pub fn set_test_context(&mut self, test_context: String) {
         self.test_context = Some(test_context);
-    }
-
-    pub const fn set_scenario_started_at(&mut self, started_at: OffsetDateTime) {
-        self.scenario_started_at = Some(started_at);
     }
 
     pub const fn set_genesis_time(&mut self, genesis_time: GenesisTime) {

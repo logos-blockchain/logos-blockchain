@@ -18,7 +18,7 @@ Feature: Cryptarchia
   @cryptarchia_ci
   Scenario: Nodes started before and after delayed genesis converge
     Given I have a cluster with capacity of 3 nodes
-    And the chain starts 60 seconds after the scenario starts
+    And the chain starts 60 seconds from now
     And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
     And I immediate start node "NODE_1"
     And I start peer node "NODE_2" connected to node "NODE_1"
