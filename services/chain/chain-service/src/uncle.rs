@@ -3,10 +3,8 @@
 use std::collections::HashSet;
 
 use lb_core::{
-    block::{Block, SignedHeader, UncleHeaders},
-    codec::SerializeOp as _,
+    block::{Block, HeaderError, SignedHeader, UncleHeaders},
     header::HeaderId,
-    proofs::leader_proof::LeaderProof as _,
 };
 use lb_cryptarchia_engine::Branch;
 
@@ -63,9 +61,13 @@ impl Cryptarchia {
         let window_start = slot.into_inner().saturating_sub(uncle_reference_window);
         self.verify_uncles_ancestry(block.uncle_headers(), parent, window_start)?;
 
-        // Each uncle's header signature and `PoL` must be valid.
+        // Each uncle's header (including its signature) must be valid,
+        // and its `PoL` must be valid.
         for uncle in block.uncle_headers().iter() {
-            self.verify_uncle_proofs(uncle)
+            uncle
+                .verify()
+                .map_err(UncleError::from)
+                .and_then(|()| self.verify_uncle_pol(uncle))
                 .map_err(|reason| Error::InvalidUncle {
                     uncle: uncle.header().id(),
                     reason,
@@ -122,20 +124,8 @@ impl Cryptarchia {
         Ok(())
     }
 
-    /// Verifies the signature and the leadership proof carried by an uncle.
-    fn verify_uncle_proofs(&self, uncle: &SignedHeader) -> Result<(), UncleError> {
-        // The signature must verify over the uncle's header, by its own leader.
-        let header_bytes = uncle
-            .header()
-            .to_bytes()
-            .map_err(|_| UncleError::InvalidSignature)?;
-        uncle
-            .header()
-            .leader_proof()
-            .leader_key()
-            .verify(&header_bytes, uncle.signature())
-            .map_err(|_| UncleError::InvalidSignature)?;
-
+    /// Verifies the leadership proof carried by an uncle.
+    fn verify_uncle_pol(&self, uncle: &SignedHeader) -> Result<(), UncleError> {
         // The proof of leadership must verify against the ledger state of the
         // uncle's parent, which must exist since the parent is on the chain.
         let parent_state = self
@@ -162,10 +152,21 @@ pub enum UncleError {
     ParentNotOnChain,
     #[error("on the chain that the block is extending")]
     OnChain,
+    #[error("at a slot no uncle can be proposed for")]
+    InvalidSlot,
     #[error("invalid header signature")]
     InvalidSignature,
     #[error("invalid proof of leadership")]
     InvalidProof,
+}
+
+impl From<HeaderError> for UncleError {
+    fn from(error: HeaderError) -> Self {
+        match error {
+            HeaderError::GenesisSlot => Self::InvalidSlot,
+            HeaderError::Signature => Self::InvalidSignature,
+        }
+    }
 }
 
 #[cfg(test)]

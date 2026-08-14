@@ -75,4 +75,8 @@ impl SignedHeader {
     pub const fn signature(&self) -> &Ed25519Signature {
         &self.signature
     }
+
+    pub fn verify(&self) -> Result<(), crate::block::HeaderError> {
+        crate::block::verify_header_alone(&self.header, &self.signature)
+    }
 }
