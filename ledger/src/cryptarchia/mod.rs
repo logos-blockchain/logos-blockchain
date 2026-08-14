@@ -310,7 +310,7 @@ impl LedgerState {
             let tx_density = {
                 let mut tx_density = self.tx_density;
                 tx_density.close_epoch();
-                tx_density;
+                tx_density
             };
             // TODO: Refactor: Have the unified update logic for all fields in `EpochState`.
             // `epoch` and `utxos` are updated by `EpochState::update_from_ledger`,
@@ -850,7 +850,7 @@ impl core::fmt::Debug for LedgerState {
 
 #[cfg(test)]
 pub mod tests {
-    use std::num::{NonZero, NonZeroU64};
+    use std::num::{NonZero, NonZeroU32, NonZeroU64};
 
     use lb_core::{
         crypto::{Digest as _, Hasher},
@@ -1074,7 +1074,7 @@ pub mod tests {
                     base_difficulty_exponent: 234,
                     target_transactions_per_block: NonZeroU64::new(10).unwrap(),
                     max_step: NonZeroU64::new(4).unwrap(),
-                    damping_num: NonZeroU64::new(1).unwrap(),
+                    damping_num: NonZeroU32::new(1).unwrap(),
                     damping_den_offset: 1,
                 },
             },

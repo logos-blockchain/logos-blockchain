@@ -104,7 +104,7 @@ where
 
     /// Stop generating proofs for this processor's epoch.
     pub fn stop_proof_generation(&mut self) {
-        self.proofs_generator.stop_proof_generation();
+        self.proofs_generator.drop_pow_proofs_stream();
     }
 }
 

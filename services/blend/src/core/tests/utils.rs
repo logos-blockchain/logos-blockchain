@@ -469,7 +469,7 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
         SET_EPOCH_PRIVATE_CALLS.with(|calls| calls.borrow_mut().push(target_epoch));
     }
 
-    fn stop_proof_generation(&mut self) {
+    fn drop_pow_proofs_stream(&mut self) {
         STOP_PROOF_GENERATION_CALLS.with(|calls| *calls.borrow_mut() += 1);
     }
 

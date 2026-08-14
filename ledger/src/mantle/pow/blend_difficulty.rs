@@ -21,7 +21,7 @@
 use core::num::NonZeroU64;
 
 use lb_core::mantle::ops::pow::PowTarget;
-use lb_groth16::{Field as _, fr_to_bytes};
+use lb_groth16::{fr_from_biguint_saturating, fr_modulus};
 use num_bigint::BigUint;
 
 use crate::{config::BlendPoWConfig, cryptarchia::tx_density::ClosedEpochLoad};
@@ -33,7 +33,7 @@ use crate::{config::BlendPoWConfig, cryptarchia::tx_density::ClosedEpochLoad};
 /// about it in exponents throughout, so that is how the deployment carries it.
 #[must_use]
 pub fn base_difficulty(config: &BlendPoWConfig) -> PowTarget {
-    into_target(field_modulus() >> config.base_difficulty_exponent)
+    fr_from_biguint_saturating(fr_modulus() >> config.base_difficulty_exponent)
 }
 
 /// Retarget `d_blend` for one epoch from the transaction load of a whole,
@@ -70,7 +70,7 @@ pub fn compute_epoch_blend_difficulty(
     // The load is kept as the exact ratio `numerator / denominator` — they are
     // equal at the reference load — and never divided out.
     let Ok(non_empty_transactions_count) = NonZeroU64::try_from(load.transactions()) else {
-        return into_target(high);
+        return fr_from_biguint_saturating(high);
     };
     let numerator = BigUint::from(non_empty_transactions_count.get());
     let denominator = BigUint::from(config.target_transactions_per_block.get()) * load.blocks();
@@ -87,25 +87,12 @@ pub fn compute_epoch_blend_difficulty(
     // approximation that could be off by one would fork the chain.
     let target = radicand.nth_root(b.get());
 
-    into_target(target.clamp(low, high))
-}
-
-/// The scalar field modulus `p`, as an integer.
-fn field_modulus() -> BigUint {
-    // `-1` is `p - 1`, the largest field element.
-    BigUint::from(-PowTarget::ONE) + 1u8
-}
-
-/// Convert back into the field, capping at `p - 1` so the conversion cannot
-/// reduce mod p and wrap a very permissive threshold into a very hard one.
-fn into_target(value: BigUint) -> PowTarget {
-    let max_target = field_modulus() - 1u8;
-    PowTarget::from(value.min(max_target))
+    fr_from_biguint_saturating(target.clamp(low, high))
 }
 
 #[cfg(test)]
 mod tests {
-    use core::num::NonZeroU64;
+    use core::num::NonZeroU32;
 
     use super::*;
 
@@ -118,13 +105,13 @@ mod tests {
             base_difficulty_exponent: 234,
             target_transactions_per_block: NonZeroU64::new(10).unwrap(),
             max_step: NonZeroU64::new(2).unwrap(),
-            damping_num: NonZeroU64::new(1).unwrap(),
+            damping_num: NonZeroU32::new(1).unwrap(),
             damping_den_offset: 1,
         }
     }
 
     fn as_int(target: PowTarget) -> BigUint {
-        BigUint::from_bytes_le(&fr_to_bytes(&target))
+        BigUint::from(target)
     }
 
     #[test]
@@ -252,8 +239,9 @@ mod tests {
         // From the easiest possible threshold (p - 1), an empty epoch would
         // grow past the field; the cap keeps it there rather than letting the
         // conversion wrap it around to a tiny — that is, maximally hard — one.
+        // `fr_from_biguint_saturating(p)` is exactly that ceiling.
         let config = config();
-        let max_target = -PowTarget::ONE;
+        let max_target = fr_from_biguint_saturating(fr_modulus());
         assert_eq!(
             compute_epoch_blend_difficulty(ClosedEpochLoad::new(0, 7), max_target, &config),
             max_target
@@ -267,6 +255,6 @@ mod tests {
             base_difficulty_exponent: 19,
             ..config()
         };
-        assert_eq!(as_int(base_difficulty(&config)), field_modulus() >> 19u32);
+        assert_eq!(as_int(base_difficulty(&config)), fr_modulus() >> 19u32);
     }
 }

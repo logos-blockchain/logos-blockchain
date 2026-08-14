@@ -36,7 +36,7 @@ pub struct CurrentEpochState {
     /// These will be used to create the proof verifier after the next
     /// epoch update.
     leader_input: LeaderInputs,
-    /// Same as `leader_input`, but for the PoW input.
+    /// Same as `leader_input`, but for the `PoW` input.
     pow_input: PowInputs,
 }
 

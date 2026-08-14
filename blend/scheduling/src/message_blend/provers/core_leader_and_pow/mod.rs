@@ -55,12 +55,15 @@ pub trait CoreLeaderAndPowProofsGenerator<CorePoQGenerator>: Sized {
     /// Called on the outgoing generator at an epoch rotation: it stays alive
     /// through the transition period to verify messages still in flight, but
     /// must not go on mining for an epoch that has ended.
-    fn stop_proof_generation(&mut self);
+    fn drop_pow_proofs_stream(&mut self);
 }
 
 pub struct RealCoreLeaderAndPowProofsGenerator<CorePoQGenerator> {
     core_and_leader_proofs_generator: RealCoreAndLeaderProofsGenerator<CorePoQGenerator>,
-    pow_proofs_generator: RealPowProofsGenerator,
+    /// `None` once generation has been stopped for this epoch. Dropping the
+    /// generator drops the mining stream it owns, which is what actually
+    /// abandons the work — see [`Self::stop_proof_generation`].
+    pow_proofs_generator: Option<RealPowProofsGenerator>,
 }
 
 #[async_trait]
@@ -81,7 +84,7 @@ where
             // The `PoW` branch depends only on public epoch information, so
             // unlike the leadership branch it is ready from the moment the
             // generator is created.
-            pow_proofs_generator: RealPowProofsGenerator::new(settings),
+            pow_proofs_generator: Some(RealPowProofsGenerator::new(settings)),
         }
     }
 
@@ -106,20 +109,23 @@ where
             .await
     }
 
-    fn stop_proof_generation(&mut self) {
-        // Only the `PoW` branch mines in the background; the other two produce
-        // a proof when one is asked for and idle otherwise.
-        self.pow_proofs_generator.stop();
+    fn drop_pow_proofs_stream(&mut self) {
+        if self.pow_proofs_generator.take().is_some() {
+            tracing::debug!(target: LOG_TARGET, "Stopped PoW proof generation for this epoch.");
+        }
     }
 
     async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {
-        let proof = self.pow_proofs_generator.get_next_proof().await?;
+        // `None` once generation has been stopped for this epoch, which reads
+        // the same to a caller as an epoch whose `PoW` inputs admit no proof.
+        let generator = self.pow_proofs_generator.as_mut()?;
+        let proof = generator.get_next_proof().await?;
         tracing::trace!(
             target: LOG_TARGET,
-            epoch = ?self.pow_proofs_generator.settings.epoch,
-            quota = %self.pow_proofs_generator.settings.public_inputs.pow.pow_quota,
-            membership_size = self.pow_proofs_generator.settings.membership_size,
-            local_node_index = ?self.pow_proofs_generator.settings.local_node_index,
+            epoch = ?generator.settings.epoch,
+            quota = %generator.settings.public_inputs.pow.pow_quota,
+            membership_size = generator.settings.membership_size,
+            local_node_index = ?generator.settings.local_node_index,
             key_nullifier = ?proof.proof_of_quota.key_nullifier(),
             signing_key = ?proof.ephemeral_signing_key.public_key(),
             "generated PoW PoQ"

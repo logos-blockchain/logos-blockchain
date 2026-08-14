@@ -124,7 +124,7 @@ impl BlendPoWConfig {
     /// Both are exponents applied to big integers, so they must stay small —
     /// `alpha` is a simple fraction such as `1/2`, not a high-precision ratio.
     #[must_use]
-    pub fn damping_exponent(&self) -> (u32, NonZeroU32) {
+    pub const fn damping_exponent(&self) -> (u32, NonZeroU32) {
         let numerator = self.damping_num.get();
         let denominator = NonZeroU32::new(numerator.strict_add(self.damping_den_offset))
             .expect("Numerator is non-zero, so denominator must be non-zero as well since it's a non-negative offset from the numerator.");

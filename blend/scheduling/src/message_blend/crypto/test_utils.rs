@@ -60,7 +60,7 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
         self.0 = Some(winning_pol_info_stream);
     }
 
-    fn stop_proof_generation(&mut self) {}
+    fn drop_pow_proofs_stream(&mut self) {}
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
         None
