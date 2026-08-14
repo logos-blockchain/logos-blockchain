@@ -36,6 +36,7 @@ use tokio::sync::{mpsc, watch};
 use crate::{
     ZoneMessage,
     adapter::{self, BoxStream},
+    sequencer::FundingConfig,
 };
 
 /// One scripted `block_stream` connection: serve `events`, then `then`.
@@ -85,6 +86,8 @@ pub struct MockNode {
     pub up: Option<watch::Receiver<bool>>,
     /// Receives every `post_transaction` tx.
     pub posted: Option<mpsc::Sender<SignedMantleTx<Unverified>>>,
+    /// Receives the priority-fee percentages from funding requests.
+    pub funding_priority_fees: Option<mpsc::Sender<u64>>,
 }
 
 impl Default for MockNode {
@@ -103,6 +106,7 @@ impl Default for MockNode {
             zone_messages: Vec::new(),
             up: None,
             posted: None,
+            funding_priority_fees: None,
         }
     }
 }
@@ -261,6 +265,12 @@ impl adapter::Node for MockNode {
         &self,
         request: WalletFundRequestBody,
     ) -> Result<WalletFundResponseBody, lb_common_http_client::Error> {
+        if let Some(priority_fees) = &self.funding_priority_fees {
+            priority_fees
+                .send(request.priority_fee_percent)
+                .await
+                .expect("funding percentage receiver alive");
+        }
         // Fee-less passthrough: build the request's ops unchanged, as the
         // node would at zero gas price.
         Ok(WalletFundResponseBody {
@@ -276,11 +286,11 @@ impl adapter::Node for MockNode {
 /// Funding config backed by a fixture key; [`MockNode::fund_tx`] ignores it
 /// and returns the ops unchanged.
 #[must_use]
-pub fn funding_config() -> crate::sequencer::FundingConfig {
-    crate::sequencer::FundingConfig {
+pub fn funding_config() -> FundingConfig {
+    FundingConfig {
         funding_pk: lb_groth16::Fr::from(1u64).into(),
         max_tx_fee: GasCost::new(u64::MAX),
-        priority_fee: crate::sequencer::FundingConfig::DEFAULT_PRIORITY_FEE,
+        priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
     }
 }
 

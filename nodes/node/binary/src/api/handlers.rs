@@ -93,6 +93,18 @@ use crate::{
 
 const TARGET: &str = node::api::ROOT;
 
+fn validate_max_tx_fee(
+    tx_fee: lb_core::mantle::gas::GasCost,
+    max_tx_fee: lb_core::mantle::gas::GasCost,
+) -> Result<(), DynError> {
+    if tx_fee > max_tx_fee {
+        return Err(overwatch::DynError::from(format!(
+            "tx_fee({tx_fee}) exceeds max_tx_fee({max_tx_fee})"
+        )));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DialPeerRequestBody {
     pub addr: Multiaddr,
@@ -1001,12 +1013,7 @@ where
             .await?;
 
         let tx_fee = funded_tx_builder.tx_fee()?;
-        if tx_fee > req.max_tx_fee {
-            return Err(overwatch::DynError::from(format!(
-                "tx_fee({tx_fee}) exceeds max_tx_fee({})",
-                req.max_tx_fee
-            )));
-        }
+        validate_max_tx_fee(tx_fee, req.max_tx_fee)?;
 
         let signed_tx = wallet.sign_tx(Some(tip), funded_tx_builder).await?.response;
         let tx_hash = signed_tx.hash();
@@ -1025,7 +1032,7 @@ where
         >(&handle, signed_tx, Hashable::hash)
         .await?;
 
-        Ok(ChannelDepositResponseBody { hash: tx_hash })
+        Ok::<_, overwatch::DynError>(ChannelDepositResponseBody { hash: tx_hash })
     })
 }
 
@@ -1977,17 +1984,12 @@ pub mod wallet {
                     req.tx_builder,
                     req.change_public_key,
                     req.funding_public_keys,
-                    req.priority_fee,
+                    req.priority_fee_percent,
                 )
                 .await?;
 
             let tx_fee = funded_tx_builder.tx_fee()?;
-            if tx_fee > req.max_tx_fee {
-                return Err(overwatch::DynError::from(format!(
-                    "tx_fee({tx_fee}) exceeds max_tx_fee({})",
-                    req.max_tx_fee
-                )));
-            }
+            validate_max_tx_fee(tx_fee, req.max_tx_fee)?;
 
             // Owners of the funding inputs, in input order — the ledger
             // verifies the transfer proof against this exact list.
@@ -2027,11 +2029,12 @@ mod tests {
         header::HeaderId,
         mantle::{
             channel::{ChannelState, SlotTimeframe, SlotTimeout},
+            gas::GasCost,
             ops::channel::{Ed25519PublicKey, MsgId, config::Keys},
         },
     };
 
-    use super::channel_response;
+    use super::{channel_response, validate_max_tx_fee};
     use crate::api::{
         errors::BlocksStreamWindowError, handlers::resolve_blocks_stream_window,
         queries::BlocksStreamRequest,
@@ -2114,6 +2117,18 @@ mod tests {
         let response = channel_response(Err(DynError::from("channel backend failed".to_owned())));
 
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn max_tx_fee_rejects_a_percentage_funded_final_fee() {
+        let mandatory_fee: u64 = 794;
+        let priority_fee_percent: u64 = 12;
+        let priority_fee_amount = (mandatory_fee * priority_fee_percent).div_ceil(100);
+        let funded_tx_fee = GasCost::new(mandatory_fee + priority_fee_amount);
+
+        let error = validate_max_tx_fee(funded_tx_fee, GasCost::new(mandatory_fee + 95))
+            .expect_err("the percentage reserve should be included in the hard cap");
+        assert!(error.to_string().contains("exceeds max_tx_fee"));
     }
 
     fn request(

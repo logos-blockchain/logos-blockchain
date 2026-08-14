@@ -592,8 +592,9 @@ impl CommonHttpClient {
 
     /// Post a request to fund a transaction from the node's wallet.
     ///
-    /// The node adds fee inputs and change from its own wallet, signs only
-    /// the appended fee transfer, and returns the funded (still unsigned)
+    /// The node adds fee inputs and change from its own wallet, reserving the
+    /// request's percentage-based priority-fee reserve, then signs only the
+    /// appended fee transfer and returns the funded (still unsigned)
     /// transaction together with the transfer proof.
     pub async fn fund_tx(
         &self,
