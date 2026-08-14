@@ -14,14 +14,25 @@ use lb_storage_service::{backends::rocksdb::RocksBackend, recovery::StorageRecov
 use lb_time_service::backends::NtpTimeBackend;
 use libp2p::PeerId;
 
-use crate::generic_services::{CryptarchiaService, SdpService, blend::pol::PolInfoProvider};
+use crate::generic_services::{
+    CryptarchiaService, MempoolNetworkAdapter, MempoolPool, SdpService, blend::pol::PolInfoProvider,
+};
 
 pub(crate) mod pol;
+
+/// Blend's exit door on this node: block proposals go back onto the chain's
+/// gossipsub topic, transactions go to the mempool.
+pub type BlendPayloadDispatcher<RuntimeServiceId> =
+    lb_blend_service::core::dispatcher::libp2p::Libp2pPayloadDispatcher<
+        MempoolNetworkAdapter<RuntimeServiceId>,
+        MempoolPool<RuntimeServiceId>,
+        RuntimeServiceId,
+    >;
 
 pub type BlendCoreRecoveryBackend<RuntimeServiceId> = StorageRecoveryBackend<
     lb_blend_service::core::CoreServiceState<
         lb_blend_service::core::backends::libp2p::Libp2pBlendBackendSettings,
-        <lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId> as lb_blend_service::core::network::NetworkAdapter<RuntimeServiceId>>::Settings,
+        BlendBroadcastSettings<RuntimeServiceId>,
     >,
     lb_blend_service::core::settings::StartingBlendConfig<
         lb_blend_service::core::backends::libp2p::Libp2pBlendBackendSettings,
@@ -34,7 +45,7 @@ pub type BlendCoreRecoveryBackend<RuntimeServiceId> = StorageRecoveryBackend<
 pub type BlendCoreService<RuntimeServiceId> = lb_blend_service::core::BlendService<
     lb_blend_service::core::backends::libp2p::Libp2pBlendBackend<RealProofsVerifier>,
     PeerId,
-    lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId>,
+    BlendPayloadDispatcher<RuntimeServiceId>,
     SdpService<RuntimeServiceId>,
     RealCoreLeaderAndPowProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>,
     RealProofsVerifier,
@@ -82,5 +93,6 @@ pub type BlendService<RuntimeServiceId> = lb_blend_service::BlendService<
     RuntimeServiceId,
 >;
 
-pub type BlendBroadcastSettings<RuntimeServiceId> =
-    <lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId> as lb_blend_service::core::network::NetworkAdapter<RuntimeServiceId>>::Settings;
+pub type BlendBroadcastSettings<RuntimeServiceId> = <BlendPayloadDispatcher<RuntimeServiceId> as lb_blend_service::core::dispatcher::PayloadDispatcher<
+    RuntimeServiceId,
+>>::Settings;

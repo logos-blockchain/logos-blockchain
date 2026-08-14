@@ -1,6 +1,8 @@
 use core::fmt::{self, Debug, Formatter};
 
-use lb_blend::message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
+use lb_blend::message::{
+    PayloadType, encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
+};
 use lb_core::{
     mantle::NoteId,
     sdp::{DeclarationId, Locator},
@@ -42,9 +44,9 @@ impl<InnerMessage> From<InnerMessage> for ProxyServiceMessage<InnerMessage> {
 
 /// A message that is handled by [`BlendService`].
 pub enum ServiceMessage<NodeId> {
-    /// To send a message to the blend network and eventually broadcast it to
-    /// the [`NetworkService`].
-    Blend(NetworkMessage),
+    /// To send a payload through the blend network, for the exit node to
+    /// hand over to whichever local service owns that kind of payload.
+    Blend(BlendPayload),
     /// Request the current blend network info (connected peers).
     GetNetworkInfo {
         reply: oneshot::Sender<Option<NetworkInfo<NodeId>>>,
@@ -60,18 +62,51 @@ impl<NodeId> Debug for ServiceMessage<NodeId> {
     }
 }
 
+/// The plaintext body of a Blend data message, tagged with what it carries.
 // TODO: Replace with strong types for each message type Blend supports.
-pub type NetworkMessage = Vec<u8>;
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum BlendPayload {
+    BlockProposal(Vec<u8>),
+    Transaction(Vec<u8>),
+}
+
+impl BlendPayload {
+    /// The wire discriminant this payload travels under.
+    #[must_use]
+    pub const fn payload_type(&self) -> PayloadType {
+        match self {
+            Self::BlockProposal(_) => PayloadType::BlockProposal,
+            Self::Transaction(_) => PayloadType::Transaction,
+        }
+    }
+
+    #[must_use]
+    pub fn body(&self) -> &[u8] {
+        match self {
+            Self::BlockProposal(body) | Self::Transaction(body) => body,
+        }
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.body().len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.body().is_empty()
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ProcessedMessage {
-    Network(NetworkMessage),
+    Unencapsulated(BlendPayload),
     Encapsulated(Box<EncapsulatedMessageWithVerifiedPublicHeader>),
 }
 
-impl From<NetworkMessage> for ProcessedMessage {
-    fn from(value: NetworkMessage) -> Self {
-        Self::Network(value)
+impl From<BlendPayload> for ProcessedMessage {
+    fn from(value: BlendPayload) -> Self {
+        Self::Unencapsulated(value)
     }
 }
 

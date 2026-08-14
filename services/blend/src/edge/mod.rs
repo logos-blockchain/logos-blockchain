@@ -51,7 +51,7 @@ use crate::{
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     kms::PreloadKmsService,
     membership::{self, chain::BlendEpochState, node_id},
-    message::{NetworkInfo, ServiceMessage},
+    message::{BlendPayload, NetworkInfo, ServiceMessage},
 };
 
 const LOG_TARGET: &str = blend::service::EDGE;
@@ -263,7 +263,7 @@ async fn run<Backend, NodeId, ProofsGenerator, PolInfoProvider, RuntimeServiceId
     public_epoch_stream: UninitializedEpochEventStream<
         impl Stream<Item = BlendEpochState<NodeId>> + Unpin,
     >,
-    mut incoming_message_stream: impl Stream<Item = Vec<u8>> + Send + Unpin,
+    mut incoming_message_stream: impl Stream<Item = BlendPayload> + Send + Unpin,
     settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     notify_ready: impl Fn(),
@@ -338,9 +338,13 @@ where
                     tracing::warn!(target: LOG_TARGET, "Received a message to blend, but no active message handler is available to process it because the secret PoL info for the current epoch is not yet available. Ignoring the message.");
                     continue;
                 };
-                let message_copies = settings.data_replication_factor.checked_add(1).unwrap();
+                let BlendPayload::BlockProposal(proposal) = message else {
+                    tracing::warn!(target: LOG_TARGET, "Edge nodes cannot blend transactions yet. Dropping the message.");
+                    continue;
+                };
+                let message_copies = settings.data_replication_factor.checked_add(1).expect("Data replication factor should not overflow when incremented.");
                 for _ in 0..message_copies {
-                    handler.handle_message_to_blend(message.clone()).await;
+                    handler.handle_message_to_blend(proposal.clone()).await;
                 }
             }
             else => {

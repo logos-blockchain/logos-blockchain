@@ -26,6 +26,7 @@ use crate::{
         backends::BlendBackend, handlers::Error, run, settings::RunningBlendConfig as BlendConfig,
         tests::test_blend_epoch_state,
     },
+    message::BlendPayload,
     settings::TimingSettings,
     test_utils::{crypto::mock_blend_proof, epoch::OncePolStreamProvider, membership::key},
 };
@@ -53,7 +54,7 @@ pub async fn spawn_run(
 ) -> (
     JoinHandle<Result<(), Error>>,
     mpsc::Sender<Membership<NodeId>>,
-    mpsc::Sender<Vec<u8>>,
+    mpsc::Sender<BlendPayload>,
     mpsc::Receiver<NodeId>,
 ) {
     let (epoch_sender, epoch_receiver) = mpsc::channel(1);

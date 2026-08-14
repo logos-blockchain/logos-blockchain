@@ -20,26 +20,30 @@ use crate::generic_services::blend::BlendService;
 pub mod blend;
 pub mod sdp;
 
-pub type TxMempoolService<RuntimeServiceId> = lb_tx_service::TxMempoolService<
+pub type MempoolNetworkAdapter<RuntimeServiceId> =
     lb_tx_service::network::adapters::libp2p::Libp2pAdapter<
         SignedMantleTx<Preverified>,
         <SignedMantleTx<Preverified> as Hashable>::Hash,
         RuntimeServiceId,
-    >,
-    Mempool<
-        HeaderId,
-        SignedMantleTx<Preverified>,
-        TxHash,
-        RocksStorageAdapter<
-            SignedMantleTx<Preverified>,
-            <SignedMantleTx<Preverified> as Hashable>::Hash,
-        >,
-        RuntimeServiceId,
-    >,
-    RocksStorageAdapter<
-        SignedMantleTx<Preverified>,
-        <SignedMantleTx<Preverified> as Hashable>::Hash,
-    >,
+    >;
+
+pub type MempoolRocksStorageAdapter = RocksStorageAdapter<
+    SignedMantleTx<Preverified>,
+    <SignedMantleTx<Preverified> as Hashable>::Hash,
+>;
+
+pub type MempoolPool<RuntimeServiceId> = Mempool<
+    HeaderId,
+    SignedMantleTx<Preverified>,
+    TxHash,
+    MempoolRocksStorageAdapter,
+    RuntimeServiceId,
+>;
+
+pub type TxMempoolService<RuntimeServiceId> = lb_tx_service::TxMempoolService<
+    MempoolNetworkAdapter<RuntimeServiceId>,
+    MempoolPool<RuntimeServiceId>,
+    MempoolRocksStorageAdapter,
     RuntimeServiceId,
 >;
 

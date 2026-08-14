@@ -19,6 +19,7 @@ use crate::{
     },
     epoch_info::PolEpochInfo,
     membership::chain::BlendEpochState,
+    message::BlendPayload,
     test_utils::membership::membership,
 };
 
@@ -39,7 +40,10 @@ async fn run_with_epoch_transition() {
     .await;
 
     // A message should be forwarded to the core node 0.
-    msg_sender.send(vec![0]).await.expect("channel opened");
+    msg_sender
+        .send(BlendPayload::BlockProposal(vec![0]))
+        .await
+        .expect("channel opened");
     assert_eq!(
         node_id_receiver.recv().await.expect("channel opened"),
         core_node
@@ -54,7 +58,10 @@ async fn run_with_epoch_transition() {
     sleep(Duration::from_millis(100)).await;
 
     // A message should be forwarded to the core node 1.
-    msg_sender.send(vec![0]).await.expect("channel opened");
+    msg_sender
+        .send(BlendPayload::BlockProposal(vec![0]))
+        .await
+        .expect("channel opened");
     assert_eq!(
         node_id_receiver.recv().await.expect("channel opened"),
         core_node

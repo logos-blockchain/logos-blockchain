@@ -51,8 +51,8 @@ use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 use crate::{
     core::{
         backends::{BackendEpochInfo, BlendBackend},
+        dispatcher::PayloadDispatcher,
         kms::KmsPoQAdapter,
-        network::NetworkAdapter,
         processor::CoreCryptographicProcessor,
         settings::{
             CoverTrafficSettings, MessageDelayerSettings, RunningBlendConfig as BlendConfig,
@@ -62,9 +62,10 @@ use crate::{
         tests::RuntimeServiceId,
     },
     epoch::CoreEpochPublicInfo,
-    message::NetworkInfo,
+    message::{BlendPayload, NetworkInfo},
     settings::TimingSettings,
     test_utils,
+    test_utils::mempool::TestMempoolService,
 };
 
 pub type NodeId = [u8; 32];
@@ -240,23 +241,28 @@ pub async fn wait_for_blend_backend_event(
     }
 }
 
-pub struct TestNetworkAdapter;
+pub struct TestPayloadDispatcher;
 
 #[async_trait]
-impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for TestNetworkAdapter {
+impl<RuntimeServiceId> PayloadDispatcher<RuntimeServiceId> for TestPayloadDispatcher
+where
+    RuntimeServiceId: Send + 'static,
+{
     type Backend = TestNetworkBackend;
+    type MempoolService = TestMempoolService<RuntimeServiceId>;
     type Settings = ();
 
     fn new(
         _network_relay: OutboundRelay<
             <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
         >,
+        _mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
         _settings: Self::Settings,
     ) -> Self {
         Self
     }
 
-    async fn broadcast(&self, _message: Vec<u8>) {}
+    async fn dispatch(&self, _payload: BlendPayload) {}
 }
 
 pub struct TestNetworkBackend {

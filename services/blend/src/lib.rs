@@ -34,10 +34,11 @@ use tracing::{debug, error, info};
 
 use crate::{
     core::{
-        network::NetworkAdapter as NetworkAdapterTrait,
+        dispatcher::PayloadDispatcher as PayloadDispatcherTrait,
         service_components::{
-            BlendBackendSettingsOfService, MessageComponents, NetworkAdapterSettingsOfService,
-            NetworkBackendOfService, ServiceComponents as CoreServiceComponents,
+            BlendBackendSettingsOfService, MempoolOfService, MessageComponents,
+            NetworkBackendOfService, PayloadDispatcherSettingsOfService,
+            ServiceComponents as CoreServiceComponents,
         },
     },
     edge::service_components::ServiceComponents as EdgeServiceComponents,
@@ -48,7 +49,7 @@ use crate::{
         chain::BlendEpochState,
         node_id::{self, TryFrom as _},
     },
-    message::ProxyServiceMessage,
+    message::{BlendPayload, ProxyServiceMessage},
     settings::Settings,
 };
 
@@ -90,7 +91,7 @@ where
     type Settings = Settings<
         BlendBackendSettingsOfService<CoreService, RuntimeServiceId>,
         <EdgeService as EdgeServiceComponents>::BackendSettings,
-        NetworkAdapterSettingsOfService<CoreService, RuntimeServiceId>,
+        PayloadDispatcherSettingsOfService<CoreService, RuntimeServiceId>,
     >;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
@@ -103,13 +104,13 @@ impl<CoreService, EdgeService, SdpService, RuntimeServiceId> ServiceCore<Runtime
     for BlendService<CoreService, EdgeService, SdpService, RuntimeServiceId>
 where
     CoreService: ServiceData<
-            Message: MessageComponents<CoreService::NodeId, Payload: Into<Vec<u8>>>
+            Message: MessageComponents<CoreService::NodeId, Payload: Into<BlendPayload>>
                          + Send
                          + Sync
                          + 'static,
         > + CoreServiceComponents<
             RuntimeServiceId,
-            NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId> + Send + Sync + 'static,
+            PayloadDispatcher: PayloadDispatcherTrait<RuntimeServiceId> + Send + Sync + 'static,
             NodeId: Clone + Debug + Hash + Eq + Send + Sync + node_id::TryFrom + 'static,
             BackendSettings: Clone + Send + Sync,
         > + Send
@@ -136,7 +137,8 @@ where
                 NetworkBackendOfService<CoreService, RuntimeServiceId>,
                 RuntimeServiceId,
             >,
-        > + AsServiceId<SdpService>
+        > + AsServiceId<MempoolOfService<CoreService, RuntimeServiceId>>
+        + AsServiceId<SdpService>
         + Debug
         + Display
         + Clone

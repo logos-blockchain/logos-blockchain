@@ -7,6 +7,7 @@ use std::{
 
 use async_trait::async_trait;
 use backends::BlendBackend;
+use dispatcher::PayloadDispatcher;
 use fork_stream::StreamExt as _;
 use futures::{
     FutureExt as _, Stream, StreamExt as _,
@@ -58,7 +59,6 @@ use lb_services_utils::{
 };
 use lb_time_service::TimeService;
 use lb_utils::blake_rng::BlakeRng;
-use network::NetworkAdapter;
 use overwatch::{
     OpaqueServiceResourcesHandle,
     overwatch::OverwatchHandle,
@@ -88,12 +88,12 @@ use crate::{
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     kms::PreloadKmsService,
     membership::{self, ZkInfo, chain::BlendEpochState},
-    message::{NetworkMessage, ProcessedMessage, ServiceMessage},
+    message::{BlendPayload, ProcessedMessage, ServiceMessage},
 };
 
 pub mod backends;
+pub mod dispatcher;
 pub mod kms;
-pub mod network;
 pub mod settings;
 
 pub(super) mod service_components;
@@ -117,7 +117,7 @@ const LOG_TARGET: &str = blend::service::CORE;
 pub struct BlendService<
     Backend,
     NodeId,
-    Network,
+    Dispatcher,
     SdpService,
     ProofsGenerator,
     ProofsVerifier,
@@ -128,15 +128,15 @@ pub struct BlendService<
     RuntimeServiceId,
 > where
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
-    Network: NetworkAdapter<RuntimeServiceId>,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId>,
     StateStorage: RecoveryBackendTrait<
             RuntimeServiceId,
-            State = RecoveryServiceState<Backend::Settings, Network::Settings>,
+            State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>,
         > + Send
         + Sync,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    last_saved_state: Option<ServiceState<Backend::Settings, Network::Settings>>,
+    last_saved_state: Option<ServiceState<Backend::Settings, Dispatcher::Settings>>,
     _phantom: PhantomData<(
         Backend,
         SdpService,
@@ -151,7 +151,7 @@ pub struct BlendService<
 impl<
     Backend,
     NodeId,
-    Network,
+    Dispatcher,
     SdpService,
     ProofsGenerator,
     ProofsVerifier,
@@ -164,7 +164,7 @@ impl<
     for BlendService<
         Backend,
         NodeId,
-        Network,
+        Dispatcher,
         SdpService,
         ProofsGenerator,
         ProofsVerifier,
@@ -176,15 +176,15 @@ impl<
     >
 where
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
-    Network: NetworkAdapter<RuntimeServiceId>,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId>,
     StateStorage: RecoveryBackendTrait<
             RuntimeServiceId,
-            State = RecoveryServiceState<Backend::Settings, Network::Settings>,
+            State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>,
         > + Send
         + Sync,
 {
-    type Settings = StartingBlendConfig<Backend::Settings, Network::Settings>;
-    type State = RecoveryServiceState<Backend::Settings, Network::Settings>;
+    type Settings = StartingBlendConfig<Backend::Settings, Dispatcher::Settings>;
+    type State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>;
     type StateOperator = RecoveryOperator<StateStorage>;
     type Message = ServiceMessage<NodeId>;
 }
@@ -193,7 +193,7 @@ where
 impl<
     Backend,
     NodeId,
-    Network,
+    Dispatcher,
     SdpService,
     ProofsGenerator,
     ProofsVerifier,
@@ -206,7 +206,7 @@ impl<
     for BlendService<
         Backend,
         NodeId,
-        Network,
+        Dispatcher,
         SdpService,
         ProofsGenerator,
         ProofsVerifier,
@@ -219,7 +219,7 @@ impl<
 where
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
     NodeId: membership::node_id::TryFrom + Clone + Debug + Send + Eq + Hash + Sync + 'static,
-    Network: NetworkAdapter<RuntimeServiceId> + Send + Sync,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
     ProofsGenerator:
         CoreLeaderAndPowProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>> + Send,
     SdpService: ServiceData<Message = SdpMessage> + Send,
@@ -229,10 +229,11 @@ where
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
     StateStorage: RecoveryBackendTrait<
             RuntimeServiceId,
-            State = RecoveryServiceState<Backend::Settings, Network::Settings>,
+            State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>,
         > + Send
         + Sync,
-    RuntimeServiceId: AsServiceId<NetworkService<Network::Backend, RuntimeServiceId>>
+    RuntimeServiceId: AsServiceId<NetworkService<Dispatcher::Backend, RuntimeServiceId>>
+        + AsServiceId<Dispatcher::MempoolService>
         + AsServiceId<SdpService>
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + AsServiceId<ChainService>
@@ -301,12 +302,16 @@ where
         )
         .await?;
 
-        let network_adapter = async {
+        let payload_dispatcher = async {
             let network_relay = overwatch_handle
                 .relay::<NetworkService<_, _>>()
                 .await
                 .expect("Relay with network service should be available.");
-            Network::new(network_relay, blend_config.network.clone())
+            let mempool_relay = overwatch_handle
+                .relay::<Dispatcher::MempoolService>()
+                .await
+                .expect("Relay with mempool service should be available.");
+            Dispatcher::new(network_relay, mempool_relay, blend_config.network.clone())
         }
         .await;
 
@@ -380,7 +385,7 @@ where
         ) = initialize::<
             NodeId,
             Backend,
-            Network,
+            Dispatcher,
             ProofsGenerator,
             ProofsVerifier,
             KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
@@ -424,7 +429,7 @@ where
             &mut remaining_epoch_stream,
             &running_blend_config,
             &mut backend,
-            &network_adapter,
+            &payload_dispatcher,
             &sdp_relay,
             message_scheduler.into(),
             &mut rng,
@@ -444,7 +449,7 @@ where
             blend_messages.map(|(message, _)| message),
             remaining_epoch_stream,
             backend,
-            network_adapter,
+            payload_dispatcher,
             sdp_relay,
             old_epoch_message_scheduler,
             rng,
@@ -466,7 +471,7 @@ where
 async fn initialize<
     NodeId,
     Backend,
-    NetAdapter,
+    Dispatcher,
     ProofsGenerator,
     ProofsVerifier,
     KmsAdapter,
@@ -477,9 +482,9 @@ async fn initialize<
     overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     kms_adapter: KmsAdapter,
     sdp_relay: &OutboundRelay<SdpMessage>,
-    mut last_saved_state: Option<ServiceState<Backend::Settings, NetAdapter::Settings>>,
+    mut last_saved_state: Option<ServiceState<Backend::Settings, Dispatcher::Settings>>,
     state_updater: StateUpdater<
-        Option<RecoveryServiceState<Backend::Settings, NetAdapter::Settings>>,
+        Option<RecoveryServiceState<Backend::Settings, Dispatcher::Settings>>,
     >,
 ) -> (
     impl Stream<Item = EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, KmsAdapter::CorePoQGenerator>>>
@@ -493,7 +498,7 @@ async fn initialize<
         ProofsGenerator,
         ProofsVerifier,
     >,
-    ServiceState<Backend::Settings, NetAdapter::Settings>,
+    ServiceState<Backend::Settings, Dispatcher::Settings>,
     SchedulerWrapper<BlakeRng, ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
     Backend,
     BlakeRng,
@@ -501,7 +506,7 @@ async fn initialize<
 where
     NodeId: Clone + Debug + Eq + Hash + Send + 'static,
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
-    NetAdapter: NetworkAdapter<RuntimeServiceId>,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId>,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<KmsAdapter::CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
     // To avoid bubbling up generics everywhere in the configs (current Overwatch limitation), we
@@ -742,7 +747,7 @@ async fn run_event_loop<
     NodeId,
     Backend,
     Rng,
-    NetAdapter,
+    Dispatcher,
     ProofsGenerator,
     ProofsVerifier,
     CorePoQGenerator,
@@ -763,7 +768,7 @@ async fn run_event_loop<
          ),
     blend_config: &RunningBlendConfig<Backend::Settings>,
     backend: &mut Backend,
-    network_adapter: &NetAdapter,
+    payload_dispatcher: &Dispatcher,
     sdp_relay: &OutboundRelay<SdpMessage>,
     mut message_scheduler: EpochMessageScheduler<
         Rng,
@@ -778,7 +783,7 @@ async fn run_event_loop<
         ProofsVerifier,
     >,
     mut current_epoch_info: CoreEpochPublicInfo<NodeId>,
-    mut recovery_checkpoint: ServiceState<Backend::Settings, NetAdapter::Settings>,
+    mut recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
 ) -> (
     CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
     OldEpochMessageScheduler<Rng, ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
@@ -788,7 +793,7 @@ where
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync + Send,
-    NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator> + Send,
     CorePoQGenerator: Send + Sync,
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
@@ -816,15 +821,9 @@ where
         tokio::select! {
             Some(msg) = inbound_relay.next() => {
                 match msg {
-                    ServiceMessage::Blend(message_payload) => {
-                        // The Blend payload is exactly the message bytes: where a
-                        // receiving node republishes them is its own configuration,
-                        // so nothing about the destination travels with them.
-                        let serialized_data_message = message_payload;
-
-                        let message_copies = blend_config.data_replication_factor.checked_add(1).unwrap();
-                        for _ in 0..message_copies {
-                            recovery_checkpoint = handle_serialized_local_data_message(&serialized_data_message, &mut crypto_processor, &mut message_scheduler, recovery_checkpoint).await;
+                    ServiceMessage::Blend(payload) => {
+                        for _ in 0..copies_to_send(&payload, blend_config.data_replication_factor) {
+                            recovery_checkpoint = handle_local_data_message(&payload, &mut crypto_processor, &mut message_scheduler, recovery_checkpoint).await;
                         }
                     }
                     ServiceMessage::GetNetworkInfo { reply } => {
@@ -837,7 +836,7 @@ where
                 recovery_checkpoint = handle_incoming_blend_message(incoming_message, &mut message_scheduler, old_epoch_message_scheduler.as_mut(), &crypto_processor, old_epoch_crypto_processor.as_ref(),  recovery_checkpoint);
             }
             Some(round_info) = message_scheduler.next() => {
-                recovery_checkpoint = handle_release_round(round_info, &mut crypto_processor, rng, backend, network_adapter, recovery_checkpoint).await;
+                recovery_checkpoint = handle_release_round(round_info, &mut crypto_processor, rng, backend, payload_dispatcher, recovery_checkpoint).await;
             }
             Some((Some(round_info), previous_epoch)) = async {
                 match (&mut old_epoch_message_scheduler, old_epoch) {
@@ -847,7 +846,7 @@ where
                     _ => None
                 }
             } => {
-                handle_release_round_for_old_epoch(round_info, rng, backend, network_adapter, previous_epoch).await;
+                handle_release_round_for_old_epoch(round_info, rng, backend, payload_dispatcher, previous_epoch).await;
             }
             Some(pol_secret_info) = secret_pol_info_stream.next() => {
                 if current_epoch_info.epoch == pol_secret_info.epoch {
@@ -895,6 +894,14 @@ where
     }
 }
 
+const fn copies_to_send(payload: &BlendPayload, data_replication_factor: u64) -> u64 {
+    match payload {
+        BlendPayload::BlockProposal(_) => data_replication_factor.strict_add(1),
+        // No replication factor set for PoW-backed transactions.
+        BlendPayload::Transaction(_) => 1,
+    }
+}
+
 /// Processes the old epoch during the epoch transition period
 /// before retiring the core service.
 #[expect(clippy::too_many_arguments, reason = "categorize args")]
@@ -902,7 +909,7 @@ async fn retire<
     NodeId,
     Backend,
     Rng,
-    NetAdapter,
+    Dispatcher,
     ProofsGenerator,
     ProofsVerifier,
     CorePoQGenerator,
@@ -917,7 +924,7 @@ async fn retire<
     > + Send
     + Unpin,
     mut backend: Backend,
-    network_adapter: NetAdapter,
+    payload_dispatcher: Dispatcher,
     sdp_relay: OutboundRelay<SdpMessage>,
     mut message_scheduler: OldEpochMessageScheduler<
         Rng,
@@ -936,7 +943,7 @@ async fn retire<
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
-    NetAdapter: NetworkAdapter<RuntimeServiceId> + Send + Sync,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator> + Send,
     CorePoQGenerator: Send + Sync,
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
@@ -948,7 +955,7 @@ async fn retire<
                 handle_incoming_blend_message_from_old_epoch(incoming_message, &mut message_scheduler, &crypto_processor, &mut blending_token_collector);
             }
             Some(round_info) = message_scheduler.next() => {
-                handle_release_round_for_old_epoch(round_info, &mut rng, &backend, &network_adapter, crypto_processor.epoch()).await;
+                handle_release_round_for_old_epoch(round_info, &mut rng, &backend, &payload_dispatcher, crypto_processor.epoch()).await;
             }
             Some(EpochEvent::TransitionPeriodExpired) = remaining_epoch_stream.next() => {
                 handle_epoch_transition_expired(&mut backend, blending_token_collector, &sdp_relay).await;
@@ -1270,7 +1277,7 @@ enum HandleEpochEventOutput<
     clippy::cognitive_complexity,
     reason = "TODO: address this in a dedicated refactor"
 )]
-async fn handle_serialized_local_data_message<
+async fn handle_local_data_message<
     NodeId,
     Rng,
     BackendSettings,
@@ -1279,7 +1286,7 @@ async fn handle_serialized_local_data_message<
     ProofsVerifier,
     CorePoQGenerator,
 >(
-    serialized_local_data_message: &[u8],
+    local_data_message: &BlendPayload,
     cryptographic_processor: &mut CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1300,15 +1307,21 @@ where
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
-    // TODO: Change this to encapsulated differently depending on the type of
-    // payload.
-    let Ok(wrapped_message) = cryptographic_processor
-        .encapsulate_block_proposal_payload(serialized_local_data_message)
-        .await
-        .inspect_err(|e| {
-            tracing::error!(target: LOG_TARGET, "Failed to wrap message: {e:?}");
-        })
-    else {
+    let encapsulation = match local_data_message {
+        BlendPayload::BlockProposal(proposal) => {
+            cryptographic_processor
+                .encapsulate_block_proposal_payload(proposal)
+                .await
+        }
+        BlendPayload::Transaction(transaction) => {
+            cryptographic_processor
+                .encapsulate_transaction_payload(transaction)
+                .await
+        }
+    };
+    let Ok(wrapped_message) = encapsulation.inspect_err(|e| {
+        tracing::error!(target: LOG_TARGET, "Failed to wrap message: {e:?}");
+    }) else {
         return current_recovery_checkpoint;
     };
 
@@ -1341,11 +1354,19 @@ where
     let processed_message = match remaining_message_type {
         // If all the layers are peeled off locally, then we are left with the initial data message.
         DecapsulatedMessageType::Completed(fully_decapsulated_message) => {
-            assert!(
-                fully_decapsulated_message.payload_type().is_data_message(),
-                "Locally-generated and fully-decapsulated message should be a data message."
-            );
-            let data_message: NetworkMessage = fully_decapsulated_message.payload_body().to_vec();
+            let data_message = match fully_decapsulated_message.into_components() {
+                (PayloadType::BlockProposal, encoded_block_proposal) => {
+                    BlendPayload::BlockProposal(encoded_block_proposal)
+                }
+                (PayloadType::Transaction, encoded_transaction) => {
+                    BlendPayload::Transaction(encoded_transaction)
+                }
+                (PayloadType::Cover, _) => {
+                    panic!(
+                        "Locally-generated and fully-decapsulated message should be a data message."
+                    );
+                }
+            };
             tracing::trace!(target: LOG_TARGET, "Locally generated data message of {} bytes had all the {} layers addressed to this same node. Propagating only the fully decapsulated message.", data_message.len(), blending_tokens.len());
             ProcessedMessage::from(data_message)
         }
@@ -1664,31 +1685,27 @@ where
 
     match decapsulated_message_type {
         DecapsulatedMessageType::Completed(fully_decapsulated_message) => {
-            match fully_decapsulated_message.into_components() {
+            let data_message = match fully_decapsulated_message.into_components() {
+                (PayloadType::BlockProposal, encoded_block_proposal) => {
+                    BlendPayload::BlockProposal(encoded_block_proposal)
+                }
+                (PayloadType::Transaction, encoded_transaction) => {
+                    BlendPayload::Transaction(encoded_transaction)
+                }
                 (PayloadType::Cover, _) => {
                     tracing::trace!(target: LOG_TARGET, "Discarding received cover message.");
-                    (None, blending_tokens.into_iter())
+                    return (None, blending_tokens.into_iter());
                 }
-                (PayloadType::BlockProposal, data_message) => {
-                    tracing::trace!(
-                        target: LOG_TARGET,
-                        "Processing a fully decapsulated data message of {} bytes.",
-                        data_message.len()
-                    );
-                    let processed_message = ProcessedMessage::from(data_message);
-                    scheduler.schedule_processed_message(processed_message.clone());
-                    (Some(processed_message), blending_tokens.into_iter())
-                }
-                // TODO: Submit the tx to the mempool.
-                (PayloadType::Transaction, transaction) => {
-                    tracing::warn!(
-                        target: LOG_TARGET,
-                        "Discarding a fully decapsulated transaction message of {} bytes: mempool submission is not wired yet.",
-                        transaction.len()
-                    );
-                    (None, blending_tokens.into_iter())
-                }
-            }
+            };
+            tracing::trace!(
+                target: LOG_TARGET,
+                "Processing a fully decapsulated {:?} message of {} bytes.",
+                data_message.payload_type(),
+                data_message.len()
+            );
+            let processed_message = ProcessedMessage::from(data_message);
+            scheduler.schedule_processed_message(processed_message.clone());
+            (Some(processed_message), blending_tokens.into_iter())
         }
         DecapsulatedMessageType::Incompleted(remaining_encapsulated_message) => {
             tracing::trace!(
@@ -1723,7 +1740,7 @@ async fn handle_release_round<
     NodeId,
     Rng,
     Backend,
-    NetAdapter,
+    Dispatcher,
     ProofsGenerator,
     ProofsVerifier,
     CorePoQGenerator,
@@ -1741,16 +1758,16 @@ async fn handle_release_round<
     >,
     rng: &mut Rng,
     backend: &Backend,
-    network_adapter: &NetAdapter,
-    current_recovery_checkpoint: ServiceState<Backend::Settings, NetAdapter::Settings>,
-) -> ServiceState<Backend::Settings, NetAdapter::Settings>
+    payload_dispatcher: &Dispatcher,
+    current_recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
+) -> ServiceState<Backend::Settings, Dispatcher::Settings>
 where
     NodeId: Eq + Hash + 'static,
     Rng: RngCore + Send,
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
-    NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
 {
     let (processed_messages, should_generate_cover_message) =
         release_type.map_or_else(|| (vec![], false), RoundReleaseType::into_components);
@@ -1779,7 +1796,7 @@ where
     let processed_messages_relay_futures = build_futures_to_release_processed_messages(
         processed_messages,
         backend,
-        network_adapter,
+        payload_dispatcher,
         Some(&mut state_updater),
         current_epoch,
     );
@@ -1823,7 +1840,7 @@ async fn handle_release_round_for_old_epoch<
     NodeId,
     Rng,
     Backend,
-    NetAdapter,
+    Dispatcher,
     ProofsVerifier,
     RuntimeServiceId,
 >(
@@ -1833,13 +1850,13 @@ async fn handle_release_round_for_old_epoch<
     }: RoundInfo<ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
     rng: &mut Rng,
     backend: &Backend,
-    network_adapter: &NetAdapter,
+    payload_dispatcher: &Dispatcher,
     epoch: Epoch,
 ) where
     NodeId: Eq + Hash + 'static,
     Rng: RngCore + Send,
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
-    NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
 {
     // The old epoch never generates cover traffic, so the cover flag is always
     // `false` here.
@@ -1864,7 +1881,7 @@ async fn handle_release_round_for_old_epoch<
         .chain(build_futures_to_release_processed_messages(
             processed_messages,
             backend,
-            network_adapter,
+            payload_dispatcher,
             None,
             epoch,
         ))
@@ -1908,20 +1925,20 @@ fn build_futures_to_release_processed_messages<
     'fut,
     NodeId,
     Backend,
-    NetAdapter,
+    Dispatcher,
     ProofsVerifier,
     RuntimeServiceId,
 >(
     processed_messages_to_release: Vec<ProcessedMessage>,
     backend: &'fut Backend,
-    network_adapter: &'fut NetAdapter,
-    mut state_updater: Option<&mut ServiceStateUpdater<Backend::Settings, NetAdapter::Settings>>,
+    payload_dispatcher: &'fut Dispatcher,
+    mut state_updater: Option<&mut ServiceStateUpdater<Backend::Settings, Dispatcher::Settings>>,
     epoch: Epoch,
 ) -> Vec<BoxFuture<'fut, ()>>
 where
     NodeId: Eq + Hash + 'static,
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
-    NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
 {
     processed_messages_to_release
         .into_iter()
@@ -1942,8 +1959,8 @@ where
         .map(
             |processed_message_to_release| -> BoxFuture<'fut, ()> {
                 match processed_message_to_release {
-                    ProcessedMessage::Network(message) => {
-                        network_adapter.broadcast(message).boxed()
+                    ProcessedMessage::Unencapsulated(payload) => {
+                        payload_dispatcher.dispatch(payload).boxed()
                     }
                     ProcessedMessage::Encapsulated(encapsulated_message) => {
                         backend.publish(*encapsulated_message, epoch).boxed()
