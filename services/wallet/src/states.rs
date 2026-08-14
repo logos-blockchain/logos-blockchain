@@ -6,7 +6,7 @@ use std::{
 use lb_core::{
     header::HeaderId,
     mantle::{
-        GasProfile, NoteId, Value,
+        GasProfile, NoteId,
         ops::leader_claim::{VoucherCm, VoucherNullifier},
         transactions::{MantleTxBuilder, MantleTxContext},
     },
@@ -358,8 +358,10 @@ impl<'u> ServiceState<'u> {
     }
 
     /// Fund `tx_builder` from the wallet's UTXOs at `tip`, excluding notes
-    /// already reserved for in-flight transactions. `priority_fee` is left
-    /// as excess balance above the mandatory fee (the execution tip).
+    /// already reserved for in-flight transactions. `priority_fee_percent`
+    /// reserves that percentage of the final mandatory fee, including both
+    /// execution and storage cost. Only the unused reserve becomes an
+    /// effective priority tip, and the percentage is not capped at 100.
     pub fn fund_tx<G: GasProfile>(
         &self,
         tip: HeaderId,
@@ -367,7 +369,7 @@ impl<'u> ServiceState<'u> {
         change_pk: ZkPublicKey,
         funding_pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
         context: &MantleTxContext,
-        priority_fee: Value,
+        priority_fee_percent: u64,
     ) -> Result<MantleTxBuilder, WalletError> {
         self.wallet.fund_tx::<G>(
             tip,
@@ -376,7 +378,7 @@ impl<'u> ServiceState<'u> {
             funding_pks,
             context,
             &self.pending_notes.note_ids(),
-            priority_fee,
+            priority_fee_percent,
         )
     }
 

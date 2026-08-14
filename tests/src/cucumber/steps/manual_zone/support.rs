@@ -982,7 +982,7 @@ pub async fn replay_finalized_history(
     let funding = FundingConfig {
         funding_pk: lb_groth16::Fr::from(1u64).into(),
         max_tx_fee: GasCost::new(u64::MAX),
-        priority_fee: FundingConfig::DEFAULT_PRIORITY_FEE,
+        priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
     };
     let mut sequencer = ZoneSequencer::init(reader.channel_id, keygen(), node, funding, None);
 
@@ -1488,7 +1488,7 @@ async fn build_funded_custom_tx(
     let response = node_client
         .fund_tx(WalletFundRequestBody {
             tip: None,
-            priority_fee: 0,
+            priority_fee_percent: 0,
             tx_builder,
             change_public_key: funding_pk,
             funding_public_keys: vec![funding_pk],
