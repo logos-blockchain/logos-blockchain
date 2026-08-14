@@ -64,7 +64,10 @@ const SEQUENCER_READY_TIMEOUT: Duration = Duration::from_mins(2);
 const SEQUENCER_READY_POLL_TIMEOUT: Duration = Duration::from_secs(10);
 const SEQUENCER_READY_HEIGHT_ADVANCE_TIMEOUT: Duration = Duration::from_secs(30);
 const ZONE_SECURITY_PARAM: u32 = 5;
-const ZONE_TEST_PRIORITY_FEE_PERCENT: u64 = 12;
+// These high-volume scenarios can move storage prices before all queued
+// publishes are included. Keep their test funding comfortably above the
+// public 12% default so they exercise sequencing rather than fee starvation.
+const ZONE_TEST_PRIORITY_FEE_PERCENT: u64 = 50;
 
 pub(super) enum DriveMode {
     Passive {
