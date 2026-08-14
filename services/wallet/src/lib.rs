@@ -610,7 +610,13 @@ where
                     funding_pk,
                     max_tx_fee,
                 };
-                let response = Self::build_leader_claim_tx(request, ledger, state, kms).await;
+                // Pinned to keep the future off the stack: `LedgerState` is
+                // passed by value and grew past the `clippy::large_futures`
+                // threshold, by 720 bytes for `PoW` and 112 for the uncle
+                // slots.
+                // TODO: consider passing it by reference so we can remove `Box::pin`.
+                let response =
+                    Box::pin(Self::build_leader_claim_tx(request, ledger, state, kms)).await;
 
                 match response {
                     Ok(built_tx) => {
