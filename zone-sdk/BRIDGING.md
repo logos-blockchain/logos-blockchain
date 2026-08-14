@@ -51,7 +51,7 @@ let mut sequencer = ZoneSequencer::init(channel_id, signing_key, node, funding, 
 
 // Inside the drive task, once `Event::Ready` has fired:
 // publishing the first inscription creates the channel just-in-time.
-let (result, checkpoint) = sequencer.handle().publish(genesis_zone_block)?;
+let (result, checkpoint) = sequencer.handle().publish(genesis_zone_block).await?;
 ```
 
 `priority_fee_percent` is a percentage reserve over the complete mandatory
