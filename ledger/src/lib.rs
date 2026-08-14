@@ -257,7 +257,7 @@ impl LedgerState {
             config,
             txs.inspect(|_| txs_in_block = txs_in_block.saturating_add(1)),
         )?;
-        state.cryptarchia_ledger.record_block_txs(txs_in_block);
+        state.mantle_ledger.pow.record_block_txs(txs_in_block);
         state.update_pow_reward_difficulty(
             // count all claimed rewards
             tx_events
@@ -301,6 +301,7 @@ impl LedgerState {
                 // CryptarchiaLedger.
                 // In the future, we will pull EpochState up into LedgerState.
                 &self.mantle_ledger.sdp,
+                &self.mantle_ledger.pow,
                 config,
             )?;
         let (mantle_ledger, effect) = self.mantle_ledger.try_apply_header(
@@ -583,8 +584,12 @@ impl LedgerState {
         slot: Slot,
         config: &Config,
     ) -> Result<EpochState, LedgerError<Id>> {
-        self.cryptarchia_ledger
-            .epoch_state_for_slot(slot, &self.mantle_ledger.sdp, config)
+        self.cryptarchia_ledger.epoch_state_for_slot(
+            slot,
+            &self.mantle_ledger.sdp,
+            &self.mantle_ledger.pow,
+            config,
+        )
     }
 
     #[must_use]

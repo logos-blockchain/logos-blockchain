@@ -24,7 +24,7 @@ use lb_core::mantle::ops::pow::PowTarget;
 use lb_groth16::fr_from_biguint_saturating;
 use num_bigint::BigUint;
 
-use crate::{config::BlendPoWConfig, cryptarchia::tx_density::ClosedEpochLoad};
+use crate::{config::BlendPoWConfig, mantle::pow::tx_density::ClosedEpochLoad};
 
 /// Retarget `d_blend` for one epoch from the transaction load of a whole,
 /// closed epoch.

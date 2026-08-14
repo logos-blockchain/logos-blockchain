@@ -29,9 +29,11 @@ use crate::{
     cryptarchia::{
         block_density::BlockDensity,
         stake::{PRECISION, StakeInference},
-        tx_density::TxDensity,
     },
-    mantle::{pow::blend_difficulty::compute_epoch_blend_difficulty, sdp::SdpLedger},
+    mantle::{
+        pow::{PowState, blend_difficulty::compute_epoch_blend_difficulty},
+        sdp::SdpLedger,
+    },
 };
 
 // corresponds to the denominator of q
@@ -104,7 +106,13 @@ pub struct EpochState {
 }
 
 impl EpochState {
-    fn update_from_ledger(self, ledger: &LedgerState, sdp: &SdpLedger, config: &Config) -> Self {
+    fn update_from_ledger(
+        self,
+        ledger: &LedgerState,
+        sdp: &SdpLedger,
+        pow: &PowState,
+        config: &Config,
+    ) -> Self {
         let nonce_snapshot_slot = config.nonce_snapshot(self.epoch);
         let (nonce, blend_pow_difficulty) = if ledger.slot < nonce_snapshot_slot {
             // The Blend difficulty is snapshotted together with the nonce, and
@@ -113,7 +121,7 @@ impl EpochState {
             // are fixed for the whole time the snapshot is open, so
             // recomputing on every block converges on one value instead of
             // stepping once per block.
-            let blend_pow_difficulty = ledger.tx_density.last_closed_epoch_load().map_or(
+            let blend_pow_difficulty = pow.last_closed_epoch_load().map_or(
                 // No epoch has closed yet, so the schedule has not started:
                 // epochs 0 and 1 sit at the baseline the chain started from.
                 ledger.epoch_state.blend_pow_difficulty,
@@ -211,8 +219,6 @@ pub struct LedgerState {
     pub epoch_state: EpochState,
     #[derivative(PartialEq = "ignore")]
     block_density: BlockDensity,
-    // per-epoch block and transaction counts, used to retarget the Blend PoW difficulty
-    tx_density: TxDensity,
     // Using an Arc wrapper here as this can be completely shared among instances of LedgerState
     #[derivative(PartialEq = "ignore")]
     stake_inference: Arc<StakeInference>,
@@ -245,6 +251,7 @@ impl LedgerState {
         self,
         slot: Slot,
         sdp: &SdpLedger,
+        pow: &PowState,
         config: &Config,
     ) -> Result<Self, LedgerError<Id>> {
         if slot <= self.slot {
@@ -265,7 +272,7 @@ impl LedgerState {
         let next_epoch_state = self
             .next_epoch_state
             .clone()
-            .update_from_ledger(&self, sdp, config);
+            .update_from_ledger(&self, sdp, pow, config);
 
         // There are 3 cases to consider:
         // 1. We are in the same epoch as the parent state: Update the next epoch state
@@ -304,11 +311,6 @@ impl LedgerState {
                 "epoch transition"
             );
             let block_density = BlockDensity::new(new_epoch, config);
-            let tx_density = {
-                let mut tx_density = self.tx_density;
-                tx_density.close_epoch();
-                tx_density
-            };
             // TODO: Refactor: Have the unified update logic for all fields in `EpochState`.
             // `epoch` and `utxos` are updated by `EpochState::update_from_ledger`,
             // but `total_stake` and lottery values are updated here.
@@ -347,7 +349,6 @@ impl LedgerState {
                 next_epoch_state,
                 epoch_state,
                 block_density,
-                tx_density,
                 storage_gas_consumed_in_epoch: 0.into(),
                 storage_gas_ema: new_ema,
                 storage_gas_price: new_price,
@@ -382,17 +383,6 @@ impl LedgerState {
             for _ in u32::from(next_epoch_state.epoch())..u32::from(new_epoch) {
                 (new_price, new_ema) = update_storage_market(new_price, 0.into(), new_ema);
             }
-
-            // Close the epoch that ended plus every epoch skipped over, so the
-            // last closed totals describe the epoch that actually preceded
-            // `new_epoch` — empty, if that epoch produced no block at all.
-            let tx_density = {
-                let mut tx_density = self.tx_density;
-                for _ in current_epoch.into_inner()..new_epoch.into_inner() {
-                    tx_density.close_epoch();
-                }
-                tx_density
-            };
 
             tracing::warn!(
                 old_epoch = ?current_epoch,
@@ -442,7 +432,6 @@ impl LedgerState {
                 next_epoch_state,
                 epoch_state,
                 block_density,
-                tx_density,
                 storage_gas_consumed_in_epoch: 0.into(),
                 storage_gas_ema: new_ema,
                 storage_gas_price: new_price,
@@ -517,6 +506,7 @@ impl LedgerState {
         proof: &LeaderProof,
         uncle_slots: &UncleSlots,
         sdp: &SdpLedger,
+        pow: &PowState,
         config: &Config,
     ) -> Result<Self, LedgerError<Id>>
     where
@@ -706,11 +696,12 @@ impl LedgerState {
         &self,
         slot: Slot,
         sdp: &SdpLedger,
+        pow: &PowState,
         config: &Config,
     ) -> Result<EpochState, LedgerError<Id>> {
         Ok(self
             .clone()
-            .update_epoch_state(slot, sdp, config)?
+            .update_epoch_state(slot, sdp, pow, config)?
             .epoch_state()
             .clone())
     }
@@ -781,7 +772,6 @@ impl LedgerState {
                 active_declarations: Arc::new(Declarations::default()),
             },
             block_density,
-            tx_density: TxDensity::default(),
             stake_inference,
             fee_window: [0.into(); 120],
             average_execution_gas: 0.into(),
@@ -876,11 +866,13 @@ pub mod tests {
     use super::*;
     use crate::{
         Ledger,
-        cryptarchia::tx_density::ClosedEpochLoad,
         leader_proof::LeaderProof,
-        mantle::sdp::{
-            ServiceRewardsParameters,
-            rewards::{self},
+        mantle::{
+            pow::tx_density::ClosedEpochLoad,
+            sdp::{
+                ServiceRewardsParameters,
+                rewards::{self},
+            },
         },
     };
 
@@ -954,6 +946,27 @@ pub mod tests {
         }
     }
 
+    /// Advance both halves of the state the way applying a block does: the
+    /// epoch state is synthesised first, reading the `PoW` state as it stands,
+    /// then the `PoW` state closes the epoch just left and counts the block's
+    /// transactions.
+    fn apply_block(
+        state: LedgerState,
+        pow: &mut PowState,
+        slot: u64,
+        txs_in_block: u64,
+        sdp: &SdpLedger,
+        config: &Config,
+    ) -> LedgerState {
+        let previous_epoch_state = state.epoch_state().clone();
+        let state = state
+            .update_epoch_state::<HeaderId>(slot.into(), sdp, pow, config)
+            .unwrap();
+        *pow = pow.try_apply_header(&previous_epoch_state, state.epoch_state());
+        pow.record_block_txs(txs_in_block);
+        state
+    }
+
     pub fn update_ledger(
         ledger: &mut Ledger<HeaderId>,
         parent: HeaderId,
@@ -966,7 +979,12 @@ pub mod tests {
             .unwrap()
             .clone()
             .cryptarchia_ledger
-            .update_epoch_state::<HeaderId>(slot, &SdpLedger::new(0.into()), ledger.config())?;
+            .update_epoch_state::<HeaderId>(
+                slot,
+                &SdpLedger::new(0.into()),
+                &ledger.state(&parent).unwrap().mantle_ledger.pow,
+                ledger.config(),
+            )?;
         let id = make_id(parent, slot, utxo);
         let proof = generate_proof(&ledger_state, &utxo, slot);
         let (_, state, _) = ledger.prepare_update::<_, _, MainnetGasProfile>(
@@ -1128,7 +1146,6 @@ pub mod tests {
             fee_window: [0.into(); 120],
             average_execution_gas: 0.into(),
             block_density,
-            tx_density: TxDensity::default(),
             execution_base_fee: GENESIS_EXECUTION_GAS_PRICE,
             storage_gas_ema: 0.into(),
             storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
@@ -1447,6 +1464,7 @@ pub mod tests {
 
         let sdp = SdpLedger::new(0.into());
         let mut state = genesis_state(&[utxo()]);
+        let mut pow = PowState::new();
         let blend_config = &config.pow_config.blend;
         let genesis_difficulty = state.epoch_state.blend_pow_difficulty;
         assert_eq!(
@@ -1456,29 +1474,20 @@ pub mod tests {
 
         // Epoch 0: three blocks carrying 12 transactions in total.
         for (slot, txs) in [(10u64, 3u64), (20, 5), (70, 4)] {
-            state = state
-                .update_epoch_state::<HeaderId>(slot.into(), &sdp, &config)
-                .unwrap();
-            state.record_block_txs(txs);
+            state = apply_block(state, &mut pow, slot, txs, &sdp, &config);
         }
 
         // Epoch 0 -> 1. No epoch had closed while epoch 1's difficulty was open
         // for snapshotting, so the schedule has not started yet and epoch 1
         // sits at the baseline, as the spec requires for epochs 0 and 1.
-        state = state
-            .update_epoch_state::<HeaderId>(100.into(), &sdp, &config)
-            .unwrap();
-        state.record_block_txs(2);
+        state = apply_block(state, &mut pow, 100, 2, &sdp, &config);
         assert_eq!(state.epoch_state.epoch, 1);
         let epoch_1_difficulty = state.epoch_state.blend_pow_difficulty;
         assert_eq!(epoch_1_difficulty, genesis_difficulty);
 
         // Epoch 1, with blocks on both sides of epoch 2's snapshot slot.
         for (slot, txs) in [(110u64, 100u64), (170, 100)] {
-            state = state
-                .update_epoch_state::<HeaderId>(slot.into(), &sdp, &config)
-                .unwrap();
-            state.record_block_txs(txs);
+            state = apply_block(state, &mut pow, slot, txs, &sdp, &config);
         }
 
         // Epoch 1 -> 2: the schedule starts here. Epoch 2's difficulty comes
@@ -1488,9 +1497,7 @@ pub mod tests {
         // is held to the factor-2 clamp. Epoch 1's own, much busier, blocks do
         // not enter it: its totals only close when it does, a full epoch after
         // the snapshot was taken.
-        state = state
-            .update_epoch_state::<HeaderId>(200.into(), &sdp, &config)
-            .unwrap();
+        state = apply_block(state, &mut pow, 200, 0, &sdp, &config);
         assert_eq!(state.epoch_state.epoch, 2);
         assert_eq!(
             state.epoch_state.blend_pow_difficulty,
@@ -1516,39 +1523,30 @@ pub mod tests {
         let blend_config = &config.pow_config.blend;
         let sdp = SdpLedger::new(0.into());
 
+        // A branch is both halves of the state together, since a block clones
+        // and advances them as a pair.
+        let mut ancestor = (genesis_state(&[utxo()]), PowState::new());
+
         // A common ancestor carrying 4 transactions, in epoch 0.
-        let mut ancestor = genesis_state(&[utxo()]);
-        ancestor = ancestor
-            .update_epoch_state::<HeaderId>(10.into(), &sdp, &config)
-            .unwrap();
-        ancestor.record_block_txs(4);
+        ancestor.0 = apply_block(ancestor.0, &mut ancestor.1, 10, 4, &sdp, &config);
 
         // Two competing blocks for the same slot, each built on its own clone
         // of the ancestor's state.
         let mut busy_branch = ancestor.clone();
-        busy_branch = busy_branch
-            .update_epoch_state::<HeaderId>(20.into(), &sdp, &config)
-            .unwrap();
-        busy_branch.record_block_txs(96);
+        busy_branch.0 = apply_block(busy_branch.0, &mut busy_branch.1, 20, 96, &sdp, &config);
 
         let mut quiet_branch = ancestor;
-        quiet_branch = quiet_branch
-            .update_epoch_state::<HeaderId>(20.into(), &sdp, &config)
-            .unwrap();
-        quiet_branch.record_block_txs(6);
+        quiet_branch.0 = apply_block(quiet_branch.0, &mut quiet_branch.1, 20, 6, &sdp, &config);
 
         // Carry both branches past the epoch-0 close and the epoch-2 snapshot.
-        let advance = |mut state: LedgerState| {
+        let advance = |(mut state, mut pow): (LedgerState, PowState)| {
             for slot in [100u64, 110, 200] {
-                state = state
-                    .update_epoch_state::<HeaderId>(slot.into(), &sdp, &config)
-                    .unwrap();
-                state.record_block_txs(0);
+                state = apply_block(state, &mut pow, slot, 0, &sdp, &config);
             }
-            state
+            (state, pow)
         };
-        let busy_branch = advance(busy_branch);
-        let quiet_branch = advance(quiet_branch);
+        let (busy_branch, _) = advance(busy_branch);
+        let (quiet_branch, _) = advance(quiet_branch);
 
         // Both branches enter epoch 1 at the baseline: no epoch had closed
         // when epoch 1's value was snapshotted, so the schedule had not
@@ -1588,19 +1586,14 @@ pub mod tests {
         let blend_config = &config.pow_config.blend;
         let sdp = SdpLedger::new(0.into());
         let mut state = genesis_state(&[utxo()]);
+        let mut pow = PowState::new();
 
         // A single busy block in epoch 0, then no block at all in epoch 1.
-        state = state
-            .update_epoch_state::<HeaderId>(10.into(), &sdp, &config)
-            .unwrap();
-        state.record_block_txs(1_000);
+        state = apply_block(state, &mut pow, 10, 1_000, &sdp, &config);
 
         // Epoch 0 -> 2. Epoch 2's snapshot slot (160) has already passed
         // unused, so its difficulty carries over unretargeted.
-        state = state
-            .update_epoch_state::<HeaderId>(222.into(), &sdp, &config)
-            .unwrap();
-        state.record_block_txs(7);
+        state = apply_block(state, &mut pow, 222, 7, &sdp, &config);
         assert_eq!(state.epoch_state.epoch, 2);
         let epoch_2_difficulty = state.epoch_state.blend_pow_difficulty;
         assert_eq!(
@@ -1612,13 +1605,8 @@ pub mod tests {
         // which produced no block at all, so epoch 3 sees no load and eases
         // by the full clamp step — epoch 0's 1000 transactions were closed
         // one epoch too early to be read.
-        state = state
-            .update_epoch_state::<HeaderId>(230.into(), &sdp, &config)
-            .unwrap();
-        state.record_block_txs(7);
-        state = state
-            .update_epoch_state::<HeaderId>(300.into(), &sdp, &config)
-            .unwrap();
+        state = apply_block(state, &mut pow, 230, 7, &sdp, &config);
+        state = apply_block(state, &mut pow, 300, 0, &sdp, &config);
         assert_eq!(state.epoch_state.epoch, 3);
         assert_eq!(
             state.epoch_state.blend_pow_difficulty,
@@ -1826,12 +1814,22 @@ pub mod tests {
         let slot = Slot::genesis().strict_add(10.into());
         let ledger_state2 = ledger_state
             .cryptarchia_ledger
-            .update_epoch_state::<HeaderId>(slot, &SdpLedger::new(0.into()), ledger_config)
+            .update_epoch_state::<HeaderId>(
+                slot,
+                &SdpLedger::new(0.into()),
+                &PowState::new(),
+                ledger_config,
+            )
             .expect("Ledger needs to move forward");
 
         let slot2 = Slot::genesis().strict_add(1.into());
         let update_epoch_err = ledger_state2
-            .update_epoch_state::<HeaderId>(slot2, &SdpLedger::new(0.into()), ledger_config)
+            .update_epoch_state::<HeaderId>(
+                slot2,
+                &SdpLedger::new(0.into()),
+                &PowState::new(),
+                ledger_config,
+            )
             .err();
 
         // Time cannot flow backwards
@@ -2123,7 +2121,12 @@ pub mod tests {
         // Query for epoch 0 (current epoch) - should return epoch_state
         let epoch_0_slot: Slot = (epoch_length - 1).into();
         let epoch_0_state = ledger_state
-            .epoch_state_for_slot::<HeaderId>(epoch_0_slot, &SdpLedger::new(0.into()), &config)
+            .epoch_state_for_slot::<HeaderId>(
+                epoch_0_slot,
+                &SdpLedger::new(0.into()),
+                &PowState::new(),
+                &config,
+            )
             .expect("Should return epoch state for current epoch");
         assert_eq!(epoch_0_state.epoch, 0);
         assert_eq!(epoch_0_state.total_stake, initial_total_stake);
@@ -2132,7 +2135,12 @@ pub mod tests {
         // Since epoch 0 has no block, total stake should be reduced
         let epoch_1_slot: Slot = (epoch_length + 1).into();
         let epoch_1_state = ledger_state
-            .epoch_state_for_slot::<HeaderId>(epoch_1_slot, &SdpLedger::new(0.into()), &config)
+            .epoch_state_for_slot::<HeaderId>(
+                epoch_1_slot,
+                &SdpLedger::new(0.into()),
+                &PowState::new(),
+                &config,
+            )
             .expect("Should return epoch state for next epoch");
         assert_eq!(epoch_1_state.epoch, 1);
         // With 0 density and LEARNING_RATE=1, total stake drops to minimum (1)
@@ -2144,7 +2152,12 @@ pub mod tests {
         // Query for epoch 3 (multiple skipped epochs) - stake stays at minimum
         let epoch_2_slot: Slot = (2 * epoch_length + 1).into();
         let epoch_2_state = ledger_state
-            .epoch_state_for_slot::<HeaderId>(epoch_2_slot, &SdpLedger::new(0.into()), &config)
+            .epoch_state_for_slot::<HeaderId>(
+                epoch_2_slot,
+                &SdpLedger::new(0.into()),
+                &PowState::new(),
+                &config,
+            )
             .expect("Should synthesize epoch state for skipped epoch");
         assert_eq!(epoch_2_state.epoch, 2);
         assert_eq!(
@@ -2175,6 +2188,7 @@ pub mod tests {
                 &proof,
                 &UncleSlots::default(),
                 &SdpLedger::new(0.into()),
+                &PowState::new(),
                 &config,
             )
             .unwrap();
@@ -2186,7 +2200,12 @@ pub mod tests {
         // First, synthesize epoch state for epoch 2
         let synthesized_ledger_state = ledger_state_1
             .clone()
-            .update_epoch_state::<HeaderId>(slot, &SdpLedger::new(0.into()), &config)
+            .update_epoch_state::<HeaderId>(
+                slot,
+                &SdpLedger::new(0.into()),
+                &PowState::new(),
+                &config,
+            )
             .unwrap();
         assert_eq!(synthesized_ledger_state.slot, slot);
 
@@ -2203,6 +2222,7 @@ pub mod tests {
                 &proof,
                 &UncleSlots::default(),
                 &SdpLedger::new(0.into()),
+                &PowState::new(),
                 &config,
             )
             .unwrap();
@@ -2450,7 +2470,12 @@ pub mod tests {
         let slot: Slot = (config.epoch_length() + 1).into();
         assert_eq!(config.epoch(slot), 1);
         let rotated = ledger
-            .update_epoch_state::<HeaderId>(slot, &SdpLedger::new(0.into()), &config)
+            .update_epoch_state::<HeaderId>(
+                slot,
+                &SdpLedger::new(0.into()),
+                &PowState::new(),
+                &config,
+            )
             .unwrap();
 
         // The accumulated 600 must reach the price update: with a starting price

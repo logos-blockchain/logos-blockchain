@@ -115,7 +115,10 @@ mod tests {
             as_int(Fr::from(ModulusShift::new::<19>())),
             fr_modulus() >> 19
         );
-        assert_eq!(as_int(Fr::from(ModulusShift::new::<1>())), fr_modulus() >> 1);
+        assert_eq!(
+            as_int(Fr::from(ModulusShift::new::<1>())),
+            fr_modulus() >> 1
+        );
     }
 
     #[test]
