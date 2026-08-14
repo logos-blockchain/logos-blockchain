@@ -26,16 +26,6 @@ use num_bigint::BigUint;
 
 use crate::{config::BlendPoWConfig, cryptarchia::tx_density::ClosedEpochLoad};
 
-/// `BLEND_DIFFICULTY_BASE`: the threshold in effect at exactly the reference
-/// load, and the value the chain starts from.
-///
-/// The spec states it as a fraction of the scalar field, `p / 2^n`, and reasons
-/// about it in exponents throughout, so that is how the deployment carries it.
-#[must_use]
-pub fn base_difficulty(config: &BlendPoWConfig) -> PowTarget {
-    fr_from_biguint_saturating(fr_modulus() >> config.base_difficulty_exponent)
-}
-
 /// Retarget `d_blend` for one epoch from the transaction load of a whole,
 /// closed epoch.
 ///
@@ -81,7 +71,7 @@ pub fn compute_epoch_blend_difficulty(
     // the result is at most one unit away from the exact value. The radicand
     // reaches roughly 2^487, well past any fixed-width type.
     let (a, b) = config.damping_exponent();
-    let base = BigUint::from(base_difficulty(config));
+    let base = BigUint::from(PowTarget::from(config.base_difficulty));
     let radicand = (base.pow(b.get()) * denominator.pow(a)) / numerator.pow(a);
     // `nth_root` is the floor of the exact root, as the spec requires: an
     // approximation that could be off by one would fork the chain.
@@ -94,6 +84,8 @@ pub fn compute_epoch_blend_difficulty(
 mod tests {
     use core::num::NonZeroU32;
 
+    use lb_groth16::ModulusShift;
+
     use super::*;
 
     /// The deployed shape: `alpha = 1/2`, `k = 2`. `T_tx` is scaled down from
@@ -102,7 +94,7 @@ mod tests {
     /// small enough to reason about.
     fn config() -> BlendPoWConfig {
         BlendPoWConfig {
-            base_difficulty_exponent: 234,
+            base_difficulty: ModulusShift::new::<234>(),
             target_transactions_per_block: NonZeroU64::new(10).unwrap(),
             max_step: NonZeroU64::new(2).unwrap(),
             damping_num: NonZeroU32::new(1).unwrap(),
@@ -119,7 +111,7 @@ mod tests {
         // 10 transactions per block over 7 blocks is exactly `T_tx`: the load
         // is 1, so the threshold is the baseline itself.
         let config = config();
-        let base = base_difficulty(&config);
+        let base = PowTarget::from(config.base_difficulty);
         assert_eq!(
             compute_epoch_blend_difficulty(ClosedEpochLoad::new(70, 7), base, &config),
             base
@@ -131,7 +123,7 @@ mod tests {
         // At alpha = 1/2, quadrupling the load halves the threshold — which is
         // still within the factor-2 clamp, so the clamp does not bind.
         let config = config();
-        let base = base_difficulty(&config);
+        let base = PowTarget::from(config.base_difficulty);
         let retargeted =
             compute_epoch_blend_difficulty(ClosedEpochLoad::new(280, 7), base, &config);
         assert_eq!(as_int(retargeted), as_int(base) / 2u8);
@@ -142,7 +134,7 @@ mod tests {
         // A quarter of the reference load doubles the threshold, exactly at
         // the clamp.
         let config = config();
-        let base = base_difficulty(&config);
+        let base = PowTarget::from(config.base_difficulty);
         let retargeted = compute_epoch_blend_difficulty(ClosedEpochLoad::new(20, 8), base, &config);
         assert_eq!(as_int(retargeted), as_int(base) * 2u8);
     }
@@ -173,7 +165,7 @@ mod tests {
     #[test]
     fn the_step_is_clamped_in_both_directions() {
         let config = config();
-        let base = base_difficulty(&config);
+        let base = PowTarget::from(config.base_difficulty);
         // A flood far past the clamp: the threshold tightens by the factor k
         // and no further, so the anonymity set can shrink only gradually.
         let flooded =
@@ -228,7 +220,7 @@ mod tests {
             max_step: NonZeroU64::new(1_000).unwrap(),
             ..config()
         };
-        let base = base_difficulty(&config);
+        let base = PowTarget::from(config.base_difficulty);
         let retargeted =
             compute_epoch_blend_difficulty(ClosedEpochLoad::new(280, 7), base, &config);
         assert_eq!(as_int(retargeted), as_int(base) / 4u8);
@@ -252,9 +244,12 @@ mod tests {
     fn the_deployed_baseline_is_the_field_over_two_to_the_nineteen() {
         // The value the spec gives: p / 2^19.
         let config = BlendPoWConfig {
-            base_difficulty_exponent: 19,
+            base_difficulty: ModulusShift::new::<19>(),
             ..config()
         };
-        assert_eq!(as_int(base_difficulty(&config)), fr_modulus() >> 19u32);
+        assert_eq!(
+            as_int(PowTarget::from(config.base_difficulty)),
+            fr_modulus() >> 19u32
+        );
     }
 }

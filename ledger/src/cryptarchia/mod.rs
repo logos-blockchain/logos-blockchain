@@ -31,10 +31,7 @@ use crate::{
         stake::{PRECISION, StakeInference},
         tx_density::TxDensity,
     },
-    mantle::{
-        pow::blend_difficulty::{base_difficulty, compute_epoch_blend_difficulty},
-        sdp::SdpLedger,
-    },
+    mantle::{pow::blend_difficulty::compute_epoch_blend_difficulty, sdp::SdpLedger},
 };
 
 // corresponds to the denominator of q
@@ -766,7 +763,7 @@ impl LedgerState {
             next_epoch_state: EpochState {
                 epoch: 1.into(),
                 nonce,
-                blend_pow_difficulty: base_difficulty(&config.pow_config.blend),
+                blend_pow_difficulty: config.pow_config.blend.base_difficulty.into(),
                 utxos: utxos.clone(),
                 total_stake,
                 lottery_0,
@@ -776,7 +773,7 @@ impl LedgerState {
             epoch_state: EpochState {
                 epoch: 0.into(),
                 nonce,
-                blend_pow_difficulty: base_difficulty(&config.pow_config.blend),
+                blend_pow_difficulty: config.pow_config.blend.base_difficulty.into(),
                 utxos,
                 total_stake,
                 lottery_0,
@@ -870,7 +867,7 @@ pub mod tests {
         sdp::{Declaration, DeclarationId, Locator, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::EpochConfig;
-    use lb_groth16::AdditiveGroup as _;
+    use lb_groth16::{AdditiveGroup as _, ModulusShift};
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkSignature};
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
     use num_bigint::BigUint;
@@ -1071,7 +1068,7 @@ pub mod tests {
             // perfect square so the reference load lands on it exactly.
             pow_config: crate::config::PoWConfig {
                 blend: crate::config::BlendPoWConfig {
-                    base_difficulty_exponent: 234,
+                    base_difficulty: ModulusShift::new::<234>(),
                     target_transactions_per_block: NonZeroU64::new(10).unwrap(),
                     max_step: NonZeroU64::new(4).unwrap(),
                     damping_num: NonZeroU32::new(1).unwrap(),
@@ -1103,7 +1100,7 @@ pub mod tests {
         let epoch_state = EpochState {
             epoch: 0.into(),
             nonce: Fr::ZERO,
-            blend_pow_difficulty: base_difficulty(&config.pow_config.blend),
+            blend_pow_difficulty: config.pow_config.blend.base_difficulty.into(),
             utxos: utxos.clone(),
             total_stake,
             lottery_0,
@@ -1113,7 +1110,7 @@ pub mod tests {
         let next_epoch_state = EpochState {
             epoch: 1.into(),
             nonce: Fr::ZERO,
-            blend_pow_difficulty: base_difficulty(&config.pow_config.blend),
+            blend_pow_difficulty: config.pow_config.blend.base_difficulty.into(),
             utxos: utxos.clone(),
             total_stake,
             lottery_0,
@@ -1452,7 +1449,10 @@ pub mod tests {
         let mut state = genesis_state(&[utxo()]);
         let blend_config = &config.pow_config.blend;
         let genesis_difficulty = state.epoch_state.blend_pow_difficulty;
-        assert_eq!(genesis_difficulty, base_difficulty(blend_config));
+        assert_eq!(
+            genesis_difficulty,
+            PowTarget::from(blend_config.base_difficulty)
+        );
 
         // Epoch 0: three blocks carrying 12 transactions in total.
         for (slot, txs) in [(10u64, 3u64), (20, 5), (70, 4)] {
@@ -1553,7 +1553,7 @@ pub mod tests {
         // Both branches enter epoch 1 at the baseline: no epoch had closed
         // when epoch 1's value was snapshotted, so the schedule had not
         // started for either of them.
-        let epoch_1_difficulty = base_difficulty(blend_config);
+        let epoch_1_difficulty = PowTarget::from(blend_config.base_difficulty);
 
         // Each tip's epoch 2 then reads its own epoch 0: 100 transactions over
         // two blocks on one branch, 10 over two on the other. The shared
@@ -1603,7 +1603,10 @@ pub mod tests {
         state.record_block_txs(7);
         assert_eq!(state.epoch_state.epoch, 2);
         let epoch_2_difficulty = state.epoch_state.blend_pow_difficulty;
-        assert_eq!(epoch_2_difficulty, base_difficulty(blend_config));
+        assert_eq!(
+            epoch_2_difficulty,
+            PowTarget::from(blend_config.base_difficulty)
+        );
 
         // Epoch 2 -> 3: the epoch that closed last is the skipped epoch 1,
         // which produced no block at all, so epoch 3 sees no load and eases

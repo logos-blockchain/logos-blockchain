@@ -8,15 +8,17 @@ mod public_input;
 
 pub mod serde;
 pub(crate) mod utils;
+mod modulus_shift;
 mod verification_key;
 mod verifier;
 
 use std::error::Error;
 
 pub use ark_bn254::{Bn254, Fr};
-use ark_ff::BigInteger as _;
+use ark_ff::{BigInteger as _, PrimeField as _};
 pub use ark_ff::{AdditiveGroup, Field};
 pub use circuit_integer::{CircuitInteger, CircuitIntegerOutOfRange};
+pub use modulus_shift::{ModulusShift, ModulusShiftOutOfRange};
 use num_bigint::BigUint;
 pub use verifier::{groth16_batch_verify, groth16_verify};
 

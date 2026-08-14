@@ -894,7 +894,7 @@ mod tests {
         Ed25519Key, Ed25519Signature, UnsecuredZkKey, ZkSignature,
     };
     use lb_ledger::{
-        config::{BlendPoWConfig, PoWConfig},
+        config::{BlendPoWConfig, ModulusShift, PoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_pol::LotteryConstants;
@@ -1897,7 +1897,7 @@ mod tests {
             faucet_pk: None,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
-                    base_difficulty_exponent: 19,
+                    base_difficulty: ModulusShift::new::<19>(),
                     damping_den_offset: 0,
                     damping_num: 1.try_into().unwrap(),
                     max_step: 1.try_into().unwrap(),

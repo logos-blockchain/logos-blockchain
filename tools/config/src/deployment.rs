@@ -8,6 +8,7 @@ use lb_core::{
     sdp::{NumberOfEpochs, ServiceType},
 };
 use lb_cryptarchia_engine::Epoch;
+use lb_groth16::ModulusShift;
 use lb_libp2p::protocol_name::StreamProtocol;
 use lb_node::config::{
     blend::deployment::{
@@ -152,7 +153,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
             faucet_pk: None,
             pow_config: lb_node::config::cryptarchia::deployment::PoWConfig {
                 blend: lb_node::config::cryptarchia::deployment::BlendPoWConfig {
-                    base_difficulty_exponent: BLEND_POW_BASE_DIFFICULTY_EXPONENT,
+                    base_difficulty: ModulusShift::new::<BLEND_POW_BASE_DIFFICULTY_EXPONENT>(),
                     target_transactions_per_block: NonZero::new(BLEND_POW_TARGET_TXS_PER_BLOCK)
                         .unwrap(),
                     max_step: NonZero::new(BLEND_POW_MAX_STEP).unwrap(),

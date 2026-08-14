@@ -2,6 +2,7 @@ use core::num::NonZeroU32;
 use std::num::{NonZero, NonZeroU64};
 
 use lb_cryptarchia_engine::{Epoch, Slot};
+pub use lb_groth16::ModulusShift;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_pol::LotteryConstants;
 
@@ -103,10 +104,9 @@ pub struct PoWConfig {
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct BlendPoWConfig {
-    /// `BLEND_DIFFICULTY_BASE`, as the exponent `n` in `p / 2^n`: the
-    /// threshold in effect at exactly the reference load, and the threshold
-    /// the chain starts from.
-    pub base_difficulty_exponent: u32,
+    /// `BLEND_DIFFICULTY_BASE`: the threshold in effect at exactly the
+    /// reference load, and the threshold the chain starts from.
+    pub base_difficulty: ModulusShift,
     pub target_transactions_per_block: NonZeroU64,
     pub max_step: NonZeroU64,
     pub damping_num: NonZeroU32,
@@ -141,6 +141,7 @@ mod tests {
 
     use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
     use lb_cryptarchia_engine::EpochConfig;
+    pub use lb_groth16::ModulusShift;
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 
     use crate::{
@@ -195,7 +196,7 @@ mod tests {
             faucet_pk: None,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
-                    base_difficulty_exponent: 19,
+                    base_difficulty: ModulusShift::new::<19>(),
                     damping_den_offset: 0,
                     damping_num: 1.try_into().unwrap(),
                     max_step: 1.try_into().unwrap(),
@@ -257,7 +258,7 @@ mod tests {
             faucet_pk: None,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
-                    base_difficulty_exponent: 19,
+                    base_difficulty: ModulusShift::new::<19>(),
                     damping_den_offset: 0,
                     damping_num: 1.try_into().unwrap(),
                     max_step: 1.try_into().unwrap(),
@@ -328,7 +329,7 @@ mod tests {
             faucet_pk: None,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
-                    base_difficulty_exponent: 19,
+                    base_difficulty: ModulusShift::new::<19>(),
                     damping_den_offset: 0,
                     damping_num: 1.try_into().unwrap(),
                     max_step: 1.try_into().unwrap(),

@@ -68,6 +68,7 @@ mod tests {
     use std::{collections::HashMap, sync::Arc};
 
     use lb_core::sdp::MinStake;
+    use lb_groth16::ModulusShift;
     use lb_utils::math::NonNegativeRatio;
 
     use super::*;
@@ -202,7 +203,7 @@ mod tests {
             faucet_pk: None,
             pow_config: crate::config::PoWConfig {
                 blend: crate::config::BlendPoWConfig {
-                    base_difficulty_exponent: 19,
+                    base_difficulty: ModulusShift::new::<19>(),
                     target_transactions_per_block: 1.try_into().unwrap(),
                     max_step: 1.try_into().unwrap(),
                     damping_num: 1.try_into().unwrap(),

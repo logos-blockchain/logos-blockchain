@@ -9,6 +9,7 @@ use lb_core::{
 use lb_cryptarchia_engine::{
     Config as ConsensusConfig, average_slots_for_blocks, base_period_length, time::epoch_length,
 };
+use lb_groth16::ModulusShift;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 use serde::{Deserialize, Serialize};
@@ -98,7 +99,7 @@ pub struct PoWConfig {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BlendPoWConfig {
-    pub base_difficulty_exponent: u32,
+    pub base_difficulty: ModulusShift,
     pub target_transactions_per_block: NonZeroU64,
     pub max_step: NonZeroU64,
     pub damping_num: NonZeroU32,
