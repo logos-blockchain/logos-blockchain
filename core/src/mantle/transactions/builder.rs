@@ -150,9 +150,8 @@ impl MantleTxBuilder {
         // Calculate the mandatory fee with a dummy change note so the reserve
         // is based on the final transaction shape.
         let candidate = self.with_dummy_change_note()?;
-        let mandatory_fee = candidate.minimum_gas_cost::<G>(context)?.into_inner();
-        let required_fee = Self::required_fee(mandatory_fee, priority_fee_percent)?;
-        let available_change = self.net_balance() - i128::from(required_fee);
+        let available_change =
+            candidate.funding_delta_with_priority_fee::<G>(context, priority_fee_percent)?;
 
         match available_change.cmp(&1) {
             Ordering::Less => {
