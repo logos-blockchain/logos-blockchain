@@ -156,7 +156,14 @@ impl<Hash> Node<Hash> {
 }
 
 impl<Hash: Copy> Node<Hash> {
-    fn canonicalize<H>(node: &Arc<Self>) -> Result<Arc<Self>, &'static str>
+    /// Recursively validates a deserialized node tree and rebuilds derived
+    /// inner-node state.
+    ///
+    /// Inner-node hashes, subtree sizes, and heights are recomputed from the
+    /// children. Fully empty sibling subtrees are collapsed into a single
+    /// empty parent. Invalid subtree heights or mismatched sibling heights
+    /// are rejected.
+    fn rebuild_and_validate<H>(node: &Arc<Self>) -> Result<Arc<Self>, &'static str>
     where
         H: MerkleHasher<Hash = Hash>,
     {
@@ -169,8 +176,10 @@ impl<Hash: Copy> Node<Hash> {
             }
             Self::Leaf { .. } => return Ok(Arc::clone(node)),
             Self::Inner { left, right, .. } => {
-                let left = Self::canonicalize::<H>(left)?;
-                let right = Self::canonicalize::<H>(right)?;
+                let left = Self::rebuild_and_validate::<H>(left)?;
+                let right = Self::rebuild_and_validate::<H>(right)?;
+                // Malformed serialized input must be rejected as a serde
+                // error; `new_inner`'s assertion is for internal misuse.
                 if left.height() != right.height() {
                     return Err("sibling subtrees have different heights");
                 }
@@ -510,9 +519,9 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
     }
 
     /// Rebuilds a tree placing each leaf hash at its given index, representing
-    /// gaps as implicit empty subtrees. Empty sibling subtrees are represented
-    /// by their single empty parent, matching the canonical structure produced
-    /// by mutation.
+    /// gaps as empty subtrees rather than materializing individual empty
+    /// leaves. Empty sibling subtrees are represented by their single empty
+    /// parent, matching the canonical structure produced by mutation.
     ///
     /// The values must be yielded in strictly increasing index order; this is
     /// the inverse of enumerating a tree's occupied positions and is meant
@@ -528,7 +537,7 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
         let root = Self::build_sparse_subtree(&mut items, 0, TREE_HEIGHT_EXCEPT_ROOT);
         assert!(
             items.next().is_none(),
-            "indices must be strictly increasing and within bounds"
+            "all indices must be within tree capacity"
         );
         Self {
             root,
@@ -536,8 +545,9 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
         }
     }
 
-    /// Builds the subtree whose first absolute leaf position is
-    /// `subtree_start`.
+    /// Builds a sparse subtree starting at `subtree_start`, representing
+    /// unoccupied ranges as [`Node::Empty`] rather than materializing
+    /// individual empty leaves.
     ///
     /// A subtree of `height` covers the half-open range
     /// `[subtree_start, subtree_start + 2^height)`. Thus, `subtree_capacity =
@@ -547,10 +557,8 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
     ///
     /// The iterator must yield entries in strictly increasing absolute
     /// position order. At `height == 0`, this subtree represents exactly one
-    /// leaf position, so the consumed item must have `position ==
-    /// subtree_start`. The function consumes only entries belonging to the
-    /// current subtree and represents unoccupied ranges with
-    /// [`Node::Empty`] instead of materializing individual empty leaves.
+    /// leaf position, so any consumed item is at `subtree_start`. The function
+    /// consumes only entries belonging to the current subtree.
     fn build_sparse_subtree<I>(
         items: &mut std::iter::Peekable<I>,
         subtree_start: usize,
@@ -568,11 +576,7 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
             "indices must be strictly increasing and within bounds"
         );
         if height == 0 {
-            let (position, value) = items.next().expect("peeked item must be available");
-            assert_eq!(
-                position, subtree_start,
-                "indices must be strictly increasing"
-            );
+            let (_, value) = items.next().expect("peeked item must be available");
             return Arc::new(Node::new(value));
         }
 
@@ -607,8 +611,9 @@ impl<H: MerkleHasher> Eq for DynamicMerkleTree<H> {}
 
 /// [`serde`](::serde) support for [`DynamicMerkleTree`].
 ///
-/// The tree serializes its canonical root node; deserialization canonicalizes
-/// reconstructed inner nodes before accepting the tree. Requires the hasher's
+/// The tree serializes its root node. Deserialization recursively validates
+/// and rebuilds the node tree, recomputing derived inner-node state and
+/// collapsing fully empty sibling subtrees. Requires the hasher's
 /// [`Hash`](MerkleHasher::Hash) type to implement the corresponding `serde`
 /// traits.
 pub mod serde {
@@ -649,8 +654,8 @@ pub mod serde {
             D: Deserializer<'de>,
         {
             let raw = Raw::<H::Hash>::deserialize(deserializer)?;
-            let root =
-                super::Node::canonicalize::<H>(&raw.root).map_err(serde::de::Error::custom)?;
+            let root = super::Node::rebuild_and_validate::<H>(&raw.root)
+                .map_err(serde::de::Error::custom)?;
             if root.height() != super::TREE_HEIGHT_EXCEPT_ROOT
                 || matches!(root.as_ref(), super::Node::Leaf { .. })
             {

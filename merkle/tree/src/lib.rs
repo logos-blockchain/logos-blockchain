@@ -330,6 +330,9 @@ pub struct CompressedMerkleTree<Key, Item> {
     items: BTreeMap<usize, (Key, Item)>,
 }
 
+// Deserialize manually so duplicate serialized positions are rejected before
+// they can be collapsed by `BTreeMap`. A derived implementation would lose
+// that information while constructing the map.
 impl<'de, Key, Item> ::serde::Deserialize<'de> for CompressedMerkleTree<Key, Item>
 where
     Key: ::serde::Deserialize<'de>,
