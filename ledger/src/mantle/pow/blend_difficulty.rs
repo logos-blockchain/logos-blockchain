@@ -21,7 +21,7 @@
 use core::num::NonZeroU64;
 
 use lb_core::mantle::ops::pow::PowTarget;
-use lb_groth16::{fr_from_biguint_saturating, fr_modulus};
+use lb_groth16::fr_from_biguint_saturating;
 use num_bigint::BigUint;
 
 use crate::{config::BlendPoWConfig, cryptarchia::tx_density::ClosedEpochLoad};
@@ -84,7 +84,7 @@ pub fn compute_epoch_blend_difficulty(
 mod tests {
     use core::num::NonZeroU32;
 
-    use lb_groth16::ModulusShift;
+    use lb_groth16::{ModulusShift, fr_modulus};
 
     use super::*;
 

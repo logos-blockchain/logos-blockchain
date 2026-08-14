@@ -47,8 +47,11 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
             .epoch_core_quota(self.num_blend_layers, &self.time, membership_size)
     }
 
-    pub const fn epoch_pow_quota(&self) -> Quota {
-        self.epoch_leadership_quota()
+    pub fn epoch_pow_quota(&self) -> Quota {
+        self.num_blend_layers
+            .get()
+            .try_into()
+            .expect("PoW Quota must fit within the width the `PoQ` circuit allows.")
     }
 
     pub const fn epoch_leadership_quota(&self) -> Quota {
