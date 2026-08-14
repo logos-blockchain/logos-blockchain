@@ -398,7 +398,7 @@ impl LedgerState {
                 epoch: new_epoch,
                 nonce: self.nonce,
                 // Too many epochs were skipped for a snapshot to have been
-                // taken for `new_epocthe last known difficulty carriesh`, so
+                // taken for `new_epoch`, so the last known difficulty carries
                 // over unretargeted, like the rest of the state does here.
                 blend_pow_difficulty: self.epoch_state.blend_pow_difficulty,
                 utxos: self.utxos.clone(),

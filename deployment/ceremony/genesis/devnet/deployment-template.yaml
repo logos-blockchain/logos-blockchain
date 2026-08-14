@@ -31,9 +31,11 @@ cryptarchia:
   window_absorption_parameter: 12
   pow_config:
     blend:
-      # BLEND_DIFFICULTY_BASE, as the exponent n in p / 2^n. The baseline
-      # is TBD in the spec pending a measurement on the target hardware;
-      # 19 is the value it currently gives.
+      # BLEND_DIFFICULTY_BASE, as the exponent n in p / 2^n: the Blend PoW
+      # threshold at the reference load. Fixed by the EmPoWering
+      # specification from a measurement on the target hardware itself
+      # (Raspberry Pi 5, one core), at which one solution is around fifty
+      # seconds of work.
       base_difficulty: 19
       target_transactions_per_block: 512
       max_step: 2

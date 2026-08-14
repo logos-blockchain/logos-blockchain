@@ -1137,6 +1137,14 @@ where
         }
         EpochEvent::NewEpoch(MaybeEmptyCoreEpochInfo::Empty { epoch, epoch_nonce }) => {
             tracing::info!(target: LOG_TARGET, "New epoch event received, but no epoch info is available due to empty membership set.");
+            // Reduce the scope of the `mut` borrow to this block only.
+            let current_cryptographic_processor = {
+                // TODO: Change the cryptographic processor type so that proving is dropped
+                // automatically on new epochs for the old epoch.
+                let mut current_cryptographic_processor = current_cryptographic_processor;
+                current_cryptographic_processor.stop_proof_generation();
+                current_cryptographic_processor
+            };
             let (_, _, _, _, current_epoch_blending_token_collector, _, _) =
                 current_recovery_checkpoint.into_components();
             let new_reward_epoch_info = reward::EpochInfo::new(

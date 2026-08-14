@@ -279,10 +279,19 @@ impl RewardsParameters {
 
     /// The epoch's proof of work public inputs: the threshold the chain fixed
     /// for this epoch, and `Q_W = ß_max`, so one solution buys one message.
+    ///
+    /// `Q_W` is `ß_max` alone, unlike the leadership quota, which the spec
+    /// defines as `ß_D + ß_D · R_D`. Every `PoQ` carries the `PoW` inputs as
+    /// public inputs whichever branch it proves, so a verifier that computed
+    /// this differently from the provers would reject every proof — including
+    /// core-branch activity proofs — wherever the replication factor is
+    /// non-zero.
     fn pow_inputs(&self, epoch_state: &EpochState) -> PowInputs {
+        let pow_quota = Quota::try_new(self.num_blend_layers.get())
+            .expect("PoW Quota must fit within the width the `PoQ` circuit allows.");
         PowInputs {
             pow_blend_difficulty: epoch_state.blend_pow_difficulty,
-            pow_quota: self.encapsulations_per_message(),
+            pow_quota,
         }
     }
 }
