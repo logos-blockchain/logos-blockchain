@@ -1,0 +1,49 @@
+# Alerts the team when a pull request is closed WITHOUT being merged.
+#
+# GitHub closes PRs silently in some situations - most notably when the base
+# branch of a stacked PR is auto-deleted after a merge and the automatic
+# retargeting loses the race (the closure is then even attributed to the PR
+# author, so GitHub sends them no notification). This workflow turns every
+# closed-without-merge event into a Discord message so such closures are
+# noticed immediately instead of being discovered by accident.
+#
+# Requires the `DISCORD_WEBHOOK_URL` repository secret (a Discord channel
+# webhook). If the secret is not configured the workflow logs a warning and
+# succeeds, so it never blocks or fails anything.
+name: Alert on PRs closed without merging
+
+on:
+  pull_request:
+    types: [ closed ]
+
+permissions: {}
+
+jobs:
+  notify:
+    name: Notify Discord
+    if: ${{ github.event.pull_request.merged == false }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Discord notification
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          CLOSED_BY: ${{ github.event.sender.login }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "::warning::DISCORD_WEBHOOK_URL secret is not configured; skipping notification"
+            exit 0
+          fi
+          jq -n \
+            --arg header "PR #${PR_NUMBER} was closed without merging: ${PR_TITLE}" \
+            --arg url "$PR_URL" \
+            --arg people "author: ${PR_AUTHOR}, closed by: ${CLOSED_BY}" \
+            --arg hint "If this is unexpected (e.g. right after a stacked-PR merge), reopen the PR and set its base to master." \
+            '{content: ([$header, $url, $people, $hint] | join("\n"))}' \
+            | curl --silent --show-error --fail-with-body \
+                --header "Content-Type: application/json" \
+                --data @- \
+                "$WEBHOOK_URL"
