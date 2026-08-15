@@ -35,7 +35,11 @@ pub enum BoundedError {
     #[error("Index {index} is out of bounds for length {len}")]
     IndexOutOfBounds { index: usize, len: usize },
     #[error("Requested capacity {capacity} is out of bounds [{min}, {max}]")]
-    CapacityOutOfBounds { min: usize, max: usize, capacity: usize },
+    CapacityOutOfBounds {
+        min: usize,
+        max: usize,
+        capacity: usize,
+    },
 }
 
 /// The measured length of a value, in whatever unit is natural for its type:

@@ -37,14 +37,19 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
     /// Constructs an empty vector with at least the specified capacity.
     ///
     /// The `capacity` must be within the `[MIN, MAX]` bounds; returns
-    /// [`BoundedError::CapacityOutOfBounds`] when `capacity` is outside this range.
+    /// [`BoundedError::CapacityOutOfBounds`] when `capacity` is outside this
+    /// range.
     ///
     /// This does **not** change the length of the vector (it is still zero
     /// after construction), but pre-allocates space so that at least
     /// `capacity` elements can be pushed without reallocation.
     pub fn with_capacity(capacity: usize) -> Result<Self, BoundedError> {
         if MIN > 0 || capacity > MAX {
-            return Err(BoundedError::CapacityOutOfBounds { min: MIN, max: MAX, capacity });
+            return Err(BoundedError::CapacityOutOfBounds {
+                min: MIN,
+                max: MAX,
+                capacity,
+            });
         }
         Ok(Self::new_unchecked(Vec::with_capacity(capacity)))
     }
@@ -57,14 +62,8 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
     #[must_use]
     pub fn with_const_capacity<const CAPACITY: usize>() -> Self {
         const {
-            assert!(
-                MIN == 0,
-                "Cannot construct empty BoundedVec when MIN > 0"
-            );
-            assert!(
-                CAPACITY <= MAX,
-                "Requested capacity exceeds BoundedVec MAX"
-            );
+            assert!(MIN == 0, "Cannot construct empty BoundedVec when MIN > 0");
+            assert!(CAPACITY <= MAX, "Requested capacity exceeds BoundedVec MAX");
         }
         Self::new_unchecked(Vec::with_capacity(CAPACITY))
     }
@@ -756,7 +755,6 @@ mod tests {
         assert!(v.as_inner().capacity() >= 5);
     }
 
-
     #[test]
     fn with_capacity_within_bounds_succeeds() {
         type V = BoundedVec<u32, 0, 10>;
@@ -778,7 +776,11 @@ mod tests {
         type V = BoundedVec<u32, 0, 4>;
         assert!(matches!(
             V::with_capacity(5),
-            Err(BoundedError::CapacityOutOfBounds { min: 0, max: 4, capacity: 5 })
+            Err(BoundedError::CapacityOutOfBounds {
+                min: 0,
+                max: 4,
+                capacity: 5
+            })
         ));
     }
 
@@ -787,8 +789,11 @@ mod tests {
         type V = BoundedVec<u32, 2, 10>;
         assert!(matches!(
             V::with_capacity(5),
-            Err(BoundedError::CapacityOutOfBounds { min: 2, max: 10, capacity: 5 })
+            Err(BoundedError::CapacityOutOfBounds {
+                min: 2,
+                max: 10,
+                capacity: 5
+            })
         ));
     }
-
 }
