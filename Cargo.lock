@@ -5477,6 +5477,7 @@ name = "logos-sql"
 version = "0.0.0"
 dependencies = [
  "bincode",
+ "blake2",
  "clap",
  "hex",
  "logos-blockchain-groth16",

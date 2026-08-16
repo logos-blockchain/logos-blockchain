@@ -345,8 +345,5 @@ impl Runtime {
 }
 
 const fn is_retryable_apply_error(error: &Error) -> bool {
-    !matches!(
-        error,
-        Error::InvalidPayload(_) | Error::UnsupportedProtocolVersion(_)
-    )
+    !matches!(error, Error::UnsupportedProtocolVersion(_))
 }

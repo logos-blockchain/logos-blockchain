@@ -3,6 +3,7 @@
 use std::fmt::{self, Display, Formatter};
 
 use bincode::Options as _;
+use blake2::{Blake2b, Digest as _, digest::consts::U32};
 use rand::RngCore as _;
 pub use rusqlite::types::Value;
 use serde::{Deserialize, Serialize};
@@ -175,6 +176,12 @@ impl Transaction {
     pub fn statements(&self) -> &[Statement] {
         &self.statements
     }
+
+    pub(crate) fn digest(&self) -> Result<[u8; 32], Error> {
+        let encoded = codec().serialize(self)?;
+
+        Ok(Blake2b::<U32>::digest(encoded).into())
+    }
 }
 
 /// Transaction payload carried by a `λSQL` channel inscription.
@@ -185,7 +192,7 @@ pub struct ChannelInscription {
 }
 
 impl ChannelInscription {
-    fn encode(&self) -> Result<Vec<u8>, Error> {
+    pub(crate) fn encode(&self) -> Result<Vec<u8>, Error> {
         let mut payload = Vec::from(PAYLOAD_MARKER);
         payload.extend_from_slice(&PAYLOAD_VERSION.to_le_bytes());
         payload.extend(codec().serialize(self)?);

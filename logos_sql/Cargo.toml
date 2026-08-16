@@ -15,6 +15,7 @@ workspace = true
 
 [dependencies]
 bincode                          = { workspace = true }
+blake2                           = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-log-targets                   = { workspace = true }
 lb-zone-sdk                      = { workspace = true }

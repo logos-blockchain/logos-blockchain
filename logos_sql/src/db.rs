@@ -7,19 +7,20 @@ use std::{
 };
 
 use bincode::Options as _;
-use lb_zone_sdk::sequencer::SequencerCheckpoint;
+use lb_zone_sdk::{node_types::MsgId, sequencer::SequencerCheckpoint};
 use rusqlite::{
-    Connection, OpenFlags, OptionalExtension as _, Row,
+    Connection, ErrorCode as SqliteErrorCode, OpenFlags, OptionalExtension as _, Row,
     hooks::{AuthAction, AuthContext, Authorization},
     params, params_from_iter,
 };
 
 use crate::{
     error::Error,
-    protocol::{EncodedWrite, Transaction, TxId},
+    protocol::{ChannelInscription, EncodedWrite, Transaction, TxId},
 };
 
 const DATABASE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+const LIB_DATABASE_FILE: &str = "LIB.db";
 const LIVE_DATABASE_FILE: &str = "LIVE.db";
 const CONTROL_DATABASE_FILE: &str = "control.db";
 
@@ -33,11 +34,27 @@ const LIVE_SCHEMA: &str = "
     ) STRICT;
 ";
 
-// Stores the participant-local ZoneSDK checkpoint independently of live state.
+// Records the SQL transactions whose effects exist in each database. The
+// marker commits with the effects, making channel-event replay idempotent.
+const APPLIED_WRITE_SCHEMA: &str = "
+    CREATE TABLE IF NOT EXISTS __logos_sql_applied_writes (
+        tx_id BLOB PRIMARY KEY CHECK (length(tx_id) = 32),
+        transaction_digest BLOB NOT NULL CHECK (length(transaction_digest) = 32)
+    ) STRICT;
+";
+
+// Stores participant-local progress and rejected channel writes independently
+// of replicated database state.
 const CONTROL_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS __logos_sql_state (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
         checkpoint BLOB
+    ) STRICT;
+
+    CREATE TABLE IF NOT EXISTS __logos_sql_rejected_writes (
+        this_msg BLOB PRIMARY KEY CHECK (length(this_msg) = 32),
+        tx_id BLOB CHECK (tx_id IS NULL OR length(tx_id) = 32),
+        reason TEXT NOT NULL
     ) STRICT;
 ";
 
@@ -58,6 +75,11 @@ const UPDATE_CHECKPOINT: &str = "
     WHERE singleton = 1
 ";
 
+const INSERT_REJECTED_WRITE: &str = "
+    INSERT INTO __logos_sql_rejected_writes (this_msg, tx_id, reason)
+    VALUES (?1, ?2, ?3)
+    ON CONFLICT (this_msg) DO NOTHING
+";
 const INSERT_PENDING_WRITE: &str = "
     INSERT INTO __logos_sql_pending_write (singleton, tx_id, payload)
     VALUES (1, ?1, ?2)
@@ -72,6 +94,17 @@ const SELECT_PENDING_PUBLISH: &str = "
 const MARK_PUBLISH_COMPLETE: &str = "
     DELETE FROM __logos_sql_pending_write
     WHERE singleton = 1 AND tx_id = ?1
+";
+
+const SELECT_APPLIED_WRITE: &str = "
+    SELECT transaction_digest
+    FROM __logos_sql_applied_writes
+    WHERE tx_id = ?1
+";
+
+const INSERT_APPLIED_WRITE: &str = "
+    INSERT INTO __logos_sql_applied_writes (tx_id, transaction_digest)
+    VALUES (?1, ?2)
 ";
 
 const WRITER_PRAGMAS: &str = "
@@ -105,8 +138,10 @@ pub struct PendingPublish {
 
 /// Owns the participant-local database connections.
 pub struct Databases {
+    lib: Connection,
     live: Connection,
     control: Connection,
+    lib_path: PathBuf,
     live_path: PathBuf,
 }
 
@@ -115,21 +150,31 @@ impl Databases {
     pub(crate) fn open(directory: &Path) -> Result<Self, Error> {
         fs::create_dir_all(directory)?;
 
+        let lib_path = directory.join(LIB_DATABASE_FILE);
         let live_path = directory.join(LIVE_DATABASE_FILE);
         let control_path = directory.join(CONTROL_DATABASE_FILE);
 
+        let lib = open_writer(&lib_path)?;
         let live = open_writer(&live_path)?;
         let control = open_writer(&control_path)?;
 
+        lib.execute_batch(APPLIED_WRITE_SCHEMA)?;
         live.execute_batch(LIVE_SCHEMA)?;
+        live.execute_batch(APPLIED_WRITE_SCHEMA)?;
         control.execute_batch(CONTROL_SCHEMA)?;
         control.execute(INITIALIZE_CONTROL_STATE, [])?;
 
         Ok(Self {
+            lib,
             live,
             control,
+            lib_path,
             live_path,
         })
+    }
+
+    pub(crate) fn lib_path(&self) -> &Path {
+        &self.lib_path
     }
 
     pub(crate) fn live_path(&self) -> &Path {
@@ -164,6 +209,28 @@ impl Databases {
         Ok(())
     }
 
+    /// Records a channel write that every replica must skip.
+    ///
+    /// Keeping the rejection in participant-local state allows replay to
+    /// advance past invalid input and preserves the outcome for later
+    /// application reporting. `tx_id` is absent when the payload could not be
+    /// decoded.
+    pub(crate) fn record_rejected_write(
+        &self,
+        this_msg: MsgId,
+        tx_id: Option<TxId>,
+        reason: &str,
+    ) -> Result<(), Error> {
+        let tx_id = tx_id.map(<[u8; 32]>::from);
+        let tx_id = tx_id.as_ref().map(<[u8; 32]>::as_slice);
+
+        self.control.execute(
+            INSERT_REJECTED_WRITE,
+            params![this_msg.as_ref(), tx_id, reason],
+        )?;
+
+        Ok(())
+    }
     /// Commits application effects and their pending publish record together in
     /// `LIVE.db`.
     pub(crate) fn commit_local_write(
@@ -177,20 +244,16 @@ impl Databases {
 
         let db_transaction = self.live.transaction()?;
 
-        // Application SQL runs inside the transaction that also records its
-        // pending publication. Keep it from escaping that transaction.
-        db_transaction.authorizer(Some(authorize_application_sql));
+        // TODO: Capture nondeterministic function results and include them in
+        // the transaction published to other participants.
+        apply_statements(&db_transaction, transaction)?;
 
-        let apply_result = transaction.statements().iter().try_for_each(|statement| {
-            // TODO: Capture nondeterministic function results and include them
-            // in the transaction published to other participants.
-            db_transaction.execute(statement.sql(), params_from_iter(statement.params()))?;
+        let transaction_digest = transaction.digest()?;
 
-            Ok::<_, Error>(())
-        });
-
-        db_transaction.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
-        apply_result?;
+        db_transaction.execute(
+            INSERT_APPLIED_WRITE,
+            params![encoded.tx_id.as_ref(), transaction_digest],
+        )?;
 
         db_transaction.execute(
             INSERT_PENDING_WRITE,
@@ -199,6 +262,43 @@ impl Databases {
         db_transaction.commit()?;
 
         Ok(encoded.tx_id)
+    }
+
+    /// Applies a newly adopted channel write to the live database.
+    pub(crate) fn apply_adopted_write(&mut self, write: &ChannelInscription) -> Result<(), Error> {
+        apply_channel_write(&mut self.live, write)
+    }
+
+    /// Applies a finalized channel write to finalized and live state.
+    ///
+    /// Applying to `LIVE.db` as well covers writes first discovered through
+    /// finalized backfill. Writes already applied locally or while adopted
+    /// are skipped using their `TxId`.
+    pub(crate) fn apply_finalized_write(
+        &mut self,
+        write: &ChannelInscription,
+    ) -> Result<(), Error> {
+        let transaction_digest = write.transaction.digest()?;
+
+        is_write_applied(&self.lib, write.tx_id, &transaction_digest)?;
+        is_write_applied(&self.live, write.tx_id, &transaction_digest)?;
+
+        // LIB and LIVE are separate SQLite files. If LIVE fails after LIB
+        // commits, the checkpoint remains behind. Redelivery then skips LIB
+        // using its applied marker and completes LIVE.
+        apply_channel_write(&mut self.lib, write)?;
+        apply_channel_write(&mut self.live, write)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn rejected_write_count(&self) -> Result<i64, Error> {
+        self.control
+            .query_row(
+                "SELECT count(*) FROM __logos_sql_rejected_writes",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(Error::from)
     }
 
     pub(crate) fn pending_publish(&self) -> Result<Option<PendingPublish>, Error> {
@@ -256,8 +356,118 @@ fn configure_connection(conn: &Connection) -> Result<(), Error> {
     Ok(())
 }
 
-// Application statements share a transaction with the pending publication
-// record, so they cannot take over transaction or connection management.
+fn apply_channel_write(
+    connection: &mut Connection,
+    write: &ChannelInscription,
+) -> Result<(), Error> {
+    let transaction_digest = write.transaction.digest()?;
+    let db_transaction = connection.transaction()?;
+
+    if is_write_applied(&db_transaction, write.tx_id, &transaction_digest)? {
+        return Ok(());
+    }
+
+    if let Err(error) = apply_statements(&db_transaction, &write.transaction) {
+        return match error {
+            Error::Database(error) if is_deterministic_sql_error(&error) => {
+                Err(Error::RejectedSql(error))
+            }
+            error => Err(error),
+        };
+    }
+
+    db_transaction.execute(
+        INSERT_APPLIED_WRITE,
+        params![write.tx_id.as_ref(), transaction_digest],
+    )?;
+    db_transaction.commit()?;
+
+    Ok(())
+}
+
+fn is_write_applied(
+    connection: &Connection,
+    tx_id: TxId,
+    transaction_digest: &[u8; 32],
+) -> Result<bool, Error> {
+    let stored_digest = connection
+        .query_row(SELECT_APPLIED_WRITE, [tx_id.as_ref()], |row| {
+            row.get::<_, Vec<u8>>(0)
+        })
+        .optional()?;
+
+    if let Some(stored_digest) = stored_digest {
+        if stored_digest.as_slice() != transaction_digest {
+            return Err(Error::InvalidPayload(
+                "transaction id was reused for different content",
+            ));
+        }
+
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
+// Only failures determined by the received statement and parameters are safe
+// to skip. Storage, locking, and other local failures must halt replay so the
+// same channel position can be retried without diverging from other replicas.
+fn is_deterministic_sql_error(error: &rusqlite::Error) -> bool {
+    if error.sqlite_error().is_some_and(|error| {
+        matches!(
+            error.extended_code,
+            rusqlite::ffi::SQLITE_ERROR_RETRY | rusqlite::ffi::SQLITE_ERROR_SNAPSHOT
+        )
+    }) {
+        return false;
+    }
+
+    match error.sqlite_error_code() {
+        Some(
+            SqliteErrorCode::Unknown
+            | SqliteErrorCode::TooBig
+            | SqliteErrorCode::ConstraintViolation
+            | SqliteErrorCode::TypeMismatch
+            | SqliteErrorCode::AuthorizationForStatementDenied
+            | SqliteErrorCode::ParameterOutOfRange,
+        ) => true,
+        Some(_) => false,
+        None => matches!(
+            error,
+            rusqlite::Error::NulError(_)
+                | rusqlite::Error::InvalidParameterName(_)
+                | rusqlite::Error::ExecuteReturnedResults
+                | rusqlite::Error::InvalidFunctionParameterType(_, _)
+                | rusqlite::Error::UserFunctionError(_)
+                | rusqlite::Error::ToSqlConversionFailure(_)
+                | rusqlite::Error::InvalidQuery
+                | rusqlite::Error::UnwindingPanic
+                | rusqlite::Error::GetAuxWrongType
+                | rusqlite::Error::MultipleStatement
+                | rusqlite::Error::InvalidParameterCount(_, _)
+        ),
+    }
+}
+
+fn apply_statements(
+    db_transaction: &rusqlite::Transaction<'_>,
+    transaction: &Transaction,
+) -> Result<(), Error> {
+    db_transaction.authorizer(Some(authorize_application_sql));
+
+    let result = transaction.statements().iter().try_for_each(|statement| {
+        db_transaction.execute(statement.sql(), params_from_iter(statement.params()))?;
+
+        Ok::<_, Error>(())
+    });
+
+    db_transaction.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+
+    result
+}
+
+// λSQL owns the surrounding transaction for local execution and replay, so
+// application statements cannot take over transaction or connection state.
 const fn authorize_application_sql(context: AuthContext<'_>) -> Authorization {
     let denied = matches!(
         context.action,
@@ -303,7 +513,7 @@ mod tests {
     use crate::{
         error::Error,
         local_write,
-        protocol::{EncodedWrite, Statement, Transaction, Value},
+        protocol::{ChannelInscription, EncodedWrite, Statement, Transaction, TxId, Value},
     };
 
     fn checkpoint(byte: u8, slot: u64) -> SequencerCheckpoint {
@@ -432,6 +642,80 @@ mod tests {
             .expect("row should be readable");
 
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn reused_transaction_id_with_different_content_is_rejected() {
+        let dir = TempDir::new().expect("temporary directory should be created");
+        let mut db = Databases::open(dir.path()).expect("databases should open");
+
+        db.live
+            .execute("CREATE TABLE items(value TEXT NOT NULL)", [])
+            .expect("application table should be created");
+
+        let tx_id = TxId::from([7; 32]);
+        let first = ChannelInscription {
+            tx_id,
+            transaction: insert("first"),
+        };
+        let conflicting = ChannelInscription {
+            tx_id,
+            transaction: insert("conflicting"),
+        };
+
+        db.apply_adopted_write(&first)
+            .expect("first write should apply");
+
+        let error = db
+            .apply_adopted_write(&conflicting)
+            .expect_err("conflicting write should be rejected");
+
+        assert!(matches!(error, Error::InvalidPayload(_)));
+
+        let value: String = db
+            .live
+            .query_row("SELECT value FROM items", [], |row| row.get(0))
+            .expect("stored value should be readable");
+
+        assert_eq!(value, "first");
+    }
+
+    #[test]
+    fn conflicting_finalized_write_does_not_modify_lib() {
+        let dir = TempDir::new().expect("temporary directory should be created");
+        let mut db = Databases::open(dir.path()).expect("databases should open");
+
+        for connection in [&db.lib, &db.live] {
+            connection
+                .execute("CREATE TABLE items(value TEXT NOT NULL)", [])
+                .expect("application table should be created");
+        }
+
+        let tx_id = TxId::from([7; 32]);
+        let first = ChannelInscription {
+            tx_id,
+            transaction: insert("first"),
+        };
+        let conflicting = ChannelInscription {
+            tx_id,
+            transaction: insert("conflicting"),
+        };
+
+        db.apply_adopted_write(&first)
+            .expect("first write should apply to LIVE");
+
+        let error = db
+            .apply_finalized_write(&conflicting)
+            .expect_err("conflicting finalized write should be rejected");
+
+        assert!(matches!(error, Error::InvalidPayload(_)));
+
+        let lib_count: i64 = db
+            .lib
+            .query_row("SELECT count(*) FROM items", [], |row| row.get(0))
+            .expect("LIB row count should be readable");
+
+        assert_eq!(lib_count, 0);
     }
 
     #[test]

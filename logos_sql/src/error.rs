@@ -44,6 +44,11 @@ pub enum Error {
     #[error("invalid \u{3bb}SQL payload: {0}")]
     InvalidPayload(&'static str),
 
+    /// SQL received from the channel was rejected deterministically by
+    /// `SQLite`.
+    #[error("channel SQL was rejected: {0}")]
+    RejectedSql(#[source] rusqlite::Error),
+
     /// The inscription uses a protocol version this library cannot execute.
     #[error("unsupported \u{3bb}SQL protocol version {0}")]
     UnsupportedProtocolVersion(u16),
