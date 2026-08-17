@@ -23,10 +23,10 @@
 //! DRAIN_ALL_NODE_WALLETS, node_name '<node_name>', to '<wallet_name>'
 //! VERIFY_MAX, wallet '<wallet_name>', wallet_state_type 'on-chain'/'encumbered'/'available', outputs <count>, value 14000, time_out <duration_seconds>
 //! VERIFY_MIN, wallet '<wallet_name>', wallet_state_type 'on-chain'/'encumbered'/'available', outputs <count>, value 14000, time_out <duration_seconds>
-//! CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs <count>, coin_split_value <amount>, num_transactions <count>, value <amount>, cycles <count>
+//! CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs <count>, coin_split_value <amount>, num_transactions <count>, value <amount>, cycles <count>, epochs_headroom <count>
 //! COIN_SPLIT_ALL_USER_WALLETS, splits_per_wallet <count>, outputs <count>, value <amount>
 //! VERIFY_MIN_AVAILABLE_OUTPUTS_ALL_USER_WALLETS, min_outputs <count>, timeout_seconds <duration_seconds>
-//! CONTINUOUS_NEXT_WALLET_USER_WALLETS, cycles <count>, num_transactions <count>, value <amount>
+//! CONTINUOUS_NEXT_WALLET_USER_WALLETS, cycles <count>, num_transactions <count>, value <amount>, epochs_headroom <count>
 //! FAUCET_ALL_USER_WALLETS, rounds <count>
 //! FAUCET_ALL_FUNDING_WALLETS, rounds <count>
 //! CREATE_SNAPSHOT_ALL_NODES, snapshot_name '<snapshot_name>'
@@ -140,19 +140,23 @@ pub(crate) async fn build_cycle_fee_policy(
     .map_err(|source| StepError::LogicalError {
         message: format!("failed to build transaction fee horizon: {source}"),
     })?;
+    let policy = TransactionFeePolicy::new(horizon).map_err(|source| StepError::LogicalError {
+        message: format!("failed to build transaction fee policy: {source}"),
+    })?;
     info!(
         target: TARGET,
-        "Cycle fee horizon: prepared tip {:?}, slot {:?}, epoch {:?}, valid through {:?}, execution {}->{}, storage {}->{}, representative wallet `{representative_wallet}`",
-        horizon.prepared_at_tip,
+        "Cycle fee horizon: prepared tip {:?}, slot {:?}, epoch {:?}, valid through {:?}, execution {}->{}, storage {}->{}, priority reserve {}%, representative wallet `{representative_wallet}`",
+        policy.horizon.prepared_at_tip,
         consensus.cryptarchia_info.slot,
-        horizon.prepared_at_epoch,
-        horizon.valid_through_epoch,
-        horizon.live_prices.execution_base_gas_price.into_inner(),
-        horizon.ceiling_prices.execution_base_gas_price.into_inner(),
-        horizon.live_prices.storage_gas_price.into_inner(),
-        horizon.ceiling_prices.storage_gas_price.into_inner(),
+        policy.horizon.prepared_at_epoch,
+        policy.horizon.valid_through_epoch,
+        policy.horizon.live_prices.execution_base_gas_price.into_inner(),
+        policy.horizon.ceiling_prices.execution_base_gas_price.into_inner(),
+        policy.horizon.live_prices.storage_gas_price.into_inner(),
+        policy.horizon.ceiling_prices.storage_gas_price.into_inner(),
+        policy.priority_fee_percent,
     );
-    Ok(TransactionFeePolicy::new(horizon))
+    Ok(policy)
 }
 
 pub(crate) async fn execute_manual_command(
@@ -473,6 +477,7 @@ async fn execute_ring_send_round_with_utxo_cache<S: BuildHasher + Sync>(
             to,
             available_utxos,
             Some(policy.horizon.ceiling_prices.clone()),
+            policy.priority_fee_percent,
         )
         .await?;
         prepared_counts.insert(from.clone(), prepared.len());
@@ -1070,6 +1075,7 @@ async fn prepare_signed_submissions_with_utxo_cache(
     requests: Vec<(String, Vec<(ZkPublicKey, u64)>)>,
     available_utxos: &mut WalletUtxos,
     gas_prices: Option<GasPrices>,
+    priority_fee_percent: u64,
 ) -> Result<Vec<SignedUserWalletSubmission>, StepError> {
     let mut reserved_submissions = Vec::with_capacity(requests.len());
 
@@ -1082,6 +1088,7 @@ async fn prepare_signed_submissions_with_utxo_cache(
                 &receivers,
                 available_utxos,
                 gas_prices.clone(),
+                priority_fee_percent,
             )
             .await?;
         reserved_submissions.push(reserved_submission);
@@ -1090,6 +1097,7 @@ async fn prepare_signed_submissions_with_utxo_cache(
     utils::finalize_reserved_user_wallet_submissions_concurrently(step, reserved_submissions).await
 }
 
+#[expect(clippy::too_many_arguments, reason = "Coin-split preparation inputs")]
 async fn prepare_coin_splits_all_wallets_with_utxo_cache(
     world: &mut CucumberWorld,
     step: &str,
@@ -1098,6 +1106,7 @@ async fn prepare_coin_splits_all_wallets_with_utxo_cache(
     value: u64,
     available_utxos: &mut WalletUtxos,
     gas_prices: Option<GasPrices>,
+    priority_fee_percent: u64,
 ) -> Result<(Vec<SignedUserWalletSubmission>, BTreeMap<String, usize>), StepError> {
     let mut requests = Vec::with_capacity(wallet_names.len());
     let mut prepared_counts = BTreeMap::new();
@@ -1116,6 +1125,7 @@ async fn prepare_coin_splits_all_wallets_with_utxo_cache(
         requests,
         available_utxos,
         gas_prices,
+        priority_fee_percent,
     )
     .await?;
     Ok((signed_submissions, prepared_counts))
@@ -1181,6 +1191,7 @@ async fn prepare_ring_send_round_send_with_utxo_cache(
     to: &str,
     available_utxos: &mut WalletUtxos,
     gas_prices: Option<GasPrices>,
+    priority_fee_percent: u64,
 ) -> Result<Vec<SignedUserWalletSubmission>, StepError> {
     let receiver = world.resolve_recipient(to)?;
     let receiver_pk = receiver.public_key;
@@ -1198,6 +1209,7 @@ async fn prepare_ring_send_round_send_with_utxo_cache(
                 &receivers,
                 available_utxos,
                 gas_prices.clone(),
+                priority_fee_percent,
             )
             .await
             .map_err(|error| match error {
@@ -1294,6 +1306,7 @@ async fn prepare_and_submit_round_robin_transactions(
             value,
             available_utxos,
             Some(policy.horizon.ceiling_prices.clone()),
+            policy.priority_fee_percent,
         )
         .await
         .map_err(|e| StepError::StepFail {
@@ -1654,6 +1667,7 @@ async fn perform_coin_splits_for_round_robin_with_utxo_cache(
             coin_split_value,
             available_utxos,
             Some(policy.horizon.ceiling_prices.clone()),
+            policy.priority_fee_percent,
         )
         .await?;
     log_phase_counts(
@@ -1725,6 +1739,7 @@ async fn prepare_round_robin_with_utxo_cache(
     value: u64,
     available_utxos: &mut WalletUtxos,
     gas_prices: Option<GasPrices>,
+    priority_fee_percent: u64,
 ) -> Result<Vec<SignedUserWalletSubmission>, StepError> {
     let mut reserved_submissions = Vec::with_capacity(transactions);
 
@@ -1742,6 +1757,7 @@ async fn prepare_round_robin_with_utxo_cache(
                 &receivers,
                 available_utxos,
                 gas_prices.clone(),
+                priority_fee_percent,
             )
             .await?;
 

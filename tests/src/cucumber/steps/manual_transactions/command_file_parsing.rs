@@ -667,7 +667,10 @@ mod tests {
                 num_transactions,
                 value,
                 epochs_headroom,
-            } if cycles == 3 && num_transactions == 30 && value == 100 && epochs_headroom == 2
+            } if cycles == 3
+                && num_transactions == 30
+                && value == 100
+                && epochs_headroom == 2
         ));
     }
 

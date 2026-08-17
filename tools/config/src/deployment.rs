@@ -47,6 +47,7 @@ const CHAIN_SYNC_PROTOCOL_SUFFIX: &str = "chainsync/1.0.0";
 const GOSSIPSUB_PROTOCOL_SUFFIX: &str = "cryptarchia/proto/1.0.0";
 
 const SECURITY_PARAM: u32 = 20;
+const WINDOW_ABSORPTION_PARAMETER: u32 = 12;
 const SLOT_ACTIVATION_COEFF_NUMERATOR: u32 = 1;
 const SLOT_ACTIVATION_COEFF_DENOMINATOR: u32 = 10;
 const EPOCH_STAKE_DISTRIBUTION_STABILIZATION: u8 = 3;
@@ -113,6 +114,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
         cryptarchia: CryptarchiaDeploymentSettings {
             gossipsub_protocol: protocol_identity.protocol_name(GOSSIPSUB_PROTOCOL_SUFFIX),
             security_param: NonZero::new(SECURITY_PARAM).unwrap(),
+            window_absorption_parameter: NonZero::new(WINDOW_ABSORPTION_PARAMETER).unwrap(),
             slot_activation_coeff: NonNegativeRatio::new(
                 SLOT_ACTIVATION_COEFF_NUMERATOR,
                 NonZero::new(SLOT_ACTIVATION_COEFF_DENOMINATOR).unwrap(),

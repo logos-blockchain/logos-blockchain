@@ -43,8 +43,13 @@ impl PreparedWalletTransactionWorkItem {
 pub fn prepare_wallet_transaction(
     intent: WalletTransactionIntent,
     resources: WalletFundingResources,
+    priority_fee_percent: u64,
 ) -> Result<PreparedWalletTransaction, WalletTransactionError> {
-    finalize_prepared_wallet_transaction(prepare_wallet_transaction_work_item(intent, resources)?)
+    finalize_prepared_wallet_transaction(prepare_wallet_transaction_work_item(
+        intent,
+        resources,
+        priority_fee_percent,
+    )?)
 }
 
 /// Fund a transaction and compute the inputs that must be reserved.
@@ -54,13 +59,15 @@ pub fn prepare_wallet_transaction(
 pub fn prepare_wallet_transaction_work_item(
     intent: WalletTransactionIntent,
     resources: WalletFundingResources,
+    priority_fee_percent: u64,
 ) -> Result<PreparedWalletTransactionWorkItem, WalletTransactionError> {
     let sender_pk = resources.sender().owner_public_key();
     let fee_sponsor_pk = resources.fee_sponsor().map(WalletFundingSource::public_key);
     let transfer_signers = transfer_signers_for_funding(&resources);
     let input_utxos_by_note_id = input_utxos_by_note_id(&resources);
 
-    let (funded_builder, context) = fund_wallet_transaction(intent, resources)?;
+    let (funded_builder, context) =
+        fund_wallet_transaction(intent, resources, priority_fee_percent)?;
     let mantle_tx = funded_builder.clone().build()?;
     let tx_hash = mantle_tx.hash();
     let funding_inputs = funding_inputs_from_transfers(&mantle_tx, &input_utxos_by_note_id)?;

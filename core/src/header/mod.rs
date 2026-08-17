@@ -14,7 +14,7 @@ use crate::{
     crypto::Hasher,
     mantle::transactions::GenesisTx,
     proofs::leader_proof::{Groth16LeaderProof, LeaderProof as _},
-    utils::{display_hex_bytes_newtype, merkle, serde_bytes_newtype},
+    utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
 pub const BEDROCK_VERSION: u8 = 1;
@@ -143,7 +143,7 @@ pub struct Header {
     version: Version,
     parent_block: HeaderId,
     slot: Slot,
-    block_root: ContentId,
+    body_root: ContentId,
     proof_of_leadership: Groth16LeaderProof,
 }
 
@@ -163,7 +163,7 @@ impl Header {
         h.update(self.version.as_byte().to_le_bytes());
         h.update(self.parent_block.0);
         h.update(self.slot.to_le_bytes());
-        h.update(self.block_root.0);
+        h.update(self.body_root.0);
         h.update(self.proof_of_leadership.voucher_cm().to_bytes());
         h.update(fr_to_bytes(&self.proof_of_leadership.entropy()));
         h.update(self.proof_of_leadership.proof().to_bytes());
@@ -183,8 +183,8 @@ impl Header {
     }
 
     #[must_use]
-    pub const fn block_root(&self) -> &ContentId {
-        &self.block_root
+    pub const fn body_root(&self) -> &ContentId {
+        &self.body_root
     }
 
     #[must_use]
@@ -205,7 +205,7 @@ impl Header {
     #[must_use]
     pub const fn new(
         parent_block: HeaderId,
-        block_root: ContentId,
+        body_root: ContentId,
         slot: Slot,
         proof_of_leadership: Groth16LeaderProof,
     ) -> Self {
@@ -213,17 +213,16 @@ impl Header {
             version: Version::Bedrock,
             parent_block,
             slot,
-            block_root,
+            body_root,
             proof_of_leadership,
         }
     }
 
     #[must_use]
     pub fn genesis(tx: &GenesisTx) -> Self {
-        let block_root = merkle::calculate_block_root(&[tx]);
         Self::new(
             HeaderId([0; 32]),
-            ContentId(block_root),
+            crate::block::body_root(&crate::block::UncleHeaders::empty(), &[tx]),
             Slot::from(0u64),
             Groth16LeaderProof::genesis(),
         )
@@ -302,39 +301,46 @@ fn test_serde() {
     );
 }
 
-/// Block-root / `HeaderId` test-vector generator.
+/// Body-root / `HeaderId` test-vector generator.
 ///
 /// This module does not assert library behaviour: it *emits* reference test
-/// vectors for the block `block_root` computation and the resulting
+/// vectors for the block `body_root` computation and the resulting
 /// [`HeaderId`], so that alternative implementations (e.g. the nim
 /// implementation) can be checked for conformance against the canonical Rust
 /// encoding.
 ///
-/// It emits three vectors:
-/// - **empty block**: `block_root` of a block with no transactions (`Merkle([])
-///   == [0u8; 32]`);
+/// It emits five vectors:
+/// - **empty block**: tx root of a block with no transactions (`Merkle([]) ==
+///   [0u8; 32]`);
 /// - **one tx per op kind**: a block whose transactions each carry a single
 ///   operation, one per distinct mantle [`Op`] variant; for it we print every
-///   leaf (`tx_hash`) and the resulting `block_root`;
-/// - **`HeaderId`**: a header reusing the previous `block_root`, with a fixed
-///   parent, slot and a deterministic genesis proof of leadership, for which we
-///   print the inputs and the resulting `HeaderId`.
+///   leaf (`tx_hash`) and the resulting tx root;
+/// - **`body_root` without uncles**: over an empty `uncle_headers` list and the
+///   previous tx root;
+/// - **`body_root` with uncles**: the same tx root over two uncle headers;
+/// - **`HeaderId`**: a header reusing the `body_root` without uncles, with a
+///   fixed parent, slot and a deterministic genesis proof of leadership, for
+///   which we print the inputs and the resulting `HeaderId`.
 ///
-/// `block_root = Merkle(blake2b256(b"MANTLE_TXHASH_V1" || tx_bytes) leaves)`,
-/// where the Merkle tree pads the leaf set to the next power of two with
-/// all-zero leaves and hashes inner nodes as `blake2b256(left || right)`.
+/// `transaction_root = Merkle(blake2b256(b"MANTLE_TXHASH_V1" || tx_bytes)
+/// leaves)`, where the Merkle tree pads the leaf set to the next power of two
+/// with all-zero leaves and hashes inner nodes as `blake2b256(left || right)`.
+///
+/// `body_root = blake2b256( b"BODY_ROOT_V1" || uncle_headers ||
+/// transactions_root )`, where `uncle_headers` is the list encoding: a 1-byte
+/// little-endian element count followed by that many fixed 361-byte entries.
 ///
 /// `HeaderId (block_id) = blake2b256( b"BLOCK_ID_V1" || bedrock_version (1B)
-/// ||` `parent_block (32B) || slot_le (8B) || block_root (32B) ||
+/// ||` `parent_block (32B) || slot_le (8B) || body_root (32B) ||
 /// leader_voucher` `(32B) || entropy_contribution (32B) || proof (128B) ||
 /// leader_key (32B) )`.
 ///
 /// The test is `#[ignore]`d so it is skipped by `cargo test --all-features`.
 /// Run it on demand with:
-/// `cargo test -p logos-blockchain-core block_root_test_vectors -- --ignored
+/// `cargo test -p logos-blockchain-core body_root_test_vectors -- --ignored
 /// --nocapture`
 #[cfg(test)]
-mod block_root_test_vectors {
+mod body_root_test_vectors {
     use lb_blend_proofs::{
         quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
         selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection},
@@ -345,6 +351,7 @@ mod block_root_test_vectors {
 
     use super::*;
     use crate::{
+        block::{SignedHeader, UncleHeaders},
         mantle::{
             Note, Op, RawMantleTx,
             channel::{SlotTimeframe, SlotTimeout},
@@ -368,6 +375,7 @@ mod block_root_test_vectors {
             ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locator,
             ProviderId, ServiceType, WithdrawMessage, blend::ActivityProof,
         },
+        utils::merkle,
     };
 
     fn ed25519_pk(seed: u8) -> Ed25519PublicKey {
@@ -498,27 +506,53 @@ mod block_root_test_vectors {
         ]
     }
 
-    /// Generates (and prints) the `block_root` / `HeaderId` test vectors.
+    fn uncle(byte: u8) -> SignedHeader {
+        let signing_key = Ed25519Key::from_bytes(&[byte; 32]);
+        let header = Header::new(
+            HeaderId([byte; 32]),
+            ContentId([byte; 32]),
+            Slot::from(u64::from(byte)),
+            Groth16LeaderProof::from_parts(
+                lb_pol::PoLProof::from_bytes(&[byte; 128]),
+                Fr::from(u64::from(byte)),
+                signing_key.public_key(),
+                VoucherCm::from(Fr::from(u64::from(byte))),
+            ),
+        );
+        let signature = header.sign(&signing_key).expect("header serializes");
+        SignedHeader::new(header, signature)
+    }
+
+    /// Generates (and prints) the `body_root` / `HeaderId` test vectors.
     /// Ignored by default so it never runs under `cargo test --all-features`;
     /// invoke explicitly with `--ignored --nocapture` to regenerate the
     /// vectors.
     #[test]
-    #[ignore = "generates block_root/HeaderId test vectors on demand; run with --ignored --nocapture"]
-    fn generate_block_root_test_vectors() {
+    #[ignore = "generates body_root/HeaderId test vectors on demand; run with --ignored --nocapture"]
+    #[expect(clippy::too_many_lines, reason = "a flat list of printed vectors")]
+    fn generate_body_root_test_vectors() {
         println!();
-        println!("block_root = Merkle( blake2b256(b\"MANTLE_TXHASH_V1\" || tx_bytes) leaves )");
+        println!(
+            "transactions_root = Merkle( blake2b256(b\"MANTLE_TXHASH_V1\" || tx_bytes) leaves )"
+        );
+        println!(
+            "body_root  = blake2b256( b\"BODY_ROOT_V1\" || uncle_headers || transactions_root )"
+        );
         println!(
             "block_id   = blake2b256( b\"BLOCK_ID_V1\" || bedrock_version || parent_block || \
-             slot_le || block_root || leader_voucher || entropy_contribution || proof || \
+             slot_le || body_root || leader_voucher || entropy_contribution || proof || \
              leader_key )"
         );
 
         // 1. Empty block: no transactions.
         let empty: Vec<RawMantleTx> = vec![];
-        let empty_root = merkle::calculate_block_root(&empty);
         println!("================================================================");
         println!("vector 1  : empty block (0 transactions)");
-        println!("block_root: {}", hex::encode(empty_root));
+        println!(
+            "{:20}: {}",
+            "transactions_root",
+            hex::encode(merkle::calculate_transactions_root(&empty))
+        );
 
         // 2. One transaction per operation kind (one op each).
         let txs_with_names = one_tx_per_op();
@@ -531,10 +565,41 @@ mod block_root_test_vectors {
         for (i, (name, tx)) in txs_with_names.iter().enumerate() {
             println!("leaf[{i}]   : {} (op: {})", hex::encode(tx.hash().0), name);
         }
-        let block_root = merkle::calculate_block_root(&txs);
-        println!("block_root: {}", hex::encode(block_root));
+        println!(
+            "{:20}: {}",
+            "transactions_root",
+            hex::encode(merkle::calculate_transactions_root(&txs))
+        );
 
-        // 3. HeaderId reusing vector 2's block_root. Every field is given a distinct
+        // 3. `body_root` over vector 2's transactions and no uncles. This is the value
+        //    vector 5's header carries.
+        let body_root = crate::block::body_root(&UncleHeaders::empty(), &txs);
+        println!("================================================================");
+        println!("vector 3  : body_root without uncles, over vector 2's transactions");
+        println!("{:20}: 00 (empty list)", "uncle_headers");
+        println!("{:20}: {}", "body_root", hex::encode(body_root.0));
+
+        // 4. The same transactions with two carried uncles. Nothing downstream consumes
+        //    this vector; it is here so that another implementation can check its
+        //    `uncle_headers` encoding, signatures included.
+        let uncles = UncleHeaders::new([uncle(0x66), uncle(0x77)]);
+        println!("================================================================");
+        println!("vector 4  : body_root with 2 uncles, over vector 2's transactions");
+        println!("{:20}: {:02x}", "uncle_count", uncles.len());
+        for (index, uncle) in uncles.iter().enumerate() {
+            println!(
+                "{:20}: {}",
+                format!("uncle_headers[{index}]"),
+                hex::encode(uncle.to_bytes().expect("uncle serializes"))
+            );
+        }
+        println!(
+            "{:20}: {}",
+            "body_root",
+            hex::encode(crate::block::body_root(&uncles, &txs).0)
+        );
+
+        // 5. HeaderId reusing vector 3's body_root. Every field is given a distinct
         //    value so that a field-transposition bug in another implementation cannot
         //    be masked by shared bytes. The proof is a synthetic (non-verifying) proof
         //    built only to exercise the hash.
@@ -546,7 +611,7 @@ mod block_root_test_vectors {
             Ed25519Key::from_bytes(&[0x33u8; 32]).public_key(), // leader_key
             VoucherCm::from(Fr::from(0x4444u64)), // leader_voucher
         );
-        let header = Header::new(parent_block, ContentId(block_root), slot, proof);
+        let header = Header::new(parent_block, body_root, slot, proof);
         let header_id = header.id();
 
         // Self-check: recompute the preimage from the public accessors and make
@@ -558,7 +623,7 @@ mod block_root_test_vectors {
         h.update(Version::Bedrock.as_byte().to_le_bytes());
         h.update(parent_block.0);
         h.update(slot.to_le_bytes());
-        h.update(block_root);
+        h.update(body_root.0);
         h.update(proof.voucher_cm().to_bytes());
         h.update(fr_to_bytes(&proof.entropy()));
         h.update(proof.proof().to_bytes());
@@ -571,7 +636,7 @@ mod block_root_test_vectors {
 
         println!("================================================================");
         // Field labels match the names in the `block_id`/`Header` specification.
-        println!("vector 3  : HeaderId (block_id) reusing vector 2's block_root");
+        println!("vector 5  : HeaderId (block_id) reusing vector 3's body_root");
         println!(
             "{:20}: {:02x}",
             "bedrock_version",
@@ -579,7 +644,7 @@ mod block_root_test_vectors {
         );
         println!("{:20}: {}", "parent_block", hex::encode(parent_block.0));
         println!("{:20}: {}", "slot", u64::from(slot));
-        println!("{:20}: {}", "block_root", hex::encode(block_root));
+        println!("{:20}: {}", "body_root", hex::encode(body_root.0));
         // proof_of_leadership fields (here, the deterministic genesis proof).
         println!(
             "{:20}: {}",

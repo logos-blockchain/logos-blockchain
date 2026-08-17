@@ -179,6 +179,7 @@ mod tests {
                 SECURITY_PARAM.try_into().unwrap(),
                 slot_activation_coeff,
                 LEARNING_RATE.try_into().unwrap(),
+                12.try_into().unwrap(),
             ),
             // Not used in the tests
             sdp_config: crate::mantle::sdp::Config {

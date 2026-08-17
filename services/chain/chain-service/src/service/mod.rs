@@ -13,7 +13,7 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt as _, future::join_all, stream};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockInfo};
 use lb_core::{
-    block::Block,
+    block::{Block, SignedHeader, UncleHeaders},
     events::Events,
     header::HeaderId,
     mantle::{
@@ -25,6 +25,7 @@ use lb_cryptarchia_engine::{PrunedBlocks, Slot};
 use lb_cryptarchia_sync::{BlocksUnavailableReason, ProviderResponse};
 use lb_network_service::message::ChainSyncEvent;
 use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
+use lb_utils::bounded::UpperBoundedVec;
 use overwatch::{
     DynError,
     services::{relay::InboundRelay, state::StateUpdater},
@@ -280,6 +281,16 @@ where
                     error!("Could not send block events through channel");
                 });
             }
+            Query::SelectUncles {
+                parent,
+                slot,
+                reply_channel,
+            } => {
+                let uncles = self.select_uncles(parent, slot).await;
+                reply_channel.send(uncles).unwrap_or_else(|_| {
+                    error!("Could not send uncles through channel");
+                });
+            }
             Query::SubscribeChainOnline { sender } => {
                 sender
                     .send(self.chain_online_notifier.subscribe())
@@ -288,6 +299,41 @@ where
                     });
             }
         }
+    }
+
+    /// Selects uncles for a new block extending `parent` at `slot`.
+    async fn select_uncles(&self, parent: HeaderId, slot: Slot) -> UncleHeaders {
+        let Some(parent_branch) = self.cryptarchia.consensus.branches().get(&parent) else {
+            return UncleHeaders::empty();
+        };
+
+        let mut uncles = Vec::new();
+        for candidate in self
+            .cryptarchia
+            .consensus
+            .select_uncles(parent_branch, slot)
+        {
+            // Every block accepted into the block tree is persisted, so a
+            // candidate must be loadable. Even if not, a proposal is still
+            // valid with fewer uncles.
+            let Some(block) = self
+                .relays
+                .storage_adapter()
+                .get_block(&candidate.id())
+                .await
+            else {
+                error!(target: LOG_TARGET, candidate = ?candidate.id(), "uncle candidate not found in storage");
+                continue;
+            };
+            uncles.push(SignedHeader::new(
+                block.header().clone(),
+                *block.signature(),
+            ));
+        }
+
+        UncleHeaders::new(
+            UpperBoundedVec::try_from(uncles).expect("at most MAX_UNCLES uncles are selected"),
+        )
     }
 
     /// Record the current service state.

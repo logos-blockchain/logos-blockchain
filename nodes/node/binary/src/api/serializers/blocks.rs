@@ -1,11 +1,12 @@
 use lb_api_service::http::mantle::BlockWithChainState;
 use lb_chain_service::Slot;
 use lb_core::{
-    block::Block,
+    block::{Block, SignedHeader},
     header::{ContentId, Header, HeaderId},
     mantle::{SignedMantleTx, transactions::states::VerificationState},
     proofs::leader_proof::Groth16LeaderProof,
 };
+use lb_key_management_system_service::keys::Ed25519Signature;
 use serde::Serialize;
 
 use crate::api::serializers::transactions::ApiSignedTransaction;
@@ -14,6 +15,7 @@ use crate::api::serializers::transactions::ApiSignedTransaction;
 pub struct ApiBlock<'block> {
     #[serde(with = "ApiHeaderSerializer")]
     header: &'block Header,
+    uncle_headers: Vec<ApiSignedHeader<'block>>,
     transactions: Vec<ApiSignedTransaction<'block>>,
 }
 
@@ -40,7 +42,25 @@ impl<'block, State: VerificationState> From<&'block Block<SignedMantleTx<State>>
             .collect();
         Self {
             header: value.header(),
+            uncle_headers: value.uncle_headers().iter().map(Into::into).collect(),
             transactions,
+        }
+    }
+}
+
+/// The signed header of an uncle a block references.
+#[derive(Serialize)]
+pub struct ApiSignedHeader<'block> {
+    #[serde(with = "ApiHeaderSerializer")]
+    header: &'block Header,
+    signature: &'block Ed25519Signature,
+}
+
+impl<'block> From<&'block SignedHeader> for ApiSignedHeader<'block> {
+    fn from(value: &'block SignedHeader) -> Self {
+        Self {
+            header: value.header(),
+            signature: value.signature(),
         }
     }
 }
@@ -67,8 +87,8 @@ pub struct ApiHeaderSerializer {
     parent_block: HeaderId,
     #[serde(getter = "Header::slot")]
     slot: Slot,
-    #[serde(getter = "Header::block_root")]
-    block_root: ContentId,
+    #[serde(getter = "Header::body_root")]
+    body_root: ContentId,
     #[serde(getter = "Header::leader_proof")]
     proof_of_leadership: Groth16LeaderProof,
 }

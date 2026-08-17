@@ -17,7 +17,9 @@ use lb_chain_service::{
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
-    block::{Block, BlockTransactions, Error as BlockError, MAX_BLOCK_TRANSACTIONS_SIZE},
+    block::{
+        Block, BlockTransactions, Error as BlockError, MAX_BLOCK_TRANSACTIONS_SIZE, UncleHeaders,
+    },
     header::HeaderId,
     mantle::{
         SignedMantleTx,
@@ -469,6 +471,7 @@ where
                                 slot,
                                 proof,
                                 &signing_key,
+                                &cryptarchia_api,
                                 &relays,
                                 tip_state,
                                 &ledger_config,
@@ -573,13 +576,22 @@ where
 {
     #[instrument(
         level = "debug",
-        skip(relays, ledger_state, ledger_config, proof, signing_key)
+        skip(
+            relays,
+            ledger_state,
+            ledger_config,
+            cryptarchia_api,
+            proof,
+            signing_key
+        )
     )]
+    #[expect(clippy::too_many_arguments, reason = "Need all args")]
     async fn propose_block(
         parent: HeaderId,
         slot: Slot,
         proof: Groth16LeaderProof,
         signing_key: &Ed25519Key,
+        cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
         relays: &CryptarchiaConsensusRelays<
             BlendService,
             Mempool,
@@ -597,9 +609,23 @@ where
 
         let tx_stream: Pin<Box<_>> = Box::pin(txs_stream);
 
+        let uncle_headers = cryptarchia_api
+            .select_uncles(parent, slot)
+            .await
+            .unwrap_or_else(|err| {
+                error!(target: LOG_TARGET, ?slot, %err, "failed to select uncles");
+                // A proposal without uncles is still valid
+                UncleHeaders::empty()
+            });
+
         (ledger_state, _) = ledger_state
             .clone()
-            .try_apply_header::<Groth16LeaderProof, HeaderId>(slot, &proof, ledger_config)?;
+            .try_apply_header::<Groth16LeaderProof, HeaderId>(
+                slot,
+                &proof,
+                &uncle_headers.slots(),
+                ledger_config,
+            )?;
 
         // Collect all candidate transactions up front so the ones that fail can
         // be retried across multiple rounds.
@@ -658,7 +684,7 @@ where
         let valid_tx_stream = stream::iter(valid_txs);
         let txs = txs_for_block(valid_tx_stream).await;
 
-        let block = Block::create(parent, slot, proof, txs, signing_key)?;
+        let block = Block::create(parent, slot, uncle_headers, proof, txs, signing_key)?;
 
         info!(
             "proposed block {:?} with {} transactions ({} removed)",

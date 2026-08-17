@@ -675,7 +675,7 @@ async fn step_manual_control_transactions_no_time_out(
 }
 
 #[when(
-    expr = "I perform continuous transactions on user wallets with {int} coin split outputs of {int} LGO, {int} transactions of {int} LGO each for {int} cycles with {int} epochs headroom per cycle"
+    expr = "I perform continuous transactions on user wallets with {int} coin split outputs of {int} LGO, {int} transactions of {int} LGO each for {int} cycles with {int} epochs headroom"
 )]
 #[expect(
     clippy::too_many_arguments,
@@ -717,7 +717,7 @@ async fn step_continuous_user_wallets(
 }
 
 #[when(
-    expr = "I perform continuous transactions on user wallets with {int} coin split outputs of {int} LGO, {int} transactions of {int} LGO each for {int} cycles and timeout of {int} seconds with {int} epochs headroom per cycle"
+    expr = "I perform continuous transactions on user wallets with {int} coin split outputs of {int} LGO, {int} transactions of {int} LGO each for {int} cycles and timeout of {int} seconds with {int} epochs headroom"
 )]
 #[expect(
     clippy::too_many_arguments,
@@ -804,7 +804,7 @@ async fn step_verify_each_wallet_minimum_outputs(
 }
 
 #[when(
-    expr = "I perform {int} stress continuous cycles with {int} transactions of {int} LGO to the next user wallet with {int} epochs headroom per cycle"
+    expr = "I perform {int} stress continuous cycles with {int} transactions of {int} LGO to the next user wallet with {int} epochs headroom"
 )]
 async fn step_perform_stress_continuous_cycles_next_user_wallet(
     world: &mut CucumberWorld,

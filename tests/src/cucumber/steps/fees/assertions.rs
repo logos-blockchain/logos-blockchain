@@ -4,7 +4,10 @@
 use std::time::Duration;
 
 use cucumber::gherkin::Step;
-use lb_core::{header::HeaderId, mantle::gas::GasPrice};
+use lb_core::{
+    header::HeaderId,
+    mantle::gas::{GasPrice, MainnetGasProfile, TxGasCalculator as _},
+};
 use tracing::info;
 
 use crate::{
@@ -158,6 +161,86 @@ pub async fn prepared_transaction_tip_absorbed_fee_increase(
         target: TARGET,
         "Transaction `{transaction_alias}` remains funded after its effective tip fell from \
          {original_tip} to {remaining_tip}",
+    );
+
+    Ok(())
+}
+
+/// Recalculates the mandatory fee of a percentage-funded transaction at the
+/// current prices and verifies that the price increase consumed part of its
+/// original reserve without making it underfunded.
+pub async fn prepared_transaction_percentage_reserve_absorbed_fee_increase(
+    world: &CucumberWorld,
+    step: &Step,
+    transaction_alias: &str,
+    configured_percent: u64,
+    node_name: &str,
+) -> StepResult {
+    let prepared_fee = world.resolve_prepared_priority_fee(transaction_alias)?;
+    if prepared_fee.percent != configured_percent {
+        return Err(StepError::StepFail {
+            message: format!(
+                "Step `{}` error: transaction `{transaction_alias}` was prepared with {}%, \
+                 expected {configured_percent}%",
+                step.value, prepared_fee.percent
+            ),
+        });
+    }
+
+    let signed_tx = world.resolve_prepared_transaction(transaction_alias)?;
+    let client = world.resolve_node_http_client(node_name)?;
+    let prices = actions::live_gas_prices(&client, step).await?;
+    let current_mandatory_fee = signed_tx
+        .total_gas_cost::<MainnetGasProfile>(&prices)
+        .map_err(|source| StepError::StepFail {
+            message: format!(
+                "Step `{}` error: current mandatory fee calculation failed: {source}",
+                step.value
+            ),
+        })?
+        .into_inner();
+    let remaining_reserve = prepared_fee
+        .funded_fee
+        .checked_sub(current_mandatory_fee)
+        .ok_or_else(|| StepError::StepFail {
+            message: format!(
+                "Step `{}` error: transaction `{transaction_alias}` is underfunded: \
+                 funded fee {}, current mandatory fee {}",
+                step.value, prepared_fee.funded_fee, current_mandatory_fee
+            ),
+        })?;
+
+    if remaining_reserve >= prepared_fee.initial_reserve {
+        return Err(StepError::StepFail {
+            message: format!(
+                "Step `{}` error: transaction `{transaction_alias}` reserve did not shrink: \
+                 initial mandatory={}, initial reserve={}, funded={}, current mandatory={}, \
+                 remaining reserve={}",
+                step.value,
+                prepared_fee.initial_mandatory_fee,
+                prepared_fee.initial_reserve,
+                prepared_fee.funded_fee,
+                current_mandatory_fee,
+                remaining_reserve,
+            ),
+        });
+    }
+
+    info!(
+        target: TARGET,
+        "Transaction `{transaction_alias}` retained a smaller effective reserve: \
+         {}% of initial mandatory {} => reserve {}, funded {}; prices execution {} -> {}, \
+         storage {} -> {}; current mandatory {}, remaining reserve {}",
+        prepared_fee.percent,
+        prepared_fee.initial_mandatory_fee,
+        prepared_fee.initial_reserve,
+        prepared_fee.funded_fee,
+        prepared_fee.initial_execution_price,
+        prices.execution_base_gas_price.into_inner(),
+        prepared_fee.initial_storage_price,
+        prices.storage_gas_price.into_inner(),
+        current_mandatory_fee,
+        remaining_reserve,
     );
 
     Ok(())

@@ -3976,6 +3976,7 @@ dependencies = [
  "quickcheck_macros",
  "rand 0.8.6",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4561,8 +4562,8 @@ dependencies = [
  "logos-blockchain-poseidon2",
  "num-bigint",
  "rand 0.8.6",
- "rpds",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -5050,7 +5051,6 @@ dependencies = [
  "libp2p",
  "logos-blockchain-api-service",
  "logos-blockchain-chain-service",
- "logos-blockchain-codec",
  "logos-blockchain-common-http-client",
  "logos-blockchain-config",
  "logos-blockchain-core",

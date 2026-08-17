@@ -1,7 +1,7 @@
 //! Cucumber wallet transaction submission workflow.
 //!
 //! This adapter resolves scenario wallets, reads spendable state, applies
-//! scenario fee policy, submits signed transactions, and records reservations.
+//! fee reserves, submits signed transactions, and records reservations.
 
 use std::{collections::HashSet, time::Duration};
 
@@ -110,6 +110,7 @@ pub(crate) async fn reserve_user_wallet_transaction_submission_with_utxo_cache(
     receivers: &[(ZkPublicKey, u64)],
     available_utxos: &mut WalletUtxos,
     gas_prices: Option<GasPrices>,
+    priority_fee_percent: u64,
 ) -> Result<ReservedUserWalletSubmission, StepError> {
     let reserved = reserve_user_wallet_transaction_submission(
         world,
@@ -120,6 +121,7 @@ pub(crate) async fn reserve_user_wallet_transaction_submission_with_utxo_cache(
         None,
         WalletInputSelectionStrategy::LargestFirst,
         gas_prices,
+        priority_fee_percent,
     )
     .await?;
     apply_reserved_inputs_to_utxo_cache(available_utxos, reserved.reserved_inputs());
@@ -735,6 +737,7 @@ pub(crate) async fn prepare_user_wallet_transaction_submission_with_change_and_s
         change_public_key,
         input_selection_strategy,
         None,
+        0,
     )
     .await?;
     let ReservedUserWalletSubmission { wallet, submission } = reserved;
@@ -757,6 +760,7 @@ async fn reserve_user_wallet_transaction_submission(
     change_public_key: Option<ZkPublicKey>,
     input_selection_strategy: WalletInputSelectionStrategy,
     gas_prices: Option<GasPrices>,
+    priority_fee_percent: u64,
 ) -> Result<ReservedUserWalletSubmission, StepError> {
     let wallet = world.resolve_wallet(sender_wallet_name).inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step);
@@ -806,11 +810,15 @@ async fn reserve_user_wallet_transaction_submission(
         transaction_intent
     };
 
-    let submission = prepare_wallet_transaction_work_item(transaction_intent, funding_resources)
-        .map_err(wallet_transaction_error)
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step);
-        })?;
+    let submission = prepare_wallet_transaction_work_item(
+        transaction_intent,
+        funding_resources,
+        priority_fee_percent,
+    )
+    .map_err(wallet_transaction_error)
+    .inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step);
+    })?;
 
     Ok(ReservedUserWalletSubmission { wallet, submission })
 }

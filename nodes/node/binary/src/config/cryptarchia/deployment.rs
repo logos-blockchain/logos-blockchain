@@ -19,6 +19,8 @@ pub struct Settings {
     pub security_param: NonZeroU32,
     pub slot_activation_coeff: NonNegativeRatio,
     pub learning_rate: NonNegativeF64,
+    /// `W`, the uncle reference window in expected block-intervals.
+    pub window_absorption_parameter: NonZeroU32,
     pub sdp_config: SdpConfig,
     pub gossipsub_protocol: String,
     pub genesis_block: GenesisBlock,
@@ -52,6 +54,7 @@ impl Settings {
             self.security_param,
             self.slot_activation_coeff,
             self.learning_rate,
+            self.window_absorption_parameter,
         )
     }
 }

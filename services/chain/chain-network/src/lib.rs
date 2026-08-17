@@ -1009,7 +1009,7 @@ where
 /// against the local mempool.
 ///
 /// A reference is only the leading bytes of a transaction hash, so it may match
-/// several mempool transactions. `header.block_root` still commits to the full
+/// several mempool transactions. `header.body_root` still commits to the full
 /// hashes, so at most one combination of candidates can reproduce it — and
 /// `Block::reconstruct` is what checks that, so the first combination that
 /// reconstructs *is* the match.
@@ -1023,11 +1023,18 @@ where
     let candidates = candidates_for_proposal(&proposal, mempool).await?;
 
     let header = proposal.header().clone();
+    let uncle_headers = proposal.uncle_headers().clone();
     let signature = *proposal.signature();
 
     let try_rebuild_with_txs = |transactions: Vec<Item>| {
         let transactions = BlockTransactions::try_from(transactions).ok()?;
-        Block::reconstruct(header.clone(), transactions, signature).ok()
+        Block::reconstruct(
+            header.clone(),
+            uncle_headers.clone(),
+            transactions,
+            signature,
+        )
+        .ok()
     };
 
     // A proposal with no references still has one candidate block: the empty one.

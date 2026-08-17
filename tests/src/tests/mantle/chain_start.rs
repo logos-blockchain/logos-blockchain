@@ -1,15 +1,6 @@
 use std::{num::NonZero, path::PathBuf, time::Duration};
 
 use lb_chain_service::PhaseTag;
-use lb_codec::BinaryEncode as _;
-use lb_core::{
-    block::genesis::GenesisBlockBuilder,
-    mantle::{
-        GenesisTime,
-        ops::channel::inscribe::{Inscription, InscriptionOp},
-        traits::GenesisTx as _,
-    },
-};
 use lb_node::config::{RunConfig, cryptarchia::deployment::EpochConfig};
 use lb_testing_framework::{
     DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig,
@@ -43,15 +34,15 @@ async fn delayed_chain_start() {
         DeploymentBuilder::new(
             TfTopologyConfig::with_node_numbers(NODE_COUNT)
                 .with_test_context(Some("delayed_chain_start".to_owned())),
+        )
+        .with_genesis_time(
+            genesis_time
+                .try_into()
+                .expect("genesis time should fit in GenesisTime"),
         ),
         NODE_COUNT,
         ManualNodeLayout::SelectNodeSeed(0),
-        move |config| {
-            Ok(test_config(
-                config,
-                genesis_time.try_into().expect("should fit in GenesisTime"),
-            ))
-        },
+        |config| Ok(test_config(config)),
         Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
     )
     .await;
@@ -104,24 +95,7 @@ where
     }
 }
 
-fn test_config(mut config: RunConfig, genesis_time: GenesisTime) -> RunConfig {
-    let genesis_tx = config.deployment.cryptarchia.genesis_block.genesis_tx();
-
-    let mut cryptarchia_parameter = genesis_tx.cryptarchia_parameter();
-    cryptarchia_parameter.genesis_time = genesis_time;
-
-    let inscription = InscriptionOp {
-        inscription: Inscription::new_unchecked(cryptarchia_parameter.encode_to_vec()),
-        ..genesis_tx.genesis_inscription().clone()
-    };
-
-    config.deployment.cryptarchia.genesis_block = GenesisBlockBuilder::new()
-        .try_add_notes(genesis_tx.genesis_transfer().outputs.iter().copied())
-        .unwrap()
-        .set_inscription(inscription)
-        .build()
-        .expect("Failed to build genesis block");
-
+fn test_config(mut config: RunConfig) -> RunConfig {
     config.deployment.time.slot_duration = Duration::from_secs(1);
     config.deployment.cryptarchia.epoch_config = EpochConfig {
         epoch_stake_distribution_stabilization: 1.try_into().unwrap(),

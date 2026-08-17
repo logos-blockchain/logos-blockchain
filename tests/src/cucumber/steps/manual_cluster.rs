@@ -5,6 +5,7 @@ use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, LbcLocalDeployer, NodeHttpClient, TopologyConfig,
     configs::{deployment::NodeBinaryProfile, wallet::WalletAccount},
     internal::DeploymentPlan,
+    resolve_automatic_genesis_time,
 };
 use testing_framework_core::scenario::{StartNodeOptions, StartedNode};
 use tokio::time::{Instant, sleep};
@@ -43,6 +44,11 @@ pub fn build_manual_cluster_deployment(
     world: &mut CucumberWorld,
     nodes_count: usize,
 ) -> Result<DeploymentPlan, StepError> {
+    let genesis_time = world.genesis_time.unwrap_or_else(|| {
+        let genesis_time = resolve_automatic_genesis_time();
+        world.set_genesis_time(genesis_time);
+        genesis_time
+    });
     let config = TopologyConfig::with_node_numbers(nodes_count)
         .with_allow_multiple_genesis_tokens(true)
         .with_allow_zero_value_genesis_tokens(true)
@@ -53,6 +59,7 @@ pub fn build_manual_cluster_deployment(
             NodeBinaryProfile::Normal
         });
     let mut config = apply_blend_core_nodes(world, config, nodes_count)?;
+    config = config.with_genesis_time(genesis_time);
 
     for genesis_token in &world.genesis_tokens {
         let wallet_account = WalletAccount::deterministic(
@@ -129,6 +136,11 @@ fn build_devnet_manual_cluster_deployment(
     world: &mut CucumberWorld,
     nodes_count: usize,
 ) -> Result<DeploymentPlan, StepError> {
+    let genesis_time = world.genesis_time.unwrap_or_else(|| {
+        let genesis_time = resolve_automatic_genesis_time();
+        world.set_genesis_time(genesis_time);
+        genesis_time
+    });
     // For devnet runs we do not allocate genesis tokens/accounts here.
     // Wallet keys are derived later, and node startup may switch deployment
     // settings, so locally generated genesis outputs are not meaningful for
@@ -148,6 +160,8 @@ fn build_devnet_manual_cluster_deployment(
             NodeBinaryProfile::Normal
         });
     let config = apply_blend_core_nodes(world, config, nodes_count)?;
+
+    let config = config.with_genesis_time(genesis_time);
 
     let deployment = DeploymentBuilder::new(config)
         .with_deployment_seed(world.manual_cluster_deployment_seed())
@@ -410,4 +424,35 @@ pub async fn insert_started_node_info<S: BuildHasher>(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_core::mantle::GenesisTime;
+
+    use super::*;
+
+    #[test]
+    fn pending_cucumber_deployment_rebuild_reuses_genesis_time() {
+        let mut world = CucumberWorld::default();
+        world.set_test_context("pending-genesis-rebuild".to_owned());
+        world.set_genesis_time(GenesisTime::new(1_000));
+        world.manual_cluster_spec = Some(ManualClusterSpec {
+            kind: ManualClusterKind::Generated,
+            capacity: 0,
+        });
+
+        let first = build_manual_cluster_deployment(&mut world, 0)
+            .expect("initial pending deployment should build");
+        let first_genesis_time = first.config().genesis_time();
+
+        rebuild_pending_local_manual_cluster(&mut world)
+            .expect("pending deployment should rebuild");
+        let rebuilt = build_manual_cluster_deployment(&mut world, 0)
+            .expect("rebuilt pending deployment should build");
+
+        assert_eq!(first_genesis_time, GenesisTime::new(1_000));
+        assert_eq!(rebuilt.config().genesis_time(), first_genesis_time);
+        assert_eq!(world.genesis_time, Some(first_genesis_time));
+    }
 }

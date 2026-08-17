@@ -11,6 +11,8 @@ use thiserror::Error;
 pub enum FeeProjectionError {
     #[error("projected storage gas price overflowed u64")]
     PriceOverflow,
+    #[error("priority fee percentage overflowed u64")]
+    PriorityFeeOverflow,
     #[error("epoch slot length must be greater than zero")]
     InvalidEpochLength,
     #[error("epoch {prepared_at:?} plus {headroom} epochs overflowed")]
@@ -29,17 +31,56 @@ pub struct TransactionFeeHorizon {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TransactionFeePolicy {
     pub horizon: TransactionFeeHorizon,
-    pub priority_tip: u64,
+    pub priority_fee_percent: u64,
 }
 
 impl TransactionFeePolicy {
-    #[must_use]
-    pub const fn new(horizon: TransactionFeeHorizon) -> Self {
-        Self {
+    pub fn new(horizon: TransactionFeeHorizon) -> Result<Self, FeeProjectionError> {
+        let priority_fee_percent = priority_fee_percent_for_storage_prices(
+            horizon.live_prices.storage_gas_price,
+            horizon.ceiling_prices.storage_gas_price,
+        )?;
+
+        Ok(Self {
             horizon,
-            priority_tip: 0,
-        }
+            priority_fee_percent,
+        })
     }
+}
+
+/// Converts the storage-price projection into the percentage reserve accepted
+/// by wallet funding.
+///
+/// The wallet's percentage is applied to the complete mandatory fee. Since
+/// execution gas is unchanged by the test horizon and storage gas is the only
+/// projected component, the storage-price ratio is a conservative reserve for
+/// the projected mandatory fee:
+///
+/// `priority_fee_percent = ceil(projected_storage * 100 / live_storage) - 100`
+///
+/// The projection is already rounded at each epoch boundary, so this uses the
+/// actual projected price rather than approximating `(9 / 8)^epochs_headroom`.
+pub fn priority_fee_percent_for_storage_prices(
+    live_storage_price: GasPrice,
+    projected_storage_price: GasPrice,
+) -> Result<u64, FeeProjectionError> {
+    let live = u128::from(live_storage_price.into_inner());
+    let projected = u128::from(projected_storage_price.into_inner());
+
+    if live == 0 || projected <= live {
+        return Ok(0);
+    }
+
+    let gross_percent = projected
+        .checked_mul(100)
+        .ok_or(FeeProjectionError::PriorityFeeOverflow)?
+        .div_ceil(live);
+    u64::try_from(
+        gross_percent
+            .checked_sub(100)
+            .ok_or(FeeProjectionError::PriorityFeeOverflow)?,
+    )
+    .map_err(|_| FeeProjectionError::PriorityFeeOverflow)
 }
 
 pub fn project_storage_price(
@@ -112,6 +153,31 @@ mod tests {
             project_storage_price(GasPrice::new(7), 0),
             Ok(GasPrice::new(7))
         );
+
+        assert_eq!(
+            priority_fee_percent_for_storage_prices(GasPrice::new(7), GasPrice::new(7)),
+            Ok(0)
+        );
+    }
+
+    #[test]
+    fn priority_fee_percent_covers_projected_storage_increase() {
+        assert_eq!(
+            priority_fee_percent_for_storage_prices(GasPrice::new(100), GasPrice::new(113)),
+            Ok(13)
+        );
+        assert_eq!(
+            priority_fee_percent_for_storage_prices(GasPrice::new(3), GasPrice::new(4)),
+            Ok(34)
+        );
+    }
+
+    #[test]
+    fn priority_fee_percent_uses_integer_projected_prices() {
+        assert_eq!(
+            priority_fee_percent_for_storage_prices(GasPrice::new(1), GasPrice::new(3)),
+            Ok(200)
+        );
     }
 
     #[test]
@@ -140,5 +206,8 @@ mod tests {
             horizon.ceiling_prices.execution_base_gas_price,
             GasPrice::new(1)
         );
+
+        let policy = TransactionFeePolicy::new(horizon).expect("policy should be valid");
+        assert_eq!(policy.priority_fee_percent, 200);
     }
 }

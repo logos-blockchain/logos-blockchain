@@ -32,7 +32,7 @@ use lb_core::{
     },
     proofs::leader_proof,
 };
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{Slot, UncleSlots};
 use lb_groth16::{AdditiveGroup as _, Fr};
 use mantle::LedgerState as MantleLedger;
 use rpds::HashTrieMapSync;
@@ -158,6 +158,7 @@ where
         parent_id: Id,
         slot: Slot,
         proof: &LeaderProof,
+        uncle_slots: &UncleSlots,
         txs: impl Iterator<Item = &'tx Tx>,
     ) -> Result<(Id, LedgerState, Events), LedgerError<Id>>
     where
@@ -175,6 +176,7 @@ where
             id,
             slot,
             proof,
+            uncle_slots,
             txs,
             &self.config,
         )?;
@@ -230,6 +232,7 @@ impl LedgerState {
         block_id: Id,
         slot: Slot,
         proof: &LeaderProof,
+        uncle_slots: &UncleSlots,
         txs: impl Iterator<Item = &'tx Tx>,
         config: &Config,
     ) -> Result<(Self, Events), LedgerError<Id>>
@@ -239,7 +242,7 @@ impl LedgerState {
         Profile: GasProfile,
         Id: Into<BlockHash>,
     {
-        let (mut state, header_events) = self.try_apply_header(slot, proof, config)?;
+        let (mut state, header_events) = self.try_apply_header(slot, proof, uncle_slots, config)?;
         // Record the applied block among the recently seen blocks `PoW`
         // claims may anchor to. This is the canonical apply path, where the
         // block's id is known — unlike a proposer's direct
@@ -272,6 +275,7 @@ impl LedgerState {
         self,
         slot: Slot,
         proof: &LeaderProof,
+        uncle_slots: &UncleSlots,
         config: &Config,
     ) -> Result<(Self, Vec<HeaderEvent>), LedgerError<Id>>
     where
@@ -283,6 +287,7 @@ impl LedgerState {
             .try_apply_header::<LeaderProof, Id>(
                 slot,
                 proof,
+                uncle_slots,
                 // TODO: threading SDP here because EpochState is currently embedded in
                 // CryptarchiaLedger.
                 // In the future, we will pull EpochState up into LedgerState.
@@ -312,6 +317,25 @@ impl LedgerState {
             },
             effect.events,
         ))
+    }
+
+    /// Verifies a leadership proof for a block at `slot` whose parent is the
+    /// block this state belongs to, leaving the state untouched.
+    pub fn verify_proof_of_leadership<LeaderProof, Id>(
+        &self,
+        slot: Slot,
+        proof: &LeaderProof,
+        config: &Config,
+    ) -> Result<(), LedgerError<Id>>
+    where
+        LeaderProof: leader_proof::LeaderProof,
+    {
+        self.cryptarchia_ledger.verify_proof_of_leadership(
+            slot,
+            proof,
+            &self.mantle_ledger.sdp,
+            config,
+        )
     }
 
     #[must_use]
@@ -1054,6 +1078,7 @@ mod tests {
                 genesis_id,
                 Slot::from(1u64),
                 &proof,
+                &UncleSlots::default(),
                 std::iter::once(&tx),
             )
             .unwrap();

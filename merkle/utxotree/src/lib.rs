@@ -9,7 +9,7 @@ use ark_ff::AdditiveGroup;
 pub use lb_dynamic_merkle::{DynamicMerkleTree, MerkleNode, MerklePath, TREE_HEIGHT_EXCEPT_ROOT};
 use lb_dynamic_merkle::{MerkleHasher, empty_subtree_root};
 pub use lb_merkle_tree::Error;
-use lb_merkle_tree::{CompressedMerkleTree, LeafExtractor, MerkleTree};
+use lb_merkle_tree::{CompressedMerkleTree, LeafExtractor, MerkleTree, RecoveryError};
 use lb_poseidon2::{Digest, Fr};
 use rpds::HashTrieMapSync;
 
@@ -201,14 +201,16 @@ where
     }
 }
 
-impl<Key, Item, Hash> From<CompressedUtxoTree<Key, Item>> for UtxoTree<Key, Item, Hash>
+impl<Key, Item, Hash> TryFrom<CompressedUtxoTree<Key, Item>> for UtxoTree<Key, Item, Hash>
 where
     Key: AsRef<Fr> + Clone + std::hash::Hash + Eq,
     Hash: Digest,
     Item: Clone,
 {
-    fn from(compressed: CompressedUtxoTree<Key, Item>) -> Self {
-        Self(compressed.0.into())
+    type Error = RecoveryError;
+
+    fn try_from(compressed: CompressedUtxoTree<Key, Item>) -> Result<Self, Self::Error> {
+        Ok(Self(compressed.0.try_into()?))
     }
 }
 
@@ -247,7 +249,7 @@ mod serde {
             D: Deserializer<'de>,
         {
             let compressed = super::CompressedUtxoTree::<Key, Item>::deserialize(deserializer)?;
-            Ok(compressed.into())
+            Self::try_from(compressed).map_err(serde::de::Error::custom)
         }
     }
 }
@@ -520,7 +522,7 @@ mod tests {
         let compressed = original_tree.compressed();
 
         // Recover the tree from compressed format
-        let recovered_tree: UtxoTree<_, _, _> = compressed.into();
+        let recovered_tree: UtxoTree<_, _, _> = compressed.try_into().unwrap();
 
         recovered_tree == original_tree
     }

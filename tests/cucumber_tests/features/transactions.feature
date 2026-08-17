@@ -216,7 +216,7 @@ Feature: Transactions
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When node "NODE_1" is at height 2 in 300 seconds
-    When I perform continuous transactions on user wallets with 5 coin split outputs of 2500 LGO, 5 transactions of 900 LGO each for 3 cycles and timeout of 300 seconds with 0 epochs headroom per cycle
+    When I perform continuous transactions on user wallets with 5 coin split outputs of 2500 LGO, 5 transactions of 900 LGO each for 3 cycles and timeout of 300 seconds with 0 epochs headroom
     Then I stop all nodes
 
   @local_transactions
@@ -247,7 +247,7 @@ Feature: Transactions
       | NODE_9    | 9             | WALLET_09A  | NODE_8       |
       | NODE_10   | 10            | WALLET_10A  | NODE_9       |
     When node "NODE_1" is at height 2 in 300 seconds
-    When I perform continuous transactions on user wallets with 50 coin split outputs of 1000 LGO, 50 transactions of 900 LGO each for 3 cycles with 2 epochs headroom per cycle
+    When I perform continuous transactions on user wallets with 50 coin split outputs of 1000 LGO, 50 transactions of 900 LGO each for 3 cycles with 2 epochs headroom
     Then I stop all nodes
 
   @transactions_ci
@@ -264,7 +264,7 @@ Feature: Transactions
     When all nodes have at least 2 blocks and converged to within 1 blocks in 300 seconds
     And I perform 2 coin split transactions for each user wallet with 10 outputs of 4000 LGO each
     And I verify each wallet has minimum 20 outputs "available" in 300 seconds
-    And I perform 3 stress continuous cycles with 20 transactions of 1000 LGO to the next user wallet with 0 epochs headroom per cycle
+    And I perform 3 stress continuous cycles with 20 transactions of 1000 LGO to the next user wallet with 0 epochs headroom
     Then I stop all nodes
 
   @local_transactions
@@ -301,7 +301,7 @@ Feature: Transactions
     And I perform 4 coin split transactions for each user wallet with 250 outputs of 4000 LGO each
     And I verify each wallet has minimum 1000 outputs "available" in 3000 seconds
     When I log wallet balances for all wallets
-    And I perform 1 stress continuous cycles with 250 transactions of 1 LGO to the next user wallet with 3 epochs headroom per cycle
+    And I perform 1 stress continuous cycles with 250 transactions of 1 LGO to the next user wallet with 3 epochs headroom
     When I log wallet balances for all wallets
     When I start peer node "NODE_LATE" connected to node "NODE_1"
     When all nodes converged to within 0 blocks in 3000 seconds

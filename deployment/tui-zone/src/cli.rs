@@ -103,14 +103,20 @@ pub struct NodeKeyArgs {
     #[arg(long, default_value_t = 1_000_000, env = "MAX_TX_FEE")]
     pub max_tx_fee: u64,
 
-    /// Execution tip paid on top of the mandatory fee when funding via
-    /// `--funding-pk`; capped by `--max-tx-fee`.
+    /// Percentage of the final mandatory fee reserved when funding via
+    /// `--funding-pk`. The percentage covers execution plus storage cost; only
+    /// unused reserve becomes an effective priority tip. The 12% default is a
+    /// practical reserve for normal fee movement, including approximately one
+    /// storage-market epoch at normal price levels, not a protocol guarantee
+    /// at very low prices or when execution fees also rise materially. Storage
+    /// prices use integer arithmetic, so 1 can become 2. Capped in total by
+    /// `--max-tx-fee`.
     #[arg(
         long,
-        default_value_t = lb_zone_sdk::sequencer::FundingConfig::DEFAULT_PRIORITY_FEE,
-        env = "PRIORITY_FEE"
+        default_value_t = lb_zone_sdk::sequencer::FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
+        env = "PRIORITY_FEE_PERCENT"
     )]
-    pub priority_fee: u64,
+    pub priority_fee_percent: u64,
 }
 
 #[derive(Args, Debug)]

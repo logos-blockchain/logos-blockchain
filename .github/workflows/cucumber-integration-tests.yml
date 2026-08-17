@@ -186,7 +186,7 @@ jobs:
         with:
           suite_tag: "@mempool_ci"
           suite_name: mempool
-          artifact_subdir: Mempool lifecycle
+          artifact_subdir: "Mempool lifecycle"
           verbose_console: "true"
 
       - *check_peer_success
@@ -199,7 +199,7 @@ jobs:
         with:
           suite_tag: "@zone_ci"
           suite_name: zone
-          artifact_subdir: Zone
+          artifact_subdir: "Zone SDK"
           max_concurrent_scenarios: "1"
 
       - *check_peer_success
@@ -212,7 +212,7 @@ jobs:
         with:
           suite_tag: "@cli_ci"
           suite_name: CLI
-          artifact_subdir: Cli
+          artifact_subdir: CLI
           max_concurrent_scenarios: "1"
 
       # Upload JUnit test results only for a lane that ran to completion.
