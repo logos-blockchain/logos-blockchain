@@ -43,6 +43,8 @@ impl From<Inputs> for PoQVerifierInput {
                 .expect("Second half of signing public key does not represent a valid `Fr` point."),
             key_nullifier: value.key_nullifier,
             leader_quota: value.prove_inputs.leader.message_quota,
+            pow_quota: value.prove_inputs.pow.pow_quota,
+            pow_blend_difficulty: value.prove_inputs.pow.pow_blend_difficulty,
             pol_epoch_nonce: value.prove_inputs.leader.pol_epoch_nonce,
             pol_ledger_aged: value.prove_inputs.leader.pol_ledger_aged,
             lottery_0: value.prove_inputs.leader.lottery_0,

@@ -15,7 +15,7 @@ use lb_core::{
     codec::DeserializeOp as _,
     header::HeaderId,
     mantle::{
-        SignedMantleTx, Utxo, Value,
+        GenesisTime, SignedMantleTx, Utxo, Value,
         ops::channel::{
             ChannelId, deposit::DepositOp, inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
@@ -33,10 +33,9 @@ use lb_testing_framework::{
     LbcEnv, LbcK8sManualCluster, LbcManualCluster, NodeHttpClient, ScenarioBuilder,
     ScenarioBuilderExt as _, configs::wallet::WalletAccount, env::set_default_env, workloads,
 };
-use lb_zone_sdk::{adapter::NodeHttpClient as ZoneNodeHttpClient, indexer::ZoneIndexer};
 use reqwest::Url;
 use testing_framework_core::{
-    scenario::{NodeControlCapability, PeerSelection, Scenario, StartedNode},
+    scenario::{PeerSelection, Scenario, StartedNode},
     topology::DeploymentSeed,
 };
 use tokio::task::JoinHandle;
@@ -167,7 +166,6 @@ pub struct ZoneSequencerRuntime {
     task: JoinHandle<()>,
     events: tokio::sync::broadcast::Receiver<Event>,
     checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
-    ready_rx: tokio::sync::watch::Receiver<bool>,
     channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
     turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
     tx_status_rx: Option<tokio::sync::broadcast::Receiver<TxStatusUpdate>>,
@@ -186,10 +184,23 @@ pub struct ZoneSequencerStartup {
     pub passive_republish_orphans: bool,
 }
 
+/// Connection info for the read-only channel observer of the "zone indexer"
+/// steps.
+///
+/// Each assertion cold-starts a fresh `ZoneSequencer` from this config with a
+/// random signing key that is not part of the channel rotation — such a
+/// sequencer can never publish or repost (inscription posting is turn-gated),
+/// it only replays and observes finalized history.
+#[derive(Clone)]
+pub struct ZoneReaderConfig {
+    pub channel_id: ChannelId,
+    pub node_url: Url,
+}
+
 #[derive(Default)]
 pub struct ZoneState {
     node_name: Option<String>,
-    indexer: Option<ZoneIndexer<ZoneNodeHttpClient>>,
+    indexer: Option<ZoneReaderConfig>,
     sequencers: HashMap<String, ZoneSequencerIdentity>,
     runtimes: HashMap<String, ZoneSequencerRuntime>,
     default_sequencer_alias: Option<String>,
@@ -275,12 +286,6 @@ impl ZoneState {
             })
     }
 
-    pub fn default_sequencer_signing_key(&self) -> Result<&Ed25519Key, StepError> {
-        let alias = self.default_sequencer_alias()?.to_owned();
-
-        self.sequencer_signing_key(&alias)
-    }
-
     pub fn sequencer_channel_id(&self, alias: &str) -> Result<ChannelId, StepError> {
         self.sequencers
             .get(alias)
@@ -288,12 +293,6 @@ impl ZoneState {
             .ok_or(StepError::LogicalError {
                 message: format!("Zone sequencer '{alias}' is not registered"),
             })
-    }
-
-    pub fn default_channel_id(&self) -> Result<ChannelId, StepError> {
-        let alias = self.default_sequencer_alias()?.to_owned();
-
-        self.sequencer_channel_id(&alias)
     }
 
     #[must_use]
@@ -608,7 +607,6 @@ impl ZoneState {
         sequencer_task: JoinHandle<()>,
         sequencer_events: tokio::sync::broadcast::Receiver<Event>,
         checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
-        ready_rx: tokio::sync::watch::Receiver<bool>,
         channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
         turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
         tx_status_rx: tokio::sync::broadcast::Receiver<TxStatusUpdate>,
@@ -625,25 +623,12 @@ impl ZoneState {
                 task: sequencer_task,
                 events: sequencer_events,
                 checkpoint_rx,
-                ready_rx,
                 channel_view_rx,
                 turn_to_write_rx,
                 tx_status_rx: Some(tx_status_rx),
                 discarded_payloads,
             },
         );
-    }
-
-    pub fn sequencer_ready_rx(
-        &self,
-        alias: &str,
-    ) -> Result<tokio::sync::watch::Receiver<bool>, StepError> {
-        self.runtimes
-            .get(alias)
-            .map(|runtime| runtime.ready_rx.clone())
-            .ok_or(StepError::LogicalError {
-                message: format!("Zone sequencer '{alias}' is not running"),
-            })
     }
 
     pub fn sequencer_channel_view_rx(
@@ -739,11 +724,11 @@ impl ZoneState {
             })
     }
 
-    pub fn set_indexer(&mut self, indexer: ZoneIndexer<ZoneNodeHttpClient>) {
+    pub fn set_indexer(&mut self, indexer: ZoneReaderConfig) {
         self.indexer = Some(indexer);
     }
 
-    pub fn indexer(&self) -> Result<&ZoneIndexer<ZoneNodeHttpClient>, StepError> {
+    pub fn indexer(&self) -> Result<&ZoneReaderConfig, StepError> {
         self.indexer.as_ref().ok_or(StepError::LogicalError {
             message: "Zone indexer is not initialized".to_owned(),
         })
@@ -856,6 +841,9 @@ pub struct CucumberWorld {
     pub deployer: Option<DeployerKind>,
     /// A unique per-scenario context string used to isolate runtime resources.
     pub test_context: Option<String>,
+    /// Resolved genesis time for this Cucumber scenario attempt. It is set in
+    /// the scenario hook and reused by every deployment build or rebuild.
+    pub genesis_time: Option<GenesisTime>,
     /// Base directory for scenario artifacts like logs and generated configs.
     pub scenario_base_dir: PathBuf,
     /// Automated: Scenario specification
@@ -920,6 +908,9 @@ pub struct CucumberWorld {
     pub submission_outcomes: HashMap<String, Result<(), String>>,
     /// Manual: Exact signed transactions prepared for later submission.
     pub prepared_transactions: HashMap<String, SignedMantleTx<Preverified>>,
+    /// Manual: Initial fee arithmetic for percentage-funded transactions
+    /// prepared by the fee-market steps.
+    pub prepared_priority_fees: HashMap<String, PreparedPriorityFee>,
     /// Manual: Transaction hashes observed in blocks by the wallet scanner.
     pub observed_transaction_hashes: SharedObservedTransactionHashes,
     /// Manual: Background wallet scanner diagnostics state.
@@ -1061,6 +1052,7 @@ impl Debug for CucumberWorld {
         f.debug_struct("CucumberWorld")
             .field("deployer", &format!("{:?}", self.deployer))
             .field("test_context", &format!("{:?}", self.test_context))
+            .field("genesis_time", &self.genesis_time)
             .field("scenario_base_dir", &self.scenario_base_dir)
             .field("spec", &format!("{:?}", self.spec))
             .field("run", &format!("{:?}", self.run))
@@ -1115,6 +1107,7 @@ impl Debug for CucumberWorld {
             .field("submitted_transactions", &self.submitted_transactions.len())
             .field("submission_outcomes", &self.submission_outcomes.len())
             .field("prepared_transactions", &self.prepared_transactions.len())
+            .field("prepared_priority_fees", &self.prepared_priority_fees.len())
             .field(
                 "observed_transaction_hashes",
                 &self.observed_transaction_hashes_len(),
@@ -1206,6 +1199,17 @@ pub struct GenesisTokens {
     /// The total amount of tokens allocated to this account in the genesis
     /// configuration.
     pub token_amount: u64,
+}
+
+/// Fee values captured when a percentage-funded transaction is prepared.
+#[derive(Clone, Debug)]
+pub struct PreparedPriorityFee {
+    pub percent: u64,
+    pub initial_mandatory_fee: u64,
+    pub initial_reserve: u64,
+    pub funded_fee: u64,
+    pub initial_execution_price: u64,
+    pub initial_storage_price: u64,
 }
 
 /// A scenario wallet is either user-owned or backed by a node wallet key.
@@ -1413,6 +1417,10 @@ impl CucumberWorld {
 
     pub fn set_test_context(&mut self, test_context: String) {
         self.test_context = Some(test_context);
+    }
+
+    pub const fn set_genesis_time(&mut self, genesis_time: GenesisTime) {
+        self.genesis_time = Some(genesis_time);
     }
 
     /// Remove all scenario artifacts from the scenario base directory. This is
@@ -1649,19 +1657,6 @@ impl CucumberWorld {
             .map_err(|source| StepError::ScenarioBuild { source })
     }
 
-    /// Build a scenario for compose deployment based on the current world
-    /// configuration. This performs necessary preflight checks and returns
-    /// a built scenario ready for deployment.
-    pub fn build_compose_scenario(
-        &self,
-    ) -> Result<Scenario<LbcEnv, NodeControlCapability>, StepError> {
-        let builder = self.make_builder_for_deployer(DeployerKind::Compose)?;
-        builder
-            .enable_node_control()
-            .build()
-            .map_err(|source| StepError::ScenarioBuild { source })
-    }
-
     /// Build a scenario for k8s deployment based on the current world
     /// configuration.
     pub fn build_k8s_scenario(&self) -> Result<Scenario<LbcEnv>, StepError> {
@@ -1704,7 +1699,7 @@ impl CucumberWorld {
             .ok_or(StepError::MissingRunDuration)?
             .get();
 
-        let mut builder: ScenarioBuilderWith = make_builder(&topology);
+        let mut builder: ScenarioBuilderWith = make_builder(&topology, self.genesis_time);
 
         builder = builder.with_run_duration(Duration::from_secs(duration_secs));
         if let Some(wallets) = self.spec.wallets {
@@ -1865,15 +1860,6 @@ impl CucumberWorld {
         self.nodes_info.keys().cloned().collect::<Vec<_>>()
     }
 
-    pub fn any_started_node(&self) -> Result<&NodeInfo, StepError> {
-        self.nodes_info
-            .values()
-            .next()
-            .ok_or_else(|| StepError::LogicalError {
-                message: "No started nodes available in world".to_owned(),
-            })
-    }
-
     /// Helper to resolve all user wallet names to the actual wallet
     /// information.
     #[must_use]
@@ -1883,20 +1869,6 @@ impl CucumberWorld {
             .filter(|w| matches!(w.wallet_type, WalletType::User { .. }))
             .cloned()
             .collect::<Vec<_>>()
-    }
-
-    /// Helper to resolve all funding wallet names to the actual wallet
-    /// information.
-    #[must_use]
-    pub fn all_funding_wallets(&self) -> Vec<WalletInfo> {
-        let mut wallets = self
-            .wallet_info
-            .values()
-            .filter(|wallet| wallet.is_node_funding_wallet())
-            .cloned()
-            .collect::<Vec<_>>();
-        wallets.sort_by(|left, right| left.wallet_name.cmp(&right.wallet_name));
-        wallets
     }
 
     /// Helper to resolve all node-owned wallet keys.
@@ -1984,6 +1956,20 @@ impl CucumberWorld {
         self.submitted_transactions.insert(alias, tx_hash);
     }
 
+    /// All remembered submitted transactions whose alias starts with `prefix`,
+    /// sorted by alias for deterministic reporting.
+    #[must_use]
+    pub fn submitted_transactions_with_prefix(&self, prefix: &str) -> Vec<(String, TxHash)> {
+        let mut txs: Vec<_> = self
+            .submitted_transactions
+            .iter()
+            .filter(|(alias, _)| alias.starts_with(prefix))
+            .map(|(alias, tx_hash)| (alias.clone(), *tx_hash))
+            .collect();
+        txs.sort();
+        txs
+    }
+
     pub fn remember_submission_outcome(&mut self, alias: String, outcome: Result<(), String>) {
         self.submission_outcomes.insert(alias, outcome);
     }
@@ -2038,6 +2024,21 @@ impl CucumberWorld {
         signed_tx: SignedMantleTx<Preverified>,
     ) {
         self.prepared_transactions.insert(alias, signed_tx);
+    }
+
+    pub fn remember_prepared_priority_fee(&mut self, alias: String, fee: PreparedPriorityFee) {
+        self.prepared_priority_fees.insert(alias, fee);
+    }
+
+    pub fn resolve_prepared_priority_fee(
+        &self,
+        alias: &str,
+    ) -> Result<&PreparedPriorityFee, StepError> {
+        self.prepared_priority_fees
+            .get(alias)
+            .ok_or(StepError::LogicalError {
+                message: format!("Prepared priority fee alias '{alias}' not found in world state"),
+            })
     }
 
     pub fn resolve_prepared_transaction(

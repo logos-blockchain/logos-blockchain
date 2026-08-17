@@ -10,8 +10,9 @@ use std::{
 
 use futures::{Stream, StreamExt as _, future::OptionFuture, stream::FuturesUnordered};
 use lb_blend::{
-    message::encap::validated::{
-        EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
+    message::encap::{
+        ProofsVerifier as ProofsVerifierTrait,
+        validated::EncapsulatedMessageWithVerifiedPublicHeader,
     },
     network::core::{
         NetworkBehaviourEvent,
@@ -58,12 +59,12 @@ use crate::{
 const FULL_MEMBERSHIP_RETRY_DELAY: Duration = Duration::from_mins(1);
 
 #[derive(Debug)]
-pub enum BlendSwarmMessage {
+pub enum BlendSwarmMessage<ProofsVerifier> {
     Publish {
         message: Box<EncapsulatedMessageWithVerifiedPublicHeader>,
         epoch: Epoch,
     },
-    StartNewEpoch(BackendEpochInfo<PeerId>),
+    StartNewEpoch(BackendEpochInfo<PeerId, ProofsVerifier>),
     CompleteEpochTransition,
     GetNetworkInfo {
         reply: oneshot::Sender<Option<NetworkInfo<PeerId>>>,
@@ -102,15 +103,17 @@ impl DialAttempt {
 type PendingRetries = FuturesUnordered<Pin<Box<dyn Future<Output = (PeerId, DialAttempt)> + Send>>>;
 type FullMembershipRetry = Option<Pin<Box<dyn Future<Output = ()> + Send>>>;
 
-pub struct BlendSwarm<Rng, ObservationWindowProvider>
+pub struct BlendSwarm<Rng, ObservationWindowProvider, ProofsVerifier>
 where
     ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
         + 'static,
+    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
-    swarm: Swarm<BlendBehaviour<ObservationWindowProvider>>,
-    swarm_messages_receiver: mpsc::Receiver<BlendSwarmMessage>,
-    incoming_message_sender: broadcast::Sender<(EncapsulatedMessageWithVerifiedSignature, Epoch)>,
-    current_epoch_info: BackendEpochInfo<PeerId>,
+    swarm: Swarm<BlendBehaviour<ObservationWindowProvider, ProofsVerifier>>,
+    swarm_messages_receiver: mpsc::Receiver<BlendSwarmMessage<ProofsVerifier>>,
+    incoming_message_sender:
+        broadcast::Sender<(EncapsulatedMessageWithVerifiedPublicHeader, Epoch)>,
+    current_epoch_info: BackendEpochInfo<PeerId, ProofsVerifier>,
     rng: Rng,
     max_dial_attempts_per_connection: NonZeroU64,
     ongoing_dials: HashMap<PeerId, DialAttempt>,
@@ -122,17 +125,18 @@ where
     peering_degree_check_clock: Pin<Box<dyn Stream<Item = ()> + Send>>,
 }
 
-pub struct SwarmParams<'config, Rng> {
+pub struct SwarmParams<'config, Rng, ProofsVerifier> {
     pub config: &'config BlendConfig<Libp2pBlendBackendSettings>,
-    pub current_epoch_info: BackendEpochInfo<PeerId>,
+    pub current_epoch_info: BackendEpochInfo<PeerId, ProofsVerifier>,
     pub rng: Rng,
-    pub swarm_message_receiver: mpsc::Receiver<BlendSwarmMessage>,
+    pub swarm_message_receiver: mpsc::Receiver<BlendSwarmMessage<ProofsVerifier>>,
     pub incoming_message_sender:
-        broadcast::Sender<(EncapsulatedMessageWithVerifiedSignature, Epoch)>,
+        broadcast::Sender<(EncapsulatedMessageWithVerifiedPublicHeader, Epoch)>,
     pub minimum_network_size: NonZeroUsize,
 }
 
-impl<Rng, ObservationWindowProvider> BlendSwarm<Rng, ObservationWindowProvider>
+impl<Rng, ObservationWindowProvider, ProofsVerifier>
+    BlendSwarm<Rng, ObservationWindowProvider, ProofsVerifier>
 where
     Rng: RngCore,
     ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
@@ -140,6 +144,7 @@ where
             &'c BlendConfig<Libp2pBlendBackendSettings>,
             &'c Membership<PeerId>,
         )> + 'static,
+    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
     pub(super) fn new(
         SwarmParams {
@@ -149,7 +154,7 @@ where
             swarm_message_receiver: swarm_messages_receiver,
             incoming_message_sender,
             minimum_network_size,
-        }: SwarmParams<Rng>,
+        }: SwarmParams<Rng, ProofsVerifier>,
     ) -> Self {
         let listening_address = config.backend.listening_address.clone();
         let mut swarm = SwarmBuilder::with_existing_identity(config.keypair())
@@ -157,7 +162,16 @@ where
             .with_quic()
             .with_dns()
             .expect("DNS transport should be supported")
-            .with_behaviour(|_| BlendBehaviour::new(config, current_epoch_info.clone()))
+            .with_behaviour(|_| {
+                BlendBehaviour::new(
+                    config,
+                    (
+                        current_epoch_info.membership.clone(),
+                        current_epoch_info.epoch,
+                    ),
+                    current_epoch_info.proofs_verifier.clone(),
+                )
+            })
             .expect("Blend Behaviour should be built")
             .with_swarm_config(|cfg| {
                 // The idle timeout starts ticking once there are no active streams on a
@@ -195,11 +209,13 @@ where
     }
 }
 
-impl<Rng, ObservationWindowProvider> BlendSwarm<Rng, ObservationWindowProvider>
+impl<Rng, ObservationWindowProvider, ProofsVerifier>
+    BlendSwarm<Rng, ObservationWindowProvider, ProofsVerifier>
 where
     Rng: RngCore,
     ObservationWindowProvider:
         IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>,
+    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
     /// Dial random peers from the membership list,
     /// excluding the peers with a negotiated connection in the ongoing epoch,
@@ -215,7 +231,7 @@ where
 
         // We need to clone else we would not be able to call `self.dial` below, which
         // requires access to `&mut self`.
-        let current_membership = self.current_epoch_info.0.clone();
+        let current_membership = self.current_epoch_info.membership.clone();
 
         let exclude_peers: HashSet<PeerId> = negotiated_peers
             .chain(self.swarm.behaviour().blocked_peers.blocked_peers())
@@ -281,7 +297,7 @@ where
     fn check_and_dial_new_peers_except(&mut self, except: &HashSet<PeerId>) {
         tracing::trace!(target: LOG_TARGET, ?except, "Checking if we need to dial new peers");
 
-        let membership_size = self.current_epoch_info.0.size();
+        let membership_size = self.current_epoch_info.membership.size();
         if membership_size < self.minimum_network_size.get() {
             tracing::warn!(target: LOG_TARGET, "Not dialing any peers because set of core nodes is smaller than the minimum network size. {membership_size} < {}", self.minimum_network_size.get());
             return;
@@ -299,8 +315,10 @@ where
 
     fn handle_disconnected_peer(&mut self, peer_id: PeerId, peer_state: NegotiatedPeerState) {
         tracing::trace!(target: LOG_TARGET, "Peer {peer_id} disconnected with state {peer_state:?}.");
-        if peer_state.is_spammy() {
+        if let NegotiatedPeerState::Spammy(reason) = peer_state {
+            tracing::debug!(target: LOG_TARGET, "Blocking spammy peer {peer_id} for reason {reason:?}.");
             self.swarm.behaviour_mut().blocked_peers.block_peer(peer_id);
+            metrics::core_peer_blocked(reason.as_str());
         }
         self.check_and_dial_new_peers_except(&HashSet::from([peer_id]));
     }
@@ -398,7 +416,10 @@ where
         clippy::cognitive_complexity,
         reason = "TODO: address this in a dedicated refactor"
     )]
-    fn handle_event(&mut self, event: SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider>>) {
+    fn handle_event(
+        &mut self,
+        event: SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider, ProofsVerifier>>,
+    ) {
         match event {
             SwarmEvent::ConnectionEstablished { peer_id, .. }
             | SwarmEvent::ConnectionClosed { peer_id, .. } => {
@@ -463,17 +484,20 @@ where
         }
     }
 
-    fn handle_swarm_message(&mut self, msg: BlendSwarmMessage) {
+    fn handle_swarm_message(&mut self, msg: BlendSwarmMessage<ProofsVerifier>) {
         match msg {
             BlendSwarmMessage::Publish { message, epoch } => {
-                self.handle_publish_swarm_message(*message, epoch);
+                self.handle_publish_swarm_message(&message, epoch);
             }
             BlendSwarmMessage::StartNewEpoch(new_epoch_info) => {
                 self.current_epoch_info = new_epoch_info;
-                self.swarm
-                    .behaviour_mut()
-                    .blend
-                    .start_new_epoch(self.current_epoch_info.clone());
+                self.swarm.behaviour_mut().blend.start_new_epoch(
+                    (
+                        self.current_epoch_info.membership.clone(),
+                        self.current_epoch_info.epoch,
+                    ),
+                    self.current_epoch_info.proofs_verifier.clone(),
+                );
                 self.ongoing_dials.clear();
                 self.pending_retries.clear();
                 self.pending_full_membership_retry = None;
@@ -504,7 +528,8 @@ where
         swarm_event_match_predicate: Predicate,
     ) -> bool
     where
-        Predicate: Fn(&SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider>>) -> bool,
+        Predicate:
+            Fn(&SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider, ProofsVerifier>>) -> bool,
     {
         tokio::select! {
             Some(msg) = self.swarm_messages_receiver.recv() => {
@@ -542,7 +567,8 @@ where
     #[cfg(test)]
     pub async fn poll_next_until<Predicate>(&mut self, swarm_event_match_predicate: Predicate)
     where
-        Predicate: Fn(&SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider>>) -> bool + Copy,
+        Predicate: Fn(&SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider, ProofsVerifier>>) -> bool
+            + Copy,
     {
         loop {
             if self.poll_next_and_match(swarm_event_match_predicate).await {
@@ -552,10 +578,12 @@ where
     }
 }
 
-impl<Rng, ObservationWindowProvider> BlendSwarm<Rng, ObservationWindowProvider>
+impl<Rng, ObservationWindowProvider, ProofsVerifier>
+    BlendSwarm<Rng, ObservationWindowProvider, ProofsVerifier>
 where
     ObservationWindowProvider:
         IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>,
+    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
     /// It tries to dial the specified peer.
     ///
@@ -696,15 +724,25 @@ where
         }
     }
 
-    fn publish_received_edge_message(&mut self, msg: &EncapsulatedMessageWithVerifiedSignature) {
+    fn publish_received_edge_message(
+        &mut self,
+        msg: &EncapsulatedMessageWithVerifiedPublicHeader,
+        epoch: Epoch,
+    ) {
         if let Err(e) = self
             .swarm
             .behaviour_mut()
             .blend
             .with_core_mut()
-            .publish_message_with_validated_signature_to_current_epoch(msg)
+            .publish_message_with_validated_header(msg, epoch)
         {
-            tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
+            // `InvalidEpoch` is expected: the message is verified off-task, so its
+            // epoch can stop being served before the outcome comes back.
+            if matches!(e, SendError::InvalidEpoch) {
+                tracing::trace!(target: LOG_TARGET, "Dropping message received from an edge node for epoch {epoch:?}, which is no longer served.");
+            } else {
+                tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
+            }
             metrics::outbound_publish_err();
         } else {
             metrics::outbound_publish_ok();
@@ -713,7 +751,7 @@ where
 
     fn forward_received_core_message(
         &mut self,
-        msg: &EncapsulatedMessageWithVerifiedSignature,
+        msg: &EncapsulatedMessageWithVerifiedPublicHeader,
         except: PeerId,
         epoch: Epoch,
     ) {
@@ -722,13 +760,15 @@ where
             .behaviour_mut()
             .blend
             .with_core_mut()
-            .forward_message_with_validated_signature(msg, except, epoch)
+            .forward_message_with_verified_public_header(msg, except, epoch)
         {
             // If we have a single connection, then we will always hit the `NoPeers` error.
             // In this case it's ok not to log such error, since this function is only
             // called on FORWARDED messages, not on PUBLISHED ones, for which we want to
-            // know if that is the issue.
-            if !matches!(e, SendError::NoPeers) {
+            // know if that is the issue. `InvalidEpoch` is expected too: verification
+            // runs off this task, so the epoch transition the message belonged to can
+            // complete before the result comes back.
+            if !matches!(e, SendError::NoPeers | SendError::InvalidEpoch) {
                 tracing::error!(target: LOG_TARGET, "Failed to forward message to blend network: {e:?}");
                 metrics::outbound_forward_err();
             }
@@ -739,7 +779,7 @@ where
 
     fn report_message_to_service(
         &self,
-        msg: EncapsulatedMessageWithVerifiedSignature,
+        msg: EncapsulatedMessageWithVerifiedPublicHeader,
         epoch: Epoch,
         message_type: metrics::InboundMessageType,
     ) {
@@ -781,22 +821,21 @@ where
 
     fn handle_blend_edge_behaviour_event(&mut self, blend_event: CoreToEdgeEvent) {
         match blend_event {
-            lb_blend::network::core::with_edge::behaviour::Event::Message(msg) => {
+            lb_blend::network::core::with_edge::behaviour::Event::Message { message, epoch } => {
+                // The epoch is the one the message was verified under, which is not
+                // necessarily the current one, so it is used for both the peers it goes
+                // to and the processor the service decapsulates it with.
                 // Forward message received from edge node to all the core nodes.
-                self.publish_received_edge_message(&msg);
+                self.publish_received_edge_message(&message, epoch);
                 // Bubble up to service for decapsulation and delaying.
-                self.report_message_to_service(
-                    msg,
-                    self.current_epoch_info.1,
-                    metrics::InboundMessageType::Edge,
-                );
+                self.report_message_to_service(message, epoch, metrics::InboundMessageType::Edge);
             }
         }
     }
 
     fn handle_publish_swarm_message(
         &mut self,
-        msg: EncapsulatedMessageWithVerifiedPublicHeader,
+        msg: &EncapsulatedMessageWithVerifiedPublicHeader,
         intended_epoch: Epoch,
     ) {
         if let Err(e) = self
@@ -814,36 +853,41 @@ where
     }
 }
 
-impl<Rng, ObservationWindowProvider> BlendSwarm<Rng, ObservationWindowProvider>
+impl<Rng, ObservationWindowProvider, ProofsVerifier>
+    BlendSwarm<Rng, ObservationWindowProvider, ProofsVerifier>
 where
     Rng: RngCore,
     ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
         + 'static,
+    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
     #[cfg(test)]
     #[expect(clippy::too_many_arguments, reason = "necessary for testing")]
     pub fn new_test<BehaviourConstructor, PeeringDegreeCheckClock>(
         identity: &libp2p::identity::Keypair,
         behaviour_constructor: BehaviourConstructor,
-        swarm_messages_receiver: mpsc::Receiver<BlendSwarmMessage>,
+        swarm_messages_receiver: mpsc::Receiver<BlendSwarmMessage<ProofsVerifier>>,
         incoming_message_sender: broadcast::Sender<(
-            EncapsulatedMessageWithVerifiedSignature,
+            EncapsulatedMessageWithVerifiedPublicHeader,
             Epoch,
         )>,
-        current_epoch_info: BackendEpochInfo<PeerId>,
+        current_epoch_info: BackendEpochInfo<PeerId, ProofsVerifier>,
         rng: Rng,
         max_dial_attempts_per_connection: NonZeroU64,
         minimum_network_size: NonZeroUsize,
         peering_degree_check_clock: PeeringDegreeCheckClock,
     ) -> Self
     where
-        BehaviourConstructor:
-            FnOnce(PeerId, Membership<PeerId>) -> BlendBehaviour<ObservationWindowProvider>,
+        BehaviourConstructor: FnOnce(
+            PeerId,
+            Membership<PeerId>,
+        )
+            -> BlendBehaviour<ObservationWindowProvider, ProofsVerifier>,
         PeeringDegreeCheckClock: Stream<Item = ()> + Send + 'static,
     {
         use crate::test_utils::memory_test_swarm;
 
-        let membership = current_epoch_info.0.clone();
+        let membership = current_epoch_info.membership.clone();
         Self {
             incoming_message_sender,
             current_epoch_info,
@@ -866,12 +910,14 @@ where
 }
 
 // We implement `Deref` so we are able to call swarm methods on our own swarm.
-impl<Rng, ObservationWindowProvider> Deref for BlendSwarm<Rng, ObservationWindowProvider>
+impl<Rng, ObservationWindowProvider, ProofsVerifier> Deref
+    for BlendSwarm<Rng, ObservationWindowProvider, ProofsVerifier>
 where
     ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
         + 'static,
+    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
-    type Target = Swarm<BlendBehaviour<ObservationWindowProvider>>;
+    type Target = Swarm<BlendBehaviour<ObservationWindowProvider, ProofsVerifier>>;
 
     fn deref(&self) -> &Self::Target {
         &self.swarm
@@ -881,11 +927,12 @@ where
 #[cfg(test)]
 // We implement `DerefMut` only for tests, since we do not want to give people a
 // chance to bypass our API.
-impl<Rng, ObservationWindowProvider> core::ops::DerefMut
-    for BlendSwarm<Rng, ObservationWindowProvider>
+impl<Rng, ObservationWindowProvider, ProofsVerifier> core::ops::DerefMut
+    for BlendSwarm<Rng, ObservationWindowProvider, ProofsVerifier>
 where
     ObservationWindowProvider: IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>
         + 'static,
+    ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync + 'static,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.swarm

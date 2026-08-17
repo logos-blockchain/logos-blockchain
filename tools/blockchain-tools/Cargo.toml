@@ -23,7 +23,7 @@ lb-node                       = { workspace = true }
 lb-utils                      = { workspace = true }
 serde                         = { features = ["derive"], workspace = true }
 serde_with                    = { features = ["hex"], workspace = true }
-serde_yml                     = { workspace = true }
+serde_yaml                    = { workspace = true }
 thiserror                     = { workspace = true }
 time                          = { features = ["serde"], workspace = true }
 tokio                         = { features = ["macros", "rt-multi-thread"], workspace = true }

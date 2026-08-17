@@ -12,7 +12,6 @@ use lb_key_management_system_service::keys::Ed25519Key;
 use lb_testing_framework::NodeHttpClient;
 use lb_zone_sdk::{
     adapter::NodeHttpClient as ZoneNodeHttpClient,
-    indexer::ZoneIndexer,
     sequencer::{FundingConfig, ZoneSequencer},
 };
 use tokio::{
@@ -55,7 +54,7 @@ use crate::{
             },
         },
         wallet::sync::current_available_utxos_for_wallet,
-        world::{CucumberWorld, WalletInfo},
+        world::{CucumberWorld, WalletInfo, ZoneReaderConfig},
     },
 };
 
@@ -65,7 +64,10 @@ const SEQUENCER_READY_TIMEOUT: Duration = Duration::from_mins(2);
 const SEQUENCER_READY_POLL_TIMEOUT: Duration = Duration::from_secs(10);
 const SEQUENCER_READY_HEIGHT_ADVANCE_TIMEOUT: Duration = Duration::from_secs(30);
 const ZONE_SECURITY_PARAM: u32 = 5;
-const ZONE_TEST_PRIORITY_FEE: u64 = 400;
+// These high-volume scenarios can move storage prices before all queued
+// publishes are included. Keep their test funding comfortably above the
+// public 12% default so they exercise sequencing rather than fee starvation.
+const ZONE_TEST_PRIORITY_FEE_PERCENT: u64 = 50;
 
 pub(super) enum DriveMode {
     Passive {
@@ -608,10 +610,10 @@ pub(super) fn initialize_zone_indexer(
 ) -> StepResult {
     let sequencer_alias = sequencer_alias.as_ref();
     let node_url = log_step_error(step, world.zone_node_url_for_sequencer(sequencer_alias))?;
-    let indexer = ZoneIndexer::new(
-        world.zone.sequencer_channel_id(sequencer_alias)?,
-        ZoneNodeHttpClient::new(CommonHttpClient::new(None), node_url),
-    );
+    let indexer = ZoneReaderConfig {
+        channel_id: world.zone.sequencer_channel_id(sequencer_alias)?,
+        node_url,
+    };
 
     world.zone.set_indexer(indexer);
 
@@ -753,7 +755,7 @@ fn sequencer_funding(
     Ok(FundingConfig {
         funding_pk,
         max_tx_fee: GasCost::new(u64::MAX),
-        priority_fee: ZONE_TEST_PRIORITY_FEE,
+        priority_fee_percent: ZONE_TEST_PRIORITY_FEE_PERCENT,
     })
 }
 
@@ -811,7 +813,6 @@ async fn start_named_sequencer_with_config(
         runtime.task,
         runtime.events,
         runtime.checkpoint_rx,
-        runtime.ready_rx,
         runtime.channel_view_rx,
         runtime.turn_to_write_rx,
         runtime.tx_status_rx,

@@ -17,11 +17,13 @@ use lb_chain_service::{
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
-    block::{Block, BlockTransactions, Error as BlockError, MAX_BLOCK_TRANSACTIONS_SIZE},
+    block::{
+        Block, BlockTransactions, Error as BlockError, MAX_BLOCK_TRANSACTIONS_SIZE, UncleHeaders,
+    },
     header::HeaderId,
     mantle::{
         SignedMantleTx,
-        gas::MainnetGasConstants,
+        gas::MainnetGasProfile,
         traits::{Hashable, MantleTxWithProofs, StorageSize},
         transactions::{hash::TxHash, states::Preverified},
     },
@@ -150,9 +152,8 @@ impl Debug for LeaderMsg {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct LeaderSettings<BlendBroadcastSettings> {
+pub struct LeaderSettings {
     pub config: lb_ledger::Config,
-    pub blend_broadcast_settings: BlendBroadcastSettings,
     pub wallet_config: LeaderWalletConfig,
 }
 
@@ -222,7 +223,7 @@ where
     ChainNetwork: ChainNetworkServiceData,
     Wallet: lb_wallet_service::api::WalletServiceData,
 {
-    type Settings = LeaderSettings<BlendService::BroadcastSettings>;
+    type Settings = LeaderSettings;
     type State = overwatch::services::state::NoState<Self::Settings>;
     type StateOperator = overwatch::services::state::NoOperator<Self::State>;
     type Message = LeaderMsg;
@@ -252,15 +253,11 @@ impl<
 where
     BlendService: ServiceData<
             Message = lb_blend_service::message::ProxyServiceMessage<
-                lb_blend_service::message::ServiceMessage<
-                    BlendService::BroadcastSettings,
-                    BlendService::NodeId,
-                >,
+                lb_blend_service::message::ServiceMessage<BlendService::NodeId>,
             >,
         > + lb_blend_service::ServiceComponents<NodeId: Send + Sync>
         + Send
         + 'static,
-    BlendService::BroadcastSettings: Clone + Send + Sync,
     Mempool: MemPool<Item = SignedMantleTx<Preverified>>
         + RecoverableMempool<BlockId = HeaderId, Key = TxHash>
         + Send
@@ -350,7 +347,6 @@ where
 
         let LeaderSettings {
             config: ledger_config,
-            blend_broadcast_settings,
             wallet_config,
         } = self
             .service_resources_handle
@@ -373,10 +369,7 @@ where
                 .expect("Relay with KMS service should be available."),
         );
 
-        let blend_adapter = BlendAdapter::<BlendService>::new(
-            relays.blend_relay().clone(),
-            blend_broadcast_settings.clone(),
-        );
+        let blend_adapter = BlendAdapter::<BlendService>::new(relays.blend_relay().clone());
 
         // Wait for other services to become ready, with timeout.
         // (except Chain, ChainNetwork, and Blend)
@@ -478,6 +471,7 @@ where
                                 slot,
                                 proof,
                                 &signing_key,
+                                &cryptarchia_api,
                                 &relays,
                                 tip_state,
                                 &ledger_config,
@@ -538,15 +532,11 @@ impl<
 where
     BlendService: ServiceData<
             Message = lb_blend_service::message::ProxyServiceMessage<
-                lb_blend_service::message::ServiceMessage<
-                    BlendService::BroadcastSettings,
-                    BlendService::NodeId,
-                >,
+                lb_blend_service::message::ServiceMessage<BlendService::NodeId>,
             >,
         > + lb_blend_service::ServiceComponents<NodeId: Send + Sync>
         + Send
         + 'static,
-    BlendService::BroadcastSettings: Clone + Send + Sync,
     Mempool: MemPool<Item = SignedMantleTx<Preverified>>
         + RecoverableMempool<BlockId = HeaderId, Key = TxHash>
         + Send
@@ -586,13 +576,22 @@ where
 {
     #[instrument(
         level = "debug",
-        skip(relays, ledger_state, ledger_config, proof, signing_key)
+        skip(
+            relays,
+            ledger_state,
+            ledger_config,
+            cryptarchia_api,
+            proof,
+            signing_key
+        )
     )]
+    #[expect(clippy::too_many_arguments, reason = "Need all args")]
     async fn propose_block(
         parent: HeaderId,
         slot: Slot,
         proof: Groth16LeaderProof,
         signing_key: &Ed25519Key,
+        cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
         relays: &CryptarchiaConsensusRelays<
             BlendService,
             Mempool,
@@ -610,9 +609,23 @@ where
 
         let tx_stream: Pin<Box<_>> = Box::pin(txs_stream);
 
+        let uncle_headers = cryptarchia_api
+            .select_uncles(parent, slot)
+            .await
+            .unwrap_or_else(|err| {
+                error!(target: LOG_TARGET, ?slot, %err, "failed to select uncles");
+                // A proposal without uncles is still valid
+                UncleHeaders::empty()
+            });
+
         (ledger_state, _) = ledger_state
             .clone()
-            .try_apply_header::<Groth16LeaderProof, HeaderId>(slot, &proof, ledger_config)?;
+            .try_apply_header::<Groth16LeaderProof, HeaderId>(
+                slot,
+                &proof,
+                &uncle_headers.slots(),
+                ledger_config,
+            )?;
 
         // Collect all candidate transactions up front so the ones that fail can
         // be retried across multiple rounds.
@@ -632,7 +645,7 @@ where
             for tx in pending {
                 match ledger_state
                     .clone()
-                    .try_apply_contents::<_, HeaderId, MainnetGasConstants>(
+                    .try_apply_contents::<_, HeaderId, MainnetGasProfile>(
                         ledger_config,
                         iter::once(&tx),
                     ) {
@@ -671,7 +684,7 @@ where
         let valid_tx_stream = stream::iter(valid_txs);
         let txs = txs_for_block(valid_tx_stream).await;
 
-        let block = Block::create(parent, slot, proof, txs, signing_key)?;
+        let block = Block::create(parent, slot, uncle_headers, proof, txs, signing_key)?;
 
         info!(
             "proposed block {:?} with {} transactions ({} removed)",

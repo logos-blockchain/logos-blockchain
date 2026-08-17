@@ -49,7 +49,9 @@ where
             change_public_key: funding.funding_pk,
             funding_public_keys: vec![funding.funding_pk],
             max_tx_fee: funding.max_tx_fee,
-            priority_fee: funding.priority_fee,
+            // The public request field is a percentage of the final
+            // mandatory fee, not an absolute fee amount.
+            priority_fee_percent: funding.priority_fee_percent,
         })
         .await
         .map_err(|e| Error::Network(format!("funding failed: {e}")))?;
@@ -197,6 +199,12 @@ where
     Ok((signed_tx, msg_id))
 }
 
+/// Build and fund a `ChannelConfig` transaction.
+///
+/// `signer` is the sequencer's signing key paired with its index in the
+/// channel's *current* (pre-update) `accredited_keys` — that is the list the
+/// ledger verifies the signature against. Pass `None` for an unclaimed
+/// channel, whose configuration requires no signatures.
 #[expect(
     clippy::too_many_arguments,
     reason = "mirrors the channel config op fields plus the funding context"
@@ -205,7 +213,7 @@ pub(super) async fn create_channel_config_tx<Node>(
     node: &Node,
     funding: &FundingConfig,
     channel_id: ChannelId,
-    signing_keys: &[&Ed25519Key],
+    signer: Option<(ChannelKeyIndex, &Ed25519Key)>,
     keys: Keys,
     posting_timeframe: SlotTimeframe,
     posting_timeout: SlotTimeout,
@@ -228,15 +236,11 @@ where
         fund_ops(node, funding, vec![Op::ChannelConfig(config_op)]).await?;
 
     let tx_hash = config_tx.hash();
-    let signatures = signing_keys
-        .iter()
-        .enumerate()
+    let signatures = signer
         .map(|(index, key)| {
-            IndexedSignature::new(
-                index as ChannelKeyIndex,
-                key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
-            )
+            IndexedSignature::new(index, key.sign_payload(tx_hash.as_signing_bytes().as_ref()))
         })
+        .into_iter()
         .collect::<Vec<_>>()
         .try_into()
         .unwrap();
@@ -277,4 +281,26 @@ pub(super) fn prepare_tx(
 
 pub(super) fn sign_tx(tx_hash: TxHash, signing_key: &Ed25519Key) -> Ed25519Signature {
     signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref())
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::sync::mpsc;
+
+    use super::*;
+    use crate::test_support::{MockNode, funding_config};
+
+    #[tokio::test]
+    async fn funding_path_passes_priority_fee_as_a_percentage() {
+        let (priority_fees_tx, mut priority_fees_rx) = mpsc::channel(1);
+        let node = MockNode {
+            funding_priority_fees: Some(priority_fees_tx),
+            ..MockNode::default()
+        };
+        let funding = funding_config();
+
+        fund_ops(&node, &funding, Vec::new()).await.unwrap();
+
+        assert_eq!(priority_fees_rx.recv().await, Some(12));
+    }
 }

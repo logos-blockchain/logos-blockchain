@@ -1,7 +1,7 @@
 use core::time::Duration;
 
 use futures::stream::repeat;
-use lb_blend_proofs::selection::inputs::VerifyInputs;
+use lb_blend_proofs::{quota::Quota, selection::inputs::VerifyInputs};
 use lb_cryptarchia_engine::Epoch;
 use test_log::test;
 use tokio::time::timeout;
@@ -16,7 +16,7 @@ use crate::message_blend::provers::{
 
 #[test(tokio::test)]
 async fn proof_generation() {
-    let leadership_quota = 15;
+    let leadership_quota = Quota::new::<15>();
     let (public_inputs, private_inputs) = valid_proof_of_leader_inputs(leadership_quota);
 
     let mut leader_proofs_generator = RealLeaderProofsGenerator::new(
@@ -32,7 +32,7 @@ async fn proof_generation() {
         Box::pin(repeat(private_inputs)),
     );
 
-    for _ in 0..leadership_quota {
+    for _ in 0..leadership_quota.get() {
         let proof = leader_proofs_generator.get_next_proof().await.unwrap();
         let verified_proof_of_quota = proof
             .proof_of_quota

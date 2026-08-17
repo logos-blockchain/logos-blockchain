@@ -160,12 +160,6 @@ impl Channels {
         self.channel_notes.contains(note_id)
     }
 
-    /// Returns the channel owning `note_id`, if it is a channel note.
-    #[must_use]
-    pub fn get_channel(&self, note_id: &NoteId) -> Option<ChannelId> {
-        self.channel_notes.get(note_id).copied()
-    }
-
     /// Returns `true` if `note_id` is a channel note owned by `channel_id`.
     #[must_use]
     pub(crate) fn is_channel_note_of(&self, note_id: &NoteId, channel_id: &ChannelId) -> bool {
@@ -246,7 +240,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        events::TxEventPayload,
+        events::{DepositNote, TxEventPayload},
         mantle::{
             Note, Utxo, Value,
             ledger::Utxos,
@@ -429,7 +423,14 @@ mod tests {
         assert_eq!(*event_channel_id, deposit_op.channel_id);
         assert_eq!(*amount, utxo.note.value);
         assert_eq!(*metadata, deposit_op.metadata);
-        assert_eq!(notes.clone().into_inner(), vec![deposited]);
+        assert_eq!(
+            notes.clone().into_inner(),
+            vec![DepositNote {
+                note_id: deposited,
+                value: utxo.note.value,
+                pk: utxo.note.pk,
+            }]
+        );
     }
 
     #[test]

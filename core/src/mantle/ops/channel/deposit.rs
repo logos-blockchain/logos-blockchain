@@ -4,15 +4,21 @@ use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    events::{DepositRecreatedNotes, TxEvent, TxEventPayload},
+    events::{DepositNote, DepositRecreatedNotes, TxEvent, TxEventPayload},
     mantle::{
+        Value,
         channel::{Channels, Error},
+        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
-            ExecutableOperation, Inputs, InputsError, Outputs, ProvableOperation, Utxos,
-            VerifiableOperation, verification_mode,
+            ExecutableOperation, Inputs, InputsError, Outputs, PreverifiableOperation,
+            ProvableOperation, Utxos, VerifiableOperation, verification_mode,
+            verification_mode::VerificationMode,
         },
-        ops::{OpId, channel::ChannelId},
-        transactions::hash::{TxHash, TxHashView},
+        ops::{OpId, SignedOp, channel::ChannelId},
+        transactions::{
+            hash::{TxHash, TxHashView},
+            states::VerificationState,
+        },
     },
     sdp::locked_notes::LockedNotes,
 };
@@ -68,24 +74,31 @@ impl ProvableOperation for DepositOp {
     type Proof = ZkSignature;
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for DepositOp {
-    type PreverificationContext<'a> = ();
-    type VerificationContext<'a> = DepositValidationContext<'a>;
+impl OperationGas<MainnetGasProfile> for DepositOp {
+    const GAS_COST: Gas = Gas::new(590);
+}
+
+impl PreverifiableOperation<verification_mode::StandardMode> for DepositOp {
+    type Context<'a> = ();
     type Error = Error;
 
     fn preverify(
         &self,
         _proof: &Self::Proof,
-        _context: &Self::PreverificationContext<'_>,
+        _context: &Self::Context<'_>,
     ) -> Result<(), Self::Error> {
+        // Ensure the inputs is non-empty
+        self.inputs.preverify()?;
+
         Ok(())
     }
+}
 
-    fn verify(
-        &self,
-        proof: &Self::Proof,
-        context: &Self::VerificationContext<'_>,
-    ) -> Result<(), Self::Error> {
+impl VerifiableOperation<verification_mode::StandardMode> for DepositOp {
+    type Context<'a> = DepositValidationContext<'a>;
+    type Error = Error;
+
+    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
         // Check that the channel exist
         if !context.channels.channels.contains_key(&self.channel_id) {
             return Err(Error::ChannelNotFound {
@@ -128,12 +141,18 @@ impl ExecutableOperation for DepositOp {
         // Add the re-created notes to the ledger and register them as channel
         // notes.
         context.utxos = outputs.execute(context.utxos, self);
-        let mut note_ids = DepositRecreatedNotes::default();
+        let mut notes = DepositRecreatedNotes::default();
         for utxo in outputs.utxos(self) {
             context.channels = context
                 .channels
                 .register_channel_note(&utxo.id(), &self.channel_id)?;
-            note_ids.try_push(utxo.id()).map_err(InputsError::from)?;
+            notes
+                .try_push(DepositNote {
+                    note_id: utxo.id(),
+                    value: utxo.note.value,
+                    pk: utxo.note.pk,
+                })
+                .map_err(InputsError::from)?;
         }
 
         let events = std::iter::once(TxEvent::new(
@@ -143,11 +162,41 @@ impl ExecutableOperation for DepositOp {
                 channel_id: self.channel_id,
                 amount: amount_deposited,
                 metadata: self.metadata.clone(),
-                notes: note_ids,
+                notes,
             },
         ))
         .collect();
 
         Ok((context, events))
+    }
+}
+
+impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
+    for SignedOp<DepositOp, State, Mode>
+{
+    fn gas_multiplier(&self) -> Value {
+        1
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use lb_groth16::CompressedGroth16Proof;
+
+    use super::*;
+
+    #[test]
+    fn test_preverify_rejects_empty_inputs() {
+        let deposit = DepositOp {
+            channel_id: ChannelId::from([0u8; 32]),
+            inputs: Inputs::empty(),
+            metadata: Metadata::empty(),
+        };
+        let proof = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
+
+        assert_eq!(
+            deposit.preverify(&proof, &()),
+            Err(Error::Inputs(InputsError::EmptyInputs))
+        );
     }
 }

@@ -98,10 +98,10 @@ pub fn transaction_is_rejected_during_preverification(
                 "expected transaction `{transaction_alias}` to be rejected during preverification, but it was accepted"
             ),
         }),
-        Err(message) if message.contains("doesn't have any input") => Ok(()),
+        Err(message) if message.contains("Inputs cannot be empty") => Ok(()),
         Err(other) => Err(StepError::LogicalError {
             message: format!(
-                "expected transaction `{transaction_alias}` to be rejected mentioning 'doesn't have any input', got: {other}"
+                "expected transaction `{transaction_alias}` to be rejected mentioning 'Inputs cannot be empty', got: {other}"
             ),
         }),
     }

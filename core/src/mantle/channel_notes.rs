@@ -36,12 +36,6 @@ impl ChannelNotes {
         self.channel_notes.contains_key(id)
     }
 
-    /// Returns the channel owning `id`, if it is a channel note.
-    #[must_use]
-    pub fn get(&self, id: &NoteId) -> Option<&ChannelId> {
-        self.channel_notes.get(id)
-    }
-
     pub fn into_channel(mut self, note_id: &NoteId, channel_id: &ChannelId) -> Result<Self, Error> {
         if let Some(channel) = self.channel_notes.get(note_id) {
             return Err(Error::AlreadyAChannelNote {

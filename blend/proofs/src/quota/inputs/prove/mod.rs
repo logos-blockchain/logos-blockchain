@@ -1,11 +1,13 @@
 use lb_groth16::fr_from_bytes;
 use lb_poq::{
-    PoQBlendInputsData, PoQChainInputsData, PoQCommonInputsData, PoQInputsFromDataError,
+    PoQBlendInputsData, PoQChainInputsData, PoQCommonInputsData, PoQPowInputsData,
     PoQWalletInputsData, PoQWitnessInputs,
 };
 
 use crate::quota::inputs::{
-    prove::private::{ProofOfCoreQuotaInputs, ProofOfLeadershipQuotaInputs, ProofType},
+    prove::private::{
+        ProofOfCoreQuotaInputs, ProofOfLeadershipQuotaInputs, ProofOfWorkQuotaInputs, ProofType,
+    },
     split_ephemeral_signing_key,
 };
 
@@ -19,10 +21,8 @@ pub(crate) struct Inputs {
     pub private: PrivateInputs,
 }
 
-impl TryFrom<Inputs> for PoQWitnessInputs {
-    type Error = PoQInputsFromDataError;
-
-    fn try_from(value: Inputs) -> Result<Self, Self::Error> {
+impl From<Inputs> for PoQWitnessInputs {
+    fn from(value: Inputs) -> Self {
         let (signing_key_first_half, signing_key_second_half) =
             split_ephemeral_signing_key(value.public.signing_key);
         let chain_input_data = PoQChainInputsData {
@@ -36,6 +36,7 @@ impl TryFrom<Inputs> for PoQWitnessInputs {
             core_quota: value.public.core.quota,
             index: value.private.key_index,
             leader_quota: value.public.leader.message_quota,
+            pow_quota: value.public.pow.pow_quota,
             message_key: (
                 fr_from_bytes(&signing_key_first_half[..]).expect(
                     "First half of signing public key does not represent a valid `Fr` point.",
@@ -45,6 +46,7 @@ impl TryFrom<Inputs> for PoQWitnessInputs {
                 ),
             ),
             selector: value.private.selector,
+            pow_difficulty: value.public.pow.pow_blend_difficulty,
         };
         witness_input_for_proof_type(
             chain_input_data,
@@ -58,7 +60,7 @@ fn witness_input_for_proof_type(
     chain_input_data: PoQChainInputsData,
     common_input_data: PoQCommonInputsData,
     proof_type: ProofType,
-) -> Result<PoQWitnessInputs, PoQInputsFromDataError> {
+) -> PoQWitnessInputs {
     match proof_type {
         ProofType::CoreQuota(core_quota_private_inputs) => {
             let ProofOfCoreQuotaInputs {
@@ -91,7 +93,7 @@ fn witness_input_for_proof_type(
                 note_value,
                 output_number,
                 slot,
-                secret_key,
+                pol_secret_key: secret_key,
                 transaction_hash,
             };
             PoQWitnessInputs::from_leader_data(
@@ -99,6 +101,12 @@ fn witness_input_for_proof_type(
                 common_input_data,
                 wallet_input_data,
             )
+        }
+        ProofType::PowQuota(pow_quota_private_inputs) => {
+            let ProofOfWorkQuotaInputs { pow_nonce } = *pow_quota_private_inputs;
+
+            let pow_input_data = PoQPowInputsData { pow_nonce };
+            PoQWitnessInputs::from_pow_data(chain_input_data, common_input_data, pow_input_data)
         }
     }
 }

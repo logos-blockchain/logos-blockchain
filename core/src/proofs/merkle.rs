@@ -1,20 +1,23 @@
 use lb_groth16::Fr;
-use lb_utxotree::{MerkleNode, MerklePath};
+use lb_utxotree::{MerkleNode, MerklePath, TREE_HEIGHT_EXCEPT_ROOT};
 use thiserror::Error;
 
 /// Converts a [`MerklePath`] to the witness format expected by the circuit.
-pub fn merkle_path_to_witness<T: Copy>(path: &MerklePath<T>) -> (Vec<T>, Vec<bool>) {
-    path.iter()
-        // PoL circuit expects the reverse order for selectors
-        .zip(path.iter().rev())
-        .map(|(node, rev_node)| {
-            (
-                *node.item(),
-                // 1 if sibling is on the left
-                matches!(rev_node, MerkleNode::Left(_)),
-            )
-        })
-        .unzip()
+pub fn merkle_path_to_witness<T: Copy>(
+    path: &MerklePath<T>,
+) -> (
+    [T; TREE_HEIGHT_EXCEPT_ROOT],
+    [bool; TREE_HEIGHT_EXCEPT_ROOT],
+) {
+    let items = core::array::from_fn(|index| *path[index].item());
+    // PoL circuit expects the reverse order for selectors.
+    let selectors = core::array::from_fn(|index| {
+        matches!(
+            path[TREE_HEIGHT_EXCEPT_ROOT - index - 1],
+            MerkleNode::Left(_)
+        )
+    });
+    (items, selectors)
 }
 
 /// Converts an [`lb_mmr::MerklePath`] to the witness format expected by
@@ -67,25 +70,16 @@ mod tests {
     use super::*;
     #[test]
     fn test_merkle_path_to_witness() {
-        let path: Vec<MerkleNode<i32>> = vec![
-            MerkleNode::Left(1),
-            MerkleNode::Right(2),
-            MerkleNode::Left(3),
-            MerkleNode::Right(4),
-        ];
+        let path: MerklePath<i32> = core::array::from_fn(|index| {
+            if index % 2 == 0 {
+                MerkleNode::Left(index as i32)
+            } else {
+                MerkleNode::Right(index as i32)
+            }
+        });
         let (items, selectors) = merkle_path_to_witness(&path);
-        // Items should be in forward order.
-        assert_eq!(items, vec![1, 2, 3, 4]);
-        // Selectors should be in reverse order.
-        assert_eq!(selectors, vec![false, true, false, true]);
-    }
-
-    #[test]
-    fn test_merkle_path_to_witness_empty() {
-        let path: Vec<MerkleNode<i32>> = vec![];
-        let (items, selectors) = merkle_path_to_witness(&path);
-        assert!(items.is_empty());
-        assert!(selectors.is_empty());
+        assert_eq!(items[0..4], [0, 1, 2, 3]);
+        assert_eq!(selectors[0..4], [false, true, false, true]);
     }
 
     #[test]

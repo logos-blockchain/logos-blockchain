@@ -24,7 +24,7 @@ use logos_blockchain_tools::{
     },
     overwrite_yaml, value_from_dotted_kv,
 };
-use serde_yml::Value;
+use serde_yaml::Value;
 
 // ── CLI definition
 // ────────────────────────────────────────────────────────────
@@ -294,7 +294,7 @@ fn load_base_config(path: Option<&PathBuf>) -> Result<Value> {
 
     let content = fs::read_to_string(path)
         .with_context(|| format!("cannot read config file '{}'", path.display()))?;
-    serde_yml::from_str(&content)
+    serde_yaml::from_str(&content)
         .with_context(|| format!("cannot parse YAML from '{}'", path.display()))
 }
 
@@ -310,7 +310,7 @@ fn resolve_override(s: &str) -> Result<Value> {
     let path = Path::new(s);
     let content = fs::read_to_string(path)
         .with_context(|| format!("cannot read override file '{}'", path.display()))?;
-    serde_yml::from_str(&content)
+    serde_yaml::from_str(&content)
         .with_context(|| format!("cannot parse YAML from override file '{}'", path.display()))
 }
 
@@ -380,10 +380,10 @@ fn build_genesis_block(
 /// Wrap a serialised `GenesisBlock` value in the mapping that corresponds to
 /// `cryptarchia.genesis_block` in a deployment config.
 fn wrap_as_cryptarchia_genesis_block(block_value: Value) -> Value {
-    let mut inner = serde_yml::Mapping::new();
+    let mut inner = serde_yaml::Mapping::new();
     inner.insert(Value::String("genesis_block".to_owned()), block_value);
 
-    let mut outer = serde_yml::Mapping::new();
+    let mut outer = serde_yaml::Mapping::new();
     outer.insert(
         Value::String("cryptarchia".to_owned()),
         Value::Mapping(inner),
@@ -395,10 +395,10 @@ fn wrap_as_cryptarchia_genesis_block(block_value: Value) -> Value {
 /// Wrap a serialised faucet public key in the mapping that corresponds to
 /// `cryptarchia.faucet_pk` in a deployment config.
 fn wrap_as_cryptarchia_faucet_pk(faucet_pk: Value) -> Value {
-    let mut inner = serde_yml::Mapping::new();
+    let mut inner = serde_yaml::Mapping::new();
     inner.insert(Value::String("faucet_pk".to_owned()), faucet_pk);
 
-    let mut outer = serde_yml::Mapping::new();
+    let mut outer = serde_yaml::Mapping::new();
     outer.insert(
         Value::String("cryptarchia".to_owned()),
         Value::Mapping(inner),
@@ -450,13 +450,13 @@ fn run_inscribe(args: &InscribeArgs) -> Result<()> {
 
 /// Serialize a value to a human-readable YAML [`Value`].
 ///
-/// Two pitfalls make a direct `serde_yml::to_value` call unsuitable:
+/// Two pitfalls make a direct `serde_yaml::to_value` call unsuitable:
 ///
-/// 1. `serde_yml::to_value` uses a *non*-human-readable serializer, so types
+/// 1. `serde_yaml::to_value` uses a *non*-human-readable serializer, so types
 ///    guarded by `is_human_readable()` (e.g. `HeaderId`, `MantleTx`) fall back
 ///    to their binary representation.
 /// 2. Some types (e.g. `PoLProof`) call `serializer.serialize_bytes`
-///    unconditionally; `serde_yml::to_string` rejects those with an error.
+///    unconditionally; `serde_yaml::to_string` rejects those with an error.
 ///
 /// Using `serde_yaml::to_string` as an intermediate format avoids both
 /// problems: YAML is a human-readable format (fixing pitfall 1).
@@ -465,12 +465,12 @@ fn run_inscribe(args: &InscribeArgs) -> Result<()> {
 /// settings override code should be refactored to use concrete genesis related
 /// types instead of operating at YAML level.
 fn struct_to_yaml_value<T: serde::Serialize>(value: &T) -> Result<Value> {
-    let yaml_string = serde_yml::to_string(value)?;
-    serde_yml::from_str(&yaml_string).map_err(Into::into)
+    let yaml_string = serde_yaml::to_string(value)?;
+    serde_yaml::from_str(&yaml_string).map_err(Into::into)
 }
 
 fn ensure_valid_deployment_settings(value: &Value) -> Result<()> {
-    let yaml = serde_yml::to_string(value)?;
+    let yaml = serde_yaml::to_string(value)?;
     drop(
         deserialize_value_from_reader::<DeploymentSettings, _>(
             yaml.as_bytes(),
@@ -492,7 +492,7 @@ where
 }
 
 fn write_yaml(value: &Value, output: Option<&Path>) -> Result<()> {
-    let yaml = serde_yml::to_string(value)?;
+    let yaml = serde_yaml::to_string(value)?;
     output.map_or_else(
         || {
             io::stdout()

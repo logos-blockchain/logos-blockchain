@@ -149,7 +149,7 @@ pub mod fund {
     use lb_core::{
         header::HeaderId,
         mantle::{
-            OpProof, Value,
+            OpProof,
             gas::GasCost,
             transactions::{RawMantleTx, builder::MantleTxBuilder},
         },
@@ -163,9 +163,21 @@ pub mod fund {
         pub tx_builder: MantleTxBuilder,
         pub change_public_key: ZkPublicKey,
         pub funding_public_keys: Vec<ZkPublicKey>,
+        /// Absolute hard cap on the final funded transaction fee.
         pub max_tx_fee: GasCost,
+        /// Percentage of the final mandatory fee reserved as a priority fee.
+        /// The percentage applies to the complete mandatory fee (execution
+        /// plus storage), not to storage alone. Only the unused reserve is an
+        /// effective priority tip. The default used by the Zone SDK and TUI
+        /// is 12%, a practical reserve intended to absorb normal fee movement,
+        /// including approximately one storage-market epoch increase at
+        /// normal price levels. It is not a protocol guarantee at very low
+        /// prices or when execution fees also rise materially. Storage prices
+        /// use integer arithmetic, so a low price can jump proportionally more
+        /// (for example, 1 to 2). `0` funds exactly to the mandatory fee; the
+        /// value is not capped at 100.
         #[serde(default)]
-        pub priority_fee: Value,
+        pub priority_fee_percent: u64,
     }
 
     #[derive(Serialize, Deserialize)]
@@ -185,7 +197,7 @@ pub mod fund {
 pub mod sign {
     use lb_core::mantle::transactions::hash::TxHash;
     use lb_key_management_system_keys::keys::{
-        Ed25519Key, ZkPublicKey, ZkSignature, secured_key::SecuredKey,
+        Ed25519Key, ZkPublicKeys, ZkSignature, secured_key::SecuredKey,
     };
     use serde::{Deserialize, Serialize};
 
@@ -203,7 +215,7 @@ pub mod sign {
     #[derive(Serialize, Deserialize)]
     pub struct WalletSignTxZkRequestBody {
         pub tx_hash: TxHash,
-        pub pks: Vec<ZkPublicKey>,
+        pub pks: ZkPublicKeys,
     }
 
     #[derive(Serialize, Deserialize)]

@@ -1,7 +1,9 @@
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
+use rpds::HashTrieMapSync;
 
 use crate::{
+    crypto::Hash,
     mantle::{
         VerificationError,
         channel::Channels,
@@ -9,6 +11,7 @@ use crate::{
         ops::{
             channel::{ChannelId, ChannelKeyIndex},
             leader_claim::{RewardsRoot, VoucherNullifier},
+            pow::{PowNullifier, PowReward, PowTarget},
         },
     },
     sdp::{DeclarationId, MinStake, ServiceType, locked_notes::LockedNotes},
@@ -51,6 +54,34 @@ pub trait OperationVerificationHelper {
         channel_id: &ChannelId,
         key_index: &ChannelKeyIndex,
     ) -> Result<Ed25519PublicKey, VerificationError>;
+
+    // `PoW` claim validation inputs, one per
+    // [`ClaimPoWRewardVerificationContext`] field. The current epoch comes from
+    // [`Self::get_epoch`] and the current block slot from
+    // [`Self::get_block_slot`].
+    //
+    // [`ClaimPoWRewardVerificationContext`]: crate::mantle::ops::pow::ClaimPoWRewardVerificationContext
+
+    /// `d_reward`: the reward difficulty a puzzle ticket must be strictly
+    /// below.
+    fn get_pow_reward_difficulty(&self) -> PowTarget;
+
+    /// Nullifiers of already-claimed `PoW` solutions.
+    fn get_pow_nullifiers(&self) -> &HashTrieMapSync<PowNullifier, Slot>;
+
+    /// `sigma_e`: reward amount per claim for the current epoch.
+    fn get_epoch_pow_reward(&self) -> PowReward;
+
+    /// `R_PoW`: current balance of the `PoW` reward pool.
+    fn get_pow_reward_pool(&self) -> PowReward;
+
+    /// The epoch preceding [`Self::get_epoch`], whose nonce is also accepted
+    /// for claims mined just before an epoch boundary.
+    fn get_previous_epoch(&self) -> Epoch;
+
+    /// Slots of the blocks a claim may anchor to, keyed by block hash;
+    /// used for the window-of-acceptance check.
+    fn get_blocks_slot(&self) -> HashTrieMapSync<Hash, Slot>;
 }
 
 #[cfg(test)]
@@ -58,9 +89,10 @@ pub mod test_utils {
     use std::collections::HashMap;
 
     use lb_cryptarchia_engine::{Epoch, Slot};
-    use rpds::HashTrieSetSync;
+    use rpds::{HashTrieMapSync, HashTrieSetSync};
 
     use crate::{
+        crypto::Hash,
         mantle::{
             Utxo, VerificationError,
             channel::Channels,
@@ -68,6 +100,7 @@ pub mod test_utils {
             ops::{
                 channel::{ChannelId, ChannelKeyIndex, Ed25519PublicKey},
                 leader_claim::{RewardsRoot, VoucherNullifier},
+                pow::{PowNullifier, PowReward, PowTarget},
             },
             transactions::OperationVerificationHelper,
         },
@@ -85,6 +118,12 @@ pub mod test_utils {
         block_slot: Slot,
         nullifiers: HashTrieSetSync<VoucherNullifier>,
         claimable_vouchers_root: RewardsRoot,
+        pow_reward_difficulty: PowTarget,
+        pow_nullifiers: HashTrieMapSync<PowNullifier, Slot>,
+        epoch_pow_reward: PowReward,
+        pow_reward_pool: PowReward,
+        previous_epoch: Epoch,
+        blocks_slot: HashTrieMapSync<Hash, Slot>,
     }
 
     impl TestOperationVerificationHelper {
@@ -107,6 +146,12 @@ pub mod test_utils {
                 block_slot: Slot::from(0u64),
                 nullifiers: HashTrieSetSync::new_sync(),
                 claimable_vouchers_root: RewardsRoot::default(),
+                pow_reward_difficulty: PowTarget::default(),
+                pow_nullifiers: HashTrieMapSync::new_sync(),
+                epoch_pow_reward: 0,
+                pow_reward_pool: 0,
+                previous_epoch: Epoch::from(0u32),
+                blocks_slot: HashTrieMapSync::new_sync(),
             }
         }
 
@@ -115,6 +160,54 @@ pub mod test_utils {
             for utxo in utxos {
                 self.utxos = self.utxos.insert(utxo.id(), utxo).0;
             }
+            self
+        }
+
+        #[must_use]
+        pub const fn with_block_slot(mut self, slot: Slot) -> Self {
+            self.block_slot = slot;
+            self
+        }
+
+        #[must_use]
+        pub const fn with_pow_reward_difficulty(mut self, difficulty: PowTarget) -> Self {
+            self.pow_reward_difficulty = difficulty;
+            self
+        }
+
+        #[must_use]
+        pub const fn with_pow_rewards(
+            mut self,
+            epoch_pow_reward: PowReward,
+            pow_reward_pool: PowReward,
+        ) -> Self {
+            self.epoch_pow_reward = epoch_pow_reward;
+            self.pow_reward_pool = pow_reward_pool;
+            self
+        }
+
+        #[must_use]
+        pub fn with_pow_nullifiers(
+            mut self,
+            nullifiers: HashTrieMapSync<PowNullifier, Slot>,
+        ) -> Self {
+            self.pow_nullifiers = nullifiers;
+            self
+        }
+
+        #[must_use]
+        pub fn with_epochs(mut self, previous: Epoch, current: Epoch) -> Self {
+            self.previous_epoch = previous;
+            self.epoch = current;
+            self
+        }
+
+        #[must_use]
+        pub fn with_blocks_slot(
+            mut self,
+            blocks_slot: impl IntoIterator<Item = (Hash, Slot)>,
+        ) -> Self {
+            self.blocks_slot = blocks_slot.into_iter().collect();
             self
         }
     }
@@ -190,6 +283,30 @@ pub mod test_utils {
                     key_index: *key_index,
                 },
             )
+        }
+
+        fn get_pow_reward_difficulty(&self) -> PowTarget {
+            self.pow_reward_difficulty
+        }
+
+        fn get_pow_nullifiers(&self) -> &HashTrieMapSync<PowNullifier, Slot> {
+            &self.pow_nullifiers
+        }
+
+        fn get_epoch_pow_reward(&self) -> PowReward {
+            self.epoch_pow_reward
+        }
+
+        fn get_pow_reward_pool(&self) -> PowReward {
+            self.pow_reward_pool
+        }
+
+        fn get_previous_epoch(&self) -> Epoch {
+            self.previous_epoch
+        }
+
+        fn get_blocks_slot(&self) -> HashTrieMapSync<Hash, Slot> {
+            self.blocks_slot.clone()
         }
     }
 }

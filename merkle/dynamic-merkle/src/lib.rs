@@ -15,8 +15,6 @@
 
 use std::{fmt, marker::PhantomData, sync::Arc};
 
-use rpds::RedBlackTreeSetSync;
-
 /// Abstraction over the hash type and hashing operations a
 /// [`DynamicMerkleTree`] needs.
 ///
@@ -93,35 +91,25 @@ enum Node<Hash> {
         left_subtree_size: usize,
         height: usize,
     },
-    // An empty inner node, representing an unexpanded empty subtree, to avoid
-    // allocating a full subtree when not necessary.
-    // Can only be found in the right subtree of an inner node.
+    // An unexpanded, fully-empty subtree. Height zero represents one empty
+    // leaf position; larger heights compactly represent multiple empty
+    // leaves, avoiding allocations for ranges that are not occupied.
     Empty {
         height: usize,
     },
-    // A leaf node (possibly) holding a hash, will be empty after a removal
+    // An occupied leaf node.
     Leaf {
-        value: Option<Hash>,
+        value: Hash,
     },
 }
 
 fn hash<H: MerkleHasher>(left: &Node<H::Hash>, right: &Node<H::Hash>) -> H::Hash {
-    let left = match left {
-        Node::Inner { value, .. } => *value,
-        Node::Leaf { value } => (*value).unwrap_or(H::EMPTY_VALUE),
-        Node::Empty { .. } => panic!("Empty node in left subtree is not allowed"),
-    };
-    let right = match right {
-        Node::Inner { value, .. } => *value,
-        Node::Leaf { value } => (*value).unwrap_or(H::EMPTY_VALUE),
-        Node::Empty { height } => H::empty_subtree_root(*height),
-    };
-    H::compress(&left, &right)
+    H::compress(&left.value::<H>(), &right.value::<H>())
 }
 
 impl<Hash> Node<Hash> {
     const fn new(value: Hash) -> Self {
-        Self::Leaf { value: Some(value) }
+        Self::Leaf { value }
     }
 
     fn size(&self) -> usize {
@@ -131,14 +119,32 @@ impl<Hash> Node<Hash> {
                 right_subtree_size,
                 ..
             } => left_subtree_size + right_subtree_size,
-            Self::Leaf { value: Some(_) } => 1,
-            Self::Empty { .. } | Self::Leaf { value: None } => 0,
+            Self::Leaf { .. } => 1,
+            Self::Empty { .. } => 0,
         }
     }
 
     // size of the full subtree
     const fn capacity(&self) -> usize {
         1 << self.height()
+    }
+
+    fn first_empty_index(&self) -> Option<usize> {
+        match self {
+            Self::Inner { left, right, .. } => {
+                if left.size() < left.capacity() {
+                    left.first_empty_index()
+                } else if right.size() < right.capacity() {
+                    right
+                        .first_empty_index()
+                        .map(|index| left.capacity() + index)
+                } else {
+                    None
+                }
+            }
+            Self::Empty { .. } => Some(0),
+            Self::Leaf { .. } => None,
+        }
     }
 
     const fn height(&self) -> usize {
@@ -150,14 +156,73 @@ impl<Hash> Node<Hash> {
 }
 
 impl<Hash: Copy> Node<Hash> {
+    /// Recursively validates a deserialized node tree and rebuilds derived
+    /// inner-node state.
+    ///
+    /// Inner-node hashes, subtree sizes, and heights are recomputed from the
+    /// children. Fully empty sibling subtrees are collapsed into a single
+    /// empty parent. Invalid subtree heights or mismatched sibling heights
+    /// are rejected.
+    fn rebuild_and_validate<H>(node: &Arc<Self>) -> Result<Arc<Self>, &'static str>
+    where
+        H: MerkleHasher<Hash = Hash>,
+    {
+        let node = match node.as_ref() {
+            Self::Empty { height } => {
+                if *height > TREE_HEIGHT_EXCEPT_ROOT {
+                    return Err("empty subtree height exceeds tree height");
+                }
+                return Ok(Arc::clone(node));
+            }
+            Self::Leaf { .. } => return Ok(Arc::clone(node)),
+            Self::Inner { left, right, .. } => {
+                let left = Self::rebuild_and_validate::<H>(left)?;
+                let right = Self::rebuild_and_validate::<H>(right)?;
+                // Malformed serialized input must be rejected as a serde
+                // error; `new_inner`'s assertion is for internal misuse.
+                if left.height() != right.height() {
+                    return Err("sibling subtrees have different heights");
+                }
+                Self::new_inner::<H>(left, right)
+            }
+        };
+        if node.height() > TREE_HEIGHT_EXCEPT_ROOT {
+            return Err("tree height exceeds fixed tree height");
+        }
+        Ok(Arc::new(node))
+    }
+
     fn new_inner<H>(left: Arc<Self>, right: Arc<Self>) -> Self
     where
         H: MerkleHasher<Hash = Hash>,
     {
+        if let (
+            Self::Empty {
+                height: left_height,
+            },
+            Self::Empty {
+                height: right_height,
+            },
+        ) = (left.as_ref(), right.as_ref())
+        {
+            assert_eq!(
+                left_height, right_height,
+                "empty sibling subtrees must have equal heights"
+            );
+            return Self::Empty {
+                height: left_height + 1,
+            };
+        }
+
+        assert_eq!(
+            left.height(),
+            right.height(),
+            "sibling subtrees must have equal heights"
+        );
         Self::Inner {
             right_subtree_size: right.size(),
             left_subtree_size: left.size(),
-            height: left.height().max(right.height()) + 1,
+            height: left.height() + 1,
             value: hash::<H>(&left, &right),
             left,
             right,
@@ -221,9 +286,9 @@ impl<Hash: Copy> Node<Hash> {
         H: MerkleHasher<Hash = Hash>,
     {
         self.insert_or_modify::<H, _>(index, |node| match node {
-            Self::Leaf { value: None } | Self::Empty { .. } => Self::new(value),
-            Self::Leaf { value: Some(_) } => panic!("Cannot insert into a non-empty leaf node"),
-            _ => panic!("Cannot insert into a non-terminal node"),
+            Self::Empty { .. } => Self::new(value),
+            Self::Leaf { .. } => panic!("Cannot insert into a non-empty leaf node"),
+            Self::Inner { .. } => panic!("Cannot insert into a non-terminal node"),
         })
     }
 
@@ -232,7 +297,7 @@ impl<Hash: Copy> Node<Hash> {
         H: MerkleHasher<Hash = Hash>,
     {
         self.insert_or_modify::<H, _>(index, move |node| match node {
-            Self::Leaf { value: Some(_) } => Self::Leaf { value: None },
+            Self::Leaf { .. } => Self::Empty { height: 0 },
             _ => panic!("Cannot remove from a empty / non-leaf node"),
         })
     }
@@ -242,7 +307,7 @@ impl<Hash: Copy> Node<Hash> {
         H: MerkleHasher<Hash = Hash>,
     {
         self.insert_or_modify::<H, _>(index, |node| match node {
-            Self::Leaf { value: Some(_) } => Self::new(value),
+            Self::Leaf { .. } => Self::new(value),
             _ => panic!("Cannot update an empty / non-leaf node"),
         })
     }
@@ -250,7 +315,7 @@ impl<Hash: Copy> Node<Hash> {
     /// Computes the Merkle path for the item at the given index.
     /// The path is ordered from leaf to root (excluded).
     /// Returns `None` if the index does not exist or has been removed.
-    fn path<H>(self: &Arc<Self>, index: usize) -> Option<MerklePath<Hash>>
+    fn path<H>(self: &Arc<Self>, index: usize) -> Option<Vec<MerkleNode<Hash>>>
     where
         H: MerkleHasher<Hash = Hash>,
     {
@@ -266,19 +331,23 @@ impl<Hash: Copy> Node<Hash> {
                 if index < left.capacity() {
                     // Going down left subtree, store right sibling hash
                     let mut path = left.path::<H>(index)?;
-                    assert!(path.len() < TREE_HEIGHT_EXCEPT_ROOT, "Path length exceeded");
+                    if path.len() >= TREE_HEIGHT_EXCEPT_ROOT {
+                        return None;
+                    }
                     path.push(MerkleNode::Right(right.value::<H>()));
                     Some(path)
                 } else {
                     // Going down right subtree, store left sibling hash
                     let mut path = right.path::<H>(index - left.capacity())?;
-                    assert!(path.len() < TREE_HEIGHT_EXCEPT_ROOT, "Path length exceeded");
+                    if path.len() >= TREE_HEIGHT_EXCEPT_ROOT {
+                        return None;
+                    }
                     path.push(MerkleNode::Left(left.value::<H>()));
                     Some(path)
                 }
             }
-            Self::Leaf { value: Some(_) } => Some(MerklePath::new()),
-            Self::Leaf { value: None } | Self::Empty { .. } => None,
+            Self::Leaf { .. } => Some(Vec::new()),
+            Self::Empty { .. } => None,
         }
     }
 
@@ -287,8 +356,7 @@ impl<Hash: Copy> Node<Hash> {
         H: MerkleHasher<Hash = Hash>,
     {
         match self {
-            Self::Inner { value, .. } | Self::Leaf { value: Some(value) } => *value,
-            Self::Leaf { value: None } => H::EMPTY_VALUE,
+            Self::Inner { value, .. } | Self::Leaf { value } => *value,
             Self::Empty { height } => H::empty_subtree_root(*height),
         }
     }
@@ -297,14 +365,14 @@ impl<Hash: Copy> Node<Hash> {
 /// A dynamic persistent Merkle tree that supports insertion and removal of
 /// leaf hashes.
 ///
-/// Removed leaves are replaced with an empty leaf node, which prevents
-/// the whole tree reordering and their position is recorded for future
-/// insertions. Compared to a MPT, the height of this tree is predictable and
-/// bounded by the number of items, for example allowing for efficient and
-/// simple proof of memberships for `PoL`.
+/// `Node::Empty` is the sole representation of free space: height zero
+/// represents one free leaf and larger heights compactly represent free
+/// ranges. Sparse recovery and normal mutation therefore produce the same
+/// canonical structure. Compared to a MPT, the height of this tree is
+/// predictable and bounded by the number of items, for example allowing for
+/// efficient and simple proof of memberships for `PoL`.
 pub struct DynamicMerkleTree<H: MerkleHasher> {
     root: Arc<Node<H::Hash>>,
-    holes: RedBlackTreeSetSync<usize>,
     _hasher: PhantomData<H>,
 }
 
@@ -312,7 +380,6 @@ impl<H: MerkleHasher> Clone for DynamicMerkleTree<H> {
     fn clone(&self) -> Self {
         Self {
             root: Arc::clone(&self.root),
-            holes: self.holes.clone(),
             _hasher: PhantomData,
         }
     }
@@ -325,19 +392,16 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DynamicMerkleTree")
             .field("root", &self.root)
-            .field("holes", &self.holes)
             .finish()
     }
 }
 
 impl<H: MerkleHasher> Default for DynamicMerkleTree<H> {
     fn default() -> Self {
-        let holes = RedBlackTreeSetSync::new_sync();
         Self {
             root: Arc::new(Node::Empty {
                 height: TREE_HEIGHT_EXCEPT_ROOT,
             }),
-            holes,
             _hasher: PhantomData,
         }
     }
@@ -360,8 +424,9 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
     /// Inserts the leaf hash `value` at the lowest available position and
     /// returns the updated tree together with the index it was assigned.
     ///
-    /// Positions freed by [`remove`](Self::remove) are reused before the tree
-    /// grows, so the smallest free index is always chosen.
+    /// The lowest available position is derived solely from the tree
+    /// structure, so sparse recovery and removals use the same representation
+    /// and the smallest free index is always chosen.
     ///
     /// The original tree is left unchanged (the structure is persistent).
     ///
@@ -375,16 +440,14 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
             "max capacity reached, cannot insert more items"
         );
 
-        let (holes, index) = self.holes.first().map_or_else(
-            || (self.holes.clone(), self.root.size()),
-            |hole| (self.holes.remove(hole), *hole),
-        );
-
+        let index = self
+            .root
+            .first_empty_index()
+            .expect("tree has capacity but no empty position");
         let root = self.root.insert_at::<H>(index, value);
         (
             Self {
                 root,
-                holes,
                 _hasher: PhantomData,
             },
             index,
@@ -393,9 +456,9 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
 
     /// Removes the leaf at `index`, returning the updated tree.
     ///
-    /// The leaf is replaced with an empty one and its position is recorded as a
-    /// hole for reuse by a future [`insert`](Self::insert); the tree is not
-    /// otherwise restructured. The original tree is left unchanged.
+    /// The leaf is replaced with `Node::Empty { height: 0 }`. Empty sibling
+    /// subtrees are collapsed while the ancestors are rebuilt, so the tree
+    /// remains canonical. The original tree is left unchanged.
     ///
     /// # Panics
     ///
@@ -406,10 +469,8 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
         assert!(index < self.root.capacity(), "Index out of bounds");
 
         let root = self.root.remove_at::<H>(index);
-        let holes = self.holes.insert(index);
         Self {
             root,
-            holes,
             _hasher: PhantomData,
         }
     }
@@ -417,8 +478,8 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
     /// Replaces the leaf hash at `index`, returning the updated tree.
     ///
     /// Unlike [`remove`](Self::remove), the leaf is replaced with another value
-    /// instead of being emptied, so the position is neither freed nor recorded
-    /// as a hole. The original tree is left unchanged.
+    /// instead of being emptied, so the position remains occupied. The
+    /// original tree is left unchanged.
     ///
     /// # Panics
     ///
@@ -431,7 +492,6 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
         let root = self.root.update_at::<H>(index, value);
         Self {
             root,
-            holes: self.holes.clone(),
             _hasher: PhantomData,
         }
     }
@@ -455,18 +515,13 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
     /// Returns `None` if the index does not exist or has been removed.
     #[must_use]
     pub fn path(&self, index: usize) -> Option<MerklePath<H::Hash>> {
-        self.root.path::<H>(index).inspect(|path| {
-            assert_eq!(
-                path.len(),
-                TREE_HEIGHT_EXCEPT_ROOT,
-                "Path length({}) must be {TREE_HEIGHT_EXCEPT_ROOT}",
-                path.len()
-            );
-        })
+        self.root.path::<H>(index)?.try_into().ok()
     }
 
-    /// Rebuilds a tree placing each leaf hash at its given index, filling the
-    /// gaps between indices with holes.
+    /// Rebuilds a tree placing each leaf hash at its given index, representing
+    /// gaps as empty subtrees rather than materializing individual empty
+    /// leaves. Empty sibling subtrees are represented by their single empty
+    /// parent, matching the canonical structure produced by mutation.
     ///
     /// The values must be yielded in strictly increasing index order; this is
     /// the inverse of enumerating a tree's occupied positions and is meant
@@ -478,42 +533,71 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
     /// bounds.
     #[must_use]
     pub fn from_sorted_items(items: impl IntoIterator<Item = (usize, H::Hash)>) -> Self {
-        let mut tree = Self::new();
-        let mut current_pos = 0;
-        for (pos, value) in items {
-            while current_pos < pos {
-                // Insert a hole for the missing position
-                tree = tree.insert_hole(current_pos);
-                current_pos += 1;
-            }
-
-            tree.root = tree.root.insert_at::<H>(pos, value);
-            current_pos = pos + 1;
-        }
-        tree
-    }
-
-    // This is only for maintaining holes information when recovering
-    // the tree from a compressed format, should not be used otherwise.
-    fn insert_hole(&self, index: usize) -> Self {
+        let mut items = items.into_iter().peekable();
+        let root = Self::build_sparse_subtree(&mut items, 0, TREE_HEIGHT_EXCEPT_ROOT);
         assert!(
-            index < self.root.capacity(),
-            "Index out of bounds for inserting an empty node"
+            items.next().is_none(),
+            "all indices must be within tree capacity"
         );
-
-        let holes = self.holes.insert(index);
-        let root = self
-            .root
-            .insert_or_modify::<H, _>(index, |node| match node {
-                Node::Empty { .. } => Node::Leaf { value: None },
-                _ => panic!("Cannot insert a hole into a non-empty/non-leaf node"),
-            });
-
         Self {
             root,
-            holes,
             _hasher: PhantomData,
         }
+    }
+
+    /// Builds a sparse subtree starting at `subtree_start`, representing
+    /// unoccupied ranges as [`Node::Empty`] rather than materializing
+    /// individual empty leaves.
+    ///
+    /// A subtree of `height` covers the half-open range
+    /// `[subtree_start, subtree_start + 2^height)`. Thus, `subtree_capacity =
+    /// 2^height` is the width of this subtree, not an absolute index bound,
+    /// and `midpoint = subtree_start + subtree_capacity / 2` divides the range
+    /// into equal left and right halves.
+    ///
+    /// The iterator must yield entries in strictly increasing absolute
+    /// position order. At `height == 0`, this subtree represents exactly one
+    /// leaf position, so any consumed item is at `subtree_start`. The function
+    /// consumes only entries belonging to the current subtree.
+    fn build_sparse_subtree<I>(
+        items: &mut std::iter::Peekable<I>,
+        subtree_start: usize,
+        height: usize,
+    ) -> Arc<Node<H::Hash>>
+    where
+        I: Iterator<Item = (usize, H::Hash)>,
+    {
+        let Some(&(position, _)) = items.peek() else {
+            return Arc::new(Node::Empty { height });
+        };
+        let subtree_capacity = 1usize << height;
+        assert!(
+            position >= subtree_start && position - subtree_start < subtree_capacity,
+            "indices must be strictly increasing and within bounds"
+        );
+        if height == 0 {
+            let (_, value) = items.next().expect("peeked item must be available");
+            return Arc::new(Node::new(value));
+        }
+
+        let midpoint = subtree_start + (subtree_capacity / 2);
+        let left = if items
+            .peek()
+            .is_some_and(|(position, _)| *position < midpoint)
+        {
+            Self::build_sparse_subtree(items, subtree_start, height - 1)
+        } else {
+            Arc::new(Node::Empty { height: height - 1 })
+        };
+        let right = if items
+            .peek()
+            .is_some_and(|(position, _)| *position < subtree_start + subtree_capacity)
+        {
+            Self::build_sparse_subtree(items, midpoint, height - 1)
+        } else {
+            Arc::new(Node::Empty { height: height - 1 })
+        };
+        Arc::new(Node::new_inner::<H>(left, right))
     }
 }
 
@@ -527,22 +611,22 @@ impl<H: MerkleHasher> Eq for DynamicMerkleTree<H> {}
 
 /// [`serde`](::serde) support for [`DynamicMerkleTree`].
 ///
-/// The tree serializes as its root node and the set of holes; on
-/// deserialization the two are reassembled into a tree. Requires the hasher's
+/// The tree serializes its root node. Deserialization recursively validates
+/// and rebuilds the node tree, recomputing derived inner-node state and
+/// collapsing fully empty sibling subtrees. Requires the hasher's
 /// [`Hash`](MerkleHasher::Hash) type to implement the corresponding `serde`
 /// traits.
 pub mod serde {
-    use std::{marker::PhantomData, sync::Arc};
+    use std::sync::Arc;
 
-    use rpds::RedBlackTreeSetSync;
     use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeStruct as _};
 
     use super::MerkleHasher;
 
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct Raw<Hash> {
         root: Arc<super::Node<Hash>>,
-        holes: RedBlackTreeSetSync<usize>,
     }
 
     impl<H> Serialize for super::DynamicMerkleTree<H>
@@ -554,9 +638,8 @@ pub mod serde {
         where
             S: Serializer,
         {
-            let mut state = serializer.serialize_struct("DynamicMerkleTree", 2)?;
+            let mut state = serializer.serialize_struct("DynamicMerkleTree", 1)?;
             state.serialize_field("root", &self.root)?;
-            state.serialize_field("holes", &self.holes)?;
             state.end()
         }
     }
@@ -571,10 +654,18 @@ pub mod serde {
             D: Deserializer<'de>,
         {
             let raw = Raw::<H::Hash>::deserialize(deserializer)?;
+            let root = super::Node::rebuild_and_validate::<H>(&raw.root)
+                .map_err(serde::de::Error::custom)?;
+            if root.height() != super::TREE_HEIGHT_EXCEPT_ROOT
+                || matches!(root.as_ref(), super::Node::Leaf { .. })
+            {
+                return Err(serde::de::Error::custom(
+                    "dynamic Merkle tree root has an invalid shape",
+                ));
+            }
             Ok(Self {
-                root: raw.root,
-                holes: raw.holes,
-                _hasher: PhantomData,
+                root,
+                _hasher: std::marker::PhantomData,
             })
         }
     }
@@ -599,7 +690,7 @@ impl<T> MerkleNode<T> {
 }
 
 /// A Merkle path consisting of sibling nodes from leaf to root (excluded).
-pub type MerklePath<T> = Vec<MerkleNode<T>>;
+pub type MerklePath<T> = [MerkleNode<T>; TREE_HEIGHT_EXCEPT_ROOT];
 
 #[cfg(test)]
 mod test_fr {
@@ -656,7 +747,7 @@ mod tests {
     }
 
     #[test]
-    fn test_hole_management() {
+    fn test_free_position_management() {
         let tree: DynamicMerkleTree<TestHasher> = DynamicMerkleTree::new();
         let mut rng = rand::thread_rng();
         let a = fr_from_rng(&mut rng);
@@ -749,6 +840,169 @@ mod tests {
     }
 
     #[test]
+    fn test_sparse_recovery_does_not_materialize_gaps() {
+        let value = fr_from_usize(1);
+        let recovered =
+            DynamicMerkleTree::<TestHasher>::from_sorted_items([((1usize << 31) + 1, value)]);
+
+        assert_eq!(recovered.size(), 1);
+        let (recovered, index) = recovered.insert(fr_from_usize(2));
+        assert_eq!(index, 0);
+        assert_eq!(recovered.size(), 2);
+    }
+
+    #[test]
+    fn test_single_removal_uses_empty_leaf() {
+        let tree = DynamicMerkleTree::<TestHasher>::new();
+        let (tree, first_position) = tree.insert(fr_from_usize(1));
+        let (tree, second_position) = tree.insert(fr_from_usize(2));
+
+        let removed = tree.remove(first_position);
+
+        assert_eq!(removed.size(), 1);
+        assert!(matches!(
+            subtree_at(&removed.root, first_position, 0),
+            Node::Empty { height: 0 }
+        ));
+        assert!(removed.path(first_position).is_none());
+        assert!(removed.path(second_position).is_some());
+        assert_canonical(&removed.root);
+    }
+
+    #[test]
+    fn test_sibling_empty_subtrees_collapse() {
+        let mut tree = DynamicMerkleTree::<TestHasher>::new();
+        for value in 0..3 {
+            tree = tree.insert(fr_from_usize(value)).0;
+        }
+
+        tree = tree.remove(0);
+        tree = tree.remove(1);
+
+        assert!(matches!(
+            subtree_at(&tree.root, 0, 1),
+            Node::Empty { height: 1 }
+        ));
+        assert_eq!(tree.size(), 1);
+        assert_canonical(&tree.root);
+    }
+
+    #[test]
+    fn test_empty_subtrees_collapse_recursively() {
+        let mut tree = DynamicMerkleTree::<TestHasher>::new();
+        for value in 0..5 {
+            tree = tree.insert(fr_from_usize(value)).0;
+        }
+
+        for position in 0..4 {
+            tree = tree.remove(position);
+        }
+
+        assert!(matches!(
+            subtree_at(&tree.root, 0, 2),
+            Node::Empty { height: 2 }
+        ));
+        assert_eq!(tree.size(), 1);
+        assert_canonical(&tree.root);
+    }
+
+    #[test]
+    fn test_removing_every_item_restores_canonical_empty_tree() {
+        let mut tree = DynamicMerkleTree::<TestHasher>::new();
+        for value in 0..8 {
+            tree = tree.insert(fr_from_usize(value)).0;
+        }
+        for position in 0..8 {
+            tree = tree.remove(position);
+        }
+
+        assert!(matches!(
+            tree.root.as_ref(),
+            Node::Empty {
+                height: TREE_HEIGHT_EXCEPT_ROOT
+            }
+        ));
+        assert_eq!(tree.root(), DynamicMerkleTree::<TestHasher>::new().root());
+        assert_canonical(&tree.root);
+    }
+
+    #[test]
+    fn test_remove_and_reinsert_restores_root() {
+        let tree = DynamicMerkleTree::<TestHasher>::new();
+        let value = fr_from_usize(1);
+        let (tree, _) = tree.insert(value);
+        let (tree, _) = tree.insert(fr_from_usize(2));
+        let original_root = tree.root();
+
+        let tree = tree.remove(0);
+        let (tree, position) = tree.insert(value);
+
+        assert_eq!(position, 0);
+        assert_eq!(tree.root(), original_root);
+        assert_canonical(&tree.root);
+    }
+
+    #[test]
+    fn test_mutation_and_sparse_recovery_have_same_structure() {
+        let capacity = 1usize << TREE_HEIGHT_EXCEPT_ROOT;
+        let items = [
+            (1, fr_from_usize(1)),
+            (7, fr_from_usize(7)),
+            (1usize << 31, fr_from_usize(31)),
+            (capacity - 1, fr_from_usize(32)),
+        ];
+        let recovered = DynamicMerkleTree::<TestHasher>::from_sorted_items(items);
+        let mutated = tree_from_indexed_mutation(items);
+
+        assert_eq!(mutated.size(), items.len());
+        assert_eq!(mutated.root, recovered.root);
+        assert_canonical(&mutated.root);
+        assert_canonical(&recovered.root);
+    }
+
+    #[test]
+    fn test_direct_serde_roundtrip_preserves_canonical_structure() {
+        let items = [
+            (1, [1; 32]),
+            (7, [7; 32]),
+            (1usize << 31, [31; 32]),
+            ((1usize << 32) - 1, [32; 32]),
+        ];
+        let tree = DynamicMerkleTree::<SerdeHasher>::from_sorted_items(items);
+        let (tree, inserted_position) = tree.insert([99; 32]);
+        let tree = tree.remove(inserted_position);
+        let serialized = serde_json::to_string(&tree).expect("serialize dynamic tree");
+        let recovered: DynamicMerkleTree<SerdeHasher> =
+            serde_json::from_str(&serialized).expect("deserialize dynamic tree");
+
+        assert!(!serialized.contains("holes"));
+        assert_eq!(tree.root, recovered.root);
+        assert_canonical(&recovered.root);
+    }
+
+    #[test]
+    fn test_direct_serde_canonicalizes_empty_inner_nodes() {
+        #[derive(::serde::Serialize)]
+        struct RawTree<Hash> {
+            root: Arc<Node<Hash>>,
+        }
+
+        let raw = RawTree {
+            root: noncanonical_empty_tree::<SerdeHasher>(TREE_HEIGHT_EXCEPT_ROOT),
+        };
+        let serialized = serde_json::to_string(&raw).expect("serialize non-canonical tree");
+        let recovered: DynamicMerkleTree<SerdeHasher> =
+            serde_json::from_str(&serialized).expect("deserialize non-canonical tree");
+
+        assert!(matches!(
+            recovered.root.as_ref(),
+            Node::Empty {
+                height: TREE_HEIGHT_EXCEPT_ROOT
+            }
+        ));
+    }
+
+    #[test]
     fn test_remove_single_item() {
         let tree: DynamicMerkleTree<TestHasher> = DynamicMerkleTree::new();
         let item = fr_from_rng(&mut rand::thread_rng());
@@ -798,7 +1052,7 @@ mod tests {
     }
 
     #[test]
-    fn test_smallest_hole_selection() {
+    fn test_smallest_free_position_selection() {
         let tree: DynamicMerkleTree<TestHasher> = DynamicMerkleTree::new();
 
         // Insert items at positions 0, 1, 2, 3, 4
@@ -808,23 +1062,23 @@ mod tests {
         let (tree, _) = tree.insert(fr_from_rng(&mut rand::thread_rng()));
         let (tree, _) = tree.insert(fr_from_rng(&mut rand::thread_rng()));
 
-        // Remove items at positions 3, 1, 4 (creating holes in that order)
+        // Remove items at positions 3, 1, 4 (creating free positions in that order)
         let tree = tree.remove(3);
         let tree = tree.remove(1);
         let tree = tree.remove(4);
 
-        // Now we have holes at positions 1, 3, 4
-        // The smallest hole should be selected first (position 1)
+        // Now we have free positions at 1, 3, 4. The smallest free position
+        // should be selected first (position 1).
         let (tree, index1) = tree.insert(fr_from_rng(&mut rand::thread_rng()));
-        assert_eq!(index1, 1, "Should select smallest hole first");
+        assert_eq!(index1, 1, "Should select smallest free position first");
 
-        // Next insertion should use the next smallest hole (position 3)
+        // Next insertion should use the next smallest free position (position 3)
         let (tree, index2) = tree.insert(fr_from_rng(&mut rand::thread_rng()));
-        assert_eq!(index2, 3, "Should select next smallest hole");
+        assert_eq!(index2, 3, "Should select next smallest free position");
 
-        // Final insertion should use the last hole (position 4)
+        // Final insertion should use the last free position (position 4)
         let (_, index3) = tree.insert(fr_from_rng(&mut rand::thread_rng()));
-        assert_eq!(index3, 4, "Should select remaining hole");
+        assert_eq!(index3, 4, "Should select remaining free position");
     }
 
     #[test]
@@ -913,5 +1167,138 @@ mod tests {
             current_hash, expected_root,
             "Computed root from path doesn't match expected root"
         );
+    }
+
+    fn assert_canonical<Hash>(node: &Arc<Node<Hash>>) {
+        match node.as_ref() {
+            Node::Empty { .. } | Node::Leaf { .. } => {}
+            Node::Inner {
+                left,
+                right,
+                left_subtree_size,
+                right_subtree_size,
+                height,
+                ..
+            } => {
+                assert_eq!(left.height(), right.height());
+                assert!(!matches!(
+                    (left.as_ref(), right.as_ref()),
+                    (Node::Empty { .. }, Node::Empty { .. })
+                ));
+                assert_eq!(*height, left.height() + 1);
+                assert_eq!(*left_subtree_size, left.size());
+                assert_eq!(*right_subtree_size, right.size());
+                assert_canonical(left);
+                assert_canonical(right);
+            }
+        }
+    }
+
+    fn subtree_at(node: &Arc<Node<Fr>>, index: usize, target_height: usize) -> &Node<Fr> {
+        assert!(target_height <= node.height());
+        if target_height == node.height() {
+            return node;
+        }
+        match node.as_ref() {
+            Node::Inner { left, right, .. } => {
+                if index < left.capacity() {
+                    subtree_at(left, index, target_height)
+                } else {
+                    subtree_at(right, index - left.capacity(), target_height)
+                }
+            }
+            Node::Empty { .. } => panic!("empty subtree is already canonical at this range"),
+            Node::Leaf { .. } => panic!("leaf is already at the smallest range"),
+        }
+    }
+
+    fn tree_from_indexed_mutation(
+        items: impl IntoIterator<Item = (usize, Fr)>,
+    ) -> DynamicMerkleTree<TestHasher> {
+        let root = items.into_iter().fold(
+            Arc::new(Node::Empty {
+                height: TREE_HEIGHT_EXCEPT_ROOT,
+            }),
+            |root, (position, value)| insert_at_any_position(&root, position, value),
+        );
+        DynamicMerkleTree {
+            root,
+            _hasher: PhantomData,
+        }
+    }
+
+    fn insert_at_any_position(node: &Arc<Node<Fr>>, index: usize, value: Fr) -> Arc<Node<Fr>> {
+        match node.as_ref() {
+            Node::Inner { left, right, .. } => {
+                if index < left.capacity() {
+                    Arc::new(Node::new_inner::<TestHasher>(
+                        insert_at_any_position(left, index, value),
+                        Arc::clone(right),
+                    ))
+                } else {
+                    Arc::new(Node::new_inner::<TestHasher>(
+                        Arc::clone(left),
+                        insert_at_any_position(right, index - left.capacity(), value),
+                    ))
+                }
+            }
+            Node::Empty { height } if *height > 0 => {
+                let half = 1usize << (height - 1);
+                let left = Arc::new(Node::Empty { height: height - 1 });
+                let right = Arc::new(Node::Empty { height: height - 1 });
+                if index < half {
+                    Arc::new(Node::new_inner::<TestHasher>(
+                        insert_at_any_position(&left, index, value),
+                        right,
+                    ))
+                } else {
+                    Arc::new(Node::new_inner::<TestHasher>(
+                        left,
+                        insert_at_any_position(&right, index - half, value),
+                    ))
+                }
+            }
+            Node::Empty { .. } => Arc::new(Node::new(value)),
+            Node::Leaf { .. } => panic!("cannot insert into an occupied position"),
+        }
+    }
+
+    fn noncanonical_empty_tree<H>(height: usize) -> Arc<Node<H::Hash>>
+    where
+        H: MerkleHasher,
+    {
+        assert!(height > 0);
+        let left = if height == 1 {
+            Arc::new(Node::Empty { height: 0 })
+        } else {
+            noncanonical_empty_tree::<H>(height - 1)
+        };
+        let right = Arc::new(Node::Empty { height: height - 1 });
+        Arc::new(Node::Inner {
+            value: hash::<H>(&left, &right),
+            left_subtree_size: left.size(),
+            right_subtree_size: right.size(),
+            height,
+            left,
+            right,
+        })
+    }
+
+    struct SerdeHasher;
+
+    impl MerkleHasher for SerdeHasher {
+        type Hash = [u8; 32];
+
+        const EMPTY_VALUE: Self::Hash = [0; 32];
+
+        fn compress(left: &Self::Hash, right: &Self::Hash) -> Self::Hash {
+            let mut hash = [0; 32];
+            for (output, (left, right)) in hash.iter_mut().zip(left.iter().zip(right)) {
+                *output = left.wrapping_add(*right);
+            }
+            hash
+        }
+
+        empty_subtree_root!([u8; 32]);
     }
 }

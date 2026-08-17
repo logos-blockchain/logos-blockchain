@@ -222,7 +222,7 @@ Feature: Zone SDK
   Scenario: Concurrent multi-sequencer publishing converges without duplicates
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 3           | 100000       |
+      | 1             | 3           | 1000000      |
     And I have a cluster with capacity of 1 nodes
     And I start nodes with wallet and sequencer resources:
       | node_name | account_index | wallet_name | connected_to | sequencers          |
@@ -232,7 +232,7 @@ Feature: Zone SDK
       | SEQ_B |
       | SEQ_C |
     When node "NODE_1" is at height 1 in 120 seconds
-    And wallet "WALLET_1A" sends 100 notes of 1500 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+    And wallet "WALLET_1A" sends 200 notes of 3000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
     And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
     And I start zone sequencer "SEQ_A" with indexer
     When I stop zone sequencer "SEQ_A"
@@ -512,13 +512,13 @@ Feature: Zone SDK
   Scenario: Concurrent identical payloads converge to one inscription per publish
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 3           | 100000       |
+      | 1             | 3           | 1000000      |
     And I have a cluster with capacity of 1 nodes
     And I start nodes with wallet and sequencer resources:
       | node_name | account_index | wallet_name | connected_to | sequencers          |
       | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B, SEQ_C |
     When node "NODE_1" is at height 1 in 120 seconds
-    And wallet "WALLET_1A" sends 100 notes of 1500 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+    And wallet "WALLET_1A" sends 200 notes of 3000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
     And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
     And I start zone sequencer "SEQ_A" with indexer
     And sequencer "SEQ_A" submits zone config transaction:
@@ -714,13 +714,13 @@ Feature: Zone SDK
   Scenario: Concurrent custom multi-inscription transactions recover from conflicts
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 3           | 100000       |
+      | 1             | 3           | 1000000      |
     And I have a cluster with capacity of 1 nodes
     And I start nodes with wallet and sequencer resources:
       | node_name | account_index | wallet_name | connected_to | sequencers   |
       | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B |
     When node "NODE_1" is at height 1 in 120 seconds
-    And wallet "WALLET_1A" sends 100 notes of 1500 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+    And wallet "WALLET_1A" sends 200 notes of 3000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
     And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
     And I start zone sequencer "SEQ_A" with indexer
     And sequencer "SEQ_A" submits zone config transaction:
@@ -733,4 +733,47 @@ Feature: Zone SDK
       | SEQ_A     | 5            | 5            |
       | SEQ_B     | 5            | 5            |
     Then the zone indexer returns all custom payloads in 600 seconds
+    And I stop all nodes
+
+  @zone_ci
+  # Config signatures must claim the signer's index in the current accredited
+  # list, not index 0 — CONFIG_BA below is signed by SEQ_B from index 1.
+  Scenario: Non-leading sequencer re-keys the channel and in-flight inscriptions recover
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers   |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B |
+    When node "NODE_1" is at height 1 in 120 seconds
+    And wallet "WALLET_1A" sends 30 notes of 1000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+    And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
+    And I start zone sequencers:
+      | alias | indexer | pending_submit_depth | passive_republish_orphans |
+      | SEQ_A | true    | default              | true                      |
+    And sequencer "SEQ_A" publishes the following zone messages:
+      | alias | data                      |
+      | MSG_1 | inscription before re-key |
+    And sequencer "SEQ_A" submits zone config transaction:
+      | config_name | posting_timeframe | posting_timeout | authorized_sequencers |
+      | CONFIG_AB   | 2                 | 0               | SEQ_A, SEQ_B          |
+    Then zone transaction "CONFIG_AB" is finalized in 180 seconds
+    When I start zone sequencers:
+      | alias | indexer | pending_submit_depth | passive_republish_orphans |
+      | SEQ_B | false   | default              | true                      |
+    And sequencer "SEQ_A" submits the following zone messages without waiting for inclusion:
+      | alias | data                    |
+      | MSG_2 | in flight during re-key |
+    And sequencer "SEQ_B" submits zone config transaction:
+      | config_name | posting_timeframe | posting_timeout | authorized_sequencers |
+      | CONFIG_BA   | 2                 | 0               | SEQ_B, SEQ_A          |
+    And sequencer "SEQ_B" submits the following zone messages without waiting for inclusion:
+      | alias | data               |
+      | MSG_3 | post re-key from B |
+    And sequencer "SEQ_A" submits the following zone messages without waiting for inclusion:
+      | alias | data               |
+      | MSG_4 | post re-key from A |
+    Then zone transaction "CONFIG_BA" is included in 180 seconds
+    And the zone indexer returns all zone messages exactly once in any order in 600 seconds
     And I stop all nodes

@@ -44,10 +44,4 @@ impl Settings {
 
         config
     }
-
-    #[must_use]
-    pub const fn with_probe_interval_millisecs(mut self, millisecs: u64) -> Self {
-        self.probe_interval_millisecs = Some(millisecs);
-        self
-    }
 }

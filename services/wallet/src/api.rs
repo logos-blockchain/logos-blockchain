@@ -10,9 +10,10 @@ use lb_core::{
     },
 };
 use lb_key_management_system_service::keys::{
-    Ed25519Key, ZkPublicKey, ZkSignature, secured_key::SecuredKey,
+    Ed25519Key, ZkPublicKey, ZkPublicKeys, ZkSignature, secured_key::SecuredKey,
 };
 use lb_storage_service::backends::StorageBackend;
+use lb_utils::bounded::BoundedError;
 use lb_wallet::WalletBalance;
 use overwatch::{
     overwatch::OverwatchHandle,
@@ -41,6 +42,8 @@ pub enum WalletApiError {
     Wallet(#[from] WalletServiceError),
     #[error(transparent)]
     TxBuilderError(#[from] TxBuilderError),
+    #[error(transparent)]
+    BoundedError(#[from] BoundedError),
 }
 
 impl From<(RelayError, WalletMsg)> for WalletApiError {
@@ -131,13 +134,17 @@ where
         Ok(rx.await??)
     }
 
+    /// Fund a transaction, reserving `priority_fee_percent` percent of its
+    /// final mandatory fee as a priority reserve. The mandatory fee includes
+    /// execution and storage cost; only the unused reserve becomes an
+    /// effective priority tip. The percentage is not capped at 100.
     pub async fn fund_tx(
         &self,
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
-        priority_fee: Value,
+        priority_fee_percent: u64,
     ) -> Result<TipResponse<MantleTxBuilder>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
@@ -147,7 +154,7 @@ where
                 tx_builder,
                 change_pk,
                 funding_pks,
-                priority_fee,
+                priority_fee_percent,
                 resp_tx,
             })
             .await?;
@@ -245,8 +252,9 @@ where
     pub async fn sign_tx_with_zk(
         &self,
         tx_hash: TxHash,
-        pks: Vec<ZkPublicKey>,
+        pks: impl IntoIterator<Item = ZkPublicKey>,
     ) -> Result<ZkSignature, WalletApiError> {
+        let pks = ZkPublicKeys::try_from_iter(pks)?;
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay

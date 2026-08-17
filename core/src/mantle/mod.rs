@@ -9,7 +9,7 @@ pub mod transactions;
 mod channel_notes;
 mod fixtures;
 
-pub use gas::{GasCalculator, GasConstants};
+pub use gas::{GasProfile, TxGasCalculator};
 pub use ledger::{Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof};
 pub use transactions::{
@@ -17,5 +17,3 @@ pub use transactions::{
 };
 
 pub use crate::mantle::transactions::VerificationError;
-
-pub const MAX_MANTLE_TXS: usize = 1024;

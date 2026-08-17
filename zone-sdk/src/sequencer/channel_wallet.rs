@@ -134,9 +134,9 @@ pub(super) fn note_ops_from_txs(
                         total: event.amount,
                         size: event.notes.len(),
                     });
-                    for note_id in event.notes.iter() {
+                    for note in event.notes.iter() {
                         ops.push(NoteOp::Add(ChannelNote {
-                            note_id: *note_id,
+                            note_id: note.note_id,
                             value: group.is_none().then_some(event.amount),
                             pk: None,
                             deposit_group: group,
@@ -166,12 +166,15 @@ pub(super) fn note_ops_from_txs(
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{
-        Note, Value,
-        ledger::{Inputs, Outputs},
-        ops::channel::{
-            channel_transfer::ChannelTransferOp,
-            deposit::{DepositOp, Metadata},
+    use lb_core::{
+        events::DepositNote,
+        mantle::{
+            Note, Value,
+            ledger::{Inputs, Outputs},
+            ops::channel::{
+                channel_transfer::ChannelTransferOp,
+                deposit::{DepositOp, Metadata},
+            },
         },
     };
     use lb_groth16::Fr;
@@ -209,7 +212,16 @@ mod tests {
             },
             crate::adapter::DepositEvent {
                 amount,
-                notes: notes.try_into().unwrap(),
+                notes: notes
+                    .into_iter()
+                    .map(|note_id| DepositNote {
+                        note_id,
+                        value: 0,
+                        pk: Fr::from(0u64).into(),
+                    })
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .unwrap(),
             },
         )])
     }

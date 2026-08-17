@@ -241,7 +241,7 @@ fn read_recovered_mempool_pending_hashes(
 
     Ok(recovery_state
         .pool()
-        .map(|pool| pool.pending_items.iter().copied().collect()))
+        .map(|pool| pool.pending_items.keys().copied().collect()))
 }
 
 fn wallet_transaction_error(error: &WalletTransactionError) -> StepError {

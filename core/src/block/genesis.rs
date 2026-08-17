@@ -7,7 +7,7 @@ use lb_utils::bounded::{BoundedError, UpperBoundedVec};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    block::{Block, BlockTransactions},
+    block::{Block, BlockTransactions, UncleHeaders},
     header::Header,
     mantle::{
         Note, Op, OpProof, SignedMantleTx,
@@ -117,6 +117,7 @@ impl<'de> Deserialize<'de> for GenesisBlock {
         struct RawGenesisBlock {
             header: Header,
             signature: Ed25519Signature,
+            uncle_headers: UncleHeaders,
             transactions: BlockTransactions<GenesisTx>,
         }
 
@@ -124,6 +125,12 @@ impl<'de> Deserialize<'de> for GenesisBlock {
 
         if raw.header.slot() != Slot::genesis() {
             return Err(serde::de::Error::custom("expected genesis slot"));
+        }
+
+        if !raw.uncle_headers.is_empty() {
+            return Err(serde::de::Error::custom(
+                "genesis block must not reference uncles",
+            ));
         }
 
         if raw.transactions.len() != 1 {
@@ -135,10 +142,11 @@ impl<'de> Deserialize<'de> for GenesisBlock {
         let block = Block {
             header: raw.header,
             signature: raw.signature,
+            uncle_headers: raw.uncle_headers,
             transactions: raw.transactions,
         };
         block
-            .validate_block_root()
+            .validate_body_root()
             .map_err(serde::de::Error::custom)?;
 
         Ok(Self(block))
@@ -159,6 +167,7 @@ impl GenesisBlock {
         Self(Block {
             header,
             signature,
+            uncle_headers: UncleHeaders::empty(),
             transactions,
         })
     }
@@ -1279,6 +1288,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        block::SignedHeader,
         header::HeaderId,
         mantle::{
             CryptarchiaParameter, GenesisTime, NoteId,
@@ -1783,6 +1793,7 @@ mod tests {
         let decoded: GenesisBlock = serde_json::from_str(&json).expect("genesis block deserialize");
 
         assert_eq!(decoded.header().slot(), Slot::genesis());
+        assert!(decoded.uncle_headers().is_empty());
         assert_eq!(decoded.transactions_iter().len(), 1);
         assert_eq!(decoded.header().id(), block.header().id());
     }
@@ -1801,6 +1812,30 @@ mod tests {
         let err = serde_json::from_value::<GenesisBlock>(value).unwrap_err();
         assert!(
             err.to_string().contains("expected genesis slot"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn genesis_block_deserialize_rejects_nonempty_uncle_references() {
+        // Build a valid genesis block first.
+        let block = GenesisBlockBuilder::new()
+            .with_genesis_tx(make_genesis_tx(vec![]))
+            .build();
+
+        // Reference an uncle, which is not allowed in a genesis block.
+        let mut value = serde_json::to_value(&block).expect("to_value should work");
+        let uncle = serde_json::to_value(SignedHeader::new(
+            block.header().clone(),
+            *block.signature(),
+        ))
+        .expect("to_value should work");
+        value["uncle_headers"] = serde_json::Value::Array(vec![uncle]);
+
+        let err = serde_json::from_value::<GenesisBlock>(value).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("genesis block must not reference uncles"),
             "unexpected error: {err}"
         );
     }
@@ -1880,18 +1915,18 @@ mod tests {
     }
 
     #[test]
-    fn genesis_block_deserialize_rejects_block_root_mismatch() {
+    fn genesis_block_deserialize_rejects_body_root_mismatch() {
         let block = GenesisBlockBuilder::new()
             .with_genesis_tx(make_genesis_tx(vec![]))
             .build();
 
         let mut value = serde_json::to_value(&block).expect("to_value should work");
-        value["header"]["block_root"] = serde_json::json!("00".repeat(32));
+        value["header"]["body_root"] = serde_json::json!("00".repeat(32));
 
         let err = serde_json::from_value::<GenesisBlock>(value).unwrap_err();
         assert!(
             err.to_string()
-                .contains("Block root mismatch: calculated content does not match header"),
+                .contains("Body root mismatch: calculated body does not match header"),
             "unexpected error: {err}"
         );
     }

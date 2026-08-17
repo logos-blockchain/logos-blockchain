@@ -4,17 +4,18 @@ use serde::{Deserialize, Serialize};
 use crate::{
     events::TxEvent,
     mantle::{
-        TxHash,
+        TxHash, Value,
         channel::{Channels, Error},
+        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
-            ExecutableOperation, Inputs, Outputs, ProvableOperation, Utxo, Utxos,
-            VerifiableOperation, verification_mode,
+            ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation, Utxo,
+            Utxos, VerifiableOperation, verification_mode, verification_mode::VerificationMode,
         },
         ops::{
-            OpId,
+            OpId, SignedOp,
             channel::{ChannelId, verification::verify_channel_multi_sig},
         },
-        transactions::{OperationVerificationHelper, hash::TxHashView},
+        transactions::{OperationVerificationHelper, hash::TxHashView, states::VerificationState},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
     sdp::locked_notes::LockedNotes,
@@ -56,30 +57,39 @@ pub struct ChannelTransferExecutionContext {
 }
 
 impl ProvableOperation for ChannelTransferOp {
+    // `SignedOperationExecutionGas::gas_multiplier` below reads this proof's
+    // signature count. If this changes, update that too.
     type Proof = ChannelMultiSigProof;
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for ChannelTransferOp {
-    type PreverificationContext<'a> = ();
-    type VerificationContext<'a> = ChannelTransferValidationContext<'a>;
+impl OperationGas<MainnetGasProfile> for ChannelTransferOp {
+    const GAS_COST: Gas = Gas::new(56);
+}
+
+impl PreverifiableOperation<verification_mode::StandardMode> for ChannelTransferOp {
+    type Context<'a> = ();
     type Error = Error;
 
     fn preverify(
         &self,
         _proof: &Self::Proof,
-        _context: &Self::PreverificationContext<'_>,
+        _context: &Self::Context<'_>,
     ) -> Result<(), Self::Error> {
+        // Ensure the inputs is non-empty
+        self.inputs.preverify()?;
+
         // Check that the outputs are valid
         self.outputs.validate()?;
 
         Ok(())
     }
+}
 
-    fn verify(
-        &self,
-        proof: &Self::Proof,
-        context: &Self::VerificationContext<'_>,
-    ) -> Result<(), Self::Error> {
+impl VerifiableOperation<verification_mode::StandardMode> for ChannelTransferOp {
+    type Context<'a> = ChannelTransferValidationContext<'a>;
+    type Error = Error;
+
+    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
         verify_channel_multi_sig(
             &self.channel_id,
             proof,
@@ -166,5 +176,55 @@ impl ExecutableOperation for ChannelTransferOp {
         }
 
         Ok((context, Vec::new()))
+    }
+}
+
+impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
+    for SignedOp<ChannelTransferOp, State, Mode>
+{
+    fn gas_multiplier(&self) -> Value {
+        let signature_count = self.proof().signatures().len();
+        Value::try_from(signature_count)
+            .expect("Channel multi-signature proofs are bound to u16::MAX signatures.")
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use lb_key_management_system_keys::keys::ZkPublicKey;
+
+    use super::*;
+    use crate::mantle::{Note, ledger::InputsError};
+
+    #[test]
+    fn test_preverify_rejects_empty_inputs() {
+        let channel_transfer = ChannelTransferOp {
+            channel_id: ChannelId::from([0u8; 32]),
+            inputs: Inputs::empty(),
+            outputs: Outputs::new([Note::new(100, ZkPublicKey::zero())]),
+        };
+        let proof = ChannelMultiSigProof::try_new([].into()).unwrap();
+
+        assert_eq!(
+            channel_transfer.preverify(&proof, &()),
+            Err(Error::Inputs(InputsError::EmptyInputs))
+        );
+    }
+
+    // An empty input list paired with an empty output list is trivially
+    // balanced, so the emptiness check is what rejects it.
+    #[test]
+    fn test_preverify_rejects_empty_inputs_and_outputs() {
+        let channel_transfer = ChannelTransferOp {
+            channel_id: ChannelId::from([0u8; 32]),
+            inputs: Inputs::empty(),
+            outputs: Outputs::empty(),
+        };
+        let proof = ChannelMultiSigProof::try_new([].into()).unwrap();
+
+        assert_eq!(
+            channel_transfer.preverify(&proof, &()),
+            Err(Error::Inputs(InputsError::EmptyInputs))
+        );
     }
 }

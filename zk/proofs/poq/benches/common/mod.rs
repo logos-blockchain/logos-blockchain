@@ -8,32 +8,38 @@ use std::str::FromStr as _;
 use lb_pol::LotteryConstants;
 use lb_utils::math::NonNegativeRatio;
 use logos_blockchain_poq::{
-    PoQBlendInputsData, PoQChainInputsData, PoQCommonInputsData, PoQWalletInputsData,
-    PoQWitnessInputs,
+    KeyIndex, PoQBlendInputsData, PoQChainInputsData, PoQCommonInputsData, PoQSelector,
+    PoQWalletInputsData, PoQWitnessInputs, Quota,
 };
 use num_bigint::BigUint;
 
-/// Quota advertised by the fixtures, for both the core and the leader branch.
+/// Quota advertised by the fixtures, for the core, the leader and pow branches.
 ///
 /// It has to stay above every key index the benchmarks prove for, since the
 /// circuit only accepts indices below the quota of the branch being proven.
-const QUOTA: u64 = 64;
+const QUOTA: Quota = Quota::new::<64>();
 
 fn lottery() -> (lb_groth16::Fr, lb_groth16::Fr) {
     LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
         .compute_lottery_values(5000)
 }
 
-fn common_data(selector: bool, key_index: u64) -> PoQCommonInputsData {
+fn common_data(selector: PoQSelector, key_index: KeyIndex) -> PoQCommonInputsData {
     PoQCommonInputsData {
         core_quota: QUOTA,
         leader_quota: QUOTA,
+        pow_quota: QUOTA,
         message_key: (
             BigUint::from(123_456u32).into(),
             BigUint::from(654_321u32).into(),
         ),
         selector,
         index: key_index,
+        pow_difficulty: BigUint::from_str(
+            "2334035772366381927456001473031809359552034265892309520954243351196711606017",
+        )
+        .unwrap()
+        .into(),
     }
 }
 
@@ -45,7 +51,7 @@ fn common_data(selector: bool, key_index: u64) -> PoQCommonInputsData {
     clippy::too_many_lines,
     reason = "Benchmark fixture with hardcoded data"
 )]
-pub fn core_node_inputs(key_index: u64) -> PoQWitnessInputs {
+pub fn core_node_inputs(key_index: KeyIndex) -> PoQWitnessInputs {
     let (lottery_0, lottery_1) = lottery();
     let chain_data = PoQChainInputsData {
         core_root: BigUint::from_str(
@@ -157,8 +163,11 @@ pub fn core_node_inputs(key_index: u64) -> PoQWitnessInputs {
         .map(|(v, s)| (BigUint::from_str(v).unwrap().into(), s)),
     };
 
-    PoQWitnessInputs::from_core_node_data(chain_data, common_data(false, key_index), blend_data)
-        .unwrap()
+    PoQWitnessInputs::from_core_node_data(
+        chain_data,
+        common_data(PoQSelector::Core, key_index),
+        blend_data,
+    )
 }
 
 /// Witness inputs for a leadership Proof of Quota at the given key index.
@@ -166,7 +175,7 @@ pub fn core_node_inputs(key_index: u64) -> PoQWitnessInputs {
     clippy::too_many_lines,
     reason = "Benchmark fixture with hardcoded data"
 )]
-pub fn leader_inputs(key_index: u64) -> PoQWitnessInputs {
+pub fn leader_inputs(key_index: KeyIndex) -> PoQWitnessInputs {
     let (lottery_0, lottery_1) = lottery();
     let chain_data = PoQChainInputsData {
         core_root: BigUint::from_str(
@@ -327,13 +336,16 @@ pub fn leader_inputs(key_index: u64) -> PoQWitnessInputs {
             ),
         ]
         .map(|(v, s)| (BigUint::from_str(v).unwrap().into(), s)),
-        secret_key: BigUint::from_str(
+        pol_secret_key: BigUint::from_str(
             "17558656186380761716563192806052137702710836103853413805442046164934618201080",
         )
         .unwrap()
         .into(),
     };
 
-    PoQWitnessInputs::from_leader_data(chain_data, common_data(true, key_index), wallet_data)
-        .unwrap()
+    PoQWitnessInputs::from_leader_data(
+        chain_data,
+        common_data(PoQSelector::Leader, key_index),
+        wallet_data,
+    )
 }

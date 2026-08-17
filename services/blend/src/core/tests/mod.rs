@@ -10,10 +10,10 @@ use lb_blend::{
     },
 };
 use lb_chain_service::Epoch;
-use lb_core::{codec::SerializeOp as _, crypto::ZkHash, sdp::ActivityMetadata};
+use lb_core::{crypto::ZkHash, sdp::ActivityMetadata};
 use lb_groth16::AdditiveGroup as _;
 use lb_key_management_system_service::keys::Ed25519Key;
-use lb_poq::CORE_MERKLE_TREE_HEIGHT;
+use lb_poq::{CORE_MERKLE_TREE_HEIGHT, Quota};
 use lb_utils::blake_rng::BlakeRng;
 use rand::SeedableRng as _;
 
@@ -26,17 +26,16 @@ use crate::{
         state::ServiceState,
         tests::utils::{
             MockKmsAdapter, MockProofsVerifier, NodeId, TestBlendBackend, TestBlendBackendEvent,
-            TestNetworkAdapter, dummy_overwatch_resources, dummy_pol_private_inputs,
-            new_crypto_processor, new_epoch_info, new_membership, new_stream,
-            recorded_set_epoch_private_calls, reset_set_epoch_private_calls, reward_epoch_info,
-            scheduler_epoch_info, scheduler_settings, sdp_relay, settings, timing_settings,
-            wait_for_blend_backend_event,
+            TestNetworkAdapter, backend_epoch_info, dummy_overwatch_resources,
+            dummy_pol_private_inputs, new_crypto_processor, new_epoch_info, new_membership,
+            new_stream, recorded_set_epoch_private_calls, reset_set_epoch_private_calls,
+            reward_epoch_info, scheduler_epoch_info, scheduler_settings, sdp_relay, settings,
+            timing_settings, wait_for_blend_backend_event,
         },
     },
     epoch::{CoreEpochInfo, CoreEpochPublicInfo},
     epoch_info::PolEpochInfo,
     membership::{MembershipInfo, ZkInfo, chain::BlendEpochState},
-    message::NetworkMessage,
     test_utils::{crypto::MockCoreAndLeaderProofsGenerator, epoch::OncePolStreamProvider},
 };
 
@@ -83,12 +82,7 @@ async fn test_handle_incoming_blend_message() {
         &public_info,
         (),
     );
-    let payload = NetworkMessage {
-        message: vec![],
-        broadcast_settings: (),
-    }
-    .to_bytes()
-    .expect("NetworkMessage serialization must succeed");
+    let payload = vec![];
     let msg = processor
         .encapsulate_data_payload(&payload)
         .await
@@ -109,7 +103,7 @@ async fn test_handle_incoming_blend_message() {
     )
     .unwrap();
     let recovery_checkpoint = handle_incoming_blend_message(
-        (msg.clone().into(), 0.into()),
+        (msg.clone(), 0.into()),
         &mut scheduler,
         None,
         &processor,
@@ -155,7 +149,7 @@ async fn test_handle_incoming_blend_message() {
     )
     .unwrap();
     let recovery_checkpoint = handle_incoming_blend_message(
-        (msg.clone().into(), 0.into()),
+        (msg.clone(), 0.into()),
         &mut new_scheduler,
         Some(&mut scheduler),
         &new_processor,
@@ -193,7 +187,7 @@ async fn test_handle_incoming_blend_message() {
         .await
         .expect("encapsulation must succeed");
     let recovery_checkpoint = handle_incoming_blend_message(
-        (msg.into(), 1.into()),
+        (msg, 1.into()),
         &mut new_scheduler,
         Some(&mut scheduler),
         &new_processor,
@@ -239,7 +233,7 @@ async fn test_handle_incoming_blend_message() {
         .await
         .expect("encapsulation must succeed");
     let recovery_checkpoint = handle_incoming_blend_message(
-        (msg.into(), 2.into()),
+        (msg, 2.into()),
         &mut new_scheduler,
         Some(&mut scheduler),
         &new_processor,
@@ -320,12 +314,7 @@ async fn test_duplicate_decapsulated_replica_handled_gracefully() {
     );
 
     // One logical data message, serialized once...
-    let payload = NetworkMessage {
-        message: vec![],
-        broadcast_settings: (),
-    }
-    .to_bytes()
-    .expect("NetworkMessage serialization must succeed");
+    let payload = vec![];
 
     // ...encapsulated twice. Each call draws fresh randomness, so these are two
     // distinct encapsulated messages (different identifiers) that the swarm
@@ -359,7 +348,7 @@ async fn test_duplicate_decapsulated_replica_handled_gracefully() {
 
     // First replica: decapsulated and recorded as an unsent processed message.
     let recovery_checkpoint = handle_incoming_blend_message(
-        (replica_a.into(), epoch),
+        (replica_a, epoch),
         &mut scheduler,
         None,
         &processor,
@@ -376,7 +365,7 @@ async fn test_duplicate_decapsulated_replica_handled_gracefully() {
     // The insert into `unsent_processed_messages` returns `Err`, but it is now
     // treated as a known duplicate instead of panicking the task.
     let recovery_checkpoint = handle_incoming_blend_message(
-        (replica_b.into(), epoch),
+        (replica_b, epoch),
         &mut scheduler,
         None,
         &processor,
@@ -416,12 +405,7 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
         (),
     );
 
-    let payload = NetworkMessage {
-        message: vec![],
-        broadcast_settings: (),
-    }
-    .to_bytes()
-    .expect("NetworkMessage serialization must succeed");
+    let payload = vec![];
     let msg = processor_0
         .encapsulate_data_payload(&payload)
         .await
@@ -458,7 +442,7 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
     // Signature is valid (built correctly) but PoQ will fail because the
     // MockProofsVerifier for epoch 1 expects epoch 1 proofs.
     drop(handle_incoming_blend_message(
-        (msg.into(), epoch_1),
+        (msg, epoch_1),
         &mut scheduler,
         None,
         &processor_1,
@@ -494,10 +478,10 @@ async fn test_handle_epoch_transition_expired() {
 
     // Create backend.
     let public_info = new_epoch_info(epoch, membership.clone(), &settings);
-    let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
-        (public_info.membership.clone(), public_info.epoch),
+        backend_epoch_info(&public_info),
         BlakeRng::from_entropy(),
     );
     let mut backend_event_receiver = backend.subscribe_to_events();
@@ -521,7 +505,7 @@ async fn test_handle_epoch_transition_expired() {
     let (sdp_relay, mut sdp_relay_receiver) = sdp_relay();
 
     // Call `handle_epoch_transition_expired`.
-    handle_epoch_transition_expired::<_, NodeId, BlakeRng, _>(
+    handle_epoch_transition_expired::<_, NodeId, BlakeRng, MockProofsVerifier, _>(
         &mut backend,
         token_collector,
         &sdp_relay,
@@ -578,10 +562,10 @@ async fn test_handle_epoch_event() {
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
-    let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
-        (public_info.membership.clone(), public_info.epoch),
+        backend_epoch_info(&public_info),
         BlakeRng::from_entropy(),
     );
     let mut backend_event_receiver = backend.subscribe_to_events();
@@ -744,10 +728,10 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
-    let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
-        (public_info.membership.clone(), public_info.epoch),
+        backend_epoch_info(&public_info),
         BlakeRng::from_entropy(),
     );
     let mut backend_event_receiver = backend.subscribe_to_events();
@@ -839,10 +823,10 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
-    let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
-        (public_info.membership.clone(), public_info.epoch),
+        backend_epoch_info(&public_info),
         BlakeRng::from_entropy(),
     );
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
@@ -933,10 +917,10 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
-    let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
-        (public_info.membership.clone(), public_info.epoch),
+        backend_epoch_info(&public_info),
         BlakeRng::from_entropy(),
     );
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
@@ -999,10 +983,10 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
-    let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
-        (public_info.membership.clone(), public_info.epoch),
+        backend_epoch_info(&public_info),
         BlakeRng::from_entropy(),
     );
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
@@ -1501,12 +1485,7 @@ async fn test_proof_generator_epoch_binding() {
     );
 
     // Build a message with epoch 0 proofs.
-    let payload = NetworkMessage {
-        message: vec![],
-        broadcast_settings: (),
-    }
-    .to_bytes()
-    .expect("NetworkMessage serialization must succeed");
+    let payload = vec![];
     let msg_0 = generator_0
         .encapsulate_data_payload(&payload)
         .await
@@ -1535,7 +1514,7 @@ async fn test_proof_generator_epoch_binding() {
     )
     .unwrap();
     drop(handle_incoming_blend_message(
-        (msg_0.clone().into(), epoch_0),
+        (msg_0.clone(), epoch_0),
         &mut scheduler_0,
         None,
         &generator_0,
@@ -1565,7 +1544,7 @@ async fn test_proof_generator_epoch_binding() {
     )
     .unwrap();
     drop(handle_incoming_blend_message(
-        (msg_1.clone().into(), epoch_0),
+        (msg_1.clone(), epoch_0),
         &mut scheduler_0_only,
         None,
         &generator_0,
@@ -1597,7 +1576,7 @@ async fn test_proof_generator_epoch_binding() {
     )
     .unwrap();
     drop(handle_incoming_blend_message(
-        (msg_1.into(), epoch_1),
+        (msg_1, epoch_1),
         &mut scheduler_1,
         None,
         &generator_1,
@@ -1656,7 +1635,7 @@ async fn test_initialize_recovers_matching_saved_state() {
         ServiceState::with_epoch(initial_epoch, token_collector, None, state_updater.clone())
             .unwrap();
     let mut updater = saved_state.start_updating();
-    updater.consume_core_quota(5);
+    updater.consume_core_quota(Quota::new::<5>());
     let saved_state = updater.commit_changes();
 
     let (
@@ -1688,7 +1667,7 @@ async fn test_initialize_recovers_matching_saved_state() {
 
     assert_eq!(
         recovered_checkpoint.spent_quota(),
-        5,
+        Quota::new::<5>(),
         "Matching epoch: spent_quota should be restored from saved state"
     );
     assert_eq!(recovered_checkpoint.last_seen_epoch(), initial_epoch);
@@ -1726,7 +1705,7 @@ async fn test_initialize_recovers_matching_saved_state() {
     )
     .unwrap();
     let mut updater = stale_state.start_updating();
-    updater.consume_core_quota(42);
+    updater.consume_core_quota(Quota::new::<42>());
     let stale_state = updater.commit_changes();
 
     let (
@@ -1758,7 +1737,7 @@ async fn test_initialize_recovers_matching_saved_state() {
 
     assert_eq!(
         recovered_checkpoint2.spent_quota(),
-        0,
+        Quota::ZERO,
         "Mismatched epoch: spent_quota should be 0 for fresh state"
     );
     assert_eq!(

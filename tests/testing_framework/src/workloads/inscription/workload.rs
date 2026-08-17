@@ -117,12 +117,6 @@ impl<E> WorkloadImpl<E> {
         self.payload_bytes = payload_bytes;
         self
     }
-
-    #[must_use]
-    pub const fn with_min_confirmed(mut self, min_confirmed: u64) -> Self {
-        self.min_confirmed = min_confirmed;
-        self
-    }
 }
 
 impl<E> Default for WorkloadImpl<E> {

@@ -6,6 +6,7 @@ mod serde {
         reward::{EpochBlendingTokenCollector, OldEpochBlendingTokenCollector},
     };
     use lb_chain_service::Epoch;
+    use lb_poq::Quota;
     use serde::{Deserialize, Serialize};
 
     use crate::{
@@ -17,31 +18,27 @@ mod serde {
     /// Recovery state that is serialized and deserialized to file.
     ///
     /// For details about its fields, check [`ServiceState`].
-    pub struct SerializableServiceState<BroadcastSettings> {
+    pub struct SerializableServiceState {
         last_seen_epoch: Epoch,
-        spent_core_quota: u64,
-        #[serde(bound(
-            deserialize = "BroadcastSettings: Deserialize<'de> + Eq + core::hash::Hash"
-        ))]
-        unsent_processed_messages: HashSet<ProcessedMessage<BroadcastSettings>>,
+        spent_core_quota: Quota,
+        unsent_processed_messages: HashSet<ProcessedMessage>,
         unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
         current_epoch_token_collector: EpochBlendingTokenCollector,
         old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
     }
 
-    impl<BroadcastSettings> SerializableServiceState<BroadcastSettings> {
+    impl SerializableServiceState {
         /// Consume the serializable state to create an actual state object, by
         /// passing it an Overwatch
         /// [`overwatch::services::state::StateUpdater`].
-        pub fn try_into_state_with_state_updater<BackendSettings>(
+        pub fn try_into_state_with_state_updater<BackendSettings, NetworkSettings>(
             self,
             state_updater: overwatch::services::state::StateUpdater<
-                Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
+                Option<RecoveryServiceState<BackendSettings, NetworkSettings>>,
             >,
-        ) -> Result<ServiceState<BackendSettings, BroadcastSettings>, error::EpochMismatch>
+        ) -> Result<ServiceState<BackendSettings, NetworkSettings>, error::EpochMismatch>
         where
             BackendSettings: Clone,
-            BroadcastSettings: Clone,
         {
             ServiceState::new(
                 self.last_seen_epoch,
@@ -55,10 +52,10 @@ mod serde {
         }
     }
 
-    impl<BackendSettings, BroadcastSettings> From<ServiceState<BackendSettings, BroadcastSettings>>
-        for SerializableServiceState<BroadcastSettings>
+    impl<BackendSettings, NetworkSettings> From<ServiceState<BackendSettings, NetworkSettings>>
+        for SerializableServiceState
     {
-        fn from(value: ServiceState<BackendSettings, BroadcastSettings>) -> Self {
+        fn from(value: ServiceState<BackendSettings, NetworkSettings>) -> Self {
             let (
                 last_seen_epoch,
                 spent_core_quota,
@@ -82,10 +79,7 @@ mod serde {
 
 pub use self::service::ServiceState;
 mod service {
-    use core::{
-        fmt::{self, Debug, Formatter},
-        hash::Hash,
-    };
+    use core::fmt::{self, Debug, Formatter};
     use std::collections::HashSet;
 
     use lb_blend::message::{
@@ -93,33 +87,44 @@ mod service {
         reward::{BlendingToken, EpochBlendingTokenCollector, OldEpochBlendingTokenCollector},
     };
     use lb_chain_service::Epoch;
+    use lb_poq::Quota;
 
     use crate::{
         core::state::{error, recovery_state::RecoveryServiceState, state_updater::StateUpdater},
         message::ProcessedMessage,
     };
 
-    #[derive(Clone)]
     /// Recovery state for Blend core service.
-    pub struct ServiceState<BackendSettings, BroadcastSettings> {
+    pub struct ServiceState<BackendSettings, NetworkSettings> {
         /// The last epoch that was saved.
         last_seen_epoch: Epoch,
         /// The last value for the core quota allowance for the epoch that is
         /// tracked.
-        spent_core_quota: u64,
-        unsent_processed_messages: HashSet<ProcessedMessage<BroadcastSettings>>,
+        spent_core_quota: Quota,
+        unsent_processed_messages: HashSet<ProcessedMessage>,
         unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
         current_epoch_token_collector: EpochBlendingTokenCollector,
         old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
         state_updater: overwatch::services::state::StateUpdater<
-            Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
+            Option<RecoveryServiceState<BackendSettings, NetworkSettings>>,
         >,
     }
 
-    impl<BackendSettings, BroadcastSettings> Debug for ServiceState<BackendSettings, BroadcastSettings>
-    where
-        BroadcastSettings: Debug,
-    {
+    impl<BackendSettings, NetworkSettings> Clone for ServiceState<BackendSettings, NetworkSettings> {
+        fn clone(&self) -> Self {
+            Self {
+                last_seen_epoch: self.last_seen_epoch,
+                spent_core_quota: self.spent_core_quota,
+                unsent_processed_messages: self.unsent_processed_messages.clone(),
+                unsent_data_messages: self.unsent_data_messages.clone(),
+                current_epoch_token_collector: self.current_epoch_token_collector.clone(),
+                old_epoch_token_collector: self.old_epoch_token_collector.clone(),
+                state_updater: self.state_updater.clone(),
+            }
+        }
+    }
+
+    impl<BackendSettings, NetworkSettings> Debug for ServiceState<BackendSettings, NetworkSettings> {
         fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
             f.debug_struct("ServiceState")
                 .field("last_seen_epoch", &self.last_seen_epoch)
@@ -135,22 +140,21 @@ mod service {
         }
     }
 
-    impl<BackendSettings, BroadcastSettings> ServiceState<BackendSettings, BroadcastSettings>
+    impl<BackendSettings, NetworkSettings> ServiceState<BackendSettings, NetworkSettings>
     where
         BackendSettings: Clone,
-        BroadcastSettings: Clone,
     {
         // Creates a new instance with the provided fields, and saves it using
         // `state_updater`.
         pub(super) fn new(
             last_seen_epoch: Epoch,
-            spent_core_quota: u64,
-            unsent_processed_messages: HashSet<ProcessedMessage<BroadcastSettings>>,
+            spent_core_quota: Quota,
+            unsent_processed_messages: HashSet<ProcessedMessage>,
             unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
             current_epoch_token_collector: EpochBlendingTokenCollector,
             old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
             state_updater: overwatch::services::state::StateUpdater<
-                Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
+                Option<RecoveryServiceState<BackendSettings, NetworkSettings>>,
             >,
         ) -> Result<Self, error::EpochMismatch> {
             // Check if `current_epoch_token_collector` has the correct epoch number.
@@ -198,12 +202,12 @@ mod service {
             current_epoch_token_collector: EpochBlendingTokenCollector,
             old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
             state_updater: overwatch::services::state::StateUpdater<
-                Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
+                Option<RecoveryServiceState<BackendSettings, NetworkSettings>>,
             >,
         ) -> Result<Self, error::EpochMismatch> {
             Self::new(
                 epoch,
-                0,
+                Quota::ZERO,
                 HashSet::new(),
                 HashSet::new(),
                 current_epoch_token_collector,
@@ -217,11 +221,11 @@ mod service {
         }
     }
 
-    impl<BackendSettings, BroadcastSettings> ServiceState<BackendSettings, BroadcastSettings> {
+    impl<BackendSettings, NetworkSettings> ServiceState<BackendSettings, NetworkSettings> {
         /// Consume `self` to return a [`StateUpdater`], which can be used to
         /// batch changes before they are stored using the underlying
         /// [`overwatch::services::state::StateUpdater`].
-        pub const fn start_updating(self) -> StateUpdater<BackendSettings, BroadcastSettings> {
+        pub const fn start_updating(self) -> StateUpdater<BackendSettings, NetworkSettings> {
             StateUpdater::new(self)
         }
 
@@ -229,14 +233,14 @@ mod service {
             self.last_seen_epoch
         }
 
-        pub(super) const fn spend_quota(&mut self, quota: u64) {
-            self.spent_core_quota = self
-                .spent_core_quota
-                .checked_add(quota)
-                .expect("Spent core quota addition overflow.");
+        pub(super) const fn spend_quota(&mut self, quota: Quota) {
+            self.spent_core_quota = match self.spent_core_quota.checked_add(quota) {
+                Some(spent) => spent,
+                None => panic!("Spent core quota addition overflow."),
+            };
         }
 
-        pub const fn spent_quota(&self) -> u64 {
+        pub const fn spent_quota(&self) -> Quota {
             self.spent_core_quota
         }
 
@@ -283,13 +287,13 @@ mod service {
             self,
         ) -> (
             Epoch,
-            u64,
-            HashSet<ProcessedMessage<BroadcastSettings>>,
+            Quota,
+            HashSet<ProcessedMessage>,
             HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
             EpochBlendingTokenCollector,
             Option<OldEpochBlendingTokenCollector>,
             overwatch::services::state::StateUpdater<
-                Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
+                Option<RecoveryServiceState<BackendSettings, NetworkSettings>>,
             >,
         ) {
             (
@@ -302,15 +306,10 @@ mod service {
                 self.state_updater,
             )
         }
-    }
 
-    impl<BackendSettings, BroadcastSettings> ServiceState<BackendSettings, BroadcastSettings>
-    where
-        BroadcastSettings: Eq + Hash,
-    {
         pub(super) fn add_unsent_processed_message(
             &mut self,
-            message: ProcessedMessage<BroadcastSettings>,
+            message: ProcessedMessage,
         ) -> Result<(), ()> {
             if self.unsent_processed_messages.insert(message) {
                 Ok(())
@@ -321,7 +320,7 @@ mod service {
 
         pub(super) fn remove_sent_processed_message(
             &mut self,
-            message: &ProcessedMessage<BroadcastSettings>,
+            message: &ProcessedMessage,
         ) -> Result<(), ()> {
             if self.unsent_processed_messages.remove(message) {
                 Ok(())
@@ -331,9 +330,7 @@ mod service {
         }
 
         /// Reference to the messages currently marked as unsent.
-        pub const fn unsent_processed_messages(
-            &self,
-        ) -> &HashSet<ProcessedMessage<BroadcastSettings>> {
+        pub const fn unsent_processed_messages(&self) -> &HashSet<ProcessedMessage> {
             &self.unsent_processed_messages
         }
 
@@ -369,12 +366,12 @@ mod service {
 
 pub use self::state_updater::StateUpdater;
 mod state_updater {
-    use core::hash::Hash;
 
     use lb_blend::message::{
         encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
         reward::{BlendingToken, OldEpochBlendingTokenCollector},
     };
+    use lb_poq::Quota;
 
     use crate::{
         core::state::{error, service::ServiceState},
@@ -384,43 +381,28 @@ mod state_updater {
     /// A state updater which gathers changes to the underlying [`ServiceState`]
     /// before committing them via the underlying
     /// [`overwatch::services::state::StateUpdater`].
-    pub struct StateUpdater<BackendSettings, BroadcastSettings> {
-        inner: ServiceState<BackendSettings, BroadcastSettings>,
+    pub struct StateUpdater<BackendSettings, NetworkSettings> {
+        inner: ServiceState<BackendSettings, NetworkSettings>,
         /// Flag indicating whether ANY changes happened since this object
         /// creation.
         changed: bool,
     }
 
-    impl<BackendSettings, BroadcastSettings> StateUpdater<BackendSettings, BroadcastSettings> {
-        pub(super) const fn new(inner: ServiceState<BackendSettings, BroadcastSettings>) -> Self {
+    impl<BackendSettings, NetworkSettings> StateUpdater<BackendSettings, NetworkSettings> {
+        pub(super) const fn new(inner: ServiceState<BackendSettings, NetworkSettings>) -> Self {
             Self {
                 inner,
                 changed: false,
             }
         }
 
-        pub fn into_inner(self) -> ServiceState<BackendSettings, BroadcastSettings> {
+        pub fn into_inner(self) -> ServiceState<BackendSettings, NetworkSettings> {
             self.inner
         }
 
-        pub const fn consume_core_quota(&mut self, amount: u64) {
+        pub const fn consume_core_quota(&mut self, amount: Quota) {
             self.changed = true;
             self.inner.spend_quota(amount);
-        }
-
-        /// Consumes `self` and return the state with any changes applied to it,
-        /// without storing those changes via the underlying
-        /// `overwatch::services::state::StateUpdater`.
-        ///
-        /// It is important to note that it is not equivalent to calling
-        /// rollback, since any changes applied before calling this function
-        /// will still be applied to the returned object.
-        /// In case the original state is needed, it needs to be `.clone()`d
-        /// before consuming it to produce this state updater instance.
-        pub fn consume_without_committing(
-            self,
-        ) -> ServiceState<BackendSettings, BroadcastSettings> {
-            self.inner
         }
 
         pub fn collect_current_epoch_tokens(
@@ -445,28 +427,7 @@ mod state_updater {
             self.changed = true;
             self.inner.clear_old_epoch_token_collector()
         }
-    }
 
-    impl<BackendSettings, BroadcastSettings> StateUpdater<BackendSettings, BroadcastSettings>
-    where
-        BackendSettings: Clone,
-        BroadcastSettings: Clone,
-    {
-        /// Consumes `self` and stores the latest state via the underlying
-        /// `overwatch::services::state::StateUpdater`, returning the updated
-        /// [`ServiceState`].
-        pub fn commit_changes(self) -> ServiceState<BackendSettings, BroadcastSettings> {
-            if self.changed {
-                self.inner.save();
-            }
-            self.inner
-        }
-    }
-
-    impl<BackendSettings, BroadcastSettings> StateUpdater<BackendSettings, BroadcastSettings>
-    where
-        BroadcastSettings: Eq + Hash,
-    {
         /// Mark a new [`ProcessedMessage`] as unsent, meaning that it has been
         /// decapsulated and scheduled for release but not yet released.
         ///
@@ -474,7 +435,7 @@ mod state_updater {
         /// otherwise.
         pub fn add_unsent_processed_message(
             &mut self,
-            message: ProcessedMessage<BroadcastSettings>,
+            message: ProcessedMessage,
         ) -> Result<(), ()> {
             self.changed = true;
             self.inner.add_unsent_processed_message(message)
@@ -487,7 +448,7 @@ mod state_updater {
         /// found), `Err` otherwise.
         pub fn remove_sent_processed_message(
             &mut self,
-            message: &ProcessedMessage<BroadcastSettings>,
+            message: &ProcessedMessage,
         ) -> Result<(), ()> {
             self.changed = true;
             self.inner.remove_sent_processed_message(message)
@@ -521,6 +482,18 @@ mod state_updater {
             self.inner.remove_sent_data_message(message)
         }
     }
+
+    impl<BackendSettings, NetworkSettings> StateUpdater<BackendSettings, NetworkSettings>
+    where
+        BackendSettings: Clone,
+    {
+        pub fn commit_changes(self) -> ServiceState<BackendSettings, NetworkSettings> {
+            if self.changed {
+                self.inner.save();
+            }
+            self.inner
+        }
+    }
 }
 
 pub use self::recovery_state::RecoveryServiceState;
@@ -543,18 +516,17 @@ mod recovery_state {
     ///
     /// If Overwatch will start supporting optional states, this type will most
     /// likely go.
-    pub struct RecoveryServiceState<BackendSettings, BroadcastSettings> {
-        #[serde(bound(
-            deserialize = "BroadcastSettings: Deserialize<'de> + Eq + core::hash::Hash"
-        ))]
-        pub service_state: Option<SerializableServiceState<BroadcastSettings>>,
-        _phantom: PhantomData<BackendSettings>,
+    pub struct RecoveryServiceState<BackendSettings, NetworkSettings> {
+        pub service_state: Option<SerializableServiceState>,
+        /// Type-level tie to the service's settings only — neither settings
+        /// type contributes any persisted data.
+        _phantom: PhantomData<fn() -> (BackendSettings, NetworkSettings)>,
     }
 
-    impl<BackendSettings, BroadcastSettings> From<ServiceState<BackendSettings, BroadcastSettings>>
-        for RecoveryServiceState<BackendSettings, BroadcastSettings>
+    impl<BackendSettings, NetworkSettings> From<ServiceState<BackendSettings, NetworkSettings>>
+        for RecoveryServiceState<BackendSettings, NetworkSettings>
     {
-        fn from(value: ServiceState<BackendSettings, BroadcastSettings>) -> Self {
+        fn from(value: ServiceState<BackendSettings, NetworkSettings>) -> Self {
             Self {
                 _phantom: PhantomData,
                 service_state: Some(value.into()),
@@ -562,11 +534,11 @@ mod recovery_state {
         }
     }
 
-    impl<BackendSettings, BroadcastSettings> overwatch::services::state::ServiceState
-        for RecoveryServiceState<BackendSettings, BroadcastSettings>
+    impl<BackendSettings, NetworkSettings> overwatch::services::state::ServiceState
+        for RecoveryServiceState<BackendSettings, NetworkSettings>
     {
         type Error = Infallible;
-        type Settings = BlendConfig<BackendSettings>;
+        type Settings = BlendConfig<BackendSettings, NetworkSettings>;
 
         fn from_settings(_: &Self::Settings) -> Result<Self, Self::Error> {
             Ok(Self {

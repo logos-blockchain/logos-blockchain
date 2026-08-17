@@ -19,6 +19,8 @@ pub struct Settings {
     pub security_param: NonZeroU32,
     pub slot_activation_coeff: NonNegativeRatio,
     pub learning_rate: NonNegativeF64,
+    /// `W`, the uncle reference window in expected block-intervals.
+    pub window_absorption_parameter: NonZeroU32,
     pub sdp_config: SdpConfig,
     pub gossipsub_protocol: String,
     pub genesis_block: GenesisBlock,
@@ -38,11 +40,6 @@ impl Settings {
     }
 
     #[must_use]
-    pub fn blocks_per_epoch(&self) -> u64 {
-        (self.slots_per_epoch() as f64 / self.average_slots_per_block() as f64).floor() as u64
-    }
-
-    #[must_use]
     pub const fn average_slots_per_block(&self) -> u64 {
         average_slots_for_blocks(
             NonZero::<u32>::new(1).expect("must be non-zero"),
@@ -57,6 +54,7 @@ impl Settings {
             self.security_param,
             self.slot_activation_coeff,
             self.learning_rate,
+            self.window_absorption_parameter,
         )
     }
 }

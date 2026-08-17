@@ -104,6 +104,7 @@ where
         let current_epoch_membership_size = self.core_proofs_generator.settings.membership_size;
         let current_epoch_core_public_inputs =
             self.core_proofs_generator.settings.public_inputs.core;
+        let current_epoch_pow_public_inputs = self.core_proofs_generator.settings.public_inputs.pow;
 
         self.leader_proofs_generator = Some(RealLeaderProofsGenerator::new(
             ProofsGeneratorSettings {
@@ -113,6 +114,7 @@ where
                 public_inputs: PoQVerificationInputsMinusSigningKey {
                     core: current_epoch_core_public_inputs,
                     leader: current_leader_inputs,
+                    pow: current_epoch_pow_public_inputs,
                 },
                 encapsulation_layers: self.core_proofs_generator.settings.encapsulation_layers,
             },
@@ -125,7 +127,7 @@ where
         tracing::trace!(
             target: LOG_TARGET,
             epoch = ?self.core_proofs_generator.settings.epoch,
-            quota = self.core_proofs_generator.settings.public_inputs.core.quota,
+            quota = %self.core_proofs_generator.settings.public_inputs.core.quota,
             membership_size = self.core_proofs_generator.settings.membership_size,
             local_node_index = ?self.core_proofs_generator.settings.local_node_index,
             key_nullifier = ?proof.proof_of_quota.key_nullifier(),
@@ -143,7 +145,7 @@ where
         tracing::trace!(
             target: LOG_TARGET,
             epoch = ?leader_proofs_generator.settings.epoch,
-            quota = leader_proofs_generator.settings.public_inputs.core.quota,
+            quota = %leader_proofs_generator.settings.public_inputs.core.quota,
             membership_size = leader_proofs_generator.settings.membership_size,
             local_node_index = ?leader_proofs_generator.settings.local_node_index,
             key_nullifier = ?proof.proof_of_quota.key_nullifier(),

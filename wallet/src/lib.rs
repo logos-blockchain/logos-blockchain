@@ -15,7 +15,7 @@ use lb_core::{
     events::{Event, Events, HeaderEvent, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
-        GasConstants, NoteId, TxHash, Utxo, Value,
+        GasProfile, NoteId, TxHash, Utxo, Value,
         ops::{
             Op, OpId as _,
             channel::{
@@ -98,6 +98,8 @@ pub enum WalletOp {
     Lock(NoteId),
     /// Create the reward note.
     LeaderClaim(Utxo),
+    /// Create the reward note.
+    ClaimPoW(Utxo),
     /// Drop the deposited notes from the wallet and insert the channel notes
     /// they are re-created as. The re-created notes keep the same key, so they
     /// remain eligible for `PoL`, but are gated out of wallet-driven spending.
@@ -138,7 +140,9 @@ impl WalletBlock {
                 WalletOp::ChannelDeposit(op) => op.inputs.iter().copied().collect::<Vec<_>>(),
                 WalletOp::ChannelTransfer(op) => op.inputs.iter().copied().collect::<Vec<_>>(),
                 WalletOp::Lock(note_id) => vec![*note_id],
-                WalletOp::ChannelWithdraw(_) | WalletOp::LeaderClaim(_) => Vec::new(),
+                WalletOp::ChannelWithdraw(_) | WalletOp::LeaderClaim(_) | WalletOp::ClaimPoW(_) => {
+                    Vec::new()
+                }
             })
             .collect()
     }
@@ -227,17 +231,18 @@ impl WalletState {
             .collect()
     }
 
-    /// Funds the transaction so its excess balance is exactly
-    /// `priority_fee` above the mandatory fee — the excess is the
-    /// transaction's execution tip. `0` funds to the exact minimum.
-    pub fn fund_tx<G: GasConstants>(
+    /// Funds the transaction so its excess balance is exactly the requested
+    /// percentage of the final mandatory fee. Only the unused reserve becomes
+    /// the transaction's effective priority tip. `0` funds to the exact
+    /// minimum.
+    pub fn fund_tx<G: GasProfile>(
         &self,
         tx_builder: &MantleTxBuilder,
         change_pk: ZkPublicKey,
         pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
         context: &MantleTxContext,
         excluded_notes: &HashSet<NoteId>,
-        priority_fee: Value,
+        priority_fee_percent: u64,
     ) -> Result<MantleTxBuilder, WalletError> {
         // Get all UTXOs owned by the provided PKs, excluding the following notes:
         // - Notes that are being consumed/locked by the tx
@@ -259,22 +264,21 @@ impl WalletState {
         // Consume large valued notes first to ensure we converge.
         utxos.sort_by_key(|utxo| -i128::from(utxo.note.value));
 
-        // The funding target: the tx's excess balance over the mandatory fee
-        // must end up exactly at `priority_fee` (the execution tip).
-        let delta_target = i128::from(priority_fee);
-
         // The transaction may already be funded before we add any of the
         // wallet's UTXOs, for example when it pays no fee or the caller already
         // supplied inputs. In that case we must not pull in an extra input (and
         // the change note it would require).
-        match tx_builder.funding_delta::<G>(context)?.cmp(&delta_target) {
+        match tx_builder
+            .funding_delta_with_priority_fee::<G>(context, priority_fee_percent)?
+            .cmp(&0)
+        {
             Ordering::Equal => return Ok(tx_builder.clone()),
             Ordering::Greater => {
-                if let Some(tx_with_change) =
-                    tx_builder
-                        .clone()
-                        .return_change::<G>(context, change_pk, priority_fee)?
-                {
+                if let Some(tx_with_change) = tx_builder.clone().return_change::<G>(
+                    context,
+                    change_pk,
+                    priority_fee_percent,
+                )? {
                     return Ok(tx_with_change);
                 }
                 // The change note costs more than the surplus covers, so fall
@@ -288,9 +292,10 @@ impl WalletState {
                 .clone()
                 .extend_ledger_inputs(utxos[..=i].iter().copied())?;
 
-            let funding_delta = funded_tx_builder.funding_delta::<G>(context)?;
+            let funding_delta = funded_tx_builder
+                .funding_delta_with_priority_fee::<G>(context, priority_fee_percent)?;
 
-            match funding_delta.cmp(&delta_target) {
+            match funding_delta.cmp(&0) {
                 Ordering::Less => {
                     // Insufficient funds, need more UTXO's.
                 }
@@ -303,9 +308,11 @@ impl WalletState {
                     // We have enough balance, but we need to introduce a change note.
                     // The change note will slightly increase the storage cost of the tx so there is
                     // a chance that we will not be able to fund the tx with the change note.
-                    if let Some(tx_with_change) =
-                        funded_tx_builder.return_change::<G>(context, change_pk, priority_fee)?
-                    {
+                    if let Some(tx_with_change) = funded_tx_builder.return_change::<G>(
+                        context,
+                        change_pk,
+                        priority_fee_percent,
+                    )? {
                         // We were able to fund the tx with change note added.
                         return Ok(tx_with_change);
                     }
@@ -417,7 +424,7 @@ impl WalletState {
                             locked_notes.insert_mut(*note_id);
                         }
                     }
-                    WalletOp::LeaderClaim(utxo) => {
+                    WalletOp::LeaderClaim(utxo) | WalletOp::ClaimPoW(utxo) => {
                         insert_utxo_if_owned(*utxo, known_keys, &mut utxos, &mut pk_index);
                     }
                 }
@@ -595,7 +602,12 @@ fn transform_op(op: &Op, event: Option<TxEventPayload>) -> Option<WalletOp> {
             TxEventPayload::Deposit { .. } => {
                 panic!("event for LeaderClaim op must be LeaderRewardClaimed")
             }
+            TxEventPayload::PoWRewardClaimed { utxo, .. } => Some(WalletOp::ClaimPoW(utxo)),
         },
+        Op::ClaimPowReward(_) => {
+            // TODO: something to track here?
+            None
+        }
         // `Op::SDPWithdraw` is ignored here — the note will be unlocked
         // after the delay and the corresponding event will be handled by
         // [`HeaderOp::from`].
@@ -782,7 +794,7 @@ where
         clippy::too_many_arguments,
         reason = "thin passthrough to `WalletState::fund_tx` plus the tip"
     )]
-    pub fn fund_tx<G: GasConstants>(
+    pub fn fund_tx<G: GasProfile>(
         &self,
         tip: HeaderId,
         tx_builder: &MantleTxBuilder,
@@ -790,7 +802,7 @@ where
         funding_pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
         context: &MantleTxContext,
         excluded_notes: &HashSet<NoteId>,
-        priority_fee: Value,
+        priority_fee_percent: u64,
     ) -> Result<MantleTxBuilder, WalletError> {
         self.wallet_state_at(tip)?.fund_tx::<G>(
             tx_builder,
@@ -798,7 +810,7 @@ where
             funding_pks,
             context,
             excluded_notes,
-            priority_fee,
+            priority_fee_percent,
         )
     }
 
@@ -864,7 +876,7 @@ mod tests {
         mantle::{
             Note, OpProof, RawMantleTx, SignedMantleTx,
             channel::Channels,
-            gas::MainnetGasConstants as Gas,
+            gas::MainnetGasProfile as Gas,
             ledger::{Inputs, Outputs},
             ops::channel::{
                 ChannelId, MsgId,
@@ -1427,7 +1439,12 @@ mod tests {
                 .into_inner()
         );
         assert_eq!(794, funded_tx_builder.net_balance());
-        assert_eq!(0, funded_tx_builder.funding_delta::<Gas>(&context).unwrap());
+        assert_eq!(
+            0,
+            funded_tx_builder
+                .funding_delta_with_priority_fee::<Gas>(&context, 0)
+                .unwrap()
+        );
 
         let funded_tx = funded_tx_builder.build().unwrap();
 
@@ -1448,7 +1465,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fund_tx_with_priority_fee() {
+    fn test_fund_tx_with_priority_fee_percentage() {
         let alice = pk(1);
         let utxo = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
         let ledger_state = LedgerState::from_utxos([utxo], &ledger_config());
@@ -1463,7 +1480,14 @@ mod tests {
             leader_reward_amount: 0,
         };
         let tx_builder = MantleTxBuilder::new();
-        let priority_fee = 200;
+        let priority_fee_percent = 12;
+        let mandatory_fee_without_change = tx_builder
+            .clone()
+            .add_ledger_input(Utxo::new(tx_hash(1), 0, Note::new(0, alice)))
+            .unwrap()
+            .minimum_gas_cost::<Gas>(&context)
+            .unwrap()
+            .into_inner();
 
         let funded_tx_builder = wallet_state
             .fund_tx::<Gas>(
@@ -1472,31 +1496,37 @@ mod tests {
                 [alice],
                 &context,
                 &HashSet::new(),
-                priority_fee,
+                priority_fee_percent,
             )
             .unwrap();
 
-        // The tip is left as excess balance above the mandatory fee.
-        let gas_cost = funded_tx_builder
+        // The final mandatory fee includes the change output, and the tip is
+        // the rounded-up percentage of that final fee.
+        let mandatory_fee = funded_tx_builder
             .minimum_gas_cost::<Gas>(&context)
             .unwrap()
             .into_inner();
+        assert_eq!(mandatory_fee_without_change, 754);
+        assert_eq!(mandatory_fee, 794);
+        let priority_fee_amount = (mandatory_fee * priority_fee_percent).div_ceil(100);
         assert_eq!(
-            i128::from(gas_cost + priority_fee),
+            i128::from(mandatory_fee + priority_fee_amount),
             funded_tx_builder.net_balance()
         );
         assert_eq!(
-            i128::from(priority_fee),
-            funded_tx_builder.funding_delta::<Gas>(&context).unwrap()
+            0,
+            funded_tx_builder
+                .funding_delta_with_priority_fee::<Gas>(&context, priority_fee_percent)
+                .unwrap()
         );
 
-        // The change output shrank by exactly the tip.
+        // The change output shrank by the mandatory fee and percentage tip.
         let funded_tx = funded_tx_builder.build().unwrap();
         if let Op::Transfer(transfer_op) = &funded_tx.ops()[funded_tx.ops().len() - 1] {
             assert_eq!(
                 transfer_op.outputs,
                 Outputs::new([Note {
-                    value: 5000 - gas_cost - priority_fee,
+                    value: 5000 - mandatory_fee - priority_fee_amount,
                     pk: alice,
                 }])
             );
@@ -1828,6 +1858,7 @@ mod tests {
             NonZero::new(1).unwrap(),
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
+            NonZero::new(12).unwrap(),
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
@@ -2262,6 +2293,7 @@ mod tests {
         let source_block = Block::create(
             HeaderId::from([0; 32]),
             Slot::from(1),
+            lb_core::block::UncleHeaders::empty(),
             test_leader_proof(),
             source_transactions,
             &Ed25519Key::from_bytes(&[0; 32]),

@@ -3,23 +3,21 @@ use std::{
     time::{Duration, Instant},
 };
 
-use futures::StreamExt as _;
-use lb_common_http_client::Slot;
 use lb_core::mantle::ops::channel::inscribe::Inscription;
-use lb_zone_sdk::{
-    ZoneMessage, adapter::NodeHttpClient as ZoneNodeHttpClient, indexer::ZoneIndexer,
+
+use super::support::{
+    DiscardedPayloads, ZoneTestError, replay_finalized_history, replayed_inscription_payloads,
+};
+use crate::cucumber::{
+    error::{StepError, StepResult},
+    world::ZoneReaderConfig,
 };
 
-use super::support::{DiscardedPayloads, ZoneTestError};
-use crate::cucumber::error::{StepError, StepResult};
-
 pub(super) async fn wait_for_indexer_unordered(
-    indexer: &ZoneIndexer<ZoneNodeHttpClient>,
+    reader: &ZoneReaderConfig,
     expected: &HashSet<Inscription>,
     timeout_duration: Duration,
 ) -> Result<HashSet<Inscription>, ZoneTestError> {
-    let mut seen = HashSet::new();
-    let mut cursor = None;
     let start = Instant::now();
 
     loop {
@@ -27,12 +25,11 @@ pub(super) async fn wait_for_indexer_unordered(
             return Err(ZoneTestError::IndexerTimeout);
         }
 
-        read_next_indexed_blocks(indexer, &mut cursor, |payload| {
-            if expected.contains(&payload) {
-                seen.insert(payload);
-            }
-        })
-        .await?;
+        let seen: HashSet<Inscription> =
+            replayed_inscription_payloads(&replay_finalized_history(reader).await?)
+                .into_iter()
+                .filter(|payload| expected.contains(payload))
+                .collect();
 
         if seen == *expected {
             return Ok(seen);
@@ -43,40 +40,36 @@ pub(super) async fn wait_for_indexer_unordered(
 }
 
 pub(super) async fn scan_indexer_for_payloads(
-    indexer: &ZoneIndexer<ZoneNodeHttpClient>,
+    reader: &ZoneReaderConfig,
     expected: &HashSet<Inscription>,
 ) -> Result<Vec<Inscription>, ZoneTestError> {
-    let mut payloads = Vec::new();
-    let mut cursor = None;
-
-    loop {
-        let saw_message = read_next_indexed_blocks(indexer, &mut cursor, |payload| {
-            if expected.contains(&payload) {
-                payloads.push(payload);
-            }
-        })
-        .await?;
-
-        if !saw_message {
-            return Ok(payloads);
-        }
-    }
+    Ok(
+        replayed_inscription_payloads(&replay_finalized_history(reader).await?)
+            .into_iter()
+            .filter(|payload| expected.contains(payload))
+            .collect(),
+    )
 }
 
 pub(super) async fn wait_until_sorted_conflict_settles(
-    indexer: &ZoneIndexer<ZoneNodeHttpClient>,
+    reader: &ZoneReaderConfig,
     expected: &HashSet<Inscription>,
     discarded: &DiscardedPayloads,
     total: usize,
     timeout_duration: Duration,
 ) -> Result<Vec<Inscription>, ZoneTestError> {
-    let mut on_chain = Vec::new();
-    let mut cursor = None;
     let start = Instant::now();
 
     loop {
         if start.elapsed() > timeout_duration {
             return Err(ZoneTestError::IndexerTimeout);
+        }
+
+        let mut on_chain: Vec<Inscription> = Vec::new();
+        for payload in replayed_inscription_payloads(&replay_finalized_history(reader).await?) {
+            if expected.contains(&payload) && !on_chain.contains(&payload) {
+                on_chain.push(payload);
+            }
         }
 
         let discarded_snapshot = discarded.lock().await.clone();
@@ -88,41 +81,8 @@ pub(super) async fn wait_until_sorted_conflict_settles(
             return Ok(on_chain);
         }
 
-        read_next_indexed_blocks(indexer, &mut cursor, |payload| {
-            if expected.contains(&payload) && !on_chain.contains(&payload) {
-                on_chain.push(payload);
-            }
-        })
-        .await?;
-
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-}
-
-async fn read_next_indexed_blocks(
-    indexer: &ZoneIndexer<ZoneNodeHttpClient>,
-    cursor: &mut Option<Slot>,
-    mut visit: impl FnMut(Inscription),
-) -> Result<bool, ZoneTestError> {
-    let stream = indexer
-        .next_messages(*cursor)
-        .await
-        .map_err(|error| ZoneTestError::Indexer {
-            message: error.to_string(),
-        })?;
-    futures::pin_mut!(stream);
-
-    let mut saw_message = false;
-
-    while let Some((message, slot)) = stream.next().await {
-        saw_message = true;
-        *cursor = Some(slot);
-        if let ZoneMessage::Block(block) = message {
-            visit(block.data);
-        }
-    }
-
-    Ok(saw_message)
 }
 
 pub(super) fn assert_sorted_outcome(

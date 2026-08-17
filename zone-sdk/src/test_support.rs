@@ -12,7 +12,7 @@ use lb_common_http_client::{
     ProcessedBlockEvent, Slot, State, TimeInfo,
 };
 use lb_core::{
-    events::{Event as ChainEvent, TxEvent, TxEventPayload},
+    events::{DepositNote, Event as ChainEvent, TxEvent, TxEventPayload},
     header::{ContentId, HeaderId},
     mantle::{
         Op, RawMantleTx, SignedMantleTx, Value,
@@ -33,6 +33,7 @@ use lb_core::{
     },
     proofs::leader_proof::Groth16LeaderProof,
 };
+use lb_groth16::Fr;
 use lb_http_api_common::bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody};
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use tokio::sync::{mpsc, watch};
@@ -40,6 +41,7 @@ use tokio::sync::{mpsc, watch};
 use crate::{
     ZoneMessage,
     adapter::{self, BoxStream},
+    sequencer::FundingConfig,
 };
 
 /// One scripted `block_stream` connection: serve `events`, then `then`.
@@ -91,6 +93,8 @@ pub struct MockNode {
     pub posted: Option<mpsc::Sender<SignedMantleTx<Unverified>>>,
     /// Served by `block_events()`, keyed by block id; absent ids yield `None`.
     pub events: HashMap<HeaderId, Events>,
+    /// Receives the priority-fee percentages from funding requests.
+    pub funding_priority_fees: Option<mpsc::Sender<u64>>,
 }
 
 impl Default for MockNode {
@@ -110,6 +114,7 @@ impl Default for MockNode {
             up: None,
             posted: None,
             events: HashMap::new(),
+            funding_priority_fees: None,
         }
     }
 }
@@ -268,6 +273,12 @@ impl adapter::Node for MockNode {
         &self,
         request: WalletFundRequestBody,
     ) -> Result<WalletFundResponseBody, lb_common_http_client::Error> {
+        if let Some(priority_fees) = &self.funding_priority_fees {
+            priority_fees
+                .send(request.priority_fee_percent)
+                .await
+                .expect("funding percentage receiver alive");
+        }
         // Fee-less passthrough: build the request's ops unchanged, as the
         // node would at zero gas price.
         Ok(WalletFundResponseBody {
@@ -283,11 +294,11 @@ impl adapter::Node for MockNode {
 /// Funding config backed by a fixture key; [`MockNode::fund_tx`] ignores it
 /// and returns the ops unchanged.
 #[must_use]
-pub fn funding_config() -> crate::sequencer::FundingConfig {
-    crate::sequencer::FundingConfig {
-        funding_pk: lb_groth16::Fr::from(1u64).into(),
+pub fn funding_config() -> FundingConfig {
+    FundingConfig {
+        funding_pk: Fr::from(1u64).into(),
         max_tx_fee: GasCost::new(u64::MAX),
-        priority_fee: crate::sequencer::FundingConfig::DEFAULT_PRIORITY_FEE,
+        priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
     }
 }
 
@@ -324,9 +335,10 @@ pub fn api_block(
             id: header_id(id),
             parent_block: header_id(parent),
             slot: slot.into(),
-            block_root: ContentId::from([0; 32]),
+            body_root: ContentId::from([0; 32]),
             proof_of_leadership: Groth16LeaderProof::genesis(),
         },
+        uncle_headers: Vec::new(),
         transactions,
     }
 }
@@ -378,7 +390,16 @@ pub fn deposit_event(
             channel_id: op.channel_id,
             amount,
             metadata: op.metadata.clone(),
-            notes: notes.try_into().expect("bounded note count"),
+            notes: notes
+                .into_iter()
+                .map(|note_id| DepositNote {
+                    note_id,
+                    value: 0,
+                    pk: Fr::from(0u64).into(),
+                })
+                .collect::<Vec<_>>()
+                .try_into()
+                .expect("bounded note count"),
         },
     )))
 }

@@ -7,11 +7,14 @@ use super::{SDPWithdrawOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
+        Value,
+        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
-            Declarations, ExecutableOperation, ProvableOperation, VerifiableOperation,
-            verification_mode,
+            Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
+            VerifiableOperation, verification_mode, verification_mode::VerificationMode,
         },
-        transactions::hash::TxHashView,
+        ops::SignedOp,
+        transactions::{hash::TxHashView, states::VerificationState},
     },
     sdp::{self, locked_notes::LockedNotes},
 };
@@ -35,24 +38,28 @@ impl ProvableOperation for SDPWithdrawOp {
     type Proof = ZkSignature;
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for SDPWithdrawOp {
-    type PreverificationContext<'a> = ();
-    type VerificationContext<'a> = SDPWithdrawValidationContext<'a>;
+impl OperationGas<MainnetGasProfile> for SDPWithdrawOp {
+    const GAS_COST: Gas = Gas::new(590);
+}
+
+impl PreverifiableOperation<verification_mode::StandardMode> for SDPWithdrawOp {
+    type Context<'a> = ();
     type Error = SdpError;
 
     fn preverify(
         &self,
         _proof: &Self::Proof,
-        _context: &Self::PreverificationContext<'_>,
+        _context: &Self::Context<'_>,
     ) -> Result<(), Self::Error> {
         Ok(())
     }
+}
 
-    fn verify(
-        &self,
-        proof: &Self::Proof,
-        context: &Self::VerificationContext<'_>,
-    ) -> Result<(), Self::Error> {
+impl VerifiableOperation<verification_mode::StandardMode> for SDPWithdrawOp {
+    type Context<'a> = SDPWithdrawValidationContext<'a>;
+    type Error = SdpError;
+
+    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
         // Check that the declaration exists
         let Some(declaration) = context.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
@@ -143,5 +150,13 @@ impl ExecutableOperation for SDPWithdrawOp {
         );
 
         Ok((context, Vec::new()))
+    }
+}
+
+impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
+    for SignedOp<SDPWithdrawOp, State, Mode>
+{
+    fn gas_multiplier(&self) -> Value {
+        1
     }
 }

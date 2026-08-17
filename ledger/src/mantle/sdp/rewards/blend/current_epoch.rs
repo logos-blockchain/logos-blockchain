@@ -5,7 +5,10 @@ use lb_blend_message::{
     crypto::proofs::PoQVerificationInputsMinusSigningKey,
     encap::ProofsVerifier as ProofsVerifierTrait, reward::EpochRandomness,
 };
-use lb_blend_proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs};
+use lb_blend_proofs::quota::{
+    Quota,
+    inputs::prove::public::{CoreInputs, LeaderInputs, PowInputs},
+};
 use lb_core::{
     crypto::ZkHash,
     mantle::Value,
@@ -161,7 +164,7 @@ impl CurrentEpochTracker {
             new_current_epoch = %next_epoch_state.epoch(),
             declaration_count,
             epoch_income = self.epoch_income,
-            core_quota,
+            core_quota = %core_quota,
             "finalized current epoch tracker with new target epoch established",
         );
 
@@ -210,7 +213,7 @@ impl CurrentEpochTracker {
     fn create_proof_verifier<ProofsVerifier: ProofsVerifierTrait>(
         leader_input: LeaderInputs,
         zk_root: ZkHash,
-        core_quota: u64,
+        core_quota: Quota,
     ) -> ProofsVerifier {
         ProofsVerifier::new(PoQVerificationInputsMinusSigningKey {
             core: CoreInputs {
@@ -218,6 +221,7 @@ impl CurrentEpochTracker {
                 quota: core_quota,
             },
             leader: leader_input,
+            pow: PowInputs::unwired_placeholder(),
         })
     }
 }

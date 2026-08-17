@@ -10,7 +10,7 @@ use crate::{
     codec::SerializeOp as _,
     mantle::{
         traits::{Hashable, Hasher, StorageSize},
-        transactions::hash::TxHash,
+        transactions::hash::{PrefixedKey, TxHash, TxHashPrefix},
     },
 };
 
@@ -105,6 +105,14 @@ impl MockTxId {
     #[must_use]
     pub const fn new(tx_id: [u8; 32]) -> Self {
         Self(tx_id)
+    }
+}
+
+impl PrefixedKey for MockTxId {
+    type Prefix = TxHashPrefix;
+
+    fn key_prefix(&self) -> Self::Prefix {
+        TxHash(self.0).prefix()
     }
 }
 

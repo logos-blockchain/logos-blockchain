@@ -15,7 +15,7 @@ codec_fixtures!(HeaderId, Self::from([0x11u8; 32]) => "1111111111111111111111111
 
 codec_fixtures!(ContentId, Self::from([0x22u8; 32]) => "2222222222222222222222222222222222222222222222222222222222222222");
 
-// Layout: `version (1B) || parent_block (32B) || slot (8B LE) || block_root
+// Layout: `version (1B) || parent_block (32B) || slot (8B LE) || body_root
 // (32B) || proof_of_leadership (224B)` — 297 bytes.
 codec_fixtures!(
     Header,

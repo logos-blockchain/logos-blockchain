@@ -1,16 +1,17 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    CHANNEL_CONFIG, CHANNEL_DEPOSIT, CHANNEL_TRANSFER, CHANNEL_WITHDRAW, INSCRIBE, LEADER_CLAIM,
-    Op, SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW, TRANSFER,
+    CHANNEL_CONFIG, CHANNEL_DEPOSIT, CHANNEL_TRANSFER, CHANNEL_WITHDRAW, CLAIM_POW_REWARD,
+    INSCRIBE, LEADER_CLAIM, Op, SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW, TRANSFER,
     channel::{config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp},
     leader_claim::LeaderClaimOp,
     sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
     serde_::OpWire,
     transfer::TransferOp,
 };
-use crate::mantle::ops::channel::{
-    channel_transfer::ChannelTransferOp, withdraw::ChannelWithdrawOp,
+use crate::mantle::ops::{
+    channel::{channel_transfer::ChannelTransferOp, withdraw::ChannelWithdrawOp},
+    pow::ClaimPowRewardOp,
 };
 
 /// Core set of supported Mantle operations and their serialization behaviour.
@@ -27,6 +28,7 @@ pub enum OpSer<'a> {
     SDPActive(OpWire<SDP_ACTIVE, &'a SDPActiveOp>),
     LeaderClaim(OpWire<LEADER_CLAIM, &'a LeaderClaimOp>),
     Transfer(OpWire<TRANSFER, &'a TransferOp>),
+    ClaimPowReward(OpWire<CLAIM_POW_REWARD, &'a ClaimPowRewardOp>),
 }
 
 impl<'a> From<&'a Op> for OpSer<'a> {
@@ -42,6 +44,7 @@ impl<'a> From<&'a Op> for OpSer<'a> {
             Op::SDPActive(op) => Self::SDPActive(OpWire::new(op)),
             Op::LeaderClaim(op) => Self::LeaderClaim(OpWire::new(op)),
             Op::Transfer(op) => Self::Transfer(OpWire::new(op)),
+            Op::ClaimPowReward(op) => Self::ClaimPowReward(OpWire::new(op)),
         }
     }
 }

@@ -134,15 +134,10 @@ impl OldEpochBlendingTokenCollector {
     }
 }
 
-#[must_use]
-pub const fn evaluate_hamming_distance(distance: u64, activity_threshold: u64) -> bool {
-    distance <= activity_threshold
-}
-
 #[cfg(test)]
 mod tests {
     use lb_blend_proofs::{
-        quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
+        quota::{PROOF_OF_QUOTA_SIZE, Quota, VerifiedProofOfQuota},
         selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection},
     };
     use lb_core::crypto::ZkHash;
@@ -153,14 +148,14 @@ mod tests {
     #[test_log::test(test)]
     fn test_blending_token_collector() {
         let num_core_nodes = 2;
-        let core_quota = 15;
+        let core_quota = Quota::new::<15>();
         let epoch_info =
             EpochInfo::new(1.into(), &ZkHash::from(1), num_core_nodes, core_quota, 1).unwrap();
         let mut tokens = EpochBlendingTokenCollector::new(&epoch_info);
         assert!(tokens.tokens().is_empty());
 
         // Insert `total_core_quota-1` tokens.
-        let total_core_quota = core_quota.checked_mul(num_core_nodes).unwrap();
+        let total_core_quota = core_quota.get().checked_mul(num_core_nodes).unwrap();
         let mut i = 0;
         for _ in 0..(total_core_quota.checked_sub(1).unwrap()) {
             let signing_key: u8 = i.try_into().unwrap();

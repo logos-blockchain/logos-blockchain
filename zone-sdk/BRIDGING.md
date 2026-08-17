@@ -45,14 +45,24 @@ let node = NodeHttpClient::new(
 let funding = FundingConfig {
     funding_pk,
     max_tx_fee: 1_000_000.into(),
-    priority_fee: FundingConfig::DEFAULT_PRIORITY_FEE,
+    priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
 };
 let mut sequencer = ZoneSequencer::init(channel_id, signing_key, node, funding, None);
 
 // Inside the drive task, once `Event::Ready` has fired:
 // publishing the first inscription creates the channel just-in-time.
-let (result, checkpoint) = sequencer.handle().publish(genesis_zone_block)?;
+let (result, checkpoint) = sequencer.handle().publish(genesis_zone_block).await?;
 ```
+
+`priority_fee_percent` is a percentage reserve over the complete mandatory
+fee, which consists of execution plus storage cost. Only the reserve left
+after the transaction's final mandatory fee is charged becomes the effective
+priority tip. The Zone SDK default is 12%: a practical reserve intended to
+absorb normal fee movement, including approximately one storage-market epoch
+increase under normal price levels. It is not a protocol guarantee at very low
+prices or when execution fees also rise materially. Storage prices use integer
+arithmetic, so low prices can make proportionally larger jumps (for example,
+1 to 2); 12% is therefore a safety margin, not a guaranteed one-epoch bound.
 
 To override other sequencer settings, build the config explicitly —
 `SequencerConfig::new(funding)` fills in the defaults for everything else:

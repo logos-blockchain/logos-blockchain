@@ -6,7 +6,7 @@ use std::{
 use lb_core::{
     header::HeaderId,
     mantle::{
-        GasConstants, NoteId, Value,
+        GasProfile, NoteId,
         ops::leader_claim::{VoucherCm, VoucherNullifier},
         transactions::{MantleTxBuilder, MantleTxContext},
     },
@@ -159,10 +159,6 @@ impl PendingNotes {
         self.notes.keys().copied().collect()
     }
 
-    fn remove_spent(&mut self, spent: &HashSet<NoteId>) {
-        self.notes.retain(|note_id, _| !spent.contains(note_id));
-    }
-
     /// Evict reservations whose LIB-progress age reached the configured limit.
     ///
     /// Each LIB update adds `new_immutable_blocks_count` to every reservation's
@@ -301,7 +297,8 @@ impl<'u> ServiceState<'u> {
 
     pub fn apply_block(&mut self, block: &WalletBlock) -> Result<(), WalletError> {
         self.wallet.apply_block(block)?;
-        self.pending_notes.remove_spent(&block.spent_note_ids());
+        // Note reservations are released after `pending_note_expiry_blocks`
+        // (see `evict_expired`), not on spent.
         self.update_state();
         Ok(())
     }
@@ -361,16 +358,18 @@ impl<'u> ServiceState<'u> {
     }
 
     /// Fund `tx_builder` from the wallet's UTXOs at `tip`, excluding notes
-    /// already reserved for in-flight transactions. `priority_fee` is left
-    /// as excess balance above the mandatory fee (the execution tip).
-    pub fn fund_tx<G: GasConstants>(
+    /// already reserved for in-flight transactions. `priority_fee_percent`
+    /// reserves that percentage of the final mandatory fee, including both
+    /// execution and storage cost. Only the unused reserve becomes an
+    /// effective priority tip, and the percentage is not capped at 100.
+    pub fn fund_tx<G: GasProfile>(
         &self,
         tip: HeaderId,
         tx_builder: &MantleTxBuilder,
         change_pk: ZkPublicKey,
         funding_pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
         context: &MantleTxContext,
-        priority_fee: Value,
+        priority_fee_percent: u64,
     ) -> Result<MantleTxBuilder, WalletError> {
         self.wallet.fund_tx::<G>(
             tip,
@@ -379,7 +378,7 @@ impl<'u> ServiceState<'u> {
             funding_pks,
             context,
             &self.pending_notes.note_ids(),
-            priority_fee,
+            priority_fee_percent,
         )
     }
 
@@ -408,7 +407,7 @@ impl<'u> ServiceState<'u> {
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
+    use lb_groth16::{Field as _, Fr};
 
     use super::*;
 
@@ -460,20 +459,6 @@ mod tests {
 
         pending_notes.evict_expired(1, EXPIRY_BLOCKS);
         assert!(!pending_notes.note_ids().contains(&note_id));
-    }
-
-    #[test]
-    fn pending_note_removed_when_observed_spent() {
-        let spent = NoteId::from(Fr::ZERO);
-        let kept = NoteId::from(Fr::ONE);
-        let mut pending_notes = PendingNotes::default();
-
-        pending_notes.reserve([spent, kept]);
-        pending_notes.remove_spent(&HashSet::from([spent]));
-
-        let note_ids = pending_notes.note_ids();
-        assert!(!note_ids.contains(&spent));
-        assert!(note_ids.contains(&kept));
     }
 
     #[test]

@@ -34,7 +34,12 @@ zeroize                       = { workspace = true }
 
 [dev-dependencies]
 bincode  = { workspace = true }
+divan    = { workspace = true }
 test-log = { features = ["trace"], workspace = true }
 
 [features]
 unsafe-test-functions = []
+
+[[bench]]
+harness = false
+name    = "verify_public_header"

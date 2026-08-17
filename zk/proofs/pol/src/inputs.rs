@@ -15,16 +15,6 @@ pub struct PolWitnessInputs {
     pub chain: PolChainInputs,
 }
 
-impl PolWitnessInputs {
-    #[must_use]
-    pub const fn from_chain_and_wallet_inputs(
-        chain: PolChainInputs,
-        wallet: PolWalletInputs,
-    ) -> Self {
-        Self { wallet, chain }
-    }
-}
-
 impl TryFrom<PolWitnessInputs> for lbc_pol_sys::PolWitnessInput<'_> {
     type Error = lbp_error::Error;
 

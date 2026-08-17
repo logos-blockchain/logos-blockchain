@@ -15,13 +15,17 @@ use std::{
 
 use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
 use futures::{StreamExt as _, future::join_all};
+use itertools::Itertools as _;
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
-    block::{Block, BlockTransactions, Proposal},
+    block::{
+        Block, BlockTransactions, MAX_CANDIDATES_PER_REFERENCE, MAX_RECONSTRUCTION_COMBINATIONS,
+        Proposal,
+    },
     header::HeaderId,
     mantle::{
         traits::{Hashable, MantleTxWithProofs},
-        transactions::hash::TxHash,
+        transactions::hash::{TxHash, TxHashPrefix},
     },
 };
 pub use lb_cryptarchia_engine::{Epoch, Slot};
@@ -83,6 +87,20 @@ pub enum Error {
     InvalidBlock(String),
     #[error("Failed to reconstruct block: {0} mempool transactions not found")]
     MissingMempoolTransactions(usize),
+    #[error("Reference {index} ({prefix}) matches no local transaction")]
+    UnresolvedReference { index: usize, prefix: TxHashPrefix },
+    #[error("Reference {index} ({prefix}) matches more than the {max} local transactions allowed")]
+    AmbiguousReference {
+        index: usize,
+        prefix: TxHashPrefix,
+        max: usize,
+    },
+    #[error(
+        "Resolving the references needs {combinations} combinations, more than the {max} allowed"
+    )]
+    TooManyReconstructionCombinations { combinations: usize, max: usize },
+    #[error("No combination of candidate transactions reproduces the block root")]
+    NoMatchingReconstruction,
     #[error("Mempool error: {0}")]
     Mempool(String),
     #[error("Block header id not found: {0}")]
@@ -987,7 +1005,14 @@ where
     Ok(())
 }
 
-/// Reconstruct a Block from a Proposal by looking up transactions from mempool
+/// Reconstruct a `Block` from a `Proposal` by resolving its reference prefixes
+/// against the local mempool.
+///
+/// A reference is only the leading bytes of a transaction hash, so it may match
+/// several mempool transactions. `header.body_root` still commits to the full
+/// hashes, so at most one combination of candidates can reproduce it — and
+/// `Block::reconstruct` is what checks that, so the first combination that
+/// reconstructs *is* the match.
 async fn reconstruct_block_from_proposal<Item>(
     proposal: Proposal,
     mempool: &MempoolAdapter<Item>,
@@ -995,29 +1020,102 @@ async fn reconstruct_block_from_proposal<Item>(
 where
     Item: MantleTxWithProofs<Hash = TxHash> + Clone + Send + Sync + 'static,
 {
-    let mempool_hashes: Vec<TxHash> = proposal.mempool_transactions().to_vec();
-    let mempool_response = mempool
-        .get_transactions_by_hashes(mempool_hashes)
-        .await
-        .map_err(|e| {
-            Error::InvalidBlock(format!("Failed to get transactions from mempool: {e}"))
-        })?;
-
-    if !mempool_response.all_found() {
-        let missing_count = mempool_response.not_found().len();
-        metrics::consensus_observe_proposal_missing_txs(missing_count);
-        return Err(Error::MissingMempoolTransactions(missing_count));
-    }
-
-    let reconstructed_transactions = BlockTransactions::try_from(mempool_response.into_found())?;
+    let candidates = candidates_for_proposal(&proposal, mempool).await?;
 
     let header = proposal.header().clone();
+    let uncle_headers = proposal.uncle_headers().clone();
     let signature = *proposal.signature();
 
-    let block = Block::reconstruct(header, reconstructed_transactions, signature)
-        .map_err(|e| Error::InvalidBlock(format!("Invalid block: {e}")))?;
+    let try_rebuild_with_txs = |transactions: Vec<Item>| {
+        let transactions = BlockTransactions::try_from(transactions).ok()?;
+        Block::reconstruct(
+            header.clone(),
+            uncle_headers.clone(),
+            transactions,
+            signature,
+        )
+        .ok()
+    };
 
-    Ok(block)
+    // A proposal with no references still has one candidate block: the empty one.
+    if candidates.is_empty() {
+        return try_rebuild_with_txs(Vec::new()).ok_or(Error::NoMatchingReconstruction);
+    }
+
+    // Try all combinations of candidates and find the one that can be used to
+    // reconstruct the block from the proposal.
+    candidates
+        .into_iter()
+        .multi_cartesian_product()
+        .find_map(try_rebuild_with_txs)
+        .ok_or(Error::NoMatchingReconstruction)
+}
+
+/// The candidate transactions for every reference in `proposal`, in reference
+/// order, subject to both caps from the block-construction specification.
+///
+/// Returning here means the cartesian product of the sets is within budget, so
+/// the search that follows is bounded before it starts.
+async fn candidates_for_proposal<Item>(
+    proposal: &Proposal,
+    mempool: &MempoolAdapter<Item>,
+) -> Result<Vec<Vec<Item>>, Error>
+where
+    Item: MantleTxWithProofs<Hash = TxHash> + Clone + Send + Sync + 'static,
+{
+    let mut candidates = Vec::with_capacity(proposal.mempool_transactions().len());
+    let mut combinations = 1usize;
+
+    for (index, prefix) in proposal.mempool_transactions().iter().copied().enumerate() {
+        let found = candidates_for_reference(index, prefix, mempool).await?;
+
+        combinations = combinations.saturating_mul(found.len());
+        if combinations > MAX_RECONSTRUCTION_COMBINATIONS {
+            return Err(Error::TooManyReconstructionCombinations {
+                combinations,
+                max: MAX_RECONSTRUCTION_COMBINATIONS,
+            });
+        }
+
+        candidates.push(found);
+    }
+
+    Ok(candidates)
+}
+
+/// The local transactions a single reference could mean, refusing as soon as
+/// the reference is unusable.
+///
+/// One candidate beyond the cap is taken so that "too many" is distinguishable
+/// from "exactly at the limit" without draining the stream.
+async fn candidates_for_reference<Item>(
+    index: usize,
+    prefix: TxHashPrefix,
+    mempool: &MempoolAdapter<Item>,
+) -> Result<Vec<Item>, Error>
+where
+    Item: Hashable<Hash = TxHash> + Send + Sync + 'static,
+{
+    let candidates: Vec<Item> = mempool
+        .get_transactions_by_prefix(prefix)
+        .await
+        .map_err(|e| Error::Mempool(format!("Failed to resolve reference {index}: {e}")))?
+        .take(MAX_CANDIDATES_PER_REFERENCE.saturating_add(1))
+        .collect()
+        .await;
+
+    match candidates.len() {
+        0 => {
+            metrics::consensus_observe_proposal_missing_txs(1);
+            Err(Error::UnresolvedReference { index, prefix })
+        }
+        found if found > MAX_CANDIDATES_PER_REFERENCE => Err(Error::AmbiguousReference {
+            index,
+            prefix,
+            max: MAX_CANDIDATES_PER_REFERENCE,
+        }),
+        _ => Ok(candidates),
+    }
 }
 
 #[cfg(test)]

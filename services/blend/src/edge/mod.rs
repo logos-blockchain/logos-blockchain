@@ -16,14 +16,13 @@ use backends::BlendBackend;
 use futures::{Stream, StreamExt as _};
 use lb_blend::{
     message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
-    proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs},
+    proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs, PowInputs},
     scheduling::{
         epoch::{EpochEvent, UninitializedEpochEventStream},
         message_blend::provers::leader::LeaderProofsGenerator,
     },
 };
 use lb_chain_service::api::CryptarchiaServiceData;
-use lb_core::codec::SerializeOp as _;
 use lb_key_management_system_service::{
     api::KmsServiceApi, keys::KeyOperators,
     operators::ed25519::exfiltrate_secret_key::LeakSecretKeyOperator,
@@ -40,7 +39,6 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
-use serde::{Serialize, de::DeserializeOwned};
 use settings::StartingBlendConfig;
 use tokio::sync::oneshot;
 use tracing::{debug, error, info};
@@ -53,7 +51,7 @@ use crate::{
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     kms::PreloadKmsService,
     membership::{self, chain::BlendEpochState, node_id},
-    message::{NetworkInfo, NetworkMessage, ServiceMessage},
+    message::{NetworkInfo, ServiceMessage},
 };
 
 const LOG_TARGET: &str = blend::service::EDGE;
@@ -64,7 +62,6 @@ type RunningSettings<Backend, NodeId, RuntimeServiceId> =
 pub struct BlendService<
     Backend,
     NodeId,
-    BroadcastSettings,
     ProofsGenerator,
     TimeBackend,
     ChainService,
@@ -78,20 +75,11 @@ pub struct BlendService<
     _phantom: PhantomData<(ProofsGenerator, TimeBackend, ChainService, PolInfoProvider)>,
 }
 
-impl<
-    Backend,
-    NodeId,
-    BroadcastSettings,
-    ProofsGenerator,
-    TimeBackend,
-    ChainService,
-    PolInfoProvider,
-    RuntimeServiceId,
-> ServiceData
+impl<Backend, NodeId, ProofsGenerator, TimeBackend, ChainService, PolInfoProvider, RuntimeServiceId>
+    ServiceData
     for BlendService<
         Backend,
         NodeId,
-        BroadcastSettings,
         ProofsGenerator,
         TimeBackend,
         ChainService,
@@ -105,24 +93,15 @@ where
     type Settings = StartingBlendConfig<Backend::Settings>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
-    type Message = ServiceMessage<BroadcastSettings, NodeId>;
+    type Message = ServiceMessage<NodeId>;
 }
 
 #[async_trait::async_trait]
-impl<
-    Backend,
-    NodeId,
-    BroadcastSettings,
-    ProofsGenerator,
-    TimeBackend,
-    ChainService,
-    PolInfoProvider,
-    RuntimeServiceId,
-> ServiceCore<RuntimeServiceId>
+impl<Backend, NodeId, ProofsGenerator, TimeBackend, ChainService, PolInfoProvider, RuntimeServiceId>
+    ServiceCore<RuntimeServiceId>
     for BlendService<
         Backend,
         NodeId,
-        BroadcastSettings,
         ProofsGenerator,
         TimeBackend,
         ChainService,
@@ -132,7 +111,6 @@ impl<
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId> + Send + Sync,
     NodeId: Clone + Debug + Eq + Hash + Send + Sync + node_id::TryFrom + 'static,
-    BroadcastSettings: Serialize + DeserializeOwned + Send,
     ProofsGenerator: LeaderProofsGenerator + Send,
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
     ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
@@ -213,20 +191,14 @@ where
             )
             .await;
 
-        let messages_to_blend_stream = Box::pin(inbound_relay.filter_map(async |msg| {
-            match msg {
-                ServiceMessage::Blend(message) => Some(
-                    NetworkMessage::<BroadcastSettings>::to_bytes(&message)
-                        .expect("NetworkMessage should be able to be serialized")
-                        .to_vec(),
-                ),
-                ServiceMessage::GetNetworkInfo { reply } => {
-                    drop(reply.send(Some(NetworkInfo {
-                        node_id: local_node_id.clone(),
-                        core_info: None,
-                    })));
-                    None
-                }
+        let messages_to_blend_stream = Box::pin(inbound_relay.filter_map(async |msg| match msg {
+            ServiceMessage::Blend(message) => Some(message),
+            ServiceMessage::GetNetworkInfo { reply } => {
+                drop(reply.send(Some(NetworkInfo {
+                    node_id: local_node_id.clone(),
+                    core_info: None,
+                })));
+                None
             }
         }));
 
@@ -453,6 +425,7 @@ where
             pol_ledger_aged: current_public_epoch_info.aged,
             message_quota: settings.epoch_leadership_quota(),
         },
+        pow: PowInputs::unwired_placeholder(),
     };
 
     debug!(target: LOG_TARGET, "Creating new handler for epoch {:?}", current_public_epoch_info.epoch);

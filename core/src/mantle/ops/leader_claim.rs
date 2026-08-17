@@ -12,11 +12,16 @@ use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
         Note, Utxo, Value,
+        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
-            ExecutableOperation, ProvableOperation, Utxos, VerifiableOperation, verification_mode,
+            ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
+            VerifiableOperation, verification_mode, verification_mode::VerificationMode,
         },
-        ops::OpId,
-        transactions::hash::{TxHash, TxHashView},
+        ops::{OpId, SignedOp},
+        transactions::{
+            hash::{TxHash, TxHashView},
+            states::VerificationState,
+        },
     },
     proofs::leader_claim_proof::{
         Groth16LeaderClaimProof, LeaderClaimProof as _, LeaderClaimPublic,
@@ -181,15 +186,18 @@ impl ProvableOperation for LeaderClaimOp {
     type Proof = Groth16LeaderClaimProof;
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for LeaderClaimOp {
-    type PreverificationContext<'a> = LeaderClaimPreverificationContext<'a>;
-    type VerificationContext<'a> = LeaderClaimVerificationContext<'a>;
+impl OperationGas<MainnetGasProfile> for LeaderClaimOp {
+    const GAS_COST: Gas = Gas::new(580);
+}
+
+impl PreverifiableOperation<verification_mode::StandardMode> for LeaderClaimOp {
+    type Context<'a> = LeaderClaimPreverificationContext<'a>;
     type Error = LeaderClaimError;
 
     fn preverify(
         &self,
         proof: &Self::Proof,
-        context: &Self::PreverificationContext<'_>,
+        context: &Self::Context<'_>,
     ) -> Result<(), Self::Error> {
         let is_verified = proof.verify(&LeaderClaimPublic {
             voucher_nullifier: self.voucher_nullifier.into(),
@@ -203,12 +211,13 @@ impl VerifiableOperation<verification_mode::StandardMode> for LeaderClaimOp {
             Err(LeaderClaimError::InvalidPoC)
         }
     }
+}
 
-    fn verify(
-        &self,
-        proof: &Self::Proof,
-        context: &Self::VerificationContext<'_>,
-    ) -> Result<(), Self::Error> {
+impl VerifiableOperation<verification_mode::StandardMode> for LeaderClaimOp {
+    type Context<'a> = LeaderClaimVerificationContext<'a>;
+    type Error = LeaderClaimError;
+
+    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
         // Check that the nullifier isn't in the set
         if context.nullifiers.contains(&self.voucher_nullifier) {
             return Err(LeaderClaimError::DuplicatedVoucherNullifier);
@@ -262,6 +271,14 @@ impl ExecutableOperation for LeaderClaimOp {
                 },
             )],
         ))
+    }
+}
+
+impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
+    for SignedOp<LeaderClaimOp, State, Mode>
+{
+    fn gas_multiplier(&self) -> Value {
+        1
     }
 }
 

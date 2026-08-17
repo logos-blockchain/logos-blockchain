@@ -3,8 +3,8 @@ use lb_cryptarchia_sync::HeaderId;
 use lb_ledger::Ledger;
 
 pub fn emit_consensus_metrics(consensus: &Cryptarchia<HeaderId>, ledger: &Ledger<HeaderId>) {
-    let tip_branch = *consensus.tip_branch();
-    let lib_branch = *consensus.lib_branch();
+    let tip_branch = consensus.tip_branch();
+    let lib_branch = consensus.lib_branch();
 
     let height = tip_branch.length();
     let finalized_height = lib_branch.length();

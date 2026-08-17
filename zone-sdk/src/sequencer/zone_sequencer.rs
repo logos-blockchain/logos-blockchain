@@ -814,18 +814,37 @@ where
         // prediction exact: it predicts a threshold-0 multi-sig proof for a
         // channel it cannot see yet, and a superfluous signature would make
         // the funded fee undershoot the actual storage cost.
-        let own_key = [&self.signing_key];
-        let signing_keys: &[&Ed25519Key] = if self.channel_state.is_some() {
-            &own_key
-        } else {
-            &[]
+        //
+        // For an existing channel the signature must claim our key's index in
+        // the *current* accredited list — that is what the ledger verifies
+        // against. Signature collection for `configuration_threshold > 1` is
+        // out of scope, so reject it early instead of submitting a
+        // transaction that can only die at block assembly.
+        let signer = match &self.channel_state {
+            None => None,
+            Some(channel) => {
+                if channel.configuration_threshold != 1 {
+                    return Err(Error::Network(format!(
+                        "channel config update needs {} signatures; this one-shot \
+                         helper only supports single-signer channels \
+                         (configuration_threshold 1) — collect the signatures \
+                         out-of-band and submit the fully-signed transaction via \
+                         `submit_signed_tx` instead",
+                        channel.configuration_threshold
+                    )));
+                }
+                let index = self.own_key_index.ok_or_else(|| {
+                    Error::Network("sequencer key not in channel accredited_keys".into())
+                })?;
+                Some((index, &self.signing_key))
+            }
         };
 
         let signed_tx = create_channel_config_tx(
             &self.node,
             &self.config.funding,
             self.channel_id,
-            signing_keys,
+            signer,
             keys,
             posting_timeframe,
             posting_timeout,
@@ -872,9 +891,20 @@ where
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
         let id = tx.mantle_tx().hash();
-        track_pending_tx(state, tx.clone(), self.channel_id);
+        let derived_tip = track_pending_tx(state, tx.clone(), self.channel_id);
         let parent_msg = self.last_msg_id;
-        self.last_msg_id = msg_id;
+        // The tip the tx leaves behind is defined by its ops (the last
+        // tip-advancing one — e.g. a config after an inscribe resets it), so
+        // the caller's `msg_id` is only a fallback for txs without one.
+        let new_tip = derived_tip.unwrap_or(msg_id);
+        if new_tip != msg_id {
+            warn!(target: TARGET,
+                "submit_signed_tx: caller msg_id {:?} is not the tx's resulting channel tip {:?}; \
+                 using the derived tip",
+                msg_id, new_tip
+            );
+        }
+        self.last_msg_id = new_tip;
         self.queue_tx_status(id, TxStatus::AcceptedLocally);
 
         info!(target: TARGET, "Submitted tx including inscription {:?}", id);
@@ -902,7 +932,7 @@ where
                 tx: PendingTx::Inscription(InscriptionInfo {
                     tx_hash: id,
                     parent_msg,
-                    this_msg: msg_id,
+                    this_msg: new_tip,
                     payload,
                 }),
             },
@@ -1085,22 +1115,30 @@ fn restored_pending_channel_tip(
 
 /// Track a signed tx in pending state: publish-shaped txs enter the
 /// inscription lineage, everything else is tracked opaquely.
+/// Returns the channel tip the tx leaves behind once mined (its last
+/// tip-advancing op), or `None` when the tx carries none for this channel.
 pub(super) fn track_pending_tx(
     state: &mut TxState,
     tx: SignedMantleTx<Unverified>,
     channel_id: ChannelId,
-) {
+) -> Option<MsgId> {
     match classify_channel_tx(&tx, channel_id, &mut None) {
         Some(BlockChannelTx::Inscription(i)) => {
-            state.submit_inscription(tx, i.parent_msg, i.this_msg, i.payload);
+            let this_msg = i.this_msg;
+            state.submit_inscription(tx, i.parent_msg, this_msg, i.payload);
+            Some(this_msg)
         }
-        Some(BlockChannelTx::AtomicWithdraw(aw)) => state.submit_atomic_withdraw(
-            tx,
-            aw.inscription.parent_msg,
-            aw.inscription.this_msg,
-            aw.inscription.payload,
-            aw.withdraws,
-        ),
+        Some(BlockChannelTx::AtomicWithdraw(aw)) => {
+            let this_msg = aw.inscription.this_msg;
+            state.submit_atomic_withdraw(
+                tx,
+                aw.inscription.parent_msg,
+                this_msg,
+                aw.inscription.payload,
+                aw.withdraws,
+            );
+            Some(this_msg)
+        }
         _ => state.submit_other(tx, channel_id),
     }
 }

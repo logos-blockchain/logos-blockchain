@@ -9,6 +9,7 @@ pub mod storage;
 mod sync;
 #[cfg(test)]
 mod tests;
+mod uncle;
 
 use core::fmt::Debug;
 use std::{
@@ -23,17 +24,17 @@ use derivative::Derivative;
 use futures::{Stream, TryStreamExt as _};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
-    block::{Block, genesis::GenesisBlock},
+    block::{Block, UncleHeaders, genesis::GenesisBlock},
     events::Events,
     header::HeaderId,
     mantle::{
-        gas::MainnetGasConstants,
+        gas::MainnetGasProfile,
         traits::{MantleTxWithProofs, PreverifiedMantleTx},
         transactions::GasPrices,
     },
     sdp::{Declaration, DeclarationId},
 };
-use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks};
+use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
 pub use lb_ledger::EpochState;
 use lb_ledger::LedgerState;
@@ -65,6 +66,7 @@ pub use crate::{
     service::phases::PhaseTag,
     states::CryptarchiaConsensusState,
     sync::config::{BlockProviderConfig, SyncConfig},
+    uncle::UncleError,
 };
 use crate::{
     bootstrap::state::choose_engine_state,
@@ -115,6 +117,8 @@ pub enum Error {
     ParentIdNotFound(HeaderId),
     #[error("Awaiting genesis time")]
     AwaitingGenesisTime,
+    #[error("Invalid uncle {uncle}: {reason}")]
+    InvalidUncle { uncle: HeaderId, reason: UncleError },
 }
 
 struct InitializedCryptarchia {
@@ -199,6 +203,12 @@ pub enum Query {
     GetBlockEvents {
         id: HeaderId,
         reply_channel: oneshot::Sender<Option<Events>>,
+    },
+    /// Selects uncles for a new block extending `parent` at `slot`.
+    SelectUncles {
+        parent: HeaderId,
+        slot: Slot,
+        reply_channel: oneshot::Sender<UncleHeaders>,
     },
     /// Subscribe to be notified when the chain becomes online mode.
     /// Since chain never goes back after entering online,
@@ -293,6 +303,10 @@ pub struct Cryptarchia {
 impl Cryptarchia {
     /// Initialize a new [`Cryptarchia`] instance.
     #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "TODO: define Lib struct to reduce args"
+    )]
     pub fn from_lib(
         lib_id: HeaderId,
         lib_ledger_state: LedgerState,
@@ -301,6 +315,7 @@ impl Cryptarchia {
         state: State,
         lib_slot: Slot,
         lib_length: u64,
+        lib_uncle_slots: UncleSlots,
     ) -> Self {
         Self {
             consensus: <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
@@ -309,6 +324,7 @@ impl Cryptarchia {
                 state,
                 lib_slot,
                 lib_length,
+                lib_uncle_slots,
             ),
             ledger: <lb_ledger::Ledger<_>>::new(lib_id, lib_ledger_state, ledger_config),
             genesis_id,
@@ -376,14 +392,18 @@ impl Cryptarchia {
             });
         }
 
+        // A block is valid only if every uncle it carries is valid.
+        self.verify_uncles(block)?;
+
         // A block number of this block if it's applied to the chain.
         let (_, state, events) = self
             .ledger
-            .prepare_update::<_, _, MainnetGasConstants>(
+            .prepare_update::<_, _, MainnetGasProfile>(
                 id,
                 parent,
                 slot,
                 header.leader_proof(),
+                &block.uncle_headers().slots(),
                 block.transactions_iter(),
             )
             .map_err(|err| match err {
@@ -396,7 +416,7 @@ impl Cryptarchia {
 
         let (pruned_blocks, reorged_blocks) = self
             .consensus
-            .receive_block(id, parent, slot)
+            .receive_block(id, parent, slot, block.uncle_headers().slots())
             .map_err(|err| match err {
                 lb_cryptarchia_engine::Error::ParentMissing(parent) => Error::ParentMissing {
                     parent,
@@ -881,6 +901,7 @@ where
             state,
             recovery_state.lib_block_slot,
             recovery_state.lib_block_length,
+            recovery_state.lib_block_uncle_slots.clone(),
         );
 
         // Stream the already applied state.
