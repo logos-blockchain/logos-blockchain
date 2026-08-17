@@ -1311,9 +1311,8 @@ mod tests {
     fn wallet_note(seed: u64, value: u64) -> NoteOp {
         NoteOp::Add(ChannelNote {
             note_id: lb_core::mantle::ledger::NoteId::from(lb_groth16::Fr::from(seed)),
-            value: Some(value),
-            pk: None,
-            deposit_group: None,
+            value,
+            pk: lb_groth16::Fr::from(seed).into(),
         })
     }
 

@@ -1178,7 +1178,7 @@ pub async fn wait_for_channel_wallet_note(
                 .finalized
                 .iter()
                 .chain(unfinalized)
-                .any(|note| note.value == Some(value))
+                .any(|note| note.value == value)
             {
                 return Ok(());
             }
@@ -1437,6 +1437,39 @@ pub fn build_zone_deposit(
             metadata,
         },
         reserved_inputs: vec![note],
+    })
+}
+
+/// Build a deposit that consumes one wallet note per listed value, in order.
+/// A deposit re-creates its inputs 1:1 as channel notes, so this yields a
+/// multi-input deposit whose recreated notes carry those exact per-note values
+/// — used to cover the channel wallet's per-note tracking.
+pub fn build_zone_deposit_from_values(
+    available_utxos: Vec<Utxo>,
+    channel_id: ChannelId,
+    input_values: &[Value],
+    metadata: Metadata,
+) -> Result<ZoneDeposit, ZoneTestError> {
+    let mut remaining = available_utxos;
+    let mut reserved_inputs = Vec::new();
+    for &value in input_values {
+        let index = remaining
+            .iter()
+            .position(|utxo| utxo.note.value == value)
+            .ok_or(ZoneTestError::MissingExactFundingNote { value })?;
+        reserved_inputs.push(remaining.remove(index));
+    }
+
+    let input_ids: Vec<_> = reserved_inputs.iter().map(Utxo::id).collect();
+    Ok(ZoneDeposit {
+        deposit: DepositOp {
+            channel_id,
+            inputs: Inputs::try_new(input_ids).map_err(|error| ZoneTestError::SubmitDeposit {
+                message: format!("deposit input set exceeds bound: {error:?}"),
+            })?,
+            metadata,
+        },
+        reserved_inputs,
     })
 }
 

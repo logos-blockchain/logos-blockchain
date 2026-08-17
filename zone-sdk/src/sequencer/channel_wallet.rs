@@ -21,7 +21,7 @@ use lb_core::{
     },
 };
 
-use super::types::{ChannelNote, ChannelWalletView, DepositGroup};
+use super::types::{ChannelNote, ChannelWalletView};
 use crate::adapter::{DepositEvents, DepositOpKey};
 
 /// One channel-note mutation, in on-chain execution order.
@@ -129,17 +129,11 @@ pub(super) fn note_ops_from_txs(
                         "deposit_events must contain every channel deposit op - \
                          fetch_block_deposit_events invariant",
                     );
-                    let group = (event.notes.len() > 1).then_some(DepositGroup {
-                        op_id,
-                        total: event.amount,
-                        size: event.notes.len(),
-                    });
                     for note in event.notes.iter() {
                         ops.push(NoteOp::Add(ChannelNote {
                             note_id: note.note_id,
-                            value: group.is_none().then_some(event.amount),
-                            pk: None,
-                            deposit_group: group,
+                            value: note.value,
+                            pk: note.pk,
                         }));
                     }
                 }
@@ -148,9 +142,8 @@ pub(super) fn note_ops_from_txs(
                     ops.extend(transfer.utxos().map(|utxo| {
                         NoteOp::Add(ChannelNote {
                             note_id: utxo.id(),
-                            value: Some(utxo.note.value),
-                            pk: Some(utxo.note.pk),
-                            deposit_group: None,
+                            value: utxo.note.value,
+                            pk: utxo.note.pk,
                         })
                     }));
                 }
@@ -199,11 +192,19 @@ mod tests {
         }
     }
 
+    fn dep_note(seed: u64, value: Value) -> DepositNote {
+        DepositNote {
+            note_id: note_id(seed),
+            value,
+            pk: zk_pk(seed),
+        }
+    }
+
     fn deposit_events_for(
         tx: &SignedMantleTx<Unverified>,
         op: &DepositOp,
         amount: Value,
-        notes: Vec<NoteId>,
+        notes: Vec<DepositNote>,
     ) -> DepositEvents {
         DepositEvents::from([(
             DepositOpKey {
@@ -212,16 +213,7 @@ mod tests {
             },
             crate::adapter::DepositEvent {
                 amount,
-                notes: notes
-                    .into_iter()
-                    .map(|note_id| DepositNote {
-                        note_id,
-                        value: 0,
-                        pk: Fr::from(0u64).into(),
-                    })
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .unwrap(),
+                notes: notes.try_into().unwrap(),
             },
         )])
     }
@@ -249,20 +241,20 @@ mod tests {
         let channel_id = ChannelId::from([1u8; 32]);
         let op = deposit_op(channel_id, 1);
         let tx = crate::test_support::unverified_tx_with_ops(vec![Op::ChannelDeposit(op.clone())]);
-        let events = deposit_events_for(&tx, &op, 50, vec![note_id(10)]);
+        let events = deposit_events_for(&tx, &op, 50, vec![dep_note(10, 50)]);
 
         let ops = note_ops_from_txs(std::slice::from_ref(&tx), channel_id, &events);
 
         let adds = added(&ops);
         assert_eq!(adds.len(), 1);
         assert_eq!(adds[0].note_id, note_id(10));
-        assert_eq!(adds[0].value, Some(50));
-        assert_eq!(adds[0].deposit_group, None);
+        assert_eq!(adds[0].value, 50);
+        assert_eq!(adds[0].pk, zk_pk(10));
         assert!(removed(&ops).is_empty());
     }
 
     #[test]
-    fn multi_input_deposit_notes_form_a_group() {
+    fn multi_input_deposit_yields_exact_per_note_values() {
         let channel_id = ChannelId::from([1u8; 32]);
         let op = DepositOp {
             channel_id,
@@ -270,19 +262,18 @@ mod tests {
             metadata: Metadata::try_from(b"m".to_vec()).unwrap(),
         };
         let tx = crate::test_support::unverified_tx_with_ops(vec![Op::ChannelDeposit(op.clone())]);
-        let events = deposit_events_for(&tx, &op, 70, vec![note_id(10), note_id(11)]);
+        let events = deposit_events_for(&tx, &op, 70, vec![dep_note(10, 30), dep_note(11, 40)]);
 
         let ops = note_ops_from_txs(std::slice::from_ref(&tx), channel_id, &events);
 
         let adds = added(&ops);
         assert_eq!(adds.len(), 2);
-        for add in &adds {
-            assert_eq!(add.value, None, "per-note values of a group are unknown");
-            let group = add.deposit_group.expect("group set");
-            assert_eq!(group.op_id, op.op_id());
-            assert_eq!(group.total, 70);
-            assert_eq!(group.size, 2);
-        }
+        assert_eq!(adds[0].note_id, note_id(10));
+        assert_eq!(adds[0].value, 30);
+        assert_eq!(adds[0].pk, zk_pk(10));
+        assert_eq!(adds[1].note_id, note_id(11));
+        assert_eq!(adds[1].value, 40);
+        assert_eq!(adds[1].pk, zk_pk(11));
     }
 
     #[test]
@@ -302,9 +293,9 @@ mod tests {
         let adds = added(&ops);
         assert_eq!(adds.len(), 2);
         assert_eq!(adds[0].note_id, expected_ids[0]);
-        assert_eq!(adds[0].value, Some(30));
-        assert_eq!(adds[0].pk, Some(zk_pk(7)));
-        assert_eq!(adds[1].value, Some(20));
+        assert_eq!(adds[0].value, 30);
+        assert_eq!(adds[0].pk, zk_pk(7));
+        assert_eq!(adds[1].value, 20);
     }
 
     #[test]
@@ -333,9 +324,8 @@ mod tests {
     fn add(seed: u64, value: Value) -> NoteOp {
         NoteOp::Add(ChannelNote {
             note_id: note_id(seed),
-            value: Some(value),
-            pk: None,
-            deposit_group: None,
+            value,
+            pk: zk_pk(seed),
         })
     }
 

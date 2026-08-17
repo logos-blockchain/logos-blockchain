@@ -535,9 +535,10 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
-  # [zone-sdk channel wallet] a deposit's recreated note surfaces in the
-  # sequencer's channel wallet and moves to the finalized layer with LIB.
-  Scenario: Channel wallet tracks a deposited note through finalization
+  # [zone-sdk channel wallet] a multi-input deposit's recreated notes surface in
+  # the sequencer's channel wallet with their exact per-note values, move to the
+  # finalized layer with LIB, and survive checkpoint restore and a fresh restart.
+  Scenario: Channel wallet tracks deposited notes with exact per-note values through finalization
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
       | 1             | 3           | 100000       |
@@ -548,20 +549,20 @@ Feature: Zone SDK
     When node "NODE_1" is at height 2 in 300 seconds
     And wallet "WALLET_1A" sends 30 notes of 1000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
     And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
-    And I do a coin split for "WALLET_1A" of 3 UTXOs valued at 1 LGO tokens each
+    And I do a coin split for "WALLET_1A" of 1 UTXOs valued at 1 LGO tokens each
+    And I do a coin split for "WALLET_1A" of 1 UTXOs valued at 2 LGO tokens each
     And I start zone sequencer "SEQ_A" with indexer
     And sequencer "SEQ_A" publishes the following zone messages:
       | alias | data                |
       | MSG_1 | initial inscription |
     Then all zone messages are safe in 120 seconds
-    When I submit zone deposit transaction "DEPOSIT_1" into channel of "SEQ_A" of 1 with metadata "Mint 1 to Alice in Zone"
+    When I submit zone deposit transaction "DEPOSIT_1" into channel of "SEQ_A" consuming notes valued "1,2" with metadata "Mint 1 and 2 into the channel"
     Then zone transaction "DEPOSIT_1" is included in 120 seconds
     And the channel wallet of "SEQ_A" contains a note of value 1 in 120 seconds
+    And the channel wallet of "SEQ_A" contains a note of value 2 in 120 seconds
     And zone transaction "DEPOSIT_1" is finalized in 120 seconds
     And the channel wallet of "SEQ_A" contains a finalized note of value 1 in 120 seconds
-    When I submit zone deposit transaction "DEPOSIT_2" into channel of "SEQ_A" of 1 with metadata "Mint another 1 in Zone"
-    Then zone transaction "DEPOSIT_2" is included in 120 seconds
-    And zone transaction "DEPOSIT_2" is finalized in 120 seconds
+    And the channel wallet of "SEQ_A" contains a finalized note of value 2 in 120 seconds
     And the channel wallet of "SEQ_A" has exactly 2 finalized and 0 unfinalized notes in 120 seconds
     When I save current checkpoint of sequencer "SEQ_A" as "WALLET_CHECKPOINT"
     And I restart zone sequencer "SEQ_A" from checkpoint "WALLET_CHECKPOINT"

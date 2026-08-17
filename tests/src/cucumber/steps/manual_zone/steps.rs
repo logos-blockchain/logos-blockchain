@@ -15,7 +15,8 @@ use super::{
         save_zone_checkpoint, start_named_sequencer,
         start_named_sequencer_with_pending_submit_depth, start_nodes_with_zone_resources,
         stop_zone_sequencer, submit_atomic_zone_deposit_transaction, submit_zone_channel_config,
-        submit_zone_deposit_transaction, submit_zone_withdraw_transaction,
+        submit_zone_deposit_transaction, submit_zone_multi_deposit_transaction,
+        submit_zone_withdraw_transaction,
     },
     assertions::{
         assert_sorted_outcome, scan_indexer_for_payloads, wait_for_indexer_unordered,
@@ -659,6 +660,36 @@ async fn step_submit_zone_deposit_transaction(
         transaction_alias,
         channel_alias,
         amount,
+        metadata
+            .into_bytes()
+            .try_into()
+            .expect("Metadata too large for deposit op."),
+    )
+    .await
+}
+
+#[when(
+    expr = "I submit zone deposit transaction {string} into channel of {string} consuming notes valued {string} with metadata {string}"
+)]
+async fn step_submit_zone_multi_deposit_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    transaction_alias: String,
+    channel_alias: String,
+    values: String,
+    metadata: String,
+) -> StepResult {
+    let input_values = values
+        .split(',')
+        .map(|part| part.trim().parse::<u64>())
+        .collect::<Result<Vec<_>, _>>()
+        .expect("deposit note values must be a comma-separated list of integers");
+    submit_zone_multi_deposit_transaction(
+        world,
+        step,
+        transaction_alias,
+        channel_alias,
+        input_values,
         metadata
             .into_bytes()
             .try_into()

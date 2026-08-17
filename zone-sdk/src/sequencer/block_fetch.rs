@@ -833,7 +833,7 @@ fn touches_channel_tip<State: VerificationState>(
 mod tests {
     use lb_core::{
         crypto::Hash,
-        events::DepositRecreatedNotes,
+        events::{DepositNote, DepositRecreatedNotes},
         mantle::{
             Note, NoteId, RawMantleTx, Value,
             channel::{SlotTimeframe, SlotTimeout},
@@ -1883,6 +1883,10 @@ mod tests {
     /// and the LIB backfill folds the result into the finalized base without
     /// double-counting.
     #[tokio::test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "End-to-end wallet tracking scenario."
+    )]
     async fn wallet_tracks_deposit_and_transfer_through_finalization() {
         let channel_id = ChannelId::from([0u8; 32]);
         let recreated = NoteId::from(Fr::from(1010u64));
@@ -1902,11 +1906,16 @@ mod tests {
         let b2 = api_block(2, 1, 2, vec![transfer_tx]);
         let b3 = api_block(3, 2, 3, Vec::new());
 
+        let recreated_note = DepositNote {
+            note_id: recreated,
+            value: 50,
+            pk: out_pk,
+        };
         let node = MockNode {
             immutable: vec![b1.clone(), b2.clone()],
             events: HashMap::from([(
                 header_id(1),
-                deposit_event(&dep_tx, &dep, 50, vec![recreated]),
+                deposit_event(&dep_tx, &dep, 50, vec![recreated_note]),
             )]),
             ..MockNode::default()
         };
@@ -1931,7 +1940,7 @@ mod tests {
         assert!(view.finalized.is_empty());
         assert_eq!(view.unfinalized.len(), 1);
         assert_eq!(view.unfinalized[0].note_id, recreated);
-        assert_eq!(view.unfinalized[0].value, Some(50));
+        assert_eq!(view.unfinalized[0].value, 50);
 
         handle_block_event(
             &live_event(&b2),
@@ -1949,7 +1958,7 @@ mod tests {
             .channel_wallet_view(Some(header_id(2)));
         assert_eq!(view.unfinalized.len(), 1, "transfer re-keys the note");
         assert_eq!(view.unfinalized[0].note_id, out_id);
-        assert_eq!(view.unfinalized[0].pk, Some(out_pk));
+        assert_eq!(view.unfinalized[0].pk, out_pk);
 
         // LIB advances to B2: the immutable range folds into the base.
         let event = ProcessedBlockEvent {

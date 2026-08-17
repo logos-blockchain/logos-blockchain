@@ -18,7 +18,6 @@ use lb_core::{
         Op, RawMantleTx, SignedMantleTx, Value,
         channel::ChannelState,
         gas::GasCost,
-        ledger::NoteId,
         ops::{
             OpId as _, OpProof,
             channel::{
@@ -381,7 +380,7 @@ pub fn deposit_event(
     tx: &SignedMantleTx<Unverified>,
     op: &DepositOp,
     amount: Value,
-    notes: Vec<NoteId>,
+    notes: Vec<DepositNote>,
 ) -> Events {
     Events::from(ChainEvent::Tx(TxEvent::new(
         tx.mantle_tx().hash(),
@@ -390,16 +389,7 @@ pub fn deposit_event(
             channel_id: op.channel_id,
             amount,
             metadata: op.metadata.clone(),
-            notes: notes
-                .into_iter()
-                .map(|note_id| DepositNote {
-                    note_id,
-                    value: 0,
-                    pk: Fr::from(0u64).into(),
-                })
-                .collect::<Vec<_>>()
-                .try_into()
-                .expect("bounded note count"),
+            notes: notes.try_into().expect("bounded note count"),
         },
     )))
 }

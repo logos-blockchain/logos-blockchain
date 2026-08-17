@@ -81,8 +81,8 @@ pub use client::SequencerClient;
 pub use handle::SequencerHandle;
 pub use types::{
     AtomicWithdrawInfo, ChannelNote, ChannelTransferInfo, ChannelUpdate, ChannelUpdateTx,
-    ChannelWalletView, DepositGroup, DepositInfo, Error, Event, FinalizedOp, FinalizedTx,
-    FundingConfig, InscriptionId, InscriptionInfo, PendingTx, PublishResult, SequencerChannelView,
+    ChannelWalletView, DepositInfo, Error, Event, FinalizedOp, FinalizedTx, FundingConfig,
+    InscriptionId, InscriptionInfo, PendingTx, PublishResult, SequencerChannelView,
     SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource, TxStatus, TxStatusUpdate,
     WithdrawArg, WithdrawInfo,
 };

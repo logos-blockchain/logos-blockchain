@@ -27,12 +27,12 @@ use super::{
     steps::DEFAULT_ZONE_SEQUENCER,
     support::{
         AtomicZoneDepositRequest, CustomRepublishDeps, DiscardedPayloads, PublishDeadline,
-        ZoneAccountBalances, ZoneDeposit, build_zone_deposit, ensure_zone_transactions_included,
-        keygen, publish_atomic_zone_withdraw, publish_message_with_retry, sequencer_config,
-        sequencer_config_with_pending_submit_depth, start_balance_aware_policy,
-        start_custom_republish_policy, start_republish_lineage_policy, start_sequencer_event_loop,
-        start_sorted_conflict_policy, submit_atomic_zone_deposit, submit_zone_deposit,
-        submit_zone_withdraw,
+        ZoneAccountBalances, ZoneDeposit, build_zone_deposit, build_zone_deposit_from_values,
+        ensure_zone_transactions_included, keygen, publish_atomic_zone_withdraw,
+        publish_message_with_retry, sequencer_config, sequencer_config_with_pending_submit_depth,
+        start_balance_aware_policy, start_custom_republish_policy, start_republish_lineage_policy,
+        start_sequencer_event_loop, start_sorted_conflict_policy, submit_atomic_zone_deposit,
+        submit_zone_deposit, submit_zone_withdraw,
     },
     tables::{ConcurrentZoneMessageRow, ZoneNodeResourcesRow, group_zone_messages_by_sequencer},
 };
@@ -421,6 +421,48 @@ pub(super) async fn submit_zone_deposit_transaction(
         available_utxos,
         world.zone.sequencer_channel_id(&channel_alias)?,
         amount,
+        metadata,
+    )
+    .map_err(|error| zone_step_error(step, &error))?;
+
+    let response = submit_zone_deposit(&node_url, &deposit, public_key)
+        .await
+        .map_err(|error| zone_step_error(step, &error))?;
+
+    world
+        .zone
+        .remember_submitted_deposit(transaction_alias.clone(), deposit, amount);
+    record_zone_wallet_submission(world, &wallet.wallet_name, response, reserved_inputs)?;
+    world.remember_submitted_transaction(transaction_alias, response);
+
+    Ok(())
+}
+
+/// Submits a multi-input channel deposit that consumes one wallet note per
+/// listed value, exercising the channel wallet's per-note value tracking.
+pub(super) async fn submit_zone_multi_deposit_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    transaction_alias: String,
+    channel_alias: String,
+    input_values: Vec<u64>,
+    metadata: Metadata,
+) -> StepResult {
+    let node_url = log_step_error(step, world.zone_node_url_for_sequencer(&channel_alias))?;
+    let wallet = log_step_error(step, resolve_zone_wallet(world, &channel_alias))?;
+    let public_key = log_step_error(step, wallet.public_key())?;
+    let available_utxos = log_step_error(
+        step,
+        current_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
+    )?;
+    let amount: u64 = input_values.iter().sum();
+    let ZoneDeposit {
+        deposit,
+        reserved_inputs,
+    } = build_zone_deposit_from_values(
+        available_utxos,
+        world.zone.sequencer_channel_id(&channel_alias)?,
+        &input_values,
         metadata,
     )
     .map_err(|error| zone_step_error(step, &error))?;

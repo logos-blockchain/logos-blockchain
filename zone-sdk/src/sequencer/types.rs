@@ -475,33 +475,18 @@ pub struct ChannelTransferInfo {
 
 /// A note owned by the channel, as reconstructed from block data.
 ///
-/// `value` and `pk` are exact for notes created by a `ChannelTransfer` (the
-/// op payload carries full notes) and for single-input deposits (the deposit
-/// event carries the total). Notes from multi-input deposits carry `None`
-/// for both — the event publishes only ids and a total — and are grouped via
-/// [`Self::deposit_group`].
+/// Every note carries its exact `value` and owning `pk`: deposits publish them
+/// per note in the deposit event (`TxEventPayload::Deposit`), and
+/// `ChannelTransfer` outputs carry full notes. Tracking each note individually
+/// — rather than as an aggregate group — is what lets a withdrawal client
+/// apply a per-note dust policy under a permissionless deposit stream.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ChannelNote {
     pub note_id: NoteId,
-    /// Exact value, when derivable from chain data.
-    pub value: Option<Value>,
-    /// The key holding the note's `PoS` participation power, when derivable.
-    pub pk: Option<ZkPublicKey>,
-    /// Set when this note was created by a multi-input deposit: per-note
-    /// values are unknown, but the group total is. The group's total is only
-    /// meaningful while all `size` members are unspent.
-    pub deposit_group: Option<DepositGroup>,
-}
-
-/// Identity and total of a multi-input deposit's recreated note group.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct DepositGroup {
-    /// `op_id` of the deposit op that created the group.
-    pub op_id: Hash,
-    /// Total value across all notes of the group.
-    pub total: Value,
-    /// Number of notes the deposit created.
-    pub size: usize,
+    /// The note's value.
+    pub value: Value,
+    /// The key holding the note's `PoS` participation power.
+    pub pk: ZkPublicKey,
 }
 
 /// The channel's note set as tracked from block data.
