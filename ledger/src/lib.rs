@@ -344,6 +344,7 @@ impl LedgerState {
             slot,
             proof,
             &self.mantle_ledger.sdp,
+            &self.mantle_ledger.pow,
             config,
         )
     }

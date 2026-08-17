@@ -516,7 +516,7 @@ impl LedgerState {
         // Then, apply the proof and update the nonce. Finally, mark the occupied
         // slots since this function is called for a new block.
         Ok(self
-            .update_epoch_state_and_apply_proof(slot, proof, sdp, config)?
+            .update_epoch_state_and_apply_proof(slot, proof, sdp, pow, config)?
             .update_nonce(&proof.entropy(), slot)
             .mark_occupied_slots(slot, uncle_slots))
     }
@@ -527,12 +527,13 @@ impl LedgerState {
         slot: Slot,
         proof: &LeaderProof,
         sdp: &SdpLedger,
+        pow: &PowState,
         config: &Config,
     ) -> Result<Self, LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
     {
-        self.update_epoch_state(slot, sdp, config)?
+        self.update_epoch_state(slot, sdp, pow, config)?
             .try_apply_proof(slot, proof, config)
     }
 
@@ -543,13 +544,14 @@ impl LedgerState {
         slot: Slot,
         proof: &LeaderProof,
         sdp: &SdpLedger,
+        pow: &PowState,
         config: &Config,
     ) -> Result<(), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
     {
         self.clone()
-            .update_epoch_state_and_apply_proof(slot, proof, sdp, config)?;
+            .update_epoch_state_and_apply_proof(slot, proof, sdp, pow, config)?;
         Ok(())
     }
 
@@ -592,17 +594,6 @@ impl LedgerState {
             block_density,
             ..self
         }
-    }
-
-    /// Count a block, and the number of transactions it carried, into the
-    /// current epoch's totals.
-    ///
-    /// Called from the canonical apply path only, once the block's contents
-    /// are known — unlike [`Self::increment_block_density`], which runs while
-    /// the header is applied and so also counts the headers a proposer
-    /// applies to a throwaway state for a block it is still building.
-    pub(crate) const fn record_block_txs(&mut self, txs_in_block: u64) {
-        self.tx_density.record_block(txs_in_block);
     }
 
     pub const fn update_fee_window(&mut self, index: usize, total_fee: GasCost) {
