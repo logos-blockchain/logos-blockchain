@@ -1,0 +1,106 @@
+# Deletes branches of merged PRs on a schedule, as a safer replacement for the
+# repository's "automatically delete head branches" setting.
+#
+# Why not auto-delete: deleting a merged stack's branches back to back can race
+# GitHub's automatic re-targeting of dependent PRs, and a PR whose base branch
+# disappears gets closed (see #3284). This job removes the race by never
+# deleting a branch that is still the base of an open PR, and by only deleting
+# branches some hours after the merge.
+#
+# Rules - a branch is deleted only if ALL hold:
+#   * its PR was merged (closed-without-merge branches are kept on purpose:
+#     closing a PR should not destroy the branch, it may be reopened)
+#   * the branch still points at the merged PR's head commit - a branch name
+#     reused for new work after the merge is never touched
+#   * the merge is at least MIN_AGE_HOURS old
+#   * no open PR uses the branch as head or as base
+#
+# Scope: looks at the most recent 300 merged PRs, so it keeps up when run
+# daily. Branches merged before this job was introduced need a one-off manual
+# cleanup. Protected branches survive anyway - the delete API refuses.
+#
+# Assumes "Automatically delete head branches" is OFF in the repository
+# settings - with it on, branches are gone before this job ever sees them.
+name: Clean up merged branches
+
+on:
+  schedule:
+    # Daily, before the workday starts.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Only log what would be deleted
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Delete merged branches
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      MIN_AGE_HOURS: 24
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+    steps:
+      - name: Delete eligible branches
+        run: |
+          set -euo pipefail
+
+          # Branches of recently merged same-repo PRs, as
+          # "<branch>\t<mergedAt>\t<head sha at merge>" lines.
+          merged_branches() {
+            gh pr list --repo "$GITHUB_REPOSITORY" --state merged --limit 300 \
+              --json headRefName,mergedAt,headRepositoryOwner,headRefOid \
+              --jq '.[]
+                    | select(.headRepositoryOwner.login == (env.GITHUB_REPOSITORY | split("/")[0]))
+                    | [.headRefName, .mergedAt, .headRefOid] | @tsv' \
+              | sort -u
+          }
+
+          # Prints the branch tip sha; fails if the branch does not exist.
+          branch_tip() {
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/$1" \
+              --jq .object.sha 2>/dev/null
+          }
+
+          # $1 = --head or --base
+          open_pr_count() {
+            gh pr list --repo "$GITHUB_REPOSITORY" --state open "$1" "$2" \
+              --json number --jq length
+          }
+
+          delete_branch() {
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/$1" >/dev/null
+          }
+
+          cutoff=$(date -u -d "${MIN_AGE_HOURS} hours ago" +%Y-%m-%dT%H:%M:%SZ)
+          echo "Deleting branches of PRs merged before ${cutoff}"
+
+          merged_branches | while IFS=$'\t' read -r branch merged_at merged_sha; do
+            [ "$branch" = "master" ] && continue
+            [[ "$merged_at" > "$cutoff" ]] && continue
+            tip=$(branch_tip "$branch") || continue
+
+            if [ "$tip" != "$merged_sha" ]; then
+              echo "keep   ${branch} (tip moved since the merge - branch reused)"
+            elif [ "$(open_pr_count --head "$branch")" != "0" ]; then
+              echo "keep   ${branch} (head of an open PR)"
+            elif [ "$(open_pr_count --base "$branch")" != "0" ]; then
+              echo "keep   ${branch} (base of an open PR)"
+            elif [ "$DRY_RUN" = "true" ]; then
+              echo "would delete ${branch} (merged ${merged_at})"
+            elif delete_branch "$branch"; then
+              echo "deleted ${branch} (merged ${merged_at})"
+            else
+              echo "::warning::could not delete ${branch} (protected or race); skipping"
+            fi
+          done
