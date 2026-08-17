@@ -475,11 +475,13 @@ pub struct ChannelTransferInfo {
 
 /// A note owned by the channel, as reconstructed from block data.
 ///
-/// Every note carries its exact `value` and owning `pk`: deposits publish them
-/// per note in the deposit event (`TxEventPayload::Deposit`), and
-/// `ChannelTransfer` outputs carry full notes. Tracking each note individually
-/// — rather than as an aggregate group — is what lets a withdrawal client
-/// apply a per-note dust policy under a permissionless deposit stream.
+/// Every note carries its exact `value`, owning `pk`, and creation `slot`:
+/// deposits publish value and pk per note in the deposit event
+/// (`TxEventPayload::Deposit`), `ChannelTransfer` outputs carry full notes, and
+/// the slot comes from the block the note was created in. Tracking each note
+/// individually — rather than as an aggregate group — is what lets a withdrawal
+/// client apply a per-note dust policy (by value and age) under a
+/// permissionless deposit stream.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ChannelNote {
     pub note_id: NoteId,
@@ -487,6 +489,10 @@ pub struct ChannelNote {
     pub value: Value,
     /// The key holding the note's `PoS` participation power.
     pub pk: ZkPublicKey,
+    /// The block slot the note was created in — its age reference. A note's age
+    /// at any tip is that tip's slot minus this. Chain-anchored, so it is
+    /// deterministic and survives sequencer restarts.
+    pub slot: Slot,
 }
 
 /// The channel's note set as tracked from block data.

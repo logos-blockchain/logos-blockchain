@@ -1313,6 +1313,7 @@ mod tests {
             note_id: lb_core::mantle::ledger::NoteId::from(lb_groth16::Fr::from(seed)),
             value,
             pk: lb_groth16::Fr::from(seed).into(),
+            slot: lb_common_http_client::Slot::from(1),
         })
     }
 

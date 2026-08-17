@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 
+use lb_common_http_client::Slot;
 use lb_core::{
     header::HeaderId,
     mantle::{
@@ -117,6 +118,7 @@ pub(super) fn note_ops_from_txs(
     transactions: &[SignedMantleTx<Unverified>],
     channel_id: ChannelId,
     deposit_events: &DepositEvents,
+    slot: Slot,
 ) -> Vec<NoteOp> {
     let mut ops = Vec::new();
     for tx in transactions {
@@ -134,6 +136,7 @@ pub(super) fn note_ops_from_txs(
                             note_id: note.note_id,
                             value: note.value,
                             pk: note.pk,
+                            slot,
                         }));
                     }
                 }
@@ -144,6 +147,7 @@ pub(super) fn note_ops_from_txs(
                             note_id: utxo.id(),
                             value: utxo.note.value,
                             pk: utxo.note.pk,
+                            slot,
                         })
                     }));
                 }
@@ -243,13 +247,19 @@ mod tests {
         let tx = crate::test_support::unverified_tx_with_ops(vec![Op::ChannelDeposit(op.clone())]);
         let events = deposit_events_for(&tx, &op, 50, vec![dep_note(10, 50)]);
 
-        let ops = note_ops_from_txs(std::slice::from_ref(&tx), channel_id, &events);
+        let ops = note_ops_from_txs(
+            std::slice::from_ref(&tx),
+            channel_id,
+            &events,
+            Slot::from(9),
+        );
 
         let adds = added(&ops);
         assert_eq!(adds.len(), 1);
         assert_eq!(adds[0].note_id, note_id(10));
         assert_eq!(adds[0].value, 50);
         assert_eq!(adds[0].pk, zk_pk(10));
+        assert_eq!(adds[0].slot, Slot::from(9));
         assert!(removed(&ops).is_empty());
     }
 
@@ -264,16 +274,23 @@ mod tests {
         let tx = crate::test_support::unverified_tx_with_ops(vec![Op::ChannelDeposit(op.clone())]);
         let events = deposit_events_for(&tx, &op, 70, vec![dep_note(10, 30), dep_note(11, 40)]);
 
-        let ops = note_ops_from_txs(std::slice::from_ref(&tx), channel_id, &events);
+        let ops = note_ops_from_txs(
+            std::slice::from_ref(&tx),
+            channel_id,
+            &events,
+            Slot::from(9),
+        );
 
         let adds = added(&ops);
         assert_eq!(adds.len(), 2);
         assert_eq!(adds[0].note_id, note_id(10));
         assert_eq!(adds[0].value, 30);
         assert_eq!(adds[0].pk, zk_pk(10));
+        assert_eq!(adds[0].slot, Slot::from(9));
         assert_eq!(adds[1].note_id, note_id(11));
         assert_eq!(adds[1].value, 40);
         assert_eq!(adds[1].pk, zk_pk(11));
+        assert_eq!(adds[1].slot, Slot::from(9));
     }
 
     #[test]
@@ -287,7 +304,12 @@ mod tests {
         let expected_ids: Vec<NoteId> = op.utxos().map(|u| u.id()).collect();
         let tx = crate::test_support::unverified_tx_with_ops(vec![Op::ChannelTransfer(op)]);
 
-        let ops = note_ops_from_txs(std::slice::from_ref(&tx), channel_id, &DepositEvents::new());
+        let ops = note_ops_from_txs(
+            std::slice::from_ref(&tx),
+            channel_id,
+            &DepositEvents::new(),
+            Slot::from(9),
+        );
 
         assert_eq!(removed(&ops), vec![note_id(10)]);
         let adds = added(&ops);
@@ -295,6 +317,7 @@ mod tests {
         assert_eq!(adds[0].note_id, expected_ids[0]);
         assert_eq!(adds[0].value, 30);
         assert_eq!(adds[0].pk, zk_pk(7));
+        assert_eq!(adds[0].slot, Slot::from(9));
         assert_eq!(adds[1].value, 20);
     }
 
@@ -315,7 +338,12 @@ mod tests {
             Op::ChannelWithdraw(foreign),
         ]);
 
-        let ops = note_ops_from_txs(std::slice::from_ref(&tx), channel_id, &DepositEvents::new());
+        let ops = note_ops_from_txs(
+            std::slice::from_ref(&tx),
+            channel_id,
+            &DepositEvents::new(),
+            Slot::from(9),
+        );
 
         assert_eq!(removed(&ops), vec![note_id(10)]);
         assert!(added(&ops).is_empty());
@@ -326,6 +354,7 @@ mod tests {
             note_id: note_id(seed),
             value,
             pk: zk_pk(seed),
+            slot: Slot::from(1),
         })
     }
 

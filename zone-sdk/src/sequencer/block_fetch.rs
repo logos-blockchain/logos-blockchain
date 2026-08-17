@@ -91,7 +91,12 @@ where
     // hits the node when the block actually carries deposits for our channel.
     let deposit_events =
         fetch_block_deposit_events(node, block_id, &event.block.transactions, channel_id).await?;
-    let note_ops = note_ops_from_txs(&event.block.transactions, channel_id, &deposit_events);
+    let note_ops = note_ops_from_txs(
+        &event.block.transactions,
+        channel_id,
+        &deposit_events,
+        event.block.header.slot,
+    );
 
     // Snapshot which txs were tracked BEFORE this event mutates state: the
     // extension-case `adopted` filter below distinguishes entries the
@@ -371,6 +376,7 @@ where
             &block.transactions,
             channel_id,
             &deposit_events,
+            block.header.slot,
         ));
 
         let current_lib = state.lib();
@@ -685,7 +691,12 @@ fn apply_backfilled_block(
     // the live-block path in `handle_block_event`.
     observe_channel_inscriptions(state, &channel_txs, &block.transactions);
 
-    let note_ops = note_ops_from_txs(&block.transactions, channel_id, deposit_events);
+    let note_ops = note_ops_from_txs(
+        &block.transactions,
+        channel_id,
+        deposit_events,
+        block.header.slot,
+    );
 
     // Use current state lib to avoid premature finalization
     state.process_block(block_id, parent_id, lib, our_txs, channel_txs, note_ops);
