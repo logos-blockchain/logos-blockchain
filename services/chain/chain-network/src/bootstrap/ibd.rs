@@ -318,7 +318,7 @@ where
     NetAdapter::PeerId: Copy + Debug + Eq + Hash + Send + Sync,
     RuntimeServiceId: Sync,
 {
-    (|| fetch_sampled_tips(network))
+    (|| fetch_sampled_tips(network, config.max_connected_peers_to_sample))
         .retry(
             ExponentialBuilder::default()
                 .with_min_delay(config.tips_fetch_min_delay)
@@ -335,12 +335,13 @@ where
 /// request failures, so an empty result means no usable peer is available yet.
 async fn fetch_sampled_tips<NetAdapter, RuntimeServiceId>(
     network: &NetAdapter,
+    max_peers: usize,
 ) -> Result<HashSet<HeaderId>, AllPeersFailed>
 where
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
     RuntimeServiceId: Sync,
 {
-    let mut responses = network.sample_tips(usize::MAX).await;
+    let mut responses = network.sample_tips(max_peers.max(1)).await;
     let mut tips = HashSet::new();
     while let Some(response) = responses.next().await {
         match response {
@@ -806,6 +807,7 @@ mod tests {
         IbdConfig {
             peers,
             discover_connected_peers: false,
+            max_connected_peers_to_sample: 16,
             tips_fetch_max_attempts: 3,
             tips_fetch_min_delay: Duration::from_millis(250),
             tips_fetch_max_delay: Duration::from_secs(1),

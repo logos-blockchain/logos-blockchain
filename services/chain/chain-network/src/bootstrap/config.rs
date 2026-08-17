@@ -26,6 +26,8 @@ where
     /// `PeerId`: the network can still connect to them and expose their tips
     /// through `NetworkAdapter::sample_tips`.
     pub discover_connected_peers: bool,
+    /// Maximum number of connected peers to sample for discovery-based IBD.
+    pub max_connected_peers_to_sample: usize,
     /// Maximum number of attempts when fetching tips from IBD peers.
     pub tips_fetch_max_attempts: usize,
     /// Lower bound of the exponential backoff between tip-fetch attempts.
