@@ -66,6 +66,10 @@ pub fn scripts(scripts: Vec<StreamScript>) -> Arc<Mutex<VecDeque<StreamScript>>>
 pub struct MockNode {
     /// Served by `channel_state()`.
     pub channel_state: Option<ChannelState>,
+    /// Optional gate for pausing `channel_state()` calls in cancellation tests.
+    pub channel_state_gate: Option<watch::Receiver<bool>>,
+    /// Optional notification sent whenever `channel_state()` is called.
+    pub channel_state_calls: Option<mpsc::UnboundedSender<()>>,
     /// LIB and tip ids reported by `consensus_info()`.
     pub lib: HeaderId,
     pub tip: HeaderId,
@@ -78,6 +82,11 @@ pub struct MockNode {
     pub blocks: Vec<ApiBlock>,
     /// Served by `immutable_blocks()`, filtered by the queried slot range.
     pub immutable: Vec<ApiBlock>,
+    /// Optional gate for pausing `immutable_blocks()` calls in cancellation
+    /// tests.
+    pub immutable_blocks_gate: Option<watch::Receiver<bool>>,
+    /// Optional notification sent whenever `immutable_blocks()` is called.
+    pub immutable_blocks_calls: Option<mpsc::UnboundedSender<()>>,
     /// Served by `zone_messages_in_blocks()`, filtered by the queried slot
     /// range.
     pub zone_messages: Vec<(ZoneMessage, Slot)>,
@@ -94,6 +103,8 @@ impl Default for MockNode {
     fn default() -> Self {
         Self {
             channel_state: Some(single_key_channel_state()),
+            channel_state_gate: None,
+            channel_state_calls: None,
             lib: header_id(0),
             tip: header_id(0),
             lib_slot: Slot::genesis(),
@@ -103,6 +114,8 @@ impl Default for MockNode {
             }]),
             blocks: Vec::new(),
             immutable: Vec::new(),
+            immutable_blocks_gate: None,
+            immutable_blocks_calls: None,
             zone_messages: Vec::new(),
             up: None,
             posted: None,
@@ -166,6 +179,21 @@ impl adapter::Node for MockNode {
         &self,
         _channel_id: ChannelId,
     ) -> Result<Option<ChannelState>, lb_common_http_client::Error> {
+        if let Some(calls) = &self.channel_state_calls {
+            let _ = calls.send(());
+        }
+
+        if let Some(gate) = &self.channel_state_gate {
+            let mut gate = gate.clone();
+            while !*gate.borrow_and_update() {
+                gate.changed().await.map_err(|_| {
+                    lb_common_http_client::Error::Client(
+                        "channel-state test gate closed".to_owned(),
+                    )
+                })?;
+            }
+        }
+
         Ok(self.channel_state.clone())
     }
 
@@ -220,6 +248,21 @@ impl adapter::Node for MockNode {
         slot_from: Slot,
         slot_to: Slot,
     ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
+        if let Some(calls) = &self.immutable_blocks_calls {
+            let _ = calls.send(());
+        }
+
+        if let Some(gate) = &self.immutable_blocks_gate {
+            let mut gate = gate.clone();
+            while !*gate.borrow_and_update() {
+                gate.changed().await.map_err(|_| {
+                    lb_common_http_client::Error::Client(
+                        "immutable-blocks test gate closed".to_owned(),
+                    )
+                })?;
+            }
+        }
+
         Ok(self
             .immutable
             .iter()
