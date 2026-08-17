@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
@@ -379,6 +380,7 @@ where
             current_public_info,
             crypto_processor,
             current_recovery_checkpoint,
+            pending_transactions,
             message_scheduler,
             mut backend,
             mut rng,
@@ -433,6 +435,7 @@ where
             &sdp_relay,
             message_scheduler.into(),
             &mut rng,
+            pending_transactions,
             crypto_processor,
             current_public_info,
             current_recovery_checkpoint,
@@ -499,6 +502,7 @@ async fn initialize<
         ProofsVerifier,
     >,
     ServiceState<Backend::Settings, Dispatcher::Settings>,
+    VecDeque<Vec<u8>>,
     SchedulerWrapper<BlakeRng, ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
     Backend,
     BlakeRng,
@@ -624,24 +628,32 @@ where
 
     // Initialize the current epoch state. If the epoch matches the stored one,
     // retrieves the tracked consumed core quota. Else, fallback to `0`.
-    let current_recovery_checkpoint = if let Some(saved_state) = last_saved_state.take()
-        && saved_state.last_seen_epoch() == current_epoch_public_info.epoch
-    {
-        tracing::trace!(
-            target: LOG_TARGET,
-            "Found recovery state for epoch {:?}: {saved_state:?}",
-            current_epoch_public_info.epoch
-        );
-        saved_state
-    } else {
-        tracing::trace!(
-            target: LOG_TARGET,
-            "No recovery state found for epoch {:?}. Initializing a new one.",
-            current_epoch_public_info.epoch
-        );
+    let current_recovery_checkpoint = match last_saved_state.take() {
+        Some(saved_state) if saved_state.last_seen_epoch() == current_epoch_public_info.epoch => {
+            tracing::trace!(
+                target: LOG_TARGET,
+                "Found recovery state for epoch {:?}: {saved_state:?}",
+                current_epoch_public_info.epoch
+            );
+            saved_state
+        }
+        stale_state => {
+            tracing::trace!(
+                target: LOG_TARGET,
+                "No recovery state found for epoch {:?}. Initializing a new one.",
+                current_epoch_public_info.epoch
+            );
 
-        ServiceState::with_epoch(
-            current_epoch_public_info.epoch,
+            // Everything else in a stale state belongs to the epoch it was
+            // saved under, but a transaction still waiting for a `PoW` solution
+            // has not been encapsulated and so belongs to none: it outlives the
+            // state that carried it, the same way it outlives an epoch rotation.
+            let pending_transactions =
+                stale_state.map_or_else(VecDeque::new, |state| state.into_components().4);
+
+            ServiceState::with_epoch(
+                current_epoch_public_info.epoch,
+                pending_transactions,
             EpochBlendingTokenCollector::new(
                 &reward::EpochInfo::new(
                     current_epoch_public_info.epoch,
@@ -650,10 +662,12 @@ where
                     current_epoch_public_info.poq_core_public_inputs.quota,
                     blend_config.activity_threshold_sensitivity,
                 ).expect("Reward epoch info must be created successfully. Panicking since the service cannot continue with this epoch")
-            ),
-            None,
-            state_updater,
-        ).expect("service state should be created successfully")
+                ),
+                None,
+                state_updater,
+            )
+            .expect("service state should be created successfully")
+        }
     };
 
     // If there is the old epoch token collector loaded from `last_saved_state`,
@@ -704,11 +718,14 @@ where
     // Rng for releasing messages.
     let rng = BlakeRng::from_entropy();
 
+    let pending_transactions = current_recovery_checkpoint.pending_transactions().clone();
+
     (
         remaining_epoch_stream,
         current_epoch_public_info,
         crypto_processor,
         current_recovery_checkpoint,
+        pending_transactions,
         message_scheduler,
         backend,
         rng,
@@ -776,6 +793,7 @@ async fn run_event_loop<
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
     rng: &mut Rng,
+    mut pending_transactions: VecDeque<Vec<u8>>,
     mut crypto_processor: CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -821,16 +839,23 @@ where
         tokio::select! {
             Some(msg) = inbound_relay.next() => {
                 match msg {
-                    ServiceMessage::Blend(payload) => {
-                        for _ in 0..copies_to_send(&payload, blend_config.data_replication_factor) {
-                            recovery_checkpoint = handle_local_data_message(&payload, &mut crypto_processor, &mut message_scheduler, recovery_checkpoint).await;
-                        }
+                    ServiceMessage::Blend(BlendPayload::Transaction(transaction)) => {
+                        recovery_checkpoint = queue_transaction_for_encapsulation(transaction, &mut pending_transactions, recovery_checkpoint);
+                    }
+                    ServiceMessage::Blend(BlendPayload::BlockProposal(proposal)) => {
+                        recovery_checkpoint = handle_local_block_proposal(&proposal, blend_config.data_replication_factor, &mut crypto_processor, &mut message_scheduler, recovery_checkpoint).await;
                     }
                     ServiceMessage::GetNetworkInfo { reply } => {
                         let info = backend.network_info().await;
                         drop(reply.send(info));
                     }
                 }
+            }
+            // A queued transaction leaves as soon as a `PoW` solution backs it. The
+            // search is awaited here, as one branch among the others, so the rest of
+            // the loop keeps turning while it runs.
+            maybe_encapsulated_tx = encapsulate_next_transaction(&pending_transactions, &mut crypto_processor), if !pending_transactions.is_empty() => {
+                recovery_checkpoint = handle_local_transaction(maybe_encapsulated_tx, &mut pending_transactions, &crypto_processor, &mut message_scheduler, recovery_checkpoint);
             }
             Some(incoming_message) = blend_messages.next() => {
                 recovery_checkpoint = handle_incoming_blend_message(incoming_message, &mut message_scheduler, old_epoch_message_scheduler.as_mut(), &crypto_processor, old_epoch_crypto_processor.as_ref(),  recovery_checkpoint);
@@ -894,12 +919,114 @@ where
     }
 }
 
-const fn copies_to_send(payload: &BlendPayload, data_replication_factor: u64) -> u64 {
-    match payload {
-        BlendPayload::BlockProposal(_) => data_replication_factor.strict_add(1),
-        // No replication factor set for PoW-backed transactions.
-        BlendPayload::Transaction(_) => 1,
-    }
+/// Records a transaction as waiting for a `PoW` solution to back its layer
+/// proofs.
+fn queue_transaction_for_encapsulation<BackendSettings, NetworkSettings>(
+    transaction: Vec<u8>,
+    pending_transactions: &mut VecDeque<Vec<u8>>,
+    current_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
+) -> ServiceState<BackendSettings, NetworkSettings>
+where
+    BackendSettings: Clone,
+{
+    pending_transactions.push_back(transaction.clone());
+    let mut state_updater = current_recovery_checkpoint.start_updating();
+    state_updater.queue_unencapsulated_transaction(transaction);
+    state_updater.commit_changes()
+}
+
+/// Encapsulates the transaction that has been waiting longest, once a `PoW`
+/// solution backs its layer proofs.
+///
+/// The transaction is only read here, never taken off the queue: `select!`
+/// drops this future whenever another branch wins the race, and a future that
+/// popped before awaiting would take the transaction down with it every time
+/// that happened. It comes off the queue in [`handle_local_transaction`]
+/// instead, which runs after the race is settled.
+///
+/// It returns `None` if the processor failed to encapsulate the transaction,
+/// and `Some(...)` if it succeeded.
+async fn encapsulate_next_transaction<NodeId, ProofsGenerator, ProofsVerifier, CorePoQGenerator>(
+    pending_transactions: &VecDeque<Vec<u8>>,
+    cryptographic_processor: &mut CoreCryptographicProcessor<
+        NodeId,
+        CorePoQGenerator,
+        ProofsGenerator,
+        ProofsVerifier,
+    >,
+) -> Option<EncapsulatedMessageWithVerifiedPublicHeader>
+where
+    NodeId: Eq + Hash + 'static,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
+{
+    let transaction = pending_transactions
+        .front()
+        .expect("This function is only ever called when there are pending transactions.");
+    cryptographic_processor
+        .encapsulate_transaction_payload(transaction)
+        .await
+        // Reported here rather than handed back: the encapsulation error is
+        // not `Send`, and a `select!` branch output has to be.
+        .inspect_err(|e| {
+            tracing::error!(target: LOG_TARGET, "Failed to encapsulate transaction: {e:?}");
+        })
+        .ok()
+}
+
+/// Processes a transaction whose wait for a `PoW` solution is over.
+///
+/// The counterpart to [`handle_local_block_proposal`], split in two because a
+/// transaction cannot be dealt with where it arrives: leadership proofs are
+/// ready on demand, whereas a transaction's have to be mined for.
+fn handle_local_transaction<
+    NodeId,
+    Rng,
+    BackendSettings,
+    NetworkSettings,
+    ProofsGenerator,
+    ProofsVerifier,
+    CorePoQGenerator,
+>(
+    maybe_encapsulated_transaction: Option<EncapsulatedMessageWithVerifiedPublicHeader>,
+    pending_transactions: &mut VecDeque<Vec<u8>>,
+    cryptographic_processor: &CoreCryptographicProcessor<
+        NodeId,
+        CorePoQGenerator,
+        ProofsGenerator,
+        ProofsVerifier,
+    >,
+    scheduler: &mut EpochMessageScheduler<
+        Rng,
+        ProcessedMessage,
+        EncapsulatedMessageWithVerifiedPublicHeader,
+    >,
+    current_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
+) -> ServiceState<BackendSettings, NetworkSettings>
+where
+    NodeId: Eq + Hash + Send + 'static,
+    Rng: RngCore + Clone + Send + Unpin,
+    BackendSettings: Clone + Send + Sync,
+    ProofsVerifier: ProofsVerifierTrait,
+{
+    let recovery_checkpoint = match maybe_encapsulated_transaction {
+        Some(encapsulated_transaction) => schedule_local_encapsulated_message(
+            &encapsulated_transaction,
+            cryptographic_processor,
+            scheduler,
+            current_recovery_checkpoint,
+        ),
+        None => current_recovery_checkpoint,
+    };
+
+    // Off both queues, the one the loop works from and the one in the recovery
+    // state. The state-side removal is told which transaction to expect, so a
+    // drift between the two is caught rather than papered over.
+    let transaction = pending_transactions
+        .pop_front()
+        .expect("Branch only yields while a transaction is queued.");
+    let mut state_updater = recovery_checkpoint.start_updating();
+    state_updater.dequeue_unencapsulated_transaction(&transaction);
+    state_updater.commit_changes()
 }
 
 /// Processes the old epoch during the epoch transition period
@@ -1033,8 +1160,16 @@ where
             // proof generator for the epoch transition period.
             let mut current_cryptographic_processor = current_cryptographic_processor;
             current_cryptographic_processor.stop_proof_generation();
-            let (_, _, _, _, current_epoch_blending_token_collector, _, state_updater) =
-                current_recovery_checkpoint.into_components();
+            let (
+                _,
+                _,
+                _,
+                _,
+                pending_transactions,
+                current_epoch_blending_token_collector,
+                _,
+                state_updater,
+            ) = current_recovery_checkpoint.into_components();
 
             let new_reward_epoch_info = reward::EpochInfo::new(
                 new_epoch_info.epoch,
@@ -1134,6 +1269,7 @@ where
                 old_scheduler: Box::new(old_scheduler),
                 new_recovery_checkpoint: ServiceState::with_epoch(
                     new_epoch_info.epoch,
+                    pending_transactions,
                     new_epoch_blending_token_collector,
                     Some(old_epoch_blending_token_collector),
                     state_updater,
@@ -1152,7 +1288,7 @@ where
                 current_cryptographic_processor.stop_proof_generation();
                 current_cryptographic_processor
             };
-            let (_, _, _, _, current_epoch_blending_token_collector, _, _) =
+            let (_, _, _, _, _, current_epoch_blending_token_collector, _, _) =
                 current_recovery_checkpoint.into_components();
             let new_reward_epoch_info = reward::EpochInfo::new(
                 epoch,
@@ -1267,17 +1403,18 @@ enum HandleEpochEventOutput<
     },
 }
 
-/// Processes an already-serialized local data message from another service.
+/// Processes a block proposal handed over by another service.
 ///
-/// The serialized payload is encapsulated with blend layers. Before scheduling,
-/// the outermost layers addressed to this node are self-decapsulated so that
-/// blending tokens are collected immediately and only the remaining layers (or
-/// the fully unwrapped message) are scheduled for the next release round.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "TODO: address this in a dedicated refactor"
-)]
-async fn handle_local_data_message<
+/// Leadership proofs are ready the moment the epoch's secret `PoL` info is, so
+/// unlike a transaction this can be encapsulated where it arrives without
+/// holding up the event loop.
+///
+/// `data_replication_factor` extra copies go out alongside the first. Block
+/// proposals are replicated and transactions are not: the spec's per-solution
+/// `PoW` quota `Q_W` is `ß_max`, i.e. exactly one message's worth of
+/// encapsulations, whereas the leadership quota `Q_L` budgets for the extra
+/// copies on top.
+async fn handle_local_block_proposal<
     NodeId,
     Rng,
     BackendSettings,
@@ -1286,7 +1423,8 @@ async fn handle_local_data_message<
     ProofsVerifier,
     CorePoQGenerator,
 >(
-    local_data_message: &BlendPayload,
+    proposal: &[u8],
+    data_replication_factor: u64,
     cryptographic_processor: &mut CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1307,24 +1445,68 @@ where
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
-    let encapsulation = match local_data_message {
-        BlendPayload::BlockProposal(proposal) => {
-            cryptographic_processor
-                .encapsulate_block_proposal_payload(proposal)
-                .await
-        }
-        BlendPayload::Transaction(transaction) => {
-            cryptographic_processor
-                .encapsulate_transaction_payload(transaction)
-                .await
-        }
-    };
-    let Ok(wrapped_message) = encapsulation.inspect_err(|e| {
-        tracing::error!(target: LOG_TARGET, "Failed to wrap message: {e:?}");
-    }) else {
-        return current_recovery_checkpoint;
-    };
+    let mut recovery_checkpoint = current_recovery_checkpoint;
+    for _ in 0..data_replication_factor.strict_add(1) {
+        let Ok(wrapped_message) = cryptographic_processor
+            .encapsulate_block_proposal_payload(proposal)
+            .await
+            .inspect_err(|e| {
+                tracing::error!(target: LOG_TARGET, "Failed to wrap message: {e:?}");
+            })
+        else {
+            return recovery_checkpoint;
+        };
 
+        recovery_checkpoint = schedule_local_encapsulated_message(
+            &wrapped_message,
+            cryptographic_processor,
+            scheduler,
+            recovery_checkpoint,
+        );
+    }
+    recovery_checkpoint
+}
+
+/// Schedules a locally-generated, already-encapsulated data message for
+/// release.
+///
+/// Before scheduling, the outermost layers addressed to this node are
+/// self-decapsulated so that blending tokens are collected immediately and only
+/// the remaining layers (or the fully unwrapped message) are scheduled for the
+/// next release round.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: address this in a dedicated refactor"
+)]
+fn schedule_local_encapsulated_message<
+    NodeId,
+    Rng,
+    BackendSettings,
+    NetworkSettings,
+    ProofsGenerator,
+    ProofsVerifier,
+    CorePoQGenerator,
+>(
+    wrapped_message: &EncapsulatedMessageWithVerifiedPublicHeader,
+    cryptographic_processor: &CoreCryptographicProcessor<
+        NodeId,
+        CorePoQGenerator,
+        ProofsGenerator,
+        ProofsVerifier,
+    >,
+    scheduler: &mut EpochMessageScheduler<
+        Rng,
+        ProcessedMessage,
+        EncapsulatedMessageWithVerifiedPublicHeader,
+    >,
+    current_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
+) -> ServiceState<BackendSettings, NetworkSettings>
+where
+    NodeId: Eq + Hash + Send + 'static,
+    Rng: RngCore + Clone + Send + Unpin,
+    BackendSettings: Clone + Send + Sync,
+    ProofsVerifier: ProofsVerifierTrait,
+{
     let mut state_updater = current_recovery_checkpoint.start_updating();
 
     // Before blending the data message, we try to peel off any outer layers that

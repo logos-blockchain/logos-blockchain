@@ -169,6 +169,7 @@ where
         _msg: EncapsulatedMessageWithVerifiedPublicHeader,
         _intended_epoch: Epoch,
     ) {
+        note_outgoing_message();
     }
 
     async fn rotate_epoch(&mut self, new_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>) {
@@ -241,6 +242,34 @@ pub async fn wait_for_blend_backend_event(
     }
 }
 
+thread_local! {
+    /// Installed by [`record_outgoing_messages`] for the duration of a test.
+    static OUTGOING_MESSAGES: RefCell<Option<mpsc::UnboundedSender<()>>> =
+        const { RefCell::new(None) };
+}
+
+/// Starts recording every message the service sends onwards, whether it goes
+/// to a Blend peer through the backend or to a local service through the
+/// dispatcher.
+///
+/// A test that needs to know a message got all the way out does not usually
+/// care which of the two paths it took — that depends on whether the outermost
+/// layer happened to be addressed to this node — so both report here.
+pub fn record_outgoing_messages() -> mpsc::UnboundedReceiver<()> {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    OUTGOING_MESSAGES.with_borrow_mut(|recorder| *recorder = Some(sender));
+    receiver
+}
+
+fn note_outgoing_message() {
+    OUTGOING_MESSAGES.with_borrow(|recorder| {
+        if let Some(sender) = recorder.as_ref() {
+            // A test that stopped listening is not a failure.
+            let _ = sender.send(());
+        }
+    });
+}
+
 pub struct TestPayloadDispatcher;
 
 #[async_trait]
@@ -262,7 +291,9 @@ where
         Self
     }
 
-    async fn dispatch(&self, _payload: BlendPayload) {}
+    async fn dispatch(&self, _payload: BlendPayload) {
+        note_outgoing_message();
+    }
 }
 
 pub struct TestNetworkBackend {
