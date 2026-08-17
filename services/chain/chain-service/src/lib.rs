@@ -53,7 +53,10 @@ use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData},
 };
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{
+    Deserialize, Serialize,
+    de::{self, DeserializeOwned, Deserializer},
+};
 use serde_with::serde_as;
 use thiserror::Error;
 use tokio::sync::{broadcast, oneshot, watch};
@@ -213,11 +216,96 @@ pub(crate) type HeaderIdStream =
     Pin<Box<dyn Stream<Item = Result<HeaderId, Error>> + Send + 'static>>;
 
 #[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ChainServiceInfo {
     pub cryptarchia_info: CryptarchiaInfo,
     pub phase: PhaseTag,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChainServiceInfoWire {
+    cryptarchia_info: CryptarchiaInfoWire,
+    #[serde(default)]
+    phase: Option<PhaseTag>,
+    #[serde(default)]
+    mode: Option<LegacyChainServiceMode>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CryptarchiaInfoWire {
+    #[serde(default)]
+    genesis_id: Option<HeaderId>,
+    lib: HeaderId,
+    lib_slot: Slot,
+    tip: HeaderId,
+    slot: Slot,
+    height: u64,
+    #[serde(default)]
+    state: Option<State>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+enum LegacyChainServiceMode {
+    AwaitingStart,
+    Started(State),
+}
+
+impl<'de> Deserialize<'de> for ChainServiceInfo {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = ChainServiceInfoWire::deserialize(deserializer)?;
+        let CryptarchiaInfoWire {
+            genesis_id,
+            lib,
+            lib_slot,
+            tip,
+            slot,
+            height,
+            state,
+        } = wire.cryptarchia_info;
+
+        let (state, phase) = match (state, wire.phase, wire.mode) {
+            (Some(state), Some(phase), _) => (state, phase),
+            (None, None, Some(mode)) => legacy_mode_parts(mode),
+            (Some(state), None, Some(mode)) => (state, legacy_mode_parts(mode).1),
+            (None, Some(phase), Some(mode)) => (legacy_mode_parts(mode).0, phase),
+            (_, None, None) => return Err(de::Error::missing_field("phase")),
+            (None, Some(_), None) => {
+                return Err(de::Error::missing_field("cryptarchia_info.state"));
+            }
+        };
+
+        Ok(Self {
+            cryptarchia_info: CryptarchiaInfo {
+                genesis_id,
+                lib,
+                lib_slot,
+                tip,
+                slot,
+                height,
+                state,
+            },
+            phase,
+        })
+    }
+}
+
+const fn legacy_mode_parts(mode: LegacyChainServiceMode) -> (State, PhaseTag) {
+    match mode {
+        LegacyChainServiceMode::AwaitingStart => {
+            (State::Bootstrapping, PhaseTag::AwaitingGenesisTime)
+        }
+        LegacyChainServiceMode::Started(state) => {
+            let phase = match state {
+                State::Bootstrapping => PhaseTag::InitialBlockDownload,
+                State::Online => PhaseTag::Following,
+            };
+            (state, phase)
+        }
+    }
 }
 
 #[serde_as]

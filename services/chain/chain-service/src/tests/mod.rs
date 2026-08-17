@@ -139,6 +139,34 @@ fn cryptarchia_info_deserializes_legacy_http_response_without_genesis_identity()
     assert_eq!(parsed.cryptarchia_info.genesis_id, None);
 }
 
+#[test]
+fn cryptarchia_info_deserializes_legacy_mode_wire() {
+    let mut response = serde_json::to_value(ChainServiceInfo {
+        cryptarchia_info: CryptarchiaInfo {
+            genesis_id: None,
+            lib: HeaderId::from([2; 32]),
+            lib_slot: Slot::new(3),
+            tip: HeaderId::from([4; 32]),
+            slot: Slot::new(5),
+            height: 6,
+            state: State::Online,
+        },
+        phase: PhaseTag::Following,
+    })
+    .unwrap();
+    response["cryptarchia_info"]
+        .as_object_mut()
+        .unwrap()
+        .remove("state");
+    response.as_object_mut().unwrap().remove("phase");
+    response["mode"] = serde_json::json!({"Started": "Online"});
+
+    let parsed = serde_json::from_value::<ChainServiceInfo>(response).unwrap();
+
+    assert_eq!(parsed.cryptarchia_info.state, State::Online);
+    assert_eq!(parsed.phase, PhaseTag::Following);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[expect(
     clippy::too_many_lines,
