@@ -138,13 +138,13 @@ pub struct TransactionTooLarge {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ProcessedMessage {
-    Unencapsulated(BlendPayload),
+    Decapsulated(BlendPayload),
     Encapsulated(Box<EncapsulatedMessageWithVerifiedPublicHeader>),
 }
 
 impl From<BlendPayload> for ProcessedMessage {
     fn from(value: BlendPayload) -> Self {
-        Self::Unencapsulated(value)
+        Self::Decapsulated(value)
     }
 }
 

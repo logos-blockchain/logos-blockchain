@@ -1,4 +1,5 @@
-use std::{collections::VecDeque, time::Duration};
+use core::time::Duration;
+use std::collections::VecDeque;
 
 use futures::{StreamExt as _, stream::repeat};
 use lb_blend::{
@@ -28,7 +29,7 @@ use crate::{
             MockKmsAdapter, MockProofsVerifier, NodeId, TestBlendBackend, TestBlendBackendEvent,
             TestPayloadDispatcher, backend_epoch_info, dummy_overwatch_resources,
             dummy_pol_private_inputs, new_crypto_processor, new_epoch_info, new_membership,
-            new_stream, record_outgoing_messages, recorded_set_epoch_private_calls,
+            new_stream, outgoing_messages_recorder, recorded_set_epoch_private_calls,
             recorded_stop_proof_generation_calls, reset_set_epoch_private_calls,
             reset_stop_proof_generation_calls, reward_epoch_info, scheduler_epoch_info,
             scheduler_settings, sdp_relay, settings, timing_settings, wait_for_blend_backend_event,
@@ -1751,11 +1752,8 @@ async fn test_initialize_recovers_matching_saved_state() {
     // A transaction still waiting for a `PoW` solution has not been encapsulated
     // and so belongs to no epoch: a restart must not lose it.
     assert_eq!(
-        recovered_checkpoint
-            .pending_transactions()
-            .front()
-            .map(Vec::as_slice),
-        Some(b"transaction".as_slice()),
+        recovered_checkpoint.pending_transactions().front(),
+        Some(&b"transaction".to_vec()),
         "Matching epoch: a queued transaction should be restored from saved state"
     );
 
@@ -1839,16 +1837,13 @@ async fn test_initialize_recovers_matching_saved_state() {
     // transaction still waiting for a `PoW` solution has not been encapsulated
     // and so belongs to none.
     assert_eq!(
-        recovered_checkpoint2
-            .pending_transactions()
-            .front()
-            .map(Vec::as_slice),
-        Some(b"stale epoch transaction".as_slice()),
+        recovered_checkpoint2.pending_transactions().front(),
+        Some(&b"stale epoch transaction".to_vec()),
         "Mismatched epoch: a queued transaction should outlive the state that carried it"
     );
     assert_eq!(
-        pending_transactions2.front().map(Vec::as_slice),
-        Some(b"stale epoch transaction".as_slice()),
+        pending_transactions2.front(),
+        Some(&b"stale epoch transaction".to_vec()),
         "Mismatched epoch: the queue handed to the event loop should carry it too"
     );
 }
@@ -1897,7 +1892,7 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
 
     // Both installed before the service exists, so nothing is missed.
     let pow_gate = PowGate::setup();
-    let mut outgoing_messages = record_outgoing_messages();
+    let mut outgoing_messages = outgoing_messages_recorder();
 
     let (
         mut remaining_epoch_stream,

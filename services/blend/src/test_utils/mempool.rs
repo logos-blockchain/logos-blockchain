@@ -1,3 +1,5 @@
+use core::future::pending;
+
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -40,6 +42,6 @@ where
 
     async fn run(self) -> Result<(), DynError> {
         self.service_resources_handle.status_updater.notify_ready();
-        core::future::pending().await
+        pending().await
     }
 }

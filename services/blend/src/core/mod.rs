@@ -637,7 +637,7 @@ where
             );
             saved_state
         }
-        stale_state => {
+        maybe_stale_state => {
             tracing::trace!(
                 target: LOG_TARGET,
                 "No recovery state found for epoch {:?}. Initializing a new one.",
@@ -649,7 +649,7 @@ where
             // has not been encapsulated and so belongs to none: it outlives the
             // state that carried it, the same way it outlives an epoch rotation.
             let pending_transactions =
-                stale_state.map_or_else(VecDeque::new, |state| state.into_components().4);
+                maybe_stale_state.map_or_else(VecDeque::new, |state| state.into_components().4);
 
             ServiceState::with_epoch(
                 current_epoch_public_info.epoch,
@@ -855,8 +855,7 @@ where
                 }
             }
             // A queued transaction leaves as soon as a `PoW` solution backs it. The
-            // search is awaited here, as one branch among the others, so the rest of
-            // the loop keeps turning while it runs.
+            // search is awaited here, so the rest of the loop keeps turning while it runs.
             maybe_encapsulated_tx = encapsulate_next_transaction(&pending_transactions, &mut crypto_processor), if !pending_transactions.is_empty() => {
                 recovery_checkpoint = handle_local_transaction(maybe_encapsulated_tx, &mut pending_transactions, &crypto_processor, &mut message_scheduler, recovery_checkpoint);
             }
@@ -1021,12 +1020,6 @@ where
         None => current_recovery_checkpoint,
     };
 
-    // Off both queues, the one the loop works from and the one in the recovery
-    // state, whether or not it could be encapsulated: one that could not would
-    // otherwise sit at the head and be retried forever, and nothing about a
-    // later attempt would go any differently. The state-side removal is told
-    // which transaction to expect, so a drift between the two is caught rather
-    // than papered over.
     let transaction = pending_transactions
         .pop_front()
         .expect("Branch only yields while a transaction is queued.");
@@ -2147,7 +2140,7 @@ where
         .map(
             |processed_message_to_release| -> BoxFuture<'fut, ()> {
                 match processed_message_to_release {
-                    ProcessedMessage::Unencapsulated(payload) => {
+                    ProcessedMessage::Decapsulated(payload) => {
                         payload_dispatcher.dispatch(payload).boxed()
                     }
                     ProcessedMessage::Encapsulated(encapsulated_message) => {

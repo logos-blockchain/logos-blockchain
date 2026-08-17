@@ -261,7 +261,7 @@ where
                 routing::post(add_tx::<MempoolStorageAdapter, RuntimeServiceId>),
             )
             .route(
-                paths::MEMPOOL_BLEND_TX,
+                paths::BLEND_DISPERSE_TRANSACTION,
                 routing::post(blend_tx::<BlendService, RuntimeServiceId>),
             )
             .route(

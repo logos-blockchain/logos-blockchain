@@ -713,7 +713,7 @@ where
 
 #[utoipa::path(
     post,
-    path = paths::MEMPOOL_BLEND_TX,
+    path = paths::BLEND_DISPERSE_TRANSACTION,
     responses(
         (status = 200, description = "Id of the transaction accepted for blending, which was not added to this node's mempool", body = TxHash),
         (status = 500, description = "Internal server error", body = ErrorBody),

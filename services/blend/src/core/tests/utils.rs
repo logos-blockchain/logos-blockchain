@@ -251,11 +251,7 @@ thread_local! {
 /// Starts recording every message the service sends onwards, whether it goes
 /// to a Blend peer through the backend or to a local service through the
 /// dispatcher.
-///
-/// A test that needs to know a message got all the way out does not usually
-/// care which of the two paths it took — that depends on whether the outermost
-/// layer happened to be addressed to this node — so both report here.
-pub fn record_outgoing_messages() -> mpsc::UnboundedReceiver<()> {
+pub fn outgoing_messages_recorder() -> mpsc::UnboundedReceiver<()> {
     let (sender, receiver) = mpsc::unbounded_channel();
     OUTGOING_MESSAGES.with_borrow_mut(|recorder| *recorder = Some(sender));
     receiver
@@ -264,7 +260,6 @@ pub fn record_outgoing_messages() -> mpsc::UnboundedReceiver<()> {
 fn note_outgoing_message() {
     OUTGOING_MESSAGES.with_borrow(|recorder| {
         if let Some(sender) = recorder.as_ref() {
-            // A test that stopped listening is not a failure.
             let _ = sender.send(());
         }
     });

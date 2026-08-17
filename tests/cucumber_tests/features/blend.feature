@@ -59,10 +59,6 @@ Feature: Blend
       | 1             | 2           | 1000         |
       | 2             | 2           | 1000         |
       | 3             | 0           | 0            |
-    # At the deployed difficulty one solution is around a minute of work, which
-    # is the point of it — but not something a test should sit through. A shift
-    # of 1 puts the threshold at half the field, so a solution takes a couple of
-    # hashes.
     And I have deployment config override "cryptarchia.pow_config.blend.base_difficulty" as "1"
     And I have a cluster with capacity of 4 nodes
     And the first 2 nodes are declared as blend providers

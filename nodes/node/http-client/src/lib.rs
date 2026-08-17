@@ -29,10 +29,10 @@ use lb_http_api_common::{
         },
     },
     paths::{
-        BLEND_JOIN_NETWORK, BLEND_PENDING_TRANSACTIONS, BLOCK_EVENTS, BLOCKS, BLOCKS_DETAIL,
-        BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHANNEL, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM,
-        LEADER_CLAIM_VOUCHERS, MANTLE_GAS_PRICES, MEMPOOL_ADD_TX, MEMPOOL_BLEND_TX, NODE_VERSION,
-        SDP_POST_DECLARATION, TIME_INFO,
+        BLEND_DISPERSE_TRANSACTION, BLEND_JOIN_NETWORK, BLEND_PENDING_TRANSACTIONS, BLOCK_EVENTS,
+        BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHANNEL, CRYPTARCHIA_INFO,
+        CRYPTARCHIA_LIB_STREAM, LEADER_CLAIM_VOUCHERS, MANTLE_GAS_PRICES, MEMPOOL_ADD_TX,
+        MEMPOOL_BLEND_TX, NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
         wallet::{BALANCE, FUND, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
@@ -305,7 +305,7 @@ impl CommonHttpClient {
         Id: for<'de> Deserialize<'de> + Send + Sync,
     {
         let request_url = base_url
-            .join(MEMPOOL_BLEND_TX.trim_start_matches('/'))
+            .join(BLEND_DISPERSE_TRANSACTION.trim_start_matches('/'))
             .map_err(Error::Url)?;
         self.post(request_url, &transaction).await
     }

@@ -132,7 +132,7 @@ where
             .enumerate()
             .inspect(|(layer, (_, node_index))| {
                 tracing::trace!(
-                    "Encapsulating layer {layer:?} of message type {payload_type:?} for node at index {node_index:?}."
+                    "Encapsulating layer {layer:?} of data message type {payload_type:?} for node at index {node_index:?}."
                 );
             })
             // Map retrieved indices to the nodes' public keys.

@@ -291,8 +291,6 @@ where
 
     let mut current_secret_epoch_info: Option<PolEpochInfo> = None;
     // Transactions waiting for a `PoW` solution to back their layer proofs.
-    // Unlike the core service, an edge node keeps no recovery state, so a
-    // restart loses whatever is waiting here.
     let mut pending_transactions: VecDeque<Vec<u8>> = VecDeque::new();
     let mut current_epoch_message_handler: Option<
         MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
