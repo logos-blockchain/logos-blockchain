@@ -61,6 +61,7 @@
             src = craneLib.path ./.;
             filter = path: type:
               (pkgs.lib.hasSuffix "nodes/node/binary/src/config/deployment/settings.yaml" path) ||
+              (pkgs.lib.hasInfix "/blend/message/src/fixtures/" path && pkgs.lib.hasSuffix ".hex" path) ||
               (craneLib.filterCargoSources path type);
           };
           crateName = craneLib.crateNameFromCargoToml { inherit src; };
