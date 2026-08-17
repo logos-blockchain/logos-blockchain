@@ -200,6 +200,13 @@ where
                 })));
                 None
             }
+            // An edge node draws no `PoW`-backed proofs yet, so it never has a
+            // transaction waiting for a solution.
+            // TODO: Report the real queue once edge nodes can blend transactions.
+            ServiceMessage::GetPendingTransactions { reply } => {
+                drop(reply.send(Vec::new()));
+                None
+            }
         }));
 
         run::<Backend, _, ProofsGenerator, PolInfoProvider, _>(

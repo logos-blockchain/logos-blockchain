@@ -78,11 +78,20 @@ where
                 })));
                 Ok(())
             }
-            Err(message) => {
-                // Forward directly to the dispatcher.
-                self.adapter.dispatch(message.into_payload().into()).await;
-                Ok(())
-            }
+            // Nothing waits for a `PoW` solution here: a node in broadcast mode
+            // does no blending, so a transaction goes straight to the mempool
+            // instead of queueing for one.
+            Err(message) => match message.try_into_pending_transactions_request() {
+                Ok(reply) => {
+                    drop(reply.send(Vec::new()));
+                    Ok(())
+                }
+                Err(message) => {
+                    // Forward directly to the dispatcher.
+                    self.adapter.dispatch(message.into_payload().into()).await;
+                    Ok(())
+                }
+            },
         }
     }
 }
@@ -290,6 +299,15 @@ pub mod tests {
 
         fn into_payload(self) -> Self::Payload {
             BlendPayload::BlockProposal(self.0)
+        }
+
+        fn try_into_pending_transactions_request(
+            self,
+        ) -> Result<oneshot::Sender<Vec<Vec<u8>>>, Self>
+        where
+            Self: Sized,
+        {
+            Err(self)
         }
 
         fn try_into_network_info_request(

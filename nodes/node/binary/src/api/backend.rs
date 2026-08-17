@@ -44,10 +44,11 @@ use utoipa::OpenApi as _;
 use utoipa_swagger_ui::SwaggerUi;
 
 use super::handlers::{
-    add_tx, blend_info, block, block_events, blocks_range_stream, blocks_stream,
-    cryptarchia_headers, cryptarchia_info, cryptarchia_lib_stream, dial_peer, get_gas_prices,
-    get_sdp_declarations, get_sdp_snapshot, immutable_blocks, libp2p_info, mantle_metrics,
-    mantle_status, mempool_view, time_info, transaction, version, wallet,
+    add_tx, blend_info, blend_pending_transactions, blend_tx, block, block_events,
+    blocks_range_stream, blocks_stream, cryptarchia_headers, cryptarchia_info,
+    cryptarchia_lib_stream, dial_peer, get_gas_prices, get_sdp_declarations, get_sdp_snapshot,
+    immutable_blocks, libp2p_info, mantle_metrics, mantle_status, mempool_view, time_info,
+    transaction, version, wallet,
 };
 use crate::{
     BlendService, TracingService, WalletService,
@@ -252,8 +253,16 @@ where
                 routing::post(blend_join_network::<BlendService, RuntimeServiceId>),
             )
             .route(
+                paths::BLEND_PENDING_TRANSACTIONS,
+                routing::get(blend_pending_transactions::<BlendService, RuntimeServiceId>),
+            )
+            .route(
                 paths::MEMPOOL_ADD_TX,
                 routing::post(add_tx::<MempoolStorageAdapter, RuntimeServiceId>),
+            )
+            .route(
+                paths::MEMPOOL_BLEND_TX,
+                routing::post(blend_tx::<BlendService, RuntimeServiceId>),
             )
             .route(
                 paths::MEMPOOL_VIEW,

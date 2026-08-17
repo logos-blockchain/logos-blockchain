@@ -687,6 +687,57 @@ where
 }
 
 #[utoipa::path(
+    get,
+    path = paths::BLEND_PENDING_TRANSACTIONS,
+    responses(
+        (status = 200, description = "Ids of the transactions waiting for a PoW solution before they can be blended", body = Vec<TxHash>),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn blend_pending_transactions<BlendService, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    BlendService: ServiceData<
+            Message = ProxyServiceMessage<lb_blend_service::message::ServiceMessage<PeerId>>,
+        > + 'static,
+    RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
+{
+    make_request_and_return_response!(blend::blend_pending_transactions::<
+        BlendService,
+        SignedMantleTx<Preverified>,
+        TxHash,
+        RuntimeServiceId,
+    >(&handle, Hashable::hash))
+}
+
+#[utoipa::path(
+    post,
+    path = paths::MEMPOOL_BLEND_TX,
+    responses(
+        (status = 200, description = "Id of the transaction accepted for blending, which was not added to this node's mempool", body = TxHash),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn blend_tx<BlendService, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(tx): Json<SignedMantleTx<Preverified>>,
+) -> Response
+where
+    BlendService: ServiceData<
+            Message = ProxyServiceMessage<lb_blend_service::message::ServiceMessage<PeerId>>,
+        > + 'static,
+    RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
+{
+    make_request_and_return_response!(blend::blend_transaction::<
+        BlendService,
+        SignedMantleTx<Preverified>,
+        TxHash,
+        RuntimeServiceId,
+    >(&handle, tx, Hashable::hash))
+}
+
+#[utoipa::path(
     post,
     path = paths::MEMPOOL_ADD_TX,
     responses(

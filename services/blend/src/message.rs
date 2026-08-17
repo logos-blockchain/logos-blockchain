@@ -1,7 +1,8 @@
 use core::fmt::{self, Debug, Formatter};
 
 use lb_blend::message::{
-    PayloadType, encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
+    MAX_PAYLOAD_BODY_SIZE, PayloadType,
+    encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
 };
 use lb_core::{
     mantle::NoteId,
@@ -51,6 +52,13 @@ pub enum ServiceMessage<NodeId> {
     GetNetworkInfo {
         reply: oneshot::Sender<Option<NetworkInfo<NodeId>>>,
     },
+    /// Request the transactions still waiting for a `PoW` solution to back
+    /// their layer proofs, oldest first.
+    // TODO: Change this to be tx IDs once we have strong types at the API level and we don't blend
+    // `Vec<u8>`s but actual `SignedMantleTx`s.
+    GetPendingTransactions {
+        reply: oneshot::Sender<Vec<Vec<u8>>>,
+    },
 }
 
 impl<NodeId> Debug for ServiceMessage<NodeId> {
@@ -58,6 +66,9 @@ impl<NodeId> Debug for ServiceMessage<NodeId> {
         match self {
             Self::Blend(msg) => f.debug_tuple("Blend").field(msg).finish(),
             Self::GetNetworkInfo { .. } => f.debug_struct("GetNetworkInfo").finish(),
+            Self::GetPendingTransactions { .. } => {
+                f.debug_struct("GetPendingTransactions").finish()
+            }
         }
     }
 }
@@ -71,6 +82,19 @@ pub enum BlendPayload {
 }
 
 impl BlendPayload {
+    /// Wraps a transaction for blending, refusing one that could never fit.
+    // TODO: This will go once we move away from `Vec<u8>` and into strong types
+    // for each message type Blend supports.
+    pub fn transaction(transaction: Vec<u8>) -> Result<Self, TransactionTooLarge> {
+        if transaction.len() > MAX_PAYLOAD_BODY_SIZE {
+            return Err(TransactionTooLarge {
+                size: transaction.len(),
+                maximum: MAX_PAYLOAD_BODY_SIZE,
+            });
+        }
+        Ok(Self::Transaction(transaction))
+    }
+
     /// The wire discriminant this payload travels under.
     #[must_use]
     pub const fn payload_type(&self) -> PayloadType {
@@ -96,6 +120,14 @@ impl BlendPayload {
     pub fn is_empty(&self) -> bool {
         self.body().is_empty()
     }
+}
+
+/// A transaction too large to fit in a Blend payload.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[error("Transaction of {size} bytes exceeds the {maximum} a Blend payload can carry.")]
+pub struct TransactionTooLarge {
+    pub size: usize,
+    pub maximum: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]

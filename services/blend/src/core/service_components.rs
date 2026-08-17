@@ -91,6 +91,13 @@ pub trait MessageComponents<NodeId> {
     ) -> Result<oneshot::Sender<Option<NetworkInfo<NodeId>>>, Self>
     where
         Self: Sized;
+
+    /// Try to extract a pending-transactions request from the message.
+    /// Returns `Ok(sender)` if the message is a pending-transactions request,
+    /// or `Err(self)` if it is not.
+    fn try_into_pending_transactions_request(self) -> Result<oneshot::Sender<Vec<Vec<u8>>>, Self>
+    where
+        Self: Sized;
 }
 
 impl<NodeId> MessageComponents<NodeId> for ServiceMessage<NodeId> {
@@ -99,8 +106,8 @@ impl<NodeId> MessageComponents<NodeId> for ServiceMessage<NodeId> {
     fn into_payload(self) -> Self::Payload {
         match self {
             Self::Blend(message) => message,
-            Self::GetNetworkInfo { .. } => {
-                panic!("NetworkInfo messages should be handled before calling into_payload")
+            Self::GetNetworkInfo { .. } | Self::GetPendingTransactions { .. } => {
+                panic!("Request messages should be handled before calling into_payload")
             }
         }
     }
@@ -110,7 +117,14 @@ impl<NodeId> MessageComponents<NodeId> for ServiceMessage<NodeId> {
     ) -> Result<oneshot::Sender<Option<NetworkInfo<NodeId>>>, Self> {
         match self {
             Self::GetNetworkInfo { reply } => Ok(reply),
-            other @ Self::Blend(_) => Err(other),
+            other @ (Self::Blend(_) | Self::GetPendingTransactions { .. }) => Err(other),
+        }
+    }
+
+    fn try_into_pending_transactions_request(self) -> Result<oneshot::Sender<Vec<Vec<u8>>>, Self> {
+        match self {
+            Self::GetPendingTransactions { reply } => Ok(reply),
+            other @ (Self::Blend(_) | Self::GetNetworkInfo { .. }) => Err(other),
         }
     }
 }

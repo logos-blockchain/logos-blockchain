@@ -9,4 +9,4 @@ mod message;
 
 pub use encap::encapsulated::MessageIdentifier;
 pub use error::Error;
-pub use message::payload::{PaddedPayloadBody, PayloadType};
+pub use message::payload::{MAX_PAYLOAD_BODY_SIZE, PaddedPayloadBody, PayloadType};

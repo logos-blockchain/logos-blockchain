@@ -849,6 +849,9 @@ where
                         let info = backend.network_info().await;
                         drop(reply.send(info));
                     }
+                    ServiceMessage::GetPendingTransactions { reply } => {
+                        drop(reply.send(pending_transactions.iter().cloned().collect()));
+                    }
                 }
             }
             // A queued transaction leaves as soon as a `PoW` solution backs it. The
@@ -1019,8 +1022,11 @@ where
     };
 
     // Off both queues, the one the loop works from and the one in the recovery
-    // state. The state-side removal is told which transaction to expect, so a
-    // drift between the two is caught rather than papered over.
+    // state, whether or not it could be encapsulated: one that could not would
+    // otherwise sit at the head and be retried forever, and nothing about a
+    // later attempt would go any differently. The state-side removal is told
+    // which transaction to expect, so a drift between the two is caught rather
+    // than papered over.
     let transaction = pending_transactions
         .pop_front()
         .expect("Branch only yields while a transaction is queued.");
