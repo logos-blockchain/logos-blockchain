@@ -4,8 +4,8 @@ use lb_blend::{
     proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
     scheduling::message_blend::provers::{
         BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
-        core_leader_and_pow::RealCoreLeaderAndPowProofsGenerator,
-        leader::{LeaderProofsGenerator, RealLeaderProofsGenerator},
+        core_leader_and_pow::RealCoreLeaderAndPowProofsGenerator, leader::LeaderProofsGenerator,
+        leader_and_pow::RealLeaderAndPowProofsGenerator,
     },
 };
 use lb_blend_service::{RealProofsVerifier, core::kms::PreloadKMSBackendCorePoQGenerator};
@@ -80,7 +80,7 @@ impl LeaderProofsGenerator for MockLeaderProofsGenerator {
 pub type BlendEdgeService<RuntimeServiceId> = lb_blend_service::edge::BlendService<
     lb_blend_service::edge::backends::libp2p::Libp2pBlendBackend,
     PeerId,
-    RealLeaderProofsGenerator,
+    RealLeaderAndPowProofsGenerator,
     NtpTimeBackend,
     CryptarchiaService<RuntimeServiceId>,
     PolInfoProvider,

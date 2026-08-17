@@ -41,7 +41,7 @@ async fn run_with_epoch_transition() {
 
     // A message should be forwarded to the core node 0.
     msg_sender
-        .send(BlendPayload::BlockProposal(vec![0]))
+        .send(BlendPayload::BlockProposal(vec![0]).into())
         .await
         .expect("channel opened");
     assert_eq!(
@@ -59,7 +59,36 @@ async fn run_with_epoch_transition() {
 
     // A message should be forwarded to the core node 1.
     msg_sender
-        .send(BlendPayload::BlockProposal(vec![0]))
+        .send(BlendPayload::BlockProposal(vec![0]).into())
+        .await
+        .expect("channel opened");
+    assert_eq!(
+        node_id_receiver.recv().await.expect("channel opened"),
+        core_node
+    );
+}
+
+/// [`run`] blends a transaction, drawing its layer proofs from the `PoW` branch
+/// rather than from leadership quota.
+///
+/// Unlike a block proposal, a transaction that arrives before the epoch's
+/// secret `PoL` info does is not dropped: it waits in the queue until there is
+/// a message handler to encapsulate it, which is the same queue that keeps the
+/// puzzle search off the event loop.
+#[test_log::test(tokio::test)]
+async fn run_blends_a_transaction() {
+    let local_node = NodeId(99);
+    let core_node = NodeId(0);
+    let minimal_network_size = 1;
+    let (_, _epoch_sender, msg_sender, mut node_id_receiver) = spawn_run(
+        local_node,
+        minimal_network_size,
+        Some(membership(&[core_node], local_node)),
+    )
+    .await;
+
+    msg_sender
+        .send(BlendPayload::Transaction(vec![0]).into())
         .await
         .expect("channel opened");
     assert_eq!(

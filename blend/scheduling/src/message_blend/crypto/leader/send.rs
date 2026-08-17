@@ -2,7 +2,7 @@ use core::hash::Hash;
 use std::num::NonZeroU64;
 
 use lb_blend_message::{
-    Error, PaddedPayloadBody, PayloadType, crypto::proofs::PoQVerificationInputsMinusSigningKey,
+    Error, PaddedPayloadBody, crypto::proofs::PoQVerificationInputsMinusSigningKey,
     input::EncapsulationInput,
 };
 use lb_cryptarchia_engine::Epoch;
@@ -11,9 +11,27 @@ use crate::{
     membership::Membership,
     message_blend::{
         crypto::EncapsulatedMessageWithVerifiedPublicHeader,
-        provers::{ProofsGeneratorSettings, WinningPolInfoStream, leader::LeaderProofsGenerator},
+        provers::{
+            BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
+            leader_and_pow::LeaderAndPowProofsGenerator,
+        },
     },
 };
+
+#[derive(Debug, Clone, Copy)]
+enum PayloadType {
+    BlockProposal,
+    Transaction,
+}
+
+impl From<PayloadType> for lb_blend_message::PayloadType {
+    fn from(value: PayloadType) -> Self {
+        match value {
+            PayloadType::BlockProposal => Self::BlockProposal,
+            PayloadType::Transaction => Self::Transaction,
+        }
+    }
+}
 
 /// [`EpochCryptographicProcessor`] is responsible for only wrapping data
 /// messages (no cover messages) for the message indistinguishability.
@@ -37,7 +55,7 @@ impl<NodeId, ProofsGenerator> EpochCryptographicProcessor<NodeId, ProofsGenerato
 
 impl<NodeId, ProofsGenerator> EpochCryptographicProcessor<NodeId, ProofsGenerator>
 where
-    ProofsGenerator: LeaderProofsGenerator,
+    ProofsGenerator: LeaderAndPowProofsGenerator,
 {
     #[must_use]
     pub fn new(
@@ -66,10 +84,27 @@ where
 impl<NodeId, ProofsGenerator> EpochCryptographicProcessor<NodeId, ProofsGenerator>
 where
     NodeId: Eq + Hash + 'static,
-    ProofsGenerator: LeaderProofsGenerator,
+    ProofsGenerator: LeaderAndPowProofsGenerator,
 {
     pub async fn encapsulate_block_proposal_payload(
         &mut self,
+        payload: &[u8],
+    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
+        self.encapsulate_payload(PayloadType::BlockProposal, payload)
+            .await
+    }
+
+    pub async fn encapsulate_transaction_payload(
+        &mut self,
+        payload: &[u8],
+    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
+        self.encapsulate_payload(PayloadType::Transaction, payload)
+            .await
+    }
+
+    async fn encapsulate_payload(
+        &mut self,
+        payload_type: PayloadType,
         payload: &[u8],
     ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
         // We validate the payload early on so we don't generate proofs unnecessarily.
@@ -77,7 +112,7 @@ where
         let mut proofs = Vec::with_capacity(self.num_blend_layers.get() as usize);
 
         for _ in 0..self.num_blend_layers.into() {
-            let Some(proof) = self.proofs_generator.get_next_proof().await else {
+            let Some(proof) = self.next_proof_for(payload_type).await else {
                 return Err(Error::ProofNotAvailable);
             };
             proofs.push(proof);
@@ -97,7 +132,7 @@ where
             .enumerate()
             .inspect(|(layer, (_, node_index))| {
                 tracing::trace!(
-                    "Encapsulating layer {layer:?} of data message for node at index {node_index:?}."
+                    "Encapsulating layer {layer:?} of message type {payload_type:?} for node at index {node_index:?}."
                 );
             })
             // Map retrieved indices to the nodes' public keys.
@@ -126,10 +161,21 @@ where
 
         Ok(EncapsulatedMessageWithVerifiedPublicHeader::try_new(
             &inputs,
-            PayloadType::BlockProposal,
+            payload_type.into(),
             validated_payload,
             self.num_blend_layers.get() as usize,
         )
         .expect("Number of encapsulation inputs is in `1..=num_blend_layers`."))
+    }
+
+    /// The `PoQ` branch each payload type draws its layer proofs from.
+    ///
+    /// An edge node has no core quota, so unlike a core node it has nothing to
+    /// spend on cover traffic — and it generates none.
+    async fn next_proof_for(&mut self, payload_type: PayloadType) -> Option<BlendLayerProof> {
+        match payload_type {
+            PayloadType::BlockProposal => self.proofs_generator.get_next_leader_proof().await,
+            PayloadType::Transaction => self.proofs_generator.get_next_pow_proof().await,
+        }
     }
 }

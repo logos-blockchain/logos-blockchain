@@ -12,6 +12,7 @@ pub mod core;
 pub mod core_and_leader;
 pub mod core_leader_and_pow;
 pub mod leader;
+pub mod leader_and_pow;
 pub mod pow;
 
 #[cfg(test)]

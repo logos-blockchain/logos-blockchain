@@ -10,7 +10,7 @@ use lb_blend::{
         membership::Membership,
         message_blend::provers::{
             BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
-            leader::LeaderProofsGenerator,
+            leader_and_pow::LeaderAndPowProofsGenerator,
         },
     },
 };
@@ -26,7 +26,7 @@ use crate::{
         backends::BlendBackend, handlers::Error, run, settings::RunningBlendConfig as BlendConfig,
         tests::test_blend_epoch_state,
     },
-    message::BlendPayload,
+    message::ServiceMessage,
     settings::TimingSettings,
     test_utils::{crypto::mock_blend_proof, epoch::OncePolStreamProvider, membership::key},
 };
@@ -34,7 +34,7 @@ use crate::{
 pub struct MockLeaderProofsGenerator;
 
 #[async_trait]
-impl LeaderProofsGenerator for MockLeaderProofsGenerator {
+impl LeaderAndPowProofsGenerator for MockLeaderProofsGenerator {
     fn new(
         _settings: ProofsGeneratorSettings,
         _winning_pol_info_stream: WinningPolInfoStream,
@@ -42,7 +42,11 @@ impl LeaderProofsGenerator for MockLeaderProofsGenerator {
         Self
     }
 
-    async fn get_next_proof(&mut self) -> Option<BlendLayerProof> {
+    async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof> {
+        Some(mock_blend_proof())
+    }
+
+    async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {
         Some(mock_blend_proof())
     }
 }
@@ -54,7 +58,7 @@ pub async fn spawn_run(
 ) -> (
     JoinHandle<Result<(), Error>>,
     mpsc::Sender<Membership<NodeId>>,
-    mpsc::Sender<BlendPayload>,
+    mpsc::Sender<ServiceMessage<NodeId>>,
     mpsc::Receiver<NodeId>,
 ) {
     let (epoch_sender, epoch_receiver) = mpsc::channel(1);
@@ -82,6 +86,7 @@ pub async fn spawn_run(
         >(
             UninitializedEpochEventStream::new(epoch_stream, Duration::ZERO),
             ReceiverStream::new(msg_receiver),
+            local_node,
             settings,
             &overwatch_handle(),
             || {},

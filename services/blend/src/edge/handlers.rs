@@ -6,7 +6,7 @@ use lb_blend::{
         membership::Membership,
         message_blend::{
             crypto::leader::send::EpochCryptographicProcessor,
-            provers::{WinningPolInfoStream, leader::LeaderProofsGenerator},
+            provers::{WinningPolInfoStream, leader_and_pow::LeaderAndPowProofsGenerator},
         },
     },
 };
@@ -28,7 +28,7 @@ impl<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId>,
     NodeId: Clone,
-    ProofsGenerator: LeaderProofsGenerator,
+    ProofsGenerator: LeaderAndPowProofsGenerator,
 {
     #[cfg(test)]
     pub const fn epoch(&self) -> Epoch {
@@ -41,7 +41,7 @@ impl<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId>,
     NodeId: Clone + Send + 'static,
-    ProofsGenerator: LeaderProofsGenerator,
+    ProofsGenerator: LeaderAndPowProofsGenerator,
 {
     /// Creates a [`MessageHandler`] with the given membership.
     ///
@@ -112,16 +112,35 @@ impl<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
 where
     NodeId: Eq + Hash + Clone + Send + 'static,
     Backend: BlendBackend<NodeId, RuntimeServiceId> + Sync,
-    ProofsGenerator: LeaderProofsGenerator,
+    ProofsGenerator: LeaderAndPowProofsGenerator,
 {
-    /// Blend a new message received from another service.
-    pub async fn handle_message_to_blend(&mut self, message: Vec<u8>) {
+    /// Blend a block proposal, spending leadership quota on its layer proofs.
+    pub async fn handle_block_proposal_to_blend(&mut self, proposal: &[u8]) {
         let Ok(message) = self
             .cryptographic_processor
-            .encapsulate_block_proposal_payload(&message)
+            .encapsulate_block_proposal_payload(proposal)
             .await
             .inspect_err(|e| {
-                tracing::error!(target: LOG_TARGET, "Failed to encapsulate message: {e:?}");
+                tracing::error!(target: LOG_TARGET, "Failed to encapsulate block proposal: {e:?}");
+            })
+        else {
+            return;
+        };
+        self.backend.send(message).await;
+    }
+
+    /// Blend a transaction, whose layer proofs are backed by a proof of work.
+    ///
+    /// Unlike a block proposal this cannot be answered on demand: the proofs
+    /// come from a puzzle search, so the caller has to be somewhere it can
+    /// afford to wait.
+    pub async fn handle_transaction_to_blend(&mut self, transaction: &[u8]) {
+        let Ok(message) = self
+            .cryptographic_processor
+            .encapsulate_transaction_payload(transaction)
+            .await
+            .inspect_err(|e| {
+                tracing::error!(target: LOG_TARGET, "Failed to encapsulate transaction: {e:?}");
             })
         else {
             return;

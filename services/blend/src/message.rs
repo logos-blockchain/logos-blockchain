@@ -73,6 +73,12 @@ impl<NodeId> Debug for ServiceMessage<NodeId> {
     }
 }
 
+impl<NodeId> From<BlendPayload> for ServiceMessage<NodeId> {
+    fn from(value: BlendPayload) -> Self {
+        Self::Blend(value)
+    }
+}
+
 /// The plaintext body of a Blend data message, tagged with what it carries.
 // TODO: Replace with strong types for each message type Blend supports.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]

@@ -20,6 +20,7 @@ log_targets! {
         proofs::CORE_AND_LEADER,
         proofs::CORE_LEADER_AND_POW,
         proofs::LEADER,
+        proofs::LEADER_AND_POW,
         proofs::POW,
     },
     service::{

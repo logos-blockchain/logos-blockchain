@@ -6,6 +6,7 @@ pub mod settings;
 mod tests;
 
 use std::{
+    collections::VecDeque,
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
@@ -19,7 +20,7 @@ use lb_blend::{
     proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs, PowInputs},
     scheduling::{
         epoch::{EpochEvent, UninitializedEpochEventStream},
-        message_blend::provers::leader::LeaderProofsGenerator,
+        message_blend::provers::leader_and_pow::LeaderAndPowProofsGenerator,
     },
 };
 use lb_chain_service::api::CryptarchiaServiceData;
@@ -111,7 +112,7 @@ impl<Backend, NodeId, ProofsGenerator, TimeBackend, ChainService, PolInfoProvide
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId> + Send + Sync,
     NodeId: Clone + Debug + Eq + Hash + Send + Sync + node_id::TryFrom + 'static,
-    ProofsGenerator: LeaderProofsGenerator + Send,
+    ProofsGenerator: LeaderAndPowProofsGenerator + Send,
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
     ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
@@ -191,30 +192,13 @@ where
             )
             .await;
 
-        let messages_to_blend_stream = Box::pin(inbound_relay.filter_map(async |msg| match msg {
-            ServiceMessage::Blend(message) => Some(message),
-            ServiceMessage::GetNetworkInfo { reply } => {
-                drop(reply.send(Some(NetworkInfo {
-                    node_id: local_node_id.clone(),
-                    core_info: None,
-                })));
-                None
-            }
-            // An edge node draws no `PoW`-backed proofs yet, so it never has a
-            // transaction waiting for a solution.
-            // TODO: Report the real queue once edge nodes can blend transactions.
-            ServiceMessage::GetPendingTransactions { reply } => {
-                drop(reply.send(Vec::new()));
-                None
-            }
-        }));
-
         run::<Backend, _, ProofsGenerator, PolInfoProvider, _>(
             UninitializedEpochEventStream::new(
                 public_epoch_stream,
                 settings.time.epoch_transition_period,
             ),
-            messages_to_blend_stream,
+            Box::pin(inbound_relay),
+            local_node_id,
             RunningSettings::<Backend, _, _> {
                 backend: settings.backend,
                 cover: settings.cover,
@@ -270,7 +254,8 @@ async fn run<Backend, NodeId, ProofsGenerator, PolInfoProvider, RuntimeServiceId
     public_epoch_stream: UninitializedEpochEventStream<
         impl Stream<Item = BlendEpochState<NodeId>> + Unpin,
     >,
-    mut incoming_message_stream: impl Stream<Item = BlendPayload> + Send + Unpin,
+    mut inbound_relay: impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin,
+    local_node_id: NodeId,
     settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     notify_ready: impl Fn(),
@@ -278,7 +263,7 @@ async fn run<Backend, NodeId, ProofsGenerator, PolInfoProvider, RuntimeServiceId
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId> + Sync + Send,
     NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
-    ProofsGenerator: LeaderProofsGenerator + Send,
+    ProofsGenerator: LeaderAndPowProofsGenerator + Send,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Unpin>,
     RuntimeServiceId: Clone + Send + Sync,
 {
@@ -305,6 +290,10 @@ where
         .expect("Should not fail to subscribe to secret PoL info stream.");
 
     let mut current_secret_epoch_info: Option<PolEpochInfo> = None;
+    // Transactions waiting for a `PoW` solution to back their layer proofs.
+    // Unlike the core service, an edge node keeps no recovery state, so a
+    // restart loses whatever is waiting here.
+    let mut pending_transactions: VecDeque<Vec<u8>> = VecDeque::new();
     let mut current_epoch_message_handler: Option<
         MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
     > = None;
@@ -339,20 +328,37 @@ where
                     Ok(()) => {}
                 }
             }
-            Some(message) = incoming_message_stream.next() => {
-                // TODO: Investigate why secret PoL info at times arrives after the block proposal.
-                let Some(handler) = current_epoch_message_handler.as_mut() else {
-                    tracing::warn!(target: LOG_TARGET, "Received a message to blend, but no active message handler is available to process it because the secret PoL info for the current epoch is not yet available. Ignoring the message.");
-                    continue;
-                };
-                let BlendPayload::BlockProposal(proposal) = message else {
-                    tracing::warn!(target: LOG_TARGET, "Edge nodes cannot blend transactions yet. Dropping the message.");
-                    continue;
-                };
-                let message_copies = settings.data_replication_factor.checked_add(1).expect("Data replication factor should not overflow when incremented.");
-                for _ in 0..message_copies {
-                    handler.handle_message_to_blend(proposal.clone()).await;
+            Some(message) = inbound_relay.next() => {
+                match message {
+                    ServiceMessage::Blend(BlendPayload::Transaction(transaction)) => {
+                        pending_transactions.push_back(transaction);
+                    }
+                    ServiceMessage::Blend(BlendPayload::BlockProposal(proposal)) => {
+                        // TODO: Investigate why secret PoL info at times arrives after the block proposal.
+                        let Some(handler) = current_epoch_message_handler.as_mut() else {
+                            tracing::warn!(target: LOG_TARGET, "Received a message to blend, but no active message handler is available to process it because the secret PoL info for the current epoch is not yet available. Ignoring the message.");
+                            continue;
+                        };
+                        let message_copies = settings.data_replication_factor.checked_add(1).expect("Data replication factor should not overflow when incremented.");
+                        for _ in 0..message_copies {
+                            handler.handle_block_proposal_to_blend(&proposal).await;
+                        }
+                    }
+                    ServiceMessage::GetNetworkInfo { reply } => {
+                        drop(reply.send(Some(NetworkInfo {
+                            node_id: local_node_id.clone(),
+                            core_info: None,
+                        })));
+                    }
+                    ServiceMessage::GetPendingTransactions { reply } => {
+                        drop(reply.send(pending_transactions.iter().cloned().collect()));
+                    }
                 }
+            }
+            // A queued transaction leaves as soon as a `PoW` solution backs it, awaited
+            // here as one branch among the others so the loop keeps turning meanwhile.
+            () = blend_next_transaction(&pending_transactions, &mut current_epoch_message_handler), if !pending_transactions.is_empty() && current_epoch_message_handler.is_some() => {
+                drop(pending_transactions.pop_front());
             }
             else => {
                 // All input streams have terminated (e.g. disorderly shutdown).
@@ -362,6 +368,34 @@ where
             }
         }
     }
+}
+
+/// Blends the transaction that has been waiting longest, once a `PoW` solution
+/// backs its layer proofs.
+///
+/// The transaction is only read here, never taken off the queue: `select!`
+/// drops this future whenever another branch wins the race, and one that popped
+/// before awaiting would take the transaction down with it every time that
+/// happened. It comes off the queue in the branch handler instead, which runs
+/// once the race is settled.
+async fn blend_next_transaction<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
+    pending_transactions: &VecDeque<Vec<u8>>,
+    current_epoch_message_handler: &mut Option<
+        MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
+    >,
+) where
+    Backend: BlendBackend<NodeId, RuntimeServiceId> + Sync,
+    NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
+    ProofsGenerator: LeaderAndPowProofsGenerator + Send,
+{
+    let transaction = pending_transactions
+        .front()
+        .expect("This function is only ever called when there are pending transactions.");
+    current_epoch_message_handler
+        .as_mut()
+        .expect("This function is only ever called when the epoch message handler exists.")
+        .handle_transaction_to_blend(transaction)
+        .await;
 }
 
 fn handle_new_epoch_event<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
@@ -376,7 +410,7 @@ fn handle_new_epoch_event<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId>,
     NodeId: Clone + Send + Eq + Hash + 'static,
-    ProofsGenerator: LeaderProofsGenerator,
+    ProofsGenerator: LeaderAndPowProofsGenerator,
 {
     // Whatever happens on a new epoch, we shut down the previous handler.
     // It will be rebuilt below if the current public and secret info line up
