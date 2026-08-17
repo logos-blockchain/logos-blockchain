@@ -90,6 +90,35 @@ pub async fn submit_prepared_transaction_to_nodes(
     Ok(())
 }
 
+/// Hands a prepared transaction to one node's Blend service rather than its
+/// mempool.
+///
+/// Only that node is told, and it does not gossip the transaction itself, so
+/// anything that later observes it anywhere came back through Blend.
+pub async fn submit_prepared_transaction_through_blend(
+    world: &CucumberWorld,
+    step: &str,
+    transaction_alias: &str,
+    node_name: &str,
+) -> Result<(), StepError> {
+    let signed_tx = world.resolve_prepared_transaction(transaction_alias)?;
+    let node = world.resolve_node_http_client(node_name).inspect_err(|e| {
+        warn!(target: TARGET, "Step `{step}` error: {e}");
+    })?;
+
+    let tx_hash = node.blend_transaction(&signed_tx).await.inspect_err(|e| {
+        warn!(target: TARGET, "Step `{step}` error: {e}");
+    })?;
+
+    info!(
+        target: TARGET,
+        "Submitted prepared transaction `{transaction_alias}` ({}) through Blend on `{node_name}`",
+        tx_hash_to_hex(&tx_hash)
+    );
+
+    Ok(())
+}
+
 pub async fn try_submit_invalid_transaction(
     world: &mut CucumberWorld,
     step: &str,
