@@ -2,7 +2,6 @@ mod block_density;
 mod stake;
 #[cfg(test)]
 mod test;
-pub(crate) mod tx_density;
 
 use std::sync::{Arc, LazyLock};
 

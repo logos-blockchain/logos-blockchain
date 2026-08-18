@@ -49,7 +49,7 @@ use crate::{
         stake::StakeInference,
         tests::{config, generate_proof},
     },
-    mantle::sdp::SdpLedger,
+    mantle::{pow::PowState, sdp::SdpLedger},
 };
 
 type HeaderId = [u8; 32];
@@ -220,6 +220,7 @@ fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
         lottery_0,
         lottery_1,
         active_declarations: Arc::new(Declarations::default()),
+        blend_pow_difficulty: Fr::ZERO,
     };
     let cryptarchia_ledger = LedgerState {
         utxos,
@@ -367,7 +368,12 @@ fn apply_block_to_ledger(
         .expect("parent state")
         .clone()
         .cryptarchia_ledger
-        .update_epoch_state::<HeaderId>(slot, &SdpLedger::new(0.into()), ledger.config())
+        .update_epoch_state::<HeaderId>(
+            slot,
+            &SdpLedger::new(0.into()),
+            &PowState::new(),
+            ledger.config(),
+        )
         .expect("epoch state update");
     let id = block_id(parent, slot);
     let proof = generate_proof(&parent_state, &utxo, slot);
