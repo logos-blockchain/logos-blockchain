@@ -1,9 +1,10 @@
 use std::sync::LazyLock;
 
-use lb_groth16::{AdditiveGroup as _, Field as _, Fr, fr_from_bytes_unchecked};
+use lb_groth16::{AdditiveGroup as _, Field as _, Fr, fr_from_bytes_unchecked, fr_from_mod_bytes};
 use lb_poseidon2::{Digest, Poseidon2Bn254Hasher};
 use lb_zksign::{ZkSignError, ZkSignPrivateKeysData, ZkSignWitnessInputs};
 use num_bigint::BigUint;
+use rand_core::RngCore;
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq as _;
 use zeroize::ZeroizeOnDrop;
@@ -61,6 +62,13 @@ impl SecretKey {
     #[must_use]
     pub fn to_public_key(&self) -> PublicKey {
         PublicKey::new(<Poseidon2Bn254Hasher as Digest>::compress(&[*KDF, self.0]))
+    }
+
+    #[must_use]
+    pub fn from_rng<RNG: RngCore>(rng: &mut RNG) -> Self {
+        let mut bytes = [0u8; 32];
+        rng.fill_bytes(&mut bytes);
+        Self(fr_from_mod_bytes(&bytes))
     }
 }
 

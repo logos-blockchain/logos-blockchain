@@ -4990,11 +4990,14 @@ dependencies = [
  "futures",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
+ "logos-blockchain-key-management-system-keys",
  "logos-blockchain-time-service",
  "overwatch",
+ "rand 0.8.6",
  "serde",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "tracing",
 ]
 

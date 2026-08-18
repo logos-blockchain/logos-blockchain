@@ -38,6 +38,19 @@ impl PowNullifier {
     pub const fn as_fr(&self) -> &Fr {
         &self.0
     }
+
+    /// The puzzle ticket must be strictly below the current reward
+    /// difficulty (§5.3: `puzzle_ticket < difficulty_reward`).
+    pub fn validate_difficulty_reward(
+        &self,
+        reward_difficulty: &Fr,
+    ) -> Result<(), ClaimPowRewardError> {
+        let ticket_as_fr = self.as_fr();
+        if ticket_as_fr >= reward_difficulty {
+            return Err(ClaimPowRewardError::InvalidPoWRewardTicket);
+        }
+        Ok(())
+    }
 }
 
 /// The ticket derived from a claim's inputs, checked against the reward
@@ -199,11 +212,7 @@ impl ClaimPoWRewardVerificationContext<'_> {
         &self,
         puzzle_ticket: PuzzleTicket,
     ) -> Result<(), ClaimPowRewardError> {
-        let ticket_as_fr = *puzzle_ticket.as_fr();
-        if ticket_as_fr >= self.reward_difficulty {
-            return Err(ClaimPowRewardError::InvalidPoWRewardTicket);
-        }
-        Ok(())
+        puzzle_ticket.validate_difficulty_reward(&self.reward_difficulty)
     }
 
     /// The puzzle ticket must not already have been claimed.

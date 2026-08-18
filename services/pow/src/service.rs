@@ -94,10 +94,10 @@ where
                 .await
                 .expect("Relay connection with Cryptarchia chain service should succeed"),
         );
+        cryptarchia_api.subscribe_new_blocks().await?;
 
-        let nonce = cryptarchia_api.get_epoch_state().await??.nonce;
         service_resources_handle.status_updater.notify_ready();
 
-        todo!()
+        Ok(())
     }
 }
