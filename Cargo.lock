@@ -4983,6 +4983,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-pow-service"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "logos-blockchain-chain-service",
+ "logos-blockchain-core",
+ "logos-blockchain-time-service",
+ "overwatch",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "logos-blockchain-proofs-error"
 version = "0.0.0"
 dependencies = [
