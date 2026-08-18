@@ -1623,7 +1623,7 @@ mod uncle_tests {
         //  |
         //  |----- u1(9)
         //
-        // With `uncle_reference_window_in_block = 1`, a proposal at slot 11 can only
+        // With `uncle_reference_window_in_slot = 1`, a proposal at slot 11 can only
         // reference slot 10. It means that no uncle can be selected.
         let [g, b1, b2, u1, u2, u3] = [0u64, 1, 2, 3, 4, 5];
         let window = 1;
