@@ -3,14 +3,20 @@ use std::marker::PhantomData;
 
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::mantle::ops::pow::ClaimPowRewardOp;
-use lb_time_service::{TimeService, TimeServiceMessage, backends::TimeBackend as TimeBackendTrait};
+use lb_time_service::{
+    TimeService, api::TimeServiceApi, backends::TimeBackend as TimeBackendTrait,
+};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
-    services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
+    services::{AsServiceId, ServiceCore, ServiceData},
 };
 
 #[derive(thiserror::Error, Debug)]
-pub enum PoWServiceError {}
+pub enum PoWServiceError {
+    #[error(transparent)]
+    TimeError(#[from] lb_time_service::api::ApiError),
+}
+
 pub enum PoWSerciveMessage {}
 
 pub struct PoWServiceState<Tx> {
@@ -69,16 +75,19 @@ where
             _phantom,
         } = self;
 
-        // Relay to the time service, used to subscribe to slot ticks / query the
-        // current slot.
-        let _time_relay: OutboundRelay<TimeServiceMessage> = service_resources_handle
-            .overwatch_handle
-            .relay::<TimeService<TimeBackend, _>>()
-            .await
-            .expect("Relay connection with TimeService should succeed");
+        // API wrapper over the time service relay, used to query slot/epoch info.
+        let time_api =
+            TimeServiceApi::<TimeService<TimeBackend, RuntimeServiceId>, RuntimeServiceId>::new(
+                service_resources_handle
+                    .overwatch_handle
+                    .relay::<TimeService<TimeBackend, _>>()
+                    .await
+                    .expect("Relay connection with TimeService should succeed"),
+            );
+        let epoch_stream = time_api.subscribe().await?;
 
         // API wrapper over the chain service relay, used to query chain state.
-        let _cryptarchia_api = CryptarchiaServiceApi::<CryptarchiaService, RuntimeServiceId>::new(
+        let cryptarchia_api = CryptarchiaServiceApi::<CryptarchiaService, RuntimeServiceId>::new(
             service_resources_handle
                 .overwatch_handle
                 .relay::<CryptarchiaService>()
@@ -86,6 +95,7 @@ where
                 .expect("Relay connection with Cryptarchia chain service should succeed"),
         );
 
+        let nonce = cryptarchia_api.get_epoch_state().await??.nonce;
         service_resources_handle.status_updater.notify_ready();
 
         todo!()
