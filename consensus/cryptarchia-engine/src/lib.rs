@@ -652,7 +652,7 @@ where
     /// - An uncle is the 1st block of a fork off the chain of `parent`.
     /// - An uncle's slot is `< slot`.
     /// - An uncle's parent slot is within the uncle reference window.
-    ///   - `0 < slot - uncle.parent.slot <= w_u`.
+    ///   - `0 < slot - uncle.parent.slot <= uncle_reference_window_in_slot`.
     /// - An uncle's slot is not already occupied by the ancestors of `parent`
     ///   (including `parent` itself) and their uncles.
     ///
@@ -688,7 +688,7 @@ where
         Id: Ord,
     {
         let window_start =
-            u64::from(slot).saturating_sub(self.config.uncle_reference_window().get());
+            u64::from(slot).saturating_sub(self.config.uncle_reference_window_in_slot().get());
 
         let (ancestors, occupied_slots) = self.collect_chain_within_window(parent, window_start);
         let mut candidates = self.uncle_candidates(slot, window_start, &ancestors, &occupied_slots);
@@ -1568,7 +1568,7 @@ pub mod tests {
 
 #[cfg(test)]
 mod uncle_tests {
-    use std::num::NonZero;
+    use std::num::{NonZero, NonZeroU32};
 
     use lb_utils::math::NonNegativeRatio;
 
@@ -1623,8 +1623,8 @@ mod uncle_tests {
         //  |
         //  |----- u1(9)
         //
-        // With `w_u = 1`, a proposal at slot 11 can only reference slot 10.
-        // It means that no uncle can be selected.
+        // With `uncle_reference_window_in_block = 1`, a proposal at slot 11 can only
+        // reference slot 10. It means that no uncle can be selected.
         let [g, b1, b2, u1, u2, u3] = [0u64, 1, 2, 3, 4, 5];
         let window = 1;
         let engine = build_tree(
@@ -1819,30 +1819,34 @@ mod uncle_tests {
         assert_eq!(selected, [u2, u1, u3]);
     }
 
-    /// A config whose uncle reference window `floor(W/f)` is exactly
-    /// `uncle_reference_window` slots, by picking an `f` just below 1.
+    /// Back-calculates `uncle_reference_window_in_block` from
+    /// `uncle_reference_window_in_slot`, which is handier to specify in tests.
     #[must_use]
-    fn config(uncle_reference_window: u32) -> Config {
+    fn config(uncle_reference_window_in_slot: NonZeroU32) -> Config {
+        // Pick `f` just below 1, so that `uncle_reference_window_in_block` equals
+        // `uncle_reference_window_in_slot`.
+        let f_numerator = uncle_reference_window_in_slot.get() + 1;
+        let f_denominator = NonZeroU32::new(uncle_reference_window_in_slot.get() + 2).unwrap();
+        let uncle_reference_window_in_block =
+            (uncle_reference_window_in_slot.get() * f_numerator).div_ceil(f_denominator.get());
+
         Config::new(
             NonZero::new(10).unwrap(),
-            NonNegativeRatio::new(
-                uncle_reference_window + 1,
-                (uncle_reference_window + 2).try_into().unwrap(),
-            ),
+            NonNegativeRatio::new(f_numerator, f_denominator),
             1f64.try_into().expect("1 > 0"),
-            uncle_reference_window.try_into().unwrap(),
+            uncle_reference_window_in_block.try_into().unwrap(),
         )
     }
 
     type HeaderId = u64;
 
     fn build_tree(
-        uncle_reference_window: u32,
+        uncle_reference_window_in_slot: u32,
         genesis: HeaderId,
         blocks: impl IntoIterator<Item = (HeaderId, HeaderId, Slot)>,
     ) -> Cryptarchia<HeaderId> {
         build_tree_with_uncle_slots(
-            uncle_reference_window,
+            uncle_reference_window_in_slot,
             genesis,
             blocks
                 .into_iter()
@@ -1851,13 +1855,13 @@ mod uncle_tests {
     }
 
     fn build_tree_with_uncle_slots(
-        uncle_reference_window: u32,
+        uncle_reference_window_in_slot: u32,
         genesis: HeaderId,
         blocks: impl IntoIterator<Item = (HeaderId, HeaderId, Slot, UncleSlots)>,
     ) -> Cryptarchia<HeaderId> {
         let mut engine = Cryptarchia::from_lib(
             genesis,
-            config(uncle_reference_window),
+            config(uncle_reference_window_in_slot.try_into().unwrap()),
             State::Bootstrapping,
             0.into(),
             0,
