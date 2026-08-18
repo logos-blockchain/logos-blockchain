@@ -4228,7 +4228,6 @@ dependencies = [
  "async-trait",
  "backon",
  "futures",
- "itertools 0.14.0",
  "logos-blockchain-chain-service",
  "logos-blockchain-codec",
  "logos-blockchain-core",
