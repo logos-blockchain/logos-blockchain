@@ -459,8 +459,8 @@ where
     /// Every transaction whose hash starts with `prefix`.
     ///
     /// The prefix index is consulted first, so the storage round-trip only
-    /// covers keys that actually match. No policy is applied here: how many
-    /// candidates are tolerable is a consensus question, so it belongs to the
+    /// covers keys that actually match. No policy is applied here: what a
+    /// non-unique match means is a consensus question, so it belongs to the
     /// caller.
     async fn get_transactions_by_prefix(
         pool: &Pool,

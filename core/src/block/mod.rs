@@ -31,18 +31,6 @@ const MAX_BLOCK_TRANSACTIONS: usize = 1024;
 /// Note: This is not the total block size.
 pub const MAX_BLOCK_TRANSACTIONS_SIZE: usize = 1024 * 1024 * 2;
 
-/// The most mempool transactions that may share a single reference prefix
-/// before a proposal is treated as unreconstructable.
-pub const MAX_CANDIDATES_PER_REFERENCE: usize = 8;
-
-/// The most candidate combinations a validator will try while resolving a
-/// proposal's references.
-///
-/// With `N_comb = product(|C_i|)` over the per-reference candidate sets, this
-/// bounds reconstruction work so that prefix collisions stay a cost problem
-/// rather than a verification-time denial-of-service vector.
-pub const MAX_RECONSTRUCTION_COMBINATIONS: usize = 32;
-
 pub type BlockNumber = u64;
 
 #[derive(Debug, thiserror::Error)]
@@ -845,15 +833,15 @@ mod tests {
         assert!(matches!(err, Error::Header(HeaderError::GenesisSlot)));
     }
 
-    /// The specification fixes the maximum proposal at 10,000 bytes:
+    /// The specification fixes the maximum proposal at 18,192 bytes:
     /// `header (297) || uncle_headers (1 + MAX_UNCLES * 361)
-    /// || references (2 + 8192) || signature (64)`.
+    /// || references (2 + 16384) || signature (64)`.
     #[test]
     fn maximum_proposal_matches_the_specified_size() {
         use lb_codec::BinaryEncode as _;
         use lb_cryptarchia_engine::MAX_UNCLES;
 
-        const SPECIFIED_MAX_PROPOSAL_SIZE: usize = 10000;
+        const SPECIFIED_MAX_PROPOSAL_SIZE: usize = 18_192;
 
         let proof = create_proof();
         let uncle = signed_uncle(1, &proof);
