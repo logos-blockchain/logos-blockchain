@@ -10,7 +10,7 @@ use lb_blend_message::crypto::{
 };
 use lb_blend_proofs::{
     quota::{
-        Quota, VerifiedProofOfQuota,
+        KeyIndex, Quota, VerifiedProofOfQuota,
         inputs::prove::{PrivateInputs, PublicInputs, private::ProofOfWorkQuotaInputs},
         pow::{PowTarget, solve_puzzle},
     },
@@ -96,7 +96,6 @@ fn create_proof_stream(
         return Box::pin(stream::empty());
     }
 
-    let epoch_nonce = public_inputs.leader.pol_epoch_nonce;
     tracing::debug!(target: LOG_TARGET, "Generating PoW quota proofs with public inputs: {public_inputs:?}.");
 
     // One item of this stream is one solution: its puzzle search, and the
@@ -109,54 +108,81 @@ fn create_proof_stream(
     // message simply means a message spans more than one solution.
     Box::pin(
         Buffered::new(
-            stream::repeat_with(move || {
-                let poq_generation_task = CancellableHandle::new(spawn("logos/blend/pow-solution-proofs", async move {
-                    let solution = mine_solution(epoch_nonce, difficulty).await;
-
-                    join_all(per_solution_quota.values_range().map(move |message_release_index| {
-                        let solution = solution.clone();
-
-                        CancellableHandle::new(spawn_blocking("logos/blend/pow-poq-blocking", move || {
-                            let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
-                            let (proof_of_quota, secret_selection_randomness) = VerifiedProofOfQuota::new(
-                                &PublicInputs {
-                                    signing_key: ephemeral_signing_key.public_key().into_inner(),
-                                    core: public_inputs.core,
-                                    leader: public_inputs.leader,
-                                    pow: public_inputs.pow,
-                                },
-                                PrivateInputs::new_proof_of_work_quota_inputs(
-                                    message_release_index,
-                                    solution,
-                                ),
-                            )
-                            .expect("PoW PoQ proof creation should not fail.");
-                            let proof_of_selection = VerifiedProofOfSelection::new(secret_selection_randomness);
-                            let pow_proof = BlendLayerProof {
-                                proof_of_quota,
-                                proof_of_selection,
-                                ephemeral_signing_key,
-                            };
-
-                            tracing::trace!(target: LOG_TARGET, "Generated PoW PoQ within the stream for message release index {message_release_index:?} with key nullifier {:?} and public key {:?}.", hex::encode(fr_to_bytes(&pow_proof.proof_of_quota.key_nullifier())), pow_proof.ephemeral_signing_key.public_key());
-                            pow_proof
-                        }))
-                    }))
-                    .await
-                    .into_iter()
-                    .map(|pow_proof| pow_proof.expect("Spawning task for PoW proof generation should not fail."))
-                    .collect::<Vec<_>>()
-                }));
-
-                async move { poq_generation_task.await.expect("PoW solution proving task should not fail.") }
-            }),
+            stream::repeat_with(move || spawn_solution_proofs(public_inputs, per_solution_quota)),
             // This case is different than the other proofs.
-            // Because the PoW mining happens once for all encapsulations (all key indices), we buffer only one item in advance, so we have all the `indices` proofs ready when the consumer polls the stream.
-            // We will probably change the logic also in the other proof generators so that each item of the stream would be the full set of proofs, since they are all required and to be consumed anyway.
+            // Because the PoW mining happens once for all encapsulations (all key indices), we
+            // buffer only one item in advance, so we have all the `indices` proofs ready when the
+            // consumer polls the stream. We will probably change the logic also in the
+            // other proof generators so that each item of the stream would be the full set of
+            // proofs, since they are all required and to be consumed anyway.
             BUFFER_SIZE,
         )
         .flat_map(stream::iter),
     )
+}
+
+/// Starts the work one solution is worth: its puzzle search, and the
+/// `per_solution_quota` proofs that solution buys.
+fn spawn_solution_proofs(
+    public_inputs: PoQVerificationInputsMinusSigningKey,
+    per_solution_quota: Quota,
+) -> impl Future<Output = Vec<BlendLayerProof>> + Send {
+    let epoch_nonce = public_inputs.leader.pol_epoch_nonce;
+    let difficulty = public_inputs.pow.pow_blend_difficulty;
+
+    let task = CancellableHandle::new(spawn("logos/blend/pow-solution-proofs", async move {
+        let solution = mine_solution(epoch_nonce, difficulty).await;
+
+        join_all(
+            per_solution_quota
+                .values_range()
+                .map(move |message_release_index| {
+                    spawn_layer_proof(public_inputs, message_release_index, solution.clone())
+                }),
+        )
+        .await
+    }));
+
+    async move {
+        task.await
+            .expect("PoW solution proving task should not fail.")
+    }
+}
+
+/// Starts the generation of the layer proof at `message_release_index`, backed
+/// by `solution`.
+fn spawn_layer_proof(
+    public_inputs: PoQVerificationInputsMinusSigningKey,
+    message_release_index: KeyIndex,
+    solution: ProofOfWorkQuotaInputs,
+) -> impl Future<Output = BlendLayerProof> + Send {
+    let task = CancellableHandle::new(spawn_blocking("logos/blend/pow-poq-blocking", move || {
+        let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
+        let (proof_of_quota, secret_selection_randomness) = VerifiedProofOfQuota::new(
+            &PublicInputs {
+                signing_key: ephemeral_signing_key.public_key().into_inner(),
+                core: public_inputs.core,
+                leader: public_inputs.leader,
+                pow: public_inputs.pow,
+            },
+            PrivateInputs::new_proof_of_work_quota_inputs(message_release_index, solution),
+        )
+        .expect("PoW PoQ proof creation should not fail.");
+        let proof_of_selection = VerifiedProofOfSelection::new(secret_selection_randomness);
+        let pow_proof = BlendLayerProof {
+            proof_of_quota,
+            proof_of_selection,
+            ephemeral_signing_key,
+        };
+
+        tracing::trace!(target: LOG_TARGET, "Generated PoW PoQ within the stream for message release index {message_release_index:?} with key nullifier {:?} and public key {:?}.", hex::encode(fr_to_bytes(&pow_proof.proof_of_quota.key_nullifier())), pow_proof.ephemeral_signing_key.public_key());
+        pow_proof
+    }));
+
+    async move {
+        task.await
+            .expect("Spawning task for PoW proof generation should not fail.")
+    }
 }
 
 /// Searches for a puzzle solution, one blocking round at a time, until it finds
