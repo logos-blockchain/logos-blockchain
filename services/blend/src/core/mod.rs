@@ -856,8 +856,8 @@ where
             }
             // A queued transaction leaves as soon as a `PoW` solution backs it. The
             // search is awaited here, so the rest of the loop keeps turning while it runs.
-            maybe_encapsulated_tx = encapsulate_next_transaction(&pending_transactions, &mut crypto_processor), if !pending_transactions.is_empty() => {
-                recovery_checkpoint = handle_local_transaction(maybe_encapsulated_tx, &mut pending_transactions, &crypto_processor, &mut message_scheduler, recovery_checkpoint);
+            Some(encapsulation) = encapsulate_next_transaction(&pending_transactions, &mut crypto_processor) => {
+                recovery_checkpoint = handle_local_transaction(&encapsulation, &mut pending_transactions, &crypto_processor, &mut message_scheduler, recovery_checkpoint);
             }
             Some(incoming_message) = blend_messages.next() => {
                 recovery_checkpoint = handle_incoming_blend_message(incoming_message, &mut message_scheduler, old_epoch_message_scheduler.as_mut(), &crypto_processor, old_epoch_crypto_processor.as_ref(),  recovery_checkpoint);
@@ -946,8 +946,14 @@ where
 /// that happened. It comes off the queue in [`handle_local_transaction`]
 /// instead, which runs after the race is settled.
 ///
-/// It returns `None` if the processor failed to encapsulate the transaction,
-/// and `Some(...)` if it succeeded.
+/// Returns `None` when there is nothing to hand back — either nothing is
+/// queued, or the transaction at the head could not be encapsulated — which is
+/// what leaves the `select!` branch free to wait on the others. The two are not
+/// worth telling apart here: in both cases the right move is to do nothing this
+/// time round.
+///
+/// A transaction that fails to encapsulate therefore stays queued and is tried
+/// again.
 async fn encapsulate_next_transaction<NodeId, ProofsGenerator, ProofsVerifier, CorePoQGenerator>(
     pending_transactions: &VecDeque<Vec<u8>>,
     cryptographic_processor: &mut CoreCryptographicProcessor<
@@ -961,14 +967,12 @@ where
     NodeId: Eq + Hash + 'static,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
 {
-    let transaction = pending_transactions
-        .front()
-        .expect("This function is only ever called when there are pending transactions.");
+    let transaction = pending_transactions.front()?;
     cryptographic_processor
         .encapsulate_transaction_payload(transaction)
         .await
-        // Reported here rather than handed back: the encapsulation error is
-        // not `Send`, and a `select!` branch output has to be.
+        // Reported here rather than handed back: the encapsulation error is not
+        // `Send`, and a `select!` branch output has to be.
         .inspect_err(|e| {
             tracing::error!(target: LOG_TARGET, "Failed to encapsulate transaction: {e:?}");
         })
@@ -989,7 +993,7 @@ fn handle_local_transaction<
     ProofsVerifier,
     CorePoQGenerator,
 >(
-    maybe_encapsulated_transaction: Option<EncapsulatedMessageWithVerifiedPublicHeader>,
+    encapsulation: &EncapsulatedMessageWithVerifiedPublicHeader,
     pending_transactions: &mut VecDeque<Vec<u8>>,
     cryptographic_processor: &CoreCryptographicProcessor<
         NodeId,
@@ -1010,15 +1014,12 @@ where
     BackendSettings: Clone + Send + Sync,
     ProofsVerifier: ProofsVerifierTrait,
 {
-    let recovery_checkpoint = match maybe_encapsulated_transaction {
-        Some(encapsulated_transaction) => schedule_local_encapsulated_message(
-            &encapsulated_transaction,
-            cryptographic_processor,
-            scheduler,
-            current_recovery_checkpoint,
-        ),
-        None => current_recovery_checkpoint,
-    };
+    let recovery_checkpoint = schedule_local_encapsulated_message(
+        encapsulation,
+        cryptographic_processor,
+        scheduler,
+        current_recovery_checkpoint,
+    );
 
     let transaction = pending_transactions
         .pop_front()

@@ -134,18 +134,19 @@ where
     /// Unlike a block proposal this cannot be answered on demand: the proofs
     /// come from a puzzle search, so the caller has to be somewhere it can
     /// afford to wait.
-    pub async fn handle_transaction_to_blend(&mut self, transaction: &[u8]) {
-        let Ok(message) = self
+    /// Returns `None` if the transaction could not be encapsulated, so the
+    /// caller can leave it queued and try again rather than losing it.
+    pub async fn handle_transaction_to_blend(&mut self, transaction: &[u8]) -> Option<()> {
+        let message = self
             .cryptographic_processor
             .encapsulate_transaction_payload(transaction)
             .await
             .inspect_err(|e| {
                 tracing::error!(target: LOG_TARGET, "Failed to encapsulate transaction: {e:?}");
             })
-        else {
-            return;
-        };
+            .ok()?;
         self.backend.send(message).await;
+        Some(())
     }
 }
 

@@ -355,7 +355,7 @@ where
             }
             // A queued transaction leaves as soon as a `PoW` solution backs it, awaited
             // here as one branch among the others so the loop keeps turning meanwhile.
-            () = blend_next_transaction(&pending_transactions, &mut current_epoch_message_handler), if !pending_transactions.is_empty() && current_epoch_message_handler.is_some() => {
+            Some(()) = blend_next_transaction(&pending_transactions, &mut current_epoch_message_handler) => {
                 drop(pending_transactions.pop_front());
             }
             else => {
@@ -376,24 +376,26 @@ where
 /// before awaiting would take the transaction down with it every time that
 /// happened. It comes off the queue in the branch handler instead, which runs
 /// once the race is settled.
+///
+/// Returns `None` when there is nothing to blend — no transaction queued, or no
+/// handler for this epoch yet — which is what leaves the `select!` branch free
+/// to wait on the others.
 async fn blend_next_transaction<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
     pending_transactions: &VecDeque<Vec<u8>>,
     current_epoch_message_handler: &mut Option<
         MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
     >,
-) where
+) -> Option<()>
+where
     Backend: BlendBackend<NodeId, RuntimeServiceId> + Sync,
     NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
     ProofsGenerator: LeaderAndPowProofsGenerator + Send,
 {
-    let transaction = pending_transactions
-        .front()
-        .expect("This function is only ever called when there are pending transactions.");
+    let transaction = pending_transactions.front()?;
     current_epoch_message_handler
-        .as_mut()
-        .expect("This function is only ever called when the epoch message handler exists.")
+        .as_mut()?
         .handle_transaction_to_blend(transaction)
-        .await;
+        .await
 }
 
 fn handle_new_epoch_event<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
