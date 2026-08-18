@@ -23,6 +23,15 @@ pub enum Error {
     #[error("invalid transaction: {0}")]
     InvalidTransaction(&'static str),
 
+    /// A bound parameter is malformed.
+    #[error("invalid SQL parameter: {0}")]
+    InvalidParameter(&'static str),
+
+    /// A bound parameter uses a `SQLite` representation that cannot be
+    /// replayed.
+    #[error("SQL parameter representation is not supported by \u{3bb}SQL")]
+    UnsupportedParameter,
+
     /// Participant-local bookkeeping is missing or malformed.
     #[error("invalid local state: {0}")]
     InvalidLocalState(&'static str),

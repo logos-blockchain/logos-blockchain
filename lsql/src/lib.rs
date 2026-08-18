@@ -1,9 +1,9 @@
 //! `λSQL`: replicated `SQLite` state over a Logos zone channel.
 //!
-//! Applications submit SQL transactions through [`Lsql::execute`]. One runtime
-//! task owns the zone sequencer and database writer, so the SQL effects and
-//! pending publication record commit together before the payload is given to
-//! `ZoneSDK`.
+//! Applications read through a normal `SQLite` connection and submit replicated
+//! writes through [`Lsql::query`]. One runtime task owns the zone sequencer
+//! and database writer, so the SQL effects and pending publication record
+//! commit together before the payload is given to `ZoneSDK`.
 
 mod applier;
 mod db;
@@ -14,5 +14,6 @@ mod protocol;
 mod runtime;
 
 pub use error::Error;
-pub use lsql::{Lsql, LsqlConfig};
-pub use protocol::{IdempotencyKey, Statement, Transaction, TxId, Value};
+pub use lsql::{Lsql, LsqlConfig, TransactionBuilder};
+pub use protocol::{IdempotencyKey, TxId};
+pub use rusqlite::types::ToSql;
