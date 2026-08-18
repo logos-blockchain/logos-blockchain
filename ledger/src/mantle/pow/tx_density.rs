@@ -96,8 +96,14 @@ struct EpochTotals {
 
 impl EpochTotals {
     const fn record_block(&mut self, txs_in_block: u64) {
-        self.blocks = self.blocks.saturating_add(1);
-        self.txs = self.txs.saturating_add(txs_in_block);
+        self.blocks = self
+            .blocks
+            .checked_add(1)
+            .expect("Block density computation overflow.");
+        self.txs = self
+            .txs
+            .checked_add(txs_in_block)
+            .expect("Tx density computation overflow.");
     }
 }
 
