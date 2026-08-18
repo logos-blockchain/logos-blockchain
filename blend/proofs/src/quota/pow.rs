@@ -41,21 +41,21 @@ static DOMAIN_SEPARATION_TAG_FR: LazyLock<ZkHash> = LazyLock::new(|| {
         .expect("DST for the Blend PoW ticket calculation must be correct.")
 });
 
-/// Derives the puzzle ticket of a candidate nonce, exactly as the circuit
-/// does: `zkhash(BLEND_POW_V1, pol_epoch_nonce, pow_nonce)`.
-#[must_use]
-pub fn derive_pow_ticket(epoch_nonce: ZkHash, pow_nonce: ZkHash) -> ZkHash {
-    [*DOMAIN_SEPARATION_TAG_FR, epoch_nonce, pow_nonce].hash()
-}
+/// The value a candidate nonce derives, which a solution must place below the
+/// epoch's [`PowTarget`] to be admitted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PowTicket(ZkHash);
 
-/// Whether `ticket` satisfies `difficulty`.
-///
-/// A field has no order, so this is not field arithmetic: the comparison is
-/// over the two values' canonical integer representatives in `[0, p-1]`, which
-/// is what [`Fr`]'s [`Ord`] compares.
-#[must_use]
-pub fn is_winning_ticket(ticket: ZkHash, difficulty: PowTarget) -> bool {
-    ticket < difficulty
+impl PowTicket {
+    #[must_use]
+    pub fn derive(epoch_nonce: ZkHash, pow_nonce: ZkHash) -> Self {
+        Self([*DOMAIN_SEPARATION_TAG_FR, epoch_nonce, pow_nonce].hash())
+    }
+
+    #[must_use]
+    pub fn satisfies(self, difficulty: PowTarget) -> bool {
+        self.0 < difficulty
+    }
 }
 
 /// Searches for a nonce whose ticket satisfies `difficulty`, trying `attempts`
@@ -82,7 +82,8 @@ where
 
     (0..attempts.get()).find_map(|_| {
         let pow_nonce = random_nonce(rng);
-        is_winning_ticket(derive_pow_ticket(epoch_nonce, pow_nonce), difficulty)
+        PowTicket::derive(epoch_nonce, pow_nonce)
+            .satisfies(difficulty)
             .then_some(ProofOfWorkQuotaInputs { pow_nonce })
     })
 }
@@ -130,9 +131,7 @@ mod tests {
         ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey, Quota,
         fixtures::valid_proof_of_work_quota_inputs,
         inputs::prove::{PublicInputs, private::ProofOfWorkQuotaInputs},
-        pow::{
-            DOMAIN_SEPARATION_TAG_FR, PowTarget, derive_pow_ticket, is_winning_ticket, solve_puzzle,
-        },
+        pow::{DOMAIN_SEPARATION_TAG_FR, PowTarget, PowTicket, solve_puzzle},
     };
 
     /// The largest field element, `p - 1`, as an integer.
@@ -161,10 +160,10 @@ mod tests {
                 Quota::ONE,
             );
 
-        assert!(is_winning_ticket(
-            derive_pow_ticket(leader.pol_epoch_nonce, pow_nonce),
-            pow.pow_blend_difficulty
-        ));
+        assert!(
+            PowTicket::derive(leader.pol_epoch_nonce, pow_nonce)
+                .satisfies(pow.pow_blend_difficulty)
+        );
     }
 
     #[test]
@@ -182,10 +181,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(is_winning_ticket(
-            derive_pow_ticket(epoch_nonce, pow_nonce),
-            difficulty
-        ));
+        assert!(PowTicket::derive(epoch_nonce, pow_nonce).satisfies(difficulty));
     }
 
     #[test]
