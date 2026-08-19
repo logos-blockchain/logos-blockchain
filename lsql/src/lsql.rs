@@ -10,16 +10,14 @@ use lb_zone_sdk::{
     sequencer::{FundingConfig, ZoneSequencer},
 };
 use reqwest::Url;
-use rusqlite::{
-    Connection,
-    types::{ToSql, ToSqlOutput, Value, ValueRef},
-};
+use rusqlite::Connection;
 
 use crate::{
     db::Databases,
     error::Error,
-    protocol::{IdempotencyKey, Statement, Transaction, TxId},
+    protocol::{IdempotencyKey, Transaction, TxId},
     runtime,
+    sql::{QueryBuilder, TransactionBuilder},
 };
 
 /// Configuration for one `λSQL` database.
@@ -92,8 +90,8 @@ impl Lsql {
 
     /// Starts a replicated write containing one SQL statement.
     ///
-    /// Bind parameters with [`TransactionBuilder::bind`], then call
-    /// [`TransactionBuilder::execute`] to execute the statement locally and
+    /// Bind parameters with [`QueryBuilder::bind`], then call
+    /// [`QueryBuilder::execute`] to execute the statement locally and
     /// submit it for publication.
     ///
     /// ```no_run
@@ -109,7 +107,7 @@ impl Lsql {
     ///     .await
     /// # }
     /// ```
-    pub fn query(&self, sql: impl Into<String>) -> TransactionBuilder<'_> {
+    pub fn query(&self, sql: impl Into<String>) -> QueryBuilder<'_> {
         self.transaction().query(sql)
     }
 
@@ -118,7 +116,7 @@ impl Lsql {
         TransactionBuilder::new(self)
     }
 
-    async fn commit_transaction(
+    pub(crate) async fn commit_transaction(
         &self,
         transaction: Transaction,
         idempotency_key: IdempotencyKey,
@@ -154,161 +152,10 @@ impl Lsql {
     }
 }
 
-/// A replicated SQL transaction being assembled by the application.
-///
-/// Create one with [`Lsql::query`] for a single statement or
-/// [`Lsql::transaction`] for multiple statements. Parameter values are
-/// converted immediately into owned `SQLite` values, so borrowed application
-/// data does not need to outlive the call to [`Self::bind`].
-#[must_use = "the transaction must be executed to apply its SQL"]
-pub struct TransactionBuilder<'a> {
-    lsql: &'a Lsql,
-    statements: Vec<Statement>,
-    current: Option<PendingStatement>,
-    error: Option<Error>,
-}
-
-impl<'a> TransactionBuilder<'a> {
-    const fn new(lsql: &'a Lsql) -> Self {
-        Self {
-            lsql,
-            statements: Vec::new(),
-            current: None,
-            error: None,
-        }
-    }
-
-    /// Adds the next SQL query to this transaction.
-    pub fn query(mut self, sql: impl Into<String>) -> Self {
-        self.finish_current_statement();
-
-        if self.error.is_none() {
-            self.current = Some(PendingStatement {
-                sql: sql.into(),
-                params: Vec::new(),
-            });
-        }
-
-        self
-    }
-
-    /// Binds one parameter to the current statement.
-    ///
-    /// Values use [`rusqlite::types::ToSql`], the same conversion interface as
-    /// ordinary `SQLite` writes. Any conversion error is returned by
-    /// [`Self::execute`].
-    pub fn bind<T>(mut self, value: T) -> Self
-    where
-        T: ToSql,
-    {
-        if self.error.is_some() {
-            return self;
-        }
-
-        let Some(statement) = &mut self.current else {
-            self.error = Some(Error::InvalidTransaction(
-                "a statement must be added before binding parameters",
-            ));
-            return self;
-        };
-
-        match owned_sql_value(&value) {
-            Ok(value) => statement.params.push(value),
-            Err(error) => self.error = Some(error),
-        }
-
-        self
-    }
-
-    /// Commits the transaction locally and submits it to `ZoneSDK`.
-    ///
-    /// A successful return means the SQL effects and recovery record are
-    /// committed locally. Publication and finality remain asynchronous.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when a parameter cannot be represented by the `λSQL`
-    /// protocol, validation or the local commit fails, the sequencer is not
-    /// ready, or the runtime has halted.
-    pub async fn execute(mut self, idempotency_key: IdempotencyKey) -> Result<TxId, Error> {
-        self.finish_current_statement();
-
-        if let Some(error) = self.error {
-            return Err(error);
-        }
-
-        let transaction = Transaction::new(self.statements)?;
-
-        self.lsql
-            .commit_transaction(transaction, idempotency_key)
-            .await
-    }
-
-    fn finish_current_statement(&mut self) {
-        if self.error.is_some() {
-            return;
-        }
-
-        let Some(statement) = self.current.take() else {
-            return;
-        };
-
-        match Statement::new(statement.sql, statement.params) {
-            Ok(statement) => self.statements.push(statement),
-            Err(error) => self.error = Some(error),
-        }
-    }
-}
-
-struct PendingStatement {
-    sql: String,
-    params: Vec<Value>,
-}
-
-fn owned_sql_value(value: &impl ToSql) -> Result<Value, Error> {
-    match value.to_sql()? {
-        ToSqlOutput::Borrowed(value) => owned_value_ref(value),
-        ToSqlOutput::Owned(value) => Ok(value),
-        _ => Err(Error::UnsupportedParameter),
-    }
-}
-
-fn owned_value_ref(value: ValueRef<'_>) -> Result<Value, Error> {
-    match value {
-        ValueRef::Null => Ok(Value::Null),
-        ValueRef::Integer(value) => Ok(Value::Integer(value)),
-        ValueRef::Real(value) => Ok(Value::Real(value)),
-        ValueRef::Text(value) => String::from_utf8(value.to_vec())
-            .map(Value::Text)
-            .map_err(|_| Error::InvalidParameter("text parameter is not valid UTF-8")),
-        ValueRef::Blob(value) => Ok(Value::Blob(value.to_vec())),
-    }
-}
-
 impl Drop for Lsql {
     fn drop(&mut self) {
         if let Some(runtime) = &self.runtime {
             runtime.abort();
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use rusqlite::types::Value;
-
-    use super::owned_sql_value;
-
-    #[test]
-    fn converts_sql_parameters_to_owned_values() {
-        let text = String::from("hello");
-
-        assert_eq!(owned_sql_value(&42i64).unwrap(), Value::Integer(42));
-        assert_eq!(owned_sql_value(&text.as_str()).unwrap(), Value::Text(text));
-    }
-
-    #[test]
-    fn converts_none_to_sql_null() {
-        assert_eq!(owned_sql_value(&Option::<i64>::None).unwrap(), Value::Null);
     }
 }

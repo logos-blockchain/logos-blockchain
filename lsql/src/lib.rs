@@ -12,8 +12,10 @@ mod local_write;
 mod lsql;
 mod protocol;
 mod runtime;
+mod sql;
 
 pub use error::Error;
-pub use lsql::{Lsql, LsqlConfig, TransactionBuilder};
+pub use lsql::{Lsql, LsqlConfig};
 pub use protocol::{IdempotencyKey, TxId};
 pub use rusqlite::types::ToSql;
+pub use sql::{QueryBuilder, TransactionBuilder};
