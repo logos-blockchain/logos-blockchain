@@ -1,5 +1,7 @@
 //! SQL transactions exchanged by `λSQL` instances.
 
+use std::fmt::{self, Display, Formatter};
+
 use bincode::Options as _;
 use blake2::{Blake2b, Digest as _, digest::consts::U32};
 use lb_utils::bounded::{BoundedError, NonEmptyBoundedVec};
@@ -17,6 +19,16 @@ const TX_ID_DOMAIN_SEPARATOR: &[u8] = b"lsql transaction id";
 /// Stable identity of one application write.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub struct TxId([u8; 32]);
+
+impl Display for TxId {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        for byte in self.0 {
+            write!(formatter, "{byte:02x}")?;
+        }
+
+        Ok(())
+    }
+}
 
 impl TxId {
     fn derive(
@@ -287,8 +299,15 @@ mod tests {
 
     use super::{
         ChannelWrite, EncodedWrite, IdempotencyKey, MAX_IDEMPOTENCY_KEY_BYTES, Statement,
-        Transaction, Value,
+        Transaction, TxId, Value,
     };
+
+    #[test]
+    fn transaction_id_is_displayed_as_hex() {
+        let tx_id = TxId::from([0xab; 32]);
+
+        assert_eq!(tx_id.to_string(), "ab".repeat(32));
+    }
 
     #[test]
     fn idempotency_key_must_not_be_empty() {

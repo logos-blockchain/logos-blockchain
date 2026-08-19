@@ -37,6 +37,7 @@ enum Command {
 /// Control surface for the owning runtime task.
 pub struct RuntimeHandle {
     command_tx: mpsc::Sender<Command>,
+    ready_rx: oneshot::Receiver<()>,
     task: JoinHandle<Result<(), Error>>,
 }
 
@@ -49,6 +50,7 @@ pub fn spawn(
     restored_checkpoint: Option<SequencerCheckpoint>,
 ) -> RuntimeHandle {
     let (command_tx, command_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
+    let (ready_tx, ready_rx) = oneshot::channel();
 
     let runtime = Runtime {
         sequencer,
@@ -57,15 +59,36 @@ pub fn spawn(
         writer_id,
         command_rx,
         sequencer_ready: false,
+        ready_tx: Some(ready_tx),
         event_pending_retry: None,
         publish_state: PublishState::Idle,
     };
     let task = tokio::spawn(runtime.run(restored_checkpoint));
 
-    RuntimeHandle { command_tx, task }
+    RuntimeHandle {
+        command_tx,
+        ready_rx,
+        task,
+    }
 }
 
 impl RuntimeHandle {
+    pub(crate) async fn wait_until_ready(&mut self) -> Result<(), Error> {
+        tokio::select! {
+            biased;
+
+            result = &mut self.task => {
+                match result? {
+                    Ok(()) => Err(Error::RuntimeStopped),
+                    Err(error) => Err(error),
+                }
+            }
+            result = &mut self.ready_rx => {
+                result.map_err(|_| Error::RuntimeStopped)
+            }
+        }
+    }
+
     pub(crate) async fn execute(
         &self,
         transaction: Transaction,
@@ -113,6 +136,7 @@ struct Runtime {
     writer_id: [u8; 32],
     command_rx: mpsc::Receiver<Command>,
     sequencer_ready: bool,
+    ready_tx: Option<oneshot::Sender<()>>,
     event_pending_retry: Option<Event>,
     publish_state: PublishState,
 }
@@ -196,10 +220,10 @@ impl Runtime {
     }
 
     async fn handle_event(&mut self, event: Event) {
-        self.sequencer_ready |= matches!(event, Event::Ready);
-
         match applier::on_event(&mut self.db, &event, self.channel_id) {
             Ok(()) => {
+                self.mark_ready(&event);
+
                 if self.sequencer_ready
                     && let Err(error) = self.advance_publish().await
                 {
@@ -226,6 +250,8 @@ impl Runtime {
 
                 tracing::debug!(target: TARGET, %error, "applier retry failed");
                 self.event_pending_retry = Some(event);
+            } else {
+                self.mark_ready(&event);
             }
         } else if self.sequencer_ready
             && let Err(error) = self.advance_publish().await
@@ -234,6 +260,18 @@ impl Runtime {
         }
 
         Ok(())
+    }
+
+    fn mark_ready(&mut self, event: &Event) {
+        if self.sequencer_ready || !matches!(event, Event::Ready) {
+            return;
+        }
+
+        self.sequencer_ready = true;
+
+        if let Some(ready_tx) = self.ready_tx.take() {
+            let _ = ready_tx.send(());
+        }
     }
 
     async fn advance_publish(&mut self) -> Result<(), Error> {

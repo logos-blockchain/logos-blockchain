@@ -47,16 +47,16 @@ pub struct Lsql {
 }
 
 impl Lsql {
-    /// Opens local state and starts the task that connects to the node and
-    /// drives replication.
+    /// Opens local state, starts replication, and waits for the initial channel
+    /// history to be processed.
     ///
     /// Must be called from within a tokio runtime.
     ///
     /// # Errors
     ///
-    /// Returns an error if no Tokio runtime is active or the local state cannot
-    /// be opened.
-    pub fn start(config: LsqlConfig) -> Result<Self, Error> {
+    /// Returns an error if no Tokio runtime is active, the local state cannot
+    /// be opened, or the replication task stops before becoming ready.
+    pub async fn start(config: LsqlConfig) -> Result<Self, Error> {
         tokio::runtime::Handle::try_current().map_err(|_| Error::RuntimeUnavailable)?;
 
         let db = Databases::open(&config.state_dir)?;
@@ -76,10 +76,18 @@ impl Lsql {
 
         let runtime = runtime::spawn(sequencer, db, config.channel_id, writer_id, checkpoint);
 
-        Ok(Self {
+        let mut lsql = Self {
             live_path,
             runtime: Some(runtime),
-        })
+        };
+
+        lsql.runtime
+            .as_mut()
+            .ok_or(Error::RuntimeStopped)?
+            .wait_until_ready()
+            .await?;
+
+        Ok(lsql)
     }
 
     /// Starts a replicated write containing one SQL statement.
