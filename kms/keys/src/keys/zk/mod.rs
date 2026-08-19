@@ -13,7 +13,9 @@ use crate::keys::{errors::KeyError, secured_key::SecuredKey};
 mod private;
 pub use self::private::SecretKey as UnsecuredZkKey;
 mod public;
-pub use self::public::{MAX_ZK_SIGNING_KEYS, PublicKey, PublicKeys};
+pub use self::public::{
+    MAX_ZK_SIGNING_KEYS, PublicKey, PublicKeys, inputs_from_pks as public_inputs_from_pks,
+};
 mod signature;
 pub use self::signature::Signature;
 

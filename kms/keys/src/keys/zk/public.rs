@@ -41,7 +41,7 @@ impl PublicKey {
 
     #[must_use]
     pub fn verify_multi(pks: &[Self], data: &Fr, signature: &Signature) -> bool {
-        let inputs = match try_from_pks((*data).into(), pks) {
+        let inputs = match inputs_from_pks((*data).into(), pks) {
             Ok(inputs) => inputs,
             Err(e) => {
                 error!(target: LOG_TARGET, "Error building verifier inputs: {e:?}");
@@ -74,7 +74,10 @@ impl From<Fr> for PublicKey {
     }
 }
 
-fn try_from_pks(msg: Groth16Input, pks: &[PublicKey]) -> Result<ZkSignVerifierInputs, ZkSignError> {
+pub fn inputs_from_pks(
+    msg: Groth16Input,
+    pks: &[PublicKey],
+) -> Result<ZkSignVerifierInputs, ZkSignError> {
     if pks.len() > MAX_ZK_SIGNING_KEYS {
         return Err(ZkSignError::TooManyKeys(pks.len()));
     }
