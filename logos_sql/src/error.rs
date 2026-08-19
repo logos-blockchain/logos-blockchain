@@ -11,7 +11,7 @@ pub enum Error {
     #[error("database error: {0}")]
     Database(#[from] rusqlite::Error),
 
-    /// Local draft serialization failed.
+    /// The participant-local `ZoneSDK` checkpoint could not be encoded.
     #[error("encoding error: {0}")]
     Encoding(#[from] bincode::Error),
 

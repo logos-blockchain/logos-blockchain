@@ -215,12 +215,13 @@ mod tests {
             SequencerCheckpoint,
         },
     };
+    use rusqlite::types::Value;
     use tempfile::TempDir;
 
     use super::on_event;
     use crate::{
         db::Databases,
-        protocol::{ChannelInscription, EncodedWrite, Statement, Transaction, Value},
+        protocol::{ChannelInscription, EncodedWrite, PAYLOAD_MARKER, Statement, Transaction},
     };
 
     const CHANNEL_ID: [u8; 32] = [9; 32];
@@ -518,7 +519,7 @@ mod tests {
             Vec::new(),
         ))
         .payload;
-        malformed.truncate(b"LOGOS_SQL".len());
+        malformed.pop();
 
         let create = encoded_write(&transaction(
             "CREATE TABLE items(value INTEGER NOT NULL)",
@@ -614,8 +615,9 @@ mod tests {
             Vec::new(),
         ))
         .payload;
-        let version_offset = b"LOGOS_SQL".len();
-        unsupported[version_offset..version_offset + 2].copy_from_slice(&2u16.to_le_bytes());
+        let version_offset = PAYLOAD_MARKER.len();
+        unsupported[version_offset..version_offset + size_of::<u16>()]
+            .copy_from_slice(&2u16.to_le_bytes());
 
         let following = encoded_write(&transaction(
             "CREATE TABLE following_write(value INTEGER)",

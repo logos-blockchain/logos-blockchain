@@ -251,7 +251,7 @@ impl Databases {
         // the transaction published to other participants.
         apply_statements(&db_transaction, transaction)?;
 
-        let transaction_digest = transaction.digest()?;
+        let transaction_digest = transaction.digest();
 
         db_transaction.execute(
             INSERT_APPLIED_WRITE,
@@ -281,7 +281,7 @@ impl Databases {
         &mut self,
         write: &ChannelInscription,
     ) -> Result<(), Error> {
-        let transaction_digest = write.transaction.digest()?;
+        let transaction_digest = write.transaction.digest();
 
         is_write_applied(&self.lib, write.tx_id, &transaction_digest)?;
         is_write_applied(&self.live, write.tx_id, &transaction_digest)?;
@@ -363,7 +363,7 @@ fn apply_channel_write(
     connection: &mut Connection,
     write: &ChannelInscription,
 ) -> Result<(), Error> {
-    let transaction_digest = write.transaction.digest()?;
+    let transaction_digest = write.transaction.digest();
     let db_transaction = connection.transaction()?;
 
     if is_write_applied(&db_transaction, write.tx_id, &transaction_digest)? {
@@ -567,13 +567,14 @@ mod tests {
         node_types::{HeaderId, MsgId, Slot},
         sequencer::SequencerCheckpoint,
     };
+    use rusqlite::types::Value;
     use tempfile::TempDir;
 
     use super::Databases;
     use crate::{
         error::Error,
         local_write,
-        protocol::{ChannelInscription, EncodedWrite, Statement, Transaction, TxId, Value},
+        protocol::{ChannelInscription, EncodedWrite, Statement, Transaction, TxId},
     };
 
     fn checkpoint(byte: u8, slot: u64) -> SequencerCheckpoint {
