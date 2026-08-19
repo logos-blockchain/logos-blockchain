@@ -3,19 +3,13 @@ use std::marker::PhantomData;
 
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::mantle::ops::pow::ClaimPowRewardOp;
-use lb_time_service::{
-    TimeService, api::TimeServiceApi, backends::TimeBackend as TimeBackendTrait,
-};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData},
 };
 
 #[derive(thiserror::Error, Debug)]
-pub enum PoWServiceError {
-    #[error(transparent)]
-    TimeError(#[from] lb_time_service::api::ApiError),
-}
+pub enum PoWServiceError {}
 
 pub enum PoWSerciveMessage {}
 
@@ -24,14 +18,14 @@ pub struct PoWServiceState<Tx> {
     transactions: Vec<Tx>,
 }
 
-pub struct PoWService<Tx, TimeBackend, CryptarchiaService, RuntimeServiceId> {
+pub struct PoWService<Tx, CryptarchiaService, RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     state: PoWServiceState<Tx>,
-    _phantom: PhantomData<(TimeBackend, CryptarchiaService)>,
+    _phantom: PhantomData<CryptarchiaService>,
 }
 
-impl<Tx, TimeBackend, CryptarchiaService, RuntimeServiceId> ServiceData
-    for PoWService<Tx, TimeBackend, CryptarchiaService, RuntimeServiceId>
+impl<Tx, CryptarchiaService, RuntimeServiceId> ServiceData
+    for PoWService<Tx, CryptarchiaService, RuntimeServiceId>
 {
     type Settings = ();
     type State = PoWServiceState<Tx>;
@@ -40,12 +34,10 @@ impl<Tx, TimeBackend, CryptarchiaService, RuntimeServiceId> ServiceData
 }
 
 #[async_trait::async_trait]
-impl<Tx, TimeBackend, CryptarchiaService, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for PoWService<Tx, TimeBackend, CryptarchiaService, RuntimeServiceId>
+impl<Tx, CryptarchiaService, RuntimeServiceId> ServiceCore<RuntimeServiceId>
+    for PoWService<Tx, CryptarchiaService, RuntimeServiceId>
 where
     Tx: Send + Sync + 'static,
-    TimeBackend: TimeBackendTrait + Send + Sync + 'static,
-    TimeBackend::Settings: Clone + Send + Sync + 'static,
     CryptarchiaService: CryptarchiaServiceData<Tx = Tx> + 'static,
     RuntimeServiceId: Debug
         + Clone
@@ -54,7 +46,6 @@ where
         + Display
         + 'static
         + AsServiceId<Self>
-        + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + AsServiceId<CryptarchiaService>,
 {
     fn init(
@@ -74,17 +65,6 @@ where
             state: _state,
             _phantom,
         } = self;
-
-        // API wrapper over the time service relay, used to query slot/epoch info.
-        let time_api =
-            TimeServiceApi::<TimeService<TimeBackend, RuntimeServiceId>, RuntimeServiceId>::new(
-                service_resources_handle
-                    .overwatch_handle
-                    .relay::<TimeService<TimeBackend, _>>()
-                    .await
-                    .expect("Relay connection with TimeService should succeed"),
-            );
-        let epoch_stream = time_api.subscribe().await?;
 
         // API wrapper over the chain service relay, used to query chain state.
         let cryptarchia_api = CryptarchiaServiceApi::<CryptarchiaService, RuntimeServiceId>::new(

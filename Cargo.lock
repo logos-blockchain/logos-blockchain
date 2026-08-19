@@ -4992,7 +4992,6 @@ dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-ledger",
- "logos-blockchain-time-service",
  "overwatch",
  "rand 0.8.6",
  "serde",

@@ -151,7 +151,7 @@ where
     {
         let epoch_nonce = epoch_state.nonce;
         let difficulty = ledger_state.mantle_ledger().pow.reward_difficulty();
-        #[allow(
+        #[expect(
             rustc::closure_returning_async_block,
             reason = "`repeat_with` takes a FnMut not an async closure"
         )]

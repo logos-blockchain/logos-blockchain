@@ -23,7 +23,6 @@ lb-chain-service              = { workspace = true }
 lb-core                       = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-ledger                     = { workspace = true }
-lb-time-service               = { workspace = true }
 overwatch                     = { workspace = true }
 
 [lints]
