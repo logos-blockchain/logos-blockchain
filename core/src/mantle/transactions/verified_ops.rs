@@ -1,5 +1,6 @@
 use crate::mantle::{
     Op, OpProof, SignedMantleTx, VerificationError,
+    batch::DeferredZkpVerification,
     traits::Hashable as _,
     transactions::{
         OperationVerificationHelper, hash::TxHashView, mantle_tx::MantleTx as _,
@@ -46,24 +47,26 @@ impl<'tx> VerifiedOps<'tx> {
     pub fn next(
         &mut self,
         helper: &impl OperationVerificationHelper,
-    ) -> Option<Result<&'tx Op, VerificationError>> {
+    ) -> Option<Result<(&'tx Op, Option<DeferredZkpVerification>), VerificationError>> {
         let index = self.index;
         let op = self.ops.get(index)?;
         let proof = self
             .proofs
             .get(index)
             .expect("SignedMantleTx<Preverified> invariant: ops and proofs have the same length");
-        if let Err(error) = SignedMantleTx::<Preverified>::verify_stateful_op(
+        match SignedMantleTx::<Preverified>::verify_stateful_op(
             index,
             op,
             proof,
             &self.tx_hash_view,
             helper,
         ) {
-            return Some(Err(error));
+            Ok(deferred_zkp) => {
+                self.index += 1;
+                Some(Ok((op, deferred_zkp)))
+            }
+            Err(e) => Some(Err(e)),
         }
-        self.index += 1;
-        Some(Ok(op))
     }
 
     #[must_use]
@@ -151,10 +154,8 @@ mod tests {
 
         let verification_result = signed_tx.verified_ops().next(&helper).unwrap();
         assert_eq!(
-            verification_result,
-            Err(VerificationError::ChannelVerificationError(
-                Error::InvalidSignature
-            ))
+            verification_result.err().unwrap(),
+            VerificationError::ChannelVerificationError(Error::InvalidSignature)
         );
     }
 }

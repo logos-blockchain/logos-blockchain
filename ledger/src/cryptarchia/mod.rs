@@ -977,15 +977,19 @@ pub mod tests {
             )?;
         let id = make_id(parent, slot, utxo);
         let proof = generate_proof(&ledger_state, &utxo, slot);
-        let (_, state, _) = ledger.prepare_update::<_, _, MainnetGasProfile>(
-            id,
-            parent,
-            slot,
-            &proof,
-            &UncleSlots::default(),
-            std::iter::empty::<&SignedMantleTx<Preverified>>(),
-        )?;
-        ledger.commit_update(id, state);
+        let update = ledger
+            .prepare_update::<_, _, MainnetGasProfile>(
+                id,
+                parent,
+                slot,
+                &proof,
+                &UncleSlots::default(),
+                std::iter::empty::<&SignedMantleTx<Preverified>>(),
+            )?
+            .verify_batch_proofs()
+            .map_err(|_| LedgerError::InvalidProof)?;
+
+        ledger.commit_update(update);
         Ok(id)
     }
 

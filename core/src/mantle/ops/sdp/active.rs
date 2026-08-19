@@ -1,5 +1,5 @@
 use lb_cryptarchia_engine::Epoch;
-use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
+use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
 use lb_log_targets::mantle;
 use tracing::info;
 
@@ -8,10 +8,12 @@ use crate::{
     events::TxEvent,
     mantle::{
         Value,
+        batch::DeferredZkpVerification,
         gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
-            VerifiableOperation, verification_mode, verification_mode::VerificationMode,
+            VerifiableOperation,
+            verification_mode::{self, VerificationMode},
         },
         ops::SignedOp,
         transactions::{hash::TxHashView, states::VerificationState},
@@ -56,7 +58,11 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPActiveOp {
     type Context<'a> = SDPActiveValidationContext<'a>;
     type Error = SdpError;
 
-    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::Context<'_>,
+    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
         // Check the declaration exists
         let Some(declaration) = context.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
@@ -81,12 +87,14 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPActiveOp {
             });
         }
 
-        // Check the signature over the `zk_id`
-        if !ZkPublicKey::verify_multi(&[declaration.zk_id], context.tx_hash_view.as_fr(), proof) {
-            return Err(SdpError::InvalidZkSignature);
-        }
-
-        Ok(())
+        // Defer the proof verification, so that the caller can batch it.
+        let inputs =
+            public_inputs_from_pks((*context.tx_hash_view.as_fr()).into(), &[declaration.zk_id])
+                .map_err(|_| SdpError::InvalidZkSignature)?;
+        Ok(Some(DeferredZkpVerification::ZkSig(
+            *proof.as_proof(),
+            inputs,
+        )))
     }
 }
 

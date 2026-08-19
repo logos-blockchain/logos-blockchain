@@ -1,16 +1,18 @@
 use lb_cryptarchia_engine::Epoch;
-use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_key_management_system_keys::keys::public_inputs_from_pks;
 
 use super::{SDPDeclareOp, SdpError};
 use crate::{
     events::TxEvent,
     mantle::{
         Note, Value,
+        batch::DeferredZkpVerification,
         channel::Channels,
         gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
-            VerifiableOperation, verification_mode, verification_mode::VerificationMode,
+            VerifiableOperation,
+            verification_mode::{self, VerificationMode},
         },
         ops::{SignedOp, ZkAndEd25519Proof},
         transactions::{hash::TxHashView, states::VerificationState},
@@ -180,21 +182,27 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPDeclareOp {
     type Context<'a> = SDPDeclareVerificationContext<'a>;
     type Error = SdpError;
 
-    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::Context<'_>,
+    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
         // Check that the note exist
         let Some((utxo, _)) = context.utxo_tree.utxos().get(&self.locked_note_id) else {
             return Err(SdpError::InexistingNote(self.locked_note_id));
         };
 
-        // Ensure locked note exists and ownership over the locked note and `zk_id`
+        // Defer the ZKP verification, so that the caller can batch it.
+        // Ed25519 verification is done by `preverify`.
+        // Ensure locked note exists and ownership over the locked note and `zk_id`.
         let note = utxo.note;
-        if !ZkPublicKey::verify_multi(
+        let inputs = public_inputs_from_pks(
+            (*context.tx_hash_view.as_fr()).into(),
             &[note.pk, self.zk_id],
-            context.tx_hash_view.as_fr(),
-            &proof.zk_sig,
-        ) {
-            return Err(SdpError::InvalidZkSignature);
-        }
+        )
+        .map_err(|_| SdpError::InvalidZkSignature)?;
+        let deferred_verification =
+            DeferredZkpVerification::ZkSig(*proof.zk_sig.as_proof(), inputs);
 
         SDPDeclareValidationExt::validate(
             self,
@@ -203,7 +211,9 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPDeclareOp {
             context.declarations,
             context.locked_notes,
             context.min_stake,
-        )
+        )?;
+
+        Ok(Some(deferred_verification))
     }
 }
 
@@ -224,7 +234,11 @@ impl VerifiableOperation<verification_mode::GenesisMode> for SDPDeclareOp {
     type Context<'a> = SDPDeclareGenesisValidationContext<'a>;
     type Error = SdpError;
 
-    fn verify(&self, _proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        _proof: &Self::Proof,
+        context: &Self::Context<'_>,
+    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
         // Check that the note exist
         let Some((utxo, _)) = context.utxo_tree.utxos().get(&self.locked_note_id) else {
             return Err(SdpError::InexistingNote(self.locked_note_id));
@@ -238,7 +252,9 @@ impl VerifiableOperation<verification_mode::GenesisMode> for SDPDeclareOp {
             context.declarations,
             context.locked_notes,
             context.min_stake,
-        )
+        )?;
+
+        Ok(None)
     }
 }
 

@@ -1,5 +1,5 @@
 use lb_cryptarchia_engine::Epoch;
-use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
+use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
 use lb_log_targets::mantle;
 use tracing::debug;
 
@@ -8,10 +8,12 @@ use crate::{
     events::TxEvent,
     mantle::{
         Value,
+        batch::DeferredZkpVerification,
         gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
-            VerifiableOperation, verification_mode, verification_mode::VerificationMode,
+            VerifiableOperation,
+            verification_mode::{self, VerificationMode},
         },
         ops::SignedOp,
         transactions::{hash::TxHashView, states::VerificationState},
@@ -59,7 +61,11 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPWithdrawOp {
     type Context<'a> = SDPWithdrawValidationContext<'a>;
     type Error = SdpError;
 
-    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::Context<'_>,
+    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
         // Check that the declaration exists
         let Some(declaration) = context.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
@@ -93,20 +99,6 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPWithdrawOp {
             });
         }
 
-        // Ensure locked note pk and zk_id attached to this declaration authorized this
-        // Operation.
-        let note = context
-            .locked_notes
-            .get(&self.locked_note_id)
-            .expect("The Operation has been checked above");
-        if !ZkPublicKey::verify_multi(
-            &[note.pk, declaration.zk_id],
-            context.tx_hash_view.as_fr(),
-            proof,
-        ) {
-            return Err(SdpError::InvalidZkSignature);
-        }
-
         // Check that the nonce is greater than the previous one
         if self.nonce <= declaration.nonce {
             return Err(SdpError::InvalidNonce {
@@ -115,7 +107,22 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPWithdrawOp {
             });
         }
 
-        Ok(())
+        // Defer the proof verification, so that the caller can batch it.
+        // Ensure locked note pk and zk_id attached to this declaration authorized this
+        // Operation.
+        let note = context
+            .locked_notes
+            .get(&self.locked_note_id)
+            .expect("The Operation has been checked above");
+        let inputs = public_inputs_from_pks(
+            (*context.tx_hash_view.as_fr()).into(),
+            &[note.pk, declaration.zk_id],
+        )
+        .map_err(|_| SdpError::InvalidZkSignature)?;
+        Ok(Some(DeferredZkpVerification::ZkSig(
+            *proof.as_proof(),
+            inputs,
+        )))
     }
 }
 

@@ -119,6 +119,8 @@ pub enum Error {
     AwaitingGenesisTime,
     #[error("Invalid uncle {uncle}: {reason}")]
     InvalidUncle { uncle: HeaderId, reason: UncleError },
+    #[error("Batch ZKP verification error: {0}")]
+    BatchZkpVerification(#[from] lb_core::mantle::batch::Error),
 }
 
 struct InitializedCryptarchia {
@@ -395,8 +397,10 @@ impl Cryptarchia {
         // A block is valid only if every uncle it carries is valid.
         self.verify_uncles(block)?;
 
-        // A block number of this block if it's applied to the chain.
-        let (_, state, events) = self
+        // Apply the block to the ledger, and batch-verify ZK proofs.
+        // This ledger update is not finalized yet, and will be committed only after
+        // checking if the block is accepted by the consensus engine.
+        let update = self
             .ledger
             .prepare_update::<_, _, MainnetGasProfile>(
                 id,
@@ -412,7 +416,8 @@ impl Cryptarchia {
                     info: Box::new(self.info()),
                 },
                 err => Error::Ledger(err),
-            })?;
+            })?
+            .verify_batch_proofs()?;
 
         let (pruned_blocks, reorged_blocks) = self
             .consensus
@@ -425,7 +430,7 @@ impl Cryptarchia {
                 err => Error::Consensus(err),
             })?;
 
-        self.ledger.commit_update(id, state);
+        let events = self.ledger.commit_update(update);
 
         // Prune the ledger states of all the pruned blocks.
         self.prune_ledger_states(pruned_blocks.all());
