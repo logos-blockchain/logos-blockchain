@@ -11,7 +11,8 @@ pub struct SignedWalletTransaction {
     signed_tx: SignedMantleTx<Preverified>,
     tx_hash: TxHash,
     reserved_inputs: WalletReservedInputs,
-    spent_fee: u64,
+    paid_fee: u64,
+    mandatory_fee_at_preparation: u64,
 }
 
 impl SignedWalletTransaction {
@@ -20,13 +21,15 @@ impl SignedWalletTransaction {
         signed_tx: SignedMantleTx<Preverified>,
         tx_hash: TxHash,
         reserved_inputs: WalletReservedInputs,
-        spent_fee: u64,
+        paid_fee: u64,
+        mandatory_fee_at_preparation: u64,
     ) -> Self {
         Self {
             signed_tx,
             tx_hash,
             reserved_inputs,
-            spent_fee,
+            paid_fee,
+            mandatory_fee_at_preparation,
         }
     }
 
@@ -47,6 +50,16 @@ impl SignedWalletTransaction {
 
     #[must_use]
     pub const fn spent_fee(&self) -> u64 {
-        self.spent_fee
+        self.paid_fee
+    }
+
+    #[must_use]
+    pub const fn paid_fee(&self) -> u64 {
+        self.paid_fee
+    }
+
+    #[must_use]
+    pub const fn mandatory_fee_at_preparation(&self) -> u64 {
+        self.mandatory_fee_at_preparation
     }
 }

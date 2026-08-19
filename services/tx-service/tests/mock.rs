@@ -817,7 +817,7 @@ fn prefix_lookup_tracks_the_pending_set() {
         );
 
         // A prefix that no transaction carries stays empty.
-        let absent = TxHashPrefix([0xFFu8; 8]);
+        let absent = TxHashPrefix([0xFFu8; _]);
         if absent != prefix {
             assert!(
                 app.runtime()

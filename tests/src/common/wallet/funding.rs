@@ -384,6 +384,15 @@ impl WalletReservedInputs {
         input_notes.extend_from_slice(&self.fee_sponsor.iter().map(Utxo::id).collect::<Vec<_>>());
         input_notes
     }
+
+    #[must_use]
+    pub(crate) fn total_value(&self) -> u64 {
+        self.sender
+            .iter()
+            .chain(self.fee_sponsor.iter())
+            .map(|utxo| utxo.note.value)
+            .sum()
+    }
 }
 
 #[cfg(test)]

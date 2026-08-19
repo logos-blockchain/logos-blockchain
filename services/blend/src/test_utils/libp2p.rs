@@ -32,7 +32,7 @@ impl TestEncapsulatedMessage {
         Self(
             EncapsulatedMessageWithVerifiedPublicHeader::try_new(
                 &generate_valid_inputs(),
-                PayloadType::Data,
+                PayloadType::BlockProposal,
                 payload.try_into().unwrap(),
                 NUM_BLEND_LAYERS.try_into().unwrap(),
             )

@@ -85,7 +85,14 @@ pub fn generate_activity_proof(
         signing_key: ephemeral.public_key().into_inner(),
         core: core_inputs,
         leader: leader_inputs,
-        pow: PowInputs::unwired_placeholder(),
+        // Match `RewardsParameters::pow_inputs(target_epoch_state)` for the
+        // same reason as the leader inputs above: the verifier is built from
+        // the target snapshot, so the proof must reproduce its `PoW` inputs
+        // exactly, even though this proof takes the core branch.
+        pow: PowInputs {
+            pow_blend_difficulty: target_epoch_state.blend_pow_difficulty,
+            pow_quota: message_quota,
+        },
     };
     for message_release_index in public_inputs.core.quota.values_range() {
         let private_inputs = PrivateInputs::new_proof_of_core_quota_inputs(

@@ -73,6 +73,12 @@ pub struct ZoneSequencer<Node> {
     // Block stream
     pub(super) blocks_stream: Option<BoxStream<ProcessedBlockEvent>>,
 
+    // A block pulled from the stream but not yet converted into a public
+    // event. Keeping it on the sequencer makes `next_event` cancellation-safe:
+    // if its future is dropped while block processing awaits node data, the
+    // next call resumes the same block instead of pulling past it.
+    pub(super) pending_block_event: Option<Arc<ProcessedBlockEvent>>,
+
     // True while the blocks stream is alive AND we have processed at least
     // one event since (re)connecting — i.e. cached `channel_state` and
     // `current_tip` reflect the latest block we observed. Cleared on stream
@@ -278,6 +284,7 @@ where
             channel_state: None,
             own_key_index: None,
             blocks_stream: None,
+            pending_block_event: None,
             connected: false,
             resubmit_interval,
             in_flight: FuturesUnordered::new(),
@@ -437,6 +444,17 @@ where
     /// (in-progress backfill batches, periodic resubmit ticks, in-flight post
     /// completions, reconnect retries), so the caller's loop body always
     /// receives a real [`Event`] — no `Option` unwrapping required.
+    ///
+    /// # Block-event cancellation safety
+    ///
+    /// Cancelling this future does not lose or partially apply a block event.
+    /// A pulled block is retained until its event is returned, and all fallible
+    /// node reads complete before the corresponding state mutation.
+    ///
+    /// A [`SequencerClient`](super::SequencerClient) command selected from the
+    /// request queue may instead fail with [`Error::Unavailable`] if this
+    /// future is cancelled while handling it. The client can retry that
+    /// command.
     pub async fn next_event(&mut self) -> Event {
         loop {
             if let Some(ev) = self.step().await {
@@ -456,6 +474,13 @@ where
             return Some(self.emit_now(event));
         }
 
+        // Finish a block already pulled from the stream before doing any
+        // other drive work. `process_pending_block_event` only clears it once
+        // processing has produced the corresponding public event.
+        if self.pending_block_event.is_some() {
+            return self.process_pending_block_event().await;
+        }
+
         // Process incremental backfill — one batch per call.
         // Returns Some(Some(event)) or Some(None) while active, None when done.
         if let Some(maybe_event) = self.process_incremental_backfill().await {
@@ -471,9 +496,13 @@ where
 
         tokio::select! {
             maybe_event = stream.next() => {
-                self.handle_stream_item(maybe_event)
-                    .await
-                    .map(|event| self.emit_now(event))
+                let Some(block_event) = maybe_event else {
+                    self.handle_stream_disconnect();
+                    return None;
+                };
+
+                self.pending_block_event = Some(Arc::new(block_event));
+                None
             }
             _ = self.resubmit_interval.tick(), if self.current_tip.is_some() => {
                 self.resubmit_pending();

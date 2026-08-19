@@ -25,7 +25,7 @@ use lb_blend::{
             crypto::EpochCryptographicProcessorSettings,
             provers::{
                 BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
-                core_and_leader::CoreAndLeaderProofsGenerator,
+                core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
             },
         },
         message_scheduler::{self, epoch_info::EpochInfo as SchedulerEpochInfo},
@@ -51,8 +51,8 @@ use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 use crate::{
     core::{
         backends::{BackendEpochInfo, BlendBackend},
+        dispatcher::PayloadDispatcher,
         kms::KmsPoQAdapter,
-        network::NetworkAdapter,
         processor::CoreCryptographicProcessor,
         settings::{
             CoverTrafficSettings, MessageDelayerSettings, RunningBlendConfig as BlendConfig,
@@ -62,9 +62,10 @@ use crate::{
         tests::RuntimeServiceId,
     },
     epoch::CoreEpochPublicInfo,
-    message::NetworkInfo,
+    message::{BlendPayload, NetworkInfo},
     settings::TimingSettings,
     test_utils,
+    test_utils::mempool::TestMempoolService,
 };
 
 pub type NodeId = [u8; 32];
@@ -168,6 +169,7 @@ where
         _msg: EncapsulatedMessageWithVerifiedPublicHeader,
         _intended_epoch: Epoch,
     ) {
+        note_outgoing_message();
     }
 
     async fn rotate_epoch(&mut self, new_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>) {
@@ -240,23 +242,53 @@ pub async fn wait_for_blend_backend_event(
     }
 }
 
-pub struct TestNetworkAdapter;
+thread_local! {
+    /// Installed by [`record_outgoing_messages`] for the duration of a test.
+    static OUTGOING_MESSAGES: RefCell<Option<mpsc::UnboundedSender<()>>> =
+        const { RefCell::new(None) };
+}
+
+/// Starts recording every message the service sends onwards, whether it goes
+/// to a Blend peer through the backend or to a local service through the
+/// dispatcher.
+pub fn outgoing_messages_recorder() -> mpsc::UnboundedReceiver<()> {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    OUTGOING_MESSAGES.with_borrow_mut(|recorder| *recorder = Some(sender));
+    receiver
+}
+
+fn note_outgoing_message() {
+    OUTGOING_MESSAGES.with_borrow(|recorder| {
+        if let Some(sender) = recorder.as_ref() {
+            let _ = sender.send(());
+        }
+    });
+}
+
+pub struct TestPayloadDispatcher;
 
 #[async_trait]
-impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for TestNetworkAdapter {
+impl<RuntimeServiceId> PayloadDispatcher<RuntimeServiceId> for TestPayloadDispatcher
+where
+    RuntimeServiceId: Send + 'static,
+{
     type Backend = TestNetworkBackend;
+    type MempoolService = TestMempoolService<RuntimeServiceId>;
     type Settings = ();
 
     fn new(
         _network_relay: OutboundRelay<
             <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
         >,
+        _mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
         _settings: Self::Settings,
     ) -> Self {
         Self
     }
 
-    async fn broadcast(&self, _message: Vec<u8>) {}
+    async fn dispatch(&self, _payload: BlendPayload) {
+        note_outgoing_message();
+    }
 }
 
 pub struct TestNetworkBackend {
@@ -330,7 +362,7 @@ pub fn new_crypto_processor<CorePoQGenerator>(
         PoQVerificationInputsMinusSigningKey {
             core: epoch_info.poq_core_public_inputs,
             leader: epoch_info.poq_leadership_public_inputs,
-            pow: PowInputs::unwired_placeholder(),
+            pow: PowInputs::disabled(),
         },
         core_poq_generator,
         epoch_info.epoch,
@@ -349,7 +381,7 @@ pub fn backend_epoch_info(
         proofs_verifier: MockProofsVerifier::new(PoQVerificationInputsMinusSigningKey {
             core: public_info.poq_core_public_inputs,
             leader: public_info.poq_leadership_public_inputs,
-            pow: PowInputs::unwired_placeholder(),
+            pow: PowInputs::disabled(),
         }),
     }
 }
@@ -361,6 +393,7 @@ pub fn new_epoch_info<BackendSettings>(
 ) -> CoreEpochPublicInfo<NodeId> {
     let core_quota = settings.epoch_core_quota(membership.size());
     CoreEpochPublicInfo {
+        poq_pow_public_inputs: PowInputs::disabled(),
         epoch,
         membership,
         poq_core_public_inputs: CoreInputs {
@@ -420,6 +453,25 @@ thread_local! {
     static SET_EPOCH_PRIVATE_CALLS: RefCell<Vec<Epoch>> = const { RefCell::new(Vec::new()) };
 }
 
+thread_local! {
+    /// Counts the calls to
+    /// [`MockCoreAndLeaderProofsGenerator::stop_proof_generation`], so tests
+    /// can assert that an epoch rotation stops the outgoing epoch's proof
+    /// generation. Test-isolated for the same reason as above.
+    static STOP_PROOF_GENERATION_CALLS: RefCell<usize> = const { RefCell::new(0) };
+}
+
+/// Clears the count of `stop_proof_generation` calls.
+pub fn reset_stop_proof_generation_calls() {
+    STOP_PROOF_GENERATION_CALLS.with(|calls| *calls.borrow_mut() = 0);
+}
+
+/// How many times `stop_proof_generation` has been called since the last
+/// reset.
+pub fn recorded_stop_proof_generation_calls() -> usize {
+    STOP_PROOF_GENERATION_CALLS.with(|calls| *calls.borrow())
+}
+
 /// Clears the record of `set_epoch_private` calls. Call before the code under
 /// test to isolate the calls of interest.
 pub fn reset_set_epoch_private_calls() {
@@ -435,7 +487,7 @@ pub fn recorded_set_epoch_private_calls() -> Vec<Epoch> {
 pub struct MockCoreAndLeaderProofsGenerator(ZkHash);
 
 #[async_trait]
-impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
+impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
     for MockCoreAndLeaderProofsGenerator
 {
     fn new(
@@ -449,11 +501,19 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
         SET_EPOCH_PRIVATE_CALLS.with(|calls| calls.borrow_mut().push(target_epoch));
     }
 
+    fn drop_pow_proofs_stream(&mut self) {
+        STOP_PROOF_GENERATION_CALLS.with(|calls| *calls.borrow_mut() += 1);
+    }
+
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
         Some(epoch_based_dummy_proofs(self.0))
     }
 
     async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof> {
+        Some(epoch_based_dummy_proofs(self.0))
+    }
+
+    async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {
         Some(epoch_based_dummy_proofs(self.0))
     }
 }

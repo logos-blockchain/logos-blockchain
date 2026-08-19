@@ -56,7 +56,7 @@ impl Cryptarchia {
             .ledger
             .config()
             .consensus_config
-            .uncle_reference_window()
+            .uncle_reference_window_in_slot()
             .get();
         let window_start = slot.into_inner().saturating_sub(uncle_reference_window);
         self.verify_uncles_ancestry(block.uncle_headers(), parent, window_start)?;
@@ -242,13 +242,13 @@ mod tests {
     fn test_reject_uncle_whose_parent_is_outside_window() {
         let (mut cryptarchia, _, u1, u1_key, ..) = chain_with_fork();
 
-        // The block is more than `w_u` slots after the uncle's parent,
-        // which puts the uncle's parent outside the window.
+        // The block is more than `uncle_reference_window` slots after the uncle's
+        // parent, which puts the uncle's parent outside the window.
         let uncle_reference_window = cryptarchia
             .ledger
             .config()
             .consensus_config
-            .uncle_reference_window()
+            .uncle_reference_window_in_slot()
             .get();
         let block = craft_block_with_uncles(
             cryptarchia.tip(),

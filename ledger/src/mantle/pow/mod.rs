@@ -1,4 +1,6 @@
+pub(crate) mod blend_difficulty;
 mod difficulty;
+pub(crate) mod tx_density;
 
 use std::num::NonZeroU64;
 
@@ -17,15 +19,28 @@ use rpds::HashTrieMapSync;
 
 use crate::{
     EpochState,
-    mantle::pow::difficulty::{PoWDifficultySettings, compute_new_reward_difficulty},
+    mantle::pow::{
+        difficulty::{PoWDifficultySettings, compute_new_reward_difficulty},
+        tx_density::{ClosedEpochLoad, TxDensity},
+    },
 };
 
 const POW_REWARD_POOL_GENESIS: PowReward = 1_000_000_000;
 const POW_EPOCH_REWARD_POOL_GENESIS: PowReward = 1_000_000;
 
-/// `PoW` reward-claiming state of the mantle ledger.
+/// `PoW` state of the mantle ledger.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PowState {
+    /// State of the token-reward role: the pool, its per-claim reward, and the
+    /// threshold and nullifiers that govern claiming.
+    reward: RewardPowState,
+    /// State of the Blend-admission role.
+    blend: BlendPowState,
+}
+
+/// State of the `PoW` role that mints token rewards.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RewardPowState {
     /// `R_PoW`: reserve funding `PoW` rewards. Credited at each epoch boundary
     /// with the `PoW` share (`beta_PoW`) of every block's reward, summed
     /// over the epoch's blocks. Drained by `sigma_e` as rewards are
@@ -51,6 +66,18 @@ pub struct PowState {
     block_slots: HashTrieMapSync<Hash, Slot>,
 }
 
+/// State of the `PoW` role that admits messages to the Blend network.
+///
+/// `d_blend` itself is not here: it must be frozen at the same moment as the
+/// epoch nonce, so it lives in the `EpochState` that snapshot produces. What
+/// this holds is the observation that threshold is computed *from*.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BlendPowState {
+    /// Per-epoch block and transaction counts, closed at each epoch boundary
+    /// and read at the next nonce snapshot.
+    tx_density: TxDensity,
+}
+
 impl Default for PowState {
     fn default() -> Self {
         Self::new()
@@ -65,80 +92,86 @@ impl PowState {
     pub fn new() -> Self {
         // TODO: Setup values when decided
         Self {
-            reward_pool: POW_REWARD_POOL_GENESIS,
-            epoch_reward: POW_EPOCH_REWARD_POOL_GENESIS,
-            reward_difficulty: compute_new_reward_difficulty::<PoWDifficultySettings>(
-                1000,
-                PowTarget::from(POW_EPOCH_REWARD_POOL_GENESIS),
-            ),
-            refill_rewards: 0,
-            nullifiers: HashTrieMapSync::new_sync(),
-            block_slots: HashTrieMapSync::new_sync(),
+            reward: RewardPowState {
+                reward_pool: POW_REWARD_POOL_GENESIS,
+                epoch_reward: POW_EPOCH_REWARD_POOL_GENESIS,
+                reward_difficulty: compute_new_reward_difficulty::<PoWDifficultySettings>(
+                    1000,
+                    PowTarget::from(POW_EPOCH_REWARD_POOL_GENESIS),
+                ),
+                refill_rewards: 0,
+                nullifiers: HashTrieMapSync::new_sync(),
+                block_slots: HashTrieMapSync::new_sync(),
+            },
+            blend: BlendPowState::default(),
         }
     }
 
     /// `R_PoW`: current balance of the `PoW` reward pool.
     #[must_use]
     pub const fn reward_pool(&self) -> Value {
-        self.reward_pool
+        self.reward.reward_pool
     }
 
     /// `sigma_e`: reward per claim for the current epoch.
     #[must_use]
     pub const fn epoch_reward(&self) -> Value {
-        self.epoch_reward
+        self.reward.epoch_reward
     }
 
     /// Nullifiers of already-claimed `PoW` solutions.
     #[must_use]
     pub const fn nullifiers(&self) -> &HashTrieMapSync<PowNullifier, Slot> {
-        &self.nullifiers
+        &self.reward.nullifiers
     }
 
     /// `d_reward`: the current reward difficulty a puzzle ticket must be
     /// strictly below.
     #[must_use]
     pub const fn reward_difficulty(&self) -> PowTarget {
-        self.reward_difficulty
+        self.reward.reward_difficulty
     }
 
     /// Apply the outcome of a [`ClaimPowRewardOp`] execution to this state.
     ///
     /// [`ClaimPowRewardOp`]: lb_core::mantle::ops::pow::ClaimPowRewardOp
     pub fn update_from_claim_execution_result(&mut self, context: &ClaimPoWRewardExecutionContext) {
-        self.nullifiers = context.nullifiers.clone();
-        self.reward_pool = context.reward_pool;
+        self.reward.nullifiers = context.nullifiers.clone();
+        self.reward.reward_pool = context.reward_pool;
     }
 
     /// Move the epoch's collected `refill_rewards` into the `reward_pool`
     /// and recompute the per-claim `epoch_reward` from it.
     pub(crate) fn add_rewards_to_pool<Constants: ClaimPoWConstants>(&mut self) {
-        self.reward_pool = self.reward_pool.saturating_add(self.refill_rewards);
-        self.refill_rewards = 0;
-        self.epoch_reward = compute_epoch_pow_reward::<Constants>(self.reward_pool);
+        self.reward.reward_pool = self
+            .reward
+            .reward_pool
+            .saturating_add(self.reward.refill_rewards);
+        self.reward.refill_rewards = 0;
+        self.reward.epoch_reward = compute_epoch_pow_reward::<Constants>(self.reward.reward_pool);
     }
 
     /// Add `reward` to the current epoch's pending `refill_rewards`.
     pub(crate) const fn add_reward_refill_rewards(&mut self, reward: PowReward) {
-        self.refill_rewards = self.refill_rewards.saturating_add(reward);
+        self.reward.refill_rewards = self.reward.refill_rewards.saturating_add(reward);
     }
 
     pub(crate) fn update_difficulty(&mut self, claims_in_block: u64) {
-        self.reward_difficulty = compute_new_reward_difficulty::<PoWDifficultySettings>(
+        self.reward.reward_difficulty = compute_new_reward_difficulty::<PoWDifficultySettings>(
             claims_in_block,
-            self.reward_difficulty,
+            self.reward.reward_difficulty,
         );
     }
 
     /// Slots of the recently seen blocks a claim may anchor to, by hash.
     #[must_use]
     pub const fn block_slots(&self) -> &HashTrieMapSync<Hash, Slot> {
-        &self.block_slots
+        &self.reward.block_slots
     }
 
     /// Record the slot of a newly applied block.
     pub(crate) fn add_seen_block_slots(&mut self, block_hash: Hash, slot: Slot) {
-        self.block_slots.insert_mut(block_hash, slot);
+        self.reward.block_slots.insert_mut(block_hash, slot);
     }
 
     /// Drop seen blocks that have aged out of the acceptance window: the
@@ -146,7 +179,8 @@ impl PowState {
     /// retained (§5.1.1).
     pub(crate) fn prune_seen_block_slots(&mut self, current: Slot) {
         let cutoff = current.saturating_sub(Slot::from(SLOT_WINDOW));
-        self.block_slots = self
+        self.reward.block_slots = self
+            .reward
             .block_slots
             .into_iter()
             .filter_map(|(&hash, &slot)| (slot >= cutoff).then_some((hash, slot)))
@@ -158,15 +192,29 @@ impl PowState {
     /// retained (§5.1.1).
     pub(crate) fn prune_nullifiers_by_slots(&mut self, current: Slot) {
         let cutoff = current.saturating_sub(Slot::from(SLOT_WINDOW));
-        self.nullifiers = self
+        self.reward.nullifiers = self
+            .reward
             .nullifiers
             .into_iter()
             .filter_map(|(&nullifier, &slot)| (slot >= cutoff).then_some((nullifier, slot)))
             .collect();
     }
 
-    /// Apply an epoch transition: on epoch change, refill the reward pool
-    /// from the rewards collected during `previous_epoch`.
+    /// Count a block, and the transactions it carried, into the current
+    /// epoch's totals.
+    pub(crate) const fn record_block_txs(&mut self, txs_in_block: u64) {
+        self.blend.tx_density.record_block(txs_in_block);
+    }
+
+    /// The load of the last epoch to close — the observation the Blend
+    /// difficulty retarget reads — or `None` while no epoch has closed yet.
+    pub(crate) const fn last_closed_epoch_load(&self) -> Option<ClosedEpochLoad> {
+        self.blend.tx_density.last_closed_epoch_load()
+    }
+
+    /// Apply an epoch transition: on epoch change, refill the reward pool from
+    /// the rewards collected during `previous_epoch`, and close that epoch's
+    /// transaction totals so the Blend retarget can read them.
     pub(crate) fn try_apply_header(
         &self,
         previous_epoch: &EpochState,
@@ -177,6 +225,12 @@ impl PowState {
         }
         let mut new_self = self.clone();
         new_self.add_rewards_to_pool::<ClaimPoWDisabledConstants>();
+        // Once per epoch crossed, so epochs skipped entirely close as empty
+        // and are read as no load — matching how the other per-epoch
+        // rotations treat them.
+        for _ in u32::from(previous_epoch.epoch)..u32::from(next_epoch.epoch) {
+            new_self.blend.tx_density.close_epoch();
+        }
         new_self
     }
 }
@@ -186,7 +240,7 @@ impl PowState {
     /// Test-only: seed the reward difficulty directly, standing in for the
     /// genesis initial-difficulty seeding that is not implemented yet.
     pub(crate) const fn set_reward_difficulty(&mut self, difficulty: PowTarget) {
-        self.reward_difficulty = difficulty;
+        self.reward.reward_difficulty = difficulty;
     }
 }
 
@@ -256,6 +310,7 @@ mod tests {
         EpochState {
             epoch: epoch.into(),
             nonce: Fr::ZERO,
+            blend_pow_difficulty: PowTarget::ZERO,
             utxos: UtxoTree::default(),
             total_stake: 0,
             lottery_0: Fr::ZERO,

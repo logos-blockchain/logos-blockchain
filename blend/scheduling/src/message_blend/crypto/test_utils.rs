@@ -17,7 +17,7 @@ use crate::message_blend::{
     CoreProofOfQuotaGenerator,
     provers::{
         BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
-        core_and_leader::CoreAndLeaderProofsGenerator,
+        core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
     },
 };
 
@@ -42,7 +42,7 @@ impl CoreProofOfQuotaGenerator for MockCorePoQGenerator {
 pub struct TestEpochChangeCoreAndLeaderProofsGenerator(pub Option<WinningPolInfoStream>);
 
 #[async_trait]
-impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
+impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
     for TestEpochChangeCoreAndLeaderProofsGenerator
 {
     fn new(
@@ -60,11 +60,17 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
         self.0 = Some(winning_pol_info_stream);
     }
 
+    fn drop_pow_proofs_stream(&mut self) {}
+
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
         None
     }
 
     async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof> {
+        None
+    }
+
+    async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {
         None
     }
 }

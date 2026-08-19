@@ -70,10 +70,10 @@ where
     /// Secondary index over [`Self::pending_items`], keyed by the hash prefix a
     /// block proposal would use to refer to a transaction.
     ///
-    /// Buckets are plain vectors: a 64-bit prefix makes collisions vanishingly
-    /// rare, so almost every one holds a single key, and the branching cap puts
-    /// a hard ceiling of a handful on the rest. A set would cost a hash table
-    /// per bucket to deduplicate keys that are already unique.
+    /// Buckets are plain vectors: a 128-bit prefix cannot be made to collide at
+    /// any feasible cost, so every one holds a single key in practice. A set
+    /// would cost a hash table per bucket to deduplicate keys that are already
+    /// unique.
     by_prefix: HashMap<Key::Prefix, Vec<Key>>,
     removed_items: BTreeMap<Key, u64>,
     last_item_timestamp: u64,

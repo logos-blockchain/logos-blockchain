@@ -18,6 +18,7 @@ use crate::{
 };
 
 pub mod inputs;
+pub mod pow;
 mod serde;
 #[cfg(test)]
 mod tests;

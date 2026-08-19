@@ -23,7 +23,7 @@ use lb_blend::{
                 EpochCryptographicProcessorSettings,
                 core_and_leader::send_and_receive::EpochCryptographicProcessor,
             },
-            provers::core_and_leader::CoreAndLeaderProofsGenerator,
+            provers::core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
         },
     },
 };
@@ -44,7 +44,24 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
 impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
     CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
 where
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
+{
+    /// Stop generating proofs for this processor's epoch.
+    ///
+    /// The outgoing processor outlives its epoch by the transition period, so
+    /// that messages sent under the old public inputs can still be
+    /// decapsulated. Generating for that epoch is over as soon as the rotation
+    /// happens, and for the `PoW` branch that generation is a continuous
+    /// search that would otherwise keep a core busy for the whole period.
+    pub fn stop_proof_generation(&mut self) {
+        self.0.stop_proof_generation();
+    }
+}
+
+impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
+    CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
+where
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
     pub fn try_new_with_core_condition_check(
@@ -295,7 +312,7 @@ mod tests {
                 lottery_0: Fr::ZERO,
                 lottery_1: Fr::ZERO,
             },
-            pow: PowInputs::unwired_placeholder(),
+            pow: PowInputs::disabled(),
         }
     }
 

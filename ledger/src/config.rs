@@ -1,6 +1,8 @@
+use core::num::NonZeroU32;
 use std::num::{NonZero, NonZeroU64};
 
 use lb_cryptarchia_engine::{Epoch, Slot};
+pub use lb_groth16::ModulusShift;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_pol::LotteryConstants;
 
@@ -11,6 +13,7 @@ pub struct Config {
     pub sdp_config: crate::mantle::sdp::Config,
     #[serde(default)]
     pub faucet_pk: Option<ZkPublicKey>,
+    pub pow_config: PoWConfig,
 }
 
 impl Config {
@@ -92,6 +95,43 @@ impl Config {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+// TODO: Add reward difficulty parameters here. For now only the ones used for
+// Blend are included.
+pub struct PoWConfig {
+    pub blend: BlendPoWConfig,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct BlendPoWConfig {
+    /// `BLEND_DIFFICULTY_BASE`: the threshold in effect at exactly the
+    /// reference load, and the threshold the chain starts from.
+    pub base_difficulty: ModulusShift,
+    pub target_transactions_per_block: NonZeroU64,
+    pub max_step: NonZeroU64,
+    pub damping_num: NonZeroU32,
+    // The offset from the denominator from the numerator.
+    // E.g. for a fraction of 1/2, `blend_damping_num` would be 1 and `blend_damping_den_offset`
+    // would be 1.
+    // For an integer number of steps, `blend_damping_den_offset` would be 0, so the fraction would
+    // be `blend_damping_num`/`blend_damping_num`.
+    pub damping_den_offset: u32,
+}
+
+impl BlendPoWConfig {
+    /// The damping exponent `alpha = a / b <= 1`, as the pair `(a, b)`.
+    ///
+    /// Both are exponents applied to big integers, so they must stay small —
+    /// `alpha` is a simple fraction such as `1/2`, not a high-precision ratio.
+    #[must_use]
+    pub const fn damping_exponent(&self) -> (u32, NonZeroU32) {
+        let numerator = self.damping_num.get();
+        let denominator = NonZeroU32::new(numerator.strict_add(self.damping_den_offset))
+            .expect("Numerator is non-zero, so denominator must be non-zero as well since it's a non-negative offset from the numerator.");
+        (numerator, denominator)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -101,9 +141,13 @@ mod tests {
 
     use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
     use lb_cryptarchia_engine::EpochConfig;
+    pub use lb_groth16::ModulusShift;
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 
-    use crate::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
+    use crate::{
+        config::{BlendPoWConfig, PoWConfig},
+        mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters},
+    };
 
     #[test]
     fn epoch_snapshots() {
@@ -150,6 +194,15 @@ mod tests {
                 },
             },
             faucet_pk: None,
+            pow_config: PoWConfig {
+                blend: BlendPoWConfig {
+                    base_difficulty: ModulusShift::new::<19>(),
+                    damping_den_offset: 0,
+                    damping_num: 1.try_into().unwrap(),
+                    max_step: 1.try_into().unwrap(),
+                    target_transactions_per_block: 1.try_into().unwrap(),
+                },
+            },
         };
         assert_eq!(config.epoch_length(), 100);
         assert_eq!(config.nonce_snapshot(1.into()), 60.into());
@@ -203,6 +256,15 @@ mod tests {
                 },
             },
             faucet_pk: None,
+            pow_config: PoWConfig {
+                blend: BlendPoWConfig {
+                    base_difficulty: ModulusShift::new::<19>(),
+                    damping_den_offset: 0,
+                    damping_num: 1.try_into().unwrap(),
+                    max_step: 1.try_into().unwrap(),
+                    target_transactions_per_block: 1.try_into().unwrap(),
+                },
+            },
         }
     }
 
@@ -265,6 +327,15 @@ mod tests {
                 },
             },
             faucet_pk: None,
+            pow_config: PoWConfig {
+                blend: BlendPoWConfig {
+                    base_difficulty: ModulusShift::new::<19>(),
+                    damping_den_offset: 0,
+                    damping_num: 1.try_into().unwrap(),
+                    max_step: 1.try_into().unwrap(),
+                    target_transactions_per_block: 1.try_into().unwrap(),
+                },
+            },
         };
         assert_eq!(config.epoch(1.into()), 0);
         assert_eq!(config.epoch(100.into()), 1);

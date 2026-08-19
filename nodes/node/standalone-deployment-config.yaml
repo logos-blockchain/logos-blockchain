@@ -27,7 +27,19 @@ cryptarchia:
     numerator: 1
     denominator: 20
   learning_rate: 0.5
-  window_absorption_parameter: 12
+  uncle_reference_window_in_block: 12
+  pow_config:
+    blend:
+      # BLEND_DIFFICULTY_BASE, as the exponent n in p / 2^n: the Blend PoW
+      # threshold at the reference load. Fixed by the EmPoWering
+      # specification from a measurement on the target hardware itself
+      # (Raspberry Pi 5, one core), at which one solution is around fifty
+      # seconds of work.
+      base_difficulty: 19
+      target_transactions_per_block: 512
+      max_step: 2
+      damping_num: 1
+      damping_den_offset: 1
   sdp_config:
     service_params:
       BN:

@@ -12,13 +12,14 @@ use overwatch::{
 
 use crate::{
     core::{
-        network::NetworkAdapter as NetworkAdapterTrait,
+        dispatcher::PayloadDispatcher as PayloadDispatcherTrait,
         service_components::{
-            MessageComponents, NetworkAdapterSettingsOfService, NetworkBackendOfService,
-            ServiceComponents as CoreServiceComponents,
+            MempoolOfService, MessageComponents, NetworkBackendOfService,
+            PayloadDispatcherSettingsOfService, ServiceComponents as CoreServiceComponents,
         },
     },
     membership::MembershipInfo,
+    message::BlendPayload,
     modes::{self, BroadcastMode, CoreMode, EdgeMode},
 };
 
@@ -36,9 +37,9 @@ where
         // Keep the previous core mode for the epoch transition period.
         prev: CoreMode<CoreService, RuntimeServiceId>,
     },
-    Broadcast(BroadcastMode<CoreService::NetworkAdapter, CoreService::NodeId, RuntimeServiceId>),
+    Broadcast(BroadcastMode<CoreService::PayloadDispatcher, CoreService::NodeId, RuntimeServiceId>),
     BroadcastAfterCore {
-        mode: BroadcastMode<CoreService::NetworkAdapter, CoreService::NodeId, RuntimeServiceId>,
+        mode: BroadcastMode<CoreService::PayloadDispatcher, CoreService::NodeId, RuntimeServiceId>,
         // Keep the previous core mode for the epoch transition period.
         prev: CoreMode<CoreService, RuntimeServiceId>,
     },
@@ -48,13 +49,13 @@ impl<CoreService, EdgeService, RuntimeServiceId>
     Instance<CoreService, EdgeService, RuntimeServiceId>
 where
     CoreService: ServiceData<
-            Message: MessageComponents<CoreService::NodeId, Payload: Into<Vec<u8>>>
+            Message: MessageComponents<CoreService::NodeId, Payload: Into<BlendPayload>>
                          + Send
                          + Sync
                          + 'static,
         > + CoreServiceComponents<
             RuntimeServiceId,
-            NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId> + Send + Sync + 'static,
+            PayloadDispatcher: PayloadDispatcherTrait<RuntimeServiceId> + Send + Sync + 'static,
             NodeId: Clone + Eq + Hash + Send + Sync,
         > + 'static,
     EdgeService: ServiceData<Message = CoreService::Message> + 'static,
@@ -65,7 +66,8 @@ where
                 NetworkBackendOfService<CoreService, RuntimeServiceId>,
                 RuntimeServiceId,
             >,
-        > + Debug
+        > + AsServiceId<MempoolOfService<CoreService, RuntimeServiceId>>
+        + Debug
         + Display
         + Clone
         + Send
@@ -77,7 +79,7 @@ where
         mode: Mode,
         local_node_id: CoreService::NodeId,
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
-        network_settings: NetworkAdapterSettingsOfService<CoreService, RuntimeServiceId>,
+        network_settings: PayloadDispatcherSettingsOfService<CoreService, RuntimeServiceId>,
     ) -> Result<Self, modes::Error> {
         match mode {
             Mode::Core => Ok(Self::Core(Self::new_core_mode(overwatch_handle).await?)),
@@ -103,9 +105,9 @@ where
     async fn new_broadcast_mode(
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
         local_node_id: CoreService::NodeId,
-        network_settings: NetworkAdapterSettingsOfService<CoreService, RuntimeServiceId>,
+        network_settings: PayloadDispatcherSettingsOfService<CoreService, RuntimeServiceId>,
     ) -> Result<
-        BroadcastMode<CoreService::NetworkAdapter, CoreService::NodeId, RuntimeServiceId>,
+        BroadcastMode<CoreService::PayloadDispatcher, CoreService::NodeId, RuntimeServiceId>,
         modes::Error,
     > {
         BroadcastMode::new::<
@@ -140,7 +142,7 @@ where
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
         minimal_network_size: usize,
         local_node_id: CoreService::NodeId,
-        network_settings: NetworkAdapterSettingsOfService<CoreService, RuntimeServiceId>,
+        network_settings: PayloadDispatcherSettingsOfService<CoreService, RuntimeServiceId>,
     ) -> Result<Self, modes::Error> {
         match event {
             EpochEvent::NewEpoch(MembershipInfo { membership, .. }) => {
@@ -164,7 +166,7 @@ where
         to_mode: Mode,
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
         local_node_id: CoreService::NodeId,
-        network_settings: NetworkAdapterSettingsOfService<CoreService, RuntimeServiceId>,
+        network_settings: PayloadDispatcherSettingsOfService<CoreService, RuntimeServiceId>,
     ) -> Result<Self, modes::Error> {
         match to_mode {
             Mode::Core => self.transition_to_core(overwatch_handle).await,
@@ -227,7 +229,7 @@ where
         self,
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
         local_node_id: CoreService::NodeId,
-        network_settings: NetworkAdapterSettingsOfService<CoreService, RuntimeServiceId>,
+        network_settings: PayloadDispatcherSettingsOfService<CoreService, RuntimeServiceId>,
     ) -> Result<Self, modes::Error> {
         match self {
             Self::Core(mode) => Ok(Self::BroadcastAfterCore {
@@ -330,7 +332,10 @@ mod tests {
     use tokio::time::sleep;
 
     use super::*;
-    use crate::modes::broadcast_tests::{TestMessage, TestNetworkAdapter, TestNetworkBackend};
+    use crate::{
+        modes::broadcast_tests::{TestMessage, TestNetworkBackend, TestPayloadDispatcher},
+        test_utils::mempool::TestMempoolService,
+    };
 
     const LOCAL_NODE_ID: u8 = 99;
 
@@ -698,6 +703,7 @@ mod tests {
         core: CoreService,
         edge: EdgeService,
         network: NetworkService<TestNetworkBackend, RuntimeServiceId>,
+        mempool: TestMempoolService<RuntimeServiceId>,
     }
 
     async fn start_network_service(handle: &OverwatchHandle<RuntimeServiceId>) {
@@ -746,7 +752,7 @@ mod tests {
     }
 
     impl CoreServiceComponents<RuntimeServiceId> for CoreService {
-        type NetworkAdapter = TestNetworkAdapter;
+        type PayloadDispatcher = TestPayloadDispatcher;
         type BackendSettings = ();
         type NodeId = u8;
         type Rng = ();
@@ -796,6 +802,7 @@ mod tests {
             core: (),
             edge: (),
             network: NetworkConfig { backend: () },
+            mempool: (),
         }
     }
 

@@ -4,8 +4,9 @@ use crate::cucumber::{
     error::{StepError, StepResult},
     steps::manual_mempool::{
         actions::{
-            prepare_transfer_transaction, submit_prepared_transaction_to_nodes,
-            try_submit_invalid_transaction, wait_for_mempool_recovery_flush,
+            prepare_transfer_transaction, submit_prepared_transaction_through_blend,
+            submit_prepared_transaction_to_nodes, try_submit_invalid_transaction,
+            wait_for_mempool_recovery_flush,
         },
         assertions::{
             assert_transaction_not_pending_on_all_nodes, assert_transaction_pending_on_nodes,
@@ -50,6 +51,21 @@ async fn step_submit_prepared_transaction_to_nodes(
     let node_names = parse_node_names_table(step)?;
 
     submit_prepared_transaction_to_nodes(world, &step.value, transaction_alias, node_names).await
+}
+
+#[when(expr = "I submit prepared transaction {string} through Blend on node {string}")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_submit_prepared_transaction_through_blend(
+    world: &mut CucumberWorld,
+    step: &Step,
+    transaction_alias: String,
+    node_name: String,
+) -> StepResult {
+    submit_prepared_transaction_through_blend(world, &step.value, &transaction_alias, &node_name)
+        .await
 }
 
 #[when(expr = "I try to submit invalid transaction {string} to node {string}")]

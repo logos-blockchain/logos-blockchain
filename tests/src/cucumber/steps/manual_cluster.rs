@@ -163,12 +163,13 @@ fn build_devnet_manual_cluster_deployment(
 
     let config = config.with_genesis_time(genesis_time);
 
-    DeploymentBuilder::new(config)
+    let deployment = DeploymentBuilder::new(config)
         .with_deployment_seed(world.manual_cluster_deployment_seed())
         .build()
         .map_err(|e| StepError::LogicalError {
             message: format!("failed to build devnet manual cluster: {e}"),
-        })
+        })?;
+    Ok(deployment)
 }
 
 fn build_manual_cluster_from_spec(

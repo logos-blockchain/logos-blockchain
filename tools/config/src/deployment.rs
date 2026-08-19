@@ -8,6 +8,7 @@ use lb_core::{
     sdp::{NumberOfEpochs, ServiceType},
 };
 use lb_cryptarchia_engine::Epoch;
+use lb_groth16::ModulusShift;
 use lb_libp2p::protocol_name::StreamProtocol;
 use lb_node::config::{
     blend::deployment::{
@@ -47,7 +48,7 @@ const CHAIN_SYNC_PROTOCOL_SUFFIX: &str = "chainsync/1.0.0";
 const GOSSIPSUB_PROTOCOL_SUFFIX: &str = "cryptarchia/proto/1.0.0";
 
 const SECURITY_PARAM: u32 = 20;
-const WINDOW_ABSORPTION_PARAMETER: u32 = 12;
+const UNCLE_REFERENCE_WINDOW_IN_BLOCK: u32 = 12;
 const SLOT_ACTIVATION_COEFF_NUMERATOR: u32 = 1;
 const SLOT_ACTIVATION_COEFF_DENOMINATOR: u32 = 10;
 const EPOCH_STAKE_DISTRIBUTION_STABILIZATION: u8 = 3;
@@ -59,6 +60,11 @@ const SDP_EPOCH: Epoch = Epoch::new(0);
 const MIN_STAKE_THRESHOLD: u64 = 1;
 const MIN_STAKE_TIMESTAMP: u64 = 0;
 const LEARNING_RATE: f64 = 0.1;
+const BLEND_POW_BASE_DIFFICULTY_EXPONENT: u32 = 19;
+const BLEND_POW_TARGET_TXS_PER_BLOCK: u64 = 512;
+const BLEND_POW_MAX_STEP: u64 = 2;
+const BLEND_POW_DAMPING_NUM: u32 = 1;
+const BLEND_POW_DAMPING_DEN_OFFSET: u32 = 1;
 
 const MEMPOOL_TOPIC: &str = "mantle_e2e_tests";
 const DEFAULT_PROTOCOL_NAMESPACE: &str = "integration/logos-blockchain";
@@ -114,7 +120,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
         cryptarchia: CryptarchiaDeploymentSettings {
             gossipsub_protocol: protocol_identity.protocol_name(GOSSIPSUB_PROTOCOL_SUFFIX),
             security_param: NonZero::new(SECURITY_PARAM).unwrap(),
-            window_absorption_parameter: NonZero::new(WINDOW_ABSORPTION_PARAMETER).unwrap(),
+            uncle_reference_window_in_block: NonZero::new(UNCLE_REFERENCE_WINDOW_IN_BLOCK).unwrap(),
             slot_activation_coeff: NonNegativeRatio::new(
                 SLOT_ACTIVATION_COEFF_NUMERATOR,
                 NonZero::new(SLOT_ACTIVATION_COEFF_DENOMINATOR).unwrap(),
@@ -145,6 +151,16 @@ pub fn e2e_deployment_settings_with_genesis_block(
             genesis_block: GenesisBlock::genesis(genesis_tx),
             learning_rate: LEARNING_RATE.try_into().expect("1 > 0"),
             faucet_pk: None,
+            pow_config: lb_node::config::cryptarchia::deployment::PoWConfig {
+                blend: lb_node::config::cryptarchia::deployment::BlendPoWConfig {
+                    base_difficulty: ModulusShift::new::<BLEND_POW_BASE_DIFFICULTY_EXPONENT>(),
+                    target_transactions_per_block: NonZero::new(BLEND_POW_TARGET_TXS_PER_BLOCK)
+                        .unwrap(),
+                    max_step: NonZero::new(BLEND_POW_MAX_STEP).unwrap(),
+                    damping_num: NonZero::new(BLEND_POW_DAMPING_NUM).unwrap(),
+                    damping_den_offset: BLEND_POW_DAMPING_DEN_OFFSET,
+                },
+            },
         },
         time: TimeDeploymentSettings {
             slot_duration: Duration::from_secs(slot_duration_in_secs),

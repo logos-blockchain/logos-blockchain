@@ -24,6 +24,7 @@ lb-poq          = { workspace = true }
 lb-poseidon2    = { workspace = true }
 lb-utils        = { workspace = true }
 num-bigint      = { workspace = true }
+rand            = { workspace = true }
 serde           = { workspace = true }
 thiserror       = { workspace = true }
 zeroize         = { workspace = true }

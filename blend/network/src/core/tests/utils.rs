@@ -156,7 +156,7 @@ impl TestEncapsulatedMessage {
         Self(
             EncapsulatedMessageWithVerifiedPublicHeader::try_new(
                 &generate_valid_inputs(0.into()),
-                PayloadType::Data,
+                PayloadType::BlockProposal,
                 payload.try_into().unwrap(),
                 NUM_BLEND_LAYERS.try_into().unwrap(),
             )
@@ -192,7 +192,7 @@ impl TestEncapsulatedMessageWithEpoch {
         Self(
             EncapsulatedMessageWithVerifiedPublicHeader::try_new(
                 &generate_valid_inputs(epoch),
-                PayloadType::Data,
+                PayloadType::BlockProposal,
                 payload.try_into().unwrap(),
                 NUM_BLEND_LAYERS.try_into().unwrap(),
             )

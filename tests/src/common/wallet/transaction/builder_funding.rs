@@ -67,6 +67,7 @@ pub fn wallet_state_from_utxos(utxos: Vec<Utxo>) -> WalletState {
 pub(super) fn fund_wallet_transaction(
     intent: WalletTransactionIntent,
     resources: WalletFundingResources,
+    priority_fee_percent: u64,
 ) -> Result<(MantleTxBuilder, MantleTxContext), WalletError> {
     let (sender, fee_sponsor) = resources.into_parts();
     let (tx_builder, context, sender_output_total) = intent.into_parts();
@@ -79,6 +80,7 @@ pub(super) fn fund_wallet_transaction(
                 sender,
                 input_selection_strategy,
                 &context,
+                priority_fee_percent,
             )?
         }
         Some(fee_sponsor) => fund_sponsored_wallet_transaction(
@@ -87,6 +89,7 @@ pub(super) fn fund_wallet_transaction(
             fee_sponsor.into_funding_utxos(),
             sender.into_funding_utxos(),
             &context,
+            priority_fee_percent,
         )?,
     };
 
@@ -98,6 +101,7 @@ fn fund_unsponsored_wallet_transaction(
     sender: WalletFundingUtxos,
     input_selection_strategy: WalletInputSelectionStrategy,
     context: &MantleTxContext,
+    priority_fee_percent: u64,
 ) -> Result<MantleTxBuilder, WalletError> {
     let sender_change_pk = sender.change_pk();
     let available_utxos = sender.into_available_utxos();
@@ -113,7 +117,13 @@ fn fund_unsponsored_wallet_transaction(
         }
     };
 
-    fund_builder_from_plan(tx_builder, sender_change_pk, &funding_plan, context)
+    fund_builder_from_plan(
+        tx_builder,
+        sender_change_pk,
+        &funding_plan,
+        context,
+        priority_fee_percent,
+    )
 }
 
 fn fund_sponsored_wallet_transaction(
@@ -122,6 +132,7 @@ fn fund_sponsored_wallet_transaction(
     fee_sponsor: WalletFundingUtxos,
     sender: WalletFundingUtxos,
     context: &MantleTxContext,
+    priority_fee_percent: u64,
 ) -> Result<MantleTxBuilder, WalletError> {
     let sender_change_pk = sender.change_pk();
     let fee_sponsor_change_pk = fee_sponsor.change_pk();
@@ -142,6 +153,7 @@ fn fund_sponsored_wallet_transaction(
             sender_inputs.into_utxos(),
         ),
         context,
+        priority_fee_percent,
     )
 }
 
@@ -166,9 +178,16 @@ fn fund_builder_from_plan(
     change_pk: ZkPublicKey,
     plan: &WalletFundingPlan,
     context: &MantleTxContext,
+    priority_fee_percent: u64,
 ) -> Result<MantleTxBuilder, WalletError> {
     plan.fund_with(|selected_inputs| {
-        evaluate_funding_inputs(tx_builder, selected_inputs, change_pk, context)
+        evaluate_funding_inputs(
+            tx_builder,
+            selected_inputs,
+            change_pk,
+            context,
+            priority_fee_percent,
+        )
     })
 }
 
@@ -196,21 +215,33 @@ fn evaluate_funding_inputs(
     selected_inputs: &[Utxo],
     change_pk: ZkPublicKey,
     context: &MantleTxContext,
+    priority_fee_percent: u64,
 ) -> Result<WalletFundingOutcome<MantleTxBuilder>, WalletError> {
     if selected_inputs.is_empty() && tx_builder.ledger_inputs().is_empty() {
         return Ok(WalletFundingOutcome::NeedsMoreInputs);
     }
 
     if selected_inputs.len() <= MAX_ZK_SIGNING_KEYS {
-        return evaluate_standard_funding_inputs(tx_builder, selected_inputs, change_pk, context);
+        return evaluate_standard_funding_inputs(
+            tx_builder,
+            selected_inputs,
+            change_pk,
+            context,
+            priority_fee_percent,
+        );
     }
 
-    Ok(
-        build_chunked_funded_tx(tx_builder, selected_inputs, change_pk, context)?.map_or(
-            WalletFundingOutcome::NeedsMoreInputs,
-            WalletFundingOutcome::Funded,
-        ),
-    )
+    Ok(build_chunked_funded_tx(
+        tx_builder,
+        selected_inputs,
+        change_pk,
+        context,
+        priority_fee_percent,
+    )?
+    .map_or(
+        WalletFundingOutcome::NeedsMoreInputs,
+        WalletFundingOutcome::Funded,
+    ))
 }
 
 fn evaluate_standard_funding_inputs(
@@ -218,17 +249,18 @@ fn evaluate_standard_funding_inputs(
     selected_inputs: &[Utxo],
     change_pk: ZkPublicKey,
     context: &MantleTxContext,
+    priority_fee_percent: u64,
 ) -> Result<WalletFundingOutcome<MantleTxBuilder>, WalletError> {
     let funded_builder = extend_wallet_funding_inputs(tx_builder, selected_inputs)?;
 
     match funded_builder
-        .funding_delta::<MainnetGasProfile>(context)?
+        .funding_delta_with_priority_fee::<MainnetGasProfile>(context, priority_fee_percent)?
         .cmp(&0)
     {
         Ordering::Less => Ok(WalletFundingOutcome::NeedsMoreInputs),
         Ordering::Equal => Ok(WalletFundingOutcome::Funded(funded_builder)),
         Ordering::Greater => Ok(funded_builder
-            .return_change::<MainnetGasProfile>(context, change_pk, 0)?
+            .return_change::<MainnetGasProfile>(context, change_pk, priority_fee_percent)?
             .map_or(
                 WalletFundingOutcome::NeedsMoreInputs,
                 WalletFundingOutcome::Funded,
@@ -241,6 +273,7 @@ fn build_chunked_funded_tx(
     funding_utxos: &[Utxo],
     change_pk: ZkPublicKey,
     context: &MantleTxContext,
+    priority_fee_percent: u64,
 ) -> Result<Option<MantleTxBuilder>, WalletError> {
     if funding_utxos.len() <= MAX_ZK_SIGNING_KEYS || !tx_builder.ledger_inputs().is_empty() {
         return Ok(None);
@@ -253,8 +286,13 @@ fn build_chunked_funded_tx(
     let output_sum = pending_transfer_output_sum(tx_builder);
 
     let chunked_builder = extend_wallet_funding_inputs(tx_builder, funding_utxos)?;
-    let funding_delta =
-        funding_delta_for_chunked_builder(&chunked_builder, input_sum, output_sum, context)?;
+    let funding_delta = funding_delta_for_chunked_builder(
+        &chunked_builder,
+        input_sum,
+        output_sum,
+        context,
+        priority_fee_percent,
+    )?;
 
     match funding_delta.cmp(&0) {
         Ordering::Less => Ok(None),
@@ -266,6 +304,7 @@ fn build_chunked_funded_tx(
             output_sum,
             funding_delta,
             context,
+            priority_fee_percent,
         ),
     }
 }
@@ -277,6 +316,7 @@ fn add_chunked_change_output(
     output_sum: u128,
     funding_delta: i128,
     context: &MantleTxContext,
+    priority_fee_percent: u64,
 ) -> Result<Option<MantleTxBuilder>, WalletError> {
     let builder_with_dummy_change = chunked_builder
         .clone()
@@ -286,6 +326,7 @@ fn add_chunked_change_output(
         input_sum,
         output_sum,
         context,
+        priority_fee_percent,
     )?;
 
     if delta_with_change <= 0 {
@@ -301,6 +342,7 @@ fn add_chunked_change_output(
             input_sum,
             output_sum + u128::from(change),
             context,
+            priority_fee_percent,
         )?,
         0
     );
@@ -351,16 +393,24 @@ fn funding_delta_for_chunked_builder(
     input_sum: u128,
     output_sum: u128,
     context: &MantleTxContext,
+    priority_fee_percent: u64,
 ) -> Result<i128, WalletError> {
-    let gas_cost = u128::from(
+    let mandatory_fee = u128::from(
         tx_builder
             .minimum_gas_cost::<MainnetGasProfile>(context)?
             .into_inner(),
     );
+    let required_fee = mandatory_fee
+        .checked_mul(u128::from(priority_fee_percent))
+        .and_then(|priority_fee| priority_fee.checked_add(99))
+        .map(|priority_fee| mandatory_fee + priority_fee / 100)
+        .ok_or(lb_core::mantle::gas::GasOverflow)?;
     Ok(i128::try_from(input_sum)
         .expect("Input sum must fit in i128")
         .checked_sub(i128::try_from(output_sum).expect("Output sum must fit in i128"))
-        .and_then(|delta| delta.checked_sub(i128::try_from(gas_cost).expect("Gas fits in i128")))
+        .and_then(|delta| {
+            delta.checked_sub(i128::try_from(required_fee).expect("Gas fits in i128"))
+        })
         .expect("Chunked funding delta must fit in i128"))
 }
 
@@ -416,6 +466,7 @@ mod tests {
             funding_source.into_funding_utxos(),
             WalletInputSelectionStrategy::LargestFirst,
             &context,
+            0,
         )
         .expect("zero-cost wallet transaction should still select a funding input");
 

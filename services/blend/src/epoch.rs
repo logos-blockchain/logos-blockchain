@@ -1,5 +1,5 @@
 use lb_blend::{
-    proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs},
+    proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs, PowInputs},
     scheduling::membership::Membership,
 };
 use lb_chain_service::Epoch;
@@ -46,5 +46,6 @@ pub struct CoreEpochPublicInfo<NodeId> {
     pub epoch: Epoch,
     pub poq_leadership_public_inputs: LeaderInputs,
     pub poq_core_public_inputs: CoreInputs,
+    pub poq_pow_public_inputs: PowInputs,
     pub membership: Membership<NodeId>,
 }

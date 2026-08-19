@@ -1,3 +1,4 @@
+pub mod fee_horizon;
 mod ids;
 pub(crate) mod scanner;
 mod tracked;
@@ -11,6 +12,10 @@ mod funding_from_chain;
 pub use chain::{
     state::{TrackedWalletKeys, TrackedWalletKeysError, WalletUtxos},
     tracked_keys::{TrackedWalletKeysBySource, TrackedWalletKeysForSource},
+};
+pub use fee_horizon::{
+    FeeProjectionError, TransactionFeeHorizon, TransactionFeePolicy, build_fee_horizon,
+    project_storage_price,
 };
 pub use funding::{
     WalletFundedTransfer, WalletFundingPolicy, WalletFundingResources, WalletFundingSource,

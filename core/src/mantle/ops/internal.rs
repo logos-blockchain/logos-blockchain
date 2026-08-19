@@ -63,6 +63,7 @@ pub enum OpDe {
     SDPActive(OpWire<SDP_ACTIVE, SDPActiveOp>),
     LeaderClaim(OpWire<LEADER_CLAIM, LeaderClaimOp>),
     Transfer(OpWire<TRANSFER, TransferOp>),
+    ClaimPoWReward(OpWire<CLAIM_POW_REWARD, ClaimPowRewardOp>),
 }
 
 impl From<OpDe> for Op {
@@ -78,6 +79,7 @@ impl From<OpDe> for Op {
             OpDe::SDPActive(w) => Self::SDPActive(w.into_op()),
             OpDe::LeaderClaim(w) => Self::LeaderClaim(w.into_op()),
             OpDe::Transfer(w) => Self::Transfer(w.into_op()),
+            OpDe::ClaimPoWReward(w) => Self::ClaimPowReward(w.into_op()),
         }
     }
 }

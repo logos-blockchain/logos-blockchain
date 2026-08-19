@@ -16,8 +16,8 @@ use crate::{
             EncapsulatedMessageWithVerifiedPublicHeader, EpochCryptographicProcessorSettings,
         },
         provers::{
-            ProofsGeneratorSettings, WinningPolInfoStream,
-            core_and_leader::CoreAndLeaderProofsGenerator,
+            BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
+            core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
         },
     },
 };
@@ -60,7 +60,7 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator>
 impl<NodeId, CorePoQGenerator, ProofsGenerator>
     EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator>
 where
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
 {
     #[must_use]
     pub fn new(
@@ -101,13 +101,18 @@ where
         self.proofs_generator
             .set_epoch_private(winning_pol_info_stream, target_epoch);
     }
+
+    /// Stop generating proofs for this processor's epoch.
+    pub fn stop_proof_generation(&mut self) {
+        self.proofs_generator.drop_pow_proofs_stream();
+    }
 }
 
 impl<NodeId, CorePoQGenerator, ProofsGenerator>
     EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator>
 where
     NodeId: Eq + Hash + 'static,
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
 {
     pub async fn encapsulate_cover_payload(
         &mut self,
@@ -116,11 +121,20 @@ where
         self.encapsulate_payload(PayloadType::Cover, payload).await
     }
 
-    pub async fn encapsulate_data_payload(
+    pub async fn encapsulate_block_proposal_payload(
         &mut self,
         payload: &[u8],
     ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
-        self.encapsulate_payload(PayloadType::Data, payload).await
+        self.encapsulate_payload(PayloadType::BlockProposal, payload)
+            .await
+    }
+
+    pub async fn encapsulate_transaction_payload(
+        &mut self,
+        payload: &[u8],
+    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
+        self.encapsulate_payload(PayloadType::Transaction, payload)
+            .await
     }
 
     // TODO: Think about optimizing this by, e.g., using less encapsulations if
@@ -136,23 +150,11 @@ where
         let validated_payload = PaddedPayloadBody::try_from(payload)?;
         let mut proofs = Vec::with_capacity(self.num_blend_layers.get() as usize);
 
-        match payload_type {
-            PayloadType::Cover => {
-                for _ in 0..self.num_blend_layers.into() {
-                    let Some(proof) = self.proofs_generator.get_next_core_proof().await else {
-                        return Err(Error::ProofNotAvailable);
-                    };
-                    proofs.push(proof);
-                }
-            }
-            PayloadType::Data => {
-                for _ in 0..self.num_blend_layers.into() {
-                    let Some(proof) = self.proofs_generator.get_next_leader_proof().await else {
-                        return Err(Error::ProofNotAvailable);
-                    };
-                    proofs.push(proof);
-                }
-            }
+        for _ in 0..self.num_blend_layers.into() {
+            let Some(proof) = self.next_proof_for(payload_type).await else {
+                return Err(Error::ProofNotAvailable);
+            };
+            proofs.push(proof);
         }
 
         let membership_size = self.membership.size();
@@ -201,6 +203,15 @@ where
             self.num_blend_layers.get() as usize,
         )
         .expect("Number of encapsulation inputs is in `1..=num_blend_layers`."))
+    }
+
+    /// The `PoQ` branch each payload type draws its layer proofs from.
+    async fn next_proof_for(&mut self, payload_type: PayloadType) -> Option<BlendLayerProof> {
+        match payload_type {
+            PayloadType::Cover => self.proofs_generator.get_next_core_proof().await,
+            PayloadType::BlockProposal => self.proofs_generator.get_next_leader_proof().await,
+            PayloadType::Transaction => self.proofs_generator.get_next_pow_proof().await,
+        }
     }
 }
 
@@ -260,7 +271,7 @@ mod test {
                         zk_root: ZkHash::ZERO,
                     },
                     leader: leader_inputs,
-                    pow: PowInputs::unwired_placeholder(),
+                    pow: PowInputs::disabled(),
                 },
                 MockCorePoQGenerator,
                 Epoch::new(0),

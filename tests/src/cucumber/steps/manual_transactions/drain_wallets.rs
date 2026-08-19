@@ -140,13 +140,12 @@ pub async fn drain_user_wallet(
                 tranche_utxos.len(),
             );
 
-            let intent = WalletTransactionIntent::transfer(
-                &[(receiver_pk, amount)],
-                DEFAULT_STORAGE_GAS_PRICE,
-            )
-            .map_err(|error| StepError::LogicalError {
-                message: error.to_string(),
-            })?;
+            let intent =
+                WalletTransactionIntent::transfer(&[(receiver_pk, amount)]).map_err(|error| {
+                    StepError::LogicalError {
+                        message: error.to_string(),
+                    }
+                })?;
             let mut tranche_available = HashMap::new();
             tranche_available.insert(WalletId::new(sender.wallet_name.clone()), tranche_utxos);
 

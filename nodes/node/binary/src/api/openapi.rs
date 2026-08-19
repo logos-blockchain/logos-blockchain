@@ -5,6 +5,7 @@ use utoipa::OpenApi;
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        crate::api::handlers::version,
         crate::api::handlers::mantle_metrics,
         crate::api::handlers::mantle_status,
         crate::api::handlers::cryptarchia_info,
@@ -14,6 +15,8 @@ use utoipa::OpenApi;
         crate::api::handlers::libp2p_info,
         crate::api::handlers::dial_peer,
         crate::api::handlers::add_tx,
+        crate::api::handlers::blend_tx,
+        crate::api::handlers::blend_pending_transactions,
         crate::api::handlers::mempool_view,
         crate::api::handlers::channel,
         crate::api::handlers::channel_deposit,

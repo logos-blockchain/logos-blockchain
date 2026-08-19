@@ -17,7 +17,7 @@ use crate::{
             EncapsulatedMessageWithVerifiedPublicHeader, EpochCryptographicProcessorSettings,
             core_and_leader::send::EpochCryptographicProcessor as SenderEpochCryptographicProcessor,
         },
-        provers::core_and_leader::CoreAndLeaderProofsGenerator,
+        provers::core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
     },
 };
 
@@ -36,9 +36,15 @@ pub struct EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator
 impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
     EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
 where
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
+    /// Stop generating proofs for this processor's epoch, while leaving it
+    /// able to decapsulate messages that are still in flight from it.
+    pub fn stop_proof_generation(&mut self) {
+        self.sender_processor.stop_proof_generation();
+    }
+
     #[must_use]
     pub fn new(
         settings: EpochCryptographicProcessorSettings,
@@ -179,7 +185,7 @@ mod test {
                     zk_root: ZkHash::ZERO,
                 },
                 leader: initial_leader,
-                pow: PowInputs::unwired_placeholder(),
+                pow: PowInputs::disabled(),
             },
             MockCorePoQGenerator,
             Epoch::new(0),

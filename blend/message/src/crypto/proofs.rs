@@ -46,7 +46,7 @@ impl Default for PoQVerificationInputsMinusSigningKey {
                 lottery_0: Fr::ZERO,
                 lottery_1: Fr::ZERO,
             },
-            pow: PowInputs::unwired_placeholder(),
+            pow: PowInputs::disabled(),
         }
     }
 }

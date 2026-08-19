@@ -2,7 +2,10 @@ use futures::future::ready;
 use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
 use lb_blend_proofs::quota::{
     self, KeyIndex, Quota, VerifiedProofOfQuota,
-    fixtures::{valid_proof_of_core_quota_inputs, valid_proof_of_leadership_quota_inputs},
+    fixtures::{
+        valid_proof_of_core_quota_inputs, valid_proof_of_leadership_quota_inputs,
+        valid_proof_of_work_quota_inputs,
+    },
     inputs::prove::{
         PrivateInputs, PublicInputs as PoQPublicInputs,
         private::{ProofOfCoreQuotaInputs, ProofOfLeadershipQuotaInputs},
@@ -68,6 +71,21 @@ pub fn valid_proof_of_leader_inputs(
         PoQVerificationInputsMinusSigningKey { core, leader, pow },
         private_inputs,
     )
+}
+
+pub fn valid_proof_of_work_inputs(pow_quota: Quota) -> PoQVerificationInputsMinusSigningKey {
+    let (
+        PoQPublicInputs {
+            core, leader, pow, ..
+        },
+        _,
+    ) = valid_proof_of_work_quota_inputs(
+        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE])
+            .unwrap()
+            .into_inner(),
+        pow_quota,
+    );
+    PoQVerificationInputsMinusSigningKey { core, leader, pow }
 }
 
 #[derive(Clone)]
