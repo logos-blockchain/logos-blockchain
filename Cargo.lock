@@ -4805,6 +4805,9 @@ version = "0.0.0"
 dependencies = [
  "bincode",
  "blake2",
+ "clap",
+ "hex",
+ "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-log-targets",
  "logos-blockchain-utils",
@@ -4816,6 +4819,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

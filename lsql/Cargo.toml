@@ -28,4 +28,8 @@ tokio                            = { features = ["macros", "rt", "sync", "time"]
 tracing                          = { workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
+clap       = { features = ["derive", "env", "help", "std"], workspace = true }
+hex        = { workspace = true }
+lb-groth16 = { workspace = true }
+tempfile   = { workspace = true }
+uuid       = { features = ["v4"], workspace = true }
