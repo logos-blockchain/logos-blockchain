@@ -1,6 +1,7 @@
 use core::fmt::{Debug, Display};
 use std::marker::PhantomData;
 
+use lb_blend_service::api::{BlendServiceApi, BlendServiceData};
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::mantle::ops::pow::ClaimPowRewardOp;
 use overwatch::{
@@ -8,37 +9,37 @@ use overwatch::{
     services::{AsServiceId, ServiceCore, ServiceData},
 };
 
-#[derive(thiserror::Error, Debug)]
-pub enum PoWServiceError {}
-
-pub enum PoWSerciveMessage {}
+pub enum PoWServiceMessage {}
 
 pub struct PoWServiceState<Tx> {
     claims: Vec<ClaimPowRewardOp>,
     transactions: Vec<Tx>,
 }
 
-pub struct PoWService<Tx, CryptarchiaService, RuntimeServiceId> {
+pub struct PoWService<Tx, CryptarchiaService, BlendService, RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     state: PoWServiceState<Tx>,
-    _phantom: PhantomData<CryptarchiaService>,
+    _phantom: PhantomData<(CryptarchiaService, BlendService)>,
 }
 
-impl<Tx, CryptarchiaService, RuntimeServiceId> ServiceData
-    for PoWService<Tx, CryptarchiaService, RuntimeServiceId>
+impl<Tx, CryptarchiaService, BlendService, RuntimeServiceId> ServiceData
+    for PoWService<Tx, CryptarchiaService, BlendService, RuntimeServiceId>
 {
     type Settings = ();
     type State = PoWServiceState<Tx>;
     type StateOperator = ();
-    type Message = PoWSerciveMessage;
+    type Message = PoWServiceMessage;
 }
 
 #[async_trait::async_trait]
-impl<Tx, CryptarchiaService, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for PoWService<Tx, CryptarchiaService, RuntimeServiceId>
+impl<Tx, CryptarchiaService, BlendService, RuntimeServiceId> ServiceCore<RuntimeServiceId>
+    for PoWService<Tx, CryptarchiaService, BlendService, RuntimeServiceId>
 where
     Tx: Send + Sync + 'static,
     CryptarchiaService: CryptarchiaServiceData<Tx = Tx> + 'static,
+    BlendService: BlendServiceData,
+    BlendService::NodeId: Send,
+    <BlendService as ServiceData>::Message: Send + 'static,
     RuntimeServiceId: Debug
         + Clone
         + Send
@@ -46,7 +47,8 @@ where
         + Display
         + 'static
         + AsServiceId<Self>
-        + AsServiceId<CryptarchiaService>,
+        + AsServiceId<CryptarchiaService>
+        + AsServiceId<BlendService>,
 {
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -74,7 +76,16 @@ where
                 .await
                 .expect("Relay connection with Cryptarchia chain service should succeed"),
         );
-        cryptarchia_api.subscribe_new_blocks().await?;
+
+        // API wrapper over the blend service relay, used to publish PoW payloads
+        // to the blend network and query blend state.
+        let _blend_api = BlendServiceApi::<BlendService, RuntimeServiceId>::new(
+            service_resources_handle
+                .overwatch_handle
+                .relay::<BlendService>()
+                .await
+                .expect("Relay connection with BlendService should succeed"),
+        );
 
         service_resources_handle.status_updater.notify_ready();
 
