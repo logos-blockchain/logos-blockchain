@@ -15,6 +15,7 @@ use crate::{
     crypto::{Hash, ZkHasher},
     events::TxEvent,
     mantle::{
+        batch::DeferredZkpVerification,
         channel::Channels,
         ops::{OpId, channel::ChannelId},
     },
@@ -70,7 +71,13 @@ pub trait VerifiableOperation<Mode: verification_mode::VerificationMode>:
     type Context<'a>;
     type Error;
 
-    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error>;
+    /// Performs stateful verifications, and returns a deferred ZKP verification
+    /// so that the caller can batch it.
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::Context<'_>,
+    ) -> Result<Option<DeferredZkpVerification>, Self::Error>;
 }
 
 pub trait ExecutableOperation {

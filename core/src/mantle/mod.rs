@@ -6,6 +6,7 @@ pub mod ops;
 pub mod traits;
 pub mod transactions;
 
+pub mod batch;
 mod channel_notes;
 mod fixtures;
 

@@ -1,5 +1,5 @@
 use lb_codec::{BinaryCodec, BinaryEncode as _};
-use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
+use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -7,12 +7,13 @@ use crate::{
     events::TxEvent,
     mantle::{
         Value,
+        batch::DeferredZkpVerification,
         channel::Channels,
         gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             self, ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation,
-            Utxo, Utxos, VerifiableOperation, verification_mode,
-            verification_mode::VerificationMode,
+            Utxo, Utxos, VerifiableOperation,
+            verification_mode::{self, VerificationMode},
         },
         ops::{OpId, SignedOp},
         transactions::{hash::TxHashView, states::VerificationState},
@@ -116,7 +117,11 @@ impl VerifiableOperation<verification_mode::StandardMode> for TransferOp {
     type Context<'a> = TransferValidationContext<'a>;
     type Error = TransferError;
 
-    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::Context<'_>,
+    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
         // Validate Inputs
         self.inputs.validate_not_in_channel(
             context.locked_notes,
@@ -124,13 +129,14 @@ impl VerifiableOperation<verification_mode::StandardMode> for TransferOp {
             context.utxos,
         )?;
 
-        // Check the transfer Proof
+        // Defer the proof verification, so that the caller can batch it.
         let pks = self.inputs.get_pk(context.utxos)?;
-        if !ZkPublicKey::verify_multi(&pks, context.tx_hash_view.as_fr(), proof) {
-            return Err(TransferError::InvalidProof);
-        }
-
-        Ok(())
+        let inputs = public_inputs_from_pks((*context.tx_hash_view.as_fr()).into(), &pks)
+            .map_err(|_| TransferError::InvalidProof)?;
+        Ok(Some(DeferredZkpVerification::ZkSig(
+            *proof.as_proof(),
+            inputs,
+        )))
     }
 }
 
@@ -161,6 +167,7 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionG
 #[cfg(test)]
 mod test {
     use lb_groth16::CompressedGroth16Proof;
+    use lb_key_management_system_keys::keys::ZkPublicKey;
     use lb_poseidon2::Fr;
     use num_bigint::BigUint;
 
