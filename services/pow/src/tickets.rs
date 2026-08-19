@@ -37,6 +37,20 @@ pub type WinnerTicketStream = Pin<Box<dyn Stream<Item = WinnerTicket> + Send>>;
 /// A boxed future resolving to a single reward-claim operation.
 pub type TicketSearchTask<'a> = BoxFuture<'a, ClaimPowRewardOp>;
 
+/// A winning ticket together with the chain tip observed when it was found.
+///
+/// The generator caches the tip from its block-event stream, so consumers can
+/// size the reward-claim transaction against the current state without an extra
+/// round-trip to the chain service.
+pub struct WinningTicket {
+    /// Chain tip when the ticket was produced.
+    pub tip: HeaderId,
+    /// Secret key that produced the winning claim (owns the reward note).
+    pub secret_key: UnsecuredZkKey,
+    /// The reward-claim operation to publish.
+    pub claim: ClaimPowRewardOp,
+}
+
 /// A [`Stream`] of winning Proof-of-Work reward tickets.
 ///
 /// It subscribes to the chain's processed-block events and drives, per block,
@@ -60,6 +74,11 @@ where
     /// Index from a block's slot to the headers with an active search at that
     /// slot, used to prune searches once their block leaves the reward window.
     tickets_search_by_slot: HashMap<Slot, HashSet<HeaderId>>,
+    /// Chain tip from the most recently processed block, cached so emitted
+    /// tickets carry the current tip without the consumer having to query it.
+    /// Initialized to the genesis id and overwritten by the first processed
+    /// block, which always precedes any emitted ticket.
+    tip: HeaderId,
 }
 
 impl<Tx, CryptarchiaServiceData, RuntimeServiceId>
@@ -94,6 +113,7 @@ where
             processed_block_stream,
             tickets_search: StreamMap::new(),
             tickets_search_by_slot: HashMap::new(),
+            tip: HeaderId::from([0u8; 32]),
         })
     }
 
@@ -219,18 +239,24 @@ where
     RuntimeServiceId: Send + Sync + Unpin + 'static,
     Tx: Send + Sync + 'static,
 {
-    type Item = WinnerTicket;
+    type Item = WinningTicket;
 
     /// Advances the generator.
     ///
     /// First drains any winning ticket that a per-block search has already
-    /// produced. Otherwise it ingests the next processed block: if the block is
-    /// still within the reward window it starts a new search for it, and it
-    /// always prunes the searches for blocks that have aged out of the window.
+    /// produced, tagging it with the cached chain tip. Otherwise it ingests the
+    /// next processed block: it caches the tip, and if the block is still
+    /// within the reward window starts a new search for it, always pruning
+    /// the searches for blocks that have aged out of the window.
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
-        if let Poll::Ready(Some((_, winner_ticket))) = this.tickets_search.poll_next_unpin(cx) {
-            return Poll::Ready(Some(winner_ticket));
+        if let Poll::Ready(Some((_, (secret_key, claim)))) = this.tickets_search.poll_next_unpin(cx)
+        {
+            return Poll::Ready(Some(WinningTicket {
+                tip: this.tip,
+                secret_key,
+                claim,
+            }));
         }
 
         if let Poll::Ready(Some((
@@ -239,11 +265,13 @@ where
             ProcessedBlockEvent {
                 block_id,
                 block_slot,
+                tip,
                 tip_slot,
                 ..
             },
         ))) = this.processed_block_stream.poll_next_unpin(cx)
         {
+            this.tip = tip;
             // compute which slot is old enough
             let frontier_slot = tip_slot.saturating_sub(Slot::new(SLOT_WINDOW));
             // trigger new stream if its new enough

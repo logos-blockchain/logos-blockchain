@@ -29,7 +29,7 @@ use overwatch::{
 use serde::Deserialize;
 use tracing::error;
 
-use crate::tickets::TicketGenerator;
+use crate::tickets::{TicketGenerator, WinningTicket};
 
 pub enum PoWServiceMessage {}
 
@@ -139,11 +139,10 @@ where
                 Some(_message) = inbound_relay.recv() => {}
                 // A puzzle was solved: turn the winning claim into a tx and
                 // publish it over the blend network.
-                Some((secret_key, claim)) = winning_tickets.next() => {
-                    // Size the reward and fee against the current tip — the state
-                    // the tx will actually be applied against — rather than the
-                    // (older) block the puzzle anchors to.
-                    let tip = cryptarchia_api.info().await?.cryptarchia_info.tip;
+                Some(WinningTicket { tip, secret_key, claim }) = winning_tickets.next() => {
+                    // The ticket carries the chain tip observed when it was found
+                    // — the state the tx will be applied against — so we size the
+                    // reward and fee against it without an extra round-trip.
                     let ledger_state = cryptarchia_api
                         .get_ledger_state(tip)
                         .await?
@@ -174,10 +173,10 @@ where
 ///
 /// The `ClaimPowReward` op mints the reward note, and an appended `Transfer` op
 /// spends that very note to pay the gas fee and return the change to
-/// `claim_address`. Because the two ops share one transaction and are applied in
-/// order, the transfer can reference the UTXO the claim mints — reconstructed
-/// here from the same data the ledger uses. The transfer is signed with the
-/// ticket's secret key, which owns the reward note.
+/// `claim_address`. Because the two ops share one transaction and are applied
+/// in order, the transfer can reference the UTXO the claim mints —
+/// reconstructed here from the same data the ledger uses. The transfer is
+/// signed with the ticket's secret key, which owns the reward note.
 async fn build_reward_claim_tx(
     claim_address: ZkPublicKey,
     ledger_state: &LedgerState,
