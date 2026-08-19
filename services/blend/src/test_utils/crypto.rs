@@ -42,8 +42,6 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
     ) {
     }
 
-    fn drop_pow_proofs_stream(&mut self) {}
-
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
         Some(mock_blend_proof())
     }
@@ -197,8 +195,6 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
         _target_epoch: Epoch,
     ) {
     }
-
-    fn drop_pow_proofs_stream(&mut self) {}
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
         Some(mock_blend_proof())

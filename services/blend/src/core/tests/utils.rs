@@ -453,25 +453,6 @@ thread_local! {
     static SET_EPOCH_PRIVATE_CALLS: RefCell<Vec<Epoch>> = const { RefCell::new(Vec::new()) };
 }
 
-thread_local! {
-    /// Counts the calls to
-    /// [`MockCoreAndLeaderProofsGenerator::stop_proof_generation`], so tests
-    /// can assert that an epoch rotation stops the outgoing epoch's proof
-    /// generation. Test-isolated for the same reason as above.
-    static STOP_PROOF_GENERATION_CALLS: RefCell<usize> = const { RefCell::new(0) };
-}
-
-/// Clears the count of `stop_proof_generation` calls.
-pub fn reset_stop_proof_generation_calls() {
-    STOP_PROOF_GENERATION_CALLS.with(|calls| *calls.borrow_mut() = 0);
-}
-
-/// How many times `stop_proof_generation` has been called since the last
-/// reset.
-pub fn recorded_stop_proof_generation_calls() -> usize {
-    STOP_PROOF_GENERATION_CALLS.with(|calls| *calls.borrow())
-}
-
 /// Clears the record of `set_epoch_private` calls. Call before the code under
 /// test to isolate the calls of interest.
 pub fn reset_set_epoch_private_calls() {
@@ -499,10 +480,6 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
 
     fn set_epoch_private(&mut self, _: WinningPolInfoStream, target_epoch: Epoch) {
         SET_EPOCH_PRIVATE_CALLS.with(|calls| calls.borrow_mut().push(target_epoch));
-    }
-
-    fn drop_pow_proofs_stream(&mut self) {
-        STOP_PROOF_GENERATION_CALLS.with(|calls| *calls.borrow_mut() += 1);
     }
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
