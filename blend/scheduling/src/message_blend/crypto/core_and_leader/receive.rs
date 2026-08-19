@@ -27,7 +27,7 @@ use crate::{
 /// transition period only so that messages still in flight from it can be
 /// decapsulated and forwarded. Converting that epoch's send-and-receive
 /// processor with
-/// [`into_receive_only`](super::send_and_receive::EpochCryptographicProcessor::into_receive_only)
+/// [`into_receiver_only`](super::send_and_receive::EpochCryptographicProcessor::into_receiver_only)
 /// drops its generators, and with them the `PoW` mining stream that would
 /// otherwise keep a core searching for solutions to a puzzle nobody will accept
 /// an answer to anymore.
