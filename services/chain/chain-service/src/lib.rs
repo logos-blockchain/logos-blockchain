@@ -267,6 +267,7 @@ pub struct PrunedBlocksInfo {
 pub struct ProcessedBlockEvent {
     /// The ID of the block that was just processed.
     pub block_id: HeaderId,
+    pub block_slot: Slot,
     /// The current canonical tip after processing this block.
     pub tip: HeaderId,
     pub tip_slot: Slot,
@@ -910,6 +911,7 @@ where
             let lib = cryptarchia.lib_branch();
             ProcessedBlockEvent {
                 block_id: init_tip.id(),
+                block_slot: init_tip.slot(),
                 tip: init_tip.id(),
                 tip_slot: init_tip.slot(),
                 lib: lib.id(),
