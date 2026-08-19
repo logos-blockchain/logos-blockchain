@@ -64,6 +64,9 @@ const fn map_notes_bounded_error(error: &BoundedError) -> Error {
             len: *len,
         },
         BoundedError::EmptyInput => Error::EmptyNotes,
+        BoundedError::CapacityOutOfBounds { .. } => {
+            panic!("CapacityOutOfBounds should not occur here")
+        }
     }
 }
 
@@ -828,6 +831,9 @@ where
             }
             BoundedError::EmptyInput | BoundedError::TooFewItems { .. } => {
                 unreachable!("GenesisSDPDeclareOps has a zero minimum bound")
+            }
+            BoundedError::CapacityOutOfBounds { .. } => {
+                unreachable!("CapacityOutOfBounds should not occur here")
             }
             BoundedError::IndexOutOfBounds { .. } => {
                 unreachable!("construction cannot produce an index error")
