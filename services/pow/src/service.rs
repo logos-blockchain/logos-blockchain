@@ -121,9 +121,17 @@ impl StorageRecoverySettings for PoWServiceSettings {
     }
 }
 
+/// Persisted state of the `PoW` service: the winning tickets awaiting a claim.
+///
+/// It is persisted so the tickets survive restarts. Expired tickets are pruned
+/// in place whenever the current slot is known (see [`prune_expired_tickets`]).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct PoWServiceState {
+    /// Mined tickets not yet submitted, drained into a claim transaction on a
+    /// [`PoWServiceMessage::Claim`].
     ready_to_claim: Vec<WinningTicket>,
+    /// Tickets whose claim transaction has been published but not yet observed
+    /// as settled; retained until their reward window closes.
     pending_to_claim: Vec<WinningTicket>,
 }
 
