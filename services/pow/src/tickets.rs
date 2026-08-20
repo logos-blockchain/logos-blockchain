@@ -12,7 +12,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use futures::{Stream, StreamExt as _, future::BoxFuture, stream};
+use futures::{Stream, StreamExt as _, stream};
 use lb_chain_service::{
     ConsensusMsg, EpochState, ProcessedBlockEvent, Slot, api::CryptarchiaServiceApi,
 };
@@ -39,8 +39,6 @@ pub type WinnerTicket = (UnsecuredZkKey, ClaimPowRewardOp);
 /// A boxed stream of [`WinnerTicket`]s found for a single block, each tagged
 /// with that block's slot (for reward-window bookkeeping).
 pub type WinnerTicketStream = Pin<Box<dyn Stream<Item = (Slot, WinnerTicket)> + Send>>;
-/// A boxed future resolving to a single reward-claim operation.
-pub type TicketSearchTask<'a> = BoxFuture<'a, ClaimPowRewardOp>;
 
 /// A winning ticket together with the chain tip observed when it was found.
 ///
@@ -65,16 +63,10 @@ pub struct WinningTicket {
 /// It subscribes to the chain's processed-block events and drives, per block,
 /// an independent concurrent search for winning tickets. Searches for blocks
 /// that fall out of the reward window are pruned as the tip advances.
-pub struct TicketGenerator<Tx, CryptarchiaServiceData, RuntimeServiceId>
-where
-    CryptarchiaServiceData:
-        Send + overwatch::services::ServiceData<Message = ConsensusMsg<Tx>> + 'static,
-{
-    /// Handle to the chain service, used to subscribe to processed blocks and
-    /// to query the epoch and ledger state of each block.
-    cryptarchia_api: CryptarchiaServiceApi<CryptarchiaServiceData, RuntimeServiceId>,
+pub struct TicketGenerator {
     /// Stream of processed blocks, each enriched with the epoch and ledger
-    /// state required to search for tickets.
+    /// state required to search for tickets. Owns the only clone of the chain
+    /// API handle, used to fetch that state.
     processed_block_stream:
         Pin<Box<dyn Stream<Item = (EpochState, LedgerState, ProcessedBlockEvent)> + Send>>,
     /// Ongoing per-block ticket searches, keyed by block header. Each entry
@@ -90,109 +82,107 @@ where
     tip: HeaderId,
 }
 
-impl<Tx, CryptarchiaServiceData, RuntimeServiceId>
-    TicketGenerator<Tx, CryptarchiaServiceData, RuntimeServiceId>
-where
-    CryptarchiaServiceData:
-        Send + Sync + overwatch::services::ServiceData<Message = ConsensusMsg<Tx>> + 'static,
-    RuntimeServiceId: Send + Sync + 'static,
-    Tx: Send + Sync + 'static,
-{
+impl TicketGenerator {
     /// Creates a new [`TicketGenerator`].
     ///
     /// Subscribes to the chain service's new-block stream and wires the
     /// enrichment pipeline that attaches each block's epoch and ledger state.
+    /// The chain API type only appears here; once the block stream is built its
+    /// type is erased, so the generator itself is not generic.
     ///
     /// # Errors
     ///
     /// Returns an error if the subscription to the chain service fails.
-    pub async fn new(
+    pub async fn new<Tx, CryptarchiaServiceData, RuntimeServiceId>(
         cryptarchia_api: CryptarchiaServiceApi<CryptarchiaServiceData, RuntimeServiceId>,
-    ) -> Result<Self, lb_chain_service::api::ApiError> {
+    ) -> Result<Self, lb_chain_service::api::ApiError>
+    where
+        CryptarchiaServiceData:
+            Send + Sync + overwatch::services::ServiceData<Message = ConsensusMsg<Tx>> + 'static,
+        RuntimeServiceId: Send + Sync + 'static,
+        Tx: Send + Sync + 'static,
+    {
         let stream = BroadcastStream::new(cryptarchia_api.subscribe_new_blocks().await?);
-        let cryptarchia_api_send = cryptarchia_api.clone();
         let processed_block_stream: Pin<
             Box<dyn Stream<Item = (EpochState, LedgerState, ProcessedBlockEvent)> + Send>,
         > = Box::pin(stream.filter_map(move |event| {
-            let cryptarchia_api = cryptarchia_api_send.clone();
-            async move { Self::process_block_event(event, cryptarchia_api).await }
+            let cryptarchia_api = cryptarchia_api.clone();
+            async move { process_block_event(event, cryptarchia_api).await }
         }));
         Ok(Self {
-            cryptarchia_api,
             processed_block_stream,
             tickets_search: StreamMap::new(),
             tickets_search_by_slot: HashMap::new(),
             tip: HeaderId::from([0u8; 32]),
         })
     }
+}
 
-    /// Enriches a raw processed-block event with its epoch and ledger state.
-    ///
-    /// Returns `None` (dropping the event) when the broadcast subscription
-    /// lagged, or when the epoch or ledger state for the block cannot be
-    /// fetched from the chain service.
-    async fn process_block_event(
-        event: Result<ProcessedBlockEvent, BroadcastStreamRecvError>,
-        cryptarchia_api: CryptarchiaServiceApi<CryptarchiaServiceData, RuntimeServiceId>,
-    ) -> Option<(EpochState, LedgerState, ProcessedBlockEvent)> {
-        match event {
-            Ok(
-                event @ ProcessedBlockEvent {
-                    block_id, tip_slot, ..
-                },
-            ) => {
-                let Ok(Ok(epoch_state)) = cryptarchia_api.get_epoch_state(tip_slot).await else {
-                    warn!(target: LOG_TARGET, "Epoch state not found for block slot: {tip_slot:?}");
-                    return None;
-                };
-                let Ok(Some(ledger_state)) = cryptarchia_api.get_ledger_state(block_id).await
-                else {
-                    warn!(target: LOG_TARGET, "Ledger state not found for block: {block_id:?}");
-                    return None;
-                };
-                Some((epoch_state, ledger_state, event))
-            }
-            Err(e) => {
-                error!(target: LOG_TARGET, "Missed new block event due to: {e}");
-                None
-            }
+/// Enriches a raw processed-block event with its epoch and ledger state.
+///
+/// Returns `None` (dropping the event) when the broadcast subscription lagged,
+/// or when the epoch or ledger state for the block cannot be fetched from the
+/// chain service.
+async fn process_block_event<Tx, CryptarchiaServiceData, RuntimeServiceId>(
+    event: Result<ProcessedBlockEvent, BroadcastStreamRecvError>,
+    cryptarchia_api: CryptarchiaServiceApi<CryptarchiaServiceData, RuntimeServiceId>,
+) -> Option<(EpochState, LedgerState, ProcessedBlockEvent)>
+where
+    CryptarchiaServiceData:
+        Send + Sync + overwatch::services::ServiceData<Message = ConsensusMsg<Tx>> + 'static,
+    RuntimeServiceId: Send + Sync + 'static,
+    Tx: Send + Sync + 'static,
+{
+    match event {
+        Ok(
+            event @ ProcessedBlockEvent {
+                block_id, tip_slot, ..
+            },
+        ) => {
+            let Ok(Ok(epoch_state)) = cryptarchia_api.get_epoch_state(tip_slot).await else {
+                warn!(target: LOG_TARGET, "Epoch state not found for block slot: {tip_slot:?}");
+                return None;
+            };
+            let Ok(Some(ledger_state)) = cryptarchia_api.get_ledger_state(block_id).await else {
+                warn!(target: LOG_TARGET, "Ledger state not found for block: {block_id:?}");
+                return None;
+            };
+            Some((epoch_state, ledger_state, event))
+        }
+        Err(e) => {
+            error!(target: LOG_TARGET, "Missed new block event due to: {e}");
+            None
         }
     }
+}
 
-    /// Builds an unbounded stream that searches for winning tickets for a
-    /// single block.
-    ///
-    /// Up to 16 attempts run concurrently; each draws a fresh random key and
-    /// checks the resulting ticket against the block's difficulty target. The
-    /// stream yields every winning `(secret key, claim)` pair it finds and
-    /// never terminates on its own — it is dropped once the block leaves the
-    /// reward window (see [`Self::prune_out_of_window_streams`]).
-    fn new_block_search_stream(
-        block_header: HeaderId,
-        block_slot: Slot,
-        epoch_state: &EpochState,
-        ledger_state: &LedgerState,
-    ) -> WinnerTicketStream
-    where
-        CryptarchiaServiceData:
-            'static + Send + Sync + overwatch::services::ServiceData<Message = ConsensusMsg<Tx>>,
-        RuntimeServiceId: 'static + Send + Sync + Unpin,
-        Tx: 'static + Send + Sync,
-    {
-        let epoch_nonce = epoch_state.nonce;
-        let difficulty = ledger_state.mantle_ledger().pow.reward_difficulty();
-        #[expect(
-            rustc::closure_returning_async_block,
-            reason = "`repeat_with` takes a FnMut not an async closure"
-        )]
-        let tasks =
-            iter::repeat_with(move || search_winner_ticket(block_header, epoch_nonce, difficulty));
-        let results = stream::iter(tasks).buffer_unordered(16);
-        let winners = tokio_stream::StreamExt::filter_map(results, |maybe_winner| maybe_winner);
-        // Tag every winner with the block's slot so the consumer can track the
-        // reward window.
-        Box::pin(winners.map(move |ticket| (block_slot, ticket)))
-    }
+/// Builds an unbounded stream that searches for winning tickets for a single
+/// block.
+///
+/// Up to 16 attempts run concurrently; each draws a fresh random key and checks
+/// the resulting ticket against the block's difficulty target. The stream
+/// yields every winning `(secret key, claim)` pair it finds and never
+/// terminates on its own — it is dropped once the block leaves the reward
+/// window (see [`prune_out_of_window_streams`]).
+fn new_block_search_stream(
+    block_header: HeaderId,
+    block_slot: Slot,
+    epoch_state: &EpochState,
+    ledger_state: &LedgerState,
+) -> WinnerTicketStream {
+    let epoch_nonce = epoch_state.nonce;
+    let difficulty = ledger_state.mantle_ledger().pow.reward_difficulty();
+    #[expect(
+        rustc::closure_returning_async_block,
+        reason = "`repeat_with` takes a FnMut not an async closure"
+    )]
+    let tasks =
+        iter::repeat_with(move || search_winner_ticket(block_header, epoch_nonce, difficulty));
+    let results = stream::iter(tasks).buffer_unordered(16);
+    let winners = tokio_stream::StreamExt::filter_map(results, |maybe_winner| maybe_winner);
+    // Tag every winner with the block's slot so the consumer can track the
+    // reward window.
+    Box::pin(winners.map(move |ticket| (block_slot, ticket)))
 }
 
 /// Runs a single ticket-search attempt for a block.
@@ -243,14 +233,7 @@ fn prune_out_of_window_streams(
     }
 }
 
-impl<Tx, CryptarchiaServiceData, RuntimeServiceId> Stream
-    for TicketGenerator<Tx, CryptarchiaServiceData, RuntimeServiceId>
-where
-    CryptarchiaServiceData:
-        Send + Sync + overwatch::services::ServiceData<Message = ConsensusMsg<Tx>> + 'static,
-    RuntimeServiceId: Send + Sync + Unpin + 'static,
-    Tx: Send + Sync + 'static,
-{
+impl Stream for TicketGenerator {
     type Item = WinningTicket;
 
     /// Advances the generator.
@@ -291,7 +274,7 @@ where
             // trigger new stream if its new enough
             if frontier_slot < block_slot {
                 let stream =
-                    Self::new_block_search_stream(block_id, block_slot, epoch_state, ledger_state);
+                    new_block_search_stream(block_id, block_slot, epoch_state, ledger_state);
                 this.tickets_search.insert(block_id, stream);
                 this.tickets_search_by_slot
                     .entry(block_slot)

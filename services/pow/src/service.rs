@@ -240,10 +240,7 @@ where
         );
 
         // Stream of winning PoW tickets, one per solved puzzle.
-        let mut winning_tickets = TicketGenerator::<Tx, CryptarchiaService, RuntimeServiceId>::new(
-            cryptarchia_api.clone(),
-        )
-        .await?;
+        let mut winning_tickets = TicketGenerator::new::<Tx, _, _>(cryptarchia_api.clone()).await?;
 
         let mut inbound_relay = service_resources_handle.inbound_relay;
         // Persists the claimable/pending tickets so they survive restarts.
