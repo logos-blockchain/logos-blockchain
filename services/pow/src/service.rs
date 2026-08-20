@@ -1,5 +1,8 @@
 use core::fmt::{Debug, Display};
-use std::{collections::HashMap, marker::PhantomData};
+use std::{
+    collections::{HashMap, HashSet},
+    marker::PhantomData,
+};
 
 use futures::StreamExt as _;
 use lb_blend_service::{
@@ -7,18 +10,20 @@ use lb_blend_service::{
     message::{BlendPayload, TransactionTooLarge},
 };
 use lb_chain_service::{
-    Slot,
+    ProcessedBlockEvent, Slot,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
     codec::{Error as CodecError, SerializeOp as _},
+    events::{Event, TxEvent, TxEventPayload},
+    header::HeaderId,
     mantle::{
         Note, NoteId, Op, OpProof, SignedMantleTx, Utxo, Value,
         gas::MainnetGasProfile,
         ledger::{Inputs, InputsError, Outputs},
         ops::{
             NoOpProof, OpId as _,
-            pow::{ClaimPowRewardOp, SLOT_WINDOW},
+            pow::{ClaimPowRewardOp, PowNullifier, SLOT_WINDOW},
             transfer::TransferOp,
         },
         traits::Hashable as _,
@@ -42,11 +47,18 @@ use lb_utils::bounded::BoundedError;
 use lb_zksign::ZkSignError;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
-    services::{AsServiceId, ServiceCore, ServiceData, state::ServiceState},
+    services::{
+        AsServiceId, ServiceCore, ServiceData,
+        state::{ServiceState, StateUpdater},
+    },
 };
 use serde::{Deserialize, Serialize};
 use tokio::{sync::oneshot, task::JoinError};
-use tracing::{error, log::info};
+use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
+use tracing::{
+    error,
+    log::{info, warn},
+};
 
 use crate::tickets::{TicketGenerator, WinningTicket};
 
@@ -250,6 +262,11 @@ where
         // Stream of winning PoW tickets, one per solved puzzle.
         let mut winning_tickets = TicketGenerator::new::<Tx, _, _>(cryptarchia_api.clone()).await?;
 
+        // Processed-block stream, watched to retire pending claims once their
+        // reward is observed as settled on chain.
+        let mut processed_blocks =
+            BroadcastStream::new(cryptarchia_api.subscribe_new_blocks().await?);
+
         let mut inbound_relay = service_resources_handle.inbound_relay;
         // Persists the claimable/pending tickets so they survive restarts.
         let state_updater = service_resources_handle.state_updater;
@@ -291,25 +308,7 @@ where
                             state_updater.update(Some(state.clone()));
                         }
                         PoWServiceMessage::ClaimableRewardsInfo { response } => {
-                            match cryptarchia_api.info().await {
-                                Ok(info) => {
-                                    let current_slot = info.cryptarchia_info.slot;
-                                    // Drop expired tickets first, so the report
-                                    // covers only what is still claimable.
-                                    prune_expired_tickets(&mut state, current_slot);
-                                    state_updater.update(Some(state.clone()));
-                                    let claimable = claimable_rewards_info(
-                                        &state.ready_to_claim,
-                                        current_slot,
-                                    );
-                                    if response.send(claimable).is_err() {
-                                        error!(target: LOG_TARGET, "ClaimableRewardsInfo response receiver was dropped");
-                                    }
-                                }
-                                Err(e) => {
-                                    error!(target: LOG_TARGET, "Failed to query chain info for claimable rewards: {e}");
-                                }
-                            }
+                            respond_claimable_rewards(&cryptarchia_api, &mut state, &state_updater, response).await;
                         }
                     }
                 }
@@ -327,6 +326,11 @@ where
                         state.ready_to_claim.len()
                     );
                     state_updater.update(Some(state.clone()));
+                }
+                // A block was processed: retire any pending claim whose reward
+                // note it minted (i.e. the claim has settled on chain).
+                Some(processed_block) = processed_blocks.next() => {
+                    retire_settled_claims(&cryptarchia_api, &mut state, &state_updater, processed_block).await;
                 }
             }
         }
@@ -416,6 +420,114 @@ fn prune_expired_tickets(state: &mut PoWServiceState, current_slot: Slot) {
     if pruned > 0 {
         info!(target: LOG_TARGET, "Pruned {pruned} expired PoW ticket(s)");
     }
+}
+
+/// Answers a [`PoWServiceMessage::ClaimableRewardsInfo`] query: prunes expired
+/// tickets against the current slot, persists the pruned state, then reports
+/// the still-claimable ones.
+async fn respond_claimable_rewards<CryptarchiaService, RuntimeServiceId>(
+    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+    state: &mut PoWServiceState,
+    state_updater: &StateUpdater<Option<PoWServiceState>>,
+    response: oneshot::Sender<ClaimableRewardsInfo>,
+) where
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
+    RuntimeServiceId: Sync,
+{
+    let current_slot = match cryptarchia_api.info().await {
+        Ok(info) => info.cryptarchia_info.slot,
+        Err(e) => {
+            error!(target: LOG_TARGET, "Failed to query chain info for claimable rewards: {e}");
+            return;
+        }
+    };
+    // Drop expired tickets first, so the report covers only what is still
+    // claimable.
+    prune_expired_tickets(state, current_slot);
+    state_updater.update(Some(state.clone()));
+    let claimable = claimable_rewards_info(&state.ready_to_claim, current_slot);
+    if response.send(claimable).is_err() {
+        error!(target: LOG_TARGET, "ClaimableRewardsInfo response receiver was dropped");
+    }
+}
+
+/// Handles one processed-block event: retires any pending claim it settled and
+/// persists the state when it changes.
+///
+/// A missed broadcast event is logged and ignored; a fresh subscription always
+/// re-emits the current tip, so a later block covers any settlement in the gap.
+async fn retire_settled_claims<CryptarchiaService, RuntimeServiceId>(
+    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+    state: &mut PoWServiceState,
+    state_updater: &StateUpdater<Option<PoWServiceState>>,
+    processed_block: Result<ProcessedBlockEvent, BroadcastStreamRecvError>,
+) where
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
+    RuntimeServiceId: Sync,
+{
+    let block_id = match processed_block {
+        Ok(block) => block.block_id,
+        Err(e) => {
+            warn!(target: LOG_TARGET, "Missed a processed-block event: {e}");
+            return;
+        }
+    };
+    match prune_settled_pending(cryptarchia_api, state, block_id).await {
+        Ok(0) => {}
+        Ok(settled) => {
+            info!(
+                target: LOG_TARGET,
+                "Retired {settled} settled PoW claim(s); {} still pending",
+                state.pending_to_claim.len()
+            );
+            state_updater.update(Some(state.clone()));
+        }
+        Err(e) => {
+            error!(target: LOG_TARGET, "Failed to check settled PoW claims: {e}");
+        }
+    }
+}
+
+/// Retires pending tickets whose reward has settled on chain, detected by a
+/// [`TxEventPayload::PoWRewardClaimed`] event in the just-processed `block_id`.
+///
+/// The event carries the spent solution's [`PowNullifier`], which is exactly a
+/// claim's puzzle ticket, so a pending ticket is matched by re-deriving that
+/// nullifier from its claim. Returns the number of tickets retired.
+async fn prune_settled_pending<CryptarchiaService, RuntimeServiceId>(
+    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+    state: &mut PoWServiceState,
+    block_id: HeaderId,
+) -> Result<usize, DynError>
+where
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
+    RuntimeServiceId: Sync,
+{
+    if state.pending_to_claim.is_empty() {
+        return Ok(0);
+    }
+    let Some(events) = cryptarchia_api.get_block_events(block_id).await? else {
+        return Ok(0);
+    };
+    let settled: HashSet<PowNullifier> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Tx(TxEvent {
+                payload: TxEventPayload::PoWRewardClaimed { pow_nullifier, .. },
+                ..
+            }) => Some(*pow_nullifier),
+            _ => None,
+        })
+        .collect();
+    if settled.is_empty() {
+        return Ok(0);
+    }
+
+    let before = state.pending_to_claim.len();
+    state
+        .pending_to_claim
+        .retain(|ticket| !settled.contains(&ticket.claim.get_puzzle_ticket()));
+    Ok(before - state.pending_to_claim.len())
 }
 
 /// Summarizes how long each ready ticket remains within the reward window.
