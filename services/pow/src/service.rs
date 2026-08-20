@@ -30,7 +30,10 @@ use lb_core::{
 };
 use lb_key_management_system_keys::keys::{MAX_ZK_SIGNING_KEYS, UnsecuredZkKey, ZkPublicKey};
 use lb_ledger::LedgerState;
-use lb_services_utils::overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings};
+use lb_services_utils::{
+    overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings},
+    wait_until_services_are_ready,
+};
 use lb_storage_service::{
     StorageService, backends::StorageBackend, recovery::StorageRecoveryBackend,
 };
@@ -199,6 +202,16 @@ where
             _phantom,
         } = self;
 
+        // The PoW service must not mine or claim until the chain is synced: wait
+        // for the chain service to become ready and reach the Online mode before
+        // starting.
+        wait_until_services_are_ready!(
+            &service_resources_handle.overwatch_handle,
+            None,
+            CryptarchiaService
+        )
+        .await?;
+
         // API wrapper over the chain service relay, used to query chain state.
         let cryptarchia_api = CryptarchiaServiceApi::<CryptarchiaService, RuntimeServiceId>::new(
             service_resources_handle
@@ -207,6 +220,11 @@ where
                 .await
                 .expect("Relay connection with Cryptarchia chain service should succeed"),
         );
+
+        // Wait till chain is online to mine
+        info!("Waiting for the chain to become online");
+        cryptarchia_api.wait_until_chain_becomes_online().await?;
+        info!("Chain is online; starting the PoW service");
 
         // API wrapper over the blend service relay, used to publish PoW reward
         // claim transactions to the blend network.
