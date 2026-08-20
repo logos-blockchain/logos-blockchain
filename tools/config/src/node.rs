@@ -40,8 +40,12 @@ pub fn create_node_user_config(config: GeneralConfig) -> UserConfig {
     });
     sdp_config.declaration_id = config.sdp_config.declaration_id;
 
+    // Pay PoW claim change to the node's own wallet key. The generated-config
+    // path has no dedicated `PoWClaim` key like the CLI keystore, but
+    // `known_key` is node-controlled and present in the KMS/wallet (so the
+    // change is spendable) — unlike `funding_pk`, which is the SDP funding key.
     let pow_config = PoWConfig::with_required_values(PoWConfigRequiredValues {
-        claim_address: config.consensus_config.funding_pk,
+        claim_address: config.consensus_config.known_key.as_public_key(),
     });
 
     UserConfig {

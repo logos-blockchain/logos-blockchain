@@ -777,8 +777,10 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
                 keys: config.kms_config.backend.keys,
             },
         },
+        // Pay PoW claim change to the node's own wallet key (node-controlled and
+        // in the KMS/wallet, so spendable), not the SDP funding key.
         pow: config::pow::serde::Config::with_required_values(config::pow::serde::RequiredValues {
-            claim_address: config.consensus_config.funding_sk.as_public_key(),
+            claim_address: config.consensus_config.known_key.as_public_key(),
         }),
         state: state::Config::default(),
     };
