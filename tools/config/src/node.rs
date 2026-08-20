@@ -7,9 +7,10 @@ use lb_key_management_system_service::{
 use lb_node::{
     UserConfig,
     config::{
-        ApiConfig, CryptarchiaConfig, SdpConfig, StorageConfig, WalletConfig,
+        ApiConfig, CryptarchiaConfig, PoWConfig, SdpConfig, StorageConfig, WalletConfig,
         api::serde::AxumBackendSettings,
         cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
+        pow::serde::RequiredValues as PoWConfigRequiredValues,
         sdp::serde::RequiredValues as SdpConfigRequiredValues, state::Config as StateConfig,
         wallet::serde::RequiredValues as WalletConfigRequiredValues,
     },
@@ -39,6 +40,10 @@ pub fn create_node_user_config(config: GeneralConfig) -> UserConfig {
     });
     sdp_config.declaration_id = config.sdp_config.declaration_id;
 
+    let pow_config = PoWConfig::with_required_values(PoWConfigRequiredValues {
+        claim_address: config.consensus_config.funding_pk,
+    });
+
     UserConfig {
         network: config.network_config,
         blend: config.blend_config.0,
@@ -50,6 +55,7 @@ pub fn create_node_user_config(config: GeneralConfig) -> UserConfig {
         sdp: sdp_config,
         wallet: create_wallet_config(&config.consensus_config, &config.kms_config.backend.keys),
         kms: config.kms_config,
+        pow: pow_config,
         state: StateConfig::default(),
     }
 }

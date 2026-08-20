@@ -777,6 +777,9 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
                 keys: config.kms_config.backend.keys,
             },
         },
+        pow: config::pow::serde::Config::with_required_values(config::pow::serde::RequiredValues {
+            claim_address: config.consensus_config.funding_sk.as_public_key(),
+        }),
         state: state::Config::default(),
     };
 
