@@ -65,7 +65,7 @@ impl SecretKey {
     }
 
     #[must_use]
-    pub fn from_rng<RNG: RngCore>(rng: &mut RNG) -> Self {
+    pub fn from_rng<Rng: RngCore>(rng: &mut Rng) -> Self {
         let mut bytes = [0u8; 32];
         rng.fill_bytes(&mut bytes);
         Self(fr_from_mod_bytes(&bytes))
