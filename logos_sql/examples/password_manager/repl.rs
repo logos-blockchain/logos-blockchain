@@ -8,7 +8,6 @@ use std::io::{self, Write as _};
 
 use clap::{Parser, Subcommand};
 use logos_sql::TxId;
-use uuid::Uuid;
 
 use crate::{
     AppResult,
@@ -80,8 +79,8 @@ pub async fn run(manager: &PasswordManager) -> AppResult<()> {
         }
 
         match handle_command(manager, command).await {
-            Ok(Some((request_id, tx_id))) => {
-                println!("request {request_id} committed locally as {tx_id}");
+            Ok(Some(tx_id)) => {
+                println!("committed locally as {tx_id}");
             }
             Ok(None) => {}
             Err(error) => eprintln!("error: {error}"),
@@ -91,32 +90,21 @@ pub async fn run(manager: &PasswordManager) -> AppResult<()> {
     Ok(())
 }
 
-async fn handle_command(
-    manager: &PasswordManager,
-    command: Command,
-) -> AppResult<Option<(Uuid, TxId)>> {
-    let request_id = Uuid::new_v4();
-
+async fn handle_command(manager: &PasswordManager, command: Command) -> AppResult<Option<TxId>> {
     let tx_id = match command {
         Command::Add {
             label,
             account,
             password,
-        } => {
-            manager
-                .add(request_id.to_string(), label, account, password.join(" "))
-                .await?
-        }
+        } => manager.add(label, account, password.join(" ")).await?,
         Command::Update { label, password } => {
-            manager
-                .update_password(request_id.to_string(), label, password.join(" "))
-                .await?
+            manager.update_password(label, password.join(" ")).await?
         }
         Command::Show { label } => {
             print_credential(manager.credential(&label)?);
             return Ok(None);
         }
-        Command::Remove { label } => manager.remove(request_id.to_string(), label).await?,
+        Command::Remove { label } => manager.remove(label).await?,
         Command::List => {
             print_credentials(manager.credentials()?);
             return Ok(None);
@@ -124,7 +112,7 @@ async fn handle_command(
         Command::Exit => return Ok(None),
     };
 
-    Ok(Some((request_id, tx_id)))
+    Ok(Some(tx_id))
 }
 
 /// Reads terminal input without blocking the runtime that drives `λSQL`.

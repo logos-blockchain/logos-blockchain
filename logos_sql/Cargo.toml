@@ -15,11 +15,10 @@ workspace = true
 
 [dependencies]
 bincode                          = { workspace = true }
-blake2                           = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-log-targets                   = { workspace = true }
-lb-utils                         = { workspace = true }
 lb-zone-sdk                      = { workspace = true }
+rand                             = { features = ["getrandom"], workspace = true }
 reqwest                          = { workspace = true }
 rusqlite                         = { features = ["bundled", "functions", "hooks"], workspace = true }
 serde                            = { features = ["derive"], workspace = true }
@@ -32,4 +31,3 @@ clap       = { features = ["derive", "env", "help", "std"], workspace = true }
 hex        = { workspace = true }
 lb-groth16 = { workspace = true }
 tempfile   = { workspace = true }
-uuid       = { features = ["v4"], workspace = true }

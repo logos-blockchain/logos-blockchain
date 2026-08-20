@@ -122,7 +122,7 @@ mod tests {
     use super::{on_event, update_contains_logos_sql};
     use crate::{
         db::Databases,
-        protocol::{EncodedWrite, IdempotencyKey, Statement, Transaction, Value},
+        protocol::{EncodedWrite, Statement, Transaction, Value},
     };
 
     fn checkpoint(byte: u8, slot: u64) -> SequencerCheckpoint {
@@ -181,9 +181,7 @@ mod tests {
             .expect("statement should be valid"),
         ])
         .expect("transaction should be valid");
-        let key = IdempotencyKey::try_from(b"request-1".to_vec()).expect("key should be valid");
-
-        EncodedWrite::new(&transaction, &key, &[3; 32])
+        EncodedWrite::new(&transaction)
             .expect("payload should encode")
             .payload
     }

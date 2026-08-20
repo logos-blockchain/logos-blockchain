@@ -16,7 +16,7 @@ use rusqlite::{
 
 use crate::{
     error::Error,
-    protocol::{EncodedWrite, IdempotencyKey, Transaction, TxId},
+    protocol::{EncodedWrite, Transaction, TxId},
 };
 
 const DATABASE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -26,18 +26,11 @@ const CONTROL_DATABASE_FILE: &str = "control.db";
 // Stores locally committed writes and their exact channel payload. At most one
 // write may be waiting for ZoneSDK publication.
 const LIVE_SCHEMA: &str = "
-    CREATE TABLE IF NOT EXISTS __logos_sql_writes (
-        idempotency_key BLOB PRIMARY KEY,
+    CREATE TABLE IF NOT EXISTS __logos_sql_pending_write (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
         tx_id BLOB NOT NULL UNIQUE CHECK (length(tx_id) = 32),
-        -- Detects reuse of an idempotency key for a different SQL transaction.
-        transaction_digest BLOB NOT NULL CHECK (length(transaction_digest) = 32),
-        payload BLOB NOT NULL,
-        publish_pending INTEGER NOT NULL CHECK (publish_pending IN (0, 1))
+        payload BLOB NOT NULL
     ) STRICT;
-
-    CREATE UNIQUE INDEX IF NOT EXISTS __logos_sql_one_pending_publish
-        ON __logos_sql_writes(publish_pending)
-        WHERE publish_pending = 1;
 ";
 
 // Stores the participant-local ZoneSDK checkpoint independently of live state.
@@ -65,32 +58,20 @@ const UPDATE_CHECKPOINT: &str = "
     WHERE singleton = 1
 ";
 
-const SELECT_WRITE_BY_IDEMPOTENCY_KEY: &str = "
-    SELECT tx_id, transaction_digest
-    FROM __logos_sql_writes
-    WHERE idempotency_key = ?1
-";
-
 const INSERT_PENDING_WRITE: &str = "
-    INSERT INTO __logos_sql_writes (
-        idempotency_key,
-        tx_id,
-        transaction_digest,
-        payload,
-        publish_pending
-    ) VALUES (?1, ?2, ?3, ?4, 1)
+    INSERT INTO __logos_sql_pending_write (singleton, tx_id, payload)
+    VALUES (1, ?1, ?2)
 ";
 
 const SELECT_PENDING_PUBLISH: &str = "
     SELECT tx_id, payload
-    FROM __logos_sql_writes
-    WHERE publish_pending = 1
+    FROM __logos_sql_pending_write
+    WHERE singleton = 1
 ";
 
 const MARK_PUBLISH_COMPLETE: &str = "
-    UPDATE __logos_sql_writes
-    SET publish_pending = 0
-    WHERE tx_id = ?1 AND publish_pending = 1
+    DELETE FROM __logos_sql_pending_write
+    WHERE singleton = 1 AND tx_id = ?1
 ";
 
 const WRITER_PRAGMAS: &str = "
@@ -99,21 +80,6 @@ const WRITER_PRAGMAS: &str = "
 ";
 
 const FOREIGN_KEYS_PRAGMA: &str = "PRAGMA foreign_keys = ON;";
-
-/// Stored identity used to recognize an idempotent retry.
-struct StoredWriteIdentity {
-    tx_id: Vec<u8>,
-    transaction_digest: Vec<u8>,
-}
-
-impl StoredWriteIdentity {
-    fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
-        Ok(Self {
-            tx_id: row.get(0)?,
-            transaction_digest: row.get(1)?,
-        })
-    }
-}
 
 /// Raw database representation of a write waiting for publication.
 struct StoredPendingPublish {
@@ -198,40 +164,11 @@ impl Databases {
         Ok(())
     }
 
-    /// Returns the existing identity for an idempotency key.
-    pub(crate) fn existing_write(
-        &self,
-        idempotency_key: &IdempotencyKey,
-        transaction_digest: &[u8; 32],
-    ) -> Result<Option<TxId>, Error> {
-        let record = self
-            .live
-            .query_row(
-                SELECT_WRITE_BY_IDEMPOTENCY_KEY,
-                [idempotency_key.as_ref()],
-                StoredWriteIdentity::from_row,
-            )
-            .optional()?;
-
-        let Some(record) = record else {
-            return Ok(None);
-        };
-
-        if record.transaction_digest.as_slice() != transaction_digest {
-            return Err(Error::IdempotencyConflict);
-        }
-
-        let tx_id = decode_tx_id(record.tx_id)?;
-
-        Ok(Some(tx_id))
-    }
-
     /// Commits application effects and their pending publish record together in
     /// `LIVE.db`.
     pub(crate) fn commit_local_write(
         &mut self,
         transaction: &Transaction,
-        idempotency_key: &IdempotencyKey,
         encoded: &EncodedWrite,
     ) -> Result<TxId, Error> {
         if self.pending_publish()?.is_some() {
@@ -257,12 +194,7 @@ impl Databases {
 
         db_transaction.execute(
             INSERT_PENDING_WRITE,
-            params![
-                idempotency_key.as_ref(),
-                encoded.tx_id.as_ref(),
-                encoded.transaction_digest,
-                encoded.payload,
-            ],
+            params![encoded.tx_id.as_ref(), encoded.payload],
         )?;
         db_transaction.commit()?;
 
@@ -371,7 +303,7 @@ mod tests {
     use crate::{
         error::Error,
         local_write,
-        protocol::{EncodedWrite, IdempotencyKey, Statement, Transaction, Value},
+        protocol::{EncodedWrite, Statement, Transaction, Value},
     };
 
     fn checkpoint(byte: u8, slot: u64) -> SequencerCheckpoint {
@@ -401,19 +333,18 @@ mod tests {
         .expect("transaction should be valid")
     }
 
-    fn encoded_write(transaction: &Transaction, key: &IdempotencyKey) -> EncodedWrite {
-        EncodedWrite::new(transaction, key, &[3; 32]).expect("write should encode")
+    fn encoded_write(transaction: &Transaction) -> EncodedWrite {
+        EncodedWrite::new(transaction).expect("write should encode")
     }
 
     fn assert_application_sql_rejected(sql: &str) {
         let dir = TempDir::new().expect("temporary directory should be created");
         let mut db = Databases::open(dir.path()).expect("databases should open");
         let transaction = transaction(sql);
-        let key = IdempotencyKey::try_from(sql.as_bytes().to_vec()).expect("key should be valid");
-        let encoded = encoded_write(&transaction, &key);
+        let encoded = encoded_write(&transaction);
 
         let error = db
-            .commit_local_write(&transaction, &key, &encoded)
+            .commit_local_write(&transaction, &encoded)
             .expect_err("application SQL should be rejected");
 
         assert!(matches!(error, Error::Database(_)));
@@ -454,10 +385,9 @@ mod tests {
             .expect("application table should be created");
 
         let transaction = insert("hello");
-        let key = IdempotencyKey::try_from(b"request-1".to_vec()).expect("key should be valid");
-        let encoded = encoded_write(&transaction, &key);
+        let encoded = encoded_write(&transaction);
 
-        db.commit_local_write(&transaction, &key, &encoded)
+        db.commit_local_write(&transaction, &encoded)
             .expect("write should commit");
 
         let count: i64 = db
@@ -476,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn idempotent_retry_does_not_execute_twice() {
+    fn repeated_write_is_a_new_transaction() {
         let dir = TempDir::new().expect("temporary directory should be created");
         let mut db = Databases::open(dir.path()).expect("databases should open");
 
@@ -485,22 +415,22 @@ mod tests {
             .expect("application table should be created");
 
         let transaction = insert("hello");
-        let key = IdempotencyKey::try_from(b"request-1".to_vec()).expect("key should be valid");
+        let first_tx_id =
+            local_write::commit(&mut db, &transaction).expect("first write should commit");
+        db.mark_publish_complete(first_tx_id)
+            .expect("first publication should complete");
 
-        let first_tx_id = local_write::commit(&mut db, &transaction, &key, &[3; 32])
-            .expect("write should commit");
+        let second_tx_id =
+            local_write::commit(&mut db, &transaction).expect("second write should commit");
 
-        let retry_tx_id = local_write::commit(&mut db, &transaction, &key, &[3; 32])
-            .expect("retry should return the existing write");
-
-        assert_eq!(retry_tx_id, first_tx_id);
+        assert_ne!(second_tx_id, first_tx_id);
 
         let count: i64 = db
             .live
             .query_row("SELECT count(*) FROM items", [], |row| row.get(0))
             .expect("row should be readable");
 
-        assert_eq!(count, 1);
+        assert_eq!(count, 2);
     }
 
     #[test]
@@ -508,10 +438,9 @@ mod tests {
         let dir = TempDir::new().expect("temporary directory should be created");
         let mut db = Databases::open(dir.path()).expect("databases should open");
         let transaction = transaction("CREATE TABLE items(value TEXT NOT NULL)");
-        let key = IdempotencyKey::try_from(b"create-items".to_vec()).expect("key should be valid");
-        let encoded = encoded_write(&transaction, &key);
+        let encoded = encoded_write(&transaction);
 
-        db.commit_local_write(&transaction, &key, &encoded)
+        db.commit_local_write(&transaction, &encoded)
             .expect("schema write should commit");
 
         db.live
@@ -538,11 +467,9 @@ mod tests {
                 Statement::new(control.to_owned(), Vec::new()).expect("statement should be valid"),
             ])
             .expect("transaction should be valid");
-            let key =
-                IdempotencyKey::try_from(control.as_bytes().to_vec()).expect("key should be valid");
-            let encoded = encoded_write(&transaction, &key);
+            let encoded = encoded_write(&transaction);
 
-            db.commit_local_write(&transaction, &key, &encoded)
+            db.commit_local_write(&transaction, &encoded)
                 .expect_err("transaction control should be rejected");
 
             let count: i64 = db

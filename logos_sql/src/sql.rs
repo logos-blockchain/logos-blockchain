@@ -5,7 +5,7 @@ use rusqlite::types::{ToSql, ToSqlOutput, Value, ValueRef};
 use crate::{
     error::Error,
     logos_sql::LogosSql,
-    protocol::{IdempotencyKey, Statement, Transaction, TxId},
+    protocol::{Statement, Transaction, TxId},
 };
 
 /// The beginning of a replicated SQL transaction.
@@ -80,12 +80,10 @@ impl QueryBuilder<'_> {
     /// Returns an error when a parameter cannot be represented by the `λSQL`
     /// protocol, validation or the local commit fails, the sequencer is not
     /// ready, or the runtime has halted.
-    pub async fn execute(self, idempotency_key: IdempotencyKey) -> Result<TxId, Error> {
+    pub async fn execute(self) -> Result<TxId, Error> {
         let transaction = self.transaction.finish()?;
 
-        self.logos_sql
-            .commit_transaction(transaction, idempotency_key)
-            .await
+        self.logos_sql.commit_transaction(transaction).await
     }
 }
 

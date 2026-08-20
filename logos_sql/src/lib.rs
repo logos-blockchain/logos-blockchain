@@ -16,6 +16,6 @@ mod sql;
 
 pub use error::Error;
 pub use logos_sql::{LogosSql, LogosSqlConfig};
-pub use protocol::{IdempotencyKey, TxId};
+pub use protocol::TxId;
 pub use rusqlite::types::ToSql;
 pub use sql::{QueryBuilder, TransactionBuilder};

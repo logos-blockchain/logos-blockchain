@@ -36,10 +36,6 @@ pub enum Error {
     #[error("invalid local state: {0}")]
     InvalidLocalState(&'static str),
 
-    /// An idempotency key was reused for different transaction content.
-    #[error("idempotency key was already used for a different transaction")]
-    IdempotencyConflict,
-
     /// A local write is committed but has not yet been accepted by `ZoneSDK`.
     #[error("a committed write is still waiting for ZoneSDK to accept it")]
     PublishPending,

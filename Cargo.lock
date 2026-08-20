@@ -5412,14 +5412,13 @@ name = "logos-sql"
 version = "0.0.0"
 dependencies = [
  "bincode",
- "blake2",
  "clap",
  "hex",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-log-targets",
- "logos-blockchain-utils",
  "logos-blockchain-zone-sdk",
+ "rand 0.8.6",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",
@@ -5427,7 +5426,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]

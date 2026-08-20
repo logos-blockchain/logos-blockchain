@@ -3,8 +3,7 @@
 use std::fmt::{self, Display, Formatter};
 
 use bincode::Options as _;
-use blake2::{Blake2b, Digest as _, digest::consts::U32};
-use lb_utils::bounded::{BoundedError, NonEmptyBoundedVec};
+use rand::RngCore as _;
 pub use rusqlite::types::Value;
 use serde::{Deserialize, Serialize};
 
@@ -13,8 +12,6 @@ use crate::error::Error;
 const PAYLOAD_MARKER: [u8; 9] = *b"LOGOS_SQL";
 const PAYLOAD_VERSION: u16 = 1;
 const PAYLOAD_HEADER_LEN: usize = PAYLOAD_MARKER.len() + size_of::<u16>();
-const MAX_IDEMPOTENCY_KEY_BYTES: usize = 1_024;
-const TX_ID_DOMAIN_SEPARATOR: &[u8] = b"logos sql transaction id";
 
 /// Stable identity of one application write.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
@@ -31,19 +28,11 @@ impl Display for TxId {
 }
 
 impl TxId {
-    fn derive(
-        writer_id: &[u8; 32],
-        idempotency_key: &IdempotencyKey,
-        transaction_digest: &[u8; 32],
-    ) -> Self {
-        let mut hasher = Blake2b::<U32>::new();
+    fn generate() -> Self {
+        let mut bytes = [0; 32];
+        rand::rngs::OsRng.fill_bytes(&mut bytes);
 
-        hasher.update(TX_ID_DOMAIN_SEPARATOR);
-        hasher.update(writer_id);
-        hasher.update(idempotency_key.as_ref());
-        hasher.update(transaction_digest);
-
-        Self(hasher.finalize().into())
+        Self(bytes)
     }
 }
 
@@ -62,24 +51,6 @@ impl AsRef<[u8; 32]> for TxId {
 impl From<TxId> for [u8; 32] {
     fn from(tx_id: TxId) -> Self {
         tx_id.0
-    }
-}
-
-/// Application-supplied identity for safely retrying one write.
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-pub struct IdempotencyKey(NonEmptyBoundedVec<u8, MAX_IDEMPOTENCY_KEY_BYTES>);
-
-impl TryFrom<Vec<u8>> for IdempotencyKey {
-    type Error = BoundedError;
-
-    fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
-        NonEmptyBoundedVec::try_from(bytes).map(Self)
-    }
-}
-
-impl AsRef<[u8]> for IdempotencyKey {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_slice()
     }
 }
 
@@ -204,12 +175,6 @@ impl Transaction {
     pub fn statements(&self) -> &[Statement] {
         &self.statements
     }
-
-    fn digest(&self) -> Result<[u8; 32], Error> {
-        let encoded = codec().serialize(self)?;
-
-        Ok(Blake2b::<U32>::digest(encoded).into())
-    }
 }
 
 /// Transaction payload carried by a `λSQL` channel inscription.
@@ -253,18 +218,12 @@ impl ChannelWrite {
 /// A local write after its identity and channel payload have been encoded.
 pub struct EncodedWrite {
     pub tx_id: TxId,
-    pub transaction_digest: [u8; 32],
     pub payload: Vec<u8>,
 }
 
 impl EncodedWrite {
-    pub fn new(
-        transaction: &Transaction,
-        idempotency_key: &IdempotencyKey,
-        writer_id: &[u8; 32],
-    ) -> Result<Self, Error> {
-        let transaction_digest = transaction.digest()?;
-        let tx_id = TxId::derive(writer_id, idempotency_key, &transaction_digest);
+    pub fn new(transaction: &Transaction) -> Result<Self, Error> {
+        let tx_id = TxId::generate();
 
         let channel_write = ChannelWrite {
             tx_id,
@@ -273,11 +232,7 @@ impl EncodedWrite {
 
         let payload = channel_write.encode()?;
 
-        Ok(Self {
-            tx_id,
-            transaction_digest,
-            payload,
-        })
+        Ok(Self { tx_id, payload })
     }
 }
 
@@ -296,38 +251,13 @@ fn codec() -> impl bincode::Options {
 
 #[cfg(test)]
 mod tests {
-    use lb_utils::bounded::BoundedError;
-
-    use super::{
-        ChannelWrite, EncodedWrite, IdempotencyKey, MAX_IDEMPOTENCY_KEY_BYTES, Statement,
-        Transaction, TxId, Value,
-    };
+    use super::{ChannelWrite, EncodedWrite, Statement, Transaction, TxId, Value};
 
     #[test]
     fn transaction_id_is_displayed_as_hex() {
         let tx_id = TxId::from([0xab; 32]);
 
         assert_eq!(tx_id.to_string(), "ab".repeat(32));
-    }
-
-    #[test]
-    fn idempotency_key_must_not_be_empty() {
-        let result = IdempotencyKey::try_from(Vec::new());
-
-        assert_eq!(result, Err(BoundedError::EmptyInput));
-    }
-
-    #[test]
-    fn idempotency_key_has_a_size_limit() {
-        let result = IdempotencyKey::try_from(vec![0; MAX_IDEMPOTENCY_KEY_BYTES + 1]);
-
-        assert_eq!(
-            result,
-            Err(BoundedError::TooManyItems {
-                count: MAX_IDEMPOTENCY_KEY_BYTES + 1,
-                max: MAX_IDEMPOTENCY_KEY_BYTES,
-            })
-        );
     }
 
     #[test]
@@ -341,9 +271,7 @@ mod tests {
         ])
         .expect("transaction should be valid");
 
-        let key = IdempotencyKey::try_from(b"request-1".to_vec()).expect("key should be valid");
-        let encoded =
-            EncodedWrite::new(&transaction, &key, &[3; 32]).expect("submission should encode");
+        let encoded = EncodedWrite::new(&transaction).expect("submission should encode");
         let decoded = ChannelWrite::decode(&encoded.payload).expect("channel write should decode");
 
         assert_eq!(decoded.tx_id, encoded.tx_id);

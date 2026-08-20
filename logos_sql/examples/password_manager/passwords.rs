@@ -4,7 +4,7 @@
 //! application ends and the replication library begins. Domain operations are
 //! translated into parameterized SQL writes here.
 
-use logos_sql::{Error as LogosSqlError, IdempotencyKey, LogosSql, LogosSqlConfig, TxId};
+use logos_sql::{Error as LogosSqlError, LogosSql, LogosSqlConfig, TxId};
 
 use crate::AppResult;
 
@@ -15,9 +15,6 @@ const CREATE_CREDENTIALS_TABLE: &str = "
         password TEXT NOT NULL
     )
 ";
-
-/// Stable across restarts so one participant records this schema version once.
-const SCHEMA_REQUEST_ID: &str = "password-manager/schema/1";
 
 const INSERT_CREDENTIAL: &str = "
     INSERT INTO credentials (label, account, password)
@@ -85,11 +82,9 @@ impl PasswordManager {
             return Ok(());
         }
 
-        let key = IdempotencyKey::try_from(SCHEMA_REQUEST_ID.as_bytes().to_vec())?;
-
         self.logos_sql
             .query(CREATE_CREDENTIALS_TABLE)
-            .execute(key)
+            .execute()
             .await?;
 
         Ok(())
@@ -107,54 +102,37 @@ impl PasswordManager {
     ///
     /// Concurrent attempts to use the same label produce a primary-key
     /// conflict.
-    pub async fn add(
-        &self,
-        request_id: String,
-        label: String,
-        account: String,
-        password: String,
-    ) -> AppResult<TxId> {
+    pub async fn add(&self, label: String, account: String, password: String) -> AppResult<TxId> {
         // TODO(security): Encrypt the password before it enters `λSQL`. The
         // resulting ciphertext, salt, and nonce should be bound instead.
-        let key = IdempotencyKey::try_from(request_id.into_bytes())?;
-
         Ok(self
             .logos_sql
             .query(INSERT_CREDENTIAL)
             .bind(label)
             .bind(account)
             .bind(password)
-            .execute(key)
+            .execute()
             .await?)
     }
 
     /// Replaces the password stored under one label.
-    pub async fn update_password(
-        &self,
-        request_id: String,
-        label: String,
-        password: String,
-    ) -> AppResult<TxId> {
-        let key = IdempotencyKey::try_from(request_id.into_bytes())?;
-
+    pub async fn update_password(&self, label: String, password: String) -> AppResult<TxId> {
         Ok(self
             .logos_sql
             .query(UPDATE_PASSWORD)
             .bind(label)
             .bind(password)
-            .execute(key)
+            .execute()
             .await?)
     }
 
     /// Removes one credential.
-    pub async fn remove(&self, request_id: String, label: String) -> AppResult<TxId> {
-        let key = IdempotencyKey::try_from(request_id.into_bytes())?;
-
+    pub async fn remove(&self, label: String) -> AppResult<TxId> {
         Ok(self
             .logos_sql
             .query(DELETE_CREDENTIAL)
             .bind(label)
-            .execute(key)
+            .execute()
             .await?)
     }
 

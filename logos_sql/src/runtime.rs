@@ -17,7 +17,7 @@ use crate::{
     db::Databases,
     error::Error,
     local_write,
-    protocol::{IdempotencyKey, Transaction, TxId},
+    protocol::{Transaction, TxId},
 };
 
 const COMMAND_CHANNEL_CAPACITY: usize = 16;
@@ -28,7 +28,6 @@ const TARGET: &str = lb_log_targets::logos_sql::RUNTIME;
 enum Command {
     Execute {
         transaction: Transaction,
-        idempotency_key: IdempotencyKey,
         response_tx: oneshot::Sender<Result<TxId, Error>>,
     },
     Shutdown,
@@ -46,7 +45,6 @@ pub fn spawn(
     sequencer: ZoneSequencer<NodeHttpClient>,
     db: Databases,
     channel_id: ChannelId,
-    writer_id: [u8; 32],
     restored_checkpoint: Option<SequencerCheckpoint>,
 ) -> RuntimeHandle {
     let (command_tx, command_rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
@@ -56,7 +54,6 @@ pub fn spawn(
         sequencer,
         db,
         channel_id,
-        writer_id,
         command_rx,
         sequencer_ready: false,
         ready_tx: Some(ready_tx),
@@ -89,16 +86,11 @@ impl RuntimeHandle {
         }
     }
 
-    pub(crate) async fn execute(
-        &self,
-        transaction: Transaction,
-        idempotency_key: IdempotencyKey,
-    ) -> Result<TxId, Error> {
+    pub(crate) async fn execute(&self, transaction: Transaction) -> Result<TxId, Error> {
         let (response_tx, response_rx) = oneshot::channel();
         self.command_tx
             .send(Command::Execute {
                 transaction,
-                idempotency_key,
                 response_tx,
             })
             .await
@@ -133,7 +125,6 @@ struct Runtime {
     sequencer: ZoneSequencer<NodeHttpClient>,
     db: Databases,
     channel_id: ChannelId,
-    writer_id: [u8; 32],
     command_rx: mpsc::Receiver<Command>,
     sequencer_ready: bool,
     ready_tx: Option<oneshot::Sender<()>>,
@@ -174,7 +165,6 @@ impl Runtime {
     async fn handle_command(&mut self, command: Command) -> bool {
         let Command::Execute {
             transaction,
-            idempotency_key,
             response_tx,
         } = command
         else {
@@ -186,12 +176,7 @@ impl Runtime {
         } else if !self.sequencer_ready {
             Err(Error::SequencerNotReady)
         } else {
-            let committed = local_write::commit(
-                &mut self.db,
-                &transaction,
-                &idempotency_key,
-                &self.writer_id,
-            );
+            let committed = local_write::commit(&mut self.db, &transaction);
 
             if let Ok(tx_id) = committed {
                 tracing::trace!(

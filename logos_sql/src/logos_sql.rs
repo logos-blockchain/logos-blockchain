@@ -15,7 +15,7 @@ use rusqlite::Connection;
 use crate::{
     db::Databases,
     error::Error,
-    protocol::{IdempotencyKey, Transaction, TxId},
+    protocol::{Transaction, TxId},
     runtime,
     sql::{QueryBuilder, TransactionBuilder},
 };
@@ -60,8 +60,6 @@ impl LogosSql {
         let db = Databases::open(&config.state_dir)?;
         let live_path = db.live_path().to_owned();
         let checkpoint = db.load_checkpoint()?;
-        let writer_id = config.signing_key.public_key().to_bytes();
-
         let node = NodeHttpClient::new(CommonHttpClient::new(None), config.node_url);
 
         let sequencer = ZoneSequencer::init(
@@ -72,7 +70,7 @@ impl LogosSql {
             checkpoint.clone(),
         );
 
-        let runtime = runtime::spawn(sequencer, db, config.channel_id, writer_id, checkpoint);
+        let runtime = runtime::spawn(sequencer, db, config.channel_id, checkpoint);
 
         let mut logos_sql = Self {
             live_path,
@@ -96,16 +94,13 @@ impl LogosSql {
     /// submit it for publication.
     ///
     /// ```no_run
-    /// # use logos_sql::{Error, IdempotencyKey, LogosSql, TxId};
-    /// # async fn create_task(
-    /// #     logos_sql: &LogosSql,
-    /// #     key: IdempotencyKey,
-    /// # ) -> Result<TxId, Error> {
+    /// # use logos_sql::{Error, LogosSql, TxId};
+    /// # async fn create_task(logos_sql: &LogosSql) -> Result<TxId, Error> {
     /// logos_sql
     ///     .query("INSERT INTO tasks (id, title) VALUES (?1, ?2)")
     ///     .bind(42i64)
     ///     .bind("Write documentation")
-    ///     .execute(key)
+    ///     .execute()
     ///     .await
     /// # }
     /// ```
@@ -118,15 +113,11 @@ impl LogosSql {
         TransactionBuilder::new(self)
     }
 
-    pub(crate) async fn commit_transaction(
-        &self,
-        transaction: Transaction,
-        idempotency_key: IdempotencyKey,
-    ) -> Result<TxId, Error> {
+    pub(crate) async fn commit_transaction(&self, transaction: Transaction) -> Result<TxId, Error> {
         self.runtime
             .as_ref()
             .ok_or(Error::RuntimeStopped)?
-            .execute(transaction, idempotency_key)
+            .execute(transaction)
             .await
     }
 
