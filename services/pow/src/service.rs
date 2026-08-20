@@ -285,9 +285,14 @@ where
                         PoWServiceMessage::ClaimableRewardsInfo { response } => {
                             match cryptarchia_api.info().await {
                                 Ok(info) => {
+                                    let current_slot = info.cryptarchia_info.slot;
+                                    // Drop expired tickets first, so the report
+                                    // covers only what is still claimable.
+                                    prune_expired_tickets(&mut state, current_slot);
+                                    state_updater.update(Some(state.clone()));
                                     let claimable = claimable_rewards_info(
                                         &state.ready_to_claim,
-                                        info.cryptarchia_info.slot,
+                                        current_slot,
                                     );
                                     if response.send(claimable).is_err() {
                                         error!(target: LOG_TARGET, "ClaimableRewardsInfo response receiver was dropped");
@@ -303,7 +308,11 @@ where
                 // A puzzle was solved: accumulate the winning ticket to be
                 // claimed on demand (only while mining is enabled).
                 Some(winning_ticket) = winning_tickets.next(), if mining => {
+                    // The new ticket's slot tracks the tip, so use it to drop any
+                    // previously stored tickets whose window has since closed.
+                    let current_slot = winning_ticket.block_slot;
                     state.ready_to_claim.push(winning_ticket);
+                    prune_expired_tickets(&mut state, current_slot);
                     info!(
                         target: LOG_TARGET,
                         "Mined a winning ticket 💲; total claimable tickets {}",
@@ -334,9 +343,17 @@ where
     RuntimeServiceId: Sync,
 {
     // Size the batch against the current tip — the state the tx applies against.
-    let tip = cryptarchia_api.info().await?.cryptarchia_info.tip;
+    let info = cryptarchia_api.info().await?.cryptarchia_info;
+
+    // Drop any tickets whose window has closed before building the batch, so an
+    // expired ticket never poisons the tx.
+    prune_expired_tickets(state, info.slot);
+    if state.ready_to_claim.is_empty() {
+        return Ok(());
+    }
+
     let ledger_state = cryptarchia_api
-        .get_ledger_state(tip)
+        .get_ledger_state(info.tip)
         .await?
         .ok_or_else(|| DynError::from("tip ledger state unavailable"))?;
 
@@ -365,12 +382,40 @@ where
     Ok(())
 }
 
-/// Summarizes which ready tickets are still claimable at `current_slot` and how
-/// long each remains within the reward window.
+/// Whether a ticket anchored to a block at `block_slot` is still within its
+/// reward window at `current_slot`: claimable while
+/// `current_slot - block_slot <= SLOT_WINDOW`.
+fn is_within_reward_window(block_slot: Slot, current_slot: Slot) -> bool {
+    u64::from(block_slot)
+        .checked_add(SLOT_WINDOW)
+        .is_some_and(|last_claimable_slot| last_claimable_slot >= u64::from(current_slot))
+}
+
+/// Drops tickets whose reward window has closed at `current_slot`.
 ///
-/// A ticket anchored to a block at `block_slot` stays claimable while
-/// `current_slot - block_slot <= SLOT_WINDOW`; its remaining lifetime is
-/// `block_slot + SLOT_WINDOW - current_slot` slots.
+/// Once a ticket falls out of the window it can never be claimed, so keeping it
+/// only bloats the state and would poison a claim tx built from the batch. Both
+/// the ready and pending sets are pruned in place.
+fn prune_expired_tickets(state: &mut PoWServiceState, current_slot: Slot) {
+    let before = state.ready_to_claim.len() + state.pending_to_claim.len();
+    state
+        .ready_to_claim
+        .retain(|ticket| is_within_reward_window(ticket.block_slot, current_slot));
+    state
+        .pending_to_claim
+        .retain(|ticket| is_within_reward_window(ticket.block_slot, current_slot));
+    let pruned = before - (state.ready_to_claim.len() + state.pending_to_claim.len());
+    if pruned > 0 {
+        info!(target: LOG_TARGET, "Pruned {pruned} expired PoW ticket(s)");
+    }
+}
+
+/// Summarizes how long each ready ticket remains within the reward window.
+///
+/// Callers prune expired tickets first (see [`prune_expired_tickets`]), so
+/// every ticket here is assumed to still be within the window: a ticket
+/// anchored to a block at `block_slot` has `block_slot + SLOT_WINDOW -
+/// current_slot` slots of remaining lifetime.
 fn claimable_rewards_info(
     ready_to_claim: &[WinningTicket],
     current_slot: Slot,
@@ -378,11 +423,7 @@ fn claimable_rewards_info(
     let current = u64::from(current_slot);
     let slots_until_expiry: Vec<Slot> = ready_to_claim
         .iter()
-        .filter_map(|ticket| {
-            let last_claimable_slot = u64::from(ticket.block_slot).checked_add(SLOT_WINDOW)?;
-            // `Some` only while the window has not closed yet.
-            last_claimable_slot.checked_sub(current).map(Slot::new)
-        })
+        .map(|ticket| Slot::new(u64::from(ticket.block_slot) + SLOT_WINDOW - current))
         .collect();
     ClaimableRewardsInfo {
         claimable_tickets: slots_until_expiry.len(),
@@ -626,9 +667,9 @@ mod tests {
     use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey};
 
     use super::{
-        MAX_TRANSFER_INPUTS, PoWError, build_reward_claim_tx_inner, change_outputs,
-        claimable_rewards_info, estimate_reward_claim_fee, max_claims_by_ops,
-        push_reward_claim_ops, transfer_ops,
+        MAX_TRANSFER_INPUTS, PoWError, PoWServiceState, build_reward_claim_tx_inner,
+        change_outputs, claimable_rewards_info, estimate_reward_claim_fee, max_claims_by_ops,
+        prune_expired_tickets, push_reward_claim_ops, transfer_ops,
     };
     use crate::tickets::WinningTicket;
 
@@ -924,12 +965,37 @@ mod tests {
     }
 
     #[test]
-    fn claimable_rewards_info_excludes_expired_tickets() {
-        // ticket(10): claimable up to slot 110 -> expired at 200.
-        // ticket(150): claimable up to slot 250 -> 50 slots left.
-        let tickets = [winning_ticket(10), winning_ticket(150)];
-        let info = claimable_rewards_info(&tickets, Slot::new(200));
-        assert_eq!(info.claimable_tickets, 1);
-        assert_eq!(info.slots_until_expiry, vec![Slot::new(50)]);
+    fn prune_expired_tickets_drops_only_out_of_window_tickets() {
+        // SLOT_WINDOW is 100. At slot 200: block 10 is expired (last claimable
+        // 110), block 150 is still live (last claimable 250).
+        let mut state = PoWServiceState {
+            ready_to_claim: vec![winning_ticket(10), winning_ticket(150)],
+            pending_to_claim: vec![winning_ticket(20), winning_ticket(180)],
+        };
+        prune_expired_tickets(&mut state, Slot::new(200));
+
+        let ready_slots: Vec<u64> = state
+            .ready_to_claim
+            .iter()
+            .map(|t| u64::from(t.block_slot))
+            .collect();
+        let pending_slots: Vec<u64> = state
+            .pending_to_claim
+            .iter()
+            .map(|t| u64::from(t.block_slot))
+            .collect();
+        assert_eq!(ready_slots, vec![150]);
+        assert_eq!(pending_slots, vec![180]);
+    }
+
+    #[test]
+    fn prune_expired_tickets_keeps_tickets_at_the_window_boundary() {
+        // A block at slot 50 is still claimable at exactly slot 150 (gap == window).
+        let mut state = PoWServiceState {
+            ready_to_claim: vec![winning_ticket(50)],
+            pending_to_claim: vec![],
+        };
+        prune_expired_tickets(&mut state, Slot::new(150));
+        assert_eq!(state.ready_to_claim.len(), 1);
     }
 }
