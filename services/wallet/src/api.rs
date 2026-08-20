@@ -139,6 +139,38 @@ where
         funding_pks: Vec<ZkPublicKey>,
         priority_fee: Value,
     ) -> Result<TipResponse<MantleTxBuilder>, WalletApiError> {
+        self.fund_tx_with_options(tip, tx_builder, change_pk, funding_pks, priority_fee, None)
+            .await
+    }
+
+    pub async fn fund_tx_with_priority_fee_margin(
+        &self,
+        tip: Option<HeaderId>,
+        tx_builder: MantleTxBuilder,
+        change_pk: ZkPublicKey,
+        funding_pks: Vec<ZkPublicKey>,
+        priority_fee_percent: u64,
+    ) -> Result<TipResponse<MantleTxBuilder>, WalletApiError> {
+        self.fund_tx_with_options(
+            tip,
+            tx_builder,
+            change_pk,
+            funding_pks,
+            0,
+            Some(priority_fee_percent),
+        )
+        .await
+    }
+
+    async fn fund_tx_with_options(
+        &self,
+        tip: Option<HeaderId>,
+        tx_builder: MantleTxBuilder,
+        change_pk: ZkPublicKey,
+        funding_pks: Vec<ZkPublicKey>,
+        priority_fee: Value,
+        priority_fee_percent: Option<u64>,
+    ) -> Result<TipResponse<MantleTxBuilder>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
@@ -148,6 +180,7 @@ where
                 change_pk,
                 funding_pks,
                 priority_fee,
+                priority_fee_percent,
                 resp_tx,
             })
             .await?;

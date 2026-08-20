@@ -72,6 +72,31 @@ type KeyId = <KmsBackend as KMSBackend>::KeyId;
 
 const LOG_TARGET: &str = wallet::SERVICE;
 
+fn fee_target_with_margin(
+    tx_builder: &MantleTxBuilder,
+    context: &MantleTxContext,
+    priority_fee_percent: u64,
+) -> Result<(Value, Value, Value), WalletServiceError> {
+    let mandatory_fee = tx_builder
+        .minimum_gas_cost::<MainnetGasConstants>(context)?
+        .into_inner();
+    let priority_fee = priority_fee_with_margin(mandatory_fee, priority_fee_percent)?;
+    let total_fee_target = mandatory_fee.checked_add(priority_fee).ok_or(GasOverflow)?;
+    Ok((mandatory_fee, priority_fee, total_fee_target))
+}
+
+fn priority_fee_with_margin(
+    mandatory_fee: Value,
+    priority_fee_percent: u64,
+) -> Result<Value, GasOverflow> {
+    mandatory_fee
+        .checked_mul(priority_fee_percent)
+        .ok_or(GasOverflow)?
+        .checked_add(99)
+        .ok_or(GasOverflow)
+        .map(|margin_numerator| margin_numerator / 100)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum WalletServiceError {
     #[error("Ledger state corresponding to block {0} not found")]
@@ -154,6 +179,7 @@ pub enum WalletMsg {
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
         priority_fee: Value,
+        priority_fee_percent: Option<u64>,
         resp_tx: Sender<Result<TipResponse<MantleTxBuilder>, WalletServiceError>>,
     },
     BuildLeaderClaimTx {
@@ -531,6 +557,7 @@ where
                 change_pk,
                 funding_pks,
                 priority_fee,
+                priority_fee_percent,
                 resp_tx,
             } => {
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
@@ -544,12 +571,23 @@ where
                 // Fetch the tx context (gas prices) fresh at fund time. It is
                 // tip-dependent, so a builder handed to us earlier must be funded
                 // against the current context rather than a stale one.
-                let context = match Self::ledger_state_at(tip, cryptarchia).await {
-                    Ok(ledger) => ledger.tx_context(),
+                let ledger = match Self::ledger_state_at(tip, cryptarchia).await {
+                    Ok(ledger) => ledger,
                     Err(err) => {
                         Self::send_err(resp_tx, err);
                         return;
                     }
+                };
+                let context = ledger.tx_context();
+                let priority_fee = match priority_fee_percent {
+                    Some(percent) => match fee_target_with_margin(&tx_builder, &context, percent) {
+                        Ok((_, priority_fee, _)) => priority_fee,
+                        Err(err) => {
+                            Self::send_err(resp_tx, err);
+                            return;
+                        }
+                    },
+                    None => priority_fee,
                 };
 
                 let funded = match state.fund_tx::<MainnetGasConstants>(
@@ -1632,5 +1670,25 @@ impl EpochConfig {
     fn epoch(&self, slot: Slot) -> Epoch {
         self.epoch_config
             .epoch(slot, self.consensus_config.base_period_length())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::priority_fee_with_margin;
+
+    #[test]
+    fn priority_fee_margin_rounds_up() {
+        assert_eq!(priority_fee_with_margin(1_783, 40).unwrap(), 714);
+    }
+
+    #[test]
+    fn priority_fee_margin_at_one_hundred_percent_matches_mandatory_fee() {
+        assert_eq!(priority_fee_with_margin(1_783, 100).unwrap(), 1_783);
+    }
+
+    #[test]
+    fn priority_fee_margin_checks_arithmetic() {
+        assert!(priority_fee_with_margin(u64::MAX, 40).is_err());
     }
 }

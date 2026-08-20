@@ -14,6 +14,8 @@ use lb_wallet_service::{
 };
 use overwatch::services::{AsServiceId, ServiceData, relay::OutboundRelay};
 
+const SDP_PRIORITY_FEE_PERCENT: u64 = 100;
+
 pub struct SdpWalletAdapter<Service, RuntimeServiceId>
 where
     Service: WalletServiceData,
@@ -49,12 +51,12 @@ where
             response: funded,
         } = self
             .api
-            .fund_tx(
+            .fund_tx_with_priority_fee_margin(
                 None,
                 tx_builder,
                 config.funding_pk,
                 vec![config.funding_pk],
-                0,
+                SDP_PRIORITY_FEE_PERCENT,
             )
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
@@ -90,12 +92,12 @@ where
             response: funded,
         } = self
             .api
-            .fund_tx(
+            .fund_tx_with_priority_fee_margin(
                 None,
                 tx_builder,
                 config.funding_pk,
                 vec![config.funding_pk],
-                0,
+                SDP_PRIORITY_FEE_PERCENT,
             )
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
@@ -131,12 +133,12 @@ where
             response: funded,
         } = self
             .api
-            .fund_tx(
+            .fund_tx_with_priority_fee_margin(
                 None,
                 tx_builder,
                 config.funding_pk,
                 vec![config.funding_pk],
-                0,
+                SDP_PRIORITY_FEE_PERCENT,
             )
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
