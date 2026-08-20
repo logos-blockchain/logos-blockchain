@@ -28,5 +28,8 @@ lb-utils                      = { workspace = true }
 lb-zksign                     = { workspace = true }
 overwatch                     = { workspace = true }
 
+[dev-dependencies]
+tokio = { features = ["macros", "rt"], workspace = true }
+
 [lints]
 workspace = true

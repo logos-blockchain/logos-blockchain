@@ -16,8 +16,8 @@ use lb_core::{
         ops::{NoOpProof, OpId as _, pow::ClaimPowRewardOp, transfer::TransferOp},
         traits::Hashable as _,
         transactions::{
-            MAX_OPS_PER_TX, MantleTxBuilder, MantleTxContext, MantleTxGasContext, OpsProofs,
-            TxBuilderError, states::Unverified,
+            GasPrices, MAX_OPS_PER_TX, MantleTxBuilder, MantleTxContext, MantleTxGasContext,
+            OpsProofs, TxBuilderError, states::Unverified,
         },
     },
 };
@@ -238,17 +238,30 @@ async fn build_reward_claim_tx(
     // `ledger_state`; they must match the state the tx applies against, or the
     // reconstructed UTXOs / fee will be off.
     let pow = &ledger_state.mantle_ledger().pow;
-    let reward_value = pow.epoch_reward();
-    let reward_pool = pow.reward_pool();
+    build_reward_claim_tx_inner(
+        claim_address,
+        pow.epoch_reward(),
+        pow.reward_pool(),
+        ledger_state.get_gas_prices(),
+        tickets,
+    )
+    .await
+}
+
+/// Inner builder over plain reward/gas values, so it can be exercised without a
+/// full [`LedgerState`]. See [`build_reward_claim_tx`].
+async fn build_reward_claim_tx_inner(
+    claim_address: ZkPublicKey,
+    reward_value: Value,
+    reward_pool: Value,
+    gas_prices: GasPrices,
+    tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
+) -> Result<SignedMantleTx<Unverified>, PoWError> {
     if reward_value == 0 {
         return Err(PoWError::RewardsDisabled);
     }
     let context = MantleTxContext {
-        gas_context: MantleTxGasContext::new(
-            HashMap::new(),
-            HashMap::new(),
-            ledger_state.get_gas_prices(),
-        ),
+        gas_context: MantleTxGasContext::new(HashMap::new(), HashMap::new(), gas_prices),
         leader_reward_amount: 0,
     };
 
@@ -408,4 +421,274 @@ fn estimate_reward_claim_fee(
         .minimum_gas_cost::<MainnetGasProfile>(context)?
         .into_inner();
     Ok(fee)
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_core::mantle::{
+        Note, NoteId, Op, OpProof, SignedMantleTx, Utxo,
+        ops::{OpId as _, pow::ClaimPowRewardOp},
+        transactions::{
+            GasPrices, MAX_OPS_PER_TX, MantleTxBuilder, MantleTxContext, MantleTxGasContext,
+            mantle_tx::MantleTx as _, states::Unverified,
+        },
+    };
+    use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey};
+
+    use super::{
+        MAX_TRANSFER_INPUTS, PoWError, build_reward_claim_tx_inner, change_outputs,
+        estimate_reward_claim_fee, max_claims_by_ops, push_reward_claim_ops, transfer_ops,
+    };
+
+    const REWARD: u64 = 1_000_000;
+    const POOL: u64 = 1_000_000_000;
+
+    /// A distinct dummy note id, derived like the ones the builder
+    /// reconstructs.
+    fn note_id(seed: u8) -> NoteId {
+        Utxo::new([seed; 32], 0, Note::new(1, ZkPublicKey::zero())).id()
+    }
+
+    /// A ticket whose claim is owned by the ticket's own key.
+    fn ticket() -> (UnsecuredZkKey, ClaimPowRewardOp) {
+        let secret_key = UnsecuredZkKey::from_rng(&mut rand::thread_rng());
+        let claim = ClaimPowRewardOp {
+            epoch_nonce: *ZkPublicKey::zero().as_fr(),
+            block_hash: [0u8; 32],
+            public_key: secret_key.to_public_key(),
+        };
+        (secret_key, claim)
+    }
+
+    fn context() -> MantleTxContext {
+        MantleTxContext {
+            gas_context: MantleTxGasContext::new(
+                Default::default(),
+                Default::default(),
+                GasPrices::new(1, 1),
+            ),
+            leader_reward_amount: 0,
+        }
+    }
+
+    /// Asserts a built tx respects the transaction's own structural limits: the
+    /// op budget, the per-transfer signing-key limit, and a correctly-typed
+    /// proof per op (the last via the ledger's stateless `preverify`).
+    fn assert_within_tx_limits(tx: &SignedMantleTx<Unverified>) {
+        let ops = tx.mantle_tx().ops();
+        assert!(ops.len() <= MAX_OPS_PER_TX, "op count exceeds the tx limit");
+        for op in ops.iter() {
+            if let Op::Transfer(transfer) = op {
+                assert!(
+                    (&transfer.inputs).into_iter().count() <= MAX_TRANSFER_INPUTS,
+                    "transfer inputs exceed the signing-key limit"
+                );
+            }
+        }
+        tx.clone()
+            .preverify()
+            .expect("built tx should pass stateless structural verification");
+    }
+
+    #[test]
+    fn max_claims_by_ops_saturates_the_op_budget() {
+        let claims = max_claims_by_ops();
+        assert!(claims + claims.div_ceil(MAX_TRANSFER_INPUTS) <= MAX_OPS_PER_TX);
+        assert!((claims + 1) + (claims + 1).div_ceil(MAX_TRANSFER_INPUTS) > MAX_OPS_PER_TX);
+    }
+
+    #[test]
+    fn change_outputs_returns_reward_minus_fee_for_a_single_group() {
+        let notes: Vec<NoteId> = (0u8..5).map(note_id).collect();
+        let outputs = change_outputs(&notes, 100, 30).unwrap();
+        assert_eq!(outputs, vec![5 * 100 - 30]);
+    }
+
+    #[test]
+    fn change_outputs_charges_the_whole_fee_to_the_first_group() {
+        // 40 notes -> two groups of 32 and 8.
+        let notes: Vec<NoteId> = (0u8..40).map(note_id).collect();
+        let outputs = change_outputs(&notes, 100, 30).unwrap();
+        assert_eq!(outputs, vec![32 * 100 - 30, 8 * 100]);
+    }
+
+    #[test]
+    fn change_outputs_errors_when_reward_below_fee() {
+        let notes = vec![note_id(0)];
+        assert!(matches!(
+            change_outputs(&notes, 10, 20),
+            Err(PoWError::RewardBelowFee)
+        ));
+    }
+
+    #[test]
+    fn change_outputs_errors_on_overflow() {
+        let notes: Vec<NoteId> = (0u8..2).map(note_id).collect();
+        assert!(matches!(
+            change_outputs(&notes, u64::MAX, 0),
+            Err(PoWError::RewardOverflow)
+        ));
+    }
+
+    #[test]
+    fn transfer_ops_groups_inputs_by_the_signing_key_limit() {
+        // 70 notes -> groups of 32, 32, 6.
+        let notes: Vec<NoteId> = (0u8..70).map(note_id).collect();
+        let transfers = transfer_ops(&notes, ZkPublicKey::zero(), &[10, 20, 30]).unwrap();
+        let input_counts: Vec<usize> = transfers
+            .iter()
+            .map(|t| (&t.inputs).into_iter().count())
+            .collect();
+        assert_eq!(input_counts, vec![32, 32, 6]);
+    }
+
+    #[test]
+    fn push_reward_claim_ops_interleaves_claims_and_transfers() {
+        let tickets: Vec<_> = (0..40).map(|_| ticket()).collect();
+        let notes: Vec<NoteId> = (0u8..40).map(note_id).collect();
+        let changes = change_outputs(&notes, 100, 0).unwrap();
+        let transfers = transfer_ops(&notes, ZkPublicKey::zero(), &changes).unwrap();
+
+        let tx = push_reward_claim_ops(MantleTxBuilder::new(), &tickets, transfers)
+            .unwrap()
+            .build()
+            .unwrap();
+        let ops = tx.ops();
+
+        assert_eq!(ops.len(), 42); // 40 claims + 2 transfers
+        assert!(
+            ops[..32]
+                .iter()
+                .all(|op| matches!(op, Op::ClaimPowReward(_)))
+        );
+        assert!(matches!(ops[32], Op::Transfer(_)));
+        assert!(
+            ops[33..41]
+                .iter()
+                .all(|op| matches!(op, Op::ClaimPowReward(_)))
+        );
+        assert!(matches!(ops[41], Op::Transfer(_)));
+    }
+
+    #[test]
+    fn estimate_reward_claim_fee_is_positive_with_nonzero_gas_prices() {
+        let tickets = vec![ticket()];
+        let notes = vec![note_id(0)];
+        let fee =
+            estimate_reward_claim_fee(&tickets, &notes, ZkPublicKey::zero(), &context()).unwrap();
+        assert!(fee > 0);
+    }
+
+    #[tokio::test]
+    async fn build_reward_claim_tx_produces_a_claim_and_signed_transfer() {
+        let (secret_key, claim) = ticket();
+        let expected_note = Utxo::new(claim.op_id(), 0, Note::new(REWARD, claim.public_key)).id();
+
+        let tx = build_reward_claim_tx_inner(
+            ZkPublicKey::zero(),
+            REWARD,
+            POOL,
+            GasPrices::new(1, 1),
+            &[(secret_key, claim)],
+        )
+        .await
+        .unwrap();
+
+        assert_within_tx_limits(&tx);
+        let ops = tx.mantle_tx().ops();
+        assert_eq!(ops.len(), 2);
+        assert!(matches!(ops[0], Op::ClaimPowReward(_)));
+        let Op::Transfer(transfer) = &ops[1] else {
+            panic!("second op should be a transfer");
+        };
+        let inputs: Vec<NoteId> = (&transfer.inputs).into_iter().copied().collect();
+        assert_eq!(inputs, vec![expected_note]);
+
+        // A `None` proof for the claim, a `ZkSig` for the transfer.
+        let proofs = tx.ops_proofs();
+        assert_eq!(proofs.len(), 2);
+        assert!(matches!(proofs[0], OpProof::None(_)));
+        assert!(matches!(proofs[1], OpProof::ZkSig(_)));
+    }
+
+    #[tokio::test]
+    async fn build_reward_claim_tx_errors_when_rewards_disabled() {
+        let result = build_reward_claim_tx_inner(
+            ZkPublicKey::zero(),
+            0,
+            POOL,
+            GasPrices::new(1, 1),
+            &[ticket()],
+        )
+        .await;
+        assert!(matches!(result, Err(PoWError::RewardsDisabled)));
+    }
+
+    #[tokio::test]
+    async fn build_reward_claim_tx_errors_when_pool_cannot_fund_a_claim() {
+        // Pool below a single reward -> nothing fundable.
+        let result = build_reward_claim_tx_inner(
+            ZkPublicKey::zero(),
+            REWARD,
+            REWARD - 1,
+            GasPrices::new(1, 1),
+            &[ticket()],
+        )
+        .await;
+        assert!(matches!(result, Err(PoWError::RewardPoolExhausted)));
+    }
+
+    #[tokio::test]
+    async fn build_reward_claim_tx_caps_claims_to_the_reward_pool() {
+        // Pool funds only two claims, but five tickets are offered.
+        let tickets: Vec<_> = (0..5).map(|_| ticket()).collect();
+        let tx = build_reward_claim_tx_inner(
+            ZkPublicKey::zero(),
+            REWARD,
+            2 * REWARD,
+            GasPrices::new(1, 1),
+            &tickets,
+        )
+        .await
+        .unwrap();
+
+        assert_within_tx_limits(&tx);
+        let ops = tx.mantle_tx().ops();
+        let claims = ops
+            .iter()
+            .filter(|op| matches!(op, Op::ClaimPowReward(_)))
+            .count();
+        assert_eq!(claims, 2); // 2 claims + 1 transfer
+        assert_eq!(ops.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn build_reward_claim_tx_caps_claims_to_the_op_limit_and_stays_within_it() {
+        // More tickets and pool room than the op budget allows: the cap is the
+        // op limit, and the resulting tx must still fit within it.
+        let cap = max_claims_by_ops();
+        let tickets: Vec<_> = (0..cap + 50).map(|_| ticket()).collect();
+        let tx = build_reward_claim_tx_inner(
+            ZkPublicKey::zero(),
+            REWARD,
+            POOL, // POOL / REWARD = 1000 > cap, so the op limit binds
+            GasPrices::new(1, 1),
+            &tickets,
+        )
+        .await
+        .unwrap();
+
+        assert_within_tx_limits(&tx);
+        let ops = tx.mantle_tx().ops();
+        let claims = ops
+            .iter()
+            .filter(|op| matches!(op, Op::ClaimPowReward(_)))
+            .count();
+        let transfers = ops.len() - claims;
+        assert_eq!(claims, cap);
+        assert_eq!(transfers, cap.div_ceil(MAX_TRANSFER_INPUTS));
+        // The cap is the largest batch that still fits the op budget exactly.
+        assert!(ops.len() <= MAX_OPS_PER_TX);
+        assert!(claims + 1 + (claims + 1).div_ceil(MAX_TRANSFER_INPUTS) > MAX_OPS_PER_TX);
+    }
 }
