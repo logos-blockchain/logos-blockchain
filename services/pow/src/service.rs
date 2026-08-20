@@ -30,13 +30,17 @@ use lb_core::{
 };
 use lb_key_management_system_keys::keys::{MAX_ZK_SIGNING_KEYS, UnsecuredZkKey, ZkPublicKey};
 use lb_ledger::LedgerState;
+use lb_services_utils::overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings};
+use lb_storage_service::{
+    StorageService, backends::StorageBackend, recovery::StorageRecoveryBackend,
+};
 use lb_utils::bounded::BoundedError;
 use lb_zksign::ZkSignError;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
-    services::{AsServiceId, ServiceCore, ServiceData},
+    services::{AsServiceId, ServiceCore, ServiceData, state::ServiceState},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::{sync::oneshot, task::JoinError};
 use tracing::{error, log::info};
 
@@ -95,44 +99,70 @@ pub enum PoWServiceMessage {
     },
 }
 
-#[derive(Clone, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct PoWServiceSettings {
     pub claim_address: ZkPublicKey,
+    /// Storage-recovery bookkeeping, populated by the runtime on startup.
+    #[serde(skip)]
+    pub recovery_data: RecoveryData,
 }
 
+impl StorageRecoverySettings for PoWServiceSettings {
+    const RECOVERY_KEY_SUFFIX: &'static [u8] = b"pow";
+
+    fn recovery_data(&self) -> &RecoveryData {
+        &self.recovery_data
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct PoWServiceState {
-    /// Whether the ticket generator is being polled. Persisted so mining
-    /// resumes across restarts.
-    mining: bool,
     ready_to_claim: Vec<WinningTicket>,
     pending_to_claim: Vec<WinningTicket>,
 }
 
-pub struct PoWService<CryptarchiaService, BlendService, RuntimeServiceId> {
+impl ServiceState for PoWServiceState {
+    type Settings = PoWServiceSettings;
+    type Error = core::convert::Infallible;
+
+    fn from_settings(_settings: &Self::Settings) -> Result<Self, Self::Error> {
+        Ok(Self::default())
+    }
+}
+
+pub struct PoWService<CryptarchiaService, BlendService, Storage, RuntimeServiceId>
+where
+    Storage: StorageBackend + Send + Sync + 'static,
+{
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     state: PoWServiceState,
     settings: PoWServiceSettings,
-    _phantom: PhantomData<(CryptarchiaService, BlendService)>,
+    _phantom: PhantomData<(CryptarchiaService, BlendService, Storage)>,
 }
 
-impl<CryptarchiaService, BlendService, RuntimeServiceId> ServiceData
-    for PoWService<CryptarchiaService, BlendService, RuntimeServiceId>
+impl<CryptarchiaService, BlendService, Storage, RuntimeServiceId> ServiceData
+    for PoWService<CryptarchiaService, BlendService, Storage, RuntimeServiceId>
+where
+    Storage: StorageBackend + Send + Sync + 'static,
 {
     type Settings = PoWServiceSettings;
     type State = PoWServiceState;
-    type StateOperator = ();
+    type StateOperator = RecoveryOperator<
+        StorageRecoveryBackend<Self::State, Self::Settings, Storage, RuntimeServiceId>,
+    >;
     type Message = PoWServiceMessage;
 }
 
 #[async_trait::async_trait]
-impl<Tx, CryptarchiaService, BlendService, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for PoWService<CryptarchiaService, BlendService, RuntimeServiceId>
+impl<Tx, CryptarchiaService, BlendService, Storage, RuntimeServiceId> ServiceCore<RuntimeServiceId>
+    for PoWService<CryptarchiaService, BlendService, Storage, RuntimeServiceId>
 where
     Tx: Send + Sync + 'static,
     CryptarchiaService: CryptarchiaServiceData<Tx = Tx> + Sync + 'static,
     BlendService: BlendServiceData,
     BlendService::NodeId: Send,
     <BlendService as ServiceData>::Message: Send + 'static,
+    Storage: StorageBackend + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Clone
         + Send
@@ -142,7 +172,8 @@ where
         + 'static
         + AsServiceId<Self>
         + AsServiceId<CryptarchiaService>
-        + AsServiceId<BlendService>,
+        + AsServiceId<BlendService>
+        + AsServiceId<StorageService<Storage, RuntimeServiceId>>,
 {
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -194,6 +225,11 @@ where
         .await?;
 
         let mut inbound_relay = service_resources_handle.inbound_relay;
+        // Persists the claimable/pending tickets so they survive restarts.
+        let state_updater = service_resources_handle.state_updater;
+        // Mining is off until explicitly started and is not persisted: a
+        // restarted node does not resume mining automatically.
+        let mut mining = false;
 
         service_resources_handle.status_updater.notify_ready();
 
@@ -202,16 +238,16 @@ where
                 Some(message) = inbound_relay.recv() => {
                     match message {
                         PoWServiceMessage::StartMining => {
-                            if !state.mining {
+                            if !mining {
                                 info!("PoW mining started");
                             }
-                            state.mining = true;
+                            mining = true;
                         }
                         PoWServiceMessage::StopMining => {
-                            if state.mining {
+                            if mining {
                                 info!("PoW mining stopped");
                             }
-                            state.mining = false;
+                            mining = false;
                         }
                         PoWServiceMessage::Claim => {
                             if state.ready_to_claim.is_empty() {
@@ -226,6 +262,7 @@ where
                             {
                                 error!("Failed to claim PoW rewards: {e}");
                             }
+                            state_updater.update(Some(state.clone()));
                         }
                         PoWServiceMessage::ClaimableRewardsInfo { response } => {
                             match cryptarchia_api.info().await {
@@ -247,12 +284,13 @@ where
                 }
                 // A puzzle was solved: accumulate the winning ticket to be
                 // claimed on demand (only while mining is enabled).
-                Some(winning_ticket) = winning_tickets.next(), if state.mining => {
+                Some(winning_ticket) = winning_tickets.next(), if mining => {
                     state.ready_to_claim.push(winning_ticket);
                     info!(
                         "Mined a winning ticket 💲; total claimable tickets {}",
                         state.ready_to_claim.len()
                     );
+                    state_updater.update(Some(state.clone()));
                 }
             }
         }

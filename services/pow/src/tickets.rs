@@ -23,6 +23,7 @@ use lb_core::{
 };
 use lb_key_management_system_keys::keys::UnsecuredZkKey;
 use lb_ledger::LedgerState;
+use serde::{Deserialize, Serialize};
 use tokio_stream::{
     StreamMap,
     wrappers::{BroadcastStream, errors::BroadcastStreamRecvError},
@@ -43,6 +44,7 @@ pub type TicketSearchTask<'a> = BoxFuture<'a, ClaimPowRewardOp>;
 /// The generator caches the tip from its block-event stream, so consumers can
 /// size the reward-claim transaction against the current state without an extra
 /// round-trip to the chain service.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WinningTicket {
     /// Chain tip when the ticket was produced.
     pub tip: HeaderId,

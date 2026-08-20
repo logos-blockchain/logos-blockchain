@@ -4994,6 +4994,8 @@ dependencies = [
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-ledger",
+ "logos-blockchain-services-utils",
+ "logos-blockchain-storage-service",
  "logos-blockchain-utils",
  "logos-blockchain-zksign",
  "overwatch",
