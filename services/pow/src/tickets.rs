@@ -24,6 +24,7 @@ use lb_core::{
 use lb_key_management_system_keys::keys::UnsecuredZkKey;
 use lb_ledger::LedgerState;
 use lb_log_targets::pow;
+use lb_utils::tokio::task::spawn_blocking;
 use serde::{Deserialize, Serialize};
 use tokio_stream::{
     StreamMap,
@@ -199,7 +200,7 @@ async fn search_winner_ticket(
 ) -> Option<(UnsecuredZkKey, ClaimPowRewardOp)> {
     // Ticket computation is heavy, need to be run in blocking threads not to block
     // async execution.
-    let task = tokio::task::spawn_blocking(move || {
+    let task = spawn_blocking("logos/pow/search-winner-ticket", move || {
         let mut rng = rand::thread_rng();
         let sk = UnsecuredZkKey::from_rng(&mut rng);
         let pk = sk.to_public_key();
