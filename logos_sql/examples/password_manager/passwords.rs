@@ -1,10 +1,10 @@
 //! Password-manager data and operations.
 //!
-//! `PasswordManager` owns `Lsql` directly so the example shows where the
+//! `PasswordManager` owns `LogosSql` directly so the example shows where the
 //! application ends and the replication library begins. Domain operations are
 //! translated into parameterized SQL writes here.
 
-use logos_blockchain_lsql::{Error as LsqlError, IdempotencyKey, Lsql, LsqlConfig, TxId};
+use logos_sql::{Error as LogosSqlError, IdempotencyKey, LogosSql, LogosSqlConfig, TxId};
 
 use crate::AppResult;
 
@@ -65,14 +65,14 @@ pub struct CredentialSummary {
 
 /// Application-facing password-manager operations over one `λSQL` database.
 pub struct PasswordManager {
-    lsql: Lsql,
+    logos_sql: LogosSql,
 }
 
 impl PasswordManager {
     /// Starts `λSQL`, catches up with the channel, and prepares the database.
-    pub async fn start(config: LsqlConfig) -> AppResult<Self> {
+    pub async fn start(config: LogosSqlConfig) -> AppResult<Self> {
         let manager = Self {
-            lsql: Lsql::start(config).await?,
+            logos_sql: LogosSql::start(config).await?,
         };
 
         manager.initialize().await?;
@@ -87,7 +87,7 @@ impl PasswordManager {
 
         let key = IdempotencyKey::try_from(SCHEMA_REQUEST_ID.as_bytes().to_vec())?;
 
-        self.lsql
+        self.logos_sql
             .query(CREATE_CREDENTIALS_TABLE)
             .execute(key)
             .await?;
@@ -98,7 +98,7 @@ impl PasswordManager {
     /// Existing participants install the schema through channel replay before
     /// startup completes. Only an empty database needs to publish the DDL.
     fn schema_exists(&self) -> AppResult<bool> {
-        let connection = self.lsql.read_connection()?;
+        let connection = self.logos_sql.read_connection()?;
 
         Ok(connection.query_row(SELECT_SCHEMA_EXISTS, [], |row| row.get(0))?)
     }
@@ -119,7 +119,7 @@ impl PasswordManager {
         let key = IdempotencyKey::try_from(request_id.into_bytes())?;
 
         Ok(self
-            .lsql
+            .logos_sql
             .query(INSERT_CREDENTIAL)
             .bind(label)
             .bind(account)
@@ -138,7 +138,7 @@ impl PasswordManager {
         let key = IdempotencyKey::try_from(request_id.into_bytes())?;
 
         Ok(self
-            .lsql
+            .logos_sql
             .query(UPDATE_PASSWORD)
             .bind(label)
             .bind(password)
@@ -151,7 +151,7 @@ impl PasswordManager {
         let key = IdempotencyKey::try_from(request_id.into_bytes())?;
 
         Ok(self
-            .lsql
+            .logos_sql
             .query(DELETE_CREDENTIAL)
             .bind(label)
             .execute(key)
@@ -160,7 +160,7 @@ impl PasswordManager {
 
     /// Reads one credential from the local `SQLite` database.
     pub fn credential(&self, label: &str) -> AppResult<Option<Credential>> {
-        let connection = self.lsql.read_connection()?;
+        let connection = self.logos_sql.read_connection()?;
         let mut statement = connection.prepare(SELECT_CREDENTIAL)?;
         let mut rows = statement.query([label])?;
 
@@ -177,7 +177,7 @@ impl PasswordManager {
 
     /// Lists credential labels and accounts from the local database.
     pub fn credentials(&self) -> AppResult<Vec<CredentialSummary>> {
-        let connection = self.lsql.read_connection()?;
+        let connection = self.logos_sql.read_connection()?;
         let mut statement = connection.prepare(SELECT_CREDENTIALS)?;
 
         let credentials = statement
@@ -193,7 +193,7 @@ impl PasswordManager {
     }
 
     /// Gracefully stops the owned `λSQL` runtime.
-    pub async fn shutdown(self) -> Result<(), LsqlError> {
-        self.lsql.shutdown().await
+    pub async fn shutdown(self) -> Result<(), LogosSqlError> {
+        self.logos_sql.shutdown().await
     }
 }

@@ -1,10 +1,10 @@
 [package]
 categories  = { workspace = true }
-description = "Logos blockchain λSQL - replicated SQLite state over a zone channel"
+description = "Logos SQL (λSQL) - decentralized SQLite over Logos Blockchain"
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "logos-blockchain-lsql"
+name        = "logos-sql"
 publish     = false
 readme      = { workspace = true }
 repository  = { workspace = true }

@@ -5,8 +5,8 @@
 //! credentials. Application-side encryption will be added in a follow-up.
 //!
 //! Run with `--help` to see startup configuration. Each option also accepts its
-//! corresponding `LSQL_*` environment variable. After startup, enter `help` to
-//! see the available commands. A short session could look like this:
+//! corresponding `LOGOS_SQL_*` environment variable. After startup, enter
+//! `help` to see the available commands. A short session could look like this:
 //!
 //! ```text
 //! add email andrus@example.org not-a-real-password

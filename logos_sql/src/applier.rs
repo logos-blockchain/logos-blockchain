@@ -9,7 +9,7 @@ use lb_zone_sdk::{
 
 use crate::{db::Databases, error::Error, protocol};
 
-const TARGET: &str = lb_log_targets::lsql::APPLIER;
+const TARGET: &str = lb_log_targets::logos_sql::APPLIER;
 
 /// Handles one sequencer event.
 ///
@@ -43,11 +43,11 @@ pub fn on_event(db: &mut Databases, event: &Event, channel_id: ChannelId) -> Res
             // TODO: Apply finalized transactions to LIB and reconcile LIVE with
             // adopted and orphaned channel transactions before persisting the
             // checkpoint.
-            if update_contains_lsql(channel_update, channel_id) {
+            if update_contains_logos_sql(channel_update, channel_id) {
                 todo!("reconcile adopted and orphaned \u{3bb}SQL transactions");
             }
 
-            if let Some(payload) = find_lsql_payload(finalized) {
+            if let Some(payload) = find_logos_sql_payload(finalized) {
                 let decoded = protocol::ChannelWrite::decode(payload)?;
 
                 tracing::debug!(
@@ -71,17 +71,17 @@ pub fn on_event(db: &mut Databases, event: &Event, channel_id: ChannelId) -> Res
     Ok(())
 }
 
-fn update_contains_lsql(channel_update: &ChannelUpdate, channel_id: ChannelId) -> bool {
+fn update_contains_logos_sql(channel_update: &ChannelUpdate, channel_id: ChannelId) -> bool {
     channel_update
         .orphaned
         .iter()
         .chain(&channel_update.adopted)
-        .any(|transaction| transaction_contains_lsql(transaction, channel_id))
+        .any(|transaction| transaction_contains_logos_sql(transaction, channel_id))
 }
 
-fn transaction_contains_lsql(transaction: &ChannelUpdateTx, channel_id: ChannelId) -> bool {
+fn transaction_contains_logos_sql(transaction: &ChannelUpdateTx, channel_id: ChannelId) -> bool {
     if let Some(inscription) = transaction.inscription() {
-        return protocol::is_lsql_payload(inscription.payload.as_ref());
+        return protocol::is_logos_sql_payload(inscription.payload.as_ref());
     }
 
     let ChannelUpdateTx::Custom(transaction) = transaction else {
@@ -90,10 +90,10 @@ fn transaction_contains_lsql(transaction: &ChannelUpdateTx, channel_id: ChannelI
 
     channel_inscriptions(transaction, channel_id)
         .iter()
-        .any(|inscription| protocol::is_lsql_payload(inscription.payload.as_ref()))
+        .any(|inscription| protocol::is_logos_sql_payload(inscription.payload.as_ref()))
 }
 
-fn find_lsql_payload(finalized: &[FinalizedTx]) -> Option<&[u8]> {
+fn find_logos_sql_payload(finalized: &[FinalizedTx]) -> Option<&[u8]> {
     finalized
         .iter()
         .flat_map(|transaction| &transaction.ops)
@@ -104,7 +104,7 @@ fn find_lsql_payload(finalized: &[FinalizedTx]) -> Option<&[u8]> {
 
             let payload = info.payload.as_ref();
 
-            protocol::is_lsql_payload(payload).then_some(payload)
+            protocol::is_logos_sql_payload(payload).then_some(payload)
         })
 }
 
@@ -119,7 +119,7 @@ mod tests {
     };
     use tempfile::TempDir;
 
-    use super::{on_event, update_contains_lsql};
+    use super::{on_event, update_contains_logos_sql};
     use crate::{
         db::Databases,
         protocol::{EncodedWrite, IdempotencyKey, Statement, Transaction, Value},
@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "apply finalized \u{3bb}SQL transactions")]
-    fn finalized_lsql_payload_reaches_replay_placeholder() {
+    fn finalized_logos_sql_payload_reaches_replay_placeholder() {
         let dir = TempDir::new().expect("temporary directory should be created");
         let path = dir.path().join("zone");
         let first = checkpoint(1, 1);
@@ -209,7 +209,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "reconcile adopted and orphaned \u{3bb}SQL transactions")]
-    fn orphaned_lsql_payload_reaches_reconciliation_placeholder() {
+    fn orphaned_logos_sql_payload_reaches_reconciliation_placeholder() {
         let dir = TempDir::new().expect("temporary directory should be created");
         let path = dir.path().join("zone");
         let mut db = Databases::open(&path).expect("databases should open");
@@ -221,14 +221,14 @@ mod tests {
     }
 
     #[test]
-    fn adopted_lsql_payload_is_detected() {
+    fn adopted_logos_sql_payload_is_detected() {
         let payload = encoded_write();
         let channel_update = ChannelUpdate {
             orphaned: Vec::new(),
             adopted: vec![ChannelUpdateTx::Inscription(inscription(&payload))],
         };
 
-        assert!(update_contains_lsql(
+        assert!(update_contains_logos_sql(
             &channel_update,
             ChannelId::from([9; 32])
         ));

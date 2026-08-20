@@ -4,7 +4,7 @@ use rusqlite::types::{ToSql, ToSqlOutput, Value, ValueRef};
 
 use crate::{
     error::Error,
-    lsql::Lsql,
+    logos_sql::LogosSql,
     protocol::{IdempotencyKey, Statement, Transaction, TxId},
 };
 
@@ -14,18 +14,18 @@ use crate::{
 /// executing the transaction become available after that statement exists.
 #[must_use = "the transaction must be executed to apply its SQL"]
 pub struct TransactionBuilder<'a> {
-    lsql: &'a Lsql,
+    logos_sql: &'a LogosSql,
 }
 
 impl<'a> TransactionBuilder<'a> {
-    pub(crate) const fn new(lsql: &'a Lsql) -> Self {
-        Self { lsql }
+    pub(crate) const fn new(logos_sql: &'a LogosSql) -> Self {
+        Self { logos_sql }
     }
 
     /// Adds the first SQL query to this transaction.
     pub fn query(self, sql: impl Into<String>) -> QueryBuilder<'a> {
         QueryBuilder {
-            lsql: self.lsql,
+            logos_sql: self.logos_sql,
             transaction: TransactionDraft::new(sql),
         }
     }
@@ -38,7 +38,7 @@ impl<'a> TransactionBuilder<'a> {
 /// [`Self::bind`].
 #[must_use = "the transaction must be executed to apply its SQL"]
 pub struct QueryBuilder<'a> {
-    lsql: &'a Lsql,
+    logos_sql: &'a LogosSql,
     transaction: TransactionDraft,
 }
 
@@ -83,7 +83,7 @@ impl QueryBuilder<'_> {
     pub async fn execute(self, idempotency_key: IdempotencyKey) -> Result<TxId, Error> {
         let transaction = self.transaction.finish()?;
 
-        self.lsql
+        self.logos_sql
             .commit_transaction(transaction, idempotency_key)
             .await
     }

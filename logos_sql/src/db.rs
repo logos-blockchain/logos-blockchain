@@ -26,7 +26,7 @@ const CONTROL_DATABASE_FILE: &str = "control.db";
 // Stores locally committed writes and their exact channel payload. At most one
 // write may be waiting for ZoneSDK publication.
 const LIVE_SCHEMA: &str = "
-    CREATE TABLE IF NOT EXISTS __lsql_writes (
+    CREATE TABLE IF NOT EXISTS __logos_sql_writes (
         idempotency_key BLOB PRIMARY KEY,
         tx_id BLOB NOT NULL UNIQUE CHECK (length(tx_id) = 32),
         -- Detects reuse of an idempotency key for a different SQL transaction.
@@ -35,44 +35,44 @@ const LIVE_SCHEMA: &str = "
         publish_pending INTEGER NOT NULL CHECK (publish_pending IN (0, 1))
     ) STRICT;
 
-    CREATE UNIQUE INDEX IF NOT EXISTS __lsql_one_pending_publish
-        ON __lsql_writes(publish_pending)
+    CREATE UNIQUE INDEX IF NOT EXISTS __logos_sql_one_pending_publish
+        ON __logos_sql_writes(publish_pending)
         WHERE publish_pending = 1;
 ";
 
 // Stores the participant-local ZoneSDK checkpoint independently of live state.
 const CONTROL_SCHEMA: &str = "
-    CREATE TABLE IF NOT EXISTS __lsql_state (
+    CREATE TABLE IF NOT EXISTS __logos_sql_state (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
         checkpoint BLOB
     ) STRICT;
 ";
 
 const INITIALIZE_CONTROL_STATE: &str = "
-    INSERT OR IGNORE INTO __lsql_state (singleton, checkpoint)
+    INSERT OR IGNORE INTO __logos_sql_state (singleton, checkpoint)
     VALUES (1, NULL)
 ";
 
 const SELECT_CHECKPOINT: &str = "
     SELECT checkpoint
-    FROM __lsql_state
+    FROM __logos_sql_state
     WHERE singleton = 1
 ";
 
 const UPDATE_CHECKPOINT: &str = "
-    UPDATE __lsql_state
+    UPDATE __logos_sql_state
     SET checkpoint = ?1
     WHERE singleton = 1
 ";
 
 const SELECT_WRITE_BY_IDEMPOTENCY_KEY: &str = "
     SELECT tx_id, transaction_digest
-    FROM __lsql_writes
+    FROM __logos_sql_writes
     WHERE idempotency_key = ?1
 ";
 
 const INSERT_PENDING_WRITE: &str = "
-    INSERT INTO __lsql_writes (
+    INSERT INTO __logos_sql_writes (
         idempotency_key,
         tx_id,
         transaction_digest,
@@ -83,12 +83,12 @@ const INSERT_PENDING_WRITE: &str = "
 
 const SELECT_PENDING_PUBLISH: &str = "
     SELECT tx_id, payload
-    FROM __lsql_writes
+    FROM __logos_sql_writes
     WHERE publish_pending = 1
 ";
 
 const MARK_PUBLISH_COMPLETE: &str = "
-    UPDATE __lsql_writes
+    UPDATE __logos_sql_writes
     SET publish_pending = 0
     WHERE tx_id = ?1 AND publish_pending = 1
 ";

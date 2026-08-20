@@ -10,11 +10,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 
-const PAYLOAD_MARKER: [u8; 4] = *b"LSQL";
+const PAYLOAD_MARKER: [u8; 9] = *b"LOGOS_SQL";
 const PAYLOAD_VERSION: u16 = 1;
 const PAYLOAD_HEADER_LEN: usize = PAYLOAD_MARKER.len() + size_of::<u16>();
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 1_024;
-const TX_ID_DOMAIN_SEPARATOR: &[u8] = b"lsql transaction id";
+const TX_ID_DOMAIN_SEPARATOR: &[u8] = b"logos sql transaction id";
 
 /// Stable identity of one application write.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
@@ -233,11 +233,12 @@ impl ChannelWrite {
             .split_at_checked(PAYLOAD_HEADER_LEN)
             .ok_or(Error::InvalidPayload("header is missing"))?;
 
-        if header[..4] != PAYLOAD_MARKER {
+        if header[..PAYLOAD_MARKER.len()] != PAYLOAD_MARKER {
             return Err(Error::InvalidPayload("protocol marker does not match"));
         }
 
-        let version = u16::from_le_bytes([header[4], header[5]]);
+        let version_offset = PAYLOAD_MARKER.len();
+        let version = u16::from_le_bytes([header[version_offset], header[version_offset + 1]]);
 
         if version != PAYLOAD_VERSION {
             return Err(Error::UnsupportedProtocolVersion(version));
@@ -282,7 +283,7 @@ impl EncodedWrite {
 
 /// Returns whether an inscription belongs to `λSQL`.
 #[must_use]
-pub fn is_lsql_payload(payload: &[u8]) -> bool {
+pub fn is_logos_sql_payload(payload: &[u8]) -> bool {
     payload.starts_with(&PAYLOAD_MARKER)
 }
 

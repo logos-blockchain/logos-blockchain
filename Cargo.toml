@@ -50,7 +50,7 @@ members = [
   "kms/operators",
   "ledger",
   "libp2p",
-  "lsql",
+  "logos_sql",
   "merkle/blake2btree",
   "merkle/dynamic-merkle",
   "merkle/tree",

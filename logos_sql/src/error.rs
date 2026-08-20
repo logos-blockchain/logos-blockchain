@@ -57,7 +57,7 @@ pub enum Error {
     InscriptionTooLarge,
 
     /// No Tokio runtime is active on the calling thread.
-    #[error("Lsql::start must be called from within a Tokio runtime")]
+    #[error("LogosSql::start must be called from within a Tokio runtime")]
     RuntimeUnavailable,
 
     /// The sequencer has not completed backfill and cannot accept writes yet.

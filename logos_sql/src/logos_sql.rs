@@ -21,7 +21,7 @@ use crate::{
 };
 
 /// Configuration for one `λSQL` database.
-pub struct LsqlConfig {
+pub struct LogosSqlConfig {
     /// Channel carrying the write log.
     pub channel_id: ChannelId,
     /// Key used to sign published inscriptions.
@@ -36,15 +36,15 @@ pub struct LsqlConfig {
 
 /// A running `λSQL` database.
 ///
-/// `Lsql` owns one background task. That task is the only owner of both the
-/// `ZoneSDK` sequencer and the database writer. Dropping `Lsql` aborts the
+/// `LogosSql` owns one background task. That task is the only owner of both the
+/// `ZoneSDK` sequencer and the database writer. Dropping `LogosSql` aborts the
 /// task; call [`Self::shutdown`] to stop it gracefully and observe errors.
-pub struct Lsql {
+pub struct LogosSql {
     live_path: PathBuf,
     runtime: Option<runtime::RuntimeHandle>,
 }
 
-impl Lsql {
+impl LogosSql {
     /// Opens local state, starts replication, and waits for the initial channel
     /// history to be processed.
     ///
@@ -54,7 +54,7 @@ impl Lsql {
     ///
     /// Returns an error if no Tokio runtime is active, the local state cannot
     /// be opened, or the replication task stops before becoming ready.
-    pub async fn start(config: LsqlConfig) -> Result<Self, Error> {
+    pub async fn start(config: LogosSqlConfig) -> Result<Self, Error> {
         tokio::runtime::Handle::try_current().map_err(|_| Error::RuntimeUnavailable)?;
 
         let db = Databases::open(&config.state_dir)?;
@@ -74,18 +74,19 @@ impl Lsql {
 
         let runtime = runtime::spawn(sequencer, db, config.channel_id, writer_id, checkpoint);
 
-        let mut lsql = Self {
+        let mut logos_sql = Self {
             live_path,
             runtime: Some(runtime),
         };
 
-        lsql.runtime
+        logos_sql
+            .runtime
             .as_mut()
             .ok_or(Error::RuntimeStopped)?
             .wait_until_ready()
             .await?;
 
-        Ok(lsql)
+        Ok(logos_sql)
     }
 
     /// Starts a replicated write containing one SQL statement.
@@ -95,12 +96,13 @@ impl Lsql {
     /// submit it for publication.
     ///
     /// ```no_run
-    /// # use logos_blockchain_lsql::{Error, IdempotencyKey, Lsql, TxId};
+    /// # use logos_sql::{Error, IdempotencyKey, LogosSql, TxId};
     /// # async fn create_task(
-    /// #     lsql: &Lsql,
+    /// #     logos_sql: &LogosSql,
     /// #     key: IdempotencyKey,
     /// # ) -> Result<TxId, Error> {
-    /// lsql.query("INSERT INTO tasks (id, title) VALUES (?1, ?2)")
+    /// logos_sql
+    ///     .query("INSERT INTO tasks (id, title) VALUES (?1, ?2)")
     ///     .bind(42i64)
     ///     .bind("Write documentation")
     ///     .execute(key)
@@ -152,7 +154,7 @@ impl Lsql {
     }
 }
 
-impl Drop for Lsql {
+impl Drop for LogosSql {
     fn drop(&mut self) {
         if let Some(runtime) = &self.runtime {
             runtime.abort();

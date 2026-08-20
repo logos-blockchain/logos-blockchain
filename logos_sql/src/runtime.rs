@@ -22,7 +22,7 @@ use crate::{
 
 const COMMAND_CHANNEL_CAPACITY: usize = 16;
 const PUBLISH_RETRY_INTERVAL: Duration = Duration::from_secs(5);
-const TARGET: &str = lb_log_targets::lsql::RUNTIME;
+const TARGET: &str = lb_log_targets::logos_sql::RUNTIME;
 
 /// Requests processed by the task that owns the sequencer and database writer.
 enum Command {

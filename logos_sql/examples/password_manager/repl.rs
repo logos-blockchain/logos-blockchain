@@ -7,7 +7,7 @@
 use std::io::{self, Write as _};
 
 use clap::{Parser, Subcommand};
-use logos_blockchain_lsql::TxId;
+use logos_sql::TxId;
 use uuid::Uuid;
 
 use crate::{
