@@ -175,59 +175,61 @@ where
             rustc::closure_returning_async_block,
             reason = "`repeat_with` takes a FnMut not an async closure"
         )]
-        let tasks = iter::repeat_with(move || {
-            Self::search_winner_ticket(block_header, epoch_nonce, difficulty)
-        });
+        let tasks =
+            iter::repeat_with(move || search_winner_ticket(block_header, epoch_nonce, difficulty));
         let results = stream::iter(tasks).buffer_unordered(16);
         Box::pin(tokio_stream::StreamExt::filter_map(
             results,
             |maybe_winner| maybe_winner,
         ))
     }
+}
 
-    /// Runs a single ticket-search attempt for a block.
-    ///
-    /// Generates a random key, builds the reward claim, and validates its
-    /// puzzle ticket against `difficulty`. The heavy computation is off-loaded
-    /// to a blocking thread so it does not stall the async runtime. Returns the
-    /// winning `(key, claim)` when the ticket meets the difficulty target,
-    /// otherwise `None`.
-    async fn search_winner_ticket(
-        block_header: HeaderId,
-        epoch_nonce: ZkHash,
-        difficulty: PowTarget,
-    ) -> Option<(UnsecuredZkKey, ClaimPowRewardOp)> {
-        // Ticket computation is heavy, need to be run in blocking threads not to block
-        // async execution.
-        let task = tokio::task::spawn_blocking(move || {
-            let mut rng = rand::thread_rng();
-            let sk = UnsecuredZkKey::from_rng(&mut rng);
-            let pk = sk.to_public_key();
-            let claim = ClaimPowRewardOp {
-                epoch_nonce,
-                block_hash: block_header.into(),
-                public_key: pk,
-            };
-            let ticket = claim.get_puzzle_ticket();
-            ticket
-                .validate_difficulty_reward(&difficulty)
-                .is_ok()
-                .then_some((sk, claim))
-        });
-        task.await.ok().flatten()
-    }
+/// Runs a single ticket-search attempt for a block.
+///
+/// Generates a random key, builds the reward claim, and validates its puzzle
+/// ticket against `difficulty`. The heavy computation is off-loaded to a
+/// blocking thread so it does not stall the async runtime. Returns the winning
+/// `(key, claim)` when the ticket meets the difficulty target, otherwise
+/// `None`.
+async fn search_winner_ticket(
+    block_header: HeaderId,
+    epoch_nonce: ZkHash,
+    difficulty: PowTarget,
+) -> Option<(UnsecuredZkKey, ClaimPowRewardOp)> {
+    // Ticket computation is heavy, need to be run in blocking threads not to block
+    // async execution.
+    let task = tokio::task::spawn_blocking(move || {
+        let mut rng = rand::thread_rng();
+        let sk = UnsecuredZkKey::from_rng(&mut rng);
+        let pk = sk.to_public_key();
+        let claim = ClaimPowRewardOp {
+            epoch_nonce,
+            block_hash: block_header.into(),
+            public_key: pk,
+        };
+        let ticket = claim.get_puzzle_ticket();
+        ticket
+            .validate_difficulty_reward(&difficulty)
+            .is_ok()
+            .then_some((sk, claim))
+    });
+    task.await.ok().flatten()
+}
 
-    /// Drops the ticket searches for every block whose slot is older than
-    /// `frontier_slot`, i.e. blocks that have fallen out of the reward window
-    /// and can no longer produce claimable tickets.
-    fn prune_out_of_window_streams(&mut self, frontier_slot: Slot) {
-        let to_remove = self
-            .tickets_search_by_slot
-            .extract_if(|k, _| k < &frontier_slot)
-            .flat_map(|(_, headers)| headers);
-        for header in to_remove {
-            self.tickets_search.remove(&header);
-        }
+/// Drops the ticket searches for every block whose slot is older than
+/// `frontier_slot`, i.e. blocks that have fallen out of the reward window and
+/// can no longer produce claimable tickets.
+fn prune_out_of_window_streams(
+    tickets_search: &mut StreamMap<HeaderId, WinnerTicketStream>,
+    tickets_search_by_slot: &mut HashMap<Slot, HashSet<HeaderId>>,
+    frontier_slot: Slot,
+) {
+    let to_remove = tickets_search_by_slot
+        .extract_if(|k, _| k < &frontier_slot)
+        .flat_map(|(_, headers)| headers);
+    for header in to_remove {
+        tickets_search.remove(&header);
     }
 }
 
@@ -284,9 +286,122 @@ where
                     .insert(block_id);
             }
             // prune old enough winning tickets
-            this.prune_out_of_window_streams(frontier_slot);
+            prune_out_of_window_streams(
+                &mut this.tickets_search,
+                &mut this.tickets_search_by_slot,
+                frontier_slot,
+            );
         }
 
         Poll::Pending
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{HashMap, HashSet};
+
+    use futures::stream;
+    use lb_chain_service::Slot;
+    use lb_core::header::HeaderId;
+    use lb_groth16::{AdditiveGroup as _, Fr};
+    use lb_key_management_system_keys::keys::ZkPublicKey;
+    use tokio_stream::StreamMap;
+
+    use super::{WinnerTicketStream, prune_out_of_window_streams, search_winner_ticket};
+
+    /// A never-resolving search stream, used to populate the map under test.
+    fn pending_stream() -> WinnerTicketStream {
+        Box::pin(stream::pending())
+    }
+
+    /// The genesis/zero field element, reused as a stand-in epoch nonce.
+    fn zero_fr() -> Fr {
+        *ZkPublicKey::zero().as_fr()
+    }
+
+    #[test]
+    fn prune_removes_only_searches_below_the_frontier() {
+        let old_block = HeaderId::from([1u8; 32]);
+        let recent_block = HeaderId::from([2u8; 32]);
+
+        let mut tickets_search: StreamMap<HeaderId, WinnerTicketStream> = StreamMap::new();
+        tickets_search.insert(old_block, pending_stream());
+        tickets_search.insert(recent_block, pending_stream());
+
+        let mut tickets_search_by_slot: HashMap<Slot, HashSet<HeaderId>> = HashMap::new();
+        tickets_search_by_slot
+            .entry(Slot::new(5))
+            .or_default()
+            .insert(old_block);
+        tickets_search_by_slot
+            .entry(Slot::new(10))
+            .or_default()
+            .insert(recent_block);
+
+        prune_out_of_window_streams(
+            &mut tickets_search,
+            &mut tickets_search_by_slot,
+            Slot::new(8),
+        );
+
+        // The slot-5 search aged out; the slot-10 one is still within the window.
+        assert_eq!(tickets_search.len(), 1);
+        assert!(!tickets_search.contains_key(&old_block));
+        assert!(tickets_search.contains_key(&recent_block));
+        assert!(!tickets_search_by_slot.contains_key(&Slot::new(5)));
+        assert!(tickets_search_by_slot.contains_key(&Slot::new(10)));
+    }
+
+    #[test]
+    fn prune_keeps_everything_when_nothing_aged_out() {
+        let block = HeaderId::from([3u8; 32]);
+        let mut tickets_search: StreamMap<HeaderId, WinnerTicketStream> = StreamMap::new();
+        tickets_search.insert(block, pending_stream());
+        let mut tickets_search_by_slot: HashMap<Slot, HashSet<HeaderId>> = HashMap::new();
+        tickets_search_by_slot
+            .entry(Slot::new(10))
+            .or_default()
+            .insert(block);
+
+        prune_out_of_window_streams(
+            &mut tickets_search,
+            &mut tickets_search_by_slot,
+            Slot::new(10), // frontier == slot, so it is not "below"
+        );
+
+        assert!(tickets_search.contains_key(&block));
+        assert!(tickets_search_by_slot.contains_key(&Slot::new(10)));
+    }
+
+    #[tokio::test]
+    async fn search_winner_ticket_rejects_when_difficulty_is_zero() {
+        // No ticket can be strictly below zero, so this attempt never wins.
+        let result = search_winner_ticket(HeaderId::from([7u8; 32]), zero_fr(), Fr::ZERO).await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn search_winner_ticket_builds_a_valid_winning_claim() {
+        let block_header = HeaderId::from([9u8; 32]);
+        let epoch_nonce = zero_fr();
+        // Maximum field element: every ticket is below it, so the attempt wins.
+        let difficulty = Fr::ZERO - Fr::from(1u64);
+
+        let (secret_key, claim) = search_winner_ticket(block_header, epoch_nonce, difficulty)
+            .await
+            .expect("a win is essentially certain at maximum difficulty");
+
+        // The claim reflects the search inputs and the winning key.
+        assert_eq!(claim.public_key, secret_key.to_public_key());
+        assert_eq!(claim.epoch_nonce, epoch_nonce);
+        assert_eq!(claim.block_hash, <[u8; 32]>::from(block_header));
+        // The winning ticket genuinely satisfies the difficulty target.
+        assert!(
+            claim
+                .get_puzzle_ticket()
+                .validate_difficulty_reward(&difficulty)
+                .is_ok()
+        );
     }
 }
