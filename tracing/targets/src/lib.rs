@@ -13,6 +13,7 @@ log_target_modules! {
     mempool,
     network_service,
     node,
+    pow,
     proofs,
     storage,
     system_sig,

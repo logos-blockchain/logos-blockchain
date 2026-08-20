@@ -23,12 +23,15 @@ use lb_core::{
 };
 use lb_key_management_system_keys::keys::UnsecuredZkKey;
 use lb_ledger::LedgerState;
+use lb_log_targets::pow;
 use serde::{Deserialize, Serialize};
 use tokio_stream::{
     StreamMap,
     wrappers::{BroadcastStream, errors::BroadcastStreamRecvError},
 };
 use tracing::{error, log::warn};
+
+const LOG_TARGET: &str = pow::ROOT;
 
 /// A winning Proof-of-Work reward: the secret key that produced the ticket,
 /// paired with the reward-claim operation to be published.
@@ -139,18 +142,18 @@ where
                 },
             ) => {
                 let Ok(Ok(epoch_state)) = cryptarchia_api.get_epoch_state(tip_slot).await else {
-                    warn!("Epoch state not found for block slot: {tip_slot:?}");
+                    warn!(target: LOG_TARGET, "Epoch state not found for block slot: {tip_slot:?}");
                     return None;
                 };
                 let Ok(Some(ledger_state)) = cryptarchia_api.get_ledger_state(block_id).await
                 else {
-                    warn!("Ledger state not found for block: {block_id:?}");
+                    warn!(target: LOG_TARGET, "Ledger state not found for block: {block_id:?}");
                     return None;
                 };
                 Some((epoch_state, ledger_state, event))
             }
             Err(e) => {
-                error!("Missed new block event due to: {e}");
+                error!(target: LOG_TARGET, "Missed new block event due to: {e}");
                 None
             }
         }

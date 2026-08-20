@@ -30,6 +30,7 @@ use lb_core::{
 };
 use lb_key_management_system_keys::keys::{MAX_ZK_SIGNING_KEYS, UnsecuredZkKey, ZkPublicKey};
 use lb_ledger::LedgerState;
+use lb_log_targets::pow;
 use lb_services_utils::{
     overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings},
     wait_until_services_are_ready,
@@ -48,6 +49,8 @@ use tokio::{sync::oneshot, task::JoinError};
 use tracing::{error, log::info};
 
 use crate::tickets::{TicketGenerator, WinningTicket};
+
+const LOG_TARGET: &str = pow::ROOT;
 
 /// Errors produced while building or publishing `PoW` reward-claim
 /// transactions.
@@ -222,9 +225,9 @@ where
         );
 
         // Wait till chain is online to mine
-        info!("Waiting for the chain to become online");
+        info!(target: LOG_TARGET, "Waiting for the chain to become online");
         cryptarchia_api.wait_until_chain_becomes_online().await?;
-        info!("Chain is online; starting the PoW service");
+        info!(target: LOG_TARGET, "Chain is online; starting the PoW service");
 
         // API wrapper over the blend service relay, used to publish PoW reward
         // claim transactions to the blend network.
@@ -257,19 +260,19 @@ where
                     match message {
                         PoWServiceMessage::StartMining => {
                             if !mining {
-                                info!("PoW mining started");
+                                info!(target: LOG_TARGET, "PoW mining started");
                             }
                             mining = true;
                         }
                         PoWServiceMessage::StopMining => {
                             if mining {
-                                info!("PoW mining stopped");
+                                info!(target: LOG_TARGET, "PoW mining stopped");
                             }
                             mining = false;
                         }
                         PoWServiceMessage::Claim => {
                             if state.ready_to_claim.is_empty() {
-                                info!("No PoW rewards to claim");
+                                info!(target: LOG_TARGET, "No PoW rewards to claim");
                             } else if let Err(e) = claim_ready_rewards(
                                 &cryptarchia_api,
                                 &blend_api,
@@ -278,7 +281,7 @@ where
                             )
                             .await
                             {
-                                error!("Failed to claim PoW rewards: {e}");
+                                error!(target: LOG_TARGET, "Failed to claim PoW rewards: {e}");
                             }
                             state_updater.update(Some(state.clone()));
                         }
@@ -290,11 +293,11 @@ where
                                         info.cryptarchia_info.slot,
                                     );
                                     if response.send(claimable).is_err() {
-                                        error!("ClaimableRewardsInfo response receiver was dropped");
+                                        error!(target: LOG_TARGET, "ClaimableRewardsInfo response receiver was dropped");
                                     }
                                 }
                                 Err(e) => {
-                                    error!("Failed to query chain info for claimable rewards: {e}");
+                                    error!(target: LOG_TARGET, "Failed to query chain info for claimable rewards: {e}");
                                 }
                             }
                         }
@@ -305,6 +308,7 @@ where
                 Some(winning_ticket) = winning_tickets.next(), if mining => {
                     state.ready_to_claim.push(winning_ticket);
                     info!(
+                        target: LOG_TARGET,
                         "Mined a winning ticket 💲; total claimable tickets {}",
                         state.ready_to_claim.len()
                     );
@@ -355,6 +359,7 @@ where
 
     let claimed: Vec<_> = state.ready_to_claim.drain(..claimed_count).collect();
     info!(
+        target: LOG_TARGET,
         "Claimed {} PoW reward(s); {} still ready",
         claimed.len(),
         state.ready_to_claim.len()
