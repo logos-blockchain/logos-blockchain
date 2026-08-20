@@ -42,30 +42,30 @@ pub struct PoWServiceSettings {
     pub claim_address: ZkPublicKey,
 }
 
-pub struct PoWServiceState<Tx> {
-    claims: Vec<ClaimPowRewardOp>,
-    transactions: Vec<Tx>,
+pub struct PoWServiceState {
+    ready_to_claim: Vec<ClaimPowRewardOp>,
+    pending_to_claim: Vec<ClaimPowRewardOp>,
 }
 
-pub struct PoWService<Tx, CryptarchiaService, BlendService, RuntimeServiceId> {
+pub struct PoWService<CryptarchiaService, BlendService, RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    state: PoWServiceState<Tx>,
+    state: PoWServiceState,
     settings: PoWServiceSettings,
     _phantom: PhantomData<(CryptarchiaService, BlendService)>,
 }
 
-impl<Tx, CryptarchiaService, BlendService, RuntimeServiceId> ServiceData
-    for PoWService<Tx, CryptarchiaService, BlendService, RuntimeServiceId>
+impl<CryptarchiaService, BlendService, RuntimeServiceId> ServiceData
+    for PoWService<CryptarchiaService, BlendService, RuntimeServiceId>
 {
     type Settings = PoWServiceSettings;
-    type State = PoWServiceState<Tx>;
+    type State = PoWServiceState;
     type StateOperator = ();
     type Message = PoWServiceMessage;
 }
 
 #[async_trait::async_trait]
 impl<Tx, CryptarchiaService, BlendService, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for PoWService<Tx, CryptarchiaService, BlendService, RuntimeServiceId>
+    for PoWService<CryptarchiaService, BlendService, RuntimeServiceId>
 where
     Tx: Send + Sync + 'static,
     CryptarchiaService: CryptarchiaServiceData<Tx = Tx> + Sync + 'static,
@@ -173,7 +173,8 @@ where
     }
 }
 
-/// Errors produced while building or publishing PoW reward-claim transactions.
+/// Errors produced while building or publishing `PoW` reward-claim
+/// transactions.
 #[derive(thiserror::Error, Debug)]
 pub enum PoWError {
     #[error("PoW rewards are disabled (epoch reward is zero)")]
@@ -425,6 +426,8 @@ fn estimate_reward_claim_fee(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use lb_core::mantle::{
         Note, NoteId, Op, OpProof, SignedMantleTx, Utxo,
         ops::{OpId as _, pow::ClaimPowRewardOp},
@@ -463,8 +466,8 @@ mod tests {
     fn context() -> MantleTxContext {
         MantleTxContext {
             gas_context: MantleTxGasContext::new(
-                Default::default(),
-                Default::default(),
+                HashMap::default(),
+                HashMap::default(),
                 GasPrices::new(1, 1),
             ),
             leader_reward_amount: 0,
@@ -544,7 +547,7 @@ mod tests {
 
     #[test]
     fn push_reward_claim_ops_interleaves_claims_and_transfers() {
-        let tickets: Vec<_> = (0..40).map(|_| ticket()).collect();
+        let tickets: Vec<_> = std::iter::repeat_with(ticket).take(40).collect();
         let notes: Vec<NoteId> = (0u8..40).map(note_id).collect();
         let changes = change_outputs(&notes, 100, 0).unwrap();
         let transfers = transfer_ops(&notes, ZkPublicKey::zero(), &changes).unwrap();
@@ -641,7 +644,7 @@ mod tests {
     #[tokio::test]
     async fn build_reward_claim_tx_caps_claims_to_the_reward_pool() {
         // Pool funds only two claims, but five tickets are offered.
-        let tickets: Vec<_> = (0..5).map(|_| ticket()).collect();
+        let tickets: Vec<_> = std::iter::repeat_with(ticket).take(5).collect();
         let tx = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
             REWARD,
@@ -667,7 +670,7 @@ mod tests {
         // More tickets and pool room than the op budget allows: the cap is the
         // op limit, and the resulting tx must still fit within it.
         let cap = max_claims_by_ops();
-        let tickets: Vec<_> = (0..cap + 50).map(|_| ticket()).collect();
+        let tickets: Vec<_> = std::iter::repeat_with(ticket).take(cap + 50).collect();
         let tx = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
             REWARD,
