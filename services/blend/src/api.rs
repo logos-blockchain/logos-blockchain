@@ -58,8 +58,6 @@ where
 impl<Blend, RuntimeServiceId> BlendServiceApi<Blend, RuntimeServiceId>
 where
     Blend: BlendServiceData,
-    Blend::NodeId: Send,
-    RuntimeServiceId: Sync,
 {
     #[must_use]
     pub const fn new(relay: OutboundRelay<Blend::Message>) -> Self {
@@ -68,7 +66,14 @@ where
             _id: PhantomData,
         }
     }
+}
 
+impl<Blend, RuntimeServiceId> BlendServiceApi<Blend, RuntimeServiceId>
+where
+    Blend: BlendServiceData,
+    Blend::NodeId: Send,
+    RuntimeServiceId: Sync,
+{
     /// Publish a payload to the blend network. The exit node hands it over to
     /// whichever local service owns that kind of payload. Fire-and-forget.
     pub async fn publish(&self, payload: BlendPayload) -> Result<(), ApiError> {
