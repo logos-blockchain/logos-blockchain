@@ -4,7 +4,7 @@ use lb_groth16::{AdditiveGroup as _, Field as _, Fr, fr_from_bytes_unchecked, fr
 use lb_poseidon2::{Digest, Poseidon2Bn254Hasher};
 use lb_zksign::{ZkSignError, ZkSignPrivateKeysData, ZkSignWitnessInputs};
 use num_bigint::BigUint;
-use rand_core::RngCore;
+use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq as _;
 use zeroize::ZeroizeOnDrop;
@@ -65,7 +65,7 @@ impl SecretKey {
     }
 
     #[must_use]
-    pub fn from_rng<Rng: RngCore>(rng: &mut Rng) -> Self {
+    pub fn from_rng<Rng: RngCore + CryptoRng>(rng: &mut Rng) -> Self {
         let mut bytes = [0u8; 32];
         rng.fill_bytes(&mut bytes);
         Self(fr_from_mod_bytes(&bytes))
