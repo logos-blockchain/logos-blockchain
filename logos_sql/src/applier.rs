@@ -48,7 +48,7 @@ pub fn on_event(db: &mut Databases, event: &Event, channel_id: ChannelId) -> Res
             }
 
             if let Some(payload) = find_logos_sql_payload(finalized) {
-                let decoded = protocol::ChannelWrite::decode(payload)?;
+                let decoded = protocol::ChannelInscription::decode(payload)?;
 
                 tracing::debug!(
                     target: TARGET,

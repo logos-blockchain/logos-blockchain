@@ -179,12 +179,12 @@ impl Transaction {
 
 /// Transaction payload carried by a `λSQL` channel inscription.
 #[derive(Serialize, Deserialize)]
-pub struct ChannelWrite {
+pub struct ChannelInscription {
     pub tx_id: TxId,
     pub transaction: Transaction,
 }
 
-impl ChannelWrite {
+impl ChannelInscription {
     fn encode(&self) -> Result<Vec<u8>, Error> {
         let mut payload = Vec::from(PAYLOAD_MARKER);
         payload.extend_from_slice(&PAYLOAD_VERSION.to_le_bytes());
@@ -225,12 +225,12 @@ impl EncodedWrite {
     pub fn new(transaction: &Transaction) -> Result<Self, Error> {
         let tx_id = TxId::generate();
 
-        let channel_write = ChannelWrite {
+        let channel_inscription = ChannelInscription {
             tx_id,
             transaction: transaction.clone(),
         };
 
-        let payload = channel_write.encode()?;
+        let payload = channel_inscription.encode()?;
 
         Ok(Self { tx_id, payload })
     }
@@ -251,7 +251,7 @@ fn codec() -> impl bincode::Options {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChannelWrite, EncodedWrite, Statement, Transaction, TxId, Value};
+    use super::{ChannelInscription, EncodedWrite, Statement, Transaction, TxId, Value};
 
     #[test]
     fn transaction_id_is_displayed_as_hex() {
@@ -261,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn channel_write_round_trips() {
+    fn channel_inscription_round_trips() {
         let transaction = Transaction::new(vec![
             Statement::new(
                 "INSERT INTO messages VALUES (?1)".to_owned(),
@@ -272,7 +272,8 @@ mod tests {
         .expect("transaction should be valid");
 
         let encoded = EncodedWrite::new(&transaction).expect("submission should encode");
-        let decoded = ChannelWrite::decode(&encoded.payload).expect("channel write should decode");
+        let decoded = ChannelInscription::decode(&encoded.payload)
+            .expect("channel inscription should decode");
 
         assert_eq!(decoded.tx_id, encoded.tx_id);
         assert_eq!(decoded.transaction, transaction);

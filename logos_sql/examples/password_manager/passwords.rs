@@ -4,28 +4,12 @@
 //! application ends and the replication library begins. Domain operations are
 //! translated into parameterized SQL writes here.
 
-use logos_sql::{Error as LogosSqlError, LogosSql, LogosSqlConfig, TxId};
+use logos_sql::{
+    Error as LogosSqlError, LogosSql, LogosSqlConfig, QueryBuilder, TransactionBuilder, TxId,
+};
 
 use crate::AppResult;
 
-const CREATE_CREDENTIALS_TABLE: &str = "
-    CREATE TABLE IF NOT EXISTS credentials (
-        label TEXT PRIMARY KEY,
-        account TEXT NOT NULL,
-        password TEXT NOT NULL
-    )
-";
-
-const INSERT_CREDENTIAL: &str = "
-    INSERT INTO credentials (label, account, password)
-    VALUES (?1, ?2, ?3)
-";
-const UPDATE_PASSWORD: &str = "
-    UPDATE credentials
-    SET password = ?2
-    WHERE label = ?1
-";
-const DELETE_CREDENTIAL: &str = "DELETE FROM credentials WHERE label = ?1";
 const SELECT_CREDENTIAL: &str = "
     SELECT label, account, password
     FROM credentials
@@ -41,6 +25,40 @@ const SELECT_SCHEMA_EXISTS: &str = "
     FROM sqlite_schema
     WHERE type = 'table' AND name = 'credentials'
 ";
+
+fn prepare_schema() -> QueryBuilder {
+    TransactionBuilder::query(
+        "CREATE TABLE IF NOT EXISTS credentials (
+            label TEXT PRIMARY KEY,
+            account TEXT NOT NULL,
+            password TEXT NOT NULL
+        )",
+    )
+}
+
+fn prepare_credential_insert(label: &str, account: &str, password: &str) -> QueryBuilder {
+    TransactionBuilder::query(
+        "INSERT INTO credentials (label, account, password)
+         VALUES (?1, ?2, ?3)",
+    )
+    .bind(label)
+    .bind(account)
+    .bind(password)
+}
+
+fn prepare_password_update(label: &str, password: &str) -> QueryBuilder {
+    TransactionBuilder::query(
+        "UPDATE credentials
+         SET password = ?2
+         WHERE label = ?1",
+    )
+    .bind(label)
+    .bind(password)
+}
+
+fn prepare_credential_delete(label: &str) -> QueryBuilder {
+    TransactionBuilder::query("DELETE FROM credentials WHERE label = ?1").bind(label)
+}
 
 /// One credential in the current local database view.
 ///
@@ -82,10 +100,7 @@ impl PasswordManager {
             return Ok(());
         }
 
-        self.logos_sql
-            .query(CREATE_CREDENTIALS_TABLE)
-            .execute()
-            .await?;
+        self.logos_sql.execute(prepare_schema()).await?;
 
         Ok(())
     }
@@ -107,11 +122,7 @@ impl PasswordManager {
         // resulting ciphertext, salt, and nonce should be bound instead.
         Ok(self
             .logos_sql
-            .query(INSERT_CREDENTIAL)
-            .bind(label)
-            .bind(account)
-            .bind(password)
-            .execute()
+            .execute(prepare_credential_insert(&label, &account, &password))
             .await?)
     }
 
@@ -119,10 +130,7 @@ impl PasswordManager {
     pub async fn update_password(&self, label: String, password: String) -> AppResult<TxId> {
         Ok(self
             .logos_sql
-            .query(UPDATE_PASSWORD)
-            .bind(label)
-            .bind(password)
-            .execute()
+            .execute(prepare_password_update(&label, &password))
             .await?)
     }
 
@@ -130,9 +138,7 @@ impl PasswordManager {
     pub async fn remove(&self, label: String) -> AppResult<TxId> {
         Ok(self
             .logos_sql
-            .query(DELETE_CREDENTIAL)
-            .bind(label)
-            .execute()
+            .execute(prepare_credential_delete(&label))
             .await?)
     }
 

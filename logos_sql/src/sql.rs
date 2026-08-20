@@ -4,28 +4,19 @@ use rusqlite::types::{ToSql, ToSqlOutput, Value, ValueRef};
 
 use crate::{
     error::Error,
-    logos_sql::LogosSql,
-    protocol::{Statement, Transaction, TxId},
+    protocol::{Statement, Transaction},
 };
 
 /// The beginning of a replicated SQL transaction.
 ///
-/// Add its first statement with [`Self::query`]. Binding parameters and
-/// executing the transaction become available after that statement exists.
-#[must_use = "the transaction must be executed to apply its SQL"]
-pub struct TransactionBuilder<'a> {
-    logos_sql: &'a LogosSql,
-}
+/// Start with [`Self::query`], then bind its parameters and pass the resulting
+/// [`QueryBuilder`] to [`crate::LogosSql::execute`].
+pub struct TransactionBuilder;
 
-impl<'a> TransactionBuilder<'a> {
-    pub(crate) const fn new(logos_sql: &'a LogosSql) -> Self {
-        Self { logos_sql }
-    }
-
-    /// Adds the first SQL query to this transaction.
-    pub fn query(self, sql: impl Into<String>) -> QueryBuilder<'a> {
+impl TransactionBuilder {
+    /// Starts a transaction with its first SQL query.
+    pub fn query(sql: impl Into<String>) -> QueryBuilder {
         QueryBuilder {
-            logos_sql: self.logos_sql,
             transaction: TransactionDraft::new(sql),
         }
     }
@@ -36,9 +27,8 @@ impl<'a> TransactionBuilder<'a> {
 /// Parameter values are converted immediately into owned `SQLite` values, so
 /// borrowed application data does not need to outlive the call to
 /// [`Self::bind`].
-#[must_use = "the transaction must be executed to apply its SQL"]
-pub struct QueryBuilder<'a> {
-    logos_sql: &'a LogosSql,
+#[must_use = "the transaction must be passed to LogosSql::execute"]
+pub struct QueryBuilder {
     transaction: TransactionDraft,
 }
 
@@ -48,7 +38,7 @@ struct TransactionDraft {
     error: Option<Error>,
 }
 
-impl QueryBuilder<'_> {
+impl QueryBuilder {
     /// Adds the next SQL query to this transaction.
     pub fn query(mut self, sql: impl Into<String>) -> Self {
         self.transaction.query(sql);
@@ -70,20 +60,8 @@ impl QueryBuilder<'_> {
         self
     }
 
-    /// Commits the transaction locally and submits it to `ZoneSDK`.
-    ///
-    /// A successful return means the SQL effects and recovery record are
-    /// committed locally. Publication and finality remain asynchronous.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when a parameter cannot be represented by the `λSQL`
-    /// protocol, validation or the local commit fails, the sequencer is not
-    /// ready, or the runtime has halted.
-    pub async fn execute(self) -> Result<TxId, Error> {
-        let transaction = self.transaction.finish()?;
-
-        self.logos_sql.commit_transaction(transaction).await
+    pub(crate) fn finish(self) -> Result<Transaction, Error> {
+        self.transaction.finish()
     }
 }
 
@@ -174,20 +152,19 @@ fn owned_value_ref(value: ValueRef<'_>) -> Result<Value, Error> {
 mod tests {
     use rusqlite::types::Value;
 
-    use super::{Statement, Transaction, TransactionDraft, to_owned_value};
+    use super::{Statement, Transaction, TransactionBuilder, to_owned_value};
 
     #[test]
     fn assembles_statements_and_parameters_in_order() {
-        let mut draft =
-            TransactionDraft::new("INSERT INTO credentials (label, account) VALUES (?1, ?2)");
-
-        draft.bind(&"email");
-        draft.bind(&"andrus@example.org");
-        draft.query("UPDATE credentials SET password = ?2 WHERE label = ?1");
-        draft.bind(&"email");
-        draft.bind(&42i64);
-
-        let transaction = draft.finish().unwrap();
+        let transaction =
+            TransactionBuilder::query("INSERT INTO credentials (label, account) VALUES (?1, ?2)")
+                .bind("email")
+                .bind("andrus@example.org")
+                .query("UPDATE credentials SET password = ?2 WHERE label = ?1")
+                .bind("email")
+                .bind(42i64)
+                .finish()
+                .unwrap();
         let expected = Transaction::new(vec![
             Statement::new(
                 "INSERT INTO credentials (label, account) VALUES (?1, ?2)".to_owned(),

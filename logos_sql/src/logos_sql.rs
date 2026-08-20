@@ -12,13 +12,7 @@ use lb_zone_sdk::{
 use reqwest::Url;
 use rusqlite::Connection;
 
-use crate::{
-    db::Databases,
-    error::Error,
-    protocol::{Transaction, TxId},
-    runtime,
-    sql::{QueryBuilder, TransactionBuilder},
-};
+use crate::{db::Databases, error::Error, protocol::TxId, runtime, sql::QueryBuilder};
 
 /// Configuration for one `λSQL` database.
 pub struct LogosSqlConfig {
@@ -87,33 +81,33 @@ impl LogosSql {
         Ok(logos_sql)
     }
 
-    /// Starts a replicated write containing one SQL statement.
-    ///
-    /// Bind parameters with [`QueryBuilder::bind`], then call
-    /// [`QueryBuilder::execute`] to execute the statement locally and
-    /// submit it for publication.
+    /// Executes a prepared SQL transaction locally and submits it for
+    /// publication.
     ///
     /// ```no_run
-    /// # use logos_sql::{Error, LogosSql, TxId};
+    /// # use logos_sql::{Error, LogosSql, TransactionBuilder, TxId};
     /// # async fn create_task(logos_sql: &LogosSql) -> Result<TxId, Error> {
-    /// logos_sql
-    ///     .query("INSERT INTO tasks (id, title) VALUES (?1, ?2)")
+    /// let transaction = TransactionBuilder::query(
+    ///     "INSERT INTO tasks (id, title) VALUES (?1, ?2)",
+    /// )
     ///     .bind(42i64)
-    ///     .bind("Write documentation")
-    ///     .execute()
-    ///     .await
+    ///     .bind("Write documentation");
+    ///
+    /// logos_sql.execute(transaction).await
     /// # }
     /// ```
-    pub fn query(&self, sql: impl Into<String>) -> QueryBuilder<'_> {
-        self.transaction().query(sql)
-    }
+    ///
+    /// A successful return means the SQL effects and recovery record are
+    /// committed locally. Publication and finality remain asynchronous.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a parameter cannot be represented by the `λSQL`
+    /// protocol, validation or the local commit fails, the sequencer is not
+    /// ready, or the runtime has halted.
+    pub async fn execute(&self, transaction: QueryBuilder) -> Result<TxId, Error> {
+        let transaction = transaction.finish()?;
 
-    /// Starts an atomic replicated write containing multiple SQL statements.
-    pub const fn transaction(&self) -> TransactionBuilder<'_> {
-        TransactionBuilder::new(self)
-    }
-
-    pub(crate) async fn commit_transaction(&self, transaction: Transaction) -> Result<TxId, Error> {
         self.runtime
             .as_ref()
             .ok_or(Error::RuntimeStopped)?
