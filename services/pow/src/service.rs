@@ -6,14 +6,21 @@ use lb_blend_service::{
     api::{ApiError as BlendApiError, BlendServiceApi, BlendServiceData},
     message::{BlendPayload, TransactionTooLarge},
 };
-use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+use lb_chain_service::{
+    Slot,
+    api::{CryptarchiaServiceApi, CryptarchiaServiceData},
+};
 use lb_core::{
     codec::{Error as CodecError, SerializeOp as _},
     mantle::{
         Note, NoteId, Op, OpProof, SignedMantleTx, Utxo, Value,
         gas::MainnetGasProfile,
         ledger::{Inputs, InputsError, Outputs},
-        ops::{NoOpProof, OpId as _, pow::ClaimPowRewardOp, transfer::TransferOp},
+        ops::{
+            NoOpProof, OpId as _,
+            pow::{ClaimPowRewardOp, SLOT_WINDOW},
+            transfer::TransferOp,
+        },
         traits::Hashable as _,
         transactions::{
             GasPrices, MAX_OPS_PER_TX, MantleTxBuilder, MantleTxContext, MantleTxGasContext,
@@ -30,12 +37,63 @@ use overwatch::{
     services::{AsServiceId, ServiceCore, ServiceData},
 };
 use serde::Deserialize;
-use tokio::task::JoinError;
-use tracing::error;
+use tokio::{sync::oneshot, task::JoinError};
+use tracing::{error, log::info};
 
 use crate::tickets::{TicketGenerator, WinningTicket};
 
-pub enum PoWServiceMessage {}
+/// Errors produced while building or publishing `PoW` reward-claim
+/// transactions.
+#[derive(thiserror::Error, Debug)]
+pub enum PoWError {
+    #[error("PoW rewards are disabled (epoch reward is zero)")]
+    RewardsDisabled,
+    #[error("no claims fit within the reward pool")]
+    RewardPoolExhausted,
+    #[error("reward value overflow")]
+    RewardOverflow,
+    #[error("PoW reward does not cover the transaction fee")]
+    RewardBelowFee,
+    #[error("failed to build transaction: {0}")]
+    TxBuilder(#[from] TxBuilderError),
+    #[error("invalid transfer inputs: {0}")]
+    Inputs(#[from] InputsError),
+    #[error("too many operation proofs: {0}")]
+    OpsProofs(#[from] BoundedError),
+    #[error("failed to sign transfer: {0}")]
+    Sign(#[from] ZkSignError),
+    #[error("signing task failed: {0}")]
+    SignTask(#[from] JoinError),
+    #[error("failed to encode transaction: {0}")]
+    Encode(#[from] CodecError),
+    #[error("transaction too large for a blend payload: {0}")]
+    PayloadTooLarge(#[from] TransactionTooLarge),
+    #[error("failed to publish to the blend network: {0}")]
+    Publish(#[from] BlendApiError),
+}
+
+/// Max inputs a single `Transfer` op can carry: its `ZkSig` is a
+/// multi-signature over one key per input, capped at [`MAX_ZK_SIGNING_KEYS`].
+/// Hence one transfer per 32 claims.
+const MAX_TRANSFER_INPUTS: usize = MAX_ZK_SIGNING_KEYS;
+
+/// A summary of the rewards this node can currently claim.
+pub struct ClaimableRewardsInfo {
+    /// Number of mined tickets still within the reward window.
+    pub claimable_tickets: usize,
+    /// For each claimable ticket, how many more slots it stays within the
+    /// reward window before it can no longer be claimed.
+    pub slots_until_expiry: Vec<Slot>,
+}
+
+pub enum PoWServiceMessage {
+    StartMining,
+    StopMining,
+    Claim,
+    ClaimableRewardsInfo {
+        response: oneshot::Sender<ClaimableRewardsInfo>,
+    },
+}
 
 #[derive(Clone, Deserialize, Debug)]
 pub struct PoWServiceSettings {
@@ -43,8 +101,11 @@ pub struct PoWServiceSettings {
 }
 
 pub struct PoWServiceState {
-    ready_to_claim: Vec<ClaimPowRewardOp>,
-    pending_to_claim: Vec<ClaimPowRewardOp>,
+    /// Whether the ticket generator is being polled. Persisted so mining
+    /// resumes across restarts.
+    mining: bool,
+    ready_to_claim: Vec<WinningTicket>,
+    pending_to_claim: Vec<WinningTicket>,
 }
 
 pub struct PoWService<CryptarchiaService, BlendService, RuntimeServiceId> {
@@ -103,7 +164,7 @@ where
         let Self {
             service_resources_handle,
             settings,
-            state: _state,
+            mut state,
             _phantom,
         } = self;
 
@@ -138,75 +199,138 @@ where
 
         loop {
             tokio::select! {
-                // No service messages are defined yet, so there is nothing to
-                // handle on this branch.
-                Some(_message) = inbound_relay.recv() => {}
-                // A puzzle was solved: turn the winning claim into a tx and
-                // publish it over the blend network.
-                Some(WinningTicket { tip, secret_key, claim }) = winning_tickets.next() => {
-                    // The ticket carries the chain tip observed when it was found
-                    // — the state the tx will be applied against — so we size the
-                    // reward and fee against it without an extra round-trip.
-                    let ledger_state = cryptarchia_api
-                        .get_ledger_state(tip)
-                        .await?
-                        .expect("Tip ledger state should always be available");
-                    // One claim at a time for now; the batch path is exercised
-                    // once claim accumulation is added.
-                    match build_reward_claim_tx(
-                        settings.claim_address,
-                        &ledger_state,
-                        &[(secret_key, claim)],
-                    )
-                    .await
-                    {
-                        Ok(signed_tx) => {
-                            if let Err(e) = publish_reward_claim(&blend_api, signed_tx).await {
-                                error!("Failed to publish PoW reward claim: {e}");
+                Some(message) = inbound_relay.recv() => {
+                    match message {
+                        PoWServiceMessage::StartMining => {
+                            if !state.mining {
+                                info!("PoW mining started");
+                            }
+                            state.mining = true;
+                        }
+                        PoWServiceMessage::StopMining => {
+                            if state.mining {
+                                info!("PoW mining stopped");
+                            }
+                            state.mining = false;
+                        }
+                        PoWServiceMessage::Claim => {
+                            if state.ready_to_claim.is_empty() {
+                                info!("No PoW rewards to claim");
+                            } else if let Err(e) = claim_ready_rewards(
+                                &cryptarchia_api,
+                                &blend_api,
+                                settings.claim_address,
+                                &mut state,
+                            )
+                            .await
+                            {
+                                error!("Failed to claim PoW rewards: {e}");
                             }
                         }
-                        Err(e) => error!("Failed to build PoW reward claim: {e}"),
+                        PoWServiceMessage::ClaimableRewardsInfo { response } => {
+                            match cryptarchia_api.info().await {
+                                Ok(info) => {
+                                    let claimable = claimable_rewards_info(
+                                        &state.ready_to_claim,
+                                        info.cryptarchia_info.slot,
+                                    );
+                                    if response.send(claimable).is_err() {
+                                        error!("ClaimableRewardsInfo response receiver was dropped");
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to query chain info for claimable rewards: {e}");
+                                }
+                            }
+                        }
                     }
+                }
+                // A puzzle was solved: accumulate the winning ticket to be
+                // claimed on demand (only while mining is enabled).
+                Some(winning_ticket) = winning_tickets.next(), if state.mining => {
+                    state.ready_to_claim.push(winning_ticket);
+                    info!(
+                        "Mined a winning ticket 💲; total claimable tickets {}",
+                        state.ready_to_claim.len()
+                    );
                 }
             }
         }
     }
 }
 
-/// Errors produced while building or publishing `PoW` reward-claim
-/// transactions.
-#[derive(thiserror::Error, Debug)]
-pub enum PoWError {
-    #[error("PoW rewards are disabled (epoch reward is zero)")]
-    RewardsDisabled,
-    #[error("no claims fit within the reward pool")]
-    RewardPoolExhausted,
-    #[error("reward value overflow")]
-    RewardOverflow,
-    #[error("PoW reward does not cover the transaction fee")]
-    RewardBelowFee,
-    #[error("failed to build transaction: {0}")]
-    TxBuilder(#[from] TxBuilderError),
-    #[error("invalid transfer inputs: {0}")]
-    Inputs(#[from] InputsError),
-    #[error("too many operation proofs: {0}")]
-    OpsProofs(#[from] BoundedError),
-    #[error("failed to sign transfer: {0}")]
-    Sign(#[from] ZkSignError),
-    #[error("signing task failed: {0}")]
-    SignTask(#[from] JoinError),
-    #[error("failed to encode transaction: {0}")]
-    Encode(#[from] CodecError),
-    #[error("transaction too large for a blend payload: {0}")]
-    PayloadTooLarge(#[from] TransactionTooLarge),
-    #[error("failed to publish to the blend network: {0}")]
-    Publish(#[from] BlendApiError),
+/// Builds and publishes a reward-claim transaction for every ticket currently
+/// ready to claim, moving the claimed tickets to the pending set on success.
+///
+/// On any failure the ready set is left untouched so the tickets can be
+/// retried.
+async fn claim_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>(
+    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+    blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
+    claim_address: ZkPublicKey,
+    state: &mut PoWServiceState,
+) -> Result<(), DynError>
+where
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
+    BlendService: BlendServiceData,
+    BlendService::NodeId: Send,
+    RuntimeServiceId: Sync,
+{
+    // Size the batch against the current tip — the state the tx applies against.
+    let tip = cryptarchia_api.info().await?.cryptarchia_info.tip;
+    let ledger_state = cryptarchia_api
+        .get_ledger_state(tip)
+        .await?
+        .ok_or_else(|| DynError::from("tip ledger state unavailable"))?;
+
+    let tickets: Vec<(UnsecuredZkKey, ClaimPowRewardOp)> = state
+        .ready_to_claim
+        .iter()
+        .map(|ticket| (ticket.secret_key.clone(), ticket.claim.clone()))
+        .collect();
+
+    // Only remove tickets from the ready set once the tx is built and published,
+    // so a failure leaves them in place for a later retry. The builder caps the
+    // batch (op limit / reward pool), claiming only a prefix; move exactly that
+    // many to the pending set and keep the rest ready.
+    let (signed_tx, claimed_count) =
+        build_reward_claim_tx(claim_address, &ledger_state, &tickets).await?;
+    publish_reward_claim(blend_api, signed_tx).await?;
+
+    let claimed: Vec<_> = state.ready_to_claim.drain(..claimed_count).collect();
+    info!(
+        "Claimed {} PoW reward(s); {} still ready",
+        claimed.len(),
+        state.ready_to_claim.len()
+    );
+    state.pending_to_claim.extend(claimed);
+    Ok(())
 }
 
-/// Max inputs a single `Transfer` op can carry: its `ZkSig` is a
-/// multi-signature over one key per input, capped at [`MAX_ZK_SIGNING_KEYS`].
-/// Hence one transfer per 32 claims.
-const MAX_TRANSFER_INPUTS: usize = MAX_ZK_SIGNING_KEYS;
+/// Summarizes which ready tickets are still claimable at `current_slot` and how
+/// long each remains within the reward window.
+///
+/// A ticket anchored to a block at `block_slot` stays claimable while
+/// `current_slot - block_slot <= SLOT_WINDOW`; its remaining lifetime is
+/// `block_slot + SLOT_WINDOW - current_slot` slots.
+fn claimable_rewards_info(
+    ready_to_claim: &[WinningTicket],
+    current_slot: Slot,
+) -> ClaimableRewardsInfo {
+    let current = u64::from(current_slot);
+    let slots_until_expiry: Vec<Slot> = ready_to_claim
+        .iter()
+        .filter_map(|ticket| {
+            let last_claimable_slot = u64::from(ticket.block_slot).checked_add(SLOT_WINDOW)?;
+            // `Some` only while the window has not closed yet.
+            last_claimable_slot.checked_sub(current).map(Slot::new)
+        })
+        .collect();
+    ClaimableRewardsInfo {
+        claimable_tickets: slots_until_expiry.len(),
+        slots_until_expiry,
+    }
+}
 
 /// Largest claim count whose ops — the claims plus the `ceil(c / 32)` transfers
 /// that spend their reward notes — fit within [`MAX_OPS_PER_TX`].
@@ -229,12 +353,13 @@ const fn max_claims_by_ops() -> usize {
 /// and is signed by those notes' owning keys.
 ///
 /// Only as many claims are taken as the reward pool can fund and the per-tx op
-/// limit allows.
+/// limit allows. Returns the signed tx together with the number of tickets (a
+/// prefix of `tickets`) it actually claims.
 async fn build_reward_claim_tx(
     claim_address: ZkPublicKey,
     ledger_state: &LedgerState,
     tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
-) -> Result<SignedMantleTx<Unverified>, PoWError> {
+) -> Result<(SignedMantleTx<Unverified>, usize), PoWError> {
     // Value each claim will mint and the pool that funds them, read at
     // `ledger_state`; they must match the state the tx applies against, or the
     // reconstructed UTXOs / fee will be off.
@@ -257,7 +382,7 @@ async fn build_reward_claim_tx_inner(
     reward_pool: Value,
     gas_prices: GasPrices,
     tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
-) -> Result<SignedMantleTx<Unverified>, PoWError> {
+) -> Result<(SignedMantleTx<Unverified>, usize), PoWError> {
     if reward_value == 0 {
         return Err(PoWError::RewardsDisabled);
     }
@@ -318,7 +443,7 @@ async fn build_reward_claim_tx_inner(
         }
         ops_proofs.try_push(OpProof::ZkSig(zk_sig))?;
     }
-    Ok(SignedMantleTx::new(mantle_tx, ops_proofs))
+    Ok((SignedMantleTx::new(mantle_tx, ops_proofs), claim_count))
 }
 
 /// Builds the `Transfer` ops spending `note_ids`, grouped into batches of up to
@@ -428,20 +553,26 @@ fn estimate_reward_claim_fee(
 mod tests {
     use std::collections::HashMap;
 
-    use lb_core::mantle::{
-        Note, NoteId, Op, OpProof, SignedMantleTx, Utxo,
-        ops::{OpId as _, pow::ClaimPowRewardOp},
-        transactions::{
-            GasPrices, MAX_OPS_PER_TX, MantleTxBuilder, MantleTxContext, MantleTxGasContext,
-            mantle_tx::MantleTx as _, states::Unverified,
+    use lb_chain_service::Slot;
+    use lb_core::{
+        header::HeaderId,
+        mantle::{
+            Note, NoteId, Op, OpProof, SignedMantleTx, Utxo,
+            ops::{OpId as _, pow::ClaimPowRewardOp},
+            transactions::{
+                GasPrices, MAX_OPS_PER_TX, MantleTxBuilder, MantleTxContext, MantleTxGasContext,
+                mantle_tx::MantleTx as _, states::Unverified,
+            },
         },
     };
     use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey};
 
     use super::{
         MAX_TRANSFER_INPUTS, PoWError, build_reward_claim_tx_inner, change_outputs,
-        estimate_reward_claim_fee, max_claims_by_ops, push_reward_claim_ops, transfer_ops,
+        claimable_rewards_info, estimate_reward_claim_fee, max_claims_by_ops,
+        push_reward_claim_ops, transfer_ops,
     };
+    use crate::tickets::WinningTicket;
 
     const REWARD: u64 = 1_000_000;
     const POOL: u64 = 1_000_000_000;
@@ -587,7 +718,7 @@ mod tests {
         let (secret_key, claim) = ticket();
         let expected_note = Utxo::new(claim.op_id(), 0, Note::new(REWARD, claim.public_key)).id();
 
-        let tx = build_reward_claim_tx_inner(
+        let (tx, claimed) = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
             REWARD,
             POOL,
@@ -597,6 +728,7 @@ mod tests {
         .await
         .unwrap();
 
+        assert_eq!(claimed, 1);
         assert_within_tx_limits(&tx);
         let ops = tx.mantle_tx().ops();
         assert_eq!(ops.len(), 2);
@@ -645,7 +777,7 @@ mod tests {
     async fn build_reward_claim_tx_caps_claims_to_the_reward_pool() {
         // Pool funds only two claims, but five tickets are offered.
         let tickets: Vec<_> = std::iter::repeat_with(ticket).take(5).collect();
-        let tx = build_reward_claim_tx_inner(
+        let (tx, claimed) = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
             REWARD,
             2 * REWARD,
@@ -655,6 +787,7 @@ mod tests {
         .await
         .unwrap();
 
+        assert_eq!(claimed, 2); // only two of the five tickets fit the pool
         assert_within_tx_limits(&tx);
         let ops = tx.mantle_tx().ops();
         let claims = ops
@@ -671,7 +804,7 @@ mod tests {
         // op limit, and the resulting tx must still fit within it.
         let cap = max_claims_by_ops();
         let tickets: Vec<_> = std::iter::repeat_with(ticket).take(cap + 50).collect();
-        let tx = build_reward_claim_tx_inner(
+        let (tx, claimed) = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
             REWARD,
             POOL, // POOL / REWARD = 1000 > cap, so the op limit binds
@@ -681,6 +814,7 @@ mod tests {
         .await
         .unwrap();
 
+        assert_eq!(claimed, cap);
         assert_within_tx_limits(&tx);
         let ops = tx.mantle_tx().ops();
         let claims = ops
@@ -693,5 +827,51 @@ mod tests {
         // The cap is the largest batch that still fits the op budget exactly.
         assert!(ops.len() <= MAX_OPS_PER_TX);
         assert!(claims + 1 + (claims + 1).div_ceil(MAX_TRANSFER_INPUTS) > MAX_OPS_PER_TX);
+    }
+
+    /// A winning ticket anchored to a block at `block_slot`.
+    fn winning_ticket(block_slot: u64) -> WinningTicket {
+        let (secret_key, claim) = ticket();
+        WinningTicket {
+            tip: HeaderId::from([0u8; 32]),
+            block_slot: Slot::new(block_slot),
+            secret_key,
+            claim,
+        }
+    }
+
+    #[test]
+    fn claimable_rewards_info_is_empty_without_tickets() {
+        let info = claimable_rewards_info(&[], Slot::new(100));
+        assert_eq!(info.claimable_tickets, 0);
+        assert!(info.slots_until_expiry.is_empty());
+    }
+
+    #[test]
+    fn claimable_rewards_info_reports_remaining_window_per_ticket() {
+        // SLOT_WINDOW is 100, so a block at slot S is claimable up to slot S + 100.
+        let tickets = [winning_ticket(50), winning_ticket(90)];
+        let info = claimable_rewards_info(&tickets, Slot::new(100));
+        assert_eq!(info.claimable_tickets, 2);
+        // (50 + 100) - 100 = 50, (90 + 100) - 100 = 90
+        assert_eq!(info.slots_until_expiry, vec![Slot::new(50), Slot::new(90)]);
+    }
+
+    #[test]
+    fn claimable_rewards_info_includes_the_last_valid_slot() {
+        // A block at slot 50 is still claimable at exactly slot 150 (gap == window).
+        let info = claimable_rewards_info(&[winning_ticket(50)], Slot::new(150));
+        assert_eq!(info.claimable_tickets, 1);
+        assert_eq!(info.slots_until_expiry, vec![Slot::new(0)]);
+    }
+
+    #[test]
+    fn claimable_rewards_info_excludes_expired_tickets() {
+        // ticket(10): claimable up to slot 110 -> expired at 200.
+        // ticket(150): claimable up to slot 250 -> 50 slots left.
+        let tickets = [winning_ticket(10), winning_ticket(150)];
+        let info = claimable_rewards_info(&tickets, Slot::new(200));
+        assert_eq!(info.claimable_tickets, 1);
+        assert_eq!(info.slots_until_expiry, vec![Slot::new(50)]);
     }
 }

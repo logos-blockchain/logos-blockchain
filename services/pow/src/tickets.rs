@@ -32,8 +32,9 @@ use tracing::{error, log::warn};
 /// A winning Proof-of-Work reward: the secret key that produced the ticket,
 /// paired with the reward-claim operation to be published.
 pub type WinnerTicket = (UnsecuredZkKey, ClaimPowRewardOp);
-/// A boxed stream of [`WinnerTicket`]s found for a single block.
-pub type WinnerTicketStream = Pin<Box<dyn Stream<Item = WinnerTicket> + Send>>;
+/// A boxed stream of [`WinnerTicket`]s found for a single block, each tagged
+/// with that block's slot (for reward-window bookkeeping).
+pub type WinnerTicketStream = Pin<Box<dyn Stream<Item = (Slot, WinnerTicket)> + Send>>;
 /// A boxed future resolving to a single reward-claim operation.
 pub type TicketSearchTask<'a> = BoxFuture<'a, ClaimPowRewardOp>;
 
@@ -45,6 +46,9 @@ pub type TicketSearchTask<'a> = BoxFuture<'a, ClaimPowRewardOp>;
 pub struct WinningTicket {
     /// Chain tip when the ticket was produced.
     pub tip: HeaderId,
+    /// Slot of the block the claim is anchored to, used to check whether the
+    /// ticket is still within the reward window.
+    pub block_slot: Slot,
     /// Secret key that produced the winning claim (owns the reward note).
     pub secret_key: UnsecuredZkKey,
     /// The reward-claim operation to publish.
@@ -160,6 +164,7 @@ where
     /// reward window (see [`Self::prune_out_of_window_streams`]).
     fn new_block_search_stream(
         block_header: HeaderId,
+        block_slot: Slot,
         epoch_state: &EpochState,
         ledger_state: &LedgerState,
     ) -> WinnerTicketStream
@@ -178,10 +183,10 @@ where
         let tasks =
             iter::repeat_with(move || search_winner_ticket(block_header, epoch_nonce, difficulty));
         let results = stream::iter(tasks).buffer_unordered(16);
-        Box::pin(tokio_stream::StreamExt::filter_map(
-            results,
-            |maybe_winner| maybe_winner,
-        ))
+        let winners = tokio_stream::StreamExt::filter_map(results, |maybe_winner| maybe_winner);
+        // Tag every winner with the block's slot so the consumer can track the
+        // reward window.
+        Box::pin(winners.map(move |ticket| (block_slot, ticket)))
     }
 }
 
@@ -252,10 +257,12 @@ where
     /// the searches for blocks that have aged out of the window.
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
-        if let Poll::Ready(Some((_, (secret_key, claim)))) = this.tickets_search.poll_next_unpin(cx)
+        if let Poll::Ready(Some((_, (block_slot, (secret_key, claim))))) =
+            this.tickets_search.poll_next_unpin(cx)
         {
             return Poll::Ready(Some(WinningTicket {
                 tip: this.tip,
+                block_slot,
                 secret_key,
                 claim,
             }));
@@ -278,7 +285,8 @@ where
             let frontier_slot = tip_slot.saturating_sub(Slot::new(SLOT_WINDOW));
             // trigger new stream if its new enough
             if frontier_slot < block_slot {
-                let stream = Self::new_block_search_stream(block_id, epoch_state, ledger_state);
+                let stream =
+                    Self::new_block_search_stream(block_id, block_slot, epoch_state, ledger_state);
                 this.tickets_search.insert(block_id, stream);
                 this.tickets_search_by_slot
                     .entry(block_slot)
