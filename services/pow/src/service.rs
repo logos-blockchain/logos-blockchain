@@ -629,8 +629,8 @@ async fn build_reward_claim_tx_inner(
         })
         .collect();
 
-    // Size the change against the final tx shape, then charge the whole fee to
-    // the first transfer's output.
+    // Size the change against the final tx shape, then spread the fee across the
+    // transfer outputs.
     let fee = estimate_reward_claim_fee(tickets, &note_ids, claim_address, &context)?;
     let change_outputs = change_outputs(&note_ids, reward_value, fee)?;
     let transfers = transfer_ops(&note_ids, claim_address, &change_outputs)?;
@@ -706,28 +706,31 @@ fn push_reward_claim_ops(
 }
 
 /// The change value each transfer group returns: the reward its notes carry,
-/// with the whole fee charged to the first group.
+/// less its share of the fee.
+///
+/// The fee is charged group by group, each absorbing as much as its reward
+/// allows before the remainder spills into the next. This lets the whole batch
+/// cover a fee larger than any single group's reward; only a fee exceeding the
+/// *total* reward fails with [`PoWError::RewardBelowFee`].
 fn change_outputs(
     note_ids: &[NoteId],
     reward_value: Value,
     fee: Value,
 ) -> Result<Vec<Value>, PoWError> {
-    note_ids
-        .chunks(MAX_TRANSFER_INPUTS)
-        .enumerate()
-        .map(|(group_index, group)| {
-            let group_reward = (group.len() as Value)
-                .checked_mul(reward_value)
-                .ok_or(PoWError::RewardOverflow)?;
-            if group_index == 0 {
-                group_reward
-                    .checked_sub(fee)
-                    .ok_or(PoWError::RewardBelowFee)
-            } else {
-                Ok(group_reward)
-            }
-        })
-        .collect()
+    let mut fee_remaining = fee;
+    let mut outputs = Vec::new();
+    for group in note_ids.chunks(MAX_TRANSFER_INPUTS) {
+        let group_reward = (group.len() as Value)
+            .checked_mul(reward_value)
+            .ok_or(PoWError::RewardOverflow)?;
+        let fee_charged = fee_remaining.min(group_reward);
+        fee_remaining -= fee_charged;
+        outputs.push(group_reward - fee_charged);
+    }
+    if fee_remaining != 0 {
+        return Err(PoWError::RewardBelowFee);
+    }
+    Ok(outputs)
 }
 
 /// Publishes a reward-claim transaction over the blend network.
@@ -858,11 +861,33 @@ mod tests {
     }
 
     #[test]
-    fn change_outputs_charges_the_whole_fee_to_the_first_group() {
-        // 40 notes -> two groups of 32 and 8.
+    fn change_outputs_charges_earlier_groups_first() {
+        // 40 notes -> two groups of 32 and 8. The first group's reward covers
+        // the whole fee, so it absorbs it all.
         let notes: Vec<NoteId> = (0u8..40).map(note_id).collect();
         let outputs = change_outputs(&notes, 100, 30).unwrap();
         assert_eq!(outputs, vec![32 * 100 - 30, 8 * 100]);
+    }
+
+    #[test]
+    fn change_outputs_spills_the_fee_into_later_groups() {
+        // 40 notes -> groups of 32 and 8. Fee 3250 exceeds the first group's
+        // 32*100=3200 reward, so the 50 remainder spills into the second group.
+        let notes: Vec<NoteId> = (0u8..40).map(note_id).collect();
+        let outputs = change_outputs(&notes, 100, 3250).unwrap();
+        assert_eq!(outputs, vec![0, 8 * 100 - 50]);
+    }
+
+    #[test]
+    fn change_outputs_errors_only_when_fee_exceeds_total_reward() {
+        // 40 notes -> total reward 4000. A fee of 4000 is fully covered
+        // (all outputs zero); one satoshi more cannot be.
+        let notes: Vec<NoteId> = (0u8..40).map(note_id).collect();
+        assert_eq!(change_outputs(&notes, 100, 4000).unwrap(), vec![0, 0]);
+        assert!(matches!(
+            change_outputs(&notes, 100, 4001),
+            Err(PoWError::RewardBelowFee)
+        ));
     }
 
     #[test]
