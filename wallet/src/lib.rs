@@ -898,7 +898,7 @@ mod tests {
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_pol::LotteryConstants;
-    use lb_utils::math::{PositiveF64, NonNegativeRatio};
+    use lb_utils::math::{NonNegativeRatio, PositiveF64};
     use lb_utxotree::UtxoTree;
     use num_bigint::BigUint;
     use rpds::HashTrieSetSync;

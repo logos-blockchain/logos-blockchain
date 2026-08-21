@@ -28,7 +28,7 @@ pub fn core_quota(
             / membership_size as f64)
             .ceil() as u64,
     )
-    .expect("Core Quota cannot not be zero, if `message_frequency_per_round` is greater than zero and `num_blend_layers` is non-zero.");
+    .expect("Core Quota cannot be zero, if `message_frequency_per_round` is greater than zero and `num_blend_layers` is non-zero.");
     quota_integer
         .get()
         .try_into()

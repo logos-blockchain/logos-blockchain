@@ -136,7 +136,7 @@ mod tests {
         config::{BlendPoWConfig, ModulusShift, PoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
-    use lb_utils::math::{PositiveF64, NonNegativeRatio};
+    use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
     use super::*;
 

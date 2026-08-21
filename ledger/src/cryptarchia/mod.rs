@@ -849,7 +849,7 @@ pub mod tests {
     use lb_cryptarchia_engine::EpochConfig;
     use lb_groth16::{AdditiveGroup as _, ModulusShift};
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkSignature};
-    use lb_utils::math::{PositiveF64, NonNegativeRatio};
+    use lb_utils::math::{NonNegativeRatio, PositiveF64};
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
 

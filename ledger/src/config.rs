@@ -142,7 +142,7 @@ mod tests {
     use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
     use lb_cryptarchia_engine::EpochConfig;
     pub use lb_groth16::ModulusShift;
-    use lb_utils::math::{PositiveF64, NonNegativeRatio};
+    use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
     use crate::{
         config::{BlendPoWConfig, PoWConfig},

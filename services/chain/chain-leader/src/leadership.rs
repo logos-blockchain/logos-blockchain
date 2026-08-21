@@ -516,7 +516,7 @@ mod pol_tests {
             Config as SdpConfig, ServiceRewardsParameters, rewards::blend::RewardsParameters,
         },
     };
-    use lb_utils::math::{PositiveF64, NonNegativeRatio};
+    use lb_utils::math::{NonNegativeRatio, PositiveF64};
     use lb_wallet_service::{WalletMsg, WalletServiceSettings};
     use overwatch::services::{
         ServiceData,

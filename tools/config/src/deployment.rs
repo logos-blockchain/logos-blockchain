@@ -24,7 +24,7 @@ use lb_node::config::{
     network::deployment::Settings as NetworkDeploymentSettings,
     time::deployment::Settings as TimeDeploymentSettings,
 };
-use lb_utils::math::{PositiveF64, NonNegativeRatio};
+use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
 use crate::{
     release::ProtocolIdentity,

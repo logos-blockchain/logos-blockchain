@@ -367,7 +367,7 @@ mod tests {
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
-    use lb_utils::math::{PositiveF64, NonNegativeRatio};
+    use lb_utils::math::{NonNegativeRatio, PositiveF64};
     use overwatch::{
         overwatch::OverwatchHandle,
         services::{ServiceData, relay::OutboundRelay},
