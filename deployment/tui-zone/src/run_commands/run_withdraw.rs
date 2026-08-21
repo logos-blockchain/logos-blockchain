@@ -1,11 +1,15 @@
 use std::path::PathBuf;
 
+use lb_codec::BinaryEncode as _;
 use lb_core::{
     mantle::{
-        MantleTransaction, Op, OpProof,
-        ops::channel::{ChannelId, ChannelKeyIndex},
-        traits::Hashable as _,
-        transactions::{codec::encode_signed_mantle_tx, mantle_tx::MantleTx as _},
+        OpProof, SignedOps,
+        ledger::verification_mode::StandardMode,
+        ops::{
+            OpRef,
+            channel::{ChannelId, ChannelKeyIndex},
+        },
+        traits::{Hashable as _, MantleTx as _},
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
@@ -197,23 +201,23 @@ pub(crate) fn run_withdraw_combine(args: WithdrawCombineArgs) -> RunResult<()> {
     let inscription_signature =
         decode_hex_bincode::<Ed25519Signature>(&intent.inscription_signature)?;
     let op_proofs = tx
-        .ops()
-        .iter()
+        .op_refs()
+        .into_iter()
         .map(|op| match op {
-            Op::ChannelWithdraw(_) => Ok(OpProof::ChannelMultiSigProof(proof.clone())),
-            Op::ChannelInscribe(_) => Ok(OpProof::Ed25519Sig(inscription_signature)),
+            OpRef::ChannelWithdraw(_) => Ok(OpProof::ChannelMultiSigProof(proof.clone())),
+            OpRef::ChannelInscribe(_) => Ok(OpProof::Ed25519Sig(inscription_signature)),
             other => Err(format!("unexpected op in withdraw intent: {other:?}").into()),
         })
         .collect::<RunResult<Vec<_>>>()?
         .try_into()?;
-    let signed_tx = MantleTransaction::new(tx, op_proofs);
+    let transaction = SignedOps::<_, StandardMode>::from_parts(tx, op_proofs)?;
     let signed = SignedWithdrawFile {
         version: ZONE_FILE_TRANSFER_VERSION,
         kind: ZONE_SIGNED_TRANSACTION.to_owned(),
         channel_id: intent.channel_id,
         tx_hash: intent.tx_hash,
         msg_id: intent.msg_id,
-        signed_mantle_tx: hex::encode(encode_signed_mantle_tx(&signed_tx)),
+        signed_mantle_tx: hex::encode(transaction.encode()),
         signatures: signature_entries,
     };
     write_json(&args.out, &signed)?;
@@ -265,11 +269,10 @@ pub(crate) async fn run_withdraw_submit(args: WithdrawSubmitArgs) -> RunResult<(
     let mut node_key = args.node_key;
     node_key.channel_id = Some(signed.channel_id.clone());
     let withdraws = signed_tx
-        .mantle_tx()
-        .ops()
-        .iter()
+        .op_refs()
+        .into_iter()
         .filter_map(|op| match op {
-            Op::ChannelWithdraw(withdraw) => Some(withdraw.clone()),
+            OpRef::ChannelWithdraw(withdraw) => Some(withdraw.clone()),
             _ => None,
         })
         .collect::<Vec<_>>();

@@ -3,13 +3,17 @@ use std::path::PathBuf;
 use lb_codec::BinaryEncode as _;
 use lb_core::{
     mantle::{
-        MantleTransaction, Op, OpProof,
-        ops::channel::{
-            ChannelId, ChannelKeyIndex,
-            config::{ChannelConfigOp, Keys},
+        Op, OpProof, SignedOps,
+        ledger::verification_mode::StandardMode,
+        ops::{
+            OpRef,
+            channel::{
+                ChannelId, ChannelKeyIndex,
+                config::{ChannelConfigOp, Keys},
+            },
         },
-        traits::Hashable as _,
-        transactions::{codec::encode_signed_mantle_tx, mantle_tx::MantleTx as _},
+        traits::{Hashable as _, MantleTx as _},
+        transactions::{OpProofs, Ops},
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
@@ -105,7 +109,7 @@ pub(crate) async fn run_config_prepare(args: ConfigPrepareArgs) -> RunResult<()>
         args.transfer_threshold,
     )?;
     let msg_id = config_op.id();
-    let tx = lb_core::mantle::RawMantleTx([Op::ChannelConfig(config_op)].into());
+    let tx = Ops::from([Op::ChannelConfig(config_op)]);
     let tx_hash = tx.hash();
     let intent = ConfigIntent {
         version: ZONE_FILE_TRANSFER_VERSION,
@@ -238,14 +242,15 @@ pub(crate) fn run_config_combine(args: ConfigCombineArgs) -> RunResult<()> {
         )
         .into());
     }
-    let signed_tx = MantleTransaction::new(tx, [OpProof::ChannelMultiSigProof(proof)].into());
+    let op_proofs = OpProofs::from([OpProof::ChannelMultiSigProof(proof)]);
+    let transaction = SignedOps::<_, StandardMode>::from_parts(tx, op_proofs)?;
     let signed = SignedConfigFile {
         version: ZONE_FILE_TRANSFER_VERSION,
         kind: ZONE_SIGNED_CONFIG.to_owned(),
         channel_id: intent.channel_id,
         tx_hash: intent.tx_hash,
         msg_id: intent.msg_id,
-        signed_mantle_tx: hex::encode(encode_signed_mantle_tx(&signed_tx)),
+        signed_mantle_tx: hex::encode(transaction.encode()),
         signatures: signature_entries,
     };
     write_json(&args.out, &signed)?;
@@ -384,19 +389,19 @@ fn validate_authorized_signer(
     .into())
 }
 
-fn validate_config_tx(tx: &lb_core::mantle::RawMantleTx, intent: &ConfigIntent) -> RunResult<()> {
+fn validate_config_tx(tx: &Ops, intent: &ConfigIntent) -> RunResult<()> {
     let config = tx
-        .ops()
-        .iter()
+        .op_refs()
+        .into_iter()
         .find_map(|op| match op {
-            Op::ChannelConfig(config) => Some(config),
+            OpRef::ChannelConfig(config) => Some(config),
             _ => None,
         })
         .ok_or("config intent transaction has no ChannelConfig op")?;
     if hex::encode(config.id().as_ref()) != intent.msg_id {
         return Err("config intent msg_id does not match ChannelConfig op id".into());
     }
-    if tx.ops().len() != 1 {
+    if tx.len() != 1 {
         return Err("config intent transaction must contain exactly one op".into());
     }
     Ok(())

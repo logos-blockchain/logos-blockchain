@@ -168,15 +168,16 @@ pub fn create_general_configs_from_ids(
             },
         )
         .collect();
-    let binding = genesis_block.genesis_tx();
-    let transfer_op = binding.genesis_transfer();
+    let genesis_tx = genesis_block.genesis_tx().clone();
+    let genesis_ops = genesis_tx.into_genesis_ops();
+    let transfer_op = genesis_ops.transfer.operation();
     let genesis_block_with_declarations = create_genesis_block_with_declarations(
         transfer_op.clone(),
         providers,
         test_context,
         genesis_time,
     );
-    let sdp_configs = create_sdp_configs(&genesis_block_with_declarations.genesis_tx(), n_nodes);
+    let sdp_configs = create_sdp_configs(genesis_block_with_declarations.genesis_tx(), n_nodes);
     let kms_configs = create_kms_configs(&blend_configs, &consensus_configs, None);
 
     let general_configs = (0..n_nodes)

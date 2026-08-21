@@ -7,9 +7,9 @@ use std::{
 use chrono::{DateTime, Utc};
 use lb_codec::BinaryDecodeExt as _;
 use lb_core::mantle::{
-    MantleTransaction, Note, Utxo, Value,
+    Note, SignedOps, Utxo, Value,
     channel::ChannelState,
-    ledger::{Inputs, Outputs},
+    ledger::{Inputs, Outputs, verification_mode::StandardMode},
     ops::{
         channel::{
             ChannelId, MsgId,
@@ -17,9 +17,7 @@ use lb_core::mantle::{
         },
         transfer::TransferOp,
     },
-    transactions::{
-        codec::decode_signed_mantle_tx, hash::TxHash, mantle_tx::RawMantleTx, states::Unverified,
-    },
+    transactions::{Ops, hash::TxHash, states::Unverified},
 };
 use lb_key_management_system_service::keys::{
     ED25519_SECRET_KEY_SIZE, Ed25519Key, Ed25519PublicKey, ZkPublicKey,
@@ -228,9 +226,9 @@ pub fn decode_exported_utxos(funds: &WalletFundsExport) -> RunResult<Vec<Utxo>> 
 }
 
 /// Decode a hex-encoded mantle transaction and reject trailing bytes.
-pub fn decode_mantle_tx_hex(value: &str) -> RunResult<RawMantleTx> {
+pub fn decode_mantle_tx_hex(value: &str) -> RunResult<Ops> {
     let bytes = decode_hex(value)?;
-    let (remaining, tx) = RawMantleTx::decode(&bytes).map_err(|error| format!("{error:?}"))?;
+    let (remaining, tx) = Ops::decode(&bytes).map_err(|error| format!("{error:?}"))?;
     if !remaining.is_empty() {
         return Err("mantle tx has trailing bytes".into());
     }
@@ -238,9 +236,10 @@ pub fn decode_mantle_tx_hex(value: &str) -> RunResult<RawMantleTx> {
 }
 
 /// Decode a hex-encoded signed mantle transaction and reject trailing bytes.
-pub fn decode_signed_mantle_tx_hex(value: &str) -> RunResult<MantleTransaction<Unverified>> {
+pub fn decode_signed_mantle_tx_hex(value: &str) -> RunResult<SignedOps<Unverified, StandardMode>> {
     let bytes = decode_hex(value)?;
-    let (remaining, tx) = decode_signed_mantle_tx(&bytes).map_err(|error| format!("{error:?}"))?;
+    let (remaining, tx) =
+        SignedOps::<_, StandardMode>::decode(&bytes).map_err(|error| format!("{error:?}"))?;
     if !remaining.is_empty() {
         return Err("signed mantle tx has trailing bytes".into());
     }
