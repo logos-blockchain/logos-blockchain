@@ -9,12 +9,17 @@ use crate::{
     mantle::{
         NoteId,
         channel_notes::{self, ChannelNotes},
-        ledger::{self, ExecutableOperation as _},
-        ops::channel::{
-            ChannelId, ChannelKeyIndex, MsgId,
-            config::Keys,
-            inscribe::{InscriptionExecutionContext, InscriptionOp},
+        ledger,
+        ledger::verification_mode::GenesisMode,
+        ops::{
+            SignedOperation,
+            channel::{
+                ChannelId, ChannelKeyIndex, MsgId,
+                config::Keys,
+                inscribe::{InscriptionExecutionContext, InscriptionOp},
+            },
         },
+        transactions::states::Verified,
     },
 };
 
@@ -134,11 +139,15 @@ impl Default for Channels {
 }
 
 impl Channels {
-    pub fn from_genesis(op: &InscriptionOp) -> Result<(Self, Vec<TxEvent>), Error> {
-        let (context, events) = op.execute(InscriptionExecutionContext {
-            channels: Self::default(),
-            block_slot: Slot::default(),
-        })?;
+    pub fn from_genesis(
+        signed_operation: SignedOperation<InscriptionOp, Verified, GenesisMode>,
+    ) -> Result<(Self, Vec<TxEvent>), Error> {
+        let (context, events) = signed_operation
+            .execute(InscriptionExecutionContext {
+                channels: Self::default(),
+                block_slot: Slot::default(),
+            })
+            .map_err(|(_signed_operation, error)| error)?;
         Ok((context.channels, events))
     }
 
@@ -235,15 +244,17 @@ impl ChannelState {
 mod tests {
     use ark_ff::AdditiveGroup as _;
     use lb_groth16::Fr;
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkSignature};
     use rand::{RngCore as _, thread_rng};
+    use lb_groth16::{CompressedGroth16Proof, Fr};
+    use rand::thread_rng;
 
     use super::*;
     use crate::{
         events::{DepositNote, TxEventPayload},
         mantle::{
             Note, Utxo, Value,
-            ledger::Utxos,
+            ledger::{Utxos, verification_mode::StandardMode},
             ops::{
                 OpId as _,
                 channel::{
@@ -252,8 +263,9 @@ mod tests {
                     withdraw::{ChannelWithdrawOp, WithdrawExecutionContext},
                 },
             },
-            transactions::{GasPrices, mantle_tx::MantleTxGasContext},
+            transactions::{GasPrices, tx_list::ops::OpsGasContext},
         },
+        proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
     };
 
     fn test_public_key(seed: u8) -> PublicKey {
@@ -359,7 +371,7 @@ mod tests {
             channel_notes: ChannelNotes::new(),
         };
 
-        let gas_context = MantleTxGasContext::from_channels(&channels, GasPrices::new(0, 0));
+        let gas_context = OpsGasContext::from_channels(&channels, GasPrices::new(0, 0));
 
         assert_eq!(gas_context.transfer_threshold(&first_id), Some(1));
         assert_eq!(gas_context.transfer_threshold(&second_id), Some(2));
@@ -379,10 +391,14 @@ mod tests {
             inputs: [note_id].into(),
             metadata: Metadata::empty(),
         };
+        let empty_proof = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
+        let signed_deposit: SignedOperation<_, _, StandardMode> =
+            SignedOperation::new(deposit_op, empty_proof).into_state_trusted();
+        let operation = signed_deposit.operation().clone();
 
         let utxo_tree = utxo_tree(vec![utxo]);
 
-        let (updated, events) = deposit_op
+        let (updated, events) = signed_deposit
             .execute(DepositExecutionContext {
                 channels,
                 utxos: utxo_tree,
@@ -392,7 +408,7 @@ mod tests {
 
         // The deposited note is consumed and re-created as a channel note
         // under a new NoteId.
-        let deposited = Utxo::new(deposit_op.op_id(), 0, utxo.note).id();
+        let deposited = Utxo::new(operation.op_id(), 0, utxo.note).id();
         assert!(!updated.utxos.contains(&note_id));
         assert!(!updated.channels.is_channel_note(&note_id));
         assert!(updated.utxos.contains(&deposited));
@@ -422,10 +438,10 @@ mod tests {
             panic!("events should include deposit event")
         };
         assert_eq!(*tx_hash, [0; 32].into());
-        assert_eq!(*op_id, deposit_op.op_id());
-        assert_eq!(*event_channel_id, deposit_op.channel_id);
+        assert_eq!(*op_id, operation.op_id());
+        assert_eq!(*event_channel_id, operation.channel_id);
         assert_eq!(*amount, utxo.note.value);
-        assert_eq!(*metadata, deposit_op.metadata);
+        assert_eq!(*metadata, operation.metadata);
         assert_eq!(
             notes.clone().into_inner(),
             vec![DepositNote {
@@ -448,8 +464,12 @@ mod tests {
             inputs: [first.id(), second.id()].into(),
             metadata: Metadata::empty(),
         };
+        let empty_proof = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
+        let signed_deposit: SignedOperation<_, _, StandardMode> =
+            SignedOperation::new(deposit_op, empty_proof).into_state_trusted();
+        let op_id = signed_deposit.operation().op_id();
 
-        let (updated, _) = deposit_op
+        let (updated, _) = signed_deposit
             .execute(DepositExecutionContext {
                 channels: Channels::new(),
                 utxos: utxo_tree(vec![first, second]),
@@ -459,8 +479,8 @@ mod tests {
 
         // Each input is re-created at its own output index, so the two notes
         // get distinct identifiers even though they share an OpId.
-        let first_deposited = Utxo::new(deposit_op.op_id(), 0, first.note).id();
-        let second_deposited = Utxo::new(deposit_op.op_id(), 1, second.note).id();
+        let first_deposited = Utxo::new(op_id, 0, first.note).id();
+        let second_deposited = Utxo::new(op_id, 1, second.note).id();
         assert_ne!(first_deposited, second_deposited);
 
         assert!(!updated.utxos.contains(&first.id()));
@@ -488,8 +508,11 @@ mod tests {
             channel_id,
             inputs: [note_id].into(),
         };
+        let empty_proof = ChannelMultiSigProof::new(IndexedSignatures::try_from(vec![]).unwrap());
+        let signed_withdraw: SignedOperation<_, _, StandardMode> =
+            SignedOperation::new(withdraw_op, empty_proof).into_state_trusted();
 
-        let (updated, events) = withdraw_op
+        let (updated, events) = signed_withdraw
             .execute(WithdrawExecutionContext {
                 channels,
                 tx_hash: [1; 32].into(),
@@ -511,15 +534,21 @@ mod tests {
             channel_id,
             inputs: [note_id].into(),
         };
+        let empty_proof = ChannelMultiSigProof::new(IndexedSignatures::try_from(vec![]).unwrap());
+        let signed_withdraw: SignedOperation<_, _, StandardMode> =
+            SignedOperation::new(withdraw_op, empty_proof).into_state_trusted();
 
-        let result = withdraw_op.execute(WithdrawExecutionContext {
+        let result = signed_withdraw.execute(WithdrawExecutionContext {
             channels,
             tx_hash: [0; 32].into(),
         });
 
         assert!(matches!(
             result,
-            Err(Error::ChannelNotes(channel_notes::Error::NotInChannel(_)))
+            Err((
+                _,
+                Error::ChannelNotes(channel_notes::Error::NotInChannel(_))
+            ))
         ));
     }
 
