@@ -261,18 +261,18 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
     /// Filtering may reduce the collection below `MIN`, so the result has
     /// only an upper bound.
     #[must_use]
-    pub fn filter_map_ref<U, F>(&self, f: F) -> UpperBoundedVec<U, MAX>
+    pub fn filter_map_ref<'a, U, F>(&'a self, f: F) -> UpperBoundedVec<U, MAX>
     where
-        F: FnMut(&T) -> Option<U>,
+        F: FnMut(&'a T) -> Option<U>,
     {
         Bounded::new_unchecked(self.as_inner().iter().filter_map(f).collect())
     }
 
     /// Maps borrowed elements while preserving both length bounds.
     #[must_use]
-    pub fn map_ref<U, F>(&self, f: F) -> BoundedVec<U, MIN, MAX>
+    pub fn map_ref<'a, U, F>(&'a self, f: F) -> BoundedVec<U, MIN, MAX>
     where
-        F: FnMut(&T) -> U,
+        F: FnMut(&'a T) -> U,
     {
         Bounded::new_unchecked(self.as_inner().iter().map(f).collect())
     }
