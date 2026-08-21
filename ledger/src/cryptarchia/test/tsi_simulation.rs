@@ -225,6 +225,7 @@ fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
     let cryptarchia_ledger = LedgerState {
         utxos,
         nonce: Fr::ZERO,
+        previous_epoch_nonce: Fr::ZERO,
         slot: 0.into(),
         next_epoch_state: EpochState {
             epoch: 1.into(),

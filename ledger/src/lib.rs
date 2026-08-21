@@ -2068,14 +2068,11 @@ mod tests {
     }
 
     mod pow {
-        use lb_core::{
-            crypto::{ZkDigest as _, ZkHasher},
-            mantle::ops::{
-                NoOpProof,
-                pow::{ClaimPowRewardError, ClaimPowRewardOp, PowTarget},
-            },
+        use lb_core::mantle::ops::{
+            NoOpProof,
+            pow::{ClaimPowRewardError, ClaimPowRewardOp, PowTarget},
         };
-        use lb_groth16::fr_from_mod_bytes;
+        use lb_groth16::{AdditiveGroup as _, fr_from_mod_bytes};
 
         use super::*;
         use crate::mantle::pow::ClaimPoWConstants;
@@ -2109,9 +2106,9 @@ mod tests {
 
         fn claim_op() -> ClaimPowRewardOp {
             ClaimPowRewardOp {
-                // The nonce `validate_current_epoch_nonce` accepts for epoch
-                // 0, the current epoch of a fresh test ledger.
-                epoch_nonce: ZkHasher::digest(&[fr_from_mod_bytes(&0u32.to_le_bytes())]),
+                // The current epoch's randomness nonce, which for a fresh test
+                // ledger built from genesis is the genesis nonce (`Fr::ZERO`).
+                epoch_nonce: Fr::ZERO,
                 block_hash: [1u8; 32],
                 public_key: ZkPublicKey::new(Fr::from(42u64)),
             }

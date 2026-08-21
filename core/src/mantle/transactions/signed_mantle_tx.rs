@@ -345,8 +345,8 @@ impl SignedMantleTx<Preverified> {
                     pow_nullifiers: helper.get_pow_nullifiers(),
                     epoch_pow_reward: helper.get_epoch_pow_reward(),
                     epoch_reward_pool: helper.get_pow_reward_pool(),
-                    current_epoch: helper.get_epoch(),
-                    previous_epoch: helper.get_previous_epoch(),
+                    current_epoch_nonce: helper.get_current_epoch_nonce(),
+                    previous_epoch_nonce: helper.get_previous_epoch_nonce(),
                     blocks_slot: helper.get_blocks_slot(),
                 };
                 claim_pow_op
