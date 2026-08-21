@@ -72,11 +72,11 @@ mod mantle_test_vectors {
     use lb_codec::BinaryEncode as _;
     use lb_cryptarchia_engine::Epoch;
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
-    use lb_poseidon2::Fr;
+    use lb_poseidon2::{Fr, ZkHash};
 
     use super::*;
     use crate::{
-        crypto::{Digest as _, Hasher},
+        crypto::{Digest as _, Hash, Hasher},
         mantle::{
             Note, RawMantleTx,
             channel::{SlotTimeframe, SlotTimeout},
@@ -91,6 +91,7 @@ mod mantle_test_vectors {
                     withdraw::ChannelWithdrawOp,
                 },
                 leader_claim::LeaderClaimOp,
+                pow::ClaimPowRewardOp,
                 transfer::TransferOp,
             },
             traits::Hashable as _,
@@ -190,6 +191,12 @@ mod mantle_test_vectors {
                 rewards_root: Fr::from(32u64).into(),
                 voucher_nullifier: Fr::from(33u64).into(),
                 pk: zk_pk(34),
+            }),
+            // ClaimPowReward (0x40)
+            Op::ClaimPowReward(ClaimPowRewardOp {
+                epoch_nonce: ZkHash::from(Fr::from(35u64)),
+                block_hash: Hash::from([36u8; 32]),
+                public_key: zk_pk(37),
             }),
         ]
     }
