@@ -1,24 +1,9 @@
+use lb_utils::bounded::BoundedError;
+
 use crate::mantle::ops::channel::{ChannelId, ChannelKeyIndex};
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum VerificationError {
-    #[error("Missing required proof for {op_type} operation at index {op_index}")]
-    MissingProof {
-        op_type: &'static str,
-        op_index: usize,
-    },
-    #[error("Incorrect proof type for {op_type} operation at index {op_index}")]
-    IncorrectProofType {
-        op_type: &'static str,
-        op_index: usize,
-    },
-    #[error(
-        "The number of proofs ({proofs_count}) does not match the number of operations ({ops_count})"
-    )]
-    ProofCountMismatch {
-        ops_count: usize,
-        proofs_count: usize,
-    },
     #[error("Channel {channel_id} could not be found")]
     ChannelNotFound { channel_id: ChannelId },
     #[error("Key {key_index} could not be found in channel {channel_id}")]
@@ -44,13 +29,15 @@ pub enum VerificationError {
         signature_index: usize,
     },
     #[error("Channel verification error: {0}")]
-    ChannelVerificationError(crate::mantle::channel::Error),
+    ChannelVerificationError(#[from] crate::mantle::channel::Error),
     #[error("Transfer verification error: {0}")]
     TransferVerificationError(#[from] crate::mantle::ops::transfer::TransferError),
     #[error("SDP verification error: {0}")]
-    SDPVerificationError(crate::mantle::ops::sdp::SdpError),
+    SDPVerificationError(#[from] crate::mantle::ops::sdp::SdpError),
     #[error("LeaderClaim verification error: {0}")]
-    LeaderClaimVerificationError(crate::mantle::ops::leader_claim::LeaderClaimError),
+    LeaderClaimVerificationError(#[from] crate::mantle::ops::leader_claim::LeaderClaimError),
     #[error("ClaimPoWReward verification error: {0}")]
-    ClaimPowRewardError(crate::mantle::ops::pow::ClaimPowRewardError),
+    ClaimPowRewardError(#[from] crate::mantle::ops::pow::ClaimPowRewardError),
+    #[error(transparent)]
+    BoundsError(#[from] BoundedError),
 }
