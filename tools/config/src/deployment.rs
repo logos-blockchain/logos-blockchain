@@ -164,7 +164,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     timestamp: MIN_STAKE_TIMESTAMP,
                 },
             },
-            genesis_block: GenesisBlock::genesis(genesis_tx),
+            genesis_block: GenesisBlock::genesis(genesis_tx.clone()),
             learning_rate: LEARNING_RATE.try_into().expect("1 > 0"),
             faucet_pk: None,
             pow_config: lb_node::config::cryptarchia::deployment::PoWConfig {

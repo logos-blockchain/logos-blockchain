@@ -1,11 +1,7 @@
 use std::iter::repeat_n;
 
 use lb_core::{
-    mantle::{
-        Op,
-        traits::GenesisTx as _,
-        transactions::{GenesisTx, mantle_tx::MantleTx as _},
-    },
+    mantle::{ops::OpRef, traits::MantleTx as _, transactions::GenesisTx},
     sdp::DeclarationId,
 };
 
@@ -17,11 +13,10 @@ pub struct GeneralSdpConfig {
 #[must_use]
 pub fn create_sdp_configs(genesis_tx: &GenesisTx, count: usize) -> Vec<GeneralSdpConfig> {
     let mut configs = genesis_tx
-        .mantle_tx()
-        .ops()
-        .iter()
+        .op_refs()
+        .into_iter()
         .filter_map(|op| match op {
-            Op::SDPDeclare(decl) => Some(GeneralSdpConfig {
+            OpRef::SDPDeclare(decl) => Some(GeneralSdpConfig {
                 declaration_id: Some(decl.id()),
             }),
             _ => None,
