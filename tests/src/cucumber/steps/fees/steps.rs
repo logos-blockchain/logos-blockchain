@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 use cucumber::{Parameter, gherkin::Step, then, when};
 use lb_core::mantle::{
-    gas::GasPrice,
+    gas::{FeeHorizonHours, GasPrice},
     transactions::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
 };
 
@@ -221,6 +221,37 @@ async fn step_prepare_wallet_funded_self_transfer_with_priority_fee(
     .await
 }
 
+#[when(
+    expr = "I prepare a wallet-funded self-transfer with a {int}% priority fee reserve and a \
+            {float} hour fee horizon from wallet {string} via node {string} as {string}"
+)]
+async fn step_prepare_wallet_funded_self_transfer_with_fee_horizon(
+    world: &mut CucumberWorld,
+    step: &Step,
+    priority_fee_percent: u64,
+    fee_horizon_hours: f64,
+    wallet_name: String,
+    node_name: String,
+    transaction_alias: String,
+) -> StepResult {
+    let fee_horizon_hours =
+        FeeHorizonHours::from_str(&fee_horizon_hours.to_string()).map_err(|message| {
+            StepError::InvalidArgument {
+                message: format!("invalid fee horizon {fee_horizon_hours}: {message}"),
+            }
+        })?;
+    actions::prepare_wallet_funded_self_transfer_with_fee_horizon(
+        world,
+        step,
+        &wallet_name,
+        &node_name,
+        transaction_alias,
+        priority_fee_percent,
+        fee_horizon_hours,
+    )
+    .await
+}
+
 #[when(expr = "I submit prepared transaction {string} via node {string}")]
 async fn step_submit_prepared_transaction(
     world: &mut CucumberWorld,
@@ -271,6 +302,51 @@ async fn step_prepared_transaction_percentage_reserve_absorbed_fee_increase(
     configured_percent: u64,
     node_name: String,
 ) -> StepResult {
+    assertions::prepared_transaction_percentage_reserve_absorbed_fee_increase(
+        world,
+        step,
+        &transaction_alias,
+        configured_percent,
+        &node_name,
+    )
+    .await
+}
+
+#[then(
+    expr = "transaction {string} prepared with a {int}% priority fee reserve and a {float} \
+            hour fee horizon remains funded with its original priority reserve at current \
+            prices on node {string}"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "cucumber step entrypoints must take `&mut World`"
+)]
+async fn step_prepared_transaction_fee_horizon_reserve_absorbed_fee_increase(
+    world: &mut CucumberWorld,
+    step: &Step,
+    transaction_alias: String,
+    configured_percent: u64,
+    fee_horizon_hours: f64,
+    node_name: String,
+) -> StepResult {
+    let fee_horizon_hours =
+        FeeHorizonHours::from_str(&fee_horizon_hours.to_string()).map_err(|message| {
+            StepError::InvalidArgument {
+                message: format!("invalid fee horizon {fee_horizon_hours}: {message}"),
+            }
+        })?;
+    let prepared_fee = world.resolve_prepared_priority_fee(&transaction_alias)?;
+    if prepared_fee.fee_horizon_tenths != fee_horizon_hours.tenths() {
+        return Err(StepError::StepFail {
+            message: format!(
+                "Step `{}` error: transaction `{transaction_alias}` was prepared with {} \
+                 tenths of an hour, expected {}",
+                step.value,
+                prepared_fee.fee_horizon_tenths,
+                fee_horizon_hours.tenths(),
+            ),
+        });
+    }
     assertions::prepared_transaction_percentage_reserve_absorbed_fee_increase(
         world,
         step,

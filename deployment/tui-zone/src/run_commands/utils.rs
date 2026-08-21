@@ -342,6 +342,7 @@ pub fn funding_config(args: &NodeKeyArgs) -> RunResult<FundingConfig> {
         funding_pk: decode_zk_public_key_hex(&args.funding_pk)?,
         max_tx_fee: args.max_tx_fee.into(),
         priority_fee_percent: args.priority_fee_percent,
+        fee_horizon_hours: (args.fee_horizon_hours.tenths() != 0).then_some(args.fee_horizon_hours),
     })
 }
 

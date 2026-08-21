@@ -98,6 +98,22 @@ where
         })
     }
 
+    /// Get the current slot from the chain service's slot ticker.
+    pub async fn current_slot(&self) -> Result<Slot, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(Query::CurrentSlot { reply_channel }.into())
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!("{relay_error} while sending CurrentSlot"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!("{relay_error} while receiving CurrentSlot"))
+        })
+    }
+
     /// Subscribe to new blocks
     pub async fn subscribe_new_blocks(
         &self,

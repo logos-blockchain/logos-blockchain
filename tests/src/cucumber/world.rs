@@ -1217,6 +1217,9 @@ pub struct PreparedPriorityFee {
     pub initial_mandatory_fee: u64,
     pub initial_reserve: u64,
     pub funded_fee: u64,
+    pub horizon_reserve: u64,
+    pub projected_mandatory_fee: u64,
+    pub fee_horizon_tenths: u16,
     pub initial_execution_price: u64,
     pub initial_storage_price: u64,
 }

@@ -173,6 +173,11 @@ where
                         error!("Could not send consensus info through channel: {:?}", e);
                     });
             }
+            Query::CurrentSlot { reply_channel } => {
+                reply_channel.send(self.current_slot).unwrap_or_else(|_| {
+                    error!("Could not send current slot through channel");
+                });
+            }
             Query::NewBlockSubscribe { sender } => {
                 sender
                     .send(self.new_block_subscription_sender.subscribe())

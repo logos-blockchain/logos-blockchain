@@ -46,6 +46,7 @@ let funding = FundingConfig {
     funding_pk,
     max_tx_fee: 1_000_000.into(),
     priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
+    fee_horizon_hours: Some(FundingConfig::DEFAULT_FEE_HORIZON_HOURS),
 };
 let mut sequencer = ZoneSequencer::init(channel_id, signing_key, node, funding, None);
 
@@ -55,14 +56,16 @@ let (result, checkpoint) = sequencer.handle().publish(genesis_zone_block).await?
 ```
 
 `priority_fee_percent` is a percentage reserve over the complete mandatory
-fee, which consists of execution plus storage cost. Only the reserve left
-after the transaction's final mandatory fee is charged becomes the effective
-priority tip. The Zone SDK default is 12%: a practical reserve intended to
-absorb normal fee movement, including approximately one storage-market epoch
-increase under normal price levels. It is not a protocol guarantee at very low
-prices or when execution fees also rise materially. Storage prices use integer
-arithmetic, so low prices can make proportionally larger jumps (for example,
-1 to 2); 12% is therefore a safety margin, not a guaranteed one-epoch bound.
+fee at preparation-time prices, which consists of execution plus storage cost.
+Its rounded-up amount is an absolute priority reserve and is not reapplied to
+future prices. `fee_horizon_hours` is an independent optional duration that
+adds enough reserve for the deterministic maximum storage-price transition at
+each covered epoch boundary. The default policy is a one-hour storage horizon
+with no explicit priority reserve. Callers can opt into a priority percentage
+independently, or use `None`/`0.0` to disable horizon coverage and retain
+percentage-only funding. The horizon reserve is not a separate refundable
+bucket: any amount not yet needed for mandatory storage fees is effective tip
+immediately, and is consumed as storage prices rise.
 
 To override other sequencer settings, build the config explicitly —
 `SequencerConfig::new(funding)` fills in the defaults for everything else:

@@ -511,6 +511,7 @@ async fn fund_via_node(
             funding_public_keys: vec![funding_pk],
             max_tx_fee: GasCost::new(u64::MAX),
             priority_fee_percent: 0,
+            fee_horizon_hours: None,
         })
         .await
         .map_err(|source| StepError::StepFail {

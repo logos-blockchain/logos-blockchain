@@ -10,7 +10,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         SignedMantleTx,
-        gas::{GasCost, MainnetGasProfile, TxGasCalculator as _},
+        gas::{FeeHorizonHours, GasCost, MainnetGasProfile, TxGasCalculator as _},
         traits::Hashable as _,
         transactions::{GasPrices, builder::MantleTxBuilder, states::Preverified},
     },
@@ -24,7 +24,7 @@ use lb_http_api_common::{
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_testing_framework::{NodeHttpClient, configs::wallet::WalletAccount};
-use tokio::time::timeout;
+use tokio::time::{Instant, sleep, timeout};
 use tracing::info;
 
 use crate::{
@@ -85,8 +85,8 @@ pub async fn prepare_wallet_funded_self_transfer_with_priority_fee(
     let account = user_wallet_account(world, step, wallet_name)?;
     let client = world.resolve_node_http_client(node_name)?;
     let funding_pk = account.public_key();
-    let (response, prices) =
-        fund_self_transfer(&client, step, funding_pk, priority_fee_percent).await?;
+    let (response, prices, _) =
+        fund_self_transfer(&client, step, funding_pk, priority_fee_percent, None).await?;
     let signed_tx = assemble_funded_transaction(response, step)?;
     let prepared_fee =
         record_prepared_priority_fee(world, step, &signed_tx, &prices, priority_fee_percent)?;
@@ -110,12 +110,130 @@ pub async fn prepare_wallet_funded_self_transfer_with_priority_fee(
     Ok(())
 }
 
+/// Funds a self-transfer with independent priority and storage-horizon
+/// controls. The expected fee is calculated below from the final transaction
+/// shape and an independent storage-price projection.
+pub async fn prepare_wallet_funded_self_transfer_with_fee_horizon(
+    world: &mut CucumberWorld,
+    step: &Step,
+    wallet_name: &str,
+    node_name: &str,
+    transaction_alias: String,
+    priority_fee_percent: u64,
+    fee_horizon_hours: FeeHorizonHours,
+) -> StepResult {
+    let account = user_wallet_account(world, step, wallet_name)?;
+    let client = world.resolve_node_http_client(node_name)?;
+    wait_until_inside_fee_horizon_epoch(&client, step, world.slots_per_epoch.get()).await?;
+    let funding_pk = account.public_key();
+    let (response, prices, horizon_data) = fund_self_transfer(
+        &client,
+        step,
+        funding_pk,
+        priority_fee_percent,
+        Some(fee_horizon_hours),
+    )
+    .await?;
+    let signed_tx = assemble_funded_transaction(response, step)?;
+    let (preparation_slot, current_slot, slot_duration_ms) =
+        horizon_data.ok_or_else(|| StepError::LogicalError {
+            message: format!(
+                "Step `{}` error: missing fee-horizon timing data",
+                step.value
+            ),
+        })?;
+    let slots_per_epoch = world.slots_per_epoch.get();
+    let prepared_fee = record_prepared_priority_fee_with_horizon(
+        world,
+        step,
+        &signed_tx,
+        &prices,
+        priority_fee_percent,
+        fee_horizon_hours,
+        preparation_slot,
+        current_slot,
+        slot_duration_ms,
+        slots_per_epoch,
+    )?;
+
+    info!(
+        target: TARGET,
+        "Prepared wallet-funded self-transfer `{transaction_alias}` ({:?}) from wallet \
+         '{wallet_name}' with {priority_fee_percent}% priority and {} tenths-hour horizon: \
+         mandatory={}, priority reserve={}, horizon reserve={}, funded={}",
+        signed_tx.hash(),
+        fee_horizon_hours.tenths(),
+        prepared_fee.initial_mandatory_fee,
+        prepared_fee.initial_reserve,
+        prepared_fee.horizon_reserve,
+        prepared_fee.funded_fee,
+    );
+
+    world.remember_prepared_priority_fee(transaction_alias.clone(), prepared_fee);
+    world.remember_prepared_transaction(transaction_alias, signed_tx);
+    Ok(())
+}
+
+async fn wait_until_inside_fee_horizon_epoch(
+    client: &NodeHttpClient,
+    step: &Step,
+    slots_per_epoch: u64,
+) -> StepResult {
+    if slots_per_epoch < 3 {
+        return Err(StepError::InvalidArgument {
+            message: format!(
+                "Step `{}` error: at least 3 slots per epoch are required to avoid epoch-boundary timing races",
+                step.value
+            ),
+        });
+    }
+
+    // Keep several configured slots between the sample and either boundary
+    // without delaying this early-chain scenario into historical-state pruning.
+    let boundary_guard = (slots_per_epoch / 6).max(1);
+    let deadline = Instant::now() + Duration::from_secs(60);
+
+    loop {
+        let time = client
+            .time_info()
+            .await
+            .map_err(|source| StepError::StepFail {
+                message: format!(
+                    "Step `{}` error: time query while waiting for a stable epoch failed: {source}",
+                    step.value
+                ),
+            })?;
+        let offset = time.current_slot % slots_per_epoch;
+        if offset >= boundary_guard && offset < slots_per_epoch - boundary_guard {
+            info!(
+                target: TARGET,
+                "Current slot {} is safely inside epoch ({} slots per epoch) before fee-horizon funding",
+                time.current_slot,
+                slots_per_epoch,
+            );
+            return Ok(());
+        }
+
+        if Instant::now() >= deadline {
+            return Err(StepError::StepFail {
+                message: format!(
+                    "Step `{}` error: current slot {} did not reach the safe interior of an epoch within 60 seconds",
+                    step.value, time.current_slot
+                ),
+            });
+        }
+
+        sleep(Duration::from_millis(100)).await;
+    }
+}
+
 async fn fund_self_transfer(
     client: &NodeHttpClient,
     step: &Step,
     funding_pk: ZkPublicKey,
     priority_fee_percent: u64,
-) -> Result<(WalletFundResponseBody, GasPrices), StepError> {
+    fee_horizon_hours: Option<FeeHorizonHours>,
+) -> Result<(WalletFundResponseBody, GasPrices, Option<(u64, u64, u64)>), StepError> {
     let response = client
         .fund_tx(WalletFundRequestBody {
             tip: None,
@@ -124,6 +242,7 @@ async fn fund_self_transfer(
             funding_public_keys: vec![funding_pk],
             max_tx_fee: GasCost::new(u64::MAX),
             priority_fee_percent,
+            fee_horizon_hours,
         })
         .await
         .map_err(|source| StepError::StepFail {
@@ -142,12 +261,44 @@ async fn fund_self_transfer(
             ),
         })?;
 
+    let horizon_data = if fee_horizon_hours.is_some() {
+        let block = client
+            .block(&response.tip)
+            .await
+            .map_err(|source| StepError::StepFail {
+                message: format!(
+                    "Step `{}` error: preparation tip block query failed: {source}",
+                    step.value
+                ),
+            })?
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!(
+                    "Step `{}` error: preparation tip {} is not available",
+                    step.value, response.tip
+                ),
+            })?;
+        let time = client
+            .time_info()
+            .await
+            .map_err(|source| StepError::StepFail {
+                message: format!("Step `{}` error: time query failed: {source}", step.value),
+            })?;
+        Some((
+            block.header.slot.into_inner(),
+            time.current_slot,
+            time.slot_duration_ms,
+        ))
+    } else {
+        None
+    };
+
     Ok((
         response,
         GasPrices {
             execution_base_gas_price: prices_at_funding_tip.execution_base_gas_price,
             storage_gas_price: prices_at_funding_tip.storage_gas_price,
         },
+        horizon_data,
     ))
 }
 
@@ -223,6 +374,155 @@ fn record_prepared_priority_fee(
         initial_mandatory_fee,
         initial_reserve,
         funded_fee,
+        horizon_reserve: 0,
+        projected_mandatory_fee: initial_mandatory_fee,
+        fee_horizon_tenths: 0,
+        initial_execution_price: prices.execution_base_gas_price.into_inner(),
+        initial_storage_price: prices.storage_gas_price.into_inner(),
+    })
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "The acceptance oracle keeps all preparation inputs visible and independent."
+)]
+fn record_prepared_priority_fee_with_horizon(
+    world: &CucumberWorld,
+    step: &Step,
+    signed_tx: &SignedMantleTx<Preverified>,
+    prices: &GasPrices,
+    priority_fee_percent: u64,
+    fee_horizon_hours: FeeHorizonHours,
+    preparation_slot: u64,
+    current_slot: u64,
+    slot_duration_ms: u64,
+    slots_per_epoch: u64,
+) -> Result<PreparedPriorityFee, StepError> {
+    let initial_mandatory_fee = signed_tx
+        .total_gas_cost::<MainnetGasProfile>(prices)
+        .map_err(|source| StepError::StepFail {
+            message: format!(
+                "Step `{}` error: initial mandatory fee calculation failed: {source}",
+                step.value
+            ),
+        })?
+        .into_inner();
+    let initial_reserve =
+        fee_spec::priority_fee_amount(initial_mandatory_fee, priority_fee_percent).map_err(
+            |message| StepError::StepFail {
+                message: format!("Step `{}` error: {message}", step.value),
+            },
+        )?;
+
+    let denominator = u128::from(slot_duration_ms)
+        .checked_mul(10)
+        .ok_or_else(|| StepError::StepFail {
+            message: format!(
+                "Step `{}` error: slot-duration arithmetic overflowed",
+                step.value
+            ),
+        })?;
+    if denominator == 0 || slots_per_epoch == 0 {
+        return Err(StepError::InvalidArgument {
+            message: "slot duration and slots per epoch must be greater than zero".to_owned(),
+        });
+    }
+    let horizon_slots = u64::try_from(
+        (u128::from(fee_horizon_hours.tenths()) * 3_600_000u128).div_ceil(denominator),
+    )
+    .map_err(|_| StepError::StepFail {
+        message: format!(
+            "Step `{}` error: horizon slot arithmetic overflowed",
+            step.value
+        ),
+    })?;
+    let horizon_end_slot = preparation_slot
+        .max(current_slot)
+        .checked_add(horizon_slots)
+        .ok_or_else(|| StepError::StepFail {
+            message: format!("Step `{}` error: horizon end slot overflowed", step.value),
+        })?;
+    let preparation_epoch = preparation_slot / slots_per_epoch;
+    let horizon_end_epoch = horizon_end_slot / slots_per_epoch;
+    let boundaries = horizon_end_epoch
+        .checked_sub(preparation_epoch)
+        .ok_or_else(|| StepError::StepFail {
+            message: format!(
+                "Step `{}` error: horizon epoch arithmetic underflowed",
+                step.value
+            ),
+        })?;
+
+    let mut projected_storage_price = prices.storage_gas_price.into_inner();
+    for _ in 0..boundaries {
+        projected_storage_price =
+            u64::try_from((u128::from(projected_storage_price) * 9).div_ceil(8)).map_err(|_| {
+                StepError::StepFail {
+                    message: format!(
+                        "Step `{}` error: projected storage price overflowed",
+                        step.value
+                    ),
+                }
+            })?;
+    }
+    let projected_prices = GasPrices {
+        execution_base_gas_price: prices.execution_base_gas_price,
+        storage_gas_price: projected_storage_price.into(),
+    };
+    let projected_mandatory_fee = signed_tx
+        .total_gas_cost::<MainnetGasProfile>(&projected_prices)
+        .map_err(|source| StepError::StepFail {
+            message: format!(
+                "Step `{}` error: projected mandatory fee failed: {source}",
+                step.value
+            ),
+        })?
+        .into_inner();
+    let horizon_reserve = projected_mandatory_fee
+        .checked_sub(initial_mandatory_fee)
+        .ok_or_else(|| StepError::StepFail {
+            message: format!(
+                "Step `{}` error: projected fee fell below current fee",
+                step.value
+            ),
+        })?;
+    let expected_target = projected_mandatory_fee
+        .checked_add(initial_reserve)
+        .ok_or_else(|| StepError::StepFail {
+            message: format!(
+                "Step `{}` error: expected target fee overflowed",
+                step.value
+            ),
+        })?;
+    let funded_fee = fee_spec::net_balance_against(&world.genesis_block_utxos, signed_tx).map_err(
+        |message| StepError::StepFail {
+            message: format!("Step `{}` error: {message}", step.value),
+        },
+    )?;
+    if funded_fee != expected_target {
+        return Err(StepError::StepFail {
+            message: format!(
+                "Step `{}` error: funded fee {funded_fee} != projected mandatory {} + \
+                 priority reserve {} (current mandatory {}, horizon reserve {}, boundaries {})",
+                step.value,
+                projected_mandatory_fee,
+                initial_reserve,
+                initial_mandatory_fee,
+                horizon_reserve,
+                boundaries,
+            ),
+        });
+    }
+
+    Ok(PreparedPriorityFee {
+        percent: priority_fee_percent,
+        initial_mandatory_fee,
+        initial_reserve,
+        funded_fee,
+        horizon_reserve,
+        projected_mandatory_fee,
+        fee_horizon_tenths: fee_horizon_hours.tenths(),
         initial_execution_price: prices.execution_base_gas_price.into_inner(),
         initial_storage_price: prices.storage_gas_price.into_inner(),
     })

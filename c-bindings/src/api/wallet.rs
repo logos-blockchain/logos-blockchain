@@ -964,12 +964,14 @@ pub(crate) fn channel_deposit_with_notes_sync(
             tip: funded_tip,
             response: funded_tx_builder,
         } = api
-            .fund_tx(
+            .fund_tx_with_policy(
                 Some(tip),
                 tx_builder,
                 change_public_key,
                 funding_public_keys,
                 0,
+                None,
+                Some(max_tx_fee),
             )
             .await
             .map_err(|error| {
@@ -1466,12 +1468,14 @@ pub(crate) fn wallet_fund_tx_sync(
             tip,
             response: funded_tx_builder,
         } = api
-            .fund_tx(
+            .fund_tx_with_policy(
                 request.tip,
                 request.tx_builder,
                 request.change_public_key,
                 request.funding_public_keys,
                 request.priority_fee_percent,
+                request.fee_horizon_hours,
+                Some(request.max_tx_fee),
             )
             .await
             .map_err(|error| {
@@ -1548,14 +1552,15 @@ pub type FfiWalletFundResult = FfiStatusResult<*mut c_char>;
 /// The request and response are JSON strings with the exact same schemas as
 /// the node's `POST /wallet/fund` HTTP request and response bodies. The
 /// optional `priority_fee_percent` field (default 0) is interpreted as a
-/// percentage of the final mandatory fee, including execution and storage
-/// cost. The rounded-up percentage is reserved as excess balance above that
-/// fee; only the unused reserve is paid to the block producer as the effective
-/// priority tip. The Zone SDK and TUI default to 12%, a practical reserve
-/// intended to absorb normal fee movement, including approximately one
-/// storage-market epoch increase at normal price levels. This is not a
-/// protocol guarantee at very low prices or when execution fees also rise
-/// materially; integer storage-price arithmetic can make 1 become 2.
+/// percentage of the mandatory fee at preparation-time prices, including
+/// execution and storage cost. Its rounded-up amount is an absolute priority
+/// reserve and is not reapplied to future prices. The optional
+/// `fee_horizon_hours` field independently adds deterministic storage-market
+/// coverage through the protocol slot ticker. An omitted horizon defaults to
+/// one hour; `null` or `0.0` disables it. The default policy is therefore 0%
+/// explicit priority reserve plus one hour of storage coverage. Unused horizon
+/// reserve is effective tip immediately and is consumed as mandatory storage
+/// fees rise.
 ///
 /// # Arguments
 ///

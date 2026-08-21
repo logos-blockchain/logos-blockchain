@@ -1,4 +1,5 @@
 pub mod api;
+mod fee;
 mod states;
 
 use std::{collections::HashMap, num::NonZeroU64, time::Duration};
@@ -118,6 +119,12 @@ pub enum WalletServiceError {
     #[error("Transaction fee exceeded the configured max fee. tx_fee={tx_fee} > max_fee={max_fee}")]
     TxFeeExceedsMaxFee { max_fee: GasCost, tx_fee: GasCost },
 
+    #[error(transparent)]
+    FeeProjection(#[from] fee::FeeProjectionError),
+
+    #[error("fee funding did not converge")]
+    FeeFundingDidNotConverge,
+
     #[error("PoC generation failed: {0:?}")]
     PoCGenerationFailed(#[from] lb_core::proofs::leader_claim_proof::Error),
 
@@ -161,6 +168,8 @@ pub enum WalletMsg {
         /// Percentage of the final mandatory fee reserved as a priority-fee
         /// reserve; only the unused reserve becomes the effective tip.
         priority_fee_percent: u64,
+        fee_horizon_hours: Option<lb_core::mantle::gas::FeeHorizonHours>,
+        max_tx_fee: Option<GasCost>,
         resp_tx: Sender<Result<TipResponse<MantleTxBuilder>, WalletServiceError>>,
     },
     BuildLeaderClaimTx {
@@ -271,11 +280,19 @@ pub struct WalletServiceSettings {
     /// blocks have passed since the reservation.
     #[serde(default = "default_pending_note_expiry_blocks")]
     pub pending_note_expiry_blocks: u64,
+    /// Slot duration used to convert a fee horizon to protocol slots.
+    #[serde(default = "default_slot_duration_ms")]
+    pub slot_duration_ms: u64,
 }
 
 #[must_use]
 pub const fn default_pending_note_expiry_blocks() -> u64 {
     10
+}
+
+#[must_use]
+pub const fn default_slot_duration_ms() -> u64 {
+    1_000
 }
 
 impl StorageRecoverySettings for WalletServiceSettings {
@@ -453,7 +470,7 @@ where
         loop {
             tokio::select! {
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
-                    Box::pin(Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage_adapter, &cryptarchia_api, &kms, &epoch_config)).await;
+                    Box::pin(Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage_adapter, &cryptarchia_api, &kms, &epoch_config, settings.slot_duration_ms)).await;
                 }
                 Ok(event) = new_block_receiver.recv() => {
                     Self::handle_new_block(event.block_id, &mut state, &storage_adapter, &cryptarchia_api, &epoch_config).await;
@@ -508,6 +525,10 @@ where
         clippy::cognitive_complexity,
         reason = "TODO: address this in a dedicated refactor"
     )]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The wallet message handler receives the service dependencies it dispatches to."
+    )]
     async fn handle_wallet_message(
         msg: WalletMsg,
         state: &mut ServiceState<'_>,
@@ -516,6 +537,7 @@ where
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         epoch_config: &EpochConfig,
+        slot_duration_ms: u64,
     ) {
         if let Err(err) =
             Self::backfill_if_not_in_sync(msg.tip(), state, storage, cryptarchia, epoch_config)
@@ -538,6 +560,8 @@ where
                 change_pk,
                 funding_pks,
                 priority_fee_percent,
+                fee_horizon_hours,
+                max_tx_fee,
                 resp_tx,
             } => {
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
@@ -551,28 +575,69 @@ where
                 // Fetch the tx context (gas prices) fresh at fund time. It is
                 // tip-dependent, so a builder handed to us earlier must be funded
                 // against the current context rather than a stale one.
-                let context = match Self::ledger_state_at(tip, cryptarchia).await {
-                    Ok(ledger) => ledger.tx_context(),
+                let ledger = match Self::ledger_state_at(tip, cryptarchia).await {
+                    Ok(ledger) => ledger,
                     Err(err) => {
                         Self::send_err(resp_tx, err);
                         return;
                     }
                 };
+                let preparation_slot = ledger.slot();
+                let context = ledger.tx_context();
 
-                let funded = match state.fund_tx::<MainnetGasProfile>(
+                let current_slot = if fee_horizon_hours.is_some_and(|horizon| horizon.tenths() > 0)
+                {
+                    match cryptarchia.current_slot().await {
+                        Ok(current_slot) => Some(current_slot),
+                        Err(err) => {
+                            Self::send_err(resp_tx, err.into());
+                            return;
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                let funded = match Self::fund_transaction(
+                    state,
                     tip,
                     &tx_builder,
                     change_pk,
                     funding_pks,
                     &context,
                     priority_fee_percent,
+                    fee_horizon_hours,
+                    current_slot,
+                    preparation_slot,
+                    epoch_config,
+                    slot_duration_ms,
                 ) {
                     Ok(funded) => funded,
                     Err(err) => {
-                        Self::send_err(resp_tx, WalletServiceError::from(err));
+                        Self::send_err(resp_tx, err);
                         return;
                     }
                 };
+
+                if let Some(max_tx_fee) = max_tx_fee {
+                    let tx_fee = match funded.tx_fee() {
+                        Ok(tx_fee) => tx_fee,
+                        Err(err) => {
+                            Self::send_err(resp_tx, WalletServiceError::from(err));
+                            return;
+                        }
+                    };
+                    if tx_fee > max_tx_fee {
+                        Self::send_err(
+                            resp_tx,
+                            WalletServiceError::TxFeeExceedsMaxFee {
+                                max_fee: max_tx_fee,
+                                tx_fee,
+                            },
+                        );
+                        return;
+                    }
+                }
 
                 let funded_notes: Vec<NoteId> = funded.consumed_or_locked_notes().collect();
                 state.reserve_pending_notes(funded_notes.iter().copied());
@@ -724,6 +789,73 @@ where
                 Self::get_tx_context(block_id, resp_tx, cryptarchia).await;
             }
         }
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The funding policy inputs are kept explicit to preserve chain-context separation."
+    )]
+    fn fund_transaction(
+        state: &ServiceState<'_>,
+        tip: HeaderId,
+        tx_builder: &MantleTxBuilder,
+        change_pk: ZkPublicKey,
+        funding_pks: Vec<ZkPublicKey>,
+        context: &MantleTxContext,
+        priority_fee_percent: u64,
+        fee_horizon_hours: Option<lb_core::mantle::gas::FeeHorizonHours>,
+        current_slot: Option<Slot>,
+        preparation_slot: Slot,
+        epoch_config: &EpochConfig,
+        slot_duration_ms: u64,
+    ) -> Result<MantleTxBuilder, WalletServiceError> {
+        let Some(horizon) = fee_horizon_hours.filter(|horizon| horizon.tenths() > 0) else {
+            return Ok(state.fund_tx::<MainnetGasProfile>(
+                tip,
+                tx_builder,
+                change_pk,
+                funding_pks,
+                context,
+                priority_fee_percent,
+            )?);
+        };
+
+        let current_slot = current_slot.ok_or(WalletServiceError::FeeFundingDidNotConverge)?;
+        let horizon_slots = fee::horizon_slots(horizon, slot_duration_ms)?;
+        let horizon_end_slot = fee::horizon_end_slot(
+            preparation_slot.into_inner(),
+            current_slot.into_inner(),
+            horizon_slots,
+        )?;
+        let preparation_epoch = epoch_config.epoch_checked(preparation_slot)?.into_inner();
+        let horizon_end_epoch = epoch_config
+            .epoch_checked(Slot::new(horizon_end_slot))?
+            .into_inner();
+        let boundaries = fee::storage_boundaries(preparation_epoch, horizon_end_epoch)?;
+        let projected_storage_price = fee::project_storage_price(
+            context.gas_context.get_gas_prices().storage_gas_price,
+            boundaries,
+        )?;
+        let horizon_context = fee::projected_context(context, projected_storage_price);
+
+        let mut required_fee = GasCost::new(0);
+        for _ in 0..64 {
+            let candidate = state.fund_tx_to_required_fee(
+                tip,
+                tx_builder,
+                change_pk,
+                funding_pks.clone(),
+                required_fee,
+            )?;
+            let target_fee =
+                fee::target_fee(&candidate, context, &horizon_context, priority_fee_percent)?;
+            if candidate.tx_fee()?.into_inner() >= target_fee.into_inner() {
+                return Ok(candidate);
+            }
+            required_fee = target_fee;
+        }
+
+        Err(WalletServiceError::FeeFundingDidNotConverge)
     }
 
     async fn handle_get_balance(
@@ -1650,5 +1782,15 @@ impl EpochConfig {
     fn epoch(&self, slot: Slot) -> Epoch {
         self.epoch_config
             .epoch(slot, self.consensus_config.base_period_length())
+    }
+
+    fn epoch_checked(&self, slot: Slot) -> Result<Epoch, fee::FeeProjectionError> {
+        let epoch = u64::from(slot)
+            / self
+                .epoch_config
+                .epoch_length(self.consensus_config.base_period_length());
+        u32::try_from(epoch)
+            .map(Epoch::new)
+            .map_err(|_| fee::FeeProjectionError::EpochOverflow)
     }
 }

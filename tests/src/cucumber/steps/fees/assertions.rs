@@ -166,9 +166,10 @@ pub async fn prepared_transaction_tip_absorbed_fee_increase(
     Ok(())
 }
 
-/// Recalculates the mandatory fee of a percentage-funded transaction at the
-/// current prices and verifies that the price increase consumed part of its
-/// original reserve without making it underfunded.
+/// Recalculates the mandatory fee of a funded transaction at current prices.
+///
+/// For horizon-funded transactions this verifies that the original absolute
+/// priority reserve remains available after the storage reserve is consumed.
 pub async fn prepared_transaction_percentage_reserve_absorbed_fee_increase(
     world: &CucumberWorld,
     step: &Step,
@@ -210,7 +211,28 @@ pub async fn prepared_transaction_percentage_reserve_absorbed_fee_increase(
             ),
         })?;
 
-    if remaining_reserve >= prepared_fee.initial_reserve {
+    if prepared_fee.fee_horizon_tenths > 0 {
+        if current_mandatory_fee <= prepared_fee.initial_mandatory_fee
+            || remaining_reserve < prepared_fee.initial_reserve
+        {
+            return Err(StepError::StepFail {
+                message: format!(
+                    "Step `{}` error: transaction `{transaction_alias}` did not preserve its \
+                     original absolute priority reserve: initial mandatory={}, priority \
+                     reserve={}, projected mandatory={}, horizon reserve={}, funded={}, \
+                     current mandatory={}, remaining reserve={}",
+                    step.value,
+                    prepared_fee.initial_mandatory_fee,
+                    prepared_fee.initial_reserve,
+                    prepared_fee.projected_mandatory_fee,
+                    prepared_fee.horizon_reserve,
+                    prepared_fee.funded_fee,
+                    current_mandatory_fee,
+                    remaining_reserve,
+                ),
+            });
+        }
+    } else if remaining_reserve >= prepared_fee.initial_reserve {
         return Err(StepError::StepFail {
             message: format!(
                 "Step `{}` error: transaction `{transaction_alias}` reserve did not shrink: \
@@ -228,12 +250,13 @@ pub async fn prepared_transaction_percentage_reserve_absorbed_fee_increase(
 
     info!(
         target: TARGET,
-        "Transaction `{transaction_alias}` retained a smaller effective reserve: \
-         {}% of initial mandatory {} => reserve {}, funded {}; prices execution {} -> {}, \
-         storage {} -> {}; current mandatory {}, remaining reserve {}",
+        "Transaction `{transaction_alias}` retained its original absolute priority reserve: \
+         {}% of initial mandatory {} => priority reserve {}, horizon reserve {}, funded {}; \
+         prices execution {} -> {}, storage {} -> {}; current mandatory {}, remaining reserve {}",
         prepared_fee.percent,
         prepared_fee.initial_mandatory_fee,
         prepared_fee.initial_reserve,
+        prepared_fee.horizon_reserve,
         prepared_fee.funded_fee,
         prepared_fee.initial_execution_price,
         prices.execution_base_gas_price.into_inner(),

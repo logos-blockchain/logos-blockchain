@@ -323,6 +323,15 @@ impl MantleTxGasContext {
     pub fn get_gas_prices(&self) -> GasPrices {
         self.gas_prices.clone()
     }
+
+    #[must_use]
+    pub fn with_gas_prices(&self, gas_prices: GasPrices) -> Self {
+        Self {
+            transfer_thresholds: self.transfer_thresholds.clone(),
+            configuration_thresholds: self.configuration_thresholds.clone(),
+            gas_prices,
+        }
+    }
 }
 
 pub trait MantleTx {

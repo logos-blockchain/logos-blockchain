@@ -15,7 +15,8 @@ use lb_core::{
     events::{Event, Events, HeaderEvent, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
-        GasProfile, NoteId, TxHash, Utxo, Value,
+        GasProfile, Note, NoteId, TxHash, Utxo, Value,
+        gas::GasCost,
         ops::{
             Op, OpId as _,
             channel::{
@@ -324,6 +325,93 @@ impl WalletState {
         Err(WalletError::InsufficientFunds {
             available: utxos.iter().map(|u| u.note.value).sum::<u64>(),
         })
+    }
+
+    /// Funds the transaction to an explicit absolute fee. The caller may
+    /// derive that amount from the final transaction shape and repeat this
+    /// operation if adding inputs or change changes the required fee.
+    pub fn fund_tx_to_required_fee(
+        &self,
+        tx_builder: &MantleTxBuilder,
+        change_pk: ZkPublicKey,
+        pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
+        excluded_notes: &HashSet<NoteId>,
+        required_fee: GasCost,
+    ) -> Result<MantleTxBuilder, WalletError> {
+        let excluded_notes = tx_builder
+            .consumed_or_locked_notes()
+            .chain(self.locked_notes.iter().copied())
+            .chain(self.channel_notes.iter().copied())
+            .chain(excluded_notes.iter().copied())
+            .collect::<HashSet<_>>();
+        let mut utxos = self
+            .utxos_owned_by_pks(pks)
+            .into_iter()
+            .filter(|utxo| !excluded_notes.contains(&utxo.id()))
+            .collect::<Vec<_>>();
+
+        utxos.sort_by_key(|utxo| -i128::from(utxo.note.value));
+
+        match tx_builder
+            .funding_delta_to_required_fee(required_fee)?
+            .cmp(&0)
+        {
+            Ordering::Equal => return Ok(tx_builder.clone()),
+            Ordering::Greater => {
+                if let Some(tx_with_change) =
+                    Self::return_change_to_required_fee(tx_builder, change_pk, required_fee)?
+                {
+                    return Ok(tx_with_change);
+                }
+            }
+            Ordering::Less => {}
+        }
+
+        for i in 0..utxos.len() {
+            let funded_tx_builder = tx_builder
+                .clone()
+                .extend_ledger_inputs(utxos[..=i].iter().copied())?;
+
+            match funded_tx_builder
+                .funding_delta_to_required_fee(required_fee)?
+                .cmp(&0)
+            {
+                Ordering::Less => {}
+                Ordering::Equal => return Ok(funded_tx_builder),
+                Ordering::Greater => {
+                    if let Some(tx_with_change) = Self::return_change_to_required_fee(
+                        &funded_tx_builder,
+                        change_pk,
+                        required_fee,
+                    )? {
+                        return Ok(tx_with_change);
+                    }
+                }
+            }
+        }
+
+        Err(WalletError::InsufficientFunds {
+            available: utxos.iter().map(|u| u.note.value).sum::<u64>(),
+        })
+    }
+
+    fn return_change_to_required_fee(
+        tx_builder: &MantleTxBuilder,
+        change_pk: ZkPublicKey,
+        required_fee: GasCost,
+    ) -> Result<Option<MantleTxBuilder>, WalletError> {
+        let candidate = tx_builder.with_dummy_change_note()?;
+        let available_change = candidate.funding_delta_to_required_fee(required_fee)?;
+
+        if available_change < 1 {
+            return Ok(None);
+        }
+
+        let change = u64::try_from(available_change).expect("change must fit in u64");
+        Ok(Some(tx_builder.clone().add_ledger_output(Note {
+            value: change,
+            pk: change_pk,
+        })?))
     }
 
     #[must_use]
@@ -814,6 +902,24 @@ where
         )
     }
 
+    pub fn fund_tx_to_required_fee(
+        &self,
+        tip: HeaderId,
+        tx_builder: &MantleTxBuilder,
+        change_pk: ZkPublicKey,
+        funding_pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
+        excluded_notes: &HashSet<NoteId>,
+        required_fee: GasCost,
+    ) -> Result<MantleTxBuilder, WalletError> {
+        self.wallet_state_at(tip)?.fund_tx_to_required_fee(
+            tx_builder,
+            change_pk,
+            funding_pks,
+            excluded_notes,
+            required_fee,
+        )
+    }
+
     pub fn wallet_state_at(&self, tip: HeaderId) -> Result<WalletState, WalletError> {
         self.wallet_states
             .get(&tip)
@@ -874,7 +980,7 @@ mod tests {
     use lb_core::{
         crypto::ZkDigest as _,
         mantle::{
-            Note, OpProof, RawMantleTx, SignedMantleTx,
+            OpProof, RawMantleTx, SignedMantleTx,
             channel::Channels,
             gas::MainnetGasProfile as Gas,
             ledger::{Inputs, Outputs},
@@ -1536,6 +1642,46 @@ mod tests {
         } else {
             panic!("last op must be a transfer")
         }
+    }
+
+    #[test]
+    fn test_fund_tx_to_required_fee_rechecks_the_final_change_shape() {
+        let alice = pk(1);
+        let utxo = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
+        let ledger_state = LedgerState::from_utxos([utxo], &ledger_config());
+        let wallet_state =
+            WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
+        let context = MantleTxContext {
+            gas_context: MantleTxGasContext::from_channels(
+                &Channels::default(),
+                GasPrices::new(1, 1),
+            ),
+            leader_reward_amount: 0,
+        };
+        let horizon_context = MantleTxContext {
+            gas_context: context.gas_context.with_gas_prices(GasPrices::new(1, 2)),
+            leader_reward_amount: 0,
+        };
+
+        let funded = wallet_state
+            .fund_tx_to_required_fee(
+                &MantleTxBuilder::new(),
+                alice,
+                [alice],
+                &HashSet::new(),
+                GasCost::new(1_094),
+            )
+            .unwrap();
+
+        assert_eq!(funded.net_balance(), 1_094);
+        assert_eq!(
+            funded.minimum_gas_cost::<Gas>(&context).unwrap(),
+            GasCost::new(794)
+        );
+        assert_eq!(
+            funded.minimum_gas_cost::<Gas>(&horizon_context).unwrap(),
+            GasCost::new(998)
+        );
     }
 
     #[test]

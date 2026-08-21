@@ -989,6 +989,7 @@ pub async fn replay_finalized_history(
         funding_pk: lb_groth16::Fr::from(1u64).into(),
         max_tx_fee: GasCost::new(u64::MAX),
         priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
+        fee_horizon_hours: Some(FundingConfig::DEFAULT_FEE_HORIZON_HOURS),
     };
     let mut sequencer = ZoneSequencer::init(reader.channel_id, keygen(), node, funding, None);
 
@@ -1595,6 +1596,7 @@ async fn build_funded_custom_tx(
             change_public_key: funding_pk,
             funding_public_keys: vec![funding_pk],
             max_tx_fee: GasCost::new(u64::MAX),
+            fee_horizon_hours: None,
         })
         .await
         .map_err(|error| ZoneTestError::SubmitCustomTx {

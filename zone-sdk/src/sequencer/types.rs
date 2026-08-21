@@ -8,7 +8,7 @@ use lb_core::{
     mantle::{
         SignedMantleTx, Value,
         channel::ChannelState,
-        gas::GasCost,
+        gas::{FeeHorizonHours, GasCost},
         ledger::{Inputs, NoteId, Outputs},
         ops::channel::{
             ChannelId, MsgId, channel_transfer::ChannelTransferOp, deposit::Metadata,
@@ -143,21 +143,42 @@ pub struct FundingConfig {
     pub funding_pk: ZkPublicKey,
     /// Absolute hard cap on the fee of a single funded transaction.
     pub max_tx_fee: GasCost,
-    /// Percentage of the final mandatory fee reserved as a priority reserve
-    /// when funding a transaction. The mandatory fee is execution plus
-    /// storage cost, and only the unused reserve becomes an effective tip.
-    /// The 12% default is a practical reserve intended to absorb normal fee
-    /// movement, including approximately one storage-market epoch increase
-    /// at normal price levels. It is not a protocol guarantee at very low
-    /// prices or when execution fees also rise materially: storage prices use
-    /// integer arithmetic, so a low price can jump proportionally more (for
-    /// example, 1 to 2). [`Self::max_tx_fee`] caps the total.
+    /// Percentage of the mandatory fee at preparation-time prices reserved as
+    /// an absolute priority incentive when funding a transaction. The
+    /// percentage covers execution plus storage cost and is not reapplied to
+    /// future prices. The default is no explicit priority reserve; callers
+    /// can opt into one independently of the storage horizon.
+    /// [`Self::max_tx_fee`] caps the total.
     pub priority_fee_percent: u64,
+    /// Optional elapsed-time horizon for independent storage-fee coverage.
+    /// The default policy uses [`Self::DEFAULT_FEE_HORIZON_HOURS`]. `None` or
+    /// zero explicitly preserves percentage-only funding. Any unused horizon
+    /// reserve is effective tip immediately and is consumed as mandatory
+    /// storage fees rise.
+    pub fee_horizon_hours: Option<FeeHorizonHours>,
 }
 
 impl FundingConfig {
-    /// Default percentage reserve for normal fee movement.
-    pub const DEFAULT_PRIORITY_FEE_PERCENT: Value = 12;
+    /// Default preparation-time priority reserve percentage.
+    pub const DEFAULT_PRIORITY_FEE_PERCENT: Value = 0;
+    /// Default deterministic storage-fee coverage horizon.
+    pub const DEFAULT_FEE_HORIZON_HOURS: FeeHorizonHours = FeeHorizonHours::from_tenths(10);
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_core::mantle::gas::FeeHorizonHours;
+
+    use super::FundingConfig;
+
+    #[test]
+    fn default_funding_policy_is_one_hour_without_explicit_priority() {
+        assert_eq!(FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT, 0);
+        assert_eq!(
+            FundingConfig::DEFAULT_FEE_HORIZON_HOURS,
+            FeeHorizonHours::from_tenths(10)
+        );
+    }
 }
 
 /// Configuration for the zone sequencer.

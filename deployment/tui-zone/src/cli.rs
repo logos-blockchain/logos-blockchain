@@ -1,6 +1,7 @@
 use std::{error::Error, path::PathBuf};
 
 use clap::{Args, Parser, Subcommand};
+use lb_core::mantle::gas::FeeHorizonHours;
 
 use crate::run_commands::{
     run_balance::run_state_full,
@@ -103,13 +104,11 @@ pub struct NodeKeyArgs {
     #[arg(long, default_value_t = 1_000_000, env = "MAX_TX_FEE")]
     pub max_tx_fee: u64,
 
-    /// Percentage of the final mandatory fee reserved when funding via
-    /// `--funding-pk`. The percentage covers execution plus storage cost; only
-    /// unused reserve becomes an effective priority tip. The 12% default is a
-    /// practical reserve for normal fee movement, including approximately one
-    /// storage-market epoch at normal price levels, not a protocol guarantee
-    /// at very low prices or when execution fees also rise materially. Storage
-    /// prices use integer arithmetic, so 1 can become 2. Capped in total by
+    /// Percentage of the mandatory fee at preparation-time prices reserved as
+    /// an absolute priority incentive when funding via `--funding-pk`. The
+    /// percentage covers execution plus storage cost and is not reapplied to
+    /// future prices. The default is no explicit priority reserve; callers can
+    /// opt into one independently of the storage horizon. Capped in total by
     /// `--max-tx-fee`.
     #[arg(
         long,
@@ -117,6 +116,13 @@ pub struct NodeKeyArgs {
         env = "PRIORITY_FEE_PERCENT"
     )]
     pub priority_fee_percent: u64,
+
+    /// Storage-fee coverage horizon. Omitted values default to 1.0 hour.
+    /// Decimal values are rounded up to the next 0.1 hour. Values above 168
+    /// hours (7 days) are rejected. Set to `0.0` to disable coverage. Capped
+    /// in total by `--max-tx-fee`.
+    #[arg(long, default_value = "1.0", env = "FEE_HORIZON_HOURS")]
+    pub fee_horizon_hours: FeeHorizonHours,
 }
 
 #[derive(Args, Debug)]

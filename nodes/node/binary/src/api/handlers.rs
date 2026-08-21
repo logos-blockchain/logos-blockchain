@@ -1066,12 +1066,14 @@ where
             tip,
             response: funded_tx_builder,
         } = wallet
-            .fund_tx(
+            .fund_tx_with_policy(
                 None,
                 tx_builder,
                 req.change_public_key,
                 req.funding_public_keys,
                 0,
+                None,
+                Some(req.max_tx_fee),
             )
             .await?;
 
@@ -2114,12 +2116,14 @@ pub mod wallet {
                 tip,
                 response: funded_tx_builder,
             } = wallet
-                .fund_tx(
+                .fund_tx_with_policy(
                     req.tip,
                     req.tx_builder,
                     req.change_public_key,
                     req.funding_public_keys,
                     req.priority_fee_percent,
+                    req.fee_horizon_hours,
+                    Some(req.max_tx_fee),
                 )
                 .await?;
 

@@ -341,6 +341,7 @@ pub fn funding_config() -> FundingConfig {
         funding_pk: Fr::from(1u64).into(),
         max_tx_fee: GasCost::new(u64::MAX),
         priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
+        fee_horizon_hours: Some(FundingConfig::DEFAULT_FEE_HORIZON_HOURS),
     }
 }
 

@@ -11,7 +11,10 @@ use lb_core::{
     events::TxEvent,
     mantle::{
         NoteId, Utxo, Value,
-        gas::{Gas, GasCost, GasOverflow, GasPrice, GasProfile},
+        gas::{
+            Gas, GasCost, GasOverflow, GasPrice, GasProfile,
+            STORAGE_PRICE_MAX_INCREASE_DENOMINATOR, STORAGE_PRICE_MAX_INCREASE_NUMERATOR,
+        },
         ledger::ExecutableOperation as _,
         ops::{pow::PowTarget, transfer::TransferOp},
         traits::GenesisTx,
@@ -48,12 +51,8 @@ const EXECUTION_MARKET_BASE_FEE_DENOMINATOR: u128 = 12_773_840;
 
 // Corresponds to the denominator of 1/beta
 const STORAGE_MARKET_EMA_DENOMINATOR: u128 = 2;
-// Corresponds to the denominator of 1+ alpha and 1-alpha
-const STORAGE_MARKET_CLAMP_DENOMINATOR: u128 = 8;
 // Corresponds to the numerator of 1-alpha
 const STORAGE_MARKET_CLAMP_DOWN_NUMERATOR: u128 = 7;
-// Corresponds to the numerator of 1+alpha
-const STORAGE_MARKET_CLAMP_UP_NUMERATOR: u128 = 9;
 
 pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
 use super::{Balance, Config, LedgerError, mantle};
@@ -810,14 +809,14 @@ fn update_storage_market(
     if new_ema_unsigned == 0 {
         return (storage_gas_price, new_ema);
     }
-    let comparator = STORAGE_MARKET_CLAMP_DENOMINATOR * total_storage_gas;
+    let comparator = STORAGE_PRICE_MAX_INCREASE_DENOMINATOR * total_storage_gas;
     let new_price = if comparator <= STORAGE_MARKET_CLAMP_DOWN_NUMERATOR * new_ema_unsigned {
         ((previous_price * STORAGE_MARKET_CLAMP_DOWN_NUMERATOR)
-            .div_ceil(STORAGE_MARKET_CLAMP_DENOMINATOR) as Value)
+            .div_ceil(STORAGE_PRICE_MAX_INCREASE_DENOMINATOR) as Value)
             .into()
-    } else if comparator >= STORAGE_MARKET_CLAMP_UP_NUMERATOR * new_ema_unsigned {
-        ((previous_price * STORAGE_MARKET_CLAMP_UP_NUMERATOR)
-            .div_ceil(STORAGE_MARKET_CLAMP_DENOMINATOR) as Value)
+    } else if comparator >= STORAGE_PRICE_MAX_INCREASE_NUMERATOR * new_ema_unsigned {
+        ((previous_price * STORAGE_PRICE_MAX_INCREASE_NUMERATOR)
+            .div_ceil(STORAGE_PRICE_MAX_INCREASE_DENOMINATOR) as Value)
             .into()
     } else {
         ((previous_price * total_storage_gas).div_ceil(new_ema_unsigned) as Value).into()

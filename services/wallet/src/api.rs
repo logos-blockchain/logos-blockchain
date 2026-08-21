@@ -2,7 +2,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Note, SignedMantleTx, Value,
-        gas::GasCost,
+        gas::{FeeHorizonHours, GasCost},
         ops::leader_claim::{RewardsRoot, VoucherCm},
         transactions::{
             MantleTxBuilder, MantleTxContext, TxBuilderError, hash::TxHash, states::Preverified,
@@ -146,6 +146,32 @@ where
         funding_pks: Vec<ZkPublicKey>,
         priority_fee_percent: u64,
     ) -> Result<TipResponse<MantleTxBuilder>, WalletApiError> {
+        self.fund_tx_with_policy(
+            tip,
+            tx_builder,
+            change_pk,
+            funding_pks,
+            priority_fee_percent,
+            None,
+            None,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The funding policy parameters are intentionally independent."
+    )]
+    pub async fn fund_tx_with_policy(
+        &self,
+        tip: Option<HeaderId>,
+        tx_builder: MantleTxBuilder,
+        change_pk: ZkPublicKey,
+        funding_pks: Vec<ZkPublicKey>,
+        priority_fee_percent: u64,
+        fee_horizon_hours: Option<FeeHorizonHours>,
+        max_tx_fee: Option<GasCost>,
+    ) -> Result<TipResponse<MantleTxBuilder>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
@@ -155,6 +181,8 @@ where
                 change_pk,
                 funding_pks,
                 priority_fee_percent,
+                fee_horizon_hours,
+                max_tx_fee,
                 resp_tx,
             })
             .await?;

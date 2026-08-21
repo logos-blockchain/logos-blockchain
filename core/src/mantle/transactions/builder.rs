@@ -244,6 +244,13 @@ impl MantleTxBuilder {
         Ok(self.net_balance() - i128::from(self.minimum_gas_cost::<G>(context)?.into_inner()))
     }
 
+    pub fn funding_delta_to_required_fee(
+        &self,
+        required_fee: GasCost,
+    ) -> Result<i128, TxBuilderError> {
+        Ok(self.net_balance() - i128::from(required_fee.into_inner()))
+    }
+
     /// Returns the balance remaining after the mandatory fee and the
     /// percentage-based priority fee reserve.
     pub fn funding_delta_with_priority_fee<G: GasProfile>(

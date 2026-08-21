@@ -65,8 +65,8 @@ const SEQUENCER_READY_POLL_TIMEOUT: Duration = Duration::from_secs(10);
 const SEQUENCER_READY_HEIGHT_ADVANCE_TIMEOUT: Duration = Duration::from_secs(30);
 const ZONE_SECURITY_PARAM: u32 = 5;
 // These high-volume scenarios can move storage prices before all queued
-// publishes are included. Keep their test funding comfortably above the
-// public 12% default so they exercise sequencing rather than fee starvation.
+// publishes are included. Keep their test funding at an explicit 50% priority
+// reserve so they exercise sequencing rather than fee starvation.
 const ZONE_TEST_PRIORITY_FEE_PERCENT: u64 = 50;
 
 pub(super) enum DriveMode {
@@ -798,6 +798,7 @@ fn sequencer_funding(
         funding_pk,
         max_tx_fee: GasCost::new(u64::MAX),
         priority_fee_percent: ZONE_TEST_PRIORITY_FEE_PERCENT,
+        fee_horizon_hours: None,
     })
 }
 

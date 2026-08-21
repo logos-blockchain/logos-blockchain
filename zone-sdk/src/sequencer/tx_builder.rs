@@ -52,6 +52,7 @@ where
             // The public request field is a percentage of the final
             // mandatory fee, not an absolute fee amount.
             priority_fee_percent: funding.priority_fee_percent,
+            fee_horizon_hours: funding.fee_horizon_hours,
         })
         .await
         .map_err(|e| Error::Network(format!("funding failed: {e}")))?;
@@ -301,6 +302,9 @@ mod tests {
 
         fund_ops(&node, &funding, Vec::new()).await.unwrap();
 
-        assert_eq!(priority_fees_rx.recv().await, Some(12));
+        assert_eq!(
+            priority_fees_rx.recv().await,
+            Some(FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT)
+        );
     }
 }

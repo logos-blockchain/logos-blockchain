@@ -166,6 +166,9 @@ pub enum Query {
     Info {
         reply_channel: oneshot::Sender<ChainServiceInfo>,
     },
+    CurrentSlot {
+        reply_channel: oneshot::Sender<Slot>,
+    },
     NewBlockSubscribe {
         sender: oneshot::Sender<broadcast::Receiver<ProcessedBlockEvent>>,
     },

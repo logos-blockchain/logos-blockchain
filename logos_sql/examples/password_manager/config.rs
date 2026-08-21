@@ -28,7 +28,8 @@ struct Options {
     #[arg(long, env = "LOGOS_SQL_MAX_TX_FEE")]
     max_tx_fee: u64,
 
-    /// Percentage of the maximum fee offered as priority fee.
+    /// Percentage of the mandatory fee at preparation-time prices reserved
+    /// as an explicit priority incentive.
     #[arg(
         long,
         env = "LOGOS_SQL_PRIORITY_FEE_PERCENT",
@@ -57,6 +58,7 @@ pub fn from_args() -> LogosSqlConfig {
             funding_pk: options.funding_key,
             max_tx_fee: options.max_tx_fee.into(),
             priority_fee_percent: options.priority_fee_percent,
+            fee_horizon_hours: Some(FundingConfig::DEFAULT_FEE_HORIZON_HOURS),
         },
         state_dir: options.state_dir,
     }

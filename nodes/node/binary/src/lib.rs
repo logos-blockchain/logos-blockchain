@@ -157,6 +157,7 @@ pub fn run_node_from_config(
         &config.deployment.time,
         &config.deployment.cryptarchia,
     );
+    let slot_duration = config.deployment.time.slot_duration;
 
     let time_service_config = TimeConfig {
         user: config.user.time,
@@ -184,7 +185,7 @@ pub fn run_node_from_config(
     let wallet_config = WalletConfig {
         user: config.user.wallet,
     }
-    .into_wallet_service_settings(recovery_data.clone());
+    .into_wallet_service_settings(recovery_data.clone(), slot_duration);
 
     let kms_config = KmsConfig {
         user: config.user.kms,

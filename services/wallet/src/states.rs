@@ -7,6 +7,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         GasProfile, NoteId,
+        gas::GasCost,
         ops::leader_claim::{VoucherCm, VoucherNullifier},
         transactions::{MantleTxBuilder, MantleTxContext},
     },
@@ -379,6 +380,24 @@ impl<'u> ServiceState<'u> {
             context,
             &self.pending_notes.note_ids(),
             priority_fee_percent,
+        )
+    }
+
+    pub fn fund_tx_to_required_fee(
+        &self,
+        tip: HeaderId,
+        tx_builder: &MantleTxBuilder,
+        change_pk: ZkPublicKey,
+        funding_pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
+        required_fee: GasCost,
+    ) -> Result<MantleTxBuilder, WalletError> {
+        self.wallet.fund_tx_to_required_fee(
+            tip,
+            tx_builder,
+            change_pk,
+            funding_pks,
+            &self.pending_notes.note_ids(),
+            required_fee,
         )
     }
 
