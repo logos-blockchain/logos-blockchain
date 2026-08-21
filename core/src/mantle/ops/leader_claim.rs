@@ -18,12 +18,12 @@ use crate::{
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
             VerifiableOperation,
-            verification_mode::{self, VerificationMode},
+            verification_mode::{StandardMode, VerificationMode},
         },
         ops::{OpId, SignedOperation},
         transactions::{
             hash::{TxHash, TxHashView},
-            states::VerificationState,
+            states::{Preverified, Unverified, VerificationState, Verified},
         },
     },
     proofs::leader_claim_proof::{
@@ -194,18 +194,18 @@ impl OperationGas<MainnetGasProfile> for LeaderClaimOp {
     const GAS_COST: Gas = Gas::new(580);
 }
 
-impl PreverifiableOperation<verification_mode::StandardMode> for LeaderClaimOp {
+impl PreverifiableOperation<StandardMode>
+    for SignedOperation<LeaderClaimOp, Unverified, StandardMode>
+{
     type Context<'a> = LeaderClaimPreverificationContext<'a>;
     type Error = LeaderClaimError;
 
-    fn preverify(
-        &self,
-        proof: &Self::Proof,
-        context: &Self::Context<'_>,
-    ) -> Result<(), Self::Error> {
-        let is_verified = proof.verify(&LeaderClaimPublic {
-            voucher_nullifier: self.voucher_nullifier.into(),
-            voucher_root: self.rewards_root.into(),
+    fn preverify(&self, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+        let operation = self.operation();
+
+        let is_verified = self.proof().verify(&LeaderClaimPublic {
+            voucher_nullifier: operation.voucher_nullifier.into(),
+            voucher_root: operation.rewards_root.into(),
             mantle_tx_hash: *context.tx_hash_view.as_fr(),
         });
 
@@ -217,30 +217,33 @@ impl PreverifiableOperation<verification_mode::StandardMode> for LeaderClaimOp {
     }
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for LeaderClaimOp {
+impl VerifiableOperation<StandardMode>
+    for SignedOperation<LeaderClaimOp, Preverified, StandardMode>
+{
     type Context<'a> = LeaderClaimVerificationContext<'a>;
     type Error = LeaderClaimError;
 
     fn verify(
         &self,
-        proof: &Self::Proof,
         context: &Self::Context<'_>,
     ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+        let operation = self.operation();
+
         // Check that the nullifier isn't in the set
-        if context.nullifiers.contains(&self.voucher_nullifier) {
+        if context.nullifiers.contains(&operation.voucher_nullifier) {
             return Err(LeaderClaimError::DuplicatedVoucherNullifier);
         }
 
         // Check that the voucher root is the same as in the ledger
-        if context.claimable_vouchers_root != &self.rewards_root {
+        if context.claimable_vouchers_root != &operation.rewards_root {
             return Err(LeaderClaimError::VouchersRootMismatch);
         }
 
-        // Defer the proof verification, so that the caller can batch it.
+        // Defer the proof verification so that the caller can batch it.
         Ok(Some(DeferredZkpVerification::LeaderClaim(
-            *proof.proof(),
+            *self.proof().proof(),
             PoCVerifierInput::new(
-                self.voucher_nullifier.into(),
+                operation.voucher_nullifier.into(),
                 context.claimable_vouchers_root.0,
                 *context.tx_hash_view.as_fr(),
             ),
@@ -248,7 +251,9 @@ impl VerifiableOperation<verification_mode::StandardMode> for LeaderClaimOp {
     }
 }
 
-impl ExecutableOperation for LeaderClaimOp {
+impl<Mode: VerificationMode> ExecutableOperation
+    for SignedOperation<LeaderClaimOp, Verified, Mode>
+{
     type Context<'a> = LeaderClaimExecutionContext;
     type Error = LeaderClaimError;
 
@@ -256,11 +261,13 @@ impl ExecutableOperation for LeaderClaimOp {
         &self,
         mut context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
+        let operation = self.operation();
+
         // Add the nullifier to the nullifier set
-        context.nullifiers = context.nullifiers.insert(self.voucher_nullifier);
+        context.nullifiers = context.nullifiers.insert(operation.voucher_nullifier);
 
         // Distribute the reward
-        let utxo = self.utxo(context.reward_amount);
+        let utxo = operation.utxo(context.reward_amount);
         context.utxos = context.utxos.insert(utxo.id(), utxo).0;
 
         // Remove the distributed rewards from the pool
@@ -271,9 +278,9 @@ impl ExecutableOperation for LeaderClaimOp {
             context,
             vec![TxEvent::new(
                 tx_hash,
-                self.op_id(),
+                operation.op_id(),
                 TxEventPayload::LeaderRewardClaimed {
-                    voucher_nullifier: self.voucher_nullifier,
+                    voucher_nullifier: operation.voucher_nullifier,
                     utxo,
                 },
             )],
@@ -328,17 +335,25 @@ mod tests {
         };
         let nullifiers = rpds::HashTrieSetSync::new_sync();
         let tx_hash_view = TxHashView::from(tx_hash);
-        let context = LeaderClaimVerificationContext {
+        let preverify_context = LeaderClaimPreverificationContext {
+            tx_hash_view: &tx_hash_view,
+        };
+        let verify_context = LeaderClaimVerificationContext {
             nullifiers: &nullifiers,
             claimable_vouchers_root: &voucher_root,
             tx_hash_view: &tx_hash_view,
         };
 
-        let deferred_zkp = op
-            .verify(&proof, &context)
-            .expect("stateful verification should succeed")
-            .expect("deferred ZKP verification should be returned");
+        let unverified_signed_operation = SignedOperation::new(op, proof);
+        let preverified_signed_operation = unverified_signed_operation
+            .into_preverified(&preverify_context)
+            .expect("preverify should accept a valid proof");
+        let deferred_zkp = preverified_signed_operation
+            .into_verified(&verify_context)
+            .expect("verify should accept a valid claim");
+
         std::iter::once(deferred_zkp)
+            .filter_map(|verified_signed_operation| verified_signed_operation.deferred_zkp)
             .collect::<DeferredZkpVerifications>()
             .verify()
             .unwrap();
@@ -347,16 +362,54 @@ mod tests {
     #[test]
     fn execute_emits_leader_reward_claimed_event() {
         let voucher_secret = VoucherSecret::from(Fr::from(7u64));
+        let voucher_cm = VoucherCm::from_secret(voucher_secret);
+        let (mmr, voucher_path) = MerkleMountainRange::<VoucherCm, ZkHasher>::new()
+            .push_with_paths(voucher_cm, &mut [])
+            .expect("MMR shouldn't be full");
+        let voucher_root = RewardsRoot::from(mmr.frontier_root());
         let reward_amount = 38;
-        let pk = ZkPublicKey::zero();
         let tx_hash = TxHash::from([11u8; 32]);
+        let proof = Groth16LeaderClaimProof::prove(
+            LeaderClaimPrivate::try_new(
+                LeaderClaimPublic::new(
+                    VoucherNullifier::from_secret(voucher_secret).into(),
+                    voucher_root.into(),
+                    tx_hash.to_fr(),
+                ),
+                &voucher_path,
+                voucher_secret,
+            )
+            .expect("voucher path should match the PoC circuit height"),
+        )
+        .expect("proof generation should succeed");
+
         let op = LeaderClaimOp {
-            rewards_root: RewardsRoot::default(),
+            rewards_root: voucher_root,
             voucher_nullifier: VoucherNullifier::from_secret(voucher_secret),
-            pk,
+            pk: ZkPublicKey::zero(),
+        };
+        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let tx_hash_view = TxHashView::from(tx_hash);
+        let preverify_context = LeaderClaimPreverificationContext {
+            tx_hash_view: &tx_hash_view,
+        };
+        let verify_context = LeaderClaimVerificationContext {
+            nullifiers: &nullifiers,
+            claimable_vouchers_root: &voucher_root,
+            tx_hash_view: &tx_hash_view,
         };
 
-        let (context, events) = op
+        let unverified_signed_operation = SignedOperation::new(op, proof);
+        let preverified_signed_operation = unverified_signed_operation
+            .into_preverified(&preverify_context)
+            .expect("preverify should accept a valid proof");
+        let verified_signed_operation = preverified_signed_operation
+            .into_verified(&verify_context)
+            .expect("verify should accept a valid claim");
+        let operation = verified_signed_operation.signed_operation().operation();
+
+        let (context, events) = verified_signed_operation
+            .signed_operation()
             .execute(LeaderClaimExecutionContext {
                 nullifiers: rpds::HashTrieSetSync::new_sync(),
                 reward_amount,
@@ -366,11 +419,11 @@ mod tests {
             })
             .expect("leader claim execution should succeed");
 
-        assert!(context.nullifiers.contains(&op.voucher_nullifier));
+        assert!(context.nullifiers.contains(&operation.voucher_nullifier));
         assert_eq!(context.claimable_rewards, 62);
         assert_eq!(
-            context.utxos.get(&op.utxo(reward_amount).id()),
-            Some(op.utxo(reward_amount))
+            context.utxos.get(&operation.utxo(reward_amount).id()),
+            Some(operation.utxo(reward_amount))
         );
 
         let mut events = events.iter();
@@ -387,9 +440,9 @@ mod tests {
             panic!("expected LeaderRewardClaimed tx event");
         };
         assert_eq!(*event_tx_hash, tx_hash);
-        assert_eq!(*op_id, op.op_id());
-        assert_eq!(*voucher_nullifier, op.voucher_nullifier);
-        assert_eq!(*utxo, op.utxo(reward_amount));
+        assert_eq!(*op_id, operation.op_id());
+        assert_eq!(*voucher_nullifier, operation.voucher_nullifier);
+        assert_eq!(*utxo, operation.utxo(reward_amount));
         assert!(events.next().is_none());
     }
 
@@ -435,21 +488,30 @@ mod tests {
         };
         let nullifiers = rpds::HashTrieSetSync::new_sync();
         let tx_hash_view = TxHashView::from(tx_hash);
-        let context = LeaderClaimVerificationContext {
+
+        let preverification_context = LeaderClaimPreverificationContext {
+            tx_hash_view: &tx_hash_view,
+        };
+        let verification_context = LeaderClaimVerificationContext {
             nullifiers: &nullifiers,
             claimable_vouchers_root: &voucher_root,
             tx_hash_view: &tx_hash_view,
         };
 
         // The proof is verified against `op.voucher_nullifier`, which does not
-        // match the proven voucher -> rejected. A voucher cannot be claimed under
-        // a substituted nullifier.
-        let deferred_zkp = op
-            .verify(&proof, &context)
-            .expect("stateful verification should succeed")
-            .expect("deferred ZKP verification should be returned");
+        // match the proven voucher -> rejected during preverify. A voucher
+        // cannot be claimed under a substituted nullifier.
+        let unverified_signed_operation = SignedOperation::new(op, proof);
+        let preverified_signed_operation = unverified_signed_operation
+            .into_preverified(&preverification_context)
+            .expect("preverify should accept a valid proof");
+        let verified_signed_operation = preverified_signed_operation
+            .into_verified(&verification_context)
+            .expect("verify should accept a valid claim");
+
         assert!(matches!(
-            std::iter::once(deferred_zkp)
+            std::iter::once(verified_signed_operation)
+                .filter_map(|verified_signed_operation| verified_signed_operation.deferred_zkp)
                 .collect::<DeferredZkpVerifications>()
                 .verify()
                 .unwrap_err(),

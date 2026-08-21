@@ -13,10 +13,13 @@ use crate::{
         ledger::{
             self, ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation,
             Utxo, Utxos, VerifiableOperation,
-            verification_mode::{self, VerificationMode},
+            verification_mode::{StandardMode, VerificationMode},
         },
         ops::{OpId, SignedOperation},
-        transactions::{hash::TxHashView, states::VerificationState},
+        transactions::{
+            hash::TxHashView,
+            states::{Preverified, Unverified, VerificationState, Verified},
+        },
     },
     sdp::service_notes::ServiceNotes,
 };
@@ -95,53 +98,54 @@ impl OperationGas<MainnetGasProfile> for TransferOp {
     const GAS_COST: Gas = Gas::new(590);
 }
 
-impl PreverifiableOperation<verification_mode::StandardMode> for TransferOp {
+impl PreverifiableOperation<StandardMode>
+    for SignedOperation<TransferOp, Unverified, StandardMode>
+{
     type Context<'a> = ();
     type Error = TransferError;
 
-    fn preverify(
-        &self,
-        _proof: &Self::Proof,
-        _context: &Self::Context<'_>,
-    ) -> Result<(), Self::Error> {
+    fn preverify(&self, _context: &Self::Context<'_>) -> Result<(), Self::Error> {
+        let operation = self.operation();
+
         // Ensure the inputs is non-empty
-        self.inputs.preverify()?;
+        operation.inputs.preverify()?;
 
         // Validate Outputs
-        self.outputs.validate()?;
+        operation.outputs.validate()?;
 
         Ok(())
     }
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for TransferOp {
+impl VerifiableOperation<StandardMode> for SignedOperation<TransferOp, Preverified, StandardMode> {
     type Context<'a> = TransferValidationContext<'a>;
     type Error = TransferError;
 
     fn verify(
         &self,
-        proof: &Self::Proof,
         context: &Self::Context<'_>,
     ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
+        let operation = self.operation();
+
         // Validate Inputs
-        self.inputs.validate_not_in_channel(
+        operation.inputs.validate_not_in_channel(
             context.service_notes,
             context.channels,
             context.utxos,
         )?;
 
-        // Defer the proof verification, so that the caller can batch it.
-        let pks = self.inputs.get_pk(context.utxos)?;
+        // Defer the proof verification so that the caller can batch it.
+        let pks = operation.inputs.get_pk(context.utxos)?;
         let inputs = public_inputs_from_pks((*context.tx_hash_view.as_fr()).into(), &pks)
             .map_err(|_| TransferError::InvalidProof)?;
         Ok(Some(DeferredZkpVerification::ZkSig(
-            *proof.as_proof(),
+            *self.proof().as_proof(),
             inputs,
         )))
     }
 }
 
-impl ExecutableOperation for TransferOp {
+impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<TransferOp, Verified, Mode> {
     type Context<'a> = Utxos;
     type Error = TransferError;
 
@@ -149,10 +153,13 @@ impl ExecutableOperation for TransferOp {
         &self,
         mut utxos: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
+        let operation = self.operation();
+
         // Remove inputs from the ledger
-        utxos = self.inputs.execute(utxos)?;
+        utxos = operation.inputs.execute(utxos)?;
+
         // Add outputs from the ledger
-        utxos = self.outputs.execute(utxos, self);
+        utxos = operation.outputs.execute(utxos, self.operation());
         Ok((utxos, Vec::new()))
     }
 }
@@ -183,9 +190,10 @@ mod test {
             outputs: Outputs::new([Note::new(100, pk)]),
         };
         let proof = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
+        let signed_operation = SignedOperation::new(transfer, proof);
 
         assert_eq!(
-            transfer.preverify(&proof, &()),
+            signed_operation.preverify(&()),
             Err(TransferError::Inputs(ledger::InputsError::EmptyInputs))
         );
     }
