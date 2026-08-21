@@ -246,66 +246,91 @@ impl Stream for TicketGenerator {
     /// the searches for blocks that have aged out of the window.
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
-        if let Poll::Ready(Some((_, (block_slot, (secret_key, claim))))) =
-            this.tickets_search.poll_next_unpin(cx)
-        {
-            return Poll::Ready(Some(WinningTicket {
-                tip: this.tip,
-                block_slot,
-                secret_key,
-                claim,
-            }));
-        }
-
-        if let Poll::Ready(Some((
-            ref epoch_state,
-            ref ledger_state,
-            ProcessedBlockEvent {
-                block_id,
-                block_slot,
-                tip,
-                tip_slot,
-                ..
-            },
-        ))) = this.processed_block_stream.poll_next_unpin(cx)
-        {
-            this.tip = tip;
-            // compute which slot is old enough
-            let frontier_slot = tip_slot.saturating_sub(Slot::new(SLOT_WINDOW));
-            // trigger new stream if its new enough
-            if frontier_slot < block_slot {
-                let stream =
-                    new_block_search_stream(block_id, block_slot, epoch_state, ledger_state);
-                this.tickets_search.insert(block_id, stream);
-                this.tickets_search_by_slot
-                    .entry(block_slot)
-                    .or_default()
-                    .insert(block_id);
+        loop {
+            // 1. Emit any winner an active search has already produced, tagged
+            //    with the cached tip.
+            if let Poll::Ready(Some((_, (block_slot, (secret_key, claim))))) =
+                this.tickets_search.poll_next_unpin(cx)
+            {
+                return Poll::Ready(Some(WinningTicket {
+                    tip: this.tip,
+                    block_slot,
+                    secret_key,
+                    claim,
+                }));
             }
-            // prune old enough winning tickets
-            prune_out_of_window_streams(
-                &mut this.tickets_search,
-                &mut this.tickets_search_by_slot,
-                frontier_slot,
-            );
-        }
 
-        Poll::Pending
+            // 2. Otherwise ingest the next processed block.
+            match this.processed_block_stream.poll_next_unpin(cx) {
+                Poll::Ready(Some((
+                    epoch_state,
+                    ledger_state,
+                    ProcessedBlockEvent {
+                        block_id,
+                        block_slot,
+                        tip,
+                        tip_slot,
+                        ..
+                    },
+                ))) => {
+                    this.tip = tip;
+                    // compute which slot is old enough
+                    let frontier_slot = tip_slot.saturating_sub(Slot::new(SLOT_WINDOW));
+                    // trigger new stream if its new enough
+                    if frontier_slot < block_slot {
+                        let stream = new_block_search_stream(
+                            block_id,
+                            block_slot,
+                            &epoch_state,
+                            &ledger_state,
+                        );
+                        this.tickets_search.insert(block_id, stream);
+                        this.tickets_search_by_slot
+                            .entry(block_slot)
+                            .or_default()
+                            .insert(block_id);
+                    }
+                    // prune old enough winning tickets
+                    prune_out_of_window_streams(
+                        &mut this.tickets_search,
+                        &mut this.tickets_search_by_slot,
+                        frontier_slot,
+                    );
+                    // Fall through to the next loop iteration so the freshly
+                    // inserted search is polled now: this starts its work and
+                    // registers its waker, without depending on an external
+                    // re-poll.
+                }
+                // No new block right now. The generator never terminates: it
+                // just idles until the next block arrives to search on. The
+                // polls above registered the wakers that will re-poll us on
+                // progress (a new block, or a winner from an active search).
+                Poll::Ready(None) | Poll::Pending => return Poll::Pending,
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::{
+        collections::{HashMap, HashSet},
+        pin::Pin,
+        task::{Context, Poll},
+    };
 
-    use futures::stream;
-    use lb_chain_service::Slot;
-    use lb_core::header::HeaderId;
+    use futures::{Stream, stream, task::noop_waker_ref};
+    use lb_chain_service::{EpochState, ProcessedBlockEvent, Slot};
+    use lb_core::{header::HeaderId, mantle::ops::pow::ClaimPowRewardOp};
     use lb_groth16::{AdditiveGroup as _, Fr};
-    use lb_key_management_system_keys::keys::ZkPublicKey;
+    use lb_ledger::LedgerState;
+    use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey};
     use tokio_stream::StreamMap;
 
-    use super::{WinnerTicketStream, prune_out_of_window_streams, search_winner_ticket};
+    use super::{
+        TicketGenerator, WinnerTicketStream, WinningTicket, prune_out_of_window_streams,
+        search_winner_ticket,
+    };
 
     /// A never-resolving search stream, used to populate the map under test.
     fn pending_stream() -> WinnerTicketStream {
@@ -400,5 +425,110 @@ mod tests {
                 .validate_difficulty_reward(&difficulty)
                 .is_ok()
         );
+    }
+
+    type ProcessedBlockStream =
+        Pin<Box<dyn Stream<Item = (EpochState, LedgerState, ProcessedBlockEvent)> + Send>>;
+
+    /// A processed-block stream that never yields (upstream open but idle).
+    fn pending_blocks() -> ProcessedBlockStream {
+        Box::pin(stream::pending())
+    }
+
+    /// A processed-block stream that is already closed (upstream terminated).
+    fn no_blocks() -> ProcessedBlockStream {
+        Box::pin(stream::empty())
+    }
+
+    /// A per-block search stream that yields a single winner, then ends.
+    fn ready_search(block_slot: Slot, ticket: (UnsecuredZkKey, ClaimPowRewardOp)) -> WinnerTicketStream {
+        Box::pin(stream::iter([(block_slot, ticket)]))
+    }
+
+    /// A winning ticket owned by its own freshly generated key.
+    fn ticket() -> (UnsecuredZkKey, ClaimPowRewardOp) {
+        let secret_key = UnsecuredZkKey::from_rng(&mut rand::thread_rng());
+        let claim = ClaimPowRewardOp {
+            epoch_nonce: zero_fr(),
+            block_hash: [0u8; 32],
+            public_key: secret_key.to_public_key(),
+        };
+        (secret_key, claim)
+    }
+
+    /// Polls the generator once with a no-op waker.
+    fn poll_once(generator: &mut TicketGenerator) -> Poll<Option<WinningTicket>> {
+        let mut cx = Context::from_waker(noop_waker_ref());
+        Pin::new(generator).poll_next(&mut cx)
+    }
+
+    #[tokio::test]
+    async fn poll_never_terminates_even_when_upstream_is_closed() {
+        // A closed upstream must not close the generator: it stays alive, idle,
+        // ready to resume if blocks ever start flowing again.
+        let mut generator = TicketGenerator {
+            processed_block_stream: no_blocks(),
+            tickets_search: StreamMap::new(),
+            tickets_search_by_slot: HashMap::new(),
+            tip: HeaderId::from([0u8; 32]),
+        };
+        assert!(matches!(poll_once(&mut generator), Poll::Pending));
+    }
+
+    #[tokio::test]
+    async fn poll_stays_pending_while_upstream_is_open_but_idle() {
+        // Open (pending) upstream and no active searches: nothing to emit, but
+        // the generator must not terminate.
+        let mut generator = TicketGenerator {
+            processed_block_stream: pending_blocks(),
+            tickets_search: StreamMap::new(),
+            tickets_search_by_slot: HashMap::new(),
+            tip: HeaderId::from([0u8; 32]),
+        };
+        assert!(matches!(poll_once(&mut generator), Poll::Pending));
+    }
+
+    #[tokio::test]
+    async fn poll_emits_ready_winner_tagged_with_cached_tip() {
+        let tip = HeaderId::from([42u8; 32]);
+        let block_slot = Slot::new(7);
+        let (secret_key, claim) = ticket();
+
+        let mut tickets_search = StreamMap::new();
+        tickets_search.insert(
+            HeaderId::from([1u8; 32]),
+            ready_search(block_slot, (secret_key.clone(), claim)),
+        );
+        let mut generator = TicketGenerator {
+            processed_block_stream: pending_blocks(),
+            tickets_search,
+            tickets_search_by_slot: HashMap::new(),
+            tip,
+        };
+
+        let Poll::Ready(Some(winner)) = poll_once(&mut generator) else {
+            panic!("expected a winning ticket");
+        };
+        assert_eq!(winner.tip, tip);
+        assert_eq!(winner.block_slot, block_slot);
+        assert_eq!(winner.claim.public_key, secret_key.to_public_key());
+    }
+
+    #[tokio::test]
+    async fn poll_drains_winner_then_stays_alive() {
+        let mut tickets_search = StreamMap::new();
+        tickets_search.insert(HeaderId::from([1u8; 32]), ready_search(Slot::new(3), ticket()));
+        let mut generator = TicketGenerator {
+            processed_block_stream: no_blocks(),
+            tickets_search,
+            tickets_search_by_slot: HashMap::new(),
+            tip: HeaderId::from([0u8; 32]),
+        };
+
+        // The winner is drained...
+        assert!(matches!(poll_once(&mut generator), Poll::Ready(Some(_))));
+        // ...and once the search is exhausted the generator idles rather than
+        // terminating, ready for the next block.
+        assert!(matches!(poll_once(&mut generator), Poll::Pending));
     }
 }
