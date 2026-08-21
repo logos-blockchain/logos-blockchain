@@ -53,6 +53,8 @@ pub fn spawn_poq_verification<Verifier>(
     Verifier: ProofsVerifier + Send + Sync + 'static,
 {
     let verifier = Arc::clone(verifier);
+    let message_id = message.id();
+    let sender_identity = *message.signing_key();
     pending_verifications.push(Box::pin(async move {
         let verification_result = spawn_blocking("logos/blend/verify-poq", move || {
             // The verification error is rendered here because it is not `Send`, so it
@@ -64,20 +66,55 @@ pub fn spawn_poq_verification<Verifier>(
         .await;
 
         match verification_result {
-            Ok(Ok(message)) => PoQVerificationOutcome::Verified {
-                message: Box::new(message),
-                sender,
-                epoch,
-            },
+            Ok(Ok(message)) => {
+                tracing::trace!(
+                    target: LOG_TARGET,
+                    diagnostic = "blend_tsi_outage",
+                    event = "blend_poq_verification",
+                    result = "success",
+                    blend_epoch = u32::from(epoch),
+                    sender_identity = ?sender_identity,
+                    message_id = ?message_id,
+                    peer = ?sender,
+                    "Incoming Blend PoQ verified"
+                );
+                PoQVerificationOutcome::Verified {
+                    message: Box::new(message),
+                    sender,
+                    epoch,
+                }
+            }
             Ok(Err(e)) => {
-                tracing::debug!(target: LOG_TARGET, "PoQ verification failed for message received from peer {sender:?} for epoch {epoch:?}: {e}.");
+                tracing::debug!(
+                    target: LOG_TARGET,
+                    diagnostic = "blend_tsi_outage",
+                    event = "blend_poq_verification_failed",
+                    result = "failure",
+                    blend_epoch = u32::from(epoch),
+                    sender_identity = ?sender_identity,
+                    message_id = ?message_id,
+                    peer = ?sender,
+                    error = %e,
+                    "Incoming Blend PoQ verification failed"
+                );
                 PoQVerificationOutcome::Failed {
                     sender,
                     connection_id,
                 }
             }
             Err(e) => {
-                tracing::error!(target: LOG_TARGET, "PoQ verification task for the message received from peer {sender:?} for epoch {epoch:?} failed to complete: {e:?}.");
+                tracing::error!(
+                    target: LOG_TARGET,
+                    diagnostic = "blend_tsi_outage",
+                    event = "blend_poq_verification_task_failed",
+                    result = "error",
+                    blend_epoch = u32::from(epoch),
+                    sender_identity = ?sender_identity,
+                    message_id = ?message_id,
+                    peer = ?sender,
+                    error = ?e,
+                    "Incoming Blend PoQ verification task failed"
+                );
                 PoQVerificationOutcome::Failed {
                     sender,
                     connection_id,

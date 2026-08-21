@@ -33,6 +33,7 @@ use lb_core::{
         transactions::{GasPrices, MantleTxGasContext, hash::TxHash, mantle_tx::MantleTxContext},
     },
     proofs::leader_proof,
+    sdp::ActivityMetadata,
 };
 use lb_cryptarchia_engine::{Slot, UncleSlots};
 use lb_groth16::{AdditiveGroup as _, Fr};
@@ -87,10 +88,33 @@ const POW_REWARD_SHARE_NUMERATOR: u128 = 0;
 const POW_REWARD_SHARE_DENOMINATOR: u128 = 4;
 const EXECUTION_GAS_LIMIT: Gas = Gas::new(3_193_460);
 
+fn activity_origin_epoch(metadata: &ActivityMetadata) -> u32 {
+    match metadata {
+        ActivityMetadata::Blend(proof) => u32::from(proof.epoch),
+    }
+}
+
 // While individual notes are constrained to be `u64`, intermediate calculations
 // may overflow, so we use `i128` to avoid that and to easily represent negative
 // balances which may arise in special circumstances (e.g. rewards calculation).
 pub type Balance = i128;
+
+#[derive(Clone, Copy, Debug)]
+pub struct TsiDiagnostic {
+    pub measured_block_density: u64,
+    pub expected_block_density: u64,
+    pub inference_period: u64,
+    pub learning_rate: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TsiEpochTransition {
+    pub from_epoch: u32,
+    pub to_epoch: u32,
+    pub old_total_stake: Value,
+    pub new_total_stake: Value,
+    pub measured_block_density: u64,
+}
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum LedgerError<Id> {
@@ -248,16 +272,19 @@ impl LedgerState {
         // claims may anchor to. This is the canonical apply path, where the
         // block's id is known — unlike a proposer's direct
         // `try_apply_header` call for a block still being built.
-        state.mantle_ledger.add_seen_block(block_id.into(), slot);
+        let source_block_id: BlockHash = block_id.into();
+        state.mantle_ledger.add_seen_block(source_block_id, slot);
         // Count the block's transactions into the epoch totals the Blend `PoW`
         // difficulty is retargeted from, for the same reason as above: only a
         // block that is actually applied, contents included, belongs in the
         // epoch's average.
         let mut txs_in_block = 0u64;
-        let (mut state, tx_events, deferred_zkp) = state.try_apply_contents::<_, _, Profile>(
-            config,
-            txs.inspect(|_| txs_in_block = txs_in_block.saturating_add(1)),
-        )?;
+        let (mut state, tx_events, deferred_zkp) = state
+            .try_apply_contents_with_source::<_, _, Profile>(
+                config,
+                txs.inspect(|_| txs_in_block = txs_in_block.saturating_add(1)),
+                Some(source_block_id),
+            )?;
         state.mantle_ledger.pow.record_block_txs(txs_in_block);
         state.update_pow_reward_difficulty(
             // count all claimed rewards
@@ -449,9 +476,21 @@ impl LedgerState {
 
     /// Apply the contents of an update to the ledger state.
     pub fn try_apply_contents<'tx, Tx, Id, Profile: GasProfile>(
+        self,
+        config: &Config,
+        txs: impl Iterator<Item = &'tx Tx>,
+    ) -> Result<(Self, Vec<TxEvent>, DeferredZkpVerifications), LedgerError<Id>>
+    where
+        Tx: PreverifiedMantleTx<Context = GasPrices> + 'tx,
+    {
+        self.try_apply_contents_with_source::<_, _, Profile>(config, txs, None)
+    }
+
+    fn try_apply_contents_with_source<'tx, Tx, Id, Profile: GasProfile>(
         mut self,
         config: &Config,
         txs: impl Iterator<Item = &'tx Tx>,
+        source_block_id: Option<BlockHash>,
     ) -> Result<(Self, Vec<TxEvent>, DeferredZkpVerifications), LedgerError<Id>>
     where
         Tx: PreverifiedMantleTx<Context = GasPrices> + 'tx,
@@ -467,7 +506,8 @@ impl LedgerState {
             let balance;
             let events;
             let deferred;
-            (self, balance, events, deferred) = self.try_apply_tx::<_, _, Profile>(config, tx)?;
+            (self, balance, events, deferred) =
+                self.try_apply_tx_with_source::<_, _, Profile>(config, tx, source_block_id)?;
             tx_events.extend(events);
             deferred_zkps.extend(deferred);
 
@@ -577,6 +617,17 @@ impl LedgerState {
         self.cryptarchia_ledger.next_epoch_state()
     }
 
+    #[must_use]
+    pub fn tsi_diagnostic(&self) -> TsiDiagnostic {
+        self.cryptarchia_ledger.tsi_diagnostic()
+    }
+
+    #[must_use]
+    pub fn tsi_epoch_transitions_for(&self, to_epoch: u32) -> Vec<TsiEpochTransition> {
+        self.cryptarchia_ledger
+            .tsi_epoch_transitions_for(to_epoch.into())
+    }
+
     /// Computes the epoch state for a given slot.
     ///
     /// This handles the case where epochs have been skipped (no blocks
@@ -623,15 +674,28 @@ impl LedgerState {
         }
     }
 
+    #[cfg(test)]
+    fn try_apply_op<Id, Profile: GasProfile>(
+        self,
+        op: &Op,
+        config: &Config,
+        tx_hash: &TxHash,
+        balance: Balance,
+        tx_events: Vec<TxEvent>,
+    ) -> Result<(Self, Balance, Vec<TxEvent>), LedgerError<Id>> {
+        self.try_apply_op_with_source::<_, Profile>(op, config, tx_hash, None, balance, tx_events)
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "This will be refactored in an upcoming PR."
     )]
-    fn try_apply_op<Id, Profile: GasProfile>(
+    fn try_apply_op_with_source<Id, Profile: GasProfile>(
         mut self,
         op: &Op,
         config: &Config,
         tx_hash: &TxHash,
+        source_block_id: Option<BlockHash>,
         mut balance: Balance,
         mut tx_events: Vec<TxEvent>,
     ) -> Result<(Self, Balance, Vec<TxEvent>), LedgerError<Id>> {
@@ -698,11 +762,77 @@ impl LedgerState {
                     self.cryptarchia_ledger.latest_utxos(),
                     config,
                 )?;
+                if tracing::enabled!(tracing::Level::TRACE)
+                    && let Some(declaration) = result.sdp_ledger().get_declaration(&op.id())
+                {
+                    let inactivity_period = config
+                        .sdp_config
+                        .service_params
+                        .get(&declaration.service_type)
+                        .map_or(0, |parameters| {
+                            parameters.inactivity_period.into_inner().into_inner()
+                        });
+                    tracing::trace!(
+                        diagnostic = "blend_tsi_outage",
+                        event = "sdp_declaration_applied",
+                        evaluation_context = "proposal",
+                        canonical = false,
+                        provider_id = ?declaration.provider_id,
+                        declaration_id = ?op.id(),
+                        ledger_epoch = u32::from(self.cryptarchia_ledger.epoch_state().epoch),
+                        ledger_slot = u64::from(self.cryptarchia_ledger.slot()),
+                        initial_active_epoch = u32::from(declaration.active),
+                        inactivity_period,
+                        is_genesis_declaration = false,
+                        "Evaluated SDP declaration on a candidate block"
+                    );
+                }
                 self.mantle_ledger = result;
                 tx_events.extend(events);
             }
             Op::SDPActive(op) => {
+                let previous_active_epoch = tracing::enabled!(tracing::Level::TRACE).then(|| {
+                    self.mantle_ledger
+                        .sdp_ledger()
+                        .get_declaration(&op.declaration_id)
+                        .map(|declaration| declaration.active)
+                });
                 let (result, events) = self.mantle_ledger.try_apply_sdp_active(op, config)?;
+                if tracing::enabled!(tracing::Level::TRACE)
+                    && let Some(new_declaration) =
+                        result.sdp_ledger().get_declaration(&op.declaration_id)
+                {
+                    let slot = self.cryptarchia_ledger.slot();
+                    let epoch = self.cryptarchia_ledger.epoch_state().epoch;
+                    tracing::trace!(
+                        diagnostic = "blend_tsi_outage",
+                        event = "sdp_activity_applied",
+                        evaluation_context = "proposal",
+                        canonical = false,
+                        epoch = u32::from(epoch),
+                        slot = u64::from(slot),
+                        proof_epoch = activity_origin_epoch(&op.metadata),
+                        ledger_epoch = u32::from(epoch),
+                        ledger_slot = u64::from(slot),
+                        source_block_id = ?source_block_id,
+                        tx_id = ?tx_hash,
+                        provider_id = ?new_declaration.provider_id,
+                        declaration_id = ?op.declaration_id,
+                        previous_active_epoch = ?previous_active_epoch.flatten(),
+                        new_active_epoch = ?new_declaration.active,
+                        active_until_epoch = u32::from(new_declaration.active).saturating_add(
+                            config
+                                .sdp_config
+                                .service_params
+                                .get(&new_declaration.service_type)
+                                .map_or(0, |parameters| {
+                                    parameters.inactivity_period.into_inner().into_inner()
+                                }),
+                        ),
+                        activity_origin_epoch = activity_origin_epoch(&op.metadata),
+                        "Evaluated SDP activity message on a candidate block"
+                    );
+                }
                 self.mantle_ledger = result;
                 tx_events.extend(events);
             }
@@ -783,10 +913,23 @@ impl LedgerState {
     ///
     /// If any operation fails verification or execution, returns a
     /// [`LedgerError`] describing the failure.
+    #[cfg(test)]
     fn try_apply_tx<'tx, Tx, Id, Profile: GasProfile>(
+        self,
+        config: &Config,
+        tx: &'tx Tx,
+    ) -> Result<(Self, Balance, Vec<TxEvent>, DeferredZkpVerifications), LedgerError<Id>>
+    where
+        Tx: PreverifiedMantleTx + 'tx + MantleTxWithProofs<Context = GasPrices>,
+    {
+        self.try_apply_tx_with_source::<_, _, Profile>(config, tx, None)
+    }
+
+    fn try_apply_tx_with_source<'tx, Tx, Id, Profile: GasProfile>(
         mut self,
         config: &Config,
         tx: &'tx Tx,
+        source_block_id: Option<BlockHash>,
     ) -> Result<(Self, Balance, Vec<TxEvent>, DeferredZkpVerifications), LedgerError<Id>>
     where
         Tx: PreverifiedMantleTx + 'tx + MantleTxWithProofs<Context = GasPrices>,
@@ -809,10 +952,11 @@ impl LedgerState {
             if let Some(deferred) = deferred_zkp {
                 deferred_zkps.push(deferred);
             }
-            (self, balance, tx_events) = self.try_apply_op::<_, Profile>(
+            (self, balance, tx_events) = self.try_apply_op_with_source::<_, Profile>(
                 op,
                 config,
                 verified_ops.tx_hash_view().tx_hash(),
+                source_block_id,
                 balance,
                 tx_events,
             )?;
@@ -860,7 +1004,7 @@ mod tests {
             channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
             leader_claim_proof::Groth16LeaderClaimProof,
         },
-        sdp::{ActivityMetadata, DeclarationId, Nonce},
+        sdp::{DeclarationId, Nonce},
     };
     use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{CompressedGroth16Proof, Field as _};

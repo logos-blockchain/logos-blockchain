@@ -24,10 +24,12 @@ use lb_core::{
     mantle::{
         SignedMantleTx,
         gas::MainnetGasProfile,
+        ops::Op,
         traits::{Hashable, MantleTxWithProofs, StorageSize},
-        transactions::{hash::TxHash, states::Preverified},
+        transactions::{hash::TxHash, mantle_tx::MantleTx as _, states::Preverified},
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
+    sdp::ActivityMetadata,
 };
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
@@ -62,6 +64,41 @@ use crate::{
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
     relays::CryptarchiaConsensusRelays,
 };
+
+fn activity_origin_epoch(metadata: &ActivityMetadata) -> u32 {
+    match metadata {
+        ActivityMetadata::Blend(proof) => u32::from(proof.epoch),
+    }
+}
+
+fn log_sdp_activity_selected_for_proposal<Tx>(block: &Block<Tx>, ledger_state: &LedgerState)
+where
+    Tx: MantleTxWithProofs,
+{
+    for tx in block.transactions_iter() {
+        for op in tx.mantle_tx().ops() {
+            let Op::SDPActive(active) = op else {
+                continue;
+            };
+            let provider_id = ledger_state
+                .mantle_ledger()
+                .sdp_ledger()
+                .get_declaration(&active.declaration_id)
+                .map(|declaration| declaration.provider_id);
+            tracing::debug!(
+                diagnostic = "blend_tsi_outage",
+                event = "sdp_activity_selected_for_proposal",
+                tx_id = ?tx.hash(),
+                provider_id = ?provider_id,
+                declaration_id = ?active.declaration_id,
+                proof_epoch = activity_origin_epoch(&active.metadata),
+                proposal_block_id = %block.header().id(),
+                proposal_slot = u64::from(block.header().slot()),
+                "Selected SDP activity transaction for proposal"
+            );
+        }
+    }
+}
 
 /// The per-subscriber stream of per-epoch winning slots. Each item
 /// carries a single epoch and that epoch's stream of winning slots.
@@ -458,7 +495,12 @@ where
                             Err(e) => {
                                 error!(
                                     target: LOG_TARGET,
-                                    "Failed to build leadership proof for slot {slot:?}: {e}"
+                                    diagnostic = "blend_tsi_outage",
+                                    event = "leadership_proof_failure",
+                                    epoch = u32::from(ledger_config.epoch(slot)),
+                                    slot = u64::from(slot),
+                                    error = %e,
+                                    "Failed to build leadership proof"
                                 );
                                 continue;
                             }
@@ -695,6 +737,9 @@ where
         let txs = txs_for_block(valid_tx_stream).await;
 
         let block = Block::create(parent, slot, uncle_headers, proof, txs, signing_key)?;
+        if tracing::enabled!(Level::DEBUG) {
+            log_sdp_activity_selected_for_proposal(&block, &ledger_state);
+        }
 
         info!(
             "proposed block {:?} with {} transactions ({} removed)",

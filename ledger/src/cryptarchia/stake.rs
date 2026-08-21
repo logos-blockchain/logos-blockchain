@@ -20,6 +20,18 @@ impl StakeInference {
         self.period
     }
 
+    pub const fn learning_rate(&self) -> f64 {
+        self.learning_rate
+    }
+
+    pub fn expected_block_density(&self) -> u64 {
+        let slot_activation_coefficient_with_precision =
+            (self.slot_activation_coefficient * PRECISION as f64).trunc() as u64;
+        self.period
+            .saturating_mul(slot_activation_coefficient_with_precision)
+            / PRECISION
+    }
+
     pub fn total_stake_inference<const PRECISION: u64>(
         &self,
         total_stake_estimate: u64,

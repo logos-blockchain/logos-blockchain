@@ -80,12 +80,21 @@ impl BlendingTokenEvaluation {
         token: &BlendingToken,
         next_epoch_randomness: EpochRandomness,
     ) -> Option<HammingDistance> {
-        let distance = token.hamming_distance(self.token_count_byte_len, next_epoch_randomness);
+        let distance = self.distance(token, next_epoch_randomness);
         tracing::trace!(
             "Evaluated blending token {:?} for activity proof. Calculated Hamming distance = {distance:?}",
             token.signing_key()
         );
         (distance <= self.activity_threshold).then_some(distance)
+    }
+
+    #[must_use]
+    pub fn distance(
+        &self,
+        token: &BlendingToken,
+        next_epoch_randomness: EpochRandomness,
+    ) -> HammingDistance {
+        token.hamming_distance(self.token_count_byte_len, next_epoch_randomness)
     }
 
     #[must_use]

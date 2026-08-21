@@ -74,7 +74,13 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
     async fn get_next_proof(&mut self) -> Option<BlendLayerProof> {
         let start = Instant::now();
         let Some(proof) = self.proofs_stream.next().await else {
-            tracing::warn!(target: LOG_TARGET, "Leadership proof stream ended. No proof is generated.");
+            tracing::warn!(
+                target: LOG_TARGET,
+                diagnostic = "blend_tsi_outage",
+                event = "leadership_proof_stream_ended",
+                epoch = u32::from(self.settings.epoch),
+                "Leadership proof stream ended. No proof is generated."
+            );
             return None;
         };
         tracing::trace!(target: LOG_TARGET, "Generated leadership Blend layer proof with key nullifier {:?} addressed to node at index {:?} in {:?} ms.", hex::encode(fr_to_bytes(&proof.proof_of_quota.key_nullifier())), proof.proof_of_selection.expected_index(self.settings.membership_size), start.elapsed().as_millis());

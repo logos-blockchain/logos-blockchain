@@ -364,6 +364,7 @@ where
                 overwatch_handle,
                 non_ephemeral_signing_key.public_key(),
                 Some(zk_public_key),
+                blend_config.minimum_network_size.get() as usize,
             )
             .await;
 
@@ -2158,7 +2159,14 @@ async fn submit_activity_proof(
     proof: ActivityProof,
     sdp_relay: &OutboundRelay<SdpMessage>,
 ) -> Result<(), RelayError> {
-    debug!(target: LOG_TARGET, "Submitting activity proof for the old epoch");
+    debug!(
+        target: LOG_TARGET,
+        diagnostic = "blend_tsi_outage",
+        event = "sdp_activity_proof_submitted",
+        epoch = u32::from(proof.epoch()),
+        provider_identity = ?proof.token().signing_key(),
+        "Submitting activity proof for the old epoch"
+    );
     sdp_relay
         .send(SdpMessage::PostActivity {
             metadata: ActivityMetadata::Blend(Box::new((&proof).into())),
