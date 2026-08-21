@@ -4189,6 +4189,7 @@ dependencies = [
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-node",
+ "logos-blockchain-pow-service",
  "logos-blockchain-time-service",
  "logos-blockchain-utils",
  "logos-blockchain-wallet-service",
