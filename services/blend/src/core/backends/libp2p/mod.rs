@@ -111,7 +111,14 @@ where
             })
             .await
         {
-            tracing::error!(target: LOG_TARGET, "Failed to send message to BlendSwarm: {e}");
+            tracing::error!(
+                target: LOG_TARGET,
+                diagnostic = "blend_tsi_outage",
+                event = "blend_send_failure",
+                epoch = u32::from(intended_epoch),
+                error = %e,
+                "Failed to send message to BlendSwarm"
+            );
         }
     }
 

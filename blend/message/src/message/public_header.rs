@@ -212,6 +212,11 @@ impl PublicHeaderWithVerifiedSignature {
         self.proof_of_quota.key_nullifier()
     }
 
+    #[must_use]
+    pub const fn signing_key(&self) -> &Ed25519PublicKey {
+        &self.signing_pubkey
+    }
+
     #[cfg(any(feature = "unsafe-test-functions", test))]
     pub const fn signature_mut(&mut self) -> &mut Ed25519Signature {
         &mut self.signature

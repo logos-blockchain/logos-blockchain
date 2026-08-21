@@ -6,7 +6,9 @@ use lb_blend_proofs::{
     quota::{self, VerifiedProofOfQuota},
     selection::inputs::VerifyInputs,
 };
-use lb_key_management_system_keys::keys::{UnsecuredEd25519Key, X25519PrivateKey};
+use lb_key_management_system_keys::keys::{
+    Ed25519PublicKey, UnsecuredEd25519Key, X25519PrivateKey,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -83,6 +85,11 @@ impl EncapsulatedMessageWithVerifiedSignature {
     #[must_use]
     pub const fn id(&self) -> MessageIdentifier {
         self.public_header_with_verified_signature.id()
+    }
+
+    #[must_use]
+    pub const fn signing_key(&self) -> &Ed25519PublicKey {
+        self.public_header_with_verified_signature.signing_key()
     }
 
     #[must_use]

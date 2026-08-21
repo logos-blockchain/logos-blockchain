@@ -51,6 +51,54 @@ const STORAGE_MARKET_CLAMP_DOWN_NUMERATOR: u128 = 7;
 const STORAGE_MARKET_CLAMP_UP_NUMERATOR: u128 = 9;
 
 pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "diagnostic fields mirror the TSI transition"
+)]
+fn log_tsi_update(
+    from_epoch: Epoch,
+    to_epoch: Epoch,
+    slot: Slot,
+    config: &Config,
+    stake_inference: &StakeInference,
+    old_total_stake: Value,
+    new_total_stake: Value,
+    measured_block_density: u64,
+) {
+    tracing::info!(
+        diagnostic = "blend_tsi_outage",
+        event = "tsi_update",
+        from_epoch = u32::from(from_epoch),
+        to_epoch = u32::from(to_epoch),
+        slot = u64::from(slot),
+        boundary_slot = u64::from(
+            config
+                .epoch_config
+                .starting_slot(&to_epoch, config.consensus_config.base_period_length(),)
+        ),
+        old_total_stake,
+        new_total_stake,
+        measured_block_density,
+        expected_block_density = stake_inference.expected_block_density(),
+        inference_period = stake_inference.period(),
+        learning_rate = stake_inference.learning_rate(),
+        "TSI diagnostic update"
+    );
+}
+
+fn tsi_transition_labels(
+    current_epoch: Epoch,
+    first_next_epoch: Epoch,
+    new_epoch: Epoch,
+) -> Vec<(Epoch, Epoch)> {
+    let mut labels = vec![(current_epoch, first_next_epoch)];
+    for from_epoch in u32::from(first_next_epoch)..u32::from(new_epoch) {
+        labels.push((from_epoch.into(), (from_epoch + 1).into()));
+    }
+    labels
+}
+
 use super::{Balance, Config, LedgerError, mantle};
 use crate::WINDOW_SIZE;
 
@@ -252,9 +300,20 @@ impl LedgerState {
             // case 2)
 
             // infer new total stake
+            let measured_block_density = self.block_density.current_block_density();
             let total_stake = self.stake_inference.total_stake_inference::<PRECISION>(
                 self.epoch_state.total_stake,
-                self.block_density.current_block_density(),
+                measured_block_density,
+            );
+            log_tsi_update(
+                current_epoch,
+                new_epoch,
+                slot,
+                config,
+                &self.stake_inference,
+                self.epoch_state.total_stake,
+                total_stake,
+                measured_block_density,
             );
             let (lottery_0, lottery_1) = config
                 .lottery_constants()
@@ -313,15 +372,45 @@ impl LedgerState {
             // case 3)
 
             // First, infer total stake using block density of the current epoch
+            let measured_block_density = self.block_density.current_block_density();
             let mut total_stake = self.stake_inference.total_stake_inference::<PRECISION>(
                 self.epoch_state.total_stake,
-                self.block_density.current_block_density(),
+                measured_block_density,
+            );
+            let mut transition_labels =
+                tsi_transition_labels(current_epoch, next_epoch_state.epoch(), new_epoch)
+                    .into_iter();
+            let (first_from_epoch, first_to_epoch) = transition_labels
+                .next()
+                .expect("skipped-epoch transition must have an initial step");
+            log_tsi_update(
+                first_from_epoch,
+                first_to_epoch,
+                slot,
+                config,
+                &self.stake_inference,
+                self.epoch_state.total_stake,
+                total_stake,
+                measured_block_density,
             );
             // Adjust total stake with zero block density for skipped epochs
-            for _ in u32::from(next_epoch_state.epoch())..u32::from(new_epoch) {
+            for ((from_epoch, to_epoch), _) in
+                transition_labels.zip(u32::from(next_epoch_state.epoch())..u32::from(new_epoch))
+            {
+                let old_total_stake = total_stake;
                 total_stake = self
                     .stake_inference
                     .total_stake_inference::<PRECISION>(total_stake, 0);
+                log_tsi_update(
+                    from_epoch,
+                    to_epoch,
+                    slot,
+                    config,
+                    &self.stake_inference,
+                    old_total_stake,
+                    total_stake,
+                    0,
+                );
             }
             let (lottery_0, lottery_1) = config
                 .lottery_constants()
@@ -541,6 +630,56 @@ impl LedgerState {
     #[must_use]
     pub const fn next_epoch_state(&self) -> &EpochState {
         &self.next_epoch_state
+    }
+
+    pub(crate) fn tsi_diagnostic(&self) -> crate::TsiDiagnostic {
+        crate::TsiDiagnostic {
+            measured_block_density: self.block_density.current_block_density(),
+            expected_block_density: self.stake_inference.expected_block_density(),
+            inference_period: self.stake_inference.period(),
+            learning_rate: self.stake_inference.learning_rate(),
+        }
+    }
+
+    pub(crate) fn tsi_epoch_transitions_for(
+        &self,
+        to_epoch: Epoch,
+    ) -> Vec<crate::TsiEpochTransition> {
+        let from_epoch = u32::from(self.epoch_state.epoch);
+        let to_epoch = u32::from(to_epoch);
+        if to_epoch <= from_epoch {
+            return Vec::new();
+        }
+
+        let mut transitions = Vec::with_capacity((to_epoch - from_epoch) as usize);
+        let mut old_total_stake = self.epoch_state.total_stake;
+        let measured_block_density = self.block_density.current_block_density();
+        let mut new_total_stake = self
+            .stake_inference
+            .total_stake_inference::<PRECISION>(old_total_stake, measured_block_density);
+        transitions.push(crate::TsiEpochTransition {
+            from_epoch,
+            to_epoch: from_epoch + 1,
+            old_total_stake,
+            new_total_stake,
+            measured_block_density,
+        });
+
+        for skipped_from_epoch in (from_epoch + 1)..to_epoch {
+            old_total_stake = new_total_stake;
+            new_total_stake = self
+                .stake_inference
+                .total_stake_inference::<PRECISION>(old_total_stake, 0);
+            transitions.push(crate::TsiEpochTransition {
+                from_epoch: skipped_from_epoch,
+                to_epoch: skipped_from_epoch + 1,
+                old_total_stake,
+                new_total_stake,
+                measured_block_density: 0,
+            });
+        }
+
+        transitions
     }
 
     /// Seeds the genesis epoch-state snapshots with the genesis SDP ledger.
@@ -777,6 +916,17 @@ pub mod tests {
     };
 
     type HeaderId = [u8; 32];
+
+    #[test]
+    fn skipped_epoch_tsi_labels_are_sequential() {
+        assert_eq!(
+            tsi_transition_labels(Epoch::new(3), Epoch::new(4), Epoch::new(5)),
+            vec![
+                (Epoch::new(3), Epoch::new(4)),
+                (Epoch::new(4), Epoch::new(5))
+            ]
+        );
+    }
 
     #[must_use]
     pub fn utxo() -> Utxo {

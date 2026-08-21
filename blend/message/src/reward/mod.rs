@@ -80,6 +80,20 @@ impl OldEpochBlendingTokenCollector {
     /// activity threshold calculated.
     #[must_use]
     pub fn compute_activity_proof(self) -> Option<ActivityProof> {
+        let proof_epoch = u32::from(self.collector.epoch());
+        let activity_threshold = self.collector.token_evaluation.activity_threshold().value();
+        let candidate_hamming_distances: Vec<_> = self
+            .collector
+            .tokens
+            .iter()
+            .map(|token| {
+                self.collector
+                    .token_evaluation
+                    .distance(token, self.next_epoch_randomness)
+                    .value()
+            })
+            .collect();
+
         // Find the blending token with the smallest Hamming distance,
         // which is <= activity threshold.
         tracing::trace!(
@@ -90,7 +104,7 @@ impl OldEpochBlendingTokenCollector {
             self.next_epoch_randomness,
             self.collector.tokens.len()
         );
-        let (winning_activity_proof, distance) = self
+        let winning_activity_proof = self
             .collector
             .tokens
             .into_iter()
@@ -111,7 +125,21 @@ impl OldEpochBlendingTokenCollector {
                 distance
             })
             .min_by_key(|(_, distance)| *distance)
-            .map(|(token, distance)| (ActivityProof::new(self.collector.epoch, token), distance))?;
+            .map(|(token, distance)| (ActivityProof::new(self.collector.epoch, token), distance));
+
+        tracing::debug!(
+            target: LOG_TARGET,
+            diagnostic = "blend_tsi_outage",
+            event = "blend_activity_token_evaluation",
+            proof_epoch,
+            candidate_blending_token_count = candidate_hamming_distances.len(),
+            activity_threshold,
+            candidate_hamming_distances = ?candidate_hamming_distances,
+            activity_proof_generated = winning_activity_proof.is_some(),
+            "Evaluated Blend activity tokens"
+        );
+
+        let (winning_activity_proof, distance) = winning_activity_proof?;
 
         tracing::trace!(
             LOG_TARGET,

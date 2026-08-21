@@ -427,6 +427,28 @@ impl SdpLedger {
                 },
             )?;
 
+        if let Some(declaration) = result.declarations.get(&op.id()) {
+            let inactivity_period = config
+                .service_params
+                .get(&declaration.service_type)
+                .map_or(0, |parameters| {
+                    parameters.inactivity_period.into_inner().into_inner()
+                });
+            tracing::info!(
+                target: LOG_TARGET,
+                diagnostic = "blend_tsi_outage",
+                event = "sdp_declaration_applied",
+                provider_id = ?declaration.provider_id,
+                declaration_id = ?op.id(),
+                ledger_epoch = u32::from(self.epoch),
+                ledger_slot = 0u64,
+                initial_active_epoch = u32::from(declaration.active),
+                inactivity_period,
+                is_genesis_declaration = true,
+                "Applied genesis SDP declaration"
+            );
+        }
+
         self.locked_notes = result.locked_notes;
         service_state.update_declarations(result.declarations);
         Ok((self, events))

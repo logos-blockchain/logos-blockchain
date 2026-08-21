@@ -210,6 +210,7 @@ where
                 non_ephemeral_signing_key.public_key(),
                 // No ZK stuff needs to be computed by edge nodes, so no ZK key is specified here.
                 None,
+                settings.minimum_network_size.get() as usize,
             )
             .await;
 

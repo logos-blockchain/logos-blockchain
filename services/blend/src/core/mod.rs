@@ -355,6 +355,7 @@ where
                 overwatch_handle,
                 non_ephemeral_signing_key.public_key(),
                 Some(zk_public_key),
+                blend_config.minimum_network_size.get() as usize,
             )
             .await;
 
@@ -1446,6 +1447,10 @@ where
 /// Validates the `PoQ` of a received message and attempts recursive
 /// decapsulation. Returns `None` if validation or decapsulation fails (already
 /// logged).
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "PoQ success and failure diagnostics stay adjacent to validation"
+)]
 fn try_validate_and_decapsulate<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>(
     message: EncapsulatedMessageWithVerifiedSignature,
     processor: &CoreCryptographicProcessor<
@@ -1459,10 +1464,32 @@ fn try_validate_and_decapsulate<NodeId, CorePoQGenerator, ProofsGenerator, Proof
 where
     ProofsVerifier: ProofsVerifierTrait,
 {
+    let sender_identity = *message.signing_key();
+    let message_id = message.id();
     let Ok(validated_message) = processor.validate_message_poq(message) else {
+        tracing::debug!(
+            target: LOG_TARGET,
+            diagnostic = "blend_tsi_outage",
+            event = "blend_poq_verification_failed",
+            result = "failure",
+            blend_epoch = u32::from(processor.epoch()),
+            sender_identity = ?sender_identity,
+            message_id = ?message_id,
+            "Incoming Blend PoQ verification failed"
+        );
         tracing::debug!(target: LOG_TARGET, "Received message for epoch {epoch} failed PoQ validation. Ignoring...");
         return None;
     };
+    tracing::trace!(
+        target: LOG_TARGET,
+        diagnostic = "blend_tsi_outage",
+        event = "blend_poq_verification",
+        result = "success",
+        blend_epoch = u32::from(processor.epoch()),
+        sender_identity = ?sender_identity,
+        message_id = ?message_id,
+        "Incoming Blend PoQ verified"
+    );
     match processor.decapsulate_message_recursive(validated_message) {
         Ok(output) => Some(output),
         Err(e) => {
@@ -1985,7 +2012,14 @@ async fn submit_activity_proof(
     proof: ActivityProof,
     sdp_relay: &OutboundRelay<SdpMessage>,
 ) -> Result<(), RelayError> {
-    debug!(target: LOG_TARGET, "Submitting activity proof for the old epoch");
+    debug!(
+        target: LOG_TARGET,
+        diagnostic = "blend_tsi_outage",
+        event = "sdp_activity_proof_submitted",
+        epoch = u32::from(proof.epoch()),
+        provider_identity = ?proof.token().signing_key(),
+        "Submitting activity proof for the old epoch"
+    );
     sdp_relay
         .send(SdpMessage::PostActivity {
             metadata: ActivityMetadata::Blend(Box::new((&proof).into())),

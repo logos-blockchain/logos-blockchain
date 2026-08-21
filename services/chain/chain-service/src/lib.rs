@@ -188,7 +188,8 @@ pub enum Query {
     },
     GetEpochState {
         slot: Slot,
-        reply_channel: oneshot::Sender<Result<EpochState, Error>>,
+        track_source: bool,
+        reply_channel: oneshot::Sender<Result<EpochStateQueryResult, Error>>,
     },
     GetEpochConfig {
         reply_channel: oneshot::Sender<(
@@ -230,6 +231,23 @@ pub struct CryptarchiaInfo {
     pub slot: Slot,
     pub height: u64,
     pub state: State,
+}
+
+/// The epoch state returned by a chain query together with the exact
+/// Cryptarchia view from which it was synthesized.
+///
+/// Keeping the source metadata beside the state prevents diagnostic callers
+/// from issuing a second, racy `Info` query after receiving the epoch state.
+#[derive(Debug, Clone)]
+pub struct EpochStateQueryResult {
+    pub requested_slot: Slot,
+    pub requested_epoch: Epoch,
+    pub epoch_state: EpochState,
+    pub source_tip_id: HeaderId,
+    pub source_tip_slot: Slot,
+    pub source_tip_height: u64,
+    pub source_lib_id: HeaderId,
+    pub source_lib_slot: Slot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -415,10 +433,31 @@ impl Cryptarchia {
         Ok((pruned_blocks, reorged_blocks, events))
     }
 
+    #[cfg(test)]
     fn epoch_state_for_slot(&self, slot: Slot) -> Result<EpochState, Error> {
-        let tip = self.tip();
-        let state = self.ledger.state(&tip).expect("no state for tip");
-        Ok(state.epoch_state_for_slot(slot, self.ledger.config())?)
+        Ok(self.epoch_state_for_slot_with_source(slot)?.epoch_state)
+    }
+
+    fn epoch_state_for_slot_with_source(&self, slot: Slot) -> Result<EpochStateQueryResult, Error> {
+        let tip = self.tip_branch();
+        let lib = self.lib_branch();
+        let state = self.ledger.state(&tip.id()).expect("no state for tip");
+        let config = self.ledger.config();
+        let epoch_state = state.epoch_state_for_slot(slot, config)?;
+        let requested_epoch = config
+            .epoch_config
+            .epoch(slot, config.consensus_config.base_period_length());
+
+        Ok(EpochStateQueryResult {
+            requested_slot: slot,
+            requested_epoch,
+            epoch_state,
+            source_tip_id: tip.id(),
+            source_tip_slot: tip.slot(),
+            source_tip_height: tip.length(),
+            source_lib_id: lib.id(),
+            source_lib_slot: lib.slot(),
+        })
     }
 
     /// Remove the ledger states associated with blocks that have been pruned by
@@ -933,7 +972,7 @@ where
             )
             .await
             {
-                Ok((new_pruned_blocks, _)) => {
+                Ok((new_pruned_blocks, _, _)) => {
                     debug!(target: LOG_TARGET, "{}/{} blocks applied during initialization", i + 1, n_blocks);
                     pruned_blocks.extend(&new_pruned_blocks);
                 }

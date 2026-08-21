@@ -21,6 +21,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         NoteId, SignedMantleTx,
+        traits::Hashable as _,
         transactions::{MantleTxBuilder, states::Preverified},
     },
     sdp::{
@@ -44,6 +45,12 @@ use crate::{
     state::{SdpState, SdpStateStorage},
     wallet::{SdpWalletAdapter, SdpWalletConfig},
 };
+
+fn activity_proof_epoch(metadata: &ActivityMetadata) -> u32 {
+    match metadata {
+        ActivityMetadata::Blend(proof) => u32::from(proof.epoch),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeclarationState {
@@ -398,6 +405,15 @@ where
         let tx_builder = MantleTxBuilder::new();
         let declaration_id = declaration.id();
 
+        tracing::debug!(
+            diagnostic = "blend_tsi_outage",
+            event = "sdp_declaration_submitted",
+            provider_id = ?declaration.provider_id,
+            declaration_id = ?declaration_id,
+            zk_id = ?declaration.zk_id,
+            "Created SDP declaration transaction"
+        );
+
         let signed_tx = match wallet_adapter
             .declare_tx(tx_builder, *declaration, &self.wallet_config)
             .await
@@ -430,6 +446,7 @@ where
 
     #[expect(
         clippy::cognitive_complexity,
+        clippy::too_many_lines,
         reason = "TODO: address this in a dedicated refactor"
     )]
     async fn handle_post_activity(
@@ -457,6 +474,39 @@ where
             return;
         };
 
+        let proof_epoch = activity_proof_epoch(&metadata);
+        let (chain_epoch, chain_slot) =
+            match (chain_api.info().await, chain_api.get_epoch_config().await) {
+                (Ok(consensus), Ok((epoch_config, consensus_config))) => {
+                    let slot = consensus.cryptarchia_info.slot;
+                    let epoch = epoch_config.epoch(slot, consensus_config.base_period_length());
+                    (Some(u32::from(epoch)), Some(u64::from(slot)))
+                }
+                (consensus_result, config_result) => {
+                    tracing::warn!(
+                        diagnostic = "blend_tsi_outage",
+                        event = "sdp_activity_context_unavailable",
+                        provider_id = ?declaration.zk_id,
+                        declaration_id = ?declaration.id,
+                        consensus_error = ?consensus_result.err(),
+                        config_error = ?config_result.err(),
+                        "Could not attach epoch and slot to SDP activity diagnostic"
+                    );
+                    (None, None)
+                }
+            };
+
+        tracing::info!(
+            diagnostic = "blend_tsi_outage",
+            event = "sdp_activity_submission_requested",
+            proof_epoch,
+            chain_epoch = ?chain_epoch,
+            chain_slot = ?chain_slot,
+            provider_id = ?declaration.zk_id,
+            declaration_id = ?declaration.id,
+            "Requested SDP activity transaction submission"
+        );
+
         let active_message = ActiveMessage {
             declaration_id: declaration.id,
             nonce,
@@ -471,16 +521,63 @@ where
         {
             Ok(tx) => tx,
             Err(e) => {
-                tracing::error!("Failed to create activity transaction: {:?}", e);
+                tracing::warn!(
+                    diagnostic = "blend_tsi_outage",
+                    event = "sdp_activity_tx_failed",
+                    proof_epoch,
+                    chain_epoch = ?chain_epoch,
+                    chain_slot = ?chain_slot,
+                    provider_id = ?declaration.zk_id,
+                    declaration_id = ?declaration.id,
+                    stage = "create",
+                    error = %e,
+                    "Failed to create SDP activity transaction"
+                );
                 metrics::activity_tx_failures_total();
                 return;
             }
         };
 
+        let tx_id = signed_tx.hash();
+        tracing::info!(
+            diagnostic = "blend_tsi_outage",
+            event = "sdp_activity_tx_created",
+            proof_epoch,
+            chain_epoch = ?chain_epoch,
+            chain_slot = ?chain_slot,
+            provider_id = ?declaration.zk_id,
+            declaration_id = ?declaration.id,
+            tx_id = ?tx_id,
+            "Created SDP activity transaction"
+        );
+
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
-            tracing::error!("Failed to post activity to mempool: {:?}", e);
+            tracing::warn!(
+                diagnostic = "blend_tsi_outage",
+                event = "sdp_activity_tx_failed",
+                proof_epoch,
+                chain_epoch = ?chain_epoch,
+                chain_slot = ?chain_slot,
+                provider_id = ?declaration.zk_id,
+                declaration_id = ?declaration.id,
+                stage = "submit",
+                tx_id = ?tx_id,
+                error = %e,
+                "Failed to submit SDP activity transaction"
+            );
             metrics::activity_mempool_failures_total();
         } else {
+            tracing::info!(
+                diagnostic = "blend_tsi_outage",
+                event = "sdp_activity_tx_submitted",
+                proof_epoch,
+                chain_epoch = ?chain_epoch,
+                chain_slot = ?chain_slot,
+                provider_id = ?declaration.zk_id,
+                declaration_id = ?declaration.id,
+                tx_id = ?tx_id,
+                "Submitted SDP activity transaction"
+            );
             metrics::activity_success_total();
         }
     }

@@ -357,6 +357,15 @@ where
             lb_blend::network::core::with_core::behaviour::Event::OutboundConnectionUpgradeFailed { peer, reason } => {
                 match reason {
                     ConnectionUpgradeFailureReason::ConnectionFailure => {
+                        tracing::debug!(
+                            target: LOG_TARGET,
+                            diagnostic = "blend_tsi_outage",
+                            event = "blend_peer_negotiation_failure",
+                            epoch = u32::from(self.current_epoch_info.1),
+                            peer = ?peer,
+                            reason = "connection_failure",
+                            "Outbound Blend peer connection failed"
+                        );
                         // If we ran out of dial attempts, we try to connect to another random peer that we are not yet connected to, if the dial attempt was performed in the current epoch.
                         let EpochDialAttempt::OngoingEpoch(Some(dial_attempt)) = self.schedule_retry(peer) else {
                             return;
@@ -369,7 +378,15 @@ where
                         self.check_and_dial_new_peers_except(&failed_peers);
                     }
                     upgrade_error @ (ConnectionUpgradeFailureReason::DuplicateConnection | ConnectionUpgradeFailureReason::MaximumPeeringDegreeReached | ConnectionUpgradeFailureReason::ReverseDirectionPreferred) => {
-                        tracing::trace!(target: LOG_TARGET, "Outbound connection upgrade somewhat expectedly failed for {peer:?}. Reason: {upgrade_error:?}. Trying with a different peer if necessary.");
+                        tracing::trace!(
+                            target: LOG_TARGET,
+                            diagnostic = "blend_tsi_outage",
+                            event = "blend_peer_negotiation_failure",
+                            epoch = u32::from(self.current_epoch_info.1),
+                            peer = ?peer,
+                            reason = ?upgrade_error,
+                            "Outbound connection upgrade failed; trying with a different peer if necessary"
+                        );
                         self.ongoing_dials.remove(&peer);
                         self.check_and_dial_new_peers_except(&HashSet::from([peer]));
                     }
@@ -386,7 +403,15 @@ where
                 }
             }
             lb_blend::network::core::with_core::behaviour::Event::InboundConnectionUpgradeFailed { peer, reason } => {
-                tracing::trace!(target: LOG_TARGET, "Inbound connection upgrade expectedly failed for {peer:?} with reason {reason:?}");
+                tracing::trace!(
+                    target: LOG_TARGET,
+                    diagnostic = "blend_tsi_outage",
+                    event = "blend_peer_negotiation_failure",
+                    epoch = u32::from(self.current_epoch_info.1),
+                    peer = ?peer,
+                    reason = ?reason,
+                    "Inbound Blend peer connection upgrade failed"
+                );
             }
             lb_blend::network::core::with_core::behaviour::Event::InboundConnectionUpgradeSucceeded(peer_id) => {
                 tracing::trace!(target: LOG_TARGET, "Inbound connection upgrade succeeded for {peer_id:?}");
@@ -704,7 +729,14 @@ where
             .with_core_mut()
             .publish_message_with_validated_signature_to_current_epoch(msg)
         {
-            tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
+            tracing::error!(
+                target: LOG_TARGET,
+                diagnostic = "blend_tsi_outage",
+                event = "blend_send_failure",
+                epoch = u32::from(self.current_epoch_info.1),
+                error = ?e,
+                "Failed to publish message to blend network"
+            );
             metrics::outbound_publish_err();
         } else {
             metrics::outbound_publish_ok();
@@ -729,7 +761,14 @@ where
             // called on FORWARDED messages, not on PUBLISHED ones, for which we want to
             // know if that is the issue.
             if !matches!(e, SendError::NoPeers) {
-                tracing::error!(target: LOG_TARGET, "Failed to forward message to blend network: {e:?}");
+                tracing::error!(
+                    target: LOG_TARGET,
+                    diagnostic = "blend_tsi_outage",
+                    event = "blend_send_failure",
+                    epoch = u32::from(epoch),
+                    error = ?e,
+                    "Failed to forward message to blend network"
+                );
                 metrics::outbound_forward_err();
             }
         } else {
@@ -806,7 +845,14 @@ where
             .with_core_mut()
             .publish_message_with_validated_header(msg, intended_epoch)
         {
-            tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
+            tracing::error!(
+                target: LOG_TARGET,
+                diagnostic = "blend_tsi_outage",
+                event = "blend_send_failure",
+                epoch = u32::from(intended_epoch),
+                error = ?e,
+                "Failed to publish message to blend network"
+            );
             metrics::outbound_publish_err();
         } else {
             metrics::outbound_publish_ok();

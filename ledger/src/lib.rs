@@ -29,6 +29,7 @@ use lb_core::{
         transactions::{GasPrices, MantleTxGasContext, hash::TxHash, mantle_tx::MantleTxContext},
     },
     proofs::leader_proof,
+    sdp::ActivityMetadata,
 };
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::{AdditiveGroup as _, Fr};
@@ -74,10 +75,33 @@ const BLEND_REWARD_SHARE_NUMERATOR: u128 = 6;
 const BLEND_REWARD_SHARE_DENOMINATOR: u128 = 10;
 const EXECUTION_GAS_LIMIT: Gas = Gas::new(3_193_460);
 
+fn activity_origin_epoch(metadata: &ActivityMetadata) -> u32 {
+    match metadata {
+        ActivityMetadata::Blend(proof) => u32::from(proof.epoch),
+    }
+}
+
 // While individual notes are constrained to be `u64`, intermediate calculations
 // may overflow, so we use `i128` to avoid that and to easily represent negative
 // balances which may arise in special circumstances (e.g. rewards calculation).
 pub type Balance = i128;
+
+#[derive(Clone, Copy, Debug)]
+pub struct TsiDiagnostic {
+    pub measured_block_density: u64,
+    pub expected_block_density: u64,
+    pub inference_period: u64,
+    pub learning_rate: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TsiEpochTransition {
+    pub from_epoch: u32,
+    pub to_epoch: u32,
+    pub old_total_stake: Value,
+    pub new_total_stake: Value,
+    pub measured_block_density: u64,
+}
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum LedgerError<Id> {
@@ -123,7 +147,7 @@ pub struct Ledger<Id: Eq + Hash> {
 
 impl<Id> Ledger<Id>
 where
-    Id: Eq + Hash + Copy,
+    Id: Eq + Hash + Copy + std::fmt::Debug,
 {
     pub fn new(id: Id, state: LedgerState, config: Config) -> Self {
         Self {
@@ -155,11 +179,14 @@ where
             .get(&parent_id)
             .ok_or(LedgerError::ParentNotFound(parent_id))?;
 
+        let source_block_id = format!("{id:?}");
         let (new_state, events) = parent_state.clone().try_update::<_, _, _, Constants>(
             slot,
             proof,
             txs,
             &self.config,
+            Some(&source_block_id),
+            Some(slot),
         )?;
 
         Ok((id, new_state, events))
@@ -214,6 +241,8 @@ impl LedgerState {
         proof: &LeaderProof,
         txs: impl Iterator<Item = &'tx Tx>,
         config: &Config,
+        source_block_id: Option<&str>,
+        source_block_slot: Option<Slot>,
     ) -> Result<(Self, Events), LedgerError<Id>>
     where
         Tx: PreverifiedMantleTx<Context = GasPrices> + 'tx,
@@ -221,7 +250,12 @@ impl LedgerState {
         Constants: GasConstants,
     {
         let (state, header_events) = self.try_apply_header(slot, proof, config)?;
-        let (state, tx_events) = state.try_apply_contents::<_, _, Constants>(config, txs)?;
+        let (state, tx_events) = state.try_apply_contents_with_source::<_, _, Constants>(
+            config,
+            txs,
+            source_block_id,
+            source_block_slot,
+        )?;
         let events = header_events
             .into_iter()
             .map(Into::into)
@@ -374,9 +408,22 @@ impl LedgerState {
 
     /// Apply the contents of an update to the ledger state.
     pub fn try_apply_contents<'tx, Tx, Id, Constants: GasConstants>(
+        self,
+        config: &Config,
+        txs: impl Iterator<Item = &'tx Tx>,
+    ) -> Result<(Self, Vec<TxEvent>), LedgerError<Id>>
+    where
+        Tx: PreverifiedMantleTx<Context = GasPrices> + 'tx,
+    {
+        self.try_apply_contents_with_source::<_, _, Constants>(config, txs, None, None)
+    }
+
+    fn try_apply_contents_with_source<'tx, Tx, Id, Constants: GasConstants>(
         mut self,
         config: &Config,
         txs: impl Iterator<Item = &'tx Tx>,
+        source_block_id: Option<&str>,
+        source_block_slot: Option<Slot>,
     ) -> Result<(Self, Vec<TxEvent>), LedgerError<Id>>
     where
         Tx: PreverifiedMantleTx<Context = GasPrices> + 'tx,
@@ -390,7 +437,12 @@ impl LedgerState {
         for tx in txs {
             let balance;
             let events;
-            (self, balance, events) = self.try_apply_tx::<_, _, Constants>(config, tx)?;
+            (self, balance, events) = self.try_apply_tx::<_, _, Constants>(
+                config,
+                tx,
+                source_block_id,
+                source_block_slot,
+            )?;
             tx_events.extend(events);
 
             let gas_prices = GasPrices {
@@ -499,6 +551,17 @@ impl LedgerState {
         self.cryptarchia_ledger.next_epoch_state()
     }
 
+    #[must_use]
+    pub fn tsi_diagnostic(&self) -> TsiDiagnostic {
+        self.cryptarchia_ledger.tsi_diagnostic()
+    }
+
+    #[must_use]
+    pub fn tsi_epoch_transitions_for(&self, to_epoch: u32) -> Vec<TsiEpochTransition> {
+        self.cryptarchia_ledger
+            .tsi_epoch_transitions_for(to_epoch.into())
+    }
+
     /// Computes the epoch state for a given slot.
     ///
     /// This handles the case where epochs have been skipped (no blocks
@@ -542,6 +605,7 @@ impl LedgerState {
     }
 
     #[expect(
+        clippy::too_many_arguments,
         clippy::too_many_lines,
         reason = "This will be refactored in an upcoming PR."
     )]
@@ -550,6 +614,8 @@ impl LedgerState {
         op: &Op,
         config: &Config,
         tx_hash: &TxHash,
+        source_block_id: Option<&str>,
+        source_block_slot: Option<Slot>,
         mut balance: Balance,
         mut tx_events: Vec<TxEvent>,
     ) -> Result<(Self, Balance, Vec<TxEvent>), LedgerError<Id>> {
@@ -616,11 +682,74 @@ impl LedgerState {
                     self.cryptarchia_ledger.latest_utxos(),
                     config,
                 )?;
+                if let Some(declaration) = result.sdp_ledger().get_declaration(&op.id()) {
+                    let inactivity_period = config
+                        .sdp_config
+                        .service_params
+                        .get(&declaration.service_type)
+                        .map_or(0, |parameters| {
+                            parameters.inactivity_period.into_inner().into_inner()
+                        });
+                    tracing::trace!(
+                        diagnostic = "blend_tsi_outage",
+                        event = "sdp_declaration_applied",
+                        evaluation_context = "proposal",
+                        canonical = false,
+                        provider_id = ?declaration.provider_id,
+                        declaration_id = ?op.id(),
+                        ledger_epoch = u32::from(self.cryptarchia_ledger.epoch_state().epoch),
+                        ledger_slot = u64::from(self.cryptarchia_ledger.slot),
+                        initial_active_epoch = u32::from(declaration.active),
+                        inactivity_period,
+                        is_genesis_declaration = false,
+                        "Evaluated SDP declaration on a candidate block"
+                    );
+                }
                 self.mantle_ledger = result;
                 tx_events.extend(events);
             }
             Op::SDPActive(op) => {
+                let previous_declaration = self
+                    .mantle_ledger
+                    .sdp_ledger()
+                    .get_declaration(&op.declaration_id)
+                    .cloned();
+                let slot = self.cryptarchia_ledger.slot();
+                let epoch = self.cryptarchia_ledger.epoch_state().epoch;
                 let (result, events) = self.mantle_ledger.try_apply_sdp_active(op, config)?;
+                if let Some(new_declaration) =
+                    result.sdp_ledger().get_declaration(&op.declaration_id)
+                {
+                    tracing::trace!(
+                        diagnostic = "blend_tsi_outage",
+                        event = "sdp_activity_applied",
+                        evaluation_context = "proposal",
+                        canonical = false,
+                        epoch = u32::from(epoch),
+                        slot = u64::from(slot),
+                        proof_epoch = activity_origin_epoch(&op.metadata),
+                        ledger_epoch = u32::from(epoch),
+                        ledger_slot = u64::from(slot),
+                        source_block_id = source_block_id.unwrap_or("unknown"),
+                        source_block_slot = source_block_slot.map(u64::from),
+                        tx_id = ?tx_hash,
+                        provider_id = ?new_declaration.provider_id,
+                        declaration_id = ?op.declaration_id,
+                        previous_active_epoch = ?previous_declaration.map(|declaration| declaration.active),
+                        new_active_epoch = ?new_declaration.active,
+                        active_until_epoch = u32::from(new_declaration.active).saturating_add(
+                            config
+                                .sdp_config
+                                .service_params
+                                .get(&new_declaration.service_type)
+                                .map_or(0, |parameters| {
+                                    parameters.inactivity_period.into_inner().into_inner()
+                                }),
+                        ),
+                        activity_origin_epoch = activity_origin_epoch(&op.metadata),
+                        "Evaluated SDP activity message on a candidate block"
+                    );
+                }
                 self.mantle_ledger = result;
                 tx_events.extend(events);
             }
@@ -686,6 +815,8 @@ impl LedgerState {
         mut self,
         config: &Config,
         tx: &'tx Tx,
+        source_block_id: Option<&str>,
+        source_block_slot: Option<Slot>,
     ) -> Result<(Self, Balance, Vec<TxEvent>), LedgerError<Id>>
     where
         Tx: PreverifiedMantleTx + 'tx + MantleTxWithProofs<Context = GasPrices>,
@@ -708,6 +839,8 @@ impl LedgerState {
                 op,
                 config,
                 verified_ops.tx_hash(),
+                source_block_id,
+                source_block_slot,
                 balance,
                 tx_events,
             )?;
@@ -749,7 +882,7 @@ mod tests {
             channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
             leader_claim_proof::Groth16LeaderClaimProof,
         },
-        sdp::{ActivityMetadata, DeclarationId, Nonce},
+        sdp::{DeclarationId, Nonce},
     };
     use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{CompressedGroth16Proof, Field as _};
@@ -896,7 +1029,7 @@ mod tests {
             &Key::Ed25519(signing_key.clone()),
         );
         ledger_state
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(config, &tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(config, &tx, None, None)
             .unwrap()
             .0
     }
@@ -1024,7 +1157,8 @@ mod tests {
         };
 
         let tx = create_signed_tx(Op::ChannelInscribe(inscribe_op), &Key::Ed25519(signing_key));
-        let result = state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &tx);
+        let result =
+            state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &tx, None, None);
         assert!(result.is_ok());
 
         let (new_state, _, events) = result.unwrap();
@@ -1068,7 +1202,8 @@ mod tests {
             Op::ChannelConfig(config_op),
             &Key::MultiSequencer(config_proof),
         );
-        let result = state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &tx);
+        let result =
+            state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &tx, None, None);
         assert!(result.is_ok());
 
         let (new_state, _, events) = result.unwrap();
@@ -1121,8 +1256,12 @@ mod tests {
         };
         let ops = vec![Op::ChannelDeposit(deposit.clone())];
         let tx = create_multi_signed_tx(ops, vec![&Key::Zk(sk)]);
-        let result =
-            ledger_state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &tx);
+        let result = ledger_state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(
+            &test_config,
+            &tx,
+            None,
+            None,
+        );
         let (new_state, balance, events) = result.unwrap();
         // The deposited note is consumed and re-created as a channel note under
         // a new NoteId.
@@ -1200,7 +1339,7 @@ mod tests {
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
         let tx = create_multi_signed_tx(deposit_ops, vec![&Key::Zk(sk)]);
         ledger_state = ledger_state
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &tx, None, None)
             .unwrap()
             .0;
 
@@ -1233,8 +1372,12 @@ mod tests {
             vec![&Key::MultiSequencer(withdraw_proof)],
         );
 
-        let result =
-            ledger_state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &signed_tx);
+        let result = ledger_state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(
+            &test_config,
+            &signed_tx,
+            None,
+            None,
+        );
         assert!(result.is_ok());
 
         let (new_state, tx_balance, events) = result.unwrap();
@@ -1275,7 +1418,7 @@ mod tests {
         let deposit_tx =
             create_multi_signed_tx(vec![Op::ChannelDeposit(deposit)], vec![&Key::Zk(sk)]);
         ledger_state = ledger_state
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &deposit_tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &deposit_tx, None, None)
             .unwrap()
             .0;
 
@@ -1301,15 +1444,24 @@ mod tests {
             vec![&Key::MultiSequencer(withdraw_proof)],
         );
         ledger_state = ledger_state
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &signed_withdraw)
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(
+                &test_config,
+                &signed_withdraw,
+                None,
+                None,
+            )
             .unwrap()
             .0;
 
         assert!(!ledger_state.latest_utxos().contains(&utxo.id()));
 
         // Replaying the signed deposit fails: its input no longer exists.
-        let result = ledger_state
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &deposit_tx);
+        let result = ledger_state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(
+            &test_config,
+            &deposit_tx,
+            None,
+            None,
+        );
         assert!(result.is_err());
     }
 
@@ -1339,7 +1491,7 @@ mod tests {
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
         let tx = create_multi_signed_tx(deposit_ops, vec![&Key::Zk(sk)]);
         ledger_state = ledger_state
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &tx, None, None)
             .unwrap()
             .0;
         // The deposit re-created the note as a channel note
@@ -1374,7 +1526,7 @@ mod tests {
 
         let err = ledger_state
             .clone()
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &signed_tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &signed_tx, None, None)
             .unwrap_err();
         assert_eq!(
             err,
@@ -1415,7 +1567,7 @@ mod tests {
             &Key::Ed25519(signing_key.clone()),
         );
         state = state
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &first_tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &first_tx, None, None)
             .unwrap()
             .0;
 
@@ -1434,7 +1586,7 @@ mod tests {
         );
         let result = state
             .clone()
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &second_tx);
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &second_tx, None, None);
         assert!(matches!(
             result,
             Err(LedgerError::VerificationError(
@@ -1457,8 +1609,12 @@ mod tests {
             Op::ChannelInscribe(empty_inscribe),
             &Key::Ed25519(signing_key),
         );
-        let empty_result =
-            state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &empty_tx);
+        let empty_result = state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(
+            &test_config,
+            &empty_tx,
+            None,
+            None,
+        );
         assert!(matches!(
             empty_result,
             Err(LedgerError::VerificationError(
@@ -1491,7 +1647,7 @@ mod tests {
             &Key::Ed25519(signing_key),
         );
         state = state
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &first_tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &first_tx, None, None)
             .unwrap()
             .0;
 
@@ -1507,8 +1663,12 @@ mod tests {
             Op::ChannelInscribe(second_inscribe),
             &Key::Ed25519(unauthorized_signing_key),
         );
-        let result =
-            state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &second_tx);
+        let result = state.try_apply_tx::<_, HeaderId, MainnetGasConstants>(
+            &test_config,
+            &second_tx,
+            None,
+            None,
+        );
         assert!(matches!(
             result,
             Err(LedgerError::VerificationError(
@@ -1593,7 +1753,7 @@ mod tests {
         );
 
         let result = state
-            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasConstants>(&test_config, &tx, None, None)
             .unwrap()
             .0;
 
