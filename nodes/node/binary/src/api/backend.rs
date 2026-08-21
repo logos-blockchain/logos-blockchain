@@ -339,11 +339,11 @@ where
             )
             .route(
                 paths::POW_START_MINING,
-                routing::post(pow_start_mining::<PoWService, RuntimeServiceId>),
+                routing::put(pow_start_mining::<PoWService, RuntimeServiceId>),
             )
             .route(
                 paths::POW_STOP_MINING,
-                routing::post(pow_stop_mining::<PoWService, RuntimeServiceId>),
+                routing::put(pow_stop_mining::<PoWService, RuntimeServiceId>),
             )
             .route(
                 paths::POW_CLAIM,
