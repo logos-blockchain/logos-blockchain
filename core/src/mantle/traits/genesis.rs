@@ -1,38 +1,25 @@
 use crate::mantle::{
-    CryptarchiaParameter, OpProof,
-    ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp, transfer::TransferOp},
-    traits::Hashable,
-    transactions::{hash::TxHash, mantle_tx::RawMantleTx},
+    CryptarchiaParameter,
+    ledger::verification_mode::GenesisMode,
+    ops::{
+        SignedOperation, channel::inscribe::InscriptionOp, sdp::SDPDeclareOp, transfer::TransferOp,
+    },
+    traits::{Hashable, MantleTx},
+    transactions::{
+        hash::TxHash,
+        states::{Preverified, Verified},
+    },
 };
+
+pub struct GenesisOps {
+    pub transfer: SignedOperation<TransferOp, Verified, GenesisMode>,
+    pub inscription: SignedOperation<InscriptionOp, Verified, GenesisMode>,
+    pub declarations: Vec<SignedOperation<SDPDeclareOp, Preverified, GenesisMode>>,
+}
 
 /// A genesis transaction as specified in the
 /// [Spec](https://lip.logos.co/blockchain/raw/bedrock-genesis-block.html).
-pub trait GenesisTx: Hashable<Hash = TxHash> {
-    fn genesis_transfer(&self) -> &TransferOp;
-    fn genesis_inscription(&self) -> &InscriptionOp;
+pub trait GenesisTx: Hashable<Hash = TxHash> + MantleTx {
+    fn into_genesis_ops(self) -> GenesisOps;
     fn cryptarchia_parameter(&self) -> CryptarchiaParameter;
-    fn sdp_declarations(&self) -> impl Iterator<Item = (&SDPDeclareOp, &OpProof)>;
-    fn mantle_tx(&self) -> &RawMantleTx;
-}
-
-impl<T: GenesisTx> GenesisTx for &T {
-    fn genesis_transfer(&self) -> &TransferOp {
-        T::genesis_transfer(self)
-    }
-
-    fn genesis_inscription(&self) -> &InscriptionOp {
-        T::genesis_inscription(self)
-    }
-
-    fn cryptarchia_parameter(&self) -> CryptarchiaParameter {
-        T::cryptarchia_parameter(self)
-    }
-
-    fn sdp_declarations(&self) -> impl Iterator<Item = (&SDPDeclareOp, &OpProof)> {
-        T::sdp_declarations(self)
-    }
-
-    fn mantle_tx(&self) -> &RawMantleTx {
-        T::mantle_tx(self)
-    }
 }
