@@ -11,10 +11,14 @@ use crate::{
         gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
-            VerifiableOperation, verification_mode, verification_mode::VerificationMode,
+            VerifiableOperation,
+            verification_mode::{StandardMode, VerificationMode},
         },
         ops::SignedOperation,
-        transactions::{hash::TxHashView, states::VerificationState},
+        transactions::{
+            hash::TxHashView,
+            states::{Preverified, Unverified, VerificationState, Verified},
+        },
     },
 };
 
@@ -40,27 +44,27 @@ impl OperationGas<MainnetGasProfile> for SDPActiveOp {
     const GAS_COST: Gas = Gas::new(590);
 }
 
-impl PreverifiableOperation<verification_mode::StandardMode> for SDPActiveOp {
+impl PreverifiableOperation<StandardMode>
+    for SignedOperation<SDPActiveOp, Unverified, StandardMode>
+{
     type Context<'a> = ();
     type Error = SdpError;
 
-    fn preverify(
-        &self,
-        _proof: &Self::Proof,
-        _context: &Self::Context<'_>,
-    ) -> Result<(), Self::Error> {
+    fn preverify(&self, _context: &Self::Context<'_>) -> Result<(), Self::Error> {
         Ok(())
     }
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for SDPActiveOp {
+impl VerifiableOperation<StandardMode> for SignedOperation<SDPActiveOp, Preverified, StandardMode> {
     type Context<'a> = SDPActiveValidationContext<'a>;
     type Error = SdpError;
 
-    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+        let operation = self.operation();
+
         // Check the declaration exists
-        let Some(declaration) = context.declarations.get(&self.declaration_id) else {
-            return Err(SdpError::DeclarationNotFound(self.declaration_id));
+        let Some(declaration) = context.declarations.get(&operation.declaration_id) else {
+            return Err(SdpError::DeclarationNotFound(operation.declaration_id));
         };
 
         // Check the declaration hasn't been withdrawn
@@ -69,21 +73,25 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPActiveOp {
             && withdraw_at <= context.epoch
         {
             return Err(SdpError::DeclarationWithdrawn {
-                declaration_id: self.declaration_id,
+                declaration_id: operation.declaration_id,
                 withdraw_at,
             });
         }
 
         // Check the nonce is increasing
-        if self.nonce <= declaration.nonce {
+        if operation.nonce <= declaration.nonce {
             return Err(SdpError::InvalidNonce {
-                message_nonce: self.nonce,
+                message_nonce: operation.nonce,
                 declaration_nonce: declaration.nonce,
             });
         }
 
         // Check the signature over the `zk_id`
-        if !ZkPublicKey::verify_multi(&[declaration.zk_id], context.tx_hash_view.as_fr(), proof) {
+        if !ZkPublicKey::verify_multi(
+            &[declaration.zk_id],
+            context.tx_hash_view.as_fr(),
+            self.proof(),
+        ) {
             return Err(SdpError::InvalidZkSignature);
         }
 
@@ -91,7 +99,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPActiveOp {
     }
 }
 
-impl ExecutableOperation for SDPActiveOp {
+impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<SDPActiveOp, Verified, Mode> {
     type Context<'a> = SDPActiveExecutionContext;
     type Error = SdpError;
 
@@ -100,13 +108,15 @@ impl ExecutableOperation for SDPActiveOp {
         &self,
         mut context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
+        let operation = self.operation();
+
         let declaration = context
             .declarations
-            .get_mut(&self.declaration_id)
+            .get_mut(&operation.declaration_id)
             .expect("The operation should have been validated");
 
         declaration.active = context.epoch;
-        declaration.nonce = self.nonce;
+        declaration.nonce = operation.nonce;
         info!(
             target: LOG_TARGET,
             provider_id = ?declaration.provider_id,

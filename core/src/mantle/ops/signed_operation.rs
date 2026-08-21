@@ -6,8 +6,8 @@ use crate::{
         GasProfile,
         gas::{Gas, OperationGas},
         ledger::{
-            ExecutableOperation, Operation, PreverifiableOperation, ProvableOperation,
-            VerifiableOperation, verification_mode::VerificationMode,
+            ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
+            verification_mode::VerificationMode,
         },
         transactions::states::{Preverified, Unverified, VerificationState, Verified},
     },
@@ -47,6 +47,21 @@ impl<T: ProvableOperation, State: VerificationState, Mode: VerificationMode>
     pub const fn proof(&self) -> &T::Proof {
         &self.proof
     }
+
+    /// Converts a `SignedOperation<T, State, Mode>` into a
+    /// `SignedOperation<T, NewState, Mode>` without performing any
+    /// verification.
+    ///
+    /// This function is intended for
+    /// [`GenesisTx`](crate::mantle::transactions::genesis_tx::GenesisTx) and
+    /// testing purposes only.
+    #[must_use]
+    #[doc(hidden)]
+    pub fn into_state_trusted<NewState: VerificationState>(
+        self,
+    ) -> SignedOperation<T, NewState, Mode> {
+        self.into_state()
+    }
 }
 
 impl<T: ProvableOperation, Mode: VerificationMode> SignedOperation<T, Unverified, Mode> {
@@ -60,22 +75,34 @@ impl<T: ProvableOperation, Mode: VerificationMode> SignedOperation<T, Unverified
     }
 }
 
-impl<T: PreverifiableOperation<Mode>, Mode: VerificationMode> SignedOperation<T, Unverified, Mode> {
-    pub fn preverify(
+impl<T: ProvableOperation, Mode: VerificationMode> SignedOperation<T, Unverified, Mode>
+where
+    Self: PreverifiableOperation<Mode>,
+{
+    pub fn into_preverified(
         self,
-        context: &T::Context<'_>,
-    ) -> Result<SignedOperation<T, Preverified, Mode>, T::Error> {
-        self.operation.preverify(&self.proof, context)?;
+        context: &<Self as PreverifiableOperation<Mode>>::Context<'_>,
+    ) -> Result<SignedOperation<T, Preverified, Mode>, <Self as PreverifiableOperation<Mode>>::Error>
+    {
+        self.preverify(context)?;
         Ok(self.into_state())
     }
 }
 
-impl<T: VerifiableOperation<Mode>, Mode: VerificationMode> SignedOperation<T, Preverified, Mode> {
-    pub fn verify(
+pub type VerifyError<T, Mode> = (
+    SignedOperation<T, Preverified, Mode>,
+    <SignedOperation<T, Preverified, Mode> as VerifiableOperation<Mode>>::Error,
+);
+
+impl<T: ProvableOperation, Mode: VerificationMode> SignedOperation<T, Preverified, Mode>
+where
+    Self: VerifiableOperation<Mode>,
+{
+    pub fn into_verified(
         self,
-        context: &T::Context<'_>,
-    ) -> Result<SignedOperation<T, Verified, Mode>, (Self, T::Error)> {
-        let verify_result = self.operation.verify(&self.proof, context);
+        context: &<Self as VerifiableOperation<Mode>>::Context<'_>,
+    ) -> Result<SignedOperation<T, Verified, Mode>, VerifyError<T, Mode>> {
+        let verify_result = self.verify(context);
         match verify_result {
             Ok(()) => Ok(self.into_state()),
             Err(error) => Err((self, error)),
@@ -83,15 +110,24 @@ impl<T: VerifiableOperation<Mode>, Mode: VerificationMode> SignedOperation<T, Pr
     }
 }
 
-impl<T: Operation<Mode>, Mode: VerificationMode> SignedOperation<T, Verified, Mode> {
-    pub fn execute<'a>(
-        &self,
-        context: <T as ExecutableOperation>::Context<'a>,
-    ) -> Result<
-        (<T as ExecutableOperation>::Context<'a>, Vec<TxEvent>),
-        <T as ExecutableOperation>::Error,
-    > {
-        self.operation.execute(context)
+pub type ExecuteOk<'context, T, Mode> = (
+    <SignedOperation<T, Verified, Mode> as ExecutableOperation>::Context<'context>,
+    Vec<TxEvent>,
+);
+pub type ExecuteError<T, Mode> = (
+    SignedOperation<T, Verified, Mode>,
+    <SignedOperation<T, Verified, Mode> as ExecutableOperation>::Error,
+);
+
+impl<T: ProvableOperation, Mode: VerificationMode> SignedOperation<T, Verified, Mode>
+where
+    Self: ExecutableOperation,
+{
+    pub fn execute(
+        self,
+        context: <Self as ExecutableOperation>::Context<'_>,
+    ) -> Result<ExecuteOk<'_, T, Mode>, ExecuteError<T, Mode>> {
+        <Self as ExecutableOperation>::execute(&self, context).map_err(|error| (self, error))
     }
 }
 
