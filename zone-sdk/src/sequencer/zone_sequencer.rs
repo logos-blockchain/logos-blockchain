@@ -12,16 +12,15 @@ use lb_common_http_client::{ProcessedBlockEvent, Slot};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        MantleTransaction, Op,
+        SignedOps,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
-        ops::channel::{ChannelId, MsgId, config::Keys, inscribe::Inscription},
-        traits::Hashable as _,
-        transactions::{
-            Ops,
-            hash::TxHash,
-            mantle_tx::{MantleTx as _, RawMantleTx},
-            states::Unverified,
+        ledger::verification_mode::StandardMode,
+        ops::{
+            OpRef,
+            channel::{ChannelId, MsgId, config::Keys, inscribe::Inscription},
         },
+        traits::Hashable as _,
+        transactions::{Ops, hash::TxHash, states::Unverified},
     },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
@@ -148,6 +147,7 @@ pub struct ZoneSequencer<Node> {
 }
 
 pub type PublishReceipt = (PublishResult, SequencerCheckpoint);
+pub type PublishResponse = (PublishReceipt, SignedOps<Unverified, StandardMode>);
 
 /// Internal request enum routed through the actor's `request_rx` channel.
 ///
@@ -171,21 +171,20 @@ pub(super) enum ActorRequest {
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
         transfer_threshold: u16,
-        response_tx:
-            oneshot::Sender<Result<(PublishReceipt, MantleTransaction<Unverified>), Error>>,
+        response_tx: oneshot::Sender<Result<PublishResponse, Error>>,
     },
     SubmitSignedTx {
-        tx: MantleTransaction<Unverified>,
+        tx: SignedOps<Unverified, StandardMode>,
         msg_id: MsgId,
         response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
     },
     PrepareTx {
         ops: Ops,
         data: Inscription,
-        response_tx: oneshot::Sender<Result<(RawMantleTx, MsgId, Ed25519Signature), Error>>,
+        response_tx: oneshot::Sender<Result<(Ops, MsgId, Ed25519Signature), Error>>,
     },
     SignTx {
-        tx: RawMantleTx,
+        tx: Ops,
         response_tx: oneshot::Sender<Result<Ed25519Signature, Error>>,
     },
     ChannelWallet {
@@ -656,7 +655,7 @@ where
             parent,
         )
         .await?;
-        let id = signed_tx.mantle_tx().hash();
+        let id = signed_tx.hash();
 
         debug!(target: TARGET,
             "Prepared publish: payload={:?}, parent={}, msg_id={}, tx={}",
@@ -780,7 +779,7 @@ where
     // build_sign_tx(tx.hash(), &self.signing_key);         let ops_proofs =
     //             build_atomic_withdraw_ops_proofs(&tx, own_key_index, own_sig,
     // transfer_proof.as_ref())?;         let signed_tx =
-    // MantleTransaction::new(tx, ops_proofs)             .map_err(|e|
+    // SignedOps::new(tx, ops_proofs)             .map_err(|e|
     // Error::Network(format!("signed tx assembly failed: {e:?}")))?;
     //
     //         let tx_hash = signed_tx.mantle_tx.hash();
@@ -835,7 +834,7 @@ where
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
         transfer_threshold: u16,
-    ) -> Result<(PublishReceipt, MantleTransaction<Unverified>), Error> {
+    ) -> Result<(PublishReceipt, SignedOps<Unverified, StandardMode>), Error> {
         self.ensure_ready()?;
         self.ensure_fundable()?;
 
@@ -883,7 +882,7 @@ where
             transfer_threshold,
         )
         .await?;
-        let tx_hash = signed_tx.mantle_tx().hash();
+        let tx_hash = signed_tx.hash();
 
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
@@ -914,14 +913,14 @@ where
 
     pub(super) fn do_submit_signed_tx(
         &mut self,
-        tx: MantleTransaction<Unverified>,
+        tx: SignedOps<Unverified, StandardMode>,
         msg_id: MsgId,
     ) -> Result<PublishReceipt, Error> {
         self.ensure_ready()?;
 
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
-        let id = tx.mantle_tx().hash();
+        let id = tx.hash();
         let derived_tip = track_pending_tx(state, tx.clone(), self.channel_id);
         let parent_msg = self.last_msg_id;
         // The tip the tx leaves behind is defined by its ops (the last
@@ -941,11 +940,10 @@ where
         info!(target: TARGET, "Submitted tx including inscription {:?}", id);
 
         let payload = tx
-            .mantle_tx()
-            .ops()
-            .iter()
+            .op_refs()
+            .into_iter()
             .find_map(|op| match op {
-                Op::ChannelInscribe(i) if i.channel_id == self.channel_id => {
+                OpRef::ChannelInscribe(i) if i.channel_id == self.channel_id => {
                     Some(i.inscription.clone())
                 }
                 _ => None,
@@ -975,7 +973,7 @@ where
         &self,
         ops: Ops,
         data: Inscription,
-    ) -> Result<(RawMantleTx, MsgId, Ed25519Signature), Error> {
+    ) -> Result<(Ops, MsgId, Ed25519Signature), Error> {
         self.ensure_ready()?;
         let parent = self.compute_publish_parent();
         Ok(build_prepare_tx(
@@ -987,7 +985,7 @@ where
         ))
     }
 
-    pub(super) fn do_sign_tx(&self, tx: &RawMantleTx) -> Result<Ed25519Signature, Error> {
+    pub(super) fn do_sign_tx(&self, tx: &Ops) -> Result<Ed25519Signature, Error> {
         self.ensure_ready()?;
         Ok(build_sign_tx(tx.hash(), &self.signing_key))
     }
@@ -1033,7 +1031,7 @@ where
     pub(super) fn queue_publish_post(
         &mut self,
         tx_hash: TxHash,
-        signed_tx: MantleTransaction<Unverified>,
+        signed_tx: SignedOps<Unverified, StandardMode>,
     ) {
         self.posting.insert(tx_hash);
         self.in_flight.push(Box::pin(post_batch(
@@ -1048,7 +1046,7 @@ where
     /// `resubmit_pending` does this gate.
     pub(super) fn queue_resubmit_batch(
         &mut self,
-        batch: Vec<(TxHash, MantleTransaction<Unverified>)>,
+        batch: Vec<(TxHash, SignedOps<Unverified, StandardMode>)>,
     ) {
         if batch.is_empty() {
             return;
@@ -1069,7 +1067,7 @@ where
 
 async fn post_batch<Node>(
     node: Node,
-    batch: Vec<(TxHash, MantleTransaction<Unverified>)>,
+    batch: Vec<(TxHash, SignedOps<Unverified, StandardMode>)>,
 ) -> Vec<(TxHash, bool)>
 where
     Node: adapter::Node + Clone + Send + Sync + 'static,
@@ -1122,15 +1120,15 @@ pub(super) fn build_checkpoint(
 }
 
 fn restored_pending_channel_tip(
-    pending_txs: &[(TxHash, MantleTransaction<Unverified>)],
+    pending_txs: &[(TxHash, SignedOps<Unverified, StandardMode>)],
     channel_id: ChannelId,
 ) -> Option<MsgId> {
     let mut parents = Vec::new();
     let mut children = HashSet::new();
 
     for (_, tx) in pending_txs {
-        for op in tx.mantle_tx().ops() {
-            if let Op::ChannelInscribe(ins) = op
+        for op in tx.op_refs() {
+            if let OpRef::ChannelInscribe(ins) = op
                 && ins.channel_id == channel_id
             {
                 parents.push(ins.parent);
@@ -1150,7 +1148,7 @@ fn restored_pending_channel_tip(
 /// tip-advancing op), or `None` when the tx carries none for this channel.
 pub(super) fn track_pending_tx(
     state: &mut TxState,
-    tx: MantleTransaction<Unverified>,
+    tx: SignedOps<Unverified, StandardMode>,
     channel_id: ChannelId,
 ) -> Option<MsgId> {
     match classify_channel_tx(&tx, channel_id, &mut None) {

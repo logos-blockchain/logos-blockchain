@@ -6,10 +6,10 @@ use lb_core::{
     events::DepositRecreatedNotes,
     header::HeaderId,
     mantle::{
-        MantleTransaction, Value,
+        SignedOps, Value,
         channel::ChannelState,
         gas::GasCost,
-        ledger::{Inputs, NoteId, Outputs},
+        ledger::{Inputs, NoteId, Outputs, verification_mode::StandardMode},
         ops::channel::{
             ChannelId, MsgId, channel_transfer::ChannelTransferOp, deposit::Metadata,
             inscribe::Inscription, withdraw::ChannelWithdrawOp,
@@ -34,7 +34,7 @@ pub struct SequencerCheckpoint {
     /// Last message ID for chain continuity.
     pub last_msg_id: MsgId,
     /// Pending transactions to restore.
-    pub pending_txs: Vec<(TxHash, MantleTransaction<Unverified>)>,
+    pub pending_txs: Vec<(TxHash, SignedOps<Unverified, StandardMode>)>,
     /// Last known LIB.
     pub lib: HeaderId,
     /// Last known LIB slot (for backfill range queries).
@@ -92,12 +92,11 @@ pub struct WithdrawArg {
 ///   `info.withdraws[i].op.inputs`. The SDK fills a fresh `parent_msg`
 ///   internally on each publish.
 /// - [`ChannelUpdateTx::Custom`] → the `prepare_tx` + `submit_signed_tx` flow:
-///   the SDK cannot demystify the tx, so it hands back the whole
-///   [`MantleTransaction`] and the caller's own logic decides how to parse and
-///   whether/how to rebuild it (an orphaned tx cannot be re-posted as-is — its
-///   parent slot is consumed).
-///   [`channel_inscriptions`](super::channel_inscriptions) extracts the tx's
-///   channel inscriptions the way the SDK sees them.
+///   the SDK cannot demystify the tx, so it hands back the whole [`SignedOps`]
+///   and the caller's own logic decides how to parse and whether/how to rebuild
+///   it (an orphaned tx cannot be re-posted as-is — its parent slot is
+///   consumed). [`channel_inscriptions`](super::channel_inscriptions) extracts
+///   the tx's channel inscriptions the way the SDK sees them.
 #[derive(Debug, Clone)]
 pub enum ChannelUpdateTx {
     /// A published message.
@@ -106,7 +105,7 @@ pub enum ChannelUpdateTx {
     AtomicWithdraw(AtomicWithdrawInfo),
     /// A tx shape the SDK cannot produce (bundled deposits, multi-inscribe,
     /// other custom-built txs), reported whole as a unit.
-    Custom(MantleTransaction<Unverified>),
+    Custom(SignedOps<Unverified, StandardMode>),
 }
 
 impl ChannelUpdateTx {
@@ -115,7 +114,7 @@ impl ChannelUpdateTx {
         match self {
             Self::Inscription(i) => i.tx_hash,
             Self::AtomicWithdraw(a) => a.tx_hash,
-            Self::Custom(tx) => tx.mantle_tx().hash(),
+            Self::Custom(tx) => tx.hash(),
         }
     }
 

@@ -11,9 +11,10 @@ use lb_core::{
     events::{DepositRecreatedNotes, TxEvent},
     header::HeaderId,
     mantle::{
-        MantleTransaction, Op, Value,
+        SignedOps, Value,
         channel::ChannelState,
-        ops::{OpId as _, channel::ChannelId},
+        ledger::verification_mode::{StandardMode, VerificationMode},
+        ops::{OpId as _, OpRef, channel::ChannelId},
         traits::Hashable as _,
         transactions::{
             hash::TxHash,
@@ -74,7 +75,7 @@ pub trait Node {
         slot_to: Slot,
     ) -> Result<Vec<ApiBlock>, Error>;
 
-    async fn post_transaction(&self, tx: MantleTransaction<Unverified>) -> Result<(), Error>;
+    async fn post_transaction(&self, tx: SignedOps<Unverified, StandardMode>) -> Result<(), Error>;
 
     /// Fund a transaction from the node's wallet.
     ///
@@ -204,7 +205,7 @@ impl Node for NodeHttpClient {
             .await
     }
 
-    async fn post_transaction(&self, tx: MantleTransaction<Unverified>) -> Result<(), Error> {
+    async fn post_transaction(&self, tx: SignedOps<Unverified, StandardMode>) -> Result<(), Error> {
         self.client
             .post_transaction(self.base_url.clone(), tx)
             .await
@@ -219,15 +220,14 @@ impl Node for NodeHttpClient {
 }
 
 /// Returns true if `transactions` contains any deposit op on `channel_id`.
-pub(crate) fn has_channel_deposit<State: VerificationState>(
-    transactions: &[MantleTransaction<State>],
+pub(crate) fn has_channel_deposit<State: VerificationState, Mode: VerificationMode>(
+    transactions: &[SignedOps<State, Mode>],
     channel_id: ChannelId,
 ) -> bool {
     transactions.iter().any(|tx| {
-        tx.mantle_tx()
-            .0
-            .iter()
-            .any(|op| matches!(op, Op::ChannelDeposit(d) if d.channel_id == channel_id))
+        tx.op_refs()
+            .into_iter()
+            .any(|op| matches!(op, OpRef::ChannelDeposit(d) if d.channel_id == channel_id))
     })
 }
 
@@ -276,8 +276,8 @@ pub(crate) fn build_deposit_events(events: &Events) -> DepositEvents {
 
 /// Walks a block's transactions and emits the [`ZoneMessage`]s relevant to
 /// `channel_id`, looking up deposit amounts and notes from `deposit_events`.
-fn block_to_messages<State: VerificationState>(
-    transactions: Vec<MantleTransaction<State>>,
+fn block_to_messages<State: VerificationState, Mode: VerificationMode>(
+    transactions: Vec<SignedOps<State, Mode>>,
     channel_id: ChannelId,
     deposit_events: &DepositEvents,
 ) -> Vec<ZoneMessage> {
@@ -285,10 +285,10 @@ fn block_to_messages<State: VerificationState>(
         .into_iter()
         .flat_map(|tx| {
             let tx_hash = tx.hash();
-            let (mantle_tx, _ops_proofs) = tx.into_parts();
-            Vec::from(mantle_tx.0)
+            tx.op_refs()
                 .into_iter()
-                .filter_map(move |op| op_to_zone_message(&op, tx_hash, channel_id, deposit_events))
+                .filter_map(move |op| op_to_zone_message(op, tx_hash, channel_id, deposit_events))
+                .collect::<Vec<_>>()
         })
         .collect()
 }
@@ -299,19 +299,19 @@ fn block_to_messages<State: VerificationState>(
 /// is a deposit without a matching event (in which case the deposit is skipped
 /// with a warning — the amount is required to be useful to consumers).
 fn op_to_zone_message(
-    op: &Op,
+    op: OpRef,
     tx_hash: TxHash,
     channel_id: ChannelId,
     deposit_events: &DepositEvents,
 ) -> Option<ZoneMessage> {
     match op {
-        Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
+        OpRef::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
             Some(ZoneMessage::Block(ZoneBlock {
                 id: inscribe.id(),
                 data: inscribe.inscription.clone(),
             }))
         }
-        Op::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
+        OpRef::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
             let op_id = deposit.op_id();
             deposit_events
                 .get(&DepositOpKey { tx_hash, op_id })
@@ -337,7 +337,7 @@ fn op_to_zone_message(
                     },
                 )
         }
-        Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
+        OpRef::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
             Some(ZoneMessage::Withdraw(Withdraw {
                 tx_hash,
                 op_id: withdraw.op_id(),
@@ -351,7 +351,7 @@ fn op_to_zone_message(
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
-        NoteId,
+        NoteId, Op,
         ledger::Inputs,
         ops::channel::{
             deposit::{DepositOp, Metadata},
