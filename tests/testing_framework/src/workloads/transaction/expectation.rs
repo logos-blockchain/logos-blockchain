@@ -11,6 +11,7 @@ use std::{
 
 use async_trait::async_trait;
 use common_http_client::ApiBlock;
+use lb_core::mantle::ops::OpRef;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::HeaderId;
 use testing_framework_core::scenario::{DynError, Expectation, RunContext};
@@ -224,7 +225,10 @@ fn capture_tx_outputs(
     observed: &AtomicU64,
 ) {
     for tx in &block.transactions {
-        for transfer in &tx.mantle_tx().transfers() {
+        for op in tx.op_refs() {
+            let OpRef::Transfer(transfer) = op else {
+                continue;
+            };
             for note in &transfer.outputs {
                 if tracked_accounts.contains(&note.pk) {
                     observed.fetch_add(1, Ordering::Relaxed);

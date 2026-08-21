@@ -9,8 +9,8 @@ use lb_core::mantle::{
     gas::{GasCost, MainnetGasProfile},
     ledger::MAX_TRANSACTION_INPUTS,
     transactions::{
-        GENESIS_EXECUTION_GAS_PRICE, GasPrices, MantleTxBuilder, MantleTxContext,
-        MantleTxGasContext, OpProofs,
+        GENESIS_EXECUTION_GAS_PRICE, GasPrices, MantleTxBuilder, OpProofs,
+        tx_list::ops::{OpsContext, OpsGasContext},
     },
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -472,8 +472,8 @@ fn fee_estimate_builder() -> Result<MantleTxBuilder, StepError> {
 }
 
 fn finalize_fee(builder: &MantleTxBuilder) -> Result<u64, StepError> {
-    let context = MantleTxContext {
-        gas_context: MantleTxGasContext::new(
+    let context = OpsContext {
+        gas_context: OpsGasContext::new(
             HashMap::new(),
             HashMap::new(),
             GasPrices::new(
@@ -481,7 +481,7 @@ fn finalize_fee(builder: &MantleTxBuilder) -> Result<u64, StepError> {
                 DEFAULT_STORAGE_GAS_PRICE,
             ),
         ),
-        ..MantleTxContext::default()
+        ..OpsContext::default()
     };
     builder
         .minimum_gas_cost::<MainnetGasProfile>(&context)

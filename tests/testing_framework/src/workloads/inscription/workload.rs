@@ -8,7 +8,8 @@ use std::{
 
 use async_trait::async_trait;
 use lb_core::mantle::{
-    MantleTransaction,
+    SignedOps,
+    ledger::verification_mode::StandardMode,
     ops::{
         Op, OpProof,
         channel::{
@@ -17,7 +18,7 @@ use lb_core::mantle::{
         },
     },
     traits::Hashable as _,
-    transactions::{hash::TxHash, mantle_tx::RawMantleTx, states::Preverified},
+    transactions::{OpProofs, Ops, hash::TxHash, states::Preverified},
 };
 use lb_key_management_system_service::keys::Ed25519Key;
 use rand::{seq::SliceRandom as _, thread_rng};
@@ -377,7 +378,7 @@ fn channel_id_from_signing_key(signing_key: &Ed25519Key) -> ChannelId {
 fn build_inscription_transaction(
     channel: &mut ChannelState,
     payload_bytes: usize,
-) -> Result<(MantleTransaction<Preverified>, MsgId, TxHash), DynError> {
+) -> Result<(SignedOps<Preverified, StandardMode>, MsgId, TxHash), DynError> {
     let op = InscriptionOp {
         channel_id: channel.channel_id,
         inscription: build_payload(channel, payload_bytes),
@@ -386,17 +387,18 @@ fn build_inscription_transaction(
     };
     let msg_id = op.id();
 
-    let mantle_tx = RawMantleTx([Op::ChannelInscribe(op)].into());
+    let mantle_tx = Ops::from([Op::ChannelInscribe(op)]);
     let tx_hash = mantle_tx.hash();
 
     let ed25519_signature = channel
         .signing_key
         .sign_payload(tx_hash.as_signing_bytes().as_ref());
 
-    let signed_tx =
-        MantleTransaction::new(mantle_tx, [OpProof::Ed25519Sig(ed25519_signature)].into())
-            .preverify()
-            .map_err(|error| InscriptionWorkloadError::SignedTransactionBuild(error.to_string()))?;
+    let op_proofs_wrapper = OpProofs::from([OpProof::Ed25519Sig(ed25519_signature)]);
+    let signed_tx = SignedOps::from_parts(mantle_tx, op_proofs_wrapper)
+        .map_err(|error| InscriptionWorkloadError::SignedTransactionBuild(error.to_string()))?
+        .preverify()
+        .map_err(|error| InscriptionWorkloadError::SignedTransactionBuild(error.to_string()))?;
 
     channel.next_nonce = channel.next_nonce.saturating_add(1);
 
@@ -421,7 +423,7 @@ fn build_payload(channel: &ChannelState, payload_bytes: usize) -> Inscription {
 
 async fn submit_transaction_via_cluster(
     ctx: &RunContext<impl LbcScenarioEnv>,
-    tx: Arc<MantleTransaction<Preverified>>,
+    tx: Arc<SignedOps<Preverified, StandardMode>>,
 ) -> Result<(), DynError> {
     let mut clients = ctx.node_clients().snapshot();
     if clients.is_empty() {
@@ -443,7 +445,7 @@ async fn submit_transaction_via_cluster(
 
 async fn submit_to_clients(
     clients: &mut [NodeHttpClient],
-    tx: &MantleTransaction<Preverified>,
+    tx: &SignedOps<Preverified, StandardMode>,
     attempt: usize,
 ) -> Result<(), DynError> {
     let tx_hash = tx.hash();

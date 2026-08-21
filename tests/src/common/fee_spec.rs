@@ -17,16 +17,19 @@
 
 use std::collections::{HashMap, HashSet};
 
+use lb_codec::BinaryEncode as _;
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
-    MantleTransaction, Note, Op, Utxo,
+    Note, SignedOps, Utxo,
     gas::{MainnetGasProfile, TxGasCalculator as _},
+    ledger::verification_mode::{StandardMode, VerificationMode},
+    ops::OpRef,
     traits::Hashable as _,
     transactions::{
-        GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext,
-        codec::{encode_signed_mantle_tx, minimum_signed_mantle_tx_size},
-        mantle_tx::MantleTx as _,
+        GasPrices, MantleTxBuilder,
+        codec::minimum_signed_transaction_size,
         states::{Preverified, VerificationState},
+        tx_list::ops::{OpsContext, OpsGasContext},
     },
 };
 use lb_testing_framework::configs::wallet::WalletAccount;
@@ -110,9 +113,9 @@ pub fn spec_block_execution_gas(block: &ApiBlock) -> Result<u64, String> {
     let mut total = 0;
 
     for tx in &block.transactions {
-        for op in tx.mantle_tx().ops().iter() {
+        for op in tx.op_refs() {
             match op {
-                Op::Transfer(_) => total += SPEC_TRANSFER_GAS,
+                OpRef::Transfer(_) => total += SPEC_TRANSFER_GAS,
                 other => {
                     return Err(format!(
                         "unexpected operation {} in a fee-scenario block; extend the spec \
@@ -142,7 +145,7 @@ pub fn self_transfer_paying_fee_at(
     account: &WalletAccount,
     prices: &GasPrices,
     tip: i128,
-) -> MantleTransaction<Preverified> {
+) -> SignedOps<Preverified, StandardMode> {
     const MAX_FEE_CONVERGENCE_ATTEMPTS: usize = 32;
 
     let utxo = genesis_utxos
@@ -151,8 +154,8 @@ pub fn self_transfer_paying_fee_at(
         .copied()
         .expect("account should own a genesis note");
 
-    let gas_context = MantleTxGasContext::new(HashMap::new(), HashMap::new(), prices.clone());
-    let context = MantleTxContext {
+    let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone());
+    let context = OpsContext {
         gas_context,
         leader_reward_amount: 0,
     };
@@ -217,10 +220,11 @@ pub fn self_transfer_paying_fee_at(
     );
 
     let mantle_tx = builder.build().expect("transaction should build");
-    let proofs = transfer_proofs_for_funded_wallet_tx(&mantle_tx, &account.secret_key)
+    let op_proofs = transfer_proofs_for_funded_wallet_tx(&mantle_tx, &account.secret_key)
         .expect("transfer proofs should build");
 
-    MantleTransaction::new(mantle_tx, proofs)
+    SignedOps::from_parts(mantle_tx, op_proofs)
+        .expect("signed transaction should build")
         .preverify()
         .expect("signed transaction should be valid")
 }
@@ -231,13 +235,13 @@ pub fn self_transfer_paying_fee_at(
 /// # Errors
 ///
 /// Returns both sizes when they differ.
-pub fn check_size_prediction<State: VerificationState>(
-    tx: &MantleTransaction<State>,
+pub fn check_size_prediction<State: VerificationState, Mode: VerificationMode>(
+    tx: &SignedOps<State, Mode>,
     prices: &GasPrices,
 ) -> Result<(), String> {
-    let gas_context = MantleTxGasContext::new(HashMap::new(), HashMap::new(), prices.clone());
-    let predicted = minimum_signed_mantle_tx_size(tx.mantle_tx(), &gas_context) as u64;
-    let actual = encode_signed_mantle_tx(tx).len() as u64;
+    let gas_context = OpsGasContext::new(HashMap::new(), HashMap::new(), prices.clone());
+    let predicted = minimum_signed_transaction_size(&tx.op_refs(), &gas_context) as u64;
+    let actual = tx.encode().len() as u64;
     if predicted == actual {
         Ok(())
     } else {
@@ -254,14 +258,14 @@ pub fn check_size_prediction<State: VerificationState>(
 ///
 /// Errors on inputs that are not genesis notes; the fee scenarios only spend
 /// genesis notes.
-pub fn net_balance_against<State: VerificationState>(
+pub fn net_balance_against<State: VerificationState, Mode: VerificationMode>(
     genesis_utxos: &[Utxo],
-    tx: &MantleTransaction<State>,
+    tx: &SignedOps<State, Mode>,
 ) -> Result<u64, String> {
     let mut input_sum = 0u64;
     let mut output_sum = 0u64;
-    for op in tx.mantle_tx().ops().iter() {
-        if let Op::Transfer(transfer) = op {
+    for op in tx.op_refs() {
+        if let OpRef::Transfer(transfer) = op {
             for input in transfer.inputs.iter() {
                 let utxo = genesis_utxos
                     .iter()
@@ -288,9 +292,9 @@ pub fn net_balance_against<State: VerificationState>(
 ///
 /// Returns an error when the transaction's balance or gas cost cannot be
 /// calculated.
-pub fn fee_surplus_at<State: VerificationState>(
+pub fn fee_surplus_at<State: VerificationState, Mode: VerificationMode>(
     genesis_utxos: &[Utxo],
-    tx: &MantleTransaction<State>,
+    tx: &SignedOps<State, Mode>,
     prices: &GasPrices,
 ) -> Result<i128, String> {
     let paid = net_balance_against(genesis_utxos, tx)?;

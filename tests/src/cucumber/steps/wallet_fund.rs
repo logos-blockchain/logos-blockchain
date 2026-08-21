@@ -7,14 +7,14 @@ use std::{collections::HashSet, time::Duration};
 use cucumber::{gherkin::Step, then, when};
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
-    MantleTransaction, Note, Op, OpProof, TxHash,
+    Note, Op, OpProof, SignedOps, TxHash,
     gas::GasCost,
     ops::channel::{
         ChannelId, MsgId,
         inscribe::{Inscription, InscriptionOp},
     },
     traits::Hashable as _,
-    transactions::{builder::MantleTxBuilder, mantle_tx::MantleTx as _},
+    transactions::{OpProofs, builder::MantleTxBuilder},
 };
 use lb_http_api_common::bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody};
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
@@ -90,7 +90,6 @@ async fn fund_and_submit_payment(
     };
     let has_transfer = response
         .funded_tx
-        .ops()
         .iter()
         .any(|op| matches!(op, Op::Transfer(_)));
     if !has_transfer {
@@ -101,8 +100,9 @@ async fn fund_and_submit_payment(
             ),
         });
     }
-
-    let signed_tx = MantleTransaction::new(response.funded_tx, [transfer_proof].into());
+    let op_proofs = OpProofs::from([transfer_proof]);
+    let signed_tx =
+        SignedOps::from_parts(response.funded_tx, op_proofs).expect("funded tx should be valid");
     let tx_hash = signed_tx.hash();
 
     world
@@ -462,7 +462,7 @@ async fn step_fund_inscription_transaction(
             ),
         });
     };
-    let ops = response.funded_tx.ops();
+    let ops = response.funded_tx;
     if ops.len() != 2
         || !matches!(ops[0], Op::ChannelInscribe(_))
         || !matches!(ops[1], Op::Transfer(_))
@@ -476,12 +476,10 @@ async fn step_fund_inscription_transaction(
         });
     }
 
-    let tx_hash = response.funded_tx.hash();
+    let tx_hash = ops.hash();
     let signature = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
-    let signed_tx = MantleTransaction::new(
-        response.funded_tx,
-        [OpProof::Ed25519Sig(signature), transfer_proof].into(),
-    );
+    let op_proofs = OpProofs::from([OpProof::Ed25519Sig(signature), transfer_proof]);
+    let signed_tx = SignedOps::from_parts(ops, op_proofs).expect("funded tx should be valid");
 
     world
         .submit_transaction(&funding_wallet, &signed_tx, &client)

@@ -111,7 +111,7 @@ pub fn build_manual_cluster_deployment(
 
     if let Some(genesis_block) = deployment.config.genesis_block.clone() {
         world.chain.genesis_block_utxos =
-            crate::cucumber::steps::nodes::genesis_block_utxos(&genesis_block.genesis_tx());
+            crate::cucumber::steps::nodes::genesis_block_utxos(genesis_block.genesis_tx());
         world.chain.genesis_block_id = Some(genesis_block.header().id());
     }
 

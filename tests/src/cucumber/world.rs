@@ -15,7 +15,8 @@ use lb_core::{
     codec::DeserializeOp as _,
     header::HeaderId,
     mantle::{
-        GenesisTime, MantleTransaction, Utxo, Value,
+        GenesisTime, SignedOps, Utxo, Value,
+        ledger::verification_mode::StandardMode,
         ops::channel::{
             ChannelId, deposit::DepositOp, inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
@@ -2385,7 +2386,7 @@ impl CucumberWorld {
     pub fn remember_prepared_transaction(
         &mut self,
         alias: String,
-        signed_tx: MantleTransaction<Preverified>,
+        signed_tx: SignedOps<Preverified, StandardMode>,
     ) {
         self.txs.prepared_transactions.insert(alias, signed_tx);
     }
@@ -2409,7 +2410,7 @@ impl CucumberWorld {
     pub fn resolve_prepared_transaction(
         &self,
         alias: &str,
-    ) -> Result<MantleTransaction<Preverified>, StepError> {
+    ) -> Result<SignedOps<Preverified, StandardMode>, StepError> {
         self.txs
             .prepared_transactions
             .get(alias)
@@ -2441,7 +2442,7 @@ impl CucumberWorld {
     pub async fn submit_transaction<State>(
         &self,
         wallet: &WalletInfo,
-        signed_tx: &MantleTransaction<State>,
+        signed_tx: &SignedOps<State, StandardMode>,
         node_client: &NodeHttpClient,
     ) -> Result<(), StepError>
     where

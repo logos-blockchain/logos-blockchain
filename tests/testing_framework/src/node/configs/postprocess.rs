@@ -193,12 +193,7 @@ pub fn apply_wallet_genesis_overrides(
         });
     }
 
-    let mut transfer_op = genesis_block
-        .transactions_iter()
-        .next()
-        .expect("Genesis block should have a genesis tx")
-        .genesis_transfer()
-        .clone();
+    let mut transfer_op = genesis_block.genesis_tx().transfer().operation().clone();
     fit_sdp_funding_outputs_to_genesis_capacity(
         &mut transfer_op,
         general_configs,

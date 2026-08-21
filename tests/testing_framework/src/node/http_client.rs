@@ -9,7 +9,8 @@ use lb_chain_service::ChainServiceInfo;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        MantleTransaction, NoteId,
+        NoteId, SignedOps,
+        ledger::verification_mode::StandardMode,
         transactions::{hash::TxHash, states::VerificationState},
     },
     sdp::{Declaration, DeclarationId, Locator},
@@ -168,7 +169,7 @@ impl NodeHttpClient {
 
     pub async fn submit_transaction<State>(
         &self,
-        tx: &MantleTransaction<State>,
+        tx: &SignedOps<State, StandardMode>,
     ) -> Result<(), Error>
     where
         State: VerificationState + Send + Sync + Clone + 'static,
@@ -183,7 +184,7 @@ impl NodeHttpClient {
 
     pub async fn blend_transaction<State>(
         &self,
-        tx: &MantleTransaction<State>,
+        tx: SignedOps<State, StandardMode>,
     ) -> Result<TxHash, Error>
     where
         State: VerificationState + Send + Sync + Clone + 'static,
@@ -191,7 +192,7 @@ impl NodeHttpClient {
         self.with_timeout(
             "Blend transaction request",
             self.http_client
-                .blend_transaction(self.base_url.clone(), tx.clone()),
+                .blend_transaction(self.base_url.clone(), tx),
         )
         .await
     }
