@@ -243,11 +243,9 @@ impl ChannelState {
 #[cfg(test)]
 mod tests {
     use ark_ff::AdditiveGroup as _;
-    use lb_groth16::Fr;
+    use lb_groth16::{CompressedGroth16Proof, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkSignature};
     use rand::{RngCore as _, thread_rng};
-    use lb_groth16::{CompressedGroth16Proof, Fr};
-    use rand::thread_rng;
 
     use super::*;
     use crate::{
