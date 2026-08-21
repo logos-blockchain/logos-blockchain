@@ -29,7 +29,7 @@ use lb_core::{
         traits::Hashable as _,
         transactions::{
             GasPrices, MAX_OPS_PER_TX, MantleTxBuilder, MantleTxContext, MantleTxGasContext,
-            OpsProofs, TxBuilderError, states::Unverified,
+            OpsProofs, TxBuilderError, hash::TxHash, states::Unverified,
         },
     },
 };
@@ -100,6 +100,7 @@ pub enum PoWError {
 const MAX_TRANSFER_INPUTS: usize = MAX_ZK_SIGNING_KEYS;
 
 /// A summary of the rewards this node can currently claim.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ClaimableRewardsInfo {
     /// Number of mined tickets still within the reward window.
     pub claimable_tickets: usize,
@@ -111,7 +112,9 @@ pub struct ClaimableRewardsInfo {
 pub enum PoWServiceMessage {
     StartMining,
     StopMining,
-    Claim,
+    Claim {
+        response: oneshot::Sender<Result<Option<TxHash>, DynError>>,
+    },
     ClaimableRewardsInfo {
         response: oneshot::Sender<ClaimableRewardsInfo>,
     },
@@ -292,20 +295,26 @@ where
                             }
                             mining = false;
                         }
-                        PoWServiceMessage::Claim => {
-                            if state.ready_to_claim.is_empty() {
+                        PoWServiceMessage::Claim { response } => {
+                            let result = if state.ready_to_claim.is_empty() {
                                 info!(target: LOG_TARGET, "No PoW rewards to claim");
-                            } else if let Err(e) = claim_ready_rewards(
-                                &cryptarchia_api,
-                                &blend_api,
-                                settings.claim_address,
-                                &mut state,
-                            )
-                            .await
-                            {
-                                error!(target: LOG_TARGET, "Failed to claim PoW rewards: {e}");
-                            }
+                                Ok(None)
+                            } else {
+                                claim_ready_rewards(
+                                    &cryptarchia_api,
+                                    &blend_api,
+                                    settings.claim_address,
+                                    &mut state,
+                                )
+                                .await
+                                .inspect_err(|e| {
+                                    error!(target: LOG_TARGET, "Failed to claim PoW rewards: {e}");
+                                })
+                            };
                             state_updater.update(Some(state.clone()));
+                            if response.send(result).is_err() {
+                                error!(target: LOG_TARGET, "Claim response receiver was dropped");
+                            }
                         }
                         PoWServiceMessage::ClaimableRewardsInfo { response } => {
                             respond_claimable_rewards(&cryptarchia_api, &mut state, &state_updater, response).await;
@@ -347,7 +356,7 @@ async fn claim_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
     claim_address: ZkPublicKey,
     state: &mut PoWServiceState,
-) -> Result<(), DynError>
+) -> Result<Option<TxHash>, DynError>
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
     BlendService: BlendServiceData,
@@ -361,7 +370,7 @@ where
     // expired ticket never poisons the tx.
     prune_expired_tickets(state, info.slot);
     if state.ready_to_claim.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     let ledger_state = cryptarchia_api
@@ -384,7 +393,7 @@ where
         .map(|ticket| (ticket.secret_key.clone(), ticket.claim.clone()))
         .collect();
     if tickets.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     // Only mutate the ready set once the tx is built and published, so a failure
@@ -393,6 +402,9 @@ where
     // ones, in ready order); move exactly those to the pending set.
     let (signed_tx, claimed_count) =
         build_reward_claim_tx(claim_address, &ledger_state, &tickets).await?;
+    // Capture the tx id before publishing consumes the signed tx, so it can be
+    // reported back to the caller.
+    let tx_hash = signed_tx.hash();
     publish_reward_claim(blend_api, signed_tx).await?;
 
     let mut remaining = Vec::with_capacity(state.ready_to_claim.len());
@@ -415,7 +427,7 @@ where
         state.ready_to_claim.len()
     );
     state.pending_to_claim.extend(claimed);
-    Ok(())
+    Ok(Some(tx_hash))
 }
 
 /// Whether a ticket anchored to a block at `block_slot` is still within its
