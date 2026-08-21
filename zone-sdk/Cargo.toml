@@ -32,5 +32,6 @@ tokio                            = { features = ["macros", "rt", "sync", "time"]
 tracing                          = { workspace = true }
 
 [dev-dependencies]
+lb-core    = { features = ["test-utils"], workspace = true }
 num-bigint = { workspace = true }
 serde_json = { workspace = true }
