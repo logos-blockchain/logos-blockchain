@@ -516,7 +516,7 @@ mod pol_tests {
             Config as SdpConfig, ServiceRewardsParameters, rewards::blend::RewardsParameters,
         },
     };
-    use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+    use lb_utils::math::{PositiveF64, NonNegativeRatio};
     use lb_wallet_service::{WalletMsg, WalletServiceSettings};
     use overwatch::services::{
         ServiceData,
@@ -749,7 +749,7 @@ mod pol_tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {
                         rounds_per_epoch: NonZero::new(10u64).unwrap(),
-                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZero::new(3u64).unwrap(),
                         minimum_network_size: NonZero::new(1u64).unwrap(),
                         data_replication_factor: 0,

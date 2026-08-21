@@ -1,4 +1,4 @@
-use core::time::Duration;
+use core::{num::NonZeroU64, time::Duration};
 use std::collections::VecDeque;
 
 use futures::{StreamExt as _, stream::repeat};
@@ -1854,8 +1854,14 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
         0,
     );
     // No cover traffic, so every message the service sends is one this test put
-    // in and the count below means what it says.
-    settings.scheduler.cover.message_frequency_per_round = 0.0.try_into().unwrap();
+    // in and the count below means what it says. The frequency itself must stay
+    // positive (`C * ß_c > 0`), so the silence comes from the quota instead:
+    // `Q_c = ceil(10 rounds * 0.05 * 2 layers / 2 nodes) = ceil(0.5) = 1`, and
+    // the scheduler floors its cover count at `Q_c / num_blend_layers = 0`.
+    // Anything in `(0, 0.1]` gives the same quota, so the halfway point keeps
+    // float drift well clear of either rounding boundary.
+    settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
+    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
 
     let (inbound_relay, inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();

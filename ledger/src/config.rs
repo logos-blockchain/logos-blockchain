@@ -142,7 +142,7 @@ mod tests {
     use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
     use lb_cryptarchia_engine::EpochConfig;
     pub use lb_groth16::ModulusShift;
-    use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+    use lb_utils::math::{PositiveF64, NonNegativeRatio};
 
     use crate::{
         config::{BlendPoWConfig, PoWConfig},
@@ -181,7 +181,7 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
@@ -243,7 +243,7 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
@@ -314,7 +314,7 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,

@@ -24,7 +24,7 @@ use lb_node::config::{
     network::deployment::Settings as NetworkDeploymentSettings,
     time::deployment::Settings as TimeDeploymentSettings,
 };
-use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+use lb_utils::math::{PositiveF64, NonNegativeRatio};
 
 use crate::{
     release::ProtocolIdentity,
@@ -97,10 +97,10 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     .expect("Normalization constant cannot be negative."),
                 scheduler: SchedulerSettings {
                     cover: CoverTrafficSettings {
-                        message_frequency_per_round: NonNegativeF64::try_from(
+                        message_frequency_per_round: PositiveF64::try_from(
                             COVER_MESSAGE_FREQUENCY_PER_ROUND,
                         )
-                        .expect("Message frequency per round cannot be negative."),
+                        .expect("Message frequency per round must be positive."),
                     },
                     delayer: MessageDelayerSettings {
                         maximum_release_delay_in_rounds: NonZeroU64::try_from(

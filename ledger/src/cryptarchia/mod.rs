@@ -849,7 +849,7 @@ pub mod tests {
     use lb_cryptarchia_engine::EpochConfig;
     use lb_groth16::{AdditiveGroup as _, ModulusShift};
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkSignature};
-    use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+    use lb_utils::math::{PositiveF64, NonNegativeRatio};
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
 
@@ -1059,7 +1059,7 @@ pub mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
