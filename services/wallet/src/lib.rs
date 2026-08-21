@@ -16,21 +16,21 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        MantleTransaction, NoteId, Op, OpProof, TxHash, Utxo, Value, VerificationError,
+        NoteId, Op, OpProof, SignedOps, TxHash, Utxo, Value, VerificationError,
         gas::{GasCost, GasOverflow, MainnetGasProfile},
-        ledger::Inputs,
+        ledger::{Inputs, verification_mode::StandardMode},
         ops::{
-            NoOpProof, ZkAndEd25519Proof,
+            NoOpProof, OpRef, ZkAndEd25519Proof,
             channel::{ChannelId, config::ChannelConfigOp, inscribe::InscriptionOp},
             leader_claim::{
                 LeaderClaimOp, RewardsRoot, VoucherCm, VoucherNullifier, VoucherSecret,
             },
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
-        traits::{Hashable as _, MantleTxWithProofs},
+        traits::{Hashable as _, MantleTx, SignedMantleTx},
         transactions::{
-            MantleTxBuilder, MantleTxContext, OpProofs, TxBuilderError, mantle_tx::MantleTx as _,
-            states::Preverified,
+            MantleTxBuilder, OpProofs, TxBuilderError, states::Preverified,
+            tx_list::ops::OpsContext,
         },
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
@@ -169,12 +169,14 @@ pub enum WalletMsg {
         reward_amount: Value,
         funding_pk: ZkPublicKey,
         max_tx_fee: GasCost,
-        resp_tx: Sender<Result<TipResponse<MantleTransaction<Preverified>>, WalletServiceError>>,
+        resp_tx:
+            Sender<Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletServiceError>>,
     },
     SignTx {
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
-        resp_tx: Sender<Result<TipResponse<MantleTransaction<Preverified>>, WalletServiceError>>,
+        resp_tx:
+            Sender<Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletServiceError>>,
     },
     SignTxWithEd25519 {
         tx_hash: TxHash,
@@ -202,7 +204,7 @@ pub enum WalletMsg {
     },
     GetTxContext {
         block_id: Option<HeaderId>,
-        resp_tx: Sender<Result<MantleTxContext, WalletServiceError>>,
+        resp_tx: Sender<Result<OpsContext, WalletServiceError>>,
     },
 }
 
@@ -219,7 +221,7 @@ pub struct UtxoWithKeyId {
 }
 
 struct LeaderClaimTx {
-    signed_tx: MantleTransaction<Preverified>,
+    signed_tx: SignedOps<Preverified, StandardMode>,
     voucher_nullifier: VoucherNullifier,
     funded_notes: Vec<NoteId>,
 }
@@ -313,7 +315,14 @@ impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId> ServiceCore<RuntimeService
     for WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
 where
     Kms: KmsServiceData<Backend = KmsBackend> + Send + Sync,
-    Tx: MantleTxWithProofs + Send + Sync + Clone + Eq + Serialize + DeserializeOwned + 'static,
+    Tx: SignedMantleTx<Preverified, StandardMode>
+        + Send
+        + Sync
+        + Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx>,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
@@ -470,7 +479,14 @@ impl<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
     WalletService<Kms, Cryptarchia, Tx, Storage, RuntimeServiceId>
 where
     Kms: KmsServiceData<Backend = KmsBackend>,
-    Tx: MantleTxWithProofs + Send + Sync + Clone + Eq + Serialize + DeserializeOwned + 'static,
+    Tx: SignedMantleTx<Preverified, StandardMode>
+        + Send
+        + Sync
+        + Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx> + Send + 'static,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
@@ -924,54 +940,55 @@ where
         tip_leader: LedgerState,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         wallet: &Wallet,
-    ) -> Result<MantleTransaction<Preverified>, WalletServiceError> {
+    ) -> Result<SignedOps<Preverified, StandardMode>, WalletServiceError> {
         // TODO: Maybe Unverified?
         // Extract input public keys before building the transaction
         let mut channel_multi_sig_proofs = tx_builder.channel_multi_sig_proofs().clone();
         let mantle_tx = tx_builder.clone().build()?;
         let tx_hash = mantle_tx.hash();
 
-        let mut ops_proofs = OpProofs::empty();
-        for (i, op) in mantle_tx.ops().iter().enumerate() {
-            let proof = match op {
-                Op::ChannelInscribe(inscribe_op) => {
+        let mut op_proofs = OpProofs::empty();
+        for (i, op) in mantle_tx.op_refs().into_iter().enumerate() {
+            let op_proof = match op {
+                OpRef::ChannelInscribe(inscribe_op) => {
                     Self::sign_inscription(tx_hash, inscribe_op, kms).await?
                 }
-                Op::ChannelConfig(set_keys_op) => {
+                OpRef::ChannelConfig(set_keys_op) => {
                     Self::sign_channel_set_key(tx_hash, set_keys_op, &tip_leader, kms).await?
                 }
-                Op::ChannelDeposit(deposit_op) => {
+                OpRef::ChannelDeposit(deposit_op) => {
                     Self::sign_channel_deposit(tx_hash, deposit_op.inputs.clone(), kms, &tip_leader)
                         .await?
                 }
-                Op::ChannelWithdraw(_) | Op::ChannelTransfer(_) => {
+                OpRef::ChannelWithdraw(_) | OpRef::ChannelTransfer(_) => {
                     let proof = channel_multi_sig_proofs
                         .remove(&i)
                         .ok_or(WalletServiceError::ChannelMultiSigProofNotFound(i))?;
                     OpProof::ChannelMultiSigProof(proof)
                 }
-                Op::SDPDeclare(declare_op) => {
+                OpRef::SDPDeclare(declare_op) => {
                     Self::sign_sdp_declare(tx_hash, declare_op, &tip_leader, kms).await?
                 }
-                Op::SDPWithdraw(withdraw_op) => {
+                OpRef::SDPWithdraw(withdraw_op) => {
                     Self::sign_sdp_withdraw(tx_hash, withdraw_op, &tip_leader, kms).await?
                 }
-                Op::SDPActive(active_op) => {
+                OpRef::SDPActive(active_op) => {
                     Self::sign_sdp_active(tx_hash, active_op, &tip_leader, kms).await?
                 }
-                Op::LeaderClaim(claim_op) => {
+                OpRef::LeaderClaim(claim_op) => {
                     Self::sign_leader_claim(tx_hash, claim_op, tip, wallet, kms).await?
                 }
-                Op::Transfer(transfer_op) => {
+                OpRef::Transfer(transfer_op) => {
                     Self::sign_transfer(tx_hash, transfer_op.inputs.clone(), kms, &tip_leader)
                         .await?
                 }
-                Op::ClaimPowReward(_) => OpProof::None(NoOpProof),
+                OpRef::ClaimPowReward(_) => OpProof::None(NoOpProof),
             };
-            ops_proofs.try_push(proof)?;
+            op_proofs.try_push(op_proof)?;
         }
 
-        let signed_mantle_tx = MantleTransaction::new(mantle_tx, ops_proofs)
+        let signed_mantle_tx = SignedOps::from_parts(mantle_tx, op_proofs)
+            .expect("SignedOps should be valid with the provided proofs.")
             .preverify()
             .expect("Preverification should not fail.");
 
@@ -1269,7 +1286,7 @@ where
         ledger: LedgerState,
         state: &mut ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-    ) -> Result<(MantleTransaction<Preverified>, Vec<NoteId>), WalletServiceError> {
+    ) -> Result<(SignedOps<Preverified, StandardMode>, Vec<NoteId>), WalletServiceError> {
         let context = ledger.tx_context();
         let tx_builder = MantleTxBuilder::new().push_op(Op::LeaderClaim(LeaderClaimOp {
             rewards_root: request.rewards_root,
@@ -1308,7 +1325,7 @@ where
         ledger: LedgerState,
         state: &ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-    ) -> Result<MantleTransaction<Preverified>, WalletServiceError> {
+    ) -> Result<SignedOps<Preverified, StandardMode>, WalletServiceError> {
         let context = ledger.tx_context();
         let net_balance = funded_tx_builder.net_balance();
         let gas_cost = funded_tx_builder.minimum_gas_cost::<MainnetGasProfile>(&context)?;
@@ -1518,23 +1535,21 @@ where
             .filter_map(async |header_id| storage_adapter.get_block(header_id).await)
             .collect::<Vec<_>>()
             .await;
-        let claimed_nullifiers: Vec<VoucherNullifier> = immutable_blocks
+
+        immutable_blocks
             .into_iter()
             .flat_map(|block: Block<Tx>| block.into_transactions().into_iter())
-            .flat_map(|tx: Tx| {
-                tx.ops_with_proof()
-                    .map(|(op, _)| op.clone())
-                    .collect::<Vec<_>>()
-            })
+            .collect::<Vec<_>>() // Need to collect to avoid lifetime issues
+            .iter()
+            .flat_map(MantleTx::op_refs)
             .filter_map(|op| {
-                if let Op::LeaderClaim(claim_op) = op {
+                if let OpRef::LeaderClaim(claim_op) = op {
                     Some(claim_op.voucher_nullifier)
                 } else {
                     None
                 }
             })
-            .collect();
-        claimed_nullifiers
+            .collect::<Vec<_>>()
     }
 
     #[expect(
@@ -1629,7 +1644,7 @@ where
 
     async fn get_tx_context(
         block_id: Option<HeaderId>,
-        resp_tx: Sender<Result<MantleTxContext, WalletServiceError>>,
+        resp_tx: Sender<Result<OpsContext, WalletServiceError>>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
         let block_id = match Self::msg_tip_or_latest(block_id, cryptarchia).await {

@@ -16,8 +16,9 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         GasProfile, NoteId, TxHash, Utxo, Value,
+        ledger::verification_mode::StandardMode,
         ops::{
-            Op, OpId as _,
+            OpId as _, OpRef,
             channel::{
                 channel_transfer::ChannelTransferOp, deposit::DepositOp,
                 withdraw::ChannelWithdrawOp,
@@ -25,9 +26,9 @@ use lb_core::{
             leader_claim::{VoucherCm, VoucherNullifier},
             transfer::TransferOp,
         },
-        traits::MantleTxWithProofs,
+        traits::SignedMantleTx,
         transactions::{
-            MAX_OPS_PER_TX, MantleTxContext, builder::MantleTxBuilder, mantle_tx::MantleTx as _,
+            MAX_OPS_PER_TX, builder::MantleTxBuilder, states::Preverified, tx_list::ops::OpsContext,
         },
     },
     proofs::leader_proof::LeaderProof as _,
@@ -115,7 +116,7 @@ impl WalletBlock {
     #[must_use]
     pub fn from_block<Tx>(block: &Block<Tx>, epoch: Epoch, events: &Events) -> Self
     where
-        Tx: MantleTxWithProofs + Clone,
+        Tx: SignedMantleTx<Preverified, StandardMode, Hash = TxHash> + Clone,
     {
         // TODO: devise a better way to mirror ledger's execution always correctly: https://github.com/logos-blockchain/logos-blockchain/issues/2627
         let (header_events, tx_events) = group_events(events);
@@ -240,7 +241,7 @@ impl WalletState {
         tx_builder: &MantleTxBuilder,
         change_pk: ZkPublicKey,
         pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
-        context: &MantleTxContext,
+        context: &OpsContext,
         excluded_notes: &HashSet<NoteId>,
         priority_fee_percent: u64,
     ) -> Result<MantleTxBuilder, WalletError> {
@@ -534,14 +535,14 @@ fn transform_txs<Tx>(
     mut events_by_tx: HashMap<TxHash, HashMap<Hash, TxEventPayload>>,
 ) -> BlockTransactions<WalletTx>
 where
-    Tx: MantleTxWithProofs,
+    Tx: SignedMantleTx<Preverified, StandardMode, Hash = TxHash>,
 {
     txs.map_ref(move |tx| {
         let mut events_by_op = events_by_tx.remove(&tx.hash()).unwrap_or_default();
 
-        let ops = tx.mantle_tx().ops().filter_map_ref(|op| {
-            let event = op_id(op).and_then(|id| events_by_op.remove(&id));
-            transform_op(op, event)
+        let ops = tx.op_refs().into_inner().filter_map_ref(|op_ref| {
+            let event = op_id_ref(op_ref).and_then(|id| events_by_op.remove(&id));
+            transform_op(op_ref, event)
         });
 
         WalletTx { ops }
@@ -577,43 +578,43 @@ fn group_events(
     (header_events, tx_events)
 }
 
-// TODO: move this to Op after implementing OpId for all operations
-fn op_id(op: &Op) -> Option<Hash> {
-    match op {
-        Op::LeaderClaim(o) => Some(o.op_id()),
-        Op::ChannelWithdraw(o) => Some(o.op_id()),
-        Op::ChannelDeposit(o) => Some(o.op_id()),
-        Op::Transfer(o) => Some(o.op_id()),
+fn op_id_ref(op_ref: &OpRef) -> Option<Hash> {
+    match op_ref {
+        OpRef::LeaderClaim(o) => Some(o.op_id()),
+        OpRef::ChannelWithdraw(o) => Some(o.op_id()),
+        OpRef::ChannelDeposit(o) => Some(o.op_id()),
+        OpRef::Transfer(o) => Some(o.op_id()),
         _ => None,
     }
 }
 
 /// Build a [`WalletOp`] for an op together with the event (if any) it
 /// emitted in this block. Returns `None` for ops the wallet doesn't track.
-fn transform_op(op: &Op, event: Option<TxEventPayload>) -> Option<WalletOp> {
+fn transform_op(op: &OpRef<'_>, event: Option<TxEventPayload>) -> Option<WalletOp> {
     match op {
-        Op::Transfer(transfer) => Some(WalletOp::Transfer(transfer.clone())),
-        Op::ChannelDeposit(deposit) => Some(WalletOp::ChannelDeposit(deposit.clone())),
-        Op::ChannelTransfer(op) => Some(WalletOp::ChannelTransfer(op.clone())),
-        Op::ChannelWithdraw(op) => Some(WalletOp::ChannelWithdraw(op.clone())),
-        Op::SDPDeclare(declaration) => Some(WalletOp::Lock(declaration.service_note_id)),
-        Op::LeaderClaim(_) => match event.expect("event for LeaderClaim op must exist") {
+        OpRef::Transfer(op) => Some(WalletOp::Transfer(*op.clone())),
+        OpRef::ChannelDeposit(op) => Some(WalletOp::ChannelDeposit(*op.clone())),
+        OpRef::ChannelTransfer(op) => Some(WalletOp::ChannelTransfer(*op.clone())),
+        OpRef::ChannelWithdraw(op) => Some(WalletOp::ChannelWithdraw(*op.clone())),
+        OpRef::SDPDeclare(op) => Some(WalletOp::Lock(op.service_note_id)),
+        OpRef::LeaderClaim(_) => match event.expect("event for LeaderClaim op must exist") {
             TxEventPayload::LeaderRewardClaimed { utxo, .. } => Some(WalletOp::LeaderClaim(utxo)),
             TxEventPayload::Deposit { .. } => {
                 panic!("event for LeaderClaim op must be LeaderRewardClaimed")
             }
             TxEventPayload::PoWRewardClaimed { utxo, .. } => Some(WalletOp::ClaimPoW(utxo)),
         },
-        Op::ClaimPowReward(_) => {
+        OpRef::ClaimPowReward(_) => {
             // TODO: something to track here?
             None
         }
         // `Op::SDPWithdraw` is ignored here — the note will be unlocked
         // after the delay and the corresponding event will be handled by
         // [`HeaderOp::from`].
-        Op::ChannelInscribe(_) | Op::ChannelConfig(_) | Op::SDPWithdraw(_) | Op::SDPActive(_) => {
-            None
-        }
+        OpRef::ChannelInscribe(_)
+        | OpRef::ChannelConfig(_)
+        | OpRef::SDPWithdraw(_)
+        | OpRef::SDPActive(_) => None,
     }
 }
 
@@ -800,7 +801,7 @@ where
         tx_builder: &MantleTxBuilder,
         change_pk: ZkPublicKey,
         funding_pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
-        context: &MantleTxContext,
+        context: &OpsContext,
         excluded_notes: &HashSet<NoteId>,
         priority_fee_percent: u64,
     ) -> Result<MantleTxBuilder, WalletError> {
@@ -874,7 +875,7 @@ mod tests {
     use lb_core::{
         crypto::ZkDigest as _,
         mantle::{
-            MantleTransaction, Note, OpProof, RawMantleTx,
+            Note, Op, OpProof, SignedOps,
             channel::Channels,
             gas::MainnetGasProfile as Gas,
             ledger::{Inputs, Outputs},
@@ -883,7 +884,7 @@ mod tests {
                 deposit::Metadata,
                 inscribe::{Inscription, InscriptionOp},
             },
-            transactions::{GasPrices, MantleTxGasContext, OpProofs, Ops, states::Unverified},
+            transactions::{GasPrices, OpProofs, Ops, tx_list::ops::OpsGasContext},
         },
         proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
         sdp::{MinStake, ServiceParameters, ServiceType},
@@ -1420,11 +1421,8 @@ mod tests {
         // Lock `utxo1` deliberately to ensure that `fund_tx` excludes service notes
         wallet_state.service_notes = wallet_state.service_notes.insert(utxo1.id());
 
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::from_channels(
-                &Channels::default(),
-                GasPrices::new(1, 1),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
             leader_reward_amount: 0,
         };
         let tx_builder = MantleTxBuilder::new();
@@ -1451,7 +1449,7 @@ mod tests {
 
         let funded_tx = funded_tx_builder.build().unwrap();
 
-        if let Op::Transfer(transfer_op) = &funded_tx.ops()[funded_tx.ops().len() - 1] {
+        if let Some(Op::Transfer(transfer_op)) = funded_tx.last() {
             // ensure alices utxo was used to pay the fee
             assert_eq!(transfer_op.inputs, Inputs::new([utxo2.id()]));
             // ensure change was returned to alice
@@ -1475,11 +1473,8 @@ mod tests {
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
 
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::from_channels(
-                &Channels::default(),
-                GasPrices::new(1, 1),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
             leader_reward_amount: 0,
         };
         let tx_builder = MantleTxBuilder::new();
@@ -1525,7 +1520,7 @@ mod tests {
 
         // The change output shrank by the mandatory fee and percentage tip.
         let funded_tx = funded_tx_builder.build().unwrap();
-        if let Op::Transfer(transfer_op) = &funded_tx.ops()[funded_tx.ops().len() - 1] {
+        if let Some(Op::Transfer(transfer_op)) = funded_tx.last() {
             assert_eq!(
                 transfer_op.outputs,
                 Outputs::new([Note {
@@ -1549,11 +1544,8 @@ mod tests {
 
         // ...but with zero gas prices a transfer-less transaction owes no fee,
         // so it needs no funding at all.
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::from_channels(
-                &Channels::default(),
-                GasPrices::new(0, 0),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(0, 0)),
             leader_reward_amount: 0,
         };
         let mut tx_builder = MantleTxBuilder::new();
@@ -1581,10 +1573,7 @@ mod tests {
         // The empty transfer is dropped, so the built tx carries no transfer op.
         let funded_tx = funded_tx_builder.build().unwrap();
         assert!(
-            !funded_tx
-                .ops()
-                .iter()
-                .any(|op| matches!(op, Op::Transfer(_))),
+            !funded_tx.iter().any(|op| matches!(op, Op::Transfer(_))),
             "a fee-less transaction must not contain a transfer op"
         );
     }
@@ -1602,8 +1591,8 @@ mod tests {
             &ledger_config(),
         );
 
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::from_channels(
+        let context = OpsContext {
+            gas_context: OpsGasContext::from_channels(
                 ledger_state.mantle_ledger().channels(),
                 GasPrices::new(1, 1),
             ),
@@ -1645,11 +1634,8 @@ mod tests {
 
         // Use non-zero gas prices so the transaction actually owes a fee and
         // therefore needs funding.
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::from_channels(
-                &Channels::default(),
-                GasPrices::new(1, 1),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
             leader_reward_amount: 0,
         };
         let tx_builder = MantleTxBuilder::new();
@@ -1677,11 +1663,8 @@ mod tests {
 
         // Use non-zero gas prices so the transaction actually owes a fee and
         // therefore needs funding.
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::from_channels(
-                &Channels::default(),
-                GasPrices::new(1, 1),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
             leader_reward_amount: 0,
         };
         let tx_builder = MantleTxBuilder::new();
@@ -1710,11 +1693,8 @@ mod tests {
 
         // Use non-zero gas prices so the transaction actually owes a fee and
         // therefore needs funding.
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::from_channels(
-                &Channels::default(),
-                GasPrices::new(1, 1),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
             leader_reward_amount: 0,
         };
         let tx_builder = MantleTxBuilder::new();
@@ -1738,11 +1718,8 @@ mod tests {
     fn test_fund_tx_unfundable_region() {
         let alice = pk(1);
 
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::from_channels(
-                &Channels::default(),
-                GasPrices::new(1, 1),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
             leader_reward_amount: 0,
         };
         let tx_builder = MantleTxBuilder::new();
@@ -1776,9 +1753,7 @@ mod tests {
             .unwrap(); // successfully funded the tx
 
         // verify that no change output was used.
-        if let Op::Transfer(transfer_op) =
-            &funded_tx_wo_change.ops()[funded_tx_wo_change.ops().len() - 1]
-        {
+        if let Some(Op::Transfer(transfer_op)) = funded_tx_wo_change.last() {
             assert_eq!(transfer_op.outputs, Outputs::empty());
         } else {
             panic!("last op must be a transfer")
@@ -1841,9 +1816,7 @@ mod tests {
             .unwrap(); // successfully funded the tx
 
         // verify that indeed a change output was used.
-        if let Op::Transfer(transfer_op) =
-            &funded_tx_wo_change.ops()[funded_tx_wo_change.ops().len() - 1]
-        {
+        if let Some(Op::Transfer(transfer_op)) = funded_tx_wo_change.last() {
             assert_eq!(transfer_op.outputs, Outputs::new([Note::new(1, alice)]));
         } else {
             panic!("the last operation must be a transfer")
@@ -2020,11 +1993,8 @@ mod tests {
 
         // `fund_tx` must also exclude the channel note: with no other
         // UTXOs available, funding a fee-paying tx must fail.
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::from_channels(
-                &Channels::default(),
-                GasPrices::new(1, 1),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
             leader_reward_amount: 0,
         };
         let err = state
@@ -2276,11 +2246,8 @@ mod tests {
         assert_eq!(state.balance(alice).unwrap().balance, 100);
 
         // `fund_tx` can now use the released note.
-        let context = MantleTxContext {
-            gas_context: MantleTxGasContext::from_channels(
-                &Channels::default(),
-                GasPrices::new(1, 1),
-            ),
+        let context = OpsContext {
+            gas_context: OpsGasContext::from_channels(&Channels::default(), GasPrices::new(1, 1)),
             leader_reward_amount: 0,
         };
         let err = state
@@ -2317,7 +2284,7 @@ mod tests {
             signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
         });
 
-        let source_transactions: BlockTransactions<MantleTransaction<Unverified>> = [
+        let source_transactions: BlockTransactions<SignedOps<Preverified, StandardMode>> = [
             signed_test_tx(vec![transfer, deposit]),
             signed_test_tx(vec![ignored_inscription]),
         ]
@@ -2361,19 +2328,22 @@ mod tests {
         assert!(second_wallet_tx.ops.is_empty());
     }
 
-    fn signed_test_tx(ops: Vec<Op>) -> MantleTransaction<Unverified> {
-        let proofs = OpProofs::try_from_iter(ops.iter().map(|op| match op {
-            Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
-            _ => OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
-                &[0; 128],
-            ))),
-        }))
-        .expect("test proofs should fit");
+    fn signed_test_tx(ops: Vec<Op>) -> SignedOps<Preverified, StandardMode> {
+        let ops = Ops::try_from(ops).expect("test operations should fit");
+        let proofs = ops
+            .iter()
+            .map(|op| match op {
+                Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
+                _ => OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
+                    &[0; 128],
+                ))),
+            })
+            .collect::<Vec<_>>();
+        let op_proofs = OpProofs::new_unchecked(proofs);
 
-        MantleTransaction::new(
-            RawMantleTx(Ops::try_from(ops).expect("test operations should fit")),
-            proofs,
-        )
+        SignedOps::from_parts(ops, op_proofs)
+            .unwrap()
+            .into_preverified_trusted()
     }
 
     fn test_leader_proof() -> Groth16LeaderProof {
