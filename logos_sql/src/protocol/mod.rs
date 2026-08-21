@@ -14,9 +14,12 @@ use crate::error::Error;
 mod codec;
 mod fixtures;
 
+// Every payload starts with this marker and version before the encoded body.
 pub const PAYLOAD_MARKER: [u8; 9] = *b"LOGOS_SQL";
-const PAYLOAD_VERSION: u16 = 1;
+const PAYLOAD_VERSION: u16 = 2;
 const PAYLOAD_HEADER_LEN: usize = PAYLOAD_MARKER.len() + size_of::<u16>();
+
+// A complete λSQL transaction must fit into one channel inscription.
 const MAX_PAYLOAD_BYTES: usize = Inscription::MAX;
 
 /// Stable identity of one application write.
@@ -113,6 +116,12 @@ impl ToSql for SqlParameter {
     }
 }
 
+impl SqlParameter {
+    pub fn into_value(self) -> Value {
+        self.0
+    }
+}
+
 /// One parameterized SQL statement.
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 pub struct Statement {
@@ -177,9 +186,62 @@ impl Transaction {
     pub fn statements(&self) -> &[Statement] {
         self.statements.as_slice()
     }
+}
 
-    pub(crate) fn digest(&self) -> [u8; 32] {
-        Blake2b::<U32>::digest(self.encode_to_vec()).into()
+/// `SQLite` function whose result must be reproduced during channel replay.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CapturedFunction {
+    Random,
+    RandomBlob,
+    Date,
+    Time,
+    DateTime,
+    JulianDay,
+    UnixEpoch,
+    Strftime,
+    TimeDiff,
+    CurrentDate,
+    CurrentTime,
+    CurrentTimestamp,
+}
+
+/// One captured `SQLite` function call and the value returned locally.
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+pub struct CapturedFunctionCall {
+    pub function: CapturedFunction,
+    pub result: SqlParameter,
+}
+
+impl CapturedFunctionCall {
+    pub fn new(function: CapturedFunction, result: Value) -> Result<Self, Error> {
+        Ok(Self {
+            function,
+            result: SqlParameter::try_from(result)?,
+        })
+    }
+}
+
+/// Function results captured while executing one replicated transaction.
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+pub struct CapturedFunctionCalls {
+    calls: UpperBoundedVec<CapturedFunctionCall, MAX_PAYLOAD_BYTES>,
+}
+
+impl CapturedFunctionCalls {
+    pub fn new(calls: Vec<CapturedFunctionCall>) -> Result<Self, Error> {
+        let calls = UpperBoundedVec::try_from(calls).map_err(|_| Error::InscriptionTooLarge)?;
+
+        Ok(Self { calls })
+    }
+
+    pub const fn empty() -> Self {
+        Self {
+            calls: UpperBoundedVec::new_unchecked(Vec::new()),
+        }
+    }
+
+    pub fn as_slice(&self) -> &[CapturedFunctionCall] {
+        self.calls.as_slice()
     }
 }
 
@@ -188,6 +250,7 @@ impl Transaction {
 pub struct ChannelInscription {
     pub tx_id: TxId,
     pub transaction: Transaction,
+    pub captured_function_calls: CapturedFunctionCalls,
 }
 
 impl ChannelInscription {
@@ -225,26 +288,40 @@ impl ChannelInscription {
         <Self as BinaryDecode>::decode_all(body, &())
             .map_err(|_| Error::InvalidPayload("body cannot be decoded"))
     }
+
+    pub fn content_digest(&self) -> [u8; 32] {
+        Blake2b::<U32>::digest(self.encode_to_vec()).into()
+    }
 }
 
 /// A local write after its identity and channel payload have been encoded.
 pub struct EncodedWrite {
     pub tx_id: TxId,
+    pub content_digest: [u8; 32],
     pub payload: Vec<u8>,
 }
 
 impl EncodedWrite {
-    pub fn new(transaction: &Transaction) -> Result<Self, Error> {
+    pub fn new(
+        transaction: &Transaction,
+        captured_function_calls: CapturedFunctionCalls,
+    ) -> Result<Self, Error> {
         let tx_id = TxId::generate();
 
         let channel_inscription = ChannelInscription {
             tx_id,
             transaction: transaction.clone(),
+            captured_function_calls,
         };
 
+        let content_digest = channel_inscription.content_digest();
         let payload = channel_inscription.encode()?;
 
-        Ok(Self { tx_id, payload })
+        Ok(Self {
+            tx_id,
+            content_digest,
+            payload,
+        })
     }
 }
 
@@ -271,7 +348,8 @@ mod tests {
     use rusqlite::types::Value;
 
     use super::{
-        ChannelInscription, EncodedWrite, MAX_PAYLOAD_BYTES, Statement, Transaction, TxId,
+        CapturedFunctionCalls, ChannelInscription, EncodedWrite, MAX_PAYLOAD_BYTES, Statement,
+        Transaction, TxId,
     };
 
     #[test]
@@ -292,7 +370,8 @@ mod tests {
         ])
         .expect("transaction should be valid");
 
-        let encoded = EncodedWrite::new(&transaction).expect("submission should encode");
+        let encoded = EncodedWrite::new(&transaction, CapturedFunctionCalls::empty())
+            .expect("payload should encode");
         let decoded = ChannelInscription::decode(&encoded.payload)
             .expect("channel inscription should decode");
 
@@ -309,6 +388,7 @@ mod tests {
         let write = ChannelInscription {
             tx_id: TxId::from([3; 32]),
             transaction,
+            captured_function_calls: CapturedFunctionCalls::empty(),
         };
         let mut payload = write.encode().expect("payload should encode");
         payload.push(0);
@@ -325,16 +405,35 @@ mod tests {
         let write = ChannelInscription {
             tx_id: TxId::from([3; 32]),
             transaction,
+            captured_function_calls: CapturedFunctionCalls::empty(),
         };
 
         let expected = hex::decode(concat!(
-            "4c4f474f535f53514c0100",
+            "4c4f474f535f53514c0200",
             "0303030303030303030303030303030303030303030303030303030303030303",
-            "010000000800000053454c454354203100000000"
+            "010000000800000053454c45435420310000000000000000"
         ))
         .expect("fixture should be valid hex");
 
         assert_eq!(write.encode().expect("payload should encode"), expected);
+    }
+
+    #[test]
+    fn content_digest_is_pinned() {
+        let transaction = Transaction::new(vec![
+            Statement::new("SELECT 1".to_owned(), Vec::new()).expect("statement should be valid"),
+        ])
+        .expect("transaction should be valid");
+        let write = ChannelInscription {
+            tx_id: TxId::from([3; 32]),
+            transaction,
+            captured_function_calls: CapturedFunctionCalls::empty(),
+        };
+
+        assert_eq!(
+            hex::encode(write.content_digest()),
+            "b119823633ba6fbe90618b226b0d68eae1805876a86c1057237aca6205874b30"
+        );
     }
 
     #[test]
@@ -347,7 +446,7 @@ mod tests {
             .expect("statement should be valid"),
         ])
         .expect("transaction should be valid");
-        let result = EncodedWrite::new(&transaction);
+        let result = EncodedWrite::new(&transaction, CapturedFunctionCalls::empty());
 
         assert!(matches!(result, Err(crate::Error::InscriptionTooLarge)));
     }

@@ -3,7 +3,26 @@
 use lb_codec::codec_fixtures;
 use rusqlite::types::Value;
 
-use super::{ChannelInscription, SqlParameter, SqlText, Statement, Transaction, TxId};
+use super::{
+    CapturedFunction, CapturedFunctionCall, CapturedFunctionCalls, ChannelInscription,
+    SqlParameter, SqlText, Statement, Transaction, TxId,
+};
+
+codec_fixtures!(
+    CapturedFunction,
+    CapturedFunction::Random => "00",
+    CapturedFunction::RandomBlob => "01",
+    CapturedFunction::Date => "02",
+    CapturedFunction::Time => "03",
+    CapturedFunction::DateTime => "04",
+    CapturedFunction::JulianDay => "05",
+    CapturedFunction::UnixEpoch => "06",
+    CapturedFunction::Strftime => "07",
+    CapturedFunction::TimeDiff => "08",
+    CapturedFunction::CurrentDate => "09",
+    CapturedFunction::CurrentTime => "0a",
+    CapturedFunction::CurrentTimestamp => "0b"
+);
 
 codec_fixtures!(
     TxId,
@@ -28,6 +47,26 @@ codec_fixtures!(
         "03020000006869",
     SqlParameter::try_from(Value::Blob(vec![0, 255])).expect("fixture should be valid") =>
         "040200000000ff"
+);
+
+fn captured_function_call_fixture() -> CapturedFunctionCall {
+    CapturedFunctionCall::new(CapturedFunction::Random, Value::Integer(42))
+        .expect("fixture should be valid")
+}
+
+codec_fixtures!(
+    CapturedFunctionCall,
+    captured_function_call_fixture() => "00012a00000000000000"
+);
+
+fn captured_function_calls_fixture() -> CapturedFunctionCalls {
+    CapturedFunctionCalls::new(vec![captured_function_call_fixture()])
+        .expect("fixture should be valid")
+}
+
+codec_fixtures!(
+    CapturedFunctionCalls,
+    captured_function_calls_fixture() => "0100000000012a00000000000000"
 );
 
 fn statement_fixture() -> Statement {
@@ -74,6 +113,7 @@ fn channel_inscription_fixture() -> ChannelInscription {
     ChannelInscription {
         tx_id: TxId::from([3; 32]),
         transaction: transaction_fixture(),
+        captured_function_calls: CapturedFunctionCalls::empty(),
     }
 }
 
@@ -81,6 +121,7 @@ codec_fixtures!(
     ChannelInscription,
     channel_inscription_fixture() => concat!(
         "0303030303030303030303030303030303030303030303030303030303030303",
-        "010000000800000053454c454354203100000000"
+        "010000000800000053454c454354203100000000",
+        "00000000"
     )
 );
