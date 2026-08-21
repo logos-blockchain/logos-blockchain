@@ -301,11 +301,14 @@ impl Stream for TicketGenerator {
                     // registers its waker, without depending on an external
                     // re-poll.
                 }
-                // No new block right now. The generator never terminates: it
-                // just idles until the next block arrives to search on. The
-                // polls above registered the wakers that will re-poll us on
-                // progress (a new block, or a winner from an active search).
-                Poll::Ready(None) | Poll::Pending => return Poll::Pending,
+                // Upstream is closed: no block will ever arrive again, so stop
+                // mining and end the generator, dropping any in-flight searches.
+                // Winners already produced were emitted by the poll above.
+                Poll::Ready(None) => return Poll::Ready(None),
+                // No new block right now: idle until the next one arrives. The
+                // polls above registered the wakers that re-poll us on progress
+                // (a new block, or a winner from an active search).
+                Poll::Pending => return Poll::Pending,
             }
         }
     }
@@ -466,16 +469,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn poll_never_terminates_even_when_upstream_is_closed() {
-        // A closed upstream must not close the generator: it stays alive, idle,
-        // ready to resume if blocks ever start flowing again.
+    async fn poll_terminates_when_upstream_is_closed() {
+        // A closed upstream means no block will ever arrive again, so the
+        // generator stops mining and ends.
         let mut generator = TicketGenerator {
             processed_block_stream: no_blocks(),
             tickets_search: StreamMap::new(),
             tickets_search_by_slot: HashMap::new(),
             tip: HeaderId::from([0u8; 32]),
         };
-        assert!(matches!(poll_once(&mut generator), Poll::Pending));
+        assert!(matches!(poll_once(&mut generator), Poll::Ready(None)));
+    }
+
+    #[tokio::test]
+    async fn poll_terminates_on_closed_upstream_dropping_active_searches() {
+        // Even with a search still running, a closed upstream terminates the
+        // generator: we want to stop mining, not keep churning on old blocks.
+        let mut tickets_search = StreamMap::new();
+        tickets_search.insert(
+            HeaderId::from([1u8; 32]),
+            Box::pin(stream::pending()) as WinnerTicketStream,
+        );
+        let mut generator = TicketGenerator {
+            processed_block_stream: no_blocks(),
+            tickets_search,
+            tickets_search_by_slot: HashMap::new(),
+            tip: HeaderId::from([0u8; 32]),
+        };
+        assert!(matches!(poll_once(&mut generator), Poll::Ready(None)));
     }
 
     #[tokio::test]
@@ -518,7 +539,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn poll_drains_winner_then_stays_alive() {
+    async fn poll_drains_ready_winner_before_terminating() {
         let mut tickets_search = StreamMap::new();
         tickets_search.insert(
             HeaderId::from([1u8; 32]),
@@ -531,10 +552,9 @@ mod tests {
             tip: HeaderId::from([0u8; 32]),
         };
 
-        // The winner is drained...
+        // A winner already produced is emitted first...
         assert!(matches!(poll_once(&mut generator), Poll::Ready(Some(_))));
-        // ...and once the search is exhausted the generator idles rather than
-        // terminating, ready for the next block.
-        assert!(matches!(poll_once(&mut generator), Poll::Pending));
+        // ...then, with the search drained and upstream closed, it terminates.
+        assert!(matches!(poll_once(&mut generator), Poll::Ready(None)));
     }
 }
