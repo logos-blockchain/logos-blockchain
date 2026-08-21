@@ -1,13 +1,17 @@
 pub mod channel;
-pub(crate) mod codec;
 pub(crate) mod internal;
 pub mod leader_claim;
 pub mod op;
 pub mod op_proof;
+pub mod op_proof_ref;
+pub mod op_ref;
 pub mod pow;
+pub mod proof_noop;
+pub mod proof_zk_and_ed;
 pub mod sdp;
 mod serde_;
 pub mod signed_op;
+pub mod signed_op_error;
 pub mod signed_operation;
 pub mod transfer;
 
@@ -15,7 +19,11 @@ use std::sync::LazyLock;
 
 pub use crate::mantle::ops::{
     op::{Op, OpId},
-    op_proof::{NoOpProof, OpProof, ZkAndEd25519Proof},
+    op_proof::OpProof,
+    op_proof_ref::OpProofRef,
+    op_ref::OpRef,
+    proof_noop::NoOpProof,
+    proof_zk_and_ed::ZkAndEd25519Proof,
     signed_op::SignedOp,
     signed_operation::SignedOperation,
 };
@@ -64,7 +72,7 @@ mod mantle_test_vectors {
     use crate::{
         crypto::{Digest as _, Hash, Hasher},
         mantle::{
-            Note, RawMantleTx,
+            Note,
             channel::{SlotTimeframe, SlotTimeout},
             ledger::{Inputs, NoteId, Outputs},
             ops::{
@@ -81,7 +89,7 @@ mod mantle_test_vectors {
                 transfer::TransferOp,
             },
             traits::Hashable as _,
-            transactions::Ops,
+            transactions::tx_list::Ops,
         },
         sdp::{
             ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locator,
@@ -215,7 +223,7 @@ mod mantle_test_vectors {
         println!();
     }
 
-    fn print_tx_vector(label: &str, tx: &RawMantleTx) {
+    fn print_tx_vector(label: &str, tx: &Ops) {
         let payload = tx.encode();
         let tx_hash = tx_hash_from_payload(&payload);
         // The hand-rolled computation must match the production `hash()`.
@@ -261,12 +269,12 @@ mod mantle_test_vectors {
     fn generate_mantle_tx_hash_test_vectors() {
         println!();
         // Empty transaction (zero operations).
-        print_tx_vector("empty (0 ops)", &RawMantleTx(Ops::new_unchecked(vec![])));
+        print_tx_vector("empty (0 ops)", &Ops::new_unchecked(vec![]));
 
         // Transaction holding one of every operation.
         print_tx_vector(
             "one of each operation (9 ops)",
-            &RawMantleTx(Ops::new_unchecked(sample_ops())),
+            &Ops::new_unchecked(sample_ops()),
         );
     }
 }
