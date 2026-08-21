@@ -11,11 +11,14 @@ use crate::{
         gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             self, ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation,
-            Utxo, Utxos, VerifiableOperation, verification_mode,
-            verification_mode::VerificationMode,
+            Utxo, Utxos, VerifiableOperation,
+            verification_mode::{StandardMode, VerificationMode},
         },
         ops::{OpId, SignedOperation},
-        transactions::{hash::TxHashView, states::VerificationState},
+        transactions::{
+            hash::TxHashView,
+            states::{Preverified, Unverified, VerificationState, Verified},
+        },
     },
     sdp::locked_notes::LockedNotes,
 };
@@ -94,40 +97,42 @@ impl OperationGas<MainnetGasProfile> for TransferOp {
     const GAS_COST: Gas = Gas::new(590);
 }
 
-impl PreverifiableOperation<verification_mode::StandardMode> for TransferOp {
+impl PreverifiableOperation<StandardMode>
+    for SignedOperation<TransferOp, Unverified, StandardMode>
+{
     type Context<'a> = ();
     type Error = TransferError;
 
-    fn preverify(
-        &self,
-        _proof: &Self::Proof,
-        _context: &Self::Context<'_>,
-    ) -> Result<(), Self::Error> {
+    fn preverify(&self, _context: &Self::Context<'_>) -> Result<(), Self::Error> {
+        let operation = self.operation();
+
         // Ensure the inputs is non-empty
-        self.inputs.preverify()?;
+        operation.inputs.preverify()?;
 
         // Validate Outputs
-        self.outputs.validate()?;
+        operation.outputs.validate()?;
 
         Ok(())
     }
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for TransferOp {
+impl VerifiableOperation<StandardMode> for SignedOperation<TransferOp, Preverified, StandardMode> {
     type Context<'a> = TransferValidationContext<'a>;
     type Error = TransferError;
 
-    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+        let operation = self.operation();
+
         // Validate Inputs
-        self.inputs.validate_not_in_channel(
+        operation.inputs.validate_not_in_channel(
             context.locked_notes,
             context.channels,
             context.utxos,
         )?;
 
         // Check the transfer Proof
-        let pks = self.inputs.get_pk(context.utxos)?;
-        if !ZkPublicKey::verify_multi(&pks, context.tx_hash_view.as_fr(), proof) {
+        let pks = operation.inputs.get_pk(context.utxos)?;
+        if !ZkPublicKey::verify_multi(&pks, context.tx_hash_view.as_fr(), self.proof()) {
             return Err(TransferError::InvalidProof);
         }
 
@@ -135,7 +140,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for TransferOp {
     }
 }
 
-impl ExecutableOperation for TransferOp {
+impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<TransferOp, Verified, Mode> {
     type Context<'a> = Utxos;
     type Error = TransferError;
 
@@ -143,10 +148,13 @@ impl ExecutableOperation for TransferOp {
         &self,
         mut utxos: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
+        let operation = self.operation();
+
         // Remove inputs from the ledger
-        utxos = self.inputs.execute(utxos)?;
+        utxos = operation.inputs.execute(utxos)?;
+
         // Add outputs from the ledger
-        utxos = self.outputs.execute(utxos, self);
+        utxos = operation.outputs.execute(utxos, self.operation());
         Ok((utxos, Vec::new()))
     }
 }
@@ -176,9 +184,10 @@ mod test {
             outputs: Outputs::new([Note::new(100, pk)]),
         };
         let proof = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
+        let signed_operation = SignedOperation::new(transfer, proof);
 
         assert_eq!(
-            transfer.preverify(&proof, &()),
+            signed_operation.preverify(&()),
             Err(TransferError::Inputs(ledger::InputsError::EmptyInputs))
         );
     }

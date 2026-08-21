@@ -17,10 +17,13 @@ use crate::{
         gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
-            verification_mode, verification_mode::VerificationMode,
+            verification_mode::{StandardMode, VerificationMode},
         },
         ops::{SignedOperation, channel::config::Keys},
-        transactions::{hash::TxHashView, states::VerificationState},
+        transactions::{
+            hash::TxHashView,
+            states::{Preverified, Unverified, VerificationState, Verified},
+        },
     },
 };
 
@@ -95,55 +98,63 @@ impl OperationGas<MainnetGasProfile> for InscriptionOp {
     const GAS_COST: Gas = Gas::new(56);
 }
 
-impl PreverifiableOperation<verification_mode::StandardMode> for InscriptionOp {
+impl PreverifiableOperation<StandardMode>
+    for SignedOperation<InscriptionOp, Unverified, StandardMode>
+{
     type Context<'a> = InscriptionPreverificationContext<'a>;
     type Error = Error;
 
-    fn preverify(
-        &self,
-        proof: &Self::Proof,
-        context: &Self::Context<'_>,
-    ) -> Result<(), Self::Error> {
+    fn preverify(&self, context: &Self::Context<'_>) -> Result<(), Self::Error> {
         // Check the signature
-        self.signer
-            .verify(context.tx_hash_view.as_bytes(), proof)
+        self.operation()
+            .signer
+            .verify(context.tx_hash_view.as_bytes(), self.proof())
             .map_err(|_error| Error::InvalidSignature)?;
 
         Ok(())
     }
 }
 
-impl VerifiableOperation<verification_mode::StandardMode> for InscriptionOp {
+impl VerifiableOperation<StandardMode>
+    for SignedOperation<InscriptionOp, Preverified, StandardMode>
+{
     type Context<'a> = InscriptionValidationContext<'a>;
     type Error = Error;
 
-    fn verify(&self, _proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+    fn verify(&self, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+        let operation = self.operation();
+
         // Check if the channel exist otherwise the inscription is valid only if and
         // only if parent == ZERO
-        if let Some(channel) = context.channels.channels.get(&self.channel_id).cloned() {
+        if let Some(channel) = context
+            .channels
+            .channels
+            .get(&operation.channel_id)
+            .cloned()
+        {
             // Check the parent corresponds to the payload
-            if self.parent != channel.tip_message {
+            if operation.parent != channel.tip_message {
                 return Err(Error::InvalidParent {
-                    channel_id: self.channel_id,
-                    parent: self.parent.into(),
+                    channel_id: operation.channel_id,
+                    parent: operation.parent.into(),
                     actual: channel.tip_message.into(),
                 });
             }
 
             // Check that the signer is the authorized one
-            if self.signer
+            if operation.signer
                 != channel.accredited_keys[channel.round_robin(context.block_slot).0 as usize]
             {
                 return Err(Error::UnauthorizedSigner {
-                    channel_id: self.channel_id,
-                    signer: format!("{signer:?}", signer = self.signer),
+                    channel_id: operation.channel_id,
+                    signer: format!("{signer:?}", signer = operation.signer),
                 });
             }
-        } else if self.parent != MsgId::root() {
+        } else if operation.parent != MsgId::root() {
             // Checked that the parent is ZERO because channel doesn't exist
             return Err(Error::InvalidParent {
-                channel_id: self.channel_id,
-                parent: self.parent.into(),
+                channel_id: operation.channel_id,
+                parent: operation.parent.into(),
                 actual: MsgId::root().into(),
             });
         }
@@ -152,7 +163,9 @@ impl VerifiableOperation<verification_mode::StandardMode> for InscriptionOp {
     }
 }
 
-impl ExecutableOperation for InscriptionOp {
+impl<Mode: VerificationMode> ExecutableOperation
+    for SignedOperation<InscriptionOp, Verified, Mode>
+{
     type Context<'a> = InscriptionExecutionContext;
     type Error = Error;
 
@@ -160,14 +173,16 @@ impl ExecutableOperation for InscriptionOp {
         &self,
         mut context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
+        let operation = self.operation();
+
         // if the channel doesn't exist, create it
         let channel = context
             .channels
             .channels
-            .get(&self.channel_id)
+            .get(&operation.channel_id)
             .cloned()
             .unwrap_or_else(|| ChannelState {
-                accredited_keys: Keys::from(self.signer).into(),
+                accredited_keys: Keys::from(operation.signer).into(),
                 configuration_threshold: 1,
                 tip_message: MsgId::root(),
                 tip_slot: context.block_slot,
@@ -182,9 +197,9 @@ impl ExecutableOperation for InscriptionOp {
         // slot
         let (new_sequencer, new_starting_slot) = channel.round_robin(context.block_slot);
         context.channels.channels = context.channels.channels.insert(
-            self.channel_id,
+            operation.channel_id,
             ChannelState {
-                tip_message: self.id(),
+                tip_message: operation.id(),
                 accredited_keys: Arc::clone(&channel.accredited_keys),
                 tip_sequencer: new_sequencer,
                 tip_sequencer_starting_slot: new_starting_slot,
