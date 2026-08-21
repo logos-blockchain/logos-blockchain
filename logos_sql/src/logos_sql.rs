@@ -12,7 +12,7 @@ use lb_zone_sdk::{
 use reqwest::Url;
 use rusqlite::Connection;
 
-use crate::{db::Databases, error::Error, protocol::TxId, runtime, sql::QueryBuilder};
+use crate::{db::Databases, error::Error, protocol::TxId, runtime, sql::TransactionBuilder};
 
 /// Configuration for one `λSQL` database.
 pub struct LogosSqlConfig {
@@ -87,7 +87,7 @@ impl LogosSql {
     /// ```no_run
     /// # use logos_sql::{Error, LogosSql, TransactionBuilder, TxId};
     /// # async fn create_task(logos_sql: &LogosSql) -> Result<TxId, Error> {
-    /// let transaction = TransactionBuilder::query(
+    /// let transaction = TransactionBuilder::new(
     ///     "INSERT INTO tasks (id, title) VALUES (?1, ?2)",
     /// )
     ///     .bind(42i64)
@@ -105,7 +105,7 @@ impl LogosSql {
     /// Returns an error when a parameter cannot be represented by the `λSQL`
     /// protocol, validation or the local commit fails, the sequencer is not
     /// ready, or the runtime has halted.
-    pub async fn execute(&self, transaction: QueryBuilder) -> Result<TxId, Error> {
+    pub async fn execute(&self, transaction: TransactionBuilder) -> Result<TxId, Error> {
         let transaction = transaction.finish()?;
 
         self.runtime

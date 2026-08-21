@@ -7,28 +7,13 @@ use crate::{
     protocol::{Statement, Transaction},
 };
 
-/// The beginning of a replicated SQL transaction.
-///
-/// Start with [`Self::query`], then bind its parameters and pass the resulting
-/// [`QueryBuilder`] to [`crate::LogosSql::execute`].
-pub struct TransactionBuilder;
-
-impl TransactionBuilder {
-    /// Starts a transaction with its first SQL query.
-    pub fn query(sql: impl Into<String>) -> QueryBuilder {
-        QueryBuilder {
-            transaction: TransactionDraft::new(sql),
-        }
-    }
-}
-
 /// A replicated SQL transaction with a current query.
 ///
 /// Parameter values are converted immediately into owned `SQLite` values, so
 /// borrowed application data does not need to outlive the call to
 /// [`Self::bind`].
 #[must_use = "the transaction must be passed to LogosSql::execute"]
-pub struct QueryBuilder {
+pub struct TransactionBuilder {
     transaction: TransactionDraft,
 }
 
@@ -38,7 +23,14 @@ struct TransactionDraft {
     error: Option<Error>,
 }
 
-impl QueryBuilder {
+impl TransactionBuilder {
+    /// Starts a transaction with its first SQL query.
+    pub fn new(sql: impl Into<String>) -> Self {
+        Self {
+            transaction: TransactionDraft::new(sql),
+        }
+    }
+
     /// Adds the next SQL query to this transaction.
     pub fn query(mut self, sql: impl Into<String>) -> Self {
         self.transaction.query(sql);
@@ -50,7 +42,7 @@ impl QueryBuilder {
     ///
     /// Values use [`rusqlite::types::ToSql`], the same conversion interface as
     /// ordinary `SQLite` writes. Any conversion error is returned by
-    /// [`Self::execute`].
+    /// [`crate::LogosSql::execute`].
     pub fn bind<T>(mut self, value: T) -> Self
     where
         T: ToSql,
@@ -157,7 +149,7 @@ mod tests {
     #[test]
     fn assembles_statements_and_parameters_in_order() {
         let transaction =
-            TransactionBuilder::query("INSERT INTO credentials (label, account) VALUES (?1, ?2)")
+            TransactionBuilder::new("INSERT INTO credentials (label, account) VALUES (?1, ?2)")
                 .bind("email")
                 .bind("andrus@example.org")
                 .query("UPDATE credentials SET password = ?2 WHERE label = ?1")

@@ -4,17 +4,10 @@
 //! application ends and the replication library begins. Domain operations are
 //! translated into parameterized SQL writes here.
 
-use logos_sql::{
-    Error as LogosSqlError, LogosSql, LogosSqlConfig, QueryBuilder, TransactionBuilder, TxId,
-};
+use logos_sql::{Error as LogosSqlError, LogosSql, LogosSqlConfig, TransactionBuilder, TxId};
 
 use crate::AppResult;
 
-const SELECT_CREDENTIAL: &str = "
-    SELECT label, account, password
-    FROM credentials
-    WHERE label = ?1
-";
 const SELECT_CREDENTIALS: &str = "
     SELECT label, account
     FROM credentials
@@ -26,8 +19,8 @@ const SELECT_SCHEMA_EXISTS: &str = "
     WHERE type = 'table' AND name = 'credentials'
 ";
 
-fn prepare_schema() -> QueryBuilder {
-    TransactionBuilder::query(
+fn prepare_schema() -> TransactionBuilder {
+    TransactionBuilder::new(
         "CREATE TABLE IF NOT EXISTS credentials (
             label TEXT PRIMARY KEY,
             account TEXT NOT NULL,
@@ -36,8 +29,8 @@ fn prepare_schema() -> QueryBuilder {
     )
 }
 
-fn prepare_credential_insert(label: &str, account: &str, password: &str) -> QueryBuilder {
-    TransactionBuilder::query(
+fn prepare_credential_insert(label: &str, account: &str, password: &str) -> TransactionBuilder {
+    TransactionBuilder::new(
         "INSERT INTO credentials (label, account, password)
          VALUES (?1, ?2, ?3)",
     )
@@ -46,8 +39,8 @@ fn prepare_credential_insert(label: &str, account: &str, password: &str) -> Quer
     .bind(password)
 }
 
-fn prepare_password_update(label: &str, password: &str) -> QueryBuilder {
-    TransactionBuilder::query(
+fn prepare_password_update(label: &str, password: &str) -> TransactionBuilder {
+    TransactionBuilder::new(
         "UPDATE credentials
          SET password = ?2
          WHERE label = ?1",
@@ -56,8 +49,8 @@ fn prepare_password_update(label: &str, password: &str) -> QueryBuilder {
     .bind(password)
 }
 
-fn prepare_credential_delete(label: &str) -> QueryBuilder {
-    TransactionBuilder::query("DELETE FROM credentials WHERE label = ?1").bind(label)
+fn prepare_credential_delete(label: &str) -> TransactionBuilder {
+    TransactionBuilder::new("DELETE FROM credentials WHERE label = ?1").bind(label)
 }
 
 /// One credential in the current local database view.
@@ -145,7 +138,11 @@ impl PasswordManager {
     /// Reads one credential from the local `SQLite` database.
     pub fn credential(&self, label: &str) -> AppResult<Option<Credential>> {
         let connection = self.logos_sql.read_connection()?;
-        let mut statement = connection.prepare(SELECT_CREDENTIAL)?;
+        let mut statement = connection.prepare(
+            "SELECT label, account, password
+             FROM credentials
+             WHERE label = ?1",
+        )?;
         let mut rows = statement.query([label])?;
 
         let Some(row) = rows.next()? else {
@@ -153,9 +150,9 @@ impl PasswordManager {
         };
 
         Ok(Some(Credential {
-            label: row.get(0)?,
-            account: row.get(1)?,
-            password: row.get(2)?,
+            label: row.get("label")?,
+            account: row.get("account")?,
+            password: row.get("password")?,
         }))
     }
 
@@ -167,8 +164,8 @@ impl PasswordManager {
         let credentials = statement
             .query_map([], |row| {
                 Ok(CredentialSummary {
-                    label: row.get(0)?,
-                    account: row.get(1)?,
+                    label: row.get("label")?,
+                    account: row.get("account")?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

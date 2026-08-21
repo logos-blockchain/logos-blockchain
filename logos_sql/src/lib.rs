@@ -18,4 +18,4 @@ pub use error::Error;
 pub use logos_sql::{LogosSql, LogosSqlConfig};
 pub use protocol::TxId;
 pub use rusqlite::types::ToSql;
-pub use sql::{QueryBuilder, TransactionBuilder};
+pub use sql::TransactionBuilder;
