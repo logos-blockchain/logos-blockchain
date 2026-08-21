@@ -11,11 +11,11 @@ use std::panic::set_hook;
 
 use color_eyre::eyre::{Result, eyre};
 pub use lb_blend_service::core::backends::libp2p::Libp2pBlendBackend as BlendBackend;
-use lb_core::mantle::transactions::states::Preverified;
+use lb_core::mantle::{ledger::verification_mode::StandardMode, transactions::states::Preverified};
 pub use lb_core::{
     codec,
     header::HeaderId,
-    mantle::{MantleTransaction, traits::Hashable, transactions::hash::TxHash},
+    mantle::{SignedOps, traits::Hashable, transactions::hash::TxHash},
 };
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 pub use lb_storage_service::backends::{
@@ -99,7 +99,7 @@ pub type ApiService = lb_api_service::ApiService<
     AxumBackend<
         NtpTimeBackend,
         ApiStorageAdapter<RuntimeServiceId>,
-        RocksStorageAdapter<MantleTransaction<Preverified>, TxHash>,
+        RocksStorageAdapter<SignedOps<Preverified, StandardMode>, TxHash>,
         SdpMempoolAdapter<RuntimeServiceId>,
         SdpWalletAdapter<RuntimeServiceId>,
         SdpRecoveryBackend<RuntimeServiceId>,

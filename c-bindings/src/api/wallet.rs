@@ -8,9 +8,9 @@ use lb_api_service::http::mempool;
 use lb_core::{
     header::HeaderId as CoreHeaderId,
     mantle::{
-        MantleTransaction, Note, NoteId as CoreNoteId, Op, OpProof, RawMantleTx,
+        Note, NoteId as CoreNoteId, Op, OpProof, SignedOps,
         gas::GasCost,
-        ledger::{Inputs, Outputs},
+        ledger::{Inputs, Outputs, verification_mode::StandardMode},
         ops::{
             channel::{
                 ChannelId,
@@ -20,7 +20,7 @@ use lb_core::{
         },
         traits::Hashable,
         transactions::{
-            MantleTxBuilder,
+            MantleTxBuilder, OpProofs, Ops,
             states::{Preverified, Unverified},
         },
     },
@@ -682,7 +682,7 @@ impl TransferFundsArguments {
 ///
 /// # Returns
 ///
-/// A `Result` containing a [`MantleTransaction`] on success, or an
+/// A `Result` containing a [`SignedOps`] on success, or an
 /// [`OperationStatus`] error on failure.
 pub(crate) fn transfer_funds_sync(
     node: &LogosBlockchainNode,
@@ -691,7 +691,7 @@ pub(crate) fn transfer_funds_sync(
     funding_public_keys: Vec<ZkPublicKey>,
     recipient_public_key: ZkPublicKey,
     amount: u64,
-) -> StatusResult<MantleTransaction<Preverified>> {
+) -> StatusResult<SignedOps<Preverified, StandardMode>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
@@ -935,7 +935,7 @@ impl ChannelDepositWithNotesArguments {
 ///
 /// # Returns
 ///
-/// A [`Result`] containing the submitted [`MantleTransaction`] on success, or
+/// A [`Result`] containing the submitted [`SignedOps`] on success, or
 /// an [`OperationStatus`] error on failure.
 pub(crate) fn channel_deposit_with_notes_sync(
     node: &LogosBlockchainNode,
@@ -944,7 +944,7 @@ pub(crate) fn channel_deposit_with_notes_sync(
     change_public_key: ZkPublicKey,
     funding_public_keys: Vec<ZkPublicKey>,
     max_tx_fee: GasCost,
-) -> StatusResult<MantleTransaction<Preverified>> {
+) -> StatusResult<SignedOps<Preverified, StandardMode>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
@@ -1239,7 +1239,7 @@ impl ChannelDepositArguments {
 ///
 /// # Returns
 ///
-/// A [`Result`] containing the submitted [`MantleTransaction`] on success, or
+/// A [`Result`] containing the submitted [`SignedOps`] on success, or
 /// an [`OperationStatus`] error on failure.
 pub(crate) fn channel_deposit_sync(
     node: &LogosBlockchainNode,
@@ -1248,7 +1248,7 @@ pub(crate) fn channel_deposit_sync(
     funding_public_key: ZkPublicKey,
     amount: Value,
     metadata: Metadata,
-) -> StatusResult<MantleTransaction<Preverified>> {
+) -> StatusResult<SignedOps<Preverified, StandardMode>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
@@ -1330,7 +1330,7 @@ pub(crate) fn channel_deposit_sync(
         //    inputs and the deposit's input note are owned by `funding_public_key`, so
         //    one signature over the tx hash satisfies both op proofs. Do not "simplify"
         //    this to `sign_tx`.
-        let tx = RawMantleTx([Op::Transfer(transfer), Op::ChannelDeposit(deposit)].into());
+        let tx = Ops::from([Op::Transfer(transfer), Op::ChannelDeposit(deposit)]);
         let tx_hash = tx.hash();
         let user_sig = api
             .sign_tx_with_zk(tx_hash, vec![funding_public_key])
@@ -1341,17 +1341,22 @@ pub(crate) fn channel_deposit_sync(
                     format!("Failed to sign deposit tx: {error}"),
                 )
             })?;
-        let signed_tx = MantleTransaction::new(
-            tx,
-            [OpProof::ZkSig(user_sig.clone()), OpProof::ZkSig(user_sig)].into(),
-        )
-        .preverify()
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!("Failed to assemble signed tx: {error:?}"),
-            )
-        })?;
+        let op_proofs =
+            OpProofs::from([OpProof::ZkSig(user_sig.clone()), OpProof::ZkSig(user_sig)]);
+        let signed_tx = SignedOps::from_parts(tx, op_proofs)
+            .map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Failed to assemble signed tx: {error:?}"),
+                )
+            })?
+            .preverify()
+            .map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Failed to assemble signed tx: {error:?}"),
+                )
+            })?;
 
         // 6. Submit to the mempool.
         if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Hashable::hash).await {
@@ -1668,15 +1673,16 @@ pub unsafe extern "C" fn submit_signed_transaction(
                 ));
             }
         };
-        let signed_tx: MantleTransaction<Unverified> = match serde_json::from_str(signed_tx_json) {
-            Ok(signed_tx) => signed_tx,
-            Err(error) => {
-                return FfiSubmitTransactionResult::err(OperationStatus::error(
-                    OperationStatusCode::ValidationError,
-                    format!("Failed to parse signed transaction: {error}"),
-                ));
-            }
-        };
+        let signed_tx: SignedOps<Unverified, StandardMode> =
+            match serde_json::from_str(signed_tx_json) {
+                Ok(signed_tx) => signed_tx,
+                Err(error) => {
+                    return FfiSubmitTransactionResult::err(OperationStatus::error(
+                        OperationStatusCode::ValidationError,
+                        format!("Failed to parse signed transaction: {error}"),
+                    ));
+                }
+            };
         match signed_tx.preverify() {
             Ok(preverified_tx) => preverified_tx,
             Err(error) => {
