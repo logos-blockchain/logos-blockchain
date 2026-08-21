@@ -58,3 +58,4 @@ name    = "mantle_tx_components"
 default               = []
 openapi               = ["dep:utoipa", "lb-utils/openapi"]
 unsafe-test-functions = []
+test-utils            = []
