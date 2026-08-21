@@ -1,36 +1,46 @@
+use std::{iter::Enumerate, vec::IntoIter};
+
 use crate::mantle::{
-    MantleTransaction, Op, OpProof, VerificationError,
+    VerificationError,
     batch::DeferredZkpVerification,
+    ledger::verification_mode::StandardMode,
+    ops::SignedOp,
     traits::Hashable as _,
     transactions::{
-        OperationVerificationHelper, hash::TxHashView, mantle_tx::MantleTx as _,
-        states::Preverified,
+        OperationVerificationHelper, SignedOps,
+        hash::TxHashView,
+        states::{Preverified, Verified},
     },
 };
 
-pub struct VerifiedOperations<'tx> {
-    ops: &'tx [Op],
-    proofs: &'tx [OpProof],
+pub struct VerifiedOperations {
+    signed_ops: Enumerate<IntoIter<SignedOp<Preverified, StandardMode>>>,
     tx_hash_view: TxHashView,
-    index: usize,
 }
 
-impl<'tx> VerifiedOperations<'tx> {
+impl VerifiedOperations {
     #[must_use]
-    pub fn new(transaction: &'tx MantleTransaction<Preverified>) -> Self {
-        let ops = transaction.mantle_tx.ops();
-        let proofs = transaction.ops_proofs();
-        let tx_hash = transaction.hash();
+    pub fn new(signed_ops: SignedOps<Preverified, StandardMode>) -> Self {
+        let tx_hash = signed_ops.hash();
         let tx_hash_view = TxHashView::from(tx_hash);
+        let signed_ops = signed_ops.into_iter().enumerate();
         Self {
-            ops,
-            proofs,
+            signed_ops,
             tx_hash_view,
-            index: 0,
         }
     }
 
     /// Yields the next operation, in order, if it passes verification.
+    ///
+    /// # Important
+    ///
+    /// **Callers must abort on the first error.**
+    ///
+    /// Verification by spec is linear: each operation is checked against the
+    /// state its predecessors produced. A failed operation is still
+    /// consumed, so calling this again verifies the *next* one against a
+    /// state that the failed one never contributed to, which can wrongly
+    /// succeed.
     ///
     /// # Returns
     ///
@@ -41,31 +51,22 @@ impl<'tx> VerifiedOperations<'tx> {
     /// # Errors
     ///
     /// Returns [`VerificationError`] if the operation at the current index
-    /// fails verification. On error, the cursor is not advanced. In the
-    /// current implementation, the callers are expected to abort since only
-    /// linear verification is supported.
+    /// fails verification.
     pub fn next(
         &mut self,
         helper: &impl OperationVerificationHelper,
-    ) -> Option<Result<(&'tx Op, Option<DeferredZkpVerification>), VerificationError>> {
-        let index = self.index;
-        let op = self.ops.get(index)?;
-        let proof = self.proofs.get(index).expect(
-            "MantleTransaction<Preverified> invariant: ops and proofs have the same length",
-        );
-        match MantleTransaction::<Preverified>::verify_stateful_op(
-            index,
-            op,
-            proof,
-            &self.tx_hash_view,
-            helper,
-        ) {
-            Ok(deferred_zkp) => {
-                self.index += 1;
-                Some(Ok((op, deferred_zkp)))
-            }
-            Err(e) => Some(Err(e)),
-        }
+    ) -> Option<
+        Result<
+            (
+                SignedOp<Verified, StandardMode>,
+                Option<DeferredZkpVerification>,
+            ),
+            VerificationError,
+        >,
+    > {
+        let (index, signed_op) = self.signed_ops.next()?;
+        let verify_result = signed_op.into_verified(index, &self.tx_hash_view, helper);
+        Some(verify_result.map_err(|(_signed_op, error)| error))
     }
 
     #[must_use]
@@ -74,9 +75,9 @@ impl<'tx> VerifiedOperations<'tx> {
     }
 }
 
-impl<'tx> From<&'tx MantleTransaction<Preverified>> for VerifiedOperations<'tx> {
-    fn from(transaction: &'tx MantleTransaction<Preverified>) -> Self {
-        VerifiedOperations::new(transaction)
+impl From<SignedOps<Preverified, StandardMode>> for VerifiedOperations {
+    fn from(signed_ops: SignedOps<Preverified, StandardMode>) -> Self {
+        Self::new(signed_ops)
     }
 }
 
@@ -91,7 +92,7 @@ mod tests {
         ledger::Inputs,
         ops::channel::{ChannelId, config::Keys},
         transactions::{
-            mantle_transaction::test_utils::{create_withdraw_tx, make_channel_state},
+            tx_list::signed_ops::test_utils::{create_withdraw_tx, make_channel_state},
             verification_helper::test_utils::TestOperationVerificationHelper,
         },
     };
@@ -133,7 +134,7 @@ mod tests {
         .with_utxos(vec![utxo]);
 
         signed_tx
-            .verified_ops()
+            .into_verified()
             .next(&helper)
             .expect("Cursor should yield the WithdrawOp")
             .expect("WithdrawOp should verify");
@@ -151,7 +152,7 @@ mod tests {
 
         let helper = TestOperationVerificationHelper::new(Channels::new(), []);
 
-        let verification_result = signed_tx.verified_ops().next(&helper).unwrap();
+        let verification_result = signed_tx.into_verified().next(&helper).unwrap();
         assert_eq!(
             verification_result.err().unwrap(),
             VerificationError::ChannelVerificationError(Error::InvalidSignature)
