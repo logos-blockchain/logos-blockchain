@@ -161,4 +161,13 @@ impl<T: ProvableOperation, Mode: VerificationMode> VerifiedSignedOperation<T, Mo
     pub const fn deferred_zkp(&self) -> &Option<DeferredZkpVerification> {
         &self.deferred_zkp
     }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        SignedOperation<T, Verified, Mode>,
+        Option<DeferredZkpVerification>,
+    ) {
+        (self.signed_operation, self.deferred_zkp)
+    }
 }

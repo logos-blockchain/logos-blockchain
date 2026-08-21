@@ -1,7 +1,11 @@
 use crate::mantle::{
     GasProfile, VerificationError,
+    batch::DeferredZkpVerification,
     gas::{Gas, GasOverflow, OperationGas, SignedOperationExecutionGas as _},
-    ledger::verification_mode::{StandardMode, VerificationMode},
+    ledger::{
+        ProvableOperation,
+        verification_mode::{StandardMode, VerificationMode},
+    },
     ops::{
         OpProofRef, OpRef, SignedOperation,
         channel::{
@@ -21,6 +25,7 @@ use crate::mantle::{
             SDPActiveOp, SDPActiveValidationContext, SDPDeclareOp, SDPDeclareVerificationContext,
             SDPWithdrawOp, SDPWithdrawValidationContext, declare::SDPDeclarePreverificationContext,
         },
+        signed_operation::VerifiedSignedOperation,
         transfer::{TransferOp, TransferValidationContext},
     },
     transactions::{
@@ -209,6 +214,20 @@ where
     (signed_operation.into(), error.into())
 }
 
+fn map_verify_success<T>(
+    verified_signed_operation: VerifiedSignedOperation<T, StandardMode>,
+) -> (
+    SignedOp<Verified, StandardMode>,
+    Option<DeferredZkpVerification>,
+)
+where
+    T: ProvableOperation,
+    SignedOp<Verified, StandardMode>: From<SignedOperation<T, Verified, StandardMode>>,
+{
+    let (signed_operation, deferred_zkp) = verified_signed_operation.into_parts();
+    (signed_operation.into(), deferred_zkp)
+}
+
 impl SignedOp<Preverified, StandardMode> {
     #[expect(
         clippy::result_large_err,
@@ -223,7 +242,13 @@ impl SignedOp<Preverified, StandardMode> {
         op_index: usize,
         tx_hash_view: &TxHashView,
         helper: &impl OperationVerificationHelper,
-    ) -> Result<SignedOp<Verified, StandardMode>, (Self, VerificationError)> {
+    ) -> Result<
+        (
+            SignedOp<Verified, StandardMode>,
+            Option<DeferredZkpVerification>,
+        ),
+        (Self, VerificationError),
+    > {
         match self {
             Self::ChannelInscribe(op) => {
                 let channel_inscribe_context = InscriptionValidationContext {
@@ -231,7 +256,7 @@ impl SignedOp<Preverified, StandardMode> {
                     block_slot: helper.get_block_slot(),
                 };
                 op.into_verified(&channel_inscribe_context)
-                    .map(SignedOp::from)
+                    .map(map_verify_success)
                     .map_err(map_verify_failure)
             }
             Self::ChannelConfig(op) => {
@@ -240,36 +265,36 @@ impl SignedOp<Preverified, StandardMode> {
                     tx_hash_view,
                 };
                 op.into_verified(&channel_config_context)
-                    .map(SignedOp::from)
+                    .map(map_verify_success)
                     .map_err(map_verify_failure)
             }
             Self::ChannelDeposit(op) => {
                 let channel_deposit_context = DepositValidationContext {
                     channels: helper.get_channels(),
-                    locked_notes: helper.get_locked_notes(),
+                    service_notes: helper.get_service_notes(),
                     utxos: helper.get_utxos(),
                     tx_hash_view,
                 };
                 op.into_verified(&channel_deposit_context)
-                    .map(SignedOp::from)
+                    .map(map_verify_success)
                     .map_err(map_verify_failure)
             }
             Self::ChannelWithdraw(op) => {
                 let channel_withdraw_context = WithdrawValidationContext {
                     channels: helper.get_channels(),
-                    locked_notes: helper.get_locked_notes(),
+                    service_notes: helper.get_service_notes(),
                     utxos: helper.get_utxos(),
                     tx_hash_view,
                     helper,
                     op_index,
                 };
                 op.into_verified(&channel_withdraw_context)
-                    .map(SignedOp::from)
+                    .map(map_verify_success)
                     .map_err(map_verify_failure)
             }
             Self::ChannelTransfer(op) => {
                 let context = ChannelTransferValidationContext {
-                    locked_notes: helper.get_locked_notes(),
+                    service_notes: helper.get_service_notes(),
                     channels: helper.get_channels(),
                     utxos: helper.get_utxos(),
                     tx_hash_view,
@@ -277,7 +302,7 @@ impl SignedOp<Preverified, StandardMode> {
                     helper,
                 };
                 op.into_verified(&context)
-                    .map(SignedOp::from)
+                    .map(map_verify_success)
                     .map_err(map_verify_failure)
             }
             Self::SDPDeclare(op) => {
@@ -289,13 +314,13 @@ impl SignedOp<Preverified, StandardMode> {
                 let context = SDPDeclareVerificationContext {
                     utxo_tree: helper.get_utxos(),
                     channels: helper.get_channels(),
-                    locked_notes: helper.get_locked_notes(),
+                    service_notes: helper.get_service_notes(),
                     tx_hash_view,
                     declarations,
                     min_stake: helper.get_min_stake(),
                 };
                 op.into_verified(&context)
-                    .map(SignedOp::from)
+                    .map(map_verify_success)
                     .map_err(map_verify_failure)
             }
             Self::SDPWithdraw(op) => {
@@ -307,11 +332,11 @@ impl SignedOp<Preverified, StandardMode> {
                 let context = SDPWithdrawValidationContext {
                     declarations,
                     epoch: helper.get_epoch(),
-                    locked_notes: helper.get_locked_notes(),
+                    service_notes: helper.get_service_notes(),
                     tx_hash_view,
                 };
                 op.into_verified(&context)
-                    .map(SignedOp::from)
+                    .map(map_verify_success)
                     .map_err(map_verify_failure)
             }
             Self::SDPActive(op) => {
@@ -326,7 +351,7 @@ impl SignedOp<Preverified, StandardMode> {
                     epoch: helper.get_epoch(),
                 };
                 op.into_verified(&context)
-                    .map(SignedOp::from)
+                    .map(map_verify_success)
                     .map_err(map_verify_failure)
             }
             Self::LeaderClaim(op) => {
@@ -336,18 +361,18 @@ impl SignedOp<Preverified, StandardMode> {
                     tx_hash_view,
                 };
                 op.into_verified(&context)
-                    .map(SignedOp::from)
+                    .map(map_verify_success)
                     .map_err(map_verify_failure)
             }
             Self::Transfer(op) => {
                 let context = TransferValidationContext {
-                    locked_notes: helper.get_locked_notes(),
+                    service_notes: helper.get_service_notes(),
                     channels: helper.get_channels(),
                     utxos: helper.get_utxos(),
                     tx_hash_view,
                 };
                 op.into_verified(&context)
-                    .map(SignedOp::from)
+                    .map(map_verify_success)
                     .map_err(map_verify_failure)
             }
             Self::ClaimPowReward(op) => {
@@ -357,12 +382,13 @@ impl SignedOp<Preverified, StandardMode> {
                     pow_nullifiers: helper.get_pow_nullifiers(),
                     epoch_pow_reward: helper.get_epoch_pow_reward(),
                     epoch_reward_pool: helper.get_pow_reward_pool(),
-                    current_epoch: helper.get_epoch(),
-                    previous_epoch: helper.get_previous_epoch(),
+                    current_epoch_nonce: helper.get_current_epoch_nonce(),
+                    previous_epoch_nonce: helper.get_previous_epoch_nonce(),
                     blocks_slot: helper.get_blocks_slot(),
+                    slot_window: helper.get_pow_slot_window(),
                 };
                 op.into_verified(&context)
-                    .map(SignedOp::from)
+                    .map(map_verify_success)
                     .map_err(map_verify_failure)
             }
         }

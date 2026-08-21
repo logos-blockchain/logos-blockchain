@@ -4,25 +4,24 @@ pub mod errors;
 pub mod gas;
 pub mod genesis_tx;
 pub mod hash;
-pub mod mantle_transaction;
-pub mod mantle_tx;
-pub mod raw_signed_mantle_tx;
 pub mod states;
+pub mod tx_list;
 pub mod verification_helper;
 pub mod verified_ops;
+
+use std::sync::LazyLock;
 
 pub use builder::{MantleTxBuilder, TxBuilderError};
 pub use errors::VerificationError;
 pub use gas::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GasPrices};
 pub use genesis_tx::{CryptarchiaParameter, GenesisTime, GenesisTx};
 pub use hash::TxHash;
-use lb_utils::bounded::UpperBoundedVec;
-pub use mantle_transaction::MantleTransaction;
-pub use mantle_tx::{MantleTxContext, MantleTxGasContext, RawMantleTx};
+pub use tx_list::{OpProofRefs, OpProofs, OpRefs, Ops, SignedOps, TxBoundedVec, TxList};
 pub use verification_helper::OperationVerificationHelper;
 pub use verified_ops::VerifiedOperations;
 
-use crate::mantle::{Op, OpProof, ops::SignedOp};
+pub(crate) static MANTLE_TX_HASH_V1_BYTES: LazyLock<Vec<u8>> =
+    LazyLock::new(|| b"MANTLE_TXHASH_V1".to_vec());
 
 // ==============================================================================
 // Memory Safety Limits
@@ -35,6 +34,3 @@ use crate::mantle::{Op, OpProof, ops::SignedOp};
 // limits maximum transaction size to 1MiB, for memory safety limits we can
 // allow 4MiB.
 pub const MAX_OPS_PER_TX: usize = u8::MAX as usize;
-pub type Ops = UpperBoundedVec<Op, MAX_OPS_PER_TX>;
-pub type SignedOps<State, Mode> = UpperBoundedVec<SignedOp<State, Mode>, MAX_OPS_PER_TX>;
-pub type OpProofs = UpperBoundedVec<OpProof, MAX_OPS_PER_TX>;
