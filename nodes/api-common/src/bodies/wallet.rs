@@ -95,7 +95,7 @@ pub mod transfer_funds {
     use lb_core::{
         header::HeaderId,
         mantle::{
-            MantleTransaction, Value, traits::Hashable as _,
+            SignedOps, Value, ledger::verification_mode::StandardMode, traits::Hashable as _,
             transactions::states::VerificationState,
         },
     };
@@ -120,11 +120,11 @@ pub mod transfer_funds {
         pub hash: lb_core::mantle::transactions::TxHash,
     }
 
-    impl<State: VerificationState> From<MantleTransaction<State>> for WalletTransferFundsResponseBody {
-        fn from(value: MantleTransaction<State>) -> Self {
-            Self {
-                hash: value.mantle_tx().hash(),
-            }
+    impl<State: VerificationState> From<SignedOps<State, StandardMode>>
+        for WalletTransferFundsResponseBody
+    {
+        fn from(value: SignedOps<State, StandardMode>) -> Self {
+            Self { hash: value.hash() }
         }
     }
 
@@ -152,7 +152,7 @@ pub mod fund {
         mantle::{
             OpProof,
             gas::GasCost,
-            transactions::{RawMantleTx, builder::MantleTxBuilder},
+            transactions::{Ops, builder::MantleTxBuilder, tx_list::ops::mantle_spec},
         },
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -187,7 +187,8 @@ pub mod fund {
         pub tip: HeaderId,
         /// The funded transaction, with the fee transfer appended as the last
         /// op. All ops are still unsigned.
-        pub funded_tx: RawMantleTx,
+        #[serde(with = "mantle_spec")]
+        pub funded_tx: Ops,
         /// Proof for the appended fee transfer, signed over the funded
         /// transaction hash. `None` if funding required no transfer (zero
         /// fee and no inputs pulled in).
