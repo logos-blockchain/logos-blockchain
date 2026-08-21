@@ -9,27 +9,26 @@ use time::OffsetDateTime;
 use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
-        MantleTransaction, OpProof,
         gas::{Gas, GasCost, GasOverflow, GasProfile, TxGasCalculator},
+        ledger::verification_mode::GenesisMode,
         ops::{
-            Op,
+            Op, OpRef, SignedOp, SignedOperation,
             channel::{ChannelId, MsgId, inscribe::InscriptionOp},
-            codec::proof_matches,
             sdp::SDPDeclareOp,
             transfer::TransferOp,
         },
-        traits::{GenesisTx as GenesisTxTrait, Hashable, hashable},
+        traits::{GenesisTx as GenesisTxTrait, Hashable, MantleTx, genesis::GenesisOps, hashable},
         transactions::{
+            OpRefs, SignedOps,
             hash::TxHash,
-            mantle_tx::{MantleTx as _, RawMantleTx},
-            states::Preverified,
+            states::{Preverified, Unverified},
         },
     },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenesisTx {
-    tx: MantleTransaction<Preverified>,
+    signed_ops: SignedOps<Preverified, GenesisMode>,
     cryptarchia_parameter: CryptarchiaParameter,
 }
 
@@ -40,40 +39,27 @@ pub enum Error {
     #[error("Genesis transaction should not have any inputs")]
     UnexpectedInput,
     #[error("Genesis block cannot contain this op: {0:?}")]
-    UnsupportedGenesisOp(Vec<Op>),
+    UnsupportedGenesisOp(Vec<(usize, &'static str)>),
     #[error(
         "Genesis transaction must have a transfer and an inscription as the two first operations"
     )]
     MissingTransferAndInscription,
     #[error("Invalid genesis inscription: {0:?}")]
-    InvalidInscription(Box<Op>),
+    InvalidInscription(Box<Op>), // TODO: Consider adding explanation
     #[error("Invalid cryptarchia inscription: {0}")]
     InvalidCryptarchiaParameter(String),
     #[error("Too many operations in genesis transaction: {count}")]
     TooManyOps { count: usize },
-    #[error(
-        "Genesis transaction has a different number of operations ({ops_count}) and proofs ({proofs_count})"
-    )]
-    ProofCountMismatch {
-        ops_count: usize,
-        proofs_count: usize,
-    },
-    #[error(
-        "Genesis transaction operation ({op:?}) is paired with an invalid proof type ({proof:?})"
-    )]
-    MismatchedProofType { op: Box<Op>, proof: Box<OpProof> },
 }
 
 impl GenesisTx {
-    pub fn from_tx(signed_mantle_tx: MantleTransaction<Preverified>) -> Result<Self, Error> {
-        let mantle_tx = signed_mantle_tx.mantle_tx();
-
+    pub fn from_tx(signed_ops: SignedOps<Preverified, GenesisMode>) -> Result<Self, Error> {
         // Genesis transactions must contain exactly one transfer as the first op,
         // one inscription as the second op, and then may contain other SDP declarations
-        let cryptarchia_parameter = match mantle_tx.ops().as_slice() {
+        let cryptarchia_parameter = match signed_ops.op_refs().as_slice() {
             [
-                Op::Transfer(transfer),
-                Op::ChannelInscribe(inscription),
+                OpRef::Transfer(transfer),
+                OpRef::ChannelInscribe(inscription),
                 rest @ ..,
             ] => {
                 if !transfer.inputs.is_empty() {
@@ -83,8 +69,9 @@ impl GenesisTx {
 
                 let unsupported_ops = rest
                     .iter()
-                    .filter(|op| !matches!(op, Op::SDPDeclare(_)))
-                    .cloned()
+                    .enumerate()
+                    .filter(|(_, op)| !matches!(op, OpRef::SDPDeclare(_)))
+                    .map(|(index, op)| (index + 2, op.as_str())) // The `+ 2` accounts for the first two ops (transfer and inscription)
                     .collect::<Vec<_>>();
 
                 if !unsupported_ops.is_empty() {
@@ -96,27 +83,37 @@ impl GenesisTx {
             _ => return Err(Error::MissingTransferAndInscription),
         };
 
-        // Validate that every operation is paired with a proof of the correct variant.
-        let ops_count = signed_mantle_tx.mantle_tx().ops().len();
-        let proofs_count = signed_mantle_tx.ops_proofs().len();
-        if ops_count != proofs_count {
-            return Err(Error::ProofCountMismatch {
-                ops_count,
-                proofs_count,
-            });
-        }
-        for (op, proof) in signed_mantle_tx.ops_with_proof() {
-            if !proof_matches(proof, op) {
-                return Err(Error::MismatchedProofType {
-                    op: Box::new(op.clone()),
-                    proof: Box::new(proof.clone()),
-                });
-            }
-        }
-
         Ok(Self {
-            tx: signed_mantle_tx,
+            signed_ops,
             cryptarchia_parameter,
+        })
+    }
+
+    #[must_use]
+    pub fn transfer(&self) -> &SignedOperation<TransferOp, Preverified, GenesisMode> {
+        match self.signed_ops.first() {
+            Some(SignedOp::Transfer(signed_operation)) => signed_operation,
+            _ => unreachable!("GenesisTx always has a valid transfer as first op"),
+        }
+    }
+
+    #[must_use]
+    pub fn inscription(&self) -> &SignedOperation<InscriptionOp, Preverified, GenesisMode> {
+        match self.signed_ops.get(1) {
+            Some(SignedOp::ChannelInscribe(signed_operation)) => signed_operation,
+            _ => unreachable!("GenesisTx always has a valid inscription as second op"),
+        }
+    }
+
+    pub fn sdp_declarations(
+        &self,
+    ) -> impl Iterator<Item = &SignedOperation<SDPDeclareOp, Preverified, GenesisMode>> {
+        self.signed_ops.inner().iter().skip(2).filter_map(|op| {
+            if let SignedOp::SDPDeclare(signed_operation) = op {
+                Some(signed_operation)
+            } else {
+                None
+            }
         })
     }
 }
@@ -156,7 +153,7 @@ impl Hashable for GenesisTx {
     type Hash = TxHash;
 
     fn as_signing(&self) -> Vec<u8> {
-        self.tx.as_signing()
+        self.signed_ops.as_signing()
     }
 }
 
@@ -190,39 +187,47 @@ impl TxGasCalculator for GenesisTx {
     }
 }
 
+impl MantleTx for GenesisTx {
+    fn op_refs(&self) -> OpRefs<'_> {
+        self.signed_ops.op_refs()
+    }
+}
+
 impl GenesisTxTrait for GenesisTx {
-    fn genesis_transfer(&self) -> &TransferOp {
-        // Safe to unwrap because we validated this in from_tx
-        match &self.mantle_tx().ops()[0] {
-            Op::Transfer(op) => op,
+    fn into_genesis_ops(self) -> GenesisOps {
+        let mut signed_ops = self.signed_ops.into_inner().into_inner().into_iter();
+
+        let transfer = match signed_ops.next() {
+            Some(SignedOp::Transfer(signed_operation)) => signed_operation,
             _ => unreachable!("GenesisTx always has a valid transfer as first op"),
         }
-    }
+        .into_state_trusted();
 
-    fn genesis_inscription(&self) -> &InscriptionOp {
-        // Safe to unwrap because we validated this in from_tx
-        match &self.mantle_tx().ops()[1] {
-            Op::ChannelInscribe(op) => op,
+        let inscription = match signed_ops.next() {
+            Some(SignedOp::ChannelInscribe(signed_operation)) => signed_operation,
             _ => unreachable!("GenesisTx always has a valid inscription as second op"),
+        }
+        .into_state_trusted();
+
+        let declarations = signed_ops
+            .filter_map(|signed_op| {
+                if let SignedOp::SDPDeclare(signed_operation) = signed_op {
+                    Some(signed_operation)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        GenesisOps {
+            transfer,
+            inscription,
+            declarations,
         }
     }
 
     fn cryptarchia_parameter(&self) -> CryptarchiaParameter {
         self.cryptarchia_parameter.clone()
-    }
-
-    fn sdp_declarations(&self) -> impl Iterator<Item = (&SDPDeclareOp, &OpProof)> {
-        self.tx.ops_with_proof().filter_map(|(op, proof)| {
-            if let Op::SDPDeclare(sdp_msg) = op {
-                Some((sdp_msg, proof))
-            } else {
-                None
-            }
-        })
-    }
-
-    fn mantle_tx(&self) -> &RawMantleTx {
-        self.tx.mantle_tx()
     }
 }
 
@@ -232,7 +237,7 @@ impl Serialize for GenesisTx {
         S: serde::Serializer,
     {
         // Skip self.cryptarchia_parameter as it is parsed from the inscription op
-        self.tx.serialize(serializer)
+        self.signed_ops.serialize(serializer)
     }
 }
 
@@ -241,7 +246,8 @@ impl<'de> Deserialize<'de> for GenesisTx {
     where
         D: serde::Deserializer<'de>,
     {
-        let tx = MantleTransaction::deserialize(deserializer)?.into_trusted();
+        let tx = SignedOps::<Unverified, GenesisMode>::deserialize(deserializer)?
+            .into_preverified_trusted();
         Self::from_tx(tx).map_err(serde::de::Error::custom)
     }
 }
@@ -401,6 +407,7 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
+            OpProof,
             ledger::{Inputs, Note, Outputs, Utxo, Value},
             ops::{
                 ZkAndEd25519Proof,
@@ -474,20 +481,19 @@ mod tests {
     // Genesis transactions don't need verified proofs for Blob/Inscription ops
     fn create_trusted_tx(
         mut ops: Vec<Op>,
-        ops_proofs: Vec<OpProof>,
-    ) -> MantleTransaction<Preverified> {
+        op_proofs_vec: Vec<OpProof>,
+    ) -> SignedOps<Preverified, GenesisMode> {
         let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new([create_test_note(1000)]));
         let mut new_ops = vec![Op::Transfer(transfer_op)];
         new_ops.append(&mut ops);
-        let mantle_tx = RawMantleTx(Ops::new_unchecked(new_ops));
-        let ops_proofs = OpProofs::try_from(ops_proofs).unwrap();
-        let mut new_op_proofs = OpProofs::from(OpProof::ZkSig(
+        let mantle_tx = Ops::new_unchecked(new_ops);
+        let mut op_proofs = OpProofs::from([OpProof::ZkSig(
             ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr()).unwrap(),
-        ));
-        for proof in ops_proofs {
-            new_op_proofs.try_push(proof).unwrap();
+        )]);
+        for proof in op_proofs_vec {
+            op_proofs.try_push(proof).unwrap();
         }
-        MantleTransaction::new_trusted(mantle_tx, new_op_proofs)
+        SignedOps::from_parts_trusted(mantle_tx, op_proofs).unwrap()
     }
 
     #[test]
@@ -581,9 +587,7 @@ mod tests {
                     Op::ChannelInscribe(inscription_op()),
                     Op::ChannelInscribe(inscription_op()),
                 ],
-                Some(Error::UnsupportedGenesisOp(vec![Op::ChannelInscribe(
-                    inscription_op(),
-                )])),
+                Some(Error::UnsupportedGenesisOp(vec![(2, "ChannelInscribe")])),
             ),
         ];
 
@@ -651,32 +655,6 @@ mod tests {
                 None => assert!(result.is_ok()),
             }
         }
-    }
-
-    #[test]
-    fn test_genesis_op_proof_type_mismatch() {
-        let inscription_op = inscription_op(
-            ChannelId::from([0; 32]),
-            &cryptarchia_param(),
-            MsgId::root(),
-            Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
-        );
-        let utxo = Utxo::new([0u8; 32], 0, create_test_note(1000));
-        let verifying_key = Ed25519PublicKey::from_bytes(&[0; 32]).unwrap();
-        let sdp_op = sdp_declare_op(utxo, 0, verifying_key);
-        // SDPDeclare requires a `ZkAndEd25519Sigs` proof, an `Ed25519Sig` is the
-        // wrong variant and must be rejected
-        let tx = create_trusted_tx(
-            vec![Op::ChannelInscribe(inscription_op), Op::SDPDeclare(sdp_op)],
-            vec![
-                OpProof::Ed25519Sig(Ed25519Signature::zero()),
-                OpProof::Ed25519Sig(Ed25519Signature::zero()),
-            ],
-        );
-        assert!(matches!(
-            GenesisTx::from_tx(tx),
-            Err(Error::MismatchedProofType { .. })
-        ));
     }
 
     #[test]
