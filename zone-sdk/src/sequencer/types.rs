@@ -6,10 +6,10 @@ use lb_core::{
     events::DepositRecreatedNotes,
     header::HeaderId,
     mantle::{
-        MantleTransaction, Value,
+        SignedOps, Value,
         channel::ChannelState,
         gas::GasCost,
-        ledger::{Inputs, NoteId, Outputs},
+        ledger::{Inputs, NoteId, Outputs, verification_mode::StandardMode},
         ops::{
             OpProof,
             channel::{
@@ -37,7 +37,7 @@ pub struct SequencerCheckpoint {
     /// Last message ID for chain continuity.
     pub last_msg_id: MsgId,
     /// Pending transactions to restore.
-    pub pending_txs: Vec<(TxHash, MantleTransaction<Unverified>)>,
+    pub pending_txs: Vec<(TxHash, SignedOps<Unverified, StandardMode>)>,
     /// Last known LIB.
     pub lib: HeaderId,
     /// Last known LIB slot (for backfill range queries).
@@ -172,10 +172,10 @@ pub enum ChannelUpdateTx {
     PinDeposit(PinDepositInfo),
     /// A config-only tx (a single `ChannelConfig` op) on the config lineage.
     /// Caller-recovered, like [`Self::Custom`] — never auto-resubmitted.
-    Config(MantleTransaction<Unverified>),
+    Config(SignedOps<Unverified, StandardMode>),
     /// A tx shape the SDK cannot produce (bundled deposits, multi-inscribe,
     /// other custom-built txs), reported whole as a unit.
-    Custom(MantleTransaction<Unverified>),
+    Custom(SignedOps<Unverified, StandardMode>),
 }
 
 impl ChannelUpdateTx {
@@ -185,7 +185,7 @@ impl ChannelUpdateTx {
             Self::Inscription(i) => i.tx_hash,
             Self::AtomicWithdraw(a) => a.tx_hash,
             Self::PinDeposit(a) => a.tx_hash,
-            Self::Config(tx) | Self::Custom(tx) => tx.mantle_tx().hash(),
+            Self::Config(tx) | Self::Custom(tx) => tx.hash(),
         }
     }
 

@@ -17,11 +17,11 @@ use lb_common_http_client::Slot;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        MantleTransaction, Value,
-        ledger::{MAX_TRANSACTION_INPUTS, NoteId},
-        ops::{Op, OpId as _, channel::ChannelId},
+        SignedOps, Value,
+        ledger::{MAX_TRANSACTION_INPUTS, NoteId, verification_mode::StandardMode},
+        ops::{Op, OpId as _, OpRef, channel::ChannelId},
         traits::Hashable as _,
-        transactions::{mantle_tx::MantleTx as _, states::Unverified},
+        transactions::states::Unverified,
     },
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -132,17 +132,17 @@ impl ChannelWallet {
 /// `fetch_block_deposit_events` — it is guaranteed to contain every channel
 /// deposit op of these transactions.
 pub(super) fn note_ops_from_txs(
-    transactions: &[MantleTransaction<Unverified>],
+    transactions: &[SignedOps<Unverified, StandardMode>],
     channel_id: ChannelId,
     deposit_events: &DepositEvents,
     slot: Slot,
 ) -> Vec<NoteOp> {
     let mut ops = Vec::new();
     for tx in transactions {
-        let tx_hash = tx.mantle_tx().hash();
-        for op in tx.mantle_tx().ops() {
+        let tx_hash = tx.hash();
+        for op in tx.op_refs() {
             match op {
-                Op::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
+                OpRef::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
                     let op_id = deposit.op_id();
                     let event = deposit_events.get(&DepositOpKey { tx_hash, op_id }).expect(
                         "deposit_events must contain every channel deposit op - \
@@ -157,7 +157,7 @@ pub(super) fn note_ops_from_txs(
                         }));
                     }
                 }
-                Op::ChannelTransfer(transfer) if transfer.channel_id == channel_id => {
+                OpRef::ChannelTransfer(transfer) if transfer.channel_id == channel_id => {
                     ops.extend(transfer.inputs.iter().map(|id| NoteOp::Remove(*id)));
                     ops.extend(transfer.utxos().map(|utxo| {
                         NoteOp::Add(ChannelNote {
@@ -168,7 +168,7 @@ pub(super) fn note_ops_from_txs(
                         })
                     }));
                 }
-                Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
+                OpRef::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
                     ops.extend(withdraw.inputs.iter().map(|id| NoteOp::Remove(*id)));
                 }
                 _ => {}
@@ -343,7 +343,7 @@ mod tests {
     use lb_core::{
         events::DepositNote,
         mantle::{
-            Note,
+            Note, Op, Value,
             ledger::{Inputs, Outputs},
             ops::channel::{
                 channel_transfer::ChannelTransferOp,
@@ -381,14 +381,14 @@ mod tests {
     }
 
     fn deposit_events_for(
-        tx: &MantleTransaction<Unverified>,
+        tx: &SignedOps<Unverified, StandardMode>,
         op: &DepositOp,
         amount: Value,
         notes: Vec<DepositNote>,
     ) -> DepositEvents {
         DepositEvents::from([(
             DepositOpKey {
-                tx_hash: tx.mantle_tx().hash(),
+                tx_hash: tx.hash(),
                 op_id: op.op_id(),
             },
             crate::adapter::DepositEvent {

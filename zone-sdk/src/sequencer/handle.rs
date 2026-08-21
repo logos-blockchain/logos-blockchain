@@ -1,10 +1,11 @@
 use lb_core::{
     mantle::{
-        MantleTransaction,
+        SignedOps,
         channel::{SlotTimeframe, SlotTimeout},
         ledger::NoteId,
+        ledger::verification_mode::StandardMode,
         ops::channel::{MsgId, config::Keys, inscribe::Inscription},
-        transactions::{Ops, mantle_tx::RawMantleTx, states::Unverified},
+        transactions::{Ops, states::Unverified},
     },
     proofs::channel_multi_sig_proof::IndexedSignature,
 };
@@ -84,29 +85,29 @@ where
         self.sequencer.do_publish(data).await
     }
 
-    /// Build a [`RawMantleTx`] for the given ops and an inscription message,
+    /// Build an [`Ops`] for the given ops and an inscription message,
     /// without submitting it.
     ///
-    /// The returned [`RawMantleTx`] should be signed by all parties and
+    /// The returned [`Ops`] should be signed by all parties and
     /// submitted via [`Self::submit_signed_tx`]. Does not mutate sequencer
     /// state.
     pub fn prepare_tx(
         &mut self,
         ops: Ops,
         data: Inscription,
-    ) -> Result<(RawMantleTx, MsgId, Ed25519Signature), Error> {
+    ) -> Result<(Ops, MsgId, Ed25519Signature), Error> {
         self.sequencer.do_prepare_tx(ops, data)
     }
 
-    /// Sign a [`RawMantleTx`] using the sequencer's key.
+    /// Sign an [`Ops`] using the sequencer's key.
     ///
     /// Useful when signing tx built by other sequencers (e.g. withdraw). Does
     /// not mutate sequencer state.
-    pub fn sign_tx(&mut self, tx: &RawMantleTx) -> Result<Ed25519Signature, Error> {
+    pub fn sign_tx(&mut self, tx: &Ops) -> Result<Ed25519Signature, Error> {
         self.sequencer.do_sign_tx(tx)
     }
 
-    /// Enqueue a [`MantleTransaction`] associated with a [`MsgId`] for posting.
+    /// Enqueue a [`SignedOps`] associated with a [`MsgId`] for posting.
     ///
     /// Synchronously records the tx as pending and queues a
     /// `post_transaction` future onto the drive loop's in-flight pool — the
@@ -115,7 +116,7 @@ where
     /// acknowledgement.
     pub fn submit_signed_tx(
         &mut self,
-        tx: MantleTransaction<Unverified>,
+        tx: SignedOps<Unverified, StandardMode>,
         msg_id: MsgId,
     ) -> Result<PublishReceipt, Error> {
         self.sequencer.do_submit_signed_tx(tx, msg_id)
@@ -150,7 +151,7 @@ where
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
         transfer_threshold: u16,
-    ) -> Result<(PublishReceipt, MantleTransaction<Unverified>), Error> {
+    ) -> Result<(PublishReceipt, SignedOps<Unverified, StandardMode>), Error> {
         self.sequencer
             .do_channel_config(
                 keys,
