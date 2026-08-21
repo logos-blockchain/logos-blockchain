@@ -3,7 +3,8 @@ use std::{collections::BTreeSet, time::Duration};
 use lb_core::{
     codec::DeserializeOp as _,
     mantle::{
-        MantleTransaction, TxHash,
+        SignedOps, TxHash,
+        ledger::verification_mode::StandardMode,
         traits::Hashable as _,
         transactions::{OpProofs, states::Preverified},
     },
@@ -106,7 +107,7 @@ pub async fn submit_prepared_transaction_through_blend(
         warn!(target: TARGET, "Step `{step}` error: {e}");
     })?;
 
-    let tx_hash = node.blend_transaction(&signed_tx).await.inspect_err(|e| {
+    let tx_hash = node.blend_transaction(signed_tx).await.inspect_err(|e| {
         warn!(target: TARGET, "Step `{step}` error: {e}");
     })?;
 
@@ -320,7 +321,7 @@ async fn submit_prepared_transaction_to_node(
     world: &CucumberWorld,
     step: &str,
     transaction_alias: &str,
-    signed_tx: &MantleTransaction<Preverified>,
+    signed_tx: &SignedOps<Preverified, StandardMode>,
     tx_hash: TxHash,
     node_name: &str,
 ) -> Result<(), StepError> {

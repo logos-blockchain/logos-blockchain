@@ -2,7 +2,7 @@
 
 use lb_core::mantle::{
     TxHash,
-    transactions::{MantleTxBuilder, MantleTxContext, OpProofs},
+    transactions::{MantleTxBuilder, OpProofs, tx_list::ops::OpsContext},
 };
 
 use super::{
@@ -13,7 +13,7 @@ use crate::common::wallet::WalletReservedInputs;
 
 pub struct PreparedWalletTransaction {
     funded_builder: MantleTxBuilder,
-    context: MantleTxContext,
+    context: OpsContext,
     tx_hash: TxHash,
     transfer_proofs: OpProofs,
     reserved_inputs: WalletReservedInputs,
@@ -23,7 +23,7 @@ impl PreparedWalletTransaction {
     #[must_use]
     pub(super) const fn new(
         funded_builder: MantleTxBuilder,
-        context: MantleTxContext,
+        context: OpsContext,
         tx_hash: TxHash,
         transfer_proofs: OpProofs,
         reserved_inputs: WalletReservedInputs,

@@ -6,8 +6,9 @@
 use std::{collections::HashSet, time::Duration};
 
 use lb_core::mantle::{
-    MantleTransaction, TxGasCalculator as _, TxHash, Utxo,
+    SignedOps, TxGasCalculator as _, TxHash, Utxo,
     gas::MainnetGasProfile,
+    ledger::verification_mode::StandardMode,
     transactions::{GasPrices, OpProofs, states::Preverified},
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
@@ -77,7 +78,7 @@ impl SignedUserWalletSubmission {
         self.submission.tx_hash()
     }
 
-    pub(crate) const fn signed_tx(&self) -> &MantleTransaction<Preverified> {
+    pub(crate) const fn signed_tx(&self) -> &SignedOps<Preverified, StandardMode> {
         self.submission.signed_tx()
     }
 
@@ -904,6 +905,9 @@ fn wallet_transaction_error(error: WalletTransactionError) -> StepError {
             message: error.to_string(),
         },
         WalletTransactionError::BoundedError(error) => StepError::BoundedError(error),
+        WalletTransactionError::SignedOpsError(error) => StepError::LogicalError {
+            message: error.to_string(),
+        },
     }
 }
 
