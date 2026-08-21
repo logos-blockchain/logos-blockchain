@@ -5,8 +5,12 @@ use lb_common_http_client::CommonHttpClient;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        MantleTransaction, Op,
-        ops::channel::{ChannelId, inscribe::InscriptionOp},
+        SignedOps,
+        ledger::verification_mode::StandardMode,
+        ops::{
+            OpRef,
+            channel::{ChannelId, inscribe::InscriptionOp},
+        },
         traits::Hashable as _,
         transactions::{hash::TxHash, states::Unverified},
     },
@@ -84,18 +88,17 @@ impl BlockStream {
 }
 
 fn extract_l2_blocks(
-    block_txs: impl Iterator<Item = MantleTransaction<Unverified>>,
+    block_txs: impl Iterator<Item = SignedOps<Unverified, StandardMode>>,
     decoded_channel_id: &ChannelId,
     token_name: &str,
 ) -> Vec<(BlockData, TxHash)> {
     let block_channel_ops: Vec<(BlockData, TxHash)> = block_txs
         .flat_map(|tx| {
-            let tx_hash = tx.mantle_tx().hash();
-            tx.mantle_tx()
-                .0
-                .iter()
+            let tx_hash = tx.hash();
+            tx.op_refs()
+                .into_iter()
                 .filter_map(|op| match op {
-                    Op::ChannelInscribe(InscriptionOp {
+                    OpRef::ChannelInscribe(InscriptionOp {
                         channel_id,
                         inscription,
                         ..

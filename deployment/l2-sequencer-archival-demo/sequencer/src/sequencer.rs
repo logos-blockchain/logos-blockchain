@@ -4,17 +4,18 @@ use lb_common_http_client::{ChainServiceInfo, CommonHttpClient};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        MantleTransaction,
+        SignedOps,
+        ledger::verification_mode::{StandardMode, VerificationMode},
         ops::{
-            Op, OpProof,
+            Op, OpProof, OpRef, SignedOp,
             channel::{
                 ChannelId, Ed25519PublicKey, MsgId,
                 inscribe::{Inscription, InscriptionOp},
             },
         },
-        traits::Hashable as _,
+        traits::{Hashable as _, SignedMantleTx as _},
         transactions::{
-            mantle_tx::{MantleTx as _, RawMantleTx},
+            OpProofs, Ops,
             states::{Unverified, VerificationState},
         },
     },
@@ -165,7 +166,7 @@ impl Sequencer {
         &self,
         data: Inscription,
         parent: MsgId,
-    ) -> MantleTransaction<Unverified> {
+    ) -> SignedOps<Unverified, StandardMode> {
         let verifying_key_bytes = self.signing_key.public_key().to_bytes();
         let verifying_key =
             Ed25519PublicKey::from_bytes(&verifying_key_bytes).expect("valid ed25519 public key");
@@ -177,7 +178,7 @@ impl Sequencer {
             signer: verifying_key,
         };
 
-        let inscribe_tx = RawMantleTx([Op::ChannelInscribe(inscribe_op)].into());
+        let inscribe_tx = Ops::from([Op::ChannelInscribe(inscribe_op)]);
 
         let tx_hash = inscribe_tx.hash();
         let signature_bytes = self
@@ -188,11 +189,12 @@ impl Sequencer {
             lb_key_management_system_service::keys::Ed25519Signature::from_bytes(&signature_bytes);
 
         // TODO: Should preverify?
-        MantleTransaction::new(inscribe_tx, [OpProof::Ed25519Sig(signature)].into())
+        let op_proofs = OpProofs::from([OpProof::Ed25519Sig(signature)]);
+        SignedOps::from_parts(inscribe_tx, op_proofs).unwrap()
     }
 
     /// Post a transaction to the node and wait for inclusion
-    async fn post_and_wait(&self, tx: &MantleTransaction<Unverified>) -> Result<()> {
+    async fn post_and_wait(&self, tx: &SignedOps<Unverified, StandardMode>) -> Result<()> {
         // Post the transaction
         self.http_client
             .post_transaction(self.node_url.clone(), tx.clone())
@@ -212,8 +214,8 @@ impl Sequencer {
         block_id: HeaderId,
     ) -> bool {
         for tx in &block.transactions {
-            for op in tx.mantle_tx().ops() {
-                if let Op::ChannelInscribe(inscribe) = op {
+            for op in tx.op_refs() {
+                if let OpRef::ChannelInscribe(inscribe) = op {
                     tracing::debug!(
                         "Found inscription: channel={}, parent={}",
                         hex::encode(inscribe.channel_id.as_ref()),
@@ -276,16 +278,15 @@ impl Sequencer {
         Ok(false)
     }
 
-    fn get_expected_inscription<State: VerificationState>(
-        tx: &MantleTransaction<State>,
+    fn get_expected_inscription<State: VerificationState, Mode: VerificationMode>(
+        tx: &SignedOps<State, Mode>,
     ) -> &InscriptionOp {
         let expected_op = tx
-            .mantle_tx()
-            .ops()
-            .first()
+            .op_refs()
+            .get(0)
             .expect("transaction should have at least one op");
 
-        let Op::ChannelInscribe(expected_inscription) = expected_op else {
+        let OpRef::ChannelInscribe(expected_inscription) = expected_op else {
             panic!("Expected ChannelInscribe op")
         };
 
@@ -316,7 +317,7 @@ impl Sequencer {
     }
 
     /// Wait for a transaction to be included in a block.
-    async fn wait_for_inclusion(&self, tx: &MantleTransaction<Unverified>) -> Result<()> {
+    async fn wait_for_inclusion(&self, tx: &SignedOps<Unverified, StandardMode>) -> Result<()> {
         let expected_inscription = Self::get_expected_inscription(tx);
 
         let timeout_duration = Duration::from_mins(5);
@@ -526,8 +527,8 @@ impl Sequencer {
         let parent = self.get_last_msg_id().await?;
         let tx = self.create_inscribe_tx(inscription_data, parent);
 
-        let new_msg_id = match tx.mantle_tx().ops().first() {
-            Some(Op::ChannelInscribe(inscribe)) => inscribe.id(),
+        let new_msg_id = match tx.signed_ops().first() {
+            Some(SignedOp::ChannelInscribe(signed_op)) => signed_op.operation().id(),
             _ => panic!("Expected ChannelInscribe op"),
         };
 

@@ -15,11 +15,12 @@ use lb_core::{
     events::{DepositNote, Event as ChainEvent, TxEvent, TxEventPayload},
     header::{ContentId, HeaderId},
     mantle::{
-        MantleTransaction, Op, RawMantleTx, Value,
+        Op, SignedOps, Value,
         channel::ChannelState,
         gas::GasCost,
+        ledger::verification_mode::StandardMode,
         ops::{
-            OpId as _, OpProof,
+            OpId as _,
             channel::{
                 ChannelId, MsgId,
                 config::Keys,
@@ -28,13 +29,13 @@ use lb_core::{
             },
         },
         traits::Hashable as _,
-        transactions::{OpProofs, Ops, states::Unverified},
+        transactions::{Ops, states::Unverified},
     },
     proofs::leader_proof::Groth16LeaderProof,
 };
 use lb_groth16::Fr;
 use lb_http_api_common::bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody};
-use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
+use lb_key_management_system_service::keys::Ed25519Key;
 use tokio::sync::{mpsc, watch};
 
 use crate::{
@@ -98,7 +99,7 @@ pub struct MockNode {
     /// the next `true -> false` transition, driving the reconnect path.
     pub up: Option<watch::Receiver<bool>>,
     /// Receives every `post_transaction` tx.
-    pub posted: Option<mpsc::Sender<MantleTransaction<Unverified>>>,
+    pub posted: Option<mpsc::Sender<SignedOps<Unverified, StandardMode>>>,
     /// Served by `block_events()`, keyed by block id; absent ids yield `None`.
     pub events: HashMap<HeaderId, Events>,
     /// Receives the priority-fee percentages from funding requests.
@@ -133,7 +134,7 @@ impl Default for MockNode {
 
 impl MockNode {
     /// Default node plus a receiver for its posted transactions.
-    pub fn with_posted_channel() -> (Self, mpsc::Receiver<MantleTransaction<Unverified>>) {
+    pub fn with_posted_channel() -> (Self, mpsc::Receiver<SignedOps<Unverified, StandardMode>>) {
         let (tx, rx) = mpsc::channel(10);
         (
             Self {
@@ -303,7 +304,7 @@ impl adapter::Node for MockNode {
 
     async fn post_transaction(
         &self,
-        tx: MantleTransaction<Unverified>,
+        tx: SignedOps<Unverified, StandardMode>,
     ) -> Result<(), lb_common_http_client::Error> {
         if let Some(posted) = &self.posted {
             posted.send(tx).await.expect("posted receiver alive");
@@ -370,7 +371,7 @@ pub fn api_block(
     id: u8,
     parent: u8,
     slot: u64,
-    transactions: Vec<MantleTransaction<Unverified>>,
+    transactions: Vec<SignedOps<Unverified, StandardMode>>,
 ) -> ApiBlock {
     ApiBlock {
         header: ApiHeader {
@@ -397,15 +398,11 @@ pub fn live_event(block: &ApiBlock) -> ProcessedBlockEvent {
     }
 }
 
-/// Build a `MantleTransaction` carrying the given ops, with placeholder proofs.
+/// Build a `SignedOps` carrying the given ops, with placeholder proofs.
 /// Suitable for tests that only care about op extraction, not verification.
-pub fn unverified_tx_with_ops(ops: Vec<Op>) -> MantleTransaction<Unverified> {
-    let n = ops.len();
-    let mantle_tx = RawMantleTx(Ops::try_from(ops).expect("ops fit"));
-    MantleTransaction::new(
-        mantle_tx,
-        OpProofs::new_unchecked(vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n]),
-    )
+pub fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedOps<Unverified, StandardMode> {
+    let ops = Ops::try_from(ops).expect("ops fit");
+    SignedOps::from_ops_with_placeholder_proofs(ops)
 }
 
 /// An inscription op signed by the zero Ed25519 key.
@@ -420,13 +417,13 @@ pub fn inscribe_op(channel_id: ChannelId, parent: MsgId, payload: &[u8]) -> Insc
 
 /// A `Deposit` block event matching `op` inside `tx`, recreating `notes`.
 pub fn deposit_event(
-    tx: &MantleTransaction<Unverified>,
+    tx: &SignedOps<Unverified, StandardMode>,
     op: &DepositOp,
     amount: Value,
     notes: Vec<DepositNote>,
 ) -> Events {
     Events::from(ChainEvent::Tx(TxEvent::new(
-        tx.mantle_tx().hash(),
+        tx.hash(),
         op.op_id(),
         TxEventPayload::Deposit {
             channel_id: op.channel_id,

@@ -8,7 +8,7 @@ use lb_core::{
     mantle::{
         GasProfile, NoteId,
         ops::leader_claim::{VoucherCm, VoucherNullifier},
-        transactions::{MantleTxBuilder, MantleTxContext},
+        transactions::{MantleTxBuilder, tx_list::ops::OpsContext},
     },
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -368,7 +368,7 @@ impl<'u> ServiceState<'u> {
         tx_builder: &MantleTxBuilder,
         change_pk: ZkPublicKey,
         funding_pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
-        context: &MantleTxContext,
+        context: &OpsContext,
         priority_fee_percent: u64,
     ) -> Result<MantleTxBuilder, WalletError> {
         self.wallet.fund_tx::<G>(

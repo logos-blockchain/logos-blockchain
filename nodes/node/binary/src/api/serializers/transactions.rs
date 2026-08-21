@@ -1,14 +1,15 @@
 use lb_core::mantle::{
-    MantleTransaction, TxHash,
-    traits::Hashable,
-    transactions::{OpProofs, Ops, mantle_tx::MantleTx, states::VerificationState},
+    SignedOps, TxHash,
+    ledger::verification_mode::VerificationMode,
+    traits::{Hashable, MantleTx},
+    transactions::{OpProofRefs, OpRefs, states::VerificationState},
 };
 use serde::Serialize;
 
 #[derive(Serialize)]
 pub struct ApiTransactionSerializer<'tx> {
     hash: TxHash,
-    ops: &'tx Ops,
+    ops: OpRefs<'tx>,
 }
 
 impl<'tx, T> From<&'tx T> for ApiTransactionSerializer<'tx>
@@ -18,7 +19,7 @@ where
     fn from(tx: &'tx T) -> Self {
         Self {
             hash: tx.hash(),
-            ops: tx.ops(),
+            ops: tx.op_refs(),
         }
     }
 }
@@ -26,16 +27,16 @@ where
 #[derive(Serialize)]
 pub struct ApiSignedTransaction<'tx> {
     mantle_tx: ApiTransactionSerializer<'tx>,
-    ops_proofs: &'tx OpProofs,
+    ops_proofs: OpProofRefs<'tx>,
 }
 
-impl<'tx, State: VerificationState> From<&'tx MantleTransaction<State>>
+impl<'tx, State: VerificationState, Mode: VerificationMode> From<&'tx SignedOps<State, Mode>>
     for ApiSignedTransaction<'tx>
 {
-    fn from(value: &'tx MantleTransaction<State>) -> Self {
+    fn from(value: &'tx SignedOps<State, Mode>) -> Self {
         Self {
-            mantle_tx: value.mantle_tx().into(),
-            ops_proofs: value.ops_proofs(),
+            mantle_tx: value.into(),
+            ops_proofs: value.op_proof_refs(),
         }
     }
 }

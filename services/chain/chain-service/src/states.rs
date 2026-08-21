@@ -82,14 +82,12 @@ impl ServiceState for CryptarchiaConsensusState {
         let (lib_id, genesis_id, lib_ledger_state) = match &settings.starting_state {
             StartingState::Genesis { genesis_block } => {
                 let lib_id = genesis_block.header().id();
-                let genesis_tx = genesis_block
-                    .transactions_iter()
-                    .next()
-                    .expect("Genesis block should be valid");
+                let genesis_tx = genesis_block.genesis_tx();
+                let epoch_nonce = genesis_tx.cryptarchia_parameter().epoch_nonce;
                 let (ledger, _events) = LedgerState::from_genesis_tx(
-                    genesis_tx,
+                    genesis_tx.clone(),
                     &settings.config,
-                    genesis_tx.cryptarchia_parameter().epoch_nonce,
+                    epoch_nonce,
                 )?;
                 (lib_id, lib_id, ledger)
             }

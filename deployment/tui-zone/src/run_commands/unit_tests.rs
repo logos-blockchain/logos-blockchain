@@ -8,15 +8,15 @@ mod tests {
 
     use lb_codec::BinaryEncode as _;
     use lb_core::mantle::{
-        MantleTransaction, Note, NoteId, Op, RawMantleTx, Utxo, Value,
-        ledger::Inputs,
+        Note, NoteId, Op, SignedOps, Utxo, Value,
+        ledger::{Inputs, verification_mode::StandardMode},
         ops::channel::{
             ChannelId, MsgId,
             inscribe::{Inscription, InscriptionOp},
             withdraw::ChannelWithdrawOp,
         },
         traits::Hashable as _,
-        transactions::{OpProofs, Ops, codec::encode_signed_mantle_tx},
+        transactions::{OpProofs, Ops},
     };
     use lb_groth16::{Fr, fr_to_bytes};
     use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key, ZkKey};
@@ -67,10 +67,6 @@ mod tests {
         Ed25519Key::from_bytes(&[byte; ED25519_SECRET_KEY_SIZE])
     }
 
-    fn empty_mantle_tx() -> RawMantleTx {
-        RawMantleTx(Ops::try_from(Vec::new()).expect("empty ops must be valid"))
-    }
-
     #[test]
     fn validate_kind_accepts_expected_versioned_kind() {
         validate_kind(ZONE_WALLET_FUNDS_EXPORT, ZONE_WALLET_FUNDS_EXPORT, 1).unwrap();
@@ -114,7 +110,7 @@ mod tests {
 
     #[test]
     fn mantle_tx_decoders_reject_trailing_bytes_and_hash_mismatches() {
-        let tx = empty_mantle_tx();
+        let tx = Ops::empty();
         let encoded = hex::encode(tx.encode());
         assert_eq!(decode_mantle_tx_hex(&encoded).unwrap(), tx);
         assert!(decode_mantle_tx_hex(&format!("{encoded}00")).is_err());
@@ -122,11 +118,11 @@ mod tests {
         ensure_tx_hash(&hex::encode(tx.hash().as_ref()), tx.hash()).unwrap();
         assert!(ensure_tx_hash(&hex::encode([1u8; 32]), tx.hash()).is_err());
 
-        let signed_tx = MantleTransaction::new(tx, OpProofs::empty());
-        let signed_encoded = hex::encode(encode_signed_mantle_tx(&signed_tx));
+        let transaction = SignedOps::<_, StandardMode>::from_parts(tx, OpProofs::empty()).unwrap();
+        let signed_encoded = hex::encode(transaction.encode());
         assert_eq!(
             decode_signed_mantle_tx_hex(&signed_encoded).unwrap(),
-            signed_tx
+            transaction
         );
         assert!(decode_signed_mantle_tx_hex(&format!("{signed_encoded}00")).is_err());
     }
@@ -234,13 +230,7 @@ mod tests {
             parent: MsgId::root(),
             signer: inscriber.public_key(),
         };
-        let tx = RawMantleTx(
-            Ops::try_from(vec![
-                Op::ChannelWithdraw(withdraw),
-                Op::ChannelInscribe(inscribe),
-            ])
-            .unwrap(),
-        );
+        let tx = Ops::from([Op::ChannelWithdraw(withdraw), Op::ChannelInscribe(inscribe)]);
         let tx_hash = tx.hash();
         let msg_id = MsgId::from([8; 32]);
         let intent = WithdrawIntent {
@@ -303,13 +293,10 @@ mod tests {
 
     #[test]
     fn withdraw_combine_rejects_too_few_signatures() {
-        let tx = RawMantleTx(
-            Ops::try_from(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
-                channel_id: ChannelId::from([9; 32]),
-                inputs: Inputs::new([NoteId::from(Fr::from(1u64))]),
-            })])
-            .unwrap(),
-        );
+        let tx = Ops::from([Op::ChannelWithdraw(ChannelWithdrawOp {
+            channel_id: ChannelId::from([9; 32]),
+            inputs: Inputs::new([NoteId::from(Fr::from(1u64))]),
+        })]);
         let intent = WithdrawIntent {
             version: ZONE_FILE_TRANSFER_VERSION,
             kind: ZONE_WITHDRAW_INTENT.to_owned(),
@@ -349,13 +336,10 @@ mod tests {
         let channel_id = ChannelId::from([10; 32]);
         let signer = test_signing_key(2);
         let second_signer = test_signing_key(3);
-        let tx = RawMantleTx(
-            Ops::try_from(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
-                channel_id,
-                inputs: Inputs::new([NoteId::from(Fr::from(1u64))]),
-            })])
-            .unwrap(),
-        );
+        let tx = Ops::from([Op::ChannelWithdraw(ChannelWithdrawOp {
+            channel_id,
+            inputs: Inputs::new([NoteId::from(Fr::from(1u64))]),
+        })]);
         let tx_hash = tx.hash();
         let intent = WithdrawIntent {
             version: ZONE_FILE_TRANSFER_VERSION,
@@ -423,13 +407,10 @@ mod tests {
         let channel_id = ChannelId::from([11; 32]);
         let signer = test_signing_key(2);
         let second_signer = test_signing_key(3);
-        let tx = RawMantleTx(
-            Ops::try_from(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
-                channel_id,
-                inputs: Inputs::new([NoteId::from(Fr::from(1u64))]),
-            })])
-            .unwrap(),
-        );
+        let tx = Ops::from([Op::ChannelWithdraw(ChannelWithdrawOp {
+            channel_id,
+            inputs: Inputs::new([NoteId::from(Fr::from(1u64))]),
+        })]);
         let tx_hash = tx.hash();
         let intent = WithdrawIntent {
             version: ZONE_FILE_TRANSFER_VERSION,

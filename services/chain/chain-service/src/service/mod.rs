@@ -17,8 +17,10 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        traits::{MantleTxWithProofs, PreverifiedMantleTx},
-        transactions::GasPrices,
+        TxGasCalculator,
+        ledger::verification_mode::StandardMode,
+        traits::{PreverifiedMantleTransaction, SignedMantleTx},
+        transactions::{GasPrices, states::Preverified},
     },
 };
 use lb_cryptarchia_engine::{PrunedBlocks, Slot};
@@ -47,7 +49,7 @@ use crate::{
 pub struct Service<Phase, Tx, Storage, RuntimeServiceId>
 where
     Phase: phases::Phase,
-    Tx: PreverifiedMantleTx + Clone + Eq + Debug,
+    Tx: PreverifiedMantleTransaction + Clone + Eq + Debug,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
 {
@@ -70,8 +72,9 @@ where
 impl<Phase, Tx, Storage, RuntimeServiceId> Service<Phase, Tx, Storage, RuntimeServiceId>
 where
     Phase: phases::Phase,
-    Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+    Tx: PreverifiedMantleTransaction
+        + SignedMantleTx<Preverified, StandardMode>
+        + TxGasCalculator<Context = GasPrices>
         + Debug
         + Clone
         + Eq
@@ -365,8 +368,9 @@ pub async fn process_block<Tx, Storage, RuntimeServiceId>(
     lib_broadcaster: &broadcast::Sender<LibUpdate>,
 ) -> Result<(PrunedBlocks<HeaderId>, Vec<Tx>), Error>
 where
-    Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+    Tx: PreverifiedMantleTransaction
+        + SignedMantleTx<Preverified, StandardMode>
+        + TxGasCalculator<Context = GasPrices>
         + Debug
         + Clone
         + Eq
@@ -383,12 +387,12 @@ where
     RuntimeServiceId: Display + 'static,
 {
     debug!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.header().id());
-    let header = block.header();
+    let header = block.header().clone();
     let prev_lib = cryptarchia.lib();
 
     let mut candidate = cryptarchia.clone();
     let (pruned_blocks, reorged_blocks, events) =
-        candidate.try_apply_block(&block, current_slot)?;
+        candidate.try_apply_block(block.clone(), current_slot)?;
     let new_lib = candidate.lib();
 
     let tx_count = block.transactions_iter().count();
@@ -405,7 +409,7 @@ where
         .store_block_data(
             header.id(),
             header.parent(),
-            block.clone(),
+            block,
             events,
             immutable_blocks,
         )
@@ -493,8 +497,9 @@ pub fn get_block_ids<Tx, Storage, RuntimeServiceId>(
     storage_adapter: StorageAdapter<Storage, Tx, RuntimeServiceId>,
 ) -> Pin<Box<dyn Stream<Item = Result<HeaderId, Error>> + Send>>
 where
-    Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+    Tx: PreverifiedMantleTransaction
+        + SignedMantleTx<Preverified, StandardMode>
+        + TxGasCalculator<Context = GasPrices>
         + Debug
         + Clone
         + Eq
@@ -552,8 +557,9 @@ pub fn load_block_ids_from_storage<Tx, Storage, RuntimeServiceId>(
     storage: StorageAdapter<Storage, Tx, RuntimeServiceId>,
 ) -> impl Stream<Item = Result<HeaderId, Error>>
 where
-    Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+    Tx: PreverifiedMantleTransaction
+        + SignedMantleTx<Preverified, StandardMode>
+        + TxGasCalculator<Context = GasPrices>
         + Debug
         + Clone
         + Eq
@@ -613,8 +619,9 @@ pub async fn delete_stale_blocks_from_storage<Tx, Storage, RuntimeServiceId>(
     storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
 ) -> HashSet<HeaderId>
 where
-    Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+    Tx: PreverifiedMantleTransaction
+        + SignedMantleTx<Preverified, StandardMode>
+        + TxGasCalculator<Context = GasPrices>
         + Debug
         + Clone
         + Eq
@@ -658,8 +665,9 @@ async fn delete_blocks_from_storage<Headers, Tx, Storage, RuntimeServiceId>(
 ) -> Result<(), Vec<(HeaderId, DynError)>>
 where
     Headers: Iterator<Item = HeaderId> + Send,
-    Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+    Tx: PreverifiedMantleTransaction
+        + SignedMantleTx<Preverified, StandardMode>
+        + TxGasCalculator<Context = GasPrices>
         + Debug
         + Clone
         + Eq

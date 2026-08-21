@@ -4,15 +4,15 @@ use lb_common_http_client::{ApiBlock, ProcessedBlockEvent, Slot};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        MantleTransaction,
+        SignedOps,
+        ledger::verification_mode::{StandardMode, VerificationMode},
         ops::{
-            Op, OpId as _,
+            OpId as _, OpRef,
             channel::{ChannelId, MsgId, inscribe::Inscription},
         },
         traits::Hashable as _,
         transactions::{
             hash::TxHash,
-            mantle_tx::MantleTx as _,
             states::{Unverified, VerificationState},
         },
     },
@@ -135,7 +135,7 @@ where
         .transactions
         .iter()
         .filter(|tx| touches_channel_tip(tx, channel_id))
-        .map(|tx| tx.mantle_tx().hash())
+        .map(|tx| tx.op_refs().hash())
         .collect();
     let channel_txs = classify_channel_txs(&event.block.transactions, channel_id);
     let mined_inscriptions = channel_txs
@@ -301,11 +301,11 @@ fn apply_prepared_block_event(
 fn observe_channel_inscriptions(
     state: &mut TxState,
     classified: &[BlockChannelTx],
-    transactions: &[MantleTransaction<Unverified>],
+    transactions: &[SignedOps<Unverified, StandardMode>],
 ) {
-    let by_hash: HashMap<TxHash, &MantleTransaction<Unverified>> = transactions
+    let by_hash: HashMap<TxHash, &SignedOps<Unverified, StandardMode>> = transactions
         .iter()
-        .map(|tx| (tx.mantle_tx().hash(), tx))
+        .map(|tx| (tx.op_refs().hash(), tx))
         .collect();
     for block_tx in classified {
         let (info, withdraws) = match block_tx {
@@ -330,14 +330,14 @@ fn observe_channel_inscriptions(
 /// yield synthetic empty-payload entries (they reset the channel tip).
 #[must_use]
 pub fn channel_inscriptions(
-    tx: &MantleTransaction<Unverified>,
+    tx: &SignedOps<Unverified, StandardMode>,
     channel_id: ChannelId,
 ) -> Vec<InscriptionInfo> {
-    let tx_hash = tx.mantle_tx().hash();
+    let tx_hash = tx.op_refs().hash();
     let mut entries: Vec<InscriptionInfo> = Vec::new();
-    for op in tx.mantle_tx().ops() {
+    for op in tx.op_refs() {
         match op {
-            Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
+            OpRef::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
                 entries.push(InscriptionInfo {
                     tx_hash,
                     parent_msg: inscribe.parent,
@@ -345,7 +345,7 @@ pub fn channel_inscriptions(
                     payload: inscribe.inscription.clone(),
                 });
             }
-            Op::ChannelConfig(config) if config.channel == channel_id => {
+            OpRef::ChannelConfig(config) if config.channel == channel_id => {
                 let parent_msg = entries
                     .last()
                     .map_or_else(MsgId::root, |prev| prev.this_msg);
@@ -426,7 +426,7 @@ where
             .transactions
             .iter()
             .filter(|tx| touches_channel_tip(tx, channel_id))
-            .map(|tx| tx.mantle_tx().hash())
+            .map(|tx| tx.op_refs().hash())
             .collect();
 
         let channel_txs = classify_channel_txs(&block.transactions, channel_id);
@@ -525,7 +525,7 @@ where
 async fn fetch_block_deposit_events<Node>(
     node: &Node,
     block_id: HeaderId,
-    transactions: &[MantleTransaction<Unverified>],
+    transactions: &[SignedOps<Unverified, StandardMode>],
     channel_id: ChannelId,
 ) -> Result<DepositEvents, Error>
 where
@@ -534,9 +534,9 @@ where
     let expected: Vec<DepositOpKey> = transactions
         .iter()
         .flat_map(|tx| {
-            let tx_hash = tx.mantle_tx().hash();
-            tx.mantle_tx().ops().iter().filter_map(move |op| match op {
-                Op::ChannelDeposit(d) if d.channel_id == channel_id => Some(DepositOpKey {
+            let tx_hash = tx.op_refs().hash();
+            tx.op_refs().into_iter().filter_map(move |op| match op {
+                OpRef::ChannelDeposit(d) if d.channel_id == channel_id => Some(DepositOpKey {
                     tx_hash,
                     op_id: d.op_id(),
                 }),
@@ -606,7 +606,7 @@ where
 ///
 /// Deposits without a matching event entry are skipped with a warning.
 fn extract_finalized_items(
-    transactions: &[MantleTransaction<Unverified>],
+    transactions: &[SignedOps<Unverified, StandardMode>],
     channel_id: ChannelId,
     l1_slot: Slot,
     deposit_events: &DepositEvents,
@@ -615,11 +615,11 @@ fn extract_finalized_items(
     let mut last_in_block: Option<MsgId> = None;
 
     for tx in transactions {
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.op_refs().hash();
         let mut ops: Vec<FinalizedOp> = Vec::new();
-        for op in tx.mantle_tx().ops() {
+        for op in tx.op_refs() {
             match op {
-                Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
+                OpRef::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
                     // Chain order is asserted by `classify_channel_txs`,
                     // which runs on the same `transactions` before this
                     // walker on every call site (live + backfill).
@@ -632,7 +632,7 @@ fn extract_finalized_items(
                     last_in_block = Some(info.this_msg);
                     ops.push(FinalizedOp::Inscription(info));
                 }
-                Op::ChannelConfig(config) if config.channel == channel_id => {
+                OpRef::ChannelConfig(config) if config.channel == channel_id => {
                     // `ChannelConfig` has no parent on the wire — it
                     // unconditionally overwrites the channel tip. Synthetic
                     // entry below keeps `channel_tip` in sync; we set
@@ -648,7 +648,7 @@ fn extract_finalized_items(
                     last_in_block = Some(info.this_msg);
                     ops.push(FinalizedOp::Inscription(info));
                 }
-                Op::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
+                OpRef::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
                     let op_id = deposit.op_id();
                     // `fetch_block_deposit_events` validates that every
                     // channel-deposit op in the block has a matching event
@@ -668,16 +668,16 @@ fn extract_finalized_items(
                         metadata: deposit.metadata.clone(),
                     }));
                 }
-                Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
+                OpRef::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
                     ops.push(FinalizedOp::Withdraw(WithdrawInfo {
                         tx_hash,
-                        op: withdraw.clone(),
+                        op: (*withdraw).clone(),
                     }));
                 }
-                Op::ChannelTransfer(transfer) if transfer.channel_id == channel_id => {
+                OpRef::ChannelTransfer(transfer) if transfer.channel_id == channel_id => {
                     ops.push(FinalizedOp::ChannelTransfer(ChannelTransferInfo {
                         tx_hash,
-                        op: transfer.clone(),
+                        op: (*transfer).clone(),
                     }));
                 }
                 _ => {}
@@ -819,7 +819,7 @@ fn apply_backfilled_block(
         .transactions
         .iter()
         .filter(|tx| touches_channel_tip(tx, channel_id))
-        .map(|tx| tx.mantle_tx().hash())
+        .map(|tx| tx.op_refs().hash())
         .collect();
 
     let channel_txs = classify_channel_txs(&block.transactions, channel_id);
@@ -855,7 +855,7 @@ fn apply_backfilled_block(
 /// subsequent entries. Downstream consumers that want unique-by-`this_msg`
 /// semantics dedup themselves.
 fn classify_channel_txs(
-    txs: &[MantleTransaction<Unverified>],
+    txs: &[SignedOps<Unverified, StandardMode>],
     channel_id: ChannelId,
 ) -> Vec<BlockChannelTx> {
     // Running in-block channel tip, for the chain-order assertion and for
@@ -868,11 +868,11 @@ fn classify_channel_txs(
 
 /// Classify one tx's channel ops; `None` when the tx has no tip-advancing op.
 pub(super) fn classify_channel_tx(
-    tx: &MantleTransaction<Unverified>,
+    tx: &SignedOps<Unverified, StandardMode>,
     channel_id: ChannelId,
     block_tip: &mut Option<MsgId>,
 ) -> Option<BlockChannelTx> {
-    let tx_hash = tx.mantle_tx().hash();
+    let tx_hash = tx.op_refs().hash();
     let mut entries: Vec<InscriptionInfo> = Vec::new();
     let mut inscribes = 0usize;
     let mut configs = 0usize;
@@ -880,9 +880,9 @@ pub(super) fn classify_channel_tx(
     let mut transfers = 0usize;
     let mut foreign_ops = false;
 
-    for op in tx.mantle_tx().ops() {
+    for op in tx.op_refs() {
         match op {
-            Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
+            OpRef::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
                 if let Some(prev) = *block_tip {
                     assert_eq!(
                         inscribe.parent, prev,
@@ -901,7 +901,7 @@ pub(super) fn classify_channel_tx(
                 });
                 *block_tip = Some(this_msg);
             }
-            Op::ChannelConfig(config) if config.channel == channel_id => {
+            OpRef::ChannelConfig(config) if config.channel == channel_id => {
                 // `ChannelConfig` has no parent on the wire — it unconditionally
                 // overwrites the channel tip. The `parent_msg` field below is
                 // unused by lineage walks for config entries; we set it to the
@@ -918,13 +918,13 @@ pub(super) fn classify_channel_tx(
                 });
                 *block_tip = Some(this_msg);
             }
-            Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
+            OpRef::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
                 withdraws.push(WithdrawInfo {
                     tx_hash,
-                    op: withdraw.clone(),
+                    op: (*withdraw).clone(),
                 });
             }
-            Op::Transfer(_) => transfers += 1,
+            OpRef::Transfer(_) => transfers += 1,
             _ => foreign_ops = true,
         }
     }
@@ -959,13 +959,13 @@ pub(super) fn classify_channel_tx(
 /// True iff this tx contains any op that advances our channel's tip pointer
 /// (`ChannelInscribe` or `ChannelConfig`). Deposits and withdraws don't move
 /// the tip and so don't make a tx "ours" for tip-tracking purposes.
-fn touches_channel_tip<State: VerificationState>(
-    tx: &MantleTransaction<State>,
+fn touches_channel_tip<State: VerificationState, Mode: VerificationMode>(
+    tx: &SignedOps<State, Mode>,
     channel_id: ChannelId,
 ) -> bool {
-    tx.mantle_tx().ops().iter().any(|op| match op {
-        Op::ChannelInscribe(inscribe) => inscribe.channel_id == channel_id,
-        Op::ChannelConfig(set_keys) => set_keys.channel == channel_id,
+    tx.op_refs().iter().any(|op| match op {
+        OpRef::ChannelInscribe(inscribe) => inscribe.channel_id == channel_id,
+        OpRef::ChannelConfig(set_keys) => set_keys.channel == channel_id,
         _ => false,
     })
 }
@@ -976,7 +976,7 @@ mod tests {
         crypto::Hash,
         events::{DepositNote, DepositRecreatedNotes},
         mantle::{
-            Note, NoteId, RawMantleTx, Value,
+            Note, NoteId, Op, Value,
             channel::{SlotTimeframe, SlotTimeout},
             ledger::{Inputs, Outputs},
             ops::{
@@ -989,6 +989,7 @@ mod tests {
                     withdraw::ChannelWithdrawOp,
                 },
             },
+            transactions::{OpProofs, Ops},
         },
     };
     use lb_groth16::Fr;
@@ -1028,7 +1029,7 @@ mod tests {
     /// Extract deposits via the unified walker and filter to deposit entries
     /// for assertion clarity.
     fn extract_deposits_for_test(
-        transactions: &[MantleTransaction<Unverified>],
+        transactions: &[SignedOps<Unverified, StandardMode>],
         channel_id: ChannelId,
         deposit_events: &DepositEvents,
     ) -> Vec<DepositInfo> {
@@ -1055,7 +1056,7 @@ mod tests {
             Op::ChannelDeposit(deposit_for_us.clone()),
             Op::ChannelDeposit(deposit_other_channel),
         ]);
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.hash();
 
         let amounts = DepositEvents::from([deposit_event_entry(tx_hash, our_op_id, 1234)]);
 
@@ -1107,8 +1108,8 @@ mod tests {
         // tx_a carries d1 then d2 (in op order); tx_b carries d3.
         let tx_a = unverified_tx_with_ops(vec![Op::ChannelDeposit(d1), Op::ChannelDeposit(d2)]);
         let tx_b = unverified_tx_with_ops(vec![Op::ChannelDeposit(d3)]);
-        let hash_a = tx_a.mantle_tx().hash();
-        let hash_b = tx_b.mantle_tx().hash();
+        let hash_a = tx_a.hash();
+        let hash_b = tx_b.hash();
 
         let amounts = DepositEvents::from([
             deposit_event_entry(hash_a, id1, 10),
@@ -1145,7 +1146,7 @@ mod tests {
 
         let tx =
             unverified_tx_with_ops(vec![Op::ChannelDeposit(dep), Op::ChannelInscribe(inscribe)]);
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.hash();
 
         let mut amounts = DepositEvents::new();
         amounts.insert(
@@ -1188,7 +1189,7 @@ mod tests {
         let msg_id = inscribe.id();
         let tx =
             unverified_tx_with_ops(vec![Op::ChannelDeposit(dep), Op::ChannelInscribe(inscribe)]);
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.hash();
 
         let classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
         assert_eq!(classified.len(), 1);
@@ -1222,7 +1223,7 @@ mod tests {
         match &update.adopted[0] {
             ChannelUpdateTx::Custom(adopted_tx) => {
                 assert_eq!(
-                    adopted_tx.mantle_tx().hash(),
+                    adopted_tx.op_refs().hash(),
                     tx_hash,
                     "the whole tx is handed over"
                 );
@@ -1249,7 +1250,7 @@ mod tests {
             Op::ChannelInscribe(first),
             Op::ChannelInscribe(second),
         ]);
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.hash();
 
         let classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
         assert_eq!(classified.len(), 1);
@@ -1314,7 +1315,7 @@ mod tests {
             Op::ChannelInscribe(inscribe),
             Op::ChannelWithdraw(withdraw),
         ]);
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.hash();
 
         let classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
         assert!(matches!(classified[0], BlockChannelTx::AtomicWithdraw(_)));
@@ -1368,7 +1369,7 @@ mod tests {
             Op::ChannelWithdraw(withdraw_for_us),
             Op::ChannelWithdraw(withdraw_other),
         ]);
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.hash();
 
         let items = extract_finalized_items(
             std::slice::from_ref(&tx),
@@ -1403,20 +1404,16 @@ mod tests {
         }
     }
 
-    fn dummy_pending_tx(seed: u8) -> MantleTransaction<Unverified> {
-        let mantle_tx = RawMantleTx(
-            [Op::ChannelInscribe(InscriptionOp {
-                channel_id: [0u8; 32].into(),
-                inscription: Inscription::new_unchecked(vec![seed]),
-                parent: MsgId::root(),
-                signer: Ed25519Key::from_bytes(&[seed; 32]).public_key(),
-            })]
-            .into(),
-        );
-        MantleTransaction::new(
-            mantle_tx,
-            [OpProof::Ed25519Sig(Ed25519Signature::zero())].into(),
-        )
+    fn dummy_pending_tx(seed: u8) -> SignedOps<Unverified, StandardMode> {
+        let mantle_tx = Ops::from([Op::ChannelInscribe(InscriptionOp {
+            channel_id: [0u8; 32].into(),
+            inscription: Inscription::new_unchecked(vec![seed]),
+            parent: MsgId::root(),
+            signer: Ed25519Key::from_bytes(&[seed; 32]).public_key(),
+        })]);
+        let op_proofs = OpProofs::from([OpProof::Ed25519Sig(Ed25519Signature::zero())]);
+        SignedOps::from_parts(mantle_tx, op_proofs)
+            .expect("Should generate a valid transaction with valid matching proofs.")
     }
 
     /// Run a synchronous callable on a background thread and bail out if it
@@ -1460,7 +1457,7 @@ mod tests {
             Op::ChannelInscribe(i2),
             Op::ChannelConfig(config),
         ]);
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.hash();
 
         // Stage pending inscriptions BEFORE driving the block through.
         let genesis = header_id(0);
@@ -1469,7 +1466,7 @@ mod tests {
 
         // Pending chained from I1 — invalidated by the replay (tip moved off I1).
         let pending_stale = dummy_pending_tx(1);
-        let pending_stale_hash = pending_stale.mantle_tx().hash();
+        let pending_stale_hash = pending_stale.hash();
         state.submit_inscription(
             pending_stale,
             i1_id,
@@ -1479,7 +1476,7 @@ mod tests {
 
         // Pending chained from the config tip — should remain on-branch.
         let pending_live = dummy_pending_tx(2);
-        let pending_live_hash = pending_live.mantle_tx().hash();
+        let pending_live_hash = pending_live.hash();
         state.submit_inscription(
             pending_live,
             config_id,
@@ -1535,7 +1532,7 @@ mod tests {
             Op::ChannelConfig(config.clone()),
             Op::ChannelConfig(config),
         ]);
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.hash();
 
         let genesis = header_id(0);
         let block = header_id(1);
@@ -1573,9 +1570,9 @@ mod tests {
         let config_id = config.id();
 
         let tx_a = unverified_tx_with_ops(vec![Op::ChannelConfig(config.clone())]);
-        let tx_a_hash = tx_a.mantle_tx().hash();
+        let tx_a_hash = tx_a.hash();
         let tx_b = unverified_tx_with_ops(vec![Op::ChannelConfig(config)]);
-        let tx_b_hash = tx_b.mantle_tx().hash();
+        let tx_b_hash = tx_b.hash();
 
         let genesis = header_id(0);
         let block_a = header_id(1);
@@ -1608,7 +1605,7 @@ mod tests {
 
         // Pending chained from the now-finalized config tip.
         let pending = dummy_pending_tx(5);
-        let pending_hash = pending.mantle_tx().hash();
+        let pending_hash = pending.hash();
         state.submit_inscription(
             pending,
             config_id,

@@ -3,13 +3,14 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        MantleTransaction,
+        SignedOps,
+        ledger::verification_mode::StandardMode,
         ops::{
-            Op,
+            OpRef,
             channel::{ChannelId, MsgId, inscribe::Inscription},
         },
         traits::Hashable as _,
-        transactions::{hash::TxHash, mantle_tx::MantleTx as _, states::Unverified},
+        transactions::{hash::TxHash, states::Unverified},
     },
 };
 use rpds::HashTrieSetSync;
@@ -44,7 +45,7 @@ pub struct ChannelUpdateInfo {
 /// the tx is always mineable) — such entries are never shed.
 #[derive(Debug, Clone)]
 struct PendingOtherTx {
-    signed_tx: MantleTransaction<Unverified>,
+    signed_tx: SignedOps<Unverified, StandardMode>,
     first_parent: Option<MsgId>,
     last_msg: Option<MsgId>,
     /// True when the tx bundles an inscription with its other ops (an atomic
@@ -58,16 +59,16 @@ struct PendingOtherTx {
 }
 
 fn opaque_lineage(
-    tx: &MantleTransaction<Unverified>,
+    tx: &SignedOps<Unverified, StandardMode>,
     channel_id: ChannelId,
 ) -> (Option<MsgId>, Option<MsgId>, bool) {
     let mut first_parent = None;
     let mut first_seen = false;
     let mut last_msg = None;
     let mut is_atomic_bundle = false;
-    for op in tx.mantle_tx().ops() {
+    for op in tx.op_refs() {
         match op {
-            Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
+            OpRef::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
                 if !first_seen {
                     first_seen = true;
                     first_parent = Some(inscribe.parent);
@@ -75,7 +76,7 @@ fn opaque_lineage(
                 last_msg = Some(inscribe.id());
                 is_atomic_bundle = true;
             }
-            Op::ChannelConfig(config) if config.channel == channel_id => {
+            OpRef::ChannelConfig(config) if config.channel == channel_id => {
                 first_seen = true;
                 last_msg = Some(config.id());
             }
@@ -93,7 +94,7 @@ fn opaque_lineage(
 #[derive(Debug, Clone)]
 pub struct PendingInscription {
     pub tx_hash: TxHash,
-    pub signed_tx: MantleTransaction<Unverified>,
+    pub signed_tx: SignedOps<Unverified, StandardMode>,
     pub parent_msg: MsgId,
     pub this_msg: MsgId,
     pub payload: Inscription,
@@ -151,7 +152,7 @@ pub enum BlockChannelTx {
     /// caller's own recovery logic — along with its tip-advancing entries
     /// in op order.
     Custom {
-        tx: MantleTransaction<Unverified>,
+        tx: SignedOps<Unverified, StandardMode>,
         entries: Vec<InscriptionInfo>,
     },
 }
@@ -211,7 +212,7 @@ impl TxState {
     /// [`Self::submit_atomic_withdraw`] for inscription+withdraw bundles.
     pub fn submit_inscription(
         &mut self,
-        signed_tx: MantleTransaction<Unverified>,
+        signed_tx: SignedOps<Unverified, StandardMode>,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,
@@ -223,7 +224,7 @@ impl TxState {
     /// must mirror the `Op::ChannelWithdraw` ops in the bundle, in tx order.
     pub fn submit_atomic_withdraw(
         &mut self,
-        signed_tx: MantleTransaction<Unverified>,
+        signed_tx: SignedOps<Unverified, StandardMode>,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,
@@ -234,13 +235,13 @@ impl TxState {
 
     fn insert_pending(
         &mut self,
-        signed_tx: MantleTransaction<Unverified>,
+        signed_tx: SignedOps<Unverified, StandardMode>,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,
         withdraws: Option<Vec<WithdrawInfo>>,
     ) {
-        let tx_hash = signed_tx.mantle_tx().hash();
+        let tx_hash = signed_tx.hash();
         self.track_local_tx(tx_hash);
         self.pending_by_parent
             .entry(parent_msg)
@@ -272,13 +273,13 @@ impl TxState {
     /// chain, so they never count as first-time publishes.
     pub fn observe_channel_inscription(
         &mut self,
-        signed_tx: MantleTransaction<Unverified>,
+        signed_tx: SignedOps<Unverified, StandardMode>,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,
         withdraws: Option<Vec<WithdrawInfo>>,
     ) {
-        let tx_hash = signed_tx.mantle_tx().hash();
+        let tx_hash = signed_tx.hash();
         if self.is_tracked(&tx_hash) {
             return;
         }
@@ -320,10 +321,10 @@ impl TxState {
     /// tip-advancing op), or `None` when it carries none for this channel.
     pub fn submit_other(
         &mut self,
-        signed_tx: MantleTransaction<Unverified>,
+        signed_tx: SignedOps<Unverified, StandardMode>,
         channel_id: ChannelId,
     ) -> Option<MsgId> {
-        let tx_hash = signed_tx.mantle_tx().hash();
+        let tx_hash = signed_tx.hash();
         let (first_parent, last_msg, is_atomic_bundle) = opaque_lineage(&signed_tx, channel_id);
         self.track_local_tx(tx_hash);
         let seq = self.next_other_seq;
@@ -484,7 +485,7 @@ impl TxState {
     /// (`pending_by_parent`), opaque txs by submission order (`seq`) — a
     /// locally chained bundle can only be built after the bundle that
     /// establishes its parent tip, so submission order is dependency order.
-    pub fn pending_txs(&self, tip: HeaderId) -> Vec<(TxHash, MantleTransaction<Unverified>)> {
+    pub fn pending_txs(&self, tip: HeaderId) -> Vec<(TxHash, SignedOps<Unverified, StandardMode>)> {
         let safe = self
             .block_states
             .get(&tip)
@@ -636,7 +637,7 @@ impl TxState {
     pub fn shed_off_branch_pending_other(
         &mut self,
         tip: HeaderId,
-    ) -> Vec<MantleTransaction<Unverified>> {
+    ) -> Vec<SignedOps<Unverified, StandardMode>> {
         if self.pending_other.is_empty() {
             return Vec::new();
         }
@@ -737,7 +738,7 @@ impl TxState {
 
     /// All pending transactions (for checkpoint serialization).
     #[must_use]
-    pub fn all_pending_txs(&self) -> Vec<(TxHash, MantleTransaction<Unverified>)> {
+    pub fn all_pending_txs(&self) -> Vec<(TxHash, SignedOps<Unverified, StandardMode>)> {
         let inscriptions = self
             .pending
             .iter()
@@ -754,7 +755,10 @@ impl TxState {
     }
 
     /// Remove a pending inscription and return its signed tx.
-    pub fn remove_pending(&mut self, tx_hash: &TxHash) -> Option<MantleTransaction<Unverified>> {
+    pub fn remove_pending(
+        &mut self,
+        tx_hash: &TxHash,
+    ) -> Option<SignedOps<Unverified, StandardMode>> {
         if let Some(removed) = self.pending.remove(tx_hash) {
             if let Some(children) = self.pending_by_parent.get_mut(&removed.parent_msg) {
                 children.retain(|h| h != tx_hash);
@@ -1178,26 +1182,20 @@ impl TxState {
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{
-        Op::ChannelInscribe, RawMantleTx, ops::channel::inscribe::InscriptionOp,
-        transactions::OpProofs,
-    };
+    use lb_core::mantle::{Op, ops::channel::inscribe::InscriptionOp, transactions::Ops};
     use lb_key_management_system_service::keys::Ed25519PublicKey;
 
     use super::*;
     use crate::test_support::header_id;
 
-    fn make_dummy_tx(data: u8) -> MantleTransaction<Unverified> {
-        let mantle_tx = RawMantleTx(
-            [ChannelInscribe(InscriptionOp {
-                channel_id: [0u8; 32].into(),
-                inscription: [data].into(),
-                parent: [0u8; 32].into(),
-                signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
-            })]
-            .into(),
-        );
-        MantleTransaction::new(mantle_tx, OpProofs::empty())
+    fn make_dummy_tx(data: u8) -> SignedOps<Unverified, StandardMode> {
+        let mantle_tx = Ops::from([Op::ChannelInscribe(InscriptionOp {
+            channel_id: [0u8; 32].into(),
+            inscription: [data].into(),
+            parent: [0u8; 32].into(),
+            signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+        })]);
+        SignedOps::from_ops_with_placeholder_proofs(mantle_tx)
     }
 
     #[test]
@@ -1217,7 +1215,7 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
 
         let tx = make_dummy_tx(1);
-        let hash = tx.mantle_tx().hash();
+        let hash = tx.hash();
         state.submit_other(tx, ChannelId::from([0u8; 32]));
 
         // Process block containing our tx, lib stays at genesis
@@ -1238,7 +1236,7 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
 
         let tx = make_dummy_tx(1);
-        let hash = tx.mantle_tx().hash();
+        let hash = tx.hash();
         state.submit_other(tx, ChannelId::from([0u8; 32]));
 
         // b1 with our tx
@@ -1267,8 +1265,8 @@ mod tests {
 
         let tx1 = make_dummy_tx(1);
         let tx2 = make_dummy_tx(2);
-        let hash1 = tx1.mantle_tx().hash();
-        let hash2 = tx2.mantle_tx().hash();
+        let hash1 = tx1.hash();
+        let hash2 = tx2.hash();
 
         state.submit_other(tx1, ChannelId::from([0u8; 32]));
         state.submit_other(tx2, ChannelId::from([0u8; 32]));
@@ -1292,7 +1290,7 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
 
         let tx = make_dummy_tx(1);
-        let hash = tx.mantle_tx().hash();
+        let hash = tx.hash();
         state.submit_other(tx, ChannelId::from([0u8; 32]));
 
         // b1 has our tx
@@ -1388,7 +1386,7 @@ mod tests {
     }
 
     /// Build an `[inscribe(parent), config]` bundle tx for the zero channel.
-    fn bundle_tx(parent: MsgId, data: u8) -> (MantleTransaction<Unverified>, MsgId, MsgId) {
+    fn bundle_tx(parent: MsgId, data: u8) -> (SignedOps<Unverified, StandardMode>, MsgId, MsgId) {
         use lb_core::mantle::{
             channel::{SlotTimeframe, SlotTimeout},
             ops::channel::config::{ChannelConfigOp, Keys},
@@ -1409,10 +1407,8 @@ mod tests {
         };
         let inscribe_msg = inscribe.id();
         let config_msg = config.id();
-        let tx = MantleTransaction::new(
-            RawMantleTx([ChannelInscribe(inscribe), Op::ChannelConfig(config)].into()),
-            OpProofs::empty(),
-        );
+        let ops = Ops::from([Op::ChannelInscribe(inscribe), Op::ChannelConfig(config)]);
+        let tx = SignedOps::from_ops_with_placeholder_proofs(ops);
         (tx, inscribe_msg, config_msg)
     }
 
@@ -1497,7 +1493,7 @@ mod tests {
         let mut hashes = Vec::new();
         for data in 1..=6u8 {
             let (bundle, _inscribe_msg, config_msg) = bundle_tx(parent, data);
-            hashes.push(bundle.mantle_tx().hash());
+            hashes.push(bundle.hash());
             state.submit_other(bundle, channel_id);
             parent = config_msg;
         }
@@ -1585,10 +1581,8 @@ mod tests {
             signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
         };
         let inscribe_msg = inscribe.id();
-        let tx = MantleTransaction::new(
-            RawMantleTx([Op::ChannelConfig(config), ChannelInscribe(inscribe)].into()),
-            OpProofs::empty(),
-        );
+        let ops = Ops::from([Op::ChannelConfig(config), Op::ChannelInscribe(inscribe)]);
+        let tx = SignedOps::from_ops_with_placeholder_proofs(ops);
 
         let derived = state.submit_other(tx, channel_id);
         assert_eq!(derived, Some(inscribe_msg), "tip is the tx's last op");
@@ -1628,10 +1622,8 @@ mod tests {
             configuration_threshold: 1,
             transfer_threshold: 1,
         };
-        let cut = MantleTransaction::new(
-            RawMantleTx([Op::ChannelConfig(config)].into()),
-            OpProofs::empty(),
-        );
+        let ops = Ops::from([Op::ChannelConfig(config)]);
+        let cut = SignedOps::from_ops_with_placeholder_proofs(ops);
         state.submit_other(cut, channel_id);
 
         assert_eq!(
@@ -1723,7 +1715,7 @@ mod tests {
         this_msg: MsgId,
     ) -> TxHash {
         let tx = make_dummy_tx(data);
-        let hash = tx.mantle_tx().hash();
+        let hash = tx.hash();
         state.submit_inscription(tx, parent_msg, this_msg, [data].into());
         hash
     }
@@ -1744,7 +1736,7 @@ mod tests {
 
         // Mined inscription M establishes channel tip m.
         let m_info = InscriptionInfo {
-            tx_hash: make_dummy_tx(1).mantle_tx().hash(),
+            tx_hash: make_dummy_tx(1).hash(),
             parent_msg: MsgId::root(),
             this_msg: msg_id(1),
             payload: [1].into(),
@@ -1765,7 +1757,7 @@ mod tests {
 
         // Config C lands alone; the tip resets to c.
         let c_info = InscriptionInfo {
-            tx_hash: make_dummy_tx(3).mantle_tx().hash(),
+            tx_hash: make_dummy_tx(3).hash(),
             parent_msg: msg_id(1),
             this_msg: msg_id(3),
             payload: [3].into(),
@@ -1815,7 +1807,7 @@ mod tests {
         // Old branch replays a config with the boundary id above the LIB:
         // a1: [Inscribe U(root→u), Config X(u→x)].
         let u_tx = make_dummy_tx(1);
-        let u_hash = u_tx.mantle_tx().hash();
+        let u_hash = u_tx.hash();
         let u_info = InscriptionInfo {
             tx_hash: u_hash,
             parent_msg: MsgId::root(),
@@ -1823,7 +1815,7 @@ mod tests {
             payload: [1].into(),
         };
         let x_old = InscriptionInfo {
-            tx_hash: make_dummy_tx(2).mantle_tx().hash(),
+            tx_hash: make_dummy_tx(2).hash(),
             parent_msg: msg_id(10),
             this_msg: x_msg,
             payload: [2].into(),
@@ -1843,13 +1835,13 @@ mod tests {
 
         // Competing branch b1: [Inscribe V(root→v), Config X(v→x)].
         let v_info = InscriptionInfo {
-            tx_hash: make_dummy_tx(3).mantle_tx().hash(),
+            tx_hash: make_dummy_tx(3).hash(),
             parent_msg: MsgId::root(),
             this_msg: msg_id(20),
             payload: [3].into(),
         };
         let x_new = InscriptionInfo {
-            tx_hash: make_dummy_tx(4).mantle_tx().hash(),
+            tx_hash: make_dummy_tx(4).hash(),
             parent_msg: msg_id(20),
             this_msg: x_msg,
             payload: [2].into(),
@@ -1904,7 +1896,7 @@ mod tests {
         let x_msg = msg_id(30);
 
         let u_tx = make_dummy_tx(1);
-        let u_hash = u_tx.mantle_tx().hash();
+        let u_hash = u_tx.hash();
         let u_info = InscriptionInfo {
             tx_hash: u_hash,
             parent_msg: MsgId::root(),
@@ -1912,7 +1904,7 @@ mod tests {
             payload: [1].into(),
         };
         let x_old = InscriptionInfo {
-            tx_hash: make_dummy_tx(2).mantle_tx().hash(),
+            tx_hash: make_dummy_tx(2).hash(),
             parent_msg: u_msg,
             this_msg: x_msg,
             payload: [2].into(),
@@ -1935,13 +1927,13 @@ mod tests {
         assert_eq!(old_lineage.len(), 2, "old lineage: U then Config X");
 
         let v_info = InscriptionInfo {
-            tx_hash: make_dummy_tx(3).mantle_tx().hash(),
+            tx_hash: make_dummy_tx(3).hash(),
             parent_msg: MsgId::root(),
             this_msg: v_msg,
             payload: [3].into(),
         };
         let x_new = InscriptionInfo {
-            tx_hash: make_dummy_tx(4).mantle_tx().hash(),
+            tx_hash: make_dummy_tx(4).hash(),
             parent_msg: v_msg,
             this_msg: x_msg,
             payload: [2].into(),
@@ -2010,7 +2002,7 @@ mod tests {
 
         let c1_msg = msg_id(20);
         let c1_tx = make_dummy_tx(99);
-        let c1_tx_hash = c1_tx.mantle_tx().hash();
+        let c1_tx_hash = c1_tx.hash();
         let c1_inscription = InscriptionInfo {
             tx_hash: c1_tx_hash,
             parent_msg: MsgId::root(),
@@ -2074,7 +2066,7 @@ mod tests {
 
         let c1_msg = msg_id(20);
         let c1_inscription = InscriptionInfo {
-            tx_hash: make_dummy_tx(99).mantle_tx().hash(),
+            tx_hash: make_dummy_tx(99).hash(),
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
             payload: [99].into(),
@@ -2151,7 +2143,7 @@ mod tests {
         // c1 lands, consuming root
         let c1_msg = msg_id(20);
         let c1_inscription = InscriptionInfo {
-            tx_hash: make_dummy_tx(99).mantle_tx().hash(),
+            tx_hash: make_dummy_tx(99).hash(),
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
             payload: [99].into(),
@@ -2183,8 +2175,8 @@ mod tests {
 
         let tx1 = make_dummy_tx(1);
         let tx2 = make_dummy_tx(2);
-        let hash1 = tx1.mantle_tx().hash();
-        let hash2 = tx2.mantle_tx().hash();
+        let hash1 = tx1.hash();
+        let hash2 = tx2.hash();
 
         state.submit_other(tx1, ChannelId::from([0u8; 32]));
         state.submit_other(tx2, ChannelId::from([0u8; 32]));

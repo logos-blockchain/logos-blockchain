@@ -28,9 +28,11 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
+        TxGasCalculator,
         gas::MainnetGasProfile,
-        traits::{MantleTxWithProofs, PreverifiedMantleTx},
-        transactions::GasPrices,
+        ledger::verification_mode::StandardMode,
+        traits::{PreverifiedMantleTransaction, SignedMantleTx},
+        transactions::{GasPrices, states::Preverified},
     },
     sdp::{Declaration, DeclarationId},
 };
@@ -367,15 +369,15 @@ impl Cryptarchia {
     }
 
     /// Try to apply a block to the chain.
-    fn try_apply_block<'tx, Tx>(
+    fn try_apply_block<Tx>(
         &mut self,
-        block: &Block<Tx>,
+        block: Block<Tx>,
         current_slot: Slot,
     ) -> Result<(PrunedBlocks<HeaderId>, ReorgedBlocks<HeaderId>, Events), Error>
     where
-        Tx: PreverifiedMantleTx + 'tx + MantleTxWithProofs<Context = GasPrices>,
+        Tx: PreverifiedMantleTransaction + TxGasCalculator<Context = GasPrices> + Clone,
     {
-        let header = block.header();
+        let header = block.header().clone();
         let id = header.id();
         let parent = header.parent();
         let slot = header.slot();
@@ -393,8 +395,10 @@ impl Cryptarchia {
         }
 
         // A block is valid only if every uncle it carries is valid.
-        self.verify_uncles(block)?;
+        self.verify_uncles(&block)?;
 
+        let block_uncle_headers_slots = block.uncle_headers().slots();
+        let transactions = block.into_transactions();
         // A block number of this block if it's applied to the chain.
         let (_, state, events) = self
             .ledger
@@ -403,8 +407,8 @@ impl Cryptarchia {
                 parent,
                 slot,
                 header.leader_proof(),
-                &block.uncle_headers().slots(),
-                block.transactions_iter(),
+                &block_uncle_headers_slots,
+                transactions.into_iter(),
             )
             .map_err(|err| match err {
                 lb_ledger::LedgerError::ParentNotFound(parent) => Error::ParentMissing {
@@ -416,7 +420,7 @@ impl Cryptarchia {
 
         let (pruned_blocks, reorged_blocks) = self
             .consensus
-            .receive_block(id, parent, slot, block.uncle_headers().slots())
+            .receive_block(id, parent, slot, block_uncle_headers_slots)
             .map_err(|err| match err {
                 lb_cryptarchia_engine::Error::ParentMissing(parent) => Error::ParentMissing {
                     parent,
@@ -531,7 +535,7 @@ impl From<GenesisBlock> for StartingState {
 #[expect(clippy::allow_attributes_without_reason)]
 pub struct CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
-    Tx: PreverifiedMantleTx + Clone + Eq + Debug,
+    Tx: PreverifiedMantleTransaction + Clone + Eq + Debug,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     TimeBackend: lb_time_service::backends::TimeBackend,
@@ -545,7 +549,7 @@ where
 impl<Tx, Storage, TimeBackend, RuntimeServiceId> ServiceData
     for CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
-    Tx: PreverifiedMantleTx + Clone + Eq + Debug,
+    Tx: PreverifiedMantleTransaction + Clone + Eq + Debug,
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     TimeBackend: lb_time_service::backends::TimeBackend,
@@ -562,8 +566,9 @@ where
 impl<Tx, Storage, TimeBackend, RuntimeServiceId> ServiceCore<RuntimeServiceId>
     for CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
-    Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+    Tx: PreverifiedMantleTransaction
+        + SignedMantleTx<Preverified, StandardMode>
+        + TxGasCalculator<Context = GasPrices>
         + Debug
         + Clone
         + Eq
@@ -740,8 +745,9 @@ where
 impl<Tx, Storage, TimeBackend, RuntimeServiceId>
     CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
-    Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+    Tx: PreverifiedMantleTransaction
+        + SignedMantleTx<Preverified, StandardMode>
+        + TxGasCalculator<Context = GasPrices>
         + Debug
         + Clone
         + Eq

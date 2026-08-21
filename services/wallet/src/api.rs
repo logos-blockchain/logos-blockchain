@@ -1,11 +1,13 @@
 use lb_core::{
     header::HeaderId,
     mantle::{
-        MantleTransaction, Note, Value,
+        Note, SignedOps, Value,
         gas::GasCost,
+        ledger::verification_mode::StandardMode,
         ops::leader_claim::{RewardsRoot, VoucherCm},
         transactions::{
-            MantleTxBuilder, MantleTxContext, TxBuilderError, hash::TxHash, states::Preverified,
+            MantleTxBuilder, TxBuilderError, hash::TxHash, states::Preverified,
+            tx_list::ops::OpsContext,
         },
     },
 };
@@ -169,7 +171,7 @@ where
         reward_amount: Value,
         funding_pk: ZkPublicKey,
         max_tx_fee: GasCost,
-    ) -> Result<TipResponse<MantleTransaction<Preverified>>, WalletApiError> {
+    ) -> Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
@@ -189,7 +191,7 @@ where
     pub async fn get_tx_context(
         &self,
         block_id: Option<HeaderId>,
-    ) -> Result<MantleTxContext, WalletApiError> {
+    ) -> Result<OpsContext, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
         self.relay
             .send(WalletMsg::GetTxContext { block_id, resp_tx })
@@ -204,7 +206,7 @@ where
         funding_pks: Vec<ZkPublicKey>,
         recipient_pk: ZkPublicKey,
         amount: Value,
-    ) -> Result<TipResponse<MantleTransaction<Preverified>>, WalletApiError> {
+    ) -> Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletApiError> {
         let mantle_tx_builder =
             MantleTxBuilder::new().add_ledger_output(Note::new(amount, recipient_pk))?;
         let funded_tx_builder = self
@@ -217,7 +219,7 @@ where
         &self,
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
-    ) -> Result<TipResponse<MantleTransaction<Preverified>>, WalletApiError> {
+    ) -> Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
@@ -307,7 +309,7 @@ mod tests {
 
     use lb_core::mantle::{
         ops::channel::{ChannelId, ChannelKeyIndex},
-        transactions::{GasPrices, MantleTxGasContext},
+        transactions::{GasPrices, tx_list::ops::OpsGasContext},
     };
     use overwatch::services::state::{NoOperator, NoState};
     use tokio::sync::mpsc;
@@ -355,8 +357,8 @@ mod tests {
             while let Some(msg) = msg_receiver.recv().await {
                 if let WalletMsg::GetTxContext { block_id, resp_tx } = msg {
                     assert_eq!(block_id, Some(expected_block_id));
-                    let context = MantleTxContext {
-                        gas_context: MantleTxGasContext::new(
+                    let context = OpsContext {
+                        gas_context: OpsGasContext::new(
                             std::iter::once((expected_channel_id, expected_threshold)).collect(),
                             std::collections::HashMap::new(),
                             expected_gas_prices,
