@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Op,
+    Op, OpRef,
     channel::{config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp},
     leader_claim::LeaderClaimOp,
     sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
@@ -47,6 +47,24 @@ impl<'a> From<&'a Op> for OpSer<'a> {
             Op::SDPActive(op) => Self::SDPActive(OpWire::new(op)),
             Op::LeaderClaim(op) => Self::LeaderClaim(OpWire::new(op)),
             Op::ClaimPowReward(op) => Self::ClaimPowReward(OpWire::new(op)),
+        }
+    }
+}
+
+impl<'a> From<OpRef<'a>> for OpSer<'a> {
+    fn from(value: OpRef<'a>) -> Self {
+        match value {
+            OpRef::ChannelInscribe(op) => Self::ChannelInscribe(OpWire::new(op)),
+            OpRef::ChannelConfig(op) => Self::ChannelConfig(OpWire::new(op)),
+            OpRef::ChannelDeposit(op) => Self::ChannelDeposit(OpWire::new(op)),
+            OpRef::ChannelWithdraw(op) => Self::ChannelWithdraw(OpWire::new(op)),
+            OpRef::ChannelTransfer(op) => Self::ChannelTransfer(OpWire::new(op)),
+            OpRef::SDPDeclare(op) => Self::SDPDeclare(OpWire::new(op)),
+            OpRef::SDPWithdraw(op) => Self::SDPWithdraw(OpWire::new(op)),
+            OpRef::SDPActive(op) => Self::SDPActive(OpWire::new(op)),
+            OpRef::LeaderClaim(op) => Self::LeaderClaim(OpWire::new(op)),
+            OpRef::Transfer(op) => Self::Transfer(OpWire::new(op)),
+            OpRef::ClaimPowReward(op) => Self::ClaimPowReward(OpWire::new(op)),
         }
     }
 }

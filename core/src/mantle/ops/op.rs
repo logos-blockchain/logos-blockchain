@@ -1,14 +1,18 @@
 use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+#[cfg(feature = "test-utils")]
+use crate::mantle::OpProof;
+#[cfg(feature = "test-utils")]
+use crate::mantle::ops::op_proof::placeholders::placeholder_proof_for;
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
         GasProfile,
-        gas::{Gas, OperationGas},
+        gas::Gas,
         ledger::ProvableOperation as _,
         ops::{
-            OPERATION_ID_V1,
+            OPERATION_ID_V1, OpRef,
             channel::{
                 channel_transfer::ChannelTransferOp, config::ChannelConfigOp, deposit::DepositOp,
                 inscribe::InscriptionOp, withdraw::ChannelWithdrawOp,
@@ -30,6 +34,16 @@ pub trait OpId {
     }
 
     fn op_bytes(&self) -> Vec<u8>;
+}
+
+impl<T: OpId> OpId for &T {
+    fn op_id(&self) -> Hash {
+        (*self).op_id()
+    }
+
+    fn op_bytes(&self) -> Vec<u8> {
+        (*self).op_bytes()
+    }
 }
 
 /// Core set of supported Mantle operations.
@@ -96,37 +110,11 @@ impl<'de> Deserialize<'de> for Op {
 // Op = Opcode OpPayload
 impl BinaryEncode for Op {
     fn encoded_length(&self) -> usize {
-        let payload = match self {
-            Self::ChannelInscribe(op) => op.encoded_length(),
-            Self::ChannelConfig(op) => op.encoded_length(),
-            Self::ChannelDeposit(op) => op.encoded_length(),
-            Self::ChannelWithdraw(op) => op.encoded_length(),
-            Self::ChannelTransfer(op) => op.encoded_length(),
-            Self::SDPDeclare(op) => op.encoded_length(),
-            Self::SDPWithdraw(op) => op.encoded_length(),
-            Self::SDPActive(op) => op.encoded_length(),
-            Self::LeaderClaim(op) => op.encoded_length(),
-            Self::Transfer(op) => op.encoded_length(),
-            Self::ClaimPowReward(op) => op.encoded_length(),
-        };
-        self.code().encoded_length().checked_add(payload).unwrap()
+        self.by_ref().encoded_length()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
-        self.code().encode_into(out);
-        match self {
-            Self::ChannelInscribe(op) => op.encode_into(out),
-            Self::ChannelConfig(op) => op.encode_into(out),
-            Self::ChannelDeposit(op) => op.encode_into(out),
-            Self::ChannelWithdraw(op) => op.encode_into(out),
-            Self::ChannelTransfer(op) => op.encode_into(out),
-            Self::SDPDeclare(op) => op.encode_into(out),
-            Self::SDPWithdraw(op) => op.encode_into(out),
-            Self::SDPActive(op) => op.encode_into(out),
-            Self::LeaderClaim(op) => op.encode_into(out),
-            Self::Transfer(op) => op.encode_into(out),
-            Self::ClaimPowReward(op) => op.encode_into(out),
-        }
+        self.by_ref().encode_into(out);
     }
 }
 
@@ -173,66 +161,37 @@ impl BinaryDecode for Op {
     }
 }
 
-const fn gas_cost_of<Op, Profile>(_op: &Op) -> Gas
-where
-    Op: OperationGas<Profile>,
-    Profile: GasProfile,
-{
-    Op::GAS_COST
-}
-
-// We just check that the enum discriminant tag is encoded correctly, so a
-// single fixture is fine here.
-// TODO: Remove once the `BinaryCodec` macro supports enums.
-
 impl Op {
     #[must_use]
-    pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::ChannelInscribe(_) => "ChannelInscribe",
-            Self::ChannelConfig(_) => "ChannelConfig",
-            Self::ChannelDeposit(_) => "ChannelDeposit",
-            Self::ChannelWithdraw(_) => "ChannelWithdraw",
-            Self::ChannelTransfer(_) => "ChannelTransfer",
-            Self::SDPDeclare(_) => "SDPDeclare",
-            Self::SDPWithdraw(_) => "SDPWithdraw",
-            Self::SDPActive(_) => "SDPActive",
-            Self::LeaderClaim(_) => "LeaderClaim",
-            Self::Transfer(_) => "Transfer",
-            Self::ClaimPowReward(_) => "ClaimPowReward",
-        }
+    pub fn by_ref(&self) -> OpRef<'_> {
+        self.into()
     }
 
     #[must_use]
-    pub const fn gas_cost<Profile: GasProfile>(&self) -> Gas {
-        match self {
-            Self::ChannelInscribe(op) => gas_cost_of(op),
-            Self::ChannelConfig(op) => gas_cost_of(op),
-            Self::ChannelDeposit(op) => gas_cost_of(op),
-            Self::ChannelWithdraw(op) => gas_cost_of(op),
-            Self::ChannelTransfer(op) => gas_cost_of(op),
-            Self::SDPDeclare(op) => gas_cost_of(op),
-            Self::SDPWithdraw(op) => gas_cost_of(op),
-            Self::SDPActive(op) => gas_cost_of(op),
-            Self::LeaderClaim(op) => gas_cost_of(op),
-            Self::Transfer(op) => gas_cost_of(op),
-            Self::ClaimPowReward(op) => gas_cost_of(op),
-        }
+    pub fn as_str(&self) -> &'static str {
+        self.by_ref().as_str()
     }
 
-    const fn code(&self) -> u8 {
+    #[must_use]
+    pub fn gas_cost<Profile: GasProfile>(&self) -> Gas {
+        self.by_ref().gas_cost::<Profile>()
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[must_use]
+    pub fn generate_placeholder_proof(&self) -> OpProof {
         match self {
-            Self::ChannelInscribe(_) => InscriptionOp::CODE,
-            Self::ChannelConfig(_) => ChannelConfigOp::CODE,
-            Self::ChannelDeposit(_) => DepositOp::CODE,
-            Self::ChannelWithdraw(_) => ChannelWithdrawOp::CODE,
-            Self::ChannelTransfer(_) => ChannelTransferOp::CODE,
-            Self::SDPDeclare(_) => SDPDeclareOp::CODE,
-            Self::SDPWithdraw(_) => SDPWithdrawOp::CODE,
-            Self::SDPActive(_) => SDPActiveOp::CODE,
-            Self::LeaderClaim(_) => LeaderClaimOp::CODE,
-            Self::Transfer(_) => TransferOp::CODE,
-            Self::ClaimPowReward(_) => ClaimPowRewardOp::CODE,
+            Self::ChannelInscribe(op) => placeholder_proof_for(op),
+            Self::ChannelConfig(op) => placeholder_proof_for(op),
+            Self::ChannelDeposit(op) => placeholder_proof_for(op),
+            Self::ChannelWithdraw(op) => placeholder_proof_for(op),
+            Self::ChannelTransfer(op) => placeholder_proof_for(op),
+            Self::SDPDeclare(op) => placeholder_proof_for(op),
+            Self::SDPWithdraw(op) => placeholder_proof_for(op),
+            Self::SDPActive(op) => placeholder_proof_for(op),
+            Self::LeaderClaim(op) => placeholder_proof_for(op),
+            Self::Transfer(op) => placeholder_proof_for(op),
+            Self::ClaimPowReward(op) => placeholder_proof_for(op),
         }
     }
 }
