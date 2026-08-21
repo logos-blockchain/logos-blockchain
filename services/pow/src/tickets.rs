@@ -247,8 +247,8 @@ impl Stream for TicketGenerator {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         loop {
-            // 1. Emit any winner an active search has already produced, tagged
-            //    with the cached tip.
+            // 1. Emit any winner an active search has already produced, tagged with the
+            //    cached tip.
             if let Poll::Ready(Some((_, (block_slot, (secret_key, claim))))) =
                 this.tickets_search.poll_next_unpin(cx)
             {
@@ -323,8 +323,8 @@ mod tests {
     use lb_chain_service::{EpochState, ProcessedBlockEvent, Slot};
     use lb_core::{header::HeaderId, mantle::ops::pow::ClaimPowRewardOp};
     use lb_groth16::{AdditiveGroup as _, Fr};
-    use lb_ledger::LedgerState;
     use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey};
+    use lb_ledger::LedgerState;
     use tokio_stream::StreamMap;
 
     use super::{
@@ -441,7 +441,10 @@ mod tests {
     }
 
     /// A per-block search stream that yields a single winner, then ends.
-    fn ready_search(block_slot: Slot, ticket: (UnsecuredZkKey, ClaimPowRewardOp)) -> WinnerTicketStream {
+    fn ready_search(
+        block_slot: Slot,
+        ticket: (UnsecuredZkKey, ClaimPowRewardOp),
+    ) -> WinnerTicketStream {
         Box::pin(stream::iter([(block_slot, ticket)]))
     }
 
@@ -517,7 +520,10 @@ mod tests {
     #[tokio::test]
     async fn poll_drains_winner_then_stays_alive() {
         let mut tickets_search = StreamMap::new();
-        tickets_search.insert(HeaderId::from([1u8; 32]), ready_search(Slot::new(3), ticket()));
+        tickets_search.insert(
+            HeaderId::from([1u8; 32]),
+            ready_search(Slot::new(3), ticket()),
+        );
         let mut generator = TicketGenerator {
             processed_block_stream: no_blocks(),
             tickets_search,

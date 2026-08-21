@@ -369,21 +369,45 @@ where
         .await?
         .ok_or_else(|| DynError::from("tip ledger state unavailable"))?;
 
+    // Build the tx only from tickets whose anchor block is still on the
+    // canonical chain: on chain `accept_claim` requires the block to be in this
+    // branch's known-block set (the map below), so a non-canonical claim —
+    // e.g. one orphaned by a reorg — would be rejected and poison the whole tx.
+    // Such tickets are *kept* in `ready_to_claim` (a later reorg may restore
+    // their block); only the window check in `prune_expired_tickets` discards
+    // tickets for good.
+    let known_blocks = ledger_state.mantle_ledger().pow.block_slots();
     let tickets: Vec<(UnsecuredZkKey, ClaimPowRewardOp)> = state
         .ready_to_claim
         .iter()
+        .filter(|ticket| known_blocks.contains_key(&ticket.claim.block_hash))
         .map(|ticket| (ticket.secret_key.clone(), ticket.claim.clone()))
         .collect();
+    if tickets.is_empty() {
+        return Ok(());
+    }
 
-    // Only remove tickets from the ready set once the tx is built and published,
-    // so a failure leaves them in place for a later retry. The builder caps the
-    // batch (op limit / reward pool), claiming only a prefix; move exactly that
-    // many to the pending set and keep the rest ready.
+    // Only mutate the ready set once the tx is built and published, so a failure
+    // leaves every ticket in place for a later retry. The builder caps the batch
+    // (op limit / reward pool) and claims a prefix of `tickets` (the canonical
+    // ones, in ready order); move exactly those to the pending set.
     let (signed_tx, claimed_count) =
         build_reward_claim_tx(claim_address, &ledger_state, &tickets).await?;
     publish_reward_claim(blend_api, signed_tx).await?;
 
-    let claimed: Vec<_> = state.ready_to_claim.drain(..claimed_count).collect();
+    let mut remaining = Vec::with_capacity(state.ready_to_claim.len());
+    let mut claimed = Vec::with_capacity(claimed_count);
+    for ticket in state.ready_to_claim.drain(..) {
+        // Take the first `claimed_count` canonical tickets — the exact prefix
+        // the builder consumed — and keep everything else ready.
+        if claimed.len() < claimed_count && known_blocks.contains_key(&ticket.claim.block_hash) {
+            claimed.push(ticket);
+        } else {
+            remaining.push(ticket);
+        }
+    }
+    state.ready_to_claim = remaining;
+
     info!(
         target: LOG_TARGET,
         "Claimed {} PoW reward(s); {} still ready",
