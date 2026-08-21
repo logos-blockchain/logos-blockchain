@@ -10,15 +10,14 @@ use crate::{
     block::{Block, BlockTransactions, UncleHeaders},
     header::Header,
     mantle::{
-        MantleTransaction, Note, Op, OpProof,
+        Note, Op, OpProof,
         ledger::{BoundedOutputs, Inputs, Outputs},
         ops::{
             ZkAndEd25519Proof, channel::inscribe::InscriptionOp, sdp::SDPDeclareOp,
             transfer::TransferOp,
         },
         transactions::{
-            GenesisTx, MAX_OPS_PER_TX, OpProofs, Ops, VerificationError, genesis_tx,
-            mantle_tx::RawMantleTx,
+            GenesisTx, MAX_OPS_PER_TX, OpProofs, Ops, SignedOps, VerificationError, genesis_tx,
         },
     },
 };
@@ -27,9 +26,11 @@ use crate::{
 /// [`GenesisBlockBuilder`].
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// The op proofs supplied to [`MantleTransaction`] failed verification.
+    /// The op proofs supplied to [`SignedOps`] failed verification.
     #[error("Transaction verification failed: {0}")]
     Verification(#[from] VerificationError),
+    #[error("Invalid signed ops: {0}")]
+    InvalidSignedOps(#[from] crate::mantle::transactions::tx_list::signed_ops::Error),
     /// The constructed transaction does not satisfy genesis transaction
     /// invariants (e.g. non-zero gas price, missing transfer/inscription,
     /// unsupported ops).
@@ -173,8 +174,11 @@ impl GenesisBlock {
     }
 
     #[must_use]
-    pub fn genesis_tx(&self) -> GenesisTx {
-        self.0.transactions()[0].clone()
+    pub fn genesis_tx(&self) -> &GenesisTx {
+        self.0
+            .transactions()
+            .first()
+            .expect("Genesis block should be valid")
     }
 
     #[must_use]
@@ -1263,7 +1267,7 @@ impl GenesisBlockBuilder<WithAll> {
                 .try_push(OpProof::ZkAndEd25519Sigs(proof))
                 .expect("genesis transaction proofs are bounded");
         }
-        let signed_tx = MantleTransaction::new_trusted(RawMantleTx(capped_ops), ops_proofs);
+        let signed_tx = SignedOps::from_parts_trusted(capped_ops, ops_proofs)?;
         Ok(GenesisBlock::genesis(GenesisTx::from_tx(signed_tx)?))
     }
 }
@@ -1292,9 +1296,13 @@ mod tests {
         header::HeaderId,
         mantle::{
             CryptarchiaParameter, GenesisTime, NoteId,
-            ops::channel::{ChannelId, MsgId, inscribe::Inscription},
-            traits::genesis::GenesisTx as _,
-            transactions::{mantle_tx::MantleTx as _, states::Preverified},
+            ledger::verification_mode::GenesisMode,
+            ops::{
+                OpRef,
+                channel::{ChannelId, MsgId, inscribe::Inscription},
+            },
+            traits::MantleTx as _,
+            transactions::states::Preverified,
         },
         sdp::{Locator, ProviderId, ServiceType},
     };
@@ -1358,7 +1366,7 @@ mod tests {
 
     // ── helpers for the with_genesis_tx path ──────────────────────────────────
 
-    fn make_signed_genesis_tx(extra_ops: Vec<Op>) -> MantleTransaction<Preverified> {
+    fn make_signed_genesis_tx(extra_ops: Vec<Op>) -> SignedOps<Preverified, GenesisMode> {
         let mut ops = vec![
             Op::Transfer(TransferOp::new(
                 Inputs::empty(),
@@ -1368,23 +1376,26 @@ mod tests {
         ];
         ops.extend(extra_ops);
 
-        let ops_proofs = OpProofs::try_from_iter(ops.iter().map(|op| match op {
-            Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
-            Op::Transfer(_) => OpProof::ZkSig(ZkSignature::new(
-                CompressedGroth16Proof::from_bytes(&[0u8; 128]),
-            )),
-            Op::SDPDeclare(_) => {
-                let proof = ZkAndEd25519Proof {
-                    zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
-                    ed25519_sig: Ed25519Signature::zero(),
-                };
-                OpProof::ZkAndEd25519Sigs(proof)
-            }
-            other => unreachable!("unexpected genesis op in tests: {}", other.as_str()),
-        }))
-        .expect("genesis transaction proofs are bounded");
+        let proofs_vec = ops
+            .iter()
+            .map(|op| match op {
+                Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
+                Op::Transfer(_) => OpProof::ZkSig(ZkSignature::new(
+                    CompressedGroth16Proof::from_bytes(&[0u8; 128]),
+                )),
+                Op::SDPDeclare(_) => {
+                    let proof = ZkAndEd25519Proof {
+                        zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
+                        ed25519_sig: Ed25519Signature::zero(),
+                    };
+                    OpProof::ZkAndEd25519Sigs(proof)
+                }
+                other => unreachable!("unexpected genesis op in tests: {}", other.as_str()),
+            })
+            .collect::<Vec<_>>();
+        let ops_proofs = OpProofs::new_unchecked(proofs_vec);
 
-        MantleTransaction::new_trusted(RawMantleTx(Ops::new_unchecked(ops)), ops_proofs)
+        SignedOps::from_parts_trusted(Ops::new_unchecked(ops), ops_proofs).unwrap()
     }
 
     fn make_genesis_tx(extra_ops: Vec<Op>) -> GenesisTx {
@@ -1515,8 +1526,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let tx = block.transactions_iter().next().unwrap();
-        assert_eq!(tx.genesis_transfer().outputs.len(), 3);
+        assert_eq!(block.genesis_tx().transfer().operation().outputs.len(), 3);
     }
 
     #[test]
@@ -1532,8 +1542,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let tx = block.transactions_iter().next().unwrap();
-        assert_eq!(tx.sdp_declarations().count(), 3);
+        assert_eq!(block.genesis_tx().sdp_declarations().count(), 3);
     }
 
     #[test]
@@ -1551,9 +1560,9 @@ mod tests {
             .build()
             .unwrap();
 
-        let tx = block.transactions_iter().next().unwrap();
-        assert_eq!(tx.genesis_transfer().outputs.len(), 3);
-        assert_eq!(tx.sdp_declarations().count(), 2);
+        let genesis_tx = block.genesis_tx();
+        assert_eq!(genesis_tx.transfer().operation().outputs.len(), 3);
+        assert_eq!(genesis_tx.sdp_declarations().count(), 2);
     }
 
     // ── set_inscription overwrites ────────────────────────────────────────────
@@ -1622,13 +1631,14 @@ mod tests {
         let block = builder
             .build()
             .expect("maximum-size genesis block should build");
-        let tx = block
-            .transactions_iter()
-            .next()
-            .expect("genesis transaction");
 
-        assert_eq!(tx.sdp_declarations().count(), MAX_GENESIS_DECLARATIONS);
-        assert_eq!(tx.mantle_tx().ops().len(), MAX_OPS_PER_TX);
+        let genesis_tx = block.genesis_tx();
+        let genesis_tx_op_refs = genesis_tx.op_refs();
+        assert_eq!(genesis_tx_op_refs.len(), MAX_OPS_PER_TX);
+        assert_eq!(
+            genesis_tx.sdp_declarations().count(),
+            MAX_GENESIS_DECLARATIONS
+        );
     }
 
     #[test]
@@ -1698,8 +1708,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let tx = block.transactions_iter().next().unwrap();
-        assert_eq!(tx.genesis_transfer().outputs.len(), 3);
+        assert_eq!(block.genesis_tx().transfer().operation().outputs.len(), 3);
     }
 
     #[test]
@@ -1712,8 +1721,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let tx = block.transactions_iter().next().unwrap();
-        assert_eq!(tx.sdp_declarations().count(), 3);
+        assert_eq!(block.genesis_tx().sdp_declarations().count(), 3);
     }
 
     #[test]
@@ -1727,9 +1735,9 @@ mod tests {
             .build()
             .unwrap();
 
-        let tx = block.transactions_iter().next().unwrap();
-        assert_eq!(tx.genesis_transfer().outputs.len(), 3);
-        assert_eq!(tx.sdp_declarations().count(), 3);
+        let genesis_tx = block.genesis_tx();
+        assert_eq!(genesis_tx.transfer().operation().outputs.len(), 3);
+        assert_eq!(genesis_tx.sdp_declarations().count(), 3);
     }
 
     #[test]
@@ -1777,10 +1785,10 @@ mod tests {
             .unwrap();
 
         let tx = block.transactions_iter().next().unwrap();
-        let ops = tx.mantle_tx().ops();
-        assert!(matches!(ops[0], Op::Transfer(_)));
-        assert!(matches!(ops[1], Op::ChannelInscribe(_)));
-        assert!(matches!(ops[2], Op::SDPDeclare(_)));
+        let tx_ops = tx.op_refs();
+        assert!(matches!(tx_ops[0], OpRef::Transfer(_)));
+        assert!(matches!(tx_ops[1], OpRef::ChannelInscribe(_)));
+        assert!(matches!(tx_ops[2], OpRef::SDPDeclare(_)));
     }
 
     #[test]
