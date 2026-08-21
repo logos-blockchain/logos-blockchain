@@ -591,8 +591,10 @@ mod tests {
         crypto::ZkHasher,
         events::Events,
         mantle::{
-            MantleTransaction, Note, RawMantleTx, ledger::Utxo, ops::leader_claim::VoucherCm,
-            transactions::states::Unverified,
+            Note,
+            ledger::{Utxo, verification_mode::StandardMode},
+            ops::leader_claim::VoucherCm,
+            transactions::{Ops, SignedOps, states::Unverified},
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };
@@ -758,13 +760,20 @@ mod tests {
         pub storage: StorageService<RocksBackend, RuntimeServiceId>,
     }
 
+    type TestBlock = (
+        Block<SignedOps<Unverified, StandardMode>>,
+        HeaderId,
+        HeaderId,
+        Slot,
+    );
+
     #[expect(dead_code, reason = "Fix in a separate PR")]
     struct TestEnv {
         service: overwatch::overwatch::Overwatch<RuntimeServiceId>,
         storage_relay: StorageRelay<RocksBackend>,
         cryptarchia: lb_cryptarchia_engine::Cryptarchia<HeaderId>,
         proof: lb_core::proofs::leader_proof::Groth16LeaderProof,
-        provider: BlockProvider<RocksBackend, MantleTransaction<Unverified>>,
+        provider: BlockProvider<RocksBackend, SignedOps<Unverified, StandardMode>>,
     }
 
     impl TestEnv {
@@ -824,16 +833,7 @@ mod tests {
             (service, storage_relay)
         }
 
-        fn create_block_sequence(
-            &self,
-            count: usize,
-            slot_offset: u64,
-        ) -> Vec<(
-            Block<MantleTransaction<Unverified>>,
-            HeaderId,
-            HeaderId,
-            Slot,
-        )> {
+        fn create_block_sequence(&self, count: usize, slot_offset: u64) -> Vec<TestBlock> {
             let mut blocks = Vec::new();
             let mut prev_header = HeaderId::from([0u8; 32]);
 
@@ -906,7 +906,7 @@ mod tests {
             &self,
             prev_header: HeaderId,
             slot: Slot,
-        ) -> Option<Block<MantleTransaction<Unverified>>> {
+        ) -> Option<Block<SignedOps<Unverified, StandardMode>>> {
             let dummy_signing_key = Ed25519Key::from_bytes(&[1u8; 32]);
             Block::create(
                 prev_header,
@@ -921,7 +921,7 @@ mod tests {
 
         async fn add_block(
             &mut self,
-            block: &Block<MantleTransaction<Unverified>>,
+            block: &Block<SignedOps<Unverified, StandardMode>>,
             header_id: HeaderId,
             prev_header: HeaderId,
             slot: Slot,
@@ -935,7 +935,7 @@ mod tests {
 
         async fn store_block_only(
             &self,
-            block: &Block<MantleTransaction<Unverified>>,
+            block: &Block<SignedOps<Unverified, StandardMode>>,
             header_id: HeaderId,
         ) {
             let parent_id = block.header().parent();
@@ -962,7 +962,7 @@ mod tests {
 
         async fn store_block_in_storage(
             &self,
-            block: &Block<MantleTransaction<Unverified>>,
+            block: &Block<SignedOps<Unverified, StandardMode>>,
             header_id: HeaderId,
             slot: Slot,
         ) {
@@ -1000,7 +1000,7 @@ mod tests {
             if let Some(ProviderResponse::Available(mut stream)) = rx.recv().await {
                 while let Some(res) = &stream.next().await {
                     if let Ok(bytes) = &res {
-                        let block: Block<MantleTransaction<Unverified>> =
+                        let block: Block<SignedOps<Unverified, StandardMode>> =
                             Block::from_bytes(bytes).unwrap();
                         blocks.push(block.header().id());
                     } else {
@@ -1045,7 +1045,7 @@ mod tests {
                     }
                     ProviderResponse::Available(mut stream) => match stream.next().await {
                         Some(Ok(bytes)) => {
-                            let block: Block<RawMantleTx> = Block::try_from(bytes).unwrap();
+                            let block: Block<Ops> = Block::try_from(bytes).unwrap();
                             (
                                 false,
                                 format!("Available(first_block={:?})", block.header().id()),

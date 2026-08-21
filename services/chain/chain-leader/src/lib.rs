@@ -22,9 +22,10 @@ use lb_core::{
     },
     header::HeaderId,
     mantle::{
-        MantleTransaction,
+        SignedOps,
         gas::MainnetGasProfile,
-        traits::{Hashable, MantleTxWithProofs, StorageSize},
+        ledger::verification_mode::StandardMode,
+        traits::{Hashable, SignedMantleTx, StorageSize},
         transactions::{hash::TxHash, states::Preverified},
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
@@ -174,7 +175,7 @@ pub struct CryptarchiaLeader<
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Settings: Clone,
     Mempool::Item: Clone + Eq + Debug + 'static,
-    Mempool::Item: MantleTxWithProofs,
+    Mempool::Item: SignedMantleTx<Preverified, StandardMode>,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
@@ -213,7 +214,7 @@ where
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::Settings: Clone,
-    Mempool::Item: MantleTxWithProofs + Clone + Eq + Debug,
+    Mempool::Item: SignedMantleTx<Preverified, StandardMode> + Clone + Eq + Debug,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
@@ -258,7 +259,7 @@ where
         > + lb_blend_service::ServiceComponents<NodeId: Send + Sync>
         + Send
         + 'static,
-    Mempool: MemPool<Item = MantleTransaction<Preverified>>
+    Mempool: MemPool<Item = SignedOps<Preverified, StandardMode>>
         + RecoverableMempool<BlockId = HeaderId, Key = TxHash>
         + Send
         + Sync
@@ -276,7 +277,7 @@ where
         + Sync
         + Unpin
         + 'static,
-    Mempool::Item: MantleTxWithProofs,
+    Mempool::Item: SignedMantleTx<Preverified, StandardMode>,
     MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>
         + Send
         + Sync
@@ -537,14 +538,14 @@ where
         > + lb_blend_service::ServiceComponents<NodeId: Send + Sync>
         + Send
         + 'static,
-    Mempool: MemPool<Item = MantleTransaction<Preverified>>
+    Mempool: MemPool<Item = SignedOps<Preverified, StandardMode>>
         + RecoverableMempool<BlockId = HeaderId, Key = TxHash>
         + Send
         + Sync
         + 'static,
     Mempool::RecoveryState: Serialize + DeserializeOwned,
     Mempool::Settings: Clone + Send + Sync + 'static,
-    Mempool::Item: MantleTxWithProofs<Hash = Mempool::Key>
+    Mempool::Item: SignedMantleTx<Preverified, StandardMode, Hash = Mempool::Key>
         + Debug
         + Clone
         + Eq
@@ -647,7 +648,10 @@ where
                     .clone()
                     .try_apply_contents::<_, HeaderId, MainnetGasProfile>(
                         ledger_config,
-                        iter::once(&tx),
+                        // Tx is cloned eagerly: `try_apply_contents` consumes the tx, but we need
+                        // it for the block if it is valid.
+                        // Avoidable if we made the ledger hand it back.
+                        iter::once(tx.clone()),
                     ) {
                     Ok((new_state, _events)) => {
                         ledger_state = new_state;

@@ -5,7 +5,11 @@ use lb_codec::BinaryDecodeExt as _;
 use lb_core::{
     block::{Block, Proposal},
     header::HeaderId,
-    mantle::traits::MantleTxWithProofs,
+    mantle::{
+        ledger::verification_mode::StandardMode,
+        traits::{SignedMantleTx, StorageSize},
+        transactions::states::Preverified,
+    },
 };
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_network_service::{
@@ -91,7 +95,15 @@ where
         additional_blocks: HashSet<HeaderId>,
     ) -> Result<BlockDownloadStream<Tx>, DynError>
     where
-        Tx: MantleTxWithProofs + Serialize + DeserializeOwned + Clone + Eq + Send + Sync + 'static,
+        Tx: SignedMantleTx<Preverified, StandardMode>
+            + StorageSize
+            + Serialize
+            + DeserializeOwned
+            + Clone
+            + Eq
+            + Send
+            + Sync
+            + 'static,
     {
         let mut stream = self
             .request_blocks_from_peer(
@@ -166,7 +178,15 @@ where
 #[async_trait::async_trait]
 impl<Tx, RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for LibP2pAdapter<Tx, RuntimeServiceId>
 where
-    Tx: MantleTxWithProofs + Serialize + DeserializeOwned + Clone + Eq + Send + Sync + 'static,
+    Tx: SignedMantleTx<Preverified, StandardMode>
+        + StorageSize
+        + Serialize
+        + DeserializeOwned
+        + Clone
+        + Eq
+        + Send
+        + Sync
+        + 'static,
 {
     type Backend = Libp2p;
     type Settings = LibP2pAdapterSettings;

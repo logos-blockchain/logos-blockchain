@@ -20,8 +20,12 @@ use lb_core::{
     block::{Block, BlockTransactions, Proposal, verify_header_alone},
     header::HeaderId,
     mantle::{
-        traits::{Hashable, MantleTxWithProofs},
-        transactions::hash::{TxHash, TxHashPrefix},
+        ledger::verification_mode::StandardMode,
+        traits::{Hashable, SignedMantleTx, StorageSize},
+        transactions::{
+            hash::{TxHash, TxHashPrefix},
+            states::Preverified,
+        },
     },
 };
 pub use lb_cryptarchia_engine::{Epoch, Slot};
@@ -134,7 +138,7 @@ pub struct ChainNetwork<
     Mempool::Settings: Clone,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::Item: Clone + Eq + Debug + 'static,
-    Mempool::Item: MantleTxWithProofs,
+    Mempool::Item: SignedMantleTx<Preverified, StandardMode>,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
     MempoolNetAdapter::Settings: Send + Sync,
@@ -162,7 +166,7 @@ where
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    Mempool::Item: MantleTxWithProofs + Clone + Eq + Debug,
+    Mempool::Item: SignedMantleTx<Preverified, StandardMode> + Clone + Eq + Debug,
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
     MempoolNetAdapter::Settings: Send + Sync,
@@ -200,7 +204,8 @@ where
     Mempool::Settings: Clone + Send + Sync + 'static,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::Item: Hashable<Hash = Mempool::Key>
-        + MantleTxWithProofs
+        + SignedMantleTx<Preverified, StandardMode>
+        + StorageSize
         + Debug
         + Clone
         + Eq
@@ -517,7 +522,8 @@ where
     Mempool::Settings: Clone + Send + Sync + 'static,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     Mempool::Item: Hashable<Hash = Mempool::Key>
-        + MantleTxWithProofs
+        + SignedMantleTx<Preverified, StandardMode>
+        + StorageSize
         + Debug
         + Clone
         + Eq
@@ -807,7 +813,7 @@ async fn should_process_block<Cryptarchia, RuntimeServiceId>(
 ) -> Result<(), DoNotProcessBlock>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: MantleTxWithProofs + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
     if !is_after_lib(cryptarchia, block_id, block_slot).await {
@@ -839,7 +845,7 @@ async fn is_after_lib<Cryptarchia, RuntimeServiceId>(
 ) -> bool
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: MantleTxWithProofs + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
     match cryptarchia.info().await {
@@ -962,7 +968,7 @@ async fn apply_block_and_reconcile_mempool<Cryptarchia, Mempool, RuntimeServiceI
 ) -> Result<(), Error>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: MantleTxWithProofs + Debug + Clone + Send + Sync,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send + Sync,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
     RuntimeServiceId: Send + Sync,
@@ -1034,7 +1040,7 @@ async fn reconstruct_block_from_proposal<Item>(
     mempool: &impl MempoolAdapterTrait<Item>,
 ) -> Result<Block<Item>, Error>
 where
-    Item: MantleTxWithProofs<Hash = TxHash> + Clone + Send + Sync + 'static,
+    Item: SignedMantleTx<Preverified, StandardMode> + StorageSize + Clone + Send + Sync + 'static,
 {
     let mut transactions = Vec::with_capacity(proposal.mempool_transactions().len());
     for (index, prefix) in proposal.mempool_transactions().iter().copied().enumerate() {

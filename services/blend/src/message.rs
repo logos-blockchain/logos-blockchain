@@ -55,7 +55,7 @@ pub enum ServiceMessage<NodeId> {
     /// Request the transactions still waiting for a `PoW` solution to back
     /// their layer proofs, oldest first.
     // TODO: Change this to be tx IDs once we have strong types at the API level and we don't blend
-    // `Vec<u8>`s but actual `MantleTransaction`s.
+    // `Vec<u8>`s but actual `SignedOps`s.
     GetPendingTransactions {
         reply: oneshot::Sender<Vec<Vec<u8>>>,
     },
