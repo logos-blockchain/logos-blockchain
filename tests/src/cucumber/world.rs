@@ -15,7 +15,8 @@ use lb_core::{
     codec::DeserializeOp as _,
     header::HeaderId,
     mantle::{
-        GenesisTime, MantleTransaction, Utxo, Value,
+        GenesisTime, SignedOps, Utxo, Value,
+        ledger::verification_mode::StandardMode,
         ops::channel::{
             ChannelId, deposit::DepositOp, inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
@@ -915,7 +916,7 @@ pub struct CucumberWorld {
     /// than on later inclusion.
     pub submission_outcomes: HashMap<String, Result<(), String>>,
     /// Manual: Exact signed transactions prepared for later submission.
-    pub prepared_transactions: HashMap<String, MantleTransaction<Preverified>>,
+    pub prepared_transactions: HashMap<String, SignedOps<Preverified, StandardMode>>,
     /// Manual: Initial fee arithmetic for percentage-funded transactions
     /// prepared by the fee-market steps.
     pub prepared_priority_fees: HashMap<String, PreparedPriorityFee>,
@@ -2030,7 +2031,7 @@ impl CucumberWorld {
     pub fn remember_prepared_transaction(
         &mut self,
         alias: String,
-        signed_tx: MantleTransaction<Preverified>,
+        signed_tx: SignedOps<Preverified, StandardMode>,
     ) {
         self.prepared_transactions.insert(alias, signed_tx);
     }
@@ -2053,7 +2054,7 @@ impl CucumberWorld {
     pub fn resolve_prepared_transaction(
         &self,
         alias: &str,
-    ) -> Result<MantleTransaction<Preverified>, StepError> {
+    ) -> Result<SignedOps<Preverified, StandardMode>, StepError> {
         self.prepared_transactions
             .get(alias)
             .cloned()
@@ -2083,7 +2084,7 @@ impl CucumberWorld {
     pub async fn submit_transaction<State>(
         &self,
         wallet: &WalletInfo,
-        signed_tx: &MantleTransaction<State>,
+        signed_tx: &SignedOps<State, StandardMode>,
         node_client: &NodeHttpClient,
     ) -> Result<(), StepError>
     where
