@@ -1,5 +1,7 @@
 mod channel;
 mod genesis;
+mod hash;
 mod ledger;
 mod ops;
-mod tx;
+mod proofs;
+mod transactions;
