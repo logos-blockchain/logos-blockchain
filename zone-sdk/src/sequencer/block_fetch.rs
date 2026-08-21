@@ -980,7 +980,7 @@ mod tests {
             channel::{SlotTimeframe, SlotTimeout},
             ledger::{Inputs, Outputs},
             ops::{
-                OpId as _, OpProof,
+                OpProof,
                 channel::{
                     channel_transfer::ChannelTransferOp,
                     config::{ChannelConfigOp, Keys},

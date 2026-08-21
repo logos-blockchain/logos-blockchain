@@ -585,7 +585,6 @@ where
 mod tests {
     use std::{collections::BTreeMap, num::NonZero};
 
-    use futures::StreamExt as _;
     use lb_core::{
         block::{BlockTransactions, UncleHeaders},
         codec::DeserializeOp as _,

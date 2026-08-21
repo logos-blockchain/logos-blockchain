@@ -903,7 +903,6 @@ fn initial_peers_for_dynamic_node(
 #[cfg(test)]
 mod tests {
     use flate2::{Compression, write::GzEncoder};
-    use testing_framework_runner_local::LocalDeployerEnv as _;
 
     use super::*;
     use crate::node::configs::deployment::DeploymentBuilder;

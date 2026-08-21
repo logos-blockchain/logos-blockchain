@@ -2075,7 +2075,7 @@ mod tests {
                 pow::{ClaimPowRewardError, ClaimPowRewardOp, PowTarget},
             },
         };
-        use lb_groth16::{AdditiveGroup as _, fr_from_mod_bytes};
+        use lb_groth16::fr_from_mod_bytes;
 
         use super::*;
         use crate::mantle::pow::ClaimPoWConstants;

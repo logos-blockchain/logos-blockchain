@@ -344,6 +344,7 @@ pub struct AllPeersFailed;
 
 #[cfg(test)]
 mod tests {
+    use core::future::ready;
     use std::{
         collections::HashMap,
         iter::empty,
@@ -660,31 +661,36 @@ mod tests {
     }
 
     impl IbdBlockProcessor<Block> for MockBlockProcessor {
-        async fn info(&self) -> Result<CryptarchiaInfo, Error> {
-            Ok(self.cryptarchia.info())
+        fn info(&self) -> impl Future<Output = Result<CryptarchiaInfo, Error>> {
+            ready(Ok(self.cryptarchia.info()))
         }
 
-        async fn process_block(&mut self, block: Block) -> Result<(), Error> {
+        fn process_block(&mut self, block: Block) -> impl Future<Output = Result<(), Error>> {
             if self.cryptarchia.has_block(&block.id) {
-                return Err(Error::BlockProcessing(ChainError::Cryptarchia(
+                return ready(Err(Error::BlockProcessing(ChainError::Cryptarchia(
                     lb_chain_service::api::ApiError::AlreadyApplied(block.id),
-                )));
+                ))));
             }
 
-            self.cryptarchia
-                .consensus
-                .receive_block(block.id, block.parent, block.slot, UncleSlots::default())
-                .map_err(|e| {
-                    self.process_block_failures.fetch_add(1, Ordering::SeqCst);
-                    Error::BlockProcessing(ChainError::InvalidBlock(format!(
-                        "Consensus error: {e:?}"
-                    )))
-                })?;
-            Ok(())
+            ready(
+                self.cryptarchia
+                    .consensus
+                    .receive_block(block.id, block.parent, block.slot, UncleSlots::default())
+                    .map_err(|e| {
+                        self.process_block_failures.fetch_add(1, Ordering::SeqCst);
+                        Error::BlockProcessing(ChainError::InvalidBlock(format!(
+                            "Consensus error: {e:?}"
+                        )))
+                    })
+                    .map(|_| ()),
+            )
         }
 
-        async fn has_processed_block(&self, header: HeaderId) -> Result<bool, Error> {
-            Ok(self.cryptarchia.has_block(&header))
+        fn has_processed_block(
+            &self,
+            header: HeaderId,
+        ) -> impl Future<Output = Result<bool, Error>> {
+            ready(Ok(self.cryptarchia.has_block(&header)))
         }
     }
 

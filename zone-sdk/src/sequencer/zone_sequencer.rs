@@ -1,3 +1,4 @@
+use core::future::ready;
 use std::{
     collections::{HashSet, VecDeque},
     sync::{
@@ -701,18 +702,18 @@ where
     // requires transferring a channel  note to that key, which needs the
     // sequencer to track the channel's notes.
     #[expect(
-        clippy::unused_async,
+        clippy::unused_self,
         clippy::needless_pass_by_ref_mut,
         reason = "Signature kept for the flow that will replace this stub."
     )]
-    pub(super) async fn do_publish_atomic_withdraw(
+    pub(super) fn do_publish_atomic_withdraw(
         &mut self,
         _inscribe: Inscription,
         _withdraws: Vec<WithdrawArg>,
-    ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
-        Err(Error::Network(
+    ) -> impl Future<Output = Result<(PublishResult, SequencerCheckpoint), Error>> {
+        ready(Err(Error::Network(
             "atomic withdraw is unsupported until channel notes are tracked".into(),
-        ))
+        )))
     }
 
     //     pub(super) async fn do_publish_atomic_withdraw(

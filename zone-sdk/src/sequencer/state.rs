@@ -1180,7 +1180,7 @@ impl TxState {
 mod tests {
     use lb_core::mantle::{
         Op::ChannelInscribe, RawMantleTx, ops::channel::inscribe::InscriptionOp,
-        traits::Hashable as _, transactions::OpsProofs,
+        transactions::OpsProofs,
     };
     use lb_key_management_system_service::keys::Ed25519PublicKey;
 
