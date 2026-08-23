@@ -29,6 +29,7 @@ use crate::{
             },
             manual_nodes::{
                 config_override::{set_deployment_config_override, set_user_config_override},
+                diagnostics::log_majority_outage_summary,
                 snapshots::validate_snapshot_path_component,
                 utils::{
                     NodesToStartUnordered, create_snapshot_all_nodes_with_wallet_state,
@@ -467,24 +468,30 @@ async fn step_node_has_peers(
 }
 
 #[when(expr = "I restart node {string}")]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require the world as the first `&mut` argument"
-)]
 async fn step_restart_node(
     world: &mut CucumberWorld,
     step: &Step,
     node_name: String,
 ) -> StepResult {
+    if world.blend_diagnostic_observation_count > 0 {
+        world.blend_diagnostic_phase = Some(crate::cucumber::world::BlendDiagnosticPhase::Recovery);
+    }
     restart_node(world, &step.value, &node_name).await
 }
 
 #[when(expr = "I stop node {string}")]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require the world as the first `&mut` argument"
-)]
 async fn step_stop_node(world: &mut CucumberWorld, step: &Step, node_name: String) -> StepResult {
+    if world.blend_diagnostic_observation_count > 0 {
+        world.blend_diagnostic_phase = Some(crate::cucumber::world::BlendDiagnosticPhase::Outage);
+    }
+    if node_name == "NODE_1"
+        && world.blend_diagnostic_phase
+            == Some(crate::cucumber::world::BlendDiagnosticPhase::Outage)
+        && !world.blend_diagnostic_outage_summary_logged
+    {
+        log_majority_outage_summary(world).await;
+        world.blend_diagnostic_outage_summary_logged = true;
+    }
     stop_node(world, &step.value, &node_name).await
 }
 

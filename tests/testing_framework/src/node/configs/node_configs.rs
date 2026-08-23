@@ -13,21 +13,23 @@ use network::NetworkParams;
 const PROLONGED_BOOTSTRAP_PERIOD: Duration = Duration::from_secs(5);
 
 #[must_use]
-pub fn create_general_configs_from_ids(
+pub fn create_general_configs_from_ids_with_additional_wallet_outputs(
     ids: &[[u8; 32]],
     blend_ports: &[u16],
     n_blend_core_nodes: usize,
     network_params: &NetworkParams,
     test_context: Option<&str>,
+    additional_wallet_outputs: usize,
     genesis_time: GenesisTime,
 ) -> (Vec<GeneralConfig>, GenesisBlock) {
-    lb_config::create_general_configs_from_ids(
+    lb_config::create_general_configs_from_ids_with_additional_wallet_outputs(
         ids,
         blend_ports,
         n_blend_core_nodes,
         network_params,
         PROLONGED_BOOTSTRAP_PERIOD,
         test_context,
+        additional_wallet_outputs,
         genesis_time,
     )
 }

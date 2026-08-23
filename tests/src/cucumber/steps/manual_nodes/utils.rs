@@ -35,6 +35,7 @@ use crate::cucumber::{
         TARGET,
         manual_nodes::{
             config_override::{apply_deployment_config_overrides, apply_user_config_overrides},
+            diagnostics::log_node_lifecycle_marker,
             snapshots::{
                 reset_named_snapshot, restore_node_state_from_snapshot,
                 save_named_node_state_snapshot, validate_snapshot_path_component,
@@ -889,12 +890,16 @@ pub async fn stop_node(world: &CucumberWorld, step: &str, node_name: &str) -> St
             warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
 
+    log_node_lifecycle_marker(world, "node_stop", node_name, "before").await;
+
     cluster
         .stop_node(&started_node_name)
         .await
         .inspect_err(|e| {
             warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
+
+    log_node_lifecycle_marker(world, "node_stop", node_name, "after").await;
 
     info!(
         target: TARGET,
@@ -916,12 +921,16 @@ pub async fn restart_node(world: &CucumberWorld, step: &str, node_name: &str) ->
             warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
 
+    log_node_lifecycle_marker(world, "node_restart", node_name, "before").await;
+
     cluster
         .restart_node(&started_node_name)
         .await
         .inspect_err(|e| {
             warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
+
+    log_node_lifecycle_marker(world, "node_restart", node_name, "after").await;
     let client = world.resolve_node_http_client(node_name).inspect_err(|e| {
         warn!(target: TARGET, "Step `{step}` error: {e}");
     })?;

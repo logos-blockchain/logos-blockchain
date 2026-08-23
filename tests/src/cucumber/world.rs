@@ -117,6 +117,24 @@ pub enum ManualClusterKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BlendDiagnosticPhase {
+    Baseline,
+    Outage,
+    Recovery,
+}
+
+impl BlendDiagnosticPhase {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Baseline => "baseline",
+            Self::Outage => "outage",
+            Self::Recovery => "recovery",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ManualClusterSpec {
     pub kind: ManualClusterKind,
     pub capacity: usize,
@@ -959,6 +977,13 @@ pub struct CucumberWorld {
     pub user_config_overrides: Vec<ConfigOverride>,
     /// Manual: Dynamic deployment-config overrides applied on node startup.
     pub deployment_config_overrides: Vec<ConfigOverride>,
+    /// Manual: Current phase of the tagged Blend/TSI diagnostic scenario.
+    pub blend_diagnostic_phase: Option<BlendDiagnosticPhase>,
+    /// Manual: Number of epoch-observation steps completed by the diagnostic
+    /// scenario.
+    pub blend_diagnostic_observation_count: u32,
+    /// Manual: Whether the majority-outage summary marker has been emitted.
+    pub blend_diagnostic_outage_summary_logged: bool,
     /// Manual: If set, nodes use a `DeploymentSettings` loaded from disk
     /// bypassing generated genesis/test deployment.
     pub deployment_config_override_path: Option<PathBuf>,
@@ -1177,6 +1202,15 @@ impl Debug for CucumberWorld {
             .field(
                 "deployment_config_overrides",
                 &user_config_overrides_display(&self.deployment_config_overrides),
+            )
+            .field("blend_diagnostic_phase", &self.blend_diagnostic_phase)
+            .field(
+                "blend_diagnostic_observation_count",
+                &self.blend_diagnostic_observation_count,
+            )
+            .field(
+                "blend_diagnostic_outage_summary_logged",
+                &self.blend_diagnostic_outage_summary_logged,
             )
             .field(
                 "deployment_config_override_path",

@@ -24,7 +24,9 @@ use crate::{
     get_reserved_available_udp_port,
     node::{
         DeploymentPlan, NodePlan,
-        configs::{Config, create_node_configs_from_ids, postprocess},
+        configs::{
+            Config, create_node_configs_from_ids_with_additional_wallet_outputs, postprocess,
+        },
     },
 };
 
@@ -331,16 +333,6 @@ impl DeploymentBuilder {
 
         let ids = generate_node_ids(node_count, self.seed.as_ref());
 
-        let blend_ports = allocate_blend_ports(node_count)?;
-        let (mut node_configs, genesis_block) = create_node_configs_from_ids(
-            &ids,
-            &blend_ports,
-            self.config.blend_core_nodes,
-            self.config.network_params.as_ref(),
-            self.config.test_context.as_deref(),
-            genesis_time,
-        );
-
         let wallet_accounts = self
             .config
             .wallet_config
@@ -348,6 +340,18 @@ impl DeploymentBuilder {
             .iter()
             .map(|account| (account.secret_key.clone(), account.value))
             .collect::<Vec<_>>();
+
+        let blend_ports = allocate_blend_ports(node_count)?;
+        let (mut node_configs, genesis_block) =
+            create_node_configs_from_ids_with_additional_wallet_outputs(
+                &ids,
+                &blend_ports,
+                self.config.blend_core_nodes,
+                self.config.network_params.as_ref(),
+                self.config.test_context.as_deref(),
+                wallet_accounts.len(),
+                genesis_time,
+            );
 
         let genesis_block = postprocess::apply_wallet_genesis_overrides(
             &mut node_configs,
