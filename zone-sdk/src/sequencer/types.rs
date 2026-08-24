@@ -83,21 +83,26 @@ pub struct WithdrawArg {
 ///
 /// The withdraw first transfers channel notes to the recipient keys, so the
 /// bundle has to consume enough channel notes to cover the withdrawn amount.
-/// [`Self::Auto`] lets the SDK pick them (best-fit: the smallest single note
-/// that covers, own-key notes ahead of the rest, falling back to largest-first
-/// when several are needed); [`Self::Explicit`] pins an exact input set the
-/// caller has chosen — e.g. to apply its own dust/age policy — which the SDK
-/// validates against the tracked note set.
+/// [`Self::Auto`] lets the SDK pick them — covering with the newest notes first
+/// (spending recent notes and preserving the older, matured positions) and
+/// sweeping dust into the remaining input slots to keep the wallet compact.
+/// [`Self::Explicit`] pins an exact input set the caller has chosen — e.g. to
+/// apply its own dust/age policy — which the SDK validates against the tracked
+/// note set. A caller sources those ids from
+/// [`ZoneSequencer::channel_wallet`](super::ZoneSequencer::channel_wallet),
+/// which lists the tracked [`ChannelNote`]s (id, value, pk, slot).
 ///
 /// On orphan recovery the input choice need not be reproduced: republish with
 /// `Auto` (reselects the right notes for the new branch) or a fresh `Explicit`
-/// set. The rebuilt bundle re-anchors on the current tip, so the orphaned one
-/// can no longer land — the input set carries no identity of its own.
+/// set re-derived from the current `channel_wallet()` view. The rebuilt bundle
+/// re-anchors on the current tip, so the orphaned one can no longer land — the
+/// input set carries no identity of its own.
 #[derive(Debug, Clone)]
 pub enum WithdrawInputs {
     /// Let the SDK select covering notes from the tracked note set.
     Auto,
-    /// Use exactly these notes, in this order.
+    /// Use exactly these notes, in this order — typically chosen from
+    /// [`ZoneSequencer::channel_wallet`](super::ZoneSequencer::channel_wallet).
     Explicit(Vec<NoteId>),
 }
 
