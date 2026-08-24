@@ -846,6 +846,7 @@ fn sequencer_funding(
     let funding_pk = world.funding_wallet(node_name)?.public_key()?;
     Ok(FundingConfig {
         funding_pk,
+        change_pk: None,
         max_tx_fee: GasCost::new(u64::MAX),
         priority_fee_percent: ZONE_TEST_PRIORITY_FEE_PERCENT,
     })

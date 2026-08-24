@@ -875,13 +875,13 @@ where
             Error::Network("selected channel notes underfund the withdrawal".into())
         })?;
 
-        // Transfer outputs: the recipient notes, then a change note back to the
-        // sequencer's own key when the inputs overpay.
-        // TODO: a dedicated `change_pk` funding-config field could route change
-        // to a separate key; for now the funding key doubles as the change key.
+        // Transfer outputs: the recipient notes, then a change note when the
+        // inputs overpay. Change routes to `change_pk` if configured, else back
+        // to the funding key.
+        let change_pk = self.config.funding.change_pk.unwrap_or(funding_pk);
         let mut transfer_outputs = recipient_outputs.to_vec();
         if change > 0 {
-            transfer_outputs.push(Note::new(change, funding_pk));
+            transfer_outputs.push(Note::new(change, change_pk));
         }
         let transfer_op = ChannelTransferOp {
             channel_id: self.channel_id,

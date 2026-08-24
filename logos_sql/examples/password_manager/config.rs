@@ -55,6 +55,7 @@ pub fn from_args() -> LogosSqlConfig {
         node_url: options.node_url,
         funding: FundingConfig {
             funding_pk: options.funding_key,
+            change_pk: None,
             max_tx_fee: options.max_tx_fee.into(),
             priority_fee_percent: options.priority_fee_percent,
         },

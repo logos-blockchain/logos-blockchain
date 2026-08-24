@@ -702,15 +702,16 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
-  # A 10000 withdraw must clear a channel holding 255 dust notes alongside a
-  # single 10000 note: best-fit selection takes the one big note (a single
-  # transfer input) and never touches the dust, so the withdraw's channel
-  # transfer stays at 1 input — whereas a naive dust-first selection would pull
-  # all 255 dust plus the big note (256 inputs) and blow the 255-input
-  # transaction limit. The dust is minted by depositing one value-255 note and
-  # splitting it into 255 value-1 notes in a single channel transfer (bounded by
-  # the 255-output limit), rather than one ZK-signed deposit per 32 notes (a
-  # deposit is capped at 32 inputs by the ZK signing-key limit).
+  # A 10000 withdraw against a channel holding 255 dust notes (value 1) plus a
+  # single 10000 note exercises the Auto note-selection policy: it covers the
+  # amount with the big note and sweeps dust into the remaining input slots, up
+  # to the 255-input transaction limit — so the transfer consumes 255 inputs
+  # (the covering note + 254 swept dust) and compacts the channel wallet instead
+  # of leaving the dust unspent, while never exceeding the 255-input bound. The
+  # dust is minted by depositing one value-255 note and splitting it into 255
+  # value-1 notes in a single channel transfer (bounded by the 255-output
+  # limit), rather than one ZK-signed deposit per 32 notes (a deposit is capped
+  # at 32 inputs by the ZK signing-key limit).
   Scenario: Withdrawal stays valid under a dust flood
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
@@ -740,7 +741,7 @@ Feature: Zone SDK
     Then zone transaction "WITHDRAW_DUST" is included in 240 seconds
     And zone transaction "WITHDRAW_DUST" is finalized in 240 seconds
     And the zone indexer returns finalized withdraw "WITHDRAW_DUST" in 240 seconds
-    And the zone indexer returns a finalized channel transfer consuming 1 inputs in 240 seconds
+    And the zone indexer returns a finalized channel transfer consuming 255 inputs in 240 seconds
     And sequencer "SEQ_A" finalizes withdraw "WITHDRAW_DUST" in 240 seconds
     And I stop all nodes
 

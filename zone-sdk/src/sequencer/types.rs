@@ -164,6 +164,11 @@ impl ChannelUpdateTx {
 pub struct FundingConfig {
     /// The node wallet key that pays transaction fees.
     pub funding_pk: ZkPublicKey,
+    /// Where an atomic withdraw's transfer change (the overpay beyond the
+    /// withdrawn amount, plus any swept dust) is sent. `None` routes change
+    /// back to [`Self::funding_pk`]; set it to keep the funding key from
+    /// doubling as an implicit custody destination for channel change.
+    pub change_pk: Option<ZkPublicKey>,
     /// Absolute hard cap on the fee of a single funded transaction.
     pub max_tx_fee: GasCost,
     /// Percentage of the final mandatory fee reserved as a priority reserve

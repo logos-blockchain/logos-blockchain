@@ -1011,6 +1011,7 @@ pub async fn replay_finalized_history(
     // turn-gated), so the funding wallet is never exercised.
     let funding = FundingConfig {
         funding_pk: lb_groth16::Fr::from(1u64).into(),
+        change_pk: None,
         max_tx_fee: GasCost::new(u64::MAX),
         priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
     };
