@@ -52,6 +52,7 @@ fn main() {
 }
 
 /// Samples `divan` takes per benchmark.
+/// 10 samples are sufficient since the benchmark result is quite stable.
 const SAMPLE_COUNT: u32 = 10;
 
 /// Single-block benchmarks.
