@@ -94,14 +94,14 @@ mod single_block {
     }
 }
 
-/// Multi-block benchmarks.
+/// Multi-block benchmarks with per-block batching.
 ///
 /// NOTE: These do not benchmark multi-block proof batching, which is not
 /// implemented yet. Instead, they process multiple blocks with per-block proof
 /// batching. Therefore, the expected performance gain is simply the sum of the
 /// single-block gains. There benchmarks exist primarily to verify the
 /// expectation.
-mod multi_block {
+mod multi_block_with_per_block_batching {
     use divan::{Bencher, counter::ItemsCount};
 
     use crate::{SAMPLE_COUNT, TX_POOL, apply_batched, apply_sequential};
