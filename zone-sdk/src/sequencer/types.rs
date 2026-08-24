@@ -83,10 +83,16 @@ pub struct WithdrawArg {
 ///
 /// The withdraw first transfers channel notes to the recipient keys, so the
 /// bundle has to consume enough channel notes to cover the withdrawn amount.
-/// [`Self::Auto`] lets the SDK pick them (largest-first, own-key notes ahead
-/// of the rest); [`Self::Explicit`] pins an exact input set the caller has
-/// chosen — e.g. to apply its own dust/age policy — which the SDK validates
-/// against the tracked note set.
+/// [`Self::Auto`] lets the SDK pick them (best-fit: the smallest single note
+/// that covers, own-key notes ahead of the rest, falling back to largest-first
+/// when several are needed); [`Self::Explicit`] pins an exact input set the
+/// caller has chosen — e.g. to apply its own dust/age policy — which the SDK
+/// validates against the tracked note set.
+///
+/// On orphan recovery the input choice need not be reproduced: republish with
+/// `Auto` (reselects the right notes for the new branch) or a fresh `Explicit`
+/// set. The rebuilt bundle re-anchors on the current tip, so the orphaned one
+/// can no longer land — the input set carries no identity of its own.
 #[derive(Debug, Clone)]
 pub enum WithdrawInputs {
     /// Let the SDK select covering notes from the tracked note set.
@@ -105,8 +111,9 @@ pub enum WithdrawInputs {
 /// - [`ChannelUpdateTx::AtomicWithdraw`] →
 ///   [`SequencerHandle::publish_atomic_withdraw`](super::SequencerHandle::publish_atomic_withdraw)
 ///   with `info.inscription.payload` and `WithdrawArg`s reconstructed from
-///   `info.withdraws[i].op.inputs`. The SDK fills a fresh `parent_msg`
-///   internally on each publish.
+///   `info.withdraws[i].op.inputs`. The SDK fills a fresh `parent_msg` and
+///   reselects the transfer inputs per [`WithdrawInputs`] on each publish — the
+///   original input selection need not be reproduced.
 /// - [`ChannelUpdateTx::Custom`] → the `prepare_tx` + `submit_signed_tx` flow:
 ///   the SDK cannot demystify the tx, so it hands back the whole
 ///   [`SignedMantleTx`] and the caller's own logic decides how to parse and
