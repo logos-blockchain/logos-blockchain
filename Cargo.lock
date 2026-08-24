@@ -4182,6 +4182,7 @@ dependencies = [
  "cbindgen",
  "futures",
  "logos-blockchain-api-service",
+ "logos-blockchain-blend-service",
  "logos-blockchain-chain-leader-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
