@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
     Note, Op, SignedMantleTx, Utxo,
-    gas::{GasCalculator as _, MainnetGasConstants},
+    gas::{MainnetGasProfile, TxGasCalculator as _},
     traits::Hashable as _,
     transactions::{
         GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext,
@@ -45,6 +45,17 @@ pub const SPEC_BASE_FEE_NUMERATOR: u128 = 11_177_110;
 pub const SPEC_BASE_FEE_DENOMINATOR: u128 = 12_773_840;
 /// Gas Cost Determination v1.5.1: a transfer costs 590 gas.
 pub const SPEC_TRANSFER_GAS: u64 = 590;
+
+/// Computes a percentage reserve with checked widened arithmetic and integer
+/// ceiling, matching the transaction funding rule.
+pub fn priority_fee_amount(mandatory_fee: u64, priority_fee_percent: u64) -> Result<u64, String> {
+    let numerator = u128::from(mandatory_fee)
+        .checked_mul(u128::from(priority_fee_percent))
+        .and_then(|value| value.checked_add(99))
+        .ok_or_else(|| "priority fee percentage arithmetic overflowed".to_owned())?;
+    u64::try_from(numerator / 100)
+        .map_err(|_| "priority fee percentage result does not fit in u64".to_owned())
+}
 
 /// The spec's execution price update, written out from the spec document.
 #[derive(Debug, Clone)]
@@ -157,7 +168,7 @@ pub fn self_transfer_paying_fee_at(
     let fee_for_output = |output_value: u64| {
         i128::from(
             builder_with_output(output_value)
-                .minimum_gas_cost::<MainnetGasConstants>(&context)
+                .minimum_gas_cost::<MainnetGasProfile>(&context)
                 .expect("gas cost should calculate")
                 .into_inner(),
         )
@@ -199,7 +210,7 @@ pub fn self_transfer_paying_fee_at(
 
     assert_eq!(
         builder
-            .funding_delta::<MainnetGasConstants>(&context)
+            .funding_delta::<MainnetGasProfile>(&context)
             .expect("funding delta should calculate"),
         tip,
         "the built transaction must carry exactly the requested tip"
@@ -284,7 +295,7 @@ pub fn fee_surplus_at<State: VerificationState>(
 ) -> Result<i128, String> {
     let paid = net_balance_against(genesis_utxos, tx)?;
     let required = tx
-        .total_gas_cost::<MainnetGasConstants>(prices)
+        .total_gas_cost::<MainnetGasProfile>(prices)
         .map_err(|source| format!("transaction gas cost calculation failed: {source}"))?;
 
     Ok(i128::from(paid) - i128::from(required.into_inner()))

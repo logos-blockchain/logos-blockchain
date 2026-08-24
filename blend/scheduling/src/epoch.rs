@@ -123,7 +123,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use futures::StreamExt as _;
     use tokio::time::{Instant, interval};
     use tokio_stream::wrappers::IntervalStream;
 

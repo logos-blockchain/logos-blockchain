@@ -14,7 +14,7 @@ use futures::FutureExt as _;
 use lb_api_service::http::{
     DynError, blend,
     consensus::{self, Cryptarchia},
-    libp2p, mantle, mempool,
+    libp2p, mantle, mempool, pow,
     storage::StorageAdapter,
 };
 use lb_blend_service::message::ProxyServiceMessage;
@@ -56,6 +56,7 @@ use lb_http_api_common::{
 use lb_libp2p::{Multiaddr, libp2p::bytes::Bytes};
 use lb_log_targets::node;
 use lb_network_service::{NetworkService, backends::libp2p::Libp2p as Libp2pNetworkBackend};
+use lb_pow_service::api::PoWServiceData;
 use lb_sdp_service::{
     mempool::SdpMempoolAdapter, state::SdpStateStorage, wallet::SdpWalletAdapter,
 };
@@ -92,6 +93,18 @@ use crate::{
 };
 
 const TARGET: &str = node::api::ROOT;
+
+fn validate_max_tx_fee(
+    tx_fee: lb_core::mantle::gas::GasCost,
+    max_tx_fee: lb_core::mantle::gas::GasCost,
+) -> Result<(), DynError> {
+    if tx_fee > max_tx_fee {
+        return Err(overwatch::DynError::from(format!(
+            "tx_fee({tx_fee}) exceeds max_tx_fee({max_tx_fee})"
+        )));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DialPeerRequestBody {
@@ -462,6 +475,17 @@ where
     >(&handle, items))
 }
 
+#[utoipa::path(
+    get,
+    path = paths::NODE_VERSION,
+    responses(
+        (status = 200, description = "Version of the running node, e.g. `0.1.2 (abcdefaa)`", body = String),
+    )
+)]
+pub async fn version() -> Response {
+    Json(crate::version::node_version()).into_response()
+}
+
 #[derive(Deserialize)]
 pub struct CryptarchiaInfoQuery {
     from: Option<HeaderId>,
@@ -661,6 +685,57 @@ where
         req.locator,
         req.locked_note_id
     ))
+}
+
+#[utoipa::path(
+    get,
+    path = paths::BLEND_PENDING_TRANSACTIONS,
+    responses(
+        (status = 200, description = "Ids of the transactions waiting for a PoW solution before they can be blended", body = Vec<TxHash>),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn blend_pending_transactions<BlendService, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    BlendService: ServiceData<
+            Message = ProxyServiceMessage<lb_blend_service::message::ServiceMessage<PeerId>>,
+        > + 'static,
+    RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
+{
+    make_request_and_return_response!(blend::blend_pending_transactions::<
+        BlendService,
+        SignedMantleTx<Preverified>,
+        TxHash,
+        RuntimeServiceId,
+    >(&handle, Hashable::hash))
+}
+
+#[utoipa::path(
+    post,
+    path = paths::BLEND_DISPERSE_TRANSACTION,
+    responses(
+        (status = 200, description = "Id of the transaction accepted for blending, which was not added to this node's mempool", body = TxHash),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn blend_tx<BlendService, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(tx): Json<SignedMantleTx<Preverified>>,
+) -> Response
+where
+    BlendService: ServiceData<
+            Message = ProxyServiceMessage<lb_blend_service::message::ServiceMessage<PeerId>>,
+        > + 'static,
+    RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
+{
+    make_request_and_return_response!(blend::blend_transaction::<
+        BlendService,
+        SignedMantleTx<Preverified>,
+        TxHash,
+        RuntimeServiceId,
+    >(&handle, tx, Hashable::hash))
 }
 
 #[utoipa::path(
@@ -1001,12 +1076,7 @@ where
             .await?;
 
         let tx_fee = funded_tx_builder.tx_fee()?;
-        if tx_fee > req.max_tx_fee {
-            return Err(overwatch::DynError::from(format!(
-                "tx_fee({tx_fee}) exceeds max_tx_fee({})",
-                req.max_tx_fee
-            )));
-        }
+        validate_max_tx_fee(tx_fee, req.max_tx_fee)?;
 
         let signed_tx = wallet.sign_tx(Some(tip), funded_tx_builder).await?.response;
         let tx_hash = signed_tx.hash();
@@ -1025,7 +1095,7 @@ where
         >(&handle, signed_tx, Hashable::hash)
         .await?;
 
-        Ok(ChannelDepositResponseBody { hash: tx_hash })
+        Ok::<_, overwatch::DynError>(ChannelDepositResponseBody { hash: tx_hash })
     })
 }
 
@@ -1275,6 +1345,78 @@ where
     RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<ChainLeader>,
 {
     make_request_and_return_response!(consensus::leader::claim(&handle))
+}
+
+#[utoipa::path(
+    post,
+    path = paths::POW_START_MINING,
+    responses(
+        (status = 200, description = "PoW mining started"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn pow_start_mining<PoW, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    PoW: PoWServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
+{
+    make_request_and_return_response!(pow::start_mining::<PoW, RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    post,
+    path = paths::POW_STOP_MINING,
+    responses(
+        (status = 200, description = "PoW mining stopped"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn pow_stop_mining<PoW, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    PoW: PoWServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
+{
+    make_request_and_return_response!(pow::stop_mining::<PoW, RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    post,
+    path = paths::POW_CLAIM,
+    responses(
+        (status = 200, description = "PoW reward-claim transactions submitted", body = lb_api_service::http::pow::PoWClaimResponseBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn pow_claim<PoW, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    PoW: PoWServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
+{
+    make_request_and_return_response!(pow::claim::<PoW, RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    get,
+    path = paths::POW_CLAIMABLE_REWARDS,
+    responses(
+        (status = 200, description = "PoW rewards this node can currently claim"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn pow_claimable_rewards<PoW, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    PoW: PoWServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
+{
+    make_request_and_return_response!(pow::claimable_rewards::<PoW, RuntimeServiceId>(&handle))
 }
 
 #[utoipa::path(
@@ -1977,17 +2119,12 @@ pub mod wallet {
                     req.tx_builder,
                     req.change_public_key,
                     req.funding_public_keys,
-                    req.priority_fee,
+                    req.priority_fee_percent,
                 )
                 .await?;
 
             let tx_fee = funded_tx_builder.tx_fee()?;
-            if tx_fee > req.max_tx_fee {
-                return Err(overwatch::DynError::from(format!(
-                    "tx_fee({tx_fee}) exceeds max_tx_fee({})",
-                    req.max_tx_fee
-                )));
-            }
+            validate_max_tx_fee(tx_fee, req.max_tx_fee)?;
 
             // Owners of the funding inputs, in input order — the ledger
             // verifies the transfer proof against this exact list.
@@ -2027,11 +2164,12 @@ mod tests {
         header::HeaderId,
         mantle::{
             channel::{ChannelState, SlotTimeframe, SlotTimeout},
+            gas::GasCost,
             ops::channel::{Ed25519PublicKey, MsgId, config::Keys},
         },
     };
 
-    use super::channel_response;
+    use super::{channel_response, validate_max_tx_fee};
     use crate::api::{
         errors::BlocksStreamWindowError, handlers::resolve_blocks_stream_window,
         queries::BlocksStreamRequest,
@@ -2115,6 +2253,18 @@ mod tests {
         let response = channel_response(Err(DynError::from("channel backend failed".to_owned())));
 
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn max_tx_fee_rejects_a_percentage_funded_final_fee() {
+        let mandatory_fee: u64 = 794;
+        let priority_fee_percent: u64 = 12;
+        let priority_fee_amount = (mandatory_fee * priority_fee_percent).div_ceil(100);
+        let funded_tx_fee = GasCost::new(mandatory_fee + priority_fee_amount);
+
+        let error = validate_max_tx_fee(funded_tx_fee, GasCost::new(mandatory_fee + 95))
+            .expect_err("the percentage reserve should be included in the hard cap");
+        assert!(error.to_string().contains("exceeds max_tx_fee"));
     }
 
     fn request(

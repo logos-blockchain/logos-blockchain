@@ -1471,7 +1471,7 @@ pub(crate) fn wallet_fund_tx_sync(
                 request.tx_builder,
                 request.change_public_key,
                 request.funding_public_keys,
-                request.priority_fee,
+                request.priority_fee_percent,
             )
             .await
             .map_err(|error| {
@@ -1547,8 +1547,15 @@ pub type FfiWalletFundResult = FfiStatusResult<*mut c_char>;
 ///
 /// The request and response are JSON strings with the exact same schemas as
 /// the node's `POST /wallet/fund` HTTP request and response bodies. The
-/// optional `priority_fee` field (default 0) is left as excess balance above
-/// the mandatory fee, paid to the block producer as the execution tip.
+/// optional `priority_fee_percent` field (default 0) is interpreted as a
+/// percentage of the final mandatory fee, including execution and storage
+/// cost. The rounded-up percentage is reserved as excess balance above that
+/// fee; only the unused reserve is paid to the block producer as the effective
+/// priority tip. The Zone SDK and TUI default to 12%, a practical reserve
+/// intended to absorb normal fee movement, including approximately one
+/// storage-market epoch increase at normal price levels. This is not a
+/// protocol guarantee at very low prices or when execution fees also rise
+/// materially; integer storage-price arithmetic can make 1 become 2.
 ///
 /// # Arguments
 ///

@@ -1,0 +1,39 @@
+[package]
+categories.workspace  = true
+description.workspace = true
+edition.workspace     = true
+keywords.workspace    = true
+license.workspace     = true
+name                  = "logos-blockchain-pow-service"
+readme.workspace      = true
+repository.workspace  = true
+version.workspace     = true
+
+[dependencies]
+async-trait  = { workspace = true }
+futures      = { workspace = true }
+rand         = { workspace = true }
+serde        = { features = ["derive"], workspace = true }
+thiserror    = { workspace = true }
+tokio        = { features = ["sync"], workspace = true }
+tokio-stream = { workspace = true }
+tracing      = { workspace = true }
+
+lb-blend-service              = { workspace = true }
+lb-chain-service              = { workspace = true }
+lb-core                       = { workspace = true }
+lb-key-management-system-keys = { workspace = true }
+lb-ledger                     = { workspace = true }
+lb-log-targets                = { workspace = true }
+lb-services-utils             = { workspace = true }
+lb-storage-service            = { workspace = true }
+lb-utils                      = { features = ["tokio"], workspace = true }
+lb-zksign                     = { workspace = true }
+overwatch                     = { workspace = true }
+
+[dev-dependencies]
+lb-groth16 = { workspace = true }
+tokio      = { features = ["macros", "rt"], workspace = true }
+
+[lints]
+workspace = true

@@ -15,13 +15,9 @@ use std::{
 
 use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
 use futures::{StreamExt as _, future::join_all};
-use itertools::Itertools as _;
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
-    block::{
-        Block, BlockTransactions, MAX_CANDIDATES_PER_REFERENCE, MAX_RECONSTRUCTION_COMBINATIONS,
-        Proposal,
-    },
+    block::{Block, BlockTransactions, Proposal, verify_header_alone},
     header::HeaderId,
     mantle::{
         traits::{Hashable, MantleTxWithProofs},
@@ -63,7 +59,7 @@ pub use crate::{
 };
 use crate::{
     bootstrap::ibd::InitialBlockDownload,
-    mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
+    mempool::{MempoolAdapter as MempoolAdapterTrait, adapter::MempoolAdapter},
     relays::ChainNetworkRelays,
     sync::{
         orphan_handler::OrphanBlocksDownloader,
@@ -85,22 +81,14 @@ pub enum Error {
     Serialisation(#[from] lb_core::codec::Error),
     #[error("Invalid block: {0}")]
     InvalidBlock(String),
-    #[error("Failed to reconstruct block: {0} mempool transactions not found")]
-    MissingMempoolTransactions(usize),
-    #[error("Reference {index} ({prefix}) matches no local transaction")]
-    UnresolvedReference { index: usize, prefix: TxHashPrefix },
-    #[error("Reference {index} ({prefix}) matches more than the {max} local transactions allowed")]
-    AmbiguousReference {
-        index: usize,
-        prefix: TxHashPrefix,
-        max: usize,
-    },
-    #[error(
-        "Resolving the references needs {combinations} combinations, more than the {max} allowed"
-    )]
-    TooManyReconstructionCombinations { combinations: usize, max: usize },
+    #[error("Header is not valid on its own: {0}")]
+    InvalidHeader(lb_core::block::HeaderError),
     #[error("No combination of candidate transactions reproduces the block root")]
     NoMatchingReconstruction,
+    #[error("Reference {index} ({prefix}) matches no local transaction")]
+    UnresolvedReference { index: usize, prefix: TxHashPrefix },
+    #[error("Reference {index} ({prefix}) matches more than one local transaction")]
+    CollidingReference { index: usize, prefix: TxHashPrefix },
     #[error("Mempool error: {0}")]
     Mempool(String),
     #[error("Block header id not found: {0}")]
@@ -586,6 +574,23 @@ where
             }
         }
 
+        // The header must stand on its own before any mempool scanning.
+        // `references` is unauthenticated, so tampered copies of a genuine
+        // proposal are cheap to mint, and reconstruction walks the mempool once
+        // per reference. A bad signature is a property of the proposal itself —
+        // identical at every node — so it is final and recorded against
+        // `block_id`.
+        if let Err(e) = verify_header_alone(proposal.header(), proposal.signature()) {
+            let e = Error::InvalidHeader(e);
+            metrics::consensus_observe_proposal_reconstruct_err("network", &e);
+            error!(
+                target: LOG_TARGET, %e, ?block_id,
+                "Proposal header failed the checks that need the header alone",
+            );
+            orphan_downloader.insert_rejected_block(block_id);
+            return;
+        }
+
         let reconstruct_started_at = Instant::now();
         let block = match reconstruct_block_from_proposal(proposal, relays.mempool_adapter()).await
         {
@@ -602,6 +607,11 @@ where
                     "Failed to reconstruct block from proposal: {:?}",
                     e
                 );
+                // Deliberately not recorded against `block_id`. Failing to
+                // resolve a reference says the transaction has not reached
+                // *this* mempool, not that the block is invalid; the same block
+                // may arrive in full through chain synchronisation and must
+                // then be judged on its merits.
                 return;
             }
         };
@@ -1008,92 +1018,63 @@ where
 /// Reconstruct a `Block` from a `Proposal` by resolving its reference prefixes
 /// against the local mempool.
 ///
-/// A reference is only the leading bytes of a transaction hash, so it may match
-/// several mempool transactions. `header.block_root` still commits to the full
-/// hashes, so at most one combination of candidates can reproduce it — and
-/// `Block::reconstruct` is what checks that, so the first combination that
-/// reconstructs *is* the match.
+/// A reference is a 16-byte prefix of the transaction hash. Two distinct hashes
+/// cannot be found or manufactured to share one at any feasible cost, so every
+/// reference resolves to exactly one local transaction and resolution never
+/// branches. `header.body_root` still commits to the full hashes and
+/// `Block::reconstruct` checks it, which is what catches the residual,
+/// cryptographically negligible case of a prefix matching the wrong
+/// transaction.
+///
+/// The caller must have validated the header first: this walks the mempool once
+/// per reference, so an unauthenticated proposal has to be discarded before it
+/// gets here.
 async fn reconstruct_block_from_proposal<Item>(
     proposal: Proposal,
-    mempool: &MempoolAdapter<Item>,
+    mempool: &impl MempoolAdapterTrait<Item>,
 ) -> Result<Block<Item>, Error>
 where
     Item: MantleTxWithProofs<Hash = TxHash> + Clone + Send + Sync + 'static,
 {
-    let candidates = candidates_for_proposal(&proposal, mempool).await?;
-
-    let header = proposal.header().clone();
-    let signature = *proposal.signature();
-
-    let try_rebuild_with_txs = |transactions: Vec<Item>| {
-        let transactions = BlockTransactions::try_from(transactions).ok()?;
-        Block::reconstruct(header.clone(), transactions, signature).ok()
-    };
-
-    // A proposal with no references still has one candidate block: the empty one.
-    if candidates.is_empty() {
-        return try_rebuild_with_txs(Vec::new()).ok_or(Error::NoMatchingReconstruction);
-    }
-
-    // Try all combinations of candidates and find the one that can be used to
-    // reconstruct the block from the proposal.
-    candidates
-        .into_iter()
-        .multi_cartesian_product()
-        .find_map(try_rebuild_with_txs)
-        .ok_or(Error::NoMatchingReconstruction)
-}
-
-/// The candidate transactions for every reference in `proposal`, in reference
-/// order, subject to both caps from the block-construction specification.
-///
-/// Returning here means the cartesian product of the sets is within budget, so
-/// the search that follows is bounded before it starts.
-async fn candidates_for_proposal<Item>(
-    proposal: &Proposal,
-    mempool: &MempoolAdapter<Item>,
-) -> Result<Vec<Vec<Item>>, Error>
-where
-    Item: MantleTxWithProofs<Hash = TxHash> + Clone + Send + Sync + 'static,
-{
-    let mut candidates = Vec::with_capacity(proposal.mempool_transactions().len());
-    let mut combinations = 1usize;
-
+    let mut transactions = Vec::with_capacity(proposal.mempool_transactions().len());
     for (index, prefix) in proposal.mempool_transactions().iter().copied().enumerate() {
-        let found = candidates_for_reference(index, prefix, mempool).await?;
-
-        combinations = combinations.saturating_mul(found.len());
-        if combinations > MAX_RECONSTRUCTION_COMBINATIONS {
-            return Err(Error::TooManyReconstructionCombinations {
-                combinations,
-                max: MAX_RECONSTRUCTION_COMBINATIONS,
-            });
-        }
-
-        candidates.push(found);
+        transactions.push(resolve_reference(index, prefix, mempool).await?);
     }
 
-    Ok(candidates)
+    Block::reconstruct(
+        proposal.header().clone(),
+        proposal.uncle_headers().clone(),
+        BlockTransactions::try_from(transactions)?,
+        *proposal.signature(),
+    )
+    .map_err(|_| Error::NoMatchingReconstruction)
 }
 
-/// The local transactions a single reference could mean, refusing as soon as
-/// the reference is unusable.
+/// The single local transaction a reference means.
 ///
-/// One candidate beyond the cap is taken so that "too many" is distinguishable
-/// from "exactly at the limit" without draining the stream.
-async fn candidates_for_reference<Item>(
+/// A reference resolves only when the match is unique. Zero matches means the
+/// transaction has not reached this mempool; two or more would be a prefix
+/// collision, which is infeasible to manufacture and vanishingly unlikely to
+/// occur by chance, and is treated as unresolved rather than searched. Because
+/// the match is unique when it exists, the result does not depend on the order
+/// in which the mempool is scanned.
+///
+/// Two candidates are taken so that "collides" is distinguishable from
+/// "resolves" without draining the stream.
+async fn resolve_reference<Item>(
     index: usize,
     prefix: TxHashPrefix,
-    mempool: &MempoolAdapter<Item>,
-) -> Result<Vec<Item>, Error>
+    mempool: &impl MempoolAdapterTrait<Item>,
+) -> Result<Item, Error>
 where
     Item: Hashable<Hash = TxHash> + Send + Sync + 'static,
 {
-    let candidates: Vec<Item> = mempool
+    let mut candidates: Vec<Item> = mempool
         .get_transactions_by_prefix(prefix)
         .await
         .map_err(|e| Error::Mempool(format!("Failed to resolve reference {index}: {e}")))?
-        .take(MAX_CANDIDATES_PER_REFERENCE.saturating_add(1))
+        .take(2)
+        // We collect into a `Vec` since we are only taking at most 2 elements.
         .collect()
         .await;
 
@@ -1102,12 +1083,8 @@ where
             metrics::consensus_observe_proposal_missing_txs(1);
             Err(Error::UnresolvedReference { index, prefix })
         }
-        found if found > MAX_CANDIDATES_PER_REFERENCE => Err(Error::AmbiguousReference {
-            index,
-            prefix,
-            max: MAX_CANDIDATES_PER_REFERENCE,
-        }),
-        _ => Ok(candidates),
+        1 => Ok(candidates.remove(0)),
+        _ => Err(Error::CollidingReference { index, prefix }),
     }
 }
 
@@ -1115,7 +1092,105 @@ where
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use futures::stream;
+    use lb_core::mantle::{traits::Hasher, transactions::hash::REFERENCE_PREFIX_BYTES};
+    use lb_tx_service::TxsWithCommonPrefix;
+
     use super::*;
+
+    /// A transaction that is nothing but its hash, which is all
+    /// [`resolve_reference`] looks at.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct HashOnlyTx(TxHash);
+
+    impl Hashable for HashOnlyTx {
+        const HASHER: Hasher<Self> = |tx| tx.0;
+        type Hash = TxHash;
+
+        fn as_signing(&self) -> Vec<u8> {
+            self.0.0.to_vec()
+        }
+    }
+
+    /// A mempool that answers every prefix with the same fixed candidate list,
+    /// so a test states only how many transactions a reference matches.
+    struct FixedCandidates(Vec<HashOnlyTx>);
+
+    #[async_trait::async_trait]
+    impl MempoolAdapterTrait<HashOnlyTx> for FixedCandidates {
+        async fn add_transaction(&self, _tx: HashOnlyTx) -> Result<(), DynError> {
+            unimplemented!("resolution never adds")
+        }
+
+        async fn remove_transactions(&self, _ids: &[TxHash]) -> Result<(), DynError> {
+            unimplemented!("resolution never removes")
+        }
+
+        async fn get_transactions_by_prefix(
+            &self,
+            _prefix: TxHashPrefix,
+        ) -> Result<TxsWithCommonPrefix<HashOnlyTx>, DynError> {
+            Ok(Box::pin(stream::iter(self.0.clone())))
+        }
+    }
+
+    fn tx(byte: u8) -> HashOnlyTx {
+        HashOnlyTx(TxHash([byte; 32]))
+    }
+
+    /// Two transactions that agree on the reference prefix and differ only past
+    /// it — the collision a 16-byte prefix makes infeasible, constructed by
+    /// hand.
+    fn colliding_pair() -> Vec<HashOnlyTx> {
+        let mut first = [0xAAu8; 32];
+        let mut second = [0xAAu8; 32];
+        first[REFERENCE_PREFIX_BYTES] = 0x01;
+        second[REFERENCE_PREFIX_BYTES] = 0x02;
+        vec![HashOnlyTx(TxHash(first)), HashOnlyTx(TxHash(second))]
+    }
+
+    #[tokio::test]
+    async fn a_reference_resolves_to_its_one_matching_transaction() {
+        let mempool = FixedCandidates(vec![tx(7)]);
+
+        let resolved = resolve_reference(0, TxHash([7u8; 32]).prefix(), &mempool)
+            .await
+            .expect("a unique match resolves");
+
+        assert_eq!(resolved, tx(7));
+    }
+
+    #[tokio::test]
+    async fn a_reference_matching_nothing_locally_is_unresolved() {
+        let mempool = FixedCandidates(Vec::new());
+        let prefix = TxHash([7u8; 32]).prefix();
+
+        assert!(matches!(
+            resolve_reference(3, prefix, &mempool).await,
+            Err(Error::UnresolvedReference { index: 3, prefix: p }) if p == prefix
+        ));
+    }
+
+    /// A collision is reported rather than searched: resolution must not
+    /// branch, so that two validators holding the same mempool always
+    /// decide alike.
+    #[tokio::test]
+    async fn a_reference_matching_two_transactions_is_not_searched() {
+        let candidates = colliding_pair();
+        let prefix = candidates[0].hash().prefix();
+        assert_eq!(
+            prefix,
+            candidates[1].hash().prefix(),
+            "the pair must collide"
+        );
+
+        let mempool = FixedCandidates(candidates);
+
+        assert!(matches!(
+            resolve_reference(1, prefix, &mempool).await,
+            Err(Error::CollidingReference { index: 1, prefix: p }) if p == prefix
+        ));
+    }
 
     fn future_block_error() -> Error {
         Error::Cryptarchia(lb_chain_service::api::ApiError::FutureBlock {

@@ -6,7 +6,11 @@
 use std::collections::HashSet;
 
 use lb_common_http_client::{ProcessedBlockEvent, Slot};
-use lb_core::mantle::{channel::ChannelState, ops::channel::MsgId, traits::Hashable as _};
+use lb_core::mantle::{
+    channel::ChannelState,
+    ops::channel::{ChannelId, MsgId},
+    traits::Hashable as _,
+};
 use tracing::{debug, error, warn};
 
 use super::{
@@ -26,27 +30,32 @@ impl<Node> ZoneSequencer<Node>
 where
     Node: adapter::Node + Clone + Send + Sync + 'static,
 {
-    /// Handle a single item from the blocks stream. `None` means the stream
-    /// disconnected; any other value is processed as a block event and
-    /// produces an [`Event::BlocksProcessed`] carrying the checkpoint, the
-    /// optional `ChannelUpdate`, and the block's finalized txs.
-    pub(super) async fn handle_stream_item(
-        &mut self,
-        maybe_event: Option<ProcessedBlockEvent>,
-    ) -> Option<Event> {
-        let Some(block_event) = maybe_event else {
-            warn!(target: TARGET, "Blocks stream disconnected, will reconnect on next call");
-            self.blocks_stream = None;
-            self.handle_stream_drop();
-            return None;
-        };
+    /// Process the block retained by the drive loop.
+    ///
+    /// The pending block is cleared only after processing completes. Dropping
+    /// the surrounding [`ZoneSequencer::next_event`] future at an `.await`
+    /// therefore leaves the block available for the next call.
+    pub(super) async fn process_pending_block_event(&mut self) -> Option<Event> {
+        let block_event = self
+            .pending_block_event
+            .clone()
+            .expect("called only with a pending block event");
 
         if let Ok(result) = self.process_block_event(&block_event).await {
+            self.pending_block_event = None;
             self.finish_block_processing(result)
+                .map(|event| self.emit_now(event))
         } else {
+            self.pending_block_event = None;
             self.handle_stream_drop();
             None
         }
+    }
+
+    pub(super) fn handle_stream_disconnect(&mut self) {
+        warn!(target: TARGET, "Blocks stream disconnected, will reconnect on next call");
+        self.blocks_stream = None;
+        self.handle_stream_drop();
     }
 
     /// Ingest one live block event into local state. On any per-block error
@@ -57,6 +66,19 @@ where
         &mut self,
         block_event: &ProcessedBlockEvent,
     ) -> Result<BlockEventResult, ()> {
+        // Fetch first, then install the new channel state only after the block
+        // has been processed. This avoids an `.await` after block state starts
+        // changing, which is the unsafe cancellation boundary.
+        let channel_state = fetch_channel_state(&self.node, self.channel_id)
+            .await
+            .map_err(|err| {
+                error!(
+                    target: TARGET,
+                    "Failed to refresh channel state before block processing; dropping stream so reconnect retries: {err}"
+                );
+                self.blocks_stream = None;
+            })?;
+
         let result = handle_block_event(
             block_event,
             &mut self.state,
@@ -78,13 +100,7 @@ where
             slot_clock.observe_slot(block_event.tip_slot);
         }
 
-        self.refresh_channel_state().await.map_err(|err| {
-            error!(
-                target: TARGET,
-                "Failed to refresh channel state after block; dropping stream so reconnect retries: {err}"
-            );
-            self.blocks_stream = None;
-        })?;
+        self.install_channel_state(channel_state);
 
         Ok(result)
     }
@@ -190,16 +206,17 @@ where
         checkpoint
     }
 
-    pub(super) async fn refresh_channel_state(&mut self) -> Result<(), Error> {
-        let channel = self
-            .node
-            .channel_state(self.channel_id)
-            .await
-            .map_err(|err| Error::Network(err.to_string()))?;
+    fn install_channel_state(&mut self, channel: Option<ChannelState>) {
         self.own_key_index = channel
             .as_ref()
             .and_then(|channel| self.own_key_index_for(channel));
         self.channel_state = channel;
+    }
+
+    pub(super) async fn refresh_channel_state(&mut self) -> Result<(), Error> {
+        let channel = fetch_channel_state(&self.node, self.channel_id).await?;
+        self.install_channel_state(channel);
+
         Ok(())
     }
 
@@ -618,6 +635,18 @@ where
     }
 }
 
+async fn fetch_channel_state<Node>(
+    node: &Node,
+    channel_id: ChannelId,
+) -> Result<Option<ChannelState>, Error>
+where
+    Node: adapter::Node + Sync,
+{
+    node.channel_state(channel_id)
+        .await
+        .map_err(|err| Error::Network(err.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use lb_core::{
@@ -629,21 +658,19 @@ mod tests {
             ops::{
                 OpProof,
                 channel::{
-                    ChannelId,
                     config::{ChannelConfigOp, Keys},
                     deposit::DepositOp,
                     inscribe::{Inscription, InscriptionOp},
                     withdraw::ChannelWithdrawOp,
                 },
             },
-            traits::Hashable as _,
             transactions::{Ops, OpsProofs, mantle_tx::MantleTx as _, states::Unverified},
         },
     };
     use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
-    use tokio::sync::watch;
+    use tokio::sync::{mpsc, watch};
 
     use super::{
         super::{
@@ -653,8 +680,8 @@ mod tests {
         *,
     };
     use crate::test_support::{
-        MockNode, StreamEnd, StreamScript, api_block, funding_config, live_event, scripts,
-        single_key_channel_state, unverified_tx_with_ops,
+        MockNode, StreamEnd, StreamScript, api_block, funding_config, header_id, live_event,
+        scripts, single_key_channel_state, unverified_tx_with_ops,
     };
 
     #[must_use]
@@ -739,6 +766,158 @@ mod tests {
                 }
             } => unreachable!(),
         }
+    }
+
+    #[tokio::test]
+    async fn cancelled_next_event_resumes_the_pulled_block() {
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+        let first_block = api_block(1, 0, 1, Vec::new());
+        let second_block = api_block(2, 1, 2, Vec::new());
+        let (gate_tx, gate_rx) = watch::channel(true);
+        let (calls_tx, mut calls_rx) = mpsc::unbounded_channel();
+        let node = MockNode {
+            scripts: scripts(vec![StreamScript {
+                events: vec![live_event(&first_block), live_event(&second_block)],
+                then: StreamEnd::Hang,
+            }]),
+            channel_state_gate: Some(gate_rx),
+            channel_state_calls: Some(calls_tx),
+            ..MockNode::default()
+        };
+        let mut sequencer =
+            ZoneSequencer::init(channel_id, sequencer_key, node, funding_config(), None);
+
+        loop {
+            if matches!(sequencer.next_event().await, Event::Ready) {
+                break;
+            }
+        }
+
+        assert!(matches!(
+            sequencer.next_event().await,
+            Event::BlocksProcessed { .. }
+        ));
+
+        while calls_rx.try_recv().is_ok() {}
+        gate_tx.send(false).unwrap();
+
+        {
+            let next_event = sequencer.next_event();
+            tokio::pin!(next_event);
+
+            tokio::select! {
+                call = calls_rx.recv() => {
+                    call.expect("channel-state call should be observed");
+                }
+                event = &mut next_event => {
+                    panic!("block processing completed while its node request was gated: {event:?}");
+                }
+            }
+        }
+
+        assert_eq!(
+            sequencer
+                .pending_block_event
+                .as_ref()
+                .map(|event| event.block.header.id),
+            Some(header_id(2))
+        );
+
+        gate_tx.send(true).unwrap();
+        let resumed =
+            tokio::time::timeout(std::time::Duration::from_secs(1), sequencer.next_event())
+                .await
+                .expect("the retained block should resume after cancellation");
+
+        assert!(matches!(resumed, Event::BlocksProcessed { .. }));
+        assert_eq!(sequencer.current_tip, Some(header_id(2)));
+        assert!(sequencer.pending_block_event.is_none());
+
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), sequencer.next_event(),)
+                .await
+                .is_err(),
+            "the resumed block must not be emitted twice"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_finalized_backfill_restarts_without_partial_state() {
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+        let first_block = api_block(1, 0, 1, Vec::new());
+        let second_block = api_block(2, 1, 2, Vec::new());
+        let second_event = ProcessedBlockEvent {
+            block: second_block.clone(),
+            tip: second_block.header.id,
+            tip_slot: second_block.header.slot,
+            lib: first_block.header.id,
+            lib_slot: first_block.header.slot,
+        };
+        let (gate_tx, gate_rx) = watch::channel(true);
+        let (calls_tx, mut calls_rx) = mpsc::unbounded_channel();
+        let node = MockNode {
+            scripts: scripts(vec![StreamScript {
+                events: vec![live_event(&first_block), second_event],
+                then: StreamEnd::Hang,
+            }]),
+            immutable: vec![first_block.clone()],
+            immutable_blocks_gate: Some(gate_rx),
+            immutable_blocks_calls: Some(calls_tx),
+            ..MockNode::default()
+        };
+        let mut sequencer =
+            ZoneSequencer::init(channel_id, sequencer_key, node, funding_config(), None);
+
+        loop {
+            if matches!(sequencer.next_event().await, Event::Ready) {
+                break;
+            }
+        }
+
+        assert!(matches!(
+            sequencer.next_event().await,
+            Event::BlocksProcessed { .. }
+        ));
+
+        while calls_rx.try_recv().is_ok() {}
+        gate_tx.send(false).unwrap();
+
+        {
+            let next_event = sequencer.next_event();
+            tokio::pin!(next_event);
+
+            tokio::select! {
+                call = calls_rx.recv() => {
+                    call.expect("immutable-blocks call should be observed");
+                }
+                event = &mut next_event => {
+                    panic!("finalized backfill completed while its node request was gated: {event:?}");
+                }
+            }
+        }
+
+        assert_eq!(sequencer.lib_slot, Slot::genesis());
+        assert_eq!(sequencer.current_tip, Some(first_block.header.id));
+        assert_eq!(
+            sequencer
+                .pending_block_event
+                .as_ref()
+                .map(|event| event.block.header.id),
+            Some(second_block.header.id)
+        );
+
+        gate_tx.send(true).unwrap();
+        let resumed =
+            tokio::time::timeout(std::time::Duration::from_secs(1), sequencer.next_event())
+                .await
+                .expect("the finalized backfill should resume after cancellation");
+
+        assert!(matches!(resumed, Event::BlocksProcessed { .. }));
+        assert_eq!(sequencer.lib_slot, first_block.header.slot);
+        assert_eq!(sequencer.current_tip, Some(second_block.header.id));
+        assert!(sequencer.pending_block_event.is_none());
     }
 
     /// A `SequencerClient::publish` issued while the node is down (reconnect

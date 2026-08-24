@@ -29,15 +29,16 @@ use lb_http_api_common::{
         },
     },
     paths::{
-        BLEND_JOIN_NETWORK, BLOCK_EVENTS, BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM,
-        BLOCKS_STREAM, CHANNEL, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_CLAIM_VOUCHERS,
-        MANTLE_GAS_PRICES, MEMPOOL_ADD_TX, SDP_POST_DECLARATION, TIME_INFO,
+        BLEND_DISPERSE_TRANSACTION, BLEND_JOIN_NETWORK, BLEND_PENDING_TRANSACTIONS, BLOCK_EVENTS,
+        BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHANNEL, CRYPTARCHIA_INFO,
+        CRYPTARCHIA_LIB_STREAM, LEADER_CLAIM_VOUCHERS, MANTLE_GAS_PRICES, MEMPOOL_ADD_TX,
+        NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
         wallet::{BALANCE, FUND, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
     settings::default_max_body_size,
 };
-use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey};
 use lb_log_targets::http_client;
 use log::warn;
 use reqwest::{Client, ClientBuilder, RequestBuilder, StatusCode, Url};
@@ -56,7 +57,7 @@ pub struct ApiHeader {
     pub id: HeaderId,
     pub parent_block: HeaderId,
     pub slot: Slot,
-    pub block_root: ContentId,
+    pub body_root: ContentId,
     pub proof_of_leadership: Groth16LeaderProof,
 }
 
@@ -65,7 +66,16 @@ pub struct ApiHeader {
 #[derive(Clone, Debug, Deserialize)]
 pub struct ApiBlock {
     pub header: ApiHeader,
+    pub uncle_headers: Vec<ApiSignedHeader>,
     pub transactions: Vec<SignedMantleTx<Unverified>>,
+}
+
+/// Client-side signed header representation matching the server's
+/// `ApiSignedHeader`.
+#[derive(Clone, Debug, Deserialize)]
+pub struct ApiSignedHeader {
+    pub header: ApiHeader,
+    pub signature: Ed25519Signature,
 }
 
 /// Processed block event from the block stream.
@@ -276,6 +286,42 @@ impl CommonHttpClient {
         self.post(request_url, &transaction).await
     }
 
+    /// Send a transaction through the Blend network, without adding it to the
+    /// node's own mempool.
+    ///
+    /// The node it is submitted to never gossips the transaction itself — that
+    /// would say where it came from — so it reaches the network blended, and
+    /// comes back to this node's mempool like any other transaction once
+    /// whichever node exits it gossips it on.
+    ///
+    /// Returns the transaction's id.
+    pub async fn blend_transaction<Tx, Id>(
+        &self,
+        base_url: Url,
+        transaction: Tx,
+    ) -> Result<Id, Error>
+    where
+        Tx: Serialize + Send + Sync + 'static,
+        Id: for<'de> Deserialize<'de> + Send + Sync,
+    {
+        let request_url = base_url
+            .join(BLEND_DISPERSE_TRANSACTION.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.post(request_url, &transaction).await
+    }
+
+    /// The ids of the transactions the node is still waiting on a `PoW`
+    /// solution for before it can blend them.
+    pub async fn blend_pending_transactions<Id>(&self, base_url: Url) -> Result<Vec<Id>, Error>
+    where
+        Id: for<'de> Deserialize<'de> + Send + Sync,
+    {
+        let request_url = base_url
+            .join(BLEND_PENDING_TRANSACTIONS.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.get::<(), _>(request_url, None).await
+    }
+
     /// Post a service declaration to the SDP endpoint.
     pub async fn post_declaration(
         &self,
@@ -286,6 +332,14 @@ impl CommonHttpClient {
             .join(SDP_POST_DECLARATION.trim_start_matches('/'))
             .map_err(Error::Url)?;
         self.post(request_url, declaration).await
+    }
+
+    /// Get the version of the node, e.g. `0.1.2 (abcdefaa)`.
+    pub async fn get_node_version(&self, base_url: Url) -> Result<String, Error> {
+        let request_url = base_url
+            .join(NODE_VERSION.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.get::<(), String>(request_url, None).await
     }
 
     /// Get consensus info (tip, height, etc.)
@@ -592,8 +646,9 @@ impl CommonHttpClient {
 
     /// Post a request to fund a transaction from the node's wallet.
     ///
-    /// The node adds fee inputs and change from its own wallet, signs only
-    /// the appended fee transfer, and returns the funded (still unsigned)
+    /// The node adds fee inputs and change from its own wallet, reserving the
+    /// request's percentage-based priority-fee reserve, then signs only the
+    /// appended fee transfer and returns the funded (still unsigned)
     /// transaction together with the transfer proof.
     pub async fn fund_tx(
         &self,

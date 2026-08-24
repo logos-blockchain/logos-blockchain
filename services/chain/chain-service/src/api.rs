@@ -1,7 +1,11 @@
 use std::pin::Pin;
 
 use futures::{Stream, TryStreamExt as _};
-use lb_core::{block::Block, events::Events, header::HeaderId};
+use lb_core::{
+    block::{Block, UncleHeaders},
+    events::Events,
+    header::HeaderId,
+};
 use lb_cryptarchia_engine::Slot;
 use lb_network_service::message::ChainSyncEvent;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
@@ -249,6 +253,33 @@ where
 
         rx.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving GetBlockEvents"))
+        })
+    }
+
+    /// Selects uncles for a new block extending `parent` at `slot`.
+    pub async fn select_uncles(
+        &self,
+        parent: HeaderId,
+        slot: Slot,
+    ) -> Result<UncleHeaders, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(
+                Query::SelectUncles {
+                    parent,
+                    slot,
+                    reply_channel,
+                }
+                .into(),
+            )
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!("{relay_error} while sending SelectUncles"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!("{relay_error} while receiving SelectUncles"))
         })
     }
 

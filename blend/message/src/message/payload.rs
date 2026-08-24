@@ -5,13 +5,31 @@ use serde_with::serde_as;
 
 use crate::Error;
 
-pub const MAX_PAYLOAD_BODY_SIZE: usize = 8555;
+/// Every dispersed payload body is padded to this size, so it must fit the
+/// largest thing the blend network carries: a block proposal.
+///
+/// A block proposal is at most 18192 bytes:
+/// - A 297-byte header
+/// - At most `MAX_UNCLES` uncle headers of 361 bytes each, behind a 1-byte
+///   count prefix.
+/// - At most `MAX_BLOCK_TXS` transaction references of 16 bytes, behind a
+///   2-byte count prefix.
+/// - A 64-byte signature
+pub const MAX_PAYLOAD_BODY_SIZE: usize = 18_192;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PayloadType {
     Cover = 0x00,
-    Data = 0x01,
+    BlockProposal = 0x01,
+    Transaction = 0x02,
+}
+
+impl PayloadType {
+    #[must_use]
+    pub const fn is_data_message(&self) -> bool {
+        matches!(self, Self::BlockProposal | Self::Transaction)
+    }
 }
 
 impl TryFrom<u8> for PayloadType {
@@ -20,7 +38,8 @@ impl TryFrom<u8> for PayloadType {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0x00 => Ok(Self::Cover),
-            0x01 => Ok(Self::Data),
+            0x01 => Ok(Self::BlockProposal),
+            0x02 => Ok(Self::Transaction),
             _ => Err(()),
         }
     }
@@ -157,7 +176,6 @@ impl BinaryDecode for PaddedPayloadBody {
 
 #[cfg(test)]
 mod tests {
-    use lb_codec::{BinaryDecode as _, BinaryEncode as _};
     use serde::Serialize;
     use serde_with::serde_as;
 

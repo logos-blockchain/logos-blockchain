@@ -4,7 +4,7 @@ use lb_core::blend::core_quota;
 use lb_key_management_system_service::{backend::preload::KeyId, keys::UnsecuredEd25519Key};
 use lb_poq::Quota;
 use lb_services_utils::overwatch::{RecoveryData, StorageRecoverySettings};
-use lb_utils::math::NonNegativeF64;
+use lb_utils::math::PositiveF64;
 use serde::{Deserialize, Serialize};
 
 use crate::settings::TimingSettings;
@@ -45,6 +45,13 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
         self.scheduler
             .cover
             .epoch_core_quota(self.num_blend_layers, &self.time, membership_size)
+    }
+
+    pub fn epoch_pow_quota(&self) -> Quota {
+        self.num_blend_layers
+            .get()
+            .try_into()
+            .expect("PoW Quota must fit within the width the `PoQ` circuit allows.")
     }
 
     pub const fn epoch_leadership_quota(&self) -> Quota {
@@ -96,7 +103,7 @@ pub struct SchedulerSettings {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CoverTrafficSettings {
     /// `F_c`: frequency at which cover messages are generated per round.
-    pub message_frequency_per_round: NonNegativeF64,
+    pub message_frequency_per_round: PositiveF64,
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ use core::{
 use std::{
     collections::{HashMap, VecDeque},
     iter::repeat_with,
+    sync::Arc,
 };
 
 use async_trait::async_trait;
@@ -23,9 +24,13 @@ use tokio::time::{MissedTickBehavior, interval};
 use tokio_stream::wrappers::IntervalStream;
 
 use crate::core::{
-    tests::utils::{PROTOCOL_NAME, TestSwarm},
+    poq_verification::PendingPoQVerifications,
+    tests::utils::{PROTOCOL_NAME, TestProofsVerifier, TestSwarm},
     with_core::behaviour::{Behaviour, Event, IntervalStreamProvider, message_cache::MessageCache},
 };
+
+/// The behaviour under test, with the `PoQ` verifier the tests use.
+pub type TestBehaviour = Behaviour<IntervalProvider, TestProofsVerifier>;
 
 #[derive(Clone)]
 pub struct IntervalProvider(Duration, RangeInclusive<u64>);
@@ -92,6 +97,7 @@ pub struct BehaviourBuilder {
     peering_degree: Option<RangeInclusive<usize>>,
     minimum_network_size: Option<NonZeroUsize>,
     num_blend_layers: Option<NonZeroU64>,
+    proofs_verifier: TestProofsVerifier,
 }
 
 impl BehaviourBuilder {
@@ -103,7 +109,14 @@ impl BehaviourBuilder {
             peering_degree: None,
             minimum_network_size: None,
             num_blend_layers: None,
+            proofs_verifier: TestProofsVerifier::accepting(),
         }
+    }
+
+    /// Makes the behaviour reject the `PoQ` of every message it receives.
+    pub const fn with_rejecting_proofs_verifier(mut self) -> Self {
+        self.proofs_verifier = TestProofsVerifier::rejecting();
+        self
     }
 
     pub fn with_membership(mut self, nodes: &[Node<PeerId>]) -> Self {
@@ -135,7 +148,7 @@ impl BehaviourBuilder {
         self
     }
 
-    pub fn build(self) -> Behaviour<IntervalProvider> {
+    pub fn build(self) -> TestBehaviour {
         Behaviour {
             negotiated_peers: HashMap::new(),
             connections_waiting_upgrade: HashMap::new(),
@@ -160,6 +173,8 @@ impl BehaviourBuilder {
                 .unwrap_or_else(|| 3.try_into().unwrap()),
             old_epoch: None,
             message_cache: MessageCache::new(),
+            proofs_verifier: Arc::new(self.proofs_verifier),
+            pending_poq_verifications: PendingPoQVerifications::new(),
         }
     }
 }
@@ -174,7 +189,7 @@ pub trait SwarmExt: libp2p_swarm_test::SwarmExt {
 }
 
 #[async_trait]
-impl SwarmExt for Swarm<Behaviour<IntervalProvider>> {
+impl SwarmExt for Swarm<TestBehaviour> {
     async fn connect_and_wait_for_upgrade<ListenerBehaviour>(
         &mut self,
         listener: &mut Swarm<ListenerBehaviour>,

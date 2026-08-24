@@ -6,7 +6,7 @@ use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
         RawMantleTx, Value, VerificationError,
-        gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow},
+        gas::{Gas, GasCost, GasOverflow, GasProfile, TxGasCalculator},
         ledger::{PreverifiableOperation, VerifiableOperation, verification_mode::StandardMode},
         ops::{
             Op, OpProof,
@@ -345,8 +345,8 @@ impl SignedMantleTx<Preverified> {
                     pow_nullifiers: helper.get_pow_nullifiers(),
                     epoch_pow_reward: helper.get_epoch_pow_reward(),
                     epoch_reward_pool: helper.get_pow_reward_pool(),
-                    current_epoch: helper.get_epoch(),
-                    previous_epoch: helper.get_previous_epoch(),
+                    current_epoch_nonce: helper.get_current_epoch_nonce(),
+                    previous_epoch_nonce: helper.get_previous_epoch_nonce(),
                     blocks_slot: helper.get_blocks_slot(),
                 };
                 claim_pow_op
@@ -391,27 +391,27 @@ impl<State: VerificationState> MantleTxWithProofs for SignedMantleTx<State> {
     }
 }
 
-impl<State: VerificationState> GasCalculator for SignedMantleTx<State> {
+impl<State: VerificationState> TxGasCalculator for SignedMantleTx<State> {
     type Context = GasPrices;
 
-    fn total_gas_cost<Constants: GasConstants>(
+    fn total_gas_cost<Profile: GasProfile>(
         &self,
         context: &Self::Context,
     ) -> Result<GasCost, GasOverflow> {
-        let execution_gas = GasCalculator::execution_gas_consumption::<Constants>(&self, context)?;
+        let execution_gas = TxGasCalculator::execution_gas_consumption::<Profile>(self, context)?;
         let execution_gas_cost =
             GasCost::calculate(execution_gas, context.execution_base_gas_price)?;
-        let storage_gas_cost = GasCalculator::storage_gas_cost(self, context)?;
+        let storage_gas_cost = TxGasCalculator::storage_gas_cost(self, context)?;
 
         execution_gas_cost.checked_add(storage_gas_cost)
     }
 
     fn storage_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow> {
-        let storage_gas = GasCalculator::storage_gas_consumption(&self, context)?;
+        let storage_gas = TxGasCalculator::storage_gas_consumption(self, context)?;
         GasCost::calculate(storage_gas, context.storage_gas_price)
     }
 
-    fn execution_gas_consumption<Constants: GasConstants>(
+    fn execution_gas_consumption<Profile: GasProfile>(
         &self,
         _context: &Self::Context,
     ) -> Result<Gas, GasOverflow> {
@@ -419,7 +419,7 @@ impl<State: VerificationState> GasCalculator for SignedMantleTx<State> {
             .ops()
             .iter()
             .zip(self.ops_proofs.iter())
-            .map(|(op, proof)| signed_op_execution_gas::<Constants>(op, proof))
+            .map(|(op, proof)| signed_op_execution_gas::<Profile>(op, proof))
             .try_fold(Gas::from(0), |total, gas| total.checked_add(gas?))
     }
 
@@ -428,7 +428,7 @@ impl<State: VerificationState> GasCalculator for SignedMantleTx<State> {
     }
 }
 
-fn signed_op_execution_gas<Constants: GasConstants>(
+fn signed_op_execution_gas<Profile: GasProfile>(
     op: &Op,
     proof: &OpProof,
 ) -> Result<Gas, GasOverflow> {
@@ -440,12 +440,12 @@ fn signed_op_execution_gas<Constants: GasConstants>(
             Op::ChannelConfig(_) | Op::ChannelWithdraw(_) | Op::ChannelTransfer(_),
             OpProof::ChannelMultiSigProof(proof),
         ) => proof.signatures().len(),
-        _ => return Ok(op.execution_gas::<Constants>()),
+        _ => return Ok(op.execution_gas::<Profile>()),
     };
     let multiplier = Value::try_from(signature_count)
         .expect("channel multi-signature proofs are bounded to u16::MAX signatures");
 
-    op.execution_gas::<Constants>().checked_mul(multiplier)
+    op.execution_gas::<Profile>().checked_mul(multiplier)
 }
 
 impl<State: VerificationState> StorageSize for SignedMantleTx<State> {
@@ -636,7 +636,7 @@ mod tests {
     use crate::mantle::{
         Note, NoteId, Utxo,
         channel::Error,
-        gas::MainnetGasConstants,
+        gas::MainnetGasProfile,
         ledger::{Inputs, Outputs, OutputsError},
         ops::{
             channel::{
@@ -702,7 +702,7 @@ mod tests {
         );
 
         let gas = mantle_tx
-            .minimum_execution_gas_consumption::<MainnetGasConstants>(&context)
+            .minimum_execution_gas_consumption::<MainnetGasProfile>(&context)
             .unwrap();
 
         let expected_config_gas = u64::from(config_threshold) * 56;
@@ -753,7 +753,7 @@ mod tests {
         );
 
         let gas_prices = GasPrices::new(1, 0);
-        let gas = GasCalculator::execution_gas_consumption::<MainnetGasConstants>(
+        let gas = TxGasCalculator::execution_gas_consumption::<MainnetGasProfile>(
             &signed_tx,
             &gas_prices,
         )

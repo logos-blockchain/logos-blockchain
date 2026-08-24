@@ -448,8 +448,8 @@ impl NetworkBehaviour for Behaviour {
                 Ok(request_stream) => {
                     self.handle_blocks_request_available(request_stream);
                 }
-                Err(e) => {
-                    error!("Error while processing block download request: {}", e);
+                Err(err) => {
+                    error!(%err, "failed to send a block download request");
                 }
             }
 
@@ -461,8 +461,8 @@ impl NetworkBehaviour for Behaviour {
                 Ok(request_stream) => {
                     self.handle_tip_request_available(request_stream);
                 }
-                Err(e) => {
-                    error!("Error while processing tip request: {}", e);
+                Err(err) => {
+                    error!(%err, "failed to send a tip request");
                 }
             }
 

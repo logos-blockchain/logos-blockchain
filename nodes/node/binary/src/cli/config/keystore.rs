@@ -23,14 +23,16 @@ impl KeyTitle {
     pub const BLEND_ZK: &str = "BlendZk";
     pub const LEADER_FUNDING: &str = "LeaderFunding";
     pub const NETWORK_SWARM: &str = "NetworkSwarm";
+    pub const POW_CLAIM: &str = "PoWClaim";
     pub const SDP_FUNDING: &str = "SdpFunding";
     pub const VAUCHER_MASTER: &str = "VaucherMaster";
     pub const STAKE: &str = "Stake";
 
     pub const PREDEFINED_ED25519: [&'static str; 2] = [Self::BLEND_SIGNING, Self::NETWORK_SWARM];
-    pub const PREDEFINED_ZK: [&'static str; 5] = [
+    pub const PREDEFINED_ZK: [&'static str; 6] = [
         Self::BLEND_ZK,
         Self::LEADER_FUNDING,
+        Self::POW_CLAIM,
         Self::SDP_FUNDING,
         Self::VAUCHER_MASTER,
         Self::STAKE,

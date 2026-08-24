@@ -27,6 +27,19 @@ cryptarchia:
     numerator: 1
     denominator: 30
   learning_rate: 1.0
+  uncle_reference_window_in_block: 12
+  pow_config:
+    blend:
+      # BLEND_DIFFICULTY_BASE, as the exponent n in p / 2^n: the Blend PoW
+      # threshold at the reference load. Fixed by the EmPoWering
+      # specification from a measurement on the target hardware itself
+      # (Raspberry Pi 5, one core), at which one solution is around fifty
+      # seconds of work.
+      base_difficulty: 19
+      target_transactions_per_block: 512
+      max_step: 2
+      damping_num: 1
+      damping_den_offset: 1
   sdp_config:
     service_params:
       BN:
@@ -41,13 +54,14 @@ cryptarchia:
       version: Bedrock
       parent_block: '0000000000000000000000000000000000000000000000000000000000000000'
       slot: 0
-      block_root: b5f8787ac23674822414c70eea15d842da38f2e806ede1a73cf7b5cf0277da07
+      body_root: 273a6e9869625d85c45e53afff1d3100aec613d403be494c173030e6a05e4c9c
       proof_of_leadership:
         proof: '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
         entropy_contribution: '0000000000000000000000000000000000000000000000000000000000000000'
         leader_key: '0000000000000000000000000000000000000000000000000000000000000000'
         voucher_cm: '0000000000000000000000000000000000000000000000000000000000000000'
     signature: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+    uncle_headers: []
     transactions: []
   faucet_pk: 0000000000000000000000000000000000000000000000000000000000000000
 time:

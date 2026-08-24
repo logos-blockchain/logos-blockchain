@@ -5,14 +5,12 @@ use std::collections::HashMap;
 use lb_core::mantle::{
     Note, Op,
     transactions::{
-        GENESIS_EXECUTION_GAS_PRICE, GasPrices, MantleTxBuilder, MantleTxContext,
-        MantleTxGasContext, mantle_tx::MantleTx as _,
+        GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext, mantle_tx::MantleTx as _,
     },
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 
 use super::error::WalletTransactionError;
-
 pub struct WalletTransactionIntent {
     tx_builder: MantleTxBuilder,
     context: MantleTxContext,
@@ -42,15 +40,12 @@ impl WalletTransactionIntent {
         Ok(Self::new(tx_builder, context, sender_output_total))
     }
 
-    pub fn transfer(
-        receivers: &[(ZkPublicKey, u64)],
-        storage_gas_price: u64,
-    ) -> Result<Self, WalletTransactionError> {
+    pub fn transfer(receivers: &[(ZkPublicKey, u64)]) -> Result<Self, WalletTransactionError> {
         let empty_context = MantleTxContext {
             gas_context: MantleTxGasContext::new(
                 HashMap::new(),
                 HashMap::new(),
-                GasPrices::new(GENESIS_EXECUTION_GAS_PRICE.into_inner(), storage_gas_price),
+                GasPrices::default(),
             ),
             ..MantleTxContext::default()
         };
@@ -63,6 +58,14 @@ impl WalletTransactionIntent {
         Self::from_builder(tx_builder, empty_context)
     }
 
+    #[must_use]
+    pub fn with_gas_prices(mut self, gas_prices: GasPrices) -> Self {
+        self.context.gas_context =
+            MantleTxGasContext::new(HashMap::new(), HashMap::new(), gas_prices);
+        self
+    }
+
+    #[must_use]
     pub(super) fn into_parts(self) -> (MantleTxBuilder, MantleTxContext, u64) {
         (self.tx_builder, self.context, self.sender_output_total)
     }

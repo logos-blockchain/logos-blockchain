@@ -12,8 +12,8 @@ use overwatch::{
 };
 
 use crate::{
-    core::{network::NetworkAdapter, service_components::MessageComponents},
-    message::NetworkInfo,
+    core::{dispatcher::PayloadDispatcher, service_components::MessageComponents},
+    message::{BlendPayload, NetworkInfo},
     modes::Error,
 };
 
@@ -25,7 +25,7 @@ pub struct BroadcastMode<Adapter, NodeId, RuntimeServiceId> {
 
 impl<Adapter, NodeId, RuntimeServiceId> BroadcastMode<Adapter, NodeId, RuntimeServiceId>
 where
-    Adapter: NetworkAdapter<RuntimeServiceId> + Send + Sync,
+    Adapter: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
 {
     pub async fn new<NetworkService>(
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
@@ -35,7 +35,13 @@ where
     where
         NetworkService:
             ServiceData<Message = BackendNetworkMsg<Adapter::Backend, RuntimeServiceId>>,
-        RuntimeServiceId: AsServiceId<NetworkService> + Debug + Display + Send + Sync + 'static,
+        RuntimeServiceId: AsServiceId<NetworkService>
+            + AsServiceId<Adapter::MempoolService>
+            + Debug
+            + Display
+            + Send
+            + Sync
+            + 'static,
     {
         wait_until_services_are_ready!(
             &overwatch_handle,
@@ -44,7 +50,8 @@ where
         )
         .await?;
         let relay = overwatch_handle.relay::<NetworkService>().await?;
-        let adapter = Adapter::new(relay, network_settings);
+        let mempool_relay = overwatch_handle.relay::<Adapter::MempoolService>().await?;
+        let adapter = Adapter::new(relay, mempool_relay, network_settings);
         Ok(Self {
             adapter,
             node_id,
@@ -55,13 +62,13 @@ where
 
 impl<Adapter, NodeId, RuntimeServiceId> BroadcastMode<Adapter, NodeId, RuntimeServiceId>
 where
-    Adapter: NetworkAdapter<RuntimeServiceId> + Send + Sync + 'static,
+    Adapter: PayloadDispatcher<RuntimeServiceId> + Send + Sync + 'static,
     NodeId: Clone + Send + Sync,
     RuntimeServiceId: Send + Sync + 'static,
 {
     pub async fn handle_inbound_message<Message>(&self, message: Message) -> Result<(), Error>
     where
-        Message: MessageComponents<NodeId, Payload: Into<Vec<u8>>> + Send + Sync + 'static,
+        Message: MessageComponents<NodeId, Payload: Into<BlendPayload>> + Send + Sync + 'static,
     {
         match message.try_into_network_info_request() {
             Ok(reply) => {
@@ -71,10 +78,20 @@ where
                 })));
                 Ok(())
             }
-            Err(message) => {
-                self.adapter.broadcast(message.into_payload().into()).await;
-                Ok(())
-            }
+            // Nothing waits for a `PoW` solution here: a node in broadcast mode
+            // does no blending, so a transaction goes straight to the mempool
+            // instead of queueing for one.
+            Err(message) => match message.try_into_pending_transactions_request() {
+                Ok(reply) => {
+                    drop(reply.send(Vec::new()));
+                    Ok(())
+                }
+                Err(message) => {
+                    // Forward directly to the dispatcher.
+                    self.adapter.dispatch(message.into_payload().into()).await;
+                    Ok(())
+                }
+            },
         }
     }
 }
@@ -97,6 +114,7 @@ pub mod tests {
     use tracing::{debug, info};
 
     use super::*;
+    use crate::test_utils::mempool::TestMempoolService;
 
     #[test_log::test(test)]
     fn broadcast_mode() {
@@ -113,7 +131,7 @@ pub mod tests {
             .unwrap();
 
             // Create the BroadcastMode
-            let mut mode = BroadcastMode::<TestNetworkAdapter, (), RuntimeServiceId>::new::<
+            let mut mode = BroadcastMode::<TestPayloadDispatcher, (), RuntimeServiceId>::new::<
                 TestNetworkService,
             >(app.handle(), (), ())
             .await
@@ -133,7 +151,7 @@ pub mod tests {
             );
 
             // Check if the mode can be created again.
-            let mut mode = BroadcastMode::<TestNetworkAdapter, (), RuntimeServiceId>::new::<
+            let mut mode = BroadcastMode::<TestPayloadDispatcher, (), RuntimeServiceId>::new::<
                 TestNetworkService,
             >(app.handle(), (), ())
             .await
@@ -155,6 +173,7 @@ pub mod tests {
     #[overwatch::derive_services]
     struct Services {
         network: TestNetworkService,
+        mempool: TestMempoolService<RuntimeServiceId>,
     }
 
     pub struct TestNetworkService {
@@ -226,7 +245,7 @@ pub mod tests {
         }
     }
 
-    pub struct TestNetworkAdapter {
+    pub struct TestPayloadDispatcher {
         relay: OutboundRelay<
             <NetworkService<TestNetworkBackend, RuntimeServiceId> as ServiceData>::Message,
         >,
@@ -235,14 +254,19 @@ pub mod tests {
     }
 
     #[async_trait::async_trait]
-    impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for TestNetworkAdapter {
+    impl<RuntimeServiceId> PayloadDispatcher<RuntimeServiceId> for TestPayloadDispatcher
+    where
+        RuntimeServiceId: Send + 'static,
+    {
         type Backend = TestNetworkBackend;
+        type MempoolService = TestMempoolService<RuntimeServiceId>;
         type Settings = ();
 
         fn new(
             relay: OutboundRelay<
                 <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
             >,
+            _mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
             (): Self::Settings,
         ) -> Self {
             let (broadcasted_messages_sender, broadcasted_messages_receiver) = mpsc::channel(100);
@@ -253,8 +277,9 @@ pub mod tests {
             }
         }
 
-        async fn broadcast(&self, message: Vec<u8>) {
-            debug!("Broadcasting message: {message:?}");
+        async fn dispatch(&self, payload: BlendPayload) {
+            debug!("Dispatching payload: {payload:?}");
+            let message = payload.body().to_vec();
             self.relay
                 .send(NetworkMsg::Process(message.clone()))
                 .await
@@ -270,10 +295,19 @@ pub mod tests {
     pub struct TestMessage(Vec<u8>);
 
     impl<NodeId> MessageComponents<NodeId> for TestMessage {
-        type Payload = Vec<u8>;
+        type Payload = BlendPayload;
 
         fn into_payload(self) -> Self::Payload {
-            self.0
+            BlendPayload::BlockProposal(self.0)
+        }
+
+        fn try_into_pending_transactions_request(
+            self,
+        ) -> Result<oneshot::Sender<Vec<Vec<u8>>>, Self>
+        where
+            Self: Sized,
+        {
+            Err(self)
         }
 
         fn try_into_network_info_request(
@@ -287,6 +321,9 @@ pub mod tests {
     }
 
     fn settings() -> ServicesServiceSettings {
-        ServicesServiceSettings { network: () }
+        ServicesServiceSettings {
+            network: (),
+            mempool: (),
+        }
     }
 }

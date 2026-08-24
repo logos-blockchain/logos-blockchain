@@ -1,4 +1,4 @@
-use core::num::{NonZero, NonZeroU32};
+use core::num::{NonZero, NonZeroU32, NonZeroU64};
 use std::collections::HashMap;
 
 use lb_chain_service::Epoch;
@@ -9,6 +9,7 @@ use lb_core::{
 use lb_cryptarchia_engine::{
     Config as ConsensusConfig, average_slots_for_blocks, base_period_length, time::epoch_length,
 };
+use lb_groth16::ModulusShift;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 use serde::{Deserialize, Serialize};
@@ -19,11 +20,14 @@ pub struct Settings {
     pub security_param: NonZeroU32,
     pub slot_activation_coeff: NonNegativeRatio,
     pub learning_rate: NonNegativeF64,
+    /// `W`, the uncle reference window in expected block-intervals.
+    pub uncle_reference_window_in_block: NonZeroU32,
     pub sdp_config: SdpConfig,
     pub gossipsub_protocol: String,
     pub genesis_block: GenesisBlock,
     #[serde(default)]
     pub faucet_pk: Option<ZkPublicKey>,
+    pub pow_config: PoWConfig,
 }
 
 impl Settings {
@@ -52,6 +56,7 @@ impl Settings {
             self.security_param,
             self.slot_activation_coeff,
             self.learning_rate,
+            self.uncle_reference_window_in_block,
         )
     }
 }
@@ -84,4 +89,19 @@ pub struct SdpConfig {
 pub struct ServiceParameters {
     pub inactivity_period: InactivityPeriod,
     pub epoch: Epoch,
+}
+
+// The same as `lb_ledger::config::PoWConfig`.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PoWConfig {
+    pub blend: BlendPoWConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BlendPoWConfig {
+    pub base_difficulty: ModulusShift,
+    pub target_transactions_per_block: NonZeroU64,
+    pub max_step: NonZeroU64,
+    pub damping_num: NonZeroU32,
+    pub damping_den_offset: u32,
 }

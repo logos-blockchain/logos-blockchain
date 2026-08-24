@@ -178,6 +178,7 @@ pub fn apply_wallet_config_to_deployment(deployment: &mut DeploymentPlan, wallet
         &wallet_accounts,
         key_id_for_preload_backend,
         deployment.config.test_context.as_deref(),
+        deployment.config.genesis_time(),
     );
     deployment.config.genesis_block = Some(genesis_block);
 

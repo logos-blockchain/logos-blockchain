@@ -7,7 +7,7 @@ use lb_core::mantle::{
 use lb_key_management_system_service::keys::Ed25519Signature;
 
 use super::{
-    types::{Error, WithdrawArg},
+    types::{ChannelWalletView, Error, WithdrawArg},
     zone_sequencer::ZoneSequencer,
 };
 use crate::{adapter, sequencer::zone_sequencer::PublishReceipt};
@@ -184,5 +184,11 @@ where
         self.sequencer
             .do_publish_atomic_withdraw(inscribe, withdraws)
             .await
+    }
+
+    /// The channel's tracked note set — see [`ZoneSequencer::channel_wallet`].
+    #[must_use]
+    pub fn channel_wallet(&self) -> ChannelWalletView {
+        self.sequencer.channel_wallet()
     }
 }

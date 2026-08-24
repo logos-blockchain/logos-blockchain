@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
+    num::NonZero,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -10,8 +11,10 @@ use cucumber::gherkin::Table;
 use futures::future::try_join_all;
 use hex::ToHex as _;
 use lb_chain_service::{ChainServiceInfo, CryptarchiaInfo, PhaseTag};
+use lb_config::kms::key_id_for_preload_backend;
 use lb_core::mantle::{Utxo, ops::OpId as _, traits::GenesisTx as _};
 use lb_http_api_common::paths::CRYPTARCHIA_INFO;
+use lb_key_management_system_service::{backend::preload::KeyId, keys::Key};
 use lb_libp2p::PeerId;
 use lb_node::config::{
     DeploymentSettings, RunConfig,
@@ -649,6 +652,18 @@ pub async fn start_node(
     let runtime_dir_prefix = format!("{node_name}_");
     let final_dir_ignore_list = matching_child_dirs(&persist_dir, &runtime_dir_prefix);
     let tokio_console_node = startup_settings.tokio_console_node.clone();
+    let scenario_wallet_key_ids = world
+        .wallet_accounts
+        .values()
+        .map(wallet_account_key_id)
+        .chain(
+            world
+                .fee_state
+                .wallet_account
+                .iter()
+                .map(wallet_account_key_id),
+        )
+        .collect();
     let start_options = StartNodeOptions::default()
         .with_peers(startup_settings.peer_selection)
         .with_persist_dir(persist_dir)
@@ -663,6 +678,7 @@ pub async fn start_node(
                 &startup_settings.user_config_overrides,
                 &startup_settings.deployment_config_overrides,
                 startup_settings.tokio_console_node.as_ref(),
+                &scenario_wallet_key_ids,
             )?;
             Ok(config)
         });
@@ -685,6 +701,7 @@ pub async fn start_node(
         warn!(target: TARGET, "Step `{step}` error: {e}");
     })?;
     let node_runtime_dir = world.scenario_base_dir.join(node_final_dir.clone());
+    populate_slots_per_epoch_from_deployment(world, &node_runtime_dir)?;
     let started_node_name = started_node.name.clone();
     info!(
         target: TARGET,
@@ -711,6 +728,7 @@ pub async fn start_node(
         restore_node_state_from_snapshot(&node_snapshot, &node_runtime_dir).inspect_err(|e| {
             warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
+        populate_slots_per_epoch_from_deployment(world, &node_runtime_dir)?;
 
         let restart_result = {
             let cluster = world.local_cluster.as_ref().expect("local cluster checked");
@@ -1036,6 +1054,7 @@ fn prepare_config_patch(
     user_config_overrides: &[ConfigOverride],
     deployment_config_overrides: &[ConfigOverride],
     tokio_console_node: Option<&TokioConsoleProfileNode>,
+    scenario_wallet_key_ids: &HashSet<KeyId>,
 ) -> Result<(), StepError> {
     if join_external_network {
         config.deployment = deployment_override
@@ -1075,7 +1094,37 @@ fn prepare_config_patch(
 
     apply_user_config_overrides(config, user_config_overrides)?;
     apply_deployment_config_overrides(config, deployment_config_overrides)?;
+    if join_external_network {
+        remove_external_scenario_wallet_keys(config, scenario_wallet_key_ids);
+    }
     Ok(())
+}
+
+fn wallet_account_key_id(account: &WalletAccount) -> KeyId {
+    let key: Key = account.secret_key.clone().into();
+    key_id_for_preload_backend(&key)
+}
+
+fn remove_external_scenario_wallet_keys(
+    config: &mut RunConfig,
+    scenario_wallet_key_ids: &HashSet<KeyId>,
+) {
+    remove_external_scenario_wallet_keys_from_maps(
+        &mut config.user.wallet.known_keys,
+        &mut config.user.kms.backend.keys,
+        scenario_wallet_key_ids,
+    );
+}
+
+fn remove_external_scenario_wallet_keys_from_maps(
+    known_keys: &mut HashMap<KeyId, lb_key_management_system_service::keys::ZkPublicKey>,
+    kms_keys: &mut HashMap<KeyId, Key>,
+    scenario_wallet_key_ids: &HashSet<KeyId>,
+) {
+    for key_id in scenario_wallet_key_ids {
+        known_keys.remove(key_id);
+        kms_keys.remove(key_id);
+    }
 }
 
 fn load_run_config(path: &Path) -> Result<DeploymentSettings, StepError> {
@@ -1085,6 +1134,41 @@ fn load_run_config(path: &Path) -> Result<DeploymentSettings, StepError> {
     serde_yaml::from_str::<DeploymentSettings>(&text).map_err(|e| StepError::LogicalError {
         message: format!("Failed to parse '{}': {e}", path.display()),
     })
+}
+
+fn populate_slots_per_epoch_from_deployment(
+    world: &mut CucumberWorld,
+    node_runtime_dir: &Path,
+) -> Result<(), StepError> {
+    let path = node_runtime_dir.join("deployment.yaml");
+    let text = fs::read_to_string(&path).map_err(|source| StepError::LogicalError {
+        message: format!(
+            "failed to read effective deployment config '{}': {source}",
+            path.display()
+        ),
+    })?;
+    let deployment = serde_yaml::from_str::<DeploymentSettings>(&text).map_err(|source| {
+        StepError::LogicalError {
+            message: format!(
+                "failed to parse effective deployment config '{}': {source}",
+                path.display()
+            ),
+        }
+    })?;
+    let slots_per_epoch = deployment.cryptarchia.slots_per_epoch();
+    let slots_per_epoch = NonZero::new(slots_per_epoch).ok_or_else(|| StepError::LogicalError {
+        message: format!(
+            "effective deployment config '{}' has zero slots per epoch",
+            path.display()
+        ),
+    })?;
+    world.slots_per_epoch = slots_per_epoch;
+    info!(
+        target: TARGET,
+        "Loaded effective epoch configuration from '{}': slots_per_epoch={slots_per_epoch}",
+        path.display()
+    );
+    Ok(())
 }
 
 // Ensure this node is ready, and achieved `Mode::OnLine` if it is a bootstrap
@@ -1977,5 +2061,105 @@ mod wallet_name_tests {
             "NODE_1_WALLET_FUNDING"
         );
         assert_eq!(generic_key_index, 0);
+    }
+}
+
+#[cfg(test)]
+mod scenario_wallet_key_tests {
+    use lb_key_management_system_service::keys::{Ed25519Key, secured_key::SecuredKey as _};
+
+    use super::*;
+
+    #[test]
+    fn removes_only_external_scenario_wallet_keys() {
+        let mut kms_keys = HashMap::new();
+        let mut known_keys = HashMap::new();
+        let scenario_accounts = [
+            WalletAccount::deterministic(100, 0, true).expect("account"),
+            WalletAccount::deterministic(101, 0, true).expect("account"),
+        ];
+        let sponsored_fee_account =
+            WalletAccount::deterministic(103, 0, true).expect("fee account");
+        let scenario_key_ids = scenario_accounts
+            .iter()
+            .map(wallet_account_key_id)
+            .chain(std::iter::once(wallet_account_key_id(
+                &sponsored_fee_account,
+            )))
+            .collect::<HashSet<_>>();
+
+        for account in scenario_accounts
+            .iter()
+            .chain(std::iter::once(&sponsored_fee_account))
+        {
+            let key: Key = account.secret_key.clone().into();
+            let key_id = key_id_for_preload_backend(&key);
+            kms_keys.insert(key_id.clone(), key);
+            known_keys.insert(key_id, account.secret_key.as_public_key());
+        }
+
+        let unrelated = WalletAccount::deterministic(102, 0, true).expect("account");
+        let unrelated_key: Key = unrelated.secret_key.clone().into();
+        let unrelated_key_id = key_id_for_preload_backend(&unrelated_key);
+        kms_keys.insert(unrelated_key_id.clone(), unrelated_key);
+        known_keys.insert(
+            unrelated_key_id.clone(),
+            unrelated.secret_key.as_public_key(),
+        );
+
+        let ed25519_key: Key = Ed25519Key::from_bytes(&[9; 32]).into();
+        let ed25519_key_id = key_id_for_preload_backend(&ed25519_key);
+        kms_keys.insert(ed25519_key_id.clone(), ed25519_key);
+        let voucher_master = WalletAccount::deterministic(104, 0, true).expect("account");
+        let voucher_key: Key = voucher_master.secret_key.clone().into();
+        let voucher_master_key_id = key_id_for_preload_backend(&voucher_key);
+        kms_keys.insert(voucher_master_key_id.clone(), voucher_key);
+        known_keys.insert(
+            voucher_master_key_id.clone(),
+            voucher_master.secret_key.as_public_key(),
+        );
+
+        remove_external_scenario_wallet_keys_from_maps(
+            &mut known_keys,
+            &mut kms_keys,
+            &scenario_key_ids,
+        );
+        remove_external_scenario_wallet_keys_from_maps(
+            &mut known_keys,
+            &mut kms_keys,
+            &scenario_key_ids,
+        );
+
+        for key_id in &scenario_key_ids {
+            assert!(!kms_keys.contains_key(key_id));
+            assert!(!known_keys.contains_key(key_id));
+        }
+        assert!(kms_keys.contains_key(&unrelated_key_id));
+        assert!(known_keys.contains_key(&unrelated_key_id));
+        assert!(kms_keys.contains_key(&ed25519_key_id));
+        assert!(kms_keys.contains_key(&voucher_master_key_id));
+        assert!(known_keys.contains_key(&voucher_master_key_id));
+    }
+
+    #[test]
+    fn empty_scenario_wallet_set_changes_nothing() {
+        let mut kms_keys = HashMap::new();
+        let mut known_keys = HashMap::new();
+        let account = WalletAccount::deterministic(105, 0, true).expect("account");
+        let key: Key = account.secret_key.clone().into();
+        let key_id = key_id_for_preload_backend(&key);
+        kms_keys.insert(key_id.clone(), key);
+        known_keys.insert(key_id, account.secret_key.as_public_key());
+        let before_kms = kms_keys.clone();
+        let before_known_keys = known_keys.clone();
+
+        remove_external_scenario_wallet_keys_from_maps(
+            &mut known_keys,
+            &mut kms_keys,
+            &HashSet::new(),
+        );
+
+        assert_eq!(kms_keys, before_kms);
+        assert_eq!(known_keys, before_known_keys);
     }
 }

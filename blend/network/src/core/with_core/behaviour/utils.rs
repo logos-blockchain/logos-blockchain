@@ -1,10 +1,12 @@
 use core::{convert::Infallible, num::NonZeroU64, task::Waker};
-use std::collections::VecDeque;
+use std::{collections::VecDeque, sync::Arc};
 
 use either::Either;
-use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedSignature;
+use lb_blend_message::encap::{
+    ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader,
+};
 use lb_blend_scheduling::{
-    deserialize_encapsulated_message, serialize_encapsulated_message_with_verified_signature,
+    deserialize_encapsulated_message, serialize_encapsulated_message_with_verified_public_header,
 };
 use lb_cryptarchia_engine::Epoch;
 use libp2p::{
@@ -12,19 +14,26 @@ use libp2p::{
     swarm::{ConnectionId, NotifyHandler, ToSwarm},
 };
 
-use crate::core::with_core::{
-    behaviour::{Event, handler::FromBehaviour, message_cache::MessageCache},
-    error::{ReceiveError, SendError},
+use crate::core::{
+    poq_verification::{PendingPoQVerifications, spawn_poq_verification},
+    with_core::{
+        behaviour::{Event, handler::FromBehaviour, message_cache::MessageCache},
+        error::{ReceiveError, SendError},
+    },
 };
 
-/// Forwards a message with a valid signature to the given peer connections, if
-/// it hasn't been forwarded already.
+/// Forwards a message with a verified public header to the given peer
+/// connections, if it hasn't been forwarded already.
 ///
 /// The message cache is also updated accordingly to mark the sent message as
 /// processed if it was sent to at least one peer, or to ignore it if it has
 /// already been forwarded before.
+///
+/// The input type is [`EncapsulatedMessageWithVerifiedPublicHeader`] because a
+/// message is relayed to the rest of the network only after its `PoQ` has been
+/// verified, which happens in the Blend service.
 pub fn forward_validated_message_and_update_cache<'epoch, PeerConnections>(
-    message: &EncapsulatedMessageWithVerifiedSignature,
+    message: &EncapsulatedMessageWithVerifiedPublicHeader,
     peer_connections: PeerConnections,
     events_queue: &'epoch mut VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     message_cache: &'epoch mut MessageCache,
@@ -42,7 +51,7 @@ where
         return Err(SendError::NoPeers);
     }
 
-    let serialized_message = serialize_encapsulated_message_with_verified_signature(message);
+    let serialized_message = serialize_encapsulated_message_with_verified_public_header(message);
 
     peer_connections.for_each(|(peer_id, connection_id)| {
         tracing::trace!("Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver message.");
@@ -60,8 +69,8 @@ where
     Ok(())
 }
 
-/// Validates the signature of a received message, and notifies the swarm about
-/// it if it hasn't been processed already.
+/// Validates the signature of a received message and dispatches the
+/// verification of its `PoQ`, if it hasn't been processed already.
 ///
 /// The message cache is updated accordingly to mark the message as processed if
 /// it is valid and hasn't been processed before, or to ignore it if it has
@@ -69,15 +78,26 @@ where
 /// received message from the same peer, it is also ignored and an error is
 /// returned to avoid processing the same message multiple times from the same
 /// peer, which could be a sign of a malicious peer.
-pub fn handle_received_serialized_encapsulated_message_and_update_cache(
+///
+/// The message is only reported to the swarm — and only entered into the
+/// message cache — once its `PoQ` verifies, which happens off the task polling
+/// this behaviour. Entering it any earlier would let anyone claim a nullifier
+/// by replaying someone else's `PoQ` under their own signing key, suppressing
+/// the genuine message that carries it.
+#[expect(clippy::too_many_arguments, reason = "categorize args")]
+pub fn handle_received_serialized_encapsulated_message_and_update_cache<Verifier>(
     serialized_message: &[u8],
     message_cache: &mut MessageCache,
-    sender: PeerId,
-    events_queue: &mut VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
+    (sender, connection_id): (PeerId, ConnectionId),
+    pending_verifications: &PendingPoQVerifications,
     waker: &mut Option<Waker>,
     epoch: Epoch,
     num_blend_layers: NonZeroU64,
-) -> Result<(), ReceiveError> {
+    proofs_verifier: &Arc<Verifier>,
+) -> Result<(), ReceiveError>
+where
+    Verifier: ProofsVerifier + Send + Sync + 'static,
+{
     // Deserialize the message.
     let deserialized_encapsulated_message =
         deserialize_encapsulated_message(serialized_message, &num_blend_layers)
@@ -95,22 +115,21 @@ pub fn handle_received_serialized_encapsulated_message_and_update_cache(
         return Ok(());
     }
 
-    // Verify the message public header
+    // Verify the message signature
     let validated_message = deserialized_encapsulated_message
         .verify_header_signature()
         .map_err(|_| ReceiveError::InvalidHeaderSignature)?;
 
-    // Notify the swarm about the received message, so that it can be further
-    // processed by the core protocol module.
-    message_cache.mark_message_as_processed(&validated_message);
-    events_queue.push_back(ToSwarm::GenerateEvent(Event::Message {
-        message: Box::new(validated_message),
-        sender,
+    // Verify the `PoQ` before the message is reported to the swarm, entered into
+    // the cache, and hence before it can be relayed any further.
+    spawn_poq_verification(
+        pending_verifications,
+        validated_message,
+        (sender, connection_id),
         epoch,
-    }));
-    if let Some(waker) = waker.take() {
-        waker.wake();
-    }
+        proofs_verifier,
+        waker,
+    );
 
     Ok(())
 }

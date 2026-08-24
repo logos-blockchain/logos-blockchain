@@ -14,6 +14,12 @@ pub struct CryptarchiaConsensusState {
     pub(crate) lib_ledger_state: LedgerState,
     pub(crate) lib_block_length: u64,
     pub(crate) lib_block_slot: lb_cryptarchia_engine::Slot,
+    /// The uncle slots in the LIB header.
+    /// These are unlikely to be used for future uncle selections,
+    /// given the depth of LIB. But, we save them because any blocks
+    /// in cryptarchia-engine must be restored to the same state as before
+    /// shutdown.
+    pub(crate) lib_block_uncle_slots: lb_cryptarchia_engine::UncleSlots,
     pub(crate) genesis_id: HeaderId,
     /// Set of blocks that have been pruned from the engine but have not yet
     /// been deleted from the persistence layer because of some unexpected
@@ -47,6 +53,7 @@ impl CryptarchiaConsensusState {
         };
         let lib_block_length = lib.length();
         let lib_block_slot = lib.slot();
+        let lib_block_uncle_slots = lib.uncle_slots().clone();
 
         Ok(Self {
             tip: cryptarchia.consensus.tip_branch().id(),
@@ -55,6 +62,7 @@ impl CryptarchiaConsensusState {
             lib_ledger_state,
             lib_block_length,
             lib_block_slot,
+            lib_block_uncle_slots,
             storage_blocks_to_remove,
             last_engine_state: Some(LastEngineState {
                 timestamp: SystemTime::now(),
@@ -98,6 +106,7 @@ impl ServiceState for CryptarchiaConsensusState {
             lib_ledger_state,
             lib_block_length: 0,
             lib_block_slot: lb_cryptarchia_engine::Slot::default(),
+            lib_block_uncle_slots: lb_cryptarchia_engine::UncleSlots::default(),
             genesis_id,
             storage_blocks_to_remove: HashSet::new(),
             last_engine_state: None,
@@ -122,9 +131,12 @@ mod tests {
         codec::{DeserializeOp as _, SerializeOp as _},
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
-    use lb_cryptarchia_engine::State::Bootstrapping;
-    use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards};
-    use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+    use lb_cryptarchia_engine::{State::Bootstrapping, UncleSlots};
+    use lb_ledger::{
+        config::{BlendPoWConfig, ModulusShift, PoWConfig},
+        mantle::sdp::{ServiceRewardsParameters, rewards},
+    };
+    use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
     use super::*;
 
@@ -138,6 +150,7 @@ mod tests {
             security_param,
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
+            NonZero::new(12).unwrap(),
         );
         let epoch_config = lb_cryptarchia_engine::EpochConfig {
             epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
@@ -164,7 +177,7 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
@@ -177,6 +190,15 @@ mod tests {
                 },
             },
             faucet_pk: None,
+            pow_config: PoWConfig {
+                blend: BlendPoWConfig {
+                    base_difficulty: ModulusShift::new::<19>(),
+                    damping_den_offset: 0,
+                    damping_num: 1.try_into().unwrap(),
+                    max_step: 1.try_into().unwrap(),
+                    target_transactions_per_block: 1.try_into().unwrap(),
+                },
+            },
         };
 
         let (cryptarchia_engine, pruned_blocks) = {
@@ -188,6 +210,7 @@ mod tests {
                 Bootstrapping,
                 0.into(),
                 0,
+                UncleSlots::default(),
             );
 
             //      b4 - b5
@@ -199,32 +222,72 @@ mod tests {
             // Add 3 more blocks to canonical chain. `b0`, `b1`, `b2`, and `b3` represent
             // the canonical chain now.
             cryptarchia
-                .receive_block([1; 32].into(), genesis_header_id, 1.into())
+                .receive_block(
+                    [1; 32].into(),
+                    genesis_header_id,
+                    1.into(),
+                    UncleSlots::default(),
+                )
                 .expect("Block 1 to be added successfully on top of block 0.");
             cryptarchia
-                .receive_block([2; 32].into(), [1; 32].into(), 2.into())
+                .receive_block(
+                    [2; 32].into(),
+                    [1; 32].into(),
+                    2.into(),
+                    UncleSlots::default(),
+                )
                 .expect("Block 2 to be added successfully on top of block 1.");
             cryptarchia
-                .receive_block([3; 32].into(), [2; 32].into(), 3.into())
+                .receive_block(
+                    [3; 32].into(),
+                    [2; 32].into(),
+                    3.into(),
+                    UncleSlots::default(),
+                )
                 .expect("Block 3 to be added successfully on top of block 2.");
             // Add a 2-block fork from genesis
             cryptarchia
-                .receive_block([4; 32].into(), genesis_header_id, 1.into())
+                .receive_block(
+                    [4; 32].into(),
+                    genesis_header_id,
+                    1.into(),
+                    UncleSlots::default(),
+                )
                 .expect("Block 4 to be added successfully on top of block 0.");
             cryptarchia
-                .receive_block([5; 32].into(), [4; 32].into(), 2.into())
+                .receive_block(
+                    [5; 32].into(),
+                    [4; 32].into(),
+                    2.into(),
+                    UncleSlots::default(),
+                )
                 .expect("Block 5 to be added successfully on top of block 4.");
             // Add a second single-block fork from genesis
             cryptarchia
-                .receive_block([6; 32].into(), genesis_header_id, 1.into())
+                .receive_block(
+                    [6; 32].into(),
+                    genesis_header_id,
+                    1.into(),
+                    UncleSlots::default(),
+                )
                 .expect("Block 6 to be added successfully on top of block 0.");
             // Add a single-block fork from the block after genesis (block `1`)
             cryptarchia
-                .receive_block([7; 32].into(), [1; 32].into(), 2.into())
+                .receive_block(
+                    [7; 32].into(),
+                    [1; 32].into(),
+                    2.into(),
+                    UncleSlots::default(),
+                )
                 .expect("Block 7 to be added successfully on top of block 1.");
             // Add a single-block fork from the second block after genesis (block `2`)
             cryptarchia
-                .receive_block([8; 32].into(), [2; 32].into(), 3.into())
+                .receive_block(
+                    [8; 32].into(),
+                    [2; 32].into(),
+                    3.into(),
+                    UncleSlots::default(),
+                )
                 .expect("Block 8 to be added successfully on top of block 2.");
 
             cryptarchia.online()
@@ -270,6 +333,7 @@ mod tests {
             security_param,
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
+            NonZero::new(12).unwrap(),
         );
         let epoch_config = lb_cryptarchia_engine::EpochConfig {
             epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
@@ -296,7 +360,7 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
@@ -309,6 +373,15 @@ mod tests {
                 },
             },
             faucet_pk: None,
+            pow_config: PoWConfig {
+                blend: BlendPoWConfig {
+                    base_difficulty: ModulusShift::new::<19>(),
+                    damping_den_offset: 0,
+                    damping_num: 1.try_into().unwrap(),
+                    max_step: 1.try_into().unwrap(),
+                    target_transactions_per_block: 1.try_into().unwrap(),
+                },
+            },
         };
 
         // Build a chain: b0 (genesis) - b1 - b2 - b3 - b4 - b5
@@ -319,13 +392,16 @@ mod tests {
             Bootstrapping,
             0.into(),
             0,
+            UncleSlots::default(),
         );
         let block_ids: Vec<HeaderId> = (1..=5u8).map(|i| [i; 32].into()).collect();
         let mut parent = genesis_header_id;
         for (i, &block_id) in block_ids.iter().enumerate() {
             let slot = (i as u64 + 1).into();
+            let uncle_slots =
+                UncleSlots::try_from(vec![lb_cryptarchia_engine::Slot::from(i as u64)]).unwrap();
             engine
-                .receive_block(block_id, parent, slot)
+                .receive_block(block_id, parent, slot, uncle_slots)
                 .unwrap_or_else(|_| panic!("Block {block_id} should be added successfully"));
             parent = block_id;
         }
@@ -369,7 +445,16 @@ mod tests {
             *engine.state(),
             saved_state.lib_block_slot,
             saved_state.lib_block_length,
+            saved_state.lib_block_uncle_slots.clone(),
         );
+
+        // Check the restore LIB is the same as before.
+        let restored_lib = restored.consensus.lib_branch();
+        let original_lib = engine.lib_branch();
+        assert_eq!(restored_lib.id(), original_lib.id());
+        assert_eq!(restored_lib.slot(), original_lib.slot());
+        assert_eq!(restored_lib.length(), original_lib.length());
+        assert_eq!(restored_lib.uncle_slots(), original_lib.uncle_slots());
 
         // Replay blocks between LIB and tip (as initialize_cryptarchia does).
         // Walk from tip back to LIB to find the blocks to replay.
@@ -382,11 +467,17 @@ mod tests {
         }
         blocks_to_replay.reverse();
         for (block_id, slot) in blocks_to_replay {
-            let parent_id = engine.branches().get(&block_id).unwrap().parent();
+            let branch = engine.branches().get(&block_id).unwrap();
+            let parent_id = branch.parent();
+            let uncle_slots = branch.uncle_slots().clone();
             restored
                 .consensus
-                .receive_block(block_id, parent_id, slot)
+                .receive_block(block_id, parent_id, slot, uncle_slots)
                 .unwrap_or_else(|_| panic!("Replay of {block_id} should succeed"));
+            assert_eq!(
+                restored.consensus.branches().get(&block_id).unwrap(),
+                engine.branches().get(&block_id).unwrap()
+            );
         }
 
         let info_after = restored.info();

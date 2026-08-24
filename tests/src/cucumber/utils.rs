@@ -6,7 +6,11 @@ use std::{
 };
 
 use hex::ToHex as _;
-use lb_core::{codec::SerializeOp as _, mantle::TxHash, sdp::Locator};
+use lb_core::{
+    codec::SerializeOp as _,
+    mantle::{GenesisTime, TxHash},
+    sdp::Locator,
+};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{PeerId, identity, identity::ed25519};
 use lb_node::UserConfig;
@@ -23,13 +27,22 @@ use crate::cucumber::{
 type ScenarioBuilderWith = ScenarioBuilder;
 
 #[must_use]
-pub fn make_builder(topology: &TopologySpec) -> ScenarioBuilderWith {
+pub fn make_builder(
+    topology: &TopologySpec,
+    requested_genesis_time: Option<GenesisTime>,
+) -> ScenarioBuilderWith {
     ScenarioBuilder::deployment_with(|t| {
         let base = match topology.network {
             NetworkKind::Star => t,
         };
-        base.nodes(topology.nodes.get())
-            .scenario_base_dir(topology.scenario_base_dir.clone())
+        let base = base
+            .nodes(topology.nodes.get())
+            .scenario_base_dir(topology.scenario_base_dir.clone());
+        if let Some(genesis_time) = requested_genesis_time {
+            base.with_genesis_time(genesis_time)
+        } else {
+            base
+        }
     })
 }
 

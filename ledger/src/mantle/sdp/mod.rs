@@ -642,7 +642,7 @@ mod tests {
     };
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
-    use lb_utils::math::NonNegativeF64;
+    use lb_utils::math::PositiveF64;
     use num_bigint::BigUint;
 
     use super::*;
@@ -658,7 +658,7 @@ mod tests {
             service_rewards_params: ServiceRewardsParameters {
                 blend: blend::RewardsParameters {
                     rounds_per_epoch: NonZeroU64::new(10).unwrap(),
-                    message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                    message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
                     num_blend_layers: NonZeroU64::new(3).unwrap(),
                     minimum_network_size: NonZeroU64::new(1).unwrap(),
                     data_replication_factor: 0,
@@ -696,6 +696,7 @@ mod tests {
         EpochState {
             epoch,
             nonce: NONCE,
+            blend_pow_difficulty: Fr::ZERO,
             utxos: UtxoTree::default(),
             total_stake: 100,
             lottery_0: LOTTERY_0,
@@ -720,6 +721,7 @@ mod tests {
         EpochState {
             epoch,
             nonce: NONCE,
+            blend_pow_difficulty: Fr::ZERO,
             utxos: UtxoTree::default(),
             total_stake: 100,
             lottery_0: LOTTERY_0,

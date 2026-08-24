@@ -26,15 +26,16 @@ use crate::{
         update_api, update_blend, update_cryptarchia, update_network, update_sdp, update_state,
         update_tracing,
     },
+    version::{HEAD_COMMIT_HASH, HEAD_TAG_NAME, PKG_VERSION, PROFILE, RUSTC_VERSION, TARGET},
 };
 
 fn long_version() -> String {
-    let head_commit_hash = env!("HEAD_COMMIT_HASH");
-    let head_tag_name = env!("HEAD_TAG_NAME");
-    let pkg_version = env!("PKG_VERSION");
-    let target = env!("TARGET");
-    let profile = env!("PROFILE");
-    let rustc_version = env!("RUSTC_VERSION");
+    let head_commit_hash = HEAD_COMMIT_HASH;
+    let head_tag_name = HEAD_TAG_NAME;
+    let pkg_version = PKG_VERSION;
+    let target = TARGET;
+    let profile = PROFILE;
+    let rustc_version = RUSTC_VERSION;
 
     let commit_line = match (head_commit_hash, head_tag_name) {
         (commit_hash, tag_name) if !commit_hash.is_empty() && !tag_name.is_empty() => {

@@ -6,10 +6,13 @@ use std::{
 
 use cucumber::{gherkin::Step, given, then, when};
 use lb_common_http_client::CommonHttpClient;
-use lb_core::codec::DeserializeOp as _;
+use lb_core::{codec::DeserializeOp as _, mantle::GenesisTime};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{Multiaddr, PeerId};
-use lb_testing_framework::USER_CONFIG_FILE;
+use lb_testing_framework::{
+    USER_CONFIG_FILE, configs::deployment::NodeBinaryProfile, ensure_node_binary_built,
+};
+use time::{Duration as TimeDuration, OffsetDateTime};
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
@@ -69,6 +72,117 @@ use crate::{
 const PUBLIC_CRYPTARCHIA_ENDPOINT: &str = "public_cryptarchia_endpoint";
 const PUBLIC_CRYPTARCHIA_ENDPOINT_USERNAME: &str = "username";
 const PUBLIC_CRYPTARCHIA_ENDPOINT_PASSWORD: &str = "password";
+
+fn resolve_step_genesis_time(
+    step_value: &str,
+    now: OffsetDateTime,
+    seconds: i64,
+) -> Result<GenesisTime, StepError> {
+    if seconds < 0 {
+        return Err(StepError::InvalidArgument {
+            message: format!("step `{step_value}` requires a non-negative offset"),
+        });
+    }
+
+    let genesis_datetime = now
+        .checked_add(TimeDuration::seconds(seconds))
+        .ok_or_else(|| StepError::InvalidArgument {
+            message: format!(
+                "step `{step_value}` has an invalid genesis time: offset is out of range"
+            ),
+        })?;
+
+    GenesisTime::try_from(genesis_datetime).map_err(|error| StepError::InvalidArgument {
+        message: format!("step `{step_value}` has an invalid genesis time: {error}"),
+    })
+}
+
+fn validate_genesis_time_change(
+    existing_genesis_time: Option<GenesisTime>,
+    nodes_started: bool,
+    requested_genesis_time: GenesisTime,
+) -> StepResult {
+    if nodes_started && existing_genesis_time != Some(requested_genesis_time) {
+        return Err(StepError::LogicalError {
+            message: "cannot change genesis time after nodes have started".to_owned(),
+        });
+    }
+
+    Ok(())
+}
+
+#[given(expr = "the chain starts {int} seconds from now")]
+#[when(expr = "the chain starts {int} seconds from now")]
+async fn step_chain_starts_from_now(
+    world: &mut CucumberWorld,
+    step: &Step,
+    seconds: i64,
+) -> StepResult {
+    let node_binary_profile = if world.tokio_console_profile_enabled() {
+        NodeBinaryProfile::TokioConsole
+    } else {
+        NodeBinaryProfile::default()
+    };
+    ensure_node_binary_built(&node_binary_profile)
+        .await
+        .map_err(|error| StepError::Preflight {
+            message: format!("failed to resolve/build node binary: {error}"),
+        })?;
+
+    let genesis_time = resolve_step_genesis_time(&step.value, OffsetDateTime::now_utc(), seconds)?;
+    validate_genesis_time_change(
+        world.genesis_time,
+        !world.nodes_info.is_empty(),
+        genesis_time,
+    )?;
+
+    world.set_genesis_time(genesis_time);
+    if world.nodes_info.is_empty() && world.manual_cluster_spec.is_some() {
+        rebuild_pending_local_manual_cluster(world)?;
+    }
+
+    Ok(())
+}
+
+#[then(expr = "the configured genesis time has not passed for {int} seconds")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
+async fn step_genesis_time_has_not_passed(
+    world: &mut CucumberWorld,
+    step: &Step,
+    seconds: u64,
+) -> StepResult {
+    let genesis_time = world.genesis_time.ok_or_else(|| StepError::LogicalError {
+        message: "the scenario has no configured genesis time".to_owned(),
+    })?;
+    let genesis_datetime = OffsetDateTime::from(genesis_time);
+    let timeout = Duration::from_secs(seconds);
+    let started_waiting = Instant::now();
+
+    loop {
+        let now = OffsetDateTime::now_utc();
+        if now >= genesis_datetime {
+            return Err(StepError::StepFail {
+                message: format!(
+                    "Step `{}` failed: configured genesis time {genesis_datetime} had passed at {now}",
+                    step.value
+                ),
+            });
+        }
+
+        if started_waiting.elapsed() >= timeout {
+            info!(
+                target: TARGET,
+                "Configured genesis time {genesis_datetime} remained in the future for {seconds} seconds"
+            );
+            return Ok(());
+        }
+
+        sleep(Duration::from_millis(250)).await;
+    }
+}
 
 #[given(expr = "I have a cluster with capacity of {int} nodes")]
 #[when(expr = "I have a cluster with capacity of {int} nodes")]
@@ -1333,4 +1447,44 @@ async fn step_verify_blend_sdp_declaration_included(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn step_relative_genesis_time_uses_now_plus_offset() {
+        let now = OffsetDateTime::from_unix_timestamp(1_000).expect("valid timestamp");
+
+        let genesis_time =
+            resolve_step_genesis_time("the chain starts 60 seconds from now", now, 60)
+                .expect("offset should produce a valid genesis time");
+
+        assert_eq!(genesis_time, GenesisTime::new(1_060));
+    }
+
+    #[test]
+    fn overflowing_step_relative_genesis_time_is_invalid_argument() {
+        let now = time::Date::MAX.midnight().assume_utc();
+
+        let error = resolve_step_genesis_time("the chain starts 1 seconds from now", now, 1)
+            .expect_err("overflowing offset should fail");
+
+        assert!(matches!(error, StepError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn genesis_time_change_after_nodes_started_is_rejected() {
+        let error = validate_genesis_time_change(
+            Some(GenesisTime::new(1_000)),
+            true,
+            GenesisTime::new(1_001),
+        )
+        .expect_err("genesis time should not change after nodes start");
+
+        assert!(
+            matches!(error, StepError::LogicalError { message } if message == "cannot change genesis time after nodes have started")
+        );
+    }
 }

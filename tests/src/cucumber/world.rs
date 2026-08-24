@@ -15,7 +15,7 @@ use lb_core::{
     codec::DeserializeOp as _,
     header::HeaderId,
     mantle::{
-        SignedMantleTx, Utxo, Value,
+        GenesisTime, SignedMantleTx, Utxo, Value,
         ops::channel::{
             ChannelId, deposit::DepositOp, inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
@@ -834,6 +834,10 @@ pub struct ConsensusLivenessSpec {
     pub lag_allowance: Option<NonZero<u64>>,
 }
 
+/// This default slots per epoch value will be overwritten by scraping the
+/// started node's deployment settings
+const DEFAULT_SLOTS_PER_EPOCH: NonZero<u64> = NonZero::new(1).expect("one is non-zero");
+
 #[derive(World, Derivative)]
 #[derivative(Default)]
 pub struct CucumberWorld {
@@ -841,6 +845,9 @@ pub struct CucumberWorld {
     pub deployer: Option<DeployerKind>,
     /// A unique per-scenario context string used to isolate runtime resources.
     pub test_context: Option<String>,
+    /// Resolved genesis time for this Cucumber scenario attempt. It is set in
+    /// the scenario hook and reused by every deployment build or rebuild.
+    pub genesis_time: Option<GenesisTime>,
     /// Base directory for scenario artifacts like logs and generated configs.
     pub scenario_base_dir: PathBuf,
     /// Automated: Scenario specification
@@ -859,6 +866,10 @@ pub struct CucumberWorld {
     /// Manual: Header id of the locally generated genesis block, when the
     /// cluster deployment carries one.
     pub genesis_block_id: Option<HeaderId>,
+    /// Effective epoch length, populated from the first launched node's
+    /// deployment config.
+    #[derivative(Default(value = "DEFAULT_SLOTS_PER_EPOCH"))]
+    pub slots_per_epoch: NonZero<u64>,
     /// Manual: Optional local cluster instance for scenarios that use the local
     /// deployer.
     #[derivative(Default(value = "None"))]
@@ -905,6 +916,9 @@ pub struct CucumberWorld {
     pub submission_outcomes: HashMap<String, Result<(), String>>,
     /// Manual: Exact signed transactions prepared for later submission.
     pub prepared_transactions: HashMap<String, SignedMantleTx<Preverified>>,
+    /// Manual: Initial fee arithmetic for percentage-funded transactions
+    /// prepared by the fee-market steps.
+    pub prepared_priority_fees: HashMap<String, PreparedPriorityFee>,
     /// Manual: Transaction hashes observed in blocks by the wallet scanner.
     pub observed_transaction_hashes: SharedObservedTransactionHashes,
     /// Manual: Background wallet scanner diagnostics state.
@@ -1046,6 +1060,7 @@ impl Debug for CucumberWorld {
         f.debug_struct("CucumberWorld")
             .field("deployer", &format!("{:?}", self.deployer))
             .field("test_context", &format!("{:?}", self.test_context))
+            .field("genesis_time", &self.genesis_time)
             .field("scenario_base_dir", &self.scenario_base_dir)
             .field("spec", &format!("{:?}", self.spec))
             .field("run", &format!("{:?}", self.run))
@@ -1068,6 +1083,7 @@ impl Debug for CucumberWorld {
                 &format!("{:?}", self.genesis_block_utxos),
             )
             .field("genesis_block_id", &self.genesis_block_id)
+            .field("slots_per_epoch", &self.slots_per_epoch)
             .field("local_cluster", {
                 if self.local_cluster.is_some() {
                     &"Has LbcManualCluster"
@@ -1100,6 +1116,7 @@ impl Debug for CucumberWorld {
             .field("submitted_transactions", &self.submitted_transactions.len())
             .field("submission_outcomes", &self.submission_outcomes.len())
             .field("prepared_transactions", &self.prepared_transactions.len())
+            .field("prepared_priority_fees", &self.prepared_priority_fees.len())
             .field(
                 "observed_transaction_hashes",
                 &self.observed_transaction_hashes_len(),
@@ -1191,6 +1208,17 @@ pub struct GenesisTokens {
     /// The total amount of tokens allocated to this account in the genesis
     /// configuration.
     pub token_amount: u64,
+}
+
+/// Fee values captured when a percentage-funded transaction is prepared.
+#[derive(Clone, Debug)]
+pub struct PreparedPriorityFee {
+    pub percent: u64,
+    pub initial_mandatory_fee: u64,
+    pub initial_reserve: u64,
+    pub funded_fee: u64,
+    pub initial_execution_price: u64,
+    pub initial_storage_price: u64,
 }
 
 /// A scenario wallet is either user-owned or backed by a node wallet key.
@@ -1398,6 +1426,10 @@ impl CucumberWorld {
 
     pub fn set_test_context(&mut self, test_context: String) {
         self.test_context = Some(test_context);
+    }
+
+    pub const fn set_genesis_time(&mut self, genesis_time: GenesisTime) {
+        self.genesis_time = Some(genesis_time);
     }
 
     /// Remove all scenario artifacts from the scenario base directory. This is
@@ -1676,7 +1708,7 @@ impl CucumberWorld {
             .ok_or(StepError::MissingRunDuration)?
             .get();
 
-        let mut builder: ScenarioBuilderWith = make_builder(&topology);
+        let mut builder: ScenarioBuilderWith = make_builder(&topology, self.genesis_time);
 
         builder = builder.with_run_duration(Duration::from_secs(duration_secs));
         if let Some(wallets) = self.spec.wallets {
@@ -2001,6 +2033,21 @@ impl CucumberWorld {
         signed_tx: SignedMantleTx<Preverified>,
     ) {
         self.prepared_transactions.insert(alias, signed_tx);
+    }
+
+    pub fn remember_prepared_priority_fee(&mut self, alias: String, fee: PreparedPriorityFee) {
+        self.prepared_priority_fees.insert(alias, fee);
+    }
+
+    pub fn resolve_prepared_priority_fee(
+        &self,
+        alias: &str,
+    ) -> Result<&PreparedPriorityFee, StepError> {
+        self.prepared_priority_fees
+            .get(alias)
+            .ok_or(StepError::LogicalError {
+                message: format!("Prepared priority fee alias '{alias}' not found in world state"),
+            })
     }
 
     pub fn resolve_prepared_transaction(

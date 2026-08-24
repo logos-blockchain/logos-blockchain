@@ -344,6 +344,7 @@ pub struct AllPeersFailed;
 
 #[cfg(test)]
 mod tests {
+    use core::future::ready;
     use std::{
         collections::HashMap,
         iter::empty,
@@ -359,13 +360,14 @@ mod tests {
         block::Proposal,
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
-    use lb_cryptarchia_engine::{EpochConfig, Slot};
+    use lb_cryptarchia_engine::{EpochConfig, Slot, UncleSlots};
     use lb_ledger::{
         LedgerState,
+        config::{BlendPoWConfig, ModulusShift, PoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
-    use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+    use lb_utils::math::{NonNegativeRatio, PositiveF64};
     use overwatch::{
         overwatch::OverwatchHandle,
         services::{ServiceData, relay::OutboundRelay},
@@ -659,31 +661,36 @@ mod tests {
     }
 
     impl IbdBlockProcessor<Block> for MockBlockProcessor {
-        async fn info(&self) -> Result<CryptarchiaInfo, Error> {
-            Ok(self.cryptarchia.info())
+        fn info(&self) -> impl Future<Output = Result<CryptarchiaInfo, Error>> {
+            ready(Ok(self.cryptarchia.info()))
         }
 
-        async fn process_block(&mut self, block: Block) -> Result<(), Error> {
+        fn process_block(&mut self, block: Block) -> impl Future<Output = Result<(), Error>> {
             if self.cryptarchia.has_block(&block.id) {
-                return Err(Error::BlockProcessing(ChainError::Cryptarchia(
+                return ready(Err(Error::BlockProcessing(ChainError::Cryptarchia(
                     lb_chain_service::api::ApiError::AlreadyApplied(block.id),
-                )));
+                ))));
             }
 
-            self.cryptarchia
-                .consensus
-                .receive_block(block.id, block.parent, block.slot)
-                .map_err(|e| {
-                    self.process_block_failures.fetch_add(1, Ordering::SeqCst);
-                    Error::BlockProcessing(ChainError::InvalidBlock(format!(
-                        "Consensus error: {e:?}"
-                    )))
-                })?;
-            Ok(())
+            ready(
+                self.cryptarchia
+                    .consensus
+                    .receive_block(block.id, block.parent, block.slot, UncleSlots::default())
+                    .map_err(|e| {
+                        self.process_block_failures.fetch_add(1, Ordering::SeqCst);
+                        Error::BlockProcessing(ChainError::InvalidBlock(format!(
+                            "Consensus error: {e:?}"
+                        )))
+                    })
+                    .map(|_| ()),
+            )
         }
 
-        async fn has_processed_block(&self, header: HeaderId) -> Result<bool, Error> {
-            Ok(self.cryptarchia.has_block(&header))
+        fn has_processed_block(
+            &self,
+            header: HeaderId,
+        ) -> impl Future<Output = Result<bool, Error>> {
+            ready(Ok(self.cryptarchia.has_block(&header)))
         }
     }
 
@@ -930,6 +937,7 @@ mod tests {
             lb_cryptarchia_engine::State::Bootstrapping,
             0.into(),
             0,
+            UncleSlots::default(),
         )
     }
 
@@ -944,6 +952,7 @@ mod tests {
             NonZero::new(1).unwrap(),
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
+            NonZero::new(12).unwrap(),
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
@@ -964,7 +973,7 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
@@ -977,6 +986,15 @@ mod tests {
                 },
             },
             faucet_pk: None,
+            pow_config: PoWConfig {
+                blend: BlendPoWConfig {
+                    base_difficulty: ModulusShift::new::<19>(),
+                    damping_den_offset: 0,
+                    damping_num: 1.try_into().unwrap(),
+                    max_step: 1.try_into().unwrap(),
+                    target_transactions_per_block: 1.try_into().unwrap(),
+                },
+            },
         }
     }
 }

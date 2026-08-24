@@ -24,7 +24,7 @@ pub use crate::config::{
     api::serde::Config as ApiConfig, blend::serde::Config as BlendConfig,
     cryptarchia::serde::Config as CryptarchiaConfig, deployment::DeploymentSettings,
     kms::serde::Config as KmsConfig, network::serde::Config as NetworkConfig,
-    sdp::serde::Config as SdpConfig, state::Config as StateConfig,
+    pow::serde::Config as PoWConfig, sdp::serde::Config as SdpConfig, state::Config as StateConfig,
     storage::serde::Config as StorageConfig, time::serde::Config as TimeConfig,
     tracing::serde::Config as TracingConfig, wallet::serde::Config as WalletConfig,
 };
@@ -43,6 +43,7 @@ pub mod deployment;
 pub mod kms;
 pub mod mempool;
 pub mod network;
+pub mod pow;
 pub mod sdp;
 pub mod state;
 pub mod storage;
@@ -69,6 +70,7 @@ pub struct UserConfig {
     #[serde(default)]
     pub kms: KmsConfig,
     pub wallet: WalletConfig,
+    pub pow: PoWConfig,
     #[serde(default)]
     pub tracing: TracingConfig,
     #[serde(default)]
@@ -80,6 +82,7 @@ pub struct RequiredValues {
     pub cryptarchia: CryptarchiaConfig,
     pub sdp: SdpConfig,
     pub wallet: WalletConfig,
+    pub pow: PoWConfig,
 }
 
 impl UserConfig {
@@ -90,6 +93,7 @@ impl UserConfig {
             cryptarchia: required_values.cryptarchia,
             sdp: required_values.sdp,
             wallet: required_values.wallet,
+            pow: required_values.pow,
 
             api: ApiConfig::default(),
             kms: KmsConfig::default(),

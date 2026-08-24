@@ -67,7 +67,10 @@ fn finalized_inscriptions(finalized: &[FinalizedTx]) -> impl Iterator<Item = &In
         .flat_map(|tx| tx.ops.iter())
         .filter_map(|op| match op {
             FinalizedOp::Inscription(info) => Some(info),
-            FinalizedOp::Deposit(_) | FinalizedOp::Withdraw(_) | FinalizedOp::Config(_) => None,
+            FinalizedOp::Deposit(_)
+            | FinalizedOp::Withdraw(_)
+            | FinalizedOp::Config(_)
+            | FinalizedOp::ChannelTransfer(_) => None,
         })
 }
 use crate::{
@@ -100,6 +103,10 @@ pub enum ZoneTestError {
     Block { message: String },
     #[error("timed out waiting for zone transactions to finalize")]
     FinalizationTimeout,
+    #[error("channel wallet request failed: {message}")]
+    ChannelWallet { message: String },
+    #[error("timed out waiting for a channel wallet note")]
+    ChannelWalletTimeout,
     #[error("timed out waiting for zone LIB to advance")]
     LibAdvanceTimeout,
     #[error("timed out waiting for zone sequencer channel view condition: {message}")]
@@ -982,7 +989,7 @@ pub async fn replay_finalized_history(
     let funding = FundingConfig {
         funding_pk: lb_groth16::Fr::from(1u64).into(),
         max_tx_fee: GasCost::new(u64::MAX),
-        priority_fee: FundingConfig::DEFAULT_PRIORITY_FEE,
+        priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
     };
     let mut sequencer = ZoneSequencer::init(reader.channel_id, keygen(), node, funding, None);
 
@@ -1118,6 +1125,69 @@ async fn count_indexed_payload(
             .filter(|payload| *payload == expected_payload)
             .count(),
     )
+}
+
+/// Polls until the wallet holds exactly the given number of finalized and
+/// unfinalized notes — an exact-count check that catches double-counting.
+pub async fn wait_for_channel_wallet_counts(
+    client: &SequencerClient,
+    finalized: usize,
+    unfinalized: usize,
+    duration: Duration,
+) -> Result<(), ZoneTestError> {
+    timeout(duration, async {
+        loop {
+            let view =
+                client
+                    .channel_wallet()
+                    .await
+                    .map_err(|error| ZoneTestError::ChannelWallet {
+                        message: error.to_string(),
+                    })?;
+            if view.finalized.len() == finalized && view.unfinalized.len() == unfinalized {
+                return Ok(());
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .map_err(|_| ZoneTestError::ChannelWalletTimeout)?
+}
+
+/// Polls the sequencer's channel wallet until a note of `value` is present.
+/// With `finalized_only`, only the finalized layer counts.
+pub async fn wait_for_channel_wallet_note(
+    client: &SequencerClient,
+    value: Value,
+    finalized_only: bool,
+    duration: Duration,
+) -> Result<(), ZoneTestError> {
+    timeout(duration, async {
+        loop {
+            let view =
+                client
+                    .channel_wallet()
+                    .await
+                    .map_err(|error| ZoneTestError::ChannelWallet {
+                        message: error.to_string(),
+                    })?;
+            let unfinalized = (!finalized_only)
+                .then_some(view.unfinalized.iter())
+                .into_iter()
+                .flatten();
+            if view
+                .finalized
+                .iter()
+                .chain(unfinalized)
+                .any(|note| note.value == value)
+            {
+                return Ok(());
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .map_err(|_| ZoneTestError::ChannelWalletTimeout)?
 }
 
 /// Waits until the finalized channel history contains the expected channel
@@ -1371,6 +1441,39 @@ pub fn build_zone_deposit(
     })
 }
 
+/// Build a deposit that consumes one wallet note per listed value, in order.
+/// A deposit re-creates its inputs 1:1 as channel notes, so this yields a
+/// multi-input deposit whose recreated notes carry those exact per-note values
+/// — used to cover the channel wallet's per-note tracking.
+pub fn build_zone_deposit_from_values(
+    available_utxos: Vec<Utxo>,
+    channel_id: ChannelId,
+    input_values: &[Value],
+    metadata: Metadata,
+) -> Result<ZoneDeposit, ZoneTestError> {
+    let mut remaining = available_utxos;
+    let mut reserved_inputs = Vec::new();
+    for &value in input_values {
+        let index = remaining
+            .iter()
+            .position(|utxo| utxo.note.value == value)
+            .ok_or(ZoneTestError::MissingExactFundingNote { value })?;
+        reserved_inputs.push(remaining.remove(index));
+    }
+
+    let input_ids: Vec<_> = reserved_inputs.iter().map(Utxo::id).collect();
+    Ok(ZoneDeposit {
+        deposit: DepositOp {
+            channel_id,
+            inputs: Inputs::try_new(input_ids).map_err(|error| ZoneTestError::SubmitDeposit {
+                message: format!("deposit input set exceeds bound: {error:?}"),
+            })?,
+            metadata,
+        },
+        reserved_inputs,
+    })
+}
+
 /// Generous cap on channel transaction fees at genesis gas prices; actual
 /// fees are a few hundred gas units for these small transactions.
 const MAX_ZONE_DEPOSIT_TX_FEE: u64 = 10_000;
@@ -1488,7 +1591,7 @@ async fn build_funded_custom_tx(
     let response = node_client
         .fund_tx(WalletFundRequestBody {
             tip: None,
-            priority_fee: 0,
+            priority_fee_percent: 0,
             tx_builder,
             change_public_key: funding_pk,
             funding_public_keys: vec![funding_pk],

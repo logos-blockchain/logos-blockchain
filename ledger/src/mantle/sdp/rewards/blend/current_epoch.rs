@@ -36,6 +36,8 @@ pub struct CurrentEpochState {
     /// These will be used to create the proof verifier after the next
     /// epoch update.
     leader_input: LeaderInputs,
+    /// Same as `leader_input`, but for the `PoW` input.
+    pow_input: PowInputs,
 }
 
 impl CurrentEpochState {
@@ -44,6 +46,7 @@ impl CurrentEpochState {
             epoch: epoch_state.epoch(),
             epoch_randomness: (*epoch_state.nonce()).into(),
             leader_input: settings.leader_inputs(epoch_state),
+            pow_input: settings.pow_inputs(epoch_state),
         }
     }
 
@@ -154,6 +157,7 @@ impl CurrentEpochTracker {
 
         let proof_verifier = Self::create_proof_verifier(
             current_reward_epoch_state.leader_input,
+            current_reward_epoch_state.pow_input,
             zk_root,
             core_quota,
         );
@@ -212,6 +216,7 @@ impl CurrentEpochTracker {
 
     fn create_proof_verifier<ProofsVerifier: ProofsVerifierTrait>(
         leader_input: LeaderInputs,
+        pow_input: PowInputs,
         zk_root: ZkHash,
         core_quota: Quota,
     ) -> ProofsVerifier {
@@ -221,7 +226,7 @@ impl CurrentEpochTracker {
                 quota: core_quota,
             },
             leader: leader_input,
-            pow: PowInputs::unwired_placeholder(),
+            pow: pow_input,
         })
     }
 }

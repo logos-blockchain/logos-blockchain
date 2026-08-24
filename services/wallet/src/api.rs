@@ -134,13 +134,17 @@ where
         Ok(rx.await??)
     }
 
+    /// Fund a transaction, reserving `priority_fee_percent` percent of its
+    /// final mandatory fee as a priority reserve. The mandatory fee includes
+    /// execution and storage cost; only the unused reserve becomes an
+    /// effective priority tip. The percentage is not capped at 100.
     pub async fn fund_tx(
         &self,
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
-        priority_fee: Value,
+        priority_fee_percent: u64,
     ) -> Result<TipResponse<MantleTxBuilder>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
@@ -150,7 +154,7 @@ where
                 tx_builder,
                 change_pk,
                 funding_pks,
-                priority_fee,
+                priority_fee_percent,
                 resp_tx,
             })
             .await?;

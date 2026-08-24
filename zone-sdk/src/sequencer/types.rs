@@ -9,9 +9,10 @@ use lb_core::{
         SignedMantleTx, Value,
         channel::ChannelState,
         gas::GasCost,
-        ledger::{Inputs, Outputs},
+        ledger::{Inputs, NoteId, Outputs},
         ops::channel::{
-            ChannelId, MsgId, deposit::Metadata, inscribe::Inscription, withdraw::ChannelWithdrawOp,
+            ChannelId, MsgId, channel_transfer::ChannelTransferOp, deposit::Metadata,
+            inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
         traits::Hashable as _,
         transactions::{TxHash, states::Unverified},
@@ -38,6 +39,12 @@ pub struct SequencerCheckpoint {
     pub lib: HeaderId,
     /// Last known LIB slot (for backfill range queries).
     pub lib_slot: Slot,
+    /// Finalized channel notes as of `lib`. Defaults to empty when restoring
+    /// a checkpoint written before channel-note tracking existed — such
+    /// restores miss notes finalized before the checkpoint; a cold start
+    /// rebuilds the full set.
+    #[serde(default)]
+    pub channel_notes: Vec<ChannelNote>,
 }
 
 /// Result of a publish operation.
@@ -134,16 +141,23 @@ impl ChannelUpdateTx {
 pub struct FundingConfig {
     /// The node wallet key that pays transaction fees.
     pub funding_pk: ZkPublicKey,
-    /// Hard cap on the fee of a single transaction.
+    /// Absolute hard cap on the fee of a single funded transaction.
     pub max_tx_fee: GasCost,
-    /// Execution tip paid on top of the mandatory fee when funding a
-    /// transaction. [`Self::max_tx_fee`] caps the total.
-    pub priority_fee: Value,
+    /// Percentage of the final mandatory fee reserved as a priority reserve
+    /// when funding a transaction. The mandatory fee is execution plus
+    /// storage cost, and only the unused reserve becomes an effective tip.
+    /// The 12% default is a practical reserve intended to absorb normal fee
+    /// movement, including approximately one storage-market epoch increase
+    /// at normal price levels. It is not a protocol guarantee at very low
+    /// prices or when execution fees also rise materially: storage prices use
+    /// integer arithmetic, so a low price can jump proportionally more (for
+    /// example, 1 to 2). [`Self::max_tx_fee`] caps the total.
+    pub priority_fee_percent: u64,
 }
 
 impl FundingConfig {
-    /// Default execution tip.
-    pub const DEFAULT_PRIORITY_FEE: Value = 200;
+    /// Default percentage reserve for normal fee movement.
+    pub const DEFAULT_PRIORITY_FEE_PERCENT: Value = 12;
 }
 
 /// Configuration for the zone sequencer.
@@ -449,6 +463,50 @@ pub struct DepositInfo {
     pub metadata: Metadata,
 }
 
+/// A channel transfer observed on chain: channel notes consumed and
+/// re-created under new keys/denominations by the channel committee.
+#[derive(Debug, Clone)]
+pub struct ChannelTransferInfo {
+    /// Transaction hash that contained this transfer op.
+    pub tx_hash: TxHash,
+    /// The transfer op (`channel_id`, inputs, outputs).
+    pub op: ChannelTransferOp,
+}
+
+/// A note owned by the channel, as reconstructed from block data.
+///
+/// Every note carries its exact `value`, owning `pk`, and creation `slot`:
+/// deposits publish value and pk per note in the deposit event
+/// (`TxEventPayload::Deposit`), `ChannelTransfer` outputs carry full notes, and
+/// the slot comes from the block the note was created in. Tracking each note
+/// individually — rather than as an aggregate group — is what lets a withdrawal
+/// client apply a per-note dust policy (by value and age) under a
+/// permissionless deposit stream.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ChannelNote {
+    pub note_id: NoteId,
+    /// The note's value.
+    pub value: Value,
+    /// The key holding the note's `PoS` participation power.
+    pub pk: ZkPublicKey,
+    /// The block slot the note was created in — its age reference. A note's age
+    /// at any tip is that tip's slot minus this. Chain-anchored, so it is
+    /// deterministic and survives sequencer restarts.
+    pub slot: Slot,
+}
+
+/// The channel's note set as tracked from block data.
+///
+/// `finalized` holds notes created below LIB and unspent at the tracked tip
+/// — immune to reorgs. `unfinalized` holds notes created above LIB on the
+/// tracked branch; they can disappear on a branch change (their ids are
+/// branch-stable, so a re-included op recreates the same ids).
+#[derive(Debug, Clone, Default)]
+pub struct ChannelWalletView {
+    pub finalized: Vec<ChannelNote>,
+    pub unfinalized: Vec<ChannelNote>,
+}
+
 /// A tx enqueued for posting and surfaced as a publish return value or in
 /// orphan payloads.
 ///
@@ -520,4 +578,7 @@ pub enum FinalizedOp {
     /// A config on the channel. `parent_msg`/`this_msg` are config-lineage
     /// ids, not message-lineage ids, and the payload is empty.
     Config(InscriptionInfo),
+    /// A channel transfer op on the channel: notes re-keyed/re-denominated
+    /// under channel authority.
+    ChannelTransfer(ChannelTransferInfo),
 }

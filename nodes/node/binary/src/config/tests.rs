@@ -24,6 +24,7 @@ use crate::{
         },
         mempool::ServiceConfig as MempoolServiceConfig,
         parse_log_filter_layer,
+        pow::serde::{Config as PoWConfig, RequiredValues as PoWRequiredValues},
         sdp::{
             ServiceConfig as SdpServiceConfig,
             serde::{Config as SdpConfig, RequiredValues as SdpRequiredValues},
@@ -144,6 +145,9 @@ fn minimal_user_config() -> UserConfig {
         wallet: WalletConfig::with_required_values(WalletRequiredValues {
             voucher_master_key_id: "voucher_master_key_id".into(),
         }),
+        pow: PoWConfig::with_required_values(PoWRequiredValues {
+            claim_address: ZkPublicKey::zero(),
+        }),
     })
 }
 
@@ -217,6 +221,9 @@ fn service_settings_receive_recovery_data() {
             cryptarchia: cryptarchia_config,
             sdp: sdp_config,
             wallet: wallet_config,
+            pow: PoWConfig::with_required_values(PoWRequiredValues {
+                claim_address: ZkPublicKey::zero(),
+            }),
         });
         base_config.storage = storage_config;
         base_config

@@ -68,6 +68,7 @@ mod tests {
     use std::{collections::HashMap, sync::Arc};
 
     use lb_core::sdp::MinStake;
+    use lb_groth16::ModulusShift;
     use lb_utils::math::NonNegativeRatio;
 
     use super::*;
@@ -179,6 +180,7 @@ mod tests {
                 SECURITY_PARAM.try_into().unwrap(),
                 slot_activation_coeff,
                 LEARNING_RATE.try_into().unwrap(),
+                12.try_into().unwrap(),
             ),
             // Not used in the tests
             sdp_config: crate::mantle::sdp::Config {
@@ -199,6 +201,15 @@ mod tests {
                 },
             },
             faucet_pk: None,
+            pow_config: crate::config::PoWConfig {
+                blend: crate::config::BlendPoWConfig {
+                    base_difficulty: ModulusShift::new::<19>(),
+                    target_transactions_per_block: 1.try_into().unwrap(),
+                    max_step: 1.try_into().unwrap(),
+                    damping_num: 1.try_into().unwrap(),
+                    damping_den_offset: 0,
+                },
+            },
         }
     }
 

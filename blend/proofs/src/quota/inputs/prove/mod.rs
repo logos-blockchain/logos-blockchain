@@ -103,15 +103,9 @@ fn witness_input_for_proof_type(
             )
         }
         ProofType::PowQuota(pow_quota_private_inputs) => {
-            let ProofOfWorkQuotaInputs {
-                pow_sk,
-                pow_block_hash,
-            } = *pow_quota_private_inputs;
+            let ProofOfWorkQuotaInputs { pow_nonce } = *pow_quota_private_inputs;
 
-            let pow_input_data = PoQPowInputsData {
-                pow_secret_key: pow_sk,
-                block_hash: pow_block_hash,
-            };
+            let pow_input_data = PoQPowInputsData { pow_nonce };
             PoQWitnessInputs::from_pow_data(chain_input_data, common_input_data, pow_input_data)
         }
     }

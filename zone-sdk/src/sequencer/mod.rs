@@ -65,6 +65,7 @@
 mod actor;
 mod backfill;
 mod block_fetch;
+mod channel_wallet;
 mod client;
 mod handle;
 mod slot_clock;
@@ -79,9 +80,10 @@ pub use block_fetch::channel_inscriptions;
 pub use client::SequencerClient;
 pub use handle::SequencerHandle;
 pub use types::{
-    AtomicWithdrawInfo, ChannelUpdate, ChannelUpdateTx, DepositInfo, Error, Event, FinalizedOp,
-    FinalizedTx, FundingConfig, InscriptionId, InscriptionInfo, PendingTx, PublishResult,
-    SequencerChannelView, SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource,
-    TxStatus, TxStatusUpdate, WithdrawArg, WithdrawInfo,
+    AtomicWithdrawInfo, ChannelNote, ChannelTransferInfo, ChannelUpdate, ChannelUpdateTx,
+    ChannelWalletView, DepositInfo, Error, Event, FinalizedOp, FinalizedTx, FundingConfig,
+    InscriptionId, InscriptionInfo, PendingTx, PublishResult, SequencerChannelView,
+    SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource, TxStatus, TxStatusUpdate,
+    WithdrawArg, WithdrawInfo,
 };
 pub use zone_sequencer::ZoneSequencer;

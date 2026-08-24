@@ -14,6 +14,7 @@ use lb_chain_service::{
     Epoch,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
+use lb_core::mantle::ops::pow::PowTarget;
 use lb_groth16::Fr;
 use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage, backends::TimeBackend};
@@ -32,6 +33,7 @@ pub struct BlendEpochState<NodeId> {
     pub aged: Fr,
     pub lottery_0: Fr,
     pub lottery_1: Fr,
+    pub pow_difficulty: PowTarget,
     pub membership_info: MembershipInfo<NodeId>,
 }
 
@@ -118,6 +120,7 @@ where
                             aged: epoch_state.utxo_merkle_root(),
                             lottery_0: epoch_state.lottery_0,
                             lottery_1: epoch_state.lottery_1,
+                            pow_difficulty: epoch_state.blend_pow_difficulty,
                             membership_info,
                         };
                         return Some((item, (ticks, last_epoch, chain_api, signing_pk, zk_pk)));

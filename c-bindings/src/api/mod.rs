@@ -7,6 +7,7 @@ pub mod leader;
 pub mod lifecycle;
 pub(crate) mod memory;
 pub mod peer;
+pub mod pow;
 pub mod storage;
 pub mod subscriptions;
 pub mod time;

@@ -7,17 +7,14 @@ use lb_blend_message::{
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
-use lb_key_management_system_keys::keys::X25519PrivateKey;
 
 use crate::{
     membership::Membership,
     message_blend::{
-        crypto::{
-            EncapsulatedMessageWithVerifiedPublicHeader, EpochCryptographicProcessorSettings,
-        },
+        crypto::EncapsulatedMessageWithVerifiedPublicHeader,
         provers::{
-            ProofsGeneratorSettings, WinningPolInfoStream,
-            core_and_leader::CoreAndLeaderProofsGenerator,
+            BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
+            core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
         },
     },
 };
@@ -28,8 +25,6 @@ use crate::{
 /// Each instance is meant to be used during a single epoch.
 pub struct EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator> {
     num_blend_layers: NonZeroU64,
-    /// The non-ephemeral encryption key (NEK) for decapsulating messages.
-    non_ephemeral_encryption_key: X25519PrivateKey,
     membership: Membership<NodeId>,
     proofs_generator: ProofsGenerator,
     _phantom: PhantomData<CorePoQGenerator>,
@@ -38,14 +33,6 @@ pub struct EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator
 impl<NodeId, CorePoQGenerator, ProofsGenerator>
     EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator>
 {
-    pub(super) const fn non_ephemeral_encryption_key(&self) -> &X25519PrivateKey {
-        &self.non_ephemeral_encryption_key
-    }
-
-    pub(super) const fn membership(&self) -> &Membership<NodeId> {
-        &self.membership
-    }
-
     #[cfg(test)]
     pub const fn proofs_generator(&self) -> &ProofsGenerator {
         &self.proofs_generator
@@ -60,11 +47,11 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator>
 impl<NodeId, CorePoQGenerator, ProofsGenerator>
     EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator>
 where
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
 {
     #[must_use]
     pub fn new(
-        settings: EpochCryptographicProcessorSettings,
+        encapsulation_layers: NonZeroU64,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
         core_proof_of_quota_generator: CorePoQGenerator,
@@ -78,12 +65,11 @@ where
             local_node_index: membership.local_index(),
             membership_size: membership.size(),
             public_inputs: public_info,
-            encapsulation_layers: settings.num_blend_layers,
+            encapsulation_layers,
             epoch,
         };
         Self {
-            num_blend_layers: settings.num_blend_layers,
-            non_ephemeral_encryption_key: settings.non_ephemeral_encryption_key,
+            num_blend_layers: encapsulation_layers,
             membership,
             proofs_generator: ProofsGenerator::new(
                 generator_settings,
@@ -107,7 +93,7 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator>
     EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator>
 where
     NodeId: Eq + Hash + 'static,
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
 {
     pub async fn encapsulate_cover_payload(
         &mut self,
@@ -116,11 +102,20 @@ where
         self.encapsulate_payload(PayloadType::Cover, payload).await
     }
 
-    pub async fn encapsulate_data_payload(
+    pub async fn encapsulate_block_proposal_payload(
         &mut self,
         payload: &[u8],
     ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
-        self.encapsulate_payload(PayloadType::Data, payload).await
+        self.encapsulate_payload(PayloadType::BlockProposal, payload)
+            .await
+    }
+
+    pub async fn encapsulate_transaction_payload(
+        &mut self,
+        payload: &[u8],
+    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
+        self.encapsulate_payload(PayloadType::Transaction, payload)
+            .await
     }
 
     // TODO: Think about optimizing this by, e.g., using less encapsulations if
@@ -136,23 +131,11 @@ where
         let validated_payload = PaddedPayloadBody::try_from(payload)?;
         let mut proofs = Vec::with_capacity(self.num_blend_layers.get() as usize);
 
-        match payload_type {
-            PayloadType::Cover => {
-                for _ in 0..self.num_blend_layers.into() {
-                    let Some(proof) = self.proofs_generator.get_next_core_proof().await else {
-                        return Err(Error::ProofNotAvailable);
-                    };
-                    proofs.push(proof);
-                }
-            }
-            PayloadType::Data => {
-                for _ in 0..self.num_blend_layers.into() {
-                    let Some(proof) = self.proofs_generator.get_next_leader_proof().await else {
-                        return Err(Error::ProofNotAvailable);
-                    };
-                    proofs.push(proof);
-                }
-            }
+        for _ in 0..self.num_blend_layers.into() {
+            let Some(proof) = self.next_proof_for(payload_type).await else {
+                return Err(Error::ProofNotAvailable);
+            };
+            proofs.push(proof);
         }
 
         let membership_size = self.membership.size();
@@ -202,6 +185,15 @@ where
         )
         .expect("Number of encapsulation inputs is in `1..=num_blend_layers`."))
     }
+
+    /// The `PoQ` branch each payload type draws its layer proofs from.
+    async fn next_proof_for(&mut self, payload_type: PayloadType) -> Option<BlendLayerProof> {
+        match payload_type {
+            PayloadType::Cover => self.proofs_generator.get_next_core_proof().await,
+            PayloadType::BlockProposal => self.proofs_generator.get_next_leader_proof().await,
+            PayloadType::Transaction => self.proofs_generator.get_next_pow_proof().await,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -227,9 +219,8 @@ mod test {
     use super::EpochCryptographicProcessor;
     use crate::{
         membership::{Membership, Node},
-        message_blend::crypto::{
-            EpochCryptographicProcessorSettings,
-            test_utils::{MockCorePoQGenerator, TestEpochChangeCoreAndLeaderProofsGenerator},
+        message_blend::crypto::test_utils::{
+            MockCorePoQGenerator, TestEpochChangeCoreAndLeaderProofsGenerator,
         },
     };
 
@@ -244,10 +235,7 @@ mod test {
         };
         let mut processor =
             EpochCryptographicProcessor::<_, _, TestEpochChangeCoreAndLeaderProofsGenerator>::new(
-                EpochCryptographicProcessorSettings {
-                    non_ephemeral_encryption_key: [0; _].into(),
-                    num_blend_layers: NonZeroU64::new(1).unwrap(),
-                },
+                NonZeroU64::new(1).unwrap(),
                 Membership::new_without_local(&[Node {
                     address: Multiaddr::empty(),
                     id: PeerId::random(),
@@ -260,7 +248,7 @@ mod test {
                         zk_root: ZkHash::ZERO,
                     },
                     leader: leader_inputs,
-                    pow: PowInputs::unwired_placeholder(),
+                    pow: PowInputs::disabled(),
                 },
                 MockCorePoQGenerator,
                 Epoch::new(0),

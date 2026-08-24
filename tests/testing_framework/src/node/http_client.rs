@@ -178,6 +178,30 @@ impl NodeHttpClient {
         .await
     }
 
+    pub async fn blend_transaction<State>(
+        &self,
+        tx: &SignedMantleTx<State>,
+    ) -> Result<TxHash, Error>
+    where
+        State: VerificationState + Send + Sync + Clone + 'static,
+    {
+        self.with_timeout(
+            "Blend transaction request",
+            self.http_client
+                .blend_transaction(self.base_url.clone(), tx.clone()),
+        )
+        .await
+    }
+
+    pub async fn blend_pending_transactions(&self) -> Result<Vec<TxHash>, Error> {
+        self.with_timeout(
+            "Blend pending transactions request",
+            self.http_client
+                .blend_pending_transactions(self.base_url.clone()),
+        )
+        .await
+    }
+
     pub async fn transfer_funds(
         &self,
         body: WalletTransferFundsRequestBody,

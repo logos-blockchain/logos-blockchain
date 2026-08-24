@@ -70,6 +70,12 @@ mod imp {
     pub fn inbound_messages_dropped(count: u64) {
         lb_tracing::increase_counter_u64!(blend_inbound_messages_dropped_total, count);
     }
+
+    /// Reports core peers blocked for spamming, labelled with what they were
+    /// caught doing — an invalid `PoQ` among the reasons.
+    pub fn core_peer_blocked(reason: &'static str) {
+        lb_tracing::increase_counter_u64!(blend_core_peers_blocked_total, 1, reason = reason);
+    }
 }
 
 pub use imp::*;

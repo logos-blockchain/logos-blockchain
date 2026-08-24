@@ -2,7 +2,10 @@ use core::{
     num::{NonZeroU64, NonZeroUsize},
     time::Duration,
 };
-use std::collections::{HashSet, VecDeque};
+use std::{
+    collections::{HashSet, VecDeque},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use futures::StreamExt as _;
@@ -14,9 +17,13 @@ use libp2p_stream::Behaviour as StreamBehaviour;
 use libp2p_swarm_test::SwarmExt as _;
 
 use crate::core::{
-    tests::utils::PROTOCOL_NAME,
+    poq_verification::PendingPoQVerifications,
+    tests::utils::{PROTOCOL_NAME, TestProofsVerifier},
     with_edge::behaviour::{Behaviour, Event as BehaviourEvent},
 };
+
+/// The behaviour under test, with the `PoQ` verifier the tests use.
+pub type TestBehaviour = Behaviour<TestProofsVerifier>;
 
 pub struct BehaviourBuilder {
     core_peer_ids: Vec<PeerId>,
@@ -24,6 +31,7 @@ pub struct BehaviourBuilder {
     timeout: Option<Duration>,
     minimum_network_size: Option<NonZeroUsize>,
     num_blend_layers: Option<NonZeroU64>,
+    proofs_verifier: TestProofsVerifier,
 }
 
 impl BehaviourBuilder {
@@ -34,7 +42,14 @@ impl BehaviourBuilder {
             timeout: None,
             minimum_network_size: None,
             num_blend_layers: None,
+            proofs_verifier: TestProofsVerifier::accepting(),
         }
+    }
+
+    /// Makes the behaviour reject the `PoQ` of every message it receives.
+    pub const fn with_rejecting_proofs_verifier(mut self) -> Self {
+        self.proofs_verifier = TestProofsVerifier::rejecting();
+        self
     }
 
     pub fn with_num_blend_layers(mut self, num_blend_layers: u64) -> Self {
@@ -57,7 +72,7 @@ impl BehaviourBuilder {
         self
     }
 
-    pub fn build(self) -> Behaviour {
+    pub fn build(self) -> TestBehaviour {
         let current_membership = Membership::new_without_local(
             self.core_peer_ids
                 .into_iter()
@@ -74,6 +89,9 @@ impl BehaviourBuilder {
             events: VecDeque::new(),
             waker: None,
             current_membership,
+            current_epoch: 0.into(),
+            proofs_verifier: Arc::new(self.proofs_verifier),
+            pending_poq_verifications: PendingPoQVerifications::new(),
             connection_timeout: self.timeout.unwrap_or(Duration::from_secs(1)),
             upgraded_edge_peers: HashSet::new(),
             max_incoming_connections: self.max_incoming_connections.unwrap_or(100),
@@ -90,12 +108,12 @@ impl BehaviourBuilder {
 
 #[async_trait]
 pub trait StreamBehaviourExt: libp2p_swarm_test::SwarmExt {
-    async fn connect_and_upgrade_to_blend(&mut self, other: &mut Swarm<Behaviour>) -> Stream;
+    async fn connect_and_upgrade_to_blend(&mut self, other: &mut Swarm<TestBehaviour>) -> Stream;
 }
 
 #[async_trait]
 impl StreamBehaviourExt for Swarm<StreamBehaviour> {
-    async fn connect_and_upgrade_to_blend(&mut self, other: &mut Swarm<Behaviour>) -> Stream {
+    async fn connect_and_upgrade_to_blend(&mut self, other: &mut Swarm<TestBehaviour>) -> Stream {
         // We connect and return the stream preventing it from being dropped so the
         // blend node does not close the connection with an EOF error.
         self.connect(other).await;

@@ -142,7 +142,10 @@ fn apply_finalized(items: &[FinalizedTx], state: &mut InMemoryZoneState) {
         .flat_map(|t| t.ops.iter())
         .filter_map(|op| match op {
             FinalizedOp::Inscription(i) => Some(i.clone()),
-            FinalizedOp::Deposit(_) | FinalizedOp::Withdraw(_) | FinalizedOp::Config(_) => None,
+            FinalizedOp::Deposit(_)
+            | FinalizedOp::Withdraw(_)
+            | FinalizedOp::Config(_)
+            | FinalizedOp::ChannelTransfer(_) => None,
         })
         .collect();
     if inscriptions.is_empty() {

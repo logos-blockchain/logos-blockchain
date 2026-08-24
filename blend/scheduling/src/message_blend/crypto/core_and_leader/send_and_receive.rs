@@ -3,10 +3,7 @@ use core::ops::{Deref, DerefMut};
 use lb_blend_message::{
     Error,
     crypto::proofs::PoQVerificationInputsMinusSigningKey,
-    encap::{
-        ProofsVerifier as ProofsVerifierTrait, decapsulated::DecapsulationOutput,
-        validated::RequiredProofOfSelectionVerificationInputs,
-    },
+    encap::{ProofsVerifier as ProofsVerifierTrait, decapsulated::DecapsulationOutput},
 };
 use lb_cryptarchia_engine::Epoch;
 
@@ -15,9 +12,12 @@ use crate::{
     message_blend::{
         crypto::{
             EncapsulatedMessageWithVerifiedPublicHeader, EpochCryptographicProcessorSettings,
-            core_and_leader::send::EpochCryptographicProcessor as SenderEpochCryptographicProcessor,
+            core_and_leader::{
+                receive::EpochCryptographicProcessor as ReceiverEpochCryptographicProcessor,
+                send::EpochCryptographicProcessor as SenderEpochCryptographicProcessor,
+            },
         },
-        provers::core_and_leader::CoreAndLeaderProofsGenerator,
+        provers::core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
     },
 };
 
@@ -29,14 +29,13 @@ use crate::{
 /// This processor is suitable for core nodes.
 pub struct EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier> {
     sender_processor: SenderEpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator>,
-    proofs_verifier: ProofsVerifier,
-    epoch: Epoch,
+    receiver_processor: ReceiverEpochCryptographicProcessor<ProofsVerifier>,
 }
 
 impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
     EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
 where
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
     #[must_use]
@@ -47,16 +46,24 @@ where
         core_proof_of_quota_generator: CorePoQGenerator,
         epoch: Epoch,
     ) -> Self {
+        let EpochCryptographicProcessorSettings {
+            non_ephemeral_encryption_key,
+            num_blend_layers,
+        } = settings;
         Self {
+            receiver_processor: ReceiverEpochCryptographicProcessor::new(
+                non_ephemeral_encryption_key,
+                &membership,
+                public_info,
+                epoch,
+            ),
             sender_processor: SenderEpochCryptographicProcessor::new(
-                settings,
+                num_blend_layers,
                 membership,
                 public_info,
                 core_proof_of_quota_generator,
                 epoch,
             ),
-            proofs_verifier: ProofsVerifier::new(public_info),
-            epoch,
         }
     }
 }
@@ -65,11 +72,22 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
     EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
 {
     pub const fn verifier(&self) -> &ProofsVerifier {
-        &self.proofs_verifier
+        self.receiver_processor.verifier()
     }
 
     pub const fn epoch(&self) -> Epoch {
-        self.epoch
+        self.receiver_processor.epoch()
+    }
+
+    pub const fn receiver(&self) -> &ReceiverEpochCryptographicProcessor<ProofsVerifier> {
+        &self.receiver_processor
+    }
+
+    /// Give up the send side of this processor, keeping only what it takes to
+    /// decapsulate.
+    #[must_use]
+    pub fn into_receiver_only(self) -> ReceiverEpochCryptographicProcessor<ProofsVerifier> {
+        self.receiver_processor
     }
 }
 
@@ -82,17 +100,7 @@ where
         &self,
         message: EncapsulatedMessageWithVerifiedPublicHeader,
     ) -> Result<DecapsulationOutput, Error> {
-        let Some(local_node_index) = self.sender_processor.membership().local_index() else {
-            return Err(Error::NotCoreNodeReceiver);
-        };
-        message.decapsulate(
-            self.sender_processor.non_ephemeral_encryption_key(),
-            &RequiredProofOfSelectionVerificationInputs {
-                expected_node_index: local_node_index as u64,
-                total_membership_size: self.sender_processor.membership().size() as u64,
-            },
-            &self.proofs_verifier,
-        )
+        self.receiver_processor.decapsulate_message(message)
     }
 }
 
@@ -179,7 +187,7 @@ mod test {
                     zk_root: ZkHash::ZERO,
                 },
                 leader: initial_leader,
-                pow: PowInputs::unwired_placeholder(),
+                pow: PowInputs::disabled(),
             },
             MockCorePoQGenerator,
             Epoch::new(0),

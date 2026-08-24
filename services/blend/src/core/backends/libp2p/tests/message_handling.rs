@@ -57,9 +57,9 @@ async fn core_message_propagation() {
         .unwrap();
 
     // We test that swarm 1 publishes a message, sending it to swarm 2, the only
-    // swarm it is connected to. Then swarm 2 forwards it to swarm 3, which is not
-    // connected to swarm 1.
+    // swarm it is connected to. Then swarm 2 verifies its public header and
+    // forwards it to swarm 3, which is not connected to swarm 1.
     let (swarm_3_received_message, epoch) = swarm_3_message_receiver.recv().await.unwrap();
-    assert_eq!(swarm_3_received_message, message.into_inner().into());
+    assert_eq!(swarm_3_received_message, message.clone());
     assert_eq!(epoch, 1);
 }

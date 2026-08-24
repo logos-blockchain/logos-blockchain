@@ -115,8 +115,12 @@ fn encapsulate_and_decapsulate() {
 
     let (inputs, blend_node_enc_keys) = generate_inputs(2);
     let msg = EncapsulatedMessage::from(
-        try_new_fully_encapsulated(&inputs, PayloadType::Data, PAYLOAD_BODY.try_into().unwrap())
-            .unwrap(),
+        try_new_fully_encapsulated(
+            &inputs,
+            PayloadType::BlockProposal,
+            PAYLOAD_BODY.try_into().unwrap(),
+        )
+        .unwrap(),
     );
 
     // NOTE: We expect that the decapsulations can be done
@@ -172,7 +176,10 @@ fn encapsulate_and_decapsulate() {
         panic!("Expected an incompleted message");
     };
     // The payload body should be the same as the original one.
-    assert_eq!(decapsulated_message.payload_type(), PayloadType::Data);
+    assert_eq!(
+        decapsulated_message.payload_type(),
+        PayloadType::BlockProposal
+    );
     assert_eq!(decapsulated_message.payload_body(), PAYLOAD_BODY);
 }
 
@@ -182,7 +189,7 @@ fn payload_too_long() {
     let (inputs, _) = generate_inputs(1);
     drop(try_new_fully_encapsulated(
         &inputs,
-        PayloadType::Data,
+        PayloadType::BlockProposal,
         vec![0u8; MAX_PAYLOAD_BODY_SIZE + 1]
             .try_into()
             .expect("Payload too large"),
@@ -199,7 +206,7 @@ fn invalid_public_header_signature() {
         let mut msg = EncapsulatedMessage::from(
             try_new_fully_encapsulated(
                 &inputs,
-                PayloadType::Data,
+                PayloadType::BlockProposal,
                 PAYLOAD_BODY.try_into().unwrap(),
             )
             .unwrap(),
@@ -225,8 +232,12 @@ fn invalid_public_header_proof_of_quota() {
 
     let (inputs, _) = generate_inputs(2);
     let msg = EncapsulatedMessage::from(
-        try_new_fully_encapsulated(&inputs, PayloadType::Data, PAYLOAD_BODY.try_into().unwrap())
-            .unwrap(),
+        try_new_fully_encapsulated(
+            &inputs,
+            PayloadType::BlockProposal,
+            PAYLOAD_BODY.try_into().unwrap(),
+        )
+        .unwrap(),
     );
 
     let public_header_verification_result = msg.verify_public_header(&verifier);
@@ -247,8 +258,12 @@ fn invalid_blend_header_proof_of_selection() {
 
     let (inputs, blend_node_enc_keys) = generate_inputs(2);
     let msg = EncapsulatedMessage::from(
-        try_new_fully_encapsulated(&inputs, PayloadType::Data, PAYLOAD_BODY.try_into().unwrap())
-            .unwrap(),
+        try_new_fully_encapsulated(
+            &inputs,
+            PayloadType::BlockProposal,
+            PAYLOAD_BODY.try_into().unwrap(),
+        )
+        .unwrap(),
     );
     let validated_message = msg.verify_public_header(&verifier).unwrap();
 
@@ -270,7 +285,7 @@ fn serde_encapsulated_and_verified() {
     let (inputs, _) = generate_inputs(3);
     let msg = try_new_fully_encapsulated(
         &inputs,
-        PayloadType::Data,
+        PayloadType::BlockProposal,
         b"".as_slice().try_into().unwrap(),
     )
     .unwrap();
@@ -291,8 +306,12 @@ fn encapsulate_and_decapsulate_via_two_step_verification() {
 
     let (inputs, blend_node_enc_keys) = generate_inputs(2);
     let msg = EncapsulatedMessage::from(
-        try_new_fully_encapsulated(&inputs, PayloadType::Data, PAYLOAD_BODY.try_into().unwrap())
-            .unwrap(),
+        try_new_fully_encapsulated(
+            &inputs,
+            PayloadType::BlockProposal,
+            PAYLOAD_BODY.try_into().unwrap(),
+        )
+        .unwrap(),
     );
 
     // Step 1: verify signature (forwarding would happen here)
@@ -332,7 +351,10 @@ fn encapsulate_and_decapsulate_via_two_step_verification() {
         panic!("Expected a completed message");
     };
 
-    assert_eq!(fully_decapsulated_message.payload_type(), PayloadType::Data);
+    assert_eq!(
+        fully_decapsulated_message.payload_type(),
+        PayloadType::BlockProposal
+    );
     assert_eq!(fully_decapsulated_message.payload_body(), PAYLOAD_BODY);
 }
 
@@ -341,7 +363,7 @@ fn empty_inputs_returns_error() {
     assert!(matches!(
         try_new_fully_encapsulated(
             &[],
-            PayloadType::Data,
+            PayloadType::BlockProposal,
             b"hello".as_slice().try_into().unwrap(),
         ),
         Err(Error::EmptyEncapsulationInputs)
@@ -354,7 +376,7 @@ fn more_inputs_than_layers_returns_error() {
     assert!(matches!(
         EncapsulatedMessageWithVerifiedPublicHeader::try_new(
             &inputs,
-            PayloadType::Data,
+            PayloadType::BlockProposal,
             b"hello".as_slice().try_into().unwrap(),
             3
         ),
@@ -377,7 +399,7 @@ fn encapsulate_and_decapsulate_fewer_layers_than_maximum() {
         let mut msg = EncapsulatedMessage::from(
             EncapsulatedMessageWithVerifiedPublicHeader::try_new(
                 &inputs,
-                PayloadType::Data,
+                PayloadType::BlockProposal,
                 PAYLOAD_BODY.try_into().unwrap(),
                 MAX_LAYERS,
             )
@@ -417,7 +439,10 @@ fn encapsulate_and_decapsulate_fewer_layers_than_maximum() {
                     ..
                 } => {
                     assert_eq!(hop, 0, "only the innermost layer should complete");
-                    assert_eq!(fully_decapsulated_message.payload_type(), PayloadType::Data);
+                    assert_eq!(
+                        fully_decapsulated_message.payload_type(),
+                        PayloadType::BlockProposal
+                    );
                     assert_eq!(fully_decapsulated_message.payload_body(), PAYLOAD_BODY);
                 }
             }
@@ -459,14 +484,18 @@ fn payload_body_round_trips_through_encapsulation() {
     let DecapsulationOutput::Completed {
         fully_decapsulated_message,
         ..
-    } = try_new_fully_encapsulated(&inputs, PayloadType::Data, BODY.try_into().unwrap())
-        .unwrap()
-        .decapsulate(
-            blend_node_enc_keys.first().unwrap(),
-            &RequiredProofOfSelectionVerificationInputs::default(),
-            &verifier,
-        )
-        .unwrap()
+    } = try_new_fully_encapsulated(
+        &inputs,
+        PayloadType::BlockProposal,
+        BODY.try_into().unwrap(),
+    )
+    .unwrap()
+    .decapsulate(
+        blend_node_enc_keys.first().unwrap(),
+        &RequiredProofOfSelectionVerificationInputs::default(),
+        &verifier,
+    )
+    .unwrap()
     else {
         panic!("Expected a completed message");
     };
@@ -483,7 +512,7 @@ fn filler_layers_are_not_reconstructable() {
         EncapsulatedMessage::from(
             EncapsulatedMessageWithVerifiedPublicHeader::try_new(
                 &inputs,
-                PayloadType::Data,
+                PayloadType::BlockProposal,
                 b"hello".as_slice().try_into().unwrap(),
                 3,
             )
@@ -500,7 +529,7 @@ fn decapsulate_empty_private_headers_returns_error() {
         let part = EncapsulatedPart::new_unchecked(
             // Empty inputs
             &[],
-            PayloadType::Data,
+            PayloadType::BlockProposal,
             b"hello".as_slice().try_into().unwrap(),
             // ...and no filler layers either, so the private header is empty.
             0,
@@ -525,7 +554,7 @@ fn sample_message(num_layers: usize) -> EncapsulatedMessageWithVerifiedPublicHea
     let (inputs, _) = generate_inputs(num_layers);
     try_new_fully_encapsulated(
         &inputs,
-        PayloadType::Data,
+        PayloadType::BlockProposal,
         b"payload".as_slice().try_into().unwrap(),
     )
     .unwrap()

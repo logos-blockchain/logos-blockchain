@@ -11,7 +11,7 @@ pub fn node(left: impl AsRef<[u8]>, right: impl AsRef<[u8]>) -> [u8; 32] {
 }
 
 // Calculates a 32-byte Merkle root of transactions
-pub fn calculate_block_root<T: Hashable<Hash = TxHash>>(transactions: &[T]) -> Hash {
+pub fn calculate_transactions_root<T: Hashable<Hash = TxHash>>(transactions: &[T]) -> Hash {
     let mut leaves: Vec<_> = transactions.iter().map(Hashable::hash).collect();
 
     let target_size = leaves.len().max(1).next_power_of_two();
@@ -57,7 +57,7 @@ mod tests {
     #[test]
     fn test_root_two_elements() {
         let txs = vec![create_random_tx(0), create_random_tx(1)];
-        let result = calculate_block_root(&txs);
+        let result = calculate_transactions_root(&txs);
         let leaf1 = txs[0].hash();
         let leaf2 = txs[1].hash();
         let expected = node(leaf1.0, leaf2.0);
@@ -68,7 +68,7 @@ mod tests {
     #[test]
     fn test_root_single_element() {
         let txs = vec![create_random_tx(42)];
-        let result = calculate_block_root(&txs);
+        let result = calculate_transactions_root(&txs);
 
         let expected = txs[0].hash();
 
@@ -78,7 +78,7 @@ mod tests {
     #[test]
     fn test_root_empty_elements() {
         let txs: Vec<RawMantleTx> = vec![];
-        let result = calculate_block_root(&txs);
+        let result = calculate_transactions_root(&txs);
 
         let expected = [0u8; 32];
 

@@ -510,10 +510,13 @@ mod pol_tests {
     use lb_cryptarchia_engine::EpochConfig;
     use lb_groth16::{Fr, fr_from_bytes_unchecked};
     use lb_key_management_system_service::keys::{UnsecuredZkKey, ZkKey};
-    use lb_ledger::mantle::sdp::{
-        Config as SdpConfig, ServiceRewardsParameters, rewards::blend::RewardsParameters,
+    use lb_ledger::{
+        config::{BlendPoWConfig, ModulusShift, PoWConfig},
+        mantle::sdp::{
+            Config as SdpConfig, ServiceRewardsParameters, rewards::blend::RewardsParameters,
+        },
     };
-    use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+    use lb_utils::math::{NonNegativeRatio, PositiveF64};
     use lb_wallet_service::{WalletMsg, WalletServiceSettings};
     use overwatch::services::{
         ServiceData,
@@ -550,6 +553,7 @@ mod pol_tests {
         let epoch_state = EpochState {
             epoch: 1.into(),
             nonce: Fr::from(999u64),
+            blend_pow_difficulty: Fr::from(0u64),
             utxos: aged_tree.clone(),
             total_stake,
             lottery_0,
@@ -642,6 +646,7 @@ mod pol_tests {
         let epoch_state = EpochState {
             epoch: 1.into(),
             nonce: Fr::from(999u64),
+            blend_pow_difficulty: Fr::from(0u64),
             utxos: aged_tree,
             total_stake,
             lottery_0,
@@ -728,6 +733,7 @@ mod pol_tests {
                 NonZero::new(5).unwrap(),
                 NonNegativeRatio::new(1, 10.try_into().unwrap()),
                 1f64.try_into().expect("1 > 0"),
+                NonZero::new(12).unwrap(),
             ),
             sdp_config: SdpConfig {
                 service_params: Arc::new(
@@ -743,7 +749,7 @@ mod pol_tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {
                         rounds_per_epoch: NonZero::new(10u64).unwrap(),
-                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZero::new(3u64).unwrap(),
                         minimum_network_size: NonZero::new(1u64).unwrap(),
                         data_replication_factor: 0,
@@ -756,6 +762,15 @@ mod pol_tests {
                 },
             },
             faucet_pk: None,
+            pow_config: PoWConfig {
+                blend: BlendPoWConfig {
+                    base_difficulty: ModulusShift::new::<19>(),
+                    damping_den_offset: 0,
+                    damping_num: 1.try_into().unwrap(),
+                    max_step: 1.try_into().unwrap(),
+                    target_transactions_per_block: 1.try_into().unwrap(),
+                },
+            },
         }
     }
 

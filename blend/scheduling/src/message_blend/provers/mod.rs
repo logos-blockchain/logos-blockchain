@@ -10,7 +10,10 @@ use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 
 pub mod core;
 pub mod core_and_leader;
+pub mod core_leader_and_pow;
 pub mod leader;
+pub mod leader_and_pow;
+pub mod pow;
 
 #[cfg(test)]
 mod test_utils;

@@ -190,8 +190,10 @@ async fn channel_deposit() {
     assert_eq!(amount, deposit_amount);
     assert_eq!(metadata, deposit_op.metadata);
     // The deposit consumes its inputs and re-creates them as channel notes,
-    // one per input.
+    // one per input. The event carries each re-created note's id, value, and
+    // owning key, so the per-note values sum back to the deposit amount.
     assert_eq!(notes.len(), deposit_op.inputs.len());
+    assert_eq!(notes.iter().map(|note| note.value).sum::<u64>(), amount);
 
     let balance_after = get_wallet_balance(&validator.client, funding_pk).await;
     let spent = balance_before - balance_after;

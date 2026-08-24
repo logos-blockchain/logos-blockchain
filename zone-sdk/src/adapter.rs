@@ -231,11 +231,27 @@ pub(crate) fn has_channel_deposit<State: VerificationState>(
     })
 }
 
-/// Builds a `(tx_hash, op_id) -> (amount, created notes)` lookup from a
-/// block's events, keeping only deposit events.
-pub(crate) fn build_deposit_events(
-    events: &Events,
-) -> HashMap<(TxHash, Hash), (Value, DepositRecreatedNotes)> {
+/// Identity of a deposit op within a block: its containing tx and the op id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct DepositOpKey {
+    pub tx_hash: TxHash,
+    pub op_id: Hash,
+}
+
+/// A deposit's block-event payload: the deposited total and the channel
+/// notes the deposit re-created.
+#[derive(Debug, Clone)]
+pub(crate) struct DepositEvent {
+    pub amount: Value,
+    pub notes: DepositRecreatedNotes,
+}
+
+/// Per-block lookup of deposit events by op identity.
+pub(crate) type DepositEvents = HashMap<DepositOpKey, DepositEvent>;
+
+/// Builds the [`DepositEvents`] lookup from a block's events, keeping only
+/// deposit events.
+pub(crate) fn build_deposit_events(events: &Events) -> DepositEvents {
     events
         .iter()
         .filter_map(|event| match event {
@@ -243,7 +259,16 @@ pub(crate) fn build_deposit_events(
                 tx_hash,
                 op_id,
                 payload: TxEventPayload::Deposit { amount, notes, .. },
-            }) => Some(((*tx_hash, *op_id), (*amount, notes.clone()))),
+            }) => Some((
+                DepositOpKey {
+                    tx_hash: *tx_hash,
+                    op_id: *op_id,
+                },
+                DepositEvent {
+                    amount: *amount,
+                    notes: notes.clone(),
+                },
+            )),
             Event::Tx { .. } | Event::Header(_) => None,
         })
         .collect()
@@ -254,7 +279,7 @@ pub(crate) fn build_deposit_events(
 fn block_to_messages<State: VerificationState>(
     transactions: Vec<SignedMantleTx<State>>,
     channel_id: ChannelId,
-    deposit_events: &HashMap<(TxHash, Hash), (Value, DepositRecreatedNotes)>,
+    deposit_events: &DepositEvents,
 ) -> Vec<ZoneMessage> {
     transactions
         .into_iter()
@@ -277,7 +302,7 @@ fn op_to_zone_message(
     op: &Op,
     tx_hash: TxHash,
     channel_id: ChannelId,
-    deposit_events: &HashMap<(TxHash, Hash), (Value, DepositRecreatedNotes)>,
+    deposit_events: &DepositEvents,
 ) -> Option<ZoneMessage> {
     match op {
         Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
@@ -288,24 +313,29 @@ fn op_to_zone_message(
         }
         Op::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
             let op_id = deposit.op_id();
-            if let Some((amount, notes)) = deposit_events.get(&(tx_hash, op_id)) {
-                Some(ZoneMessage::Deposit(Deposit {
-                    tx_hash,
-                    op_id,
-                    inputs: deposit.inputs.clone(),
-                    notes: notes.clone(),
-                    amount: *amount,
-                    metadata: deposit.metadata.clone(),
-                }))
-            } else {
-                warn!(
-                    target: TARGET,
-                    ?tx_hash,
-                    ?op_id,
-                    "Deposit op has no matching event in block; skipping"
-                );
-                None
-            }
+            deposit_events
+                .get(&DepositOpKey { tx_hash, op_id })
+                .map_or_else(
+                    || {
+                        warn!(
+                            target: TARGET,
+                            ?tx_hash,
+                            ?op_id,
+                            "Deposit op has no matching event in block; skipping"
+                        );
+                        None
+                    },
+                    |event| {
+                        Some(ZoneMessage::Deposit(Deposit {
+                            tx_hash,
+                            op_id,
+                            inputs: deposit.inputs.clone(),
+                            notes: event.notes.clone(),
+                            amount: event.amount,
+                            metadata: deposit.metadata.clone(),
+                        }))
+                    },
+                )
         }
         Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
             Some(ZoneMessage::Withdraw(Withdraw {
@@ -381,14 +411,26 @@ mod tests {
 
         // Both deposits get an event, so channel filtering is proven to be
         // the reason the foreign one is dropped — not a missing amount.
-        let deposit_events = HashMap::from([
+        let deposit_events = DepositEvents::from([
             (
-                (tx_a_hash, our_deposit.op_id()),
-                (1234, DepositRecreatedNotes::default()),
+                DepositOpKey {
+                    tx_hash: tx_a_hash,
+                    op_id: our_deposit.op_id(),
+                },
+                DepositEvent {
+                    amount: 1234,
+                    notes: DepositRecreatedNotes::default(),
+                },
             ),
             (
-                (tx_a_hash, foreign_deposit.op_id()),
-                (999, DepositRecreatedNotes::default()),
+                DepositOpKey {
+                    tx_hash: tx_a_hash,
+                    op_id: foreign_deposit.op_id(),
+                },
+                DepositEvent {
+                    amount: 999,
+                    notes: DepositRecreatedNotes::default(),
+                },
             ),
         ]);
 

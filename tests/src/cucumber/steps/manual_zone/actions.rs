@@ -27,12 +27,12 @@ use super::{
     steps::DEFAULT_ZONE_SEQUENCER,
     support::{
         AtomicZoneDepositRequest, CustomRepublishDeps, DiscardedPayloads, PublishDeadline,
-        ZoneAccountBalances, ZoneDeposit, build_zone_deposit, ensure_zone_transactions_included,
-        keygen, publish_atomic_zone_withdraw, publish_message_with_retry, sequencer_config,
-        sequencer_config_with_pending_submit_depth, start_balance_aware_policy,
-        start_custom_republish_policy, start_republish_lineage_policy, start_sequencer_event_loop,
-        start_sorted_conflict_policy, submit_atomic_zone_deposit, submit_zone_deposit,
-        submit_zone_withdraw,
+        ZoneAccountBalances, ZoneDeposit, build_zone_deposit, build_zone_deposit_from_values,
+        ensure_zone_transactions_included, keygen, publish_atomic_zone_withdraw,
+        publish_message_with_retry, sequencer_config, sequencer_config_with_pending_submit_depth,
+        start_balance_aware_policy, start_custom_republish_policy, start_republish_lineage_policy,
+        start_sequencer_event_loop, start_sorted_conflict_policy, submit_atomic_zone_deposit,
+        submit_zone_deposit, submit_zone_withdraw,
     },
     tables::{ConcurrentZoneMessageRow, ZoneNodeResourcesRow, group_zone_messages_by_sequencer},
 };
@@ -64,7 +64,10 @@ const SEQUENCER_READY_TIMEOUT: Duration = Duration::from_mins(2);
 const SEQUENCER_READY_POLL_TIMEOUT: Duration = Duration::from_secs(10);
 const SEQUENCER_READY_HEIGHT_ADVANCE_TIMEOUT: Duration = Duration::from_secs(30);
 const ZONE_SECURITY_PARAM: u32 = 5;
-const ZONE_TEST_PRIORITY_FEE: u64 = 400;
+// These high-volume scenarios can move storage prices before all queued
+// publishes are included. Keep their test funding comfortably above the
+// public 12% default so they exercise sequencing rather than fee starvation.
+const ZONE_TEST_PRIORITY_FEE_PERCENT: u64 = 50;
 
 pub(super) enum DriveMode {
     Passive {
@@ -435,6 +438,48 @@ pub(super) async fn submit_zone_deposit_transaction(
     Ok(())
 }
 
+/// Submits a multi-input channel deposit that consumes one wallet note per
+/// listed value, exercising the channel wallet's per-note value tracking.
+pub(super) async fn submit_zone_multi_deposit_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    transaction_alias: String,
+    channel_alias: String,
+    input_values: Vec<u64>,
+    metadata: Metadata,
+) -> StepResult {
+    let node_url = log_step_error(step, world.zone_node_url_for_sequencer(&channel_alias))?;
+    let wallet = log_step_error(step, resolve_zone_wallet(world, &channel_alias))?;
+    let public_key = log_step_error(step, wallet.public_key())?;
+    let available_utxos = log_step_error(
+        step,
+        current_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
+    )?;
+    let amount: u64 = input_values.iter().sum();
+    let ZoneDeposit {
+        deposit,
+        reserved_inputs,
+    } = build_zone_deposit_from_values(
+        available_utxos,
+        world.zone.sequencer_channel_id(&channel_alias)?,
+        &input_values,
+        metadata,
+    )
+    .map_err(|error| zone_step_error(step, &error))?;
+
+    let response = submit_zone_deposit(&node_url, &deposit, public_key)
+        .await
+        .map_err(|error| zone_step_error(step, &error))?;
+
+    world
+        .zone
+        .remember_submitted_deposit(transaction_alias.clone(), deposit, amount);
+    record_zone_wallet_submission(world, &wallet.wallet_name, response, reserved_inputs)?;
+    world.remember_submitted_transaction(transaction_alias, response);
+
+    Ok(())
+}
+
 pub(super) async fn submit_atomic_zone_deposit_transaction(
     world: &mut CucumberWorld,
     step: &Step,
@@ -752,7 +797,7 @@ fn sequencer_funding(
     Ok(FundingConfig {
         funding_pk,
         max_tx_fee: GasCost::new(u64::MAX),
-        priority_fee: ZONE_TEST_PRIORITY_FEE,
+        priority_fee_percent: ZONE_TEST_PRIORITY_FEE_PERCENT,
     })
 }
 

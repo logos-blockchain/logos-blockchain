@@ -1,4 +1,5 @@
-mod utils;
+use core::{num::NonZeroU64, time::Duration};
+use std::collections::VecDeque;
 
 use futures::{StreamExt as _, stream::repeat};
 use lb_blend::{
@@ -26,18 +27,24 @@ use crate::{
         state::ServiceState,
         tests::utils::{
             MockKmsAdapter, MockProofsVerifier, NodeId, TestBlendBackend, TestBlendBackendEvent,
-            TestNetworkAdapter, dummy_overwatch_resources, dummy_pol_private_inputs,
-            new_crypto_processor, new_epoch_info, new_membership, new_stream,
-            recorded_set_epoch_private_calls, reset_set_epoch_private_calls, reward_epoch_info,
-            scheduler_epoch_info, scheduler_settings, sdp_relay, settings, timing_settings,
-            wait_for_blend_backend_event,
+            TestPayloadDispatcher, backend_epoch_info, dummy_overwatch_resources,
+            dummy_pol_private_inputs, new_crypto_processor, new_epoch_info, new_membership,
+            new_stream, outgoing_messages_recorder, recorded_set_epoch_private_calls,
+            reset_set_epoch_private_calls, reward_epoch_info, scheduler_epoch_info,
+            scheduler_settings, sdp_relay, settings, timing_settings, wait_for_blend_backend_event,
         },
     },
     epoch::{CoreEpochInfo, CoreEpochPublicInfo},
     epoch_info::PolEpochInfo,
     membership::{MembershipInfo, ZkInfo, chain::BlendEpochState},
-    test_utils::{crypto::MockCoreAndLeaderProofsGenerator, epoch::OncePolStreamProvider},
+    message::{BlendPayload, ServiceMessage},
+    test_utils::{
+        crypto::{GatedPowProofsGenerator, MockCoreAndLeaderProofsGenerator, PowGate},
+        epoch::OncePolStreamProvider,
+    },
 };
+
+mod utils;
 
 type RuntimeServiceId = ();
 
@@ -46,6 +53,7 @@ fn test_blend_epoch_state(
     membership_info: MembershipInfo<NodeId>,
 ) -> BlendEpochState<NodeId> {
     BlendEpochState {
+        pow_difficulty: ZkHash::ZERO,
         epoch: epoch.into(),
         nonce: ZkHash::ZERO,
         aged: ZkHash::ZERO,
@@ -84,7 +92,7 @@ async fn test_handle_incoming_blend_message() {
     );
     let payload = vec![];
     let msg = processor
-        .encapsulate_data_payload(&payload)
+        .encapsulate_block_proposal_payload(&payload)
         .await
         .expect("encapsulation must succeed");
 
@@ -97,16 +105,17 @@ async fn test_handle_incoming_blend_message() {
     );
     let recovery_checkpoint = ServiceState::with_epoch(
         epoch,
+        VecDeque::new(),
         EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info)),
         None,
         state_updater,
     )
     .unwrap();
     let recovery_checkpoint = handle_incoming_blend_message(
-        (msg.clone().into(), 0.into()),
+        (msg.clone(), 0.into()),
         &mut scheduler,
         None,
-        &processor,
+        processor.receiver(),
         None,
         recovery_checkpoint,
     );
@@ -120,7 +129,9 @@ async fn test_handle_incoming_blend_message() {
     );
 
     // Creates a new processor/scheduler/token_collector with the new epoch
-    // number.
+    // number. The outgoing processor is retired into its receive-only form,
+    // which is all it is good for during the transition period.
+    let processor = processor.rotate_epoch();
     epoch = epoch.strict_add(1.into());
     let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let mut new_processor = new_crypto_processor(
@@ -133,7 +144,7 @@ async fn test_handle_incoming_blend_message() {
     );
     let (mut new_scheduler, mut scheduler) =
         scheduler.rotate_epoch(scheduler_epoch_info(&public_info), scheduler_settings);
-    let (_, _, _, _, current_token_collector, _, state_updater) =
+    let (_, _, _, _, _, current_token_collector, _, state_updater) =
         recovery_checkpoint.into_components();
     let (new_token_collector, old_token_collector) =
         current_token_collector.rotate_epoch(&reward_epoch_info(&public_info));
@@ -143,16 +154,17 @@ async fn test_handle_incoming_blend_message() {
     // scheduler.
     let recovery_checkpoint = ServiceState::with_epoch(
         epoch,
+        VecDeque::new(),
         new_token_collector,
         Some(old_token_collector),
         state_updater,
     )
     .unwrap();
     let recovery_checkpoint = handle_incoming_blend_message(
-        (msg.clone().into(), 0.into()),
+        (msg.clone(), 0.into()),
         &mut new_scheduler,
         Some(&mut scheduler),
-        &new_processor,
+        new_processor.receiver(),
         Some(&processor),
         recovery_checkpoint,
     );
@@ -183,14 +195,14 @@ async fn test_handle_incoming_blend_message() {
     // Check that a new message built with the new processor is decapsulated
     // with the new processor and scheduled in the new scheduler.
     let msg = new_processor
-        .encapsulate_data_payload(&payload)
+        .encapsulate_block_proposal_payload(&payload)
         .await
         .expect("encapsulation must succeed");
     let recovery_checkpoint = handle_incoming_blend_message(
-        (msg.into(), 1.into()),
+        (msg, 1.into()),
         &mut new_scheduler,
         Some(&mut scheduler),
-        &new_processor,
+        new_processor.receiver(),
         Some(&processor),
         recovery_checkpoint,
     );
@@ -229,14 +241,14 @@ async fn test_handle_incoming_blend_message() {
         (),
     );
     let msg = future_processor
-        .encapsulate_data_payload(&payload)
+        .encapsulate_block_proposal_payload(&payload)
         .await
         .expect("encapsulation must succeed");
     let recovery_checkpoint = handle_incoming_blend_message(
-        (msg.into(), 2.into()),
+        (msg, 2.into()),
         &mut new_scheduler,
         Some(&mut scheduler),
-        &new_processor,
+        new_processor.receiver(),
         Some(&processor),
         recovery_checkpoint,
     );
@@ -320,11 +332,11 @@ async fn test_duplicate_decapsulated_replica_handled_gracefully() {
     // distinct encapsulated messages (different identifiers) that the swarm
     // would forward independently — exactly the replicas the service produces.
     let replica_a = processor
-        .encapsulate_data_payload(&payload)
+        .encapsulate_block_proposal_payload(&payload)
         .await
         .expect("encapsulation must succeed");
     let replica_b = processor
-        .encapsulate_data_payload(&payload)
+        .encapsulate_block_proposal_payload(&payload)
         .await
         .expect("encapsulation must succeed");
     assert_ne!(
@@ -340,6 +352,7 @@ async fn test_duplicate_decapsulated_replica_handled_gracefully() {
     );
     let recovery_checkpoint = ServiceState::with_epoch(
         epoch,
+        VecDeque::new(),
         EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info)),
         None,
         state_updater,
@@ -348,10 +361,10 @@ async fn test_duplicate_decapsulated_replica_handled_gracefully() {
 
     // First replica: decapsulated and recorded as an unsent processed message.
     let recovery_checkpoint = handle_incoming_blend_message(
-        (replica_a.into(), epoch),
+        (replica_a, epoch),
         &mut scheduler,
         None,
-        &processor,
+        processor.receiver(),
         None,
         recovery_checkpoint,
     );
@@ -365,10 +378,10 @@ async fn test_duplicate_decapsulated_replica_handled_gracefully() {
     // The insert into `unsent_processed_messages` returns `Err`, but it is now
     // treated as a known duplicate instead of panicking the task.
     let recovery_checkpoint = handle_incoming_blend_message(
-        (replica_b.into(), epoch),
+        (replica_b, epoch),
         &mut scheduler,
         None,
-        &processor,
+        processor.receiver(),
         None,
         recovery_checkpoint,
     );
@@ -407,7 +420,7 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
 
     let payload = vec![];
     let msg = processor_0
-        .encapsulate_data_payload(&payload)
+        .encapsulate_block_proposal_payload(&payload)
         .await
         .expect("encapsulation must succeed");
 
@@ -432,6 +445,7 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
     );
     let recovery_checkpoint = ServiceState::with_epoch(
         epoch_1,
+        VecDeque::new(),
         EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info_1)),
         None,
         state_updater,
@@ -442,10 +456,10 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
     // Signature is valid (built correctly) but PoQ will fail because the
     // MockProofsVerifier for epoch 1 expects epoch 1 proofs.
     drop(handle_incoming_blend_message(
-        (msg.into(), epoch_1),
+        (msg, epoch_1),
         &mut scheduler,
         None,
-        &processor_1,
+        processor_1.receiver(),
         None,
         recovery_checkpoint,
     ));
@@ -478,10 +492,10 @@ async fn test_handle_epoch_transition_expired() {
 
     // Create backend.
     let public_info = new_epoch_info(epoch, membership.clone(), &settings);
-    let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
-        (public_info.membership.clone(), public_info.epoch),
+        backend_epoch_info(&public_info),
         BlakeRng::from_entropy(),
     );
     let mut backend_event_receiver = backend.subscribe_to_events();
@@ -505,7 +519,7 @@ async fn test_handle_epoch_transition_expired() {
     let (sdp_relay, mut sdp_relay_receiver) = sdp_relay();
 
     // Call `handle_epoch_transition_expired`.
-    handle_epoch_transition_expired::<_, NodeId, BlakeRng, _>(
+    handle_epoch_transition_expired::<_, NodeId, BlakeRng, MockProofsVerifier, _>(
         &mut backend,
         token_collector,
         &sdp_relay,
@@ -562,10 +576,10 @@ async fn test_handle_epoch_event() {
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
-    let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
-        (public_info.membership.clone(), public_info.epoch),
+        backend_epoch_info(&public_info),
         BlakeRng::from_entropy(),
     );
     let mut backend_event_receiver = backend.subscribe_to_events();
@@ -587,7 +601,14 @@ async fn test_handle_epoch_event() {
         crypto_processor,
         scheduler,
         public_info,
-        ServiceState::with_epoch(epoch, token_collector, None, state_updater.clone()).unwrap(),
+        ServiceState::with_epoch(
+            epoch,
+            VecDeque::new(),
+            token_collector,
+            None,
+            state_updater.clone(),
+        )
+        .unwrap(),
         &mut backend,
         &sdp_relay,
         &mut None,
@@ -728,10 +749,10 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
-    let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
-        (public_info.membership.clone(), public_info.epoch),
+        backend_epoch_info(&public_info),
         BlakeRng::from_entropy(),
     );
     let mut backend_event_receiver = backend.subscribe_to_events();
@@ -760,7 +781,14 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
         crypto_processor,
         scheduler,
         public_info,
-        ServiceState::with_epoch(epoch, token_collector, None, state_updater.clone()).unwrap(),
+        ServiceState::with_epoch(
+            epoch,
+            VecDeque::new(),
+            token_collector,
+            None,
+            state_updater.clone(),
+        )
+        .unwrap(),
         &mut backend,
         &sdp_relay,
         &mut None,
@@ -823,10 +851,10 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
-    let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
-        (public_info.membership.clone(), public_info.epoch),
+        backend_epoch_info(&public_info),
         BlakeRng::from_entropy(),
     );
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
@@ -853,7 +881,14 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
         crypto_processor,
         scheduler,
         public_info,
-        ServiceState::with_epoch(epoch, token_collector, None, state_updater.clone()).unwrap(),
+        ServiceState::with_epoch(
+            epoch,
+            VecDeque::new(),
+            token_collector,
+            None,
+            state_updater.clone(),
+        )
+        .unwrap(),
         &mut backend,
         &sdp_relay,
         &mut Some(secret_info),
@@ -917,10 +952,10 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
-    let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
-        (public_info.membership.clone(), public_info.epoch),
+        backend_epoch_info(&public_info),
         BlakeRng::from_entropy(),
     );
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
@@ -933,7 +968,14 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
         crypto_processor,
         scheduler,
         public_info.clone(),
-        ServiceState::with_epoch(epoch, token_collector, None, state_updater.clone()).unwrap(),
+        ServiceState::with_epoch(
+            epoch,
+            VecDeque::new(),
+            token_collector,
+            None,
+            state_updater.clone(),
+        )
+        .unwrap(),
         &mut backend,
         &sdp_relay,
         &mut None,
@@ -983,10 +1025,10 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
-    let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
-        (public_info.membership.clone(), public_info.epoch),
+        backend_epoch_info(&public_info),
         BlakeRng::from_entropy(),
     );
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
@@ -1006,7 +1048,14 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
         crypto_processor,
         scheduler,
         public_info.clone(),
-        ServiceState::with_epoch(epoch, token_collector, None, state_updater.clone()).unwrap(),
+        ServiceState::with_epoch(
+            epoch,
+            VecDeque::new(),
+            token_collector,
+            None,
+            state_updater.clone(),
+        )
+        .unwrap(),
         &mut backend,
         &sdp_relay,
         &mut None,
@@ -1073,13 +1122,14 @@ async fn complete_old_epoch_after_main_loop_done() {
         current_public_info,
         crypto_processor,
         current_recovery_checkpoint,
+        pending_transactions,
         message_scheduler,
         mut backend,
         mut rng,
     ) = initialize::<
         NodeId,
         TestBlendBackend,
-        TestNetworkAdapter,
+        TestPayloadDispatcher,
         MockCoreAndLeaderProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
@@ -1113,10 +1163,11 @@ async fn complete_old_epoch_after_main_loop_done() {
             &mut remaining_epoch_stream,
             &settings_cloned,
             &mut backend,
-            &TestNetworkAdapter,
+            &TestPayloadDispatcher,
             &sdp_relay,
             message_scheduler.into(),
             &mut rng,
+            pending_transactions,
             crypto_processor,
             current_public_info,
             current_recovery_checkpoint,
@@ -1127,7 +1178,7 @@ async fn complete_old_epoch_after_main_loop_done() {
             blend_message_stream.map(|(msg, _)| msg),
             remaining_epoch_stream,
             backend,
-            TestNetworkAdapter,
+            TestPayloadDispatcher,
             sdp_relay,
             old_epoch_message_scheduler,
             rng,
@@ -1220,13 +1271,14 @@ async fn stop_on_empty_epoch() {
         current_public_info,
         crypto_processor,
         current_recovery_checkpoint,
+        pending_transactions,
         message_scheduler,
         mut backend,
         mut rng,
     ) = initialize::<
         NodeId,
         TestBlendBackend,
-        TestNetworkAdapter,
+        TestPayloadDispatcher,
         MockCoreAndLeaderProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
@@ -1260,10 +1312,11 @@ async fn stop_on_empty_epoch() {
             &mut remaining_epoch_stream,
             &settings_cloned,
             &mut backend,
-            &TestNetworkAdapter,
+            &TestPayloadDispatcher,
             &sdp_relay,
             message_scheduler.into(),
             &mut rng,
+            pending_transactions,
             crypto_processor,
             current_public_info,
             current_recovery_checkpoint,
@@ -1274,7 +1327,7 @@ async fn stop_on_empty_epoch() {
             blend_message_stream.map(|(msg, _)| msg),
             remaining_epoch_stream,
             backend,
-            TestNetworkAdapter,
+            TestPayloadDispatcher,
             sdp_relay,
             old_epoch_message_scheduler,
             rng,
@@ -1356,13 +1409,14 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
         current_public_info,
         crypto_processor,
         current_recovery_checkpoint,
+        pending_transactions,
         message_scheduler,
         mut backend,
         mut rng,
     ) = initialize::<
         NodeId,
         TestBlendBackend,
-        TestNetworkAdapter,
+        TestPayloadDispatcher,
         MockCoreAndLeaderProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
@@ -1396,10 +1450,11 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
             &mut remaining_epoch_stream,
             &settings_cloned,
             &mut backend,
-            &TestNetworkAdapter,
+            &TestPayloadDispatcher,
             &sdp_relay,
             message_scheduler.into(),
             &mut rng,
+            pending_transactions,
             crypto_processor,
             current_public_info,
             current_recovery_checkpoint,
@@ -1410,7 +1465,7 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
             blend_message_stream.map(|(msg, _)| msg),
             remaining_epoch_stream,
             backend,
-            TestNetworkAdapter,
+            TestPayloadDispatcher,
             sdp_relay,
             old_epoch_message_scheduler,
             rng,
@@ -1487,13 +1542,13 @@ async fn test_proof_generator_epoch_binding() {
     // Build a message with epoch 0 proofs.
     let payload = vec![];
     let msg_0 = generator_0
-        .encapsulate_data_payload(&payload)
+        .encapsulate_block_proposal_payload(&payload)
         .await
         .expect("encapsulation with epoch 0 must succeed");
 
     // Build a message with epoch 1 proofs.
     let msg_1 = generator_1
-        .encapsulate_data_payload(&payload)
+        .encapsulate_block_proposal_payload(&payload)
         .await
         .expect("encapsulation with epoch 1 must succeed");
 
@@ -1508,16 +1563,17 @@ async fn test_proof_generator_epoch_binding() {
     );
     let recovery_checkpoint = ServiceState::with_epoch(
         epoch_0,
+        VecDeque::new(),
         EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info_0)),
         None,
         state_updater,
     )
     .unwrap();
     drop(handle_incoming_blend_message(
-        (msg_0.clone().into(), epoch_0),
+        (msg_0.clone(), epoch_0),
         &mut scheduler_0,
         None,
-        &generator_0,
+        generator_0.receiver(),
         None,
         recovery_checkpoint,
     ));
@@ -1538,16 +1594,17 @@ async fn test_proof_generator_epoch_binding() {
     );
     let recovery_checkpoint = ServiceState::with_epoch(
         epoch_0,
+        VecDeque::new(),
         EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info_0)),
         None,
         state_updater,
     )
     .unwrap();
     drop(handle_incoming_blend_message(
-        (msg_1.clone().into(), epoch_0),
+        (msg_1.clone(), epoch_0),
         &mut scheduler_0_only,
         None,
-        &generator_0,
+        generator_0.receiver(),
         None,
         recovery_checkpoint,
     ));
@@ -1570,16 +1627,17 @@ async fn test_proof_generator_epoch_binding() {
     );
     let recovery_checkpoint = ServiceState::with_epoch(
         epoch_1,
+        VecDeque::new(),
         EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info_1)),
         None,
         state_updater,
     )
     .unwrap();
     drop(handle_incoming_blend_message(
-        (msg_1.into(), epoch_1),
+        (msg_1, epoch_1),
         &mut scheduler_1,
         None,
-        &generator_1,
+        generator_1.receiver(),
         None,
         recovery_checkpoint,
     ));
@@ -1631,11 +1689,17 @@ async fn test_initialize_recovers_matching_saved_state() {
     // Build a pre-populated saved state with matching epoch and some spent quota.
     let public_info = new_epoch_info(initial_epoch, membership.clone(), &settings);
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
-    let saved_state =
-        ServiceState::with_epoch(initial_epoch, token_collector, None, state_updater.clone())
-            .unwrap();
+    let saved_state = ServiceState::with_epoch(
+        initial_epoch,
+        VecDeque::new(),
+        token_collector,
+        None,
+        state_updater.clone(),
+    )
+    .unwrap();
     let mut updater = saved_state.start_updating();
     updater.consume_core_quota(Quota::new::<5>());
+    updater.queue_unencapsulated_transaction(b"transaction".to_vec());
     let saved_state = updater.commit_changes();
 
     let (
@@ -1643,13 +1707,14 @@ async fn test_initialize_recovers_matching_saved_state() {
         _current_public_info,
         _crypto_processor,
         recovered_checkpoint,
+        _pending_transactions,
         _message_scheduler,
         _backend,
         _rng,
     ) = initialize::<
         NodeId,
         TestBlendBackend,
-        TestNetworkAdapter,
+        TestPayloadDispatcher,
         MockCoreAndLeaderProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
@@ -1671,6 +1736,13 @@ async fn test_initialize_recovers_matching_saved_state() {
         "Matching epoch: spent_quota should be restored from saved state"
     );
     assert_eq!(recovered_checkpoint.last_seen_epoch(), initial_epoch);
+    // A transaction still waiting for a `PoW` solution has not been encapsulated
+    // and so belongs to no epoch: a restart must not lose it.
+    assert_eq!(
+        recovered_checkpoint.pending_transactions().front(),
+        Some(&b"transaction".to_vec()),
+        "Matching epoch: a queued transaction should be restored from saved state"
+    );
 
     // Mismatched epoch: fresh state should be created
 
@@ -1699,6 +1771,7 @@ async fn test_initialize_recovers_matching_saved_state() {
         EpochBlendingTokenCollector::new(&reward_epoch_info(&stale_public_info));
     let stale_state = ServiceState::with_epoch(
         99.into(),
+        VecDeque::new(),
         stale_token_collector,
         None,
         state_updater2.clone(),
@@ -1706,6 +1779,7 @@ async fn test_initialize_recovers_matching_saved_state() {
     .unwrap();
     let mut updater = stale_state.start_updating();
     updater.consume_core_quota(Quota::new::<42>());
+    updater.queue_unencapsulated_transaction(b"stale epoch transaction".to_vec());
     let stale_state = updater.commit_changes();
 
     let (
@@ -1713,13 +1787,14 @@ async fn test_initialize_recovers_matching_saved_state() {
         _current_public_info2,
         _crypto_processor2,
         recovered_checkpoint2,
+        pending_transactions2,
         _message_scheduler2,
         _backend2,
         _rng2,
     ) = initialize::<
         NodeId,
         TestBlendBackend,
-        TestNetworkAdapter,
+        TestPayloadDispatcher,
         MockCoreAndLeaderProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
@@ -1745,4 +1820,168 @@ async fn test_initialize_recovers_matching_saved_state() {
         initial_epoch,
         "Mismatched epoch: should track the current epoch, not the stale one"
     );
+    // The rest of a stale state belongs to the epoch it was saved under, but a
+    // transaction still waiting for a `PoW` solution has not been encapsulated
+    // and so belongs to none.
+    assert_eq!(
+        recovered_checkpoint2.pending_transactions().front(),
+        Some(&b"stale epoch transaction".to_vec()),
+        "Mismatched epoch: a queued transaction should outlive the state that carried it"
+    );
+    assert_eq!(
+        pending_transactions2.front(),
+        Some(&b"stale epoch transaction".to_vec()),
+        "Mismatched epoch: the queue handed to the event loop should carry it too"
+    );
+}
+
+/// A transaction waits for a `PoW` solution without holding up anything else.
+///
+/// The puzzle search behind a transaction's layer proofs takes long enough that
+/// awaiting it where the transaction arrives would stop the service dead: no
+/// incoming messages, no release rounds, no epoch events, no cover traffic. So
+/// the transaction is queued and mined for on its own branch of the event loop,
+/// and this test pins that down by getting a block proposal all the way out
+/// while the transaction is still waiting for its solution.
+#[test_log::test(tokio::test)]
+async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let mut settings = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+    // No cover traffic, so every message the service sends is one this test put
+    // in and the count below means what it says. The frequency itself must stay
+    // positive (`C * ß_c > 0`), so the silence comes from the quota instead:
+    // `Q_c = ceil(10 rounds * 0.05 * 2 layers / 2 nodes) = ceil(0.5) = 1`, and
+    // the scheduler floors its cover count at `Q_c / num_blend_layers = 0`.
+    // Anything in `(0, 0.1]` gives the same quota, so the halfway point keeps
+    // float drift well clear of either rounding boundary.
+    settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
+    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+
+    let (inbound_relay, inbound_message_sender) = new_stream();
+    let (mut blend_message_stream, _blend_message_sender) = new_stream();
+    let (membership_stream, membership_sender) = new_stream();
+
+    let membership_info = MembershipInfo {
+        membership,
+        zk: Some(ZkInfo {
+            root: ZkHash::ZERO,
+            core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
+        }),
+    };
+    membership_sender
+        .send(test_blend_epoch_state(0, membership_info))
+        .await
+        .unwrap();
+
+    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources();
+
+    // Both installed before the service exists, so nothing is missed.
+    let pow_gate = PowGate::setup();
+    let mut outgoing_messages = outgoing_messages_recorder();
+
+    let (
+        mut remaining_epoch_stream,
+        current_public_info,
+        crypto_processor,
+        current_recovery_checkpoint,
+        pending_transactions,
+        message_scheduler,
+        mut backend,
+        mut rng,
+    ) = initialize::<
+        NodeId,
+        TestBlendBackend,
+        TestPayloadDispatcher,
+        GatedPowProofsGenerator,
+        MockProofsVerifier,
+        MockKmsAdapter,
+        RuntimeServiceId,
+    >(
+        settings.clone(),
+        membership_stream,
+        overwatch_handle.clone(),
+        MockKmsAdapter,
+        &sdp_relay,
+        None,
+        state_updater,
+    )
+    .await;
+
+    tokio::spawn(async move {
+        let secret_pol_info_stream =
+            post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
+        run_event_loop(
+            inbound_relay,
+            &mut blend_message_stream,
+            secret_pol_info_stream,
+            &mut remaining_epoch_stream,
+            &settings,
+            &mut backend,
+            &TestPayloadDispatcher,
+            &sdp_relay,
+            message_scheduler.into(),
+            &mut rng,
+            pending_transactions,
+            crypto_processor,
+            current_public_info,
+            current_recovery_checkpoint,
+        )
+        .await;
+    });
+
+    // The transaction goes in first, so if the loop blocked on mining, the
+    // proposal queued behind it could never get out.
+    inbound_message_sender
+        .send(ServiceMessage::Blend(BlendPayload::Transaction(
+            b"transaction".to_vec(),
+        )))
+        .await
+        .unwrap();
+    inbound_message_sender
+        .send(ServiceMessage::Blend(BlendPayload::BlockProposal(
+            b"proposal".to_vec(),
+        )))
+        .await
+        .unwrap();
+
+    // The proposal gets out while the transaction is still mining. Nothing else
+    // can be in flight: cover traffic is off and the gate is shut. A stalled
+    // loop shows up as a timeout here rather than as a hung test.
+    expect_outgoing_message(
+        &mut outgoing_messages,
+        "the block proposal should be sent while the transaction is still mining",
+    )
+    .await;
+
+    // And the transaction follows once its solution lands.
+    pow_gate.release();
+    expect_outgoing_message(
+        &mut outgoing_messages,
+        "the transaction should be sent once its PoW solution lands",
+    )
+    .await;
+}
+
+/// Waits for the service to send one message onwards, failing rather than
+/// hanging if it never does.
+async fn expect_outgoing_message(
+    outgoing_messages: &mut tokio::sync::mpsc::UnboundedReceiver<()>,
+    expectation: &str,
+) {
+    // Generous next to the release round the message has to wait for, and only
+    // ever reached when the assertion has already failed.
+    const GRACE: Duration = Duration::from_secs(10);
+
+    tokio::time::timeout(GRACE, outgoing_messages.recv())
+        .await
+        .unwrap_or_else(|_| panic!("timed out: {expectation}"))
+        .unwrap_or_else(|| panic!("service stopped sending: {expectation}"));
 }

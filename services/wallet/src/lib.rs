@@ -17,7 +17,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         NoteId, Op, OpProof, SignedMantleTx, TxHash, Utxo, Value, VerificationError,
-        gas::{GasCost, GasOverflow, MainnetGasConstants},
+        gas::{GasCost, GasOverflow, MainnetGasProfile},
         ledger::Inputs,
         ops::{
             NoOpProof, ZkAndEd25519Proof,
@@ -158,7 +158,9 @@ pub enum WalletMsg {
         tx_builder: MantleTxBuilder,
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
-        priority_fee: Value,
+        /// Percentage of the final mandatory fee reserved as a priority-fee
+        /// reserve; only the unused reserve becomes the effective tip.
+        priority_fee_percent: u64,
         resp_tx: Sender<Result<TipResponse<MantleTxBuilder>, WalletServiceError>>,
     },
     BuildLeaderClaimTx {
@@ -535,7 +537,7 @@ where
                 tx_builder,
                 change_pk,
                 funding_pks,
-                priority_fee,
+                priority_fee_percent,
                 resp_tx,
             } => {
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
@@ -557,13 +559,13 @@ where
                     }
                 };
 
-                let funded = match state.fund_tx::<MainnetGasConstants>(
+                let funded = match state.fund_tx::<MainnetGasProfile>(
                     tip,
                     &tx_builder,
                     change_pk,
                     funding_pks,
                     &context,
-                    priority_fee,
+                    priority_fee_percent,
                 ) {
                     Ok(funded) => funded,
                     Err(err) => {
@@ -608,7 +610,13 @@ where
                     funding_pk,
                     max_tx_fee,
                 };
-                let response = Self::build_leader_claim_tx(request, ledger, state, kms).await;
+                // Pinned to keep the future off the stack: `LedgerState` is
+                // passed by value and grew past the `clippy::large_futures`
+                // threshold, by 720 bytes for `PoW` and 112 for the uncle
+                // slots.
+                // TODO: consider passing it by reference so we can remove `Box::pin`.
+                let response =
+                    Box::pin(Self::build_leader_claim_tx(request, ledger, state, kms)).await;
 
                 match response {
                     Ok(built_tx) => {
@@ -1267,7 +1275,7 @@ where
             pk: request.funding_pk,
         }))?;
 
-        let funded_tx_builder = state.fund_tx::<MainnetGasConstants>(
+        let funded_tx_builder = state.fund_tx::<MainnetGasProfile>(
             request.tip,
             &tx_builder,
             request.funding_pk,
@@ -1299,7 +1307,7 @@ where
     ) -> Result<SignedMantleTx<Preverified>, WalletServiceError> {
         let context = ledger.tx_context();
         let net_balance = funded_tx_builder.net_balance();
-        let gas_cost = funded_tx_builder.minimum_gas_cost::<MainnetGasConstants>(&context)?;
+        let gas_cost = funded_tx_builder.minimum_gas_cost::<MainnetGasProfile>(&context)?;
         debug!(
             target: LOG_TARGET,
             net_balance,

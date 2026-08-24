@@ -1,7 +1,7 @@
 //! Configurable [`adapter::Node`] mock and shared builders for unit tests.
 
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     sync::{Arc, Mutex},
 };
 
@@ -12,23 +12,27 @@ use lb_common_http_client::{
     ProcessedBlockEvent, Slot, State, TimeInfo,
 };
 use lb_core::{
+    events::{DepositNote, Event as ChainEvent, TxEvent, TxEventPayload},
     header::{ContentId, HeaderId},
     mantle::{
-        Op, RawMantleTx, SignedMantleTx,
+        Op, RawMantleTx, SignedMantleTx, Value,
         channel::ChannelState,
         gas::GasCost,
         ops::{
-            OpProof,
+            OpId as _, OpProof,
             channel::{
                 ChannelId, MsgId,
                 config::Keys,
+                deposit::DepositOp,
                 inscribe::{Inscription, InscriptionOp},
             },
         },
+        traits::Hashable as _,
         transactions::{Ops, OpsProofs, states::Unverified},
     },
     proofs::leader_proof::Groth16LeaderProof,
 };
+use lb_groth16::Fr;
 use lb_http_api_common::bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody};
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use tokio::sync::{mpsc, watch};
@@ -36,6 +40,7 @@ use tokio::sync::{mpsc, watch};
 use crate::{
     ZoneMessage,
     adapter::{self, BoxStream},
+    sequencer::FundingConfig,
 };
 
 /// One scripted `block_stream` connection: serve `events`, then `then`.
@@ -65,6 +70,10 @@ pub fn scripts(scripts: Vec<StreamScript>) -> Arc<Mutex<VecDeque<StreamScript>>>
 pub struct MockNode {
     /// Served by `channel_state()`.
     pub channel_state: Option<ChannelState>,
+    /// Optional gate for pausing `channel_state()` calls in cancellation tests.
+    pub channel_state_gate: Option<watch::Receiver<bool>>,
+    /// Optional notification sent whenever `channel_state()` is called.
+    pub channel_state_calls: Option<mpsc::UnboundedSender<()>>,
     /// LIB and tip ids reported by `consensus_info()`.
     pub lib: HeaderId,
     pub tip: HeaderId,
@@ -77,6 +86,11 @@ pub struct MockNode {
     pub blocks: Vec<ApiBlock>,
     /// Served by `immutable_blocks()`, filtered by the queried slot range.
     pub immutable: Vec<ApiBlock>,
+    /// Optional gate for pausing `immutable_blocks()` calls in cancellation
+    /// tests.
+    pub immutable_blocks_gate: Option<watch::Receiver<bool>>,
+    /// Optional notification sent whenever `immutable_blocks()` is called.
+    pub immutable_blocks_calls: Option<mpsc::UnboundedSender<()>>,
     /// Served by `zone_messages_in_blocks()`, filtered by the queried slot
     /// range.
     pub zone_messages: Vec<(ZoneMessage, Slot)>,
@@ -85,12 +99,18 @@ pub struct MockNode {
     pub up: Option<watch::Receiver<bool>>,
     /// Receives every `post_transaction` tx.
     pub posted: Option<mpsc::Sender<SignedMantleTx<Unverified>>>,
+    /// Served by `block_events()`, keyed by block id; absent ids yield `None`.
+    pub events: HashMap<HeaderId, Events>,
+    /// Receives the priority-fee percentages from funding requests.
+    pub funding_priority_fees: Option<mpsc::Sender<u64>>,
 }
 
 impl Default for MockNode {
     fn default() -> Self {
         Self {
             channel_state: Some(single_key_channel_state()),
+            channel_state_gate: None,
+            channel_state_calls: None,
             lib: header_id(0),
             tip: header_id(0),
             lib_slot: Slot::genesis(),
@@ -100,9 +120,13 @@ impl Default for MockNode {
             }]),
             blocks: Vec::new(),
             immutable: Vec::new(),
+            immutable_blocks_gate: None,
+            immutable_blocks_calls: None,
             zone_messages: Vec::new(),
             up: None,
             posted: None,
+            events: HashMap::new(),
+            funding_priority_fees: None,
         }
     }
 }
@@ -162,6 +186,21 @@ impl adapter::Node for MockNode {
         &self,
         _channel_id: ChannelId,
     ) -> Result<Option<ChannelState>, lb_common_http_client::Error> {
+        if let Some(calls) = &self.channel_state_calls {
+            let _ = calls.send(());
+        }
+
+        if let Some(gate) = &self.channel_state_gate {
+            let mut gate = gate.clone();
+            while !*gate.borrow_and_update() {
+                gate.changed().await.map_err(|_| {
+                    lb_common_http_client::Error::Client(
+                        "channel-state test gate closed".to_owned(),
+                    )
+                })?;
+            }
+        }
+
         Ok(self.channel_state.clone())
     }
 
@@ -206,9 +245,9 @@ impl adapter::Node for MockNode {
 
     async fn block_events(
         &self,
-        _id: HeaderId,
+        id: HeaderId,
     ) -> Result<Option<Events>, lb_common_http_client::Error> {
-        Ok(None)
+        Ok(self.events.get(&id).cloned())
     }
 
     async fn immutable_blocks(
@@ -216,6 +255,21 @@ impl adapter::Node for MockNode {
         slot_from: Slot,
         slot_to: Slot,
     ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
+        if let Some(calls) = &self.immutable_blocks_calls {
+            let _ = calls.send(());
+        }
+
+        if let Some(gate) = &self.immutable_blocks_gate {
+            let mut gate = gate.clone();
+            while !*gate.borrow_and_update() {
+                gate.changed().await.map_err(|_| {
+                    lb_common_http_client::Error::Client(
+                        "immutable-blocks test gate closed".to_owned(),
+                    )
+                })?;
+            }
+        }
+
         Ok(self
             .immutable
             .iter()
@@ -261,6 +315,12 @@ impl adapter::Node for MockNode {
         &self,
         request: WalletFundRequestBody,
     ) -> Result<WalletFundResponseBody, lb_common_http_client::Error> {
+        if let Some(priority_fees) = &self.funding_priority_fees {
+            priority_fees
+                .send(request.priority_fee_percent)
+                .await
+                .expect("funding percentage receiver alive");
+        }
         // Fee-less passthrough: build the request's ops unchanged, as the
         // node would at zero gas price.
         Ok(WalletFundResponseBody {
@@ -276,11 +336,11 @@ impl adapter::Node for MockNode {
 /// Funding config backed by a fixture key; [`MockNode::fund_tx`] ignores it
 /// and returns the ops unchanged.
 #[must_use]
-pub fn funding_config() -> crate::sequencer::FundingConfig {
-    crate::sequencer::FundingConfig {
-        funding_pk: lb_groth16::Fr::from(1u64).into(),
+pub fn funding_config() -> FundingConfig {
+    FundingConfig {
+        funding_pk: Fr::from(1u64).into(),
         max_tx_fee: GasCost::new(u64::MAX),
-        priority_fee: crate::sequencer::FundingConfig::DEFAULT_PRIORITY_FEE,
+        priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
     }
 }
 
@@ -318,9 +378,10 @@ pub fn api_block(
             id: header_id(id),
             parent_block: header_id(parent),
             slot: slot.into(),
-            block_root: ContentId::from([0; 32]),
+            body_root: ContentId::from([0; 32]),
             proof_of_leadership: Groth16LeaderProof::genesis(),
         },
+        uncle_headers: Vec::new(),
         transactions,
     }
 }
@@ -356,4 +417,23 @@ pub fn inscribe_op(channel_id: ChannelId, parent: MsgId, payload: &[u8]) -> Insc
         parent,
         signer: Ed25519Key::from_bytes(&[0u8; 32]).public_key(),
     }
+}
+
+/// A `Deposit` block event matching `op` inside `tx`, recreating `notes`.
+pub fn deposit_event(
+    tx: &SignedMantleTx<Unverified>,
+    op: &DepositOp,
+    amount: Value,
+    notes: Vec<DepositNote>,
+) -> Events {
+    Events::from(ChainEvent::Tx(TxEvent::new(
+        tx.mantle_tx().hash(),
+        op.op_id(),
+        TxEventPayload::Deposit {
+            channel_id: op.channel_id,
+            amount,
+            metadata: op.metadata.clone(),
+            notes: notes.try_into().expect("bounded note count"),
+        },
+    )))
 }

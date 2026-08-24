@@ -12,9 +12,10 @@ pub trait MempoolAdapter<Tx>: Send + Sync {
 
     /// The local transactions a single proposal reference could mean.
     ///
-    /// A reference is only the leading hash bytes, so several mempool
-    /// transactions may answer to it. The stream is unbounded and unordered:
-    /// deciding how many candidates are acceptable is the caller's job.
+    /// A reference is only the leading hash bytes, so in principle several
+    /// mempool transactions could answer to it. The stream is unbounded and
+    /// unordered: what a non-unique match means is a consensus question, so it
+    /// is the caller's to decide.
     async fn get_transactions_by_prefix(
         &self,
         prefix: TxHashPrefix,

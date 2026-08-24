@@ -6,13 +6,16 @@ use std::{fmt::Debug, num::NonZeroU64};
 use lb_blend_message::{
     encap::ProofsVerifier as ProofsVerifierTrait, reward::BlendingTokenEvaluation,
 };
-use lb_blend_proofs::quota::{Quota, inputs::prove::public::LeaderInputs};
+use lb_blend_proofs::quota::{
+    Quota,
+    inputs::prove::public::{LeaderInputs, PowInputs},
+};
 use lb_core::{
     blend::core_quota,
     mantle::{Utxo, Value},
     sdp::{ActivityMetadata, ProviderId, ServiceParameters},
 };
-use lb_utils::math::NonNegativeF64;
+use lb_utils::math::PositiveF64;
 use tracing::debug;
 
 use crate::{
@@ -230,7 +233,7 @@ where
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RewardsParameters {
     pub rounds_per_epoch: NonZeroU64,
-    pub message_frequency_per_round: NonNegativeF64,
+    pub message_frequency_per_round: PositiveF64,
     pub num_blend_layers: NonZeroU64,
     pub data_replication_factor: u64,
     pub minimum_network_size: NonZeroU64,
@@ -258,17 +261,37 @@ impl RewardsParameters {
         ))
     }
 
-    fn leader_inputs(&self, epoch_state: &EpochState) -> LeaderInputs {
+    fn encapsulations_per_message(&self) -> Quota {
         let num_blend_layers = self.num_blend_layers.get();
-        let message_quota =
-            Quota::try_new(num_blend_layers + (num_blend_layers * self.data_replication_factor))
-                .expect("Leader Quota must fit within the width the `PoQ` circuit allows.");
+        Quota::try_new(num_blend_layers + (num_blend_layers * self.data_replication_factor))
+            .expect("Quota must fit within the width the `PoQ` circuit allows.")
+    }
+
+    fn leader_inputs(&self, epoch_state: &EpochState) -> LeaderInputs {
         LeaderInputs {
             pol_ledger_aged: epoch_state.utxos.root(),
             pol_epoch_nonce: epoch_state.nonce,
-            message_quota,
+            message_quota: self.encapsulations_per_message(),
             lottery_0: epoch_state.lottery_0,
             lottery_1: epoch_state.lottery_1,
+        }
+    }
+
+    /// The epoch's proof of work public inputs: the threshold the chain fixed
+    /// for this epoch, and `Q_W = ß_max`, so one solution buys one message.
+    ///
+    /// `Q_W` is `ß_max` alone, unlike the leadership quota, which the spec
+    /// defines as `ß_D + ß_D · R_D`. Every `PoQ` carries the `PoW` inputs as
+    /// public inputs whichever branch it proves, so a verifier that computed
+    /// this differently from the provers would reject every proof — including
+    /// core-branch activity proofs — wherever the replication factor is
+    /// non-zero.
+    fn pow_inputs(&self, epoch_state: &EpochState) -> PowInputs {
+        let pow_quota = Quota::try_new(self.num_blend_layers.get())
+            .expect("PoW Quota must fit within the width the `PoQ` circuit allows.");
+        PowInputs {
+            pow_blend_difficulty: epoch_state.blend_pow_difficulty,
+            pow_quota,
         }
     }
 }
@@ -304,7 +327,7 @@ mod tests {
     ) -> RewardsParameters {
         RewardsParameters {
             rounds_per_epoch: rounds_per_epoch.try_into().unwrap(),
-            message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+            message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
             num_blend_layers: NonZeroU64::new(3).unwrap(),
             minimum_network_size: minimum_network_size.try_into().unwrap(),
             data_replication_factor: 0,

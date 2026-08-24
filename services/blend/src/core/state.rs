@@ -1,5 +1,5 @@
 mod serde {
-    use std::collections::HashSet;
+    use std::collections::{HashSet, VecDeque};
 
     use lb_blend::message::{
         encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
@@ -23,6 +23,7 @@ mod serde {
         spent_core_quota: Quota,
         unsent_processed_messages: HashSet<ProcessedMessage>,
         unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
+        pending_transactions: VecDeque<Vec<u8>>,
         current_epoch_token_collector: EpochBlendingTokenCollector,
         old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
     }
@@ -45,6 +46,7 @@ mod serde {
                 self.spent_core_quota,
                 self.unsent_processed_messages,
                 self.unsent_data_messages,
+                self.pending_transactions,
                 self.current_epoch_token_collector,
                 self.old_epoch_token_collector,
                 state_updater,
@@ -61,6 +63,7 @@ mod serde {
                 spent_core_quota,
                 unsent_processed_messages,
                 unsent_data_messages,
+                pending_transactions,
                 current_epoch_token_collector,
                 old_epoch_token_collector,
                 _,
@@ -70,6 +73,7 @@ mod serde {
                 spent_core_quota,
                 unsent_processed_messages,
                 unsent_data_messages,
+                pending_transactions,
                 current_epoch_token_collector,
                 old_epoch_token_collector,
             }
@@ -80,7 +84,7 @@ mod serde {
 pub use self::service::ServiceState;
 mod service {
     use core::fmt::{self, Debug, Formatter};
-    use std::collections::HashSet;
+    use std::collections::{HashSet, VecDeque};
 
     use lb_blend::message::{
         encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
@@ -103,6 +107,9 @@ mod service {
         spent_core_quota: Quota,
         unsent_processed_messages: HashSet<ProcessedMessage>,
         unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
+        /// Transactions handed over for blending that are still waiting for a
+        /// `PoW` solution to back their layer proofs.
+        pending_transactions: VecDeque<Vec<u8>>,
         current_epoch_token_collector: EpochBlendingTokenCollector,
         old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
         state_updater: overwatch::services::state::StateUpdater<
@@ -117,6 +124,7 @@ mod service {
                 spent_core_quota: self.spent_core_quota,
                 unsent_processed_messages: self.unsent_processed_messages.clone(),
                 unsent_data_messages: self.unsent_data_messages.clone(),
+                pending_transactions: self.pending_transactions.clone(),
                 current_epoch_token_collector: self.current_epoch_token_collector.clone(),
                 old_epoch_token_collector: self.old_epoch_token_collector.clone(),
                 state_updater: self.state_updater.clone(),
@@ -131,6 +139,7 @@ mod service {
                 .field("spent_core_quota", &self.spent_core_quota)
                 .field("unsent_processed_messages", &self.unsent_processed_messages)
                 .field("unsent_data_messages", &self.unsent_data_messages)
+                .field("pending_transactions", &self.pending_transactions.len())
                 .field(
                     "current_epoch_token_collector",
                     &self.current_epoch_token_collector,
@@ -146,11 +155,16 @@ mod service {
     {
         // Creates a new instance with the provided fields, and saves it using
         // `state_updater`.
+        #[expect(
+            clippy::too_many_arguments,
+            reason = "One argument per persisted field."
+        )]
         pub(super) fn new(
             last_seen_epoch: Epoch,
             spent_core_quota: Quota,
             unsent_processed_messages: HashSet<ProcessedMessage>,
             unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
+            pending_transactions: VecDeque<Vec<u8>>,
             current_epoch_token_collector: EpochBlendingTokenCollector,
             old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
             state_updater: overwatch::services::state::StateUpdater<
@@ -182,6 +196,7 @@ mod service {
                 spent_core_quota,
                 unsent_processed_messages,
                 unsent_data_messages,
+                pending_transactions,
                 current_epoch_token_collector,
                 old_epoch_token_collector,
                 state_updater,
@@ -196,9 +211,13 @@ mod service {
         /// The new instance is saved immediately using `state_updater`.
         ///
         /// This is typically used on epoch rotations or when no previous
-        /// state was recovered.
+        /// state was recovered. `pending_transactions` is carried in
+        /// rather than emptied: a transaction that has not been encapsulated
+        /// yet is tied to no epoch, so an epoch rotation is no reason to lose
+        /// it.
         pub fn with_epoch(
             epoch: Epoch,
+            pending_transactions: VecDeque<Vec<u8>>,
             current_epoch_token_collector: EpochBlendingTokenCollector,
             old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
             state_updater: overwatch::services::state::StateUpdater<
@@ -210,6 +229,7 @@ mod service {
                 Quota::ZERO,
                 HashSet::new(),
                 HashSet::new(),
+                pending_transactions,
                 current_epoch_token_collector,
                 old_epoch_token_collector,
                 state_updater,
@@ -290,6 +310,7 @@ mod service {
             Quota,
             HashSet<ProcessedMessage>,
             HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
+            VecDeque<Vec<u8>>,
             EpochBlendingTokenCollector,
             Option<OldEpochBlendingTokenCollector>,
             overwatch::services::state::StateUpdater<
@@ -301,6 +322,7 @@ mod service {
                 self.spent_core_quota,
                 self.unsent_processed_messages,
                 self.unsent_data_messages,
+                self.pending_transactions,
                 self.current_epoch_token_collector,
                 self.old_epoch_token_collector,
                 self.state_updater,
@@ -360,6 +382,26 @@ mod service {
             &self,
         ) -> &HashSet<EncapsulatedMessageWithVerifiedPublicHeader> {
             &self.unsent_data_messages
+        }
+
+        pub(super) fn queue_pending_transaction(&mut self, transaction: Vec<u8>) {
+            self.pending_transactions.push_back(transaction);
+        }
+
+        pub(super) fn dequeue_transaction(&mut self, expected_transaction: &[u8]) {
+            assert_eq!(
+                self.pending_transactions.pop_front().as_deref(),
+                Some(expected_transaction),
+                "Expected transaction to be dequeued does not match the oldest pending transaction."
+            );
+        }
+
+        /// The transactions still waiting for a `PoW` solution, oldest first.
+        ///
+        /// This is what a restarting service reads to refill the queue it works
+        /// from.
+        pub const fn pending_transactions(&self) -> &VecDeque<Vec<u8>> {
+            &self.pending_transactions
         }
     }
 }
@@ -480,6 +522,25 @@ mod state_updater {
         ) -> Result<(), ()> {
             self.changed = true;
             self.inner.remove_sent_data_message(message)
+        }
+
+        /// Record a transaction as waiting for a `PoW` solution to back its
+        /// layer proofs.
+        pub fn queue_unencapsulated_transaction(&mut self, transaction: Vec<u8>) {
+            self.changed = true;
+            self.inner.queue_pending_transaction(transaction);
+        }
+
+        /// Take the longest-waiting transaction off the queue, whether it went
+        /// on to be encapsulated or could not be.
+        ///
+        /// `expected_transaction` is what the caller believes is at the head,
+        /// so that a drift between this queue and the one the event
+        /// loop works from is caught here rather than silently dropping
+        /// the wrong transaction.
+        pub fn dequeue_unencapsulated_transaction(&mut self, expected_transaction: &[u8]) {
+            self.changed = true;
+            self.inner.dequeue_transaction(expected_transaction);
         }
     }
 

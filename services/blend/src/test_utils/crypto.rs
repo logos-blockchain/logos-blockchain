@@ -1,4 +1,7 @@
-use core::{cell::Cell, convert::Infallible};
+use core::{
+    cell::{Cell, RefCell},
+    convert::Infallible,
+};
 
 use async_trait::async_trait;
 use lb_blend::{
@@ -12,16 +15,17 @@ use lb_blend::{
     },
     scheduling::message_blend::provers::{
         BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
-        core_and_leader::CoreAndLeaderProofsGenerator,
+        core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
     },
 };
 use lb_chain_service::Epoch;
 use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
+use tokio::sync::watch;
 
 pub struct MockCoreAndLeaderProofsGenerator;
 
 #[async_trait]
-impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
+impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
     for MockCoreAndLeaderProofsGenerator
 {
     fn new(
@@ -43,6 +47,10 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
     }
 
     async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof> {
+        Some(mock_blend_proof())
+    }
+
+    async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {
         Some(mock_blend_proof())
     }
 }
@@ -133,5 +141,74 @@ pub fn mock_blend_proof() -> BlendLayerProof {
         proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
         proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
         ephemeral_signing_key: UnsecuredEd25519Key::generate_with_blake_rng(),
+    }
+}
+
+/// A proofs generator whose `PoW` branch only yields once a test lets it.
+///
+/// Standing in for the puzzle search, which in production takes long enough
+/// that awaiting it anywhere on the event loop's critical path would stall the
+/// service. Core and leadership proofs stay immediate, as they are in
+/// production, so a test can tell the two apart.
+pub struct GatedPowProofsGenerator;
+
+thread_local! {
+    static POW_GATE: RefCell<Option<watch::Receiver<bool>>> = const { RefCell::new(None) };
+}
+
+/// Holds the `PoW` branch shut until [`Self::release`] is called.
+///
+/// Level-triggered on purpose: the event loop re-creates the branch future on
+/// every iteration, so an edge-triggered gate would lose the release whenever
+/// it happened to fire between two of them.
+pub struct PowGate(watch::Sender<bool>);
+
+impl PowGate {
+    /// Sets up a closed gate for generators created on this thread.
+    #[must_use]
+    pub fn setup() -> Self {
+        let (sender, receiver) = watch::channel(false);
+        POW_GATE.with_borrow_mut(|gate| *gate = Some(receiver));
+        Self(sender)
+    }
+
+    /// Lets `PoW` proof requests through, now and from now on.
+    pub fn release(&self) {
+        self.0.send_replace(true);
+    }
+}
+
+#[async_trait]
+impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
+    for GatedPowProofsGenerator
+{
+    fn new(
+        _settings: ProofsGeneratorSettings,
+        _core_proof_of_quota_generator: CorePoQGenerator,
+    ) -> Self {
+        Self
+    }
+
+    fn set_epoch_private(
+        &mut self,
+        _winning_pol_info_stream: WinningPolInfoStream,
+        _target_epoch: Epoch,
+    ) {
+    }
+
+    async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
+        Some(mock_blend_proof())
+    }
+
+    async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof> {
+        Some(mock_blend_proof())
+    }
+
+    async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {
+        let mut gate = POW_GATE.with_borrow(Clone::clone)?;
+        gate.wait_for(|open| *open)
+            .await
+            .expect("the gate should outlive the generator");
+        Some(mock_blend_proof())
     }
 }

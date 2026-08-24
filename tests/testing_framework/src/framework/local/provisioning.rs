@@ -636,6 +636,7 @@ fn plan_local_node_config(
             base_consensus,
             base_time,
             descriptors.config.test_context.as_deref(),
+            descriptors.config.genesis_time(),
         )
         .map_err(|source| -> DynError { source.into() })?;
 
@@ -776,6 +777,11 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
                 keys: config.kms_config.backend.keys,
             },
         },
+        // Pay PoW claim change to the node's own wallet key (node-controlled and
+        // in the KMS/wallet, so spendable), not the SDP funding key.
+        pow: config::pow::serde::Config::with_required_values(config::pow::serde::RequiredValues {
+            claim_address: config.consensus_config.known_key.as_public_key(),
+        }),
         state: state::Config::default(),
     };
 
@@ -902,7 +908,6 @@ fn initial_peers_for_dynamic_node(
 #[cfg(test)]
 mod tests {
     use flate2::{Compression, write::GzEncoder};
-    use testing_framework_runner_local::LocalDeployerEnv as _;
 
     use super::*;
     use crate::node::configs::deployment::DeploymentBuilder;

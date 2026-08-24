@@ -15,7 +15,7 @@ serde_bytes_newtype!(TxHash, 32);
 
 /// Number of leading hash bytes a block proposal uses to refer to a
 /// transaction.
-const REFERENCE_PREFIX_BYTES: usize = 8;
+pub const REFERENCE_PREFIX_BYTES: usize = 16;
 
 /// The leading [`REFERENCE_PREFIX_BYTES`] bytes of a [`TxHash`] — how a block
 /// proposal refers to a transaction that is already in a validator's mempool.
@@ -162,7 +162,7 @@ mod tests {
 
         assert_eq!(
             TxHash(hash).prefix(),
-            TxHashPrefix([0, 1, 2, 3, 4, 5, 6, 7])
+            TxHashPrefix([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
         );
     }
 

@@ -100,15 +100,15 @@ pub struct PowInputs {
 }
 
 impl PowInputs {
-    /// Placeholder inputs for the `PoW` quota parameters, which are not plumbed
-    /// through from the chain yet.
+    /// Inputs that admit nothing over the proof of work branch.
     ///
-    /// These are public inputs, so a prover and the verifier checking its
-    /// proofs must use identical values. Every call site shares this single
-    /// definition so they cannot drift apart.
-    // TODO: Remove once the PoW quota parameters are sourced from the chain.
+    /// No ticket is below a zero threshold and a zero quota spends no
+    /// solution, so a node holding these mines nothing and sends nothing over
+    /// this branch. It is a real configuration rather than a stand-in — the
+    /// chain hands out live values now — and it is what a deployment or a test
+    /// that wants no `PoW`-backed traffic uses.
     #[must_use]
-    pub const fn unwired_placeholder() -> Self {
+    pub const fn disabled() -> Self {
         Self {
             pow_blend_difficulty: ZkHash::ZERO,
             pow_quota: Quota::ZERO,

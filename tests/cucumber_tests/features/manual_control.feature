@@ -17,10 +17,10 @@ Feature: Manual control of transactions
   #   SEND, num_transactions <count>, value <amount>, from '<wallet_name>', to '<wallet_name>'
   #   VERIFY_MAX, wallet '<wallet_name>', wallet_state_type 'on-chain'/'encumbered'/'available', outputs <count>, value 14000, time_out <duration_seconds>
   #   VERIFY_MIN, wallet '<wallet_name>', wallet_state_type 'on-chain'/'encumbered'/'available', outputs <count>, value 14000, time_out <duration_seconds>
-  #   CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs <count>, coin_split_value <amount>, num_transactions <count>, value <amount>, cycles <count>
+  #   CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs <count>, coin_split_value <amount>, num_transactions <count>, value <amount>, cycles <count>, epochs_headroom <count>
   #   COIN_SPLIT_ALL_USER_WALLETS, splits_per_wallet <count>, outputs <count>, value <amount>
   #   VERIFY_MIN_AVAILABLE_OUTPUTS_ALL_USER_WALLETS, min_outputs <count>, timeout_seconds <duration_seconds>
-  #   CONTINUOUS_NEXT_WALLET_USER_WALLETS, cycles <count>, num_transactions <count>, value <amount>
+  #   CONTINUOUS_NEXT_WALLET_USER_WALLETS, cycles <count>, num_transactions <count>, value <amount>, epochs_headroom <count>
   #   FAUCET_ALL_USER_WALLETS, rounds <count>
   #   FAUCET_ALL_FUNDING_WALLETS, rounds <count>
   #   CREATE_SNAPSHOT_ALL_NODES, snapshot_name '<snapshot_name>'
@@ -48,7 +48,7 @@ Feature: Manual control of transactions
   #   CREATE_SNAPSHOT_NODE, snapshot_name 'SNAP_TEST_01', node_name 'NODE_1'
   #   RESTART_NODE, node_name 'NODE_1'
   #   CREATE_SNAPSHOT_ALL_NODES, snapshot_name 'SNAP_TEST_02'
-  #   CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs 10, coin_split_value 100, num_transactions 10, value 100, cycles 3
+  #   CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs 10, coin_split_value 100, num_transactions 10, value 100, cycles 3, epochs_headroom 0
   #   STOP
 
   @manual_control_transactions

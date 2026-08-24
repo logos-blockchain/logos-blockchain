@@ -15,6 +15,7 @@ use lb_key_management_system_keys::keys::X25519PrivateKey;
 
 pub mod core_and_leader;
 pub use self::core_and_leader::{
+    receive::EpochCryptographicProcessor as CoreAndLeaderReceiverOnlyEpochCryptographicProcessor,
     send::EpochCryptographicProcessor as CoreAndLeaderSenderOnlyEpochCryptographicProcessor,
     send_and_receive::EpochCryptographicProcessor as CoreAndLeaderSendAndReceiveEpochCryptographicProcessor,
 };

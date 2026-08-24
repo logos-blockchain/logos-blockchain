@@ -8,12 +8,15 @@ use crate::{
     crypto::{Digest as _, Hasher},
     events::TxEvent,
     mantle::{
+        Value,
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
+        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
-            verification_mode,
+            verification_mode, verification_mode::VerificationMode,
         },
-        transactions::hash::TxHashView,
+        ops::SignedOp,
+        transactions::{hash::TxHashView, states::VerificationState},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
@@ -52,7 +55,13 @@ pub struct ChannelConfigExecutionContext {
 }
 
 impl ProvableOperation for ChannelConfigOp {
+    // `SignedOperationExecutionGas::gas_multiplier` below reads this proof's
+    // signature count. If this changes, update that too.
     type Proof = ChannelMultiSigProof;
+}
+
+impl OperationGas<MainnetGasProfile> for ChannelConfigOp {
+    const GAS_COST: Gas = Gas::new(56);
 }
 
 impl PreverifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
@@ -168,5 +177,15 @@ impl ExecutableOperation for ChannelConfigOp {
             );
         }
         Ok((context, Vec::new()))
+    }
+}
+
+impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
+    for SignedOp<ChannelConfigOp, State, Mode>
+{
+    fn gas_multiplier(&self) -> Value {
+        let signature_count = self.proof().signatures().len();
+        Value::try_from(signature_count)
+            .expect("Channel multi-signature proofs are bound to u16::MAX signatures.")
     }
 }

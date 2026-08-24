@@ -6,7 +6,7 @@ use std::{
 
 use lb_core::mantle::{
     Note, Utxo,
-    gas::{GasCost, MainnetGasConstants},
+    gas::{GasCost, MainnetGasProfile},
     ledger::MAX_TRANSACTION_INPUTS,
     transactions::{
         GENESIS_EXECUTION_GAS_PRICE, GasPrices, MantleTxBuilder, MantleTxContext,
@@ -140,13 +140,12 @@ pub async fn drain_user_wallet(
                 tranche_utxos.len(),
             );
 
-            let intent = WalletTransactionIntent::transfer(
-                &[(receiver_pk, amount)],
-                DEFAULT_STORAGE_GAS_PRICE,
-            )
-            .map_err(|error| StepError::LogicalError {
-                message: error.to_string(),
-            })?;
+            let intent =
+                WalletTransactionIntent::transfer(&[(receiver_pk, amount)]).map_err(|error| {
+                    StepError::LogicalError {
+                        message: error.to_string(),
+                    }
+                })?;
             let mut tranche_available = HashMap::new();
             tranche_available.insert(WalletId::new(sender.wallet_name.clone()), tranche_utxos);
 
@@ -480,7 +479,7 @@ fn finalize_fee(builder: &MantleTxBuilder) -> Result<u64, StepError> {
         ..MantleTxContext::default()
     };
     builder
-        .minimum_gas_cost::<MainnetGasConstants>(&context)
+        .minimum_gas_cost::<MainnetGasProfile>(&context)
         .map(GasCost::into_inner)
         .map_err(|error| StepError::LogicalError {
             message: error.to_string(),
