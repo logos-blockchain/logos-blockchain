@@ -8,6 +8,7 @@
 use std::{
     collections::{HashMap, HashSet},
     iter,
+    num::NonZeroUsize,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -88,6 +89,9 @@ pub struct TicketGenerator {
     /// keeping that work off Tokio's runtime threads. Cloned into every active
     /// per-block search so the searches share the same threads.
     pool: Arc<ThreadPool>,
+    /// Maximum number of ticket-search attempts kept in flight concurrently for
+    /// each block (the `buffer_unordered` degree of every per-block search).
+    max_tickets_per_block: NonZeroUsize,
 }
 
 impl TicketGenerator {
@@ -104,6 +108,7 @@ impl TicketGenerator {
     pub async fn new<Tx, CryptarchiaServiceData, RuntimeServiceId>(
         cryptarchia_api: CryptarchiaServiceApi<CryptarchiaServiceData, RuntimeServiceId>,
         pool: Arc<ThreadPool>,
+        max_tickets_per_block: NonZeroUsize,
     ) -> Result<Self, lb_chain_service::api::ApiError>
     where
         CryptarchiaServiceData:
@@ -124,6 +129,7 @@ impl TicketGenerator {
             tickets_search_by_slot: HashMap::new(),
             tip: HeaderId::from([0u8; 32]),
             pool,
+            max_tickets_per_block,
         })
     }
 }
@@ -169,17 +175,18 @@ where
 /// Builds an unbounded stream that searches for winning tickets for a single
 /// block.
 ///
-/// Up to 16 attempts run concurrently; each draws a fresh random key and checks
-/// the resulting ticket against the block's difficulty target. The stream
-/// yields every winning `(secret key, claim)` pair it finds and never
-/// terminates on its own — it is dropped once the block leaves the reward
-/// window (see [`prune_out_of_window_streams`]).
+/// Up to `max_tickets_per_block` attempts run concurrently; each draws a fresh
+/// random key and checks the resulting ticket against the block's difficulty
+/// target. The stream yields every winning `(secret key, claim)` pair it finds
+/// and never terminates on its own — it is dropped once the block leaves the
+/// reward window (see [`prune_out_of_window_streams`]).
 fn new_block_search_stream(
     block_header: HeaderId,
     block_slot: Slot,
     epoch_state: &EpochState,
     ledger_state: &LedgerState,
     pool: Arc<ThreadPool>,
+    max_tickets_per_block: NonZeroUsize,
 ) -> WinnerTicketStream {
     let epoch_nonce = epoch_state.nonce;
     let difficulty = ledger_state.mantle_ledger().pow.reward_difficulty();
@@ -190,7 +197,7 @@ fn new_block_search_stream(
     let tasks = iter::repeat_with(move || {
         search_winner_ticket(block_header, epoch_nonce, difficulty, Arc::clone(&pool))
     });
-    let results = stream::iter(tasks).buffer_unordered(16);
+    let results = stream::iter(tasks).buffer_unordered(max_tickets_per_block.get());
     let winners = tokio_stream::StreamExt::filter_map(results, |maybe_winner| maybe_winner);
     // Tag every winner with the block's slot so the consumer can track the
     // reward window.
@@ -302,6 +309,7 @@ impl Stream for TicketGenerator {
                             &epoch_state,
                             &ledger_state,
                             Arc::clone(&this.pool),
+                            this.max_tickets_per_block,
                         );
                         this.tickets_search.insert(block_id, stream);
                         this.tickets_search_by_slot
@@ -337,6 +345,7 @@ impl Stream for TicketGenerator {
 mod tests {
     use std::{
         collections::{HashMap, HashSet},
+        num::NonZeroUsize,
         pin::Pin,
         sync::Arc,
         task::{Context, Poll},
@@ -511,6 +520,7 @@ mod tests {
             tickets_search_by_slot: HashMap::new(),
             tip: HeaderId::from([0u8; 32]),
             pool: test_pool(),
+            max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
         };
         assert!(matches!(poll_once(&mut generator), Poll::Ready(None)));
     }
@@ -530,6 +540,7 @@ mod tests {
             tickets_search_by_slot: HashMap::new(),
             tip: HeaderId::from([0u8; 32]),
             pool: test_pool(),
+            max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
         };
         assert!(matches!(poll_once(&mut generator), Poll::Ready(None)));
     }
@@ -544,6 +555,7 @@ mod tests {
             tickets_search_by_slot: HashMap::new(),
             tip: HeaderId::from([0u8; 32]),
             pool: test_pool(),
+            max_tickets_per_block: NonZeroUsize::new(16).unwrap(),
         };
         assert!(matches!(poll_once(&mut generator), Poll::Pending));
     }
@@ -565,6 +577,7 @@ mod tests {
             tickets_search_by_slot: HashMap::new(),
             tip,
             pool: test_pool(),
+            max_tickets_per_block: NonZeroUsize::new(16).unwrap(),
         };
 
         let Poll::Ready(Some(winner)) = poll_once(&mut generator) else {
@@ -588,6 +601,7 @@ mod tests {
             tickets_search_by_slot: HashMap::new(),
             tip: HeaderId::from([0u8; 32]),
             pool: test_pool(),
+            max_tickets_per_block: NonZeroUsize::new(4).unwrap(),
         };
 
         // A winner already produced is emitted first...

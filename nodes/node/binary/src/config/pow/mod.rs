@@ -17,6 +17,7 @@ impl ServiceConfig {
     ) -> PoWServiceSettings {
         PoWServiceSettings {
             claim_address: self.user.claim_address,
+            mining: self.user.mining,
             recovery_data,
         }
     }

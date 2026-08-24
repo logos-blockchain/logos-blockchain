@@ -2,6 +2,7 @@ use core::fmt::{Debug, Display};
 use std::{
     collections::{HashMap, HashSet},
     marker::PhantomData,
+    num::NonZeroUsize,
     sync::Arc,
 };
 
@@ -53,6 +54,7 @@ use overwatch::{
         state::{ServiceState, StateUpdater},
     },
 };
+use rayon::{current_num_threads, max_num_threads};
 use serde::{Deserialize, Serialize};
 use tokio::{sync::oneshot, task::JoinError};
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
@@ -124,9 +126,62 @@ pub enum PoWServiceMessage {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct PoWServiceSettings {
     pub claim_address: ZkPublicKey,
+    /// Tuning for the CPU-heavy ticket search (thread pool and per-block
+    /// concurrency).
+    #[serde(default)]
+    pub mining: PoWMiningSettings,
     /// Storage-recovery bookkeeping, populated by the runtime on startup.
     #[serde(skip)]
     pub recovery_data: RecoveryData,
+}
+
+/// Default number of ticket-search attempts kept in flight per block.
+const fn default_max_tickets_per_block() -> NonZeroUsize {
+    NonZeroUsize::new(4).expect("4 is non-zero")
+}
+
+/// Tuning knobs for the Proof-of-Work ticket search.
+///
+/// The search is CPU-bound and runs on a dedicated thread pool so it does not
+/// starve Tokio's runtime threads. Both fields have sensible defaults, so an
+/// omitted `mining` section keeps the previous behaviour. The non-zero types
+/// make a `0` configuration a deserialization error rather than a silent stall.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct PoWMiningSettings {
+    /// Worker threads in the dedicated ticket-search pool. `None` lets rayon
+    /// pick its default (one thread per logical CPU).
+    #[serde(default)]
+    pub max_threads: Option<NonZeroUsize>,
+    /// Maximum ticket-search attempts kept in flight concurrently per block.
+    #[serde(default = "default_max_tickets_per_block")]
+    pub max_tickets_per_block: NonZeroUsize,
+}
+
+impl Default for PoWMiningSettings {
+    fn default() -> Self {
+        Self {
+            max_threads: None,
+            max_tickets_per_block: default_max_tickets_per_block(),
+        }
+    }
+}
+
+/// Builds the dedicated ticket-search thread pool.
+///
+/// Kept as a plain (non-async) helper so the non-`Send`
+/// [`rayon::ThreadPoolBuilder`] never becomes part of the service's async
+/// state. `max_threads == None` lets rayon default to one thread per logical
+/// CPU.
+fn build_search_pool(max_threads: Option<NonZeroUsize>) -> Arc<rayon::ThreadPool> {
+    let mut builder = rayon::ThreadPoolBuilder::new();
+    if let Some(threads) = max_threads {
+        builder = builder.num_threads(threads.get());
+    }
+    Arc::new(
+        builder
+            .build()
+            .expect("PoW ticket search thread pool should build"),
+    )
 }
 
 impl StorageRecoverySettings for PoWServiceSettings {
@@ -265,15 +320,15 @@ where
 
         // Dedicated thread pool for the CPU-heavy ticket search, keeping it off
         // Tokio's runtime threads.
-        let pool = Arc::new(
-            rayon::ThreadPoolBuilder::new()
-                .build()
-                .expect("PoW ticket search thread pool should build"),
-        );
+        let pool = build_search_pool(settings.mining.max_threads);
 
         // Stream of winning PoW tickets, one per solved puzzle.
-        let mut winning_tickets =
-            TicketGenerator::new::<Tx, _, _>(cryptarchia_api.clone(), pool).await?;
+        let mut winning_tickets = TicketGenerator::new::<Tx, _, _>(
+            cryptarchia_api.clone(),
+            pool,
+            settings.mining.max_tickets_per_block,
+        )
+        .await?;
 
         // Processed-block stream, watched to retire pending claims once their
         // reward is observed as settled on chain.
