@@ -71,7 +71,7 @@ impl LedgerState {
             sdp: sdp::SdpLedger::new(epoch_state.epoch())
                 .with_blend_service(&config.sdp_config.service_rewards_params.blend, epoch_state),
             leaders: leader::LeaderState::new(),
-            pow: pow::PowState::new(),
+            pow: pow::PowState::from_reward_config(&config.pow_config.reward),
         }
     }
 
@@ -100,7 +100,7 @@ impl LedgerState {
                 channels,
                 sdp,
                 leaders: leader::LeaderState::new(),
-                pow: pow::PowState::new(),
+                pow: pow::PowState::from_reward_config(&config.pow_config.reward),
             },
             tx_events,
         ))
@@ -155,7 +155,9 @@ impl LedgerState {
             self.sdp
                 .try_apply_header(&config.sdp_config, last_epoch_state, epoch_state)?;
         self.sdp = new_sdp;
-        self.pow = self.pow.try_apply_header(last_epoch_state, epoch_state);
+        self.pow =
+            self.pow
+                .try_apply_header(last_epoch_state, epoch_state, &config.pow_config.reward);
         Ok((self, effect))
     }
 
@@ -167,10 +169,11 @@ impl LedgerState {
     /// known — a proposer applying the header of a block it is still
     /// building has no id to record (and that block's transactions cannot
     /// anchor to it anyway).
-    pub fn add_seen_block(&mut self, block_hash: Hash, slot: Slot) {
+    pub fn add_seen_block(&mut self, block_hash: Hash, slot: Slot, config: &Config) {
+        let slot_window = config.pow_config.reward.slot_window;
         self.pow.add_seen_block_slots(block_hash, slot);
-        self.pow.prune_seen_block_slots(slot);
-        self.pow.prune_nullifiers_by_slots(slot);
+        self.pow.prune_seen_block_slots(slot, slot_window);
+        self.pow.prune_nullifiers_by_slots(slot, slot_window);
     }
 
     pub fn try_apply_channel_inscription(

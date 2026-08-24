@@ -511,7 +511,7 @@ mod pol_tests {
     use lb_groth16::{Fr, fr_from_bytes_unchecked};
     use lb_key_management_system_service::keys::{UnsecuredZkKey, ZkKey};
     use lb_ledger::{
-        config::{BlendPoWConfig, ModulusShift, PoWConfig},
+        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{
             Config as SdpConfig, ServiceRewardsParameters, rewards::blend::RewardsParameters,
         },
@@ -722,6 +722,24 @@ mod pol_tests {
         );
     }
 
+    /// A reward config with claiming disabled, standing in for a real
+    /// deployment config in tests.
+    fn disabled_reward_config() -> RewardPoWConfig {
+        RewardPoWConfig {
+            reward_pool_genesis: 1_000_000_000,
+            epoch_reward_genesis: 1_000_000,
+            initial_difficulty_seed: 1_000,
+            ema_smoothing_factor: 9,
+            ema_smoothing_precision: core::num::NonZeroU64::new(10).unwrap(),
+            target_claims_per_block: 100,
+            rate_num: 0,
+            rate_den: core::num::NonZeroU64::MIN,
+            target_claim_per_block: core::num::NonZeroU64::MIN,
+            expected_blocks_per_epoch: core::num::NonZeroU64::MIN,
+            slot_window: 100,
+        }
+    }
+
     fn test_config() -> lb_ledger::Config {
         lb_ledger::Config {
             epoch_config: EpochConfig {
@@ -770,6 +788,7 @@ mod pol_tests {
                     max_step: 1.try_into().unwrap(),
                     target_transactions_per_block: 1.try_into().unwrap(),
                 },
+                reward: disabled_reward_config(),
             },
         }
     }

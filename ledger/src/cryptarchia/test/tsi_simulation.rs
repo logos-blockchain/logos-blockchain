@@ -49,7 +49,7 @@ use crate::{
         stake::StakeInference,
         tests::{config, generate_proof},
     },
-    mantle::{pow::PowState, sdp::SdpLedger},
+    mantle::sdp::SdpLedger,
 };
 
 type HeaderId = [u8; 32];
@@ -372,7 +372,7 @@ fn apply_block_to_ledger(
         .update_epoch_state::<HeaderId>(
             slot,
             &SdpLedger::new(0.into()),
-            &PowState::new(),
+            &crate::cryptarchia::tests::pow_state(),
             ledger.config(),
         )
         .expect("epoch state update");

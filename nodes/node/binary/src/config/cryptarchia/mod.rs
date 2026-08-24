@@ -80,6 +80,39 @@ impl ServiceConfig {
                         .blend
                         .target_transactions_per_block,
                 },
+                reward: lb_ledger::config::RewardPoWConfig {
+                    reward_pool_genesis: self.deployment.pow_config.reward.reward_pool_genesis,
+                    epoch_reward_genesis: self.deployment.pow_config.reward.epoch_reward_genesis,
+                    initial_difficulty_seed: self
+                        .deployment
+                        .pow_config
+                        .reward
+                        .initial_difficulty_seed,
+                    ema_smoothing_factor: self.deployment.pow_config.reward.ema_smoothing_factor,
+                    ema_smoothing_precision: self
+                        .deployment
+                        .pow_config
+                        .reward
+                        .ema_smoothing_precision,
+                    target_claims_per_block: self
+                        .deployment
+                        .pow_config
+                        .reward
+                        .target_claims_per_block,
+                    rate_num: self.deployment.pow_config.reward.rate_num,
+                    rate_den: self.deployment.pow_config.reward.rate_den,
+                    target_claim_per_block: self
+                        .deployment
+                        .pow_config
+                        .reward
+                        .target_claim_per_block,
+                    expected_blocks_per_epoch: self
+                        .deployment
+                        .pow_config
+                        .reward
+                        .expected_blocks_per_epoch,
+                    slot_window: self.deployment.pow_config.reward.slot_window,
+                },
             },
         };
 

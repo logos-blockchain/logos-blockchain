@@ -85,6 +85,10 @@ pub trait OperationVerificationHelper {
     /// Slots of the blocks a claim may anchor to, keyed by block hash;
     /// used for the window-of-acceptance check.
     fn get_blocks_slot(&self) -> HashTrieMapSync<Hash, Slot>;
+
+    /// Acceptance window, in slots, for the window-of-acceptance check.
+    /// Configured per-deployment.
+    fn get_pow_slot_window(&self) -> u64;
 }
 
 #[cfg(test)]
@@ -103,7 +107,7 @@ pub mod test_utils {
             ops::{
                 channel::{ChannelId, ChannelKeyIndex, Ed25519PublicKey},
                 leader_claim::{RewardsRoot, VoucherNullifier},
-                pow::{PowNullifier, PowReward, PowTarget},
+                pow::{PowNullifier, PowReward, PowTarget, SLOT_WINDOW},
             },
             transactions::OperationVerificationHelper,
         },
@@ -128,6 +132,7 @@ pub mod test_utils {
         current_epoch_nonce: ZkHash,
         previous_epoch_nonce: ZkHash,
         blocks_slot: HashTrieMapSync<Hash, Slot>,
+        pow_slot_window: u64,
     }
 
     impl TestOperationVerificationHelper {
@@ -157,6 +162,7 @@ pub mod test_utils {
                 current_epoch_nonce: ZkHash::default(),
                 previous_epoch_nonce: ZkHash::default(),
                 blocks_slot: HashTrieMapSync::new_sync(),
+                pow_slot_window: SLOT_WINDOW,
             }
         }
 
@@ -219,6 +225,12 @@ pub mod test_utils {
             blocks_slot: impl IntoIterator<Item = (Hash, Slot)>,
         ) -> Self {
             self.blocks_slot = blocks_slot.into_iter().collect();
+            self
+        }
+
+        #[must_use]
+        pub const fn with_pow_slot_window(mut self, slot_window: u64) -> Self {
+            self.pow_slot_window = slot_window;
             self
         }
     }
@@ -322,6 +334,10 @@ pub mod test_utils {
 
         fn get_blocks_slot(&self) -> HashTrieMapSync<Hash, Slot> {
             self.blocks_slot.clone()
+        }
+
+        fn get_pow_slot_window(&self) -> u64 {
+            self.pow_slot_window
         }
     }
 }

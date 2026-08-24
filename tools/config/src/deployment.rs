@@ -66,10 +66,27 @@ const BLEND_POW_MAX_STEP: u64 = 2;
 const BLEND_POW_DAMPING_NUM: u32 = 1;
 const BLEND_POW_DAMPING_DEN_OFFSET: u32 = 1;
 
+// Token-reward PoW parameters. Payout is disabled (`rate_num = 0`).
+const REWARD_POW_POOL_GENESIS: u64 = 1_000_000_000;
+const REWARD_POW_EPOCH_REWARD_GENESIS: u64 = 1_000_000;
+const REWARD_POW_INITIAL_DIFFICULTY_SEED: u64 = 1_000;
+const REWARD_POW_EMA_SMOOTHING_FACTOR: u64 = 9;
+const REWARD_POW_EMA_SMOOTHING_PRECISION: u64 = 10;
+const REWARD_POW_TARGET_CLAIMS_PER_BLOCK: u64 = 100;
+const REWARD_POW_RATE_NUM: u64 = 0;
+const REWARD_POW_RATE_DEN: u64 = 1;
+const REWARD_POW_TARGET_CLAIM_PER_BLOCK: u64 = 1;
+const REWARD_POW_EXPECTED_BLOCKS_PER_EPOCH: u64 = 1;
+const REWARD_POW_SLOT_WINDOW: u64 = 100;
+
 const MEMPOOL_TOPIC: &str = "mantle_e2e_tests";
 const DEFAULT_PROTOCOL_NAMESPACE: &str = "integration/logos-blockchain";
 
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Deployment settings assembled in a single place for clarity."
+)]
 pub fn e2e_deployment_settings_with_genesis_block(
     genesis_block: &GenesisBlock,
 ) -> DeploymentSettings {
@@ -159,6 +176,22 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     max_step: NonZero::new(BLEND_POW_MAX_STEP).unwrap(),
                     damping_num: NonZero::new(BLEND_POW_DAMPING_NUM).unwrap(),
                     damping_den_offset: BLEND_POW_DAMPING_DEN_OFFSET,
+                },
+                reward: lb_node::config::cryptarchia::deployment::RewardPoWConfig {
+                    reward_pool_genesis: REWARD_POW_POOL_GENESIS,
+                    epoch_reward_genesis: REWARD_POW_EPOCH_REWARD_GENESIS,
+                    initial_difficulty_seed: REWARD_POW_INITIAL_DIFFICULTY_SEED,
+                    ema_smoothing_factor: REWARD_POW_EMA_SMOOTHING_FACTOR,
+                    ema_smoothing_precision: NonZero::new(REWARD_POW_EMA_SMOOTHING_PRECISION)
+                        .unwrap(),
+                    target_claims_per_block: REWARD_POW_TARGET_CLAIMS_PER_BLOCK,
+                    rate_num: REWARD_POW_RATE_NUM,
+                    rate_den: NonZero::new(REWARD_POW_RATE_DEN).unwrap(),
+                    target_claim_per_block: NonZero::new(REWARD_POW_TARGET_CLAIM_PER_BLOCK)
+                        .unwrap(),
+                    expected_blocks_per_epoch: NonZero::new(REWARD_POW_EXPECTED_BLOCKS_PER_EPOCH)
+                        .unwrap(),
+                    slot_window: REWARD_POW_SLOT_WINDOW,
                 },
             },
         },

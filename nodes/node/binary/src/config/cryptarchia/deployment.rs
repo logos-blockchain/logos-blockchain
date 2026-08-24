@@ -95,6 +95,7 @@ pub struct ServiceParameters {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PoWConfig {
     pub blend: BlendPoWConfig,
+    pub reward: RewardPoWConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -104,4 +105,20 @@ pub struct BlendPoWConfig {
     pub max_step: NonZeroU64,
     pub damping_num: NonZeroU32,
     pub damping_den_offset: u32,
+}
+
+// The same as `lb_ledger::config::RewardPoWConfig`.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RewardPoWConfig {
+    pub reward_pool_genesis: u64,
+    pub epoch_reward_genesis: u64,
+    pub initial_difficulty_seed: u64,
+    pub ema_smoothing_factor: u64,
+    pub ema_smoothing_precision: NonZeroU64,
+    pub target_claims_per_block: u64,
+    pub rate_num: u64,
+    pub rate_den: NonZeroU64,
+    pub target_claim_per_block: NonZeroU64,
+    pub expected_blocks_per_epoch: NonZeroU64,
+    pub slot_window: u64,
 }

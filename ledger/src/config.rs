@@ -1,6 +1,7 @@
 use core::num::NonZeroU32;
 use std::num::{NonZero, NonZeroU64};
 
+use lb_core::mantle::ops::pow::PowReward;
 use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_groth16::ModulusShift;
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -96,10 +97,66 @@ impl Config {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
-// TODO: Add reward difficulty parameters here. For now only the ones used for
-// Blend are included.
 pub struct PoWConfig {
     pub blend: BlendPoWConfig,
+    pub reward: RewardPoWConfig,
+}
+
+/// Deployment-configurable parameters for the token-reward `PoW` role.
+///
+/// Covers the genesis endowment, the reward-difficulty (`d_reward`) EMA
+/// controller, the per-epoch payout rate, and the claim acceptance window.
+/// There is deliberately no `Default`: every value must be supplied by the
+/// deployment configuration. The shipped deployments set `rate_num = 0`, which
+/// disables claiming (matching the network behaviour before these values were
+/// configurable).
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RewardPoWConfig {
+    /// `R_PoW` genesis: initial balance of the reward pool.
+    pub reward_pool_genesis: PowReward,
+    /// `sigma_e` genesis: initial per-claim reward, also the target the
+    /// initial `d_reward` is seeded from.
+    pub epoch_reward_genesis: PowReward,
+    /// Claim count fed to the difficulty controller to seed the initial
+    /// `d_reward` at genesis.
+    pub initial_difficulty_seed: u64,
+    /// EMA smoothing factor `F` (weight of the prior estimate). Must not
+    /// exceed [`Self::ema_smoothing_precision`].
+    pub ema_smoothing_factor: u64,
+    /// EMA smoothing precision `P`; the smoothing fraction is `F / P`.
+    pub ema_smoothing_precision: NonZeroU64,
+    /// Target reward claims per block the controller aims for.
+    pub target_claims_per_block: u64,
+    /// Numerator of the per-epoch payout rate. `0` disables claiming.
+    pub rate_num: u64,
+    /// Denominator scale of the per-epoch payout rate.
+    pub rate_den: NonZeroU64,
+    /// Expected number of reward claims per block, a factor of the payout-rate
+    /// denominator.
+    pub target_claim_per_block: NonZeroU64,
+    /// Expected number of blocks per epoch, a factor of the payout-rate
+    /// denominator.
+    pub expected_blocks_per_epoch: NonZeroU64,
+    /// Acceptance window, in slots: how far back a claim's anchor block (and
+    /// its nullifier) may be from the current block.
+    pub slot_window: u64,
+}
+
+impl RewardPoWConfig {
+    /// Full denominator of the per-epoch payout rate:
+    /// `rate_den * target_claim_per_block * expected_blocks_per_epoch`.
+    #[must_use]
+    pub const fn claim_rate_denominator(&self) -> NonZeroU64 {
+        // The product of three non-zero values is non-zero; `strict_mul`
+        // panics on overflow rather than silently wrapping to a smaller (or
+        // zero) denominator.
+        let product = self
+            .rate_den
+            .get()
+            .strict_mul(self.target_claim_per_block.get())
+            .strict_mul(self.expected_blocks_per_epoch.get());
+        NonZeroU64::new(product).expect("product of non-zero values is non-zero")
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -145,9 +202,27 @@ mod tests {
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
     use crate::{
-        config::{BlendPoWConfig, PoWConfig},
+        config::{BlendPoWConfig, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters},
     };
+
+    /// A reward config with claiming disabled, standing in for a real
+    /// deployment config in tests that don't exercise the reward parameters.
+    fn disabled_reward_config() -> RewardPoWConfig {
+        RewardPoWConfig {
+            reward_pool_genesis: 1_000_000_000,
+            epoch_reward_genesis: 1_000_000,
+            initial_difficulty_seed: 1_000,
+            ema_smoothing_factor: 9,
+            ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
+            target_claims_per_block: 100,
+            rate_num: 0,
+            rate_den: NonZeroU64::MIN,
+            target_claim_per_block: NonZeroU64::MIN,
+            expected_blocks_per_epoch: NonZeroU64::MIN,
+            slot_window: 100,
+        }
+    }
 
     #[test]
     fn epoch_snapshots() {
@@ -202,6 +277,7 @@ mod tests {
                     max_step: 1.try_into().unwrap(),
                     target_transactions_per_block: 1.try_into().unwrap(),
                 },
+                reward: disabled_reward_config(),
             },
         };
         assert_eq!(config.epoch_length(), 100);
@@ -264,6 +340,7 @@ mod tests {
                     max_step: 1.try_into().unwrap(),
                     target_transactions_per_block: 1.try_into().unwrap(),
                 },
+                reward: disabled_reward_config(),
             },
         }
     }
@@ -335,6 +412,7 @@ mod tests {
                     max_step: 1.try_into().unwrap(),
                     target_transactions_per_block: 1.try_into().unwrap(),
                 },
+                reward: disabled_reward_config(),
             },
         };
         assert_eq!(config.epoch(1.into()), 0);
