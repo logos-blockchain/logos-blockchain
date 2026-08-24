@@ -54,7 +54,6 @@ use overwatch::{
         state::{ServiceState, StateUpdater},
     },
 };
-use rayon::{current_num_threads, max_num_threads};
 use serde::{Deserialize, Serialize};
 use tokio::{sync::oneshot, task::JoinError};
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
