@@ -173,6 +173,7 @@ impl Default for PoWMiningSettings {
 /// CPU.
 fn build_search_pool(max_threads: Option<NonZeroUsize>) -> Arc<rayon::ThreadPool> {
     let mut builder = rayon::ThreadPoolBuilder::new();
+    builder = builder.thread_name(|index| format!("logos/pow/pow-ticket-search-{index}"));
     if let Some(threads) = max_threads {
         builder = builder.num_threads(threads.get());
     }
