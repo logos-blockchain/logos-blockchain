@@ -330,7 +330,9 @@ async fn submit_blend_sdp_declaration<SdpService>(
 where
     SdpService: ServiceData<Message = SdpMessage>,
 {
-    tracing::info!(
+    // SDP's wallet adapter applies the internal 12% priority incentive plus
+    // the 1.5-hour storage-fee horizon when it funds this declaration.
+    info!(
         target: LOG_TARGET,
         "Submitting Blend service declaration to SDP with locator {locator:?} and locked note id {locked_note_id:?}",
     );

@@ -15,6 +15,11 @@ use lb_wallet_service::{
 };
 use overwatch::services::{AsServiceId, ServiceData, relay::OutboundRelay};
 
+// The horizon covers deterministic storage-fee movement; the independent
+// priority reserve remains an explicit incentive. Any retry/rebuild would
+// handle only exceptional lifetime, execution-fee, submission, or
+// state-invalidating cases.
+const SDP_PRIORITY_FEE_PERCENT: u64 = 12;
 const SDP_FEE_HORIZON_HOURS: FeeHorizonHours = FeeHorizonHours::from_tenths(15);
 
 pub struct SdpWalletAdapter<Service, RuntimeServiceId>
@@ -57,7 +62,7 @@ where
                 tx_builder,
                 config.funding_pk,
                 vec![config.funding_pk],
-                0,
+                SDP_PRIORITY_FEE_PERCENT,
                 Some(SDP_FEE_HORIZON_HOURS),
                 Some(config.max_tx_fee),
             )
@@ -100,7 +105,7 @@ where
                 tx_builder,
                 config.funding_pk,
                 vec![config.funding_pk],
-                0,
+                SDP_PRIORITY_FEE_PERCENT,
                 Some(SDP_FEE_HORIZON_HOURS),
                 Some(config.max_tx_fee),
             )
@@ -143,7 +148,7 @@ where
                 tx_builder,
                 config.funding_pk,
                 vec![config.funding_pk],
-                0,
+                SDP_PRIORITY_FEE_PERCENT,
                 Some(SDP_FEE_HORIZON_HOURS),
                 Some(config.max_tx_fee),
             )
@@ -274,7 +279,7 @@ mod tests {
             panic!("expected SDP funding request");
         };
 
-        assert_eq!(priority_fee_percent, 0);
+        assert_eq!(priority_fee_percent, SDP_PRIORITY_FEE_PERCENT);
         assert_eq!(fee_horizon_hours, Some(SDP_FEE_HORIZON_HOURS));
         assert_eq!(max_tx_fee, Some(expected_max_tx_fee));
 
@@ -312,7 +317,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn all_sdp_operations_use_zero_priority_and_one_and_a_half_hour_horizon() {
+    async fn all_sdp_operations_use_twelve_percent_priority_and_one_and_a_half_hour_horizon() {
         let config = test_config();
 
         assert_operation(

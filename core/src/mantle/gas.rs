@@ -3,7 +3,8 @@ use std::{
     ops::Add,
 };
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Visitor};
+use serde::{Deserialize, Serialize, Serializer};
+use thiserror::Error;
 
 use crate::mantle::Value;
 
@@ -69,32 +70,15 @@ impl From<Value> for GasPrice {
 pub const STORAGE_PRICE_MAX_INCREASE_NUMERATOR: u128 = 9;
 pub const STORAGE_PRICE_MAX_INCREASE_DENOMINATOR: u128 = 8;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 enum FeeHorizonParseError {
+    #[error("fee_horizon_hours must be non-negative")]
     NonNegative,
+    #[error("fee_horizon_hours must be a plain decimal number")]
     InvalidDecimal,
+    #[error("fee_horizon_hours exceeds the supported maximum of 168 hours (7 days)")]
     ExceedsMaximum,
-    NonFinite,
-    ExpectedInput,
 }
-
-impl Display for FeeHorizonParseError {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::NonNegative => "fee_horizon_hours must be non-negative",
-            Self::InvalidDecimal => "fee_horizon_hours must be a plain decimal number",
-            Self::ExceedsMaximum => {
-                "fee_horizon_hours exceeds the supported maximum of 168 hours (7 days)"
-            }
-            Self::NonFinite => "fee_horizon_hours must be finite",
-            Self::ExpectedInput => {
-                "a non-negative decimal number of hours rounded up to 0.1 hour, with a maximum of 168 hours (7 days)"
-            }
-        })
-    }
-}
-
-impl std::error::Error for FeeHorizonParseError {}
 
 /// Applies the protocol's maximum upward storage-price transition with checked
 /// arithmetic and rounding at this boundary.
@@ -108,7 +92,12 @@ pub fn max_storage_price_after_epoch(price: GasPrice) -> Result<GasPrice, GasOve
         .map_err(|_| GasOverflow)
 }
 
-/// A non-negative duration in hours stored internally in tenths of an hour.
+/// A non-negative, deployment-independent duration in hours stored internally
+/// in tenths of an hour.
+///
+/// The wallet resolves this elapsed-time policy to protocol slots using the
+/// deployment's configured slot duration; tenths are only the normalized
+/// representation of the public 0.1-hour precision.
 ///
 /// User-facing decimal values are rounded up to the next 0.1 hour so funded
 /// coverage is never shorter than requested. The maximum supported horizon is
@@ -192,98 +181,6 @@ impl Serialize for FeeHorizonHours {
         S: Serializer,
     {
         serializer.serialize_f64(f64::from(self.tenths) / 10.0)
-    }
-}
-
-impl<'de> Deserialize<'de> for FeeHorizonHours {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct FeeHorizonHoursVisitor;
-
-        impl Visitor<'_> for FeeHorizonHoursVisitor {
-            type Value = FeeHorizonHours;
-
-            fn expecting(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-                FeeHorizonParseError::ExpectedInput.fmt(formatter)
-            }
-
-            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                let tenths = value
-                    .checked_mul(10)
-                    .ok_or(FeeHorizonParseError::ExceedsMaximum)
-                    .map_err(E::custom)?;
-                if tenths > u64::from(FeeHorizonHours::MAX_TENTHS) {
-                    return Err(E::custom(FeeHorizonParseError::ExceedsMaximum));
-                }
-                Ok(FeeHorizonHours::from_tenths(tenths as u16))
-            }
-
-            fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                if value < 0 {
-                    return Err(E::custom(FeeHorizonParseError::NonNegative));
-                }
-                self.visit_u64(value as u64)
-            }
-
-            fn visit_u128<E>(self, value: u128) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                let tenths = value
-                    .checked_mul(10)
-                    .ok_or(FeeHorizonParseError::ExceedsMaximum)
-                    .map_err(E::custom)?;
-                if tenths > u128::from(FeeHorizonHours::MAX_TENTHS) {
-                    return Err(E::custom(FeeHorizonParseError::ExceedsMaximum));
-                }
-                Ok(FeeHorizonHours::from_tenths(tenths as u16))
-            }
-
-            fn visit_i128<E>(self, value: i128) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                if value < 0 {
-                    return Err(E::custom(FeeHorizonParseError::NonNegative));
-                }
-                self.visit_u128(value as u128)
-            }
-
-            fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                if !value.is_finite() {
-                    return Err(E::custom(FeeHorizonParseError::NonFinite));
-                }
-                if value.is_sign_negative() {
-                    return Err(E::custom(FeeHorizonParseError::NonNegative));
-                }
-
-                let normalized = (value * 10.0).ceil();
-                if !normalized.is_finite() || normalized > f64::from(FeeHorizonHours::MAX_TENTHS) {
-                    return Err(E::custom(FeeHorizonParseError::ExceedsMaximum));
-                }
-                Ok(FeeHorizonHours::from_tenths(normalized as u16))
-            }
-
-            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                FeeHorizonHours::parse_decimal(value).map_err(E::custom)
-            }
-        }
-
-        deserializer.deserialize_any(FeeHorizonHoursVisitor)
     }
 }
 
@@ -444,116 +341,6 @@ mod tests {
                 "input: {input}"
             );
         }
-    }
-
-    #[test]
-    fn fee_horizon_hours_deserializer_covers_all_visitor_paths() {
-        use serde::de::{IntoDeserializer, value};
-
-        fn deserialize_value<T>(input: T) -> Result<FeeHorizonHours, value::Error>
-        where
-            T: IntoDeserializer<'static, value::Error>,
-        {
-            FeeHorizonHours::deserialize(input.into_deserializer())
-        }
-
-        let valid_cases = [
-            (deserialize_value(1u64), 10),
-            (deserialize_value(1i64), 10),
-            (deserialize_value(1u128), 10),
-            (deserialize_value(1i128), 10),
-            (deserialize_value(0.25f64), 3),
-            (deserialize_value("0.25".to_owned()), 3),
-        ];
-        for (result, expected_tenths) in valid_cases {
-            assert_eq!(result.unwrap().tenths(), expected_tenths);
-        }
-
-        for (input, expected_tenths) in [
-            ("0.01", 1),
-            ("0.25", 3),
-            ("1", 10),
-            ("1.0", 10),
-            ("1.00000", 10),
-            ("1.5001", 16),
-            ("167.999", 1_680),
-            ("168.0", 1_680),
-        ] {
-            assert_eq!(
-                serde_json::from_str::<FeeHorizonHours>(input)
-                    .unwrap()
-                    .tenths(),
-                expected_tenths,
-                "input: {input}"
-            );
-        }
-
-        let error_cases = [
-            (
-                deserialize_value(-1i64).unwrap_err().to_string(),
-                FeeHorizonParseError::NonNegative.to_string(),
-            ),
-            (
-                deserialize_value(-1i128).unwrap_err().to_string(),
-                FeeHorizonParseError::NonNegative.to_string(),
-            ),
-            (
-                deserialize_value(-0.1f64).unwrap_err().to_string(),
-                FeeHorizonParseError::NonNegative.to_string(),
-            ),
-            (
-                deserialize_value(f64::INFINITY).unwrap_err().to_string(),
-                FeeHorizonParseError::NonFinite.to_string(),
-            ),
-            (
-                deserialize_value(f64::NAN).unwrap_err().to_string(),
-                FeeHorizonParseError::NonFinite.to_string(),
-            ),
-            (
-                deserialize_value(f64::MAX).unwrap_err().to_string(),
-                FeeHorizonParseError::ExceedsMaximum.to_string(),
-            ),
-            (
-                deserialize_value(168.1f64).unwrap_err().to_string(),
-                FeeHorizonParseError::ExceedsMaximum.to_string(),
-            ),
-            (
-                deserialize_value(u64::MAX).unwrap_err().to_string(),
-                FeeHorizonParseError::ExceedsMaximum.to_string(),
-            ),
-            (
-                deserialize_value(169u64).unwrap_err().to_string(),
-                FeeHorizonParseError::ExceedsMaximum.to_string(),
-            ),
-            (
-                deserialize_value(u128::MAX).unwrap_err().to_string(),
-                FeeHorizonParseError::ExceedsMaximum.to_string(),
-            ),
-            (
-                deserialize_value(169u128).unwrap_err().to_string(),
-                FeeHorizonParseError::ExceedsMaximum.to_string(),
-            ),
-            (
-                deserialize_value("1e2".to_owned()).unwrap_err().to_string(),
-                FeeHorizonParseError::InvalidDecimal.to_string(),
-            ),
-        ];
-        for (error, expected_message) in error_cases {
-            assert!(
-                error.contains(&expected_message),
-                "expected {expected_message:?} in {error:?}"
-            );
-        }
-
-        for input in ["-0.1", "168.00001", "169"] {
-            assert!(
-                serde_json::from_str::<FeeHorizonHours>(input).is_err(),
-                "input should be rejected: {input}"
-            );
-        }
-
-        let expecting = deserialize_value(true).unwrap_err().to_string();
-        assert!(expecting.contains(&FeeHorizonParseError::ExpectedInput.to_string()));
     }
 
     #[test]

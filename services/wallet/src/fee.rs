@@ -27,6 +27,8 @@ pub enum FeeProjectionError {
     TxBuilder(#[from] lb_core::mantle::transactions::TxBuilderError),
 }
 
+/// Resolve the caller's elapsed-time fee policy to protocol slots using the
+/// deployment's configured slot duration.
 pub fn horizon_slots(
     horizon: FeeHorizonHours,
     slot_duration_ms: u64,
