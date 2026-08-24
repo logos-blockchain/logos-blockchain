@@ -201,8 +201,6 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPDeclareOp {
             &[note.pk, self.zk_id],
         )
         .map_err(|_| SdpError::InvalidZkSignature)?;
-        let deferred_verification =
-            DeferredZkpVerification::ZkSig(*proof.zk_sig.as_proof(), inputs);
 
         SDPDeclareValidationExt::validate(
             self,
@@ -213,7 +211,10 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPDeclareOp {
             context.min_stake,
         )?;
 
-        Ok(Some(deferred_verification))
+        Ok(Some(DeferredZkpVerification::ZkSig(
+            *proof.zk_sig.as_proof(),
+            inputs,
+        )))
     }
 }
 
