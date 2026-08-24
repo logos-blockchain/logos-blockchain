@@ -61,6 +61,7 @@
 */
 ///
 use lb_node::config::RunConfig;
+use lb_testing_framework::configs::wallet::WalletAccount;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_yaml::{Mapping, Value as YamlValue};
 use time::{Duration as TimeDuration, OffsetDateTime};
@@ -165,6 +166,7 @@ fn parse_value(step: &str, raw_value: &str) -> Result<YamlValue, StepError> {
             "hex" => parse_hex(arg, step, raw),
             "seconds" => parse_seconds(arg, step, raw),
             "now_plus_seconds" => parse_now_plus_seconds_value(arg, step, raw),
+            "wallet_pk" => parse_wallet_pk(arg, step, raw),
             _ => Err(step_error(
                 step,
                 &format!("unknown override function '{name}' in '{raw}'"),
@@ -227,6 +229,32 @@ fn parse_now_plus_seconds_value(arg: &str, step: &str, raw: &str) -> Result<Yaml
         step_error(
             step,
             &format!("failed to convert override '{raw}' to YAML: {source}"),
+        )
+    })
+}
+
+/// Resolves `wallet_pk(<account_index>)` to the deterministic genesis wallet
+/// account's public key, serialized in the same form the config expects. Used
+/// to point a node's `pow.claim_address` at a wallet the test already tracks,
+/// so mined rewards land in a balance the existing wallet assertions can see.
+/// The public key depends only on the account index, so it matches the
+/// provisioned account regardless of its token value.
+fn parse_wallet_pk(arg: &str, step: &str, raw: &str) -> Result<YamlValue, StepError> {
+    let account_index = arg
+        .parse::<u64>()
+        .map_err(|_| step_error(step, &format!("invalid wallet_pk index in '{raw}'")))?;
+
+    let account = WalletAccount::deterministic(account_index, 0, true).map_err(|source| {
+        step_error(
+            step,
+            &format!("failed to derive wallet_pk for '{raw}': {source}"),
+        )
+    })?;
+
+    serde_yaml::to_value(account.public_key()).map_err(|source| {
+        step_error(
+            step,
+            &format!("failed to serialize wallet_pk for '{raw}': {source}"),
         )
     })
 }

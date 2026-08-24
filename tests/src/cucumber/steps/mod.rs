@@ -10,6 +10,7 @@ pub mod manual_nodes;
 pub mod manual_transactions;
 pub mod manual_zone;
 pub mod parse_steps;
+pub mod pow;
 pub mod tokio_console;
 pub mod wallet_fund;
 
