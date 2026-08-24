@@ -142,8 +142,8 @@ impl TicketGenerator {
 /// Enriches a raw processed-block event with its epoch and ledger state.
 ///
 /// Returns `None` (dropping the event) when the broadcast subscription lagged,
-/// or when the epoch or ledger state for the block cannot be fetched from the
-/// chain service.
+/// or when the ledger state for the block cannot be fetched from the chain
+/// service.
 async fn process_block_event<Tx, CryptarchiaServiceData, RuntimeServiceId>(
     event: Result<ProcessedBlockEvent, BroadcastStreamRecvError>,
     cryptarchia_api: CryptarchiaServiceApi<CryptarchiaServiceData, RuntimeServiceId>,
@@ -155,19 +155,17 @@ where
     Tx: Send + Sync + 'static,
 {
     match event {
-        Ok(
-            event @ ProcessedBlockEvent {
-                block_id, tip_slot, ..
-            },
-        ) => {
-            let Ok(Ok(epoch_state)) = cryptarchia_api.get_epoch_state(tip_slot).await else {
-                warn!(target: LOG_TARGET, "Epoch state not found for block slot: {tip_slot:?}");
-                return None;
-            };
+        Ok(event @ ProcessedBlockEvent { block_id, .. }) => {
             let Ok(Some(ledger_state)) = cryptarchia_api.get_ledger_state(block_id).await else {
                 warn!(target: LOG_TARGET, "Ledger state not found for block: {block_id:?}");
                 return None;
             };
+            // Take the epoch state (and its nonce) from the block's own ledger
+            // state: it is the epoch the block was applied under, which is
+            // exactly what the puzzle ticket must be built against. Querying the
+            // chain service for the tip slot instead fails, because the epoch
+            // state can only be computed for a slot strictly after the tip.
+            let epoch_state = ledger_state.epoch_state().clone();
             Some((epoch_state, ledger_state, event))
         }
         Err(e) => {
