@@ -15,8 +15,8 @@ use super::{
         save_zone_checkpoint, start_named_sequencer,
         start_named_sequencer_with_pending_submit_depth, start_nodes_with_zone_resources,
         stop_zone_sequencer, submit_atomic_zone_deposit_transaction, submit_zone_channel_config,
-        submit_zone_deposit_transaction, submit_zone_multi_deposit_transaction,
-        submit_zone_withdraw_transaction,
+        submit_zone_channel_split_transaction, submit_zone_deposit_transaction,
+        submit_zone_multi_deposit_transaction, submit_zone_withdraw_transaction,
     },
     assertions::{
         assert_sorted_outcome, scan_indexer_for_payloads, wait_for_indexer_unordered,
@@ -721,6 +721,26 @@ async fn step_submit_zone_bulk_deposit_transaction(
             .into_bytes()
             .try_into()
             .expect("Metadata too large for deposit op."),
+    )
+    .await
+}
+
+#[when(expr = "sequencer {string} splits deposit {string} into {int} dust notes as {string}")]
+async fn step_submit_zone_channel_split_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    deposit_alias: String,
+    dust_count: usize,
+    transaction_alias: String,
+) -> StepResult {
+    submit_zone_channel_split_transaction(
+        world,
+        step,
+        &sequencer_alias,
+        &deposit_alias,
+        dust_count,
+        transaction_alias,
     )
     .await
 }

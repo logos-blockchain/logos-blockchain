@@ -702,12 +702,15 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
-  # A 10000 withdraw must clear a channel holding 256 dust notes (>255) alongside
-  # a single 10000 note: best-fit largest-first selects the one big note (a single
-  # transfer input) and never touches the dust, so the transfer stays far under the
-  # 255-input transaction limit that a naive dust-first selection would blow. Dust
-  # is minted 32 notes at a time because the per-transaction ZK signing-key limit
-  # caps a single deposit at 32 input notes.
+  # A 10000 withdraw must clear a channel holding 255 dust notes alongside a
+  # single 10000 note: best-fit selection takes the one big note (a single
+  # transfer input) and never touches the dust, so the withdraw's channel
+  # transfer stays at 1 input — whereas a naive dust-first selection would pull
+  # all 255 dust plus the big note (256 inputs) and blow the 255-input
+  # transaction limit. The dust is minted by depositing one value-255 note and
+  # splitting it into 255 value-1 notes in a single channel transfer (bounded by
+  # the 255-output limit), rather than one ZK-signed deposit per 32 notes (a
+  # deposit is capped at 32 inputs by the ZK signing-key limit).
   Scenario: Withdrawal stays valid under a dust flood
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
@@ -719,33 +722,20 @@ Feature: Zone SDK
     When node "NODE_1" is at height 2 in 300 seconds
     And wallet "WALLET_1A" sends 60 notes of 2000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
     And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
-    And I do a coin split for "WALLET_1A" of 200 UTXOs valued at 1 LGO tokens each
-    And I do a coin split for "WALLET_1A" of 200 UTXOs valued at 1 LGO tokens each
-    And I do a coin split for "WALLET_1A" of 2 UTXOs valued at 10000 LGO tokens each
+    And I do a coin split for "WALLET_1A" of 1 UTXOs valued at 255 LGO tokens each
+    And I do a coin split for "WALLET_1A" of 1 UTXOs valued at 10000 LGO tokens each
     And I start zone sequencer "SEQ_A" with indexer
     And sequencer "SEQ_A" publishes the following zone messages:
       | alias    | data                |
       | MSG_INIT | initial inscription |
     Then all zone messages are finalized in 120 seconds
-    When I submit zone deposit transaction "DEPOSIT_DUST_1" into channel of "SEQ_A" consuming 32 notes of value 1 with metadata "Dust flood 1"
-    Then zone transaction "DEPOSIT_DUST_1" is included in 180 seconds
-    When I submit zone deposit transaction "DEPOSIT_DUST_2" into channel of "SEQ_A" consuming 32 notes of value 1 with metadata "Dust flood 2"
-    Then zone transaction "DEPOSIT_DUST_2" is included in 180 seconds
-    When I submit zone deposit transaction "DEPOSIT_DUST_3" into channel of "SEQ_A" consuming 32 notes of value 1 with metadata "Dust flood 3"
-    Then zone transaction "DEPOSIT_DUST_3" is included in 180 seconds
-    When I submit zone deposit transaction "DEPOSIT_DUST_4" into channel of "SEQ_A" consuming 32 notes of value 1 with metadata "Dust flood 4"
-    Then zone transaction "DEPOSIT_DUST_4" is included in 180 seconds
-    When I submit zone deposit transaction "DEPOSIT_DUST_5" into channel of "SEQ_A" consuming 32 notes of value 1 with metadata "Dust flood 5"
-    Then zone transaction "DEPOSIT_DUST_5" is included in 180 seconds
-    When I submit zone deposit transaction "DEPOSIT_DUST_6" into channel of "SEQ_A" consuming 32 notes of value 1 with metadata "Dust flood 6"
-    Then zone transaction "DEPOSIT_DUST_6" is included in 180 seconds
-    When I submit zone deposit transaction "DEPOSIT_DUST_7" into channel of "SEQ_A" consuming 32 notes of value 1 with metadata "Dust flood 7"
-    Then zone transaction "DEPOSIT_DUST_7" is included in 180 seconds
-    When I submit zone deposit transaction "DEPOSIT_DUST_8" into channel of "SEQ_A" consuming 32 notes of value 1 with metadata "Dust flood 8"
-    Then zone transaction "DEPOSIT_DUST_8" is included in 180 seconds
+    When I submit zone deposit transaction "DEPOSIT_DUST_SEED" into channel of "SEQ_A" of 255 with metadata "Dust seed"
+    Then zone transaction "DEPOSIT_DUST_SEED" is included in 180 seconds
     When I submit zone deposit transaction "DEPOSIT_BIG" into channel of "SEQ_A" of 10000 with metadata "Big note"
     Then zone transaction "DEPOSIT_BIG" is finalized in 240 seconds
     And the zone indexer returns finalized deposit "DEPOSIT_BIG" in 120 seconds
+    When sequencer "SEQ_A" splits deposit "DEPOSIT_DUST_SEED" into 255 dust notes as "SPLIT_DUST"
+    Then zone transaction "SPLIT_DUST" is finalized in 240 seconds
     When sequencer "SEQ_A" submits zone withdraw transaction "WITHDRAW_DUST" with inscription "MSG_DUST" of 10000
     Then zone transaction "WITHDRAW_DUST" is included in 240 seconds
     And zone transaction "WITHDRAW_DUST" is finalized in 240 seconds

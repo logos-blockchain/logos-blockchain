@@ -32,7 +32,7 @@ use super::{
         publish_message_with_retry, sequencer_config, sequencer_config_with_pending_submit_depth,
         start_balance_aware_policy, start_custom_republish_policy, start_republish_lineage_policy,
         start_sequencer_event_loop, start_sorted_conflict_policy, submit_atomic_zone_deposit,
-        submit_zone_deposit, submit_zone_withdraw,
+        submit_zone_channel_split, submit_zone_deposit, submit_zone_withdraw,
     },
     tables::{ConcurrentZoneMessageRow, ZoneNodeResourcesRow, group_zone_messages_by_sequencer},
 };
@@ -417,6 +417,7 @@ pub(super) async fn submit_zone_deposit_transaction(
     let ZoneDeposit {
         deposit,
         reserved_inputs,
+        channel_notes,
     } = build_zone_deposit(
         available_utxos,
         world.zone.sequencer_channel_id(&channel_alias)?,
@@ -429,6 +430,9 @@ pub(super) async fn submit_zone_deposit_transaction(
         .await
         .map_err(|error| zone_step_error(step, &error))?;
 
+    world
+        .zone
+        .remember_deposit_channel_notes(transaction_alias.clone(), channel_notes);
     world
         .zone
         .remember_submitted_deposit(transaction_alias.clone(), deposit, amount);
@@ -459,6 +463,7 @@ pub(super) async fn submit_zone_multi_deposit_transaction(
     let ZoneDeposit {
         deposit,
         reserved_inputs,
+        channel_notes,
     } = build_zone_deposit_from_values(
         available_utxos,
         world.zone.sequencer_channel_id(&channel_alias)?,
@@ -473,9 +478,51 @@ pub(super) async fn submit_zone_multi_deposit_transaction(
 
     world
         .zone
+        .remember_deposit_channel_notes(transaction_alias.clone(), channel_notes);
+    world
+        .zone
         .remember_submitted_deposit(transaction_alias.clone(), deposit, amount);
     record_zone_wallet_submission(world, &wallet.wallet_name, response, reserved_inputs)?;
     world.remember_submitted_transaction(transaction_alias, response);
+
+    Ok(())
+}
+
+pub(super) async fn submit_zone_channel_split_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: &str,
+    deposit_alias: &str,
+    dust_count: usize,
+    transaction_alias: String,
+) -> StepResult {
+    let node_url = log_step_error(step, world.zone_node_url_for_sequencer(sequencer_alias))?;
+    let wallet = log_step_error(step, resolve_zone_wallet(world, sequencer_alias))?;
+    let public_key = log_step_error(step, wallet.public_key())?;
+    let channel_id = world.zone.sequencer_channel_id(sequencer_alias)?;
+    let signing_key =
+        log_step_error(step, world.zone.sequencer_signing_key(sequencer_alias))?.clone();
+    let input_note = *log_step_error(
+        step,
+        world.zone.resolve_deposit_channel_notes(deposit_alias),
+    )?
+    .first()
+    .ok_or_else(|| StepError::LogicalError {
+        message: format!("Zone deposit '{deposit_alias}' created no channel notes to split"),
+    })?;
+
+    let tx_hash = submit_zone_channel_split(
+        &node_url,
+        channel_id,
+        &signing_key,
+        public_key,
+        input_note,
+        dust_count,
+    )
+    .await
+    .map_err(|error| zone_step_error(step, &error))?;
+
+    world.remember_submitted_transaction(transaction_alias, tx_hash);
 
     Ok(())
 }

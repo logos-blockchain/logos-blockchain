@@ -12,21 +12,26 @@ use std::{
 };
 
 use lb_common_http_client::{CommonHttpClient, Slot};
-use lb_core::mantle::{
-    Note, Op, OpProof, RawMantleTx, Utxo, Value,
-    gas::GasCost,
-    ledger::{Inputs, Outputs, OutputsError},
-    ops::{
-        channel::{
-            ChannelId, MsgId,
-            deposit::{DepositOp, Metadata},
-            inscribe::{Inscription, InscriptionOp},
-            withdraw::ChannelWithdrawOp,
+use lb_core::{
+    mantle::{
+        Note, Op, OpProof, RawMantleTx, Utxo, Value,
+        gas::GasCost,
+        ledger::{Inputs, Outputs, OutputsError},
+        ops::{
+            OpId as _,
+            channel::{
+                ChannelId, MsgId,
+                channel_transfer::ChannelTransferOp,
+                deposit::{DepositOp, Metadata},
+                inscribe::{Inscription, InscriptionOp},
+                withdraw::ChannelWithdrawOp,
+            },
+            transfer::TransferOp,
         },
-        transfer::TransferOp,
+        traits::Hashable as _,
+        transactions::{OpsProofs, builder::MantleTxBuilder, states::Unverified},
     },
-    traits::Hashable as _,
-    transactions::{OpsProofs, builder::MantleTxBuilder, states::Unverified},
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 use lb_http_api_common::bodies::{
     channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
@@ -114,6 +119,8 @@ pub enum ZoneTestError {
     MissingExactFundingNote { value: Value },
     #[error("failed to submit zone deposit: {message}")]
     SubmitDeposit { message: String },
+    #[error("failed to submit zone channel split transfer: {message}")]
+    SplitTransfer { message: String },
     #[error("failed to sign zone transaction: {message}")]
     SignTransaction { message: String },
     #[error("failed to build atomic zone deposit transaction: {message}")]
@@ -163,6 +170,23 @@ pub struct ZoneWithdrawSubmission {
 pub struct ZoneDeposit {
     pub deposit: DepositOp,
     pub reserved_inputs: Vec<Utxo>,
+    /// The channel notes the deposit re-creates (1:1 with its inputs). Computed
+    /// deterministically from the deposit's `op_id` and its input notes so a
+    /// later channel transfer can spend them without waiting on the indexer.
+    pub channel_notes: Vec<Utxo>,
+}
+
+/// The channel notes a deposit re-creates: one per input, same note (value +
+/// pk), re-homed under the deposit's `op_id`. Matches the ledger's deposit
+/// execution (`DepositOp::outputs` re-creates inputs 1:1) and the zone-sdk's
+/// channel-note derivation.
+fn recreated_channel_notes(deposit: &DepositOp, reserved_inputs: &[Utxo]) -> Vec<Utxo> {
+    let op_id = deposit.op_id();
+    reserved_inputs
+        .iter()
+        .enumerate()
+        .map(|(index, utxo)| Utxo::new(op_id, index, utxo.note))
+        .collect()
 }
 
 pub type DiscardedPayloads = Arc<tokio::sync::Mutex<HashSet<Inscription>>>;
@@ -1454,13 +1478,17 @@ pub fn build_zone_deposit(
         .find(|utxo| utxo.note.value == amount)
         .ok_or(ZoneTestError::MissingExactFundingNote { value: amount })?;
 
+    let deposit = DepositOp {
+        channel_id,
+        inputs: Inputs::new([note.id()]),
+        metadata,
+    };
+    let reserved_inputs = vec![note];
+    let channel_notes = recreated_channel_notes(&deposit, &reserved_inputs);
     Ok(ZoneDeposit {
-        deposit: DepositOp {
-            channel_id,
-            inputs: Inputs::new([note.id()]),
-            metadata,
-        },
-        reserved_inputs: vec![note],
+        deposit,
+        reserved_inputs,
+        channel_notes,
     })
 }
 
@@ -1485,15 +1513,18 @@ pub fn build_zone_deposit_from_values(
     }
 
     let input_ids: Vec<_> = reserved_inputs.iter().map(Utxo::id).collect();
+    let deposit = DepositOp {
+        channel_id,
+        inputs: Inputs::try_new(input_ids).map_err(|error| ZoneTestError::SubmitDeposit {
+            message: format!("deposit input set exceeds bound: {error:?}"),
+        })?,
+        metadata,
+    };
+    let channel_notes = recreated_channel_notes(&deposit, &reserved_inputs);
     Ok(ZoneDeposit {
-        deposit: DepositOp {
-            channel_id,
-            inputs: Inputs::try_new(input_ids).map_err(|error| ZoneTestError::SubmitDeposit {
-                message: format!("deposit input set exceeds bound: {error:?}"),
-            })?,
-            metadata,
-        },
+        deposit,
         reserved_inputs,
+        channel_notes,
     })
 }
 
@@ -1530,6 +1561,93 @@ pub async fn submit_zone_deposit(
         })?;
 
     Ok(response.hash)
+}
+
+/// Splits one channel note into `dust_count` value-1 dust notes via a raw,
+/// node-funded `ChannelTransfer`, submitted straight to the node mempool (no
+/// zone-sdk involvement — mirrors how deposits are submitted).
+///
+/// The transfer is value-preserving, so the input note's value must equal
+/// `dust_count` (every output is value 1). The channel authorizes the transfer
+/// with the sequencer's accredited key at index 0 (single-signer channel,
+/// `transfer_threshold == 1`); the node appends and proves the fee transfer.
+pub async fn submit_zone_channel_split(
+    node_url: &Url,
+    channel_id: ChannelId,
+    signing_key: &Ed25519Key,
+    funding_pk: ZkPublicKey,
+    input_note: Utxo,
+    dust_count: usize,
+) -> Result<InscriptionId, ZoneTestError> {
+    let input_value = input_note.note.value;
+    if input_value != dust_count as u64 {
+        return Err(ZoneTestError::SplitTransfer {
+            message: format!(
+                "channel note value {input_value} must equal dust count {dust_count} \
+                 (each dust note is value 1)"
+            ),
+        });
+    }
+
+    let outputs =
+        Outputs::try_new(vec![Note::new(1, funding_pk); dust_count]).map_err(|error| {
+            ZoneTestError::SplitTransfer {
+                message: format!("dust outputs exceed bound: {error:?}"),
+            }
+        })?;
+    let transfer = ChannelTransferOp {
+        channel_id,
+        inputs: Inputs::new([input_note.id()]),
+        outputs,
+    };
+
+    let tx_builder = MantleTxBuilder::new()
+        .push_op(Op::ChannelTransfer(transfer))
+        .map_err(|error| ZoneTestError::SplitTransfer {
+            message: format!("too many ops: {error}"),
+        })?;
+
+    let node = NodeHttpClient::from_url(node_url.clone());
+    let response = node
+        .fund_tx(WalletFundRequestBody {
+            tip: None,
+            priority_fee_percent: 0,
+            tx_builder,
+            change_public_key: funding_pk,
+            funding_public_keys: vec![funding_pk],
+            max_tx_fee: GasCost::new(u64::MAX),
+        })
+        .await
+        .map_err(|error| ZoneTestError::SplitTransfer {
+            message: format!("funding failed: {error}"),
+        })?;
+
+    // The channel multi-sig proves the transfer over the funded tx hash; the
+    // funding appends its own fee transfer proof as the last op.
+    let funded_tx = response.funded_tx;
+    let tx_hash = funded_tx.hash();
+    let signature = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
+    let proof = ChannelMultiSigProof::try_new([IndexedSignature::new(0, signature)].into())
+        .map_err(|error| ZoneTestError::SplitTransfer {
+            message: format!("multi-sig proof assembly failed: {error:?}"),
+        })?;
+    let mut ops_proofs = OpsProofs::new_unchecked(vec![OpProof::ChannelMultiSigProof(proof)]);
+    if let Some(transfer_proof) = response.transfer_proof {
+        ops_proofs
+            .try_push(transfer_proof)
+            .map_err(|error| ZoneTestError::SplitTransfer {
+                message: format!("too many operation proofs: {error:?}"),
+            })?;
+    }
+
+    let signed_tx = SignedMantleTx::new(funded_tx, ops_proofs);
+    node.submit_transaction(&signed_tx)
+        .await
+        .map_err(|error| ZoneTestError::SplitTransfer {
+            message: format!("submit failed: {error}"),
+        })?;
+
+    Ok(tx_hash)
 }
 
 /// Builds and submits a single transaction that both creates the deposit note
