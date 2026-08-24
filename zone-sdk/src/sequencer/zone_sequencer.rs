@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -11,9 +11,16 @@ use lb_common_http_client::{ProcessedBlockEvent, Slot};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx,
+        Note, Op, SignedMantleTx, Value,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
-        ops::channel::{ChannelId, MsgId, config::Keys, inscribe::Inscription},
+        ledger::{Inputs, Outputs},
+        ops::channel::{
+            ChannelId, MsgId,
+            channel_transfer::ChannelTransferOp,
+            config::Keys,
+            inscribe::{Inscription, InscriptionOp},
+            withdraw::ChannelWithdrawOp,
+        },
         traits::Hashable as _,
         transactions::{
             Ops,
@@ -30,18 +37,20 @@ use tracing::{debug, info, warn};
 use super::{
     TARGET,
     block_fetch::classify_channel_tx,
+    channel_wallet::select_channel_notes,
     client::SequencerClient,
     handle::SequencerHandle,
     slot_clock::SlotClock,
     state::{BlockChannelTx, TxState},
     tx_builder::{
-        create_channel_config_tx, create_inscribe_tx, prepare_tx as build_prepare_tx,
-        sign_tx as build_sign_tx,
+        build_atomic_withdraw_ops_proofs, create_channel_config_tx, create_inscribe_tx,
+        find_own_key_index, fund_ops, prepare_tx as build_prepare_tx, sign_tx as build_sign_tx,
     },
     types::{
-        ChannelWalletView, Error, Event, FundingConfig, InscriptionInfo, PendingTx, PublishResult,
-        SequencerChannelView, SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource,
-        TxStatus, TxStatusUpdate, WithdrawArg,
+        AtomicWithdrawInfo, ChannelWalletView, Error, Event, FundingConfig, InscriptionInfo,
+        PendingTx, PublishResult, SequencerChannelView, SequencerCheckpoint, SequencerConfig,
+        TurnNotification, TxSource, TxStatus, TxStatusUpdate, WithdrawArg, WithdrawInfo,
+        WithdrawInputs,
     },
 };
 use crate::{adapter, adapter::BoxStream};
@@ -162,6 +171,7 @@ pub(super) enum ActorRequest {
     PublishAtomicWithdraw {
         inscribe: Inscription,
         withdraws: Vec<WithdrawArg>,
+        inputs: WithdrawInputs,
         response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
     },
     ChannelConfig {
@@ -534,9 +544,15 @@ where
             ActorRequest::PublishAtomicWithdraw {
                 inscribe,
                 withdraws,
+                inputs,
                 response_tx,
             } => {
-                drop(response_tx.send(self.do_publish_atomic_withdraw(inscribe, withdraws).await));
+                drop(
+                    response_tx.send(
+                        self.do_publish_atomic_withdraw(inscribe, withdraws, inputs)
+                            .await,
+                    ),
+                );
             }
             ActorRequest::ChannelConfig {
                 keys,
@@ -695,136 +711,202 @@ where
         ))
     }
 
-    // TODO: rebuild the atomic withdraw flow on CHANNEL_TRANSFER +
-    // CHANNEL_WITHDRAW.  A channel withdraw now only releases an existing
-    // channel note to the key it  already carries, so paying a recipient first
-    // requires transferring a channel  note to that key, which needs the
-    // sequencer to track the channel's notes.
-    #[expect(
-        clippy::unused_async,
-        clippy::needless_pass_by_ref_mut,
-        reason = "Signature kept for the flow that will replace this stub."
-    )]
+    /// Core atomic-withdraw logic. Builds the client-side bundle
+    /// `[CHANNEL_INSCRIBE, CHANNEL_TRANSFER, CHANNEL_WITHDRAW]`: the transfer
+    /// moves channel notes to the recipient keys (plus a change note back to
+    /// the sequencer's own key when the selected inputs overpay), and the
+    /// withdraw releases exactly the freshly-created recipient notes. A channel
+    /// withdraw only releases an existing channel note to the key it already
+    /// carries, so paying a fresh recipient requires transferring a note to
+    /// that key first — which is why this depends on the sequencer tracking the
+    /// channel's notes.
+    ///
+    /// Mirrors [`Self::do_publish`] for the readiness/funding checks, parent
+    /// computation, status queueing and checkpointing. Scoped to single-signer
+    /// (centralized) channels — only the sequencer's own signature proves the
+    /// transfer and withdraw ops.
     pub(super) async fn do_publish_atomic_withdraw(
         &mut self,
-        _inscribe: Inscription,
-        _withdraws: Vec<WithdrawArg>,
-    ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
-        Err(Error::Network(
-            "atomic withdraw is unsupported until channel notes are tracked".into(),
+        inscribe: Inscription,
+        withdraws: Vec<WithdrawArg>,
+        inputs: WithdrawInputs,
+    ) -> Result<PublishReceipt, Error> {
+        self.ensure_ready()?;
+        self.ensure_fundable()?;
+
+        if withdraws.is_empty() {
+            return Err(Error::Network(
+                "publish_atomic_withdraw requires at least one withdraw".into(),
+            ));
+        }
+
+        // Use the cached channel state kept fresh by the drive loop — see
+        // `ensure_connected` for the staleness gate.
+        let channel_state = self.channel_state.as_ref().ok_or_else(|| {
+            Error::Network(format!(
+                "publish_atomic_withdraw requires channel state for {:?}",
+                self.channel_id
+            ))
+        })?;
+        if channel_state.transfer_threshold > 1 {
+            return Err(Error::Network(format!(
+                "publish_atomic_withdraw requires transfer_threshold == 1, got {}",
+                channel_state.transfer_threshold
+            )));
+        }
+        let own_key_index = find_own_key_index(channel_state, &self.signing_key)?;
+
+        // Recipient notes, concatenated across the withdraw args in order, plus
+        // the total value they release.
+        let recipient_outputs: Vec<Note> = withdraws
+            .iter()
+            .flat_map(|w| w.outputs.iter().copied())
+            .collect();
+        let amount = recipient_outputs.iter().try_fold(0u64, |acc, note| {
+            acc.checked_add(note.value)
+                .ok_or_else(|| Error::Network("withdraw amount overflow".into()))
+        })?;
+
+        let (transfer_op, withdraw_op) =
+            self.build_transfer_and_withdraw(&recipient_outputs, amount, &inputs)?;
+
+        let parent = self.compute_publish_parent();
+        let inscription_op = InscriptionOp {
+            channel_id: self.channel_id,
+            inscription: inscribe.clone(),
+            parent,
+            signer: self.signing_key.public_key(),
+        };
+        let msg_id = inscription_op.id();
+
+        let ops = vec![
+            Op::ChannelInscribe(inscription_op),
+            Op::ChannelTransfer(transfer_op),
+            Op::ChannelWithdraw(withdraw_op.clone()),
+        ];
+
+        let (tx, transfer_proof) = fund_ops(&self.node, &self.config.funding, ops).await?;
+        let own_sig = build_sign_tx(tx.hash(), &self.signing_key);
+        let ops_proofs =
+            build_atomic_withdraw_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
+        let signed_tx = SignedMantleTx::new(tx, ops_proofs);
+
+        let tx_hash = signed_tx.mantle_tx().hash();
+        let withdraw_infos = vec![WithdrawInfo {
+            tx_hash,
+            op: withdraw_op,
+        }];
+
+        debug!(target: TARGET,
+            "Prepared atomic withdraw: payload={:?}, parent={}, msg_id={}, tx={}, amount={}",
+            String::from_utf8_lossy(&inscribe),
+            hex::encode(parent.as_ref()),
+            hex::encode(msg_id.as_ref()),
+            hex::encode(tx_hash.0),
+            amount,
+        );
+
+        // Safe to unwrap — `ensure_ready` checks state.
+        let state = self.state.as_mut().unwrap();
+        state.submit_atomic_withdraw(
+            signed_tx.clone(),
+            parent,
+            msg_id,
+            inscribe.clone(),
+            withdraw_infos.clone(),
+        );
+        self.last_msg_id = msg_id;
+        self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
+
+        if self.can_publish_inscription_now() {
+            self.queue_publish_post(tx_hash, signed_tx);
+        }
+
+        self.publish_channel_view();
+
+        let checkpoint = self.publish_checkpoint().ok_or(Error::Unavailable {
+            reason: "checkpoint unavailable",
+        })?;
+
+        Ok((
+            PublishResult {
+                tx: PendingTx::AtomicWithdraw(AtomicWithdrawInfo {
+                    tx_hash,
+                    inscription: InscriptionInfo {
+                        tx_hash,
+                        parent_msg: parent,
+                        this_msg: msg_id,
+                        payload: inscribe,
+                    },
+                    withdraws: withdraw_infos,
+                }),
+            },
+            checkpoint,
         ))
     }
 
-    //     pub(super) async fn do_publish_atomic_withdraw(
-    //         &mut self,
-    //         inscribe: Inscription,
-    //         withdraws: Vec<WithdrawArg>,
-    //     ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
-    //         self.ensure_ready()?;
-    //         self.ensure_fundable()?;
-    //
-    //         if withdraws.is_empty() {
-    //             return Err(Error::Network(
-    //                 "publish_atomic_withdraw requires at least one
-    // withdraw".into(),             ));
-    //         }
-    //
-    //         // Use the cached channel state kept fresh by the drive loop — see
-    //         // `ensure_connected` for the staleness gate.
-    //         let channel_state = self.channel_state.as_ref().ok_or_else(|| {
-    //             Error::Network(format!(
-    //                 "publish_atomic_withdraw requires channel state for {:?}",
-    //                 self.channel_id
-    //             ))
-    //         })?;
-    //         if channel_state.transfer_threshold > 1 {
-    //             return Err(Error::Network(format!(
-    //                 "publish_atomic_withdraw requires withdraw_threshold == 1,
-    // got {}",                 channel_state.transfer_threshold
-    //             )));
-    //         }
-    //         let own_key_index = find_own_key_index(channel_state,
-    // &self.signing_key)?;         let mut next_nonce =
-    // channel_state.withdrawal_nonce;
-    //
-    //         let parent = self.compute_publish_parent();
-    //
-    //         let mut ops: Vec<Op> = Vec::with_capacity(withdraws.len() + 1);
-    //         let mut withdraw_ops = Vec::with_capacity(withdraws.len());
-    //         for arg in withdraws {
-    //             let op = ChannelWithdrawOp {
-    //                 channel_id: self.channel_id,
-    //                 outputs: arg.outputs,
-    //                 withdraw_nonce: next_nonce,
-    //             };
-    //             withdraw_ops.push(op.clone());
-    //             ops.push(Op::ChannelWithdraw(op));
-    //             next_nonce = next_nonce
-    //                 .checked_add(1)
-    //                 .ok_or_else(|| Error::Network("withdraw nonce
-    // overflow".into()))?;         }
-    //
-    //         let inscription_op = InscriptionOp {
-    //             channel_id: self.channel_id,
-    //             inscription: inscribe.clone(),
-    //             parent,
-    //             signer: self.signing_key.public_key(),
-    //         };
-    //         let msg_id = inscription_op.id();
-    //         ops.push(Op::ChannelInscribe(inscription_op));
-    //
-    //         let (tx, transfer_proof) = fund_ops(&self.node,
-    // self.config.funding.as_ref(), ops).await?;         let own_sig =
-    // build_sign_tx(tx.hash(), &self.signing_key);         let ops_proofs =
-    //             build_atomic_withdraw_ops_proofs(&tx, own_key_index, own_sig,
-    // transfer_proof.as_ref())?;         let signed_tx =
-    // SignedMantleTx::new(tx, ops_proofs)             .map_err(|e|
-    // Error::Network(format!("signed tx assembly failed: {e:?}")))?;
-    //
-    //         let tx_hash = signed_tx.mantle_tx.hash();
-    //         let withdraw_infos: Vec<WithdrawInfo> = withdraw_ops
-    //             .into_iter()
-    //             .map(|op| WithdrawInfo { tx_hash, op })
-    //             .collect();
-    //
-    //         // Safe to unwrap — `ensure_ready` checks state.
-    //         let state = self.state.as_mut().unwrap();
-    //         state.submit_atomic_withdraw(
-    //             signed_tx.clone(),
-    //             parent,
-    //             msg_id,
-    //             inscribe.clone(),
-    //             withdraw_infos.clone(),
-    //         );
-    //         self.last_msg_id = msg_id;
-    //         self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
-    //
-    //         if self.can_publish_inscription_now() {
-    //             self.queue_publish_post(tx_hash, signed_tx);
-    //         }
-    //
-    //         self.publish_channel_view();
-    //
-    //         let checkpoint = self.publish_checkpoint().ok_or(Error::Unavailable {
-    //             reason: "checkpoint unavailable",
-    //         })?;
-    //
-    //         Ok((
-    //             PublishResult {
-    //                 tx: PendingTx::AtomicWithdraw(AtomicWithdrawInfo {
-    //                     tx_hash,
-    //                     inscription: InscriptionInfo {
-    //                         tx_hash,
-    //                         parent_msg: parent,
-    //                         this_msg: msg_id,
-    //                         payload: inscribe,
-    //                     },
-    //                     withdraws: withdraw_infos,
-    //                 }),
-    //             },
-    //             checkpoint,
-    //         ))
-    //     }
+    /// Build the transfer + withdraw ops for an atomic withdraw: select the
+    /// channel notes that cover `amount`, transfer them to the recipient keys
+    /// (with change back to the funding key when they overpay), and release the
+    /// freshly-created recipient notes.
+    fn build_transfer_and_withdraw(
+        &self,
+        recipient_outputs: &[Note],
+        amount: Value,
+        inputs: &WithdrawInputs,
+    ) -> Result<(ChannelTransferOp, ChannelWithdrawOp), Error> {
+        let funding_pk = self.config.funding.funding_pk;
+        let view = self.channel_wallet();
+        let selected = select_channel_notes(&view, funding_pk, amount, inputs)?;
+        let by_id: HashMap<_, _> = view
+            .finalized
+            .iter()
+            .chain(view.unfinalized.iter())
+            .map(|n| (n.note_id, n.value))
+            .collect();
+        let selected_sum = selected.iter().try_fold(0u64, |acc, id| {
+            let value = by_id.get(id).ok_or_else(|| {
+                Error::Network("selected channel note vanished from the tracked set".into())
+            })?;
+            acc.checked_add(*value)
+                .ok_or_else(|| Error::Network("selected channel note value overflow".into()))
+        })?;
+        let change = selected_sum.checked_sub(amount).ok_or_else(|| {
+            Error::Network("selected channel notes underfund the withdrawal".into())
+        })?;
+
+        // Transfer outputs: the recipient notes, then a change note back to the
+        // sequencer's own key when the inputs overpay.
+        // TODO: a dedicated `change_pk` funding-config field could route change
+        // to a separate key; for now the funding key doubles as the change key.
+        let mut transfer_outputs = recipient_outputs.to_vec();
+        if change > 0 {
+            transfer_outputs.push(Note::new(change, funding_pk));
+        }
+        let transfer_op = ChannelTransferOp {
+            channel_id: self.channel_id,
+            inputs: Inputs::try_new(selected)
+                .map_err(|e| Error::Network(format!("invalid transfer inputs: {e:?}")))?,
+            outputs: Outputs::try_new(transfer_outputs)
+                .map_err(|e| Error::Network(format!("invalid transfer outputs: {e:?}")))?,
+        };
+
+        // The withdraw releases exactly the recipient notes the transfer
+        // created: the first `recipient_outputs.len()` utxos in output order. A
+        // trailing change note, if any, stays in the channel.
+        let recipient_note_ids: Vec<_> = transfer_op
+            .utxos()
+            .take(recipient_outputs.len())
+            .map(|utxo| utxo.id())
+            .collect();
+        let withdraw_op = ChannelWithdrawOp {
+            channel_id: self.channel_id,
+            inputs: Inputs::try_new(recipient_note_ids)
+                .map_err(|e| Error::Network(format!("invalid withdraw inputs: {e:?}")))?,
+        };
+
+        Ok((transfer_op, withdraw_op))
+    }
 
     pub(super) async fn do_channel_config(
         &mut self,

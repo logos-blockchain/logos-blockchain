@@ -616,22 +616,25 @@ pub(super) async fn publish_atomic_zone_withdraw_transaction(
         .map_err(|error| zone_step_error(step, &error))?
     };
 
-    if submission.withdraws.len() != withdraw_rows.len() {
+    // A bundle carries a single `ChannelWithdrawOp` that releases every
+    // recipient note the transfer created, regardless of how many withdraw args
+    // were passed. Remember that one op under each row alias so per-withdraw
+    // indexer assertions all resolve to the same finalized op.
+    let [withdraw_op] = submission.withdraws.as_slice() else {
         return Err(zone_step_error(
             step,
             &super::support::ZoneTestError::SubmitWithdraw {
                 message: format!(
-                    "atomic withdraw bundle produced {} withdraw ops, expected {}",
+                    "atomic withdraw bundle produced {} withdraw ops, expected exactly 1",
                     submission.withdraws.len(),
-                    withdraw_rows.len(),
                 ),
             },
         ));
-    }
-    for ((alias, _), withdraw_op) in withdraw_rows.iter().zip(submission.withdraws) {
+    };
+    for (alias, _) in &withdraw_rows {
         world
             .zone
-            .remember_submitted_withdraw(alias.clone(), withdraw_op);
+            .remember_submitted_withdraw(alias.clone(), withdraw_op.clone());
     }
     remember_published_zone_message(
         world,

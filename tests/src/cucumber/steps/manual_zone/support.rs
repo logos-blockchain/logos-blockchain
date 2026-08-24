@@ -54,7 +54,7 @@ use super::runner::{
     self, ChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx, FundingConfig,
     InscriptionId, InscriptionInfo, PendingTx, PublishResult, SequencerChannelView,
     SequencerCheckpoint, SequencerClient, SequencerConfig, TurnNotification, TxStatus,
-    TxStatusUpdate, WithdrawArg,
+    TxStatusUpdate, WithdrawArg, WithdrawInputs,
 };
 
 /// Inscriptions in the just-finalized txs — the permanent, settled part of the
@@ -1221,6 +1221,30 @@ pub async fn wait_for_withdraw(
     .await
 }
 
+/// Waits until the finalized channel history contains a channel transfer whose
+/// input set has exactly `expected_inputs` notes.
+///
+/// This is the on-chain record of the withdrawal's note selection: in the
+/// dust-flood scenario it proves best-fit largest-first consumed a single
+/// covering note rather than sweeping the >255-note dust flood into a transfer
+/// the ledger would reject.
+pub async fn wait_for_channel_transfer_input_count(
+    reader: &ZoneReaderConfig,
+    expected_inputs: usize,
+    timeout_duration: Duration,
+) -> Result<(), ZoneTestError> {
+    poll_replayed_history_until(
+        reader,
+        timeout_duration,
+        ZoneTestError::IndexerTimeout,
+        move |op| {
+            matches!(op, FinalizedOp::ChannelTransfer(transfer)
+                if transfer.op.inputs.len() == expected_inputs)
+        },
+    )
+    .await
+}
+
 async fn poll_replayed_history_until(
     reader: &ZoneReaderConfig,
     duration: Duration,
@@ -1835,86 +1859,51 @@ fn build_atomic_deposit_op(
 /// Submits a channel withdraw signed by the active zone sequencer and publishes
 /// the withdraw inscription as part of the same SDK flow.
 ///
-/// TODO: rebuild on `CHANNEL_TRANSFER` + `CHANNEL_WITHDRAW`. A withdraw now
-///  only releases an existing channel note to the key it already carries, so
-///  paying a recipient an arbitrary amount first requires transferring a
-///  channel note to their key. That needs channel note tracking.
+/// The withdraw pays a single note of `amount` back to `funding_public_key`
+/// (self-withdraw). Inputs are selected automatically by the SDK
+/// (`WithdrawInputs::Auto`, best-fit largest-first, capped at 255 inputs).
 pub async fn submit_zone_withdraw(
-    _client: &SequencerClient,
+    client: &SequencerClient,
     _channel_id: ChannelId,
-    _funding_public_key: ZkPublicKey,
-    _amount: Value,
-    _inscription_data: Inscription,
+    funding_public_key: ZkPublicKey,
+    amount: Value,
+    inscription_data: Inscription,
 ) -> Result<ZoneWithdrawSubmission, ZoneTestError> {
-    Err(ZoneTestError::SubmitWithdraw {
-        message: "zone withdraw is unsupported until channel notes are tracked".to_owned(),
+    let (result, _cp) = client
+        .publish_atomic_withdraw(
+            inscription_data,
+            vec![WithdrawArg {
+                outputs: Outputs::new([Note::new(amount, funding_public_key)]),
+            }],
+            WithdrawInputs::Auto,
+        )
+        .await
+        .map_err(|error| ZoneTestError::SubmitWithdraw {
+            message: error.to_string(),
+        })?;
+
+    let PendingTx::AtomicWithdraw(info) = result.tx else {
+        return Err(ZoneTestError::SubmitWithdraw {
+            message: "publish_atomic_withdraw returned a non-AtomicWithdraw publish result"
+                .to_owned(),
+        });
+    };
+    let withdraw = info
+        .withdraws
+        .first()
+        .ok_or_else(|| ZoneTestError::SubmitWithdraw {
+            message: "atomic withdraw bundle had no withdraw ops".to_owned(),
+        })?
+        .op
+        .clone();
+
+    Ok(ZoneWithdrawSubmission {
+        withdraw,
+        publish: PublishResult {
+            tx: PendingTx::AtomicWithdraw(info),
+        },
     })
 }
-
-// pub async fn submit_zone_withdraw(
-//     client: &SequencerClient,
-//     channel_id: ChannelId,
-//     funding_public_key: ZkPublicKey,
-//     amount: Value,
-//     inscription_data: Inscription,
-// ) -> Result<ZoneWithdrawSubmission, ZoneTestError> {
-//     let withdraw = ChannelWithdrawOp {
-//         channel_id,
-//         outputs: Outputs::new([Note::new(amount, funding_public_key)]),
-//         withdraw_nonce: 0,
-//     };
-//
-//     let (tx, msg_id, inscription_sig) = client
-//         .prepare_tx(
-//             [Op::ChannelWithdraw(withdraw.clone())].into(),
-//             inscription_data,
-//         )
-//         .await
-//         .map_err(|error| ZoneTestError::SubmitWithdraw {
-//             message: error.to_string(),
-//         })?;
-//
-//     let withdraw_sig =
-//         client
-//             .sign_tx(&tx)
-//             .await
-//             .map_err(|error| ZoneTestError::SubmitWithdraw {
-//                 message: error.to_string(),
-//             })?;
-//
-//     let withdraw_proof =
-//         match ChannelMultiSigProof::try_new([IndexedSignature::new(0,
-// withdraw_sig)].into()) {             Ok(proof) => proof,
-//             Err(error) => {
-//                 return Err(ZoneTestError::SubmitWithdraw {
-//                     message: error.to_string(),
-//                 });
-//             }
-//         };
-//
-//     let signed_tx = SignedMantleTx::new(
-//         tx,
-//         vec![
-//             OpProof::ChannelMultiSigProof(withdraw_proof),
-//             OpProof::Ed25519Sig(inscription_sig),
-//         ],
-//     )
-//     .map_err(|error| ZoneTestError::SubmitWithdraw {
-//         message: error.to_string(),
-//     })?;
-//
-//     let (result, _cp) = client
-//         .submit_signed_tx(signed_tx, msg_id)
-//         .await
-//         .map_err(|error| ZoneTestError::SubmitWithdraw {
-//             message: error.to_string(),
-//         })?;
-//
-//     Ok(ZoneWithdrawSubmission {
-//         withdraw,
-//         publish: result,
-//     })
-// }
 
 /// Result of publishing an atomic inscription+withdraw bundle. Carries every
 /// withdraw op produced by the SDK (one per `WithdrawArg`, in submission
@@ -1960,7 +1949,7 @@ pub async fn publish_atomic_zone_withdraw(
         .collect::<Result<Vec<_>, ZoneTestError>>()?;
 
     let (result, _cp) = client
-        .publish_atomic_withdraw(inscription_data, withdraw_args)
+        .publish_atomic_withdraw(inscription_data, withdraw_args, WithdrawInputs::Auto)
         .await
         .map_err(|error| ZoneTestError::SubmitWithdraw {
             message: error.to_string(),

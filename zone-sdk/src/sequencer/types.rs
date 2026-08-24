@@ -79,6 +79,22 @@ pub struct WithdrawArg {
     pub outputs: Outputs,
 }
 
+/// Which channel notes fund the transfer half of an atomic withdraw.
+///
+/// The withdraw first transfers channel notes to the recipient keys, so the
+/// bundle has to consume enough channel notes to cover the withdrawn amount.
+/// [`Self::Auto`] lets the SDK pick them (largest-first, own-key notes ahead
+/// of the rest); [`Self::Explicit`] pins an exact input set the caller has
+/// chosen — e.g. to apply its own dust/age policy — which the SDK validates
+/// against the tracked note set.
+#[derive(Debug, Clone)]
+pub enum WithdrawInputs {
+    /// Let the SDK select covering notes from the tracked note set.
+    Auto,
+    /// Use exactly these notes, in this order.
+    Explicit(Vec<NoteId>),
+}
+
 /// A tx reported in a [`ChannelUpdate`], in both `adopted` and `orphaned`.
 ///
 /// The variants mirror the submission flows, so an orphaned entry is

@@ -10,7 +10,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use super::{
     types::{
         ChannelWalletView, Error, Event, SequencerChannelView, SequencerCheckpoint,
-        TurnNotification, TxStatusUpdate, WithdrawArg,
+        TurnNotification, TxStatusUpdate, WithdrawArg, WithdrawInputs,
     },
     zone_sequencer::ActorRequest,
 };
@@ -79,11 +79,13 @@ impl SequencerClient {
         &self,
         inscribe: Inscription,
         withdraws: Vec<WithdrawArg>,
+        inputs: WithdrawInputs,
     ) -> Result<PublishReceipt, Error> {
         let (response_tx, response_rx) = oneshot::channel();
         self.send(ActorRequest::PublishAtomicWithdraw {
             inscribe,
             withdraws,
+            inputs,
             response_tx,
         })?;
         Self::recv(response_rx).await?

@@ -7,7 +7,7 @@ use lb_core::mantle::{
 use lb_key_management_system_service::keys::Ed25519Signature;
 
 use super::{
-    types::{ChannelWalletView, Error, WithdrawArg},
+    types::{ChannelWalletView, Error, WithdrawArg, WithdrawInputs},
     zone_sequencer::ZoneSequencer,
 };
 use crate::{adapter, sequencer::zone_sequencer::PublishReceipt};
@@ -176,13 +176,19 @@ where
     /// stream resumes and our turn is current. Returns [`Error::Network`] if
     /// the channel's `transfer_threshold > 1` (which would require multi-sig
     /// orchestration this API doesn't support).
+    ///
+    /// `inputs` chooses which tracked channel notes fund the transfer —
+    /// [`WithdrawInputs::Auto`] lets the SDK pick covering notes (largest
+    /// first, own-key notes ahead of the rest), or [`WithdrawInputs::Explicit`]
+    /// pins an exact input set.
     pub async fn publish_atomic_withdraw(
         &mut self,
         inscribe: Inscription,
         withdraws: Vec<WithdrawArg>,
+        inputs: WithdrawInputs,
     ) -> Result<PublishReceipt, Error> {
         self.sequencer
-            .do_publish_atomic_withdraw(inscribe, withdraws)
+            .do_publish_atomic_withdraw(inscribe, withdraws, inputs)
             .await
     }
 
