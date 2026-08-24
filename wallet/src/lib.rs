@@ -1004,7 +1004,7 @@ mod tests {
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_pol::LotteryConstants;
-    use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+    use lb_utils::math::{NonNegativeRatio, PositiveF64};
     use lb_utxotree::UtxoTree;
     use num_bigint::BigUint;
     use rpds::HashTrieSetSync;
@@ -2028,7 +2028,7 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
