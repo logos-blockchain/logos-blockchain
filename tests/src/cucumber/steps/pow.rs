@@ -56,7 +56,7 @@ async fn step_stop_mining(world: &mut CucumberWorld, step: &Step, node_name: Str
 }
 
 #[when(expr = "I claim PoW rewards on node {string} as {string} within {int} seconds")]
-#[cucumber::then(expr = "I claim PoW rewards on node {string} as {string} within {int} seconds")]
+#[then(expr = "I claim PoW rewards on node {string} as {string} within {int} seconds")]
 async fn step_claim_pow_rewards(
     world: &mut CucumberWorld,
     step: &Step,
