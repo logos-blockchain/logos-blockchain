@@ -120,5 +120,5 @@ pub struct RewardPoWConfig {
     pub rate_den: NonZeroU64,
     pub target_claim_per_block: NonZeroU64,
     pub expected_blocks_per_epoch: NonZeroU64,
-    pub slot_window: u64,
+    pub slot_window: NonZeroU64,
 }

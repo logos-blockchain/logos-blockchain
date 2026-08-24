@@ -2120,7 +2120,7 @@ mod tests {
                 rate_den: NonZeroU64::MIN,
                 target_claim_per_block: NonZeroU64::MIN,
                 expected_blocks_per_epoch: NonZeroU64::MIN,
-                slot_window: 100,
+                slot_window: NonZeroU64::new(100).expect("100 is non-zero"),
             }
         }
 

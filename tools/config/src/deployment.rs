@@ -191,7 +191,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                         .unwrap(),
                     expected_blocks_per_epoch: NonZero::new(REWARD_POW_EXPECTED_BLOCKS_PER_EPOCH)
                         .unwrap(),
-                    slot_window: REWARD_POW_SLOT_WINDOW,
+                    slot_window: NonZero::new(REWARD_POW_SLOT_WINDOW).unwrap(),
                 },
             },
         },

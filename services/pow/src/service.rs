@@ -2,7 +2,7 @@ use core::fmt::{Debug, Display};
 use std::{
     collections::{HashMap, HashSet},
     marker::PhantomData,
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     sync::Arc,
 };
 
@@ -132,7 +132,7 @@ pub struct PoWServiceSettings {
     /// Acceptance window, in slots, a mined ticket stays claimable for. Must
     /// match the network's consensus `slot_window` (sourced from the same
     /// deployment configuration); a ticket outside it can never be claimed.
-    pub slot_window: u64,
+    pub slot_window: NonZeroU64,
     /// Storage-recovery bookkeeping, populated by the runtime on startup.
     #[serde(skip)]
     pub recovery_data: RecoveryData,
@@ -335,7 +335,7 @@ where
             cryptarchia_api.clone(),
             pool,
             settings.mining.max_tickets_per_block,
-            settings.slot_window,
+            settings.slot_window.get(),
         )
         .await?;
 
@@ -379,7 +379,7 @@ where
                                     &blend_api,
                                     settings.claim_address,
                                     &mut state,
-                                    settings.slot_window,
+                                    settings.slot_window.get(),
                                 )
                                 .await
                                 .inspect_err(|e| {
@@ -392,7 +392,7 @@ where
                             }
                         }
                         PoWServiceMessage::ClaimableRewardsInfo { response } => {
-                            respond_claimable_rewards(&cryptarchia_api, &mut state, &state_updater, response, settings.slot_window).await;
+                            respond_claimable_rewards(&cryptarchia_api, &mut state, &state_updater, response, settings.slot_window.get()).await;
                         }
                     }
                 }
@@ -403,7 +403,7 @@ where
                     // previously stored tickets whose window has since closed.
                     let current_slot = winning_ticket.block_slot;
                     state.ready_to_claim.push(winning_ticket);
-                    prune_expired_tickets(&mut state, current_slot, settings.slot_window);
+                    prune_expired_tickets(&mut state, current_slot, settings.slot_window.get());
                     info!(
                         target: LOG_TARGET,
                         "Mined a winning ticket 💲; total claimable tickets {}",

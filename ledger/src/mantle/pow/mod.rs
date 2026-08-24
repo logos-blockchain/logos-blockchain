@@ -297,7 +297,7 @@ mod tests {
             rate_den: NonZeroU64::MIN,
             target_claim_per_block: NonZeroU64::MIN,
             expected_blocks_per_epoch: NonZeroU64::MIN,
-            slot_window: SLOT_WINDOW,
+            slot_window: NonZeroU64::new(SLOT_WINDOW).expect("SLOT_WINDOW is non-zero"),
         }
     }
 

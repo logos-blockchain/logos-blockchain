@@ -1,3 +1,5 @@
+use core::num::NonZeroU64;
+
 use lb_pow_service::PoWServiceSettings;
 use lb_services_utils::overwatch::RecoveryData;
 
@@ -17,7 +19,7 @@ impl ServiceConfig {
     pub const fn into_pow_service_settings(
         self,
         recovery_data: RecoveryData,
-        slot_window: u64,
+        slot_window: NonZeroU64,
     ) -> PoWServiceSettings {
         PoWServiceSettings {
             claim_address: self.user.claim_address,

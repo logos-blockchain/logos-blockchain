@@ -159,6 +159,6 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
     }
 
     fn get_pow_slot_window(&self) -> u64 {
-        self.config.pow_config.reward.slot_window
+        self.config.pow_config.reward.slot_window.get()
     }
 }

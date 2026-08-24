@@ -170,7 +170,7 @@ impl LedgerState {
     /// building has no id to record (and that block's transactions cannot
     /// anchor to it anyway).
     pub fn add_seen_block(&mut self, block_hash: Hash, slot: Slot, config: &Config) {
-        let slot_window = config.pow_config.reward.slot_window;
+        let slot_window = config.pow_config.reward.slot_window.get();
         self.pow.add_seen_block_slots(block_hash, slot);
         self.pow.prune_seen_block_slots(slot, slot_window);
         self.pow.prune_nullifiers_by_slots(slot, slot_window);

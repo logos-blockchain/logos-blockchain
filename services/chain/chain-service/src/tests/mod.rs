@@ -448,7 +448,7 @@ fn disabled_reward_config() -> RewardPoWConfig {
         rate_den: core::num::NonZeroU64::MIN,
         target_claim_per_block: core::num::NonZeroU64::MIN,
         expected_blocks_per_epoch: core::num::NonZeroU64::MIN,
-        slot_window: 100,
+        slot_window: core::num::NonZeroU64::new(100).unwrap(),
     }
 }
 
