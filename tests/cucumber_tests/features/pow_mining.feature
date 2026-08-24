@@ -41,7 +41,12 @@ Feature: PoW mining
     And I have deployment config override "cryptarchia.pow_config.reward.ema_smoothing_factor" as "1"
     And I have deployment config override "cryptarchia.pow_config.reward.ema_smoothing_precision" as "1000000000000000000"
     And I have deployment config override "cryptarchia.pow_config.reward.target_claims_per_block" as "1000000000000000000"
-    And I have user config override "pow.claim_address" as "wallet_pk(3)"
+    # The claim address names its recipient by wallet-resource alias; it is
+    # resolved to account 3's public key when the wallet-resource table below is
+    # processed, after checking WALLET_MINER appears there exactly once on
+    # account index 3.
+    And I have user config override "pow.claim_address" as "wallet_pk(WALLET_MINER)"
+    And I have a claim wallet account index 3 with alias "WALLET_MINER"
     # Start the network with the two staking nodes only; they drive consensus
     # and blend. WALLET_MINER (account 3, the miner's reward account) is bound to
     # NODE_1 so its balance can be queried while NODE_3 does the mining.

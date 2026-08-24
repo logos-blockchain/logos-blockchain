@@ -28,7 +28,10 @@ use crate::{
                 stop_active_manual_cluster,
             },
             manual_nodes::{
-                config_override::{set_deployment_config_override, set_user_config_override},
+                config_override::{
+                    resolve_pending_claim_address_overrides, set_deployment_config_override,
+                    set_user_config_override,
+                },
                 snapshots::validate_snapshot_path_component,
                 utils::{
                     NodesToStartUnordered, create_snapshot_all_nodes_with_wallet_state,
@@ -281,9 +284,14 @@ async fn step_start_nodes_with_wallet_resources(
     // Map wallet start info and connected peers to node name
     verify_node_wallet_resources_table_indexes(table, &step.value)?;
     let mut nodes_to_start: NodesToStartUnordered = HashMap::new();
+    let mut wallet_bindings: Vec<(String, usize)> = Vec::new();
     for row in table.rows.iter().skip(1) {
         let (node_name, wallet_start_info, connected_to) =
             parse_wallet_resources_table_row(&step.value, row)?;
+        wallet_bindings.push((
+            wallet_start_info.wallet_name.clone(),
+            wallet_start_info.account_index,
+        ));
         let entry = nodes_to_start
             .entry(node_name)
             .or_insert_with(|| (Vec::new(), Vec::new()));
@@ -292,6 +300,11 @@ async fn step_start_nodes_with_wallet_resources(
             entry.1.push(peer);
         }
     }
+
+    // Resolve any deferred `wallet_pk(<alias>)` overrides against this table
+    // before starting nodes, so the derived claim address is applied to every
+    // node — including ones that join later.
+    resolve_pending_claim_address_overrides(world, &step.value, &wallet_bindings)?;
 
     let nodes_to_start_ordered = start_nodes_order_respecting_dependencies(nodes_to_start)
         .inspect_err(|e| {
@@ -581,6 +594,19 @@ fn step_set_deployment_config_setting(
     setting_value: String,
 ) -> StepResult {
     set_deployment_config_override(world, &step.value, &setting_path, &setting_value)
+}
+
+#[given(expr = "I have a claim wallet account index {int} with alias {string}")]
+#[when(expr = "I have a claim wallet account index {int} with alias {string}")]
+fn step_declare_claim_wallet(
+    world: &mut CucumberWorld,
+    account_index: usize,
+    alias: String,
+) -> StepResult {
+    world
+        .claim_wallet_account_indices
+        .insert(alias, account_index);
+    Ok(())
 }
 
 #[given(expr = "the first {int} nodes are declared as blend providers")]

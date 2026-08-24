@@ -68,7 +68,7 @@ use time::{Duration as TimeDuration, OffsetDateTime};
 
 use crate::cucumber::{
     error::{StepError, StepResult},
-    world::{ConfigOverride, CucumberWorld},
+    world::{ConfigOverride, CucumberWorld, PendingClaimAddressOverride},
 };
 
 // ============================================================
@@ -81,7 +81,119 @@ pub fn set_user_config_override(
     raw_path: &str,
     raw_value: &str,
 ) -> StepResult {
+    // `wallet_pk(<alias>)` names its recipient by wallet-resource alias, which
+    // is only cross-checked once that table is known; defer it rather than
+    // resolving a public key here.
+    if let Some(alias) = deferred_wallet_pk_alias(raw_value) {
+        let path = normalize_path(step, raw_path)?;
+        world.user_config_overrides.retain(|item| item.path != path);
+        world
+            .pending_claim_address_overrides
+            .retain(|item| item.path != path);
+        world
+            .pending_claim_address_overrides
+            .push(PendingClaimAddressOverride { path, alias });
+        return Ok(());
+    }
+
     set_override(&mut world.user_config_overrides, step, raw_path, raw_value)
+}
+
+/// Resolves the pending `wallet_pk(<alias>)` user config overrides against the
+/// wallet-resource bindings (`wallet_name` -> `account_index`) parsed from a
+/// `I start nodes with wallet resources` table. Each alias must appear exactly
+/// once in the table and match the account index declared for it via
+/// `I have a claim wallet account index N with alias X`; the resolved public
+/// key is then applied as a normal user config override.
+pub fn resolve_pending_claim_address_overrides(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallet_bindings: &[(String, usize)],
+) -> StepResult {
+    let pending = std::mem::take(&mut world.pending_claim_address_overrides);
+    for PendingClaimAddressOverride { path, alias } in pending {
+        let table_indexes: Vec<usize> = wallet_bindings
+            .iter()
+            .filter(|(name, _)| *name == alias)
+            .map(|(_, index)| *index)
+            .collect();
+        if table_indexes.len() != 1 {
+            return Err(step_error(
+                step,
+                &format!(
+                    "claim wallet alias '{alias}' must appear exactly once in the \
+                    wallet-resource table, found {} occurrence(s)",
+                    table_indexes.len()
+                ),
+            ));
+        }
+        let table_index = table_indexes[0];
+
+        let declared_index = *world
+            .claim_wallet_account_indices
+            .get(&alias)
+            .ok_or_else(|| {
+                step_error(
+                    step,
+                    &format!(
+                        "claim wallet alias '{alias}' was not declared; add \
+                    `I have a claim wallet account index <n> with alias \"{alias}\"`"
+                    ),
+                )
+            })?;
+        if table_index != declared_index {
+            return Err(step_error(
+                step,
+                &format!(
+                    "claim wallet alias '{alias}' is bound to account index {table_index} in the \
+                    wallet-resource table but declared as account index {declared_index}"
+                ),
+            ));
+        }
+
+        let account =
+            WalletAccount::deterministic(declared_index as u64, 0, true).map_err(|source| {
+                step_error(
+                    step,
+                    &format!(
+                        "failed to derive public key for claim wallet alias '{alias}': {source}"
+                    ),
+                )
+            })?;
+        let value = serde_yaml::to_value(account.public_key()).map_err(|source| {
+            step_error(
+                step,
+                &format!(
+                    "failed to serialize public key for claim wallet alias '{alias}': {source}"
+                ),
+            )
+        })?;
+
+        if let Some(existing) = world
+            .user_config_overrides
+            .iter_mut()
+            .find(|item| item.path == path)
+        {
+            existing.value = value;
+        } else {
+            world
+                .user_config_overrides
+                .push(ConfigOverride { path, value });
+        }
+    }
+
+    Ok(())
+}
+
+/// Returns the alias in a `wallet_pk(<alias>)` value that must be deferred: a
+/// non-numeric argument names a wallet-resource alias. A numeric argument
+/// (`wallet_pk(3)`) resolves eagerly in [`parse_value`] and is not deferred.
+fn deferred_wallet_pk_alias(raw_value: &str) -> Option<String> {
+    let (name, arg) = parse_call(raw_value.trim())?;
+    if name != "wallet_pk" || arg.parse::<u64>().is_ok() {
+        return None;
+    }
+    Some(arg.to_owned())
 }
 
 pub fn set_deployment_config_override(
