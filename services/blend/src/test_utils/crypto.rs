@@ -10,7 +10,7 @@ use lb_blend::{
         encap::ProofsVerifier,
     },
     proofs::{
-        quota::{ProofOfQuota, VerifiedProofOfQuota},
+        quota::{KeyIndex, ProofOfQuota, VerifiedProofOfQuota},
         selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
     },
     scheduling::message_blend::provers::{
@@ -22,6 +22,27 @@ use lb_chain_service::Epoch;
 use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use tokio::sync::watch;
 
+thread_local! {
+    /// Records the core key index each [`MockCoreAndLeaderProofsGenerator`] was
+    /// built to start from, so tests can assert that a recovered quota reaches
+    /// the generator rather than it silently restarting at zero. Reliable
+    /// because `#[tokio::test]` uses a single-threaded runtime, so the value is
+    /// test-isolated.
+    static STARTING_CORE_KEY_INDICES: RefCell<Vec<KeyIndex>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Clears the record of generator starting key indices. Call before the code
+/// under test to isolate the constructions of interest.
+pub fn reset_starting_core_key_indices() {
+    STARTING_CORE_KEY_INDICES.with(|indices| indices.borrow_mut().clear());
+}
+
+/// Returns the starting key index of every generator built since the last
+/// reset, in construction order.
+pub fn recorded_starting_core_key_indices() -> Vec<KeyIndex> {
+    STARTING_CORE_KEY_INDICES.with(|indices| indices.borrow().clone())
+}
+
 pub struct MockCoreAndLeaderProofsGenerator;
 
 #[async_trait]
@@ -30,8 +51,10 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
 {
     fn new(
         _settings: ProofsGeneratorSettings,
+        starting_key_index: KeyIndex,
         _core_proof_of_quota_generator: CorePoQGenerator,
     ) -> Self {
+        STARTING_CORE_KEY_INDICES.with(|indices| indices.borrow_mut().push(starting_key_index));
         Self
     }
 
@@ -184,6 +207,7 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
 {
     fn new(
         _settings: ProofsGeneratorSettings,
+        _starting_key_index: KeyIndex,
         _core_proof_of_quota_generator: CorePoQGenerator,
     ) -> Self {
         Self

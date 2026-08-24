@@ -5,6 +5,7 @@ use lb_blend_message::{
     Error, PaddedPayloadBody, PayloadType, crypto::proofs::PoQVerificationInputsMinusSigningKey,
     input::EncapsulationInput,
 };
+use lb_blend_proofs::quota::Quota;
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
 use rayon::ThreadPool;
@@ -34,6 +35,12 @@ pub struct EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator
 impl<NodeId, CorePoQGenerator, ProofsGenerator>
     EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator>
 {
+    /// `ß_max`: how many layer proofs one encapsulation draws from the
+    /// generator, and therefore how much quota it spends.
+    pub const fn num_blend_layers(&self) -> NonZeroU64 {
+        self.num_blend_layers
+    }
+
     #[cfg(test)]
     pub const fn proofs_generator(&self) -> &ProofsGenerator {
         &self.proofs_generator
@@ -58,9 +65,10 @@ where
         core_proof_of_quota_generator: CorePoQGenerator,
         epoch: Epoch,
         pow_mining_pool: Arc<ThreadPool>,
+        spent_core_quota: Quota,
     ) -> Self {
         tracing::trace!(
-            "Creating epoch cryptographic processor with public info {public_info:?} and epoch {epoch:?}"
+            "Creating epoch cryptographic processor with public info {public_info:?} and epoch {epoch:?}, resuming core key indices from {spent_core_quota}"
         );
 
         let generator_settings = ProofsGeneratorSettings {
@@ -76,6 +84,8 @@ where
             membership,
             proofs_generator: ProofsGenerator::new(
                 generator_settings,
+                // Spent core quota == starting key index
+                spent_core_quota,
                 core_proof_of_quota_generator,
             ),
             _phantom: PhantomData,
@@ -257,6 +267,7 @@ mod test {
                 MockCorePoQGenerator,
                 Epoch::new(0),
                 Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+                Quota::ZERO,
             );
 
         let new_private_inputs = ProofOfLeadershipQuotaInputs {

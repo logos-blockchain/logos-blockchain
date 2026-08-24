@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
+use lb_blend_proofs::quota::KeyIndex;
 use lb_cryptarchia_engine::Epoch;
 use lb_log_targets::blend;
 
@@ -31,6 +32,7 @@ pub trait CoreAndLeaderProofsGenerator<CorePoQGenerator>: Sized {
     /// Instantiate a new generator for the duration of an epoch.
     fn new(
         settings: ProofsGeneratorSettings,
+        starting_key_index: KeyIndex,
         core_proof_of_quota_generator: CorePoQGenerator,
     ) -> Self;
     /// Notify the proof generator about the stream of winning `PoL` slots for
@@ -59,10 +61,13 @@ pub struct RealCoreAndLeaderProofsGenerator<CorePoQGenerator> {
 
 impl<CorePoQGenerator> RealCoreAndLeaderProofsGenerator<CorePoQGenerator> {
     #[cfg(test)]
-    pub fn override_settings(&mut self, new_settings: ProofsGeneratorSettings) {
+    pub fn override_settings(
+        &mut self,
+        new_settings: crate::message_blend::provers::core::CoreProofsGeneratorSettings,
+    ) {
         self.core_proofs_generator.settings = new_settings.clone();
         if let Some(leader_proofs_generator) = &mut self.leader_proofs_generator {
-            leader_proofs_generator.settings = new_settings;
+            leader_proofs_generator.settings = new_settings.common;
         }
     }
 }
@@ -75,11 +80,13 @@ where
 {
     fn new(
         settings: ProofsGeneratorSettings,
+        starting_key_index: KeyIndex,
         core_proof_of_quota_generator: CorePoQGenerator,
     ) -> Self {
         Self {
             core_proofs_generator: RealCoreProofsGenerator::new(
                 settings,
+                starting_key_index,
                 core_proof_of_quota_generator,
             ),
             leader_proofs_generator: None,
@@ -95,18 +102,29 @@ where
     ) {
         // TODO: Change trait API to avoid runtime panics.
         let (current_generator_epoch, current_leader_inputs) = (
-            self.core_proofs_generator.settings.epoch,
-            self.core_proofs_generator.settings.public_inputs.leader,
+            self.core_proofs_generator.settings.common.epoch,
+            self.core_proofs_generator
+                .settings
+                .common
+                .public_inputs
+                .leader,
         );
         assert!(
             current_generator_epoch == reference_epoch,
             "set_epoch_private should be called with a reference epoch matching the current core proofs generator's epoch."
         );
-        let current_epoch_local_node_index = self.core_proofs_generator.settings.local_node_index;
-        let current_epoch_membership_size = self.core_proofs_generator.settings.membership_size;
-        let current_epoch_core_public_inputs =
-            self.core_proofs_generator.settings.public_inputs.core;
-        let current_epoch_pow_public_inputs = self.core_proofs_generator.settings.public_inputs.pow;
+        let current_epoch_local_node_index =
+            self.core_proofs_generator.settings.common.local_node_index;
+        let current_epoch_membership_size =
+            self.core_proofs_generator.settings.common.membership_size;
+        let current_epoch_core_public_inputs = self
+            .core_proofs_generator
+            .settings
+            .common
+            .public_inputs
+            .core;
+        let current_epoch_pow_public_inputs =
+            self.core_proofs_generator.settings.common.public_inputs.pow;
 
         self.leader_proofs_generator = Some(RealLeaderProofsGenerator::new(
             ProofsGeneratorSettings {
@@ -118,8 +136,14 @@ where
                     leader: current_leader_inputs,
                     pow: current_epoch_pow_public_inputs,
                 },
-                encapsulation_layers: self.core_proofs_generator.settings.encapsulation_layers,
-                pow_mining_pool: Arc::clone(&self.core_proofs_generator.settings.pow_mining_pool),
+                encapsulation_layers: self
+                    .core_proofs_generator
+                    .settings
+                    .common
+                    .encapsulation_layers,
+                pow_mining_pool: Arc::clone(
+                    &self.core_proofs_generator.settings.common.pow_mining_pool,
+                ),
             },
             winning_pol_info_stream,
         ));
@@ -129,10 +153,10 @@ where
         let proof = self.core_proofs_generator.get_next_proof().await?;
         tracing::trace!(
             target: LOG_TARGET,
-            epoch = ?self.core_proofs_generator.settings.epoch,
-            quota = %self.core_proofs_generator.settings.public_inputs.core.quota,
-            membership_size = self.core_proofs_generator.settings.membership_size,
-            local_node_index = ?self.core_proofs_generator.settings.local_node_index,
+            epoch = ?self.core_proofs_generator.settings.common.epoch,
+            quota = %self.core_proofs_generator.settings.common.public_inputs.core.quota,
+            membership_size = self.core_proofs_generator.settings.common.membership_size,
+            local_node_index = ?self.core_proofs_generator.settings.common.local_node_index,
             key_nullifier = ?proof.proof_of_quota.key_nullifier(),
             signing_key = ?proof.ephemeral_signing_key.public_key(),
             "generated core PoQ"

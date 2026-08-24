@@ -401,6 +401,7 @@ mod tests {
             non_ephemeral_encryption_key: key(local_id).0.derive_x25519(),
             num_blend_layers: NonZeroU64::new(1).unwrap(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+            spent_core_quota: Quota::ZERO,
         }
     }
 

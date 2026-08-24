@@ -617,26 +617,6 @@ where
         pow: current_epoch_public_info.poq_pow_public_inputs,
     };
 
-    let crypto_processor = CurrentEpochCryptographicProcessor::<
-        _,
-        KmsAdapter::CorePoQGenerator,
-        ProofsGenerator,
-        ProofsVerifier,
-    >::try_new_with_core_condition_check(
-        current_epoch_public_info.membership.clone(),
-        blend_config.minimum_network_size,
-        EpochCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: blend_config.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: blend_config.num_blend_layers,
-            pow_mining_pool: Arc::clone(&blend_config.pow_mining_pool),
-        },
-        current_epoch_poq_verification_inputs,
-        current_epoch_core_poq_generator
-            .expect("Core PoQ generator must be present at startup: the proxy service only launches CoreMode when the node is part of the core membership."),
-        current_epoch_public_info.epoch,
-    )
-    .expect("The initial membership should satisfy the core node condition");
-
     // Initialize the current epoch state. If the epoch matches the stored one,
     // retrieves the tracked consumed core quota. Else, fallback to `0`.
     let current_recovery_checkpoint = match last_saved_state.take() {
@@ -655,26 +635,47 @@ where
                 current_epoch_public_info.epoch
             );
 
-            // Everything else in a stale state belongs to the epoch it was
-            // saved under, but a transaction still waiting for a `PoW` solution
-            // has not been encapsulated and so belongs to none: it outlives the
-            // state that carried it, the same way it outlives an epoch rotation.
-            let pending_transactions =
-                maybe_stale_state.map_or_else(VecDeque::new, |state| state.into_components().4);
-
-            ServiceState::with_epoch(
-                current_epoch_public_info.epoch,
-                pending_transactions,
-            EpochBlendingTokenCollector::new(
-                &reward::EpochInfo::new(
+            let current_epoch_reward_info = reward::EpochInfo::new(
                     current_epoch_public_info.epoch,
                     &current_epoch_public_info.poq_leadership_public_inputs.pol_epoch_nonce,
                     current_epoch_public_info.membership.size() as u64,
                     current_epoch_public_info.poq_core_public_inputs.quota,
                     blend_config.activity_threshold_sensitivity,
-                ).expect("Reward epoch info must be created successfully. Panicking since the service cannot continue with this epoch")
-                ),
-                None,
+                ).expect("Reward epoch info must be created successfully. Panicking since the service cannot continue with this epoch");
+
+            // Everything else in a stale state belongs to the epoch it was
+            // saved under, but a transaction still waiting for a `PoW` solution
+            // has not been encapsulated and so belongs to none: it outlives the
+            // state that carried it, the same way it outlives an epoch rotation.
+            //
+            // The tokens that state collected are the exception. A state saved
+            // under the immediately preceding epoch holds a full epoch's worth
+            // of them, and they are still worth an activity proof: rotating that
+            // collector here is the same move the running service makes at an
+            // epoch boundary, and it hands the proof to the submission below.
+            // A gap of two or more epochs is past submitting for, so it is
+            // dropped.
+            let (pending_transactions, recovered_old_epoch_token_collector) = maybe_stale_state
+                .map_or_else(
+                    || (VecDeque::new(), None),
+                    |state| {
+                        let is_previous_epoch = state.last_seen_epoch().strict_add(1.into())
+                            == current_epoch_public_info.epoch;
+                        let (_, _, _, _, pending_transactions, token_collector, ..) =
+                            state.into_components();
+                        let old_epoch_token_collector = is_previous_epoch.then(|| {
+                            tracing::debug!(target: LOG_TARGET, "Recovered a token collector for the immediately preceding epoch. Rotating it so its activity proof is not lost.");
+                            token_collector.rotate_epoch(&current_epoch_reward_info).1
+                        });
+                        (pending_transactions, old_epoch_token_collector)
+                    },
+                );
+
+            ServiceState::with_epoch(
+                current_epoch_public_info.epoch,
+                pending_transactions,
+                EpochBlendingTokenCollector::new(&current_epoch_reward_info),
+                recovered_old_epoch_token_collector,
                 state_updater,
             )
             .expect("service state should be created successfully")
@@ -692,11 +693,34 @@ where
     }
     let current_recovery_checkpoint = state_updater.commit_changes();
 
+    let epoch_core_quota =
+        blend_config.epoch_core_quota(current_epoch_public_info.membership.size());
+    let spent_core_quota = current_recovery_checkpoint.spent_quota();
+
+    let crypto_processor = CurrentEpochCryptographicProcessor::<
+        _,
+        KmsAdapter::CorePoQGenerator,
+        ProofsGenerator,
+        ProofsVerifier,
+    >::try_new_with_core_condition_check(
+        current_epoch_public_info.membership.clone(),
+        blend_config.minimum_network_size,
+        EpochCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: blend_config.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: blend_config.num_blend_layers,
+            pow_mining_pool: Arc::clone(&blend_config.pow_mining_pool),
+            spent_core_quota,
+        },
+        current_epoch_poq_verification_inputs,
+        current_epoch_core_poq_generator
+            .expect("Core PoQ generator must be present at startup: the proxy service only launches CoreMode when the node is part of the core membership."),
+        current_epoch_public_info.epoch,
+    )
+    .expect("The initial membership should satisfy the core node condition");
+
     let message_scheduler = SchedulerWrapper::new_with_initial_messages(
         SchedulerEpochInfo {
-            core_quota: blend_config
-                .epoch_core_quota(current_epoch_public_info.membership.size())
-                .saturating_sub(current_recovery_checkpoint.spent_quota()),
+            core_quota: epoch_core_quota.saturating_sub(spent_core_quota),
             epoch: current_epoch_public_info.epoch,
         },
         BlakeRng::from_entropy(),
@@ -1226,6 +1250,7 @@ where
                             .derive_x25519(),
                         num_blend_layers: settings.num_blend_layers,
                         pow_mining_pool: Arc::clone(&settings.pow_mining_pool),
+                        spent_core_quota: Quota::ZERO,
                     },
                     new_poq_verification_inputs,
                     core_poq_generator,
@@ -1912,8 +1937,6 @@ where
             if state_updater.remove_sent_data_message(data_message_to_blend).is_err() {
                 tracing::warn!(target: LOG_TARGET, "Recovered data message should be present in the recovery state but was not found.");
             }
-            // Each data message that is sent is one less cover message that should be generated, hence we consume one core quota per data message here.
-            state_updater.consume_core_quota(Quota::ONE);
         }).map(
             |data_message_to_blend| -> BoxFuture<'_, ()> {
                 backend.publish(data_message_to_blend, current_epoch).boxed()
@@ -2129,14 +2152,18 @@ where
         .encapsulate_cover_payload(&random_sized_bytes::<{ size_of::<u32>() }>())
         .await
         .expect("Should not fail to generate new cover message");
+    // Each message consumes `num_blend_layers` indices.
+    state_updater.consume_core_quota(
+        Quota::try_new(cryptographic_processor.num_blend_layers().get())
+            .expect("Number of blend layers must fit within the `PoQ` quota width."),
+    );
     let self_decapsulation_output = cryptographic_processor
         .receiver()
         .decapsulate_message_recursive(encapsulated_cover_message.clone());
     let Ok(multi_layer_decapsulation_output) = self_decapsulation_output else {
-        // First layer not addressed to ourselves. Publish as regular cover message,
-        // hence we consume a core quota.
+        // First layer not addressed to ourselves, so it goes out fully encapsulated.
+        // The quota it spent was already recorded above.
         tracing::trace!(target: LOG_TARGET, "Locally generated cover message does not have its outermost layer addressed to us. Sending it out fully encapsulated...");
-        state_updater.consume_core_quota(Quota::ONE);
         return Some(encapsulated_cover_message.into());
     };
     let (blending_tokens, message_type) = multi_layer_decapsulation_output.into_components();

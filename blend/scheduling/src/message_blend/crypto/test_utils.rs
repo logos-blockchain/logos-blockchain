@@ -47,6 +47,7 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
 {
     fn new(
         _settings: ProofsGeneratorSettings,
+        _starting_key_index: KeyIndex,
         _proof_of_quota_generator: CorePoQGenerator,
     ) -> Self {
         Self(None)

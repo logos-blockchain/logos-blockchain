@@ -10,6 +10,7 @@ use lb_blend_message::{
         },
     },
 };
+use lb_blend_proofs::quota::Quota;
 use lb_codec::{BinaryDecode as _, BinaryEncode as _};
 use lb_key_management_system_keys::keys::X25519PrivateKey;
 use rayon::ThreadPool;
@@ -38,6 +39,11 @@ pub struct EpochCryptographicProcessorSettings {
     /// The dedicated thread pool the `PoW` puzzle search runs on, built once
     /// for the service and shared by every epoch's processor.
     pub pow_mining_pool: Arc<ThreadPool>,
+    /// How much of this epoch's core quota has already been spent, counted in
+    /// key indices. Zero for an epoch entered fresh; recovered from the
+    /// persisted state when a restart lands part-way through one, so the
+    /// generator resumes rather than replaying key nullifiers.
+    pub spent_core_quota: Quota,
 }
 
 #[must_use]

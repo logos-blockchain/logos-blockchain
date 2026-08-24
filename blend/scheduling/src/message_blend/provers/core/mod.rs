@@ -29,15 +29,25 @@ const LOG_TARGET: &str = blend::scheduling::proofs::CORE;
 #[async_trait]
 pub trait CoreProofsGenerator<PoQGenerator>: Sized {
     /// Instantiate a new generator for the duration of an epoch.
-    fn new(settings: ProofsGeneratorSettings, proof_of_quota_generator: PoQGenerator) -> Self;
+    fn new(
+        settings: ProofsGeneratorSettings,
+        starting_key_index: KeyIndex,
+        proof_of_quota_generator: PoQGenerator,
+    ) -> Self;
     /// Request a new core proof from the prover. It returns `None` if the
     /// maximum core quota has already been reached for this epoch.
     async fn get_next_proof(&mut self) -> Option<BlendLayerProof>;
 }
 
+#[derive(Debug, Clone)]
+pub struct CoreProofsGeneratorSettings {
+    pub common: ProofsGeneratorSettings,
+    pub starting_core_key_index: KeyIndex,
+}
+
 pub struct RealCoreProofsGenerator<PoQGenerator> {
     remaining_quota: Quota,
-    pub(super) settings: ProofsGeneratorSettings,
+    pub(super) settings: CoreProofsGeneratorSettings,
     proofs_stream: Pin<Box<dyn Stream<Item = BlendLayerProof> + Send + Sync>>,
     _phantom: PhantomData<PoQGenerator>,
 }
@@ -47,16 +57,27 @@ impl<PoQGenerator> CoreProofsGenerator<PoQGenerator> for RealCoreProofsGenerator
 where
     PoQGenerator: CoreProofOfQuotaGenerator + Clone + Send + Sync + 'static,
 {
-    fn new(settings: ProofsGeneratorSettings, proof_of_quota_generator: PoQGenerator) -> Self {
+    fn new(
+        settings: ProofsGeneratorSettings,
+        starting_key_index: KeyIndex,
+        proof_of_quota_generator: PoQGenerator,
+    ) -> Self {
         Self {
             proofs_stream: Box::pin(create_proof_stream(
                 settings.public_inputs,
                 proof_of_quota_generator,
-                KeyIndex::ZERO,
+                starting_key_index,
                 buffer_size(settings.encapsulation_layers.get() as usize),
             )),
-            remaining_quota: settings.public_inputs.core.quota,
-            settings,
+            remaining_quota: settings
+                .public_inputs
+                .core
+                .quota
+                .saturating_sub(starting_key_index),
+            settings: CoreProofsGeneratorSettings {
+                common: settings,
+                starting_core_key_index: starting_key_index,
+            },
             _phantom: PhantomData,
         }
     }
@@ -72,7 +93,7 @@ where
             tracing::warn!(target: LOG_TARGET, "No proof available from the stream.");
             return None;
         };
-        tracing::trace!(target: LOG_TARGET, "Generated core Blend layer proof with key nullifier {:?} addressed to node at index {:?} in {:?} ms.", hex::encode(fr_to_bytes(&proof.proof_of_quota.key_nullifier())), proof.proof_of_selection.expected_index(self.settings.membership_size), start.elapsed().as_millis());
+        tracing::trace!(target: LOG_TARGET, "Generated core Blend layer proof with key nullifier {:?} addressed to node at index {:?} in {:?} ms.", hex::encode(fr_to_bytes(&proof.proof_of_quota.key_nullifier())), proof.proof_of_selection.expected_index(self.settings.common.membership_size), start.elapsed().as_millis());
         Some(proof)
     }
 }

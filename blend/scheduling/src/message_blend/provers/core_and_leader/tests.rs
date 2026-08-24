@@ -1,13 +1,17 @@
 use std::sync::Arc;
 
 use futures::stream::repeat;
-use lb_blend_proofs::{quota::Quota, selection::inputs::VerifyInputs};
+use lb_blend_proofs::{
+    quota::{KeyIndex, Quota},
+    selection::inputs::VerifyInputs,
+};
 use lb_cryptarchia_engine::Epoch;
 use rayon::ThreadPoolBuilder;
 use test_log::test;
 
 use crate::message_blend::provers::{
     ProofsGeneratorSettings,
+    core::CoreProofsGeneratorSettings,
     core_and_leader::{CoreAndLeaderProofsGenerator as _, RealCoreAndLeaderProofsGenerator},
     test_utils::{
         CorePoQGeneratorFromPrivateCoreQuotaInputs,
@@ -30,6 +34,7 @@ async fn proof_generation() {
             epoch: Epoch::new(0),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
+        KeyIndex::ZERO,
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs),
     );
 
@@ -71,13 +76,16 @@ async fn proof_generation() {
 
     // We override all the settings since we fixtures for core and leadership proofs
     // use a different set of public inputs.
-    core_and_leader_proofs_generator.override_settings(ProofsGeneratorSettings {
-        local_node_index: None,
-        membership_size: 1,
-        public_inputs: leadership_public_inputs,
-        encapsulation_layers: 1.try_into().unwrap(),
-        epoch: Epoch::new(0),
-        pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+    core_and_leader_proofs_generator.override_settings(CoreProofsGeneratorSettings {
+        common: ProofsGeneratorSettings {
+            local_node_index: None,
+            membership_size: 1,
+            public_inputs: leadership_public_inputs,
+            encapsulation_layers: 1.try_into().unwrap(),
+            epoch: Epoch::new(0),
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+        },
+        starting_core_key_index: KeyIndex::ZERO,
     });
     core_and_leader_proofs_generator
         .set_epoch_private(Box::pin(repeat(leadership_private_inputs)), Epoch::new(0));
@@ -109,6 +117,7 @@ async fn proof_generation() {
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "Test function.")]
 #[test(tokio::test)]
 async fn epoch_private_info() {
     let core_quota = Quota::new::<10>();
@@ -126,18 +135,22 @@ async fn epoch_private_info() {
             epoch: Epoch::new(0),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
+        KeyIndex::ZERO,
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs.clone()),
     );
 
     // Switch to leadership inputs before wiring leader private epoch info, because
     // we use fixtures that yield different public inputs.
-    core_and_leader_proofs_generator.override_settings(ProofsGeneratorSettings {
-        local_node_index: None,
-        membership_size: 1,
-        public_inputs: leadership_public_inputs,
-        encapsulation_layers: 1.try_into().unwrap(),
-        epoch: Epoch::new(0),
-        pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+    core_and_leader_proofs_generator.override_settings(CoreProofsGeneratorSettings {
+        common: ProofsGeneratorSettings {
+            local_node_index: None,
+            membership_size: 1,
+            public_inputs: leadership_public_inputs,
+            encapsulation_layers: 1.try_into().unwrap(),
+            epoch: Epoch::new(0),
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+        },
+        starting_core_key_index: KeyIndex::ZERO,
     });
 
     core_and_leader_proofs_generator
@@ -196,13 +209,16 @@ async fn epoch_private_info() {
 
     // We override all the settings since we fixtures for core and leadership proofs
     // use a different set of public inputs.
-    core_and_leader_proofs_generator.override_settings(ProofsGeneratorSettings {
-        local_node_index: None,
-        membership_size: 1,
-        public_inputs: core_public_inputs,
-        encapsulation_layers: 1.try_into().unwrap(),
-        epoch: Epoch::new(0),
-        pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+    core_and_leader_proofs_generator.override_settings(CoreProofsGeneratorSettings {
+        common: ProofsGeneratorSettings {
+            local_node_index: None,
+            membership_size: 1,
+            public_inputs: core_public_inputs,
+            encapsulation_layers: 1.try_into().unwrap(),
+            epoch: Epoch::new(0),
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+        },
+        starting_core_key_index: KeyIndex::ZERO,
     });
 
     // We test that core proof generation still works fine

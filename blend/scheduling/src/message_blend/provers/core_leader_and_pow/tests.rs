@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use lb_blend_proofs::{quota::Quota, selection::inputs::VerifyInputs};
+use lb_blend_proofs::{
+    quota::{KeyIndex, Quota},
+    selection::inputs::VerifyInputs,
+};
 use lb_cryptarchia_engine::Epoch;
 use rayon::ThreadPoolBuilder;
 use test_log::test;
@@ -42,6 +45,7 @@ async fn pow_proof_generation() {
             epoch: Epoch::new(0),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
+        KeyIndex::ZERO,
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs),
     );
 
@@ -86,6 +90,7 @@ async fn core_proofs_are_delegated() {
             epoch: Epoch::new(0),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
+        KeyIndex::ZERO,
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs),
     );
 
