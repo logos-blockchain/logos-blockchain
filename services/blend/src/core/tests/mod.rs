@@ -1991,9 +1991,11 @@ async fn test_initialize_drops_activity_proof_older_than_one_epoch() {
             core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
         }),
     };
+    // The node comes back up in epoch 3, so a state saved under epoch 1 is
+    // genuinely two epochs behind rather than merely different.
     let (membership_stream, membership_sender) = new_stream();
     membership_sender
-        .send(test_blend_epoch_state(1, membership_info))
+        .send(test_blend_epoch_state(3, membership_info))
         .await
         .unwrap();
 
@@ -2001,8 +2003,7 @@ async fn test_initialize_drops_activity_proof_older_than_one_epoch() {
         dummy_overwatch_resources();
     let (sdp_relay, mut sdp_relay_receiver) = sdp_relay();
 
-    // Two epochs behind the one the node comes back up in.
-    let stale_epoch = 99.into();
+    let stale_epoch = 1.into();
     let stale_public_info = new_epoch_info(stale_epoch, membership.clone(), &settings);
     let stale_state = ServiceState::with_epoch(
         stale_epoch,
