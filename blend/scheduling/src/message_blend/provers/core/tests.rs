@@ -1,4 +1,7 @@
-use lb_blend_proofs::{quota::Quota, selection::inputs::VerifyInputs};
+use lb_blend_proofs::{
+    quota::{KeyIndex, Quota},
+    selection::inputs::VerifyInputs,
+};
 use lb_cryptarchia_engine::Epoch;
 use test_log::test;
 
@@ -24,6 +27,7 @@ async fn proof_generation() {
             encapsulation_layers: 1.try_into().unwrap(),
             epoch: Epoch::new(0),
         },
+        KeyIndex::ZERO,
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(private_inputs.clone()),
     );
 

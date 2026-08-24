@@ -10,6 +10,7 @@ use lb_blend_message::{
         },
     },
 };
+use lb_blend_proofs::quota::Quota;
 use lb_codec::{BinaryDecode as _, BinaryEncode as _};
 use lb_key_management_system_keys::keys::X25519PrivateKey;
 
@@ -34,6 +35,11 @@ pub struct EpochCryptographicProcessorSettings {
     pub non_ephemeral_encryption_key: X25519PrivateKey,
     /// `ß_c`: number of blending operations for each locally generated message.
     pub num_blend_layers: NonZeroU64,
+    /// How much of this epoch's core quota has already been spent, counted in
+    /// key indices. Zero for an epoch entered fresh; recovered from the
+    /// persisted state when a restart lands part-way through one, so the
+    /// generator resumes rather than replaying key nullifiers.
+    pub spent_core_quota: Quota,
 }
 
 #[must_use]

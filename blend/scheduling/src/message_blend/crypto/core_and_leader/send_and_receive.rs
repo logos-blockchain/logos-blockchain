@@ -49,6 +49,7 @@ where
         let EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key,
             num_blend_layers,
+            spent_core_quota,
         } = settings;
         Self {
             receiver_processor: ReceiverEpochCryptographicProcessor::new(
@@ -63,6 +64,7 @@ where
                 public_info,
                 core_proof_of_quota_generator,
                 epoch,
+                spent_core_quota,
             ),
         }
     }
@@ -175,6 +177,7 @@ mod test {
             EpochCryptographicProcessorSettings {
                 non_ephemeral_encryption_key: [0; _].into(),
                 num_blend_layers: NonZeroU64::new(1).unwrap(),
+                spent_core_quota: Quota::ZERO,
             },
             Membership::new_without_local(&[Node {
                 address: Multiaddr::empty(),

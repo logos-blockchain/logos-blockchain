@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use lb_blend_proofs::quota::KeyIndex;
 use lb_cryptarchia_engine::Epoch;
 use lb_log_targets::blend;
 
@@ -28,6 +29,7 @@ pub trait CoreLeaderAndPowProofsGenerator<CorePoQGenerator>: Sized {
     /// Instantiate a new generator for the duration of an epoch.
     fn new(
         settings: ProofsGeneratorSettings,
+        starting_key_index: KeyIndex,
         core_proof_of_quota_generator: CorePoQGenerator,
     ) -> Self;
     /// Notify the proof generator about the stream of winning `PoL` slots for
@@ -65,11 +67,13 @@ where
 {
     fn new(
         settings: ProofsGeneratorSettings,
+        starting_key_index: KeyIndex,
         core_proof_of_quota_generator: CorePoQGenerator,
     ) -> Self {
         Self {
             core_and_leader_proofs_generator: RealCoreAndLeaderProofsGenerator::new(
                 settings,
+                starting_key_index,
                 core_proof_of_quota_generator,
             ),
             // The `PoW` branch depends only on public epoch information, so
