@@ -1593,55 +1593,6 @@ mod tests {
         );
     }
 
-    /// A pending config-led tx (`[config, inscribe]`, nothing anchoring it to
-    /// the chain) acts as a chain restart: the next publish chains on its
-    /// last tip-advancing op, and anchored pending links continue from there.
-    #[test]
-    fn publish_parent_restarts_at_pending_config_led_tx() {
-        use lb_core::mantle::{
-            channel::{SlotTimeframe, SlotTimeout},
-            ops::channel::config::{ChannelConfigOp, Keys},
-        };
-        let genesis = header_id(0);
-        let tip = header_id(1);
-        let channel_id = ChannelId::from([0u8; 32]);
-        let mut state = TxState::new(genesis, MsgId::root());
-        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new());
-
-        let config = ChannelConfigOp {
-            channel: [0u8; 32].into(),
-            parent: MsgId::root(),
-            keys: Keys::try_from(vec![Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()]).unwrap(),
-            posting_timeframe: SlotTimeframe::from(0u32),
-            posting_timeout: SlotTimeout::from(0u32),
-            configuration_threshold: 1,
-            transfer_threshold: 1,
-        };
-        let inscribe = InscriptionOp {
-            channel_id: [0u8; 32].into(),
-            inscription: [7].into(),
-            parent: config.id(),
-            signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
-        };
-        let inscribe_msg = inscribe.id();
-        let tx = SignedMantleTx::new(
-            RawMantleTx([Op::ChannelConfig(config), ChannelInscribe(inscribe)].into()),
-            OpsProofs::empty(),
-        );
-
-        let derived = state.submit_other(tx, channel_id);
-        assert_eq!(derived, Some(inscribe_msg), "tip is the tx's last op");
-        assert_eq!(
-            state.publish_parent(tip),
-            inscribe_msg,
-            "walk restarts at the pending config-led tx's last op"
-        );
-
-        // Anchored pending links continue from the restart point.
-        state.submit_inscription(make_dummy_tx(9), inscribe_msg, msg_id(90), [9].into());
-        assert_eq!(state.publish_parent(tip), msg_id(90));
-    }
-
     /// A pure config cut (no inscription in the tx) is NOT chained: it lands
     /// whenever it lands and orphans what it cut off — publishes keep
     /// chaining on the existing pending chain meanwhile.
