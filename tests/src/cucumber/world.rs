@@ -933,6 +933,10 @@ pub struct CucumberWorld {
     pub wallets: SharedTrackedWallets,
     /// Manual: Mapping of scenario transaction aliases to submitted hashes.
     pub submitted_transactions: HashMap<String, TxHash>,
+    /// Manual: Wallet balances captured under a label, so a later step can
+    /// assert a wallet's balance strictly increased relative to the recorded
+    /// baseline (used by the PoW mining test to prove the reward landed).
+    pub recorded_wallet_balances: HashMap<String, u64>,
     /// Manual: Outcome of a transaction submission attempt, keyed by scenario
     /// alias, for scenarios that assert on submission being rejected rather
     /// than on later inclusion.
