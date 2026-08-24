@@ -20,7 +20,9 @@ use lb_blend::{
     proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs, PowInputs},
     scheduling::{
         epoch::{EpochEvent, UninitializedEpochEventStream},
-        message_blend::provers::leader_and_pow::LeaderAndPowProofsGenerator,
+        message_blend::provers::{
+            leader_and_pow::LeaderAndPowProofsGenerator, pow::new_mining_pool,
+        },
     },
 };
 use lb_chain_service::api::CryptarchiaServiceData;
@@ -207,6 +209,7 @@ where
                 minimum_network_size: settings.minimum_network_size,
                 time: settings.time,
                 data_replication_factor: settings.data_replication_factor,
+                pow_mining_pool: new_mining_pool(),
             },
             &overwatch_handle,
             || {

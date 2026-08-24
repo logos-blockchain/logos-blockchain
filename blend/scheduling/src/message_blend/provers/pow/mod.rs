@@ -1,4 +1,5 @@
 use core::{num::NonZeroU64, pin::Pin};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::{
@@ -25,7 +26,8 @@ use lb_utils::tokio::{
     task::{CancellableHandle, spawn, spawn_blocking},
 };
 use rand::rngs::OsRng;
-use tokio::time::Instant;
+use rayon::{ThreadPool, ThreadPoolBuilder};
+use tokio::{sync::oneshot, time::Instant};
 
 use crate::message_blend::provers::{BlendLayerProof, ProofsGeneratorSettings};
 
@@ -33,6 +35,16 @@ use crate::message_blend::provers::{BlendLayerProof, ProofsGeneratorSettings};
 mod tests;
 
 const LOG_TARGET: &str = blend::scheduling::proofs::POW;
+
+#[must_use]
+pub fn new_mining_pool() -> Arc<ThreadPool> {
+    Arc::new(
+        ThreadPoolBuilder::new()
+            .thread_name(|index| format!("logos/blend/pow-puzzle-search-{index}"))
+            .build()
+            .expect("Blend PoW puzzle search thread pool should build."),
+    )
+}
 
 /// A `PoQ` generator that deals only with proof of work backed proofs.
 ///
@@ -57,8 +69,11 @@ pub struct RealPowProofsGenerator {
 impl PowProofsGenerator for RealPowProofsGenerator {
     fn new(settings: ProofsGeneratorSettings) -> Self {
         Self {
+            proofs_stream: create_proof_stream(
+                settings.public_inputs,
+                Arc::clone(&settings.pow_mining_pool),
+            ),
             settings,
-            proofs_stream: create_proof_stream(settings.public_inputs),
         }
     }
 
@@ -75,6 +90,7 @@ impl PowProofsGenerator for RealPowProofsGenerator {
 
 fn create_proof_stream(
     public_inputs: PoQVerificationInputsMinusSigningKey,
+    thread_pool: Arc<ThreadPool>,
 ) -> Pin<Box<dyn Stream<Item = BlendLayerProof> + Send>> {
     const BUFFER_SIZE: usize = 2;
 
@@ -108,7 +124,9 @@ fn create_proof_stream(
     // message simply means a message spans more than one solution.
     Box::pin(
         Buffered::new(
-            stream::repeat_with(move || spawn_solution_proofs(public_inputs, per_solution_quota)),
+            stream::repeat_with(move || {
+                spawn_solution_proofs(public_inputs, per_solution_quota, Arc::clone(&thread_pool))
+            }),
             // This case is different than the other proofs.
             // Because the PoW mining happens once for all encapsulations (all key indices), we
             // buffer only one item in advance, so we have all the `indices` proofs ready when the
@@ -126,12 +144,13 @@ fn create_proof_stream(
 fn spawn_solution_proofs(
     public_inputs: PoQVerificationInputsMinusSigningKey,
     per_solution_quota: Quota,
+    pool: Arc<ThreadPool>,
 ) -> impl Future<Output = Vec<BlendLayerProof>> + Send {
     let epoch_nonce = public_inputs.leader.pol_epoch_nonce;
     let difficulty = public_inputs.pow.pow_blend_difficulty;
 
     let task = CancellableHandle::new(spawn("logos/blend/pow-solution-proofs", async move {
-        let solution = mine_solution(epoch_nonce, difficulty).await;
+        let solution = mine_solution(epoch_nonce, difficulty, &pool).await;
 
         join_all(
             per_solution_quota
@@ -185,18 +204,23 @@ fn spawn_layer_proof(
     }
 }
 
-/// Searches for a puzzle solution, one blocking round at a time, until it finds
-/// one.
+/// Searches for a puzzle solution, one round at a time on `pool`, until it
+/// finds one.
 ///
 /// The caller must have established that `difficulty` is satisfiable;
 /// otherwise this never returns.
-async fn mine_solution(epoch_nonce: ZkHash, difficulty: PowTarget) -> ProofOfWorkQuotaInputs {
-    /// Number of candidate nonces a single blocking search round tries.
+async fn mine_solution(
+    epoch_nonce: ZkHash,
+    difficulty: PowTarget,
+    pool: &ThreadPool,
+) -> ProofOfWorkQuotaInputs {
+    /// Number of candidate nonces a single search round tries.
     ///
-    /// The search occupies a blocking thread for as long as it runs, so it is
-    /// broken into rounds: between them the task returns to the runtime, which
-    /// is what lets a generator that is dropped mid-search stop being mined
-    /// for. The bound only has to keep a round short relative to an epoch.
+    /// The search occupies a pool thread for as long as it runs, so it is
+    /// broken into rounds: a round that nobody is waiting for any more is the
+    /// last one, which is what lets a generator that is dropped mid-search
+    /// stop being mined for. The bound only has to keep a round short relative
+    /// to an epoch.
     const CANDIDATES_PER_SEARCH_ROUND: NonZeroU64 = NonZeroU64::new(1 << 16u8).unwrap();
 
     let start = Instant::now();
@@ -204,19 +228,19 @@ async fn mine_solution(epoch_nonce: ZkHash, difficulty: PowTarget) -> ProofOfWor
 
     loop {
         rounds = rounds.saturating_add(1);
-        let round_outcome = CancellableHandle::new(spawn_blocking(
-            "logos/blend/pow-puzzle-search-round",
-            move || {
-                solve_puzzle(
-                    epoch_nonce,
-                    difficulty,
-                    &mut OsRng,
-                    CANDIDATES_PER_SEARCH_ROUND,
-                )
-            },
-        ))
-        .await
-        .expect("PoW puzzle search round should not fail.");
+        let (round_sender, round_receiver) = oneshot::channel();
+        pool.spawn(move || {
+            let outcome = solve_puzzle(
+                epoch_nonce,
+                difficulty,
+                &mut OsRng,
+                CANDIDATES_PER_SEARCH_ROUND,
+            );
+            drop(round_sender.send(outcome));
+        });
+        let round_outcome = round_receiver
+            .await
+            .expect("PoW puzzle search round should not fail.");
 
         if let Some(solution) = round_outcome {
             tracing::trace!(target: LOG_TARGET, "Found a Blend PoW solution after {rounds} round(s) of {CANDIDATES_PER_SEARCH_ROUND} candidates in {} ms.", start.elapsed().as_millis());

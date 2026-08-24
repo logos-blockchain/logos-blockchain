@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 use futures::stream;
 use lb_blend_proofs::{quota::Quota, selection::inputs::VerifyInputs};
 use lb_cryptarchia_engine::Epoch;
+use rayon::ThreadPoolBuilder;
 use test_log::test;
 
 use crate::message_blend::provers::{
@@ -27,6 +30,7 @@ async fn pow_proof_generation() {
             public_inputs,
             encapsulation_layers: 1.try_into().unwrap(),
             epoch: Epoch::new(0),
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
         Box::pin(stream::empty()),
     );
@@ -70,6 +74,7 @@ async fn leadership_proofs_are_delegated() {
             public_inputs,
             encapsulation_layers: 1.try_into().unwrap(),
             epoch: Epoch::new(0),
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
         Box::pin(stream::repeat(leadership_private_inputs)),
     );

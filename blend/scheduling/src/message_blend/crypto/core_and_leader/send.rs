@@ -1,5 +1,5 @@
 use core::{hash::Hash, marker::PhantomData};
-use std::num::NonZeroU64;
+use std::{num::NonZeroU64, sync::Arc};
 
 use lb_blend_message::{
     Error, PaddedPayloadBody, PayloadType, crypto::proofs::PoQVerificationInputsMinusSigningKey,
@@ -7,6 +7,7 @@ use lb_blend_message::{
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
+use rayon::ThreadPool;
 
 use crate::{
     membership::Membership,
@@ -56,6 +57,7 @@ where
         public_info: PoQVerificationInputsMinusSigningKey,
         core_proof_of_quota_generator: CorePoQGenerator,
         epoch: Epoch,
+        pow_mining_pool: Arc<ThreadPool>,
     ) -> Self {
         tracing::trace!(
             "Creating epoch cryptographic processor with public info {public_info:?} and epoch {epoch:?}"
@@ -67,6 +69,7 @@ where
             public_inputs: public_info,
             encapsulation_layers,
             epoch,
+            pow_mining_pool,
         };
         Self {
             num_blend_layers: encapsulation_layers,
@@ -198,7 +201,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use std::num::NonZeroU64;
+    use std::{num::NonZeroU64, sync::Arc};
 
     use futures::{StreamExt as _, stream::repeat};
     use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
@@ -215,6 +218,7 @@ mod test {
     use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
     use libp2p::PeerId;
     use multiaddr::Multiaddr;
+    use rayon::ThreadPoolBuilder;
 
     use super::EpochCryptographicProcessor;
     use crate::{
@@ -252,6 +256,7 @@ mod test {
                 },
                 MockCorePoQGenerator,
                 Epoch::new(0),
+                Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             );
 
         let new_private_inputs = ProofOfLeadershipQuotaInputs {

@@ -62,12 +62,12 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
         winning_pol_info_stream: WinningPolInfoStream,
     ) -> Self {
         Self {
-            settings,
             proofs_stream: Box::pin(create_proof_stream(
                 settings.public_inputs,
                 winning_pol_info_stream,
                 buffer_size(settings.public_inputs.leader.message_quota.get() as usize),
             )),
+            settings,
         }
     }
 

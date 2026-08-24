@@ -1,4 +1,4 @@
-use std::num::NonZeroU64;
+use std::{num::NonZeroU64, sync::Arc};
 
 use derivative::Derivative;
 use lb_blend_message::{
@@ -12,6 +12,7 @@ use lb_blend_message::{
 };
 use lb_codec::{BinaryDecode as _, BinaryEncode as _};
 use lb_key_management_system_keys::keys::X25519PrivateKey;
+use rayon::ThreadPool;
 
 pub mod core_and_leader;
 pub use self::core_and_leader::{
@@ -34,6 +35,9 @@ pub struct EpochCryptographicProcessorSettings {
     pub non_ephemeral_encryption_key: X25519PrivateKey,
     /// `ß_c`: number of blending operations for each locally generated message.
     pub num_blend_layers: NonZeroU64,
+    /// The dedicated thread pool the `PoW` puzzle search runs on, built once
+    /// for the service and shared by every epoch's processor.
+    pub pow_mining_pool: Arc<ThreadPool>,
 }
 
 #[must_use]

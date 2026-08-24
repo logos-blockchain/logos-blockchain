@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
 use lb_cryptarchia_engine::Epoch;
@@ -57,8 +59,8 @@ pub struct RealCoreAndLeaderProofsGenerator<CorePoQGenerator> {
 
 impl<CorePoQGenerator> RealCoreAndLeaderProofsGenerator<CorePoQGenerator> {
     #[cfg(test)]
-    pub const fn override_settings(&mut self, new_settings: ProofsGeneratorSettings) {
-        self.core_proofs_generator.settings = new_settings;
+    pub fn override_settings(&mut self, new_settings: ProofsGeneratorSettings) {
+        self.core_proofs_generator.settings = new_settings.clone();
         if let Some(leader_proofs_generator) = &mut self.leader_proofs_generator {
             leader_proofs_generator.settings = new_settings;
         }
@@ -117,6 +119,7 @@ where
                     pow: current_epoch_pow_public_inputs,
                 },
                 encapsulation_layers: self.core_proofs_generator.settings.encapsulation_layers,
+                pow_mining_pool: Arc::clone(&self.core_proofs_generator.settings.pow_mining_pool),
             },
             winning_pol_info_stream,
         ));

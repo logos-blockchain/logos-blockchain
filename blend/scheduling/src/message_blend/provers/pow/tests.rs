@@ -1,5 +1,5 @@
 use core::time::Duration;
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 use lb_blend_proofs::{
     quota::{Quota, inputs::prove::public::PowInputs},
@@ -7,6 +7,7 @@ use lb_blend_proofs::{
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
+use rayon::ThreadPoolBuilder;
 use test_log::test;
 use tokio::time::timeout;
 
@@ -37,13 +38,14 @@ fn settings(pow_overrides: Option<PowInputs>) -> ProofsGeneratorSettings {
         // not an error.
         encapsulation_layers: (POW_QUOTA + 1).try_into().unwrap(),
         epoch: Epoch::new(0),
+        pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
     }
 }
 
 #[test(tokio::test)]
 async fn proof_generation() {
     let settings = settings(None);
-    let mut pow_proofs_generator = RealPowProofsGenerator::new(settings);
+    let mut pow_proofs_generator = RealPowProofsGenerator::new(settings.clone());
 
     // More than one solution's worth of proofs, so that the later ones come
     // from a solution mined after the first one's quota ran out.
