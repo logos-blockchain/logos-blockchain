@@ -24,6 +24,10 @@ const CLAIM_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const BALANCE_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 #[when(expr = "I start mining on node {string}")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
 async fn step_start_mining(
     world: &mut CucumberWorld,
     step: &Step,
@@ -42,6 +46,10 @@ async fn step_start_mining(
 }
 
 #[when(expr = "I stop mining on node {string}")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
 async fn step_stop_mining(world: &mut CucumberWorld, step: &Step, node_name: String) -> StepResult {
     let node = world
         .resolve_node_http_client(&node_name)

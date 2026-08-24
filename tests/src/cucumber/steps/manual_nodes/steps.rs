@@ -598,15 +598,10 @@ fn step_set_deployment_config_setting(
 
 #[given(expr = "I have a claim wallet account index {int} with alias {string}")]
 #[when(expr = "I have a claim wallet account index {int} with alias {string}")]
-fn step_declare_claim_wallet(
-    world: &mut CucumberWorld,
-    account_index: usize,
-    alias: String,
-) -> StepResult {
+fn step_declare_claim_wallet(world: &mut CucumberWorld, account_index: usize, alias: String) {
     world
         .claim_wallet_account_indices
         .insert(alias, account_index);
-    Ok(())
 }
 
 #[given(expr = "the first {int} nodes are declared as blend providers")]
