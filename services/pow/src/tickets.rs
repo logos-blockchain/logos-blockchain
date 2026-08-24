@@ -9,6 +9,7 @@ use std::{
     collections::{HashMap, HashSet},
     iter,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
 };
 
@@ -24,8 +25,9 @@ use lb_core::{
 use lb_key_management_system_keys::keys::UnsecuredZkKey;
 use lb_ledger::LedgerState;
 use lb_log_targets::pow;
-use lb_utils::tokio::task::spawn_blocking;
+use rayon::ThreadPool;
 use serde::{Deserialize, Serialize};
+use tokio::sync::oneshot;
 use tokio_stream::{
     StreamMap,
     wrappers::{BroadcastStream, errors::BroadcastStreamRecvError},
@@ -81,6 +83,11 @@ pub struct TicketGenerator {
     /// Initialized to the genesis id and overwritten by the first processed
     /// block, which always precedes any emitted ticket.
     tip: HeaderId,
+
+    /// Shared pool of worker threads dedicated to the CPU-heavy ticket search,
+    /// keeping that work off Tokio's runtime threads. Cloned into every active
+    /// per-block search so the searches share the same threads.
+    pool: Arc<ThreadPool>,
 }
 
 impl TicketGenerator {
@@ -96,6 +103,7 @@ impl TicketGenerator {
     /// Returns an error if the subscription to the chain service fails.
     pub async fn new<Tx, CryptarchiaServiceData, RuntimeServiceId>(
         cryptarchia_api: CryptarchiaServiceApi<CryptarchiaServiceData, RuntimeServiceId>,
+        pool: Arc<ThreadPool>,
     ) -> Result<Self, lb_chain_service::api::ApiError>
     where
         CryptarchiaServiceData:
@@ -115,6 +123,7 @@ impl TicketGenerator {
             tickets_search: StreamMap::new(),
             tickets_search_by_slot: HashMap::new(),
             tip: HeaderId::from([0u8; 32]),
+            pool,
         })
     }
 }
@@ -170,6 +179,7 @@ fn new_block_search_stream(
     block_slot: Slot,
     epoch_state: &EpochState,
     ledger_state: &LedgerState,
+    pool: Arc<ThreadPool>,
 ) -> WinnerTicketStream {
     let epoch_nonce = epoch_state.nonce;
     let difficulty = ledger_state.mantle_ledger().pow.reward_difficulty();
@@ -177,8 +187,9 @@ fn new_block_search_stream(
         rustc::closure_returning_async_block,
         reason = "`repeat_with` takes a FnMut not an async closure"
     )]
-    let tasks =
-        iter::repeat_with(move || search_winner_ticket(block_header, epoch_nonce, difficulty));
+    let tasks = iter::repeat_with(move || {
+        search_winner_ticket(block_header, epoch_nonce, difficulty, Arc::clone(&pool))
+    });
     let results = stream::iter(tasks).buffer_unordered(16);
     let winners = tokio_stream::StreamExt::filter_map(results, |maybe_winner| maybe_winner);
     // Tag every winner with the block's slot so the consumer can track the
@@ -189,18 +200,18 @@ fn new_block_search_stream(
 /// Runs a single ticket-search attempt for a block.
 ///
 /// Generates a random key, builds the reward claim, and validates its puzzle
-/// ticket against `difficulty`. The heavy computation is off-loaded to a
-/// blocking thread so it does not stall the async runtime. Returns the winning
-/// `(key, claim)` when the ticket meets the difficulty target, otherwise
-/// `None`.
+/// ticket against `difficulty`. The heavy computation is off-loaded to the
+/// dedicated `pool` so it does not stall Tokio's runtime threads. Returns the
+/// winning `(key, claim)` when the ticket meets the difficulty target,
+/// otherwise `None`.
 async fn search_winner_ticket(
     block_header: HeaderId,
     epoch_nonce: ZkHash,
     difficulty: PowTarget,
+    pool: Arc<ThreadPool>,
 ) -> Option<(UnsecuredZkKey, ClaimPowRewardOp)> {
-    // Ticket computation is heavy, need to be run in blocking threads not to block
-    // async execution.
-    let task = spawn_blocking("logos/pow/search-winner-ticket", move || {
+    let (response_sender, response_receiver) = oneshot::channel();
+    let pool_task = move || {
         let mut rng = rand::thread_rng();
         let sk = UnsecuredZkKey::from_rng(&mut rng);
         let pk = sk.to_public_key();
@@ -210,12 +221,19 @@ async fn search_winner_ticket(
             public_key: pk,
         };
         let ticket = claim.get_puzzle_ticket();
-        ticket
+        let result = ticket
             .validate_difficulty_reward(&difficulty)
             .is_ok()
-            .then_some((sk, claim))
-    });
-    task.await.ok().flatten()
+            .then_some((sk, claim));
+        if response_sender.send(result).is_err() {
+            error!(target: LOG_TARGET, "Failed to send ticket result: receiver dropped");
+        }
+    };
+    // Ticket computation is heavy, we have a custom separated threadpool for this
+    // tasks
+    pool.spawn(pool_task);
+    // await response on the channel
+    response_receiver.await.ok().flatten()
 }
 
 /// Drops the ticket searches for every block whose slot is older than
@@ -283,6 +301,7 @@ impl Stream for TicketGenerator {
                             block_slot,
                             &epoch_state,
                             &ledger_state,
+                            Arc::clone(&this.pool),
                         );
                         this.tickets_search.insert(block_id, stream);
                         this.tickets_search_by_slot
@@ -319,6 +338,7 @@ mod tests {
     use std::{
         collections::{HashMap, HashSet},
         pin::Pin,
+        sync::Arc,
         task::{Context, Poll},
     };
 
@@ -328,6 +348,7 @@ mod tests {
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey};
     use lb_ledger::LedgerState;
+    use rayon::{ThreadPool, ThreadPoolBuilder};
     use tokio_stream::StreamMap;
 
     use super::{
@@ -338,6 +359,16 @@ mod tests {
     /// A never-resolving search stream, used to populate the map under test.
     fn pending_stream() -> WinnerTicketStream {
         Box::pin(stream::pending())
+    }
+
+    /// A small dedicated thread pool for exercising the ticket search.
+    fn test_pool() -> Arc<ThreadPool> {
+        Arc::new(
+            ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .expect("test thread pool should build"),
+        )
     }
 
     /// The genesis/zero field element, reused as a stand-in epoch nonce.
@@ -402,7 +433,8 @@ mod tests {
     #[tokio::test]
     async fn search_winner_ticket_rejects_when_difficulty_is_zero() {
         // No ticket can be strictly below zero, so this attempt never wins.
-        let result = search_winner_ticket(HeaderId::from([7u8; 32]), zero_fr(), Fr::ZERO).await;
+        let result =
+            search_winner_ticket(HeaderId::from([7u8; 32]), zero_fr(), Fr::ZERO, test_pool()).await;
         assert!(result.is_none());
     }
 
@@ -413,9 +445,10 @@ mod tests {
         // Maximum field element: every ticket is below it, so the attempt wins.
         let difficulty = Fr::ZERO - Fr::from(1u64);
 
-        let (secret_key, claim) = search_winner_ticket(block_header, epoch_nonce, difficulty)
-            .await
-            .expect("a win is essentially certain at maximum difficulty");
+        let (secret_key, claim) =
+            search_winner_ticket(block_header, epoch_nonce, difficulty, test_pool())
+                .await
+                .expect("a win is essentially certain at maximum difficulty");
 
         // The claim reflects the search inputs and the winning key.
         assert_eq!(claim.public_key, secret_key.to_public_key());
@@ -477,6 +510,7 @@ mod tests {
             tickets_search: StreamMap::new(),
             tickets_search_by_slot: HashMap::new(),
             tip: HeaderId::from([0u8; 32]),
+            pool: test_pool(),
         };
         assert!(matches!(poll_once(&mut generator), Poll::Ready(None)));
     }
@@ -495,6 +529,7 @@ mod tests {
             tickets_search,
             tickets_search_by_slot: HashMap::new(),
             tip: HeaderId::from([0u8; 32]),
+            pool: test_pool(),
         };
         assert!(matches!(poll_once(&mut generator), Poll::Ready(None)));
     }
@@ -508,6 +543,7 @@ mod tests {
             tickets_search: StreamMap::new(),
             tickets_search_by_slot: HashMap::new(),
             tip: HeaderId::from([0u8; 32]),
+            pool: test_pool(),
         };
         assert!(matches!(poll_once(&mut generator), Poll::Pending));
     }
@@ -528,6 +564,7 @@ mod tests {
             tickets_search,
             tickets_search_by_slot: HashMap::new(),
             tip,
+            pool: test_pool(),
         };
 
         let Poll::Ready(Some(winner)) = poll_once(&mut generator) else {
@@ -550,6 +587,7 @@ mod tests {
             tickets_search,
             tickets_search_by_slot: HashMap::new(),
             tip: HeaderId::from([0u8; 32]),
+            pool: test_pool(),
         };
 
         // A winner already produced is emitted first...

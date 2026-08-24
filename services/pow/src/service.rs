@@ -2,6 +2,7 @@ use core::fmt::{Debug, Display};
 use std::{
     collections::{HashMap, HashSet},
     marker::PhantomData,
+    sync::Arc,
 };
 
 use futures::StreamExt as _;
@@ -262,8 +263,17 @@ where
                 .expect("Relay connection with BlendService should succeed"),
         );
 
+        // Dedicated thread pool for the CPU-heavy ticket search, keeping it off
+        // Tokio's runtime threads.
+        let pool = Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .build()
+                .expect("PoW ticket search thread pool should build"),
+        );
+
         // Stream of winning PoW tickets, one per solved puzzle.
-        let mut winning_tickets = TicketGenerator::new::<Tx, _, _>(cryptarchia_api.clone()).await?;
+        let mut winning_tickets =
+            TicketGenerator::new::<Tx, _, _>(cryptarchia_api.clone(), pool).await?;
 
         // Processed-block stream, watched to retire pending claims once their
         // reward is observed as settled on chain.
