@@ -569,7 +569,7 @@ mod tests {
                     nonce_for_epoch(PREVIOUS_EPOCH),
                     nonce_for_epoch(CURRENT_EPOCH)
                 ),
-            })
+            }
         );
     }
 
