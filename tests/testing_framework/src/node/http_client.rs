@@ -26,7 +26,7 @@ use lb_http_api_common::{
     },
     paths::{
         BLEND_NETWORK_INFO, DIAL_PEER, MANTLE_METRICS, MANTLE_SDP_DECLARATIONS, MEMPOOL_VIEW,
-        NETWORK_INFO,
+        NETWORK_INFO, POW_CLAIM, POW_START_MINING, POW_STOP_MINING,
     },
     queries::BlocksStreamQuery,
 };
@@ -247,6 +247,46 @@ impl NodeHttpClient {
         .await
     }
 
+    /// Turns on `PoW` mining on the node. Mining stays off until this is
+    /// called and is not persisted across restarts.
+    pub async fn start_mining(&self) -> Result<(), Error> {
+        let request_url = Self::join_path(&self.base_url, POW_START_MINING)?;
+
+        self.with_timeout(
+            "Start PoW mining request",
+            self.http_client.put::<(), ()>(request_url, None),
+        )
+        .await
+    }
+
+    /// Turns off `PoW` mining on the node.
+    pub async fn stop_mining(&self) -> Result<(), Error> {
+        let request_url = Self::join_path(&self.base_url, POW_STOP_MINING)?;
+
+        self.with_timeout(
+            "Stop PoW mining request",
+            self.http_client.put::<(), ()>(request_url, None),
+        )
+        .await
+    }
+
+    /// Submits the mined-but-unclaimed `PoW` rewards as a single reward-claim
+    /// transaction, returning its hash. Returns `None` when there is nothing
+    /// to claim yet.
+    pub async fn claim_pow_rewards(&self) -> Result<Option<TxHash>, Error> {
+        let request_url = Self::join_path(&self.base_url, POW_CLAIM)?;
+
+        let response: PowClaimResponseBody = self
+            .with_timeout(
+                "PoW claim request",
+                self.http_client
+                    .post::<(), PowClaimResponseBody>(request_url, &()),
+            )
+            .await?;
+
+        Ok(response.tx_hash)
+    }
+
     #[must_use]
     pub const fn base_url(&self) -> &Url {
         &self.base_url
@@ -319,4 +359,11 @@ impl NodeHttpClient {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct DialPeerRequestBody {
     addr: Multiaddr,
+}
+
+/// Mirrors the node's `PoWClaimResponseBody`: the hash of the submitted
+/// reward-claim transaction, or `null` when there was nothing to claim.
+#[derive(Clone, Debug, Deserialize)]
+struct PowClaimResponseBody {
+    tx_hash: Option<TxHash>,
 }
