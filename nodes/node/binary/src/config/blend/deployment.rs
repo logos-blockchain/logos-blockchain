@@ -2,7 +2,7 @@ use core::{num::NonZeroU64, time::Duration};
 
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_libp2p::protocol_name::StreamProtocol;
-use lb_utils::math::NonNegativeF64;
+use lb_utils::math::{NonNegativeF64, PositiveF64};
 use nutype::nutype;
 use serde::{Deserialize, Serialize};
 
@@ -127,7 +127,7 @@ pub struct SchedulerSettings {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CoverTrafficSettings {
     /// `F_c`: frequency at which cover messages are generated per round.
-    pub message_frequency_per_round: NonNegativeF64,
+    pub message_frequency_per_round: PositiveF64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

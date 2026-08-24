@@ -50,6 +50,7 @@ members = [
   "kms/operators",
   "ledger",
   "libp2p",
+  "logos_sql",
   "merkle/blake2btree",
   "merkle/dynamic-merkle",
   "merkle/tree",
@@ -66,6 +67,7 @@ members = [
   "services/chain/chain-service",
   "services/key-management-system",
   "services/network",
+  "services/pow",
   "services/sdp",
   "services/storage",
   "services/system-sig",
@@ -146,6 +148,7 @@ lb-poc                             = { default-features = false, package = "logo
 lb-pol                             = { default-features = false, package = "logos-blockchain-pol", path = "./zk/proofs/pol" }
 lb-poq                             = { default-features = false, package = "logos-blockchain-poq", path = "./zk/proofs/poq" }
 lb-poseidon2                       = { default-features = false, package = "logos-blockchain-poseidon2", path = "./zk/poseidon2" }
+lb-pow-service                     = { default-features = false, package = "logos-blockchain-pow-service", path = "./services/pow" }
 lb-sdp-service                     = { default-features = false, package = "logos-blockchain-sdp-service", path = "./services/sdp" }
 lb-services-utils                  = { default-features = false, package = "logos-blockchain-services-utils", path = "./services/utils" }
 lb-storage-service                 = { default-features = false, package = "logos-blockchain-storage-service", path = "./services/storage" }
@@ -254,6 +257,7 @@ reqwest                            = { default-features = false, version = "0.12
 rocksdb                            = { default-features = false, version = "0.24" }
 rpds                               = { default-features = false, version = "1" }
 rs-merkle-tree                     = { default-features = false, version = "0.1" }
+rusqlite                           = { default-features = false, version = "0.35" }
 tar                                = { default-features = false, version = "0.4.46" }
 # Must stay in sync with the rust-rapidsnark flake input in flake.nix.
 rust-rapidsnark       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git", rev = "e91187f8ccb5bbfc7bb00dac88169112428da78f" } # feat/nixify

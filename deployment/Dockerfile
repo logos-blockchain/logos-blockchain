@@ -5,7 +5,7 @@
 # ===========================
 # BUILD IMAGE
 # ===========================
-FROM rust:1.97.1-slim-bookworm AS builder
+FROM rust:1.98.0-slim-bookworm AS builder
 
 WORKDIR /logos-blockchain
 COPY . .

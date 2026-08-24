@@ -53,6 +53,7 @@ use crate::{
     settings::Settings,
 };
 
+pub mod api;
 pub mod core;
 pub mod edge;
 pub mod epoch;

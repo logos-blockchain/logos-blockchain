@@ -15,7 +15,7 @@ use lb_core::{
     mantle::{Utxo, Value},
     sdp::{ActivityMetadata, ProviderId, ServiceParameters},
 };
-use lb_utils::math::NonNegativeF64;
+use lb_utils::math::PositiveF64;
 use tracing::debug;
 
 use crate::{
@@ -233,7 +233,7 @@ where
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RewardsParameters {
     pub rounds_per_epoch: NonZeroU64,
-    pub message_frequency_per_round: NonNegativeF64,
+    pub message_frequency_per_round: PositiveF64,
     pub num_blend_layers: NonZeroU64,
     pub data_replication_factor: u64,
     pub minimum_network_size: NonZeroU64,
@@ -327,7 +327,7 @@ mod tests {
     ) -> RewardsParameters {
         RewardsParameters {
             rounds_per_epoch: rounds_per_epoch.try_into().unwrap(),
-            message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+            message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
             num_blend_layers: NonZeroU64::new(3).unwrap(),
             minimum_network_size: minimum_network_size.try_into().unwrap(),
             data_replication_factor: 0,

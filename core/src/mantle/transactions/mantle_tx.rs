@@ -246,8 +246,6 @@ where
 }
 #[cfg(test)]
 mod tests {
-    use lb_codec::BinaryEncode as _;
-
     use super::*;
 
     #[test]

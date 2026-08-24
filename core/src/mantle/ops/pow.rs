@@ -1,6 +1,6 @@
 use ark_ff::Zero as _;
 use lb_codec::{BinaryCodec, BinaryEncode as _};
-use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Fr, fr_from_mod_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use rpds::HashTrieMapSync;
@@ -37,6 +37,19 @@ impl PowNullifier {
     #[must_use]
     pub const fn as_fr(&self) -> &Fr {
         &self.0
+    }
+
+    /// The puzzle ticket must be strictly below the current reward
+    /// difficulty (§5.3: `puzzle_ticket < difficulty_reward`).
+    pub fn validate_difficulty_reward(
+        &self,
+        reward_difficulty: &Fr,
+    ) -> Result<(), ClaimPowRewardError> {
+        let ticket_as_fr = self.as_fr();
+        if ticket_as_fr >= reward_difficulty {
+            return Err(ClaimPowRewardError::InvalidPoWRewardTicket);
+        }
+        Ok(())
     }
 }
 
@@ -97,7 +110,8 @@ pub enum ClaimPowRewardError {
     #[error("Mismatch epoch nonce ({claim:?}), accepted {accepted:?}")]
     MismatchEpochNonce {
         claim: ZkHash,
-        accepted: (Epoch, Epoch),
+        /// The (previous, current) epoch nonces a claim may match.
+        accepted: (ZkHash, ZkHash),
     },
     #[error("Invalid PoW reward ticket")]
     InvalidPoWRewardTicket,
@@ -124,10 +138,13 @@ pub struct ClaimPoWRewardVerificationContext<'a> {
     pub epoch_pow_reward: PowReward,
     /// `R_PoW`: current balance of the `PoW` reward pool.
     pub epoch_reward_pool: PowReward,
-    /// Nonce of the current epoch.
-    pub current_epoch: Epoch,
-    /// Nonce of the previous epoch, also accepted for claims.
-    pub previous_epoch: Epoch,
+    /// Randomness nonce of the current epoch (the same value
+    /// proof-of-leadership uses), against which a claim's `epoch_nonce` is
+    /// matched.
+    pub current_epoch_nonce: ZkHash,
+    /// Randomness nonce of the previous epoch, also accepted for claims mined
+    /// just before an epoch boundary and claimed just after it.
+    pub previous_epoch_nonce: ZkHash,
     /// Slots of known blocks, used to check the claim's block is within
     /// the acceptance window.
     pub blocks_slot: HashTrieMapSync<Hash, Slot>,
@@ -168,28 +185,20 @@ impl ClaimPoWRewardVerificationContext<'_> {
         Ok(())
     }
 
-    /// Epoch nonce must match the current epoch or the previous epoch nonce
+    /// Epoch nonce must match the current epoch or the previous epoch nonce.
     fn validate_current_epoch_nonce(
         &self,
         claim_epoch_nonce: ZkHash,
     ) -> Result<(), ClaimPowRewardError> {
-        let previous_epoch_nonce = ZkHasher::digest(&[fr_from_mod_bytes(
-            &self.previous_epoch.into_inner().to_le_bytes(),
-        )]);
-        if claim_epoch_nonce == previous_epoch_nonce {
-            return Ok(());
-        }
-
-        let current_epoch_nonce = ZkHasher::digest(&[fr_from_mod_bytes(
-            &self.current_epoch.into_inner().to_le_bytes(),
-        )]);
-        if claim_epoch_nonce == current_epoch_nonce {
+        if claim_epoch_nonce == self.current_epoch_nonce
+            || claim_epoch_nonce == self.previous_epoch_nonce
+        {
             return Ok(());
         }
 
         Err(ClaimPowRewardError::MismatchEpochNonce {
             claim: claim_epoch_nonce,
-            accepted: (self.previous_epoch, self.current_epoch),
+            accepted: (self.previous_epoch_nonce, self.current_epoch_nonce),
         })
     }
 
@@ -199,11 +208,7 @@ impl ClaimPoWRewardVerificationContext<'_> {
         &self,
         puzzle_ticket: PuzzleTicket,
     ) -> Result<(), ClaimPowRewardError> {
-        let ticket_as_fr = *puzzle_ticket.as_fr();
-        if ticket_as_fr >= self.reward_difficulty {
-            return Err(ClaimPowRewardError::InvalidPoWRewardTicket);
-        }
-        Ok(())
+        puzzle_ticket.validate_difficulty_reward(&self.reward_difficulty)
     }
 
     /// The puzzle ticket must not already have been claimed.
@@ -358,8 +363,8 @@ mod tests {
             pow_nullifiers: nullifiers,
             epoch_pow_reward,
             epoch_reward_pool,
-            current_epoch: 0.into(),
-            previous_epoch: 0.into(),
+            current_epoch_nonce: nonce_for_epoch(0),
+            previous_epoch_nonce: nonce_for_epoch(0),
             blocks_slot: HashTrieMapSync::new_sync(),
         }
     }
@@ -403,7 +408,8 @@ mod tests {
     const PREVIOUS_EPOCH: u32 = 4;
     const CLAIM_BLOCK_HASH: Hash = [1u8; 32];
 
-    /// The epoch nonce `validate_current_epoch_nonce` derives for an epoch.
+    /// A distinct, deterministic stand-in epoch nonce, so tests can build
+    /// claims and contexts for different epochs without a real ledger.
     fn nonce_for_epoch(epoch: u32) -> ZkHash {
         ZkHasher::digest(&[fr_from_mod_bytes(&epoch.to_le_bytes())])
     }
@@ -428,8 +434,8 @@ mod tests {
             pow_nullifiers: nullifiers,
             epoch_pow_reward: 10,
             epoch_reward_pool: 1_000,
-            current_epoch: CURRENT_EPOCH.into(),
-            previous_epoch: PREVIOUS_EPOCH.into(),
+            current_epoch_nonce: nonce_for_epoch(CURRENT_EPOCH),
+            previous_epoch_nonce: nonce_for_epoch(PREVIOUS_EPOCH),
             blocks_slot: std::iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
         }
     }
@@ -544,7 +550,10 @@ mod tests {
             op.verify(&NoOpProof, &ctx),
             Err(ClaimPowRewardError::MismatchEpochNonce {
                 claim: op.epoch_nonce,
-                accepted: (PREVIOUS_EPOCH.into(), CURRENT_EPOCH.into()),
+                accepted: (
+                    nonce_for_epoch(PREVIOUS_EPOCH),
+                    nonce_for_epoch(CURRENT_EPOCH)
+                ),
             })
         );
     }

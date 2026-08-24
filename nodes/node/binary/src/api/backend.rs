@@ -51,11 +51,12 @@ use super::handlers::{
     transaction, version, wallet,
 };
 use crate::{
-    BlendService, TracingService, WalletService,
+    BlendService, PoWService, TracingService, WalletService,
     api::{
         handlers::{
             blend_join_network, channel, channel_deposit, leader_claim, post_activity,
-            post_declaration, post_set_declaration_id, post_withdrawal,
+            post_declaration, post_set_declaration_id, post_withdrawal, pow_claim,
+            pow_claimable_rewards, pow_start_mining, pow_stop_mining,
         },
         openapi::ApiDoc,
         tracing::reload_tracing_filter,
@@ -178,6 +179,7 @@ where
         + AsServiceId<WalletService>
         + AsServiceId<ChainLeader>
         + AsServiceId<BlendService>
+        + AsServiceId<PoWService>
         + AsServiceId<TracingService>,
 {
     type Error = std::io::Error;
@@ -334,6 +336,22 @@ where
             .route(
                 paths::LEADER_CLAIM,
                 routing::post(leader_claim::<ChainLeader, RuntimeServiceId>),
+            )
+            .route(
+                paths::POW_START_MINING,
+                routing::put(pow_start_mining::<PoWService, RuntimeServiceId>),
+            )
+            .route(
+                paths::POW_STOP_MINING,
+                routing::put(pow_stop_mining::<PoWService, RuntimeServiceId>),
+            )
+            .route(
+                paths::POW_CLAIM,
+                routing::post(pow_claim::<PoWService, RuntimeServiceId>),
+            )
+            .route(
+                paths::POW_CLAIMABLE_REWARDS,
+                routing::get(pow_claimable_rewards::<PoWService, RuntimeServiceId>),
             )
             .route(
                 paths::LEADER_CLAIM_VOUCHERS,

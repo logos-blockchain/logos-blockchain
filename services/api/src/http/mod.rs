@@ -5,5 +5,6 @@ mod errors;
 pub mod libp2p;
 pub mod mantle;
 pub mod mempool;
+pub mod pow;
 pub mod sdp;
 pub mod storage;

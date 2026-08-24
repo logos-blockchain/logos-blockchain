@@ -420,6 +420,7 @@ where
         let lib = cryptarchia.lib_branch();
         ProcessedBlockEvent {
             block_id: header.id(),
+            block_slot: header.slot(),
             tip: tip.id(),
             tip_slot: tip.slot(),
             lib: lib.id(),

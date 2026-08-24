@@ -140,3 +140,10 @@ pub type SdpService<RuntimeServiceId> = lb_sdp_service::SdpService<
     SdpRecoveryBackend<RuntimeServiceId>,
     RuntimeServiceId,
 >;
+
+pub type PoWService<RuntimeServiceId> = lb_pow_service::PoWService<
+    CryptarchiaService<RuntimeServiceId>,
+    BlendService<RuntimeServiceId>,
+    RocksBackend,
+    RuntimeServiceId,
+>;

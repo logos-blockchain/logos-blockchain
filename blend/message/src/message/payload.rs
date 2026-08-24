@@ -176,7 +176,6 @@ impl BinaryDecode for PaddedPayloadBody {
 
 #[cfg(test)]
 mod tests {
-    use lb_codec::{BinaryDecode as _, BinaryEncode as _};
     use serde::Serialize;
     use serde_with::serde_as;
 

@@ -7,14 +7,11 @@ use lb_blend_message::{
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
-use lb_key_management_system_keys::keys::X25519PrivateKey;
 
 use crate::{
     membership::Membership,
     message_blend::{
-        crypto::{
-            EncapsulatedMessageWithVerifiedPublicHeader, EpochCryptographicProcessorSettings,
-        },
+        crypto::EncapsulatedMessageWithVerifiedPublicHeader,
         provers::{
             BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
             core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
@@ -28,8 +25,6 @@ use crate::{
 /// Each instance is meant to be used during a single epoch.
 pub struct EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator> {
     num_blend_layers: NonZeroU64,
-    /// The non-ephemeral encryption key (NEK) for decapsulating messages.
-    non_ephemeral_encryption_key: X25519PrivateKey,
     membership: Membership<NodeId>,
     proofs_generator: ProofsGenerator,
     _phantom: PhantomData<CorePoQGenerator>,
@@ -38,14 +33,6 @@ pub struct EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator
 impl<NodeId, CorePoQGenerator, ProofsGenerator>
     EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator>
 {
-    pub(super) const fn non_ephemeral_encryption_key(&self) -> &X25519PrivateKey {
-        &self.non_ephemeral_encryption_key
-    }
-
-    pub(super) const fn membership(&self) -> &Membership<NodeId> {
-        &self.membership
-    }
-
     #[cfg(test)]
     pub const fn proofs_generator(&self) -> &ProofsGenerator {
         &self.proofs_generator
@@ -64,7 +51,7 @@ where
 {
     #[must_use]
     pub fn new(
-        settings: EpochCryptographicProcessorSettings,
+        encapsulation_layers: NonZeroU64,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
         core_proof_of_quota_generator: CorePoQGenerator,
@@ -78,12 +65,11 @@ where
             local_node_index: membership.local_index(),
             membership_size: membership.size(),
             public_inputs: public_info,
-            encapsulation_layers: settings.num_blend_layers,
+            encapsulation_layers,
             epoch,
         };
         Self {
-            num_blend_layers: settings.num_blend_layers,
-            non_ephemeral_encryption_key: settings.non_ephemeral_encryption_key,
+            num_blend_layers: encapsulation_layers,
             membership,
             proofs_generator: ProofsGenerator::new(
                 generator_settings,
@@ -100,11 +86,6 @@ where
     ) {
         self.proofs_generator
             .set_epoch_private(winning_pol_info_stream, target_epoch);
-    }
-
-    /// Stop generating proofs for this processor's epoch.
-    pub fn stop_proof_generation(&mut self) {
-        self.proofs_generator.drop_pow_proofs_stream();
     }
 }
 
@@ -238,9 +219,8 @@ mod test {
     use super::EpochCryptographicProcessor;
     use crate::{
         membership::{Membership, Node},
-        message_blend::crypto::{
-            EpochCryptographicProcessorSettings,
-            test_utils::{MockCorePoQGenerator, TestEpochChangeCoreAndLeaderProofsGenerator},
+        message_blend::crypto::test_utils::{
+            MockCorePoQGenerator, TestEpochChangeCoreAndLeaderProofsGenerator,
         },
     };
 
@@ -255,10 +235,7 @@ mod test {
         };
         let mut processor =
             EpochCryptographicProcessor::<_, _, TestEpochChangeCoreAndLeaderProofsGenerator>::new(
-                EpochCryptographicProcessorSettings {
-                    non_ephemeral_encryption_key: [0; _].into(),
-                    num_blend_layers: NonZeroU64::new(1).unwrap(),
-                },
+                NonZeroU64::new(1).unwrap(),
                 Membership::new_without_local(&[Node {
                     address: Multiaddr::empty(),
                     id: PeerId::random(),

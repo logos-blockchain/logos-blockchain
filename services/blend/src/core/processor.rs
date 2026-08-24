@@ -4,17 +4,11 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+pub use lb_blend::scheduling::message_blend::crypto::core_and_leader::receive::EpochCryptographicProcessor as ReceiverCryptographicProcessor;
 use lb_blend::{
     message::{
-        Error as InnerError,
         crypto::proofs::PoQVerificationInputsMinusSigningKey,
-        encap::{
-            ProofsVerifier as ProofsVerifierTrait,
-            decapsulated::{DecapsulatedMessage, DecapsulationOutput},
-            encapsulated::EncapsulatedMessage,
-            validated::EncapsulatedMessageWithVerifiedPublicHeader,
-        },
-        reward::BlendingToken,
+        encap::ProofsVerifier as ProofsVerifierTrait,
     },
     scheduling::{
         membership::Membership,
@@ -39,22 +33,12 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
     pub const fn epoch(&self) -> Epoch {
         self.0.epoch()
     }
-}
 
-impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
-    CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
-where
-    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
-{
-    /// Stop generating proofs for this processor's epoch.
-    ///
-    /// The outgoing processor outlives its epoch by the transition period, so
-    /// that messages sent under the old public inputs can still be
-    /// decapsulated. Generating for that epoch is over as soon as the rotation
-    /// happens, and for the `PoW` branch that generation is a continuous
-    /// search that would otherwise keep a core busy for the whole period.
-    pub fn stop_proof_generation(&mut self) {
-        self.0.stop_proof_generation();
+    /// Retire this processor into the read-only one an epoch that has ended is
+    /// left with.
+    #[must_use]
+    pub fn rotate_epoch(self) -> ReceiverCryptographicProcessor<ProofsVerifier> {
+        self.0.into_receiver_only()
     }
 }
 
@@ -107,133 +91,6 @@ where
     }
 }
 
-/// The output of a multi-layer decapsulation operation.
-#[derive(Debug)]
-pub struct MultiLayerDecapsulationOutput {
-    /// The blending token collected on the way, one per decapsulated layer.
-    blending_tokens: Vec<BlendingToken>,
-    /// The final message type.
-    decapsulated_message: DecapsulatedMessageType,
-}
-
-impl MultiLayerDecapsulationOutput {
-    pub fn into_components(self) -> (Vec<BlendingToken>, DecapsulatedMessageType) {
-        (self.blending_tokens, self.decapsulated_message)
-    }
-}
-
-/// The final message type of a multi-layer decapsulation operation.
-#[derive(Debug)]
-pub enum DecapsulatedMessageType {
-    /// The remainder of the message still needs to be decapsulated by some
-    /// other node.
-    Incompleted(Box<EncapsulatedMessage>),
-    /// The message was fully decapsulated, as all the remaining encapsulations
-    /// were addressed to this node.
-    Completed(DecapsulatedMessage),
-}
-
-impl From<DecapsulationOutput> for DecapsulatedMessageType {
-    fn from(value: DecapsulationOutput) -> Self {
-        match value {
-            DecapsulationOutput::Completed {
-                fully_decapsulated_message,
-                ..
-            } => Self::Completed(fully_decapsulated_message),
-            DecapsulationOutput::Incompleted {
-                remaining_encapsulated_message,
-                ..
-            } => Self::Incompleted(remaining_encapsulated_message),
-        }
-    }
-}
-
-impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
-    CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
-where
-    ProofsVerifier: ProofsVerifierTrait,
-{
-    /// Validate the public header of an [`EncapsulatedMessage`].
-    pub fn validate_message_header(
-        &self,
-        message: EncapsulatedMessage,
-    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, InnerError> {
-        message.verify_public_header(self.verifier())
-    }
-
-    /// Semantically similar to the underlying
-    /// [`EpochCryptographicProcessor::decapsulate_message`], but it does not
-    /// stop after decapsulating the outermost layer. It stops only when a layer
-    /// cannot be decapsulated or when the decapsulation is completed.
-    ///
-    /// If no layer (`Err`) or at most one layer (`Ok`) can be decapsulated,
-    /// this is semantically equivalent to
-    /// calling [`EpochCryptographicProcessor::decapsulate_message`].
-    ///
-    /// If more than a single layer can be decapsulated, then the decapsulation
-    /// happens recursively until the first layer that cannot be decapsulated is
-    /// found or when there is no more layers to decapsulate. In either case, it
-    /// returns the last processed layer, along with the list of blending tokens
-    /// collected along the way.
-    pub fn decapsulate_message_recursive(
-        &self,
-        message: EncapsulatedMessageWithVerifiedPublicHeader,
-    ) -> Result<MultiLayerDecapsulationOutput, InnerError> {
-        tracing::trace!(
-            "Attempt at batch-decapsulating message with PoQ nullifier and key: ({:?}, {:?})",
-            message.public_header().signing_key(),
-            message.public_header().proof_of_quota().key_nullifier()
-        );
-        let mut decapsulation_output = self.0.decapsulate_message(message)?;
-
-        let mut collected_blending_tokens = Vec::new();
-
-        loop {
-            match &decapsulation_output {
-                // We reached the end. Collect token and stop.
-                DecapsulationOutput::Completed { blending_token, .. } => {
-                    collected_blending_tokens.push(blending_token.clone());
-                    break;
-                }
-                // One or more layers to decapsulate. Collect token from current layer and attempt
-                // one more decapsulation.
-                DecapsulationOutput::Incompleted {
-                    remaining_encapsulated_message,
-                    blending_token,
-                } => {
-                    collected_blending_tokens.push(blending_token.clone());
-                    // If we find a message with an invalid public header after a successful
-                    // decapsulation, we still bubble it up for the scheduler to
-                    // schedule it. At the time of release, the message will be
-                    // ignored since its public header cannot be verified. This is not the most
-                    // efficient way, but it's the less invasive way since by decapsulation we
-                    // currently mean decrypting an encrypted Blend header. No additional checks are
-                    // performed on the nested public header. The spec simply ignores the message,
-                    // and so we do.
-                    let Ok(message_with_validated_public_header) = remaining_encapsulated_message
-                        .clone()
-                        .verify_public_header(self.verifier())
-                    else {
-                        break;
-                    };
-                    let Ok(nested_layer_decapsulation_output) = self
-                        .0
-                        .decapsulate_message(message_with_validated_public_header)
-                    else {
-                        break;
-                    };
-                    decapsulation_output = nested_layer_decapsulation_output;
-                }
-            }
-        }
-
-        Ok(MultiLayerDecapsulationOutput {
-            blending_tokens: collected_blending_tokens,
-            decapsulated_message: decapsulation_output.into(),
-        })
-    }
-}
-
 impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier> Deref
     for CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
 {
@@ -281,7 +138,9 @@ mod tests {
             },
             selection::{self, VerifiedProofOfSelection},
         },
-        scheduling::message_blend::crypto::EpochCryptographicProcessorSettings,
+        scheduling::message_blend::crypto::{
+            EpochCryptographicProcessorSettings, core_and_leader::receive::DecapsulatedMessageType,
+        },
     };
     use lb_chain_service::Epoch;
     use lb_core::crypto::ZkHash;
@@ -290,7 +149,7 @@ mod tests {
     use lb_poq::Quota;
 
     use crate::{
-        core::processor::{CoreCryptographicProcessor, DecapsulatedMessageType, Error},
+        core::processor::{CoreCryptographicProcessor, Error},
         test_utils::{
             crypto::{MockCoreAndLeaderProofsGenerator, MockProofsVerifier, StaticFetchVerifier},
             membership::{key, membership},
@@ -395,7 +254,9 @@ mod tests {
             Epoch::new(0),
         );
         assert!(matches!(
-            processor.decapsulate_message_recursive(mock_message),
+            processor
+                .receiver()
+                .decapsulate_message_recursive(mock_message),
             Err(InnerError::ProofOfSelectionVerificationFailed(
                 selection::Error::Verification
             ))
@@ -427,6 +288,7 @@ mod tests {
         );
         StaticFetchVerifier::set_remaining_valid_poq_proofs(1);
         let decapsulation_output = processor
+            .receiver()
             .decapsulate_message_recursive(mock_message)
             .unwrap();
         let (blending_tokens, remaining_message_type) = decapsulation_output.into_components();
@@ -462,6 +324,7 @@ mod tests {
         );
         StaticFetchVerifier::set_remaining_valid_poq_proofs(2);
         let decapsulation_output = processor
+            .receiver()
             .decapsulate_message_recursive(mock_message)
             .unwrap();
         let (blending_tokens, remaining_message_type) = decapsulation_output.into_components();
@@ -497,6 +360,7 @@ mod tests {
         );
         StaticFetchVerifier::set_remaining_valid_poq_proofs(3);
         let decapsulation_output = processor
+            .receiver()
             .decapsulate_message_recursive(mock_message)
             .unwrap();
         let (blending_tokens, remaining_message_type) = decapsulation_output.into_components();

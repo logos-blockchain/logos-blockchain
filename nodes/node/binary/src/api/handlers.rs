@@ -14,7 +14,7 @@ use futures::FutureExt as _;
 use lb_api_service::http::{
     DynError, blend,
     consensus::{self, Cryptarchia},
-    libp2p, mantle, mempool,
+    libp2p, mantle, mempool, pow,
     storage::StorageAdapter,
 };
 use lb_blend_service::message::ProxyServiceMessage;
@@ -56,6 +56,7 @@ use lb_http_api_common::{
 use lb_libp2p::{Multiaddr, libp2p::bytes::Bytes};
 use lb_log_targets::node;
 use lb_network_service::{NetworkService, backends::libp2p::Libp2p as Libp2pNetworkBackend};
+use lb_pow_service::api::PoWServiceData;
 use lb_sdp_service::{
     mempool::SdpMempoolAdapter, state::SdpStateStorage, wallet::SdpWalletAdapter,
 };
@@ -1344,6 +1345,78 @@ where
     RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<ChainLeader>,
 {
     make_request_and_return_response!(consensus::leader::claim(&handle))
+}
+
+#[utoipa::path(
+    post,
+    path = paths::POW_START_MINING,
+    responses(
+        (status = 200, description = "PoW mining started"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn pow_start_mining<PoW, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    PoW: PoWServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
+{
+    make_request_and_return_response!(pow::start_mining::<PoW, RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    post,
+    path = paths::POW_STOP_MINING,
+    responses(
+        (status = 200, description = "PoW mining stopped"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn pow_stop_mining<PoW, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    PoW: PoWServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
+{
+    make_request_and_return_response!(pow::stop_mining::<PoW, RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    post,
+    path = paths::POW_CLAIM,
+    responses(
+        (status = 200, description = "PoW reward-claim transactions submitted", body = lb_api_service::http::pow::PoWClaimResponseBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn pow_claim<PoW, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    PoW: PoWServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
+{
+    make_request_and_return_response!(pow::claim::<PoW, RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    get,
+    path = paths::POW_CLAIMABLE_REWARDS,
+    responses(
+        (status = 200, description = "PoW rewards this node can currently claim"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn pow_claimable_rewards<PoW, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    PoW: PoWServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
+{
+    make_request_and_return_response!(pow::claimable_rewards::<PoW, RuntimeServiceId>(&handle))
 }
 
 #[utoipa::path(

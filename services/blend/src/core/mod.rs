@@ -33,7 +33,12 @@ use lb_blend::{
         EpochMessageScheduler,
         epoch::{EpochEvent, UninitializedEpochEventStream},
         message_blend::{
-            crypto::EpochCryptographicProcessorSettings,
+            crypto::{
+                EpochCryptographicProcessorSettings,
+                core_and_leader::receive::{
+                    DecapsulatedMessageType, MultiLayerDecapsulationOutput,
+                },
+            },
             provers::core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
         },
         message_scheduler::{
@@ -78,8 +83,8 @@ use crate::{
         backends::BackendEpochInfo,
         kms::{KmsPoQAdapter, PreloadKMSBackendCorePoQGenerator},
         processor::{
-            CoreCryptographicProcessor, DecapsulatedMessageType, Error,
-            MultiLayerDecapsulationOutput,
+            CoreCryptographicProcessor as CurrentEpochCryptographicProcessor, Error,
+            ReceiverCryptographicProcessor,
         },
         scheduler::SchedulerWrapper,
         settings::{RunningBlendConfig, StartingBlendConfig},
@@ -107,6 +112,9 @@ mod tests;
 pub use state::RecoveryServiceState as CoreServiceState;
 
 const LOG_TARGET: &str = blend::service::CORE;
+
+type OldEpochCryptographicProcessor<ProofsVerifier> =
+    ReceiverCryptographicProcessor<ProofsVerifier>;
 
 /// A blend service that sends messages to the blend network
 /// and broadcasts fully unwrapped messages through the [`NetworkService`].
@@ -495,7 +503,7 @@ async fn initialize<
     + Send
     + 'static,
     CoreEpochPublicInfo<NodeId>,
-    CoreCryptographicProcessor<
+    CurrentEpochCryptographicProcessor<
         NodeId,
         KmsAdapter::CorePoQGenerator,
         ProofsGenerator,
@@ -607,7 +615,7 @@ where
         pow: current_epoch_public_info.poq_pow_public_inputs,
     };
 
-    let crypto_processor = CoreCryptographicProcessor::<
+    let crypto_processor = CurrentEpochCryptographicProcessor::<
         _,
         KmsAdapter::CorePoQGenerator,
         ProofsGenerator,
@@ -794,7 +802,7 @@ async fn run_event_loop<
     >,
     rng: &mut Rng,
     mut pending_transactions: VecDeque<Vec<u8>>,
-    mut crypto_processor: CoreCryptographicProcessor<
+    mut crypto_processor: CurrentEpochCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
         ProofsGenerator,
@@ -803,7 +811,7 @@ async fn run_event_loop<
     mut current_epoch_info: CoreEpochPublicInfo<NodeId>,
     mut recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
 ) -> (
-    CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
+    OldEpochCryptographicProcessor<ProofsVerifier>,
     OldEpochMessageScheduler<Rng, ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
     OldEpochBlendingTokenCollector,
 )
@@ -819,9 +827,8 @@ where
 {
     // An optional crypto processor to handle the old epoch during transition
     // period.
-    let mut old_epoch_crypto_processor: Option<
-        CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
-    > = None;
+    let mut old_epoch_crypto_processor: Option<OldEpochCryptographicProcessor<ProofsVerifier>> =
+        None;
     let mut old_epoch_message_scheduler: Option<
         OldEpochMessageScheduler<
             Rng,
@@ -835,7 +842,7 @@ where
         // `old_epoch` captured here so we can drop the `Sync` requirement.
         let old_epoch = old_epoch_crypto_processor
             .as_ref()
-            .map(CoreCryptographicProcessor::epoch);
+            .map(OldEpochCryptographicProcessor::epoch);
         tokio::select! {
             Some(msg) = inbound_relay.next() => {
                 match msg {
@@ -860,7 +867,7 @@ where
                 recovery_checkpoint = handle_local_transaction(&encapsulation, &mut pending_transactions, &crypto_processor, &mut message_scheduler, recovery_checkpoint);
             }
             Some(incoming_message) = blend_messages.next() => {
-                recovery_checkpoint = handle_incoming_blend_message(incoming_message, &mut message_scheduler, old_epoch_message_scheduler.as_mut(), &crypto_processor, old_epoch_crypto_processor.as_ref(),  recovery_checkpoint);
+                recovery_checkpoint = handle_incoming_blend_message(incoming_message, &mut message_scheduler, old_epoch_message_scheduler.as_mut(), crypto_processor.receiver(), old_epoch_crypto_processor.as_ref(),  recovery_checkpoint);
             }
             Some(round_info) = message_scheduler.next() => {
                 recovery_checkpoint = handle_release_round(round_info, &mut crypto_processor, rng, backend, payload_dispatcher, recovery_checkpoint).await;
@@ -956,7 +963,7 @@ where
 /// again.
 async fn encapsulate_next_transaction<NodeId, ProofsGenerator, ProofsVerifier, CorePoQGenerator>(
     pending_transactions: &VecDeque<Vec<u8>>,
-    cryptographic_processor: &mut CoreCryptographicProcessor<
+    cryptographic_processor: &mut CurrentEpochCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
         ProofsGenerator,
@@ -995,7 +1002,7 @@ fn handle_local_transaction<
 >(
     encapsulation: &EncapsulatedMessageWithVerifiedPublicHeader,
     pending_transactions: &mut VecDeque<Vec<u8>>,
-    cryptographic_processor: &CoreCryptographicProcessor<
+    cryptographic_processor: &CurrentEpochCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
         ProofsGenerator,
@@ -1037,7 +1044,6 @@ async fn retire<
     Backend,
     Rng,
     Dispatcher,
-    ProofsGenerator,
     ProofsVerifier,
     CorePoQGenerator,
     RuntimeServiceId,
@@ -1060,18 +1066,12 @@ async fn retire<
     >,
     mut rng: Rng,
     mut blending_token_collector: OldEpochBlendingTokenCollector,
-    crypto_processor: CoreCryptographicProcessor<
-        NodeId,
-        CorePoQGenerator,
-        ProofsGenerator,
-        ProofsVerifier,
-    >,
+    crypto_processor: OldEpochCryptographicProcessor<ProofsVerifier>,
 ) where
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
-    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator> + Send,
     CorePoQGenerator: Send + Sync,
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     RuntimeServiceId: Send + Sync,
@@ -1118,7 +1118,7 @@ async fn handle_epoch_event<
 >(
     event: EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>>,
     settings: &RunningBlendConfig<Backend::Settings>,
-    current_cryptographic_processor: CoreCryptographicProcessor<
+    current_cryptographic_processor: CurrentEpochCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
         ProofsGenerator,
@@ -1156,10 +1156,10 @@ where
                 core_poq_generator: new_core_poq_generator,
                 public: new_epoch_info,
             } = *core_epoch_info;
-            // Once a new epoch starts, old epoch's PoW work is useless, so we drop the PoW
-            // proof generator for the epoch transition period.
-            let mut current_cryptographic_processor = current_cryptographic_processor;
-            current_cryptographic_processor.stop_proof_generation();
+            // Once a new epoch starts, the old epoch's proving is useless: retiring
+            // its processor into a receive-only one for the transition period drops
+            // the generators, and with them the `PoW` mining they have in flight.
+            let old_cryptographic_processor = current_cryptographic_processor.rotate_epoch();
             let (
                 _,
                 _,
@@ -1203,7 +1203,7 @@ where
             let Some(core_poq_generator) = new_core_poq_generator else {
                 tracing::info!(target: LOG_TARGET, "Local node is not part of new membership. Retiring from core.");
                 return HandleEpochEventOutput::Retiring {
-                    old_crypto_processor: current_cryptographic_processor,
+                    old_crypto_processor: old_cryptographic_processor,
                     old_scheduler: Box::new(
                         current_scheduler
                             .rotate_epoch(new_scheduler_epoch_info, settings.scheduler_settings())
@@ -1213,8 +1213,8 @@ where
                 };
             };
 
-            let new_processor: CoreCryptographicProcessor<_, _, _, ProofsVerifier> =
-                match CoreCryptographicProcessor::try_new_with_core_condition_check(
+            let new_processor: CurrentEpochCryptographicProcessor<_, _, _, ProofsVerifier> =
+                match CurrentEpochCryptographicProcessor::try_new_with_core_condition_check(
                     new_epoch_info.membership.clone(),
                     settings.minimum_network_size,
                     EpochCryptographicProcessorSettings {
@@ -1246,7 +1246,7 @@ where
                     Err(e @ (Error::LocalIsNotCoreNode | Error::NetworkIsTooSmall(_))) => {
                         tracing::info!(target: LOG_TARGET, "New membership does not satisfy the core node condition: {e:?}");
                         return HandleEpochEventOutput::Retiring {
-                            old_crypto_processor: current_cryptographic_processor,
+                            old_crypto_processor: old_cryptographic_processor,
                             old_scheduler: Box::new(
                                 current_scheduler
                                     .rotate_epoch(
@@ -1264,7 +1264,7 @@ where
                 .rotate_epoch(new_scheduler_epoch_info, settings.scheduler_settings());
             HandleEpochEventOutput::Transitioning {
                 new_crypto_processor: new_processor,
-                old_crypto_processor: current_cryptographic_processor,
+                old_crypto_processor: old_cryptographic_processor,
                 new_scheduler,
                 old_scheduler: Box::new(old_scheduler),
                 new_recovery_checkpoint: ServiceState::with_epoch(
@@ -1280,14 +1280,7 @@ where
         }
         EpochEvent::NewEpoch(MaybeEmptyCoreEpochInfo::Empty { epoch, epoch_nonce }) => {
             tracing::info!(target: LOG_TARGET, "New epoch event received, but no epoch info is available due to empty membership set.");
-            // Reduce the scope of the `mut` borrow to this block only.
-            let current_cryptographic_processor = {
-                // TODO: Change the cryptographic processor type so that proving is dropped
-                // automatically on new epochs for the old epoch.
-                let mut current_cryptographic_processor = current_cryptographic_processor;
-                current_cryptographic_processor.stop_proof_generation();
-                current_cryptographic_processor
-            };
+            let old_cryptographic_processor = current_cryptographic_processor.rotate_epoch();
             let (_, _, _, _, _, current_epoch_blending_token_collector, _, _) =
                 current_recovery_checkpoint.into_components();
             let new_reward_epoch_info = reward::EpochInfo::new(
@@ -1301,7 +1294,7 @@ where
             let (_, old_epoch_blending_token_collector) =
                 current_epoch_blending_token_collector.rotate_epoch(&new_reward_epoch_info);
             HandleEpochEventOutput::Retiring {
-                old_crypto_processor: current_cryptographic_processor,
+                old_crypto_processor: old_cryptographic_processor,
                 old_scheduler: Box::new(current_scheduler.consume()),
                 old_token_collector: old_epoch_blending_token_collector,
             }
@@ -1359,10 +1352,13 @@ enum HandleEpochEventOutput<
     CorePoQGenerator,
 > {
     Transitioning {
-        new_crypto_processor:
-            CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
-        old_crypto_processor:
-            CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
+        new_crypto_processor: CurrentEpochCryptographicProcessor<
+            NodeId,
+            CorePoQGenerator,
+            ProofsGenerator,
+            ProofsVerifier,
+        >,
+        old_crypto_processor: OldEpochCryptographicProcessor<ProofsVerifier>,
         new_scheduler: EpochMessageScheduler<
             Rng,
             ProcessedMessage,
@@ -1379,8 +1375,12 @@ enum HandleEpochEventOutput<
         new_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
     },
     TransitionCompleted {
-        current_crypto_processor:
-            CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
+        current_crypto_processor: CurrentEpochCryptographicProcessor<
+            NodeId,
+            CorePoQGenerator,
+            ProofsGenerator,
+            ProofsVerifier,
+        >,
         current_scheduler: EpochMessageScheduler<
             Rng,
             ProcessedMessage,
@@ -1390,8 +1390,7 @@ enum HandleEpochEventOutput<
         new_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
     },
     Retiring {
-        old_crypto_processor:
-            CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
+        old_crypto_processor: OldEpochCryptographicProcessor<ProofsVerifier>,
         old_scheduler: Box<
             OldEpochMessageScheduler<
                 Rng,
@@ -1425,7 +1424,7 @@ async fn handle_local_block_proposal<
 >(
     proposal: &[u8],
     data_replication_factor: u64,
-    cryptographic_processor: &mut CoreCryptographicProcessor<
+    cryptographic_processor: &mut CurrentEpochCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
         ProofsGenerator,
@@ -1488,7 +1487,7 @@ fn schedule_local_encapsulated_message<
     CorePoQGenerator,
 >(
     wrapped_message: &EncapsulatedMessageWithVerifiedPublicHeader,
-    cryptographic_processor: &CoreCryptographicProcessor<
+    cryptographic_processor: &CurrentEpochCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
         ProofsGenerator,
@@ -1512,8 +1511,9 @@ where
     // Before blending the data message, we try to peel off any outer layers that
     // are addressed to us. In this case, we collect the blending tokens and we
     // blend only the remaining layers.
-    let self_decapsulation_output =
-        cryptographic_processor.decapsulate_message_recursive(wrapped_message.clone());
+    let self_decapsulation_output = cryptographic_processor
+        .receiver()
+        .decapsulate_message_recursive(wrapped_message.clone());
 
     let Ok(multi_layer_decapsulation_output) = self_decapsulation_output else {
         // The outermost layer of the data message is not for us, hence we treat this as
@@ -1592,15 +1592,7 @@ where
 /// included, which is what gated it from being relayed to the rest of the
 /// network — so all that is left here is to decapsulate it with the current or
 /// old epoch's cryptographic processor, depending on the epoch it comes from.
-fn handle_incoming_blend_message<
-    NodeId,
-    Rng,
-    BackendSettings,
-    NetworkSettings,
-    ProofsGenerator,
-    ProofsVerifier,
-    CorePoQGenerator,
->(
+fn handle_incoming_blend_message<Rng, BackendSettings, NetworkSettings, ProofsVerifier>(
     (verified_message, epoch): (EncapsulatedMessageWithVerifiedPublicHeader, Epoch),
     scheduler: &mut EpochMessageScheduler<
         Rng,
@@ -1614,19 +1606,11 @@ fn handle_incoming_blend_message<
             EncapsulatedMessageWithVerifiedPublicHeader,
         >,
     >,
-    cryptographic_processor: &CoreCryptographicProcessor<
-        NodeId,
-        CorePoQGenerator,
-        ProofsGenerator,
-        ProofsVerifier,
-    >,
-    old_epoch_cryptographic_processor: Option<
-        &CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
-    >,
+    cryptographic_processor: &ReceiverCryptographicProcessor<ProofsVerifier>,
+    old_epoch_cryptographic_processor: Option<&OldEpochCryptographicProcessor<ProofsVerifier>>,
     current_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
 ) -> ServiceState<BackendSettings, NetworkSettings>
 where
-    NodeId: 'static,
     Rng: RngCore + Clone + Send + Unpin,
     BackendSettings: Clone,
     ProofsVerifier: ProofsVerifierTrait,
@@ -1663,14 +1647,9 @@ where
 
 /// Attempts recursive decapsulation of a message whose `PoQ` has already been
 /// verified. Returns `None` if decapsulation fails (already logged).
-fn try_decapsulate<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>(
+fn try_decapsulate<ProofsVerifier>(
     message: EncapsulatedMessageWithVerifiedPublicHeader,
-    processor: &CoreCryptographicProcessor<
-        NodeId,
-        CorePoQGenerator,
-        ProofsGenerator,
-        ProofsVerifier,
-    >,
+    processor: &ReceiverCryptographicProcessor<ProofsVerifier>,
     epoch: Epoch,
 ) -> Option<MultiLayerDecapsulationOutput>
 where
@@ -1691,28 +1670,16 @@ where
 
 /// Same as [`handle_incoming_blend_message`] but only tries with
 /// the old epoch crypto processor.
-fn handle_incoming_blend_message_from_old_epoch<
-    Rng,
-    NodeId,
-    ProofsGenerator,
-    ProofsVerifier,
-    CorePoQGenerator,
->(
+fn handle_incoming_blend_message_from_old_epoch<Rng, ProofsVerifier>(
     verified_message: EncapsulatedMessageWithVerifiedPublicHeader,
     scheduler: &mut OldEpochMessageScheduler<
         Rng,
         ProcessedMessage,
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
-    cryptographic_processor: &CoreCryptographicProcessor<
-        NodeId,
-        CorePoQGenerator,
-        ProofsGenerator,
-        ProofsVerifier,
-    >,
+    cryptographic_processor: &OldEpochCryptographicProcessor<ProofsVerifier>,
     blending_token_collector: &mut OldEpochBlendingTokenCollector,
 ) where
-    NodeId: 'static,
     ProofsVerifier: ProofsVerifierTrait,
 {
     let Some(output) = try_decapsulate(
@@ -1738,9 +1705,6 @@ fn handle_decapsulated_incoming_message_from_current_epoch<
     Rng,
     BackendSettings,
     NetworkSettings,
-    NodeId,
-    CorePoQGenerator,
-    ProofsGenerator,
     ProofsVerifier,
 >(
     multi_layer_decapsulation_output: MultiLayerDecapsulationOutput,
@@ -1750,12 +1714,7 @@ fn handle_decapsulated_incoming_message_from_current_epoch<
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
     current_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
-    cryptographic_processor: &CoreCryptographicProcessor<
-        NodeId,
-        CorePoQGenerator,
-        ProofsGenerator,
-        ProofsVerifier,
-    >,
+    cryptographic_processor: &ReceiverCryptographicProcessor<ProofsVerifier>,
 ) -> ServiceState<BackendSettings, NetworkSettings>
 where
     BackendSettings: Clone,
@@ -1792,9 +1751,6 @@ fn handle_decapsulated_incoming_message_from_old_epoch<
     Rng,
     BackendSettings,
     NetworkSettings,
-    NodeId,
-    CorePoQGenerator,
-    ProofsGenerator,
     ProofsVerifier,
 >(
     multi_layer_decapsulation_output: MultiLayerDecapsulationOutput,
@@ -1804,12 +1760,7 @@ fn handle_decapsulated_incoming_message_from_old_epoch<
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
     recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
-    old_cryptographic_processor: &CoreCryptographicProcessor<
-        NodeId,
-        CorePoQGenerator,
-        ProofsGenerator,
-        ProofsVerifier,
-    >,
+    old_cryptographic_processor: &OldEpochCryptographicProcessor<ProofsVerifier>,
 ) -> ServiceState<BackendSettings, NetworkSettings>
 where
     BackendSettings: Clone,
@@ -1836,20 +1787,10 @@ where
     clippy::cognitive_complexity,
     reason = "TODO: address this in a dedicated refactor"
 )]
-fn schedule_decapsulated_incoming_message<
-    NodeId,
-    CorePoQGenerator,
-    ProofsGenerator,
-    ProofsVerifier,
->(
+fn schedule_decapsulated_incoming_message<ProofsVerifier>(
     multi_layer_decapsulation_output: MultiLayerDecapsulationOutput,
     scheduler: &mut impl ProcessedMessageScheduler<ProcessedMessage>,
-    cryptographic_processor: &CoreCryptographicProcessor<
-        NodeId,
-        CorePoQGenerator,
-        ProofsGenerator,
-        ProofsVerifier,
-    >,
+    cryptographic_processor: &ReceiverCryptographicProcessor<ProofsVerifier>,
 ) -> (
     Option<ProcessedMessage>,
     impl Iterator<Item = BlendingToken>,
@@ -1932,7 +1873,7 @@ async fn handle_release_round<
         data_messages,
         release_type,
     }: RoundInfo<ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
-    cryptographic_processor: &mut CoreCryptographicProcessor<
+    cryptographic_processor: &mut CurrentEpochCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
         ProofsGenerator,
@@ -2166,7 +2107,7 @@ async fn generate_and_try_to_decapsulate_cover_message<
     ProofsVerifier,
     CorePoQGenerator,
 >(
-    cryptographic_processor: &mut CoreCryptographicProcessor<
+    cryptographic_processor: &mut CurrentEpochCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
         ProofsGenerator,
@@ -2184,8 +2125,9 @@ where
         .encapsulate_cover_payload(&random_sized_bytes::<{ size_of::<u32>() }>())
         .await
         .expect("Should not fail to generate new cover message");
-    let self_decapsulation_output =
-        cryptographic_processor.decapsulate_message_recursive(encapsulated_cover_message.clone());
+    let self_decapsulation_output = cryptographic_processor
+        .receiver()
+        .decapsulate_message_recursive(encapsulated_cover_message.clone());
     let Ok(multi_layer_decapsulation_output) = self_decapsulation_output else {
         // First layer not addressed to ourselves. Publish as regular cover message,
         // hence we consume a core quota.

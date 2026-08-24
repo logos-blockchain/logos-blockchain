@@ -46,8 +46,9 @@ use crate::{
         RunConfig, api::ServiceConfig as ApiConfig, blend::ServiceConfig as BlendConfig,
         cryptarchia::ServiceConfig as CryptarchiaConfig, kms::ServiceConfig as KmsConfig,
         mempool::ServiceConfig as MempoolConfig, network::ServiceConfig as NetworkConfig,
-        sdp::ServiceConfig as SdpConfig, storage::ServiceConfig as StorageConfig,
-        time::ServiceConfig as TimeConfig, wallet::ServiceConfig as WalletConfig,
+        pow::ServiceConfig as PoWConfig, sdp::ServiceConfig as SdpConfig,
+        storage::ServiceConfig as StorageConfig, time::ServiceConfig as TimeConfig,
+        wallet::ServiceConfig as WalletConfig,
     },
     generic_services::{SdpMempoolAdapter, SdpRecoveryBackend, SdpService, SdpWalletAdapter},
     panic::log_and_exit_hook,
@@ -89,6 +90,8 @@ pub(crate) type CryptarchiaLeaderService = generic_services::CryptarchiaLeaderSe
 
 pub type TimeService = generic_services::TimeService<RuntimeServiceId>;
 
+pub type PoWService = generic_services::PoWService<RuntimeServiceId>;
+
 pub type ApiStorageAdapter<RuntimeServiceId> =
     lb_api_service::http::storage::adapters::rocksdb::RocksAdapter<RuntimeServiceId>;
 
@@ -121,6 +124,7 @@ pub struct LogosBlockchain {
     cryptarchia_leader: CryptarchiaLeaderService,
     block_broadcast: BlockBroadcastService,
     sdp: SdpService<RuntimeServiceId>,
+    pow: PoWService,
     time: TimeService,
     http: ApiService,
     storage: StorageService,
@@ -190,7 +194,12 @@ pub fn run_node_from_config(
     let sdp_config = SdpConfig {
         user: config.user.sdp,
     }
-    .into_sdp_service_settings(recovery_data);
+    .into_sdp_service_settings(recovery_data.clone());
+
+    let pow_config = PoWConfig {
+        user: config.user.pow,
+    }
+    .into_pow_service_settings(recovery_data);
 
     let tracing_config = config::tracing::ServiceConfig {
         user: config.user.tracing,
@@ -222,6 +231,7 @@ pub fn run_node_from_config(
             system_sig: (),
             key_management: kms_config,
             sdp: sdp_config,
+            pow: pow_config,
             wallet: wallet_config,
 
             tracing: tracing_config,

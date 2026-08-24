@@ -1,4 +1,4 @@
-use core::time::Duration;
+use core::{num::NonZeroU64, time::Duration};
 use std::collections::VecDeque;
 
 use futures::{StreamExt as _, stream::repeat};
@@ -30,8 +30,7 @@ use crate::{
             TestPayloadDispatcher, backend_epoch_info, dummy_overwatch_resources,
             dummy_pol_private_inputs, new_crypto_processor, new_epoch_info, new_membership,
             new_stream, outgoing_messages_recorder, recorded_set_epoch_private_calls,
-            recorded_stop_proof_generation_calls, reset_set_epoch_private_calls,
-            reset_stop_proof_generation_calls, reward_epoch_info, scheduler_epoch_info,
+            reset_set_epoch_private_calls, reward_epoch_info, scheduler_epoch_info,
             scheduler_settings, sdp_relay, settings, timing_settings, wait_for_blend_backend_event,
         },
     },
@@ -116,7 +115,7 @@ async fn test_handle_incoming_blend_message() {
         (msg.clone(), 0.into()),
         &mut scheduler,
         None,
-        &processor,
+        processor.receiver(),
         None,
         recovery_checkpoint,
     );
@@ -130,7 +129,9 @@ async fn test_handle_incoming_blend_message() {
     );
 
     // Creates a new processor/scheduler/token_collector with the new epoch
-    // number.
+    // number. The outgoing processor is retired into its receive-only form,
+    // which is all it is good for during the transition period.
+    let processor = processor.rotate_epoch();
     epoch = epoch.strict_add(1.into());
     let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let mut new_processor = new_crypto_processor(
@@ -163,7 +164,7 @@ async fn test_handle_incoming_blend_message() {
         (msg.clone(), 0.into()),
         &mut new_scheduler,
         Some(&mut scheduler),
-        &new_processor,
+        new_processor.receiver(),
         Some(&processor),
         recovery_checkpoint,
     );
@@ -201,7 +202,7 @@ async fn test_handle_incoming_blend_message() {
         (msg, 1.into()),
         &mut new_scheduler,
         Some(&mut scheduler),
-        &new_processor,
+        new_processor.receiver(),
         Some(&processor),
         recovery_checkpoint,
     );
@@ -247,7 +248,7 @@ async fn test_handle_incoming_blend_message() {
         (msg, 2.into()),
         &mut new_scheduler,
         Some(&mut scheduler),
-        &new_processor,
+        new_processor.receiver(),
         Some(&processor),
         recovery_checkpoint,
     );
@@ -363,7 +364,7 @@ async fn test_duplicate_decapsulated_replica_handled_gracefully() {
         (replica_a, epoch),
         &mut scheduler,
         None,
-        &processor,
+        processor.receiver(),
         None,
         recovery_checkpoint,
     );
@@ -380,7 +381,7 @@ async fn test_duplicate_decapsulated_replica_handled_gracefully() {
         (replica_b, epoch),
         &mut scheduler,
         None,
-        &processor,
+        processor.receiver(),
         None,
         recovery_checkpoint,
     );
@@ -458,7 +459,7 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
         (msg, epoch_1),
         &mut scheduler,
         None,
-        &processor_1,
+        processor_1.receiver(),
         None,
         recovery_checkpoint,
     ));
@@ -894,20 +895,6 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
     )
     .await;
     recorded_set_epoch_private_calls()
-}
-
-/// An epoch rotation must stop the outgoing epoch's proof generation.
-///
-/// The outgoing processor is kept for the transition period so messages still
-/// in flight from its epoch can be decapsulated, but its generators are done:
-/// a `PoW` solution is ground against one epoch's nonce and judged against
-/// that epoch's threshold, so mining for an epoch that has ended produces
-/// nothing usable while occupying a core for the whole period.
-#[test_log::test(tokio::test)]
-async fn test_handle_epoch_event_stops_old_epoch_proof_generation() {
-    reset_stop_proof_generation_calls();
-    let _calls = transition_to_new_epoch_with_secret(1.into()).await;
-    assert_eq!(recorded_stop_proof_generation_calls(), 1);
 }
 
 /// On an epoch change, if secret `PoL` info for the *new* epoch is already
@@ -1586,7 +1573,7 @@ async fn test_proof_generator_epoch_binding() {
         (msg_0.clone(), epoch_0),
         &mut scheduler_0,
         None,
-        &generator_0,
+        generator_0.receiver(),
         None,
         recovery_checkpoint,
     ));
@@ -1617,7 +1604,7 @@ async fn test_proof_generator_epoch_binding() {
         (msg_1.clone(), epoch_0),
         &mut scheduler_0_only,
         None,
-        &generator_0,
+        generator_0.receiver(),
         None,
         recovery_checkpoint,
     ));
@@ -1650,7 +1637,7 @@ async fn test_proof_generator_epoch_binding() {
         (msg_1, epoch_1),
         &mut scheduler_1,
         None,
-        &generator_1,
+        generator_1.receiver(),
         None,
         recovery_checkpoint,
     ));
@@ -1867,8 +1854,14 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
         0,
     );
     // No cover traffic, so every message the service sends is one this test put
-    // in and the count below means what it says.
-    settings.scheduler.cover.message_frequency_per_round = 0.0.try_into().unwrap();
+    // in and the count below means what it says. The frequency itself must stay
+    // positive (`C * ß_c > 0`), so the silence comes from the quota instead:
+    // `Q_c = ceil(10 rounds * 0.05 * 2 layers / 2 nodes) = ceil(0.5) = 1`, and
+    // the scheduler floors its cover count at `Q_c / num_blend_layers = 0`.
+    // Anything in `(0, 0.1]` gives the same quota, so the halfway point keeps
+    // float drift well clear of either rounding boundary.
+    settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
+    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
 
     let (inbound_relay, inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
