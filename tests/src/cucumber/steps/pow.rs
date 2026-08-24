@@ -14,10 +14,16 @@ use crate::cucumber::{
 const CLAIM_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 #[when(expr = "I start mining on node {string}")]
-async fn step_start_mining(world: &mut CucumberWorld, step: &Step, node_name: String) -> StepResult {
-    let node = world.resolve_node_http_client(&node_name).inspect_err(|e| {
-        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-    })?;
+async fn step_start_mining(
+    world: &mut CucumberWorld,
+    step: &Step,
+    node_name: String,
+) -> StepResult {
+    let node = world
+        .resolve_node_http_client(&node_name)
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+        })?;
 
     node.start_mining().await?;
 
@@ -27,9 +33,11 @@ async fn step_start_mining(world: &mut CucumberWorld, step: &Step, node_name: St
 
 #[when(expr = "I stop mining on node {string}")]
 async fn step_stop_mining(world: &mut CucumberWorld, step: &Step, node_name: String) -> StepResult {
-    let node = world.resolve_node_http_client(&node_name).inspect_err(|e| {
-        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-    })?;
+    let node = world
+        .resolve_node_http_client(&node_name)
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+        })?;
 
     node.stop_mining().await?;
 
@@ -46,9 +54,11 @@ async fn step_claim_pow_rewards(
     transaction_alias: String,
     timeout_seconds: u64,
 ) -> StepResult {
-    let node = world.resolve_node_http_client(&node_name).inspect_err(|e| {
-        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-    })?;
+    let node = world
+        .resolve_node_http_client(&node_name)
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+        })?;
 
     // The node only produces a claim transaction once it has mined at least one
     // winning ticket, so poll `claim` until it submits one (or we time out).
