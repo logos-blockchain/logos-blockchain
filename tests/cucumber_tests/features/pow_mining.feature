@@ -32,7 +32,11 @@ Feature: PoW mining
     And I have deployment config override "cryptarchia.slot_activation_coeff.denominator" as "2"
     And I have deployment config override "cryptarchia.pow_config.reward.rate_num" as "1"
     And I have deployment config override "cryptarchia.pow_config.reward.epoch_reward_genesis" as "1000000"
-    And I have deployment config override "cryptarchia.pow_config.reward.reward_pool_genesis" as "1000000000"
+    # Fund the pool for exactly one claim (pool == per-claim reward): with the
+    # difficulty eased to the field maximum the miner finds tickets extremely
+    # fast, and the claim is capped to `reward_pool / reward` tickets — so a
+    # single-ticket cap keeps the reward-claim transaction small and fast.
+    And I have deployment config override "cryptarchia.pow_config.reward.reward_pool_genesis" as "1000000"
     And I have deployment config override "cryptarchia.pow_config.reward.initial_difficulty_seed" as "0"
     And I have deployment config override "cryptarchia.pow_config.reward.ema_smoothing_factor" as "1"
     And I have deployment config override "cryptarchia.pow_config.reward.ema_smoothing_precision" as "1000000000000000000"
@@ -56,6 +60,9 @@ Feature: PoW mining
     And I record the balance of wallet "WALLET_MINER" as "MINER_BASELINE"
     And I start mining on node "NODE_3"
     And I claim PoW rewards on node "NODE_3" as "POW_CLAIM_TX" within 180 seconds
+    And I stop mining on node "NODE_3"
     Then transaction "POW_CLAIM_TX" is included on node "NODE_1" in 120 seconds
-    And wallet "WALLET_MINER" balance increased by at least 1000 over "MINER_BASELINE" in 120 seconds
+    # The balance grows by exactly the reward the claim transaction paid to the
+    # account and no more, so the increase is strictly the claimed reward.
+    And wallet "WALLET_MINER" balance increased by exactly the reward from claim "POW_CLAIM_TX" over "MINER_BASELINE" in 120 seconds
     Then I stop all nodes

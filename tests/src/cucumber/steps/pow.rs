@@ -1,11 +1,14 @@
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 use cucumber::{gherkin::Step, then, when};
+use lb_core::mantle::{Op, traits::Hashable as _, transactions::hash::TxHash};
+use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_testing_framework::NodeHttpClient;
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
 use crate::{
-    common::wallet::WalletOutputState,
+    common::{chain::scan_chain_until, wallet::WalletOutputState},
     cucumber::{
         error::{StepError, StepResult},
         steps::TARGET,
@@ -106,13 +109,14 @@ async fn wallet_onchain_value(
     step: &str,
     wallet_name: &str,
 ) -> Result<u64, StepError> {
-    let wallet = world
-        .wallet_info
-        .get(wallet_name)
-        .cloned()
-        .ok_or_else(|| StepError::LogicalError {
-            message: format!("wallet '{wallet_name}' not found in world state"),
-        })?;
+    let wallet =
+        world
+            .wallet_info
+            .get(wallet_name)
+            .cloned()
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!("wallet '{wallet_name}' not found in world state"),
+            })?;
 
     let balance =
         current_wallet_output_balance(world, step, &wallet, WalletOutputState::OnChain).await?;
@@ -149,11 +153,12 @@ async fn step_wallet_balance_increased(
     baseline_label: String,
     timeout_seconds: u64,
 ) -> StepResult {
-    let baseline = *world.recorded_wallet_balances.get(&baseline_label).ok_or_else(|| {
-        StepError::LogicalError {
+    let baseline = *world
+        .recorded_wallet_balances
+        .get(&baseline_label)
+        .ok_or_else(|| StepError::LogicalError {
             message: format!("no recorded wallet balance found for label '{baseline_label}'"),
-        }
-    })?;
+        })?;
     let target = baseline.saturating_add(minimum_increase);
 
     let deadline = Duration::from_secs(timeout_seconds);
@@ -174,6 +179,127 @@ async fn step_wallet_balance_increased(
                 message: format!(
                     "wallet `{wallet_name}` balance {latest} did not reach baseline `{baseline_label}` \
                     ({baseline}) + {minimum_increase} = {target} within {timeout_seconds} seconds"
+                ),
+            });
+        }
+
+        sleep(BALANCE_POLL_INTERVAL).await;
+    }
+}
+
+/// Sums the values of a transaction's transfer outputs paid to `claim_address`,
+/// by locating the transaction on the chain served by `node`. This is the exact
+/// amount the reward-claim transaction credited to that account.
+async fn claim_reward_credited_to(
+    node: &NodeHttpClient,
+    tx_hash: TxHash,
+    claim_address: ZkPublicKey,
+) -> Result<u64, StepError> {
+    let tip = node.consensus_info().await?.cryptarchia_info.tip;
+    let mut scanned_blocks = HashSet::new();
+
+    let credited = scan_chain_until(
+        tip,
+        &mut scanned_blocks,
+        |header_id| {
+            let node = node.clone();
+            async move { node.block(&header_id).await.ok().flatten() }
+        },
+        |block| {
+            let tx = block.transactions.iter().find(|tx| tx.hash() == tx_hash)?;
+            let credited = tx
+                .ops_with_proof()
+                .filter_map(|(op, _proof)| match op {
+                    Op::Transfer(transfer) => Some(transfer),
+                    _ => None,
+                })
+                .flat_map(|transfer| transfer.outputs.iter())
+                .filter(|note| note.pk == claim_address)
+                .map(|note| note.value)
+                .sum::<u64>();
+            Some(credited)
+        },
+    )
+    .await;
+
+    credited.ok_or_else(|| StepError::LogicalError {
+        message: format!("claim transaction {tx_hash:?} was not found on the chain"),
+    })
+}
+
+#[when(
+    expr = "wallet {string} balance increased by exactly the reward from claim {string} over {string} in {int} seconds"
+)]
+#[then(
+    expr = "wallet {string} balance increased by exactly the reward from claim {string} over {string} in {int} seconds"
+)]
+async fn step_wallet_balance_increased_by_claim_reward(
+    world: &mut CucumberWorld,
+    step: &Step,
+    wallet_name: String,
+    claim_alias: String,
+    baseline_label: String,
+    timeout_seconds: u64,
+) -> StepResult {
+    let baseline = *world
+        .recorded_wallet_balances
+        .get(&baseline_label)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("no recorded wallet balance found for label '{baseline_label}'"),
+        })?;
+    let tx_hash = world.resolve_submitted_transaction(&claim_alias)?;
+
+    let wallet = world
+        .wallet_info
+        .get(&wallet_name)
+        .cloned()
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("wallet '{wallet_name}' not found in world state"),
+        })?;
+    // The reward beneficiary is this wallet's public key, which is what the
+    // miner's `claim_address` was pointed at.
+    let claim_address = wallet.public_key()?;
+    let node = world.resolve_node_http_client(&wallet.node_name)?;
+
+    let reward = claim_reward_credited_to(&node, tx_hash, claim_address).await?;
+    if reward == 0 {
+        return Err(StepError::LogicalError {
+            message: format!(
+                "claim transaction `{claim_alias}` credited nothing to wallet `{wallet_name}`"
+            ),
+        });
+    }
+    let expected = baseline.saturating_add(reward);
+
+    let deadline = Duration::from_secs(timeout_seconds);
+    let started = Instant::now();
+    loop {
+        let latest = wallet_onchain_value(world, &step.value, &wallet_name).await?;
+        if latest == expected {
+            info!(
+                target: TARGET,
+                "Wallet `{wallet_name}` grew from {baseline} to {latest} LGO, exactly the \
+                {reward} LGO credited by claim `{claim_alias}`"
+            );
+            return Ok(());
+        }
+        // Overshooting the claimed reward means something other than the claim
+        // credited the account — the increase is then not strictly the reward.
+        if latest > expected {
+            return Err(StepError::StepFail {
+                message: format!(
+                    "wallet `{wallet_name}` balance {latest} exceeded baseline `{baseline_label}` \
+                    ({baseline}) + claim reward ({reward}) = {expected}; increase is not strictly \
+                    the claimed reward"
+                ),
+            });
+        }
+
+        if started.elapsed() >= deadline {
+            return Err(StepError::StepFail {
+                message: format!(
+                    "wallet `{wallet_name}` balance {latest} did not reach baseline `{baseline_label}` \
+                    ({baseline}) + claim reward ({reward}) = {expected} within {timeout_seconds} seconds"
                 ),
             });
         }
