@@ -83,7 +83,7 @@ async fn resumed_generator_is_bounded_by_what_the_quota_has_left() {
             epoch: Epoch::new(0),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
-        Quota::try_new(SPENT).unwrap(),
+        KeyIndex::try_new(SPENT).unwrap(),
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(private_inputs),
     );
 
