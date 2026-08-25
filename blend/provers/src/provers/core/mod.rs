@@ -6,7 +6,7 @@ use lb_blend_message::crypto::{
     key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
 };
 use lb_blend_proofs::{
-    quota::{KeyIndex, Quota, inputs::prove::PublicInputs},
+    quota::{KeyIndex, inputs::prove::PublicInputs},
     selection::VerifiedProofOfSelection,
 };
 use lb_groth16::fr_to_bytes;
@@ -46,7 +46,6 @@ pub struct CoreProofsGeneratorSettings {
 }
 
 pub struct RealCoreProofsGenerator<PoQGenerator> {
-    remaining_quota: Quota,
     pub(super) settings: CoreProofsGeneratorSettings,
     proofs_stream: Pin<Box<dyn Stream<Item = BlendLayerProof> + Send + Sync>>,
     _phantom: PhantomData<PoQGenerator>,
@@ -69,11 +68,6 @@ where
                 starting_key_index,
                 buffer_size(settings.encapsulation_layers.get() as usize),
             )),
-            remaining_quota: settings
-                .public_inputs
-                .core
-                .quota
-                .saturating_sub(starting_key_index),
             settings: CoreProofsGeneratorSettings {
                 common: settings,
                 starting_core_key_index: starting_key_index,
@@ -84,13 +78,13 @@ where
 
     async fn get_next_proof(&mut self) -> Option<BlendLayerProof> {
         let start = Instant::now();
-        let Some(remaining_quota) = self.remaining_quota.checked_sub(Quota::ONE) else {
-            tracing::warn!(target: LOG_TARGET, "Core quota exhausted. No proof is generated.");
-            return None;
-        };
-        self.remaining_quota = remaining_quota;
+        // The stream is built over `quota.values_range_from(starting_key_index)`, so
+        // it runs out at exactly the point a separate counter would have: one proof
+        // per key index the epoch's quota still holds. Letting it be the only bound
+        // keeps the two from ever disagreeing, and leaves nothing to spend before
+        // the `await` that a cancelled caller could take with it.
         let Some(proof) = self.proofs_stream.next().await else {
-            tracing::warn!(target: LOG_TARGET, "No proof available from the stream.");
+            tracing::warn!(target: LOG_TARGET, "Core quota exhausted for this epoch. No proof is generated.");
             return None;
         };
         tracing::trace!(target: LOG_TARGET, "Generated core Blend layer proof with key nullifier {:?} addressed to node at index {:?} in {:?} ms.", hex::encode(fr_to_bytes(&proof.proof_of_quota.key_nullifier())), proof.proof_of_selection.expected_index(self.settings.common.membership_size), start.elapsed().as_millis());
