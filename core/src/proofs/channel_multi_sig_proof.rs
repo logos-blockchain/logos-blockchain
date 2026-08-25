@@ -107,6 +107,18 @@ impl ChannelMultiSigProof {
     pub fn signatures(&self) -> &[IndexedSignature] {
         self.signatures.as_slice()
     }
+
+    #[cfg(any(test, feature = "samples"))]
+    #[must_use]
+    pub fn sample_with_signatures(signature_count: u16) -> Self {
+        let signatures = IndexedSignatures::try_from_iter((0..signature_count).map(|index| {
+            let [low, _] = index.to_le_bytes();
+            IndexedSignature::new(index, Ed25519Signature::from_bytes(&[low; 64]))
+        }))
+        .expect("`signature_count` is bounded by `MAX_SIGNATURES`");
+
+        Self::new(signatures)
+    }
 }
 
 impl BinaryEncode for ChannelMultiSigProof {
@@ -173,7 +185,7 @@ pub mod codec {
 #[cfg(any(test, feature = "samples"))]
 impl crate::mantle::ops::op_proof::samples::SampleProof for ChannelMultiSigProof {
     fn sample() -> Self {
-        Self::new(IndexedSignatures::empty())
+        Self::sample_with_signatures(2)
     }
 }
 

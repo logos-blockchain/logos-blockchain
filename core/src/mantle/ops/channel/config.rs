@@ -205,3 +205,21 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionG
             .expect("Channel multi-signature proofs are bound to u16::MAX signatures.")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn channel_config_op_execution_gas() {
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            ChannelConfigOp::sample(),
+            ChannelMultiSigProof::sample_with_signatures(3),
+        );
+
+        assert_eq!(
+            signed_operation.execution_gas::<MainnetGasProfile>(),
+            Ok(Gas::new(168))
+        );
+    }
+}

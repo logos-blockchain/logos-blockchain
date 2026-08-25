@@ -258,4 +258,17 @@ mod test {
             Err(Error::Inputs(InputsError::EmptyInputs))
         );
     }
+
+    #[test]
+    fn channel_transfer_op_execution_gas() {
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            ChannelTransferOp::sample(),
+            ChannelMultiSigProof::sample_with_signatures(3),
+        );
+
+        assert_eq!(
+            signed_operation.execution_gas::<MainnetGasProfile>(),
+            Ok(Gas::new(168))
+        );
+    }
 }

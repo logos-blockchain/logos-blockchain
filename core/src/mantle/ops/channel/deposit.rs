@@ -204,6 +204,7 @@ mod test {
     use lb_groth16::CompressedGroth16Proof;
 
     use super::*;
+    use crate::mantle::ops::op_proof::samples::SampleProof as _;
 
     #[test]
     fn test_preverify_rejects_empty_inputs() {
@@ -218,6 +219,19 @@ mod test {
         assert_eq!(
             signed_operation.preverify(&()),
             Err(Error::Inputs(InputsError::EmptyInputs))
+        );
+    }
+
+    #[test]
+    fn deposit_op_execution_gas() {
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            DepositOp::sample(),
+            <DepositOp as ProvableOperation>::Proof::sample(),
+        );
+
+        assert_eq!(
+            signed_operation.execution_gas::<MainnetGasProfile>(),
+            Ok(Gas::new(590))
         );
     }
 }

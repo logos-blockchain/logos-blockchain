@@ -278,9 +278,16 @@ mod tests {
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use num_bigint::BigUint;
 
-    use super::{SDPDeclareOp, SdpError, validate_service_scoped_uniqueness};
+    use super::{
+        ProvableOperation, SDPDeclareOp, SdpError, SignedOperation, StandardMode, Unverified,
+        validate_service_scoped_uniqueness,
+    };
     use crate::{
-        mantle::ledger::Declarations,
+        mantle::{
+            gas::{Gas, MainnetGasProfile, SignedOperationExecutionGas as _},
+            ledger::Declarations,
+            ops::op_proof::samples::SampleProof as _,
+        },
         sdp::{Declaration, ServiceType},
     };
 
@@ -328,5 +335,18 @@ mod tests {
             validate_service_scoped_uniqueness(&declare_b, &declarations),
             Err(SdpError::DuplicateZkId { .. })
         ));
+    }
+
+    #[test]
+    fn sdp_declare_op_execution_gas() {
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            SDPDeclareOp::sample(),
+            <SDPDeclareOp as ProvableOperation>::Proof::sample(),
+        );
+
+        assert_eq!(
+            signed_operation.execution_gas::<MainnetGasProfile>(),
+            Ok(Gas::new(646))
+        );
     }
 }

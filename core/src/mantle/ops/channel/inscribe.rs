@@ -237,6 +237,7 @@ mod tests {
     use lb_utils::bounded::BoundedError;
 
     use super::*;
+    use crate::mantle::ops::op_proof::samples::SampleProof as _;
 
     fn sample() -> InscriptionOp {
         InscriptionOp {
@@ -291,5 +292,18 @@ mod tests {
         let bytes = bincode::serialize(&op).unwrap();
         let recovered: InscriptionOp = bincode::deserialize(&bytes).unwrap();
         assert_eq!(op, recovered);
+    }
+
+    #[test]
+    fn inscription_op_execution_gas() {
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            InscriptionOp::sample(),
+            <InscriptionOp as ProvableOperation>::Proof::sample(),
+        );
+
+        assert_eq!(
+            signed_operation.execution_gas::<MainnetGasProfile>(),
+            Ok(Gas::new(56))
+        );
     }
 }

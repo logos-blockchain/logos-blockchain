@@ -437,13 +437,8 @@ impl_try_from_op_and_proof! {
 
 #[cfg(test)]
 mod tests {
-    use super::{SignedOp, TransferOp};
-    use crate::mantle::{
-        Op, OpProof,
-        ledger::verification_mode::StandardMode,
-        ops::NoOpProof,
-        transactions::states::Unverified,
-    };
+    use super::{SignedOp, StandardMode, TransferOp, Unverified};
+    use crate::mantle::{Op, OpProof, ops::NoOpProof};
 
     type UnverifiedOp = SignedOp<Unverified, StandardMode>;
 

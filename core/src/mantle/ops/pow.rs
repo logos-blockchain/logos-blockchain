@@ -371,6 +371,7 @@ mod tests {
     use lb_groth16::{AdditiveGroup as _, Field as _};
 
     use super::*;
+    use crate::mantle::ops::op_proof::samples::SampleProof as _;
 
     fn validation_context(
         nullifiers: &HashTrieMapSync<PowNullifier, Slot>,
@@ -718,5 +719,18 @@ mod tests {
             utxos: Utxos::new(),
             block_slots: std::iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
         }));
+    }
+
+    #[test]
+    fn claim_pow_reward_op_execution_gas() {
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            ClaimPowRewardOp::sample(),
+            <ClaimPowRewardOp as ProvableOperation>::Proof::sample(),
+        );
+
+        assert_eq!(
+            signed_operation.execution_gas::<MainnetGasProfile>(),
+            Ok(Gas::new(1))
+        );
     }
 }

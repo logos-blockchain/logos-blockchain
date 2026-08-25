@@ -307,7 +307,10 @@ mod tests {
     use lb_mmr::MerkleMountainRange;
 
     use super::*;
-    use crate::proofs::leader_claim_proof::LeaderClaimPrivate;
+    use crate::{
+        mantle::ops::op_proof::samples::SampleProof as _,
+        proofs::leader_claim_proof::LeaderClaimPrivate,
+    };
 
     #[test]
     fn validate_accepts_valid_proof_of_claim() {
@@ -493,5 +496,18 @@ mod tests {
         let unverified_signed_operation = SignedOperation::new(op, proof);
         let preverify_result = unverified_signed_operation.into_preverified(&preverify_context);
         assert_eq!(preverify_result.err(), Some(LeaderClaimError::InvalidPoC));
+    }
+
+    #[test]
+    fn leader_claim_op_execution_gas() {
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            LeaderClaimOp::sample(),
+            <LeaderClaimOp as ProvableOperation>::Proof::sample(),
+        );
+
+        assert_eq!(
+            signed_operation.execution_gas::<MainnetGasProfile>(),
+            Ok(Gas::new(580))
+        );
     }
 }

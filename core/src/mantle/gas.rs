@@ -160,3 +160,61 @@ pub trait SignedOperationExecutionGas {
         Self::GAS_COST.checked_mul(self.gas_multiplier())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Gas, GasOverflow, MainnetGasProfile, OperationGas, SignedOperationExecutionGas};
+    use crate::mantle::Value;
+
+    struct ScalingOp(Value);
+
+    impl OperationGas<MainnetGasProfile> for ScalingOp {
+        const GAS_COST: Gas = Gas::new(7);
+    }
+
+    impl SignedOperationExecutionGas for ScalingOp {
+        fn gas_multiplier(&self) -> Value {
+            self.0
+        }
+    }
+
+    struct MaxCostOp;
+
+    impl OperationGas<MainnetGasProfile> for MaxCostOp {
+        const GAS_COST: Gas = Gas::new(Value::MAX);
+    }
+
+    impl SignedOperationExecutionGas for MaxCostOp {
+        fn gas_multiplier(&self) -> Value {
+            2
+        }
+    }
+
+    #[test]
+    fn execution_gas_scales_the_base_cost() {
+        assert_eq!(
+            ScalingOp(0).execution_gas::<MainnetGasProfile>().unwrap(),
+            Gas::new(0)
+        );
+        assert_eq!(
+            ScalingOp(1).execution_gas::<MainnetGasProfile>().unwrap(),
+            Gas::new(7)
+        );
+        assert_eq!(
+            ScalingOp(2).execution_gas::<MainnetGasProfile>().unwrap(),
+            Gas::new(14)
+        );
+        assert_eq!(
+            ScalingOp(3).execution_gas::<MainnetGasProfile>().unwrap(),
+            Gas::new(21)
+        );
+    }
+
+    #[test]
+    fn execution_gas_reports_overflow() {
+        assert_eq!(
+            MaxCostOp.execution_gas::<MainnetGasProfile>(),
+            Err(GasOverflow)
+        );
+    }
+}

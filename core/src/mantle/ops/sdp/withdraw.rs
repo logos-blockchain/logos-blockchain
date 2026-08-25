@@ -171,3 +171,22 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionG
         1
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mantle::ops::op_proof::samples::SampleProof as _;
+
+    #[test]
+    fn sdp_withdraw_op_execution_gas() {
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            SDPWithdrawOp::sample(),
+            <SDPWithdrawOp as ProvableOperation>::Proof::sample(),
+        );
+
+        assert_eq!(
+            signed_operation.execution_gas::<MainnetGasProfile>(),
+            Ok(Gas::new(590))
+        );
+    }
+}

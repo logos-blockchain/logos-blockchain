@@ -189,6 +189,7 @@ mod test {
     use num_bigint::BigUint;
 
     use super::*;
+    use crate::mantle::ops::op_proof::samples::SampleProof as _;
 
     #[test]
     fn test_preverify_rejects_empty_inputs() {
@@ -245,5 +246,18 @@ mod test {
         );
 
         assert!(transfer.utxo_by_index(3).is_none());
+    }
+
+    #[test]
+    fn transfer_op_execution_gas() {
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            TransferOp::sample(),
+            <TransferOp as ProvableOperation>::Proof::sample(),
+        );
+
+        assert_eq!(
+            signed_operation.execution_gas::<MainnetGasProfile>(),
+            Ok(Gas::new(590))
+        );
     }
 }
