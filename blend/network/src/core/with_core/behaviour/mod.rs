@@ -12,10 +12,10 @@ use std::{
 
 use either::Either;
 use futures::{Stream, StreamExt as _};
+use lb_blend_membership::Membership;
 use lb_blend_message::encap::{
     ProofsVerifier as ProofsVerifierTrait, validated::EncapsulatedMessageWithVerifiedPublicHeader,
 };
-use lb_blend_scheduling::membership::Membership;
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
 use lb_log_targets::blend;
@@ -377,9 +377,7 @@ impl<ObservationWindowClockProvider, ProofsVerifier>
         epoch: Epoch,
     ) -> Result<(), SendError> {
         let serialized_message =
-            lb_blend_scheduling::serialize_encapsulated_message_with_verified_public_header(
-                message,
-            );
+            lb_blend_message::serialize_encapsulated_message_with_verified_public_header(message);
         self.force_send_serialized_message_to_peer_at_epoch(serialized_message, peer_id, epoch)
     }
 

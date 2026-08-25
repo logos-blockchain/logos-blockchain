@@ -15,7 +15,7 @@ use lb_blend_proofs::{
     quota::{ProofOfQuota, VerifiedProofOfQuota},
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
-use lb_blend_scheduling::message_blend::provers::BlendLayerProof;
+use lb_blend_provers::provers::BlendLayerProof;
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::{
     Ed25519PublicKey, Ed25519Signature, UnsecuredEd25519Key,

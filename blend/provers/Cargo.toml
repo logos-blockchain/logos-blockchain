@@ -4,7 +4,7 @@ description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "logos-blockchain-blend-network"
+name        = "logos-blockchain-blend-provers"
 readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }
@@ -13,34 +13,32 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-either                        = { workspace = true }
+async-trait                   = { workspace = true }
+derivative                    = { workspace = true }
 futures                       = { workspace = true }
-futures-timer                 = { workspace = true }
 hex                           = { workspace = true }
 lb-blend-membership           = { workspace = true }
 lb-blend-message              = { workspace = true }
 lb-blend-proofs               = { workspace = true }
+lb-core                       = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
-lb-libp2p                     = { workspace = true }
 lb-log-targets                = { workspace = true }
-lb-utils                      = { features = ["tokio", "tokio-task-names"], workspace = true }
-libp2p                        = { workspace = true }
+lb-utils                      = { features = ["rng", "tokio"], workspace = true }
+rand                          = { features = ["alloc"], workspace = true }
 tokio                         = { workspace = true }
 tracing                       = { workspace = true }
 
 [dev-dependencies]
-async-trait         = { workspace = true }
 lb-blend-membership = { features = ["unsafe-test-functions"], workspace = true }
 lb-blend-message    = { features = ["unsafe-test-functions"], workspace = true }
-lb-blend-provers    = { features = ["unsafe-test-functions"], workspace = true }
-libp2p              = { features = ["plaintext", "tcp", "yamux"], workspace = true }
-libp2p-stream       = { workspace = true }
-libp2p-swarm-test   = { features = ["tokio"], workspace = true }
+lb-blend-proofs     = { features = ["unsafe-test-functions"], workspace = true }
+lb-groth16          = { workspace = true }
+libp2p              = { workspace = true }
+multiaddr           = { workspace = true }
 test-log            = { features = ["trace"], workspace = true }
-tokio               = { workspace = true }
-tokio-stream        = { workspace = true }
 
 [features]
+tokio-task-names      = ["lb-utils/tokio-task-names"]
 unsafe-test-functions = []

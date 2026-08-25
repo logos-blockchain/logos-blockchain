@@ -10,10 +10,14 @@ use std::{
 
 use either::Either;
 use futures::StreamExt as _;
-use lb_blend_message::encap::{
-    ProofsVerifier as ProofsVerifierTrait, validated::EncapsulatedMessageWithVerifiedPublicHeader,
+use lb_blend_membership::Membership;
+use lb_blend_message::{
+    deserialize_encapsulated_message,
+    encap::{
+        ProofsVerifier as ProofsVerifierTrait,
+        validated::EncapsulatedMessageWithVerifiedPublicHeader,
+    },
 };
-use lb_blend_scheduling::{deserialize_encapsulated_message, membership::Membership};
 use lb_cryptarchia_engine::Epoch;
 use lb_log_targets::blend;
 use libp2p::{
