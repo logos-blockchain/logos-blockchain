@@ -195,3 +195,64 @@ impl Op {
         }
     }
 }
+
+macro_rules! impl_from_operation {
+    ($($variant:ident => $operation:ident),* $(,)?) => {
+        $(
+            impl From<$operation> for Op {
+                fn from(op: $operation) -> Self {
+                    Self::$variant(op)
+                }
+            }
+        )*
+    };
+}
+
+impl_from_operation! {
+    ChannelInscribe => InscriptionOp,
+    ChannelConfig => ChannelConfigOp,
+    ChannelDeposit => DepositOp,
+    ChannelWithdraw => ChannelWithdrawOp,
+    ChannelTransfer => ChannelTransferOp,
+    SDPDeclare => SDPDeclareOp,
+    SDPWithdraw => SDPWithdrawOp,
+    SDPActive => SDPActiveOp,
+    LeaderClaim => LeaderClaimOp,
+    Transfer => TransferOp,
+    ClaimPowReward => ClaimPowRewardOp,
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::mantle::{Op, OpProof, transactions::Ops};
+
+    #[expect(clippy::match_same_arms, reason = "Clarity")]
+    fn does_proof_match(op: &Op, op_proof: &OpProof) -> bool {
+        match op {
+            Op::ChannelInscribe(_) => matches!(op_proof, OpProof::Ed25519Sig(_)),
+            Op::ChannelConfig(_) => matches!(op_proof, OpProof::ChannelMultiSigProof(_)),
+            Op::ChannelDeposit(_) => matches!(op_proof, OpProof::ZkSig(_)),
+            Op::ChannelWithdraw(_) => matches!(op_proof, OpProof::ChannelMultiSigProof(_)),
+            Op::ChannelTransfer(_) => matches!(op_proof, OpProof::ChannelMultiSigProof(_)),
+            Op::SDPDeclare(_) => matches!(op_proof, OpProof::ZkAndEd25519Sigs(_)),
+            Op::SDPWithdraw(_) => matches!(op_proof, OpProof::ZkSig(_)),
+            Op::SDPActive(_) => matches!(op_proof, OpProof::ZkSig(_)),
+            Op::LeaderClaim(_) => matches!(op_proof, OpProof::PoC(_)),
+            Op::Transfer(_) => matches!(op_proof, OpProof::ZkSig(_)),
+            Op::ClaimPowReward(_) => matches!(op_proof, OpProof::None(_)),
+        }
+    }
+
+    #[test]
+    fn sample_proof_matches_the_kind_each_op_requires() {
+        for op in &Ops::sample() {
+            let proof = op.sample_proof();
+
+            assert!(
+                does_proof_match(op, &proof),
+                "{} got the wrong proof kind: {proof:?}",
+                op.as_str()
+            );
+        }
+    }
+}
