@@ -144,6 +144,7 @@ mod tests {
     use super::{SDPActiveOp, SDPActiveValidationContext, SdpError};
     use crate::{
         mantle::{
+            gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
             ledger::{Declarations, VerifiableOperation as _, verification_mode::StandardMode},
             ops::{SignedOperation, sdp::SDPDeclareOp},
             transactions::{
@@ -213,5 +214,15 @@ mod tests {
                 epoch,
             })
             .map(|_| ())
+    }
+
+    #[test]
+    fn sdp_active_op_execution_gas_does_not_scale_with_the_threshold() {
+        for threshold in [0, 1, 3] {
+            assert_eq!(
+                SDPActiveOp::sample().execution_gas(&FixedThresholds(threshold)),
+                Ok(Gas::new(590))
+            );
+        }
     }
 }

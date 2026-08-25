@@ -189,6 +189,7 @@ mod test {
     use num_bigint::BigUint;
 
     use super::*;
+    use crate::mantle::gas::test_utils::FixedThresholds;
 
     #[test]
     fn test_preverify_rejects_empty_inputs() {
@@ -245,5 +246,15 @@ mod test {
         );
 
         assert!(transfer.utxo_by_index(3).is_none());
+    }
+
+    #[test]
+    fn transfer_op_execution_gas_does_not_scale_with_the_threshold() {
+        for threshold in [0, 1, 3] {
+            assert_eq!(
+                TransferOp::sample().execution_gas(&FixedThresholds(threshold)),
+                Ok(Gas::new(590))
+            );
+        }
     }
 }
