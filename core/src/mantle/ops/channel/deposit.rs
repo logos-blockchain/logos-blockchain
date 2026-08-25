@@ -1,8 +1,12 @@
 use lb_codec::{BinaryCodec, BinaryEncode as _};
+#[cfg(any(test, feature = "samples"))]
+use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
+#[cfg(any(test, feature = "samples"))]
+use crate::mantle::NoteId;
 use crate::{
     events::{DepositNote, DepositRecreatedNotes, TxEvent, TxEventPayload},
     mantle::{
@@ -48,6 +52,17 @@ impl DepositOp {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Outputs::try_new(notes)?)
+    }
+
+    #[cfg(any(test, feature = "samples"))]
+    #[must_use]
+    pub fn sample() -> Self {
+        Self {
+            channel_id: ChannelId::from([16u8; 32]),
+            inputs: Inputs::new([NoteId(Fr::from(17u64))]),
+            metadata: Metadata::try_from(b"deposit-metadata".to_vec())
+                .expect("Metadata is within bounds."),
+        }
     }
 }
 

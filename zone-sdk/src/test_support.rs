@@ -398,11 +398,11 @@ pub fn live_event(block: &ApiBlock) -> ProcessedBlockEvent {
     }
 }
 
-/// Build a `SignedOps` carrying the given ops, with placeholder proofs.
+/// Build a `SignedOps` carrying the given ops, with sample proofs.
 /// Suitable for tests that only care about op extraction, not verification.
 pub fn unverified_tx_with_ops(ops: Vec<Op>) -> SignedOps<Unverified, StandardMode> {
     let ops = Ops::try_from(ops).expect("ops fit");
-    SignedOps::from_ops_with_placeholder_proofs(ops)
+    SignedOps::from_ops_with_sample_proofs(ops)
 }
 
 /// An inscription op signed by the zero Ed25519 key.

@@ -15,7 +15,7 @@ workspace = true
 
 [dev-dependencies]
 divan       = { workspace = true }
-lb-core     = { workspace = true, features = ["test-utils"] }
+lb-core     = { workspace = true, features = ["samples"] }
 lb-groth16  = { workspace = true }
 lb-mmr      = { workspace = true }
 lb-utxotree = { workspace = true }

@@ -1,7 +1,7 @@
 use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_utils::bounded::BoundedError;
 
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "samples"))]
 use crate::mantle::Op;
 use crate::mantle::{
     GasProfile, OpProofRef, TxGasCalculator, TxHash, VerificationError,
@@ -78,21 +78,24 @@ impl<Mode: VerificationMode> SignedOps<Unverified, Mode> {
         self.into_state_trusted()
     }
 
-    /// Pairs every op with a placeholder proof of the kind that op requires.
+    /// Pairs every op with the sample proof of the kind that op requires.
     ///
     /// The proofs are structurally valid but cryptographically meaningless, so
     /// the result is only useful to tests that exercise op extraction rather
     /// than verification — `preverify` will reject it.
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "samples"))]
     #[must_use]
-    pub fn from_ops_with_placeholder_proofs(ops: Ops) -> Self {
-        let proofs = ops
-            .iter()
-            .map(Op::generate_placeholder_proof)
-            .collect::<Vec<_>>();
+    pub fn from_ops_with_sample_proofs(ops: Ops) -> Self {
+        let proofs = ops.iter().map(Op::sample_proof).collect::<Vec<_>>();
         let op_proofs = OpProofs::new_unchecked(proofs);
         Self::from_parts(ops, op_proofs)
-            .expect("Placeholder proofs pair with their ops by construction.")
+            .expect("Sample proofs pair with their ops by construction.")
+    }
+
+    #[cfg(any(test, feature = "samples"))]
+    #[must_use]
+    pub fn sample() -> Self {
+        Self::from_ops_with_sample_proofs(Ops::sample())
     }
 }
 

@@ -1,6 +1,10 @@
 use lb_codec::{BinaryCodec, BinaryEncode as _};
+#[cfg(any(test, feature = "samples"))]
+use lb_groth16::Fr;
 use serde::{Deserialize, Serialize};
 
+#[cfg(any(test, feature = "samples"))]
+use crate::mantle::NoteId;
 use crate::{
     events::TxEvent,
     mantle::{
@@ -173,6 +177,17 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionG
         let signature_count = self.proof().signatures().len();
         Value::try_from(signature_count)
             .expect("Channel multi-signature proofs are bound to u16::MAX signatures.")
+    }
+}
+
+#[cfg(any(test, feature = "samples"))]
+impl ChannelWithdrawOp {
+    #[must_use]
+    pub fn sample() -> Self {
+        Self {
+            channel_id: ChannelId::from([18u8; 32]),
+            inputs: Inputs::new([NoteId(Fr::from(19u64))]),
+        }
     }
 }
 

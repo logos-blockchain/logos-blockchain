@@ -32,5 +32,5 @@ tokio                            = { features = ["macros", "rt", "sync", "time"]
 tracing                          = { workspace = true }
 
 [dev-dependencies]
-lb-core    = { workspace = true, features = ["test-utils"] }
+lb-core    = { workspace = true, features = ["samples"] }
 num-bigint = { workspace = true }

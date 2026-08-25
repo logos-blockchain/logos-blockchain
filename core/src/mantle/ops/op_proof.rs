@@ -139,73 +139,37 @@ impl_try_from_op_proof_for_proof! {
     None => NoOpProof,
 }
 
-#[cfg(feature = "test-utils")]
-pub mod placeholders {
+#[cfg(any(test, feature = "samples"))]
+pub mod samples {
     use lb_groth16::{COMPRESSED_PROOF_SIZE, CompressedGroth16Proof};
     use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 
-    use crate::{
-        mantle::{
-            OpProof,
-            ledger::ProvableOperation,
-            ops::{NoOpProof, ZkAndEd25519Proof},
-        },
-        proofs::{
-            channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
-            leader_claim_proof::Groth16LeaderClaimProof,
-        },
-    };
+    use crate::mantle::{OpProof, ledger::ProvableOperation};
 
-    pub trait PlaceholderProof {
-        fn placeholder() -> Self;
+    pub trait SampleProof {
+        fn sample() -> Self;
     }
 
-    impl PlaceholderProof for Ed25519Signature {
-        fn placeholder() -> Self {
+    impl SampleProof for Ed25519Signature {
+        fn sample() -> Self {
             Self::zero()
         }
     }
 
-    impl PlaceholderProof for ZkSignature {
-        fn placeholder() -> Self {
+    impl SampleProof for ZkSignature {
+        fn sample() -> Self {
             Self::new(CompressedGroth16Proof::from_bytes(
                 &[0u8; COMPRESSED_PROOF_SIZE],
             ))
         }
     }
 
-    impl PlaceholderProof for ZkAndEd25519Proof {
-        fn placeholder() -> Self {
-            Self::new(ZkSignature::placeholder(), Ed25519Signature::placeholder())
-        }
-    }
-
-    impl PlaceholderProof for Groth16LeaderClaimProof {
-        fn placeholder() -> Self {
-            Self::new(CompressedGroth16Proof::from_bytes(
-                &[0u8; COMPRESSED_PROOF_SIZE],
-            ))
-        }
-    }
-
-    impl PlaceholderProof for ChannelMultiSigProof {
-        fn placeholder() -> Self {
-            Self::new(IndexedSignatures::empty())
-        }
-    }
-
-    impl PlaceholderProof for NoOpProof {
-        fn placeholder() -> Self {
-            Self
-        }
-    }
-
-    pub fn placeholder_proof_for<T>(_op: &T) -> OpProof
+    pub fn sample_proof_for<T>(_op: &T) -> OpProof
     where
         T: ProvableOperation,
-        T::Proof: PlaceholderProof + Into<OpProof>,
+        T::Proof: SampleProof + Into<OpProof>,
     {
-        T::Proof::placeholder().into()
+        T::Proof::sample().into()
     }
 }
 

@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use lb_codec::{BinaryCodec, BinaryEncode as _};
 use lb_cryptarchia_engine::Slot;
+#[cfg(any(test, feature = "samples"))]
+use lb_key_management_system_keys::keys::Ed25519Key;
 use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
@@ -72,6 +74,17 @@ impl InscriptionOp {
         let mut hasher = Hasher::new();
         hasher.update(self.encode().as_ref());
         MsgId(hasher.finalize().into())
+    }
+
+    #[cfg(any(test, feature = "samples"))]
+    #[must_use]
+    pub fn sample() -> Self {
+        Self {
+            channel_id: ChannelId::from([14u8; 32]),
+            inscription: b"hello logos".into(),
+            parent: MsgId::root(),
+            signer: Ed25519Key::from_bytes(&[15; 32]).public_key(),
+        }
     }
 }
 

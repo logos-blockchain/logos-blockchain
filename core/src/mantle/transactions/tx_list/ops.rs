@@ -4,6 +4,17 @@ use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+#[cfg(any(test, feature = "samples"))]
+use crate::mantle::ops::{
+    channel::{
+        channel_transfer::ChannelTransferOp, config::ChannelConfigOp, deposit::DepositOp,
+        inscribe::InscriptionOp, withdraw::ChannelWithdrawOp,
+    },
+    leader_claim::LeaderClaimOp,
+    pow::ClaimPowRewardOp,
+    sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
+    transfer::TransferOp,
+};
 use crate::{
     block::MAX_BLOCK_TRANSACTIONS_SIZE,
     mantle::{
@@ -154,6 +165,24 @@ impl Ops {
     #[must_use]
     fn minimum_signed_serialized_size(&self, context: &OpsGasContext) -> u64 {
         minimum_signed_transaction_size(&self.by_ref(), context) as u64
+    }
+
+    #[cfg(any(test, feature = "samples"))]
+    #[must_use]
+    pub fn sample() -> Self {
+        Self::from([
+            Op::Transfer(TransferOp::sample()),               // 0x00
+            Op::ChannelConfig(ChannelConfigOp::sample()),     // 0x10
+            Op::ChannelInscribe(InscriptionOp::sample()),     // 0x11
+            Op::ChannelDeposit(DepositOp::sample()),          // 0x12
+            Op::ChannelWithdraw(ChannelWithdrawOp::sample()), // 0x13
+            Op::ChannelTransfer(ChannelTransferOp::sample()), // 0x14
+            Op::SDPDeclare(SDPDeclareOp::sample()),           // 0x20
+            Op::SDPWithdraw(SDPWithdrawOp::sample()),         // 0x21
+            Op::SDPActive(SDPActiveOp::sample()),             // 0x22
+            Op::LeaderClaim(LeaderClaimOp::sample()),         // 0x30
+            Op::ClaimPowReward(ClaimPowRewardOp::sample()),   // 0x40
+        ])
     }
 }
 

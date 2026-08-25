@@ -87,6 +87,16 @@ impl ClaimPowRewardOp {
             *self.public_key.as_fr(),
         ]))
     }
+
+    #[cfg(any(test, feature = "samples"))]
+    #[must_use]
+    pub fn sample() -> Self {
+        Self {
+            epoch_nonce: ZkHash::from(Fr::from(35u64)),
+            block_hash: Hash::from([36u8; 32]),
+            public_key: ZkPublicKey::from(Fr::from(37u64)),
+        }
+    }
 }
 
 /// Errors returned while validating a [`ClaimPowRewardOp`].

@@ -275,7 +275,7 @@ mod tests {
             Inputs::empty(),
             Outputs::new(outputs),
         ))]);
-        SignedOps::from_ops_with_placeholder_proofs(ops)
+        SignedOps::from_ops_with_sample_proofs(ops)
     }
 
     fn sdp_declaration(locked_note_id: lb_core::mantle::NoteId) -> DeclarationMessage {
@@ -348,7 +348,7 @@ mod tests {
             inputs: Inputs::from([owned.id()]),
             metadata: b"deposit".into(),
         })]);
-        let spend = SignedOps::from_ops_with_placeholder_proofs(ops);
+        let spend = SignedOps::from_ops_with_sample_proofs(ops);
         let mut accounting =
             ScannerAccounting::new(vec![TrackedWalletKeys::new("alice", [pk(1)])], &[owned])
                 .expect("accounting should build");
@@ -373,13 +373,13 @@ mod tests {
         let locked = utxo(10, 0, pk(1));
         let declaration = sdp_declaration(locked.id());
         let declare_ops = Ops::from([Op::SDPDeclare(declaration.clone())]);
-        let declare_tx = SignedOps::from_ops_with_placeholder_proofs(declare_ops);
+        let declare_tx = SignedOps::from_ops_with_sample_proofs(declare_ops);
         let withdraw_ops = Ops::from([Op::SDPWithdraw(WithdrawMessage {
             declaration_id: declaration.id(),
             locked_note_id: locked.id(),
             nonce: 0,
         })]);
-        let withdraw_tx = SignedOps::from_ops_with_placeholder_proofs(withdraw_ops);
+        let withdraw_tx = SignedOps::from_ops_with_sample_proofs(withdraw_ops);
         let mut accounting =
             ScannerAccounting::new(vec![TrackedWalletKeys::new("alice", [pk(1)])], &[locked])
                 .expect("accounting should build");

@@ -400,8 +400,8 @@ pub struct CryptarchiaParameter {
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof};
-    use lb_key_management_system_keys::keys::{Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature};
+    use lb_groth16::AdditiveGroup as _;
+    use lb_key_management_system_keys::keys::{Ed25519Signature, ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
 
     use super::*;
@@ -409,10 +409,7 @@ mod tests {
         mantle::{
             OpProof,
             ledger::{Inputs, Note, Outputs, Utxo, Value},
-            ops::{
-                ZkAndEd25519Proof,
-                channel::{Ed25519PublicKey, inscribe::Inscription},
-            },
+            ops::channel::{Ed25519PublicKey, inscribe::Inscription},
             transactions::{OpProofs, Ops},
         },
         sdp::{Locator, ProviderId, ServiceType},
@@ -457,24 +454,6 @@ mod tests {
     // Helper function to create a test note
     fn create_test_note(value: Value) -> Note {
         Note::new(value, ZkPublicKey::from(BigUint::from(123u64)))
-    }
-
-    // Helper function to build a proof of the variant expected for a given op
-    fn placeholder_proof(op: &Op) -> OpProof {
-        match op {
-            Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
-            Op::Transfer(_) => OpProof::ZkSig(ZkSignature::new(
-                CompressedGroth16Proof::from_bytes(&[0u8; 128]),
-            )),
-            Op::SDPDeclare(_) => {
-                let proof = ZkAndEd25519Proof {
-                    zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
-                    ed25519_sig: Ed25519Signature::zero(),
-                };
-                OpProof::ZkAndEd25519Sigs(proof)
-            }
-            other => unreachable!("unexpected genesis op in tests: {}", other.as_str()),
-        }
     }
 
     // Helper function to create a basic signed transaction
@@ -593,7 +572,7 @@ mod tests {
 
         // Execute all test cases
         for (ops, expected_err) in test_cases {
-            let ops_proofs = ops.iter().map(placeholder_proof).collect::<Vec<_>>();
+            let ops_proofs = ops.iter().map(Op::sample_proof).collect::<Vec<_>>();
             let tx = create_trusted_tx(ops, ops_proofs);
             let result = GenesisTx::from_tx(tx);
             match expected_err {
@@ -647,7 +626,7 @@ mod tests {
 
         // Execute all test cases
         for (ops, expected_err) in test_cases {
-            let ops_proofs = ops.iter().map(placeholder_proof).collect::<Vec<_>>();
+            let ops_proofs = ops.iter().map(Op::sample_proof).collect::<Vec<_>>();
             let tx = create_trusted_tx(ops, ops_proofs);
             let result = GenesisTx::from_tx(tx);
             match expected_err {

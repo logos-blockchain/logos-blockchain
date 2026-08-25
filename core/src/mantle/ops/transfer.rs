@@ -1,8 +1,12 @@
 use lb_codec::{BinaryCodec, BinaryEncode as _};
+#[cfg(any(test, feature = "samples"))]
+use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+#[cfg(any(test, feature = "samples"))]
+use crate::mantle::{Note, NoteId};
 use crate::{
     events::TxEvent,
     mantle::{
@@ -60,6 +64,18 @@ impl TransferOp {
             .checked_sub(i128::from(output_amount))
             .ok_or(TransferError::BalanceOverflow)?;
         Ok(balance)
+    }
+
+    #[cfg(any(test, feature = "samples"))]
+    #[must_use]
+    pub fn sample() -> Self {
+        Self::new(
+            Inputs::new([NoteId(Fr::from(1u64)), NoteId(Fr::from(2u64))]),
+            Outputs::new([
+                Note::new(3, ZkPublicKey::from(Fr::from(4u64))),
+                Note::new(5, ZkPublicKey::from(Fr::from(6u64))),
+            ]),
+        )
     }
 }
 
@@ -170,11 +186,9 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionG
 #[cfg(test)]
 mod test {
     use lb_groth16::CompressedGroth16Proof;
-    use lb_poseidon2::Fr;
     use num_bigint::BigUint;
 
     use super::*;
-    use crate::mantle::{Note, NoteId};
 
     #[test]
     fn test_preverify_rejects_empty_inputs() {

@@ -1195,7 +1195,7 @@ mod tests {
             parent: [0u8; 32].into(),
             signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
         })]);
-        SignedOps::from_ops_with_placeholder_proofs(mantle_tx)
+        SignedOps::from_ops_with_sample_proofs(mantle_tx)
     }
 
     #[test]
@@ -1408,7 +1408,7 @@ mod tests {
         let inscribe_msg = inscribe.id();
         let config_msg = config.id();
         let ops = Ops::from([Op::ChannelInscribe(inscribe), Op::ChannelConfig(config)]);
-        let tx = SignedOps::from_ops_with_placeholder_proofs(ops);
+        let tx = SignedOps::from_ops_with_sample_proofs(ops);
         (tx, inscribe_msg, config_msg)
     }
 
@@ -1582,7 +1582,7 @@ mod tests {
         };
         let inscribe_msg = inscribe.id();
         let ops = Ops::from([Op::ChannelConfig(config), Op::ChannelInscribe(inscribe)]);
-        let tx = SignedOps::from_ops_with_placeholder_proofs(ops);
+        let tx = SignedOps::from_ops_with_sample_proofs(ops);
 
         let derived = state.submit_other(tx, channel_id);
         assert_eq!(derived, Some(inscribe_msg), "tip is the tx's last op");
@@ -1623,7 +1623,7 @@ mod tests {
             transfer_threshold: 1,
         };
         let ops = Ops::from([Op::ChannelConfig(config)]);
-        let cut = SignedOps::from_ops_with_placeholder_proofs(ops);
+        let cut = SignedOps::from_ops_with_sample_proofs(ops);
         state.submit_other(cut, channel_id);
 
         assert_eq!(

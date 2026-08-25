@@ -1,5 +1,7 @@
 use lb_codec::{BinaryCodec, BinaryEncode as _};
 use lb_cryptarchia_engine::Slot;
+#[cfg(any(test, feature = "samples"))]
+use lb_key_management_system_keys::keys::Ed25519Key;
 use lb_utils::bounded::NonEmptyBoundedVec;
 use serde::{Deserialize, Serialize};
 
@@ -43,6 +45,23 @@ impl ChannelConfigOp {
         let mut hasher = Hasher::new();
         hasher.update(self.encode());
         MsgId(hasher.finalize().into())
+    }
+
+    #[cfg(any(test, feature = "samples"))]
+    #[must_use]
+    pub fn sample() -> Self {
+        Self {
+            channel: ChannelId::from([7u8; 32]),
+            keys: Keys::try_from(vec![
+                Ed25519Key::from_bytes(&[8; 32]).public_key(),
+                Ed25519Key::from_bytes(&[9; 32]).public_key(),
+            ])
+            .expect("Two keys are within bounds."),
+            posting_timeframe: SlotTimeframe::from(10u32),
+            posting_timeout: SlotTimeout::from(11u32),
+            configuration_threshold: 12,
+            transfer_threshold: 13,
+        }
     }
 }
 

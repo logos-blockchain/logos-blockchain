@@ -170,6 +170,13 @@ pub mod codec {
     }
 }
 
+#[cfg(any(test, feature = "samples"))]
+impl crate::mantle::ops::op_proof::samples::SampleProof for ChannelMultiSigProof {
+    fn sample() -> Self {
+        Self::new(IndexedSignatures::empty())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

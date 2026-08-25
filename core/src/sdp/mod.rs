@@ -1,6 +1,5 @@
 pub mod blend;
 pub mod locked_notes;
-
 use core::{
     fmt::{self, Display, Formatter},
     str::FromStr,
@@ -9,9 +8,18 @@ use std::{collections::HashMap, hash::Hash};
 
 use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
+#[cfg(any(test, feature = "samples"))]
+use lb_blend_proofs::{
+    quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
+    selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection},
+};
 use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_cryptarchia_engine::Epoch;
+#[cfg(any(test, feature = "samples"))]
+use lb_groth16::Fr;
 use lb_groth16::fr_to_bytes;
+#[cfg(any(test, feature = "samples"))]
+use lb_key_management_system_keys::keys::Ed25519Key;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey};
 use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec};
 use multiaddr::{Multiaddr, Protocol};
@@ -26,6 +34,7 @@ use crate::{
         ops::{channel::Ed25519PublicKey, sdp::SdpError},
         transactions::hash::TxHashView,
     },
+    sdp::blend::ActivityProof,
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
@@ -501,6 +510,21 @@ impl DeclarationMessage {
 
         Ok(())
     }
+
+    #[cfg(any(test, feature = "samples"))]
+    #[must_use]
+    pub fn sample() -> Self {
+        Self {
+            service_type: ServiceType::BlendNetwork,
+            locators: "/ip4/127.0.0.1/udp/3000/quic-v1"
+                .parse::<Locator>()
+                .expect("Locator is valid.")
+                .into(),
+            provider_id: ProviderId(Ed25519Key::from_bytes(&[24; 32]).public_key()),
+            zk_id: ZkPublicKey::from(Fr::from(25u64)),
+            locked_note_id: NoteId(Fr::from(26u64)),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
@@ -520,7 +544,7 @@ pub struct ActiveMessage {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ActivityMetadata {
-    Blend(Box<blend::ActivityProof>),
+    Blend(Box<ActivityProof>),
 }
 
 const ACTIVE_METADATA_BLEND_TYPE: u8 = 1;
@@ -554,7 +578,7 @@ impl BinaryDecode for ActivityMetadata {
         let (input, metadata_type) = u8::decode(input, &())?;
         match metadata_type {
             ACTIVE_METADATA_BLEND_TYPE => {
-                let (input, proof) = blend::ActivityProof::decode(input, &())?;
+                let (input, proof) = ActivityProof::decode(input, &())?;
                 Ok((input, Self::Blend(Box::new(proof))))
             }
             other => Err(DecodeError::unknown_discriminant::<Self>(u64::from(other))),
@@ -688,5 +712,40 @@ mod tests {
 
         assert_eq!(concatenated(&joined), concatenated(&split));
         assert_ne!(joined.id(), split.id());
+    }
+}
+
+#[cfg(any(test, feature = "samples"))]
+impl WithdrawMessage {
+    #[must_use]
+    pub fn sample() -> Self {
+        Self {
+            declaration_id: DeclarationId([27u8; 32]),
+            locked_note_id: NoteId(Fr::from(28u64)),
+            nonce: 29,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "samples"))]
+impl ActiveMessage {
+    #[must_use]
+    pub fn sample() -> Self {
+        let activity = ActivityProof {
+            epoch: Epoch::new(10),
+            signing_key: Ed25519Key::from_bytes(&[1; 32]).public_key(),
+            proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([2u8; PROOF_OF_QUOTA_SIZE])
+                .into(),
+            proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked(
+                [3u8; PROOF_OF_SELECTION_SIZE],
+            )
+            .into(),
+        };
+
+        Self {
+            declaration_id: DeclarationId([30u8; 32]),
+            nonce: 31,
+            metadata: ActivityMetadata::Blend(Box::new(activity)),
+        }
     }
 }

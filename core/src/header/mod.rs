@@ -341,170 +341,14 @@ fn test_serde() {
 /// --nocapture`
 #[cfg(test)]
 mod body_root_test_vectors {
-    use lb_blend_proofs::{
-        quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
-        selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection},
-    };
-    use lb_cryptarchia_engine::Epoch;
-    use lb_key_management_system_keys::keys::ZkPublicKey;
     use lb_poseidon2::Fr;
 
     use super::*;
     use crate::{
         block::{SignedHeader, UncleHeaders},
-        mantle::{
-            Note, Op,
-            channel::{SlotTimeframe, SlotTimeout},
-            ledger::{Inputs, NoteId, Outputs},
-            ops::{
-                channel::{
-                    ChannelId, Ed25519PublicKey, MsgId,
-                    channel_transfer::ChannelTransferOp,
-                    config::{ChannelConfigOp, Keys},
-                    deposit::{DepositOp, Metadata},
-                    inscribe::InscriptionOp,
-                    withdraw::ChannelWithdrawOp,
-                },
-                leader_claim::{LeaderClaimOp, VoucherCm},
-                transfer::TransferOp,
-            },
-            traits::Hashable as _,
-            transactions::Ops,
-        },
-        sdp::{
-            ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locator,
-            ProviderId, ServiceType, WithdrawMessage, blend::ActivityProof,
-        },
+        mantle::{ops::leader_claim::VoucherCm, traits::Hashable as _, transactions::Ops},
         utils::merkle,
     };
-
-    fn ed25519_pk(seed: u8) -> Ed25519PublicKey {
-        Ed25519Key::from_bytes(&[seed; 32]).public_key()
-    }
-
-    fn zk_pk(seed: u64) -> ZkPublicKey {
-        ZkPublicKey::from(Fr::from(seed))
-    }
-
-    fn tx(op: Op) -> Ops {
-        Ops::new_unchecked(vec![op])
-    }
-
-    /// Builds one transaction per distinct mantle operation kind, each carrying
-    /// a single operation. The instances mirror those used by the `OpId` test
-    /// vectors so the two vector sets stay consistent.
-    fn one_tx_per_op() -> Vec<(&'static str, Ops)> {
-        let activity = ActivityProof {
-            epoch: Epoch::new(10),
-            signing_key: ed25519_pk(1),
-            proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([2u8; PROOF_OF_QUOTA_SIZE])
-                .into(),
-            proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked(
-                [3u8; PROOF_OF_SELECTION_SIZE],
-            )
-            .into(),
-        };
-
-        vec![
-            // Transfer (0x00)
-            (
-                "Transfer",
-                tx(Op::Transfer(TransferOp::new(
-                    Inputs::new([NoteId(Fr::from(1u64)), NoteId(Fr::from(2u64))]),
-                    Outputs::new([Note::new(3, zk_pk(4)), Note::new(5, zk_pk(6))]),
-                ))),
-            ),
-            // ChannelConfig (0x10)
-            (
-                "ChannelConfig",
-                tx(Op::ChannelConfig(ChannelConfigOp {
-                    channel: ChannelId::from([7u8; 32]),
-                    keys: Keys::try_from(vec![ed25519_pk(8), ed25519_pk(9)]).unwrap(),
-                    posting_timeframe: SlotTimeframe::from(10u32),
-                    posting_timeout: SlotTimeout::from(11u32),
-                    configuration_threshold: 12,
-                    transfer_threshold: 13,
-                })),
-            ),
-            // ChannelInscribe (0x11)
-            (
-                "ChannelInscribe",
-                tx(Op::ChannelInscribe(InscriptionOp {
-                    channel_id: ChannelId::from([14u8; 32]),
-                    inscription: b"hello logos".into(),
-                    parent: MsgId::root(),
-                    signer: ed25519_pk(15),
-                })),
-            ),
-            // ChannelDeposit (0x12)
-            (
-                "ChannelDeposit",
-                tx(Op::ChannelDeposit(DepositOp {
-                    channel_id: ChannelId::from([16u8; 32]),
-                    inputs: Inputs::new([NoteId(Fr::from(17u64))]),
-                    metadata: Metadata::try_from(b"deposit-metadata".to_vec()).unwrap(),
-                })),
-            ),
-            // ChannelWithdraw (0x13)
-            (
-                "ChannelWithdraw",
-                tx(Op::ChannelWithdraw(ChannelWithdrawOp {
-                    channel_id: ChannelId::from([18u8; 32]),
-                    inputs: Inputs::new([NoteId(Fr::from(19u64))]),
-                })),
-            ),
-            // ChannelTransfer (0x14)
-            (
-                "ChannelTransfer",
-                tx(Op::ChannelTransfer(ChannelTransferOp {
-                    channel_id: ChannelId::from([20u8; 32]),
-                    inputs: Inputs::new([NoteId(Fr::from(21u64))]),
-                    outputs: Outputs::new([Note::new(22, zk_pk(23))]),
-                })),
-            ),
-            // SDPDeclare (0x20)
-            (
-                "SDPDeclare",
-                tx(Op::SDPDeclare(DeclarationMessage {
-                    service_type: ServiceType::BlendNetwork,
-                    locators: "/ip4/127.0.0.1/udp/3000/quic-v1"
-                        .parse::<Locator>()
-                        .unwrap()
-                        .into(),
-                    provider_id: ProviderId(ed25519_pk(24)),
-                    zk_id: zk_pk(25),
-                    locked_note_id: NoteId(Fr::from(26u64)),
-                })),
-            ),
-            // SDPWithdraw (0x21)
-            (
-                "SDPWithdraw",
-                tx(Op::SDPWithdraw(WithdrawMessage {
-                    declaration_id: DeclarationId([27u8; 32]),
-                    locked_note_id: NoteId(Fr::from(28u64)),
-                    nonce: 29,
-                })),
-            ),
-            // SDPActive (0x22)
-            (
-                "SDPActive",
-                tx(Op::SDPActive(ActiveMessage {
-                    declaration_id: DeclarationId([30u8; 32]),
-                    nonce: 31,
-                    metadata: ActivityMetadata::Blend(Box::new(activity)),
-                })),
-            ),
-            // LeaderClaim (0x30)
-            (
-                "LeaderClaim",
-                tx(Op::LeaderClaim(LeaderClaimOp {
-                    rewards_root: Fr::from(32u64).into(),
-                    voucher_nullifier: Fr::from(33u64).into(),
-                    pk: zk_pk(34),
-                })),
-            ),
-        ]
-    }
 
     fn uncle(byte: u8) -> SignedHeader {
         let signing_key = Ed25519Key::from_bytes(&[byte; 32]);
@@ -554,8 +398,12 @@ mod body_root_test_vectors {
             hex::encode(merkle::calculate_transactions_root(&empty))
         );
 
-        // 2. One transaction per operation kind (one op each).
-        let txs_with_names = one_tx_per_op();
+        // 2. One transaction per operation kind (one op each), labelled by that
+        //    operation's name.
+        let txs_with_names: Vec<(&'static str, Ops)> = Ops::sample()
+            .into_iter()
+            .map(|op| (op.as_str(), Ops::from([op])))
+            .collect();
         let txs: Vec<Ops> = txs_with_names.iter().map(|(_, tx)| tx.clone()).collect();
         println!("================================================================");
         println!(

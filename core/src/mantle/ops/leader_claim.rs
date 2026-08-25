@@ -68,6 +68,16 @@ impl LeaderClaimOp {
             },
         }
     }
+
+    #[cfg(any(test, feature = "samples"))]
+    #[must_use]
+    pub fn sample() -> Self {
+        Self {
+            rewards_root: Fr::from(32u64).into(),
+            voucher_nullifier: Fr::from(33u64).into(),
+            pk: ZkPublicKey::from(Fr::from(34u64)),
+        }
+    }
 }
 
 impl OpId for LeaderClaimOp {

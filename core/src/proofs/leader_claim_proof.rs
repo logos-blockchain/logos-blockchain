@@ -1,4 +1,6 @@
 use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
+#[cfg(any(test, feature = "samples"))]
+use lb_groth16::CompressedGroth16Proof;
 use lb_groth16::{COMPRESSED_PROOF_SIZE, Fr, serde::serde_fr};
 use lb_log_targets::proofs;
 use lb_mmr::MerklePath;
@@ -178,5 +180,14 @@ mod proof_serde {
     {
         let proof_array = lb_utils::serde::deserialize_bytes_array::<128, D>(deserializer)?;
         Ok(lb_poc::PoCProof::from_bytes(&proof_array))
+    }
+}
+
+#[cfg(any(test, feature = "samples"))]
+impl crate::mantle::ops::op_proof::samples::SampleProof for Groth16LeaderClaimProof {
+    fn sample() -> Self {
+        Self::new(CompressedGroth16Proof::from_bytes(
+            &[0u8; COMPRESSED_PROOF_SIZE],
+        ))
     }
 }
