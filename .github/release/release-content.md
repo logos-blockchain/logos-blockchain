@@ -4,9 +4,9 @@
 
 1. Download `logos-core` binaries:
 
-- `lgpd` (Logos Package Downloader): https://github.com/logos-co/logos-package-downloader/releases/tag/0.2.0
-- `lgpm` (Logos Package Manager): https://github.com/logos-co/logos-package-manager/releases/tag/0.2.0
-- `logoscore` (Logos Core CLI): https://github.com/logos-co/logos-logoscore-cli/releases/tag/0.2.0
+- `lgpd` (Logos Package Downloader): https://github.com/logos-co/logos-package-downloader/releases/latest
+- `lgpm` (Logos Package Manager): https://github.com/logos-co/logos-package-manager/releases/latest
+- `logoscore` (Logos Core CLI): https://github.com/logos-co/logos-logoscore-cli/releases/latest
 
 2. Download the Logos Blockchain module using the Logos Package Downloader:
 
