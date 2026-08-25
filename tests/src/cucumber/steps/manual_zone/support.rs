@@ -283,8 +283,25 @@ pub fn start_sorted_conflict_policy(
 /// auto-republished (callers that issue bundles re-prepare with fresh withdraw
 /// nonces themselves). Assumes unique payloads, so the payload identifies the
 /// message; for repeating payloads see [`RepublishLineagePolicy`].
+///
+/// Maintains the on-chain state as two flat sets keyed by id (`this_msg`) — no
+/// intent-lineage map needed. Per block, in order: (1) remove orphaned by id,
+/// (2) add finalized by id (permanent — finalized entries can't be orphaned),
+/// (3) add adopted by id; then republish an orphan only if **no id in
+/// `canonical` still carries its payload**. Keying by id but deciding by
+/// payload is the trick: when an old twin is orphaned its id leaves while a
+/// live twin's id keeps the payload covered, so we never re-home a payload
+/// that's still on chain (the duplicate) yet still recover a payload that's
+/// genuinely gone. Carrying `canonical` cumulatively (not just this block's
+/// adopted) closes the reorg window where a copy adopted earlier hasn't
+/// finalized yet.
 #[derive(Default)]
 struct OrphanRepublishPolicy {
+    /// Canonical on-chain inscriptions by id: adopted-unfinalized + finalized.
+    canonical: HashMap<MsgId, Inscription>,
+    /// Permanent floor of finalized payloads — an independent guard so a
+    /// finalized payload is never re-homed even if the canonical accounting
+    /// churns.
     finalized: HashSet<Inscription>,
 }
 
@@ -301,21 +318,36 @@ where
         else {
             return;
         };
-        // Add finalized payloads to state first.
-        self.finalized
-            .extend(finalized_inscriptions(finalized).map(|i| i.payload.clone()));
-        // Skip orphans whose payload is already on chain (adopted) or finalized
-        // — republishing them would duplicate.
-        let adopted: HashSet<&Inscription> = channel_update
+        // 1. Remove orphaned by id — a dead twin leaves, a live twin stays.
+        for entry in &channel_update.orphaned {
+            if let Some(info) = entry.inscription() {
+                self.canonical.remove(&info.this_msg);
+            }
+        }
+        // 2. Add finalized by id, and record the payload in the permanent floor.
+        for info in finalized_inscriptions(finalized) {
+            self.canonical.insert(info.this_msg, info.payload.clone());
+            self.finalized.insert(info.payload.clone());
+        }
+        // 3. Add adopted by id (this block's new canonical).
+        for info in channel_update
             .adopted
             .iter()
-            .filter_map(|tx| tx.inscription().map(|i| &i.payload))
-            .collect();
+            .filter_map(ChannelUpdateTx::inscription)
+        {
+            self.canonical.insert(info.this_msg, info.payload.clone());
+        }
+        // 4. Republish orphaned whose payload no canonical id still carries.
         for entry in &channel_update.orphaned {
             let ChannelUpdateTx::Inscription(info) = entry else {
                 continue;
             };
-            if adopted.contains(&info.payload) || self.finalized.contains(&info.payload) {
+            if self.finalized.contains(&info.payload)
+                || self
+                    .canonical
+                    .values()
+                    .any(|payload| *payload == info.payload)
+            {
                 continue;
             }
             if let Err(error) = sequencer.handle().publish(info.payload.clone()).await {

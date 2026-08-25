@@ -314,7 +314,7 @@ fn observe_channel_inscriptions(
         let (info, withdraws) = match block_tx {
             BlockChannelTx::Inscription(i) => (i, None),
             BlockChannelTx::AtomicWithdraw(a) => (&a.inscription, Some(a.withdraws.clone())),
-            BlockChannelTx::Custom { .. } => continue,
+            BlockChannelTx::Config(_) | BlockChannelTx::Custom { .. } => continue,
         };
         let tx = by_hash
             .get(&info.tx_hash)
@@ -876,6 +876,7 @@ pub(super) fn classify_channel_tx(
 ) -> Option<BlockChannelTx> {
     let tx_hash = tx.mantle_tx().hash();
     let mut entries: Vec<InscriptionInfo> = Vec::new();
+    let mut config_entries: Vec<InscriptionInfo> = Vec::new();
     let mut inscribes = 0usize;
     let mut configs = 0usize;
     let mut withdraws: Vec<WithdrawInfo> = Vec::new();
@@ -905,6 +906,17 @@ pub(super) fn classify_channel_tx(
             }
             Op::ChannelConfig(config) if config.channel == channel_id => {
                 configs += 1;
+                // Configs sit on the separate config lineage — `this_msg` is a
+                // config id, `parent_msg` its config parent, payload empty.
+                // Captured here (including inside mixed/custom txs) so the
+                // config-tip walk can see every landed config, not just the
+                // node's single tip.
+                config_entries.push(InscriptionInfo {
+                    tx_hash,
+                    parent_msg: config.parent,
+                    this_msg: config.id(),
+                    payload: [].into(),
+                });
             }
             Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
                 withdraws.push(WithdrawInfo {
@@ -917,8 +929,8 @@ pub(super) fn classify_channel_tx(
         }
     }
 
-    if entries.is_empty() {
-        // No tip-advancing op — nothing to store for this tx.
+    if entries.is_empty() && config_entries.is_empty() {
+        // Neither a tip-advancing op nor a config — nothing to store.
         return None;
     }
 
@@ -934,10 +946,15 @@ pub(super) fn classify_channel_tx(
                 withdraws,
             })
         }
+    } else if clean && inscribes == 0 && configs == 1 && withdraws.is_empty() {
+        // A pure single-config tx — the config-lineage analogue of a clean
+        // single inscription.
+        BlockChannelTx::Config(config_entries.pop().expect("exactly one config entry"))
     } else {
         BlockChannelTx::Custom {
             tx: tx.clone(),
             entries,
+            config_entries,
         }
     })
 }
