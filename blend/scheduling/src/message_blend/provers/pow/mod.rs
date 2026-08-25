@@ -35,11 +35,13 @@ use crate::message_blend::provers::{BlendLayerProof, ProofsGeneratorSettings};
 mod tests;
 
 const LOG_TARGET: &str = blend::scheduling::proofs::POW;
+const BUFFER_SIZE: usize = 2;
 
 #[must_use]
 pub fn new_mining_pool() -> Arc<ThreadPool> {
     Arc::new(
         ThreadPoolBuilder::new()
+            .num_threads(BUFFER_SIZE)
             .thread_name(|index| format!("logos/blend/pow-puzzle-search-{index}"))
             .build()
             .expect("Blend PoW puzzle search thread pool should build."),
@@ -92,8 +94,6 @@ fn create_proof_stream(
     public_inputs: PoQVerificationInputsMinusSigningKey,
     thread_pool: Arc<ThreadPool>,
 ) -> Pin<Box<dyn Stream<Item = BlendLayerProof> + Send>> {
-    const BUFFER_SIZE: usize = 2;
-
     let difficulty = public_inputs.pow.pow_blend_difficulty;
     // No ticket is below zero, so the puzzle has no solution and there is
     // nothing to mine for.
