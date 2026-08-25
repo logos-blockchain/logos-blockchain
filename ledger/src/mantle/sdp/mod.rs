@@ -693,7 +693,7 @@ mod tests {
     use lb_core::{
         mantle::{
             ledger::Utxos,
-            ops::{ZkAndEd25519Proof, op_proof::placeholders::PlaceholderProof as _},
+            ops::{ZkAndEd25519Proof, op_proof::samples::SampleProof as _},
         },
         sdp::{Locator, SNAPSHOT_FINALIZATION_DELAY},
     };
@@ -819,9 +819,9 @@ mod tests {
             provider_id: ProviderId(signing_key.public_key()),
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
-        let placeholder_proof = ZkAndEd25519Proof::placeholder();
+        let sample_proof = ZkAndEd25519Proof::sample();
         let declare_signed_operation =
-            SignedOperation::new(declare_op, placeholder_proof).into_state_trusted();
+            SignedOperation::new(declare_op, sample_proof).into_state_trusted();
         let operation_id = declare_signed_operation.operation().id();
 
         let (ledger, _) = ledger
@@ -838,7 +838,7 @@ mod tests {
                 &config.service_rewards_params.blend,
             ))),
         };
-        let placeholder_proof = ZkSignature::placeholder();
+        let placeholder_proof = ZkSignature::sample();
         let active_signed_operation =
             SignedOperation::new(active_op, placeholder_proof).into_state_trusted();
 

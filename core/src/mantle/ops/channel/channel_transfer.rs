@@ -1,6 +1,12 @@
 use lb_codec::{BinaryCodec, BinaryEncode as _};
+#[cfg(feature = "samples")]
+use lb_groth16::Fr;
+#[cfg(feature = "samples")]
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "samples")]
+use crate::mantle::{Note, NoteId};
 use crate::{
     events::TxEvent,
     mantle::{
@@ -40,6 +46,16 @@ pub struct ChannelTransferOp {
 impl ChannelTransferOp {
     pub fn utxos(&self) -> impl Iterator<Item = Utxo> {
         self.outputs.utxos(self)
+    }
+
+    #[cfg(any(test, feature = "samples"))]
+    #[must_use]
+    pub fn sample() -> Self {
+        Self {
+            channel_id: ChannelId::from([20u8; 32]),
+            inputs: Inputs::new([NoteId(Fr::from(21u64))]),
+            outputs: Outputs::new([Note::new(22, ZkPublicKey::from(Fr::from(23u64)))]),
+        }
     }
 }
 
@@ -208,8 +224,18 @@ impl<Mode: VerificationMode> ExecutableOperation
 mod test {
     use lb_key_management_system_keys::keys::ZkPublicKey;
 
-    use super::*;
-    use crate::mantle::{Note, ledger::InputsError};
+    use crate::{
+        mantle::{
+            Note,
+            channel::Error,
+            ledger::{Inputs, InputsError, Outputs, PreverifiableOperation as _},
+            ops::{
+                SignedOperation,
+                channel::{ChannelId, channel_transfer::ChannelTransferOp},
+            },
+        },
+        proofs::channel_multi_sig_proof::ChannelMultiSigProof,
+    };
 
     #[test]
     fn test_preverify_rejects_empty_inputs() {

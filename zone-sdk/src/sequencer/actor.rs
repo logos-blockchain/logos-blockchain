@@ -1267,7 +1267,7 @@ mod tests {
             Op::ChannelInscribe(inscribe_op),
         ]);
         let tx_hash = mantle_tx.hash();
-        let signed_tx = SignedOps::from_ops_with_placeholder_proofs(mantle_tx);
+        let signed_tx = SignedOps::from_ops_with_sample_proofs(mantle_tx);
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
         track_pending_tx(&mut state, signed_tx, channel_id);
@@ -1298,7 +1298,7 @@ mod tests {
         };
         let mantle_tx = Ops::from([Op::ChannelInscribe(inscribe_op)]);
         let tx_hash = mantle_tx.hash();
-        let signed_tx = SignedOps::from_ops_with_placeholder_proofs(mantle_tx);
+        let signed_tx = SignedOps::from_ops_with_sample_proofs(mantle_tx);
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
         track_pending_tx(&mut state, signed_tx, channel_id);
@@ -1323,7 +1323,7 @@ mod tests {
         };
         let mantle_tx = Ops::from([Op::ChannelInscribe(inscribe_op)]);
         let tx_hash = mantle_tx.hash();
-        let signed_tx = SignedOps::from_ops_with_placeholder_proofs(mantle_tx);
+        let signed_tx = SignedOps::from_ops_with_sample_proofs(mantle_tx);
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
         track_pending_tx(&mut state, signed_tx, our_channel);
