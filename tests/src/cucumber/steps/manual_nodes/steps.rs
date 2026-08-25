@@ -10,7 +10,9 @@ use lb_core::{codec::DeserializeOp as _, mantle::GenesisTime};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_testing_framework::{
-    USER_CONFIG_FILE, configs::deployment::NodeBinaryProfile, ensure_node_binary_built,
+    USER_CONFIG_FILE,
+    configs::{deployment::NodeBinaryProfile, wallet::WalletAccount},
+    ensure_node_binary_built,
 };
 use time::{Duration as TimeDuration, OffsetDateTime};
 use tokio::time::{Instant, sleep};
@@ -28,10 +30,7 @@ use crate::{
                 stop_active_manual_cluster,
             },
             manual_nodes::{
-                config_override::{
-                    resolve_pending_claim_address_overrides, set_deployment_config_override,
-                    set_user_config_override,
-                },
+                config_override::{set_deployment_config_override, set_user_config_override},
                 snapshots::validate_snapshot_path_component,
                 utils::{
                     NodesToStartUnordered, create_snapshot_all_nodes_with_wallet_state,
@@ -39,10 +38,12 @@ use crate::{
                     ensure_all_nodes_agree_on_lib,
                     ensure_fee_sponsorship_and_fork_groups_are_not_mixed,
                     get_cryptarchia_info_all_nodes, nodes_converged,
-                    parse_genesis_wallet_tokens_row, parse_url, parse_wallet_resources_table_row,
+                    parse_genesis_wallet_tokens_row, parse_mining_wallet_resources_table_row,
+                    parse_url, parse_wallet_resources_table_row,
                     poll_all_nodes_and_update_consensus_cache, restart_node, start_node,
                     start_nodes_order_respecting_dependencies, stop_node,
                     verify_genesis_wallet_resources_table_indexes,
+                    verify_mining_node_wallet_resources_table_indexes,
                     verify_node_wallet_resources_table_indexes,
                     verify_reponsive_and_network_ready_with_timeout, wait_all_nodes_responive,
                     wait_for_all_nodes_to_be_synced_to_chain,
@@ -65,8 +66,8 @@ use crate::{
             sync::{WalletSendReadiness, wait_wallet_send_ready},
         },
         world::{
-            CucumberWorld, GenesisTokens, ManualClusterKind, ManualClusterSpec, NodeSnapshot,
-            PublicCryptarchiaEndpointPeer,
+            ConfigOverride, CucumberWorld, GenesisTokens, ManualClusterKind, ManualClusterSpec,
+            NodeSnapshot, PublicCryptarchiaEndpointPeer,
         },
     },
     non_zero,
@@ -284,14 +285,9 @@ async fn step_start_nodes_with_wallet_resources(
     // Map wallet start info and connected peers to node name
     verify_node_wallet_resources_table_indexes(table, &step.value)?;
     let mut nodes_to_start: NodesToStartUnordered = HashMap::new();
-    let mut wallet_bindings: Vec<(String, usize)> = Vec::new();
     for row in table.rows.iter().skip(1) {
         let (node_name, wallet_start_info, connected_to) =
             parse_wallet_resources_table_row(&step.value, row)?;
-        wallet_bindings.push((
-            wallet_start_info.wallet_name.clone(),
-            wallet_start_info.account_index,
-        ));
         let entry = nodes_to_start
             .entry(node_name)
             .or_insert_with(|| (Vec::new(), Vec::new()));
@@ -301,15 +297,13 @@ async fn step_start_nodes_with_wallet_resources(
         }
     }
 
-    // Resolve any deferred `wallet_pk(<alias>)` overrides against this table
-    // before starting nodes, so the derived claim address is applied to every
-    // node — including ones that join later.
-    resolve_pending_claim_address_overrides(world, &step.value, &wallet_bindings)?;
-
-    let nodes_to_start_ordered = start_nodes_order_respecting_dependencies(nodes_to_start)
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-        })?;
+    let nodes_to_start_ordered = start_nodes_order_respecting_dependencies(
+        nodes_to_start,
+        world.nodes_info.keys().cloned().collect(),
+    )
+    .inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
     for (node_name, wallet_start_info, mut initial_peers) in nodes_to_start_ordered {
         initial_peers.sort();
         initial_peers.dedup();
@@ -320,6 +314,122 @@ async fn step_start_nodes_with_wallet_resources(
             &wallet_start_info,
             &initial_peers,
             false,
+            &[],
+        )
+        .await?;
+    }
+
+    world.ensure_wallet_scanner_started().await?;
+
+    Ok(())
+}
+
+/// Starts mining nodes, each carrying one or more wallet resources of which
+/// exactly one is flagged `is_mining_wallet`. That wallet's public key is
+/// derived and applied as the node's `pow.claim_address`, so mined rewards are
+/// paid to a wallet the test tracks. Multiple mining nodes are supported; each
+/// gets its own single mining wallet / claim address.
+#[given("I start mining nodes with wallet resources:")]
+#[when("I start mining nodes with wallet resources:")]
+async fn step_start_mining_nodes_with_wallet_resources(
+    world: &mut CucumberWorld,
+    step: &Step,
+) -> StepResult {
+    let table = step
+        .table
+        .as_ref()
+        .ok_or(StepError::MissingTable)
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+        })?;
+
+    verify_mining_node_wallet_resources_table_indexes(table, &step.value)?;
+
+    let mut nodes_to_start: NodesToStartUnordered = HashMap::new();
+    let mut node_claim_overrides: HashMap<String, ConfigOverride> = HashMap::new();
+    let mut node_mining_wallet_count: HashMap<String, usize> = HashMap::new();
+    for row in table.rows.iter().skip(1) {
+        let (node_name, wallet_start_info, is_mining_wallet, connected_to) =
+            parse_mining_wallet_resources_table_row(&step.value, row)?;
+
+        if is_mining_wallet {
+            *node_mining_wallet_count
+                .entry(node_name.clone())
+                .or_insert(0) += 1;
+            let account =
+                WalletAccount::deterministic(wallet_start_info.account_index as u64, 0, true)
+                    .map_err(|source| StepError::InvalidArgument {
+                        message: format!(
+                            "Step `{}` error: failed to derive mining wallet public key for \
+                            `{}`: {source}",
+                            step.value, wallet_start_info.wallet_name
+                        ),
+                    })?;
+            let value = serde_yaml::to_value(account.public_key()).map_err(|source| {
+                StepError::InvalidArgument {
+                    message: format!(
+                        "Step `{}` error: failed to serialize mining wallet public key for \
+                            `{}`: {source}",
+                        step.value, wallet_start_info.wallet_name
+                    ),
+                }
+            })?;
+            node_claim_overrides.insert(
+                node_name.clone(),
+                ConfigOverride {
+                    path: "pow.claim_address".to_owned(),
+                    value,
+                },
+            );
+        }
+
+        let entry = nodes_to_start
+            .entry(node_name)
+            .or_insert_with(|| (Vec::new(), Vec::new()));
+        entry.0.push(wallet_start_info);
+        if let Some(peer) = connected_to {
+            entry.1.push(peer);
+        }
+    }
+
+    // Every mining node must configure exactly one mining wallet.
+    for node_name in nodes_to_start.keys() {
+        let count = node_mining_wallet_count
+            .get(node_name)
+            .copied()
+            .unwrap_or(0);
+        if count != 1 {
+            return Err(StepError::InvalidArgument {
+                message: format!(
+                    "Step `{}` error: mining node `{node_name}` must have exactly one \
+                    is_mining_wallet row, found {count}",
+                    step.value
+                ),
+            });
+        }
+    }
+
+    let nodes_to_start_ordered = start_nodes_order_respecting_dependencies(
+        nodes_to_start,
+        world.nodes_info.keys().cloned().collect(),
+    )
+    .inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
+    for (node_name, wallet_start_info, mut initial_peers) in nodes_to_start_ordered {
+        initial_peers.sort();
+        initial_peers.dedup();
+        let extra_user_overrides = node_claim_overrides
+            .get(&node_name)
+            .map_or(&[][..], std::slice::from_ref);
+        start_node(
+            world,
+            &step.value,
+            &node_name,
+            &wallet_start_info,
+            &initial_peers,
+            false,
+            extra_user_overrides,
         )
         .await?;
     }
@@ -343,6 +453,7 @@ async fn step_start_manual_stand_alone_node(
         &Vec::new(),
         &Vec::new(),
         false,
+        &[],
     )
     .await
 }
@@ -361,6 +472,7 @@ async fn step_start_manual_network_ready_only_stand_alone_node(
         &Vec::new(),
         &Vec::new(),
         true,
+        &[],
     )
     .await
 }
@@ -381,6 +493,7 @@ async fn step_start_manual_stand_alone_node_not_ready_before(
         &Vec::new(),
         &Vec::new(),
         false,
+        &[],
     )
     .await?;
 
@@ -426,6 +539,7 @@ async fn step_start_manual_peer_node_not_ready_before(
         &Vec::new(),
         &[peer_name],
         false,
+        &[],
     )
     .await?;
 
@@ -594,14 +708,6 @@ fn step_set_deployment_config_setting(
     setting_value: String,
 ) -> StepResult {
     set_deployment_config_override(world, &step.value, &setting_path, &setting_value)
-}
-
-#[given(expr = "I have a claim wallet account index {int} with alias {string}")]
-#[when(expr = "I have a claim wallet account index {int} with alias {string}")]
-fn step_declare_claim_wallet(world: &mut CucumberWorld, account_index: usize, alias: String) {
-    world
-        .claim_wallet_account_indices
-        .insert(alias, account_index);
 }
 
 #[given(expr = "the first {int} nodes are declared as blend providers")]
@@ -869,6 +975,7 @@ async fn step_start_manual_connected_node(
         &Vec::new(),
         &[peer_name],
         false,
+        &[],
     )
     .await
 }
@@ -888,6 +995,7 @@ async fn step_immediate_start_manual_connected_node(
         &Vec::new(),
         &[peer_name],
         true,
+        &[],
     )
     .await
 }
@@ -908,6 +1016,7 @@ async fn step_start_manual_two_connected_nodes(
         &Vec::new(),
         &[peer_name1, peer_name2],
         false,
+        &[],
     )
     .await
 }
@@ -928,6 +1037,7 @@ async fn step_immediate_start_manual_two_connected_nodes(
         &Vec::new(),
         &[peer_name1, peer_name2],
         true,
+        &[],
     )
     .await
 }

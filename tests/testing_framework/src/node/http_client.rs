@@ -26,7 +26,7 @@ use lb_http_api_common::{
     },
     paths::{
         BLEND_NETWORK_INFO, DIAL_PEER, MANTLE_METRICS, MANTLE_SDP_DECLARATIONS, MEMPOOL_VIEW,
-        NETWORK_INFO, POW_CLAIM, POW_START_MINING, POW_STOP_MINING,
+        NETWORK_INFO, POW_CLAIM, POW_CLAIMABLE_REWARDS, POW_START_MINING, POW_STOP_MINING,
     },
     queries::BlocksStreamQuery,
 };
@@ -287,6 +287,23 @@ impl NodeHttpClient {
         Ok(response.tx_hash)
     }
 
+    /// Returns how many mined `PoW` tickets are currently claimable. Uses the
+    /// same service inbound-relay path as start/stop mining, so it also probes
+    /// whether that path is being serviced under a mining flood.
+    pub async fn pow_claimable_tickets(&self) -> Result<usize, Error> {
+        let request_url = Self::join_path(&self.base_url, POW_CLAIMABLE_REWARDS)?;
+
+        let response: PowClaimableRewardsBody = self
+            .with_timeout(
+                "PoW claimable rewards request",
+                self.http_client
+                    .get::<(), PowClaimableRewardsBody>(request_url, None),
+            )
+            .await?;
+
+        Ok(response.claimable_tickets)
+    }
+
     #[must_use]
     pub const fn base_url(&self) -> &Url {
         &self.base_url
@@ -366,4 +383,10 @@ struct DialPeerRequestBody {
 #[derive(Clone, Debug, Deserialize)]
 struct PowClaimResponseBody {
     tx_hash: Option<TxHash>,
+}
+
+/// Subset of the node's `ClaimableRewardsInfo` we assert on.
+#[derive(Clone, Debug, Deserialize)]
+struct PowClaimableRewardsBody {
+    claimable_tickets: usize,
 }

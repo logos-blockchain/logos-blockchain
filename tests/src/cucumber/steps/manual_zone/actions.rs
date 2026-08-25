@@ -142,7 +142,11 @@ pub(super) async fn start_nodes_with_zone_resources(
     apply_zone_timing_defaults(world, &step.value)?;
 
     let nodes = collect_zone_nodes_to_start(&rows);
-    let nodes = start_nodes_order_respecting_dependencies(nodes).inspect_err(|error| {
+    let nodes = start_nodes_order_respecting_dependencies(
+        nodes,
+        world.nodes_info.keys().cloned().collect(),
+    )
+    .inspect_err(|error| {
         warn!(target: TARGET, "Step `{}` error: {error}", step.value);
     })?;
 
@@ -157,6 +161,7 @@ pub(super) async fn start_nodes_with_zone_resources(
             &wallet_start_info,
             &initial_peers,
             false,
+            &[],
         )
         .await?;
     }

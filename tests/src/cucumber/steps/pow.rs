@@ -63,6 +63,55 @@ async fn step_stop_mining(world: &mut CucumberWorld, step: &Step, node_name: Str
     Ok(())
 }
 
+#[when(expr = "node {string} has at least {int} claimable PoW rewards within {int} seconds")]
+#[then(expr = "node {string} has at least {int} claimable PoW rewards within {int} seconds")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
+async fn step_node_has_claimable_rewards(
+    world: &mut CucumberWorld,
+    step: &Step,
+    node_name: String,
+    minimum: usize,
+    timeout_seconds: u64,
+) -> StepResult {
+    let node = world
+        .resolve_node_http_client(&node_name)
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+        })?;
+
+    let deadline = Duration::from_secs(timeout_seconds);
+    let started = Instant::now();
+    loop {
+        match node.pow_claimable_tickets().await {
+            Ok(tickets) if tickets >= minimum => {
+                info!(
+                    target: TARGET,
+                    "Node `{node_name}` reports {tickets} claimable PoW rewards (>= {minimum})"
+                );
+                return Ok(());
+            }
+            Ok(_) => {}
+            Err(e) => {
+                warn!(target: TARGET, "Claimable-rewards query on node `{node_name}` failed: {e}");
+            }
+        }
+
+        if started.elapsed() >= deadline {
+            return Err(StepError::Timeout {
+                message: format!(
+                    "node `{node_name}` did not report at least {minimum} claimable PoW rewards \
+                    within {timeout_seconds} seconds"
+                ),
+            });
+        }
+
+        sleep(CLAIM_POLL_INTERVAL).await;
+    }
+}
+
 #[when(expr = "I claim PoW rewards on node {string} as {string} within {int} seconds")]
 #[then(expr = "I claim PoW rewards on node {string} as {string} within {int} seconds")]
 async fn step_claim_pow_rewards(
@@ -149,50 +198,6 @@ async fn step_record_wallet_balance(
         "Recorded balance of wallet `{wallet_name}` as `{baseline_label}` = {value} LGO"
     );
     Ok(())
-}
-
-#[when(expr = "wallet {string} balance increased by at least {int} over {string} in {int} seconds")]
-#[then(expr = "wallet {string} balance increased by at least {int} over {string} in {int} seconds")]
-async fn step_wallet_balance_increased(
-    world: &mut CucumberWorld,
-    step: &Step,
-    wallet_name: String,
-    minimum_increase: u64,
-    baseline_label: String,
-    timeout_seconds: u64,
-) -> StepResult {
-    let baseline = *world
-        .recorded_wallet_balances
-        .get(&baseline_label)
-        .ok_or_else(|| StepError::LogicalError {
-            message: format!("no recorded wallet balance found for label '{baseline_label}'"),
-        })?;
-    let target = baseline.saturating_add(minimum_increase);
-
-    let deadline = Duration::from_secs(timeout_seconds);
-    let started = Instant::now();
-    loop {
-        let latest = wallet_onchain_value(world, &step.value, &wallet_name).await?;
-        if latest >= target {
-            info!(
-                target: TARGET,
-                "Wallet `{wallet_name}` grew from {baseline} to {latest} LGO \
-                (>= baseline + {minimum_increase})"
-            );
-            return Ok(());
-        }
-
-        if started.elapsed() >= deadline {
-            return Err(StepError::StepFail {
-                message: format!(
-                    "wallet `{wallet_name}` balance {latest} did not reach baseline `{baseline_label}` \
-                    ({baseline}) + {minimum_increase} = {target} within {timeout_seconds} seconds"
-                ),
-            });
-        }
-
-        sleep(BALANCE_POLL_INTERVAL).await;
-    }
 }
 
 /// Sums the values of a transaction's transfer outputs paid to `claim_address`,

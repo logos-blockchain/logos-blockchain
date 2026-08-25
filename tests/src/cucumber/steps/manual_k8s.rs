@@ -97,7 +97,10 @@ async fn step_k8s_manual_start_nodes_with_wallet_resources(
         }
     }
 
-    let ordered = start_nodes_order_respecting_dependencies(nodes_to_start)?;
+    let ordered = start_nodes_order_respecting_dependencies(
+        nodes_to_start,
+        world.nodes_info.keys().cloned().collect(),
+    )?;
 
     for (node_name, wallet_start_info, initial_peers) in ordered {
         let runtime_node_name = format!("node-{}", world.nodes_info.len());

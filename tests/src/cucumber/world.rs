@@ -824,20 +824,6 @@ pub struct ConfigOverride {
     pub value: serde_yaml::Value,
 }
 
-/// A deferred `wallet_pk(<alias>)` user config override.
-///
-/// Its value cannot be resolved when the step runs, because the alias' account
-/// index is only cross-checked once the wallet-resource table is known. It is
-/// resolved to the account's public key while that table is processed.
-#[derive(Debug, Clone)]
-pub struct PendingClaimAddressOverride {
-    /// Dot-separated user config path, e.g. `pow.claim_address`.
-    pub path: String,
-    /// Wallet-resource alias naming the intended recipient, e.g.
-    /// `WALLET_MINER`.
-    pub alias: String,
-}
-
 #[derive(Debug, Default, Clone)]
 pub struct ScenarioSpec {
     pub topology: Option<TopologySpec>,
@@ -951,14 +937,6 @@ pub struct CucumberWorld {
     /// assert a wallet's balance strictly increased relative to the recorded
     /// baseline (used by the `PoW` mining test to prove the reward landed).
     pub recorded_wallet_balances: HashMap<String, u64>,
-    /// Manual: Declared claim-wallet aliases mapped to their genesis account
-    /// index, from `I have a claim wallet account index N with alias X`. Used
-    /// to resolve a deferred `wallet_pk(<alias>)` config override against the
-    /// wallet-resource table.
-    pub claim_wallet_account_indices: HashMap<String, usize>,
-    /// Manual: `wallet_pk(<alias>)` user config overrides awaiting resolution
-    /// until the wallet-resource table is processed.
-    pub pending_claim_address_overrides: Vec<PendingClaimAddressOverride>,
     /// Manual: Outcome of a transaction submission attempt, keyed by scenario
     /// alias, for scenarios that assert on submission being rejected rather
     /// than on later inclusion.
@@ -1166,14 +1144,6 @@ impl Debug for CucumberWorld {
             .field(
                 "recorded_wallet_balances",
                 &self.recorded_wallet_balances.len(),
-            )
-            .field(
-                "claim_wallet_account_indices",
-                &self.claim_wallet_account_indices.len(),
-            )
-            .field(
-                "pending_claim_address_overrides",
-                &self.pending_claim_address_overrides.len(),
             )
             .field("submission_outcomes", &self.submission_outcomes.len())
             .field("prepared_transactions", &self.prepared_transactions.len())

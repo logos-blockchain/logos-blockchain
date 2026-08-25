@@ -1,10 +1,15 @@
 Feature: PoW mining
 
-  # The network is started with two staking nodes that drive consensus and
-  # provide blend. A third node joins the running network later, syncs, and only
-  # then mines token-reward PoW. Its mined reward is claimed through the blend
-  # network, lands in a block, and credits its account — which starts from a
-  # balance recorded before mining, so the increase is asserted explicitly.
+  # Two staking nodes start normally (as in the Cryptarchia features) and only
+  # exist to establish the Blend-backed chain. A third node joins the running
+  # network later and mines token-reward PoW. Its mined reward is claimed
+  # through the Blend network, lands in a block, and credits its account — which
+  # starts empty, so the increase is exactly the claimed reward.
+  #
+  # Wallet resources are only needed on the late-joining mining node: it carries
+  # a mining wallet (`is_mining_wallet`), whose public key becomes the node's
+  # `pow.claim_address`, plus an unrelated second wallet to show only one mining
+  # wallet is configured.
   #
   # Two deployment tweaks make mining observable in a short test:
   #   * `rate_num = 1` enables the reward payout (the shipped configs disable it
@@ -12,18 +17,13 @@ Feature: PoW mining
   #   * The reward-difficulty EMA is tuned (factor 1, huge precision and
   #     target-claims-per-block) so the difficulty target eases to the field
   #     maximum within a few blocks, making a winning ticket trivial to find.
-  # The miner's `pow.claim_address` is pointed at the tracked wallet on account
-  # 3, so the reward lands in a balance the wallet assertions can observe. That
-  # wallet is bound to NODE_1 for querying, since the reward note is on the
-  # shared chain and visible from any node.
 
-  @pow_ci
+  @blend_ci
   Scenario: A late-joining node mines PoW rewards while two nodes run consensus
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 1           | 1000         |
+      | 1             | 0           | 0            |
       | 2             | 1           | 1000         |
-      | 3             | 1           | 1000         |
     And I have a cluster with capacity of 3 nodes
     And the first 2 nodes are declared as blend providers
     And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
@@ -41,31 +41,29 @@ Feature: PoW mining
     And I have deployment config override "cryptarchia.pow_config.reward.ema_smoothing_factor" as "1"
     And I have deployment config override "cryptarchia.pow_config.reward.ema_smoothing_precision" as "1000000000000000000"
     And I have deployment config override "cryptarchia.pow_config.reward.target_claims_per_block" as "1000000000000000000"
-    # The claim address names its recipient by wallet-resource alias; it is
-    # resolved to account 3's public key when the wallet-resource table below is
-    # processed, after checking WALLET_MINER appears there exactly once on
-    # account index 3.
-    And I have user config override "pow.claim_address" as "wallet_pk(WALLET_MINER)"
-    And I have a claim wallet account index 3 with alias "WALLET_MINER"
     # Start the network with the two staking nodes only; they drive consensus
-    # and blend. WALLET_MINER (account 3, the miner's reward account) is bound to
-    # NODE_1 so its balance can be queried while NODE_3 does the mining.
-    And I start nodes with wallet resources:
-      | node_name | account_index | wallet_name  | connected_to |
-      | NODE_1    | 1             | WALLET_1     |              |
-      | NODE_1    | 3             | WALLET_MINER |              |
-      | NODE_2    | 2             | WALLET_2     | NODE_1       |
+    # and blend and hold no wallet resources.
+    And I start node "NODE_1"
+    And I start peer node "NODE_2" connected to node "NODE_1"
     # Let the two-node chain advance so the reward difficulty eases to a
     # mineable target before the miner joins.
     When node "NODE_1" is at height 5 in 300 seconds
-    # The miner joins the running network and syncs to the tip.
-    And I start peer node "NODE_3" connected to node "NODE_1"
+    # The miner joins the running network with its wallet resources; WALLET_MINER
+    # (account 1) is the mining wallet and becomes the node's pow.claim_address.
+    And I start mining nodes with wallet resources:
+      | node_name | account_index | wallet_name  | is_mining_wallet | connected_to |
+      | NODE_3    | 1             | WALLET_MINER | true             | NODE_1       |
+      | NODE_3    | 2             | OTHER_WALLET | false            | NODE_1       |
     And node "NODE_3" is at height 6 in 180 seconds
     # Record the miner's balance, then mine and claim; assert the balance grew.
     And I record the balance of wallet "WALLET_MINER" as "MINER_BASELINE"
     And I start mining on node "NODE_3"
-    And I claim PoW rewards on node "NODE_3" as "POW_CLAIM_TX" within 180 seconds
+    # Wait until at least one ticket is claimable, then stop mining before
+    # claiming: at the eased difficulty the miner finds tickets very fast, so
+    # halting it first frees the service loop to process the claim promptly.
+    And node "NODE_3" has at least 1 claimable PoW rewards within 120 seconds
     And I stop mining on node "NODE_3"
+    And I claim PoW rewards on node "NODE_3" as "POW_CLAIM_TX" within 120 seconds
     Then transaction "POW_CLAIM_TX" is included on node "NODE_1" in 120 seconds
     # The balance grows by exactly the reward the claim transaction paid to the
     # account and no more, so the increase is strictly the claimed reward.
