@@ -1,4 +1,4 @@
-use std::{hash::Hash, marker::PhantomData};
+use std::{hash::Hash, marker::PhantomData, sync::Arc};
 
 use lb_blend::{
     message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
@@ -85,12 +85,14 @@ where
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         epoch: Epoch,
     ) -> Self {
+        let pow_mining_pool = Arc::clone(&settings.pow_mining_pool);
         let cryptographic_processor = EpochCryptographicProcessor::new(
             settings.num_blend_layers,
             membership.clone(),
             public_info,
             winning_pol_info_stream,
             epoch,
+            pow_mining_pool,
         );
         let backend = Backend::new(
             settings.backend,

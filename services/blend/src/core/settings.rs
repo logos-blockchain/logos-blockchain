@@ -1,10 +1,11 @@
-use std::num::NonZeroU64;
+use std::{num::NonZeroU64, sync::Arc};
 
 use lb_core::blend::core_quota;
 use lb_key_management_system_service::{backend::preload::KeyId, keys::UnsecuredEd25519Key};
 use lb_poq::Quota;
 use lb_services_utils::overwatch::{RecoveryData, StorageRecoverySettings};
 use lb_utils::math::PositiveF64;
+use rayon::ThreadPool;
 use serde::{Deserialize, Serialize};
 
 use crate::settings::TimingSettings;
@@ -38,6 +39,7 @@ pub struct RunningBlendConfig<BackendSettings> {
     pub minimum_network_size: NonZeroU64,
     pub data_replication_factor: u64,
     pub activity_threshold_sensitivity: u64,
+    pub pow_mining_pool: Arc<ThreadPool>,
 }
 
 impl<BackendSettings> RunningBlendConfig<BackendSettings> {

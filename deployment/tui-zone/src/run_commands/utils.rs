@@ -341,6 +341,7 @@ pub fn build_deposit_op(
 pub fn funding_config(args: &NodeKeyArgs) -> RunResult<FundingConfig> {
     Ok(FundingConfig {
         funding_pk: decode_zk_public_key_hex(&args.funding_pk)?,
+        change_pk: None,
         max_tx_fee: args.max_tx_fee.into(),
         priority_fee_percent: args.priority_fee_percent,
     })

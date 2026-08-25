@@ -13,11 +13,12 @@ use crate::{
     events::TxEvent,
     mantle::{
         Value,
+        batch::DeferredZkpVerification,
         channel::{ChannelState, Channels, Error},
         gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
-            verification_mode, verification_mode::VerificationMode,
+            verification_mode::{self, VerificationMode},
         },
         ops::{SignedOp, channel::config::Keys},
         transactions::{hash::TxHashView, states::VerificationState},
@@ -116,7 +117,11 @@ impl VerifiableOperation<verification_mode::StandardMode> for InscriptionOp {
     type Context<'a> = InscriptionValidationContext<'a>;
     type Error = Error;
 
-    fn verify(&self, _proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        _proof: &Self::Proof,
+        context: &Self::Context<'_>,
+    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
         // Check if the channel exist otherwise the inscription is valid only if and
         // only if parent == ZERO
         if let Some(channel) = context.channels.channels.get(&self.channel_id).cloned() {
@@ -147,7 +152,8 @@ impl VerifiableOperation<verification_mode::StandardMode> for InscriptionOp {
             });
         }
 
-        Ok(())
+        // No deferred proof verification because it's cheap and done by `preverify`.
+        Ok(None)
     }
 }
 

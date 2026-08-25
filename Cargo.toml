@@ -252,6 +252,7 @@ quote                              = { default-features = false, version = "1" }
 rand                               = { default-features = false, version = "0.8" }
 rand_chacha                        = { default-features = false, version = "0.3" }
 rand_core                          = { default-features = false, version = "0.6.4" }
+rayon                              = { default-features = false, version = "1.12" }
 redb                               = { default-features = false, version = "2.2" }
 reqwest                            = { default-features = false, version = "0.12" }
 rocksdb                            = { default-features = false, version = "0.24" }

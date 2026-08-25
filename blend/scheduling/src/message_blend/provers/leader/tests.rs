@@ -1,8 +1,10 @@
 use core::time::Duration;
+use std::sync::Arc;
 
 use futures::stream::repeat;
 use lb_blend_proofs::{quota::Quota, selection::inputs::VerifyInputs};
 use lb_cryptarchia_engine::Epoch;
+use rayon::ThreadPoolBuilder;
 use test_log::test;
 use tokio::time::timeout;
 
@@ -26,6 +28,7 @@ async fn proof_generation() {
             public_inputs,
             encapsulation_layers: 1.try_into().unwrap(),
             epoch: Epoch::new(0),
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
         // Each winning slot yields `message_quota` (= `leadership_quota`) proofs; a
         // repeated slot stream keeps the generator supplied across messages.

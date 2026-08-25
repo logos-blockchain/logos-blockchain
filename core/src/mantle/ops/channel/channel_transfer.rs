@@ -5,11 +5,13 @@ use crate::{
     events::TxEvent,
     mantle::{
         TxHash, Value,
+        batch::DeferredZkpVerification,
         channel::{Channels, Error},
         gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation, Utxo,
-            Utxos, VerifiableOperation, verification_mode, verification_mode::VerificationMode,
+            Utxos, VerifiableOperation,
+            verification_mode::{self, VerificationMode},
         },
         ops::{
             OpId, SignedOp,
@@ -89,7 +91,11 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelTransferOp 
     type Context<'a> = ChannelTransferValidationContext<'a>;
     type Error = Error;
 
-    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::Context<'_>,
+    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
         verify_channel_multi_sig(
             &self.channel_id,
             proof,
@@ -134,7 +140,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelTransferOp 
             });
         }
 
-        // Check the signatures
+        // Check the signatures. Don't defer this because ed25519 verification is cheap.
         for sig in signatures {
             if channel
                 .accredited_keys
@@ -147,7 +153,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelTransferOp 
             }
         }
 
-        Ok(())
+        Ok(None)
     }
 }
 

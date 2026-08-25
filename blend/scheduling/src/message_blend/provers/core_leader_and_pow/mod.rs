@@ -69,7 +69,7 @@ where
     ) -> Self {
         Self {
             core_and_leader_proofs_generator: RealCoreAndLeaderProofsGenerator::new(
-                settings,
+                settings.clone(),
                 core_proof_of_quota_generator,
             ),
             // The `PoW` branch depends only on public epoch information, so

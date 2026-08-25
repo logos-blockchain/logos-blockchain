@@ -1,11 +1,12 @@
 use core::hash::Hash;
-use std::num::NonZeroU64;
+use std::{num::NonZeroU64, sync::Arc};
 
 use lb_blend_message::{
     Error, PaddedPayloadBody, crypto::proofs::PoQVerificationInputsMinusSigningKey,
     input::EncapsulationInput,
 };
 use lb_cryptarchia_engine::Epoch;
+use rayon::ThreadPool;
 
 use crate::{
     membership::Membership,
@@ -64,6 +65,7 @@ where
         public_info: PoQVerificationInputsMinusSigningKey,
         winning_pol_info_stream: WinningPolInfoStream,
         epoch: Epoch,
+        pow_mining_pool: Arc<ThreadPool>,
     ) -> Self {
         let generator_settings = ProofsGeneratorSettings {
             local_node_index: membership.local_index(),
@@ -71,6 +73,7 @@ where
             public_inputs: public_info,
             encapsulation_layers: num_blend_layers,
             epoch,
+            pow_mining_pool,
         };
         Self {
             num_blend_layers,

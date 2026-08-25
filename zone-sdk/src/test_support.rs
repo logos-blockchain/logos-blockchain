@@ -339,6 +339,7 @@ impl adapter::Node for MockNode {
 pub fn funding_config() -> FundingConfig {
     FundingConfig {
         funding_pk: Fr::from(1u64).into(),
+        change_pk: None,
         max_tx_fee: GasCost::new(u64::MAX),
         priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
     }

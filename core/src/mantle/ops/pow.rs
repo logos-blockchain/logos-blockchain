@@ -12,6 +12,7 @@ use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
         Note, TxHash, Utxo, Value,
+        batch::DeferredZkpVerification,
         gas::{Gas, MainnetGasProfile, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
@@ -293,14 +294,18 @@ impl VerifiableOperation<verification_mode::StandardMode> for ClaimPowRewardOp {
     type Context<'a> = ClaimPoWRewardVerificationContext<'a>;
     type Error = ClaimPowRewardError;
 
-    fn verify(&self, _proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        _proof: &Self::Proof,
+        context: &Self::Context<'_>,
+    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
         context.are_pow_reward_enabled()?;
         context.accept_claim::<{ SLOT_WINDOW }>(self.block_hash)?;
         context.validate_current_epoch_nonce(self.epoch_nonce)?;
         let puzzle_ticket = self.get_puzzle_ticket();
         context.validate_difficulty_reward(puzzle_ticket)?;
         context.validate_double_claiming(puzzle_ticket)?;
-        Ok(())
+        Ok(None)
     }
 }
 
@@ -529,7 +534,12 @@ mod tests {
     fn validate_accepts_claim_with_current_epoch_nonce() {
         let nullifiers = HashTrieMapSync::new_sync();
         let ctx = accepting_context(&nullifiers);
-        assert_eq!(claim_op(CURRENT_EPOCH).verify(&NoOpProof, &ctx), Ok(()));
+        assert!(
+            claim_op(CURRENT_EPOCH)
+                .verify(&NoOpProof, &ctx)
+                .expect("stateful verification must succeed")
+                .is_none()
+        );
     }
 
     #[test]
@@ -538,7 +548,12 @@ mod tests {
         // stays claimable, so the previous epoch's nonce is also accepted.
         let nullifiers = HashTrieMapSync::new_sync();
         let ctx = accepting_context(&nullifiers);
-        assert_eq!(claim_op(PREVIOUS_EPOCH).verify(&NoOpProof, &ctx), Ok(()));
+        assert!(
+            claim_op(PREVIOUS_EPOCH)
+                .verify(&NoOpProof, &ctx)
+                .expect("stateful verification must succeed")
+                .is_none()
+        );
     }
 
     #[test]
@@ -547,14 +562,14 @@ mod tests {
         let ctx = accepting_context(&nullifiers);
         let op = claim_op(PREVIOUS_EPOCH - 1);
         assert_eq!(
-            op.verify(&NoOpProof, &ctx),
-            Err(ClaimPowRewardError::MismatchEpochNonce {
+            op.verify(&NoOpProof, &ctx).err().unwrap(),
+            ClaimPowRewardError::MismatchEpochNonce {
                 claim: op.epoch_nonce,
                 accepted: (
                     nonce_for_epoch(PREVIOUS_EPOCH),
                     nonce_for_epoch(CURRENT_EPOCH)
                 ),
-            })
+            }
         );
     }
 
@@ -566,8 +581,11 @@ mod tests {
         // pass, and this op's ticket is not zero.
         ctx.reward_difficulty = Fr::ZERO;
         assert_eq!(
-            claim_op(CURRENT_EPOCH).verify(&NoOpProof, &ctx),
-            Err(ClaimPowRewardError::InvalidPoWRewardTicket)
+            claim_op(CURRENT_EPOCH)
+                .verify(&NoOpProof, &ctx)
+                .err()
+                .unwrap(),
+            ClaimPowRewardError::InvalidPoWRewardTicket
         );
     }
 
@@ -581,8 +599,8 @@ mod tests {
         let mut ctx = accepting_context(&nullifiers);
         ctx.reward_difficulty = op.get_puzzle_ticket().into();
         assert_eq!(
-            op.verify(&NoOpProof, &ctx),
-            Err(ClaimPowRewardError::InvalidPoWRewardTicket)
+            op.verify(&NoOpProof, &ctx).err().unwrap(),
+            ClaimPowRewardError::InvalidPoWRewardTicket
         );
     }
 
@@ -593,8 +611,8 @@ mod tests {
             HashTrieMapSync::new_sync().insert(op.get_puzzle_ticket(), Slot::from(45u64));
         let ctx = accepting_context(&nullifiers);
         assert_eq!(
-            op.verify(&NoOpProof, &ctx),
-            Err(ClaimPowRewardError::DoubleClaimed)
+            op.verify(&NoOpProof, &ctx).err().unwrap(),
+            ClaimPowRewardError::DoubleClaimed
         );
     }
 

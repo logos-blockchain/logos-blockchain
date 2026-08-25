@@ -3,6 +3,7 @@ use std::{
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
+    sync::Arc,
     time::Duration,
 };
 
@@ -39,7 +40,7 @@ use lb_blend::{
                     DecapsulatedMessageType, MultiLayerDecapsulationOutput,
                 },
             },
-            provers::core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
+            provers::{core_leader_and_pow::CoreLeaderAndPowProofsGenerator, pow::new_mining_pool},
         },
         message_scheduler::{
             OldEpochMessageScheduler, ProcessedMessageScheduler,
@@ -382,6 +383,7 @@ where
             zk: blend_config.zk,
             data_replication_factor: blend_config.data_replication_factor,
             activity_threshold_sensitivity: blend_config.activity_threshold_sensitivity,
+            pow_mining_pool: new_mining_pool(),
         };
         let (
             mut remaining_epoch_stream,
@@ -626,6 +628,7 @@ where
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: blend_config.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: blend_config.num_blend_layers,
+            pow_mining_pool: Arc::clone(&blend_config.pow_mining_pool),
         },
         current_epoch_poq_verification_inputs,
         current_epoch_core_poq_generator
@@ -1222,6 +1225,7 @@ where
                             .non_ephemeral_signing_key
                             .derive_x25519(),
                         num_blend_layers: settings.num_blend_layers,
+                        pow_mining_pool: Arc::clone(&settings.pow_mining_pool),
                     },
                     new_poq_verification_inputs,
                     core_poq_generator,

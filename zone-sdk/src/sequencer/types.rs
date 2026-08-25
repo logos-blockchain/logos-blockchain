@@ -79,6 +79,33 @@ pub struct WithdrawArg {
     pub outputs: Outputs,
 }
 
+/// Which channel notes fund the transfer half of an atomic withdraw.
+///
+/// The withdraw first transfers channel notes to the recipient keys, so the
+/// bundle has to consume enough channel notes to cover the withdrawn amount.
+/// [`Self::Auto`] lets the SDK pick them — covering with the newest notes first
+/// (spending recent notes and preserving the older, matured positions) and
+/// sweeping dust into the remaining input slots to keep the wallet compact.
+/// [`Self::Explicit`] pins an exact input set the caller has chosen — e.g. to
+/// apply its own dust/age policy — which the SDK validates against the tracked
+/// note set. A caller sources those ids from
+/// [`ZoneSequencer::channel_wallet`](super::ZoneSequencer::channel_wallet),
+/// which lists the tracked [`ChannelNote`]s (id, value, pk, slot).
+///
+/// On orphan recovery the input choice need not be reproduced: republish with
+/// `Auto` (reselects the right notes for the new branch) or a fresh `Explicit`
+/// set re-derived from the current `channel_wallet()` view. The rebuilt bundle
+/// re-anchors on the current tip, so the orphaned one can no longer land — the
+/// input set carries no identity of its own.
+#[derive(Debug, Clone)]
+pub enum WithdrawInputs {
+    /// Let the SDK select covering notes from the tracked note set.
+    Auto,
+    /// Use exactly these notes, in this order — typically chosen from
+    /// [`ZoneSequencer::channel_wallet`](super::ZoneSequencer::channel_wallet).
+    Explicit(Vec<NoteId>),
+}
+
 /// A tx reported in a [`ChannelUpdate`], in both `adopted` and `orphaned`.
 ///
 /// The variants mirror the submission flows, so an orphaned entry is
@@ -89,8 +116,9 @@ pub struct WithdrawArg {
 /// - [`ChannelUpdateTx::AtomicWithdraw`] →
 ///   [`SequencerHandle::publish_atomic_withdraw`](super::SequencerHandle::publish_atomic_withdraw)
 ///   with `info.inscription.payload` and `WithdrawArg`s reconstructed from
-///   `info.withdraws[i].op.inputs`. The SDK fills a fresh `parent_msg`
-///   internally on each publish.
+///   `info.withdraws[i].op.inputs`. The SDK fills a fresh `parent_msg` and
+///   reselects the transfer inputs per [`WithdrawInputs`] on each publish — the
+///   original input selection need not be reproduced.
 /// - [`ChannelUpdateTx::Custom`] → the `prepare_tx` + `submit_signed_tx` flow:
 ///   the SDK cannot demystify the tx, so it hands back the whole
 ///   [`SignedMantleTx`] and the caller's own logic decides how to parse and
@@ -141,6 +169,11 @@ impl ChannelUpdateTx {
 pub struct FundingConfig {
     /// The node wallet key that pays transaction fees.
     pub funding_pk: ZkPublicKey,
+    /// Where an atomic withdraw's transfer change (the overpay beyond the
+    /// withdrawn amount, plus any swept dust) is sent. `None` routes change
+    /// back to [`Self::funding_pk`]; set it to keep the funding key from
+    /// doubling as an implicit custody destination for channel change.
+    pub change_pk: Option<ZkPublicKey>,
     /// Absolute hard cap on the fee of a single funded transaction.
     pub max_tx_fee: GasCost,
     /// Percentage of the final mandatory fee reserved as a priority reserve

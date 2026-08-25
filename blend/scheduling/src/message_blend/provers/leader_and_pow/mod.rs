@@ -52,7 +52,7 @@ impl LeaderAndPowProofsGenerator for RealLeaderAndPowProofsGenerator {
     ) -> Self {
         Self {
             leader_proofs_generator: RealLeaderProofsGenerator::new(
-                settings,
+                settings.clone(),
                 winning_pol_info_stream,
             ),
             pow_proofs_generator: RealPowProofsGenerator::new(settings),

@@ -9,11 +9,12 @@ use crate::{
     events::TxEvent,
     mantle::{
         Value,
+        batch::DeferredZkpVerification,
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
         gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, VerifiableOperation,
-            verification_mode, verification_mode::VerificationMode,
+            verification_mode::{self, VerificationMode},
         },
         ops::SignedOp,
         transactions::{hash::TxHashView, states::VerificationState},
@@ -87,7 +88,11 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
     type Context<'a> = ChannelConfigValidationContext<'a>;
     type Error = Error;
 
-    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::Context<'_>,
+    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
         // Check that the indexes are unique and there is the same number of proof and
         // index. This is enforced by the proof structure that enforces it.
 
@@ -111,7 +116,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
                 });
             }
 
-            // Check the signatures
+            // Check the signatures. Don't defer this because ed25519 verification is cheap.
             for signature in signatures {
                 if channel
                     .accredited_keys
@@ -136,7 +141,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
             });
         }
 
-        Ok(())
+        Ok(None)
     }
 }
 

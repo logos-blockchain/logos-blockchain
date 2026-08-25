@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use ::core::{num::NonZeroU64, pin::Pin};
 use futures::Stream;
 use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
@@ -7,6 +9,7 @@ use lb_blend_proofs::{
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
+use rayon::ThreadPool;
 
 pub mod core;
 pub mod core_and_leader;
@@ -36,11 +39,12 @@ pub struct BlendLayerProof {
     pub ephemeral_signing_key: UnsecuredEd25519Key,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ProofsGeneratorSettings {
     pub local_node_index: Option<usize>,
     pub membership_size: usize,
     pub public_inputs: PoQVerificationInputsMinusSigningKey,
     pub encapsulation_layers: NonZeroU64,
     pub epoch: Epoch,
+    pub pow_mining_pool: Arc<ThreadPool>,
 }

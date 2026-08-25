@@ -42,6 +42,7 @@ use overwatch::{
     overwatch::{OverwatchHandle, commands::OverwatchCommand},
     services::{ServiceData, relay::OutboundRelay, state::StateUpdater},
 };
+use rayon::ThreadPoolBuilder;
 use tokio::sync::{
     broadcast::{self},
     mpsc, watch,
@@ -108,6 +109,7 @@ pub fn settings<BackendSettings>(
         minimum_network_size,
         data_replication_factor,
         activity_threshold_sensitivity: 1,
+        pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
     }
 }
 

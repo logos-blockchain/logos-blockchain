@@ -92,15 +92,10 @@ pub(super) fn attach_transfer_proof(
 }
 
 /// Build per-op proofs for an atomic withdraw bundle. The same single-signer
-/// `ChannelMultiSigProof` is reused for every `ChannelWithdraw` op (all sign
-/// the same tx hash with the same key), the inscription op carries an
-/// `Ed25519Sig` proof and the fee transfer — when the transaction was funded
-/// — carries the wallet's proof.
-/// TODO: enable it back when wallet tracks channel notes
-#[expect(
-    dead_code,
-    reason = "Belongs to the atomic withdraw flow; restored with `do_publish_atomic_withdraw`."
-)]
+/// `ChannelMultiSigProof` is reused for every `ChannelTransfer` and
+/// `ChannelWithdraw` op (all sign the same tx hash with the same key), the
+/// inscription op carries an `Ed25519Sig` proof and the fee transfer — when
+/// the transaction was funded — carries the wallet's proof.
 pub(super) fn build_atomic_withdraw_ops_proofs(
     tx: &impl MantleTx,
     own_key_index: ChannelKeyIndex,
@@ -113,7 +108,10 @@ pub(super) fn build_atomic_withdraw_ops_proofs(
     let mut ops_proofs = OpsProofs::empty();
     for op in tx.ops() {
         match op {
-            Op::ChannelWithdraw(_) => {
+            // Both the channel transfer (recipient + change notes) and the
+            // withdraw (releasing the recipient notes) are single-signer
+            // multi-sig proofs over the same funded tx hash.
+            Op::ChannelTransfer(_) | Op::ChannelWithdraw(_) => {
                 ops_proofs
                     .try_push(OpProof::ChannelMultiSigProof(withdraw_proof.clone()))
                     .map_err(|e| Error::Network(format!("too many operation proofs: {e:?}")))?;
@@ -144,11 +142,6 @@ pub(super) fn build_atomic_withdraw_ops_proofs(
 /// Find the position of the SDK's public key in the channel's `accredited_keys`
 /// list. Returns an error if our key is not on the accredited list (we can't
 /// sign for this channel).
-/// TODO: reactivate when channel notes are tracked by the wallet
-#[expect(
-    dead_code,
-    reason = "Belongs to the atomic withdraw flow; restored with `do_publish_atomic_withdraw`."
-)]
 pub(super) fn find_own_key_index(
     channel_state: &ChannelState,
     signing_key: &Ed25519Key,

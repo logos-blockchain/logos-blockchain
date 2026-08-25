@@ -4,6 +4,7 @@ use crate::{
     events::TxEvent,
     mantle::{
         GasProfile,
+        batch::DeferredZkpVerification,
         gas::{Gas, OperationGas},
         ledger::{
             ExecutableOperation, Operation, PreverifiableOperation, ProvableOperation,
@@ -73,10 +74,13 @@ impl<T: VerifiableOperation<Mode>, Mode: VerificationMode> SignedOp<T, Preverifi
     pub fn verify(
         self,
         context: &T::Context<'_>,
-    ) -> Result<SignedOp<T, Verified, Mode>, (Self, T::Error)> {
+    ) -> Result<VerifiedSignedOp<T, Mode>, (Self, T::Error)> {
         let verify_result = self.operation.verify(&self.proof, context);
         match verify_result {
-            Ok(()) => Ok(self.into_state()),
+            Ok(deferred_zkp) => Ok(VerifiedSignedOp {
+                signed_op: self.into_state(),
+                deferred_zkp,
+            }),
             Err(error) => Err((self, error)),
         }
     }
@@ -102,4 +106,10 @@ where
     Mode: VerificationMode,
 {
     const GAS_COST: Gas = T::GAS_COST;
+}
+
+#[expect(dead_code, reason = "TODO: use SignedOp::verify")]
+pub struct VerifiedSignedOp<T: ProvableOperation, Mode: VerificationMode> {
+    signed_op: SignedOp<T, Verified, Mode>,
+    deferred_zkp: Option<DeferredZkpVerification>,
 }

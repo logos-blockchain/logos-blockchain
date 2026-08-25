@@ -49,6 +49,7 @@ where
         let EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key,
             num_blend_layers,
+            pow_mining_pool,
         } = settings;
         Self {
             receiver_processor: ReceiverEpochCryptographicProcessor::new(
@@ -63,6 +64,7 @@ where
                 public_info,
                 core_proof_of_quota_generator,
                 epoch,
+                pow_mining_pool,
             ),
         }
     }
@@ -126,7 +128,7 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier> DerefMut
 
 #[cfg(test)]
 mod test {
-    use std::num::NonZeroU64;
+    use std::{num::NonZeroU64, sync::Arc};
 
     use futures::{StreamExt as _, stream::repeat};
     use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
@@ -142,6 +144,7 @@ mod test {
     use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
     use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
     use multiaddr::{Multiaddr, PeerId};
+    use rayon::ThreadPoolBuilder;
 
     use crate::{
         membership::{Membership, Node},
@@ -175,6 +178,7 @@ mod test {
             EpochCryptographicProcessorSettings {
                 non_ephemeral_encryption_key: [0; _].into(),
                 num_blend_layers: NonZeroU64::new(1).unwrap(),
+                pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             },
             Membership::new_without_local(&[Node {
                 address: Multiaddr::empty(),

@@ -1,5 +1,5 @@
 use core::{num::NonZeroU64, time::Duration};
-use std::collections::VecDeque;
+use std::{collections::VecDeque, sync::Arc};
 
 use futures::{StreamExt as _, stream::repeat};
 use lb_blend::{
@@ -17,6 +17,7 @@ use lb_key_management_system_service::keys::Ed25519Key;
 use lb_poq::{CORE_MERKLE_TREE_HEIGHT, Quota};
 use lb_utils::blake_rng::BlakeRng;
 use rand::SeedableRng as _;
+use rayon::ThreadPoolBuilder;
 
 use crate::{
     core::{
@@ -86,6 +87,7 @@ async fn test_handle_incoming_blend_message() {
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
         &public_info,
         (),
@@ -138,6 +140,7 @@ async fn test_handle_incoming_blend_message() {
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
         &public_info,
         (),
@@ -236,6 +239,7 @@ async fn test_handle_incoming_blend_message() {
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
         &new_epoch_info(epoch, membership, &settings),
         (),
@@ -320,6 +324,7 @@ async fn test_duplicate_decapsulated_replica_handled_gracefully() {
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
         &public_info,
         (),
@@ -413,6 +418,7 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
         &public_info_0,
         (),
@@ -432,6 +438,7 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
         &public_info_1,
         (),
@@ -566,6 +573,7 @@ async fn test_handle_epoch_event() {
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
         &public_info,
         (),
@@ -739,6 +747,7 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
         &public_info,
         (),
@@ -841,6 +850,7 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
         &public_info,
         (),
@@ -942,6 +952,7 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
         &public_info,
         (),
@@ -1015,6 +1026,7 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
         &public_info,
         (),
@@ -1525,6 +1537,7 @@ async fn test_proof_generator_epoch_binding() {
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
         &public_info_0,
         (),
@@ -1534,6 +1547,7 @@ async fn test_proof_generator_epoch_binding() {
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         },
         &public_info_1,
         (),

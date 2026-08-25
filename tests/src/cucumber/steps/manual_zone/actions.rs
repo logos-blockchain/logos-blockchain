@@ -32,7 +32,7 @@ use super::{
         publish_message_with_retry, sequencer_config, sequencer_config_with_pending_submit_depth,
         start_balance_aware_policy, start_custom_republish_policy, start_republish_lineage_policy,
         start_sequencer_event_loop, start_sorted_conflict_policy, submit_atomic_zone_deposit,
-        submit_zone_deposit, submit_zone_withdraw,
+        submit_zone_channel_split, submit_zone_deposit, submit_zone_withdraw,
     },
     tables::{ConcurrentZoneMessageRow, ZoneNodeResourcesRow, group_zone_messages_by_sequencer},
 };
@@ -417,6 +417,7 @@ pub(super) async fn submit_zone_deposit_transaction(
     let ZoneDeposit {
         deposit,
         reserved_inputs,
+        channel_notes,
     } = build_zone_deposit(
         available_utxos,
         world.zone.sequencer_channel_id(&channel_alias)?,
@@ -429,6 +430,9 @@ pub(super) async fn submit_zone_deposit_transaction(
         .await
         .map_err(|error| zone_step_error(step, &error))?;
 
+    world
+        .zone
+        .remember_deposit_channel_notes(transaction_alias.clone(), channel_notes);
     world
         .zone
         .remember_submitted_deposit(transaction_alias.clone(), deposit, amount);
@@ -459,6 +463,7 @@ pub(super) async fn submit_zone_multi_deposit_transaction(
     let ZoneDeposit {
         deposit,
         reserved_inputs,
+        channel_notes,
     } = build_zone_deposit_from_values(
         available_utxos,
         world.zone.sequencer_channel_id(&channel_alias)?,
@@ -473,9 +478,51 @@ pub(super) async fn submit_zone_multi_deposit_transaction(
 
     world
         .zone
+        .remember_deposit_channel_notes(transaction_alias.clone(), channel_notes);
+    world
+        .zone
         .remember_submitted_deposit(transaction_alias.clone(), deposit, amount);
     record_zone_wallet_submission(world, &wallet.wallet_name, response, reserved_inputs)?;
     world.remember_submitted_transaction(transaction_alias, response);
+
+    Ok(())
+}
+
+pub(super) async fn submit_zone_channel_split_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: &str,
+    deposit_alias: &str,
+    dust_count: usize,
+    transaction_alias: String,
+) -> StepResult {
+    let node_url = log_step_error(step, world.zone_node_url_for_sequencer(sequencer_alias))?;
+    let wallet = log_step_error(step, resolve_zone_wallet(world, sequencer_alias))?;
+    let public_key = log_step_error(step, wallet.public_key())?;
+    let channel_id = world.zone.sequencer_channel_id(sequencer_alias)?;
+    let signing_key =
+        log_step_error(step, world.zone.sequencer_signing_key(sequencer_alias))?.clone();
+    let input_note = *log_step_error(
+        step,
+        world.zone.resolve_deposit_channel_notes(deposit_alias),
+    )?
+    .first()
+    .ok_or_else(|| StepError::LogicalError {
+        message: format!("Zone deposit '{deposit_alias}' created no channel notes to split"),
+    })?;
+
+    let tx_hash = submit_zone_channel_split(
+        &node_url,
+        channel_id,
+        &signing_key,
+        public_key,
+        input_note,
+        dust_count,
+    )
+    .await
+    .map_err(|error| zone_step_error(step, &error))?;
+
+    world.remember_submitted_transaction(transaction_alias, tx_hash);
 
     Ok(())
 }
@@ -616,22 +663,25 @@ pub(super) async fn publish_atomic_zone_withdraw_transaction(
         .map_err(|error| zone_step_error(step, &error))?
     };
 
-    if submission.withdraws.len() != withdraw_rows.len() {
+    // A bundle carries a single `ChannelWithdrawOp` that releases every
+    // recipient note the transfer created, regardless of how many withdraw args
+    // were passed. Remember that one op under each row alias so per-withdraw
+    // indexer assertions all resolve to the same finalized op.
+    let [withdraw_op] = submission.withdraws.as_slice() else {
         return Err(zone_step_error(
             step,
             &super::support::ZoneTestError::SubmitWithdraw {
                 message: format!(
-                    "atomic withdraw bundle produced {} withdraw ops, expected {}",
+                    "atomic withdraw bundle produced {} withdraw ops, expected exactly 1",
                     submission.withdraws.len(),
-                    withdraw_rows.len(),
                 ),
             },
         ));
-    }
-    for ((alias, _), withdraw_op) in withdraw_rows.iter().zip(submission.withdraws) {
+    };
+    for (alias, _) in &withdraw_rows {
         world
             .zone
-            .remember_submitted_withdraw(alias.clone(), withdraw_op);
+            .remember_submitted_withdraw(alias.clone(), withdraw_op.clone());
     }
     remember_published_zone_message(
         world,
@@ -796,6 +846,7 @@ fn sequencer_funding(
     let funding_pk = world.funding_wallet(node_name)?.public_key()?;
     Ok(FundingConfig {
         funding_pk,
+        change_pk: None,
         max_tx_fee: GasCost::new(u64::MAX),
         priority_fee_percent: ZONE_TEST_PRIORITY_FEE_PERCENT,
     })
