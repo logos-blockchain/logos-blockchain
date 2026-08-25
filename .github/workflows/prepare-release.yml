@@ -17,8 +17,6 @@ concurrency:
 
 env:
   TEST_TAG_NAME: release-ci-test
-  # Release candidates always point at the fixed devnet version of the `blockchain_module` package.
-  PRERELEASE_MODULE_VERSION: 0.0.999
 
 jobs:
   configure-version:
@@ -132,14 +130,11 @@ jobs:
             fi
           done
 
-          # Release candidates target the devnet and always point at the fixed devnet version of the
-          # `blockchain_module` package, while releases target the testnet and publish the package under
-          # the same version as the node.
+          # The `blockchain_module` package is published under the same version as the node, for both
+          # releases and release candidates. Only the network they bootstrap against differs.
           if [[ "$IS_PRERELEASE" == "true" ]]; then
-            BLOCKCHAIN_MODULE_VERSION="$PRERELEASE_MODULE_VERSION"
             PEERS_FILE=.github/release/devnet-peers.txt
           else
-            BLOCKCHAIN_MODULE_VERSION="$VERSION"
             PEERS_FILE=.github/release/testnet-peers.txt
           fi
           # `sed`'s `r` command ignores a missing file, which would silently produce an empty peer list.
@@ -148,9 +143,9 @@ jobs:
             exit 1
           fi
 
-          echo "Setting '$MODULE_VERSION_PLACEHOLDER' to '$BLOCKCHAIN_MODULE_VERSION' and '$INITIAL_PEERS_PLACEHOLDER' to the contents of '$PEERS_FILE'."
+          echo "Setting '$MODULE_VERSION_PLACEHOLDER' to '$VERSION' and '$INITIAL_PEERS_PLACEHOLDER' to the contents of '$PEERS_FILE'."
 
-          sed -e "s|$MODULE_VERSION_PLACEHOLDER|$BLOCKCHAIN_MODULE_VERSION|g" \
+          sed -e "s|$MODULE_VERSION_PLACEHOLDER|$VERSION|g" \
               -e "/$INITIAL_PEERS_PLACEHOLDER/r $PEERS_FILE" \
               -e "/$INITIAL_PEERS_PLACEHOLDER/d" \
               "$TEMPLATE" > "$OUTPUT"

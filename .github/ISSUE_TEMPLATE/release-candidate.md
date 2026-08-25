@@ -63,7 +63,7 @@ Most of the template content is the same or very similar to what is in `release.
 - [ ] Enter the [logos-blockchain-module] repository locally.
 - [ ] Branch out from the latest `master` commit with a release branch named `release/X.Y.Z`. If this is not the first release candidate for this version, HARD reset the branch on top of `master` and force-push the new tip
 - [ ] Bump the `logos-blockchain.url` input in the `flake.nix` file: `logos-blockchain.url = "github:logos-blockchain/logos-blockchain?ref=X.Y.Z-rc.N";`
-- [ ] Set the version to `0.0.999` inside the `metadata.json` file
+- [ ] Set the version to `X.Y.Z-rc.N` inside the `metadata.json` file
 - [ ] Re-generate the `flake.lock` file using the command `nix flake lock`
 - [ ] Commit the changes and tag them with `X.Y.Z-rc.N`
 - [ ] Push the commit and the tag
