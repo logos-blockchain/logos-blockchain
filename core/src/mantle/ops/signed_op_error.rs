@@ -15,4 +15,14 @@ impl OpProofMismatch {
             actual_proof,
         }
     }
+
+    #[must_use]
+    pub const fn operation(&self) -> &Op {
+        &self.operation
+    }
+
+    #[must_use]
+    pub const fn actual_proof(&self) -> &OpProof {
+        &self.actual_proof
+    }
 }
