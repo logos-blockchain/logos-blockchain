@@ -6,11 +6,7 @@
 use std::collections::HashSet;
 
 use lb_common_http_client::{ProcessedBlockEvent, Slot};
-use lb_core::mantle::{
-    channel::ChannelState,
-    ops::channel::{ChannelId, MsgId},
-    traits::Hashable as _,
-};
+use lb_core::mantle::{channel::ChannelState, ops::channel::ChannelId, traits::Hashable as _};
 use tracing::{debug, error, warn};
 
 use super::{
@@ -515,13 +511,7 @@ where
         // block: a foreign config landing alone moves no message lineage and
         // reports no update, but still invalidates a pending config of ours.
         let stale_configs = match (self.state.as_mut(), self.current_tip) {
-            (Some(s), Some(tip)) => {
-                let config_tip = self
-                    .channel_state
-                    .as_ref()
-                    .map_or_else(MsgId::root, |channel| channel.config_tip_hash);
-                s.shed_stale_pending_configs(tip, config_tip)
-            }
+            (Some(s), Some(tip)) => s.shed_stale_pending_configs(tip),
             _ => Vec::new(),
         };
         let seen: HashSet<_> = channel_update
@@ -533,6 +523,31 @@ where
             if !seen.contains(&tx.mantle_tx().hash()) {
                 channel_update.orphaned.push(ChannelUpdateTx::Custom(tx));
             }
+        }
+
+        // Shed the not-on-branch pending tail a config change may have
+        // invalidated. Only never-mined entries are shed, so re-posts form at
+        // most a competing branch that adoption collapses — never a duplicate.
+        let config_shed = match (self.state.as_mut(), self.current_tip) {
+            (Some(s), Some(tip)) => s.shed_pending_inscriptions_on_config(tip),
+            _ => Vec::new(),
+        };
+        let config_shed_any = !config_shed.is_empty();
+        let mut seen: HashSet<_> = channel_update
+            .orphaned
+            .iter()
+            .map(ChannelUpdateTx::tx_hash)
+            .collect();
+        for entry in config_shed {
+            let tx = orphan_from_shed(entry);
+            if seen.insert(tx.tx_hash()) {
+                channel_update.orphaned.push(tx);
+            }
+        }
+        // Reset the chaining pointer to the message tip so re-posts re-home
+        // there. This equals any reorg recovery tip, so the two don't conflict.
+        if config_shed_any && let (Some(s), Some(tip)) = (self.state.as_ref(), self.current_tip) {
+            self.last_msg_id = s.channel_tip_at(tip);
         }
 
         (
@@ -658,6 +673,7 @@ mod tests {
             ops::{
                 OpProof,
                 channel::{
+                    MsgId,
                     config::{ChannelConfigOp, Keys},
                     deposit::DepositOp,
                     inscribe::{Inscription, InscriptionOp},
@@ -1103,7 +1119,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn config_only_block_keeps_pending_inscription_and_message_tip() {
+    async fn config_only_block_orphans_pending_inscription_but_keeps_message_tip() {
         let channel_id = ChannelId::from([0; 32]);
         let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
 
@@ -1165,7 +1181,6 @@ mod tests {
             .expect("publish must resolve")
             .expect("publish should be accepted after Ready");
         let p_hash = result.inscription_id();
-        let p_msg = result.tx.inscription().this_msg;
 
         // Keep driving between the toggles so the down-edge is observed. The
         // config block is recognized by the `OnChain` status of its tx; the
@@ -1201,18 +1216,23 @@ mod tests {
         .await
         .expect("the config-only block must be processed");
 
+        // The config changes the channel view, so the pending inscription is
+        // shed and reported orphaned (to be resubmitted against the new view).
         assert!(
-            update.orphaned.is_empty(),
-            "a config-only block must not orphan the pending inscription; got {:?}",
+            update.orphaned.iter().any(|tx| tx.tx_hash() == p_hash),
+            "a config block must orphan the pending inscription; got {:?}",
             update.orphaned
         );
-        assert_eq!(
-            checkpoint.last_msg_id, p_msg,
-            "the config must not move the message tip"
-        );
         assert!(
-            checkpoint.pending_txs.iter().any(|(h, _)| *h == p_hash),
-            "the pending inscription must survive the config block"
+            checkpoint.pending_txs.iter().all(|(h, _)| *h != p_hash),
+            "the pending inscription must be shed from the pending set"
+        );
+        // The chaining pointer resets to the (unchanged) message tip so the
+        // resubmit re-posts there. Nothing was mined, so the tip is root.
+        assert_eq!(
+            checkpoint.last_msg_id,
+            MsgId::root(),
+            "the pointer resets to the message tip (root)"
         );
     }
 
