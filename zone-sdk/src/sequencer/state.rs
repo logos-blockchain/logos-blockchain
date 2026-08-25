@@ -136,10 +136,8 @@ pub struct TxState {
     /// [`Self::shed_stale_pending_configs`] so a pending config chaining on the
     /// finalized config tip is not falsely orphaned.
     finalized_config: MsgId,
-    /// The config tip at the branch when we last ran the config-driven
-    /// inscription shed. A change means a config landed (or the branch's config
-    /// lineage diverged on a reorg), so the accredited-key view changed and the
-    /// not-yet-mined pending tail is re-evaluated. Starts at [`MsgId::root`].
+    /// Config tip last seen by the config-driven inscription shed; a change
+    /// means a config landed (or the branch's config lineage diverged).
     observed_config_tip: MsgId,
     /// The channel's note set: finalized base + per-block overlay.
     wallet: ChannelWallet,
@@ -677,29 +675,13 @@ impl TxState {
         ordered
     }
 
-    /// Re-evaluate the not-yet-mined pending tail when the branch's config
-    /// view changes.
-    ///
-    /// A config landing is a new *possibility*, not a reorg: it changes the
-    /// accredited-key view without moving the message tip. Which pending
-    /// inscriptions actually took the new config is observed by reading the
-    /// block — [`Self::detect_channel_update`] adopts the ones that landed.
-    /// This pass handles only the complement: the pending entries **not on
-    /// this branch's tip** (not in the tip's safe set), i.e. the
-    /// not-yet-mined tail a config may have invalidated. They are shed
-    /// parent-first for orphan reporting; the caller resets the chaining
-    /// pointer to the (unchanged) message tip so their resubmits re-post
-    /// there as a competing branch.
-    ///
-    /// The exclusion of on-branch (mined) entries is what makes this
-    /// duplicate-free: a re-post is only ever of something that was **never on
-    /// chain**, so it forms at most a competing alternate — one copy is
-    /// adopted, the dead branch is cleaned by adoption/finalization, never a
-    /// real duplicate. Orphaning a mined inscription instead would re-post an
-    /// on-chain original as a second copy — the bug this scoping avoids. (A
-    /// later refinement can narrow further to only the entries the new
-    /// accredited keys actually invalidate — pure optimization.) No change to
-    /// the config tip → empty.
+    /// On a config-tip change, shed the pending entries **not on this branch's
+    /// tip** (not in the safe set) — the not-yet-mined tail a config may have
+    /// invalidated. Mined/on-branch entries are excluded: a config never
+    /// invalidates a landed inscription, so orphaning one would re-post an
+    /// on-chain original as a duplicate. The caller resets the chaining pointer
+    /// to the message tip so re-posts land as a competing branch. Unchanged
+    /// config tip → empty.
     pub fn shed_pending_inscriptions_on_config(&mut self, tip: HeaderId) -> Vec<PendingTx> {
         let config_tip = self.config_tip_at(tip);
         if config_tip == self.observed_config_tip {
@@ -2043,12 +2025,9 @@ mod tests {
         assert!(state.pending_other_contains(&c_hash));
     }
 
-    /// A config landing sheds only the not-yet-mined pending tail
-    /// (parent-first) for orphan reporting, and leaves an inscription
-    /// already mined on this branch alone: it is on chain, so re-posting it
-    /// would be a real duplicate, whereas the never-mined tail forms only a
-    /// competing branch. A later block with the same config tip sheds
-    /// nothing more.
+    /// A config landing sheds only the not-yet-mined pending tail; an
+    /// inscription already mined on this branch is kept (re-posting an on-chain
+    /// entry would duplicate). Same config tip on a later block sheds nothing.
     #[test]
     fn config_land_sheds_pending_tail_but_keeps_mined_inscription() {
         let genesis = header_id(0);

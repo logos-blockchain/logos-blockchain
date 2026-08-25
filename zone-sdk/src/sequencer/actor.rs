@@ -525,15 +525,9 @@ where
             }
         }
 
-        // A config landing is a new *possibility*, not a reorg: it changes the
-        // accredited-key view without moving the message tip. Adoption is
-        // observed by reading the block (`detect_channel_update` above adopts
-        // the inscriptions that took the new config). This pass handles the
-        // complement — the not-yet-mined pending tail *not on this branch* that
-        // a config may have invalidated — shedding it for orphan reporting.
-        // Because only never-mined entries are shed, their resubmits form at
-        // most a competing branch that adoption/finalization collapses to one
-        // chain, never a real duplicate.
+        // Shed the not-on-branch pending tail a config change may have
+        // invalidated. Only never-mined entries are shed, so re-posts form at
+        // most a competing branch that adoption collapses — never a duplicate.
         let config_shed = match (self.state.as_mut(), self.current_tip) {
             (Some(s), Some(tip)) => s.shed_pending_inscriptions_on_config(tip),
             _ => Vec::new(),
@@ -550,10 +544,8 @@ where
                 channel_update.orphaned.push(tx);
             }
         }
-        // Shedding the pending tail invalidates the chaining pointer: reset it
-        // to the (unchanged) message tip so resubmits re-post there as a
-        // competing branch. This equals any reorg recovery tip the message
-        // shed set above, so the two never fight over `last_msg_id`.
+        // Reset the chaining pointer to the message tip so re-posts re-home
+        // there. This equals any reorg recovery tip, so the two don't conflict.
         if config_shed_any && let (Some(s), Some(tip)) = (self.state.as_ref(), self.current_tip) {
             self.last_msg_id = s.channel_tip_at(tip);
         }

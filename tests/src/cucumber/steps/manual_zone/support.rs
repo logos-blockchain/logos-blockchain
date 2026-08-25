@@ -278,30 +278,19 @@ pub fn start_sorted_conflict_policy(
     to_policy_runtime(runner::spawn(sequencer, policy))
 }
 
-/// Inline policy: republish orphaned inscriptions that aren't already back on
-/// the canonical chain. Plain inscriptions only — bundles are not
-/// auto-republished (callers that issue bundles re-prepare with fresh withdraw
-/// nonces themselves). Assumes unique payloads, so the payload identifies the
-/// message; for repeating payloads see [`RepublishLineagePolicy`].
+/// Inline policy: republish orphaned inscriptions not already back on the
+/// canonical chain. Plain inscriptions only — bundles re-prepare themselves.
+/// Assumes unique payloads; for repeating payloads see
+/// [`RepublishLineagePolicy`].
 ///
-/// Maintains the on-chain state as two flat sets keyed by id (`this_msg`) — no
-/// intent-lineage map needed. Per block, in order: (1) remove orphaned by id,
-/// (2) add finalized by id (permanent — finalized entries can't be orphaned),
-/// (3) add adopted by id; then republish an orphan only if **no id in
-/// `canonical` still carries its payload**. Keying by id but deciding by
-/// payload is the trick: when an old twin is orphaned its id leaves while a
-/// live twin's id keeps the payload covered, so we never re-home a payload
-/// that's still on chain (the duplicate) yet still recover a payload that's
-/// genuinely gone. Carrying `canonical` cumulatively (not just this block's
-/// adopted) closes the reorg window where a copy adopted earlier hasn't
-/// finalized yet.
+/// Tracks canonical on-chain state keyed by id, decided by payload (see
+/// `on_event`): a dead twin's id leaves while a live twin keeps the payload
+/// covered, so a payload still on chain is never re-homed.
 #[derive(Default)]
 struct OrphanRepublishPolicy {
-    /// Canonical on-chain inscriptions by id: adopted-unfinalized + finalized.
+    /// Canonical on-chain inscriptions by id (adopted-unfinalized + finalized).
     canonical: HashMap<MsgId, Inscription>,
-    /// Permanent floor of finalized payloads — an independent guard so a
-    /// finalized payload is never re-homed even if the canonical accounting
-    /// churns.
+    /// Permanent floor of finalized payloads — never re-homed.
     finalized: HashSet<Inscription>,
 }
 
