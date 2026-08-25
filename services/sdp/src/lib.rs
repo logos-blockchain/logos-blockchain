@@ -18,7 +18,10 @@ use lb_core::{
         traits::Hashable as _,
         transactions::{MantleTxBuilder, states::Preverified},
     },
-    sdp::{ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, WithdrawMessage},
+    sdp::{
+        ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, ProviderId,
+        WithdrawMessage,
+    },
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_services_utils::overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings};
@@ -87,6 +90,7 @@ struct RuntimeDeclarationContext {
     declaration: RuntimeDeclaration,
     chain_epoch: u32,
     chain_slot: u64,
+    provider_id: ProviderId,
 }
 
 pub enum SdpMessage {
@@ -336,6 +340,7 @@ where
             },
             chain_epoch: u32::from(ledger_state.epoch_state().epoch),
             chain_slot: u64::from(ledger_state.slot()),
+            provider_id: declaration.provider_id,
         }))
     }
 
@@ -443,6 +448,7 @@ where
             declaration,
             chain_epoch,
             chain_slot,
+            provider_id,
         }) = self
             .try_fetch_runtime_declaration(declaration_id, chain_api)
             .await
@@ -464,7 +470,8 @@ where
             proof_epoch,
             chain_epoch,
             chain_slot,
-            provider_id = ?declaration.zk_id,
+            provider_id = ?provider_id,
+            zk_id = ?declaration.zk_id,
             declaration_id = ?declaration.id,
             "Requested SDP activity transaction submission"
         );
@@ -489,7 +496,8 @@ where
                     proof_epoch,
                     chain_epoch,
                     chain_slot,
-                    provider_id = ?declaration.zk_id,
+                    provider_id = ?provider_id,
+                    zk_id = ?declaration.zk_id,
                     declaration_id = ?declaration.id,
                     stage = "create",
                     error = %e,
@@ -507,7 +515,8 @@ where
             proof_epoch,
             chain_epoch,
             chain_slot,
-            provider_id = ?declaration.zk_id,
+            provider_id = ?provider_id,
+            zk_id = ?declaration.zk_id,
             declaration_id = ?declaration.id,
             tx_id = ?tx_id,
             "Created SDP activity transaction"
@@ -520,7 +529,8 @@ where
                 proof_epoch,
                 chain_epoch,
                 chain_slot,
-                provider_id = ?declaration.zk_id,
+                provider_id = ?provider_id,
+                zk_id = ?declaration.zk_id,
                 declaration_id = ?declaration.id,
                 stage = "submit",
                 tx_id = ?tx_id,
@@ -535,7 +545,8 @@ where
                 proof_epoch,
                 chain_epoch,
                 chain_slot,
-                provider_id = ?declaration.zk_id,
+                provider_id = ?provider_id,
+                zk_id = ?declaration.zk_id,
                 declaration_id = ?declaration.id,
                 tx_id = ?tx_id,
                 "Submitted SDP activity transaction"
