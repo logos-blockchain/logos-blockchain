@@ -395,60 +395,6 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
-  # A config landing changes the channel view without moving the message tip, so
-  # the sequencer sheds its pending inscriptions (reports them orphaned). With
-  # orphan-republish on, they must be re-posted respecting lineage and end up
-  # indexed in order — i.e. a config that lands while messages are pending must
-  # not lose or reorder them. SEQ_B holds three messages pending (it is off
-  # turn) while SEQ_A lands a second config, which triggers the shed.
-  Scenario: A config landing orphans pending inscriptions which then re-adopt in order
-    Given the genesis block has the following wallet resources:
-      | account_index | token_count | token_amount |
-      | 1             | 3           | 100000       |
-    And I have a cluster with capacity of 1 nodes
-    And I start nodes with wallet and sequencer resources:
-      | node_name | account_index | wallet_name | connected_to | sequencers   |
-      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B |
-    When node "NODE_1" is at height 1 in 120 seconds
-    And wallet "WALLET_1A" sends 30 notes of 1000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
-    And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
-    And I start zone sequencers:
-      | alias | indexer | pending_submit_depth | passive_republish_orphans |
-      | SEQ_A | true    | unlimited            | false                     |
-    And sequencer "SEQ_A" submits zone config transaction:
-      | config_name      | posting_timeframe | posting_timeout | authorized_sequencers |
-      | CHANNEL_CONFIG_1 | 2                 | 0               | SEQ_A, SEQ_B          |
-    Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
-    When I start zone sequencers:
-      | alias | indexer | pending_submit_depth | passive_republish_orphans |
-      | SEQ_B | false   | unlimited            | true                      |
-    Then sequencer "SEQ_B" reaches sequencing state:
-      | own_key_index | turn_to_write | pending_transactions | time_out |
-      | 1             | NOT_OUR_TURN  | 0                    | 120      |
-    # SEQ_B queues messages while off turn — they sit pending.
-    When sequencer "SEQ_B" submits the following zone messages to queue immediately:
-      | alias  | data          |
-      | MSG_B1 | cfg-orphan-b1 |
-      | MSG_B2 | cfg-orphan-b2 |
-      | MSG_B3 | cfg-orphan-b3 |
-    Then sequencer "SEQ_B" reaches sequencing state:
-      | own_key_index | turn_to_write | pending_transactions | time_out |
-      | 1             | NOT_OUR_TURN  | 3                    | 120      |
-    # A second config lands while SEQ_B's three messages are pending: the new
-    # config view sheds them, and orphan-republish must recover them.
-    When sequencer "SEQ_A" submits zone config transaction:
-      | config_name      | posting_timeframe | posting_timeout | authorized_sequencers |
-      | CHANNEL_CONFIG_2 | 2                 | 0               | SEQ_A, SEQ_B          |
-    Then zone transaction "CHANNEL_CONFIG_2" is finalized in 180 seconds
-    # The shed inscriptions survive: re-posted and indexed in lineage order.
-    And the zone indexer returns messages in this order:
-      | alias  |
-      | MSG_B1 |
-      | MSG_B2 |
-      | MSG_B3 |
-    And I stop all nodes
-
-  @zone_ci
   Scenario: Round-robin publishes immediately when it is our turn
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |

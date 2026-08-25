@@ -130,15 +130,6 @@ pub struct TxState {
     /// restore); the finalized-prefix search then matches nothing (see
     /// [`Self::finalized_prefix_ids`]).
     finalized_parent_msg: Option<MsgId>,
-    /// The config-lineage tip at LIB — the newest config finalized so far, or
-    /// [`MsgId::root`] when none has finalized (or is unknown after a
-    /// checkpoint restore). Seeds the landable set in
-    /// [`Self::shed_stale_pending_configs`] so a pending config chaining on the
-    /// finalized config tip is not falsely orphaned.
-    finalized_config: MsgId,
-    /// Config tip last seen by the config-driven inscription shed; a change
-    /// means a config landed (or the branch's config lineage diverged).
-    observed_config_tip: MsgId,
     /// The channel's note set: finalized base + per-block overlay.
     wallet: ChannelWallet,
 }
@@ -151,20 +142,13 @@ pub enum BlockChannelTx {
     Inscription(InscriptionInfo),
     /// `publish_atomic_withdraw` shape: an inscription + its withdraws.
     AtomicWithdraw(AtomicWithdrawInfo),
-    /// A pure `channel_config` tx: a single config on the config lineage
-    /// (`this_msg` = config id, `parent_msg` = config parent), which does not
-    /// advance the message tip.
-    Config(InscriptionInfo),
     /// A shape the SDK cannot produce (bundled deposits, multi-inscribe,
     /// custom-built txs). Kept whole — updates hand the tx back to the
     /// caller's own recovery logic — along with its tip-advancing entries
-    /// in op order. `config_entries` holds any `ChannelConfig` ops it carries,
-    /// which sit on the separate config lineage and never advance the message
-    /// tip.
+    /// in op order.
     Custom {
         tx: SignedMantleTx<Unverified>,
         entries: Vec<InscriptionInfo>,
-        config_entries: Vec<InscriptionInfo>,
     },
 }
 
@@ -174,21 +158,7 @@ impl BlockChannelTx {
         match self {
             Self::Inscription(i) => std::slice::from_ref(i),
             Self::AtomicWithdraw(a) => std::slice::from_ref(&a.inscription),
-            Self::Config(_) => &[],
             Self::Custom { entries, .. } => entries,
-        }
-    }
-
-    /// The `ChannelConfig` entries this tx carries, in op order. These are on
-    /// the config lineage (`this_msg` = config id, `parent_msg` = config
-    /// parent) and do not advance the message tip. The clean
-    /// `Inscription`/`AtomicWithdraw` shapes carry none; a pure config is a
-    /// [`Self::Config`]; mixed/unknown configs ride in [`Self::Custom`].
-    pub fn config_entries(&self) -> &[InscriptionInfo] {
-        match self {
-            Self::Inscription(_) | Self::AtomicWithdraw(_) => &[],
-            Self::Config(c) => std::slice::from_ref(c),
-            Self::Custom { config_entries, .. } => config_entries,
         }
     }
 
@@ -199,10 +169,7 @@ impl BlockChannelTx {
 
     #[must_use]
     pub fn tx_hash(&self) -> Option<TxHash> {
-        self.infos()
-            .first()
-            .or_else(|| self.config_entries().first())
-            .map(|i| i.tx_hash)
+        self.infos().first().map(|i| i.tx_hash)
     }
 }
 
@@ -222,8 +189,6 @@ impl TxState {
             block_txs: HashMap::new(),
             finalized_msg,
             finalized_parent_msg: None,
-            finalized_config: MsgId::root(),
-            observed_config_tip: MsgId::root(),
             wallet: ChannelWallet::default(),
             next_other_seq: 0,
         }
@@ -447,11 +412,6 @@ impl TxState {
                 self.finalized_msg = msg;
                 self.finalized_parent_msg = Some(parent);
             }
-            // Advance the finalized config tip too (same pre-prune walk), so a
-            // pending config chaining on it stays landable after LIB moves.
-            if let Some(config) = self.config_tip_entry_at(lib) {
-                self.finalized_config = config.this_msg;
-            }
 
             // Prune ancestors of new lib (but not lib itself)
             let mut prune_cursor = self.parent_map.get(&lib).copied();
@@ -612,13 +572,6 @@ impl TxState {
             .filter(|h| !on_branch.contains(h) && !safe.contains(h))
             .copied()
             .collect();
-        self.drain_pending_in_lineage_order(&eligible)
-    }
-
-    /// Remove the given pending inscriptions/bundles in parent-first lineage
-    /// order, returning them as [`PendingTx`] for orphan reporting. Shared by
-    /// the off-branch and config-driven sheds.
-    fn drain_pending_in_lineage_order(&mut self, eligible: &HashSet<TxHash>) -> Vec<PendingTx> {
         if eligible.is_empty() {
             return Vec::new();
         }
@@ -673,34 +626,6 @@ impl TxState {
             self.remove_pending(&entry.tx_hash());
         }
         ordered
-    }
-
-    /// On a config-tip change, shed the pending entries **not on this branch's
-    /// tip** (not in the safe set) — the not-yet-mined tail a config may have
-    /// invalidated. Mined/on-branch entries are excluded: a config never
-    /// invalidates a landed inscription, so orphaning one would re-post an
-    /// on-chain original as a duplicate. The caller resets the chaining pointer
-    /// to the message tip so re-posts land as a competing branch. Unchanged
-    /// config tip → empty.
-    pub fn shed_pending_inscriptions_on_config(&mut self, tip: HeaderId) -> Vec<PendingTx> {
-        let config_tip = self.config_tip_at(tip);
-        if config_tip == self.observed_config_tip {
-            return Vec::new();
-        }
-        self.observed_config_tip = config_tip;
-
-        let safe: HashSet<TxHash> = self
-            .block_states
-            .get(&tip)
-            .map(|s| s.iter().copied().collect())
-            .unwrap_or_default();
-        let eligible: HashSet<TxHash> = self
-            .pending
-            .keys()
-            .filter(|h| !safe.contains(h))
-            .copied()
-            .collect();
-        self.drain_pending_in_lineage_order(&eligible)
     }
 
     /// Shed pending opaque txs whose first inscription's parent slot was
@@ -763,16 +688,16 @@ impl TxState {
     /// Shed pending config-carrying txs whose config parent can no longer
     /// reach the mined config tip: removed from retry and returned whole for
     /// orphan reporting.
-    pub fn shed_stale_pending_configs(&mut self, tip: HeaderId) -> Vec<SignedMantleTx<Unverified>> {
+    pub fn shed_stale_pending_configs(
+        &mut self,
+        tip: HeaderId,
+        config_tip: MsgId,
+    ) -> Vec<SignedMantleTx<Unverified>> {
         if self.pending_other.is_empty() {
             return Vec::new();
         }
-        // Seed with the config tip we have actually processed on this branch —
-        // not the node's config tip, which can race ahead of the blocks we have
-        // processed and falsely orphan a pending config that merely extends our
-        // local tip (its block just hasn't arrived yet).
         let mut landable: HashSet<MsgId> = HashSet::new();
-        landable.insert(self.config_tip_at(tip));
+        landable.insert(config_tip);
         // A viable entry makes its own last config landable, so entries
         // chained on it are kept too.
         loop {
@@ -799,9 +724,10 @@ impl TxState {
             .pending_other
             .iter()
             .filter(|(hash, entry)| {
-                // An entry whose own config already landed on this branch (its
-                // `last_config` is in `landable`) stays — even if its block is
-                // not yet in the safe set.
+                // `config_tip` comes from the node's tip, which can be ahead
+                // of the blocks we processed: an entry whose own config IS
+                // the tip landed on chain, even if we have not seen its
+                // block yet and it is therefore not in the safe set.
                 let landed = entry
                     .last_config
                     .is_some_and(|last_config| landable.contains(&last_config));
@@ -1003,39 +929,6 @@ impl TxState {
         }
     }
 
-    /// The config-lineage tip entry at a block: the most recent config in the
-    /// walked window (block → LIB). Mirrors [`Self::channel_tip_entry_at`] but
-    /// over the config lineage; `None` when no config exists in the window.
-    fn config_tip_entry_at(&self, block_id: HeaderId) -> Option<&InscriptionInfo> {
-        let mut current = block_id;
-        loop {
-            if let Some(txs) = self.block_txs.get(&current)
-                && let Some(entry) = txs.iter().rev().find_map(|tx| tx.config_entries().last())
-            {
-                return Some(entry);
-            }
-
-            if current == self.current_lib {
-                return None;
-            }
-
-            match self.parent_map.get(&current) {
-                Some(&parent) => current = parent,
-                None => return None,
-            }
-        }
-    }
-
-    /// The config-lineage tip at a block: the most recent config in the walked
-    /// window (block → LIB), or [`Self::finalized_config`] if none. Derived
-    /// only from blocks we have processed, so — unlike the node's single config
-    /// tip — it never races ahead of local state.
-    #[must_use]
-    pub fn config_tip_at(&self, block_id: HeaderId) -> MsgId {
-        self.config_tip_entry_at(block_id)
-            .map_or(self.finalized_config, |entry| entry.this_msg)
-    }
-
     /// Detect a channel update between old and new L1 tips.
     ///
     /// Diffs the two channel *lineages*. `old_lineage` must be captured by the
@@ -1149,9 +1042,7 @@ impl TxState {
                     Some(ChannelUpdateTx::AtomicWithdraw(a.clone()))
                 }
                 BlockChannelTx::Inscription(_) => Some(ChannelUpdateTx::Inscription(info.clone())),
-                // A pure config carries no message-lineage entry to report.
-                BlockChannelTx::Config(_) => None,
-                BlockChannelTx::Custom { tx, entries, .. } => entries
+                BlockChannelTx::Custom { tx, entries } => entries
                     .iter()
                     .any(|entry| !entry.payload.is_empty())
                     .then(|| ChannelUpdateTx::Custom(tx.clone())),
@@ -1852,118 +1743,45 @@ mod tests {
         (tx, config_msg)
     }
 
-    /// Wrap a config tx as it is classified when mined: a `Custom` block tx
-    /// carrying the config on the config lineage (no message-tip entry).
-    fn config_block_tx(
-        tx: &SignedMantleTx<Unverified>,
-        this_msg: MsgId,
-        parent: MsgId,
-    ) -> BlockChannelTx {
-        BlockChannelTx::Custom {
-            tx: tx.clone(),
-            entries: Vec::new(),
-            config_entries: vec![InscriptionInfo {
-                tx_hash: tx.mantle_tx().hash(),
-                parent_msg: parent,
-                this_msg,
-                payload: [].into(),
-            }],
-        }
-    }
-
-    /// Once a rival config lands on-branch and moves the config tip, our
-    /// pending config chained on the superseded parent is shed.
+    /// A landed config supersedes a pending config whose parent no longer
+    /// reaches the config tip; a pending config chained on the new tip
+    /// survives.
     #[test]
     fn shed_stale_pending_configs_removes_superseded_config() {
         let genesis = header_id(0);
-        let b1 = header_id(1);
-        let b2 = header_id(2);
+        let tip = header_id(1);
         let channel_id = ChannelId::from([0u8; 32]);
         let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new());
 
-        // Our pending config chains on the (root) config tip.
         let (stale, _) = config_tx(MsgId::root(), 1);
         let stale_hash = stale.mantle_tx().hash();
         state.submit_other(stale, channel_id);
 
-        // No config has landed yet — the local config tip is root, so ours is
-        // still viable.
-        state.process_block(b1, genesis, genesis, vec![], vec![], Vec::new());
-        assert!(state.shed_stale_pending_configs(b1).is_empty());
-        assert!(state.pending_other_contains(&stale_hash));
-
-        // A rival config (also chaining on root) lands on-branch and moves the
-        // config tip: our pending config's parent is now superseded → shed.
-        let (rival, rival_msg) = config_tx(MsgId::root(), 2);
-        state.process_block(
-            b2,
-            b1,
-            genesis,
-            vec![],
-            vec![config_block_tx(&rival, rival_msg, MsgId::root())],
-            Vec::new(),
+        // While the config tip is still ZERO the pending config is viable.
+        assert!(
+            state
+                .shed_stale_pending_configs(tip, MsgId::root())
+                .is_empty()
         );
 
-        let shed = state.shed_stale_pending_configs(b2);
+        // Another config landed and moved the config tip: the pending one
+        // can no longer land, while one chained on the new tip can.
+        let landed_tip = msg_id(42);
+        let (live, _) = config_tx(landed_tip, 2);
+        let live_hash = live.mantle_tx().hash();
+        state.submit_other(live, channel_id);
+
+        let shed = state.shed_stale_pending_configs(tip, landed_tip);
         assert_eq!(shed.len(), 1);
         assert_eq!(shed[0].mantle_tx().hash(), stale_hash);
         assert!(!state.pending_other_contains(&stale_hash));
+        assert!(state.pending_other_contains(&live_hash));
     }
 
-    /// Many configs can land in one block as a chain (`root → C1 → C2`). The
-    /// config walk must resolve the *tip* of that chain, not the first entry,
-    /// so the shed evaluates pending configs against the correct parent.
-    #[test]
-    fn config_chain_in_one_block_resolves_tip_and_sheds_superseded() {
-        let genesis = header_id(0);
-        let b1 = header_id(1);
-        let channel_id = ChannelId::from([0u8; 32]);
-        let mut state = TxState::new(genesis, MsgId::root());
-
-        // Two chained configs land in a single block: C1 on root, C2 on C1.
-        let (c1, c1_msg) = config_tx(MsgId::root(), 1);
-        let (c2, c2_msg) = config_tx(c1_msg, 2);
-
-        // One pending config chains on the now-superseded root; another chains
-        // on the chain tip C2.
-        let (stale, _) = config_tx(MsgId::root(), 3);
-        let stale_hash = stale.mantle_tx().hash();
-        let (on_tip, _) = config_tx(c2_msg, 4);
-        let on_tip_hash = on_tip.mantle_tx().hash();
-        state.submit_other(stale, channel_id);
-        state.submit_other(on_tip, channel_id);
-
-        state.process_block(
-            b1,
-            genesis,
-            genesis,
-            vec![],
-            vec![
-                config_block_tx(&c1, c1_msg, MsgId::root()),
-                config_block_tx(&c2, c2_msg, c1_msg),
-            ],
-            Vec::new(),
-        );
-
-        // The walk resolves the chain tip (C2), not C1 or root.
-        assert_eq!(
-            state.config_tip_at(b1),
-            c2_msg,
-            "config_tip_at must resolve the last config in the block's chain"
-        );
-
-        // The shed evaluates against that tip: the root-parented config is
-        // superseded and shed; the C2-parented one still chains on the tip and
-        // is kept.
-        let shed = state.shed_stale_pending_configs(b1);
-        assert_eq!(shed.len(), 1);
-        assert_eq!(shed[0].mantle_tx().hash(), stale_hash);
-        assert!(!state.pending_other_contains(&stale_hash));
-        assert!(state.pending_other_contains(&on_tip_hash));
-    }
-
-    /// A pending config mined on the current branch sits in the tip's safe set
-    /// and is not shed.
+    /// A pending config mined on the current branch sits in the tip's safe
+    /// set and is not shed, even though the config tip it moved makes its
+    /// own parent stale.
     #[test]
     fn shed_stale_pending_configs_keeps_safe_on_branch_config() {
         let genesis = header_id(0);
@@ -1973,118 +1791,34 @@ mod tests {
 
         let (config, config_msg) = config_tx(MsgId::root(), 1);
         let config_hash = config.mantle_tx().hash();
-        // Build the block entry before `submit_other` moves the tx.
-        let block_tx = config_block_tx(&config, config_msg, MsgId::root());
         state.submit_other(config, channel_id);
 
-        // The config lands on-branch: in the block's safe set and on the config
-        // lineage.
-        state.process_block(
-            tip,
-            genesis,
-            genesis,
-            vec![config_hash],
-            vec![block_tx],
-            Vec::new(),
-        );
+        // The config lands on-branch, so it enters the block's safe set.
+        state.process_block(tip, genesis, genesis, vec![config_hash], vec![], Vec::new());
 
-        assert!(state.shed_stale_pending_configs(tip).is_empty());
+        assert!(state.shed_stale_pending_configs(tip, config_msg).is_empty());
         assert!(state.pending_other_contains(&config_hash));
     }
 
-    /// Regression (youngjoon): a pending config that merely extends our local
-    /// config tip must survive while its own block is still unprocessed — even
-    /// though the node may report a further-ahead config tip. We seed from the
-    /// local tip, so an ahead-of-us node tip never sheds it.
+    /// The config tip is read from the node, which can be ahead of the blocks
+    /// we processed. A config of ours that already moved that tip landed on
+    /// chain, so it must survive even before its block reaches our safe set.
     #[test]
-    fn shed_stale_pending_configs_keeps_pending_extending_local_tip() {
+    fn shed_stale_pending_configs_keeps_config_that_moved_the_tip() {
         let genesis = header_id(0);
-        let b1 = header_id(1);
+        let tip = header_id(1);
         let channel_id = ChannelId::from([0u8; 32]);
         let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(tip, genesis, genesis, vec![], vec![], Vec::new());
 
-        // Config B lands on-branch → the local config tip is B.
-        let (b_config, b_msg) = config_tx(MsgId::root(), 1);
-        state.process_block(
-            b1,
-            genesis,
-            genesis,
-            vec![],
-            vec![config_block_tx(&b_config, b_msg, MsgId::root())],
-            Vec::new(),
-        );
+        let (config, config_msg) = config_tx(MsgId::root(), 1);
+        let config_hash = config.mantle_tx().hash();
+        state.submit_other(config, channel_id);
 
-        // Our config C chains on B and is pending; its block hasn't arrived, so
-        // it is in no safe set.
-        let (c_config, _c_msg) = config_tx(b_msg, 2);
-        let c_hash = c_config.mantle_tx().hash();
-        state.submit_other(c_config, channel_id);
-
-        // C extends the local tip B, so it survives.
-        assert!(state.shed_stale_pending_configs(b1).is_empty());
-        assert!(state.pending_other_contains(&c_hash));
-    }
-
-    /// A config landing sheds only the not-yet-mined pending tail; an
-    /// inscription already mined on this branch is kept (re-posting an on-chain
-    /// entry would duplicate). Same config tip on a later block sheds nothing.
-    #[test]
-    fn config_land_sheds_pending_tail_but_keeps_mined_inscription() {
-        let genesis = header_id(0);
-        let b1 = header_id(1);
-        let mut state = TxState::new(genesis, MsgId::root());
-
-        // p1 is published and mined on-branch — it enters the block's safe set.
-        let p1 = submit_fake_inscription(&mut state, 1, MsgId::root(), msg_id(1));
-        let m1 = InscriptionInfo {
-            tx_hash: p1,
-            parent_msg: MsgId::root(),
-            this_msg: msg_id(1),
-            payload: [1].into(),
-        };
-        state.process_block(
-            b1,
-            genesis,
-            genesis,
-            vec![p1],
-            vec![BlockChannelTx::Inscription(m1)],
-            Vec::new(),
-        );
-
-        // p2, p3 chain on the mined tip but are not yet mined (pending).
-        let p2 = submit_fake_inscription(&mut state, 2, msg_id(1), msg_id(2));
-        let p3 = submit_fake_inscription(&mut state, 3, msg_id(2), msg_id(3));
-
-        // No config has landed → the config tip is unchanged → nothing shed.
-        assert!(state.shed_pending_inscriptions_on_config(b1).is_empty());
-
-        // A config lands, moving the config tip.
-        let (cfg, cfg_msg) = config_tx(MsgId::root(), 9);
-        let b2 = header_id(2);
-        state.process_block(
-            b2,
-            b1,
-            genesis,
-            vec![],
-            vec![config_block_tx(&cfg, cfg_msg, MsgId::root())],
-            Vec::new(),
-        );
-
-        // Only the not-yet-mined tail is shed, parent-first; the mined p1 is on
-        // chain and must not be orphaned (re-posting it would duplicate).
-        let shed: Vec<TxHash> = state
-            .shed_pending_inscriptions_on_config(b2)
-            .iter()
-            .map(PendingTx::tx_hash)
-            .collect();
-        assert_eq!(shed, vec![p2, p3], "shed only the not-yet-mined tail");
-        assert!(
-            state.pending_inscription(&p1).is_some(),
-            "the mined inscription must not be orphaned"
-        );
-
-        // Same config tip on the next call → nothing more to shed.
-        assert!(state.shed_pending_inscriptions_on_config(b2).is_empty());
+        // The node reports our config as the tip while its block is still
+        // unprocessed here, so nothing put it in the safe set.
+        assert!(state.shed_stale_pending_configs(tip, config_msg).is_empty());
+        assert!(state.pending_other_contains(&config_hash));
     }
 
     /// A config-only block does not touch the message lineage: no update is

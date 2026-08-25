@@ -870,20 +870,15 @@ where
             }
         };
 
-        // The configuration extends our *local* config tip — the same view the
-        // config shed evaluates against — so a config we submit is never
-        // transiently orphaned by an ahead-of-us node config tip. If we are
-        // behind the node the parent is stale, so the config simply does not
-        // land (parent mismatch) and is orphaned and resubmitted once we catch
-        // up — the same self-healing path an inscription takes. Single-signer
-        // only, so we always sign with our own key; multi-sig configs are
-        // rejected above and go through the consumer's `submit_signed_tx` flow.
-        // We chain on the mined tip, not a config of ours still in flight: a
+        // The configuration extends the mined config tip — the same view the
+        // signer above was picked from. Chaining onto a config of ours still
+        // in flight would pair that config's parent with a proof built for
+        // the pre-config key set, which the ledger rejects either way: a
         // reconfiguration lands one at a time.
-        let parent = match (self.state.as_ref(), self.current_tip) {
-            (Some(state), Some(tip)) => state.config_tip_at(tip),
-            _ => MsgId::root(),
-        };
+        let parent = self
+            .channel_state
+            .as_ref()
+            .map_or_else(MsgId::root, |channel| channel.config_tip_hash);
 
         let signed_tx = create_channel_config_tx(
             &self.node,
