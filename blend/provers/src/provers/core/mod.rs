@@ -16,8 +16,8 @@ use lb_utils::tokio::{stream::Buffered, task::spawn};
 use tokio::time::Instant;
 
 use crate::{
-    CoreProofOfQuotaGenerator, buffer_size,
-    provers::{BlendLayerProof, ProofsGeneratorSettings},
+    CoreProofOfQuotaGenerator, buffer_size, into_encapsulation_sets,
+    provers::{BlendLayerProof, EncapsulationProofs, ProofsGeneratorSettings, message_cost},
 };
 
 #[cfg(test)]
@@ -36,7 +36,7 @@ pub trait CoreProofsGenerator<PoQGenerator>: Sized {
     ) -> Self;
     /// Request a new core proof from the prover. It returns `None` if the
     /// maximum core quota has already been reached for this epoch.
-    async fn get_next_proof(&mut self) -> Option<BlendLayerProof>;
+    async fn get_next_proof(&mut self) -> Option<EncapsulationProofs>;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -48,7 +48,7 @@ pub struct CoreProofsGeneratorSettings {
 pub struct RealCoreProofsGenerator<PoQGenerator> {
     remaining_quota: Quota,
     pub(super) settings: CoreProofsGeneratorSettings,
-    proofs_stream: Pin<Box<dyn Stream<Item = BlendLayerProof> + Send + Sync>>,
+    proofs_stream: Pin<Box<dyn Stream<Item = EncapsulationProofs> + Send + Sync>>,
     _phantom: PhantomData<PoQGenerator>,
 }
 
@@ -63,11 +63,14 @@ where
         proof_of_quota_generator: PoQGenerator,
     ) -> Self {
         Self {
-            proofs_stream: Box::pin(create_proof_stream(
-                settings.public_inputs,
-                proof_of_quota_generator,
-                starting_key_index,
-                buffer_size(settings.encapsulation_layers.get() as usize),
+            proofs_stream: Box::pin(into_encapsulation_sets(
+                create_proof_stream(
+                    settings.public_inputs,
+                    proof_of_quota_generator,
+                    starting_key_index,
+                    buffer_size(settings.encapsulation_layers.get() as usize),
+                ),
+                settings.encapsulation_layers,
             )),
             remaining_quota: settings
                 .public_inputs
@@ -82,19 +85,20 @@ where
         }
     }
 
-    async fn get_next_proof(&mut self) -> Option<BlendLayerProof> {
+    async fn get_next_proof(&mut self) -> Option<EncapsulationProofs> {
         let start = Instant::now();
-        let Some(remaining_quota) = self.remaining_quota.checked_sub(Quota::ONE) else {
+        let message_cost = message_cost(self.settings.common.encapsulation_layers);
+        let Some(remaining_quota) = self.remaining_quota.checked_sub(message_cost) else {
             tracing::warn!(target: LOG_TARGET, "Core quota exhausted. No proof is generated.");
             return None;
         };
         self.remaining_quota = remaining_quota;
-        let Some(proof) = self.proofs_stream.next().await else {
-            tracing::warn!(target: LOG_TARGET, "No proof available from the stream.");
+        let Some(proofs) = self.proofs_stream.next().await else {
+            tracing::warn!(target: LOG_TARGET, "No proofs available from the stream.");
             return None;
         };
-        tracing::trace!(target: LOG_TARGET, "Generated core Blend layer proof with key nullifier {:?} addressed to node at index {:?} in {:?} ms.", hex::encode(fr_to_bytes(&proof.proof_of_quota.key_nullifier())), proof.proof_of_selection.expected_index(self.settings.common.membership_size), start.elapsed().as_millis());
-        Some(proof)
+        tracing::trace!(target: LOG_TARGET, "Generated core Blend layer proof with key nullifier {:?} addressed to node at index {:?} in {:?} ms.", hex::encode(fr_to_bytes(&proofs.outermost().proof_of_quota.key_nullifier())), proofs.outermost().proof_of_selection.expected_index(self.settings.common.membership_size), start.elapsed().as_millis());
+        Some(proofs)
     }
 }
 

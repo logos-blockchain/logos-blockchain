@@ -45,7 +45,11 @@ async fn pow_proof_generation() {
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs),
     );
 
-    let proof = generator.get_next_pow_proof().await.unwrap();
+    let proof = generator
+        .get_next_pow_proof()
+        .await
+        .unwrap()
+        .into_single_layer();
     let verified_proof_of_quota = proof
         .proof_of_quota
         .into_inner()
@@ -89,7 +93,11 @@ async fn core_proofs_are_delegated() {
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs),
     );
 
-    let proof = generator.get_next_core_proof().await.unwrap();
+    let proof = generator
+        .get_next_core_proof()
+        .await
+        .unwrap()
+        .into_single_layer();
     proof
         .proof_of_quota
         .into_inner()

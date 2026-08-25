@@ -11,7 +11,7 @@ use lb_cryptarchia_engine::Epoch;
 use crate::{
     crypto::EncapsulatedMessageWithVerifiedPublicHeader,
     provers::{
-        BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
+        EncapsulationProofs, ProofsGeneratorSettings, WinningPolInfoStream,
         leader_and_pow::LeaderAndPowProofsGenerator,
     },
 };
@@ -107,18 +107,13 @@ where
     ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
         // We validate the payload early on so we don't generate proofs unnecessarily.
         let validated_payload = PaddedPayloadBody::try_from(payload)?;
-        let mut proofs = Vec::with_capacity(self.num_blend_layers.get() as usize);
-
-        for _ in 0..self.num_blend_layers.into() {
-            let Some(proof) = self.next_proof_for(payload_type).await else {
-                return Err(Error::ProofNotAvailable);
-            };
-            proofs.push(proof);
-        }
+        let Some(proofs) = self.next_proofs_for(payload_type).await else {
+            return Err(Error::ProofNotAvailable);
+        };
 
         let membership_size = self.membership.size();
         let proofs_and_signing_keys = proofs
-            .into_iter()
+            .into_layers()
             // Collect remote (or local) index info for each PoSel.
             .map(|proof| {
                 let expected_index = proof
@@ -170,7 +165,7 @@ where
     ///
     /// An edge node has no core quota, so unlike a core node it has nothing to
     /// spend on cover traffic — and it generates none.
-    async fn next_proof_for(&mut self, payload_type: PayloadType) -> Option<BlendLayerProof> {
+    async fn next_proofs_for(&mut self, payload_type: PayloadType) -> Option<EncapsulationProofs> {
         match payload_type {
             PayloadType::BlockProposal => self.proofs_generator.get_next_leader_proof().await,
             PayloadType::Transaction => self.proofs_generator.get_next_pow_proof().await,

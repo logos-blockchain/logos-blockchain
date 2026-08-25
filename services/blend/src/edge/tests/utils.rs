@@ -9,7 +9,7 @@ use lb_blend::{
         epoch::UninitializedEpochEventStream,
         membership::Membership,
         message_blend::provers::{
-            BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
+            EncapsulationProofs, ProofsGeneratorSettings, WinningPolInfoStream,
             leader_and_pow::LeaderAndPowProofsGenerator,
         },
     },
@@ -28,26 +28,28 @@ use crate::{
     },
     message::ServiceMessage,
     settings::TimingSettings,
-    test_utils::{crypto::mock_blend_proof, epoch::OncePolStreamProvider, membership::key},
+    test_utils::{
+        crypto::mock_encapsulation_proofs, epoch::OncePolStreamProvider, membership::key,
+    },
 };
 
-pub struct MockLeaderProofsGenerator;
+pub struct MockLeaderProofsGenerator(NonZeroU64);
 
 #[async_trait]
 impl LeaderAndPowProofsGenerator for MockLeaderProofsGenerator {
     fn new(
-        _settings: ProofsGeneratorSettings,
+        settings: ProofsGeneratorSettings,
         _winning_pol_info_stream: WinningPolInfoStream,
     ) -> Self {
-        Self
+        Self(settings.encapsulation_layers)
     }
 
-    async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof> {
-        Some(mock_blend_proof())
+    async fn get_next_leader_proof(&mut self) -> Option<EncapsulationProofs> {
+        Some(mock_encapsulation_proofs(self.0))
     }
 
-    async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {
-        Some(mock_blend_proof())
+    async fn get_next_pow_proof(&mut self) -> Option<EncapsulationProofs> {
+        Some(mock_encapsulation_proofs(self.0))
     }
 }
 

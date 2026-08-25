@@ -21,7 +21,9 @@ use tokio::time::Instant;
 
 use crate::{
     buffer_size,
-    provers::{BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream},
+    provers::{
+        BlendLayerProof, EncapsulationProofs, ProofsGeneratorSettings, WinningPolInfoStream,
+    },
 };
 
 #[cfg(test)]
@@ -40,12 +42,12 @@ pub trait LeaderProofsGenerator: Sized {
         winning_pol_info_stream: WinningPolInfoStream,
     ) -> Self;
     /// Get the next leadership proof.
-    async fn get_next_proof(&mut self) -> Option<BlendLayerProof>;
+    async fn get_next_proof(&mut self) -> Option<EncapsulationProofs>;
 }
 
 pub struct RealLeaderProofsGenerator {
     pub(super) settings: ProofsGeneratorSettings,
-    proofs_stream: Pin<Box<dyn Stream<Item = BlendLayerProof> + Send>>,
+    proofs_stream: Pin<Box<dyn Stream<Item = EncapsulationProofs> + Send>>,
 }
 
 impl RealLeaderProofsGenerator {
@@ -63,22 +65,25 @@ impl LeaderProofsGenerator for RealLeaderProofsGenerator {
     ) -> Self {
         Self {
             settings,
-            proofs_stream: Box::pin(create_proof_stream(
-                settings.public_inputs,
-                winning_pol_info_stream,
-                buffer_size(settings.public_inputs.leader.message_quota.get() as usize),
+            proofs_stream: Box::pin(crate::into_encapsulation_sets(
+                create_proof_stream(
+                    settings.public_inputs,
+                    winning_pol_info_stream,
+                    buffer_size(settings.public_inputs.leader.message_quota.get() as usize),
+                ),
+                settings.encapsulation_layers,
             )),
         }
     }
 
-    async fn get_next_proof(&mut self) -> Option<BlendLayerProof> {
+    async fn get_next_proof(&mut self) -> Option<EncapsulationProofs> {
         let start = Instant::now();
-        let Some(proof) = self.proofs_stream.next().await else {
-            tracing::warn!(target: LOG_TARGET, "Leadership proof stream ended. No proof is generated.");
+        let Some(proofs) = self.proofs_stream.next().await else {
+            tracing::warn!(target: LOG_TARGET, "leadership proof stream ended. No proofs are generated.");
             return None;
         };
-        tracing::trace!(target: LOG_TARGET, "Generated leadership Blend layer proof with key nullifier {:?} addressed to node at index {:?} in {:?} ms.", hex::encode(fr_to_bytes(&proof.proof_of_quota.key_nullifier())), proof.proof_of_selection.expected_index(self.settings.membership_size), start.elapsed().as_millis());
-        Some(proof)
+        tracing::trace!(target: LOG_TARGET, "Generated a leadership Blend message's {} layer proofs with key nullifiers {:?} addressed to nodes at indices {:?} in {:?} ms.", proofs.layers().len(), proofs.layers().iter().map(|proof| hex::encode(fr_to_bytes(&proof.proof_of_quota.key_nullifier()))).collect::<Vec<_>>(), proofs.layers().iter().map(|proof| proof.proof_of_selection.expected_index(self.settings.membership_size)).collect::<Vec<_>>(), start.elapsed().as_millis());
+        Some(proofs)
     }
 }
 

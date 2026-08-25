@@ -31,27 +31,34 @@ async fn proof_generation() {
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(private_inputs.clone()),
     );
 
+    // One layer per message here, so the quota buys exactly `core_quota` messages.
     for _ in 0..core_quota.get() {
-        let proof = core_proofs_generator.get_next_proof().await.unwrap();
-        let verified_proof_of_quota = proof
-            .proof_of_quota
-            .into_inner()
-            .verify(&poq_public_inputs_from_epoch_public_inputs_and_signing_key(
-                (public_inputs, proof.ephemeral_signing_key.public_key()),
-            ))
-            .unwrap();
-        proof
-            .proof_of_selection
-            .into_inner()
-            .verify(&VerifyInputs {
-                // Membership of 1 -> only a single index can be included
-                expected_node_index: 0,
-                key_nullifier: verified_proof_of_quota.key_nullifier(),
-                total_membership_size: 1,
-            })
-            .unwrap();
+        for proof in core_proofs_generator
+            .get_next_proof()
+            .await
+            .unwrap()
+            .into_layers()
+        {
+            let verified_proof_of_quota = proof
+                .proof_of_quota
+                .into_inner()
+                .verify(&poq_public_inputs_from_epoch_public_inputs_and_signing_key(
+                    (public_inputs, proof.ephemeral_signing_key.public_key()),
+                ))
+                .unwrap();
+            proof
+                .proof_of_selection
+                .into_inner()
+                .verify(&VerifyInputs {
+                    // Membership of 1 -> only a single index can be included
+                    expected_node_index: 0,
+                    key_nullifier: verified_proof_of_quota.key_nullifier(),
+                    total_membership_size: 1,
+                })
+                .unwrap();
+        }
     }
 
-    // Next proof should be `None` since we ran out of core quota.
+    // Next set should be `None` since we ran out of core quota.
     assert!(core_proofs_generator.get_next_proof().await.is_none());
 }

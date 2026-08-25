@@ -16,7 +16,7 @@ use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use crate::{
     CoreProofOfQuotaGenerator,
     provers::{
-        BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
+        EncapsulationProofs, ProofsGeneratorSettings, WinningPolInfoStream,
         core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
     },
 };
@@ -61,15 +61,15 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
         self.0 = Some(winning_pol_info_stream);
     }
 
-    async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
+    async fn get_next_core_proof(&mut self) -> Option<EncapsulationProofs> {
         None
     }
 
-    async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof> {
+    async fn get_next_leader_proof(&mut self) -> Option<EncapsulationProofs> {
         None
     }
 
-    async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {
+    async fn get_next_pow_proof(&mut self) -> Option<EncapsulationProofs> {
         None
     }
 }

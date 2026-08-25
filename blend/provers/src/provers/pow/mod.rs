@@ -27,7 +27,7 @@ use lb_utils::tokio::{
 use rand::rngs::OsRng;
 use tokio::time::Instant;
 
-use crate::provers::{BlendLayerProof, ProofsGeneratorSettings};
+use crate::provers::{BlendLayerProof, EncapsulationProofs, ProofsGeneratorSettings};
 
 #[cfg(test)]
 mod tests;
@@ -45,12 +45,12 @@ pub trait PowProofsGenerator: Sized {
     /// Instantiate a new generator for the duration of an epoch.
     fn new(settings: ProofsGeneratorSettings) -> Self;
     /// Get the next `PoW` proof.
-    async fn get_next_proof(&mut self) -> Option<BlendLayerProof>;
+    async fn get_next_proof(&mut self) -> Option<EncapsulationProofs>;
 }
 
 pub struct RealPowProofsGenerator {
     pub(super) settings: ProofsGeneratorSettings,
-    proofs_stream: Pin<Box<dyn Stream<Item = BlendLayerProof> + Send>>,
+    proofs_stream: Pin<Box<dyn Stream<Item = EncapsulationProofs> + Send>>,
 }
 
 #[async_trait]
@@ -58,18 +58,21 @@ impl PowProofsGenerator for RealPowProofsGenerator {
     fn new(settings: ProofsGeneratorSettings) -> Self {
         Self {
             settings,
-            proofs_stream: create_proof_stream(settings.public_inputs),
+            proofs_stream: Box::pin(crate::into_encapsulation_sets(
+                create_proof_stream(settings.public_inputs),
+                settings.encapsulation_layers,
+            )),
         }
     }
 
-    async fn get_next_proof(&mut self) -> Option<BlendLayerProof> {
+    async fn get_next_proof(&mut self) -> Option<EncapsulationProofs> {
         let start = Instant::now();
-        let Some(proof) = self.proofs_stream.next().await else {
-            tracing::warn!(target: LOG_TARGET, "PoW proof stream ended. No proof is generated.");
+        let Some(proofs) = self.proofs_stream.next().await else {
+            tracing::warn!(target: LOG_TARGET, "PoW proof stream ended. No proofs are generated.");
             return None;
         };
-        tracing::trace!(target: LOG_TARGET, "Generated PoW Blend layer proof with key nullifier {:?} addressed to node at index {:?} in {:?} ms.", hex::encode(fr_to_bytes(&proof.proof_of_quota.key_nullifier())), proof.proof_of_selection.expected_index(self.settings.membership_size), start.elapsed().as_millis());
-        Some(proof)
+        tracing::trace!(target: LOG_TARGET, "Generated a PoW Blend message's {} layer proofs with key nullifiers {:?} addressed to nodes at indices {:?} in {:?} ms.", proofs.layers().len(), proofs.layers().iter().map(|proof| hex::encode(fr_to_bytes(&proof.proof_of_quota.key_nullifier()))).collect::<Vec<_>>(), proofs.layers().iter().map(|proof| proof.proof_of_selection.expected_index(self.settings.membership_size)).collect::<Vec<_>>(), start.elapsed().as_millis());
+        Some(proofs)
     }
 }
 

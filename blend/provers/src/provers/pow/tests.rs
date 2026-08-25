@@ -45,35 +45,43 @@ async fn proof_generation() {
     let settings = settings(None);
     let mut pow_proofs_generator = RealPowProofsGenerator::new(settings);
 
-    // More than one solution's worth of proofs, so that the later ones come
-    // from a solution mined after the first one's quota ran out.
+    // The settings ask for more layers than one solution's quota covers, so each
+    // message spans several solutions — the generator's business, not an error.
+    // Two messages' worth exercises the boundary in both directions.
     let mut key_nullifiers = HashSet::new();
-    for _ in 0..2 * POW_QUOTA {
-        let proof = pow_proofs_generator.get_next_proof().await.unwrap();
-        let verified_proof_of_quota = proof
-            .proof_of_quota
-            .into_inner()
-            .verify(&poq_public_inputs_from_epoch_public_inputs_and_signing_key(
-                (
-                    settings.public_inputs,
-                    proof.ephemeral_signing_key.public_key(),
-                ),
-            ))
-            .unwrap();
-        proof
-            .proof_of_selection
-            .into_inner()
-            .verify(&VerifyInputs {
-                // Membership of 1 -> only a single index can be included
-                expected_node_index: 0,
-                key_nullifier: verified_proof_of_quota.key_nullifier(),
-                total_membership_size: 1,
-            })
-            .unwrap();
+    for _ in 0..2 {
+        let proofs = pow_proofs_generator.get_next_proof().await.unwrap();
+        assert_eq!(
+            proofs.layers().len(),
+            settings.encapsulation_layers.get() as usize,
+            "a set must hold exactly one proof per blend layer, however many solutions that took"
+        );
+        for proof in proofs.into_layers() {
+            let verified_proof_of_quota = proof
+                .proof_of_quota
+                .into_inner()
+                .verify(&poq_public_inputs_from_epoch_public_inputs_and_signing_key(
+                    (
+                        settings.public_inputs,
+                        proof.ephemeral_signing_key.public_key(),
+                    ),
+                ))
+                .unwrap();
+            proof
+                .proof_of_selection
+                .into_inner()
+                .verify(&VerifyInputs {
+                    // Membership of 1 -> only a single index can be included
+                    expected_node_index: 0,
+                    key_nullifier: verified_proof_of_quota.key_nullifier(),
+                    total_membership_size: 1,
+                })
+                .unwrap();
 
-        // A nullifier may be used only once, whether the proof comes from the
-        // same solution at another index or from a different solution.
-        assert!(key_nullifiers.insert(verified_proof_of_quota.key_nullifier()));
+            // A nullifier may be used only once, whether the proof comes from the
+            // same solution at another index or from a different solution.
+            assert!(key_nullifiers.insert(verified_proof_of_quota.key_nullifier()));
+        }
     }
 }
 

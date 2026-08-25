@@ -31,7 +31,11 @@ async fn pow_proof_generation() {
         Box::pin(stream::empty()),
     );
 
-    let proof = generator.get_next_pow_proof().await.unwrap();
+    let proof = generator
+        .get_next_pow_proof()
+        .await
+        .unwrap()
+        .into_single_layer();
     let verified_proof_of_quota = proof
         .proof_of_quota
         .into_inner()
@@ -74,7 +78,11 @@ async fn leadership_proofs_are_delegated() {
         Box::pin(stream::repeat(leadership_private_inputs)),
     );
 
-    let proof = generator.get_next_leader_proof().await.unwrap();
+    let proof = generator
+        .get_next_leader_proof()
+        .await
+        .unwrap()
+        .into_single_layer();
     proof
         .proof_of_quota
         .into_inner()

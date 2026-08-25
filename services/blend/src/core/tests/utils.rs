@@ -24,8 +24,8 @@ use lb_blend::{
         message_blend::{
             crypto::EpochCryptographicProcessorSettings,
             provers::{
-                BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
-                core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
+                BlendLayerProof, EncapsulationProofs, ProofsGeneratorSettings,
+                WinningPolInfoStream, core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
             },
         },
         message_scheduler::{self, epoch_info::EpochInfo as SchedulerEpochInfo},
@@ -465,7 +465,7 @@ pub fn recorded_set_epoch_private_calls() -> Vec<Epoch> {
     SET_EPOCH_PRIVATE_CALLS.with(|calls| calls.borrow().clone())
 }
 
-pub struct MockCoreAndLeaderProofsGenerator(ZkHash);
+pub struct MockCoreAndLeaderProofsGenerator(ZkHash, NonZeroU64);
 
 #[async_trait]
 impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
@@ -476,23 +476,50 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
         _starting_key_index: KeyIndex,
         _core_proof_of_quota_generator: CorePoQGenerator,
     ) -> Self {
-        Self(settings.public_inputs.leader.pol_epoch_nonce)
+        Self(
+            settings.public_inputs.leader.pol_epoch_nonce,
+            settings.encapsulation_layers,
+        )
     }
 
     fn set_epoch_private(&mut self, _: WinningPolInfoStream, target_epoch: Epoch) {
         SET_EPOCH_PRIVATE_CALLS.with(|calls| calls.borrow_mut().push(target_epoch));
     }
 
-    async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
-        Some(epoch_based_dummy_proofs(self.0))
+    async fn get_next_core_proof(&mut self) -> Option<EncapsulationProofs> {
+        Some(
+            EncapsulationProofs::try_new(
+                core::iter::repeat_with(|| epoch_based_dummy_proofs(self.0))
+                    .take(self.1.get() as usize)
+                    .collect(),
+                self.1,
+            )
+            .expect("built with exactly one proof per layer"),
+        )
     }
 
-    async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof> {
-        Some(epoch_based_dummy_proofs(self.0))
+    async fn get_next_leader_proof(&mut self) -> Option<EncapsulationProofs> {
+        Some(
+            EncapsulationProofs::try_new(
+                core::iter::repeat_with(|| epoch_based_dummy_proofs(self.0))
+                    .take(self.1.get() as usize)
+                    .collect(),
+                self.1,
+            )
+            .expect("built with exactly one proof per layer"),
+        )
     }
 
-    async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {
-        Some(epoch_based_dummy_proofs(self.0))
+    async fn get_next_pow_proof(&mut self) -> Option<EncapsulationProofs> {
+        Some(
+            EncapsulationProofs::try_new(
+                core::iter::repeat_with(|| epoch_based_dummy_proofs(self.0))
+                    .take(self.1.get() as usize)
+                    .collect(),
+                self.1,
+            )
+            .expect("built with exactly one proof per layer"),
+        )
     }
 }
 

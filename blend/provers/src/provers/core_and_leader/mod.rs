@@ -7,7 +7,7 @@ use lb_log_targets::blend;
 use crate::{
     CoreProofOfQuotaGenerator,
     provers::{
-        BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
+        EncapsulationProofs, ProofsGeneratorSettings, WinningPolInfoStream,
         core::{CoreProofsGenerator as _, RealCoreProofsGenerator},
         leader::{LeaderProofsGenerator as _, RealLeaderProofsGenerator},
     },
@@ -45,11 +45,11 @@ pub trait CoreAndLeaderProofsGenerator<CorePoQGenerator>: Sized {
     );
     /// Request a new core proof from the prover. It returns `None` if the
     /// maximum core quota has already been reached for this epoch.
-    async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof>;
+    async fn get_next_core_proof(&mut self) -> Option<EncapsulationProofs>;
     /// Request a new leadership proof from the prover. It returns `None` if no
     /// secret `PoL` info has been provided for the current epoch or if all the
     /// winning slots for the current epoch have been used up.
-    async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof>;
+    async fn get_next_leader_proof(&mut self) -> Option<EncapsulationProofs>;
 }
 
 pub struct RealCoreAndLeaderProofsGenerator<CorePoQGenerator> {
@@ -144,36 +144,36 @@ where
         ));
     }
 
-    async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
-        let proof = self.core_proofs_generator.get_next_proof().await?;
+    async fn get_next_core_proof(&mut self) -> Option<EncapsulationProofs> {
+        let proofs = self.core_proofs_generator.get_next_proof().await?;
         tracing::trace!(
             target: LOG_TARGET,
             epoch = ?self.core_proofs_generator.settings.common.epoch,
             quota = %self.core_proofs_generator.settings.common.public_inputs.core.quota,
             membership_size = self.core_proofs_generator.settings.common.membership_size,
             local_node_index = ?self.core_proofs_generator.settings.common.local_node_index,
-            key_nullifier = ?proof.proof_of_quota.key_nullifier(),
-            signing_key = ?proof.ephemeral_signing_key.public_key(),
+            key_nullifier = ?proofs.outermost().proof_of_quota.key_nullifier(),
+            signing_key = ?proofs.outermost().ephemeral_signing_key.public_key(),
             "generated core PoQ"
         );
-        Some(proof)
+        Some(proofs)
     }
 
-    async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof> {
+    async fn get_next_leader_proof(&mut self) -> Option<EncapsulationProofs> {
         let Some(leader_proofs_generator) = &mut self.leader_proofs_generator else {
             return None;
         };
-        let proof = leader_proofs_generator.get_next_proof().await?;
+        let proofs = leader_proofs_generator.get_next_proof().await?;
         tracing::trace!(
             target: LOG_TARGET,
             epoch = ?leader_proofs_generator.settings.epoch,
             quota = %leader_proofs_generator.settings.public_inputs.core.quota,
             membership_size = leader_proofs_generator.settings.membership_size,
             local_node_index = ?leader_proofs_generator.settings.local_node_index,
-            key_nullifier = ?proof.proof_of_quota.key_nullifier(),
-            signing_key = ?proof.ephemeral_signing_key.public_key(),
+            key_nullifier = ?proofs.outermost().proof_of_quota.key_nullifier(),
+            signing_key = ?proofs.outermost().ephemeral_signing_key.public_key(),
             "generated leadership PoQ"
         );
-        Some(proof)
+        Some(proofs)
     }
 }

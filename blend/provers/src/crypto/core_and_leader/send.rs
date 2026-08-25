@@ -13,7 +13,7 @@ use lb_groth16::fr_to_bytes;
 use crate::{
     crypto::EncapsulatedMessageWithVerifiedPublicHeader,
     provers::{
-        BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
+        EncapsulationProofs, ProofsGeneratorSettings, WinningPolInfoStream,
         core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
     },
 };
@@ -129,7 +129,6 @@ where
     // TODO: Think about optimizing this by, e.g., using less encapsulations if
     // there are less than 3 proofs available, or use a proof from a different pool
     // if needed (core proof for leadership message or leadership proof for
-    // cover message, since the protocol does not enforce that).
     async fn encapsulate_payload(
         &mut self,
         payload_type: PayloadType,
@@ -137,18 +136,13 @@ where
     ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
         // We validate the payload early on so we don't generate proofs unnecessarily.
         let validated_payload = PaddedPayloadBody::try_from(payload)?;
-        let mut proofs = Vec::with_capacity(self.num_blend_layers.get() as usize);
-
-        for _ in 0..self.num_blend_layers.into() {
-            let Some(proof) = self.next_proof_for(payload_type).await else {
-                return Err(Error::ProofNotAvailable);
-            };
-            proofs.push(proof);
-        }
+        let Some(proofs) = self.next_proofs_for(payload_type).await else {
+            return Err(Error::ProofNotAvailable);
+        };
 
         let membership_size = self.membership.size();
         let proofs_and_signing_keys = proofs
-            .into_iter()
+            .into_layers()
             // Collect remote (or local) index info for each PoSel.
             .map(|proof| {
                 let expected_index = proof
@@ -195,7 +189,7 @@ where
     }
 
     /// The `PoQ` branch each payload type draws its layer proofs from.
-    async fn next_proof_for(&mut self, payload_type: PayloadType) -> Option<BlendLayerProof> {
+    async fn next_proofs_for(&mut self, payload_type: PayloadType) -> Option<EncapsulationProofs> {
         match payload_type {
             PayloadType::Cover => self.proofs_generator.get_next_core_proof().await,
             PayloadType::BlockProposal => self.proofs_generator.get_next_leader_proof().await,

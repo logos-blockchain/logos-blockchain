@@ -1,6 +1,7 @@
 use core::{
     cell::{Cell, RefCell},
     convert::Infallible,
+    num::NonZeroU64,
 };
 
 use async_trait::async_trait;
@@ -14,7 +15,7 @@ use lb_blend::{
         selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
     },
     scheduling::message_blend::provers::{
-        BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
+        BlendLayerProof, EncapsulationProofs, ProofsGeneratorSettings, WinningPolInfoStream,
         core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
     },
 };
@@ -43,19 +44,30 @@ pub fn recorded_starting_core_key_indices() -> Vec<KeyIndex> {
     STARTING_CORE_KEY_INDICES.with(|indices| indices.borrow().clone())
 }
 
-pub struct MockCoreAndLeaderProofsGenerator;
+/// A whole message's worth of identical mock proofs.
+pub fn mock_encapsulation_proofs(encapsulation_layers: NonZeroU64) -> EncapsulationProofs {
+    EncapsulationProofs::try_new(
+        core::iter::repeat_with(mock_blend_proof)
+            .take(encapsulation_layers.get() as usize)
+            .collect(),
+        encapsulation_layers,
+    )
+    .expect("built with exactly one proof per layer")
+}
+
+pub struct MockCoreAndLeaderProofsGenerator(NonZeroU64);
 
 #[async_trait]
 impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
     for MockCoreAndLeaderProofsGenerator
 {
     fn new(
-        _settings: ProofsGeneratorSettings,
+        settings: ProofsGeneratorSettings,
         starting_key_index: KeyIndex,
         _core_proof_of_quota_generator: CorePoQGenerator,
     ) -> Self {
         STARTING_CORE_KEY_INDICES.with(|indices| indices.borrow_mut().push(starting_key_index));
-        Self
+        Self(settings.encapsulation_layers)
     }
 
     fn set_epoch_private(
@@ -65,16 +77,16 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
     ) {
     }
 
-    async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
-        Some(mock_blend_proof())
+    async fn get_next_core_proof(&mut self) -> Option<EncapsulationProofs> {
+        Some(mock_encapsulation_proofs(self.0))
     }
 
-    async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof> {
-        Some(mock_blend_proof())
+    async fn get_next_leader_proof(&mut self) -> Option<EncapsulationProofs> {
+        Some(mock_encapsulation_proofs(self.0))
     }
 
-    async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {
-        Some(mock_blend_proof())
+    async fn get_next_pow_proof(&mut self) -> Option<EncapsulationProofs> {
+        Some(mock_encapsulation_proofs(self.0))
     }
 }
 
@@ -173,7 +185,7 @@ pub fn mock_blend_proof() -> BlendLayerProof {
 /// that awaiting it anywhere on the event loop's critical path would stall the
 /// service. Core and leadership proofs stay immediate, as they are in
 /// production, so a test can tell the two apart.
-pub struct GatedPowProofsGenerator;
+pub struct GatedPowProofsGenerator(NonZeroU64);
 
 thread_local! {
     static POW_GATE: RefCell<Option<watch::Receiver<bool>>> = const { RefCell::new(None) };
@@ -206,11 +218,11 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
     for GatedPowProofsGenerator
 {
     fn new(
-        _settings: ProofsGeneratorSettings,
+        settings: ProofsGeneratorSettings,
         _starting_key_index: KeyIndex,
         _core_proof_of_quota_generator: CorePoQGenerator,
     ) -> Self {
-        Self
+        Self(settings.encapsulation_layers)
     }
 
     fn set_epoch_private(
@@ -220,19 +232,19 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
     ) {
     }
 
-    async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
-        Some(mock_blend_proof())
+    async fn get_next_core_proof(&mut self) -> Option<EncapsulationProofs> {
+        Some(mock_encapsulation_proofs(self.0))
     }
 
-    async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof> {
-        Some(mock_blend_proof())
+    async fn get_next_leader_proof(&mut self) -> Option<EncapsulationProofs> {
+        Some(mock_encapsulation_proofs(self.0))
     }
 
-    async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {
+    async fn get_next_pow_proof(&mut self) -> Option<EncapsulationProofs> {
         let mut gate = POW_GATE.with_borrow(Clone::clone)?;
         gate.wait_for(|open| *open)
             .await
             .expect("the gate should outlive the generator");
-        Some(mock_blend_proof())
+        Some(mock_encapsulation_proofs(self.0))
     }
 }

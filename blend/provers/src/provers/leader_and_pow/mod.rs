@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use lb_log_targets::blend;
 
 use crate::provers::{
-    BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
+    EncapsulationProofs, ProofsGeneratorSettings, WinningPolInfoStream,
     leader::{LeaderProofsGenerator as _, RealLeaderProofsGenerator},
     pow::{PowProofsGenerator as _, RealPowProofsGenerator},
 };
@@ -28,10 +28,10 @@ pub trait LeaderAndPowProofsGenerator: Sized {
     ) -> Self;
     /// Request a new leadership proof from the prover. It returns `None` if all
     /// the winning slots for the current epoch have been used up.
-    async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof>;
+    async fn get_next_leader_proof(&mut self) -> Option<EncapsulationProofs>;
     /// Request a new proof of work backed proof from the prover. It returns
     /// `None` if the epoch's `PoW` public inputs admit no proof at all.
-    async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof>;
+    async fn get_next_pow_proof(&mut self) -> Option<EncapsulationProofs>;
 }
 
 /// The generator an edge node runs for the duration of an epoch.
@@ -59,18 +59,18 @@ impl LeaderAndPowProofsGenerator for RealLeaderAndPowProofsGenerator {
         }
     }
 
-    async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof> {
+    async fn get_next_leader_proof(&mut self) -> Option<EncapsulationProofs> {
         self.leader_proofs_generator.get_next_proof().await
     }
 
-    async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {
-        let proof = self.pow_proofs_generator.get_next_proof().await?;
+    async fn get_next_pow_proof(&mut self) -> Option<EncapsulationProofs> {
+        let proofs = self.pow_proofs_generator.get_next_proof().await?;
         tracing::trace!(
             target: LOG_TARGET,
-            key_nullifier = ?proof.proof_of_quota.key_nullifier(),
-            signing_key = ?proof.ephemeral_signing_key.public_key(),
+            key_nullifier = ?proofs.outermost().proof_of_quota.key_nullifier(),
+            signing_key = ?proofs.outermost().ephemeral_signing_key.public_key(),
             "generated PoW PoQ"
         );
-        Some(proof)
+        Some(proofs)
     }
 }

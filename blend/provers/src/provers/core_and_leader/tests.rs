@@ -38,7 +38,8 @@ async fn proof_generation() {
         let proof = core_and_leader_proofs_generator
             .get_next_core_proof()
             .await
-            .unwrap();
+            .unwrap()
+            .into_single_layer();
         let verified_proof_of_quota = proof
             .proof_of_quota
             .into_inner()
@@ -89,7 +90,8 @@ async fn proof_generation() {
         let proof = core_and_leader_proofs_generator
             .get_next_leader_proof()
             .await
-            .unwrap();
+            .unwrap()
+            .into_single_layer();
         let verified_proof_of_quota = proof
             .proof_of_quota
             .into_inner()
@@ -153,7 +155,8 @@ async fn epoch_private_info() {
     let proof = core_and_leader_proofs_generator
         .get_next_leader_proof()
         .await
-        .unwrap();
+        .unwrap()
+        .into_single_layer();
     let verified_proof_of_quota = proof
         .proof_of_quota
         .into_inner()
@@ -178,7 +181,8 @@ async fn epoch_private_info() {
     let proof = core_and_leader_proofs_generator
         .get_next_leader_proof()
         .await
-        .unwrap();
+        .unwrap()
+        .into_single_layer();
     let verified_proof_of_quota = proof
         .proof_of_quota
         .into_inner()
@@ -217,7 +221,8 @@ async fn epoch_private_info() {
     let proof = core_and_leader_proofs_generator
         .get_next_core_proof()
         .await
-        .unwrap();
+        .unwrap()
+        .into_single_layer();
     let verified_proof_of_quota = proof
         .proof_of_quota
         .into_inner()
