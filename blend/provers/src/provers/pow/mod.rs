@@ -34,7 +34,7 @@ use crate::provers::{BlendLayerProof, ProofsGeneratorSettings};
 #[cfg(test)]
 mod tests;
 
-const LOG_TARGET: &str = blend::provers::POW;
+const LOG_TARGET: &str = blend::prover::POW;
 const BUFFER_SIZE: usize = 2;
 
 #[must_use]

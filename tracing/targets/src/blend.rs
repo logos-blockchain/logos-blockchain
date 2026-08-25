@@ -13,7 +13,11 @@ log_targets! {
         edge::BEHAVIOUR,
         handler::CORE_EDGE,
     },
-    provers::{
+    processor::{
+        core_and_leader::SEND,
+        leader::SEND,
+    },
+    prover::{
         CORE,
         CORE_AND_LEADER,
         CORE_LEADER_AND_POW,

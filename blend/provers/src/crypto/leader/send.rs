@@ -7,6 +7,7 @@ use lb_blend_message::{
     crypto::proofs::PoQVerificationInputsMinusSigningKey, input::EncapsulationInput,
 };
 use lb_cryptarchia_engine::Epoch;
+use lb_log_targets::blend;
 use rayon::ThreadPool;
 
 use crate::{
@@ -16,6 +17,8 @@ use crate::{
         leader_and_pow::LeaderAndPowProofsGenerator,
     },
 };
+
+const LOG_TARGET: &str = blend::processor::leader::SEND;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum PayloadType {
@@ -168,6 +171,7 @@ where
 
         if message_proofs.len() < encapsulations {
             tracing::warn!(
+                target: LOG_TARGET,
                 "Encapsulating a {payload_type:?} message under {} of {encapsulations} layers: its quota branch is exhausted for this epoch.",
                 message_proofs.len()
             );

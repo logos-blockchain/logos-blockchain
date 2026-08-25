@@ -9,6 +9,7 @@ use lb_blend_message::{
 use lb_blend_proofs::quota::Quota;
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
+use lb_log_targets::blend;
 use rayon::ThreadPool;
 
 use crate::{
@@ -18,6 +19,8 @@ use crate::{
         core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
     },
 };
+
+const LOG_TARGET: &str = blend::processor::core_and_leader::SEND;
 
 /// [`EpochCryptographicProcessor`] is responsible for only wrapping
 /// cover and data messages for the message indistinguishability.
@@ -209,8 +212,9 @@ where
 
         if message_proofs.len() < encapsulations {
             tracing::warn!(
-                "Encapsulating a {payload_type:?} message under {used} of {encapsulations} layers: its quota branch is exhausted for this epoch.",
-                used = message_proofs.len()
+                target: LOG_TARGET,
+                "Encapsulating a {payload_type:?} message under {} of {encapsulations} layers: its quota branch is exhausted for this epoch.",
+                message_proofs.len()
             );
         }
         Some(message_proofs)

@@ -10,7 +10,7 @@ use crate::provers::{
 #[cfg(test)]
 mod tests;
 
-const LOG_TARGET: &str = blend::provers::LEADER_AND_POW;
+const LOG_TARGET: &str = blend::prover::LEADER_AND_POW;
 
 /// Proof generator for the two `PoQ` variants an edge node can reach.
 ///
