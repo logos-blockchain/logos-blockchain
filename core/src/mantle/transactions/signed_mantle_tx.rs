@@ -349,6 +349,7 @@ impl SignedMantleTx<Preverified> {
                     current_epoch_nonce: helper.get_current_epoch_nonce(),
                     previous_epoch_nonce: helper.get_previous_epoch_nonce(),
                     blocks_slot: helper.get_blocks_slot(),
+                    slot_window: helper.get_pow_slot_window(),
                 };
                 claim_pow_op
                     .verify(proof, &context)

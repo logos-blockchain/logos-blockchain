@@ -95,6 +95,7 @@ pub struct ServiceParameters {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PoWConfig {
     pub blend: BlendPoWConfig,
+    pub reward: RewardPoWConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -105,3 +106,8 @@ pub struct BlendPoWConfig {
     pub damping_num: NonZeroU32,
     pub damping_den_offset: u32,
 }
+
+// The reward parameters are used verbatim, so the ledger type is reused
+// directly: deserializing the deployment config runs its invariant checks
+// (`RewardPoWConfig::validate`), rejecting an invalid config at load time.
+pub use lb_ledger::config::RewardPoWConfig;

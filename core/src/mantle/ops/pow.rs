@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use ark_ff::Zero as _;
 use lb_codec::{BinaryCodec, BinaryEncode as _};
 use lb_cryptarchia_engine::Slot;
@@ -22,7 +24,6 @@ use crate::{
     },
 };
 
-pub const SLOT_WINDOW: u64 = 100;
 /// `d_reward`: the difficulty threshold a puzzle ticket must be strictly
 /// below to qualify for a `PoW` reward claim.
 pub type PowTarget = Fr;
@@ -149,6 +150,9 @@ pub struct ClaimPoWRewardVerificationContext<'a> {
     /// Slots of known blocks, used to check the claim's block is within
     /// the acceptance window.
     pub blocks_slot: HashTrieMapSync<Hash, Slot>,
+    /// Acceptance window, in slots: how far back a claim's anchor block may
+    /// be from the current block. Configured per-deployment.
+    pub slot_window: NonZeroU64,
 }
 
 impl ClaimPoWRewardVerificationContext<'_> {
@@ -162,11 +166,9 @@ impl ClaimPoWRewardVerificationContext<'_> {
         Ok(())
     }
 
-    /// On-chain `block_hash` window check, measured in slots.
-    pub fn accept_claim<const WINDOW: u64>(
-        &self,
-        block_id: Hash,
-    ) -> Result<(), ClaimPowRewardError> {
+    /// On-chain `block_hash` window check, measured in slots. The window is
+    /// taken from [`Self::slot_window`], configured per-deployment.
+    pub fn accept_claim(&self, block_id: Hash) -> Result<(), ClaimPowRewardError> {
         let Some(&block_slot) = self.blocks_slot.get(&block_id) else {
             return Err(ClaimPowRewardError::MissingBlock { block_id });
         };
@@ -177,7 +179,7 @@ impl ClaimPoWRewardVerificationContext<'_> {
                 current_slot: self.current_block_slot,
             });
         };
-        if slot_gap > Slot::from(WINDOW) {
+        if slot_gap > Slot::from(self.slot_window.get()) {
             return Err(ClaimPowRewardError::OutOfWindowSlot {
                 slot: block_slot,
                 current_slot: self.current_block_slot,
@@ -300,7 +302,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for ClaimPowRewardOp {
         context: &Self::Context<'_>,
     ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
         context.are_pow_reward_enabled()?;
-        context.accept_claim::<{ SLOT_WINDOW }>(self.block_hash)?;
+        context.accept_claim(self.block_hash)?;
         context.validate_current_epoch_nonce(self.epoch_nonce)?;
         let puzzle_ticket = self.get_puzzle_ticket();
         context.validate_difficulty_reward(puzzle_ticket)?;
@@ -353,9 +355,13 @@ impl ExecutableOperation for ClaimPowRewardOp {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZero;
+
     use lb_groth16::{AdditiveGroup as _, Field as _};
 
     use super::*;
+
+    pub const SLOT_WINDOW: NonZeroU64 = NonZeroU64::new(100).expect("100 is not 0");
 
     fn validation_context(
         nullifiers: &HashTrieMapSync<PowNullifier, Slot>,
@@ -371,6 +377,7 @@ mod tests {
             current_epoch_nonce: nonce_for_epoch(0),
             previous_epoch_nonce: nonce_for_epoch(0),
             blocks_slot: HashTrieMapSync::new_sync(),
+            slot_window: SLOT_WINDOW,
         }
     }
 
@@ -442,6 +449,8 @@ mod tests {
             current_epoch_nonce: nonce_for_epoch(CURRENT_EPOCH),
             previous_epoch_nonce: nonce_for_epoch(PREVIOUS_EPOCH),
             blocks_slot: std::iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
+            // Tests below exercise a window of 10 slots.
+            slot_window: NonZero::new(10).expect("10 is not 0"),
         }
     }
 
@@ -477,13 +486,13 @@ mod tests {
         // Gap of zero: the claim's block is the current block.
         ctx.blocks_slot
             .insert_mut(CLAIM_BLOCK_HASH, Slot::from(50u64));
-        assert_eq!(ctx.accept_claim::<10>(CLAIM_BLOCK_HASH), Ok(()));
+        assert_eq!(ctx.accept_claim(CLAIM_BLOCK_HASH), Ok(()));
 
         // Gap exactly equal to the window is still inside it (§5.1.1:
         // `0 <= current - anchor <= WINDOW`, measured in slots).
         ctx.blocks_slot
             .insert_mut(CLAIM_BLOCK_HASH, Slot::from(40u64));
-        assert_eq!(ctx.accept_claim::<10>(CLAIM_BLOCK_HASH), Ok(()));
+        assert_eq!(ctx.accept_claim(CLAIM_BLOCK_HASH), Ok(()));
     }
 
     #[test]
@@ -492,7 +501,7 @@ mod tests {
         let ctx = accepting_context(&nullifiers);
         let unknown = [9u8; 32];
         assert_eq!(
-            ctx.accept_claim::<10>(unknown),
+            ctx.accept_claim(unknown),
             Err(ClaimPowRewardError::MissingBlock { block_id: unknown })
         );
     }
@@ -505,7 +514,7 @@ mod tests {
         ctx.blocks_slot
             .insert_mut(CLAIM_BLOCK_HASH, Slot::from(39u64));
         assert_eq!(
-            ctx.accept_claim::<10>(CLAIM_BLOCK_HASH),
+            ctx.accept_claim(CLAIM_BLOCK_HASH),
             Err(ClaimPowRewardError::OutOfWindowSlot {
                 slot: Slot::from(39u64),
                 current_slot: Slot::from(50),
@@ -522,7 +531,7 @@ mod tests {
         ctx.blocks_slot
             .insert_mut(CLAIM_BLOCK_HASH, Slot::from(51u64));
         assert_eq!(
-            ctx.accept_claim::<10>(CLAIM_BLOCK_HASH),
+            ctx.accept_claim(CLAIM_BLOCK_HASH),
             Err(ClaimPowRewardError::OutOfWindowSlot {
                 slot: Slot::from(51u64),
                 current_slot: Slot::from(50),

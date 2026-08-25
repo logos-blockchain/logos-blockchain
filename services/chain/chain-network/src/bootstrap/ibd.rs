@@ -363,7 +363,7 @@ mod tests {
     use lb_cryptarchia_engine::{EpochConfig, Slot, UncleSlots};
     use lb_ledger::{
         LedgerState,
-        config::{BlendPoWConfig, ModulusShift, PoWConfig},
+        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
@@ -941,6 +941,24 @@ mod tests {
         )
     }
 
+    /// A reward config with claiming disabled, standing in for a real
+    /// deployment config in tests.
+    fn disabled_reward_config() -> RewardPoWConfig {
+        RewardPoWConfig {
+            reward_pool_genesis: 1_000_000_000,
+            epoch_reward_genesis: 1_000_000,
+            initial_difficulty_seed: 1_000,
+            ema_smoothing_factor: 9,
+            ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
+            target_claims_per_block: 100,
+            rate_num: 0,
+            rate_den: NonZeroU64::MIN,
+            target_claim_per_block: NonZeroU64::MIN,
+            expected_blocks_per_epoch: NonZeroU64::MIN,
+            slot_window: NonZeroU64::new(100).unwrap(),
+        }
+    }
+
     #[must_use]
     fn ledger_config() -> lb_ledger::Config {
         let epoch_config = EpochConfig {
@@ -994,6 +1012,7 @@ mod tests {
                     max_step: 1.try_into().unwrap(),
                     target_transactions_per_block: 1.try_into().unwrap(),
                 },
+                reward: disabled_reward_config(),
             },
         }
     }
