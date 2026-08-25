@@ -316,7 +316,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        mantle::batch::DeferredZkpVerifications, proofs::leader_claim_proof::LeaderClaimPrivate,
+        mantle::{batch::DeferredZkpVerifications, gas::test_utils::FixedThresholds},
+        proofs::leader_claim_proof::LeaderClaimPrivate,
     };
 
     #[test]
@@ -516,5 +517,15 @@ mod tests {
             preverified_signed_operation_result,
             Err(LeaderClaimError::InvalidPoC)
         ));
+    }
+
+    #[test]
+    fn leader_claim_op_execution_gas_does_not_scale_with_the_threshold() {
+        for threshold in [0, 1, 3] {
+            assert_eq!(
+                LeaderClaimOp::sample().execution_gas(&FixedThresholds(threshold)),
+                Ok(Gas::new(580))
+            );
+        }
     }
 }

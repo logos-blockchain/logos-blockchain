@@ -236,6 +236,7 @@ mod tests {
     use lb_utils::bounded::BoundedError;
 
     use super::*;
+    use crate::mantle::gas::test_utils::FixedThresholds;
 
     fn sample() -> InscriptionOp {
         InscriptionOp {
@@ -290,5 +291,15 @@ mod tests {
         let bytes = bincode::serialize(&op).unwrap();
         let recovered: InscriptionOp = bincode::deserialize(&bytes).unwrap();
         assert_eq!(op, recovered);
+    }
+
+    #[test]
+    fn inscription_op_execution_gas_does_not_scale_with_the_threshold() {
+        for threshold in [0, 1, 3] {
+            assert_eq!(
+                InscriptionOp::sample().execution_gas(&FixedThresholds(threshold)),
+                Ok(Gas::new(56))
+            );
+        }
     }
 }

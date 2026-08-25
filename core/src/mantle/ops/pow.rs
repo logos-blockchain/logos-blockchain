@@ -377,6 +377,7 @@ mod tests {
     use lb_groth16::{AdditiveGroup as _, Field as _};
 
     use super::*;
+    use crate::mantle::gas::test_utils::FixedThresholds;
 
     pub const SLOT_WINDOW: NonZeroU64 = NonZeroU64::new(100).expect("100 is not 0");
 
@@ -746,5 +747,15 @@ mod tests {
             utxos: Utxos::new(),
             block_slots: std::iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
         }));
+    }
+
+    #[test]
+    fn claim_pow_reward_op_execution_gas_does_not_scale_with_the_threshold() {
+        for threshold in [0, 1, 3] {
+            assert_eq!(
+                ClaimPowRewardOp::sample().execution_gas(&FixedThresholds(threshold)),
+                Ok(Gas::new(1))
+            );
+        }
     }
 }

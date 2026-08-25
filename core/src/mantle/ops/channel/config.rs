@@ -243,6 +243,7 @@ impl<Mode: VerificationMode> ExecutableOperation
 mod tests {
     use super::*;
     use crate::mantle::{
+        gas::test_utils::FixedThresholds,
         ops::channel::verification::test_utils::create_channel_multi_sig_proof,
         transactions::hash::TxHash,
     };
@@ -300,5 +301,23 @@ mod tests {
             .unwrap();
 
         assert!(signed_operation.verify(&context).unwrap().is_none());
+    }
+
+    #[test]
+    fn channel_config_op_execution_gas_scales_with_the_threshold() {
+        for (threshold, expected) in [(1, 56), (2, 112), (3, 168)] {
+            assert_eq!(
+                ChannelConfigOp::sample().execution_gas(&FixedThresholds(threshold)),
+                Ok(Gas::new(expected))
+            );
+        }
+    }
+
+    #[test]
+    fn channel_config_op_execution_gas_is_zero_against_an_unknown_channel() {
+        assert_eq!(
+            ChannelConfigOp::sample().execution_gas(&FixedThresholds(0)),
+            Ok(Gas::new(0))
+        );
     }
 }
