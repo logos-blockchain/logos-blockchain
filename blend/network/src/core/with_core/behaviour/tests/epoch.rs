@@ -2,8 +2,8 @@ use core::time::Duration;
 
 use either::Either;
 use futures::StreamExt as _;
+use lb_blend_membership::Membership;
 use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
-use lb_blend_scheduling::membership::Membership;
 use lb_cryptarchia_engine::Epoch;
 use lb_libp2p::{NetworkBehaviour as _, SwarmEvent};
 use libp2p::{Multiaddr, swarm::ConnectionId};

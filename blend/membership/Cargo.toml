@@ -1,0 +1,25 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-blend-membership"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+lb-key-management-system-keys = { workspace = true }
+multiaddr                     = { workspace = true }
+rand                          = { features = ["alloc"], workspace = true }
+serde                         = { workspace = true }
+
+[dev-dependencies]
+lb-key-management-system-keys = { workspace = true }
+
+[features]
+unsafe-test-functions = []
