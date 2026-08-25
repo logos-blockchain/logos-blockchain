@@ -187,9 +187,13 @@ where
     ///
     /// Proofs are accumulated on `self` rather than in a local, so a caller
     /// that is cancelled mid-draw — a `select!` arm losing the race, say —
-    /// leaves them where the next attempt will find them. Returns `None`
-    /// when the branch cannot complete the set, keeping whatever it did
-    /// draw.
+    /// leaves them where the next attempt will find them.
+    ///
+    /// A branch that runs out part-way does not sink the message: the wire
+    /// format carries `ß_max` blending headers whatever happens, padding the
+    /// unused ones with random bytes, so a message can go out under fewer real
+    /// layers without telling anyone it did. Returns `None` only when not one
+    /// proof is available, which is the one case with nothing to send.
     async fn next_proofs_for(&mut self, payload_type: PayloadType) -> Option<Vec<BlendLayerProof>> {
         let encapsulations = self.num_blend_layers.get() as usize;
         while self.partial_draws.for_type(payload_type).len() < encapsulations
