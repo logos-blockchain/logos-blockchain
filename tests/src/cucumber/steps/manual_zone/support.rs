@@ -289,9 +289,9 @@ pub fn start_sorted_conflict_policy(
 #[derive(Default)]
 struct OrphanRepublishPolicy {
     /// Canonical on-chain inscriptions by id (adopted-unfinalized + finalized).
+    /// Finalized entries are added and never removed — they can't be orphaned —
+    /// so this one set is the whole on-chain view.
     canonical: HashMap<MsgId, Inscription>,
-    /// Permanent floor of finalized payloads — never re-homed.
-    finalized: HashSet<Inscription>,
 }
 
 impl<Node> runner::Policy<Node> for OrphanRepublishPolicy
@@ -313,10 +313,9 @@ where
                 self.canonical.remove(&info.this_msg);
             }
         }
-        // 2. Add finalized by id, and record the payload in the permanent floor.
+        // 2. Add finalized by id (permanent — finalized can't be orphaned).
         for info in finalized_inscriptions(finalized) {
             self.canonical.insert(info.this_msg, info.payload.clone());
-            self.finalized.insert(info.payload.clone());
         }
         // 3. Add adopted by id (this block's new canonical).
         for info in channel_update
@@ -331,11 +330,10 @@ where
             let ChannelUpdateTx::Inscription(info) = entry else {
                 continue;
             };
-            if self.finalized.contains(&info.payload)
-                || self
-                    .canonical
-                    .values()
-                    .any(|payload| *payload == info.payload)
+            if self
+                .canonical
+                .values()
+                .any(|payload| *payload == info.payload)
             {
                 continue;
             }
