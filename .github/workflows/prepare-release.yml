@@ -115,30 +115,50 @@ jobs:
       - name: Checkout
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
 
-      - name: Prepare release body with the module version and release candidate-specific disclaimers
+      - name: Prepare release body with the module version, bootstrap peers, and release candidate-specific disclaimers
         run: |
           set -euo pipefail
 
           TEMPLATE=.github/release/release-content.md
           DISCLAIMER_FILE=.github/release/rc-disclaimer.md
           OUTPUT=.github/release/release-content.generated.md
-          PLACEHOLDER='{{BLOCKCHAIN_MODULE_VERSION}}'
+          MODULE_VERSION_PLACEHOLDER='{{BLOCKCHAIN_MODULE_VERSION}}'
+          INITIAL_PEERS_PLACEHOLDER='{{INITIAL_PEERS}}'
 
-          if ! grep -qF "$PLACEHOLDER" "$TEMPLATE"; then
-            echo "'$TEMPLATE' does not contain the '$PLACEHOLDER' placeholder. It must be present so the release notes reference the module version being released."
+          for PLACEHOLDER in "$MODULE_VERSION_PLACEHOLDER" "$INITIAL_PEERS_PLACEHOLDER"; do
+            if ! grep -qF "$PLACEHOLDER" "$TEMPLATE"; then
+              echo "'$TEMPLATE' does not contain the '$PLACEHOLDER' placeholder. It must be present so the release notes match the release being prepared."
+              exit 1
+            fi
+          done
+
+          # Release candidates target the devnet and always point at the fixed devnet version of the
+          # `blockchain_module` package, while releases target the testnet and publish the package under
+          # the same version as the node.
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            BLOCKCHAIN_MODULE_VERSION="$PRERELEASE_MODULE_VERSION"
+            PEERS_FILE=.github/release/devnet-peers.txt
+          else
+            BLOCKCHAIN_MODULE_VERSION="$VERSION"
+            PEERS_FILE=.github/release/testnet-peers.txt
+          fi
+          # `sed`'s `r` command ignores a missing file, which would silently produce an empty peer list.
+          if [[ ! -s "$PEERS_FILE" ]]; then
+            echo "'$PEERS_FILE' is missing or empty. It must list the bootstrap peers to inject into the release notes."
             exit 1
           fi
 
-          # A release publishes the `blockchain_module` package under the same version as the node, while
-          # release candidates always point at the fixed devnet version.
-          if [[ "$IS_PRERELEASE" == "true" ]]; then
-            MODULE_VERSION="$PRERELEASE_MODULE_VERSION"
-          else
-            MODULE_VERSION="$VERSION"
-          fi
-          echo "Setting the '$PLACEHOLDER' placeholder to '$MODULE_VERSION'."
+          echo "Setting '$MODULE_VERSION_PLACEHOLDER' to '$BLOCKCHAIN_MODULE_VERSION' and '$INITIAL_PEERS_PLACEHOLDER' to the contents of '$PEERS_FILE'."
 
-          sed "s|$PLACEHOLDER|$MODULE_VERSION|g" "$TEMPLATE" > "$OUTPUT"
+          sed -e "s|$MODULE_VERSION_PLACEHOLDER|$BLOCKCHAIN_MODULE_VERSION|g" \
+              -e "/$INITIAL_PEERS_PLACEHOLDER/r $PEERS_FILE" \
+              -e "/$INITIAL_PEERS_PLACEHOLDER/d" \
+              "$TEMPLATE" > "$OUTPUT"
+
+          if grep -n '{{' "$OUTPUT"; then
+            echo "'$OUTPUT' still contains unsubstituted placeholders (listed above)."
+            exit 1
+          fi
 
           if [[ "$IS_PRERELEASE" == "true" ]]; then
             { cat "$DISCLAIMER_FILE"; echo; cat "$OUTPUT"; } > "${OUTPUT}.tmp"
