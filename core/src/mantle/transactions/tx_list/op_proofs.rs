@@ -30,6 +30,33 @@ impl OpProofs {
 
         Ok((remaining_input, op_proofs))
     }
+
+    /// One sample of every [`OpProof`] variant, in declaration order.
+    ///
+    /// Exhaustive over the enum, so it carries no alignment with any [`Ops`] —
+    /// pairing proofs to their ops is `SignedOps`' job, not this column's.
+    #[cfg(any(test, feature = "samples"))]
+    #[must_use]
+    pub fn sample() -> Self {
+        use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
+
+        use crate::{
+            mantle::ops::{NoOpProof, ZkAndEd25519Proof, op_proof::samples::SampleProof as _},
+            proofs::{
+                channel_multi_sig_proof::ChannelMultiSigProof,
+                leader_claim_proof::Groth16LeaderClaimProof,
+            },
+        };
+
+        Self::from([
+            OpProof::Ed25519Sig(Ed25519Signature::sample()),
+            OpProof::ZkSig(ZkSignature::sample()),
+            OpProof::ZkAndEd25519Sigs(ZkAndEd25519Proof::sample()),
+            OpProof::PoC(Groth16LeaderClaimProof::sample()),
+            OpProof::ChannelMultiSigProof(ChannelMultiSigProof::sample()),
+            OpProof::None(NoOpProof::sample()),
+        ])
+    }
 }
 
 /// A bare sequence, mirroring [`OpProofRefs`]' `Serialize`, which is what

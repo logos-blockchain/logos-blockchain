@@ -1,10 +1,10 @@
 use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "samples"))]
 use crate::mantle::OpProof;
-#[cfg(feature = "test-utils")]
-use crate::mantle::ops::op_proof::placeholders::placeholder_proof_for;
+#[cfg(any(test, feature = "samples"))]
+use crate::mantle::ops::op_proof::samples::sample_proof_for;
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
@@ -177,21 +177,21 @@ impl Op {
         self.by_ref().gas_cost::<Profile>()
     }
 
-    #[cfg(feature = "test-utils")]
+    #[cfg(any(test, feature = "samples"))]
     #[must_use]
-    pub fn generate_placeholder_proof(&self) -> OpProof {
+    pub fn sample_proof(&self) -> OpProof {
         match self {
-            Self::ChannelInscribe(op) => placeholder_proof_for(op),
-            Self::ChannelConfig(op) => placeholder_proof_for(op),
-            Self::ChannelDeposit(op) => placeholder_proof_for(op),
-            Self::ChannelWithdraw(op) => placeholder_proof_for(op),
-            Self::ChannelTransfer(op) => placeholder_proof_for(op),
-            Self::SDPDeclare(op) => placeholder_proof_for(op),
-            Self::SDPWithdraw(op) => placeholder_proof_for(op),
-            Self::SDPActive(op) => placeholder_proof_for(op),
-            Self::LeaderClaim(op) => placeholder_proof_for(op),
-            Self::Transfer(op) => placeholder_proof_for(op),
-            Self::ClaimPowReward(op) => placeholder_proof_for(op),
+            Self::ChannelInscribe(op) => sample_proof_for(op),
+            Self::ChannelConfig(op) => sample_proof_for(op),
+            Self::ChannelDeposit(op) => sample_proof_for(op),
+            Self::ChannelWithdraw(op) => sample_proof_for(op),
+            Self::ChannelTransfer(op) => sample_proof_for(op),
+            Self::SDPDeclare(op) => sample_proof_for(op),
+            Self::SDPWithdraw(op) => sample_proof_for(op),
+            Self::SDPActive(op) => sample_proof_for(op),
+            Self::LeaderClaim(op) => sample_proof_for(op),
+            Self::Transfer(op) => sample_proof_for(op),
+            Self::ClaimPowReward(op) => sample_proof_for(op),
         }
     }
 }
