@@ -163,6 +163,9 @@ sdp:
   wallet:
     max_tx_fee: 18446744073709551615
     funding_pk: 9750fa86471fddc69749aa9f8568ef6635e64d9f9aa815e8cb932cea183c8e18
+  active_message_tracker:
+    status_check_interval_in_tip_changes: 3
+    max_status_checks: 5
 api:
   backend:
     listen_address: 127.0.0.1:8080

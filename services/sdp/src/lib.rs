@@ -1,4 +1,5 @@
 pub mod api;
+mod intent;
 pub mod mempool;
 mod metrics;
 pub mod state;
@@ -8,7 +9,7 @@ use std::fmt::{Debug, Display};
 
 use async_trait::async_trait;
 use lb_chain_service::{
-    ChainServiceInfo,
+    ChainServiceInfo, ProcessedBlockEvent,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
@@ -20,6 +21,7 @@ use lb_core::{
     sdp::{ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, WithdrawMessage},
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_ledger::LedgerState;
 use lb_services_utils::overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -28,9 +30,11 @@ use overwatch::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::oneshot;
+use tracing::{debug, error, trace};
 
-pub use crate::api::SdpServiceApi;
+pub use crate::{api::SdpServiceApi, intent::Config as ActiveMessageTrackerConfig};
 use crate::{
+    intent::{Direction, IntentTracker},
     mempool::SdpMempoolAdapter,
     state::{SdpState, SdpStateStorage},
     wallet::{SdpWalletAdapter, SdpWalletConfig},
@@ -55,6 +59,7 @@ pub struct SdpSettings {
     /// will be fetched from the ledger.
     pub declaration_id: Option<DeclarationId>,
     pub wallet_config: SdpWalletConfig,
+    pub active_message_tracker: intent::Config,
     #[serde(skip)]
     pub recovery_data: RecoveryData,
 }
@@ -74,6 +79,7 @@ pub struct RuntimeDeclaration {
     pub zk_id: ZkPublicKey,
     pub locked_note_id: NoteId,
     pub nonce: u64,
+    pub tip: HeaderId,
 }
 
 pub enum SdpMessage {
@@ -95,17 +101,22 @@ pub enum SdpMessage {
 
 pub struct SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
 where
+    ChainService: CryptarchiaServiceData,
     StateStorage: SdpStateStorage<RuntimeServiceId>,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     declaration_id: Option<DeclarationId>,
     wallet_config: SdpWalletConfig,
+    active_message_tracker_config: intent::Config,
+    active_message_tracker:
+        Option<IntentTracker<ActiveMessage, CryptarchiaServiceApi<ChainService, RuntimeServiceId>>>,
     _phantom: std::marker::PhantomData<(ChainService, StateStorage)>,
 }
 
 impl<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId> ServiceData
     for SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
 where
+    ChainService: CryptarchiaServiceData,
     StateStorage: SdpStateStorage<RuntimeServiceId>,
 {
     type Settings = SdpSettings;
@@ -152,6 +163,8 @@ where
             declaration_id,
             service_resources_handle,
             wallet_config: settings.wallet_config,
+            active_message_tracker_config: settings.active_message_tracker,
+            active_message_tracker: None,
             _phantom: std::marker::PhantomData,
         })
     }
@@ -181,65 +194,24 @@ where
 
         self.validate_initial_declaration_status(&chain_api).await?;
 
+        let mut new_blocks = chain_api.subscribe_new_blocks().await?;
+
         self.service_resources_handle.status_updater.notify_ready();
         tracing::info!(
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
 
-        while let Some(msg) = self.service_resources_handle.inbound_relay.recv().await {
-            match msg {
-                SdpMessage::PostActivity { metadata, .. } => {
-                    metrics::activity_posts_total();
-
-                    self.handle_post_activity(
-                        metadata,
-                        &wallet_adapter,
-                        &mempool_adapter,
-                        &chain_api,
-                    )
-                    .await;
+        loop {
+            tokio::select! {
+                Some(msg) = self.service_resources_handle.inbound_relay.recv() => {
+                    self.handle_message(msg, &wallet_adapter, &mempool_adapter, &chain_api).await;
                 }
-                SdpMessage::PostDeclaration {
-                    declaration,
-                    reply_channel,
-                } => {
-                    metrics::declarations_total();
-
-                    self.handle_post_declaration(
-                        declaration,
-                        &wallet_adapter,
-                        &mempool_adapter,
-                        reply_channel,
-                    )
-                    .await;
-                }
-                SdpMessage::PostWithdrawal { declaration_id } => {
-                    metrics::withdrawals_total();
-
-                    self.handle_post_withdrawal(
-                        declaration_id,
-                        &wallet_adapter,
-                        &mempool_adapter,
-                        &chain_api,
-                    )
-                    .await;
-                }
-                SdpMessage::SetCurrentDeclarationId {
-                    declaration_id,
-                    reply_channel,
-                } => {
-                    self.handle_set_current_declaration_id(
-                        declaration_id,
-                        reply_channel,
-                        &chain_api,
-                    )
-                    .await;
+                Ok(event) = new_blocks.recv() => {
+                    self.handle_new_block(event, &wallet_adapter, &mempool_adapter, &chain_api).await;
                 }
             }
         }
-
-        Ok(())
     }
 }
 
@@ -260,6 +232,123 @@ where
         + Sync
         + 'static,
 {
+    async fn handle_message(
+        &mut self,
+        msg: SdpMessage,
+        wallet_adapter: &WalletAdapter,
+        mempool_adapter: &MempoolAdapter,
+        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+    ) {
+        match msg {
+            SdpMessage::PostActivity { metadata, .. } => {
+                metrics::activity_posts_total();
+
+                self.handle_post_activity(metadata, wallet_adapter, mempool_adapter, chain_api)
+                    .await;
+            }
+            SdpMessage::PostDeclaration {
+                declaration,
+                reply_channel,
+            } => {
+                metrics::declarations_total();
+
+                self.handle_post_declaration(
+                    declaration,
+                    wallet_adapter,
+                    mempool_adapter,
+                    reply_channel,
+                )
+                .await;
+            }
+            SdpMessage::PostWithdrawal { declaration_id } => {
+                metrics::withdrawals_total();
+
+                self.handle_post_withdrawal(
+                    declaration_id,
+                    wallet_adapter,
+                    mempool_adapter,
+                    chain_api,
+                )
+                .await;
+            }
+            SdpMessage::SetCurrentDeclarationId {
+                declaration_id,
+                reply_channel,
+            } => {
+                self.handle_set_current_declaration_id(declaration_id, reply_channel, chain_api)
+                    .await;
+            }
+        }
+    }
+
+    async fn handle_new_block(
+        &mut self,
+        event: ProcessedBlockEvent,
+        wallet_adapter: &WalletAdapter,
+        mempool_adapter: &MempoolAdapter,
+        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+    ) {
+        let Some(tracker) = self.active_message_tracker.take() else {
+            trace!("no active message tracker exists");
+            return;
+        };
+
+        match tracker.handle_tip(event.tip).await {
+            Ok(direction) => {
+                self.handle_active_message_tracker_direction(
+                    direction,
+                    wallet_adapter,
+                    mempool_adapter,
+                    chain_api,
+                )
+                .await;
+            }
+            Err((err, tracker)) => {
+                error!(%err, "active message tracker failed to handle tip");
+                self.active_message_tracker = Some(tracker);
+            }
+        }
+    }
+
+    async fn handle_active_message_tracker_direction(
+        &mut self,
+        direction: Direction<ActiveMessage, CryptarchiaServiceApi<ChainService, RuntimeServiceId>>,
+        wallet_adapter: &WalletAdapter,
+        mempool_adapter: &MempoolAdapter,
+        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+    ) {
+        match direction {
+            Direction::ResubmitAndTrack { intent, tracker } => {
+                self.active_message_tracker = Some(tracker);
+                self.submit_activity(
+                    intent.declaration_id,
+                    intent.metadata,
+                    wallet_adapter,
+                    mempool_adapter,
+                    chain_api,
+                )
+                .await;
+            }
+            Direction::ResubmitAndDone(intent) => {
+                self.submit_activity(
+                    intent.declaration_id,
+                    intent.metadata,
+                    wallet_adapter,
+                    mempool_adapter,
+                    chain_api,
+                )
+                .await;
+            }
+            Direction::Track(tracker) => {
+                self.active_message_tracker = Some(tracker);
+                trace!("no active message to resubmit");
+            }
+            Direction::Done => {
+                debug!("active message tracker has completed");
+            }
+        }
+    }
+
     /// Attempt to restore declaration state from the ledger on startup.
     ///
     /// If a `declaration_id` is configured, fetches the full declaration info
@@ -319,6 +408,7 @@ where
             zk_id: declaration.zk_id,
             locked_note_id: declaration.locked_note_id,
             nonce: declaration.nonce,
+            tip,
         }))
     }
 
@@ -396,12 +486,8 @@ where
             .update(Some(SdpState::from(self.declaration_id)));
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: address this in a dedicated refactor"
-    )]
     async fn handle_post_activity(
-        &self,
+        &mut self,
         metadata: ActivityMetadata,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
@@ -412,21 +498,61 @@ where
             return;
         };
 
+        let Some((activity, tip)) = self
+            .submit_activity(
+                declaration_id,
+                metadata,
+                wallet_adapter,
+                mempool_adapter,
+                chain_api,
+            )
+            .await
+        else {
+            return;
+        };
+
+        if self
+            .active_message_tracker
+            .replace(IntentTracker::new(
+                activity,
+                self.active_message_tracker_config.clone(),
+                tip,
+                chain_api.clone(),
+            ))
+            .is_some()
+        {
+            debug!("active message tracker replaced");
+        }
+    }
+
+    #[expect(clippy::cognitive_complexity, reason = "TODO: refactor")]
+    async fn submit_activity(
+        &self,
+        declaration_id: DeclarationId,
+        metadata: ActivityMetadata,
+        wallet_adapter: &WalletAdapter,
+        mempool_adapter: &MempoolAdapter,
+        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+    ) -> Option<(ActiveMessage, HeaderId)> {
+        trace!(
+            epoch = ?metadata.submission_epoch(),
+            "submitting activity message"
+        );
+
         let Ok(ref declaration) = self
             .try_fetch_runtime_declaration(declaration_id, chain_api)
             .await
         else {
             tracing::error!("Can't find declaration. Cannot post activity without declaration.");
-            return;
+            return None;
         };
 
         let Some(nonce) = declaration.nonce.checked_add(1) else {
             tracing::error!("Can't bump nonce");
-            return;
+            return None;
         };
-
-        let active_message = ActiveMessage {
-            declaration_id: declaration.id,
+        let activity = ActiveMessage {
+            declaration_id,
             nonce,
             metadata,
         };
@@ -434,23 +560,25 @@ where
         let tx_builder = MantleTxBuilder::new();
 
         let signed_tx = match wallet_adapter
-            .active_tx(tx_builder, active_message, &self.wallet_config)
+            .active_tx(tx_builder, activity.clone(), &self.wallet_config)
             .await
         {
             Ok(tx) => tx,
             Err(e) => {
                 tracing::error!("Failed to create activity transaction: {:?}", e);
                 metrics::activity_tx_failures_total();
-                return;
+                return None;
             }
         };
 
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
             tracing::error!("Failed to post activity to mempool: {:?}", e);
             metrics::activity_mempool_failures_total();
-        } else {
-            metrics::activity_success_total();
+            return None;
         }
+
+        metrics::activity_success_total();
+        Some((activity, declaration.tip))
     }
 
     #[expect(
@@ -547,5 +675,19 @@ where
             .update(Some(SdpState::from(self.declaration_id)));
 
         Ok(())
+    }
+}
+
+#[async_trait]
+impl<ChainService, RuntimeServiceId> intent::LedgerStateProvider
+    for CryptarchiaServiceApi<ChainService, RuntimeServiceId>
+where
+    ChainService: CryptarchiaServiceData<Tx: Send + Sync> + Send + Sync,
+    RuntimeServiceId: AsServiceId<ChainService> + Send + Sync,
+{
+    type Error = lb_chain_service::api::ApiError;
+
+    async fn get(&self, block: HeaderId) -> Result<Option<LedgerState>, Self::Error> {
+        Ok(self.get_ledger_state(block).await?)
     }
 }

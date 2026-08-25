@@ -19,7 +19,7 @@ use lb_core::{
         },
     },
     sdp::{
-        ActivityMetadata, Declaration, DeclarationId, MinStake, Nonce, ProviderId,
+        ActiveMessage, ActivityMetadata, Declaration, DeclarationId, MinStake, Nonce, ProviderId,
         ServiceParameters, ServiceType,
         locked_notes::{self, LockedNotes},
     },
@@ -28,7 +28,7 @@ use lb_cryptarchia_engine::Epoch;
 use rewards::{Error as RewardsError, Rewards};
 use tracing::debug;
 
-use crate::{EpochState, UtxoTree, mantle::sdp::rewards::blend};
+use crate::{EpochState, Intent, IntentStatus, LedgerState, UtxoTree, mantle::sdp::rewards::blend};
 
 const LOG_TARGET: &str = "ledger::mantle::sdp";
 
@@ -276,6 +276,28 @@ fn is_active(declaration: &Declaration, current_epoch: Epoch, config: ServicePar
         && declaration
             .withdraw_at
             .is_none_or(|withdraw_at| withdraw_at > current_epoch)
+}
+
+impl Intent for ActiveMessage {
+    /// The intent of an active message is to refresh the `Declaration::active`
+    /// field.
+    fn status(&self, ledger: &LedgerState) -> IntentStatus {
+        let Some(declaration) = ledger
+            .mantle_ledger()
+            .sdp_ledger()
+            .get_declaration(&self.declaration_id)
+        else {
+            // The declaration doesn't exist (e.g., withdrawn).
+            return IntentStatus::Inapplicable;
+        };
+
+        // Check if the `active` field has been refreshed.
+        if declaration.active >= self.metadata.submission_epoch() {
+            IntentStatus::Applied
+        } else {
+            IntentStatus::NotApplied
+        }
+    }
 }
 
 /// A SDP state of the mantle ledger

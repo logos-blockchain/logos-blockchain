@@ -523,6 +523,16 @@ pub enum ActivityMetadata {
     Blend(Box<blend::ActivityProof>),
 }
 
+impl ActivityMetadata {
+    /// The epoch during which this activity must be submitted/accepted.
+    #[must_use]
+    pub fn submission_epoch(&self) -> Epoch {
+        match self {
+            Self::Blend(proof) => proof.epoch.strict_add(1.into()),
+        }
+    }
+}
+
 const ACTIVE_METADATA_BLEND_TYPE: u8 = 1;
 
 impl BinaryEncode for ActivityMetadata {

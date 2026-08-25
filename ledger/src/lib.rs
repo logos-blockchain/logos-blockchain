@@ -4,6 +4,7 @@ pub mod config;
 //   algorithm, including a minimal UTxO model.
 // - `mantle_ops`: our extensions in the form of Mantle operations, e.g. SDP.
 pub mod cryptarchia;
+mod intent;
 pub mod mantle;
 mod update;
 
@@ -12,6 +13,7 @@ use std::hash::Hash;
 pub use config::Config;
 use cryptarchia::LedgerState as CryptarchiaLedger;
 pub use cryptarchia::{EpochState, UtxoTree};
+pub use intent::{Intent, IntentStatus};
 use lb_core::{
     block::BlockNumber,
     crypto::Hash as BlockHash,
