@@ -11,14 +11,14 @@
 2. Download the Logos Blockchain module using the Logos Package Downloader:
 
 ```bash
-lgpd download blockchain_module --version 0.2.0 --output ./
-# writes ./blockchain_module-0.2.0.lgx
+lgpd download blockchain_module --version {{BLOCKCHAIN_MODULE_VERSION}} --output ./
+# writes ./blockchain_module-{{BLOCKCHAIN_MODULE_VERSION}}.lgx
 ```
 
 3. Install the Logos Blockchain module using the Logos Package Manager:
 
 ```bash
-lgpm --modules-dir ./modules install --file blockchain_module-0.2.0.lgx
+lgpm --modules-dir ./modules install --file blockchain_module-{{BLOCKCHAIN_MODULE_VERSION}}.lgx
 ```
 
 4. Launch the Logos Core CLI in daemon mode and load the blockchain module:

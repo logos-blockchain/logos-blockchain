@@ -17,6 +17,8 @@ concurrency:
 
 env:
   TEST_TAG_NAME: release-ci-test
+  # Release candidates always point at the fixed devnet version of the `blockchain_module` package.
+  PRERELEASE_MODULE_VERSION: 0.0.999
 
 jobs:
   configure-version:
@@ -113,17 +115,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
 
-      - name: Prepare release body by injecting release candidate-specific disclaimers
-        env:
-          IS_PRERELEASE: ${{ needs.configure-version.outputs.is_prerelease }}
+      - name: Prepare release body with the module version and release candidate-specific disclaimers
         run: |
           set -euo pipefail
 
           TEMPLATE=.github/release/release-content.md
           DISCLAIMER_FILE=.github/release/rc-disclaimer.md
           OUTPUT=.github/release/release-content.generated.md
+          PLACEHOLDER='{{BLOCKCHAIN_MODULE_VERSION}}'
 
-          cp "$TEMPLATE" "$OUTPUT"
+          if ! grep -qF "$PLACEHOLDER" "$TEMPLATE"; then
+            echo "'$TEMPLATE' does not contain the '$PLACEHOLDER' placeholder. It must be present so the release notes reference the module version being released."
+            exit 1
+          fi
+
+          # A release publishes the `blockchain_module` package under the same version as the node, while
+          # release candidates always point at the fixed devnet version.
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            MODULE_VERSION="$PRERELEASE_MODULE_VERSION"
+          else
+            MODULE_VERSION="$VERSION"
+          fi
+          echo "Setting the '$PLACEHOLDER' placeholder to '$MODULE_VERSION'."
+
+          sed "s|$PLACEHOLDER|$MODULE_VERSION|g" "$TEMPLATE" > "$OUTPUT"
 
           if [[ "$IS_PRERELEASE" == "true" ]]; then
             { cat "$DISCLAIMER_FILE"; echo; cat "$OUTPUT"; } > "${OUTPUT}.tmp"
