@@ -27,7 +27,7 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
-const LOG_TARGET: &str = blend::scheduling::proofs::LEADER;
+const LOG_TARGET: &str = blend::provers::LEADER;
 
 /// A `PoQ` generator that deals only with leadership proofs, suitable for edge
 /// nodes.

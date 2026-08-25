@@ -13,15 +13,17 @@ log_targets! {
         edge::BEHAVIOUR,
         handler::CORE_EDGE,
     },
+    provers::{
+        CORE,
+        CORE_AND_LEADER,
+        CORE_LEADER_AND_POW,
+        LEADER,
+        LEADER_AND_POW,
+        POW
+    },
     scheduling::{
         COVER,
         DELAY,
-        proofs::CORE,
-        proofs::CORE_AND_LEADER,
-        proofs::CORE_LEADER_AND_POW,
-        proofs::LEADER,
-        proofs::LEADER_AND_POW,
-        proofs::POW,
     },
     service::{
         CORE,

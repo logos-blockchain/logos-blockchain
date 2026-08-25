@@ -23,7 +23,7 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
-const LOG_TARGET: &str = blend::scheduling::proofs::CORE;
+const LOG_TARGET: &str = blend::provers::CORE;
 
 /// Proof generator for core `PoQ` variants.
 #[async_trait]

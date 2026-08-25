@@ -1,10 +1,10 @@
-use core::hash::Hash;
+use core::{hash::Hash, mem};
 use std::{num::NonZeroU64, sync::Arc};
 
 use lb_blend_membership::Membership;
 use lb_blend_message::{
-    Error, PaddedPayloadBody, crypto::proofs::PoQVerificationInputsMinusSigningKey,
-    input::EncapsulationInput,
+    Error, MAX_PAYLOAD_BODY_SIZE, PaddedPayloadBody,
+    crypto::proofs::PoQVerificationInputsMinusSigningKey, input::EncapsulationInput,
 };
 use lb_cryptarchia_engine::Epoch;
 use rayon::ThreadPool;
@@ -18,7 +18,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy)]
-enum PayloadType {
+pub(crate) enum PayloadType {
     BlockProposal,
     Transaction,
 }
@@ -28,6 +28,23 @@ impl From<PayloadType> for lb_blend_message::PayloadType {
         match value {
             PayloadType::BlockProposal => Self::BlockProposal,
             PayloadType::Transaction => Self::Transaction,
+        }
+    }
+}
+
+/// Layer proofs drawn for a message that was never finished. See the core
+/// processor's `PartialDraws` for why they are worth keeping.
+#[derive(Default)]
+pub(crate) struct PartialDraws {
+    block_proposal: Vec<BlendLayerProof>,
+    transaction: Vec<BlendLayerProof>,
+}
+
+impl PartialDraws {
+    pub const fn for_type(&mut self, payload_type: PayloadType) -> &mut Vec<BlendLayerProof> {
+        match payload_type {
+            PayloadType::BlockProposal => &mut self.block_proposal,
+            PayloadType::Transaction => &mut self.transaction,
         }
     }
 }
@@ -44,6 +61,7 @@ pub struct EpochCryptographicProcessor<NodeId, ProofsGenerator> {
     membership: Membership<NodeId>,
     proofs_generator: ProofsGenerator,
     epoch: Epoch,
+    partial_draws: PartialDraws,
 }
 
 impl<NodeId, ProofsGenerator> EpochCryptographicProcessor<NodeId, ProofsGenerator> {
@@ -78,6 +96,7 @@ where
             membership,
             proofs_generator: ProofsGenerator::new(generator_settings, winning_pol_info_stream),
             epoch,
+            partial_draws: PartialDraws::default(),
         }
     }
 }
@@ -108,17 +127,55 @@ where
         payload_type: PayloadType,
         payload: &[u8],
     ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, Error> {
-        // We validate the payload early on so we don't generate proofs unnecessarily.
-        let validated_payload = PaddedPayloadBody::try_from(payload)?;
-        let mut proofs = Vec::with_capacity(self.num_blend_layers.get() as usize);
-
-        for _ in 0..self.num_blend_layers.into() {
-            let Some(proof) = self.next_proof_for(payload_type).await else {
-                return Err(Error::ProofNotAvailable);
-            };
-            proofs.push(proof);
+        // Refuse a payload that could never fit before spending anything on it.
+        // Only the length check has to happen this early; padding it — an 18 KiB
+        // allocation with a random tail — waits until the proofs are in hand, so
+        // an attempt that comes up short or is cancelled costs nothing.
+        if payload.len() > MAX_PAYLOAD_BODY_SIZE {
+            return Err(Error::PayloadTooLarge);
         }
 
+        let Some(proofs) = self.next_proofs_for(payload_type).await else {
+            return Err(Error::ProofNotAvailable);
+        };
+
+        Ok(self.encapsulate_with(payload_type, PaddedPayloadBody::try_from(payload)?, proofs))
+    }
+
+    /// Draws a whole message's layer proofs, resuming any run a previous
+    /// attempt left unfinished.
+    ///
+    /// Proofs are accumulated on `self` rather than in a local variable, so a
+    /// caller that is cancelled mid-draw leaves them where the next attempt
+    /// will find them.
+    async fn next_proofs_for(&mut self, payload_type: PayloadType) -> Option<Vec<BlendLayerProof>> {
+        let encapsulations = self.num_blend_layers.get() as usize;
+        while self.partial_draws.for_type(payload_type).len() < encapsulations
+            && let Some(layer_proof) = self.next_proof_for(payload_type).await
+        {
+            self.partial_draws.for_type(payload_type).push(layer_proof);
+        }
+
+        let message_proofs = mem::take(self.partial_draws.for_type(payload_type));
+        if message_proofs.is_empty() {
+            return None;
+        }
+
+        if message_proofs.len() < encapsulations {
+            tracing::warn!(
+                "Encapsulating a {payload_type:?} message under {} of {encapsulations} layers: its quota branch is exhausted for this epoch.",
+                message_proofs.len()
+            );
+        }
+        Some(message_proofs)
+    }
+
+    fn encapsulate_with(
+        &self,
+        payload_type: PayloadType,
+        validated_payload: PaddedPayloadBody,
+        proofs: Vec<BlendLayerProof>,
+    ) -> EncapsulatedMessageWithVerifiedPublicHeader {
         let membership_size = self.membership.size();
         let proofs_and_signing_keys = proofs
             .into_iter()
@@ -160,13 +217,13 @@ where
             })
             .collect::<Vec<_>>();
 
-        Ok(EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+        EncapsulatedMessageWithVerifiedPublicHeader::try_new(
             &inputs,
             payload_type.into(),
             validated_payload,
             self.num_blend_layers.get() as usize,
         )
-        .expect("Number of encapsulation inputs is in `1..=num_blend_layers`."))
+        .expect("Number of encapsulation inputs is in `1..=num_blend_layers`.")
     }
 
     /// The `PoQ` branch each payload type draws its layer proofs from.

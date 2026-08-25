@@ -1,9 +1,10 @@
-use core::convert::Infallible;
+use core::{cell::Cell, convert::Infallible};
 
 use async_trait::async_trait;
 use futures::future::ready;
 use lb_blend_message::{
-    crypto::proofs::PoQVerificationInputsMinusSigningKey, encap::ProofsVerifier,
+    crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
+    encap::ProofsVerifier,
 };
 use lb_blend_proofs::{
     quota::{self, KeyIndex, ProofOfQuota, VerifiedProofOfQuota, inputs::prove::PublicInputs},
@@ -11,7 +12,7 @@ use lb_blend_proofs::{
 };
 use lb_core::crypto::ZkHash;
 use lb_cryptarchia_engine::Epoch;
-use lb_key_management_system_keys::keys::Ed25519PublicKey;
+use lb_key_management_system_keys::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 
 use crate::{
     CoreProofOfQuotaGenerator,
@@ -100,5 +101,71 @@ impl ProofsVerifier for TestEpochChangeProofsVerifier {
         Ok(VerifiedProofOfSelection::from_proof_of_selection_unchecked(
             proof,
         ))
+    }
+}
+
+thread_local! {
+    /// How many more core proofs [`RationedCoreProofsGenerator`] will hand out.
+    static CORE_PROOFS_AVAILABLE: Cell<usize> = const { Cell::new(0) };
+    /// Whether running out means "no more this epoch" or "not yet".
+    static CORE_BRANCH_EXHAUSTED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Lets the next `count` core proof requests succeed. Once they are used up the
+/// branch either reports itself exhausted or blocks, depending on
+/// [`exhaust_core_branch`] — which is the difference between a draw that has to
+/// settle for fewer layers and one that a caller can abandon part-way.
+///
+/// Reliable because `#[tokio::test]` runs on a current-thread runtime.
+pub fn ration_core_proofs(count: usize) {
+    CORE_PROOFS_AVAILABLE.with(|available| available.set(count));
+}
+
+/// Makes a rationed-out core branch report `None` rather than block.
+pub fn exhaust_core_branch(exhausted: bool) {
+    CORE_BRANCH_EXHAUSTED.with(|flag| flag.set(exhausted));
+}
+
+/// A generator whose core branch runs out on demand, so a test can stop a draw
+/// part-way through a message and then let it finish.
+pub struct RationedCoreProofsGenerator;
+
+#[async_trait]
+impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
+    for RationedCoreProofsGenerator
+{
+    fn new(
+        _settings: ProofsGeneratorSettings,
+        _starting_key_index: KeyIndex,
+        _proof_of_quota_generator: CorePoQGenerator,
+    ) -> Self {
+        Self
+    }
+
+    fn set_epoch_private(&mut self, _: WinningPolInfoStream, _: Epoch) {}
+
+    async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
+        if CORE_PROOFS_AVAILABLE.with(Cell::get) == 0 && !CORE_BRANCH_EXHAUSTED.with(Cell::get) {
+            // Not exhausted, just nothing right now: block, so a caller can be
+            // abandoned mid-draw.
+            core::future::pending::<()>().await;
+        }
+        CORE_PROOFS_AVAILABLE.with(|available| {
+            let left = available.get();
+            available.set(left.checked_sub(1)?);
+            Some(BlendLayerProof {
+                proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
+                proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
+                ephemeral_signing_key: UnsecuredEd25519Key::generate_with_blake_rng(),
+            })
+        })
+    }
+
+    async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof> {
+        None
+    }
+
+    async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {
+        None
     }
 }

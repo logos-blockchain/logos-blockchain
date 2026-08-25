@@ -15,7 +15,7 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
-const LOG_TARGET: &str = blend::scheduling::proofs::CORE_LEADER_AND_POW;
+const LOG_TARGET: &str = blend::provers::CORE_LEADER_AND_POW;
 
 /// Proof generator for all three `PoQ` variants.
 ///
