@@ -1268,9 +1268,10 @@ mod tests {
             ..dangling_config
         };
         let rooted_tx = create_config_tx(rooted_config.clone(), &signing_key);
-        let (new_state, _, _) = state
+        let new_state = state
             .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &rooted_tx)
-            .unwrap();
+            .unwrap()
+            .0;
         let channel = new_state
             .mantle_ledger
             .channels()
@@ -1337,9 +1338,10 @@ mod tests {
         }
 
         // The configuration is still valid and leaves the message tip untouched
-        let (new_state, _, _) = state
+        let new_state = state
             .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &config_tx)
-            .unwrap();
+            .unwrap()
+            .0;
         let channel = new_state
             .mantle_ledger
             .channels()
@@ -1465,9 +1467,10 @@ mod tests {
             Op::ChannelInscribe(second_inscribe.clone()),
             &Key::Ed25519(signing_key),
         );
-        let (new_state, _, _) = state
+        let new_state = state
             .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &second_tx)
-            .unwrap();
+            .unwrap()
+            .0;
         let channel = new_state
             .mantle_ledger
             .channels()
