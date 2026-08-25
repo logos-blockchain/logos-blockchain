@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use ark_ff::Zero as _;
 use lb_codec::{BinaryCodec, BinaryEncode as _};
 use lb_cryptarchia_engine::Slot;
@@ -22,7 +24,6 @@ use crate::{
     },
 };
 
-pub const SLOT_WINDOW: u64 = 100;
 /// `d_reward`: the difficulty threshold a puzzle ticket must be strictly
 /// below to qualify for a `PoW` reward claim.
 pub type PowTarget = Fr;
@@ -152,7 +153,7 @@ pub struct ClaimPoWRewardVerificationContext<'a> {
     /// Acceptance window, in slots: how far back a claim's anchor block may
     /// be from the current block. Configured per-deployment (defaults to
     /// [`SLOT_WINDOW`]).
-    pub slot_window: u64,
+    pub slot_window: NonZeroU64,
 }
 
 impl ClaimPoWRewardVerificationContext<'_> {
@@ -179,7 +180,7 @@ impl ClaimPoWRewardVerificationContext<'_> {
                 current_slot: self.current_block_slot,
             });
         };
-        if slot_gap > Slot::from(self.slot_window) {
+        if slot_gap > Slot::from(self.slot_window.get()) {
             return Err(ClaimPowRewardError::OutOfWindowSlot {
                 slot: block_slot,
                 current_slot: self.current_block_slot,
@@ -355,9 +356,13 @@ impl ExecutableOperation for ClaimPowRewardOp {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZero;
+
     use lb_groth16::{AdditiveGroup as _, Field as _};
 
     use super::*;
+
+    pub const SLOT_WINDOW: NonZeroU64 = NonZeroU64::new(100).expect("100 is not 0");
 
     fn validation_context(
         nullifiers: &HashTrieMapSync<PowNullifier, Slot>,
@@ -446,7 +451,7 @@ mod tests {
             previous_epoch_nonce: nonce_for_epoch(PREVIOUS_EPOCH),
             blocks_slot: std::iter::once((CLAIM_BLOCK_HASH, Slot::from(45u64))).collect(),
             // Tests below exercise a window of 10 slots.
-            slot_window: 10,
+            slot_window: NonZero::new(10).expect("10 is not 0"),
         }
     }
 

@@ -2,6 +2,8 @@ pub(crate) mod blend_difficulty;
 mod difficulty;
 pub(crate) mod tx_density;
 
+use std::num::NonZeroU64;
+
 use lb_core::{
     crypto::Hash,
     mantle::{
@@ -165,8 +167,8 @@ impl PowState {
     /// Drop seen blocks that have aged out of the acceptance window: the
     /// window check rejects them regardless, so they no longer need to be
     /// retained (§5.1.1).
-    pub(crate) fn prune_seen_block_slots(&mut self, current: Slot, slot_window: u64) {
-        let cutoff = current.saturating_sub(Slot::from(slot_window));
+    pub(crate) fn prune_seen_block_slots(&mut self, current: Slot, slot_window: NonZeroU64) {
+        let cutoff = current.saturating_sub(Slot::from(slot_window.get()));
         self.reward.block_slots = self
             .reward
             .block_slots
@@ -178,8 +180,8 @@ impl PowState {
     /// Drop seen nullifiers that have aged out of the acceptance window: the
     /// window check rejects them regardless, so they no longer need to be
     /// retained (§5.1.1).
-    pub(crate) fn prune_nullifiers_by_slots(&mut self, current: Slot, slot_window: u64) {
-        let cutoff = current.saturating_sub(Slot::from(slot_window));
+    pub(crate) fn prune_nullifiers_by_slots(&mut self, current: Slot, slot_window: NonZeroU64) {
+        let cutoff = current.saturating_sub(Slot::from(slot_window.get()));
         self.reward.nullifiers = self
             .reward
             .nullifiers
@@ -261,6 +263,8 @@ mod tests {
     use super::*;
     use crate::UtxoTree;
 
+    const SLOT_WINDOW: NonZeroU64 = NonZeroU64::new(100).expect("100 is not 0");
+
     fn epoch_state(epoch: u32) -> EpochState {
         EpochState {
             epoch: epoch.into(),
@@ -273,10 +277,6 @@ mod tests {
             active_declarations: Arc::new(Declarations::default()),
         }
     }
-
-    use std::num::NonZeroU64;
-
-    use lb_core::mantle::ops::pow::SLOT_WINDOW;
 
     /// Genesis endowment values used by [`reward_config`], pinned here so the
     /// assertions read against a fixed number.
@@ -297,7 +297,7 @@ mod tests {
             rate_den: NonZeroU64::MIN,
             target_claim_per_block: NonZeroU64::MIN,
             expected_blocks_per_epoch: NonZeroU64::MIN,
-            slot_window: NonZeroU64::new(SLOT_WINDOW).expect("SLOT_WINDOW is non-zero"),
+            slot_window: NonZeroU64::new(SLOT_WINDOW.get()).expect("SLOT_WINDOW is non-zero"),
         }
     }
 
@@ -549,14 +549,14 @@ mod tests {
         // right on the cutoff (`current - WINDOW`) and must survive, since
         // the window check still accepts a gap equal to the window.
         state.add_seen_block_slots(BLOCK_A, Slot::from(5u64));
-        state.add_seen_block_slots(BLOCK_B, Slot::from(5 + SLOT_WINDOW));
-        state.prune_seen_block_slots(Slot::from(5 + SLOT_WINDOW), SLOT_WINDOW);
+        state.add_seen_block_slots(BLOCK_B, Slot::from(5 + SLOT_WINDOW.get()));
+        state.prune_seen_block_slots(Slot::from(5 + SLOT_WINDOW.get()), SLOT_WINDOW);
         assert!(state.block_slots().contains_key(&BLOCK_A));
         assert!(state.block_slots().contains_key(&BLOCK_B));
 
         // One slot further, A is strictly older than the window and is
         // pruned; B remains.
-        state.prune_seen_block_slots(Slot::from(5 + SLOT_WINDOW + 1), SLOT_WINDOW);
+        state.prune_seen_block_slots(Slot::from(5 + SLOT_WINDOW.get() + 1), SLOT_WINDOW);
         assert!(!state.block_slots().contains_key(&BLOCK_A));
         assert!(state.block_slots().contains_key(&BLOCK_B));
     }
@@ -570,7 +570,7 @@ mod tests {
         let recent_nullifier = PowNullifier::from(Fr::from(2u64));
         let nullifiers = HashTrieMapSync::new_sync()
             .insert(old_nullifier, Slot::from(5u64))
-            .insert(recent_nullifier, Slot::from(5 + SLOT_WINDOW));
+            .insert(recent_nullifier, Slot::from(5 + SLOT_WINDOW.get()));
         let mut state = pow_state();
         state.update_from_claim_execution_result(&ClaimPoWRewardExecutionContext {
             reward_pool: state.reward_pool(),
@@ -583,13 +583,13 @@ mod tests {
 
         // A claim slot exactly `SLOT_WINDOW` back sits on the cutoff and must
         // survive, matching the inclusive window check.
-        state.prune_nullifiers_by_slots(Slot::from(5 + SLOT_WINDOW), SLOT_WINDOW);
+        state.prune_nullifiers_by_slots(Slot::from(5 + SLOT_WINDOW.get()), SLOT_WINDOW);
         assert!(state.nullifiers().contains_key(&old_nullifier));
         assert!(state.nullifiers().contains_key(&recent_nullifier));
 
         // One slot further, the old nullifier is strictly outside the window
         // and is dropped; the recent one remains.
-        state.prune_nullifiers_by_slots(Slot::from(5 + SLOT_WINDOW + 1), SLOT_WINDOW);
+        state.prune_nullifiers_by_slots(Slot::from(5 + SLOT_WINDOW.get() + 1), SLOT_WINDOW);
         assert!(!state.nullifiers().contains_key(&old_nullifier));
         assert!(state.nullifiers().contains_key(&recent_nullifier));
     }

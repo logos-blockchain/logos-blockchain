@@ -8,7 +8,7 @@
 use std::{
     collections::{HashMap, HashSet},
     iter,
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -94,7 +94,7 @@ pub struct TicketGenerator {
     max_tickets_per_block: NonZeroUsize,
     /// Acceptance window, in slots: a block older than this leaves the reward
     /// window and its search is pruned. Matches the consensus `slot_window`.
-    slot_window: u64,
+    slot_window: NonZeroU64,
 }
 
 impl TicketGenerator {
@@ -112,7 +112,7 @@ impl TicketGenerator {
         cryptarchia_api: CryptarchiaServiceApi<CryptarchiaServiceData, RuntimeServiceId>,
         pool: Arc<ThreadPool>,
         max_tickets_per_block: NonZeroUsize,
-        slot_window: u64,
+        slot_window: NonZeroU64,
     ) -> Result<Self, lb_chain_service::api::ApiError>
     where
         CryptarchiaServiceData:
@@ -305,7 +305,7 @@ impl Stream for TicketGenerator {
                 ))) => {
                     this.tip = tip;
                     // compute which slot is old enough
-                    let frontier_slot = tip_slot.saturating_sub(Slot::new(this.slot_window));
+                    let frontier_slot = tip_slot.saturating_sub(Slot::new(this.slot_window.get()));
                     // trigger new stream if its new enough
                     if frontier_slot < block_slot {
                         let stream = new_block_search_stream(
@@ -350,7 +350,7 @@ impl Stream for TicketGenerator {
 mod tests {
     use std::{
         collections::{HashMap, HashSet},
-        num::NonZeroUsize,
+        num::{NonZeroU64, NonZeroUsize},
         pin::Pin,
         sync::Arc,
         task::{Context, Poll},
@@ -358,10 +358,7 @@ mod tests {
 
     use futures::{Stream, stream, task::noop_waker_ref};
     use lb_chain_service::{EpochState, ProcessedBlockEvent, Slot};
-    use lb_core::{
-        header::HeaderId,
-        mantle::ops::pow::{ClaimPowRewardOp, SLOT_WINDOW},
-    };
+    use lb_core::{header::HeaderId, mantle::ops::pow::ClaimPowRewardOp};
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey};
     use lb_ledger::LedgerState;
@@ -372,6 +369,8 @@ mod tests {
         TicketGenerator, WinnerTicketStream, WinningTicket, prune_out_of_window_streams,
         search_winner_ticket,
     };
+
+    const SLOT_WINDOW: NonZeroU64 = NonZeroU64::new(100).expect("100 is not 0");
 
     /// A never-resolving search stream, used to populate the map under test.
     fn pending_stream() -> WinnerTicketStream {
