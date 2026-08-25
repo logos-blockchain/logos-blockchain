@@ -1617,7 +1617,7 @@ mod tests {
             parent,
             signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
         })]);
-        SignedOps::from_ops_with_placeholder_proofs(mantle_tx)
+        SignedOps::from_ops_with_sample_proofs(mantle_tx)
     }
 
     fn dummy_tx_msg(tx: &SignedOps<Unverified, StandardMode>) -> MsgId {
@@ -1835,7 +1835,7 @@ mod tests {
         let inscribe_msg = inscribe.id();
         let config_msg = config.id();
         let ops = Ops::from([Op::ChannelInscribe(inscribe), Op::ChannelConfig(config)]);
-        let tx = SignedOps::from_ops_with_placeholder_proofs(ops);
+        let tx = SignedOps::from_ops_with_sample_proofs(ops);
         (tx, inscribe_msg, config_msg)
     }
 
@@ -2014,7 +2014,7 @@ mod tests {
             transfer_threshold: 1,
         };
         let ops = Ops::from([Op::ChannelConfig(config)]);
-        let config_tx = SignedOps::from_ops_with_placeholder_proofs(ops);
+        let config_tx = SignedOps::from_ops_with_sample_proofs(ops);
         state.submit_other(config_tx, channel_id).unwrap();
 
         assert_eq!(
@@ -2135,8 +2135,7 @@ mod tests {
             transfer_threshold: 1,
         };
         let config_msg = config.id();
-        let tx =
-            SignedOps::from_ops_with_placeholder_proofs(Ops::from([Op::ChannelConfig(config)]));
+        let tx = SignedOps::from_ops_with_sample_proofs(Ops::from([Op::ChannelConfig(config)]));
         (tx, config_msg)
     }
 

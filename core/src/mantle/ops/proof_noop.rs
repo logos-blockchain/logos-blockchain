@@ -22,3 +22,14 @@ impl BinaryDecode for NoOpProof {
         Ok((input, Self))
     }
 }
+
+#[cfg(any(test, feature = "samples"))]
+pub mod samples {
+    use crate::mantle::ops::{NoOpProof, op_proof::samples::SampleProof};
+
+    impl SampleProof for NoOpProof {
+        fn sample() -> Self {
+            Self
+        }
+    }
+}

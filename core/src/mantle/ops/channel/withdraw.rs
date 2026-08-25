@@ -1,6 +1,10 @@
 use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
+#[cfg(any(test, feature = "samples"))]
+use lb_groth16::Fr;
 use serde::{Deserialize, Serialize};
 
+#[cfg(any(test, feature = "samples"))]
+use crate::mantle::NoteId;
 use crate::{
     events::TxEvent,
     mantle::{
@@ -173,6 +177,17 @@ impl<Mode: VerificationMode> ExecutableOperation
         }
 
         Ok((context, Vec::new()))
+    }
+}
+
+#[cfg(any(test, feature = "samples"))]
+impl ChannelWithdrawOp {
+    #[must_use]
+    pub fn sample() -> Self {
+        Self {
+            channel_id: ChannelId::from([18u8; 32]),
+            inputs: Inputs::new([NoteId(Fr::from(19u64))]),
+        }
     }
 }
 
