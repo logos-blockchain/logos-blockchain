@@ -107,18 +107,7 @@ pub struct BlendPoWConfig {
     pub damping_den_offset: u32,
 }
 
-// The same as `lb_ledger::config::RewardPoWConfig`.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct RewardPoWConfig {
-    pub reward_pool_genesis: u64,
-    pub epoch_reward_genesis: u64,
-    pub initial_difficulty_seed: u64,
-    pub ema_smoothing_factor: u64,
-    pub ema_smoothing_precision: NonZeroU64,
-    pub target_claims_per_block: u64,
-    pub rate_num: u64,
-    pub rate_den: NonZeroU64,
-    pub target_claim_per_block: NonZeroU64,
-    pub expected_blocks_per_epoch: NonZeroU64,
-    pub slot_window: NonZeroU64,
-}
+// The reward parameters are used verbatim, so the ledger type is reused
+// directly: deserializing the deployment config runs its invariant checks
+// (`RewardPoWConfig::validate`), rejecting an invalid config at load time.
+pub use lb_ledger::config::RewardPoWConfig;

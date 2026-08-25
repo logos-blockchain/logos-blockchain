@@ -151,8 +151,7 @@ pub struct ClaimPoWRewardVerificationContext<'a> {
     /// the acceptance window.
     pub blocks_slot: HashTrieMapSync<Hash, Slot>,
     /// Acceptance window, in slots: how far back a claim's anchor block may
-    /// be from the current block. Configured per-deployment (defaults to
-    /// [`SLOT_WINDOW`]).
+    /// be from the current block. Configured per-deployment.
     pub slot_window: NonZeroU64,
 }
 

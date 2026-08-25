@@ -111,6 +111,10 @@ pub struct PoWConfig {
 /// disables claiming (matching the network behaviour before these values were
 /// configurable).
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+// Validate the deployment-controlled invariants on deserialization, so an
+// invalid config is rejected at load time (see [`RewardPoWConfig::validate`])
+// instead of panicking later while processing consensus state.
+#[serde(try_from = "RewardPoWConfigFields")]
 pub struct RewardPoWConfig {
     /// `R_PoW` genesis: initial balance of the reward pool.
     pub reward_pool_genesis: PowReward,
@@ -142,20 +146,112 @@ pub struct RewardPoWConfig {
     pub slot_window: NonZeroU64,
 }
 
+/// Wire representation of [`RewardPoWConfig`], deserialized first so its
+/// invariants can be checked before a validated [`RewardPoWConfig`] is built.
+#[derive(serde::Deserialize)]
+struct RewardPoWConfigFields {
+    reward_pool_genesis: PowReward,
+    epoch_reward_genesis: PowReward,
+    initial_difficulty_seed: u64,
+    ema_smoothing_factor: u64,
+    ema_smoothing_precision: NonZeroU64,
+    target_claims_per_block: u64,
+    rate_num: u64,
+    rate_den: NonZeroU64,
+    target_claim_per_block: NonZeroU64,
+    expected_blocks_per_epoch: NonZeroU64,
+    slot_window: NonZeroU64,
+}
+
+impl TryFrom<RewardPoWConfigFields> for RewardPoWConfig {
+    type Error = RewardPoWConfigError;
+
+    fn try_from(fields: RewardPoWConfigFields) -> Result<Self, Self::Error> {
+        let config = Self {
+            reward_pool_genesis: fields.reward_pool_genesis,
+            epoch_reward_genesis: fields.epoch_reward_genesis,
+            initial_difficulty_seed: fields.initial_difficulty_seed,
+            ema_smoothing_factor: fields.ema_smoothing_factor,
+            ema_smoothing_precision: fields.ema_smoothing_precision,
+            target_claims_per_block: fields.target_claims_per_block,
+            rate_num: fields.rate_num,
+            rate_den: fields.rate_den,
+            target_claim_per_block: fields.target_claim_per_block,
+            expected_blocks_per_epoch: fields.expected_blocks_per_epoch,
+            slot_window: fields.slot_window,
+        };
+        config.validate()?;
+        Ok(config)
+    }
+}
+
+/// Invariant violations in a [`RewardPoWConfig`], surfaced at config-load time.
+#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
+pub enum RewardPoWConfigError {
+    #[error(
+        "EMA smoothing factor ({factor}) must not exceed EMA smoothing precision ({precision})"
+    )]
+    EmaSmoothingFactorExceedsPrecision { factor: u64, precision: NonZeroU64 },
+    #[error(
+        "claim rate denominator overflows u64: rate_den ({rate_den}) * \
+         target_claim_per_block ({target_claim_per_block}) * \
+         expected_blocks_per_epoch ({expected_blocks_per_epoch})"
+    )]
+    ClaimRateDenominatorOverflow {
+        rate_den: NonZeroU64,
+        target_claim_per_block: NonZeroU64,
+        expected_blocks_per_epoch: NonZeroU64,
+    },
+}
+
 impl RewardPoWConfig {
-    /// Full denominator of the per-epoch payout rate:
-    /// `rate_den * target_claim_per_block * expected_blocks_per_epoch`.
-    #[must_use]
-    pub const fn claim_rate_denominator(&self) -> NonZeroU64 {
-        // The product of three non-zero values is non-zero; `strict_mul`
-        // panics on overflow rather than silently wrapping to a smaller (or
-        // zero) denominator.
+    /// Check the invariants the reward-difficulty controller and payout-rate
+    /// arithmetic rely on. Run on deserialization (see the `try_from` on this
+    /// type) so a bad deployment config is rejected when it is loaded rather
+    /// than panicking later while initializing or processing consensus state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RewardPoWConfigError`] if the EMA smoothing factor exceeds the
+    /// precision, or the payout-rate denominator overflows `u64`.
+    pub fn validate(&self) -> Result<(), RewardPoWConfigError> {
+        if self.ema_smoothing_factor > self.ema_smoothing_precision.get() {
+            return Err(RewardPoWConfigError::EmaSmoothingFactorExceedsPrecision {
+                factor: self.ema_smoothing_factor,
+                precision: self.ema_smoothing_precision,
+            });
+        }
+        // Discard the value; this call only checks that it does not overflow.
+        self.checked_claim_rate_denominator()?;
+        Ok(())
+    }
+
+    /// Full denominator of the per-epoch payout rate, or
+    /// [`RewardPoWConfigError::ClaimRateDenominatorOverflow`] if the product
+    /// overflows `u64`.
+    fn checked_claim_rate_denominator(&self) -> Result<NonZeroU64, RewardPoWConfigError> {
         let product = self
             .rate_den
             .get()
-            .strict_mul(self.target_claim_per_block.get())
-            .strict_mul(self.expected_blocks_per_epoch.get());
-        NonZeroU64::new(product).expect("product of non-zero values is non-zero")
+            .checked_mul(self.target_claim_per_block.get())
+            .and_then(|partial| partial.checked_mul(self.expected_blocks_per_epoch.get()))
+            .ok_or(RewardPoWConfigError::ClaimRateDenominatorOverflow {
+                rate_den: self.rate_den,
+                target_claim_per_block: self.target_claim_per_block,
+                expected_blocks_per_epoch: self.expected_blocks_per_epoch,
+            })?;
+        Ok(NonZeroU64::new(product).expect("product of non-zero values is non-zero"))
+    }
+
+    /// Full denominator of the per-epoch payout rate:
+    /// `rate_den * target_claim_per_block * expected_blocks_per_epoch`.
+    ///
+    /// The product is guaranteed not to overflow by [`Self::validate`], which
+    /// runs on deserialization.
+    #[must_use]
+    pub fn claim_rate_denominator(&self) -> NonZeroU64 {
+        self.checked_claim_rate_denominator()
+            .expect("claim rate denominator overflow is rejected at config-load time")
     }
 }
 
@@ -202,7 +298,7 @@ mod tests {
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
 
     use crate::{
-        config::{BlendPoWConfig, PoWConfig, RewardPoWConfig},
+        config::{BlendPoWConfig, PoWConfig, RewardPoWConfig, RewardPoWConfigError},
         mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters},
     };
 
@@ -222,6 +318,75 @@ mod tests {
             expected_blocks_per_epoch: NonZeroU64::MIN,
             slot_window: NonZeroU64::new(100).expect("100 is non-zero"),
         }
+    }
+
+    #[test]
+    fn valid_reward_config_passes_validation() {
+        assert_eq!(disabled_reward_config().validate(), Ok(()));
+    }
+
+    #[test]
+    fn reward_config_rejects_ema_factor_above_precision() {
+        let mut config = disabled_reward_config();
+        config.ema_smoothing_factor = config.ema_smoothing_precision.get() + 1;
+        assert_eq!(
+            config.validate(),
+            Err(RewardPoWConfigError::EmaSmoothingFactorExceedsPrecision {
+                factor: config.ema_smoothing_factor,
+                precision: config.ema_smoothing_precision,
+            })
+        );
+    }
+
+    #[test]
+    fn reward_config_accepts_ema_factor_equal_to_precision() {
+        // F == P is q = 1 (full smoothing): a valid boundary, not a rejection.
+        let mut config = disabled_reward_config();
+        config.ema_smoothing_factor = config.ema_smoothing_precision.get();
+        assert_eq!(config.validate(), Ok(()));
+    }
+
+    #[test]
+    fn reward_config_rejects_claim_rate_denominator_overflow() {
+        // rate_den * target_claim_per_block * expected_blocks_per_epoch would
+        // exceed u64::MAX.
+        let mut config = disabled_reward_config();
+        config.rate_den = NonZeroU64::MAX;
+        config.target_claim_per_block = NonZeroU64::new(2).unwrap();
+        config.expected_blocks_per_epoch = NonZeroU64::MIN;
+        assert_eq!(
+            config.validate(),
+            Err(RewardPoWConfigError::ClaimRateDenominatorOverflow {
+                rate_den: config.rate_den,
+                target_claim_per_block: config.target_claim_per_block,
+                expected_blocks_per_epoch: config.expected_blocks_per_epoch,
+            })
+        );
+    }
+
+    #[test]
+    fn deserialize_rejects_invalid_reward_config() {
+        // The invariant check runs on deserialization, so an invalid config is
+        // rejected at config-load time instead of panicking later. The values
+        // are serialized from a plain struct (bypassing validation) to emulate
+        // a hand-written deployment config.
+        let mut invalid = disabled_reward_config();
+        invalid.ema_smoothing_factor = invalid.ema_smoothing_precision.get() + 1;
+        let json = serde_json::to_string(&invalid).expect("serialize");
+        let error = serde_json::from_str::<RewardPoWConfig>(&json)
+            .expect_err("invalid reward config must be rejected on deserialization");
+        assert!(
+            error.to_string().contains("EMA smoothing factor"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn deserialize_accepts_valid_reward_config() {
+        let valid = disabled_reward_config();
+        let json = serde_json::to_string(&valid).expect("serialize");
+        let restored: RewardPoWConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored, valid);
     }
 
     #[test]
