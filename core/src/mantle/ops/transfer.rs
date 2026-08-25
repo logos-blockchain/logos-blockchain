@@ -191,6 +191,7 @@ mod test {
 
     use crate::mantle::{
         Note, NoteId, Utxo,
+        gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
         ledger::{Inputs, InputsError, Outputs, PreverifiableOperation as _},
         ops::{
             OpId as _, SignedOperation,
@@ -253,5 +254,15 @@ mod test {
         );
 
         assert!(transfer.utxo_by_index(3).is_none());
+    }
+
+    #[test]
+    fn transfer_op_execution_gas_does_not_scale_with_the_threshold() {
+        for threshold in [0, 1, 3] {
+            assert_eq!(
+                TransferOp::sample().execution_gas(&FixedThresholds(threshold)),
+                Ok(Gas::new(590))
+            );
+        }
     }
 }
