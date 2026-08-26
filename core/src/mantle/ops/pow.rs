@@ -500,16 +500,20 @@ mod tests {
     fn accept_claim_accepts_blocks_inside_the_window() {
         let nullifiers = HashTrieMapSync::new_sync();
         let mut ctx = accepting_context(&nullifiers);
+        let current_slot = 200u64;
+        ctx.current_block_slot = Slot::from(current_slot);
 
         // Gap of zero: the claim's block is the current block.
         ctx.blocks_slot
-            .insert_mut(CLAIM_BLOCK_HASH, Slot::from(50u64));
+            .insert_mut(CLAIM_BLOCK_HASH, Slot::from(current_slot));
         assert_eq!(ctx.accept_claim(CLAIM_BLOCK_HASH), Ok(()));
 
         // Gap exactly equal to the window is still inside it (§5.1.1:
         // `0 <= current - anchor <= WINDOW`, measured in slots).
-        ctx.blocks_slot
-            .insert_mut(CLAIM_BLOCK_HASH, Slot::from(40u64));
+        ctx.blocks_slot.insert_mut(
+            CLAIM_BLOCK_HASH,
+            Slot::from(current_slot - ctx.slot_window.get()),
+        );
         assert_eq!(ctx.accept_claim(CLAIM_BLOCK_HASH), Ok(()));
     }
 
@@ -528,14 +532,16 @@ mod tests {
     fn accept_claim_rejects_block_beyond_the_window() {
         let nullifiers = HashTrieMapSync::new_sync();
         let mut ctx = accepting_context(&nullifiers);
+        let current_slot = 200u64;
+        ctx.current_block_slot = Slot::from(current_slot);
         // Gap of WINDOW + 1: one slot too old.
-        ctx.blocks_slot
-            .insert_mut(CLAIM_BLOCK_HASH, Slot::from(39u64));
+        let anchor = Slot::from(current_slot - ctx.slot_window.get() - 1);
+        ctx.blocks_slot.insert_mut(CLAIM_BLOCK_HASH, anchor);
         assert_eq!(
             ctx.accept_claim(CLAIM_BLOCK_HASH),
             Err(ClaimPowRewardError::OutOfWindowSlot {
-                slot: Slot::from(39u64),
-                current_slot: Slot::from(50),
+                slot: anchor,
+                current_slot: Slot::from(current_slot),
             })
         );
     }
@@ -558,7 +564,15 @@ mod tests {
     }
 
     #[test]
-    fn validate_accepts_claim_with_current_epoch_nonce() {
+    fn preverify_accepts_every_claim() {
+        let signed_operation =
+            SignedOperation::<_, Unverified, StandardMode>::new(claim_op(CURRENT_EPOCH), NoOpProof);
+
+        assert_eq!(signed_operation.preverify(&()), Ok(()));
+    }
+
+    #[test]
+    fn verify_accepts_a_claim_with_the_current_epoch_nonce() {
         let nullifiers = HashTrieMapSync::new_sync();
         let ctx = accepting_context(&nullifiers);
         let op = claim_op(CURRENT_EPOCH);
@@ -574,7 +588,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_accepts_claim_with_previous_epoch_nonce() {
+    fn verify_accepts_a_claim_with_the_previous_epoch_nonce() {
         // Spec §5.3 step 3: a solution mined just before an epoch boundary
         // stays claimable, so the previous epoch's nonce is also accepted.
         let nullifiers = HashTrieMapSync::new_sync();
@@ -593,7 +607,40 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_claim_with_stale_epoch_nonce() {
+    fn verify_rejects_a_claim_while_the_pool_cannot_cover_the_reward() {
+        let nullifiers = HashTrieMapSync::new_sync();
+        let mut ctx = accepting_context(&nullifiers);
+        ctx.epoch_reward_pool = ctx.epoch_pow_reward - 1;
+        let signed_operation = SignedOperation::new(claim_op(CURRENT_EPOCH), NoOpProof)
+            .into_preverified(&())
+            .unwrap();
+        assert_eq!(
+            signed_operation.verify(&ctx).unwrap_err(),
+            ClaimPowRewardError::InsufficientPoolBalance {
+                pool: 9,
+                reward: 10,
+            }
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_claim_anchored_to_an_unknown_block() {
+        let nullifiers = HashTrieMapSync::new_sync();
+        let mut ctx = accepting_context(&nullifiers);
+        ctx.blocks_slot = HashTrieMapSync::new_sync();
+        let signed_operation = SignedOperation::new(claim_op(CURRENT_EPOCH), NoOpProof)
+            .into_preverified(&())
+            .unwrap();
+        assert_eq!(
+            signed_operation.verify(&ctx).unwrap_err(),
+            ClaimPowRewardError::MissingBlock {
+                block_id: CLAIM_BLOCK_HASH,
+            }
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_claim_with_a_stale_epoch_nonce() {
         let nullifiers = HashTrieMapSync::new_sync();
         let ctx = accepting_context(&nullifiers);
         let op = claim_op(PREVIOUS_EPOCH - 1);
@@ -613,7 +660,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_ticket_above_the_reward_difficulty() {
+    fn verify_rejects_a_ticket_above_the_reward_difficulty() {
         let nullifiers = HashTrieMapSync::new_sync();
         let mut ctx = accepting_context(&nullifiers);
         // The hardest possible target: only a ticket of exactly zero would
@@ -630,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_ticket_equal_to_the_reward_difficulty() {
+    fn verify_rejects_a_ticket_equal_to_the_reward_difficulty() {
         // Spec §5.3: the check is the strict `puzzle_ticket <
         // difficulty_reward`, so a ticket exactly on the target does not
         // qualify.
@@ -648,7 +695,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_already_claimed_ticket() {
+    fn verify_rejects_an_already_claimed_ticket() {
         let op = claim_op(CURRENT_EPOCH);
         let nullifiers =
             HashTrieMapSync::new_sync().insert(op.get_puzzle_ticket(), Slot::from(45u64));

@@ -144,16 +144,177 @@ mod tests {
     use super::{SDPActiveOp, SDPActiveValidationContext, SdpError};
     use crate::{
         mantle::{
+            TxHash,
             gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
-            ledger::{Declarations, VerifiableOperation as _, verification_mode::StandardMode},
-            ops::{SignedOperation, sdp::SDPDeclareOp},
+            ledger::{
+                Declarations, PreverifiableOperation as _, ProvableOperation,
+                VerifiableOperation as _, verification_mode::StandardMode,
+            },
+            ops::{SignedOperation, op_proof::samples::SampleProof as _, sdp::SDPDeclareOp},
             transactions::{
-                hash::{TxHash, TxHashView},
-                states::Preverified,
+                hash::TxHashView,
+                states::{Preverified, Unverified},
             },
         },
-        sdp::{ActivityMetadata, Declaration, ServiceType, blend::ActivityProof},
+        sdp::{
+            ActivityMetadata, Declaration, DeclarationMessage, ServiceType, blend::ActivityProof,
+        },
     };
+
+    fn declaration_key() -> ZkKey {
+        ZkKey::from(BigUint::from(1u8))
+    }
+
+    fn declaration() -> (DeclarationMessage, Declaration) {
+        let message = DeclarationMessage {
+            zk_id: declaration_key().to_public_key(),
+            ..DeclarationMessage::sample()
+        };
+        let declaration = Declaration::new(Epoch::from(0), &message);
+
+        (message, declaration)
+    }
+
+    fn preverified(
+        operation: SDPActiveOp,
+        tx_hash_view: &TxHashView,
+    ) -> SignedOperation<SDPActiveOp, Preverified, StandardMode> {
+        let proof = ZkKey::multi_sign(&[declaration_key()], tx_hash_view.as_fr())
+            .expect("signing should succeed");
+
+        SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
+            .into_preverified(&())
+            .expect("preverify accepts every active message")
+    }
+
+    #[test]
+    fn preverify_accepts_every_active_message() {
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            SDPActiveOp::sample(),
+            <SDPActiveOp as ProvableOperation>::Proof::sample(),
+        );
+
+        assert_eq!(signed_operation.preverify(&()), Ok(()));
+    }
+
+    #[test]
+    fn verify_rejects_an_unknown_declaration() {
+        let operation = SDPActiveOp::sample();
+        let declaration_id = operation.declaration_id;
+
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let signed_operation = preverified(operation, &signed_view);
+
+        assert_eq!(
+            signed_operation
+                .verify(&SDPActiveValidationContext {
+                    declarations: &Declarations::new_sync(),
+                    tx_hash_view: &signed_view,
+                    epoch: Epoch::from(0),
+                })
+                .unwrap_err(),
+            SdpError::DeclarationNotFound(declaration_id)
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_declaration_whose_withdrawal_epoch_has_passed() {
+        let (message, declaration) = declaration();
+        let declaration_id = message.id();
+        let withdraw_at = Epoch::from(3);
+        let declarations = Declarations::new_sync().insert(
+            declaration_id,
+            Declaration {
+                withdraw_at: Some(withdraw_at),
+                ..declaration
+            },
+        );
+
+        let operation = SDPActiveOp {
+            declaration_id,
+            ..SDPActiveOp::sample()
+        };
+
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let signed_operation = preverified(operation, &signed_view);
+
+        assert_eq!(
+            signed_operation
+                .verify(&SDPActiveValidationContext {
+                    declarations: &declarations,
+                    tx_hash_view: &signed_view,
+                    epoch: withdraw_at.strict_add(Epoch::from(1)),
+                })
+                .unwrap_err(),
+            SdpError::DeclarationWithdrawn {
+                declaration_id,
+                withdraw_at,
+            }
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_nonce_that_does_not_increase() {
+        let (message, declaration) = declaration();
+        let declaration_id = message.id();
+        let declaration_nonce = declaration.nonce;
+        let declarations = Declarations::new_sync().insert(declaration_id, declaration);
+
+        let operation = SDPActiveOp {
+            declaration_id,
+            nonce: declaration_nonce,
+            ..SDPActiveOp::sample()
+        };
+
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let signed_operation = preverified(operation, &signed_view);
+
+        assert_eq!(
+            signed_operation
+                .verify(&SDPActiveValidationContext {
+                    declarations: &declarations,
+                    tx_hash_view: &signed_view,
+                    epoch: Epoch::from(0),
+                })
+                .unwrap_err(),
+            SdpError::InvalidNonce {
+                message_nonce: declaration_nonce,
+                declaration_nonce,
+            }
+        );
+    }
+
+    #[test]
+    fn verify_accepts_a_declaration_whose_withdrawal_epoch_is_still_ahead() {
+        let (message, declaration) = declaration();
+        let declaration_id = message.id();
+        let declarations = Declarations::new_sync().insert(
+            declaration_id,
+            Declaration {
+                withdraw_at: Some(Epoch::from(3)),
+                ..declaration
+            },
+        );
+
+        let operation = SDPActiveOp {
+            declaration_id,
+            ..SDPActiveOp::sample()
+        };
+
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let signed_operation = preverified(operation, &signed_view);
+
+        assert!(
+            signed_operation
+                .verify(&SDPActiveValidationContext {
+                    declarations: &declarations,
+                    tx_hash_view: &signed_view,
+                    epoch: Epoch::from(2),
+                })
+                .unwrap()
+                .is_some()
+        );
+    }
 
     const WITHDRAW_AT: Epoch = Epoch::new(5);
 
