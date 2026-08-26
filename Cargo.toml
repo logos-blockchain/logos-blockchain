@@ -31,9 +31,11 @@ strip    = "none"    # Don't strip symbols to allow for better profiling results
 members = [
   "blend/core",
   "blend/crypto",
+  "blend/membership",
   "blend/message",
   "blend/network",
   "blend/proofs",
+  "blend/provers",
   "blend/scheduling",
   "c-bindings",
   "codec",
@@ -110,9 +112,11 @@ lb-api-service                     = { default-features = false, package = "logo
 lb-blake2btree                     = { default-features = false, package = "logos-blockchain-blake2btree", path = "merkle/blake2btree" }
 lb-blend                           = { default-features = false, package = "logos-blockchain-blend", path = "./blend/core" }
 lb-blend-crypto                    = { default-features = false, package = "logos-blockchain-blend-crypto", path = "./blend/crypto" }
+lb-blend-membership                = { default-features = false, package = "logos-blockchain-blend-membership", path = "./blend/membership" }
 lb-blend-message                   = { default-features = false, package = "logos-blockchain-blend-message", path = "./blend/message" }
 lb-blend-network                   = { default-features = false, package = "logos-blockchain-blend-network", path = "./blend/network" }
 lb-blend-proofs                    = { default-features = false, package = "logos-blockchain-blend-proofs", path = "./blend/proofs" }
+lb-blend-provers                   = { default-features = false, package = "logos-blockchain-blend-provers", path = "./blend/provers" }
 lb-blend-scheduling                = { default-features = false, package = "logos-blockchain-blend-scheduling", path = "./blend/scheduling" }
 lb-blend-service                   = { default-features = false, package = "logos-blockchain-blend-service", path = "./services/blend" }
 lb-chain-broadcast-service         = { default-features = false, package = "logos-blockchain-chain-broadcast-service", path = "./services/chain/broadcast-service" }

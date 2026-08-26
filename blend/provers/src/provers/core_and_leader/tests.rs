@@ -1,0 +1,246 @@
+use std::sync::Arc;
+
+use futures::stream::repeat;
+use lb_blend_proofs::{
+    quota::{KeyIndex, Quota},
+    selection::inputs::VerifyInputs,
+};
+use lb_cryptarchia_engine::Epoch;
+use rayon::ThreadPoolBuilder;
+use test_log::test;
+
+use crate::provers::{
+    ProofsGeneratorSettings,
+    core::CoreProofsGeneratorSettings,
+    core_and_leader::{CoreAndLeaderProofsGenerator as _, RealCoreAndLeaderProofsGenerator},
+    test_utils::{
+        CorePoQGeneratorFromPrivateCoreQuotaInputs,
+        poq_public_inputs_from_epoch_public_inputs_and_signing_key, valid_proof_of_leader_inputs,
+        valid_proof_of_quota_inputs,
+    },
+};
+
+#[test(tokio::test)]
+async fn proof_generation() {
+    let core_quota = Quota::new::<10>();
+    let (core_public_inputs, core_private_inputs) = valid_proof_of_quota_inputs(core_quota);
+
+    let mut core_and_leader_proofs_generator = RealCoreAndLeaderProofsGenerator::new(
+        ProofsGeneratorSettings {
+            local_node_index: None,
+            membership_size: 1,
+            public_inputs: core_public_inputs,
+            encapsulation_layers: 1.try_into().unwrap(),
+            epoch: Epoch::new(0),
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+        },
+        KeyIndex::ZERO,
+        CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs),
+    );
+
+    for _ in 0..core_quota.get() {
+        let proof = core_and_leader_proofs_generator
+            .get_next_core_proof()
+            .await
+            .unwrap();
+        let verified_proof_of_quota = proof
+            .proof_of_quota
+            .into_inner()
+            .verify(&poq_public_inputs_from_epoch_public_inputs_and_signing_key(
+                (core_public_inputs, proof.ephemeral_signing_key.public_key()),
+            ))
+            .unwrap();
+        proof
+            .proof_of_selection
+            .into_inner()
+            .verify(&VerifyInputs {
+                // Membership of 1 -> only a single index can be included
+                expected_node_index: 0,
+                key_nullifier: verified_proof_of_quota.key_nullifier(),
+                total_membership_size: 1,
+            })
+            .unwrap();
+    }
+
+    // Next proof should be `None` since we ran out of core quota.
+    assert!(
+        core_and_leader_proofs_generator
+            .get_next_core_proof()
+            .await
+            .is_none()
+    );
+
+    let leadership_quota = Quota::new::<15>();
+    let (leadership_public_inputs, leadership_private_inputs) =
+        valid_proof_of_leader_inputs(leadership_quota);
+
+    // We override all the settings since we fixtures for core and leadership proofs
+    // use a different set of public inputs.
+    core_and_leader_proofs_generator.override_settings(CoreProofsGeneratorSettings {
+        common: ProofsGeneratorSettings {
+            local_node_index: None,
+            membership_size: 1,
+            public_inputs: leadership_public_inputs,
+            encapsulation_layers: 1.try_into().unwrap(),
+            epoch: Epoch::new(0),
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+        },
+        starting_core_key_index: KeyIndex::ZERO,
+    });
+    core_and_leader_proofs_generator
+        .set_epoch_private(Box::pin(repeat(leadership_private_inputs)), Epoch::new(0));
+
+    for _ in 0..leadership_quota.get() {
+        let proof = core_and_leader_proofs_generator
+            .get_next_leader_proof()
+            .await
+            .unwrap();
+        let verified_proof_of_quota = proof
+            .proof_of_quota
+            .into_inner()
+            .verify(&poq_public_inputs_from_epoch_public_inputs_and_signing_key(
+                (
+                    leadership_public_inputs,
+                    proof.ephemeral_signing_key.public_key(),
+                ),
+            ))
+            .unwrap();
+        proof
+            .proof_of_selection
+            .into_inner()
+            .verify(&VerifyInputs {
+                expected_node_index: 0,
+                key_nullifier: verified_proof_of_quota.key_nullifier(),
+                total_membership_size: 1,
+            })
+            .unwrap();
+    }
+}
+
+#[expect(clippy::too_many_lines, reason = "Test function.")]
+#[test(tokio::test)]
+async fn epoch_private_info() {
+    let core_quota = Quota::new::<10>();
+    let leadership_quota = Quota::new::<15>();
+    let (core_public_inputs, core_private_inputs) = valid_proof_of_quota_inputs(core_quota);
+    let (leadership_public_inputs, leadership_private_inputs) =
+        valid_proof_of_leader_inputs(leadership_quota);
+
+    let mut core_and_leader_proofs_generator = RealCoreAndLeaderProofsGenerator::new(
+        ProofsGeneratorSettings {
+            local_node_index: None,
+            membership_size: 1,
+            public_inputs: core_public_inputs,
+            encapsulation_layers: 1.try_into().unwrap(),
+            epoch: Epoch::new(0),
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+        },
+        KeyIndex::ZERO,
+        CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs.clone()),
+    );
+
+    // Switch to leadership inputs before wiring leader private epoch info, because
+    // we use fixtures that yield different public inputs.
+    core_and_leader_proofs_generator.override_settings(CoreProofsGeneratorSettings {
+        common: ProofsGeneratorSettings {
+            local_node_index: None,
+            membership_size: 1,
+            public_inputs: leadership_public_inputs,
+            encapsulation_layers: 1.try_into().unwrap(),
+            epoch: Epoch::new(0),
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+        },
+        starting_core_key_index: KeyIndex::ZERO,
+    });
+
+    core_and_leader_proofs_generator
+        .set_epoch_private(Box::pin(repeat(leadership_private_inputs)), Epoch::new(0));
+
+    // Leadership proof should be generated and verified correctly.
+    let proof = core_and_leader_proofs_generator
+        .get_next_leader_proof()
+        .await
+        .unwrap();
+    let verified_proof_of_quota = proof
+        .proof_of_quota
+        .into_inner()
+        .verify(&poq_public_inputs_from_epoch_public_inputs_and_signing_key(
+            (
+                leadership_public_inputs,
+                proof.ephemeral_signing_key.public_key(),
+            ),
+        ))
+        .unwrap();
+    proof
+        .proof_of_selection
+        .into_inner()
+        .verify(&VerifyInputs {
+            expected_node_index: 0,
+            key_nullifier: verified_proof_of_quota.key_nullifier(),
+            total_membership_size: 1,
+        })
+        .unwrap();
+
+    // New proof should verify successfully.
+    let proof = core_and_leader_proofs_generator
+        .get_next_leader_proof()
+        .await
+        .unwrap();
+    let verified_proof_of_quota = proof
+        .proof_of_quota
+        .into_inner()
+        .verify(&poq_public_inputs_from_epoch_public_inputs_and_signing_key(
+            (
+                leadership_public_inputs,
+                proof.ephemeral_signing_key.public_key(),
+            ),
+        ))
+        .unwrap();
+    proof
+        .proof_of_selection
+        .into_inner()
+        .verify(&VerifyInputs {
+            // Membership of 1 -> only a single index can be included
+            expected_node_index: 0,
+            key_nullifier: verified_proof_of_quota.key_nullifier(),
+            total_membership_size: 1,
+        })
+        .unwrap();
+
+    // We override all the settings since we fixtures for core and leadership proofs
+    // use a different set of public inputs.
+    core_and_leader_proofs_generator.override_settings(CoreProofsGeneratorSettings {
+        common: ProofsGeneratorSettings {
+            local_node_index: None,
+            membership_size: 1,
+            public_inputs: core_public_inputs,
+            encapsulation_layers: 1.try_into().unwrap(),
+            epoch: Epoch::new(0),
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+        },
+        starting_core_key_index: KeyIndex::ZERO,
+    });
+
+    // We test that core proof generation still works fine
+    let proof = core_and_leader_proofs_generator
+        .get_next_core_proof()
+        .await
+        .unwrap();
+    let verified_proof_of_quota = proof
+        .proof_of_quota
+        .into_inner()
+        .verify(&poq_public_inputs_from_epoch_public_inputs_and_signing_key(
+            (core_public_inputs, proof.ephemeral_signing_key.public_key()),
+        ))
+        .unwrap();
+    proof
+        .proof_of_selection
+        .into_inner()
+        .verify(&VerifyInputs {
+            // Membership of 1 -> only a single index can be included
+            expected_node_index: 0,
+            key_nullifier: verified_proof_of_quota.key_nullifier(),
+            total_membership_size: 1,
+        })
+        .unwrap();
+}
