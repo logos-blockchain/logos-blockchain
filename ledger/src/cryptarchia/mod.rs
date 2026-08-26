@@ -967,7 +967,11 @@ pub mod tests {
         let state = state
             .update_epoch_state::<HeaderId>(slot.into(), sdp, pow, config)
             .unwrap();
-        *pow = pow.try_apply_header(&previous_epoch_state, state.epoch_state());
+        *pow = pow.try_apply_header(
+            &previous_epoch_state,
+            state.epoch_state(),
+            &config.pow_config.reward,
+        );
         pow.record_block_txs(txs_in_block);
         state
     }
@@ -1101,8 +1105,34 @@ pub mod tests {
                     damping_num: NonZeroU32::new(1).unwrap(),
                     damping_den_offset: 1,
                 },
+                reward: disabled_reward_config(),
             },
         }
+    }
+
+    /// A reward config with claiming disabled, standing in for a real
+    /// deployment config in tests that don't exercise the reward parameters.
+    #[must_use]
+    pub fn disabled_reward_config() -> crate::config::RewardPoWConfig {
+        crate::config::RewardPoWConfig {
+            reward_pool_genesis: 1_000_000_000,
+            epoch_reward_genesis: 1_000_000,
+            initial_difficulty_seed: 1_000,
+            ema_smoothing_factor: 9,
+            ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
+            target_claims_per_block: 100,
+            rate_num: 0,
+            rate_den: NonZeroU64::MIN,
+            target_claim_per_block: NonZeroU64::MIN,
+            expected_blocks_per_epoch: NonZeroU64::MIN,
+            slot_window: NonZeroU64::new(100).expect("100 is non-zero"),
+        }
+    }
+
+    /// Genesis `PoW` state built from [`disabled_reward_config`].
+    #[must_use]
+    pub fn pow_state() -> PowState {
+        PowState::from_reward_config(&disabled_reward_config())
     }
 
     #[must_use]
@@ -1474,7 +1504,7 @@ pub mod tests {
 
         let sdp = SdpLedger::new(0.into());
         let mut state = genesis_state(&[utxo()]);
-        let mut pow = PowState::new();
+        let mut pow = pow_state();
         let blend_config = &config.pow_config.blend;
         let genesis_difficulty = state.epoch_state.blend_pow_difficulty;
         assert_eq!(
@@ -1529,7 +1559,7 @@ pub mod tests {
         let config = config();
         assert_eq!(config.epoch_length(), 100);
         let sdp = SdpLedger::new(0.into());
-        let mut pow = PowState::new();
+        let mut pow = pow_state();
 
         // Genesis (epoch 0). Stamp a distinct nonce on the current epoch so it
         // is recognisable after the boundary; genesis seeds the previous-epoch
@@ -1561,7 +1591,7 @@ pub mod tests {
 
         // A branch is both halves of the state together, since a block clones
         // and advances them as a pair.
-        let mut ancestor = (genesis_state(&[utxo()]), PowState::new());
+        let mut ancestor = (genesis_state(&[utxo()]), pow_state());
 
         // A common ancestor carrying 4 transactions, in epoch 0.
         ancestor.0 = apply_block(ancestor.0, &mut ancestor.1, 10, 4, &sdp, &config);
@@ -1622,7 +1652,7 @@ pub mod tests {
         let blend_config = &config.pow_config.blend;
         let sdp = SdpLedger::new(0.into());
         let mut state = genesis_state(&[utxo()]);
-        let mut pow = PowState::new();
+        let mut pow = pow_state();
 
         // A single busy block in epoch 0, then no block at all in epoch 1.
         state = apply_block(state, &mut pow, 10, 1_000, &sdp, &config);
@@ -1853,7 +1883,7 @@ pub mod tests {
             .update_epoch_state::<HeaderId>(
                 slot,
                 &SdpLedger::new(0.into()),
-                &PowState::new(),
+                &pow_state(),
                 ledger_config,
             )
             .expect("Ledger needs to move forward");
@@ -1863,7 +1893,7 @@ pub mod tests {
             .update_epoch_state::<HeaderId>(
                 slot2,
                 &SdpLedger::new(0.into()),
-                &PowState::new(),
+                &pow_state(),
                 ledger_config,
             )
             .err();
@@ -2160,7 +2190,7 @@ pub mod tests {
             .epoch_state_for_slot::<HeaderId>(
                 epoch_0_slot,
                 &SdpLedger::new(0.into()),
-                &PowState::new(),
+                &pow_state(),
                 &config,
             )
             .expect("Should return epoch state for current epoch");
@@ -2174,7 +2204,7 @@ pub mod tests {
             .epoch_state_for_slot::<HeaderId>(
                 epoch_1_slot,
                 &SdpLedger::new(0.into()),
-                &PowState::new(),
+                &pow_state(),
                 &config,
             )
             .expect("Should return epoch state for next epoch");
@@ -2191,7 +2221,7 @@ pub mod tests {
             .epoch_state_for_slot::<HeaderId>(
                 epoch_2_slot,
                 &SdpLedger::new(0.into()),
-                &PowState::new(),
+                &pow_state(),
                 &config,
             )
             .expect("Should synthesize epoch state for skipped epoch");
@@ -2224,7 +2254,7 @@ pub mod tests {
                 &proof,
                 &UncleSlots::default(),
                 &SdpLedger::new(0.into()),
-                &PowState::new(),
+                &pow_state(),
                 &config,
             )
             .unwrap();
@@ -2236,12 +2266,7 @@ pub mod tests {
         // First, synthesize epoch state for epoch 2
         let synthesized_ledger_state = ledger_state_1
             .clone()
-            .update_epoch_state::<HeaderId>(
-                slot,
-                &SdpLedger::new(0.into()),
-                &PowState::new(),
-                &config,
-            )
+            .update_epoch_state::<HeaderId>(slot, &SdpLedger::new(0.into()), &pow_state(), &config)
             .unwrap();
         assert_eq!(synthesized_ledger_state.slot, slot);
 
@@ -2258,7 +2283,7 @@ pub mod tests {
                 &proof,
                 &UncleSlots::default(),
                 &SdpLedger::new(0.into()),
-                &PowState::new(),
+                &pow_state(),
                 &config,
             )
             .unwrap();
@@ -2506,12 +2531,7 @@ pub mod tests {
         let slot: Slot = (config.epoch_length() + 1).into();
         assert_eq!(config.epoch(slot), 1);
         let rotated = ledger
-            .update_epoch_state::<HeaderId>(
-                slot,
-                &SdpLedger::new(0.into()),
-                &PowState::new(),
-                &config,
-            )
+            .update_epoch_state::<HeaderId>(slot, &SdpLedger::new(0.into()), &pow_state(), &config)
             .unwrap();
 
         // The accumulated 600 must reach the price update: with a starting price

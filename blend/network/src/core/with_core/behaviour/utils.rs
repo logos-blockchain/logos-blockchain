@@ -2,11 +2,10 @@ use core::{convert::Infallible, num::NonZeroU64, task::Waker};
 use std::{collections::VecDeque, sync::Arc};
 
 use either::Either;
-use lb_blend_message::encap::{
-    ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader,
-};
-use lb_blend_scheduling::{
-    deserialize_encapsulated_message, serialize_encapsulated_message_with_verified_public_header,
+use lb_blend_message::{
+    deserialize_encapsulated_message,
+    encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
+    serialize_encapsulated_message_with_verified_public_header,
 };
 use lb_cryptarchia_engine::Epoch;
 use libp2p::{

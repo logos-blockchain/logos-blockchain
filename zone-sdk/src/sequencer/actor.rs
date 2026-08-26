@@ -487,16 +487,12 @@ where
             Some(update) => {
                 Self::log_channel_update(&update);
 
-                let new_channel_tip = update.new_channel_tip;
                 let built = self.build_channel_update(update);
 
-                let has_pending = self
-                    .state
-                    .as_ref()
-                    .is_some_and(TxState::has_pending_inscriptions);
-
-                if !built.orphaned.is_empty() || !has_pending {
-                    self.last_msg_id = new_channel_tip;
+                // Advance the tip to the current valid publish parent (channel
+                // tip + our pending tail), the same value publishing chains on.
+                if let (Some(state), Some(tip)) = (self.state.as_ref(), self.current_tip) {
+                    self.last_msg_id = state.publish_parent(tip);
                 }
 
                 built

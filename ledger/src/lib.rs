@@ -145,7 +145,9 @@ where
         // Record the root block among the recently seen blocks, so early
         // `PoW` reward claims can anchor to it. Later blocks are recorded
         // as they are applied in `try_update`.
-        state.mantle_ledger.add_seen_block(id.into(), state.slot());
+        state
+            .mantle_ledger
+            .add_seen_block(id.into(), state.slot(), &config);
         Self {
             states: HashTrieMapSync::new_sync().insert(id, state),
             config,
@@ -248,7 +250,9 @@ impl LedgerState {
         // claims may anchor to. This is the canonical apply path, where the
         // block's id is known — unlike a proposer's direct
         // `try_apply_header` call for a block still being built.
-        state.mantle_ledger.add_seen_block(block_id.into(), slot);
+        state
+            .mantle_ledger
+            .add_seen_block(block_id.into(), slot, config);
         // Count the block's transactions into the epoch totals the Blend `PoW`
         // difficulty is retargeted from, for the same reason as above: only a
         // block that is actually applied, contents included, belongs in the
@@ -267,6 +271,7 @@ impl LedgerState {
                     matches!(payload, TxEventPayload::PoWRewardClaimed { .. })
                 })
                 .count() as u64,
+            config,
         );
         let events = header_events
             .into_iter()
@@ -821,8 +826,10 @@ impl LedgerState {
         Ok((self, balance, tx_events, deferred_zkps))
     }
 
-    fn update_pow_reward_difficulty(&mut self, claims_in_block: u64) {
-        self.mantle_ledger.pow.update_difficulty(claims_in_block);
+    fn update_pow_reward_difficulty(&mut self, claims_in_block: u64, config: &Config) {
+        self.mantle_ledger
+            .pow
+            .update_difficulty(claims_in_block, &config.pow_config.reward);
     }
 }
 
@@ -2370,22 +2377,44 @@ mod tests {
     }
 
     mod pow {
+        use std::num::NonZeroU64;
+
         use lb_core::mantle::ops::{
             NoOpProof,
             pow::{ClaimPowRewardError, ClaimPowRewardOp, PowTarget},
         };
 
         use super::*;
-        use crate::mantle::pow::ClaimPoWConstants;
+        use crate::config::RewardPoWConfig;
+
+        /// A reward config with claiming disabled (`rate_num = 0`), standing in
+        /// for a real deployment config.
+        fn disabled_reward_config() -> RewardPoWConfig {
+            RewardPoWConfig {
+                reward_pool_genesis: 1_000_000_000,
+                epoch_reward_genesis: 1_000_000,
+                initial_difficulty_seed: 1_000,
+                ema_smoothing_factor: 9,
+                ema_smoothing_precision: NonZeroU64::new(10).expect("10 is non-zero"),
+                target_claims_per_block: 100,
+                rate_num: 0,
+                rate_den: NonZeroU64::MIN,
+                target_claim_per_block: NonZeroU64::MIN,
+                expected_blocks_per_epoch: NonZeroU64::MIN,
+                slot_window: NonZeroU64::new(100).expect("100 is non-zero"),
+            }
+        }
 
         /// A payout rate of `1/100`: `sigma_e = pool / 100`, used to give the
         /// `PoW` state a nonzero per-claim reward in tests.
-        struct TestPoolConstants;
-        impl ClaimPoWConstants for TestPoolConstants {
-            const RATE_NUM: u64 = 1;
-            const RATE_DEN: u64 = 1;
-            const TARGET_CLAIM_PER_BLOCK: u64 = 10;
-            const EXPECTED_BLOCKS_PER_EPOCH: u64 = 10;
+        fn test_pool_config() -> RewardPoWConfig {
+            RewardPoWConfig {
+                rate_num: 1,
+                rate_den: NonZeroU64::MIN,
+                target_claim_per_block: NonZeroU64::new(10).expect("10 is non-zero"),
+                expected_blocks_per_epoch: NonZeroU64::new(10).expect("10 is non-zero"),
+                ..disabled_reward_config()
+            }
         }
 
         /// A ledger state with a funded `PoW` pool (1000, `sigma_e` = 10) and
@@ -2397,7 +2426,7 @@ mod tests {
             state
                 .mantle_ledger
                 .pow
-                .add_rewards_to_pool::<TestPoolConstants>();
+                .add_rewards_to_pool(&test_pool_config());
             state
                 .mantle_ledger
                 .pow
@@ -2462,9 +2491,9 @@ mod tests {
             // Exercises the `LedgerState` plumbing directly with a claim
             // count: 2T claims shrink the target,
             // 1000 -> 10·100·1000/(1·200 + 9·100) = 909.
-            let (mut state, _config) = pow_ledger_state(1_000);
+            let (mut state, config) = pow_ledger_state(1_000);
 
-            state.update_pow_reward_difficulty(200);
+            state.update_pow_reward_difficulty(200, &config);
 
             assert_eq!(
                 state.mantle_ledger.pow.reward_difficulty(),
@@ -2501,20 +2530,13 @@ mod tests {
             // zero the claim fails the §5.6 safety cutoff. This exercises
             // the full wiring: preverification, the stateful
             // `ClaimPowReward` arm and the helper-built context.
-            struct DisabledConstants;
-            impl ClaimPoWConstants for DisabledConstants {
-                const RATE_NUM: u64 = 0;
-                const RATE_DEN: u64 = 1;
-                const TARGET_CLAIM_PER_BLOCK: u64 = 1;
-                const EXPECTED_BLOCKS_PER_EPOCH: u64 = 1;
-            }
-
             let config = config();
             let mut state = LedgerState::from_utxos([utxo()], &config);
+            // The default reward config disables claiming (`rate_num = 0`).
             state
                 .mantle_ledger
                 .pow
-                .add_rewards_to_pool::<DisabledConstants>();
+                .add_rewards_to_pool(&disabled_reward_config());
             assert_eq!(state.mantle_ledger.pow.epoch_reward(), 0);
 
             let err = state
@@ -2749,7 +2771,7 @@ mod tests {
             state
                 .mantle_ledger
                 .pow
-                .add_rewards_to_pool::<TestPoolConstants>();
+                .add_rewards_to_pool(&test_pool_config());
             assert_eq!(state.mantle_ledger.pow.reward_pool(), pool_before);
         }
     }

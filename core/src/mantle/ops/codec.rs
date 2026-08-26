@@ -111,6 +111,7 @@ pub const fn proof_matches(proof: &OpProof, op: &Op) -> bool {
                 Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_) | Op::ChannelDeposit(_),
             )
             | (OpProof::PoC(_), Op::LeaderClaim(_))
+            | (OpProof::None(_), Op::ClaimPowReward(_))
     )
 }
 

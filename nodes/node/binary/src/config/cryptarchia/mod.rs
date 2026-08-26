@@ -80,6 +80,9 @@ impl ServiceConfig {
                         .blend
                         .target_transactions_per_block,
                 },
+                // Reused verbatim: the deployment mirror already holds the
+                // validated ledger type.
+                reward: self.deployment.pow_config.reward.clone(),
             },
         };
 

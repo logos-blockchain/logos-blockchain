@@ -201,6 +201,12 @@ const WALLET_NAME_IDX: usize = 2;
 const CONNECTED_TO: &str = "connected_to";
 const CONNECTED_TO_IDX: usize = 3;
 
+// Mining-node wallet-resources table adds an `is_mining_wallet` column between
+// `wallet_name` and `connected_to`.
+const IS_MINING_WALLET: &str = "is_mining_wallet";
+const IS_MINING_WALLET_IDX: usize = 3;
+const MINING_CONNECTED_TO_IDX: usize = 4;
+
 pub(crate) fn verify_node_wallet_resources_table_indexes(
     table: &Table,
     step: &str,
@@ -298,6 +304,103 @@ pub(crate) fn parse_wallet_resources_table_row(
             wallet_name,
             account_index,
         },
+        connected_to,
+    ))
+}
+
+pub(crate) fn verify_mining_node_wallet_resources_table_indexes(
+    table: &Table,
+    step: &str,
+) -> Result<(), StepError> {
+    if table.rows.is_empty()
+        || table.rows[0].len() != 5
+        || table.rows[0][NODE_NAME_IDX] != NODE_NAME
+        || table.rows[0][ACCOUNT_INDEX_IDX_T2] != ACCOUNT_INDEX
+        || table.rows[0][WALLET_NAME_IDX] != WALLET_NAME
+        || table.rows[0][IS_MINING_WALLET_IDX] != IS_MINING_WALLET
+        || table.rows[0][MINING_CONNECTED_TO_IDX] != CONNECTED_TO
+    {
+        return Err(StepError::InvalidArgument {
+            message: format!(
+                "Step `{step}` error: Mining wallet resources table must have a header row with columns: {NODE_NAME}, {ACCOUNT_INDEX}, {WALLET_NAME}, {IS_MINING_WALLET}, {CONNECTED_TO}"
+            ),
+        });
+    }
+    // All wallet indexes must be unique.
+    let account_indexes: HashSet<_> = table
+        .rows
+        .iter()
+        .map(|row| &row[ACCOUNT_INDEX_IDX_T2])
+        .collect();
+    if account_indexes.len() != table.rows.len() {
+        return Err(StepError::InvalidArgument {
+            message: format!(
+                "Step `{step}` error: Duplicate {ACCOUNT_INDEX} indexes found in the table"
+            ),
+        });
+    }
+    // All wallet names must be unique.
+    let wallet_names: HashSet<_> = table.rows.iter().map(|row| &row[WALLET_NAME_IDX]).collect();
+    if wallet_names.len() != table.rows.len() {
+        return Err(StepError::InvalidArgument {
+            message: format!(
+                "Step `{step}` error: Duplicate {WALLET_NAME} indexes found in the table"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+pub(crate) fn parse_mining_wallet_resources_table_row(
+    step: &str,
+    row: &[String],
+) -> Result<(String, WalletStartInfo, bool, Option<String>), StepError> {
+    let node_name = row[NODE_NAME_IDX].trim().to_owned();
+    if node_name.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: format!("Step `{step}` error: {NODE_NAME} cannot be empty"),
+        });
+    }
+    let account_index = row[ACCOUNT_INDEX_IDX_T2]
+        .trim()
+        .parse::<usize>()
+        .map_err(|_| StepError::InvalidArgument {
+            message: format!(
+                "Step `{step}` error: {ACCOUNT_INDEX} '{}' must be a valid number",
+                row[ACCOUNT_INDEX_IDX_T2]
+            ),
+        })?;
+    let wallet_name = row[WALLET_NAME_IDX].trim().to_owned();
+    if wallet_name.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: format!("Step `{step}` error: {WALLET_NAME} cannot be empty"),
+        });
+    }
+    let is_mining_wallet = match row[IS_MINING_WALLET_IDX].trim() {
+        "true" => true,
+        "false" => false,
+        other => {
+            return Err(StepError::InvalidArgument {
+                message: format!(
+                    "Step `{step}` error: {IS_MINING_WALLET} '{other}' must be 'true' or 'false'"
+                ),
+            });
+        }
+    };
+    let connected_to = row
+        .get(MINING_CONNECTED_TO_IDX)
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+
+    Ok((
+        node_name,
+        WalletStartInfo {
+            wallet_name,
+            account_index,
+        },
+        is_mining_wallet,
         connected_to,
     ))
 }
@@ -560,15 +663,19 @@ fn log_chain_sync_progress(
 // dependency, return an error.
 pub(crate) fn start_nodes_order_respecting_dependencies(
     nodes_to_start: NodesToStartUnordered,
+    already_started: HashSet<String>,
 ) -> Result<NodesToStartOrdered, StepError> {
     let mut remaining = nodes_to_start;
-    let mut started = HashSet::new();
+    // Peers that are already running (started by earlier steps) count as
+    // satisfied dependencies, so a node in this batch may connect to them.
+    let mut started = already_started;
     let mut ordered = Vec::new();
 
-    // Step 1: Find all nodes without any peer dependencies
+    // Step 1: Find all nodes whose peer dependencies are already satisfied
+    // (no in-batch peers, or all peers already running).
     let nodes_without_peers: Vec<String> = remaining
         .iter()
-        .filter(|&(_, (_, peers))| peers.is_empty())
+        .filter(|&(_, (_, peers))| peers.iter().all(|peer| started.contains(peer)))
         .map(|(node_name, (_, _))| node_name.clone())
         .collect();
 
@@ -636,16 +743,30 @@ pub async fn start_node(
     wallet_start_info: &[WalletStartInfo],
     initial_peers: &[String],
     immediate_start: bool,
+    extra_user_overrides: &[ConfigOverride],
 ) -> StepResult {
     if world.local_cluster.is_none() {
         return Err(StepError::LogicalError {
             message: "No local cluster available".into(),
         });
     }
-    let startup_settings =
+    let mut startup_settings =
         get_startup_settings(world, initial_peers, node_name).inspect_err(|e| {
             warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
+    // Merge per-node user config overrides (e.g. a mining node's derived
+    // `pow.claim_address`) on top of the scenario-wide ones, upserting by path.
+    for extra in extra_user_overrides {
+        if let Some(existing) = startup_settings
+            .user_config_overrides
+            .iter_mut()
+            .find(|item| item.path == extra.path)
+        {
+            existing.value = extra.value.clone();
+        } else {
+            startup_settings.user_config_overrides.push(extra.clone());
+        }
+    }
     let is_bootstrap_node = startup_settings.is_bootstrap_node;
     let join_external_network = startup_settings.join_external_network;
     let persist_dir = world.scenario_base_dir.join(node_name);

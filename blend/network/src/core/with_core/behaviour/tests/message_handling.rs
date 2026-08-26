@@ -2,7 +2,7 @@ use core::time::Duration;
 use std::collections::HashSet;
 
 use futures::StreamExt as _;
-use lb_blend_scheduling::serialize_encapsulated_message_with_verified_public_header;
+use lb_blend_message::serialize_encapsulated_message_with_verified_public_header;
 use lb_libp2p::SwarmEvent;
 use libp2p_swarm_test::SwarmExt as _;
 use test_log::test;

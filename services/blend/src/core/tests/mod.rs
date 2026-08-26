@@ -1,4 +1,4 @@
-use core::{num::NonZeroU64, time::Duration};
+use core::{iter::once, num::NonZeroU64, time::Duration};
 use std::{collections::VecDeque, sync::Arc};
 
 use futures::{StreamExt as _, stream::repeat};
@@ -40,7 +40,10 @@ use crate::{
     membership::{MembershipInfo, ZkInfo, chain::BlendEpochState},
     message::{BlendPayload, ServiceMessage},
     test_utils::{
-        crypto::{GatedPowProofsGenerator, MockCoreAndLeaderProofsGenerator, PowGate},
+        crypto::{
+            GatedPowProofsGenerator, MockCoreAndLeaderProofsGenerator, PowGate,
+            recorded_starting_core_key_indices, reset_starting_core_key_indices,
+        },
         epoch::OncePolStreamProvider,
     },
 };
@@ -88,6 +91,7 @@ async fn test_handle_incoming_blend_message() {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+            spent_core_quota: Quota::ZERO,
         },
         &public_info,
         (),
@@ -141,6 +145,7 @@ async fn test_handle_incoming_blend_message() {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+            spent_core_quota: Quota::ZERO,
         },
         &public_info,
         (),
@@ -150,7 +155,8 @@ async fn test_handle_incoming_blend_message() {
     let (_, _, _, _, _, current_token_collector, _, state_updater) =
         recovery_checkpoint.into_components();
     let (new_token_collector, old_token_collector) =
-        current_token_collector.rotate_epoch(&reward_epoch_info(&public_info));
+        EpochBlendingTokenCollector::clone(&current_token_collector)
+            .rotate_epoch(&reward_epoch_info(&public_info));
 
     // Check that decapsulating the same message fails with the new processor
     // but succeeds with the old one. Also, it should be scheduled in the old
@@ -240,6 +246,7 @@ async fn test_handle_incoming_blend_message() {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+            spent_core_quota: Quota::ZERO,
         },
         &new_epoch_info(epoch, membership, &settings),
         (),
@@ -325,6 +332,7 @@ async fn test_duplicate_decapsulated_replica_handled_gracefully() {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+            spent_core_quota: Quota::ZERO,
         },
         &public_info,
         (),
@@ -419,6 +427,7 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+            spent_core_quota: Quota::ZERO,
         },
         &public_info_0,
         (),
@@ -439,6 +448,7 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+            spent_core_quota: Quota::ZERO,
         },
         &public_info_1,
         (),
@@ -574,6 +584,7 @@ async fn test_handle_epoch_event() {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+            spent_core_quota: Quota::ZERO,
         },
         &public_info,
         (),
@@ -748,6 +759,7 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+            spent_core_quota: Quota::ZERO,
         },
         &public_info,
         (),
@@ -851,6 +863,7 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+            spent_core_quota: Quota::ZERO,
         },
         &public_info,
         (),
@@ -953,6 +966,7 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+            spent_core_quota: Quota::ZERO,
         },
         &public_info,
         (),
@@ -1027,6 +1041,7 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+            spent_core_quota: Quota::ZERO,
         },
         &public_info,
         (),
@@ -1538,6 +1553,7 @@ async fn test_proof_generator_epoch_binding() {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+            spent_core_quota: Quota::ZERO,
         },
         &public_info_0,
         (),
@@ -1548,6 +1564,7 @@ async fn test_proof_generator_epoch_binding() {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+            spent_core_quota: Quota::ZERO,
         },
         &public_info_1,
         (),
@@ -1670,12 +1687,18 @@ async fn test_proof_generator_epoch_binding() {
 async fn test_initialize_recovers_matching_saved_state() {
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let settings = settings(
-        local_private_key.clone(),
-        u64::from(minimal_network_size).try_into().unwrap(),
-        (),
-        0,
-    );
+    let settings = {
+        let mut settings = settings(
+            local_private_key.clone(),
+            u64::from(minimal_network_size).try_into().unwrap(),
+            (),
+            0,
+        );
+        // More than one layer, so the emission slots the recovery state counts and the
+        // key indices the generator resumes from cannot be confused for each other.
+        settings.num_blend_layers = 3.try_into().unwrap();
+        settings
+    };
 
     let initial_epoch = 0.into();
 
@@ -1712,9 +1735,12 @@ async fn test_initialize_recovers_matching_saved_state() {
     )
     .unwrap();
     let mut updater = saved_state.start_updating();
-    updater.consume_core_quota(Quota::new::<5>());
+    // Five cover messages' worth, at three layers each.
+    updater.consume_core_quota(Quota::new::<15>());
     updater.queue_unencapsulated_transaction(b"transaction".to_vec());
     let saved_state = updater.commit_changes();
+
+    reset_starting_core_key_indices();
 
     let (
         _remaining_epoch_stream,
@@ -1746,7 +1772,7 @@ async fn test_initialize_recovers_matching_saved_state() {
 
     assert_eq!(
         recovered_checkpoint.spent_quota(),
-        Quota::new::<5>(),
+        Quota::new::<15>(),
         "Matching epoch: spent_quota should be restored from saved state"
     );
     assert_eq!(recovered_checkpoint.last_seen_epoch(), initial_epoch);
@@ -1756,6 +1782,15 @@ async fn test_initialize_recovers_matching_saved_state() {
         recovered_checkpoint.pending_transactions().front(),
         Some(&b"transaction".to_vec()),
         "Matching epoch: a queued transaction should be restored from saved state"
+    );
+    // The restored quota is also what tells the core proof generator where to pick
+    // up — it is counted in proofs, and the generator hands out one per key index.
+    // Re-proving an index re-derives a key nullifier this node already put on the
+    // wire, and peers drop that as a duplicate.
+    assert_eq!(
+        recorded_starting_core_key_indices(),
+        vec![Quota::new::<15>()],
+        "Matching epoch: the generator should resume from the spent quota"
     );
 
     // Mismatched epoch: fresh state should be created
@@ -1846,6 +1881,182 @@ async fn test_initialize_recovers_matching_saved_state() {
         pending_transactions2.front(),
         Some(&b"stale epoch transaction".to_vec()),
         "Mismatched epoch: the queue handed to the event loop should carry it too"
+    );
+}
+
+/// The tokens collected during an epoch are worth an activity proof, and a
+/// restart into the *next* epoch must not throw them away.
+#[test_log::test(tokio::test)]
+async fn test_initialize_submits_activity_proof_for_the_previous_epoch() {
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let mut settings = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+    // A long epoch makes the core quota, and with it the activity threshold, high
+    // enough for a single token to clear it.
+    settings.time.rounds_per_epoch = 648_000.try_into().unwrap();
+
+    // Saved under epoch 0; the node comes back up in epoch 1.
+    let saved_epoch = 0.into();
+    let current_epoch = Epoch::new(1);
+
+    let membership_info = MembershipInfo {
+        membership: membership.clone(),
+        zk: Some(ZkInfo {
+            root: ZkHash::ZERO,
+            core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
+        }),
+    };
+    let (membership_stream, membership_sender) = new_stream();
+    membership_sender
+        .send(test_blend_epoch_state(1, membership_info))
+        .await
+        .unwrap();
+
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources();
+    let (sdp_relay, mut sdp_relay_receiver) = sdp_relay();
+
+    let saved_public_info = new_epoch_info(saved_epoch, membership.clone(), &settings);
+    let saved_state = ServiceState::with_epoch(
+        saved_epoch,
+        VecDeque::new(),
+        EpochBlendingTokenCollector::new(&reward_epoch_info(&saved_public_info)),
+        None,
+        state_updater.clone(),
+    )
+    .unwrap();
+    let mut updater = saved_state.start_updating();
+    updater.collect_current_epoch_tokens(once(BlendingToken::new(
+        Ed25519Key::from_bytes(&[0; _]).public_key(),
+        VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
+        VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
+    )));
+    let saved_state = updater.commit_changes();
+
+    let (
+        _remaining_epoch_stream,
+        _current_public_info,
+        _crypto_processor,
+        recovered_checkpoint,
+        _pending_transactions,
+        _message_scheduler,
+        _backend,
+        _rng,
+    ) = initialize::<
+        NodeId,
+        TestBlendBackend,
+        TestPayloadDispatcher,
+        MockCoreAndLeaderProofsGenerator,
+        MockProofsVerifier,
+        MockKmsAdapter,
+        RuntimeServiceId,
+    >(
+        settings.clone(),
+        membership_stream,
+        overwatch_handle,
+        MockKmsAdapter,
+        &sdp_relay,
+        Some(saved_state),
+        state_updater,
+    )
+    .await;
+
+    assert_eq!(
+        recovered_checkpoint.last_seen_epoch(),
+        current_epoch,
+        "the recovered state should track the epoch the node came back up in"
+    );
+    assert!(
+        matches!(
+            sdp_relay_receiver.try_recv(),
+            Ok(lb_sdp_service::SdpMessage::PostActivity {
+                metadata: ActivityMetadata::Blend(_),
+            })
+        ),
+        "the previous epoch's tokens should be submitted as an activity proof, not dropped"
+    );
+}
+
+/// A state older than the immediately preceding epoch is past submitting for.
+///
+/// The counterpart to
+/// [`test_initialize_submits_activity_proof_for_the_previous_epoch`].
+#[test_log::test(tokio::test)]
+async fn test_initialize_drops_activity_proof_older_than_one_epoch() {
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let mut settings = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+    settings.time.rounds_per_epoch = 648_000.try_into().unwrap();
+
+    let membership_info = MembershipInfo {
+        membership: membership.clone(),
+        zk: Some(ZkInfo {
+            root: ZkHash::ZERO,
+            core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
+        }),
+    };
+    // The node comes back up in epoch 3, so a state saved under epoch 1 is
+    // genuinely two epochs behind rather than merely different.
+    let (membership_stream, membership_sender) = new_stream();
+    membership_sender
+        .send(test_blend_epoch_state(3, membership_info))
+        .await
+        .unwrap();
+
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources();
+    let (sdp_relay, mut sdp_relay_receiver) = sdp_relay();
+
+    let stale_epoch = 1.into();
+    let stale_public_info = new_epoch_info(stale_epoch, membership.clone(), &settings);
+    let stale_state = ServiceState::with_epoch(
+        stale_epoch,
+        VecDeque::new(),
+        EpochBlendingTokenCollector::new(&reward_epoch_info(&stale_public_info)),
+        None,
+        state_updater.clone(),
+    )
+    .unwrap();
+    let mut updater = stale_state.start_updating();
+    updater.collect_current_epoch_tokens(once(BlendingToken::new(
+        Ed25519Key::from_bytes(&[0; _]).public_key(),
+        VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
+        VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
+    )));
+    let stale_state = updater.commit_changes();
+
+    let (.., _rng) = initialize::<
+        NodeId,
+        TestBlendBackend,
+        TestPayloadDispatcher,
+        MockCoreAndLeaderProofsGenerator,
+        MockProofsVerifier,
+        MockKmsAdapter,
+        RuntimeServiceId,
+    >(
+        settings.clone(),
+        membership_stream,
+        overwatch_handle,
+        MockKmsAdapter,
+        &sdp_relay,
+        Some(stale_state),
+        state_updater,
+    )
+    .await;
+
+    assert!(
+        sdp_relay_receiver.try_recv().is_err(),
+        "a collector more than one epoch old should be dropped, not submitted"
     );
 }
 
