@@ -10,7 +10,7 @@ use lb_chain_service::Epoch;
 use lb_core::crypto::ZkHash;
 use lb_groth16::{AdditiveGroup as _, Fr};
 use tokio::{
-    sync::oneshot,
+    sync::{mpsc, oneshot},
     time::{sleep, timeout},
 };
 
@@ -25,6 +25,7 @@ use crate::{
     epoch_info::PolEpochInfo,
     membership::chain::BlendEpochState,
     message::{BlendPayload, ServiceMessage},
+    pending::{NextLocalMessage, PendingLocalMessages},
     test_utils::{
         epoch::{GatedPolStreamProvider, PolGate},
         membership::membership,
@@ -171,7 +172,7 @@ fn test_pol_epoch_info(epoch: Epoch) -> PolEpochInfo {
 async fn handle_new_secret_epoch_info_recreates_handler() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
-    let (node_id_sender, _node_id_receiver) = tokio::sync::mpsc::channel(1);
+    let (node_id_sender, _node_id_receiver) = mpsc::channel(1);
 
     let settings = settings(local_node, 1, node_id_sender);
     let overwatch = overwatch_handle();
@@ -231,7 +232,7 @@ fn test_blend_epoch_state(epoch: Epoch, membership: Membership<NodeId>) -> Blend
 async fn two_publics_without_private_in_between() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
-    let (node_id_sender, _node_id_receiver) = tokio::sync::mpsc::channel(1);
+    let (node_id_sender, _node_id_receiver) = mpsc::channel(1);
 
     let settings = settings(local_node, 1, node_id_sender);
     let overwatch = overwatch_handle();
@@ -275,7 +276,7 @@ async fn two_publics_without_private_in_between() {
 async fn public_then_private_same_epoch_creates_handler() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
-    let (node_id_sender, _node_id_receiver) = tokio::sync::mpsc::channel(1);
+    let (node_id_sender, _node_id_receiver) = mpsc::channel(1);
 
     let settings = settings(local_node, 1, node_id_sender);
     let overwatch = overwatch_handle();
@@ -321,7 +322,7 @@ async fn public_then_private_same_epoch_creates_handler() {
 async fn private_then_public_same_epoch_creates_handler() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
-    let (node_id_sender, _node_id_receiver) = tokio::sync::mpsc::channel(1);
+    let (node_id_sender, _node_id_receiver) = mpsc::channel(1);
 
     let settings = settings(local_node, 1, node_id_sender);
     let overwatch = overwatch_handle();
@@ -455,5 +456,77 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
             .await
             .expect("the transaction behind the oversized proposal should still go out"),
         Some(core_node)
+    );
+}
+
+/// A proposal still queued when the public epoch rotates is dropped; a
+/// transaction is not.
+///
+/// Leadership quota is one message's worth per winning slot, so a proposal that
+/// missed its epoch would spend the quota the new epoch's own block needs.
+#[test_log::test(tokio::test)]
+async fn a_new_public_epoch_discards_queued_proposals() {
+    let local_node = NodeId(99);
+    let core_node = NodeId(0);
+    let (node_id_sender, _node_id_receiver) = mpsc::channel(1);
+    let settings = settings(local_node, 1, node_id_sender);
+
+    let mut handler_state: Option<
+        super::handlers::MessageHandler<TestBackend, NodeId, MockLeaderProofsGenerator, usize>,
+    > = None;
+    let mut pending_messages = PendingLocalMessages::new();
+    pending_messages.queue_proposal(b"proposal".to_vec(), 2.try_into().unwrap());
+    pending_messages.queue_transaction(b"transaction".to_vec());
+
+    super::handle_new_public_epoch_event(
+        &test_blend_epoch_state(Epoch::new(1), membership(&[core_node], local_node)),
+        &mut Some(test_pol_epoch_info(Epoch::new(1))),
+        &mut handler_state,
+        &mut pending_messages,
+        settings,
+        overwatch_handle(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        pending_messages.next(),
+        Some(NextLocalMessage::Transaction(b"transaction")),
+        "the proposal must not survive the rotation, and the transaction must"
+    );
+}
+
+/// Secret `PoL` info arriving is not an epoch change, so it must leave queued
+/// proposals alone.
+///
+/// This is the window the queue exists for: a proposal that landed before this
+/// epoch's leadership proofs were possible is waiting for exactly this event.
+/// Discarding here would put back the bug the queue removes.
+#[test_log::test(tokio::test)]
+async fn secret_pol_info_arriving_keeps_queued_proposals() {
+    let local_node = NodeId(99);
+    let core_node = NodeId(0);
+    let (node_id_sender, _node_id_receiver) = mpsc::channel(1);
+    let settings = settings(local_node, 1, node_id_sender);
+
+    let mut handler_state: Option<
+        super::handlers::MessageHandler<TestBackend, NodeId, MockLeaderProofsGenerator, usize>,
+    > = None;
+    let mut pending_messages = PendingLocalMessages::new();
+    pending_messages.queue_proposal(b"proposal".to_vec(), 2.try_into().unwrap());
+
+    // The path the secret-`PoL` arm takes, which is not a new epoch.
+    super::handle_new_epoch_event(
+        &test_blend_epoch_state(Epoch::new(1), membership(&[core_node], local_node)),
+        &mut Some(test_pol_epoch_info(Epoch::new(1))),
+        &mut handler_state,
+        settings,
+        overwatch_handle(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        pending_messages.next(),
+        Some(NextLocalMessage::ProposalCopy(b"proposal")),
+        "a proposal waiting for this epoch's leadership proofs must survive them arriving"
     );
 }
