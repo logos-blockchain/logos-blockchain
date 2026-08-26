@@ -468,34 +468,55 @@ pub mod test_utils {
 
 #[cfg(test)]
 mod tests {
+    use lb_binary_codec::{
+        bincode::{DeserializeOp as _, SerializeOp as _},
+        canonical::BinaryEncode as _,
+    };
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use num_bigint::BigUint;
 
     use crate::mantle::{
         Note, NoteId, Op, OpProof, SignedOps, Utxo, VerificationError,
-        channel::{Channels, Error},
+        channel::{Channels, Error as ChannelError},
         gas::{MainnetGasProfile, TxGasCalculator as _},
         ledger::{Inputs, Outputs, OutputsError, verification_mode::StandardMode},
         ops::{
             channel::{
                 ChannelId, MsgId, config::ChannelConfigOp, deposit::DepositOp,
-                withdraw::ChannelWithdrawOp,
+                inscribe::InscriptionOp, withdraw::ChannelWithdrawOp,
             },
             transfer::{TransferError, TransferOp},
         },
         traits::Hashable as _,
         transactions::{
-            GasPrices, OpProofs,
+            GasPrices, OpProofs, Ops,
             states::{Preverified, Unverified},
             tx_list::{
                 ops::OpsGasContext,
-                signed_ops::test_utils::{
-                    create_test_inscribe_op, create_test_mantle_tx, make_channel_state,
+                signed_ops::{
+                    Error,
+                    test_utils::{
+                        create_test_inscribe_op, create_test_mantle_tx, make_channel_state,
+                    },
                 },
             },
         },
     };
+
+    fn sample_columns() -> (Ops, OpProofs) {
+        let ops = Ops::sample();
+        let op_proofs = OpProofs::new_unchecked(ops.iter().map(Op::sample_proof).collect());
+        (ops, op_proofs)
+    }
+
+    fn mantle_spec_json(ops: &Ops, op_proofs: &OpProofs) -> serde_json::Value {
+        serde_json::json!({
+            "mantle_tx": { "ops": serde_json::to_value(ops).expect("the op column serializes") },
+            "ops_proofs": serde_json::to_value(op_proofs.inner())
+                .expect("the proof column serializes"),
+        })
+    }
 
     fn create_config_op(channel: ChannelId, signing_key: &Ed25519Key) -> ChannelConfigOp {
         ChannelConfigOp {
@@ -517,11 +538,51 @@ mod tests {
         }
     }
 
+    fn two_column_ops() -> Ops {
+        Ops::from([
+            Op::ChannelInscribe(InscriptionOp::sample()),
+            Op::ChannelDeposit(DepositOp::sample()),
+        ])
+    }
+
     fn create_withdraw_op(channel_id: ChannelId) -> ChannelWithdrawOp {
         ChannelWithdrawOp {
             channel_id,
             inputs: Inputs::new([NoteId(Fr::from(0u64))]),
         }
+    }
+
+    #[test]
+    fn from_parts_rejects_a_proof_column_of_a_different_length() {
+        let ops = two_column_ops();
+        let op_proofs = OpProofs::new_unchecked(vec![ops[0].sample_proof()]);
+
+        assert!(matches!(
+            SignedOps::<Unverified, StandardMode>::from_parts(ops, op_proofs),
+            Err(Error::LengthMismatch {
+                operations: 2,
+                proofs: 1
+            })
+        ));
+    }
+
+    #[test]
+    fn from_parts_reports_the_index_of_the_mismatched_proof() {
+        let ops = Ops::from([
+            Op::ChannelInscribe(InscriptionOp::sample()),
+            Op::ChannelDeposit(DepositOp::sample()),
+            Op::ChannelInscribe(InscriptionOp::sample()),
+        ]);
+        let op_proofs = OpProofs::new_unchecked(vec![
+            ops[0].sample_proof(),
+            ops[2].sample_proof(),
+            ops[2].sample_proof(),
+        ]);
+
+        assert!(matches!(
+            SignedOps::<Unverified, StandardMode>::from_parts(ops, op_proofs),
+            Err(Error::OpProofMismatch { index: 1, .. })
+        ));
     }
 
     #[test]
@@ -650,7 +711,7 @@ mod tests {
         assert!(matches!(
             result,
             Err(VerificationError::ChannelVerificationError(
-                Error::InvalidSignature
+                ChannelError::InvalidSignature
             ))
         ));
     }
@@ -706,7 +767,7 @@ mod tests {
         assert!(matches!(
             result,
             Err(VerificationError::ChannelVerificationError(
-                Error::InvalidSignature
+                ChannelError::InvalidSignature
             ))
         ));
     }
@@ -738,6 +799,124 @@ mod tests {
                 TransferError::Outputs(OutputsError::ZeroValueNote)
             ))
         );
+    }
+
+    #[test]
+    fn trusted_constructor_skips_preverification() {
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
+        let wrong_key = Ed25519Key::from_bytes(&[2; 32]);
+        let ops = create_test_mantle_tx(vec![Op::ChannelInscribe(create_test_inscribe_op(
+            &signing_key,
+        ))]);
+        let op_proofs = OpProofs::from([OpProof::Ed25519Sig(
+            wrong_key.sign_payload(ops.hash().as_signing_bytes().as_ref()),
+        )]);
+
+        assert!(
+            SignedOps::<Unverified, StandardMode>::from_parts(ops.clone(), op_proofs.clone())
+                .expect("the proof matches the op")
+                .preverify()
+                .is_err()
+        );
+
+        let trusted =
+            SignedOps::<Unverified, StandardMode>::from_parts(ops.clone(), op_proofs.clone())
+                .expect("the proof matches the op")
+                .into_preverified_trusted_standard();
+
+        assert_eq!(trusted.op_refs(), ops.by_ref());
+        assert!(
+            trusted
+                .op_proof_refs_iter()
+                .eq(op_proofs.iter().map(OpProof::by_ref))
+        );
+    }
+
+    #[test]
+    fn changing_a_proof_does_not_change_the_transaction_hash() {
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
+        let other_key = Ed25519Key::from_bytes(&[2; 32]);
+        let ops = create_test_mantle_tx(vec![Op::ChannelInscribe(create_test_inscribe_op(
+            &signing_key,
+        ))]);
+        let tx_hash = ops.hash();
+
+        let signed = SignedOps::<Unverified, StandardMode>::from_parts(
+            ops.clone(),
+            OpProofs::from([OpProof::Ed25519Sig(
+                signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+            )]),
+        )
+        .expect("the proof matches the op");
+        let resigned = SignedOps::<Unverified, StandardMode>::from_parts(
+            ops,
+            OpProofs::from([OpProof::Ed25519Sig(
+                other_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+            )]),
+        )
+        .expect("the proof matches the op");
+
+        assert_ne!(signed, resigned);
+        assert_eq!(signed.hash(), tx_hash);
+        assert_eq!(resigned.hash(), tx_hash);
+    }
+
+    #[test]
+    fn serialize_to_json() {
+        let (ops, op_proofs) = sample_columns();
+        let signed_ops =
+            SignedOps::<Unverified, StandardMode>::from_parts(ops.clone(), op_proofs.clone())
+                .expect("sample proofs pair with their ops");
+
+        assert_eq!(
+            serde_json::to_value(&signed_ops).expect("the human-readable arm serializes"),
+            mantle_spec_json(&ops, &op_proofs)
+        );
+    }
+
+    #[test]
+    fn serialize_to_binary() {
+        let signed_ops = SignedOps::<Unverified, StandardMode>::sample();
+
+        assert_eq!(
+            signed_ops.to_bytes().expect("the binary arm serializes"),
+            bincode::serialize(&signed_ops.encode_to_vec()).expect("the envelope serializes")
+        );
+    }
+
+    #[test]
+    fn deserialize_from_json() {
+        let (ops, op_proofs) = sample_columns();
+        let json = mantle_spec_json(&ops, &op_proofs);
+
+        assert_eq!(
+            serde_json::from_value::<SignedOps<Unverified, StandardMode>>(json)
+                .expect("the human-readable arm deserializes"),
+            SignedOps::from_parts(ops, op_proofs).expect("sample proofs pair with their ops")
+        );
+    }
+
+    #[test]
+    fn deserialize_from_binary() {
+        let signed_ops = SignedOps::<Unverified, StandardMode>::sample();
+        let envelope =
+            bincode::serialize(&signed_ops.encode_to_vec()).expect("the envelope serializes");
+
+        assert_eq!(
+            SignedOps::<Unverified, StandardMode>::from_bytes(&envelope)
+                .expect("the binary arm deserializes"),
+            signed_ops
+        );
+    }
+
+    #[test]
+    fn deserialize_from_binary_rejects_trailing_bytes() {
+        let mut encoded_signed_ops =
+            SignedOps::<Unverified, StandardMode>::sample().encode_to_vec();
+        encoded_signed_ops.push(0);
+        let envelope = bincode::serialize(&encoded_signed_ops).expect("the envelope serializes");
+
+        assert!(SignedOps::<Unverified, StandardMode>::from_bytes(&envelope).is_err());
     }
 
     #[test]
