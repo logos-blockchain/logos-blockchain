@@ -38,11 +38,11 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::EpochConfig;
 use lb_key_management_system_keys::keys::ZkKey;
-use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
+use lb_utils::math::{NonNegativeRatio, PositiveF64};
 use lb_zksign::verify;
 use logos_blockchain_ledger::{
     Config, LedgerState,
-    config::{BlendPoWConfig, ModulusShift, PoWConfig},
+    config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
 use num_bigint::BigUint;
@@ -251,7 +251,7 @@ fn config() -> Config {
             service_rewards_params: ServiceRewardsParameters {
                 blend: rewards::blend::RewardsParameters {
                     rounds_per_epoch: epoch_length.try_into().unwrap(),
-                    message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                    message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
                     num_blend_layers: NonZero::new(3).unwrap(),
                     minimum_network_size: NonZero::new(1).unwrap(),
                     data_replication_factor: 0,
@@ -271,6 +271,21 @@ fn config() -> Config {
                 max_step: NonZero::new(4).unwrap(),
                 damping_num: NonZero::new(1).unwrap(),
                 damping_den_offset: 1,
+            },
+            // `rate_num = 0` pays no reward, which keeps the benchmark measuring
+            // transaction processing only.
+            reward: RewardPoWConfig {
+                reward_pool_genesis: 1_000_000_000,
+                epoch_reward_genesis: 1_000_000,
+                initial_difficulty_seed: 1_000,
+                ema_smoothing_factor: 9,
+                ema_smoothing_precision: NonZero::new(10).unwrap(),
+                target_claims_per_block: 100,
+                rate_num: 0,
+                rate_den: NonZero::<u64>::MIN,
+                target_claim_per_block: NonZero::<u64>::MIN,
+                expected_blocks_per_epoch: NonZero::<u64>::MIN,
+                slot_window: NonZero::new(100).unwrap(),
             },
         },
     }
