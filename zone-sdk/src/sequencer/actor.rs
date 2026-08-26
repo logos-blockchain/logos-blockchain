@@ -11,7 +11,7 @@ use tracing::{debug, error, warn};
 
 use super::{
     TARGET,
-    block_fetch::{BlockEventResult, handle_block_event, orphan_from_shed},
+    block_fetch::{BlockEventResult, classify_shed_other, handle_block_event, orphan_from_shed},
     slot_clock::{SlotClock, slot_to_u64},
     state::{ChannelUpdateInfo, TxState},
     types::{
@@ -521,7 +521,9 @@ where
             .collect();
         for tx in stale_configs {
             if !seen.contains(&tx.mantle_tx().hash()) {
-                channel_update.orphaned.push(ChannelUpdateTx::Custom(tx));
+                channel_update
+                    .orphaned
+                    .push(classify_shed_other(tx, self.channel_id));
             }
         }
 
@@ -634,7 +636,12 @@ where
             _ => (Vec::new(), Vec::new()),
         };
         let mut orphaned: Vec<ChannelUpdateTx> = shed.into_iter().map(orphan_from_shed).collect();
-        orphaned.extend(shed_other.into_iter().map(ChannelUpdateTx::Custom));
+        let channel_id = self.channel_id;
+        orphaned.extend(
+            shed_other
+                .into_iter()
+                .map(|tx| classify_shed_other(tx, channel_id)),
+        );
 
         let mut seen: HashSet<_> = orphaned.iter().map(ChannelUpdateTx::tx_hash).collect();
         for tx in u.orphaned {

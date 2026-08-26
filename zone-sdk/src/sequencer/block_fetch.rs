@@ -959,6 +959,38 @@ pub(super) fn classify_channel_tx(
     })
 }
 
+/// Whether `tx` is a clean single-config tx for `channel_id` — the same
+/// config-only shape [`classify_channel_tx`] reports as
+/// [`BlockChannelTx::Config`]. Mirrors that rule so a shed config is typed the
+/// same way it was classified on chain.
+fn is_pure_config(tx: &SignedMantleTx<Unverified>, channel_id: ChannelId) -> bool {
+    let mut configs = 0usize;
+    let mut transfers = 0usize;
+    for op in tx.mantle_tx().ops() {
+        match op {
+            Op::ChannelConfig(config) if config.channel == channel_id => configs += 1,
+            Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => return false,
+            Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => return false,
+            Op::Transfer(_) => transfers += 1,
+            _ => return false,
+        }
+    }
+    configs == 1 && transfers <= 1
+}
+
+/// Type a shed pending tx for orphan reporting: a config-only tx as
+/// [`ChannelUpdateTx::Config`], anything else as [`ChannelUpdateTx::Custom`].
+pub(super) fn classify_shed_other(
+    tx: SignedMantleTx<Unverified>,
+    channel_id: ChannelId,
+) -> ChannelUpdateTx {
+    if is_pure_config(&tx, channel_id) {
+        ChannelUpdateTx::Config(tx)
+    } else {
+        ChannelUpdateTx::Custom(tx)
+    }
+}
+
 /// True iff this tx contains any op that advances our channel's tip pointer
 /// (`ChannelInscribe` or `ChannelConfig`). Deposits and withdraws don't move
 /// the tip and so don't make a tx "ours" for tip-tracking purposes.
@@ -1235,6 +1267,43 @@ mod tests {
             }
             other => panic!("expected Custom, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn classify_shed_other_types_config_only_as_config_and_the_rest_as_custom() {
+        let channel_id = ChannelId::from([0; 32]);
+
+        // A config-only tx is typed Config.
+        let config_tx = unverified_tx_with_ops(vec![Op::ChannelConfig(channel_config(
+            channel_id,
+            MsgId::root(),
+        ))]);
+        let config_hash = config_tx.mantle_tx().hash();
+        match classify_shed_other(config_tx, channel_id) {
+            ChannelUpdateTx::Config(tx) => assert_eq!(tx.mantle_tx().hash(), config_hash),
+            other => panic!("expected Config, got {other:?}"),
+        }
+
+        // A config bundled with an inscription is not config-only → Custom.
+        let mixed = unverified_tx_with_ops(vec![
+            Op::ChannelConfig(channel_config(channel_id, MsgId::root())),
+            Op::ChannelInscribe(inscribe_op(channel_id, MsgId::root(), b"m")),
+        ]);
+        assert!(matches!(
+            classify_shed_other(mixed, channel_id),
+            ChannelUpdateTx::Custom(_)
+        ));
+
+        // A tx with no config → Custom.
+        let no_config = unverified_tx_with_ops(vec![Op::ChannelInscribe(inscribe_op(
+            channel_id,
+            MsgId::root(),
+            b"x",
+        ))]);
+        assert!(matches!(
+            classify_shed_other(no_config, channel_id),
+            ChannelUpdateTx::Custom(_)
+        ));
     }
 
     #[test]
