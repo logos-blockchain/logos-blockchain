@@ -5,8 +5,8 @@ pub mod settings;
 #[cfg(test)]
 mod tests;
 
+use core::num::NonZeroU64;
 use std::{
-    collections::VecDeque,
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
@@ -16,7 +16,10 @@ use std::{
 use backends::BlendBackend;
 use futures::{Stream, StreamExt as _};
 use lb_blend::{
-    message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
+    message::{
+        crypto::proofs::PoQVerificationInputsMinusSigningKey,
+        encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
+    },
     proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs, PowInputs},
     scheduling::{
         epoch::{EpochEvent, UninitializedEpochEventStream},
@@ -55,6 +58,7 @@ use crate::{
     kms::PreloadKmsService,
     membership::{self, chain::BlendEpochState, node_id},
     message::{BlendPayload, NetworkInfo, ServiceMessage},
+    pending::{LocalEncapsulation, NextLocalMessage, PendingLocalMessages, resolve_encapsulation},
 };
 
 const LOG_TARGET: &str = blend::service::EDGE;
@@ -294,7 +298,7 @@ where
 
     let mut current_secret_epoch_info: Option<PolEpochInfo> = None;
     // Transactions waiting for a `PoW` solution to back their layer proofs.
-    let mut pending_transactions: VecDeque<Vec<u8>> = VecDeque::new();
+    let mut pending_messages = PendingLocalMessages::new();
     let mut current_epoch_message_handler: Option<
         MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
     > = None;
@@ -332,18 +336,11 @@ where
             Some(message) = inbound_relay.next() => {
                 match message {
                     ServiceMessage::Blend(BlendPayload::Transaction(transaction)) => {
-                        pending_transactions.push_back(transaction);
+                        pending_messages.queue_transaction(transaction);
                     }
                     ServiceMessage::Blend(BlendPayload::BlockProposal(proposal)) => {
-                        // TODO: Investigate why secret PoL info at times arrives after the block proposal.
-                        let Some(handler) = current_epoch_message_handler.as_mut() else {
-                            tracing::warn!(target: LOG_TARGET, "Received a message to blend, but no active message handler is available to process it because the secret PoL info for the current epoch is not yet available. Ignoring the message.");
-                            continue;
-                        };
-                        let message_copies = settings.data_replication_factor.checked_add(1).expect("Data replication factor should not overflow when incremented.");
-                        for _ in 0..message_copies {
-                            handler.handle_block_proposal_to_blend(&proposal).await;
-                        }
+                        let proposal_copies = NonZeroU64::new(settings.data_replication_factor.checked_add(1).expect("Data replication factor should not overflow when incremented.")).expect("Number of block proposal copies cannot be zero by definition.");
+                        pending_messages.queue_proposal(proposal, proposal_copies);
                     }
                     ServiceMessage::GetNetworkInfo { reply } => {
                         drop(reply.send(Some(NetworkInfo {
@@ -352,14 +349,27 @@ where
                         })));
                     }
                     ServiceMessage::GetPendingTransactions { reply } => {
-                        drop(reply.send(pending_transactions.iter().cloned().collect()));
+                        drop(reply.send(pending_messages.transactions().cloned().collect()));
                     }
                 }
             }
             // A queued transaction leaves as soon as a `PoW` solution backs it, awaited
             // here as one branch among the others so the loop keeps turning meanwhile.
-            Some(()) = blend_next_transaction(&pending_transactions, &mut current_epoch_message_handler) => {
-                drop(pending_transactions.pop_front());
+            // Both kinds share one branch because both need the handler mutably,
+            // and `select!` builds every branch future before any of them wins.
+            Some(encapsulation_result) = encapsulate_next_local_message(&pending_messages, &mut current_epoch_message_handler) => {
+                let current_epoch_message_handler = current_epoch_message_handler.as_mut().expect("Message handler must exist for a message that was just encapsulated.");
+                match encapsulation_result {
+                    Ok(LocalEncapsulation::ProposalCopy(message)) => {
+                        current_epoch_message_handler.send(message).await;
+                        pending_messages.mark_proposal_copy_as_sent();
+                    }
+                    Ok(LocalEncapsulation::Transaction(message)) => {
+                        current_epoch_message_handler.send(message).await;
+                        drop(pending_messages.mark_transaction_as_sent());
+                    }
+                    Err(()) => drop(pending_messages.discard_head()),
+                }
             }
             else => {
                 // All input streams have terminated (e.g. disorderly shutdown).
@@ -371,34 +381,46 @@ where
     }
 }
 
-/// Blends the transaction that has been waiting longest, once a `PoW` solution
-/// backs its layer proofs.
+/// Encapsulates one locally-originated message, once a handler exists to make
+/// it and proofs back it.
 ///
-/// The transaction is only read here, never taken off the queue: `select!`
-/// drops this future whenever another branch wins the race, and one that popped
-/// before awaiting would take the transaction down with it every time that
-/// happened. It comes off the queue in the branch handler instead, which runs
-/// once the race is settled.
+/// Proposals go first: one is tied to the slot it was built for and goes stale,
+/// whereas a transaction keeps.
 ///
-/// Returns `None` when there is nothing to blend — no transaction queued, or no
-/// handler for this epoch yet — which is what leaves the `select!` branch free
-/// to wait on the others.
-async fn blend_next_transaction<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
-    pending_transactions: &VecDeque<Vec<u8>>,
+/// Neither queue is popped here either, for the same reason: one that popped
+/// before awaiting would take the message down with it every time this future
+/// was dropped. The caller updates the queues once the race is settled, which
+/// is also why only one copy of a proposal is wrapped per call.
+///
+/// Returns `None` when there is nothing to hand back — nothing queued, no
+/// handler for this epoch yet, or no proofs — which is what leaves the branch
+/// free to wait on the others.
+async fn encapsulate_next_local_message<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
+    pending_messages: &PendingLocalMessages,
     current_epoch_message_handler: &mut Option<
         MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
     >,
-) -> Option<()>
+) -> Option<Result<LocalEncapsulation, ()>>
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId> + Sync,
     NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
     ProofsGenerator: LeaderAndPowProofsGenerator + Send,
 {
-    let transaction = pending_transactions.front()?;
-    current_epoch_message_handler
-        .as_mut()?
-        .handle_transaction_to_blend(transaction)
-        .await
+    type Wrap = fn(EncapsulatedMessageWithVerifiedPublicHeader) -> LocalEncapsulation;
+
+    let handler = current_epoch_message_handler.as_mut()?;
+    let (encapsulated, wrap_fn): (_, Wrap) = match pending_messages.next()? {
+        NextLocalMessage::ProposalCopy(proposal) => (
+            handler.encapsulate_block_proposal(proposal).await,
+            LocalEncapsulation::ProposalCopy,
+        ),
+        NextLocalMessage::Transaction(transaction) => (
+            handler.encapsulate_transaction(transaction).await,
+            LocalEncapsulation::Transaction,
+        ),
+    };
+
+    resolve_encapsulation(encapsulated, wrap_fn)
 }
 
 fn handle_new_epoch_event<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(

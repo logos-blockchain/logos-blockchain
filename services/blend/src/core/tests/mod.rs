@@ -3,7 +3,10 @@ use std::{collections::VecDeque, sync::Arc};
 
 use futures::{StreamExt as _, stream::repeat};
 use lb_blend::{
-    message::reward::{ActivityProof, BlendingToken, EpochBlendingTokenCollector},
+    message::{
+        MAX_PAYLOAD_BODY_SIZE,
+        reward::{ActivityProof, BlendingToken, EpochBlendingTokenCollector},
+    },
     proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
     scheduling::{
         EpochMessageScheduler, epoch::EpochEvent,
@@ -18,6 +21,7 @@ use lb_poq::{CORE_MERKLE_TREE_HEIGHT, Quota};
 use lb_utils::blake_rng::BlakeRng;
 use rand::SeedableRng as _;
 use rayon::ThreadPoolBuilder;
+use tokio::sync::oneshot;
 
 use crate::{
     core::{
@@ -41,10 +45,10 @@ use crate::{
     message::{BlendPayload, ServiceMessage},
     test_utils::{
         crypto::{
-            GatedPowProofsGenerator, MockCoreAndLeaderProofsGenerator, PowGate,
-            recorded_starting_core_key_indices, reset_starting_core_key_indices,
+            GatedPowProofsGenerator, MockCoreAndLeaderProofsGenerator, PolAwareProofsGenerator,
+            PowGate, recorded_starting_core_key_indices, reset_starting_core_key_indices,
         },
-        epoch::OncePolStreamProvider,
+        epoch::{GatedPolStreamProvider, OncePolStreamProvider, PolGate},
     },
 };
 
@@ -1824,7 +1828,7 @@ async fn test_initialize_recovers_matching_saved_state() {
         _current_public_info2,
         _crypto_processor2,
         recovered_checkpoint2,
-        pending_transactions2,
+        pending_messages2,
         _message_scheduler2,
         _backend2,
         _rng2,
@@ -1866,7 +1870,7 @@ async fn test_initialize_recovers_matching_saved_state() {
         "Mismatched epoch: a queued transaction should outlive the state that carried it"
     );
     assert_eq!(
-        pending_transactions2.front(),
+        pending_messages2.transactions().next(),
         Some(&b"stale epoch transaction".to_vec()),
         "Mismatched epoch: the queue handed to the event loop should carry it too"
     );
@@ -2046,6 +2050,251 @@ async fn test_initialize_drops_activity_proof_older_than_one_epoch() {
         sdp_relay_receiver.try_recv().is_err(),
         "a collector more than one epoch old should be dropped, not submitted"
     );
+}
+
+/// A block proposal that arrives before this epoch's secret `PoL` info still
+/// goes out once it lands.
+///
+/// Leadership proofs only become possible when the secret `PoL` info reaches
+/// the processor, and that regularly happens *after* the first proposal does —
+/// most visibly at startup, when the node wins the very first slot it is asked
+/// to lead. The proposal used to be encapsulated where it arrived, fail, and be
+/// dropped with an error, silently losing a block this node had just produced.
+#[test_log::test(tokio::test)]
+async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let mut settings = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+    // No cover traffic, so the only message that can come out is the proposal.
+    // See the `PoW` liveness test for why this quota silences it.
+    settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
+    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+
+    let (inbound_relay, inbound_message_sender) = new_stream();
+    let (mut blend_message_stream, _blend_message_sender) = new_stream();
+    let (membership_stream, membership_sender) = new_stream();
+
+    let membership_info = MembershipInfo {
+        membership,
+        zk: Some(ZkInfo {
+            root: ZkHash::ZERO,
+            core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
+        }),
+    };
+    membership_sender
+        .send(test_blend_epoch_state(0, membership_info))
+        .await
+        .unwrap();
+
+    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources();
+
+    // Both installed before the service exists, so nothing is missed.
+    let pol_gate = PolGate::setup();
+    let mut outgoing_messages = outgoing_messages_recorder();
+
+    let (
+        mut remaining_epoch_stream,
+        current_public_info,
+        crypto_processor,
+        current_recovery_checkpoint,
+        pending_transactions,
+        message_scheduler,
+        mut backend,
+        mut rng,
+    ) = initialize::<
+        NodeId,
+        TestBlendBackend,
+        TestPayloadDispatcher,
+        PolAwareProofsGenerator,
+        MockProofsVerifier,
+        MockKmsAdapter,
+        RuntimeServiceId,
+    >(
+        settings.clone(),
+        membership_stream,
+        overwatch_handle.clone(),
+        MockKmsAdapter,
+        &sdp_relay,
+        None,
+        state_updater,
+    )
+    .await;
+
+    tokio::spawn(async move {
+        let secret_pol_info_stream =
+            post_initialize::<GatedPolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
+        run_event_loop(
+            inbound_relay,
+            &mut blend_message_stream,
+            secret_pol_info_stream,
+            &mut remaining_epoch_stream,
+            &settings,
+            &mut backend,
+            &TestPayloadDispatcher,
+            &sdp_relay,
+            message_scheduler.into(),
+            &mut rng,
+            pending_transactions,
+            crypto_processor,
+            current_public_info,
+            current_recovery_checkpoint,
+        )
+        .await;
+    });
+
+    // The gate is shut, so the leadership branch has nothing to give: this is the
+    // window the proposal used to die in.
+    inbound_message_sender
+        .send(ServiceMessage::Blend(BlendPayload::BlockProposal(
+            b"proposal".to_vec(),
+        )))
+        .await
+        .unwrap();
+
+    // Answering a request proves the service went round the inbound arm again,
+    // so the proposal ahead of it has already been handled. Without this the
+    // gate could open first and the test would pass on a proposal that was
+    // never queued at all.
+    let (reply, answered) = oneshot::channel();
+    inbound_message_sender
+        .send(ServiceMessage::GetPendingTransactions { reply })
+        .await
+        .unwrap();
+    answered.await.unwrap();
+
+    pol_gate.release();
+
+    expect_outgoing_message(
+        &mut outgoing_messages,
+        "the proposal should have been held until leadership proofs were possible",
+    )
+    .await;
+}
+
+/// A block proposal that arrives before this epoch's secret `PoL` info still
+/// goes out once it lands.
+///
+/// Leadership proofs only become possible when the secret `PoL` info reaches
+/// the processor, and that regularly happens *after* the first proposal does —
+/// most visibly at startup, when the node wins the very first slot it is asked
+/// to lead. The proposal used to be encapsulated where it arrived, fail, and be
+/// dropped with an error, silently losing a block this node had just produced.
+#[test_log::test(tokio::test)]
+async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let mut settings = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+    // No cover traffic, so the only message that can come out is the one this
+    // test expects. See the `PoW` liveness test for why this quota silences it.
+    settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
+    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+
+    let (inbound_relay, inbound_message_sender) = new_stream();
+    let (mut blend_message_stream, _blend_message_sender) = new_stream();
+    let (membership_stream, membership_sender) = new_stream();
+
+    let membership_info = MembershipInfo {
+        membership,
+        zk: Some(ZkInfo {
+            root: ZkHash::ZERO,
+            core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
+        }),
+    };
+    membership_sender
+        .send(test_blend_epoch_state(0, membership_info))
+        .await
+        .unwrap();
+
+    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources();
+
+    // Installed before the service exists, so nothing is missed.
+    let mut outgoing_messages = outgoing_messages_recorder();
+
+    let (
+        mut remaining_epoch_stream,
+        current_public_info,
+        crypto_processor,
+        current_recovery_checkpoint,
+        pending_transactions,
+        message_scheduler,
+        mut backend,
+        mut rng,
+    ) = initialize::<
+        NodeId,
+        TestBlendBackend,
+        TestPayloadDispatcher,
+        MockCoreAndLeaderProofsGenerator,
+        MockProofsVerifier,
+        MockKmsAdapter,
+        RuntimeServiceId,
+    >(
+        settings.clone(),
+        membership_stream,
+        overwatch_handle.clone(),
+        MockKmsAdapter,
+        &sdp_relay,
+        None,
+        state_updater,
+    )
+    .await;
+
+    tokio::spawn(async move {
+        let secret_pol_info_stream =
+            post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
+        run_event_loop(
+            inbound_relay,
+            &mut blend_message_stream,
+            secret_pol_info_stream,
+            &mut remaining_epoch_stream,
+            &settings,
+            &mut backend,
+            &TestPayloadDispatcher,
+            &sdp_relay,
+            message_scheduler.into(),
+            &mut rng,
+            pending_transactions,
+            crypto_processor,
+            current_public_info,
+            current_recovery_checkpoint,
+        )
+        .await;
+    });
+
+    // One byte over what a payload can hold, so encapsulating it fails the same
+    // way however long it waits.
+    inbound_message_sender
+        .send(ServiceMessage::Blend(BlendPayload::BlockProposal(vec![
+            0;
+            MAX_PAYLOAD_BODY_SIZE + 1
+        ])))
+        .await
+        .unwrap();
+    inbound_message_sender
+        .send(ServiceMessage::Blend(BlendPayload::Transaction(
+            b"transaction".to_vec(),
+        )))
+        .await
+        .unwrap();
+
+    expect_outgoing_message(
+        &mut outgoing_messages,
+        "the transaction behind the oversized proposal should still go out",
+    )
+    .await;
 }
 
 /// A transaction waits for a `PoW` solution without holding up anything else.
