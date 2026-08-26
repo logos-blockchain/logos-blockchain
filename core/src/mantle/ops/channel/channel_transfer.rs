@@ -222,11 +222,76 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionG
 
 #[cfg(test)]
 mod test {
+    use lb_key_management_system_keys::keys::Ed25519Key;
+
     use super::*;
-    use crate::mantle::ledger::InputsError;
+    use crate::mantle::{
+        ledger::{InputsError, OutputsError},
+        ops::channel::{config::Keys, verification::test_utils::create_channel_multi_sig_proof},
+        transactions::{
+            tx_list::signed_ops::test_utils::make_channel_state,
+            verification_helper::test_utils::TestOperationVerificationHelper,
+        },
+    };
+
+    const CHANNEL_ID: ChannelId = ChannelId([20u8; 32]);
+
+    fn signing_key() -> Ed25519Key {
+        Ed25519Key::from_bytes(&[0; 32])
+    }
+
+    fn utxo() -> Utxo {
+        Utxo {
+            op_id: [1u8; 32],
+            output_index: 0,
+            note: Note::new(10_000, ZkPublicKey::from(Fr::from(1u64))),
+        }
+    }
+
+    fn channel_view() -> Channels {
+        let mut channels = Channels::new();
+        channels.channels.insert_mut(
+            CHANNEL_ID,
+            make_channel_state(
+                1,
+                Some(Keys::new_unchecked(vec![signing_key().public_key()])),
+            ),
+        );
+
+        channels
+            .register_channel_note(&utxo().id(), &CHANNEL_ID)
+            .expect("the note is not owned by another channel")
+    }
+
+    fn ledger_view(transfer_threshold: u16, accredited_keys: Keys) -> Channels {
+        let mut channels = Channels::new();
+        channels.channels.insert_mut(
+            CHANNEL_ID,
+            make_channel_state(transfer_threshold, Some(accredited_keys)),
+        );
+
+        channels
+            .register_channel_note(&utxo().id(), &CHANNEL_ID)
+            .expect("the note is not owned by another channel")
+    }
+
+    fn preverified(
+        outputs: Outputs,
+        proof: ChannelMultiSigProof,
+    ) -> SignedOperation<ChannelTransferOp, Preverified, StandardMode> {
+        let operation = ChannelTransferOp {
+            channel_id: CHANNEL_ID,
+            inputs: Inputs::new([utxo().id()]),
+            outputs,
+        };
+
+        SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
+            .into_preverified(&())
+            .expect("preverify accepts a non-empty, well-formed transfer")
+    }
 
     #[test]
-    fn test_preverify_rejects_empty_inputs() {
+    fn preverify_rejects_empty_inputs() {
         let channel_transfer = ChannelTransferOp {
             channel_id: ChannelId::from([0u8; 32]),
             inputs: Inputs::empty(),
@@ -241,10 +306,26 @@ mod test {
         );
     }
 
+    #[test]
+    fn preverify_rejects_a_zero_value_output() {
+        let channel_transfer = ChannelTransferOp {
+            channel_id: ChannelId::from([0u8; 32]),
+            inputs: Inputs::new([utxo().id()]),
+            outputs: Outputs::new([Note::new(0, ZkPublicKey::zero())]),
+        };
+        let proof = ChannelMultiSigProof::try_new([].into()).unwrap();
+        let signed_operation = SignedOperation::new(channel_transfer, proof);
+
+        assert_eq!(
+            signed_operation.preverify(&()),
+            Err(Error::Outputs(OutputsError::ZeroValueNote))
+        );
+    }
+
     // An empty input list paired with an empty output list is trivially
     // balanced, so the emptiness check is what rejects it.
     #[test]
-    fn test_preverify_rejects_empty_inputs_and_outputs() {
+    fn preverify_rejects_empty_inputs_and_outputs() {
         let channel_transfer = ChannelTransferOp {
             channel_id: ChannelId::from([0u8; 32]),
             inputs: Inputs::empty(),
@@ -256,6 +337,329 @@ mod test {
         assert_eq!(
             signed_operation.preverify(&()),
             Err(Error::Inputs(InputsError::EmptyInputs))
+        );
+    }
+
+    #[test]
+    fn verify_rejects_signatures_over_another_transaction() {
+        let signed_hash = TxHash::from([9u8; 32]);
+        let other_hash = TxHash::from([10u8; 32]);
+        let signed_operation = preverified(
+            Outputs::new([Note::new(10_000, ZkPublicKey::from(Fr::from(2u64)))]),
+            create_channel_multi_sig_proof(&signed_hash, &[&signing_key()]),
+        );
+
+        let channels = channel_view();
+        let helper = TestOperationVerificationHelper::new(
+            channel_view(),
+            [((CHANNEL_ID, 0), signing_key().public_key())],
+        );
+        let locked_notes = LockedNotes::new();
+        let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
+
+        assert_eq!(
+            signed_operation.verify(&ChannelTransferValidationContext {
+                channels: &channels,
+                locked_notes: &locked_notes,
+                utxos: &utxos,
+                tx_hash_view: &TxHashView::from(signed_hash),
+                op_index: 0,
+                helper: &helper,
+            }),
+            Ok(())
+        );
+        assert_eq!(
+            signed_operation.verify(&ChannelTransferValidationContext {
+                channels: &channels,
+                locked_notes: &locked_notes,
+                utxos: &utxos,
+                tx_hash_view: &TxHashView::from(other_hash),
+                op_index: 0,
+                helper: &helper,
+            }),
+            Err(Error::InvalidSignature)
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_channel_missing_from_the_ledger_view() {
+        let signed_hash = TxHash::from([9u8; 32]);
+        let signed_operation = preverified(
+            Outputs::new([Note::new(10_000, ZkPublicKey::from(Fr::from(2u64)))]),
+            create_channel_multi_sig_proof(&signed_hash, &[&signing_key()]),
+        );
+
+        let helper = TestOperationVerificationHelper::new(
+            channel_view(),
+            [((CHANNEL_ID, 0), signing_key().public_key())],
+        );
+        let locked_notes = LockedNotes::new();
+        let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
+
+        assert_eq!(
+            signed_operation.verify(&ChannelTransferValidationContext {
+                channels: &Channels::new(),
+                locked_notes: &locked_notes,
+                utxos: &utxos,
+                tx_hash_view: &TxHashView::from(signed_hash),
+                op_index: 0,
+                helper: &helper,
+            }),
+            Err(Error::ChannelNotFound {
+                channel_id: CHANNEL_ID
+            })
+        );
+    }
+
+    #[test]
+    fn verify_rejects_inputs_whose_total_overflows() {
+        let signed_hash = TxHash::from([9u8; 32]);
+        let first = Utxo {
+            op_id: [1u8; 32],
+            output_index: 0,
+            note: Note::new(Value::MAX, ZkPublicKey::from(Fr::from(1u64))),
+        };
+        let second = Utxo {
+            op_id: [2u8; 32],
+            output_index: 0,
+            note: Note::new(Value::MAX, ZkPublicKey::from(Fr::from(1u64))),
+        };
+
+        let operation = ChannelTransferOp {
+            channel_id: CHANNEL_ID,
+            inputs: Inputs::new([first.id(), second.id()]),
+            outputs: Outputs::new([Note::new(10_000, ZkPublicKey::from(Fr::from(2u64)))]),
+        };
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            operation,
+            create_channel_multi_sig_proof(&signed_hash, &[&signing_key()]),
+        )
+        .into_preverified(&())
+        .expect("preverify accepts a non-empty, well-formed transfer");
+
+        let mut channels = Channels::new();
+        channels.channels.insert_mut(
+            CHANNEL_ID,
+            make_channel_state(
+                1,
+                Some(Keys::new_unchecked(vec![signing_key().public_key()])),
+            ),
+        );
+        let channels = channels
+            .register_channel_note(&first.id(), &CHANNEL_ID)
+            .expect("the note is not owned by another channel")
+            .register_channel_note(&second.id(), &CHANNEL_ID)
+            .expect("the note is not owned by another channel");
+
+        let helper = TestOperationVerificationHelper::new(
+            channel_view(),
+            [((CHANNEL_ID, 0), signing_key().public_key())],
+        );
+        let locked_notes = LockedNotes::new();
+        let (utxos, _) = Utxos::new().insert(first.id(), first);
+        let (utxos, _) = utxos.insert(second.id(), second);
+
+        assert_eq!(
+            signed_operation.verify(&ChannelTransferValidationContext {
+                channels: &channels,
+                locked_notes: &locked_notes,
+                utxos: &utxos,
+                tx_hash_view: &TxHashView::from(signed_hash),
+                op_index: 0,
+                helper: &helper,
+            }),
+            Err(Error::Inputs(InputsError::InputsOverflow))
+        );
+    }
+
+    #[test]
+    fn verify_rejects_outputs_whose_total_overflows() {
+        let signed_hash = TxHash::from([9u8; 32]);
+        let signed_operation = preverified(
+            Outputs::new([
+                Note::new(Value::MAX, ZkPublicKey::from(Fr::from(2u64))),
+                Note::new(Value::MAX, ZkPublicKey::from(Fr::from(3u64))),
+            ]),
+            create_channel_multi_sig_proof(&signed_hash, &[&signing_key()]),
+        );
+
+        let channels = channel_view();
+        let helper = TestOperationVerificationHelper::new(
+            channel_view(),
+            [((CHANNEL_ID, 0), signing_key().public_key())],
+        );
+        let locked_notes = LockedNotes::new();
+        let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
+
+        assert_eq!(
+            signed_operation.verify(&ChannelTransferValidationContext {
+                channels: &channels,
+                locked_notes: &locked_notes,
+                utxos: &utxos,
+                tx_hash_view: &TxHashView::from(signed_hash),
+                op_index: 0,
+                helper: &helper,
+            }),
+            Err(Error::Outputs(OutputsError::OutputsOverflow))
+        );
+    }
+
+    #[test]
+    fn verify_rejects_an_input_the_channel_does_not_own() {
+        let signed_hash = TxHash::from([9u8; 32]);
+        let signed_operation = preverified(
+            Outputs::new([Note::new(10_000, ZkPublicKey::from(Fr::from(2u64)))]),
+            create_channel_multi_sig_proof(&signed_hash, &[&signing_key()]),
+        );
+
+        let mut channels = Channels::new();
+        channels.channels.insert_mut(
+            CHANNEL_ID,
+            make_channel_state(
+                1,
+                Some(Keys::new_unchecked(vec![signing_key().public_key()])),
+            ),
+        );
+        let helper = TestOperationVerificationHelper::new(
+            channels.clone(),
+            [((CHANNEL_ID, 0), signing_key().public_key())],
+        );
+        let locked_notes = LockedNotes::new();
+        let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
+
+        assert_eq!(
+            signed_operation.verify(&ChannelTransferValidationContext {
+                channels: &channels,
+                locked_notes: &locked_notes,
+                utxos: &utxos,
+                tx_hash_view: &TxHashView::from(signed_hash),
+                op_index: 0,
+                helper: &helper,
+            }),
+            Err(Error::Inputs(InputsError::NotAChannelNote(utxo().id())))
+        );
+    }
+
+    #[test]
+    fn verify_rejects_outputs_that_do_not_match_the_inputs() {
+        let signed_hash = TxHash::from([9u8; 32]);
+        let signed_operation = preverified(
+            Outputs::new([Note::new(9_999, ZkPublicKey::from(Fr::from(2u64)))]),
+            create_channel_multi_sig_proof(&signed_hash, &[&signing_key()]),
+        );
+
+        let channels = channel_view();
+        let helper = TestOperationVerificationHelper::new(
+            channel_view(),
+            [((CHANNEL_ID, 0), signing_key().public_key())],
+        );
+        let locked_notes = LockedNotes::new();
+        let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
+
+        assert_eq!(
+            signed_operation.verify(&ChannelTransferValidationContext {
+                channels: &channels,
+                locked_notes: &locked_notes,
+                utxos: &utxos,
+                tx_hash_view: &TxHashView::from(signed_hash),
+                op_index: 0,
+                helper: &helper,
+            }),
+            Err(Error::UnbalancedTransfer)
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_signature_count_below_the_ledger_view_threshold() {
+        let signed_hash = TxHash::from([9u8; 32]);
+        let signed_operation = preverified(
+            Outputs::new([Note::new(10_000, ZkPublicKey::from(Fr::from(2u64)))]),
+            create_channel_multi_sig_proof(&signed_hash, &[&signing_key()]),
+        );
+
+        let channels = ledger_view(2, Keys::new_unchecked(vec![signing_key().public_key()]));
+        let helper = TestOperationVerificationHelper::new(
+            channel_view(),
+            [((CHANNEL_ID, 0), signing_key().public_key())],
+        );
+        let locked_notes = LockedNotes::new();
+        let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
+
+        assert_eq!(
+            signed_operation.verify(&ChannelTransferValidationContext {
+                channels: &channels,
+                locked_notes: &locked_notes,
+                utxos: &utxos,
+                tx_hash_view: &TxHashView::from(signed_hash),
+                op_index: 0,
+                helper: &helper,
+            }),
+            Err(Error::ThresholdUnmet {
+                channel_id: CHANNEL_ID,
+                threshold: 2,
+                actual: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_signature_the_ledger_view_key_does_not_match() {
+        let signed_hash = TxHash::from([9u8; 32]);
+        let signed_operation = preverified(
+            Outputs::new([Note::new(10_000, ZkPublicKey::from(Fr::from(2u64)))]),
+            create_channel_multi_sig_proof(&signed_hash, &[&signing_key()]),
+        );
+
+        let channels = ledger_view(
+            1,
+            Keys::new_unchecked(vec![Ed25519Key::from_bytes(&[1; 32]).public_key()]),
+        );
+        let helper = TestOperationVerificationHelper::new(
+            channel_view(),
+            [((CHANNEL_ID, 0), signing_key().public_key())],
+        );
+        let locked_notes = LockedNotes::new();
+        let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
+
+        assert_eq!(
+            signed_operation.verify(&ChannelTransferValidationContext {
+                channels: &channels,
+                locked_notes: &locked_notes,
+                utxos: &utxos,
+                tx_hash_view: &TxHashView::from(signed_hash),
+                op_index: 0,
+                helper: &helper,
+            }),
+            Err(Error::InvalidSignature)
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_signature_index_the_ledger_view_cannot_resolve() {
+        let signed_hash = TxHash::from([9u8; 32]);
+        let signed_operation = preverified(
+            Outputs::new([Note::new(10_000, ZkPublicKey::from(Fr::from(2u64)))]),
+            create_channel_multi_sig_proof(&signed_hash, &[&signing_key()]),
+        );
+
+        let channels = ledger_view(1, Keys::new_unchecked(vec![]));
+        let helper = TestOperationVerificationHelper::new(
+            channel_view(),
+            [((CHANNEL_ID, 0), signing_key().public_key())],
+        );
+        let locked_notes = LockedNotes::new();
+        let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
+
+        assert_eq!(
+            signed_operation.verify(&ChannelTransferValidationContext {
+                channels: &channels,
+                locked_notes: &locked_notes,
+                utxos: &utxos,
+                tx_hash_view: &TxHashView::from(signed_hash),
+                op_index: 0,
+                helper: &helper,
+            }),
+            Err(Error::InvalidSignature)
         );
     }
 

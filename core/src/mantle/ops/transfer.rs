@@ -186,13 +186,17 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionG
 #[cfg(test)]
 mod test {
     use lb_groth16::CompressedGroth16Proof;
+    use lb_key_management_system_keys::keys::ZkKey;
     use num_bigint::BigUint;
 
     use super::*;
-    use crate::mantle::ops::op_proof::samples::SampleProof as _;
+    use crate::mantle::{
+        TxHash,
+        ops::{channel::ChannelId, op_proof::samples::SampleProof as _},
+    };
 
     #[test]
-    fn test_preverify_rejects_empty_inputs() {
+    fn preverify_rejects_empty_inputs() {
         let pk = ZkPublicKey::from(Fr::from(BigUint::from(0u8)));
         let transfer = TransferOp {
             inputs: Inputs::empty(),
@@ -208,7 +212,23 @@ mod test {
     }
 
     #[test]
-    fn test_utxos_and_utxo_by_index() {
+    fn preverify_rejects_a_zero_value_output() {
+        let pk = ZkPublicKey::from(Fr::from(BigUint::from(0u8)));
+        let transfer = TransferOp {
+            inputs: Inputs::new([NoteId(Fr::from(BigUint::from(1u8)))]),
+            outputs: Outputs::new([Note::new(0, pk)]),
+        };
+        let proof = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
+        let signed_operation = SignedOperation::new(transfer, proof);
+
+        assert_eq!(
+            signed_operation.preverify(&()),
+            Err(TransferError::Outputs(ledger::OutputsError::ZeroValueNote))
+        );
+    }
+
+    #[test]
+    fn utxos_and_utxo_by_index() {
         let pk0 = ZkPublicKey::from(Fr::from(BigUint::from(0u8)));
         let pk1 = ZkPublicKey::from(Fr::from(BigUint::from(1u8)));
         let pk2 = ZkPublicKey::from(Fr::from(BigUint::from(2u8)));
@@ -246,6 +266,179 @@ mod test {
         );
 
         assert!(transfer.utxo_by_index(3).is_none());
+    }
+
+    #[test]
+    fn verify_rejects_a_proof_over_another_transaction() {
+        let input_key = ZkKey::from(BigUint::from(1u8));
+        let input_utxo = Utxo {
+            op_id: [1u8; 32],
+            output_index: 0,
+            note: Note::new(10_000, input_key.to_public_key()),
+        };
+        let (utxos, _) = Utxos::new().insert(input_utxo.id(), input_utxo);
+
+        let operation = TransferOp::new(
+            Inputs::new([input_utxo.id()]),
+            Outputs::new([Note::new(
+                10_000,
+                ZkPublicKey::from(Fr::from(BigUint::from(2u8))),
+            )]),
+        );
+
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let other_view = TxHashView::from(TxHash::from([10u8; 32]));
+        let proof =
+            ZkKey::multi_sign(&[input_key], signed_view.as_fr()).expect("signing should succeed");
+
+        let signed_operation =
+            SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
+                .into_preverified(&())
+                .expect("preverify should accept a well-formed transfer");
+
+        let channels = Channels::new();
+        let locked_notes = LockedNotes::new();
+
+        assert_eq!(
+            signed_operation.verify(&TransferValidationContext {
+                locked_notes: &locked_notes,
+                channels: &channels,
+                utxos: &utxos,
+                tx_hash_view: &signed_view,
+            }),
+            Ok(())
+        );
+        assert_eq!(
+            signed_operation.verify(&TransferValidationContext {
+                locked_notes: &locked_notes,
+                channels: &channels,
+                utxos: &utxos,
+                tx_hash_view: &other_view,
+            }),
+            Err(TransferError::InvalidProof)
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_proof_from_a_key_that_does_not_own_the_input() {
+        let input_key = ZkKey::from(BigUint::from(1u8));
+        let other_key = ZkKey::from(BigUint::from(7u8));
+        let input_utxo = Utxo {
+            op_id: [1u8; 32],
+            output_index: 0,
+            note: Note::new(10_000, input_key.to_public_key()),
+        };
+        let (utxos, _) = Utxos::new().insert(input_utxo.id(), input_utxo);
+
+        let operation = TransferOp::new(
+            Inputs::new([input_utxo.id()]),
+            Outputs::new([Note::new(
+                10_000,
+                ZkPublicKey::from(Fr::from(BigUint::from(2u8))),
+            )]),
+        );
+
+        let tx_hash_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let proof =
+            ZkKey::multi_sign(&[other_key], tx_hash_view.as_fr()).expect("signing should succeed");
+
+        let signed_operation =
+            SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
+                .into_preverified(&())
+                .expect("preverify should accept a well-formed transfer");
+
+        assert_eq!(
+            signed_operation.verify(&TransferValidationContext {
+                locked_notes: &LockedNotes::new(),
+                channels: &Channels::new(),
+                utxos: &utxos,
+                tx_hash_view: &tx_hash_view,
+            }),
+            Err(TransferError::InvalidProof)
+        );
+    }
+
+    #[test]
+    fn verify_rejects_an_input_missing_from_the_ledger() {
+        let input_key = ZkKey::from(BigUint::from(1u8));
+        let input_utxo = Utxo {
+            op_id: [1u8; 32],
+            output_index: 0,
+            note: Note::new(10_000, input_key.to_public_key()),
+        };
+
+        let operation = TransferOp::new(
+            Inputs::new([input_utxo.id()]),
+            Outputs::new([Note::new(
+                10_000,
+                ZkPublicKey::from(Fr::from(BigUint::from(2u8))),
+            )]),
+        );
+
+        let tx_hash_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let proof =
+            ZkKey::multi_sign(&[input_key], tx_hash_view.as_fr()).expect("signing should succeed");
+
+        let signed_operation =
+            SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
+                .into_preverified(&())
+                .expect("preverify should accept a well-formed transfer");
+
+        assert_eq!(
+            signed_operation.verify(&TransferValidationContext {
+                locked_notes: &LockedNotes::new(),
+                channels: &Channels::new(),
+                utxos: &Utxos::new(),
+                tx_hash_view: &tx_hash_view,
+            }),
+            Err(TransferError::Inputs(ledger::InputsError::InexistingNote(
+                input_utxo.id()
+            )))
+        );
+    }
+
+    #[test]
+    fn verify_rejects_an_input_owned_by_a_channel() {
+        let input_key = ZkKey::from(BigUint::from(1u8));
+        let input_utxo = Utxo {
+            op_id: [1u8; 32],
+            output_index: 0,
+            note: Note::new(10_000, input_key.to_public_key()),
+        };
+        let (utxos, _) = Utxos::new().insert(input_utxo.id(), input_utxo);
+
+        let operation = TransferOp::new(
+            Inputs::new([input_utxo.id()]),
+            Outputs::new([Note::new(
+                10_000,
+                ZkPublicKey::from(Fr::from(BigUint::from(2u8))),
+            )]),
+        );
+
+        let tx_hash_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let proof =
+            ZkKey::multi_sign(&[input_key], tx_hash_view.as_fr()).expect("signing should succeed");
+
+        let signed_operation =
+            SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
+                .into_preverified(&())
+                .expect("preverify should accept a well-formed transfer");
+
+        let channels = Channels::new()
+            .register_channel_note(&input_utxo.id(), &ChannelId::from([21u8; 32]))
+            .expect("the note is not owned by another channel");
+
+        assert_eq!(
+            signed_operation.verify(&TransferValidationContext {
+                locked_notes: &LockedNotes::new(),
+                channels: &channels,
+                utxos: &utxos,
+                tx_hash_view: &tx_hash_view,
+            }),
+            Err(TransferError::Inputs(ledger::InputsError::ChannelNote(
+                input_utxo.id()
+            )))
+        );
     }
 
     #[test]

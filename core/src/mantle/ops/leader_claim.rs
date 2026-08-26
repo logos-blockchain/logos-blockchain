@@ -245,6 +245,7 @@ impl VerifiableOperation<StandardMode>
         }
 
         // Check the proof of claim
+        // TODO: Remove. Already checked in preverify.
         if !self.proof().verify(&LeaderClaimPublic {
             voucher_nullifier: operation.voucher_nullifier.into(),
             voucher_root: context.claimable_vouchers_root.0,
@@ -312,8 +313,238 @@ mod tests {
         proofs::leader_claim_proof::LeaderClaimPrivate,
     };
 
+    /// Regression test for #2990 (reward double-claim).
+    ///
+    /// The op's `voucher_nullifier` is fed in as the proof's public input, so a
+    /// claim that supplies a nullifier other than the one the proof commits to
+    /// fails verification (`InvalidPoC`). This is what prevents re-claiming a
+    /// voucher under a different, unused nullifier to bypass the double-spend
+    /// set: the op's dedup key is bound to the proven voucher.
     #[test]
-    fn validate_accepts_valid_proof_of_claim() {
+    fn preverify_rejects_a_nullifier_the_proof_does_not_prove() {
+        let voucher_secret = VoucherSecret::from(Fr::from(7u64));
+        let voucher_cm = VoucherCm::from_secret(voucher_secret);
+        let (mmr, voucher_path) = MerkleMountainRange::<VoucherCm, ZkHasher>::new()
+            .push_with_paths(voucher_cm, &mut [])
+            .expect("MMR shouldn't be full");
+        let voucher_root = RewardsRoot::from(mmr.frontier_root());
+        let tx_hash = TxHash::from([11u8; 32]);
+        // Proof proves ownership of the voucher whose nullifier is
+        // `from_secret(voucher_secret)`.
+        let proof = Groth16LeaderClaimProof::prove(
+            LeaderClaimPrivate::try_new(
+                LeaderClaimPublic::new(
+                    VoucherNullifier::from_secret(voucher_secret).into(),
+                    voucher_root.into(),
+                    tx_hash.to_fr(),
+                ),
+                &voucher_path,
+                voucher_secret,
+            )
+            .expect("voucher path should match the PoC circuit height"),
+        )
+        .expect("proof generation should succeed");
+
+        // The claim supplies a DIFFERENT nullifier than the one the proof proves.
+        let bogus_nf = VoucherNullifier::from_secret(VoucherSecret::from(Fr::from(999u64)));
+        assert_ne!(bogus_nf, VoucherNullifier::from_secret(voucher_secret));
+        let op = LeaderClaimOp {
+            rewards_root: voucher_root,
+            voucher_nullifier: bogus_nf,
+            pk: ZkPublicKey::zero(),
+        };
+        let tx_hash_view = TxHashView::from(tx_hash);
+        let preverify_context = LeaderClaimPreverificationContext {
+            tx_hash_view: &tx_hash_view,
+        };
+
+        // The proof is verified against `op.voucher_nullifier`, which does not
+        // match the proven voucher -> rejected during preverify. A voucher
+        // cannot be claimed under a substituted nullifier.
+        let unverified_signed_operation = SignedOperation::new(op, proof);
+        let preverify_result = unverified_signed_operation.into_preverified(&preverify_context);
+        assert_eq!(preverify_result.err(), Some(LeaderClaimError::InvalidPoC));
+    }
+
+    #[test]
+    fn preverify_rejects_a_rewards_root_the_proof_does_not_prove() {
+        let voucher_secret = VoucherSecret::from(Fr::from(7u64));
+        let voucher_cm = VoucherCm::from_secret(voucher_secret);
+        let (mmr, voucher_path) = MerkleMountainRange::<VoucherCm, ZkHasher>::new()
+            .push_with_paths(voucher_cm, &mut [])
+            .expect("MMR shouldn't be full");
+        let voucher_root = RewardsRoot::from(mmr.frontier_root());
+        let tx_hash = TxHash::from([11u8; 32]);
+        let proof = Groth16LeaderClaimProof::prove(
+            LeaderClaimPrivate::try_new(
+                LeaderClaimPublic::new(
+                    VoucherNullifier::from_secret(voucher_secret).into(),
+                    voucher_root.into(),
+                    tx_hash.to_fr(),
+                ),
+                &voucher_path,
+                voucher_secret,
+            )
+            .expect("voucher path should match the PoC circuit height"),
+        )
+        .expect("proof generation should succeed");
+
+        let other_root = RewardsRoot::from(Fr::from(42u64));
+        assert_ne!(other_root, voucher_root);
+        let operation = LeaderClaimOp {
+            rewards_root: other_root,
+            voucher_nullifier: VoucherNullifier::from_secret(voucher_secret),
+            pk: ZkPublicKey::zero(),
+        };
+        let tx_hash_view = TxHashView::from(tx_hash);
+
+        assert_eq!(
+            SignedOperation::<_, Unverified, StandardMode>::new(operation, proof).preverify(
+                &LeaderClaimPreverificationContext {
+                    tx_hash_view: &tx_hash_view,
+                }
+            ),
+            Err(LeaderClaimError::InvalidPoC)
+        );
+    }
+
+    #[test]
+    fn preverify_rejects_a_proof_over_another_transaction() {
+        let voucher_secret = VoucherSecret::from(Fr::from(7u64));
+        let voucher_cm = VoucherCm::from_secret(voucher_secret);
+        let (mmr, voucher_path) = MerkleMountainRange::<VoucherCm, ZkHasher>::new()
+            .push_with_paths(voucher_cm, &mut [])
+            .expect("MMR shouldn't be full");
+        let voucher_root = RewardsRoot::from(mmr.frontier_root());
+        let signed_hash = TxHash::from([11u8; 32]);
+        let proof = Groth16LeaderClaimProof::prove(
+            LeaderClaimPrivate::try_new(
+                LeaderClaimPublic::new(
+                    VoucherNullifier::from_secret(voucher_secret).into(),
+                    voucher_root.into(),
+                    signed_hash.to_fr(),
+                ),
+                &voucher_path,
+                voucher_secret,
+            )
+            .expect("voucher path should match the PoC circuit height"),
+        )
+        .expect("proof generation should succeed");
+        let op = LeaderClaimOp {
+            rewards_root: voucher_root,
+            voucher_nullifier: VoucherNullifier::from_secret(voucher_secret),
+            pk: ZkPublicKey::zero(),
+        };
+        let other_view = TxHashView::from(TxHash::from([12u8; 32]));
+
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(op, proof);
+
+        assert_eq!(
+            signed_operation.preverify(&LeaderClaimPreverificationContext {
+                tx_hash_view: &other_view
+            }),
+            Err(LeaderClaimError::InvalidPoC)
+        );
+    }
+
+    fn preverified_claim(
+        tx_hash: TxHash,
+    ) -> (
+        RewardsRoot,
+        VoucherNullifier,
+        SignedOperation<LeaderClaimOp, Preverified, StandardMode>,
+    ) {
+        let voucher_secret = VoucherSecret::from(Fr::from(7u64));
+        let voucher_cm = VoucherCm::from_secret(voucher_secret);
+        let (mmr, voucher_path) = MerkleMountainRange::<VoucherCm, ZkHasher>::new()
+            .push_with_paths(voucher_cm, &mut [])
+            .expect("MMR shouldn't be full");
+        let voucher_root = RewardsRoot::from(mmr.frontier_root());
+        let voucher_nullifier = VoucherNullifier::from_secret(voucher_secret);
+
+        let proof = Groth16LeaderClaimProof::prove(
+            LeaderClaimPrivate::try_new(
+                LeaderClaimPublic::new(
+                    voucher_nullifier.into(),
+                    voucher_root.into(),
+                    tx_hash.to_fr(),
+                ),
+                &voucher_path,
+                voucher_secret,
+            )
+            .expect("voucher path should match the PoC circuit height"),
+        )
+        .expect("proof generation should succeed");
+
+        let operation = LeaderClaimOp {
+            rewards_root: voucher_root,
+            voucher_nullifier,
+            pk: ZkPublicKey::zero(),
+        };
+        let tx_hash_view = TxHashView::from(tx_hash);
+        let signed_operation = SignedOperation::new(operation, proof)
+            .into_preverified(&LeaderClaimPreverificationContext {
+                tx_hash_view: &tx_hash_view,
+            })
+            .expect("preverify should accept a valid proof");
+
+        (voucher_root, voucher_nullifier, signed_operation)
+    }
+
+    #[test]
+    fn verify_rejects_a_voucher_that_was_already_claimed() {
+        let tx_hash = TxHash::from([11u8; 32]);
+        let (voucher_root, voucher_nullifier, signed_operation) = preverified_claim(tx_hash);
+
+        let nullifiers = rpds::HashTrieSetSync::new_sync().insert(voucher_nullifier);
+
+        assert_eq!(
+            signed_operation.verify(&LeaderClaimVerificationContext {
+                nullifiers: &nullifiers,
+                claimable_vouchers_root: &voucher_root,
+                tx_hash_view: &TxHashView::from(tx_hash),
+            }),
+            Err(LeaderClaimError::DuplicatedVoucherNullifier)
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_claim_against_a_stale_rewards_root() {
+        let tx_hash = TxHash::from([11u8; 32]);
+        let (_, _, signed_operation) = preverified_claim(tx_hash);
+
+        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let other_root = RewardsRoot::from(Fr::from(42u64));
+
+        assert_eq!(
+            signed_operation.verify(&LeaderClaimVerificationContext {
+                nullifiers: &nullifiers,
+                claimable_vouchers_root: &other_root,
+                tx_hash_view: &TxHashView::from(tx_hash),
+            }),
+            Err(LeaderClaimError::VouchersRootMismatch)
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_proof_over_another_transaction() {
+        let tx_hash = TxHash::from([11u8; 32]);
+        let (rewards_root, _, signed_operation) = preverified_claim(tx_hash);
+
+        let nullifiers = rpds::HashTrieSetSync::new_sync();
+
+        assert_eq!(
+            signed_operation.verify(&LeaderClaimVerificationContext {
+                nullifiers: &nullifiers,
+                claimable_vouchers_root: &rewards_root,
+                tx_hash_view: &TxHashView::from(TxHash::from([12u8; 32])),
+            }),
+            Err(LeaderClaimError::InvalidPoC)
+        );
+    }
+
+    #[test]
+    fn verify_accepts_a_valid_proof_of_claim() {
         let voucher_secret = VoucherSecret::from(Fr::from(7u64));
         let voucher_cm = VoucherCm::from_secret(voucher_secret);
         let (mmr, voucher_path) = MerkleMountainRange::<VoucherCm, ZkHasher>::new()
@@ -443,59 +674,6 @@ mod tests {
         assert_eq!(*voucher_nullifier, operation.voucher_nullifier);
         assert_eq!(*utxo, operation.utxo(reward_amount));
         assert!(events.next().is_none());
-    }
-
-    /// Regression test for #2990 (reward double-claim).
-    ///
-    /// The op's `voucher_nullifier` is fed in as the proof's public input, so a
-    /// claim that supplies a nullifier other than the one the proof commits to
-    /// fails verification (`InvalidPoC`). This is what prevents re-claiming a
-    /// voucher under a different, unused nullifier to bypass the double-spend
-    /// set: the op's dedup key is bound to the proven voucher.
-    #[test]
-    fn validate_rejects_op_nullifier_not_matching_proof() {
-        let voucher_secret = VoucherSecret::from(Fr::from(7u64));
-        let voucher_cm = VoucherCm::from_secret(voucher_secret);
-        let (mmr, voucher_path) = MerkleMountainRange::<VoucherCm, ZkHasher>::new()
-            .push_with_paths(voucher_cm, &mut [])
-            .expect("MMR shouldn't be full");
-        let voucher_root = RewardsRoot::from(mmr.frontier_root());
-        let tx_hash = TxHash::from([11u8; 32]);
-        // Proof proves ownership of the voucher whose nullifier is
-        // `from_secret(voucher_secret)`.
-        let proof = Groth16LeaderClaimProof::prove(
-            LeaderClaimPrivate::try_new(
-                LeaderClaimPublic::new(
-                    VoucherNullifier::from_secret(voucher_secret).into(),
-                    voucher_root.into(),
-                    tx_hash.to_fr(),
-                ),
-                &voucher_path,
-                voucher_secret,
-            )
-            .expect("voucher path should match the PoC circuit height"),
-        )
-        .expect("proof generation should succeed");
-
-        // The claim supplies a DIFFERENT nullifier than the one the proof proves.
-        let bogus_nf = VoucherNullifier::from_secret(VoucherSecret::from(Fr::from(999u64)));
-        assert_ne!(bogus_nf, VoucherNullifier::from_secret(voucher_secret));
-        let op = LeaderClaimOp {
-            rewards_root: voucher_root,
-            voucher_nullifier: bogus_nf,
-            pk: ZkPublicKey::zero(),
-        };
-        let tx_hash_view = TxHashView::from(tx_hash);
-        let preverify_context = LeaderClaimPreverificationContext {
-            tx_hash_view: &tx_hash_view,
-        };
-
-        // The proof is verified against `op.voucher_nullifier`, which does not
-        // match the proven voucher -> rejected during preverify. A voucher
-        // cannot be claimed under a substituted nullifier.
-        let unverified_signed_operation = SignedOperation::new(op, proof);
-        let preverify_result = unverified_signed_operation.into_preverified(&preverify_context);
-        assert_eq!(preverify_result.err(), Some(LeaderClaimError::InvalidPoC));
     }
 
     #[test]
