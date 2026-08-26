@@ -1417,6 +1417,130 @@ mod tests {
         }
     }
 
+    /// The finalized config tip must survive the real persistence path —
+    /// `build_checkpoint` → serde → `init_with_config` — not just the in-state
+    /// setter. A config-free resume must leave it intact, surfaced through the
+    /// checkpoint the sequencer re-emits.
+    #[tokio::test]
+    async fn finalized_config_survives_checkpoint_persistence_and_resume() {
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+        let finalized_config = MsgId::from([9; 32]);
+
+        // `build_checkpoint` captures the finalized config tip.
+        let mut state = TxState::new(header_id(0), MsgId::root());
+        state.set_finalized_config(finalized_config);
+        let cp = build_checkpoint(&state, MsgId::root(), Slot::genesis());
+        assert_eq!(
+            cp.finalized_config, finalized_config,
+            "build_checkpoint saves it"
+        );
+
+        // It survives serde (and `serde(default)` does not clobber a set value).
+        let json = serde_json::to_string(&cp).expect("serialize checkpoint");
+        let cp: SequencerCheckpoint = serde_json::from_str(&json).expect("deserialize checkpoint");
+        assert_eq!(
+            cp.finalized_config, finalized_config,
+            "serde round-trips it"
+        );
+
+        // `init_with_config` restores it; a config-free resume keeps it.
+        let genesis_block = api_block(0, 0, 0, Vec::new());
+        let live_block = api_block(1, 0, 1, Vec::new());
+        let node = MockNode {
+            lib: header_id(0),
+            tip: header_id(0),
+            immutable: vec![genesis_block],
+            scripts: scripts(vec![StreamScript {
+                events: vec![live_event(&live_block)],
+                then: StreamEnd::Hang,
+            }]),
+            ..MockNode::default()
+        };
+        let mut sequencer =
+            ZoneSequencer::init(channel_id, sequencer_key, node, funding_config(), Some(cp));
+
+        let restored = loop {
+            match sequencer.next_event().await {
+                Event::BlocksProcessed { checkpoint, .. } => {
+                    break checkpoint.finalized_config;
+                }
+                Event::Ready | Event::MempoolPending(_) | Event::TurnNotification { .. } => {}
+            }
+        };
+        assert_eq!(
+            restored, finalized_config,
+            "resume restores finalized_config through the checkpoint"
+        );
+    }
+
+    /// A config finalized during downtime, replayed by the resume backfill,
+    /// must refine `finalized_config` past the (stale) checkpoint seed —
+    /// exercising the backfill's config arm, not just the seed.
+    #[tokio::test]
+    async fn resume_backfill_refines_finalized_config_from_a_replayed_config() {
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+
+        // A pure config sits in the finalized history the backfill replays.
+        let config_op = ChannelConfigOp {
+            channel: channel_id,
+            parent: MsgId::root(),
+            keys: Keys::try_from(vec![Ed25519Key::from_bytes(&[0; 32]).public_key()]).unwrap(),
+            posting_timeframe: SlotTimeframe::from(0u32),
+            posting_timeout: SlotTimeout::from(0u32),
+            configuration_threshold: 1,
+            transfer_threshold: 1,
+        };
+        let config_id = config_op.id();
+        let config_tx = unverified_tx_with_ops(vec![Op::ChannelConfig(config_op)]);
+        // The config finalized during downtime at slot 1 — above the checkpoint
+        // LIB (genesis), so the resume backfill must replay it.
+        let config_block = api_block(1, 0, 1, vec![config_tx]);
+
+        // The checkpoint's finalized_config is stale; the backfill must move it.
+        let stale = MsgId::from([1; 32]);
+        let mut state = TxState::new(header_id(0), MsgId::root());
+        state.set_finalized_config(stale);
+        let cp = build_checkpoint(&state, MsgId::root(), Slot::genesis());
+
+        // A live block at slot 2 whose LIB is the config block (slot 1), so the
+        // backfill catches up [genesis..=slot 1] and replays the config.
+        let live_block = api_block(2, 1, 2, Vec::new());
+        let event = ProcessedBlockEvent {
+            block: live_block.clone(),
+            tip: live_block.header.id,
+            tip_slot: live_block.header.slot,
+            lib: header_id(1),
+            lib_slot: Slot::from(1),
+        };
+        let node = MockNode {
+            lib: header_id(1),
+            tip: header_id(1),
+            immutable: vec![config_block],
+            scripts: scripts(vec![StreamScript {
+                events: vec![event],
+                then: StreamEnd::Hang,
+            }]),
+            ..MockNode::default()
+        };
+        let mut sequencer =
+            ZoneSequencer::init(channel_id, sequencer_key, node, funding_config(), Some(cp));
+
+        let restored = loop {
+            match sequencer.next_event().await {
+                Event::BlocksProcessed { checkpoint, .. } => {
+                    break checkpoint.finalized_config;
+                }
+                Event::Ready | Event::MempoolPending(_) | Event::TurnNotification { .. } => {}
+            }
+        };
+        assert_eq!(
+            restored, config_id,
+            "backfill refines finalized_config to the replayed config"
+        );
+    }
+
     /// Realistic stream-gap scenario, driven end-to-end through the public
     /// `ZoneSequencer` event loop.
     ///

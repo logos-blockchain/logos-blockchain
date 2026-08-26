@@ -1867,23 +1867,21 @@ mod tests {
         (tx, config_msg)
     }
 
-    /// Wrap a config tx as it is classified when mined: a `Custom` block tx
-    /// carrying the config on the config lineage (no message-tip entry).
+    /// Wrap a pure config tx as it is classified when mined: a clean
+    /// [`BlockChannelTx::Config`] on the config lineage (the mixed/unknown
+    /// `Custom { config_entries }` shape is exercised separately in
+    /// `mixed_config_tx_is_custom_but_advances_the_config_tip`).
     fn config_block_tx(
         tx: &SignedMantleTx<Unverified>,
         this_msg: MsgId,
         parent: MsgId,
     ) -> BlockChannelTx {
-        BlockChannelTx::Custom {
-            tx: tx.clone(),
-            entries: Vec::new(),
-            config_entries: vec![InscriptionInfo {
-                tx_hash: tx.mantle_tx().hash(),
-                parent_msg: parent,
-                this_msg,
-                payload: [].into(),
-            }],
-        }
+        BlockChannelTx::Config(InscriptionInfo {
+            tx_hash: tx.mantle_tx().hash(),
+            parent_msg: parent,
+            this_msg,
+            payload: [].into(),
+        })
     }
 
     /// Once a rival config lands on-branch and moves the config tip, our
