@@ -14,7 +14,7 @@ pub struct Config {
     #[serde(default)]
     pub declaration_id: Option<DeclarationId>,
     pub wallet: WalletConfig,
-    #[serde(default = "default_active_message_tracker")]
+    #[serde(default)]
     pub active_message_tracker: ActiveMessageTrackerConfig,
 }
 
@@ -26,32 +26,25 @@ pub struct WalletConfig {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
 pub struct ActiveMessageTrackerConfig {
     /// Interval between status checks of a submitted activity, in tip changes.
-    #[serde(default = "default_status_check_interval_in_tip_changes")]
     pub status_check_interval_in_tip_changes: NonZeroU64,
     /// Max number of status checks for a submitted activity.
-    #[serde(default = "default_max_status_checks")]
     pub max_status_checks: NonZeroU64,
+}
+
+impl Default for ActiveMessageTrackerConfig {
+    fn default() -> Self {
+        Self {
+            status_check_interval_in_tip_changes: NonZeroU64::new(3).unwrap(),
+            max_status_checks: NonZeroU64::new(5).unwrap(),
+        }
+    }
 }
 
 const fn default_max_tx_fee() -> GasCost {
     GasCost::new(Value::MAX)
-}
-
-const fn default_status_check_interval_in_tip_changes() -> NonZeroU64 {
-    NonZeroU64::new(3).unwrap()
-}
-
-const fn default_max_status_checks() -> NonZeroU64 {
-    NonZeroU64::new(5).unwrap()
-}
-
-const fn default_active_message_tracker() -> ActiveMessageTrackerConfig {
-    ActiveMessageTrackerConfig {
-        status_check_interval_in_tip_changes: default_status_check_interval_in_tip_changes(),
-        max_status_checks: default_max_status_checks(),
-    }
 }
 
 pub struct RequiredValues {
@@ -60,14 +53,14 @@ pub struct RequiredValues {
 
 impl Config {
     #[must_use]
-    pub const fn with_required_values(RequiredValues { funding_pk }: RequiredValues) -> Self {
+    pub fn with_required_values(RequiredValues { funding_pk }: RequiredValues) -> Self {
         Self {
             wallet: WalletConfig {
                 funding_pk,
                 max_tx_fee: default_max_tx_fee(),
             },
             declaration_id: None,
-            active_message_tracker: default_active_message_tracker(),
+            active_message_tracker: ActiveMessageTrackerConfig::default(),
         }
     }
 
