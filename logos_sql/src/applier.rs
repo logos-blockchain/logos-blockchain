@@ -132,6 +132,7 @@ mod tests {
             lib: HeaderId::from([byte; 32]),
             lib_slot: Slot::from(slot),
             channel_notes: Vec::new(),
+            finalized_config: MsgId::root(),
         }
     }
 

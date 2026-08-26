@@ -546,7 +546,9 @@ where
                 .iter()
                 .filter_map(|o| match o {
                     ChannelUpdateTx::Inscription(i) => Some(i.clone()),
-                    ChannelUpdateTx::AtomicWithdraw(_) | ChannelUpdateTx::Custom(_) => None,
+                    ChannelUpdateTx::AtomicWithdraw(_)
+                    | ChannelUpdateTx::Custom(_)
+                    | ChannelUpdateTx::Config(_) => None,
                 })
                 .collect();
             self.balances
@@ -611,7 +613,9 @@ where
             .iter()
             .filter_map(|o| match o {
                 ChannelUpdateTx::Inscription(i) => Some(i),
-                ChannelUpdateTx::AtomicWithdraw(_) | ChannelUpdateTx::Custom(_) => None,
+                ChannelUpdateTx::AtomicWithdraw(_)
+                | ChannelUpdateTx::Custom(_)
+                | ChannelUpdateTx::Config(_) => None,
             })
             .collect();
 
