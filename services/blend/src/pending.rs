@@ -101,12 +101,26 @@ pub enum Discarded {
 /// race, and a queue that popped before awaiting would lose the message every
 /// time that happened. The caller reports what actually went out instead, once
 /// the race is settled.
+///
+/// Queued proposals do not survive an epoch change; queued transactions do.
+/// A proposal is built for one slot, and leadership quota is one message's
+/// worth per winning slot, so a proposal still waiting when the epoch turns
+/// would spend the quota that the *new* epoch's block needs. Losing the block
+/// this node is about to produce is worse than losing one it failed to send in
+/// time. A transaction is not slot-bound and its `PoW` branch is redrawn
+/// anyway, so it stays.
 #[derive(Debug)]
 pub struct PendingLocalMessages {
     /// Each proposal with the copies it still owes. Proposals are replicated;
     /// transactions are not.
     proposals: VecDeque<(Vec<u8>, NonZeroU64)>,
     transactions: VecDeque<Vec<u8>>,
+}
+
+impl Default for PendingLocalMessages {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PendingLocalMessages {
@@ -171,6 +185,17 @@ impl PendingLocalMessages {
         self.transactions
             .pop_front()
             .expect("A transaction was reported sent, but none is queued")
+    }
+
+    /// Drops every queued proposal, returning how many went, for a caller whose
+    /// epoch has turned over. Transactions are left alone.
+    ///
+    /// See the note on this type for why proposals cannot outlive the epoch
+    /// they were queued in.
+    pub fn discard_proposals(&mut self) -> usize {
+        let discarded = self.proposals.len();
+        self.proposals.clear();
+        discarded
     }
 
     /// Drops the message [`Self::next`] would hand out, for a caller that has
@@ -262,6 +287,24 @@ mod tests {
             pending.next(),
             Some(NextLocalMessage::Transaction(b"tx")),
             "what was queued behind it must get its turn"
+        );
+    }
+
+    #[test]
+    fn an_epoch_change_takes_the_proposals_and_leaves_the_transactions() {
+        let mut pending = PendingLocalMessages::new();
+        pending.queue_proposal(b"proposal".to_vec(), 3.try_into().unwrap());
+        pending.queue_transaction(b"tx".to_vec());
+
+        assert_eq!(
+            pending.discard_proposals(),
+            1,
+            "outstanding copies go with it: they would all spend the new epoch's quota"
+        );
+        assert_eq!(
+            pending.next(),
+            Some(NextLocalMessage::Transaction(b"tx")),
+            "a transaction is not slot-bound and outlives the epoch it arrived in"
         );
     }
 }
