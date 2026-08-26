@@ -43,6 +43,7 @@ use crate::{
     epoch_info::PolEpochInfo,
     membership::{MembershipInfo, ZkInfo, chain::BlendEpochState},
     message::{BlendPayload, ServiceMessage},
+    pending::{NextLocalMessage, PendingLocalMessages},
     test_utils::{
         crypto::{
             GatedPowProofsGenerator, MockCoreAndLeaderProofsGenerator, PolAwareProofsGenerator,
@@ -566,6 +567,95 @@ async fn test_handle_epoch_transition_expired() {
     assert_eq!(*activity_proof, (&ActivityProof::new(epoch, token)).into());
 }
 
+/// A proposal still queued when the epoch rotates is dropped; a transaction is
+/// not.
+///
+/// Leadership quota is one message's worth per winning slot, so a proposal that
+/// missed its epoch would spend the quota the new epoch's own block needs.
+/// Already-encapsulated messages are unaffected: they have left the queue for
+/// the scheduler, and the previous epoch's scheduler keeps releasing them for
+/// the transition period, when peers still hold that epoch's verifier.
+#[test_log::test(tokio::test)]
+async fn test_handle_epoch_event_discards_queued_proposals() {
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+
+    // Prepare components for epoch event handling.
+    let epoch = 0.into();
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let settings = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+    let public_info = new_epoch_info(epoch, membership.clone(), &settings);
+    let crypto_processor = new_crypto_processor(
+        EpochCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.num_blend_layers,
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+            spent_core_quota: Quota::ZERO,
+        },
+        &public_info,
+        (),
+    );
+    let scheduler = EpochMessageScheduler::new(
+        scheduler_epoch_info(&public_info),
+        BlakeRng::from_entropy(),
+        scheduler_settings(&settings.time, settings.num_blend_layers),
+    );
+    let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
+        settings.clone(),
+        overwatch_handle.clone(),
+        backend_epoch_info(&public_info),
+        BlakeRng::from_entropy(),
+    );
+    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+
+    let mut pending_messages = PendingLocalMessages::new();
+    pending_messages.queue_proposal(b"proposal".to_vec(), 2.try_into().unwrap());
+    pending_messages.queue_transaction(b"transaction".to_vec());
+
+    let _output = handle_epoch_event(
+        EpochEvent::NewEpoch(
+            CoreEpochInfo {
+                public: CoreEpochPublicInfo {
+                    epoch: epoch.strict_add(1.into()),
+                    ..public_info.clone()
+                },
+                core_poq_generator: Some(()),
+            }
+            .into(),
+        ),
+        &settings,
+        crypto_processor,
+        scheduler,
+        public_info,
+        ServiceState::with_epoch(
+            epoch,
+            VecDeque::new(),
+            token_collector,
+            None,
+            state_updater.clone(),
+        )
+        .unwrap(),
+        &mut backend,
+        &sdp_relay,
+        &mut None,
+        &mut pending_messages,
+    )
+    .await;
+
+    assert_eq!(
+        pending_messages.next(),
+        Some(NextLocalMessage::Transaction(b"transaction")),
+        "the proposal must not survive the rotation, and the transaction must"
+    );
+}
+
 #[test_log::test(tokio::test)]
 #[expect(clippy::too_many_lines, reason = "Test function.")]
 async fn test_handle_epoch_event() {
@@ -635,6 +725,7 @@ async fn test_handle_epoch_event() {
         &mut backend,
         &sdp_relay,
         &mut None,
+        &mut PendingLocalMessages::new(),
     )
     .await;
     let HandleEpochEventOutput::Transitioning {
@@ -681,6 +772,7 @@ async fn test_handle_epoch_event() {
         &mut backend,
         &sdp_relay,
         &mut None,
+        &mut PendingLocalMessages::new(),
     )
     .await;
     let HandleEpochEventOutput::TransitionCompleted {
@@ -729,6 +821,7 @@ async fn test_handle_epoch_event() {
         &mut backend,
         &sdp_relay,
         &mut None,
+        &mut PendingLocalMessages::new(),
     )
     .await;
     let HandleEpochEventOutput::Retiring {
@@ -820,6 +913,7 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
         &mut backend,
         &sdp_relay,
         &mut None,
+        &mut PendingLocalMessages::new(),
     )
     .await;
 
@@ -922,6 +1016,7 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
         &mut backend,
         &sdp_relay,
         &mut Some(secret_info),
+        &mut PendingLocalMessages::new(),
     )
     .await;
     recorded_set_epoch_private_calls()
@@ -1011,6 +1106,7 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
         &mut backend,
         &sdp_relay,
         &mut None,
+        &mut PendingLocalMessages::new(),
     )
     .await;
     let HandleEpochEventOutput::Retiring {
@@ -1093,6 +1189,7 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
         &mut backend,
         &sdp_relay,
         &mut None,
+        &mut PendingLocalMessages::new(),
     )
     .await;
 

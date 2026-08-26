@@ -47,7 +47,7 @@ use overwatch::{
 };
 use settings::StartingBlendConfig;
 use tokio::sync::oneshot;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     edge::{
@@ -307,7 +307,7 @@ where
         tokio::select! {
             Some(EpochEvent::NewEpoch(new_public_epoch_info)) = remaining_public_epoch_stream.next() => {
                 current_epoch_info = new_public_epoch_info;
-                match handle_new_epoch_event(&current_epoch_info, &mut current_secret_epoch_info, &mut current_epoch_message_handler, settings.clone(), overwatch_handle.clone()) {
+                match handle_new_public_epoch_event(&current_epoch_info, &mut current_secret_epoch_info, &mut current_epoch_message_handler, &mut pending_messages, settings.clone(), overwatch_handle.clone()) {
                     Err(Error::NetworkIsTooSmall(_)) => {
                         info!(target: LOG_TARGET, "New membership does not satisfy edge node condition, edge service shutting down.");
                         return Ok(());
@@ -421,6 +421,42 @@ where
     };
 
     resolve_encapsulation(encapsulated, wrap_fn)
+}
+
+/// Handles the start of a new *public* epoch: the one this node was in has
+/// ended.
+///
+/// Split from [`handle_new_epoch_event`], which also runs when this epoch's
+/// secret `PoL` info arrives — that is not an epoch change, and a proposal
+/// queued waiting for exactly that info has to survive it. Only a real epoch
+/// change invalidates queued proposals; see [`PendingLocalMessages`] for why
+/// they cannot outlive it.
+fn handle_new_public_epoch_event<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
+    current_public_epoch_info: &BlendEpochState<NodeId>,
+    maybe_current_secret_epoch_info: &mut Option<PolEpochInfo>,
+    current_epoch_message_handler: &mut Option<
+        MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
+    >,
+    pending_messages: &mut PendingLocalMessages,
+    settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
+    overwatch_handle: OverwatchHandle<RuntimeServiceId>,
+) -> Result<(), Error>
+where
+    Backend: BlendBackend<NodeId, RuntimeServiceId>,
+    NodeId: Clone + Eq + Hash + Send + Sync + 'static,
+    ProofsGenerator: LeaderAndPowProofsGenerator,
+{
+    let discarded = pending_messages.discard_proposals();
+    if discarded > 0 {
+        warn!(target: LOG_TARGET, "Dropping {discarded} block proposal(s) still queued when the epoch ended.");
+    }
+    handle_new_epoch_event(
+        current_public_epoch_info,
+        maybe_current_secret_epoch_info,
+        current_epoch_message_handler,
+        settings,
+        overwatch_handle,
+    )
 }
 
 fn handle_new_epoch_event<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(

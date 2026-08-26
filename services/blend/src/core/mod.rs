@@ -936,7 +936,7 @@ where
                 }
             }
             Some(epoch_event) = remaining_epoch_stream.next() => {
-                match handle_epoch_event(epoch_event, blend_config, crypto_processor, message_scheduler, current_epoch_info, recovery_checkpoint, backend, sdp_relay, &mut latest_secret_pol_info).await {
+                match handle_epoch_event(epoch_event, blend_config, crypto_processor, message_scheduler, current_epoch_info, recovery_checkpoint, backend, sdp_relay, &mut latest_secret_pol_info, &mut pending_messages).await {
                     // Current epoch info updated to new one
                     HandleEpochEventOutput::Transitioning { new_crypto_processor, new_scheduler, new_epoch_info, new_recovery_checkpoint, old_epoch_components: transitioning_epoch } => {
                         crypto_processor = new_crypto_processor;
@@ -1028,6 +1028,18 @@ where
     };
 
     resolve_encapsulation(encapsulated, wrap_fn)
+}
+
+/// Drops proposals left over from the epoch that just ended, saying so if there
+/// were any.
+fn discard_stale_proposals(pending_messages: &mut PendingLocalMessages) {
+    let discarded_proposals = pending_messages.discard_proposals();
+    if discarded_proposals > 0 {
+        tracing::warn!(
+            target: LOG_TARGET,
+            "Dropping {discarded_proposals} block proposal(s) still queued when the epoch ended."
+        );
+    }
 }
 
 /// Drops the queued message that cannot be encapsulated, taking it out of the
@@ -1192,6 +1204,7 @@ async fn handle_epoch_event<
     backend: &mut Backend,
     sdp_relay: &OutboundRelay<SdpMessage>,
     current_secret_info: &mut Option<PolEpochInfo>,
+    pending_messages: &mut PendingLocalMessages,
 ) -> HandleEpochEventOutput<
     NodeId,
     Rng,
@@ -1218,6 +1231,14 @@ where
             // its processor into a receive-only one for the transition period drops
             // the generators, and with them the `PoW` mining they have in flight.
             let old_cryptographic_processor = current_cryptographic_processor.rotate_epoch();
+            // Queued proposals go with it, and for the same reason: the rotation
+            // is what makes them unsendable. Anything not yet encapsulated would
+            // now draw on the new epoch's leadership quota — one message's worth
+            // per winning slot — spending it on a block the chain has moved past
+            // instead of on the one this node is about to produce. What was
+            // already encapsulated is not here; it is in the old scheduler, which
+            // goes on releasing it for the transition period.
+            discard_stale_proposals(pending_messages);
             let (
                 _,
                 _,
@@ -1341,6 +1362,7 @@ where
             }
         }
         EpochEvent::NewEpoch(MaybeEmptyCoreEpochInfo::Empty { epoch, epoch_nonce }) => {
+            discard_stale_proposals(pending_messages);
             tracing::info!(target: LOG_TARGET, "New epoch event received, but no epoch info is available due to empty membership set.");
             let old_cryptographic_processor = current_cryptographic_processor.rotate_epoch();
             let (_, _, _, _, _, current_epoch_blending_token_collector, _, _) =
