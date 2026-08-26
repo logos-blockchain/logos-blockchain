@@ -17,6 +17,7 @@ ark-groth16   = { features = ["std"], workspace = true }
 ark-serialize = { workspace = true }
 generic-array = { features = ["serde"], workspace = true }
 hex           = { features = ["alloc"], workspace = true }
+lb-utils      = { workspace = true }
 num-bigint    = { workspace = true }
 rand          = { features = ["std"], workspace = true }
 serde         = { features = ["derive"], workspace = true }
