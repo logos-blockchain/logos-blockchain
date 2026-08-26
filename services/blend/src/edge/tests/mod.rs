@@ -2,25 +2,33 @@ use core::time::Duration;
 
 use futures::stream::repeat;
 use lb_blend::{
+    message::MAX_PAYLOAD_BODY_SIZE,
     proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs,
     scheduling::membership::Membership,
 };
 use lb_chain_service::Epoch;
 use lb_core::crypto::ZkHash;
 use lb_groth16::{AdditiveGroup as _, Fr};
-use tokio::time::sleep;
+use tokio::{
+    sync::oneshot,
+    time::{sleep, timeout},
+};
 
 use crate::{
     edge::{
         handlers::Error,
         tests::utils::{
             MockLeaderProofsGenerator, NodeId, TestBackend, overwatch_handle, settings, spawn_run,
+            spawn_run_with_pol,
         },
     },
     epoch_info::PolEpochInfo,
     membership::chain::BlendEpochState,
-    message::BlendPayload,
-    test_utils::membership::membership,
+    message::{BlendPayload, ServiceMessage},
+    test_utils::{
+        epoch::{GatedPolStreamProvider, PolGate},
+        membership::membership,
+    },
 };
 
 pub mod utils;
@@ -354,5 +362,98 @@ async fn private_then_public_same_epoch_creates_handler() {
             .expect("Handler must be created")
             .epoch(),
         Epoch::new(1)
+    );
+}
+
+/// A block proposal that arrives before this epoch's secret `PoL` info still
+/// goes out once it lands.
+///
+/// An edge node has no message handler at all until the secret `PoL` info
+/// arrives, and that regularly happens *after* the first proposal does — most
+/// visibly at startup, when the node wins the very first slot it is asked to
+/// lead. The proposal used to be dropped with a warning in that window,
+/// silently losing a block this node had just produced.
+#[test_log::test(tokio::test)]
+async fn a_proposal_arriving_before_the_pol_info_is_still_blended() {
+    let local_node = NodeId(99);
+    let core_node = NodeId(0);
+
+    // Installed before the service exists, so the shut gate is in place from the
+    // first poll of the stream.
+    let pol_gate = PolGate::setup();
+
+    let (_join_handle, _epoch_sender, msg_sender, mut node_id_receiver) =
+        spawn_run_with_pol::<GatedPolStreamProvider>(
+            local_node,
+            1,
+            Some(membership(&[core_node], local_node)),
+        )
+        .await;
+
+    // The gate is shut, so there is no handler yet: this is the window the
+    // proposal used to die in.
+    msg_sender
+        .send(ServiceMessage::Blend(BlendPayload::BlockProposal(
+            b"proposal".to_vec(),
+        )))
+        .await
+        .unwrap();
+
+    // Answering a request proves the service went round the inbound arm again,
+    // so the proposal ahead of it has already been handled. Without this the
+    // gate could open first and the test would pass on a proposal that was
+    // never queued at all.
+    let (reply, answered) = oneshot::channel();
+    msg_sender
+        .send(ServiceMessage::GetPendingTransactions { reply })
+        .await
+        .unwrap();
+    answered.await.unwrap();
+
+    pol_gate.release();
+
+    assert_eq!(
+        timeout(Duration::from_secs(5), node_id_receiver.recv())
+            .await
+            .expect("the proposal should have been held until a handler existed"),
+        Some(core_node)
+    );
+}
+
+/// A message that can never be encapsulated is dropped rather than left
+/// blocking everything queued behind it.
+///
+/// The head of the queue is retried before anything else is looked at, so one
+/// that keeps failing — a payload too large to fit, which will not shrink by
+/// waiting — would take the whole queue down with it.
+#[test_log::test(tokio::test)]
+async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
+    let local_node = NodeId(99);
+    let core_node = NodeId(0);
+
+    let (_join_handle, _epoch_sender, msg_sender, mut node_id_receiver) =
+        spawn_run(local_node, 1, Some(membership(&[core_node], local_node))).await;
+
+    // One byte over what a payload can hold, so encapsulating it fails the same
+    // way however long it waits.
+    msg_sender
+        .send(ServiceMessage::Blend(BlendPayload::BlockProposal(vec![
+            0;
+            MAX_PAYLOAD_BODY_SIZE + 1
+        ])))
+        .await
+        .unwrap();
+    msg_sender
+        .send(ServiceMessage::Blend(BlendPayload::Transaction(
+            b"transaction".to_vec(),
+        )))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        timeout(Duration::from_secs(5), node_id_receiver.recv())
+            .await
+            .expect("the transaction behind the oversized proposal should still go out"),
+        Some(core_node)
     );
 }

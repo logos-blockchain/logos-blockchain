@@ -30,6 +30,7 @@ use crate::{
         backends::BlendBackend, handlers::Error, run, settings::RunningBlendConfig as BlendConfig,
         tests::test_blend_epoch_state,
     },
+    epoch_info::PolInfoProvider,
     message::ServiceMessage,
     settings::TimingSettings,
     test_utils::{crypto::mock_blend_proof, epoch::OncePolStreamProvider, membership::key},
@@ -65,6 +66,30 @@ pub async fn spawn_run(
     mpsc::Sender<ServiceMessage<NodeId>>,
     mpsc::Receiver<NodeId>,
 ) {
+    spawn_run_with_pol::<OncePolStreamProvider>(
+        local_node,
+        minimal_network_size,
+        initial_membership,
+    )
+    .await
+}
+
+/// [`spawn_run`], with the source of this epoch's secret `PoL` info left to the
+/// caller — a test that needs to hold it back picks
+/// [`GatedPolStreamProvider`](crate::test_utils::epoch::GatedPolStreamProvider).
+pub async fn spawn_run_with_pol<PolProvider>(
+    local_node: NodeId,
+    minimal_network_size: u64,
+    initial_membership: Option<Membership<NodeId>>,
+) -> (
+    JoinHandle<Result<(), Error>>,
+    mpsc::Sender<Membership<NodeId>>,
+    mpsc::Sender<ServiceMessage<NodeId>>,
+    mpsc::Receiver<NodeId>,
+)
+where
+    PolProvider: PolInfoProvider<usize, Stream: Unpin + Send> + Send + 'static,
+{
     let (epoch_sender, epoch_receiver) = mpsc::channel(1);
     let (msg_sender, msg_receiver) = mpsc::channel(1);
     let (node_id_sender, node_id_receiver) = mpsc::channel(1);
@@ -85,7 +110,7 @@ pub async fn spawn_run(
             TestBackend,
             _,
             MockLeaderProofsGenerator,
-            OncePolStreamProvider,
+            PolProvider,
             _,
         >(
             UninitializedEpochEventStream::new(epoch_stream, Duration::ZERO),
