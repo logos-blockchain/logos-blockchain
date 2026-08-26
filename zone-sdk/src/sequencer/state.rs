@@ -1720,6 +1720,11 @@ mod tests {
         MsgId::from(bytes)
     }
 
+    /// A throwaway inscription author for test fixtures (never asserted on).
+    fn test_signer() -> Ed25519PublicKey {
+        Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()
+    }
+
     /// Submit a fake pending inscription with lineage metadata.
     fn submit_fake_inscription(
         state: &mut TxState,
@@ -1753,7 +1758,7 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: msg_id(1),
             payload: [1].into(),
-            signer: None,
+            signer: Some(test_signer()),
         };
         state.process_block(
             b1,
@@ -1828,7 +1833,7 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: msg_id(10),
             payload: [1].into(),
-            signer: None,
+            signer: Some(test_signer()),
         };
         let x_old = InscriptionInfo {
             tx_hash: make_dummy_tx(2).mantle_tx().hash(),
@@ -1856,7 +1861,7 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: msg_id(20),
             payload: [3].into(),
-            signer: None,
+            signer: Some(test_signer()),
         };
         let x_new = InscriptionInfo {
             tx_hash: make_dummy_tx(4).mantle_tx().hash(),
@@ -1921,7 +1926,7 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: u_msg,
             payload: [1].into(),
-            signer: None,
+            signer: Some(test_signer()),
         };
         let x_old = InscriptionInfo {
             tx_hash: make_dummy_tx(2).mantle_tx().hash(),
@@ -1952,7 +1957,7 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: v_msg,
             payload: [3].into(),
-            signer: None,
+            signer: Some(test_signer()),
         };
         let x_new = InscriptionInfo {
             tx_hash: make_dummy_tx(4).mantle_tx().hash(),
@@ -2031,7 +2036,7 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
             payload: [99].into(),
-            signer: None,
+            signer: Some(test_signer()),
         };
         // Mirror the observed inscription into pending before the safe-set
         // build, as `handle_block_event` does — the pending set reflects the
@@ -2094,7 +2099,7 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
             payload: [99].into(),
-            signer: None,
+            signer: Some(test_signer()),
         };
         state.process_block(
             block2,
@@ -2172,7 +2177,7 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
             payload: [99].into(),
-            signer: None,
+            signer: Some(test_signer()),
         };
         state.process_block(
             block2,

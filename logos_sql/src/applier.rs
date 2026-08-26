@@ -111,6 +111,7 @@ fn find_logos_sql_payload(finalized: &[FinalizedTx]) -> Option<&[u8]> {
 #[cfg(test)]
 mod tests {
     use lb_zone_sdk::{
+        Ed25519PublicKey,
         node_types::{ChannelId, HeaderId, MsgId, Slot, TxHash},
         sequencer::{
             ChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx, InscriptionInfo,
@@ -144,7 +145,7 @@ mod tests {
                 .to_vec()
                 .try_into()
                 .expect("test payload should fit an inscription"),
-            signer: None,
+            signer: Some(Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()),
         }
     }
 
