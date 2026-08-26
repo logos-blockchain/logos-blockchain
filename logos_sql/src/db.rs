@@ -23,10 +23,11 @@ const DATABASE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const LIB_DATABASE_FILE: &str = "LIB.db";
 const LIVE_DATABASE_FILE: &str = "LIVE.db";
 const CONTROL_DATABASE_FILE: &str = "control.db";
+const RESERVED_OBJECT_PREFIX: &str = "__logos_sql_";
 
-// Stores locally committed writes and their exact channel payload. At most one
-// write may be waiting for ZoneSDK publication.
-const LIVE_SCHEMA: &str = "
+// Present in both state databases so replicated SQL observes the same schema.
+// Only LIVE.db stores a row, committed atomically with the local write.
+const PENDING_WRITE_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS __logos_sql_pending_write (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
         tx_id BLOB NOT NULL UNIQUE CHECK (length(tx_id) = 32),
@@ -158,9 +159,11 @@ impl Databases {
         let live = open_writer(&live_path)?;
         let control = open_writer(&control_path)?;
 
-        lib.execute_batch(APPLIED_WRITE_SCHEMA)?;
-        live.execute_batch(LIVE_SCHEMA)?;
-        live.execute_batch(APPLIED_WRITE_SCHEMA)?;
+        for connection in [&lib, &live] {
+            connection.execute_batch(PENDING_WRITE_SCHEMA)?;
+            connection.execute_batch(APPLIED_WRITE_SCHEMA)?;
+        }
+
         control.execute_batch(CONTROL_SCHEMA)?;
         control.execute(INITIALIZE_CONTROL_STATE, [])?;
 
@@ -466,9 +469,10 @@ fn apply_statements(
     result
 }
 
-// λSQL owns the surrounding transaction for local execution and replay, so
-// application statements cannot take over transaction or connection state.
-const fn authorize_application_sql(context: AuthContext<'_>) -> Authorization {
+// λSQL owns the surrounding transaction and its bookkeeping tables, so
+// application statements cannot modify either. Temporary objects are also
+// denied because they exist only for one connection and cannot be replicated.
+fn authorize_application_sql(context: AuthContext<'_>) -> Authorization {
     let denied = matches!(
         context.action,
         AuthAction::Unknown { .. }
@@ -477,13 +481,69 @@ const fn authorize_application_sql(context: AuthContext<'_>) -> Authorization {
             | AuthAction::Attach { .. }
             | AuthAction::Detach { .. }
             | AuthAction::Pragma { .. }
-    );
+    ) || is_temporary_object_action(context.action)
+        || action_uses_reserved_name(context.action);
 
     if denied {
         Authorization::Deny
     } else {
         Authorization::Allow
     }
+}
+
+const fn is_temporary_object_action(action: AuthAction<'_>) -> bool {
+    matches!(
+        action,
+        AuthAction::CreateTempIndex { .. }
+            | AuthAction::CreateTempTable { .. }
+            | AuthAction::CreateTempTrigger { .. }
+            | AuthAction::CreateTempView { .. }
+            | AuthAction::DropTempIndex { .. }
+            | AuthAction::DropTempTable { .. }
+            | AuthAction::DropTempTrigger { .. }
+            | AuthAction::DropTempView { .. }
+    )
+}
+
+fn action_uses_reserved_name(action: AuthAction<'_>) -> bool {
+    match action {
+        AuthAction::CreateIndex {
+            index_name,
+            table_name,
+        }
+        | AuthAction::DropIndex {
+            index_name,
+            table_name,
+        } => is_reserved_name(index_name) || is_reserved_name(table_name),
+        AuthAction::CreateTrigger {
+            trigger_name,
+            table_name,
+        }
+        | AuthAction::DropTrigger {
+            trigger_name,
+            table_name,
+        } => is_reserved_name(trigger_name) || is_reserved_name(table_name),
+        AuthAction::CreateTable { table_name }
+        | AuthAction::Delete { table_name }
+        | AuthAction::DropTable { table_name }
+        | AuthAction::Insert { table_name }
+        | AuthAction::Read { table_name, .. }
+        | AuthAction::Update { table_name, .. }
+        | AuthAction::AlterTable { table_name, .. }
+        | AuthAction::Analyze { table_name }
+        | AuthAction::CreateVtable { table_name, .. }
+        | AuthAction::DropVtable { table_name, .. } => is_reserved_name(table_name),
+        AuthAction::CreateView { view_name } | AuthAction::DropView { view_name } => {
+            is_reserved_name(view_name)
+        }
+        AuthAction::Reindex { index_name } => is_reserved_name(index_name),
+        _ => false,
+    }
+}
+
+fn is_reserved_name(name: &str) -> bool {
+    name.get(..RESERVED_OBJECT_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(RESERVED_OBJECT_PREFIX))
 }
 
 fn decode_tx_id(bytes: Vec<u8>) -> Result<TxId, Error> {
@@ -551,6 +611,11 @@ mod tests {
     fn assert_application_sql_rejected(sql: &str) {
         let dir = TempDir::new().expect("temporary directory should be created");
         let mut db = Databases::open(dir.path()).expect("databases should open");
+
+        db.live
+            .execute("CREATE TABLE items(value INTEGER)", [])
+            .expect("application table should be created");
+
         let transaction = transaction(sql);
         let encoded = encoded_write(&transaction);
 
@@ -558,12 +623,39 @@ mod tests {
             .commit_local_write(&transaction, &encoded)
             .expect_err("application SQL should be rejected");
 
-        assert!(matches!(error, Error::Database(_)));
+        assert!(matches!(
+            error,
+            Error::Database(ref error)
+                if error.sqlite_error_code()
+                    == Some(rusqlite::ErrorCode::AuthorizationForStatementDenied)
+        ));
         assert!(
             db.pending_publish()
                 .expect("pending publication should load")
                 .is_none()
         );
+    }
+
+    fn internal_schema(
+        connection: &rusqlite::Connection,
+    ) -> Vec<(String, String, String, Option<String>)> {
+        let mut statement = connection
+            .prepare(
+                "SELECT type, name, tbl_name, sql
+                 FROM sqlite_schema
+                 WHERE name GLOB '__logos_sql_*'
+                    OR tbl_name GLOB '__logos_sql_*'
+                 ORDER BY type, name",
+            )
+            .expect("schema query should prepare");
+
+        statement
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .expect("schema query should run")
+            .collect::<Result<_, _>>()
+            .expect("schema rows should decode")
     }
 
     #[test]
@@ -614,6 +706,14 @@ mod tests {
                 .tx_id,
             encoded.tx_id
         );
+    }
+
+    #[test]
+    fn state_databases_have_the_same_internal_schema() {
+        let dir = TempDir::new().expect("temporary directory should be created");
+        let db = Databases::open(dir.path()).expect("databases should open");
+
+        assert_eq!(internal_schema(&db.lib), internal_schema(&db.live));
     }
 
     #[test]
@@ -779,6 +879,42 @@ mod tests {
         ] {
             assert_application_sql_rejected(sql);
         }
+    }
+
+    #[test]
+    fn application_sql_cannot_access_internal_objects() {
+        for sql in [
+            "DELETE FROM __logos_sql_applied_writes",
+            "DROP TABLE __logos_sql_applied_writes",
+            "ALTER TABLE __logos_sql_applied_writes RENAME TO application_table",
+            "CREATE INDEX __logos_sql_index ON items(value)",
+            "CREATE VIEW __logos_sql_view AS SELECT 1",
+            "CREATE TRIGGER __logos_sql_trigger AFTER INSERT ON items BEGIN SELECT 1; END",
+            "CREATE TABLE __LOGOS_SQL_mixed_case(value INTEGER)",
+        ] {
+            assert_application_sql_rejected(sql);
+        }
+    }
+
+    #[test]
+    fn application_sql_cannot_create_temporary_objects() {
+        for sql in [
+            "CREATE TEMP TABLE temporary_items(value INTEGER)",
+            "CREATE TEMP VIEW temporary_items AS SELECT 1",
+        ] {
+            assert_application_sql_rejected(sql);
+        }
+    }
+
+    #[test]
+    fn reserved_name_check_accepts_non_ascii_identifiers() {
+        let dir = TempDir::new().expect("temporary directory should be created");
+        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let transaction = transaction("CREATE TABLE aaaaaaaaaa\u{65e5}(value INTEGER)");
+        let encoded = encoded_write(&transaction);
+
+        db.commit_local_write(&transaction, &encoded)
+            .expect("non-reserved Unicode name should be accepted");
     }
 
     #[test]
