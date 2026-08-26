@@ -249,8 +249,14 @@ impl TxState {
     /// warm start, or from backfilled finalized history. Without this the tip
     /// resets to [`MsgId::root`] on restart, and `config_tip_at` can fall back
     /// to a stale parent once the config's block is pruned below LIB.
+    ///
+    /// Also advances `observed_config_tip` to it: an already-finalized config
+    /// has effectively been observed, so the config-driven inscription shed
+    /// must not treat it as a fresh landing and orphan the pending tail on the
+    /// first block after resume/backfill.
     pub const fn set_finalized_config(&mut self, config: MsgId) {
         self.finalized_config = config;
+        self.observed_config_tip = config;
     }
 
     /// Submit an inscription tx for tracking with lineage metadata. Use
@@ -1945,6 +1951,31 @@ mod tests {
         // Restored from the checkpoint's `finalized_config`, the tip resolves.
         restored.set_finalized_config(state.finalized_config());
         assert_eq!(restored.config_tip_at(genesis), config);
+    }
+
+    /// Restoring a finalized config tip must also seed `observed_config_tip`,
+    /// so the config-driven shed does not treat the already-finalized
+    /// config as a fresh landing and orphan the pending tail on the first
+    /// block after a resume/backfill.
+    #[test]
+    fn restored_finalized_config_does_not_spuriously_shed_pending() {
+        let genesis = header_id(0);
+        let mut state = TxState::new(genesis, MsgId::root());
+
+        // A resume/backfill hands us the finalized config tip...
+        state.set_finalized_config(msg_id(7));
+        // ...and a pending inscription is in flight (observed or our own).
+        submit_fake_inscription(&mut state, 1, MsgId::root(), msg_id(1));
+
+        // The first shed at a tip resolving to that already-finalized config
+        // must be a no-op — without seeding `observed_config_tip` it would fire
+        // (`config_tip != root`) and orphan the pending tail.
+        assert!(
+            state
+                .shed_pending_inscriptions_on_config(genesis)
+                .is_empty(),
+            "an already-finalized config must not orphan pending on resume"
+        );
     }
 
     /// Many configs can land in one block as a chain (`root → C1 → C2`). The
