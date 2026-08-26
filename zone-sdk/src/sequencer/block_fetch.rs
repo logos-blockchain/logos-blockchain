@@ -1306,6 +1306,49 @@ mod tests {
         ));
     }
 
+    /// A mixed tx (a `ChannelConfig` bundled with another channel op) stays
+    /// `Custom`, but its config is retained in `config_entries`, and once mined
+    /// `config_tip_at` resolves it — configs inside custom txs still advance
+    /// the config lineage.
+    #[test]
+    fn mixed_config_tx_is_custom_but_advances_the_config_tip() {
+        let channel_id = ChannelId::from([0; 32]);
+
+        let config = channel_config(channel_id, MsgId::root());
+        let config_id = config.id();
+        let tx = unverified_tx_with_ops(vec![
+            Op::ChannelConfig(config),
+            Op::ChannelInscribe(inscribe_op(channel_id, MsgId::root(), b"m")),
+        ]);
+        let tx_hash = tx.mantle_tx().hash();
+
+        // Classification keeps the config in `config_entries`.
+        let classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
+        assert_eq!(classified.len(), 1);
+        match &classified[0] {
+            BlockChannelTx::Custom { config_entries, .. } => {
+                assert_eq!(config_entries.len(), 1);
+                assert_eq!(config_entries[0].this_msg, config_id);
+            }
+            other => panic!("expected Custom carrying a config entry, got {other:?}"),
+        }
+
+        // Once mined, the config-tip walk resolves the config the mixed tx
+        // carried — it is not lost to the `Custom` shape.
+        let genesis = header_id(0);
+        let block = header_id(1);
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.process_block(
+            block,
+            genesis,
+            genesis,
+            vec![tx_hash],
+            classified,
+            Vec::new(),
+        );
+        assert_eq!(state.config_tip_at(block), config_id);
+    }
+
     #[test]
     fn multi_inscribe_tx_advances_tip_and_delivers_adopted_entries() {
         // A valid tx can chain several inscriptions internally (each parents
