@@ -685,6 +685,7 @@ where
             parent_msg: parent,
             this_msg: new_msg_id,
             payload: data.clone(),
+            signer: Some(self.signing_key.public_key()),
         };
 
         // Safe to unwrap — `ensure_ready` checks state.
@@ -837,6 +838,7 @@ where
                         parent_msg: parent,
                         this_msg: msg_id,
                         payload: inscribe,
+                        signer: Some(self.signing_key.public_key()),
                     },
                     withdraws: withdraw_infos,
                 }),
@@ -986,6 +988,8 @@ where
                 parent_msg: self.last_msg_id,
                 this_msg: self.last_msg_id,
                 payload: Inscription::new_unchecked(Vec::new()),
+                // Config entry: authorized by a key threshold, no single author.
+                signer: None,
             }),
         };
         let publish_receipt = (publish_result, checkpoint);
@@ -1020,17 +1024,17 @@ where
 
         info!(target: TARGET, "Submitted tx including inscription {:?}", id);
 
-        let payload = tx
+        let (payload, signer) = tx
             .mantle_tx()
             .ops()
             .iter()
             .find_map(|op| match op {
                 Op::ChannelInscribe(i) if i.channel_id == self.channel_id => {
-                    Some(i.inscription.clone())
+                    Some((i.inscription.clone(), Some(i.signer)))
                 }
                 _ => None,
             })
-            .unwrap_or_else(|| Inscription::new_unchecked(Vec::new()));
+            .unwrap_or_else(|| (Inscription::new_unchecked(Vec::new()), None));
 
         self.queue_publish_post(id, tx);
 
@@ -1045,6 +1049,7 @@ where
                     parent_msg,
                     this_msg: new_tip,
                     payload,
+                    signer,
                 }),
             },
             checkpoint,

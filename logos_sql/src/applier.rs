@@ -144,6 +144,7 @@ mod tests {
                 .to_vec()
                 .try_into()
                 .expect("test payload should fit an inscription"),
+            signer: None,
         }
     }
 

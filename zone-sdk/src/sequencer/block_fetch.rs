@@ -343,6 +343,7 @@ pub fn channel_inscriptions(
                     parent_msg: inscribe.parent,
                     this_msg: inscribe.id(),
                     payload: inscribe.inscription.clone(),
+                    signer: Some(inscribe.signer),
                 });
             }
             Op::ChannelConfig(config) if config.channel == channel_id => {
@@ -354,6 +355,7 @@ pub fn channel_inscriptions(
                     parent_msg,
                     this_msg: config.id(),
                     payload: [].into(),
+                    signer: None,
                 });
             }
             _ => {}
@@ -628,6 +630,7 @@ fn extract_finalized_items(
                         parent_msg: inscribe.parent,
                         this_msg: inscribe.id(),
                         payload: inscribe.inscription.clone(),
+                        signer: Some(inscribe.signer),
                     };
                     last_in_block = Some(info.this_msg);
                     ops.push(FinalizedOp::Inscription(info));
@@ -644,6 +647,7 @@ fn extract_finalized_items(
                         parent_msg,
                         this_msg: config.id(),
                         payload: Inscription::new_unchecked(Vec::new()),
+                        signer: None,
                     };
                     last_in_block = Some(info.this_msg);
                     ops.push(FinalizedOp::Inscription(info));
@@ -898,6 +902,7 @@ pub(super) fn classify_channel_tx(
                     parent_msg: inscribe.parent,
                     this_msg,
                     payload: inscribe.inscription.clone(),
+                    signer: Some(inscribe.signer),
                 });
                 *block_tip = Some(this_msg);
             }
@@ -915,6 +920,7 @@ pub(super) fn classify_channel_tx(
                     parent_msg,
                     this_msg,
                     payload: [].into(),
+                    signer: None,
                 });
                 *block_tip = Some(this_msg);
             }

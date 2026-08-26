@@ -12,7 +12,18 @@ use lb_core::{
         transactions::{hash::TxHash, mantle_tx::MantleTx as _, states::Unverified},
     },
 };
+use lb_key_management_system_service::keys::Ed25519PublicKey;
 use rpds::HashTrieSetSync;
+
+/// The Ed25519 author of a tx's channel inscription op, if it carries one — the
+/// signer stored on the pending entry's `signed_tx`, recovered for lineage
+/// reconstruction.
+fn inscription_signer(tx: &SignedMantleTx<Unverified>) -> Option<Ed25519PublicKey> {
+    tx.mantle_tx().ops().iter().find_map(|op| match op {
+        Op::ChannelInscribe(inscribe) => Some(inscribe.signer),
+        _ => None,
+    })
+}
 
 use super::{
     channel_wallet::{ChannelWallet, NoteOp},
@@ -1126,6 +1137,7 @@ impl TxState {
                     parent_msg: pending.parent_msg,
                     this_msg: pending.this_msg,
                     payload: pending.payload.clone(),
+                    signer: inscription_signer(&pending.signed_tx),
                 });
                 queue.push_back(pending.this_msg);
             }
@@ -1176,7 +1188,6 @@ mod tests {
         Op::ChannelInscribe, RawMantleTx, ops::channel::inscribe::InscriptionOp,
         transactions::OpsProofs,
     };
-    use lb_key_management_system_service::keys::Ed25519PublicKey;
 
     use super::*;
     use crate::test_support::header_id;
@@ -1742,6 +1753,7 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: msg_id(1),
             payload: [1].into(),
+            signer: None,
         };
         state.process_block(
             b1,
@@ -1763,6 +1775,7 @@ mod tests {
             parent_msg: msg_id(1),
             this_msg: msg_id(3),
             payload: [3].into(),
+            signer: None,
         };
         state.process_block(
             b2,
@@ -1815,12 +1828,14 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: msg_id(10),
             payload: [1].into(),
+            signer: None,
         };
         let x_old = InscriptionInfo {
             tx_hash: make_dummy_tx(2).mantle_tx().hash(),
             parent_msg: msg_id(10),
             this_msg: x_msg,
             payload: [2].into(),
+            signer: None,
         };
         state.process_block(
             a1,
@@ -1841,12 +1856,14 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: msg_id(20),
             payload: [3].into(),
+            signer: None,
         };
         let x_new = InscriptionInfo {
             tx_hash: make_dummy_tx(4).mantle_tx().hash(),
             parent_msg: msg_id(20),
             this_msg: x_msg,
             payload: [2].into(),
+            signer: None,
         };
         state.process_block(
             b1,
@@ -1904,12 +1921,14 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: u_msg,
             payload: [1].into(),
+            signer: None,
         };
         let x_old = InscriptionInfo {
             tx_hash: make_dummy_tx(2).mantle_tx().hash(),
             parent_msg: u_msg,
             this_msg: x_msg,
             payload: [2].into(),
+            signer: None,
         };
         state.process_block(
             a1,
@@ -1933,12 +1952,14 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: v_msg,
             payload: [3].into(),
+            signer: None,
         };
         let x_new = InscriptionInfo {
             tx_hash: make_dummy_tx(4).mantle_tx().hash(),
             parent_msg: v_msg,
             this_msg: x_msg,
             payload: [2].into(),
+            signer: None,
         };
         state.process_block(
             b1,
@@ -2010,6 +2031,7 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
             payload: [99].into(),
+            signer: None,
         };
         // Mirror the observed inscription into pending before the safe-set
         // build, as `handle_block_event` does — the pending set reflects the
@@ -2072,6 +2094,7 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
             payload: [99].into(),
+            signer: None,
         };
         state.process_block(
             block2,
@@ -2149,6 +2172,7 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
             payload: [99].into(),
+            signer: None,
         };
         state.process_block(
             block2,
