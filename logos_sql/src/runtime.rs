@@ -229,10 +229,6 @@ impl Runtime {
     async fn retry_pending_work(&mut self) -> Result<(), Error> {
         if let Some(event) = self.event_pending_retry.take() {
             if let Err(error) = applier::on_event(&mut self.db, &event, self.channel_id) {
-                if !is_retryable_apply_error(&error) {
-                    return Err(error);
-                }
-
                 tracing::debug!(target: TARGET, %error, "applier retry failed");
                 self.event_pending_retry = Some(event);
             } else {
@@ -342,8 +338,4 @@ impl Runtime {
             || matches!(self.publish_state, PublishState::CheckpointPending { .. })
             || self.db.pending_publish()?.is_some())
     }
-}
-
-const fn is_retryable_apply_error(error: &Error) -> bool {
-    !matches!(error, Error::UnsupportedProtocolVersion(_))
 }

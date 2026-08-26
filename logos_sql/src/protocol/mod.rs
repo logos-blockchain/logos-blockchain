@@ -213,7 +213,7 @@ impl ChannelInscription {
         let version = u16::from_le_bytes([header[version_offset], header[version_offset + 1]]);
 
         if version != PAYLOAD_VERSION {
-            return Err(Error::UnsupportedProtocolVersion(version));
+            return Err(Error::InvalidPayload("protocol version is not supported"));
         }
 
         codec()

@@ -220,7 +220,6 @@ mod tests {
     use super::on_event;
     use crate::{
         db::Databases,
-        error::Error,
         protocol::{ChannelInscription, EncodedWrite, Statement, Transaction, Value},
     };
 
@@ -605,13 +604,10 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_protocol_does_not_advance_checkpoint() {
+    fn unsupported_protocol_does_not_block_following_writes() {
         let dir = TempDir::new().expect("temporary directory should be created");
         let mut db = Databases::open(dir.path()).expect("databases should open");
-        let first = checkpoint(1, 1);
-
-        db.persist_checkpoint(&first)
-            .expect("initial checkpoint should commit");
+        let live_path = db.live_path().to_owned();
 
         let mut unsupported = encoded_write(&transaction(
             "CREATE TABLE discarded(value INTEGER)",
@@ -621,26 +617,35 @@ mod tests {
         let version_offset = b"LOGOS_SQL".len();
         unsupported[version_offset..version_offset + 2].copy_from_slice(&2u16.to_le_bytes());
 
+        let following = encoded_write(&transaction(
+            "CREATE TABLE following_write(value INTEGER)",
+            Vec::new(),
+        ));
+        let expected_checkpoint = checkpoint(2, 2);
         let event = blocks_processed(
-            checkpoint(2, 2),
-            vec![ChannelUpdateTx::Inscription(inscription(&unsupported, 1))],
+            expected_checkpoint.clone(),
+            vec![
+                ChannelUpdateTx::Inscription(inscription(&unsupported, 1)),
+                ChannelUpdateTx::Inscription(inscription(&following.payload, 2)),
+            ],
             Vec::new(),
             Vec::new(),
         );
 
-        let result = on_event(&mut db, &event, ChannelId::from(CHANNEL_ID));
-        assert!(matches!(result, Err(Error::UnsupportedProtocolVersion(2))));
+        on_event(&mut db, &event, ChannelId::from(CHANNEL_ID))
+            .expect("unsupported protocol should not halt channel replay");
 
         let restored = db
             .load_checkpoint()
             .expect("checkpoint should load")
             .expect("checkpoint should exist");
 
-        assert_eq!(restored.lib, first.lib);
-        assert_eq!(restored.lib_slot, first.lib_slot);
+        assert_eq!(restored.lib, expected_checkpoint.lib);
+        assert_eq!(restored.lib_slot, expected_checkpoint.lib_slot);
+        assert!(table_exists(&live_path, "following_write"));
         assert_eq!(
             db.rejected_write_count().expect("rejections should load"),
-            0
+            1
         );
     }
 

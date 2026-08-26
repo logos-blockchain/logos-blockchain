@@ -49,10 +49,6 @@ pub enum Error {
     #[error("channel SQL was rejected: {0}")]
     RejectedSql(#[source] rusqlite::Error),
 
-    /// The inscription uses a protocol version this library cannot execute.
-    #[error("unsupported \u{3bb}SQL protocol version {0}")]
-    UnsupportedProtocolVersion(u16),
-
     /// The encoded payload exceeds the inscription limit.
     #[error("transaction is too large for one inscription")]
     InscriptionTooLarge,
