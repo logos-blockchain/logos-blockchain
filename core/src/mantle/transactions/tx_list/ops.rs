@@ -347,22 +347,176 @@ pub mod mantle_spec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        codec::{DeserializeOp as _, SerializeOp as _},
+        mantle::gas::MainnetGasProfile,
+    };
+
+    const CONFIGURATION_THRESHOLD: ChannelKeyIndex = 3;
+    const TRANSFER_THRESHOLD: ChannelKeyIndex = 2;
 
     #[test]
-    fn binary_serde_rejects_trailing_bytes_inside_transaction_envelope() {
-        let tx = Ops::empty();
-        let mut encoded_tx = tx.encode().into_vec();
-        encoded_tx.push(0);
-        let envelope = bincode::serialize(&encoded_tx).unwrap();
+    fn minimum_total_gas_cost_sums_execution_and_storage() {
+        let ops = Ops::from([Op::ChannelInscribe(InscriptionOp::sample())]);
+        let context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(2, 3));
+
+        assert_eq!(
+            ops.minimum_total_gas_cost::<MainnetGasProfile>(&context),
+            Ok(GasCost::new(643))
+        );
+    }
+
+    #[test]
+    fn minimum_execution_gas_consumption_uses_channel_thresholds() {
+        let ops = Ops::from([
+            Op::ChannelConfig(ChannelConfigOp::sample()),
+            Op::ChannelDeposit(DepositOp::sample()),
+            Op::ChannelWithdraw(ChannelWithdrawOp::sample()),
+        ]);
+        let context = OpsGasContext::new(
+            [(ChannelWithdrawOp::sample().channel_id, TRANSFER_THRESHOLD)].into(),
+            [(ChannelConfigOp::sample().channel, CONFIGURATION_THRESHOLD)].into(),
+            GasPrices::new(1, 0),
+        );
+
+        assert_eq!(
+            ops.minimum_execution_gas_consumption::<MainnetGasProfile>(&context),
+            Ok(Gas::from(168 + 590 + 112))
+        );
+    }
+
+    #[test]
+    fn minimum_execution_gas_consumption_charges_nothing_for_a_channel_the_context_does_not_hold() {
+        let ops = Ops::from([
+            Op::ChannelConfig(ChannelConfigOp::sample()),
+            Op::ChannelWithdraw(ChannelWithdrawOp::sample()),
+            Op::ChannelTransfer(ChannelTransferOp::sample()),
+        ]);
+
+        assert_eq!(
+            ops.minimum_execution_gas_consumption::<MainnetGasProfile>(&OpsGasContext::default()),
+            Ok(Gas::from(0))
+        );
+    }
+
+    #[test]
+    fn minimum_execution_gas_consumption_charges_the_flat_cost_of_an_op_without_a_channel() {
+        let ops = Ops::from([Op::ChannelDeposit(DepositOp::sample())]);
+
+        assert_eq!(
+            ops.minimum_execution_gas_consumption::<MainnetGasProfile>(&OpsGasContext::default()),
+            Ok(Gas::from(590))
+        );
+    }
+
+    #[test]
+    fn minimum_storage_gas_cost_prices_the_signed_size() {
+        let ops = Ops::from([Op::ChannelInscribe(InscriptionOp::sample())]);
+        let context = OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(2, 3));
+
+        assert_eq!(
+            ops.minimum_storage_gas_cost(&context),
+            Ok(GasCost::new(531))
+        );
+    }
+
+    #[test]
+    fn minimum_signed_serialized_size_counts_the_length_prefix_of_an_empty_column() {
+        assert_eq!(
+            Ops::empty().minimum_signed_serialized_size(&OpsGasContext::default()),
+            1
+        );
+    }
+
+    #[test]
+    fn minimum_signed_serialized_size_adds_the_proof_each_op_will_carry() {
+        let ops = Ops::from([Op::ChannelInscribe(InscriptionOp::sample())]);
+
+        assert_eq!(
+            ops.minimum_signed_serialized_size(&OpsGasContext::default()),
+            177
+        );
+    }
+
+    #[test]
+    fn serialize_to_json() {
+        let ops = Ops::sample();
+
+        assert_eq!(
+            serde_json::to_value(&ops).expect("the human-readable arm serializes"),
+            serde_json::to_value(ops.inner()).expect("the inner column serializes")
+        );
+    }
+
+    #[test]
+    fn serialize_to_binary() {
+        let ops = Ops::sample();
+
+        assert_eq!(
+            ops.to_bytes().expect("the binary arm serializes"),
+            bincode::serialize(&ops.encode().into_vec()).expect("the envelope serializes")
+        );
+    }
+
+    #[test]
+    fn deserialize_from_json() {
+        let ops = Ops::sample();
+        let json = serde_json::to_value(ops.inner()).expect("the inner column serializes");
+
+        assert_eq!(
+            serde_json::from_value::<Ops>(json).expect("the human-readable arm deserializes"),
+            ops
+        );
+    }
+
+    #[test]
+    fn deserialize_from_binary() {
+        let ops = Ops::sample();
+        let envelope =
+            bincode::serialize(&ops.encode().into_vec()).expect("the envelope serializes");
+
+        assert_eq!(
+            Ops::from_bytes(&envelope).expect("the binary arm deserializes"),
+            ops
+        );
+    }
+
+    #[test]
+    fn deserialize_from_binary_rejects_trailing_bytes() {
+        let mut encoded_ops = Ops::empty().encode().into_vec();
+        encoded_ops.push(0);
+        let envelope = bincode::serialize(&encoded_ops).expect("the envelope serializes");
 
         assert!(bincode::deserialize::<Ops>(&envelope).is_err());
     }
 
     #[test]
-    fn binary_serde_rejects_oversized_transaction_envelope() {
+    fn deserialize_from_binary_rejects_an_oversized_envelope() {
         let oversized = vec![0u8; MAX_BLOCK_TRANSACTIONS_SIZE + 1];
-        let envelope = bincode::serialize(&oversized).unwrap();
+        let envelope = bincode::serialize(&oversized).expect("the envelope serializes");
 
         assert!(bincode::deserialize::<Ops>(&envelope).is_err());
+    }
+
+    #[test]
+    fn mantle_spec_serialize_wraps_the_column_in_an_ops_field() {
+        let ops = Ops::sample();
+
+        assert_eq!(
+            mantle_spec::serialize(&ops, serde_json::value::Serializer)
+                .expect("the human-readable arm serializes"),
+            serde_json::json!({ "ops": serde_json::to_value(&ops).expect("the column serializes") })
+        );
+    }
+
+    #[test]
+    fn mantle_spec_deserialize_reads_the_ops_field() {
+        let ops = Ops::sample();
+        let json = serde_json::json!({ "ops": serde_json::to_value(&ops).expect("the column serializes") });
+
+        assert_eq!(
+            mantle_spec::deserialize(json).expect("the human-readable arm deserializes"),
+            ops
+        );
     }
 }

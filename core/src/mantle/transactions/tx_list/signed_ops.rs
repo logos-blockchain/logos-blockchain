@@ -492,33 +492,50 @@ pub mod test_utils {
 
 #[cfg(test)]
 mod tests {
+    use lb_codec::BinaryEncode as _;
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use num_bigint::BigUint;
 
-    use crate::mantle::{
-        Note, NoteId, Op, OpProof, SignedOps, TxGasCalculator, Utxo, VerificationError,
-        channel::Error,
-        gas::MainnetGasProfile,
-        ledger::{Inputs, Outputs, OutputsError, verification_mode::StandardMode},
-        ops::{
-            channel::{
-                ChannelId, config::ChannelConfigOp, deposit::DepositOp,
-                verification::test_utils::create_channel_multi_sig_proof,
-                withdraw::ChannelWithdrawOp,
+    use super::Error as SignedOpsError;
+    use crate::{
+        codec::{DeserializeOp as _, SerializeOp as _},
+        mantle::{
+            Note, NoteId, Op, OpProof, SignedOps, TxGasCalculator, Utxo, VerificationError,
+            channel::Error,
+            gas::{Gas, GasCost, MainnetGasProfile},
+            ledger::{Inputs, Outputs, OutputsError, verification_mode::StandardMode},
+            ops::{
+                channel::{
+                    ChannelId, config::ChannelConfigOp, deposit::DepositOp,
+                    inscribe::InscriptionOp,
+                    verification::test_utils::create_channel_multi_sig_proof,
+                    withdraw::ChannelWithdrawOp,
+                },
+                transfer::{TransferError, TransferOp},
             },
-            transfer::{TransferError, TransferOp},
-        },
-        traits::Hashable as _,
-        transactions::{
-            GasPrices, OpProofs,
-            states::{Preverified, Unverified},
-            tx_list::{
-                ops::OpsGasContext,
-                signed_ops::test_utils::{create_test_inscribe_op, create_test_mantle_tx},
+            traits::Hashable as _,
+            transactions::{
+                GasPrices, OpProofs, Ops,
+                states::{Preverified, Unverified},
+                tx_list::signed_ops::test_utils::{create_test_inscribe_op, create_test_mantle_tx},
             },
         },
     };
+
+    fn sample_columns() -> (Ops, OpProofs) {
+        let ops = Ops::sample();
+        let op_proofs = OpProofs::new_unchecked(ops.iter().map(Op::sample_proof).collect());
+        (ops, op_proofs)
+    }
+
+    fn mantle_spec_json(ops: &Ops, op_proofs: &OpProofs) -> serde_json::Value {
+        serde_json::json!({
+            "mantle_tx": { "ops": serde_json::to_value(ops).expect("the op column serializes") },
+            "ops_proofs": serde_json::to_value(op_proofs.inner())
+                .expect("the proof column serializes"),
+        })
+    }
 
     fn create_config_op(channel: ChannelId, signing_key: &Ed25519Key) -> ChannelConfigOp {
         ChannelConfigOp {
@@ -539,6 +556,17 @@ mod tests {
         }
     }
 
+    fn inscribe_ops() -> Ops {
+        Ops::from([Op::ChannelInscribe(InscriptionOp::sample())])
+    }
+
+    fn two_column_ops() -> Ops {
+        Ops::from([
+            Op::ChannelInscribe(InscriptionOp::sample()),
+            Op::ChannelDeposit(DepositOp::sample()),
+        ])
+    }
+
     fn create_withdraw_op(channel_id: ChannelId) -> ChannelWithdrawOp {
         ChannelWithdrawOp {
             channel_id,
@@ -547,88 +575,36 @@ mod tests {
     }
 
     #[test]
-    fn unsigned_execution_gas_uses_channel_thresholds() {
-        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
+    fn from_parts_rejects_a_proof_column_of_a_different_length() {
+        let ops = two_column_ops();
+        let op_proofs = OpProofs::new_unchecked(vec![ops[0].sample_proof()]);
 
-        let config_channel = ChannelId::from([2; 32]);
-        let deposit_channel = ChannelId::from([3; 32]);
-        let withdraw_channel = ChannelId::from([4; 32]);
-
-        let mantle_tx = create_test_mantle_tx(vec![
-            Op::ChannelConfig(create_config_op(config_channel, &signing_key)),
-            Op::ChannelDeposit(create_deposit_op(deposit_channel)),
-            Op::ChannelWithdraw(create_withdraw_op(withdraw_channel)),
-        ]);
-
-        let config_threshold = 3;
-        let transfer_threshold = 2;
-        let context = OpsGasContext::new(
-            [(withdraw_channel, transfer_threshold)].into(),
-            [(config_channel, config_threshold)].into(),
-            GasPrices::new(1, 0),
-        );
-
-        let gas = mantle_tx
-            .minimum_execution_gas_consumption::<MainnetGasProfile>(&context)
-            .unwrap();
-
-        let expected_config_gas = u64::from(config_threshold) * 56;
-        let expected_deposit_gas = 590;
-        let expected_withdraw_gas = u64::from(transfer_threshold) * 56;
-        let expected_total_gas = expected_config_gas + expected_deposit_gas + expected_withdraw_gas;
-
-        assert_eq!(gas.into_inner(), expected_total_gas);
+        assert!(matches!(
+            SignedOps::<Unverified, StandardMode>::from_parts(ops, op_proofs),
+            Err(SignedOpsError::LengthMismatch {
+                operations: 2,
+                proofs: 1
+            })
+        ));
     }
 
     #[test]
-    fn signed_execution_gas_uses_multi_signature_proof_lengths() {
-        let config_keys = [
-            Ed25519Key::from_bytes(&[1; 32]),
-            Ed25519Key::from_bytes(&[2; 32]),
-            Ed25519Key::from_bytes(&[3; 32]),
-        ];
-        let withdraw_keys = [
-            Ed25519Key::from_bytes(&[4; 32]),
-            Ed25519Key::from_bytes(&[5; 32]),
-        ];
-        let config_signers = [&config_keys[0], &config_keys[1], &config_keys[2]];
-        let withdraw_signers = [&withdraw_keys[0], &withdraw_keys[1]];
-
-        let config_channel = ChannelId::from([6; 32]);
-        let deposit_channel = ChannelId::from([7; 32]);
-        let withdraw_channel = ChannelId::from([8; 32]);
-
-        let mantle_tx = create_test_mantle_tx(vec![
-            Op::ChannelConfig(create_config_op(config_channel, &config_keys[0])),
-            Op::ChannelDeposit(create_deposit_op(deposit_channel)),
-            Op::ChannelWithdraw(create_withdraw_op(withdraw_channel)),
+    fn from_parts_reports_the_index_of_the_mismatched_proof() {
+        let ops = Ops::from([
+            Op::ChannelInscribe(InscriptionOp::sample()),
+            Op::ChannelDeposit(DepositOp::sample()),
+            Op::ChannelInscribe(InscriptionOp::sample()),
+        ]);
+        let op_proofs = OpProofs::new_unchecked(vec![
+            ops[0].sample_proof(),
+            ops[2].sample_proof(),
+            ops[2].sample_proof(),
         ]);
 
-        let tx_hash = mantle_tx.hash();
-        let config_proof = create_channel_multi_sig_proof(&tx_hash, &config_signers);
-        let deposit_proof = ZkKey::multi_sign(&[], &tx_hash.to_fr()).unwrap();
-        let withdraw_proof = create_channel_multi_sig_proof(&tx_hash, &withdraw_signers);
-
-        let op_proofs = OpProofs::from([
-            OpProof::ChannelMultiSigProof(config_proof),
-            OpProof::ZkSig(deposit_proof),
-            OpProof::ChannelMultiSigProof(withdraw_proof),
-        ]);
-        let signed_ops = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs).unwrap();
-
-        let gas_prices = GasPrices::new(1, 0);
-        let gas = TxGasCalculator::execution_gas_consumption::<MainnetGasProfile>(
-            &signed_ops,
-            &gas_prices,
-        )
-        .unwrap();
-
-        let expected_config_gas = config_keys.len() as u64 * 56;
-        let expected_deposit_gas = 590;
-        let expected_withdraw_gas = withdraw_keys.len() as u64 * 56;
-        let expected_total_gas = expected_config_gas + expected_deposit_gas + expected_withdraw_gas;
-
-        assert_eq!(gas.into_inner(), expected_total_gas);
+        assert!(matches!(
+            SignedOps::<Unverified, StandardMode>::from_parts(ops, op_proofs),
+            Err(SignedOpsError::OpProofMismatch { index: 1, .. })
+        ));
     }
 
     #[test]
@@ -755,6 +731,189 @@ mod tests {
             Err(VerificationError::TransferVerificationError(
                 TransferError::Outputs(OutputsError::ZeroValueNote)
             ))
+        );
+    }
+
+    #[test]
+    fn trusted_constructors_skip_preverification() {
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
+        let wrong_key = Ed25519Key::from_bytes(&[2; 32]);
+        let ops = create_test_mantle_tx(vec![Op::ChannelInscribe(create_test_inscribe_op(
+            &signing_key,
+        ))]);
+        let op_proofs = OpProofs::from([OpProof::Ed25519Sig(
+            wrong_key.sign_payload(&ops.hash().as_signing_bytes()),
+        )]);
+
+        assert!(
+            SignedOps::<Unverified, StandardMode>::from_parts(ops.clone(), op_proofs.clone())
+                .expect("the proof matches the op")
+                .preverify()
+                .is_err()
+        );
+
+        let trusted = SignedOps::<Preverified, StandardMode>::from_parts_trusted(
+            ops.clone(),
+            op_proofs.clone(),
+        )
+        .expect("the proof matches the op");
+
+        assert_eq!(trusted.op_refs(), ops.by_ref());
+        assert_eq!(
+            SignedOps::<Unverified, StandardMode>::from_parts(ops, op_proofs)
+                .expect("the proof matches the op")
+                .into_preverified_trusted(),
+            trusted
+        );
+    }
+
+    #[test]
+    fn changing_a_proof_does_not_change_the_transaction_hash() {
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
+        let other_key = Ed25519Key::from_bytes(&[2; 32]);
+        let ops = create_test_mantle_tx(vec![Op::ChannelInscribe(create_test_inscribe_op(
+            &signing_key,
+        ))]);
+        let tx_hash = ops.hash();
+
+        let signed = SignedOps::<Unverified, StandardMode>::from_parts(
+            ops.clone(),
+            OpProofs::from([OpProof::Ed25519Sig(
+                signing_key.sign_payload(&tx_hash.as_signing_bytes()),
+            )]),
+        )
+        .expect("the proof matches the op");
+        let resigned = SignedOps::<Unverified, StandardMode>::from_parts(
+            ops,
+            OpProofs::from([OpProof::Ed25519Sig(
+                other_key.sign_payload(&tx_hash.as_signing_bytes()),
+            )]),
+        )
+        .expect("the proof matches the op");
+
+        assert_ne!(signed, resigned);
+        assert_eq!(signed.hash(), tx_hash);
+        assert_eq!(resigned.hash(), tx_hash);
+    }
+
+    #[test]
+    fn signed_execution_gas_uses_multi_signature_proof_lengths() {
+        let config_keys = [
+            Ed25519Key::from_bytes(&[1; 32]),
+            Ed25519Key::from_bytes(&[2; 32]),
+            Ed25519Key::from_bytes(&[3; 32]),
+        ];
+        let withdraw_keys = [
+            Ed25519Key::from_bytes(&[4; 32]),
+            Ed25519Key::from_bytes(&[5; 32]),
+        ];
+        let config_signers = [&config_keys[0], &config_keys[1], &config_keys[2]];
+        let withdraw_signers = [&withdraw_keys[0], &withdraw_keys[1]];
+
+        let config_channel = ChannelId::from([6; 32]);
+        let deposit_channel = ChannelId::from([7; 32]);
+        let withdraw_channel = ChannelId::from([8; 32]);
+
+        let mantle_tx = create_test_mantle_tx(vec![
+            Op::ChannelConfig(create_config_op(config_channel, &config_keys[0])),
+            Op::ChannelDeposit(create_deposit_op(deposit_channel)),
+            Op::ChannelWithdraw(create_withdraw_op(withdraw_channel)),
+        ]);
+
+        let tx_hash = mantle_tx.hash();
+        let config_proof = create_channel_multi_sig_proof(&tx_hash, &config_signers);
+        let deposit_proof = ZkKey::multi_sign(&[], &tx_hash.to_fr()).unwrap();
+        let withdraw_proof = create_channel_multi_sig_proof(&tx_hash, &withdraw_signers);
+
+        let op_proofs = OpProofs::from([
+            OpProof::ChannelMultiSigProof(config_proof),
+            OpProof::ZkSig(deposit_proof),
+            OpProof::ChannelMultiSigProof(withdraw_proof),
+        ]);
+        let signed_ops = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs).unwrap();
+
+        let gas_prices = GasPrices::new(1, 0);
+        let gas = TxGasCalculator::execution_gas_consumption::<MainnetGasProfile>(
+            &signed_ops,
+            &gas_prices,
+        )
+        .unwrap();
+
+        let expected_config_gas = config_keys.len() as u64 * 56;
+        let expected_deposit_gas = 590;
+        let expected_withdraw_gas = withdraw_keys.len() as u64 * 56;
+        let expected_total_gas = expected_config_gas + expected_deposit_gas + expected_withdraw_gas;
+
+        assert_eq!(gas.into_inner(), expected_total_gas);
+    }
+
+    #[test]
+    fn storage_gas_consumption_counts_the_signed_encoded_bytes() {
+        let signed_ops =
+            SignedOps::<Unverified, StandardMode>::from_ops_with_sample_proofs(inscribe_ops());
+
+        assert_eq!(
+            TxGasCalculator::storage_gas_consumption(&signed_ops, &GasPrices::new(2, 3)),
+            Ok(Gas::from(177))
+        );
+    }
+
+    #[test]
+    fn total_gas_cost_sums_execution_and_storage() {
+        let signed_ops =
+            SignedOps::<Unverified, StandardMode>::from_ops_with_sample_proofs(inscribe_ops());
+
+        assert_eq!(
+            signed_ops.total_gas_cost::<MainnetGasProfile>(&GasPrices::new(2, 3)),
+            Ok(GasCost::new(643))
+        );
+    }
+
+    #[test]
+    fn serialize_to_json() {
+        let (ops, op_proofs) = sample_columns();
+        let signed_ops =
+            SignedOps::<Unverified, StandardMode>::from_parts(ops.clone(), op_proofs.clone())
+                .expect("sample proofs pair with their ops");
+
+        assert_eq!(
+            serde_json::to_value(&signed_ops).expect("the human-readable arm serializes"),
+            mantle_spec_json(&ops, &op_proofs)
+        );
+    }
+
+    #[test]
+    fn serialize_to_binary() {
+        let signed_ops = SignedOps::<Unverified, StandardMode>::sample();
+
+        assert_eq!(
+            signed_ops.to_bytes().expect("the binary arm serializes"),
+            bincode::serialize(&signed_ops.encode_to_vec()).expect("the envelope serializes")
+        );
+    }
+
+    #[test]
+    fn deserialize_from_json() {
+        let (ops, op_proofs) = sample_columns();
+        let json = mantle_spec_json(&ops, &op_proofs);
+
+        assert_eq!(
+            serde_json::from_value::<SignedOps<Unverified, StandardMode>>(json)
+                .expect("the human-readable arm deserializes"),
+            SignedOps::from_parts(ops, op_proofs).expect("sample proofs pair with their ops")
+        );
+    }
+
+    #[test]
+    fn deserialize_from_binary() {
+        let signed_ops = SignedOps::<Unverified, StandardMode>::sample();
+        let envelope =
+            bincode::serialize(&signed_ops.encode_to_vec()).expect("the envelope serializes");
+
+        assert_eq!(
+            SignedOps::<Unverified, StandardMode>::from_bytes(&envelope)
+                .expect("the binary arm deserializes"),
+            signed_ops
         );
     }
 
