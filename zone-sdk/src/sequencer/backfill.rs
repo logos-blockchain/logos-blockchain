@@ -92,6 +92,26 @@ where
             }
         }
 
+        // Advance the config-lineage marker using the last config in the batch,
+        // mirroring the inscription marker above so `config_tip_at` keeps a
+        // valid parent once these blocks prune below LIB.
+        if let Some(last_config) = batch
+            .items
+            .iter()
+            .rev()
+            .flat_map(|t| t.ops.iter().rev())
+            .find_map(|op| match op {
+                FinalizedOp::Config(c) => Some(c),
+                FinalizedOp::Inscription(_)
+                | FinalizedOp::Deposit(_)
+                | FinalizedOp::Withdraw(_)
+                | FinalizedOp::ChannelTransfer(_) => None,
+            })
+            && let Some(s) = self.state.as_mut()
+        {
+            s.set_finalized_config(last_config.this_msg);
+        }
+
         // Clean up our pending set for txs that finalized in this batch.
         // Mirrors the cleanup in `handle_block_event`. Without this, restored
         // pending txs whose blocks were already finalized during downtime

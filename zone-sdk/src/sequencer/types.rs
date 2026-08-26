@@ -45,6 +45,13 @@ pub struct SequencerCheckpoint {
     /// rebuilds the full set.
     #[serde(default)]
     pub channel_notes: Vec<ChannelNote>,
+    /// The finalized config-lineage tip as of `lib`. Restored so
+    /// `config_tip_at` keeps resolving the right config parent after a warm
+    /// restart, once the config's block has been pruned below LIB. Defaults
+    /// to [`MsgId::root`] for checkpoints written before this field existed
+    /// (matching the old reset-to-root behavior).
+    #[serde(default = "MsgId::root")]
+    pub finalized_config: MsgId,
 }
 
 /// Result of a publish operation.

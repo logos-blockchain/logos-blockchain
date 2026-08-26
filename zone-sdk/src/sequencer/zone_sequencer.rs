@@ -248,10 +248,12 @@ where
                 lib,
                 lib_slot,
                 channel_notes,
+                finalized_config,
             } = cp;
             let finalized_msg =
                 restored_pending_channel_tip(&pending_txs, channel_id).unwrap_or(last_msg_id);
             let mut tx_state = TxState::new(lib, finalized_msg);
+            tx_state.set_finalized_config(finalized_config);
             tx_state.restore_channel_notes(channel_notes);
             for (_hash, tx) in pending_txs {
                 track_pending_tx(&mut tx_state, tx, channel_id);
@@ -1215,6 +1217,7 @@ pub(super) fn build_checkpoint(
         lib: state.lib(),
         lib_slot,
         channel_notes: state.channel_notes_base(),
+        finalized_config: state.finalized_config(),
     }
 }
 

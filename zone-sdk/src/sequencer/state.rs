@@ -238,6 +238,21 @@ impl TxState {
         self.finalized_parent_msg = parent;
     }
 
+    /// The finalized config-lineage tip (the newest config at/below LIB). Read
+    /// for checkpointing; restored via [`Self::set_finalized_config`].
+    #[must_use]
+    pub const fn finalized_config(&self) -> MsgId {
+        self.finalized_config
+    }
+
+    /// Restore/refresh the finalized config-lineage tip — from a checkpoint on
+    /// warm start, or from backfilled finalized history. Without this the tip
+    /// resets to [`MsgId::root`] on restart, and `config_tip_at` can fall back
+    /// to a stale parent once the config's block is pruned below LIB.
+    pub const fn set_finalized_config(&mut self, config: MsgId) {
+        self.finalized_config = config;
+    }
+
     /// Submit an inscription tx for tracking with lineage metadata. Use
     /// [`Self::submit_atomic_withdraw`] for inscription+withdraw bundles.
     pub fn submit_inscription(
@@ -1908,6 +1923,30 @@ mod tests {
         assert_eq!(shed.len(), 1);
         assert_eq!(shed[0].mantle_tx().hash(), stale_hash);
         assert!(!state.pending_other_contains(&stale_hash));
+    }
+
+    /// The finalized config tip must survive a warm restart. It lives only in
+    /// `finalized_config` once its block prunes below LIB, so a checkpoint has
+    /// to carry it — otherwise `config_tip_at` falls back to `root` after
+    /// restart and a later config would chain on a stale parent.
+    #[test]
+    fn finalized_config_survives_checkpoint_restore() {
+        let genesis = header_id(0);
+        let config = msg_id(7);
+
+        // A config finalized at/below LIB; the checkpoint captures its tip.
+        let mut state = TxState::new(genesis, MsgId::root());
+        state.set_finalized_config(config);
+        assert_eq!(state.finalized_config(), config);
+
+        // Warm restart without restoring it: `config_tip_at` falls back to root
+        // (the bug — a new config would chain on the wrong parent).
+        let mut restored = TxState::new(genesis, MsgId::root());
+        assert_eq!(restored.config_tip_at(genesis), MsgId::root());
+
+        // Restored from the checkpoint's `finalized_config`, the tip resolves.
+        restored.set_finalized_config(state.finalized_config());
+        assert_eq!(restored.config_tip_at(genesis), config);
     }
 
     /// Many configs can land in one block as a chain (`root → C1 → C2`). The
