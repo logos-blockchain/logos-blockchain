@@ -78,25 +78,11 @@ impl OldEpochBlendingTokenCollector {
     ///
     /// It returns `None` if there was no blending token satisfying the
     /// activity threshold calculated.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "Diagnostic token evaluation remains adjacent to proof selection."
-    )]
     #[must_use]
     pub fn compute_activity_proof(self) -> Option<ActivityProof> {
-        let proof_epoch = u32::from(self.collector.epoch());
-        let activity_threshold = self.collector.token_evaluation.activity_threshold().value();
-
         // Find the blending token with the smallest Hamming distance,
         // which is <= activity threshold.
-        tracing::trace!(
-            LOG_TARGET,
-            "Computing activity proof for epoch {} with activity threshold {:?} and next epoch randomness {:?} for {} candidate tokens",
-            self.collector.epoch(),
-            self.collector.token_evaluation.activity_threshold(),
-            self.next_epoch_randomness,
-            self.collector.tokens.len()
-        );
+        // Capture DEBUG-only token diagnostics before the tokens are consumed below.
         let candidate_hamming_distances =
             tracing::enabled!(target: LOG_TARGET, tracing::Level::DEBUG).then(|| {
                 self.collector
@@ -110,8 +96,10 @@ impl OldEpochBlendingTokenCollector {
                     })
                     .collect::<Vec<_>>()
             });
-        let candidate_blending_token_count = self.collector.tokens.len();
-        let winning_activity_proof = self
+        // Capture these scalars before consuming the token set below.
+        let proof_epoch = u32::from(self.collector.epoch());
+        let activity_threshold = self.collector.token_evaluation.activity_threshold().value();
+        let winning_activity_proof_with_distance = self
             .collector
             .tokens
             .into_iter()
@@ -140,15 +128,15 @@ impl OldEpochBlendingTokenCollector {
                 diagnostic = "blend_tsi_outage",
                 event = "blend_activity_token_evaluation",
                 proof_epoch,
-                candidate_blending_token_count,
+                candidate_blending_token_count = candidate_hamming_distances.len(),
                 activity_threshold,
-                candidate_hamming_distances = ?candidate_hamming_distances,
-                activity_proof_generated = winning_activity_proof.is_some(),
+                ?candidate_hamming_distances,
+                activity_proof_generated = winning_activity_proof_with_distance.is_some(),
                 "Evaluated Blend activity tokens"
             );
         }
 
-        let (winning_activity_proof, distance) = winning_activity_proof?;
+        let (winning_activity_proof, distance) = winning_activity_proof_with_distance?;
 
         tracing::trace!(
             LOG_TARGET,
