@@ -243,10 +243,31 @@ impl<Mode: VerificationMode> ExecutableOperation
 mod tests {
     use super::*;
     use crate::mantle::{
-        gas::test_utils::FixedThresholds,
+        TxHash, gas::test_utils::FixedThresholds,
         ops::channel::verification::test_utils::create_channel_multi_sig_proof,
-        transactions::hash::TxHash,
+        transactions::tx_list::signed_ops::test_utils::make_channel_state,
     };
+
+    fn channels(channel_id: ChannelId, configuration_threshold: u16, keys: Keys) -> Channels {
+        let mut channels = Channels::new();
+        channels.channels.insert_mut(
+            channel_id,
+            ChannelState {
+                configuration_threshold,
+                ..make_channel_state(1, Some(keys))
+            },
+        );
+        channels
+    }
+
+    fn preverified(
+        operation: ChannelConfigOp,
+        proof: ChannelMultiSigProof,
+    ) -> SignedOperation<ChannelConfigOp, Preverified, StandardMode> {
+        SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
+            .into_preverified(&())
+            .expect("preverify accepts a well-formed configuration")
+    }
 
     fn genesis_config_op(channel: ChannelId) -> ChannelConfigOp {
         ChannelConfigOp {
@@ -301,6 +322,192 @@ mod tests {
             .unwrap();
 
         assert!(signed_operation.verify(&context).unwrap().is_none());
+    }
+
+    #[test]
+    fn preverify_rejects_a_zero_configuration_threshold() {
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            ChannelConfigOp {
+                configuration_threshold: 0,
+                ..ChannelConfigOp::sample()
+            },
+            ChannelMultiSigProof::sample_with_signatures(1),
+        );
+
+        assert_eq!(
+            signed_operation.preverify(&()),
+            Err(Error::InvalidChannelConfig)
+        );
+    }
+
+    #[test]
+    fn preverify_rejects_a_zero_transfer_threshold() {
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            ChannelConfigOp {
+                transfer_threshold: 0,
+                ..ChannelConfigOp::sample()
+            },
+            ChannelMultiSigProof::sample_with_signatures(1),
+        );
+
+        assert_eq!(
+            signed_operation.preverify(&()),
+            Err(Error::InvalidChannelConfig)
+        );
+    }
+
+    #[test]
+    fn preverify_rejects_an_empty_accredited_key_set() {
+        let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
+            ChannelConfigOp {
+                keys: Keys::new_unchecked(vec![]),
+                ..ChannelConfigOp::sample()
+            },
+            ChannelMultiSigProof::sample_with_signatures(1),
+        );
+
+        assert_eq!(
+            signed_operation.preverify(&()),
+            Err(Error::InvalidChannelConfig)
+        );
+    }
+
+    #[test]
+    fn verify_accepts_an_unregistered_channel_without_checking_signatures() {
+        let signed_operation = preverified(
+            ChannelConfigOp::sample(),
+            ChannelMultiSigProof::sample_with_signatures(0),
+        );
+
+        assert!(
+            signed_operation
+                .verify(&ChannelConfigValidationContext {
+                    channels: &Channels::new(),
+                    tx_hash_view: &TxHashView::from(TxHash::from([9u8; 32])),
+                })
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_signature_count_below_the_threshold() {
+        let operation = ChannelConfigOp::sample();
+        let channel_id = operation.channel;
+        let key = Ed25519Key::from_bytes(&[0; 32]);
+        let tx_hash = TxHash::from([9u8; 32]);
+
+        let signed_operation =
+            preverified(operation, create_channel_multi_sig_proof(&tx_hash, &[&key]));
+
+        assert_eq!(
+            signed_operation
+                .verify(&ChannelConfigValidationContext {
+                    channels: &channels(channel_id, 2, Keys::new_unchecked(vec![key.public_key()])),
+                    tx_hash_view: &TxHashView::from(tx_hash),
+                })
+                .unwrap_err(),
+            Error::ThresholdUnmet {
+                channel_id,
+                threshold: 2,
+                actual: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_signature_index_outside_the_accredited_keys() {
+        let operation = ChannelConfigOp::sample();
+        let channel_id = operation.channel;
+        let accredited = Ed25519Key::from_bytes(&[0; 32]);
+        let outsider = Ed25519Key::from_bytes(&[1; 32]);
+        let tx_hash = TxHash::from([9u8; 32]);
+
+        let signed_operation = preverified(
+            operation,
+            create_channel_multi_sig_proof(&tx_hash, &[&accredited, &outsider]),
+        );
+
+        assert_eq!(
+            signed_operation
+                .verify(&ChannelConfigValidationContext {
+                    channels: &channels(
+                        channel_id,
+                        2,
+                        Keys::new_unchecked(vec![accredited.public_key()])
+                    ),
+                    tx_hash_view: &TxHashView::from(tx_hash),
+                })
+                .unwrap_err(),
+            Error::InvalidSignatureIndex {
+                channel_id,
+                sequencers: 1,
+                index: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_signature_from_a_key_the_channel_does_not_accredit() {
+        let operation = ChannelConfigOp::sample();
+        let channel_id = operation.channel;
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let accredited_key = Ed25519Key::from_bytes(&[1; 32]);
+        let signed_hash = TxHash::from([9u8; 32]);
+
+        let signed_operation = preverified(
+            operation,
+            create_channel_multi_sig_proof(&signed_hash, &[&signing_key]),
+        );
+        let channels = channels(
+            channel_id,
+            1,
+            Keys::new_unchecked(vec![accredited_key.public_key()]),
+        );
+
+        assert_eq!(
+            signed_operation
+                .verify(&ChannelConfigValidationContext {
+                    channels: &channels,
+                    tx_hash_view: &TxHashView::from(signed_hash),
+                })
+                .unwrap_err(),
+            Error::InvalidSignature
+        );
+    }
+
+    #[test]
+    fn verify_rejects_signatures_over_another_transaction() {
+        let operation = ChannelConfigOp::sample();
+        let channel_id = operation.channel;
+        let key = Ed25519Key::from_bytes(&[0; 32]);
+        let signed_hash = TxHash::from([9u8; 32]);
+        let other_hash = TxHash::from([10u8; 32]);
+
+        let signed_operation = preverified(
+            operation,
+            create_channel_multi_sig_proof(&signed_hash, &[&key]),
+        );
+        let channels = channels(channel_id, 1, Keys::new_unchecked(vec![key.public_key()]));
+
+        assert!(
+            signed_operation
+                .verify(&ChannelConfigValidationContext {
+                    channels: &channels,
+                    tx_hash_view: &TxHashView::from(signed_hash),
+                })
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            signed_operation
+                .verify(&ChannelConfigValidationContext {
+                    channels: &channels,
+                    tx_hash_view: &TxHashView::from(other_hash),
+                })
+                .unwrap_err(),
+            Error::InvalidSignature
+        );
     }
 
     #[test]

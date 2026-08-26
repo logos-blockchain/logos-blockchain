@@ -7,6 +7,7 @@ use lb_zksign::{ZkSignProof, ZkSignVerifierInputs};
     reason = "This is short-lived; each is pushed into DeferredZkpVerifications almost immediately, \
     which stores the two kinds in separate vectors. Also, most of them are the larger ZkSig variant."
 )]
+#[derive(Debug)]
 pub enum DeferredZkpVerification {
     ZkSig(ZkSignProof, ZkSignVerifierInputs),
     LeaderClaim(PoCProof, PoCVerifierInput),

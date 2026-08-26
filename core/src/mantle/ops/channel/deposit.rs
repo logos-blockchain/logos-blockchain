@@ -200,12 +200,17 @@ impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<DepositOp, 
 #[cfg(test)]
 mod test {
     use lb_groth16::CompressedGroth16Proof;
+    use lb_key_management_system_keys::keys::ZkKey;
+    use num_bigint::BigUint;
 
     use super::*;
-    use crate::mantle::gas::test_utils::FixedThresholds;
+    use crate::mantle::{
+        Note, Utxo, gas::test_utils::FixedThresholds,
+        transactions::tx_list::signed_ops::test_utils::make_channel_state,
+    };
 
     #[test]
-    fn test_preverify_rejects_empty_inputs() {
+    fn preverify_rejects_empty_inputs() {
         let deposit = DepositOp {
             channel_id: ChannelId::from([0u8; 32]),
             inputs: Inputs::empty(),
@@ -217,6 +222,134 @@ mod test {
         assert_eq!(
             signed_operation.preverify(&()),
             Err(Error::Inputs(InputsError::EmptyInputs))
+        );
+    }
+
+    #[test]
+    fn verify_rejects_an_unregistered_channel() {
+        let input_key = ZkKey::from(BigUint::from(1u8));
+        let input_utxo = Utxo {
+            op_id: [1u8; 32],
+            output_index: 0,
+            note: Note::new(10_000, input_key.to_public_key()),
+        };
+        let (utxos, _) = Utxos::new().insert(input_utxo.id(), input_utxo);
+
+        let operation = DepositOp {
+            inputs: Inputs::new([input_utxo.id()]),
+            ..DepositOp::sample()
+        };
+        let channel_id = operation.channel_id;
+
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let proof =
+            ZkKey::multi_sign(&[input_key], signed_view.as_fr()).expect("signing should succeed");
+
+        let signed_operation =
+            SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
+                .into_preverified(&())
+                .expect("preverify should accept a non-empty deposit");
+
+        let locked_notes = ServiceNotes::new();
+
+        assert_eq!(
+            signed_operation
+                .verify(&DepositValidationContext {
+                    channels: &Channels::new(),
+                    service_notes: &locked_notes,
+                    utxos: &utxos,
+                    tx_hash_view: &signed_view,
+                })
+                .unwrap_err(),
+            Error::ChannelNotFound { channel_id }
+        );
+    }
+
+    #[test]
+    fn verify_rejects_an_input_missing_from_the_ledger() {
+        let input_key = ZkKey::from(BigUint::from(1u8));
+        let input_utxo = Utxo {
+            op_id: [1u8; 32],
+            output_index: 0,
+            note: Note::new(10_000, input_key.to_public_key()),
+        };
+
+        let operation = DepositOp {
+            inputs: Inputs::new([input_utxo.id()]),
+            ..DepositOp::sample()
+        };
+
+        let mut channels = Channels::new();
+        channels
+            .channels
+            .insert_mut(operation.channel_id, make_channel_state(1, None));
+        let locked_notes = ServiceNotes::new();
+
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let proof =
+            ZkKey::multi_sign(&[input_key], signed_view.as_fr()).expect("signing should succeed");
+
+        let signed_operation =
+            SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
+                .into_preverified(&())
+                .expect("preverify should accept a non-empty deposit");
+
+        assert_eq!(
+            signed_operation
+                .verify(&DepositValidationContext {
+                    channels: &channels,
+                    service_notes: &locked_notes,
+                    utxos: &Utxos::new(),
+                    tx_hash_view: &signed_view,
+                })
+                .unwrap_err(),
+            Error::Inputs(InputsError::InexistingNote(input_utxo.id()))
+        );
+    }
+
+    #[test]
+    fn verify_rejects_an_input_already_owned_by_a_channel() {
+        let input_key = ZkKey::from(BigUint::from(1u8));
+        let input_utxo = Utxo {
+            op_id: [1u8; 32],
+            output_index: 0,
+            note: Note::new(10_000, input_key.to_public_key()),
+        };
+        let (utxos, _) = Utxos::new().insert(input_utxo.id(), input_utxo);
+
+        let operation = DepositOp {
+            inputs: Inputs::new([input_utxo.id()]),
+            ..DepositOp::sample()
+        };
+
+        let mut channels = Channels::new();
+        channels
+            .channels
+            .insert_mut(operation.channel_id, make_channel_state(1, None));
+        let channels = channels
+            .register_channel_note(&input_utxo.id(), &ChannelId::from([21u8; 32]))
+            .expect("the note is not owned by another channel");
+        let locked_notes = ServiceNotes::new();
+
+        let signed_view = TxHashView::from(TxHash::from([9u8; 32]));
+        let proof =
+            ZkKey::multi_sign(&[input_key], signed_view.as_fr()).expect("signing should succeed");
+
+        let signed_operation =
+            SignedOperation::<_, Unverified, StandardMode>::new(operation, proof)
+                .into_preverified(&())
+                .expect("preverify should accept a non-empty deposit");
+
+        assert_eq!(
+            signed_operation
+                .verify(&DepositValidationContext {
+                    channels: &channels,
+                    service_notes: &locked_notes,
+                    utxos: &utxos,
+                    tx_hash_view: &signed_view,
+                })
+                .unwrap_err(),
+            Error::Inputs(InputsError::ChannelNote(input_utxo.id()))
         );
     }
 
