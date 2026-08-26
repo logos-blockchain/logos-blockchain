@@ -636,22 +636,25 @@ async fn test_handle_epoch_event() {
     let HandleEpochEventOutput::Transitioning {
         new_crypto_processor,
         new_scheduler,
-        old_scheduler,
         new_epoch_info,
         new_recovery_checkpoint,
-        old_crypto_processor,
+        old_epoch_components,
     } = output
     else {
         panic!("expected Transitioning output");
     };
     assert_eq!(new_crypto_processor.epoch(), epoch.strict_add(1.into()));
-    assert_eq!(old_crypto_processor.epoch(), epoch);
+    assert_eq!(old_epoch_components.epoch(), epoch);
     assert_eq!(
         new_scheduler.release_delayer().unreleased_messages().len(),
         0
     );
     assert_eq!(
-        old_scheduler.release_delayer().unreleased_messages().len(),
+        old_epoch_components
+            .scheduler()
+            .release_delayer()
+            .unreleased_messages()
+            .len(),
         0
     );
     assert_eq!(new_epoch_info.epoch, epoch.strict_add(1.into()));
@@ -725,13 +728,13 @@ async fn test_handle_epoch_event() {
     )
     .await;
     let HandleEpochEventOutput::Retiring {
-        old_crypto_processor,
+        old_epoch_components,
         ..
     } = output
     else {
         panic!("expected Retiring output");
     };
-    assert_eq!(old_crypto_processor.epoch(), epoch.strict_add(1.into()));
+    assert_eq!(old_epoch_components.epoch(), epoch.strict_add(1.into()));
 }
 
 /// On an epoch change where the membership actually changes (and the local node
@@ -818,7 +821,7 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
 
     let HandleEpochEventOutput::Transitioning {
         new_crypto_processor,
-        old_crypto_processor,
+        old_epoch_components,
         new_epoch_info: returned_epoch_info,
         ..
     } = output
@@ -829,7 +832,7 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
     // A fresh generator is built for the new epoch, and the previous one is
     // retained for the old epoch.
     assert_eq!(new_crypto_processor.epoch(), new_epoch);
-    assert_eq!(old_crypto_processor.epoch(), epoch);
+    assert_eq!(old_epoch_components.epoch(), epoch);
     // The returned public info carries the new membership.
     assert_eq!(returned_epoch_info.epoch, new_epoch);
     assert_eq!(returned_epoch_info.membership.size(), new_membership.size());
@@ -1007,7 +1010,7 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
     )
     .await;
     let HandleEpochEventOutput::Retiring {
-        old_crypto_processor,
+        old_epoch_components,
         ..
     } = output
     else {
@@ -1015,7 +1018,7 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
     };
     // The old processor/info should be from the epoch we were on before
     // the empty epoch arrived.
-    assert_eq!(old_crypto_processor.epoch(), epoch);
+    assert_eq!(old_epoch_components.epoch(), epoch);
 }
 
 /// Handle a `NewEpoch(NonEmpty)` event where membership exists but the local
@@ -1090,14 +1093,14 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
     .await;
 
     let HandleEpochEventOutput::Retiring {
-        old_crypto_processor,
+        old_epoch_components,
         ..
     } = output
     else {
         panic!("expected Retiring output for NonEmpty epoch without local core path");
     };
 
-    assert_eq!(old_crypto_processor.epoch(), epoch);
+    assert_eq!(old_epoch_components.epoch(), epoch);
 }
 
 /// Check if the service keeps running after it receives a new epoch where
@@ -1179,11 +1182,7 @@ async fn complete_old_epoch_after_main_loop_done() {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
 
-        let (
-            old_epoch_crypto_processor,
-            old_epoch_message_scheduler,
-            old_epoch_blending_token_collector,
-        ) = run_event_loop(
+        let (old_epoch_components, old_epoch_blending_token_collector) = run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
             secret_pol_info_stream,
@@ -1207,10 +1206,9 @@ async fn complete_old_epoch_after_main_loop_done() {
             backend,
             TestPayloadDispatcher,
             sdp_relay,
-            old_epoch_message_scheduler,
             rng,
             old_epoch_blending_token_collector,
-            old_epoch_crypto_processor,
+            old_epoch_components,
         )
         .await;
     });
@@ -1328,11 +1326,7 @@ async fn stop_on_empty_epoch() {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
 
-        let (
-            old_epoch_crypto_processor,
-            old_epoch_message_scheduler,
-            old_epoch_blending_token_collector,
-        ) = run_event_loop(
+        let (old_epoch_components, old_epoch_blending_token_collector) = run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
             secret_pol_info_stream,
@@ -1356,10 +1350,9 @@ async fn stop_on_empty_epoch() {
             backend,
             TestPayloadDispatcher,
             sdp_relay,
-            old_epoch_message_scheduler,
             rng,
             old_epoch_blending_token_collector,
-            old_epoch_crypto_processor,
+            old_epoch_components,
         )
         .await;
     });
@@ -1466,11 +1459,7 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
 
-        let (
-            old_epoch_crypto_processor,
-            old_epoch_message_scheduler,
-            old_epoch_blending_token_collector,
-        ) = run_event_loop(
+        let (old_epoch_components, old_epoch_blending_token_collector) = run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
             secret_pol_info_stream,
@@ -1494,10 +1483,9 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
             backend,
             TestPayloadDispatcher,
             sdp_relay,
-            old_epoch_message_scheduler,
             rng,
             old_epoch_blending_token_collector,
-            old_epoch_crypto_processor,
+            old_epoch_components,
         )
         .await;
     });

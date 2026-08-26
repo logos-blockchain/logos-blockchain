@@ -90,6 +90,7 @@ use crate::{
         scheduler::SchedulerWrapper,
         settings::{RunningBlendConfig, StartingBlendConfig},
         state::{RecoveryServiceState, ServiceState, StateUpdater as ServiceStateUpdater},
+        transitioning::TransitioningEpoch,
     },
     epoch::{CoreEpochInfo, CoreEpochPublicInfo, MaybeEmptyCoreEpochInfo},
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
@@ -110,6 +111,7 @@ mod scheduler;
 mod state;
 #[cfg(test)]
 mod tests;
+mod transitioning;
 pub use state::RecoveryServiceState as CoreServiceState;
 
 const LOG_TARGET: &str = blend::service::CORE;
@@ -428,13 +430,8 @@ where
 
         // Run the main event loop while the node is a core node across multiple
         // epochs. When the node becomes a non-core node in a new epoch, the
-        // old epoch's components (crypto processor, scheduler, blending token
-        // collector, public info, and epoch) are returned for the retirement phase.
-        let (
-            old_epoch_crypto_processor,
-            old_epoch_message_scheduler,
-            old_epoch_blending_token_collector,
-        ) = run_event_loop(
+        // epoch it is leaving behind is handed over for the retirement phase.
+        let (old_epoch_components, old_epoch_blending_token_collector) = run_event_loop(
             inbound_relay,
             &mut blend_messages,
             secret_pol_info_stream,
@@ -464,10 +461,9 @@ where
             backend,
             payload_dispatcher,
             sdp_relay,
-            old_epoch_message_scheduler,
             rng,
             old_epoch_blending_token_collector,
-            old_epoch_crypto_processor,
+            old_epoch_components,
         )
         .await;
 
@@ -838,8 +834,7 @@ async fn run_event_loop<
     mut current_epoch_info: CoreEpochPublicInfo<NodeId>,
     mut recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
 ) -> (
-    OldEpochCryptographicProcessor<ProofsVerifier>,
-    OldEpochMessageScheduler<Rng, ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
+    TransitioningEpoch<Rng, ProofsVerifier>,
     OldEpochBlendingTokenCollector,
 )
 where
@@ -852,24 +847,13 @@ where
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     RuntimeServiceId: Sync + Send,
 {
-    // An optional crypto processor to handle the old epoch during transition
-    // period.
-    let mut old_epoch_crypto_processor: Option<OldEpochCryptographicProcessor<ProofsVerifier>> =
-        None;
-    let mut old_epoch_message_scheduler: Option<
-        OldEpochMessageScheduler<
-            Rng,
-            ProcessedMessage,
-            EncapsulatedMessageWithVerifiedPublicHeader,
-        >,
-    > = None;
+    // The previous epoch's pipeline, present only while its transition period
+    // runs.
+    let mut old_epoch_components: Option<TransitioningEpoch<Rng, ProofsVerifier>> = None;
     let mut latest_secret_pol_info: Option<PolEpochInfo> = None;
 
     loop {
-        // `old_epoch` captured here so we can drop the `Sync` requirement.
-        let old_epoch = old_epoch_crypto_processor
-            .as_ref()
-            .map(OldEpochCryptographicProcessor::epoch);
+        let old_epoch = old_epoch_components.as_ref().map(TransitioningEpoch::epoch);
         tokio::select! {
             Some(msg) = inbound_relay.next() => {
                 match msg {
@@ -894,15 +878,21 @@ where
                 recovery_checkpoint = handle_local_transaction(&encapsulation, &mut pending_transactions, &crypto_processor, &mut message_scheduler, recovery_checkpoint);
             }
             Some(incoming_message) = blend_messages.next() => {
-                recovery_checkpoint = handle_incoming_blend_message(incoming_message, &mut message_scheduler, old_epoch_message_scheduler.as_mut(), crypto_processor.receiver(), old_epoch_crypto_processor.as_ref(),  recovery_checkpoint);
+                let (old_cryptographic_processor, old_scheduler) = old_epoch_components
+                    .as_mut()
+                    .map_or((None, None), |transitioning| {
+                        let (crypto, scheduler) = transitioning.split_mut();
+                        (Some(crypto), Some(scheduler))
+                    });
+                recovery_checkpoint = handle_incoming_blend_message(incoming_message, &mut message_scheduler, old_scheduler, crypto_processor.receiver(), old_cryptographic_processor,  recovery_checkpoint);
             }
             Some(round_info) = message_scheduler.next() => {
                 recovery_checkpoint = handle_release_round(round_info, &mut crypto_processor, rng, backend, payload_dispatcher, recovery_checkpoint).await;
             }
             Some((Some(round_info), previous_epoch)) = async {
-                match (&mut old_epoch_message_scheduler, old_epoch) {
-                    (Some(old_scheduler), Some(old_epoch)) => {
-                        Some((old_scheduler.next().await, old_epoch))
+                match (&mut old_epoch_components, old_epoch) {
+                    (Some(old_epoch_components), Some(old_epoch)) => {
+                        Some((old_epoch_components.scheduler_mut().next().await, old_epoch))
                     },
                     _ => None
                 }
@@ -923,31 +913,25 @@ where
             Some(epoch_event) = remaining_epoch_stream.next() => {
                 match handle_epoch_event(epoch_event, blend_config, crypto_processor, message_scheduler, current_epoch_info, recovery_checkpoint, backend, sdp_relay, &mut latest_secret_pol_info).await {
                     // Current epoch info updated to new one
-                    HandleEpochEventOutput::Transitioning { new_crypto_processor, old_crypto_processor, new_scheduler, old_scheduler, new_epoch_info, new_recovery_checkpoint } => {
+                    HandleEpochEventOutput::Transitioning { new_crypto_processor, new_scheduler, new_epoch_info, new_recovery_checkpoint, old_epoch_components: transitioning_epoch } => {
                         crypto_processor = new_crypto_processor;
-                        old_epoch_crypto_processor = Some(old_crypto_processor);
                         message_scheduler = new_scheduler;
-                        old_epoch_message_scheduler = Some(*old_scheduler);
                         current_epoch_info = new_epoch_info;
                         recovery_checkpoint = new_recovery_checkpoint;
+                        old_epoch_components = Some(*transitioning_epoch);
                     },
                     // Current epoch info unchanged
                     HandleEpochEventOutput::TransitionCompleted { current_crypto_processor, current_scheduler, new_recovery_checkpoint, current_epoch_info: same_epoch_info } => {
                         crypto_processor = current_crypto_processor;
-                        old_epoch_crypto_processor = None;
                         message_scheduler = current_scheduler;
-                        old_epoch_message_scheduler = None;
                         current_epoch_info = same_epoch_info;
                         recovery_checkpoint = new_recovery_checkpoint;
+                        old_epoch_components = None;
                     },
                     // Current epoch info consumed, not usable anymore
-                    HandleEpochEventOutput::Retiring { old_crypto_processor, old_scheduler, old_token_collector } => {
+                    HandleEpochEventOutput::Retiring { old_epoch_components, old_token_collector } => {
                         tracing::info!(target: LOG_TARGET, "Exiting from the main event loop");
-                        return (
-                            old_crypto_processor,
-                            *old_scheduler,
-                            old_token_collector,
-                        );
+                        return (*old_epoch_components, old_token_collector);
                     },
                 }
             }
@@ -1086,14 +1070,9 @@ async fn retire<
     mut backend: Backend,
     payload_dispatcher: Dispatcher,
     sdp_relay: OutboundRelay<SdpMessage>,
-    mut message_scheduler: OldEpochMessageScheduler<
-        Rng,
-        ProcessedMessage,
-        EncapsulatedMessageWithVerifiedPublicHeader,
-    >,
     mut rng: Rng,
     mut blending_token_collector: OldEpochBlendingTokenCollector,
-    crypto_processor: OldEpochCryptographicProcessor<ProofsVerifier>,
+    old_epoch_components: TransitioningEpoch<Rng, ProofsVerifier>,
 ) where
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
@@ -1103,6 +1082,7 @@ async fn retire<
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
+    let (crypto_processor, mut message_scheduler) = old_epoch_components.into_components();
     loop {
         tokio::select! {
             Some(incoming_message) = blend_messages.next() => {
@@ -1230,12 +1210,12 @@ where
             let Some(core_poq_generator) = new_core_poq_generator else {
                 tracing::info!(target: LOG_TARGET, "Local node is not part of new membership. Retiring from core.");
                 return HandleEpochEventOutput::Retiring {
-                    old_crypto_processor: old_cryptographic_processor,
-                    old_scheduler: Box::new(
+                    old_epoch_components: Box::new(TransitioningEpoch::new(
+                        old_cryptographic_processor,
                         current_scheduler
                             .rotate_epoch(new_scheduler_epoch_info, settings.scheduler_settings())
                             .1,
-                    ),
+                    )),
                     old_token_collector: old_epoch_blending_token_collector,
                 };
             };
@@ -1275,15 +1255,15 @@ where
                     Err(e @ (Error::LocalIsNotCoreNode | Error::NetworkIsTooSmall(_))) => {
                         tracing::info!(target: LOG_TARGET, "New membership does not satisfy the core node condition: {e:?}");
                         return HandleEpochEventOutput::Retiring {
-                            old_crypto_processor: old_cryptographic_processor,
-                            old_scheduler: Box::new(
+                            old_epoch_components: Box::new(TransitioningEpoch::new(
+                                old_cryptographic_processor,
                                 current_scheduler
                                     .rotate_epoch(
                                         new_scheduler_epoch_info,
                                         settings.scheduler_settings(),
                                     )
                                     .1,
-                            ),
+                            )),
                             old_token_collector: old_epoch_blending_token_collector,
                         };
                     }
@@ -1293,9 +1273,11 @@ where
                 .rotate_epoch(new_scheduler_epoch_info, settings.scheduler_settings());
             HandleEpochEventOutput::Transitioning {
                 new_crypto_processor: new_processor,
-                old_crypto_processor: old_cryptographic_processor,
                 new_scheduler,
-                old_scheduler: Box::new(old_scheduler),
+                old_epoch_components: Box::new(TransitioningEpoch::new(
+                    old_cryptographic_processor,
+                    old_scheduler,
+                )),
                 new_recovery_checkpoint: ServiceState::with_epoch(
                     new_epoch_info.epoch,
                     pending_transactions,
@@ -1323,8 +1305,10 @@ where
             let (_, old_epoch_blending_token_collector) =
                 current_epoch_blending_token_collector.rotate_epoch(&new_reward_epoch_info);
             HandleEpochEventOutput::Retiring {
-                old_crypto_processor: old_cryptographic_processor,
-                old_scheduler: Box::new(current_scheduler.consume()),
+                old_epoch_components: Box::new(TransitioningEpoch::new(
+                    old_cryptographic_processor,
+                    current_scheduler.consume(),
+                )),
                 old_token_collector: old_epoch_blending_token_collector,
             }
         }
@@ -1387,21 +1371,14 @@ enum HandleEpochEventOutput<
             ProofsGenerator,
             ProofsVerifier,
         >,
-        old_crypto_processor: OldEpochCryptographicProcessor<ProofsVerifier>,
         new_scheduler: EpochMessageScheduler<
             Rng,
             ProcessedMessage,
             EncapsulatedMessageWithVerifiedPublicHeader,
         >,
-        old_scheduler: Box<
-            OldEpochMessageScheduler<
-                Rng,
-                ProcessedMessage,
-                EncapsulatedMessageWithVerifiedPublicHeader,
-            >,
-        >,
         new_epoch_info: CoreEpochPublicInfo<NodeId>,
         new_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
+        old_epoch_components: Box<TransitioningEpoch<Rng, ProofsVerifier>>,
     },
     TransitionCompleted {
         current_crypto_processor: CurrentEpochCryptographicProcessor<
@@ -1419,14 +1396,10 @@ enum HandleEpochEventOutput<
         new_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
     },
     Retiring {
-        old_crypto_processor: OldEpochCryptographicProcessor<ProofsVerifier>,
-        old_scheduler: Box<
-            OldEpochMessageScheduler<
-                Rng,
-                ProcessedMessage,
-                EncapsulatedMessageWithVerifiedPublicHeader,
-            >,
-        >,
+        old_epoch_components: Box<TransitioningEpoch<Rng, ProofsVerifier>>,
+        /// Held apart from `old_epoch_components` because the recovery state
+        /// that would otherwise carry these is consumed on the way out
+        /// of core.
         old_token_collector: OldEpochBlendingTokenCollector,
     },
 }
