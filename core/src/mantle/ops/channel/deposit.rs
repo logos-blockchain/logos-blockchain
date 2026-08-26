@@ -207,7 +207,7 @@ mod test {
 
     use super::*;
     use crate::mantle::{
-        Note, Utxo, ops::op_proof::samples::SampleProof as _,
+        Note, Utxo, channel_notes, ops::op_proof::samples::SampleProof as _,
         transactions::tx_list::signed_ops::test_utils::make_channel_state,
     };
 
@@ -439,6 +439,138 @@ mod test {
                 tx_hash_view: &other_view,
             }),
             Err(Error::InvalidSignature)
+        );
+    }
+
+    fn input_utxo(seed: u8) -> Utxo {
+        Utxo {
+            op_id: [seed; 32],
+            output_index: 0,
+            note: Note::new(10_000, ZkKey::from(BigUint::from(seed)).to_public_key()),
+        }
+    }
+
+    fn verified(inputs: Inputs) -> SignedOperation<DepositOp, Verified, StandardMode> {
+        SignedOperation::<_, Unverified, StandardMode>::new(
+            DepositOp {
+                inputs,
+                ..DepositOp::sample()
+            },
+            <DepositOp as ProvableOperation>::Proof::sample(),
+        )
+        .into_state_trusted()
+    }
+
+    #[test]
+    fn execute_recreates_every_input_as_a_channel_note_and_emits_a_deposit_event() {
+        let first = input_utxo(1);
+        let second = input_utxo(2);
+        let (utxos, _) = Utxos::new().insert(first.id(), first);
+        let (utxos, _) = utxos.insert(second.id(), second);
+
+        let signed_operation = verified(Inputs::new([first.id(), second.id()]));
+        let operation = signed_operation.operation().clone();
+        let tx_hash = TxHash::from([9u8; 32]);
+
+        let (context, events) = signed_operation
+            .execute(DepositExecutionContext {
+                channels: Channels::new(),
+                utxos,
+                tx_hash,
+            })
+            .expect("both inputs are in the ledger");
+
+        let first_deposited = Utxo::new(operation.op_id(), 0, first.note).id();
+        let second_deposited = Utxo::new(operation.op_id(), 1, second.note).id();
+        assert!(!context.utxos.contains(&first.id()));
+        assert!(!context.utxos.contains(&second.id()));
+        assert!(!context.channels.is_channel_note(&first.id()));
+        assert!(!context.channels.is_channel_note(&second.id()));
+        assert!(context.utxos.contains(&first_deposited));
+        assert!(context.utxos.contains(&second_deposited));
+        assert!(
+            context
+                .channels
+                .is_channel_note_of(&first_deposited, &operation.channel_id)
+        );
+        assert!(
+            context
+                .channels
+                .is_channel_note_of(&second_deposited, &operation.channel_id)
+        );
+
+        assert_eq!(
+            events,
+            vec![TxEvent::new(
+                tx_hash,
+                operation.op_id(),
+                TxEventPayload::Deposit {
+                    channel_id: operation.channel_id,
+                    amount: first.note.value + second.note.value,
+                    metadata: operation.metadata,
+                    notes: DepositRecreatedNotes::try_from(vec![
+                        DepositNote {
+                            note_id: first_deposited,
+                            value: first.note.value,
+                            pk: first.note.pk,
+                        },
+                        DepositNote {
+                            note_id: second_deposited,
+                            value: second.note.value,
+                            pk: second.note.pk,
+                        },
+                    ])
+                    .expect("two recreated notes are within bounds"),
+                },
+            )]
+        );
+    }
+
+    #[test]
+    fn execute_rejects_an_input_missing_from_the_ledger() {
+        let input = input_utxo(1);
+        let signed_operation = verified(Inputs::new([input.id()]));
+
+        assert_eq!(
+            signed_operation
+                .execute(DepositExecutionContext {
+                    channels: Channels::new(),
+                    utxos: Utxos::new(),
+                    tx_hash: TxHash::from([9u8; 32]),
+                })
+                .map(|_| ())
+                .map_err(|(_, error)| error),
+            Err(Error::Inputs(InputsError::InexistingNote(input.id())))
+        );
+    }
+
+    #[test]
+    fn execute_rejects_a_recreated_note_another_channel_already_owns() {
+        let other_channel = ChannelId::from([21u8; 32]);
+        let input = input_utxo(1);
+        let (utxos, _) = Utxos::new().insert(input.id(), input);
+
+        let signed_operation = verified(Inputs::new([input.id()]));
+        let deposited = Utxo::new(signed_operation.operation().op_id(), 0, input.note).id();
+        let channels = Channels::new()
+            .register_channel_note(&deposited, &other_channel)
+            .expect("the recreated note is not owned by another channel yet");
+
+        assert_eq!(
+            signed_operation
+                .execute(DepositExecutionContext {
+                    channels,
+                    utxos,
+                    tx_hash: TxHash::from([9u8; 32]),
+                })
+                .map(|_| ())
+                .map_err(|(_, error)| error),
+            Err(Error::ChannelNotes(
+                channel_notes::Error::AlreadyAChannelNote {
+                    note_id: deposited,
+                    channel_id: other_channel,
+                }
+            ))
         );
     }
 

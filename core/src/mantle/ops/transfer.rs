@@ -442,6 +442,70 @@ mod test {
     }
 
     #[test]
+    fn execute_rejects_an_input_missing_from_the_ledger() {
+        let missing_note = NoteId(Fr::from(BigUint::from(3u8)));
+        let operation = TransferOp::new(
+            Inputs::new([missing_note]),
+            Outputs::new([Note::new(
+                10_000,
+                ZkPublicKey::from(Fr::from(BigUint::from(2u8))),
+            )]),
+        );
+
+        let signed_operation: SignedOperation<_, _, StandardMode> = SignedOperation::new(
+            operation,
+            <TransferOp as ProvableOperation>::Proof::sample(),
+        )
+        .into_state_trusted();
+
+        assert_eq!(
+            signed_operation
+                .execute(Utxos::new())
+                .map(|_| ())
+                .map_err(|(_, error)| error),
+            Err(TransferError::Inputs(ledger::InputsError::InexistingNote(
+                missing_note
+            )))
+        );
+    }
+
+    #[test]
+    fn execute_removes_the_inputs_and_adds_the_outputs() {
+        let input_key = ZkKey::from(BigUint::from(1u8));
+        let input_utxo = Utxo {
+            op_id: [1u8; 32],
+            output_index: 0,
+            note: Note::new(10_000, input_key.to_public_key()),
+        };
+        let (utxos, _) = Utxos::new().insert(input_utxo.id(), input_utxo);
+
+        let operation = TransferOp::new(
+            Inputs::new([input_utxo.id()]),
+            Outputs::new([Note::new(
+                10_000,
+                ZkPublicKey::from(Fr::from(BigUint::from(2u8))),
+            )]),
+        );
+        let output_utxo = operation
+            .utxo_by_index(0)
+            .expect("the operation declares one output");
+
+        let signed_operation: SignedOperation<_, _, StandardMode> = SignedOperation::new(
+            operation,
+            <TransferOp as ProvableOperation>::Proof::sample(),
+        )
+        .into_state_trusted();
+
+        let (utxos, events) = signed_operation
+            .execute(utxos)
+            .expect("the input is in the ledger");
+
+        assert!(!utxos.contains(&input_utxo.id()));
+        assert_eq!(utxos.get(&output_utxo.id()), Some(output_utxo));
+        assert!(events.is_empty());
+    }
+
+    #[test]
     fn transfer_op_execution_gas() {
         let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
             TransferOp::sample(),

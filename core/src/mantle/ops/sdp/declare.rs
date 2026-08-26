@@ -281,9 +281,10 @@ mod tests {
 
     use super::{
         Channels, GenesisMode, LockedNotes, MinStake, Note, PreverifiableOperation as _,
-        Preverified, ProvableOperation, SDPDeclareGenesisValidationContext, SDPDeclareOp,
-        SDPDeclarePreverificationContext, SDPDeclareVerificationContext, SdpError, SignedOperation,
-        StandardMode, TxHashView, Unverified, Utxos, VerifiableOperation as _, ZkAndEd25519Proof,
+        Preverified, ProvableOperation, SDPDeclareExecutionContext,
+        SDPDeclareGenesisValidationContext, SDPDeclareOp, SDPDeclarePreverificationContext,
+        SDPDeclareVerificationContext, SdpError, SignedOperation, StandardMode, TxHashView,
+        Unverified, Utxos, VerifiableOperation as _, Verified, ZkAndEd25519Proof,
         validate_service_scoped_uniqueness,
     };
     use crate::{
@@ -743,6 +744,103 @@ mod tests {
                     },
                 }),
                 Ok(())
+            );
+        }
+
+        fn verified(
+            operation: SDPDeclareOp,
+        ) -> SignedOperation<SDPDeclareOp, Verified, StandardMode> {
+            SignedOperation::<_, Unverified, StandardMode>::new(
+                operation,
+                <SDPDeclareOp as ProvableOperation>::Proof::sample(),
+            )
+            .into_state_trusted()
+        }
+
+        #[test]
+        fn execute_registers_the_declaration_and_locks_the_note() {
+            let note_key = ZkKey::from(BigUint::from(3u64));
+            let utxo = locked_utxo(&note_key);
+            let (utxos, _) = Utxos::new().insert(utxo.id(), utxo);
+
+            let operation = SDPDeclareOp {
+                locked_note_id: utxo.id(),
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+            };
+            let declaration_id = operation.id();
+            let service_type = operation.service_type;
+            let epoch = Epoch::new(4);
+            let expected = Declaration::new(epoch, &operation);
+
+            let (context, events) = verified(operation)
+                .execute(SDPDeclareExecutionContext {
+                    utxo_tree: utxos,
+                    epoch,
+                    declarations: Declarations::new_sync(),
+                    locked_notes: LockedNotes::new(),
+                    min_stake: MinStake {
+                        threshold: 0,
+                        timestamp: 0,
+                    },
+                })
+                .expect("the locked note is in the ledger");
+
+            assert_eq!(context.declarations.get(&declaration_id), Some(&expected));
+            assert!(
+                context
+                    .locked_notes
+                    .is_locked_for_service(&utxo.id(), &service_type)
+            );
+            assert!(events.is_empty());
+        }
+
+        #[test]
+        #[should_panic(expected = "The operation should have been checked")]
+        fn execute_panics_on_a_locked_note_missing_from_the_ledger() {
+            let note_key = ZkKey::from(BigUint::from(3u64));
+            let operation = SDPDeclareOp {
+                locked_note_id: locked_utxo(&note_key).id(),
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+            };
+
+            drop(verified(operation).execute(SDPDeclareExecutionContext {
+                utxo_tree: Utxos::new(),
+                epoch: Epoch::new(4),
+                declarations: Declarations::new_sync(),
+                locked_notes: LockedNotes::new(),
+                min_stake: MinStake {
+                    threshold: 0,
+                    timestamp: 0,
+                },
+            }));
+        }
+
+        #[test]
+        fn execute_rejects_a_locked_note_below_the_minimum_stake() {
+            let note_key = ZkKey::from(BigUint::from(3u64));
+            let utxo = locked_utxo(&note_key);
+            let (utxos, _) = Utxos::new().insert(utxo.id(), utxo);
+
+            let operation = SDPDeclareOp {
+                locked_note_id: utxo.id(),
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+            };
+
+            assert_eq!(
+                verified(operation)
+                    .execute(SDPDeclareExecutionContext {
+                        utxo_tree: utxos,
+                        epoch: Epoch::new(4),
+                        declarations: Declarations::new_sync(),
+                        locked_notes: LockedNotes::new(),
+                        min_stake: MinStake {
+                            threshold: utxo.note.value + 1,
+                            timestamp: 0,
+                        },
+                    })
+                    .map(|_| ())
+                    .map_err(|(_, error)| error),
+                Err(SdpError::UnexpectedError)
             );
         }
 

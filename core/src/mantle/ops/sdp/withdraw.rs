@@ -446,6 +446,64 @@ mod tests {
         );
     }
 
+    fn verified(
+        operation: SDPWithdrawOp,
+    ) -> SignedOperation<SDPWithdrawOp, Verified, StandardMode> {
+        SignedOperation::<_, Unverified, StandardMode>::new(
+            operation,
+            <SDPWithdrawOp as ProvableOperation>::Proof::sample(),
+        )
+        .into_state_trusted()
+    }
+
+    #[test]
+    fn execute_schedules_the_withdrawal_after_the_snapshot_delay() {
+        let operation = SDPWithdrawOp::sample();
+        let declaration_id = operation.declaration_id;
+        let locked_note_id = operation.locked_note_id;
+        let nonce = operation.nonce;
+        let locked_notes = locked_notes(&locked_note_id);
+        let declarations = declarations(&operation, declaration(locked_note_id));
+        let epoch = Epoch::from(4);
+
+        let (context, events) = verified(operation)
+            .execute(SDPWithdrawExecutionContext {
+                declarations,
+                locked_notes,
+                epoch,
+            })
+            .expect("the declaration is registered");
+
+        let updated = context
+            .declarations
+            .get(&declaration_id)
+            .expect("the declaration stays registered");
+        assert_eq!(
+            updated.withdraw_at,
+            Some(epoch.strict_add(sdp::SNAPSHOT_FINALIZATION_DELAY))
+        );
+        assert_eq!(updated.nonce, nonce);
+        assert!(
+            context
+                .locked_notes
+                .is_locked_for_service(&locked_note_id, &ServiceType::BlendNetwork)
+        );
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "The operation should have been validated")]
+    fn execute_panics_on_a_declaration_the_ledger_does_not_hold() {
+        let operation = SDPWithdrawOp::sample();
+        let locked_notes = locked_notes(&operation.locked_note_id);
+
+        drop(verified(operation).execute(SDPWithdrawExecutionContext {
+            declarations: Declarations::new_sync(),
+            locked_notes,
+            epoch: Epoch::from(4),
+        }));
+    }
+
     #[test]
     fn sdp_withdraw_op_execution_gas() {
         let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(

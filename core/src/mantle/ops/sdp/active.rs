@@ -357,6 +357,54 @@ mod tests {
         );
     }
 
+    fn verified(operation: SDPActiveOp) -> SignedOperation<SDPActiveOp, Verified, StandardMode> {
+        SignedOperation::<_, Unverified, StandardMode>::new(
+            operation,
+            <SDPActiveOp as ProvableOperation>::Proof::sample(),
+        )
+        .into_state_trusted()
+    }
+
+    #[test]
+    #[should_panic(expected = "The operation should have been validated")]
+    fn execute_panics_on_a_declaration_the_ledger_does_not_hold() {
+        drop(
+            verified(SDPActiveOp::sample()).execute(SDPActiveExecutionContext {
+                epoch: Epoch::from(4),
+                declarations: Declarations::new_sync(),
+            }),
+        );
+    }
+
+    #[test]
+    fn execute_marks_the_declaration_active_for_the_current_epoch() {
+        let (message, declaration) = declaration();
+        let declaration_id = message.id();
+        let declarations = Declarations::new_sync().insert(declaration_id, declaration);
+
+        let operation = SDPActiveOp {
+            declaration_id,
+            ..SDPActiveOp::sample()
+        };
+        let nonce = operation.nonce;
+        let epoch = Epoch::from(4);
+
+        let (context, events) = verified(operation)
+            .execute(SDPActiveExecutionContext {
+                epoch,
+                declarations,
+            })
+            .expect("the declaration is registered");
+
+        let updated = context
+            .declarations
+            .get(&declaration_id)
+            .expect("the declaration stays registered");
+        assert_eq!(updated.active, epoch);
+        assert_eq!(updated.nonce, nonce);
+        assert!(events.is_empty());
+    }
+
     #[test]
     fn sdp_active_op_execution_gas() {
         let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(

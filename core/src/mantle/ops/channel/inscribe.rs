@@ -500,6 +500,94 @@ mod tests {
     }
 
     #[test]
+    fn execute_bootstraps_a_channel_the_ledger_does_not_hold_yet() {
+        let operation = InscriptionOp::sample();
+        let channel_id = operation.channel_id;
+        let signer = operation.signer;
+        let message_id = operation.id();
+        let block_slot = Slot::from(7u64);
+
+        let signed_operation: SignedOperation<_, _, StandardMode> = SignedOperation::new(
+            operation,
+            <InscriptionOp as ProvableOperation>::Proof::sample(),
+        )
+        .into_state_trusted();
+
+        let (context, events) = signed_operation
+            .execute(InscriptionExecutionContext {
+                channels: Channels::new(),
+                block_slot,
+            })
+            .expect("inscribing never fails");
+
+        assert_eq!(
+            context.channels.channel_state(&channel_id),
+            Some(&ChannelState {
+                accredited_keys: Arc::new(Keys::from(signer)),
+                configuration_threshold: 1,
+                tip_message: message_id,
+                tip_slot: block_slot,
+                tip_sequencer: 0,
+                tip_sequencer_starting_slot: block_slot,
+                posting_timeframe: 0.into(),
+                posting_timeout: 0.into(),
+                transfer_threshold: crate::mantle::channel::DEFAULT_TRANSFER_THRESHOLD,
+            })
+        );
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn execute_rotates_the_sequencer_of_an_existing_channel() {
+        let operation = InscriptionOp::sample();
+        let channel_id = operation.channel_id;
+        let message_id = operation.id();
+        let keys = Keys::try_from(vec![
+            Ed25519Key::from_bytes(&[16; 32]).public_key(),
+            operation.signer,
+        ])
+        .expect("two keys are within bounds");
+
+        let channels = channels(
+            channel_id,
+            ChannelState {
+                configuration_threshold: 2,
+                posting_timeframe: 1.into(),
+                ..make_channel_state(3, Some(keys.clone()))
+            },
+        );
+
+        let signed_operation: SignedOperation<_, _, StandardMode> = SignedOperation::new(
+            operation,
+            <InscriptionOp as ProvableOperation>::Proof::sample(),
+        )
+        .into_state_trusted();
+
+        let (context, events) = signed_operation
+            .execute(InscriptionExecutionContext {
+                channels,
+                block_slot: Slot::from(1u64),
+            })
+            .expect("inscribing never fails");
+
+        assert_eq!(
+            context.channels.channel_state(&channel_id),
+            Some(&ChannelState {
+                accredited_keys: Arc::new(keys),
+                configuration_threshold: 2,
+                tip_message: message_id,
+                tip_slot: Slot::from(1u64),
+                tip_sequencer: 1,
+                tip_sequencer_starting_slot: Slot::from(1u64),
+                posting_timeframe: 1.into(),
+                posting_timeout: 0.into(),
+                transfer_threshold: 3,
+            })
+        );
+        assert!(events.is_empty());
+    }
+
+    #[test]
     fn inscription_op_execution_gas() {
         let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
             InscriptionOp::sample(),

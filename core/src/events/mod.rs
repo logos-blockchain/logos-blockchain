@@ -82,7 +82,7 @@ impl From<HeaderEvent> for Event {
 }
 
 /// An event emitted while processing a transaction
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TxEvent {
     pub tx_hash: TxHash,
     pub op_id: Hash,
@@ -118,7 +118,7 @@ pub struct DepositNote {
 pub type DepositRecreatedNotes = UpperBoundedVec<DepositNote, MAX_TRANSACTION_INPUTS>;
 
 /// Event payloads emitted while processing a transaction
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TxEventPayload {
     Deposit {
         channel_id: ChannelId,

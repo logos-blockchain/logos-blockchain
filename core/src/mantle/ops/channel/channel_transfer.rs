@@ -226,6 +226,7 @@ mod test {
 
     use super::*;
     use crate::mantle::{
+        channel_notes,
         ledger::{InputsError, OutputsError},
         ops::channel::{config::Keys, verification::test_utils::create_channel_multi_sig_proof},
         transactions::{
@@ -660,6 +661,128 @@ mod test {
                 helper: &helper,
             }),
             Err(Error::InvalidSignature)
+        );
+    }
+
+    fn verified(outputs: Outputs) -> SignedOperation<ChannelTransferOp, Verified, StandardMode> {
+        SignedOperation::<_, Unverified, StandardMode>::new(
+            ChannelTransferOp {
+                channel_id: CHANNEL_ID,
+                inputs: Inputs::new([utxo().id()]),
+                outputs,
+            },
+            ChannelMultiSigProof::sample_with_signatures(1),
+        )
+        .into_state_trusted()
+    }
+
+    #[test]
+    fn execute_replaces_the_inputs_with_outputs_the_channel_owns() {
+        let signed_operation = verified(Outputs::new([Note::new(
+            10_000,
+            ZkPublicKey::from(Fr::from(2u64)),
+        )]));
+        let output = signed_operation
+            .operation()
+            .utxos()
+            .next()
+            .expect("the operation declares one output");
+        let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
+
+        let (context, events) = signed_operation
+            .execute(ChannelTransferExecutionContext {
+                channels: channel_view(),
+                utxos,
+                tx_hash: TxHash::from([9u8; 32]),
+            })
+            .expect("the input is a channel note held by the ledger");
+
+        assert!(!context.utxos.contains(&utxo().id()));
+        assert!(!context.channels.is_channel_note(&utxo().id()));
+        assert_eq!(context.utxos.get(&output.id()), Some(output));
+        assert!(
+            context
+                .channels
+                .is_channel_note_of(&output.id(), &CHANNEL_ID)
+        );
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn execute_rejects_an_input_missing_from_the_ledger() {
+        let signed_operation = verified(Outputs::new([Note::new(
+            10_000,
+            ZkPublicKey::from(Fr::from(2u64)),
+        )]));
+
+        assert_eq!(
+            signed_operation
+                .execute(ChannelTransferExecutionContext {
+                    channels: channel_view(),
+                    utxos: Utxos::new(),
+                    tx_hash: TxHash::from([9u8; 32]),
+                })
+                .map(|_| ())
+                .map_err(|(_, error)| error),
+            Err(Error::Inputs(InputsError::InexistingNote(utxo().id())))
+        );
+    }
+
+    #[test]
+    fn execute_rejects_an_input_the_channel_does_not_own() {
+        let signed_operation = verified(Outputs::new([Note::new(
+            10_000,
+            ZkPublicKey::from(Fr::from(2u64)),
+        )]));
+        let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
+
+        assert_eq!(
+            signed_operation
+                .execute(ChannelTransferExecutionContext {
+                    channels: Channels::new(),
+                    utxos,
+                    tx_hash: TxHash::from([9u8; 32]),
+                })
+                .map(|_| ())
+                .map_err(|(_, error)| error),
+            Err(Error::ChannelNotes(channel_notes::Error::NotInChannel(
+                utxo().id()
+            )))
+        );
+    }
+
+    #[test]
+    fn execute_rejects_an_output_another_channel_already_owns() {
+        let other_channel = ChannelId::from([21u8; 32]);
+        let signed_operation = verified(Outputs::new([Note::new(
+            10_000,
+            ZkPublicKey::from(Fr::from(2u64)),
+        )]));
+        let output = signed_operation
+            .operation()
+            .utxos()
+            .next()
+            .expect("the operation declares one output");
+        let (utxos, _) = Utxos::new().insert(utxo().id(), utxo());
+        let channels = channel_view()
+            .register_channel_note(&output.id(), &other_channel)
+            .expect("the output is not owned by another channel yet");
+
+        assert_eq!(
+            signed_operation
+                .execute(ChannelTransferExecutionContext {
+                    channels,
+                    utxos,
+                    tx_hash: TxHash::from([9u8; 32]),
+                })
+                .map(|_| ())
+                .map_err(|(_, error)| error),
+            Err(Error::ChannelNotes(
+                channel_notes::Error::AlreadyAChannelNote {
+                    note_id: output.id(),
+                    channel_id: other_channel,
+                }
+            ))
         );
     }
 

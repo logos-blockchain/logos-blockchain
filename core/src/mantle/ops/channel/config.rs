@@ -208,6 +208,8 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionG
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::mantle::{
         TxHash, ops::channel::verification::test_utils::create_channel_multi_sig_proof,
@@ -407,6 +409,81 @@ mod tests {
             }),
             Err(Error::InvalidSignature)
         );
+    }
+
+    fn configured_state(operation: &ChannelConfigOp, block_slot: Slot) -> ChannelState {
+        ChannelState {
+            accredited_keys: Arc::new(operation.keys.clone()),
+            configuration_threshold: operation.configuration_threshold,
+            tip_message: operation.id(),
+            tip_slot: block_slot,
+            tip_sequencer: 0,
+            tip_sequencer_starting_slot: block_slot,
+            posting_timeframe: operation.posting_timeframe.clone(),
+            posting_timeout: operation.posting_timeout.clone(),
+            transfer_threshold: operation.transfer_threshold,
+        }
+    }
+
+    #[test]
+    fn execute_creates_a_channel_the_ledger_does_not_hold_yet() {
+        let operation = ChannelConfigOp::sample();
+        let channel_id = operation.channel;
+        let block_slot = Slot::from(7u64);
+        let expected = configured_state(&operation, block_slot);
+
+        let signed_operation: SignedOperation<_, _, StandardMode> =
+            SignedOperation::new(operation, ChannelMultiSigProof::sample_with_signatures(1))
+                .into_state_trusted();
+
+        let (context, events) = signed_operation
+            .execute(ChannelConfigExecutionContext {
+                channels: Channels::new(),
+                block_slot,
+            })
+            .expect("configuring a channel never fails");
+
+        assert_eq!(context.channels.channel_state(&channel_id), Some(&expected));
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn execute_replaces_every_field_of_an_existing_channel() {
+        let operation = ChannelConfigOp::sample();
+        let channel_id = operation.channel;
+        let block_slot = Slot::from(7u64);
+        let expected = configured_state(&operation, block_slot);
+
+        let mut channels = Channels::new();
+        channels.channels.insert_mut(
+            channel_id,
+            ChannelState {
+                tip_sequencer: 5,
+                tip_sequencer_starting_slot: Slot::from(1u64),
+                tip_slot: Slot::from(2u64),
+                configuration_threshold: 99,
+                ..make_channel_state(
+                    98,
+                    Some(Keys::new_unchecked(vec![
+                        Ed25519Key::from_bytes(&[42; 32]).public_key(),
+                    ])),
+                )
+            },
+        );
+
+        let signed_operation: SignedOperation<_, _, StandardMode> =
+            SignedOperation::new(operation, ChannelMultiSigProof::sample_with_signatures(1))
+                .into_state_trusted();
+
+        let (context, events) = signed_operation
+            .execute(ChannelConfigExecutionContext {
+                channels,
+                block_slot,
+            })
+            .expect("configuring a channel never fails");
+
+        assert_eq!(context.channels.channel_state(&channel_id), Some(&expected));
+        assert!(events.is_empty());
     }
 
     #[test]
