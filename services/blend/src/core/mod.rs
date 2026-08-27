@@ -83,7 +83,14 @@ use tracing::{debug, error, info};
 use crate::{
     core::{
         backends::BackendEpochInfo,
-        epoch_stages::{retiring::RetiringEpoch, transitioning::TransitioningEpoch},
+        epoch_stages::{
+            retiring::RetiringEpoch,
+            running::{
+                Components, CurrentEpoch, CurrentEpochDuringTransition, CurrentEpochEvent,
+                DuringTransitionEvent,
+            },
+            transitioning::TransitioningEpoch,
+        },
         kms::{KmsPoQAdapter, PreloadKMSBackendCorePoQGenerator},
         processor::{
             CoreCryptographicProcessor as CurrentEpochCryptographicProcessor, Error,
@@ -417,6 +424,7 @@ where
             &sdp_relay,
             last_saved_state,
             state_updater,
+            BlakeRng::from_entropy(),
         )
         .await;
 
@@ -445,11 +453,14 @@ where
             &mut backend,
             &payload_dispatcher,
             &sdp_relay,
-            message_scheduler.into(),
             &mut rng,
-            pending_messages,
-            crypto_processor,
-            current_public_info,
+            CurrentEpoch::new(
+                crypto_processor,
+                message_scheduler.into(),
+                current_public_info,
+                pending_messages,
+                None,
+            ),
             current_recovery_checkpoint,
         )
         .await;
@@ -481,6 +492,7 @@ where
     clippy::cognitive_complexity,
     reason = "TODO: address this in a dedicated refactor"
 )]
+#[expect(clippy::too_many_arguments, reason = "categorize args")]
 async fn initialize<
     NodeId,
     Backend,
@@ -499,6 +511,7 @@ async fn initialize<
     state_updater: StateUpdater<
         Option<RecoveryServiceState<Backend::Settings, Dispatcher::Settings>>,
     >,
+    release_delay_rng: BlakeRng,
 ) -> (
     impl Stream<Item = EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, KmsAdapter::CorePoQGenerator>>>
     + Unpin
@@ -723,7 +736,7 @@ where
             core_quota: epoch_core_quota.saturating_sub(spent_core_quota),
             epoch: current_epoch_public_info.epoch,
         },
-        BlakeRng::from_entropy(),
+        release_delay_rng,
         blend_config.scheduler_settings(),
         // We don't consume the map because we will remove the items one by one once they
         // will be scheduled for release.
@@ -827,20 +840,8 @@ async fn run_event_loop<
     backend: &mut Backend,
     payload_dispatcher: &Dispatcher,
     sdp_relay: &OutboundRelay<SdpMessage>,
-    mut message_scheduler: EpochMessageScheduler<
-        Rng,
-        ProcessedMessage,
-        EncapsulatedMessageWithVerifiedPublicHeader,
-    >,
     rng: &mut Rng,
-    mut pending_messages: PendingLocalMessages,
-    mut crypto_processor: CurrentEpochCryptographicProcessor<
-        NodeId,
-        CorePoQGenerator,
-        ProofsGenerator,
-        ProofsVerifier,
-    >,
-    mut current_epoch_info: CoreEpochPublicInfo<NodeId>,
+    current_epoch: CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
     mut recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
 ) -> RetiringEpoch<Rng, ProofsVerifier>
 where
@@ -853,109 +854,511 @@ where
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     RuntimeServiceId: Sync + Send,
 {
-    // The previous epoch's pipeline, present only while its transition period
-    // runs.
-    let mut old_epoch_components: Option<TransitioningEpoch<Rng, ProofsVerifier>> = None;
-    let mut latest_secret_pol_info: Option<PolEpochInfo> = None;
-
+    let mut current_epoch_stage = Stage::Current(Box::new(current_epoch));
     loop {
-        let old_epoch = old_epoch_components.as_ref().map(TransitioningEpoch::epoch);
+        let epoch_outcome = match current_epoch_stage {
+            Stage::Current(current) => {
+                run_current_epoch(
+                    &mut inbound_relay,
+                    blend_messages,
+                    &mut secret_pol_info_stream,
+                    remaining_epoch_stream,
+                    blend_config,
+                    backend,
+                    payload_dispatcher,
+                    sdp_relay,
+                    rng,
+                    *current,
+                    recovery_checkpoint,
+                )
+                .await
+            }
+            Stage::DuringTransition(during_transition) => {
+                run_during_transition(
+                    &mut inbound_relay,
+                    blend_messages,
+                    &mut secret_pol_info_stream,
+                    remaining_epoch_stream,
+                    blend_config,
+                    backend,
+                    payload_dispatcher,
+                    sdp_relay,
+                    rng,
+                    *during_transition,
+                    recovery_checkpoint,
+                )
+                .await
+            }
+        };
+        match epoch_outcome {
+            StageOutcome::NewEpoch {
+                next,
+                recovery_checkpoint: checkpoint,
+            } => {
+                current_epoch_stage = next;
+                recovery_checkpoint = *checkpoint;
+            }
+            StageOutcome::Retiring(retiring_epoch) => {
+                tracing::info!(target: LOG_TARGET, "Exiting from the main event loop");
+                return *retiring_epoch;
+            }
+        }
+    }
+}
+
+/// Which stage of its life the node's blending is in.
+enum Stage<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng> {
+    Current(Box<CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>>),
+    DuringTransition(
+        Box<
+            CurrentEpochDuringTransition<
+                NodeId,
+                CorePoQGenerator,
+                ProofsGenerator,
+                ProofsVerifier,
+                Rng,
+            >,
+        >,
+    ),
+}
+
+/// How a stage ended.
+enum StageOutcome<
+    NodeId,
+    CorePoQGenerator,
+    ProofsGenerator,
+    ProofsVerifier,
+    Rng,
+    BackendSettings,
+    NetworkSettings,
+> {
+    /// An epoch event moved the node to another stage.
+    NewEpoch {
+        next: Stage<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
+        recovery_checkpoint: Box<ServiceState<BackendSettings, NetworkSettings>>,
+    },
+    /// The node is no longer a core node, or Blend is disabled.
+    Retiring(Box<RetiringEpoch<Rng, ProofsVerifier>>),
+}
+
+/// The stage with no previous epoch left to drain.
+#[expect(clippy::too_many_arguments, reason = "categorize args")]
+async fn run_current_epoch<
+    NodeId,
+    Backend,
+    Rng,
+    Dispatcher,
+    ProofsGenerator,
+    ProofsVerifier,
+    CorePoQGenerator,
+    RuntimeServiceId,
+>(
+    inbound_relay: &mut (impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin),
+    blend_messages: &mut (
+             impl Stream<Item = (EncapsulatedMessageWithVerifiedPublicHeader, Epoch)>
+             + Send
+             + Unpin
+             + 'static
+         ),
+    secret_pol_info_stream: &mut (impl Stream<Item = PolEpochInfo> + Send + Unpin),
+    remaining_epoch_stream: &mut (
+             impl Stream<Item = EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>>>
+             + Unpin
+             + Send
+         ),
+    blend_config: &RunningBlendConfig<Backend::Settings>,
+    backend: &mut Backend,
+    payload_dispatcher: &Dispatcher,
+    sdp_relay: &OutboundRelay<SdpMessage>,
+    rng: &mut Rng,
+    mut current_epoch: CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
+    mut recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
+) -> StageOutcome<
+    NodeId,
+    CorePoQGenerator,
+    ProofsGenerator,
+    ProofsVerifier,
+    Rng,
+    Backend::Settings,
+    Dispatcher::Settings,
+>
+where
+    NodeId: Clone + Eq + Hash + Send + Sync + 'static,
+    Rng: rand::Rng + Clone + Send + Unpin,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync + Send,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator> + Send,
+    CorePoQGenerator: Send + Sync,
+    ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    RuntimeServiceId: Sync + Send,
+{
+    loop {
         tokio::select! {
             Some(msg) = inbound_relay.next() => {
-                match msg {
-                    ServiceMessage::Blend(BlendPayload::Transaction(transaction)) => {
-                        recovery_checkpoint = queue_transaction_for_encapsulation(transaction, &mut pending_messages, recovery_checkpoint);
-                    }
-                    ServiceMessage::Blend(BlendPayload::BlockProposal(proposal)) => {
-                        let copies = NonZeroU64::new(blend_config.data_replication_factor.strict_add(1)).unwrap();
-                        pending_messages.queue_proposal(proposal, copies);
-                    }
-                    ServiceMessage::GetNetworkInfo { reply } => {
-                        let info = backend.network_info().await;
-                        drop(reply.send(info));
-                    }
-                    ServiceMessage::GetPendingTransactions { reply } => {
-                        drop(reply.send(pending_messages.transactions().cloned().collect()));
-                    }
-                }
-            }
-            // A queued message leaves as soon as proofs back it — a `PoW` solution
-            // for a transaction, this epoch's secret `PoL` info for a proposal. Both
-            // are awaited here so the rest of the loop keeps turning meanwhile, and
-            // both share one branch because both need the processor mutably and
-            // `select!` builds every branch future before any of them wins.
-            Some(encapsulation) = encapsulate_next_local_message(&pending_messages, &mut crypto_processor) => {
-                match encapsulation {
-                    Ok(LocalEncapsulation::ProposalCopy(message)) => {
-                        recovery_checkpoint = schedule_local_encapsulated_message(&message, &crypto_processor, &mut message_scheduler, recovery_checkpoint);
-                        pending_messages.mark_proposal_copy_as_sent();
-                    }
-                    Ok(LocalEncapsulation::Transaction(message)) => {
-                        recovery_checkpoint = handle_local_transaction(&message, &mut pending_messages, &crypto_processor, &mut message_scheduler, recovery_checkpoint);
-                    }
-                    Err(()) => {
-                        recovery_checkpoint = discard_unencapsulatable_message(&mut pending_messages, recovery_checkpoint);
-                    }
-                }
+                recovery_checkpoint = handle_service_message(msg, &mut current_epoch, blend_config, backend, recovery_checkpoint).await;
             }
             Some(incoming_message) = blend_messages.next() => {
-                let (old_cryptographic_processor, old_scheduler) = old_epoch_components
-                    .as_mut()
-                    .map_or((None, None), |transitioning| {
-                        let (crypto, scheduler) = transitioning.split_mut();
-                        (Some(crypto), Some(scheduler))
-                    });
-                recovery_checkpoint = handle_incoming_blend_message(incoming_message, &mut message_scheduler, old_scheduler, crypto_processor.receiver(), old_cryptographic_processor,  recovery_checkpoint);
+                let (scheduler, crypto) = current_epoch.decapsulation_borrows();
+                recovery_checkpoint = handle_incoming_blend_message(incoming_message, scheduler, None, crypto.receiver(), None, recovery_checkpoint);
             }
-            Some(round_info) = message_scheduler.next() => {
-                recovery_checkpoint = handle_release_round(round_info, &mut crypto_processor, rng, backend, payload_dispatcher, recovery_checkpoint).await;
-            }
-            Some((Some(round_info), previous_epoch)) = async {
-                match (&mut old_epoch_components, old_epoch) {
-                    (Some(old_epoch_components), Some(old_epoch)) => {
-                        Some((old_epoch_components.scheduler_mut().next().await, old_epoch))
-                    },
-                    _ => None
-                }
-            } => {
-                handle_release_round_for_old_epoch(round_info, rng, backend, payload_dispatcher, previous_epoch).await;
+            event = current_epoch.next_event() => {
+                recovery_checkpoint = handle_current_epoch_event(event, &mut current_epoch, rng, backend, payload_dispatcher, recovery_checkpoint).await;
             }
             Some(pol_secret_info) = secret_pol_info_stream.next() => {
-                if current_epoch_info.epoch == pol_secret_info.epoch {
-                    // Apply now: move the winning-slot stream into the current processor.
-                    crypto_processor.set_epoch_private(pol_secret_info.winning_pol_info_stream, pol_secret_info.epoch);
-                    latest_secret_pol_info = None;
-                } else {
-                    // Belongs to an upcoming epoch: keep it to seed that epoch's
-                    // processor when the rotation happens.
-                    latest_secret_pol_info = Some(pol_secret_info);
-                }
+                apply_or_hold_secret_pol_info(pol_secret_info, &mut current_epoch);
             }
             Some(epoch_event) = remaining_epoch_stream.next() => {
-                match handle_epoch_event(epoch_event, blend_config, crypto_processor, message_scheduler, current_epoch_info, recovery_checkpoint, backend, sdp_relay, &mut latest_secret_pol_info, &mut pending_messages).await {
-                    // Current epoch info updated to new one
-                    HandleEpochEventOutput::Transitioning { new_crypto_processor, new_scheduler, new_epoch_info, new_recovery_checkpoint, old_epoch_components: transitioning_epoch } => {
-                        crypto_processor = new_crypto_processor;
-                        message_scheduler = new_scheduler;
-                        current_epoch_info = new_epoch_info;
-                        recovery_checkpoint = new_recovery_checkpoint;
-                        old_epoch_components = Some(*transitioning_epoch);
-                    },
-                    // Current epoch info unchanged
-                    HandleEpochEventOutput::TransitionCompleted { current_crypto_processor, current_scheduler, new_recovery_checkpoint, current_epoch_info: same_epoch_info } => {
-                        crypto_processor = current_crypto_processor;
-                        message_scheduler = current_scheduler;
-                        current_epoch_info = same_epoch_info;
-                        recovery_checkpoint = new_recovery_checkpoint;
-                        old_epoch_components = None;
-                    },
-                    // Current epoch info consumed, not usable anymore
-                    HandleEpochEventOutput::Retiring { retiring_epoch } => {
-                        tracing::info!(target: LOG_TARGET, "Exiting from the main event loop");
-                        return *retiring_epoch;
-                    },
+                return rotate::<_, _, _, Dispatcher, _, _, _, RuntimeServiceId>(epoch_event, current_epoch.into_components(), blend_config, backend, sdp_relay, recovery_checkpoint).await;
+            }
+        }
+    }
+}
+
+/// The stage in which the epoch before this one is still within its transition
+/// period, so both are live.
+#[expect(clippy::too_many_arguments, reason = "categorize args")]
+async fn run_during_transition<
+    NodeId,
+    Backend,
+    Rng,
+    Dispatcher,
+    ProofsGenerator,
+    ProofsVerifier,
+    CorePoQGenerator,
+    RuntimeServiceId,
+>(
+    inbound_relay: &mut (impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin),
+    blend_messages: &mut (
+             impl Stream<Item = (EncapsulatedMessageWithVerifiedPublicHeader, Epoch)>
+             + Send
+             + Unpin
+             + 'static
+         ),
+    secret_pol_info_stream: &mut (impl Stream<Item = PolEpochInfo> + Send + Unpin),
+    remaining_epoch_stream: &mut (
+             impl Stream<Item = EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>>>
+             + Unpin
+             + Send
+         ),
+    blend_config: &RunningBlendConfig<Backend::Settings>,
+    backend: &mut Backend,
+    payload_dispatcher: &Dispatcher,
+    sdp_relay: &OutboundRelay<SdpMessage>,
+    rng: &mut Rng,
+    mut during_transition: CurrentEpochDuringTransition<
+        NodeId,
+        CorePoQGenerator,
+        ProofsGenerator,
+        ProofsVerifier,
+        Rng,
+    >,
+    mut recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
+) -> StageOutcome<
+    NodeId,
+    CorePoQGenerator,
+    ProofsGenerator,
+    ProofsVerifier,
+    Rng,
+    Backend::Settings,
+    Dispatcher::Settings,
+>
+where
+    NodeId: Clone + Eq + Hash + Send + Sync + 'static,
+    Rng: rand::Rng + Clone + Send + Unpin,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync + Send,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator> + Send,
+    CorePoQGenerator: Send + Sync,
+    ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    RuntimeServiceId: Sync + Send,
+{
+    loop {
+        tokio::select! {
+            Some(msg) = inbound_relay.next() => {
+                recovery_checkpoint = handle_service_message(msg, during_transition.current_mut(), blend_config, backend, recovery_checkpoint).await;
+            }
+            Some(incoming_message) = blend_messages.next() => {
+                let (scheduler, previous_scheduler, crypto, previous_crypto) = during_transition.decapsulation_borrows();
+                recovery_checkpoint = handle_incoming_blend_message(incoming_message, scheduler, Some(previous_scheduler), crypto.receiver(), Some(previous_crypto), recovery_checkpoint);
+            }
+            event = during_transition.next_event() => {
+                match event {
+                    DuringTransitionEvent::Current(event) => {
+                        recovery_checkpoint = handle_current_epoch_event(event, during_transition.current_mut(), rng, backend, payload_dispatcher, recovery_checkpoint).await;
+                    }
+                    DuringTransitionEvent::PreviousEpochReleaseRound(round_info, previous_epoch) => {
+                        handle_release_round_for_old_epoch(round_info, rng, backend, payload_dispatcher, previous_epoch).await;
+                    }
                 }
             }
+            Some(pol_secret_info) = secret_pol_info_stream.next() => {
+                apply_or_hold_secret_pol_info(pol_secret_info, during_transition.current_mut());
+            }
+            Some(epoch_event) = remaining_epoch_stream.next() => {
+                return rotate::<_, _, _, Dispatcher, _, _, _, RuntimeServiceId>(epoch_event, during_transition.into_components(), blend_config, backend, sdp_relay, recovery_checkpoint).await;
+            }
+        }
+    }
+}
+
+/// Answers a message from another service, which both stages do the same way.
+async fn handle_service_message<
+    NodeId,
+    Backend,
+    Rng,
+    ProofsGenerator,
+    ProofsVerifier,
+    CorePoQGenerator,
+    NetworkSettings,
+    RuntimeServiceId,
+>(
+    message: ServiceMessage<NodeId>,
+    current_epoch: &mut CurrentEpoch<
+        NodeId,
+        CorePoQGenerator,
+        ProofsGenerator,
+        ProofsVerifier,
+        Rng,
+    >,
+    blend_config: &RunningBlendConfig<Backend::Settings>,
+    backend: &Backend,
+    recovery_checkpoint: ServiceState<Backend::Settings, NetworkSettings>,
+) -> ServiceState<Backend::Settings, NetworkSettings>
+where
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    NetworkSettings: Clone,
+{
+    match message {
+        ServiceMessage::Blend(BlendPayload::Transaction(transaction)) => {
+            queue_transaction_for_encapsulation(
+                transaction,
+                current_epoch.pending_local_messages_mut(),
+                recovery_checkpoint,
+            )
+        }
+        ServiceMessage::Blend(BlendPayload::BlockProposal(proposal)) => {
+            let copies = NonZeroU64::new(blend_config.data_replication_factor.strict_add(1))
+                .expect("A block proposal is always sent at least once.");
+            current_epoch
+                .pending_local_messages_mut()
+                .queue_proposal(proposal, copies);
+            recovery_checkpoint
+        }
+        ServiceMessage::GetNetworkInfo { reply } => {
+            let info = backend.network_info().await;
+            drop(reply.send(info));
+            recovery_checkpoint
+        }
+        ServiceMessage::GetPendingTransactions { reply } => {
+            drop(
+                reply.send(
+                    current_epoch
+                        .pending_local_messages()
+                        .transactions()
+                        .cloned()
+                        .collect(),
+                ),
+            );
+            recovery_checkpoint
+        }
+    }
+}
+
+/// Acts on something the current epoch produced, which both stages do the same
+/// way.
+async fn handle_current_epoch_event<
+    NodeId,
+    Backend,
+    Rng,
+    Dispatcher,
+    ProofsGenerator,
+    ProofsVerifier,
+    CorePoQGenerator,
+    RuntimeServiceId,
+>(
+    event: CurrentEpochEvent,
+    current_epoch: &mut CurrentEpoch<
+        NodeId,
+        CorePoQGenerator,
+        ProofsGenerator,
+        ProofsVerifier,
+        Rng,
+    >,
+    rng: &mut Rng,
+    backend: &Backend,
+    payload_dispatcher: &Dispatcher,
+    recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
+) -> ServiceState<Backend::Settings, Dispatcher::Settings>
+where
+    NodeId: Eq + Hash + Send + Sync + 'static,
+    Rng: rand::Rng + Clone + Send + Unpin,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
+    ProofsVerifier: ProofsVerifierTrait,
+{
+    match event {
+        CurrentEpochEvent::Encapsulated(Ok(encapsulation)) => {
+            let (pending_messages, crypto_processor, scheduler) =
+                current_epoch.scheduling_borrows();
+            match *encapsulation {
+                LocalEncapsulation::ProposalCopy(message) => {
+                    let checkpoint = schedule_local_encapsulated_message(
+                        &message,
+                        crypto_processor,
+                        scheduler,
+                        recovery_checkpoint,
+                    );
+                    pending_messages.mark_proposal_copy_as_sent();
+                    checkpoint
+                }
+                LocalEncapsulation::Transaction(message) => handle_local_transaction(
+                    &message,
+                    pending_messages,
+                    crypto_processor,
+                    scheduler,
+                    recovery_checkpoint,
+                ),
+            }
+        }
+        CurrentEpochEvent::Encapsulated(Err(())) => discard_unencapsulatable_message(
+            current_epoch.pending_local_messages_mut(),
+            recovery_checkpoint,
+        ),
+        CurrentEpochEvent::ReleaseRound(round_info) => {
+            handle_release_round(
+                round_info,
+                current_epoch.crypto_processor_mut(),
+                rng,
+                backend,
+                payload_dispatcher,
+                recovery_checkpoint,
+            )
+            .await
+        }
+    }
+}
+
+/// Applies this epoch's secret `PoL` info, or holds it for the epoch it names,
+/// which both stages do the same way.
+fn apply_or_hold_secret_pol_info<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>(
+    pol_secret_info: PolEpochInfo,
+    current_epoch: &mut CurrentEpoch<
+        NodeId,
+        CorePoQGenerator,
+        ProofsGenerator,
+        ProofsVerifier,
+        Rng,
+    >,
+) where
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
+{
+    if current_epoch.epoch_info().epoch == pol_secret_info.epoch {
+        // Apply now: move the winning-slot stream into the current processor.
+        current_epoch.crypto_processor_mut().set_epoch_private(
+            pol_secret_info.winning_pol_info_stream,
+            pol_secret_info.epoch,
+        );
+        *current_epoch.latest_secret_pol_info_mut() = None;
+    } else {
+        // Belongs to an upcoming epoch: keep it to seed that epoch's processor
+        // when the rotation happens.
+        *current_epoch.latest_secret_pol_info_mut() = Some(pol_secret_info);
+    }
+}
+
+/// Turns an epoch event into the stage that follows, which is the only thing
+/// either stage ends on.
+async fn rotate<
+    NodeId,
+    Backend,
+    Rng,
+    Dispatcher,
+    ProofsGenerator,
+    ProofsVerifier,
+    CorePoQGenerator,
+    RuntimeServiceId,
+>(
+    epoch_event: EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>>,
+    components: Components<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
+    blend_config: &RunningBlendConfig<Backend::Settings>,
+    backend: &mut Backend,
+    sdp_relay: &OutboundRelay<SdpMessage>,
+    recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
+) -> StageOutcome<
+    NodeId,
+    CorePoQGenerator,
+    ProofsGenerator,
+    ProofsVerifier,
+    Rng,
+    Backend::Settings,
+    Dispatcher::Settings,
+>
+where
+    NodeId: Clone + Eq + Hash + Send,
+    Rng: rand::Rng + Clone + Unpin,
+    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId>,
+    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
+    ProofsVerifier: ProofsVerifierTrait,
+{
+    let (
+        crypto_processor,
+        message_scheduler,
+        current_epoch_info,
+        mut pending_messages,
+        mut latest_secret_pol_info,
+    ) = components;
+    match handle_epoch_event(
+        epoch_event,
+        blend_config,
+        crypto_processor,
+        message_scheduler,
+        current_epoch_info,
+        recovery_checkpoint,
+        backend,
+        sdp_relay,
+        &mut latest_secret_pol_info,
+        &mut pending_messages,
+    )
+    .await
+    {
+        HandleEpochEventOutput::Transitioning {
+            new_crypto_processor,
+            new_scheduler,
+            new_epoch_info,
+            new_recovery_checkpoint,
+            old_epoch_components,
+        } => StageOutcome::NewEpoch {
+            next: Stage::DuringTransition(Box::new(CurrentEpochDuringTransition::new(
+                CurrentEpoch::new(
+                    new_crypto_processor,
+                    new_scheduler,
+                    new_epoch_info,
+                    pending_messages,
+                    latest_secret_pol_info,
+                ),
+                *old_epoch_components,
+            ))),
+            recovery_checkpoint: Box::new(new_recovery_checkpoint),
+        },
+        HandleEpochEventOutput::TransitionCompleted {
+            current_crypto_processor,
+            current_scheduler,
+            new_recovery_checkpoint,
+            current_epoch_info,
+        } => StageOutcome::NewEpoch {
+            next: Stage::Current(Box::new(CurrentEpoch::new(
+                current_crypto_processor,
+                current_scheduler,
+                current_epoch_info,
+                pending_messages,
+                latest_secret_pol_info,
+            ))),
+            recovery_checkpoint: Box::new(new_recovery_checkpoint),
+        },
+        HandleEpochEventOutput::Retiring { retiring_epoch } => {
+            StageOutcome::Retiring(retiring_epoch)
         }
     }
 }
@@ -1059,10 +1462,6 @@ where
 }
 
 /// Processes a transaction whose wait for a `PoW` solution is over.
-///
-/// The counterpart to [`handle_local_block_proposal`], split in two because a
-/// transaction cannot be dealt with where it arrives: leadership proofs are
-/// ready on demand, whereas a transaction's have to be mined for.
 fn handle_local_transaction<
     NodeId,
     Rng,
