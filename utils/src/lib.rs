@@ -124,7 +124,7 @@ pub mod serde {
         }
     }
 
-    fn deserialize_human_readable_bytes_array<'de, const N: usize, D: serde::Deserializer<'de>>(
+    fn deserialize_human_readable_hex_array<'de, const N: usize, D: serde::Deserializer<'de>>(
         deserializer: D,
     ) -> Result<[u8; N], D::Error> {
         deserializer.deserialize_str(FixedBytesVisitor::<N>)
@@ -171,7 +171,7 @@ pub mod serde {
         deserializer: D,
     ) -> Result<[u8; N], D::Error> {
         if deserializer.is_human_readable() {
-            deserialize_human_readable_bytes_array(deserializer)
+            deserialize_human_readable_hex_array(deserializer)
         } else {
             deserialize_human_unreadable_bytes_array(deserializer)
         }
@@ -181,6 +181,8 @@ pub mod serde {
         deserializer: D,
     ) -> Result<[u8; N], D::Error> {
         if deserializer.is_human_readable() {
+            // This path intentionally accepts both the hex string and byte-array
+            // representations, so it must dispatch through `deserialize_any`.
             deserializer.deserialize_any(FixedBytesVisitor::<N>)
         } else {
             deserialize_human_unreadable_bytes_array(deserializer)
@@ -189,19 +191,23 @@ pub mod serde {
 
     #[cfg(test)]
     mod tests {
+        use super::{
+            deserialize_bytes_array, deserialize_bytes_array_or_seq, serialize_bytes_array,
+        };
+
         /// 64 bytes exceeds serde's built-in 32-element array support, so this
         /// exercises the explicit tuple path on both ends.
         struct Bytes64([u8; 64]);
 
         impl serde::Serialize for Bytes64 {
             fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-                super::serialize_bytes_array(self.0, serializer)
+                serialize_bytes_array(self.0, serializer)
             }
         }
 
         impl<'de> serde::Deserialize<'de> for Bytes64 {
             fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-                super::deserialize_bytes_array(deserializer).map(Self)
+                deserialize_bytes_array(deserializer).map(Self)
             }
         }
 
@@ -209,7 +215,7 @@ pub mod serde {
 
         impl<'de> serde::Deserialize<'de> for Bytes64OrSeq {
             fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-                super::deserialize_bytes_array_or_seq(deserializer).map(Self)
+                deserialize_bytes_array_or_seq(deserializer).map(Self)
             }
         }
 
