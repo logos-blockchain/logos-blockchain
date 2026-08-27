@@ -1,15 +1,16 @@
 use std::io;
 
 use futures::{AsyncReadExt, AsyncWriteExt};
-use lb_core::codec::{self, DeserializeOp as _, SerializeOp as _};
+use lb_core::codec::{self, BoundedBytes, BoundedSerializeOp, DeserializeOp as _};
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
+
+use super::MAX_MSG_LEN;
 
 type Result<T> = std::result::Result<T, PackingError>;
 
 type LenType = u32;
 const MAX_MSG_LEN_BYTES: usize = size_of::<LenType>();
-const MAX_MSG_LEN: usize = 16 * 1024 * 1024; // 16 MiB;
 
 #[derive(Debug, Error)]
 pub enum PackingError {
@@ -25,10 +26,18 @@ pub enum PackingError {
 
 pub async fn pack_to_writer<Message, Writer>(message: &Message, writer: &mut Writer) -> Result<()>
 where
-    Message: Serialize + DeserializeOwned + Sync,
+    Message: BoundedSerializeOp + DeserializeOwned + Sync,
     Writer: AsyncWriteExt + Send + Unpin,
 {
-    let packed_message = message.to_bounded_bytes::<MAX_MSG_LEN>()?;
+    if <Message::Bytes as BoundedBytes>::MAX > MAX_MSG_LEN {
+        return Err(PackingError::MessageTooLarge {
+            max: MAX_MSG_LEN,
+            actual: <Message::Bytes as BoundedBytes>::MAX,
+        });
+    }
+
+    let packed_message = message.to_bounded_bytes()?;
+    let packed_message = packed_message.as_ref();
     let length_prefix: LenType = packed_message
         .len()
         .try_into()
@@ -39,7 +48,7 @@ where
         .await
         .map_err(Into::<PackingError>::into)?;
 
-    writer.write_all(&packed_message).await.map_err(Into::into)
+    writer.write_all(packed_message).await.map_err(Into::into)
 }
 
 async fn read_data_length<R>(reader: &mut R) -> Result<usize>
@@ -73,11 +82,24 @@ where
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
+
     use super::*;
+    use crate::{
+        libp2p::messages::{DownloadBlocksResponse, RequestMessage},
+        messages::GetTipResponse,
+    };
+
+    fn assert_valid_message_bound<T>()
+    where
+        T: BoundedSerializeOp,
+    {
+        assert!(<T::Bytes as BoundedBytes>::MAX <= MAX_MSG_LEN);
+    }
 
     #[tokio::test]
     async fn sender_rejects_messages_above_frame_limit() {
-        let message = vec![0u8; MAX_MSG_LEN];
+        let message = DownloadBlocksResponse::Block(Bytes::from(vec![0u8; MAX_MSG_LEN]));
         let mut writer = futures::io::Cursor::new(Vec::new());
 
         let error = pack_to_writer(&message, &mut writer).await.unwrap_err();
@@ -87,5 +109,12 @@ mod tests {
             PackingError::Serialization(codec::Error::Serialize(_))
         ));
         assert!(writer.into_inner().is_empty());
+    }
+
+    #[test]
+    fn production_messages_have_bounded_serialization() {
+        assert_valid_message_bound::<RequestMessage>();
+        assert_valid_message_bound::<DownloadBlocksResponse>();
+        assert_valid_message_bound::<GetTipResponse>();
     }
 }

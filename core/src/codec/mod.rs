@@ -6,18 +6,12 @@ pub mod errors;
 
 use bytes::Bytes;
 pub use errors::Error;
-use lb_utils::bounded::UpperBoundedVec;
+pub use lb_utils::bounded::UpperBoundedVec;
 use serde::{Serialize, de::DeserializeOwned};
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub trait SerializeOp {
     fn to_bytes(&self) -> Result<Bytes>;
-
-    /// Serialize the value into a byte vector whose length is bounded by
-    /// `MAX`.
-    fn to_bounded_bytes<const MAX: usize>(&self) -> Result<UpperBoundedVec<u8, MAX>>
-    where
-        Self: Sized;
     fn bytes_size(&self) -> Result<u64>;
 }
 
@@ -30,12 +24,36 @@ impl<T: Serialize> SerializeOp for T {
         bincode::serialize(self)
     }
 
-    fn to_bounded_bytes<const MAX: usize>(&self) -> Result<UpperBoundedVec<u8, MAX>> {
-        bincode::serialize_bounded(self)
-    }
-
     fn bytes_size(&self) -> Result<u64> {
         bincode::serialized_size(self)
+    }
+}
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+impl<const MAX: usize> sealed::Sealed for UpperBoundedVec<u8, MAX> {}
+
+pub trait BoundedBytes: sealed::Sealed + AsRef<[u8]> + Sized {
+    const MAX: usize;
+
+    fn serialize<T: Serialize>(value: &T) -> Result<Self>;
+}
+
+impl<const MAX: usize> BoundedBytes for UpperBoundedVec<u8, MAX> {
+    const MAX: usize = MAX;
+
+    fn serialize<T: Serialize>(value: &T) -> Result<Self> {
+        bincode::serialize_bounded::<_, MAX>(value)
+    }
+}
+
+pub trait BoundedSerializeOp: SerializeOp + Serialize + Sized {
+    type Bytes: BoundedBytes;
+
+    fn to_bounded_bytes(&self) -> Result<Self::Bytes> {
+        Self::Bytes::serialize(self)
     }
 }
 
@@ -51,7 +69,16 @@ impl<T> SerdeOp for T where T: SerializeOp + DeserializeOp {}
 
 #[cfg(test)]
 mod tests {
+    use serde::Serialize;
+
     use super::*;
+
+    #[derive(Serialize)]
+    struct TestBounded(Vec<u8>);
+
+    impl BoundedSerializeOp for TestBounded {
+        type Bytes = UpperBoundedVec<u8, 11>;
+    }
 
     #[test]
     fn serialize_deserialize() {
@@ -79,17 +106,20 @@ mod tests {
 
     #[test]
     fn bounded_serialization_preserves_the_wire_format() {
-        let tmp = vec![1u8, 2, 3];
+        let tmp = TestBounded(vec![1u8, 2, 3]);
 
-        let bounded = tmp.to_bounded_bytes::<11>().unwrap();
+        let bounded = tmp.to_bounded_bytes().unwrap();
 
         assert_eq!(bounded.as_slice(), tmp.to_bytes().unwrap().as_ref());
         assert_eq!(bounded.len(), 11);
+        assert_eq!(<TestBounded as BoundedSerializeOp>::Bytes::MAX, 11);
     }
 
     #[test]
     fn bounded_serialization_rejects_values_over_the_limit() {
-        let error = vec![1u8, 2, 3].to_bounded_bytes::<10>().unwrap_err();
+        let error = TestBounded(vec![1u8, 2, 3, 4])
+            .to_bounded_bytes()
+            .unwrap_err();
 
         assert!(matches!(error, Error::Serialize(_)));
     }
