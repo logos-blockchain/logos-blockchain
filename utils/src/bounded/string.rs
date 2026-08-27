@@ -1,3 +1,5 @@
+use serde::{Deserialize, Deserializer};
+
 use crate::bounded::{Bounded, BoundedError, BoundedLen, BoundedVec};
 
 impl BoundedLen for String {
@@ -9,10 +11,17 @@ impl BoundedLen for String {
 /// A `String` whose byte length is statically enforced to be in the range
 /// `[MIN, MAX]`.
 ///
-/// A thin alias over [`Bounded`]. Length checking, (de)serialization, `Display`
-/// and unchecked construction all come from the generic wrapper; only the
-/// string-flavoured conversions live here.
+/// A thin alias over [`Bounded`]. Length checking, serialization, `Display` and
+/// unchecked construction come from the generic wrapper; string deserialization
+/// and the remaining string-flavoured conversions live here.
 pub type BoundedString<const MIN: usize, const MAX: usize> = Bounded<String, MIN, MAX>;
+
+impl<'de, const MIN: usize, const MAX: usize> Deserialize<'de> for BoundedString<MIN, MAX> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        Self::try_new(value).map_err(serde::de::Error::custom)
+    }
+}
 
 impl<const MIN: usize, const MAX: usize> BoundedString<MIN, MAX> {
     /// Length in bytes (not `char`s), matching `str`/`String` semantics.

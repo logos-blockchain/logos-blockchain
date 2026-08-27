@@ -28,7 +28,7 @@ pub fn create_epoch_state(
             let declaration = Declaration {
                 service_type,
                 provider_id: *provider_id,
-                locked_note_id: note_id,
+                service_note_id: note_id,
                 locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
                 zk_id: ZkPublicKey::new(BigUint::from(i as u64).into()),
                 created: 0.into(),

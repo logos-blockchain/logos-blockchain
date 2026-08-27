@@ -11,7 +11,7 @@ pub enum Error {
     #[error("database error: {0}")]
     Database(#[from] rusqlite::Error),
 
-    /// Local draft serialization failed.
+    /// The participant-local `ZoneSDK` checkpoint could not be encoded.
     #[error("encoding error: {0}")]
     Encoding(#[from] bincode::Error),
 
@@ -44,9 +44,10 @@ pub enum Error {
     #[error("invalid \u{3bb}SQL payload: {0}")]
     InvalidPayload(&'static str),
 
-    /// The inscription uses a protocol version this library cannot execute.
-    #[error("unsupported \u{3bb}SQL protocol version {0}")]
-    UnsupportedProtocolVersion(u16),
+    /// SQL received from the channel was rejected deterministically by
+    /// `SQLite`.
+    #[error("channel SQL was rejected: {0}")]
+    RejectedSql(#[source] rusqlite::Error),
 
     /// The encoded payload exceeds the inscription limit.
     #[error("transaction is too large for one inscription")]

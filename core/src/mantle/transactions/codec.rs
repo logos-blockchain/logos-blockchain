@@ -255,6 +255,7 @@ mod tests {
             }),
             Op::ChannelConfig(ChannelConfigOp {
                 channel: ChannelId::from([0x22; 32]),
+                parent: MsgId::from([0x33; 32]),
                 keys: signing_key.public_key().into(),
                 posting_timeframe: 1.into(),
                 posting_timeout: 2.into(),
@@ -459,6 +460,7 @@ mod tests {
 
         let config_op = ChannelConfigOp {
             channel: ChannelId::from([0xFF; 32]),
+            parent: MsgId::from([0xAA; 32]),
             keys: [
                 signing_key1.public_key(),
                 signing_key2.public_key(),
@@ -498,13 +500,13 @@ mod tests {
         let locator1: Multiaddr = "/ip4/127.0.0.1/tcp/8080".parse().unwrap();
         let locator2: Multiaddr = "/ip6/::1/tcp/9090".parse().unwrap();
 
-        let locked_note_sk = ZkKey::from(BigUint::from(1u64));
-        let locked_note = Utxo {
+        let service_note_sk = ZkKey::from(BigUint::from(1u64));
+        let service_note = Utxo {
             op_id: [1u8; 32],
             output_index: 12,
             note: Note {
                 value: 500,
-                pk: locked_note_sk.to_public_key(),
+                pk: service_note_sk.to_public_key(),
             },
         };
         let sdp_declare_op = SDPDeclareOp {
@@ -517,7 +519,7 @@ mod tests {
             .unwrap(),
             provider_id: ProviderId(signing_key.public_key()),
             zk_id: zk_sk.to_public_key(),
-            locked_note_id: locked_note.id(),
+            service_note_id: service_note.id(),
         };
 
         let mantle_tx = RawMantleTx(Ops::new_unchecked(vec![Op::SDPDeclare(sdp_declare_op)]));
@@ -530,7 +532,7 @@ mod tests {
         // Create a signed tx and encode it to get actual size
         let tx_hash = mantle_tx.hash();
         let proof = ZkAndEd25519Proof {
-            zk_sig: ZkKey::multi_sign(&[locked_note_sk, zk_sk], &tx_hash.to_fr()).unwrap(),
+            zk_sig: ZkKey::multi_sign(&[service_note_sk, zk_sk], &tx_hash.to_fr()).unwrap(),
             ed25519_sig: Ed25519Signature::from_bytes(&[0u8; 64]),
         };
         let signed_tx = SignedMantleTx::new(mantle_tx, [OpProof::ZkAndEd25519Sigs(proof)].into());
@@ -542,12 +544,12 @@ mod tests {
 
     #[test]
     fn test_minimum_signed_mantle_tx_size_with_sdp_withdraw() {
-        let locked_note_id = NoteId(BigUint::from(123u64).into());
+        let service_note_id = NoteId(BigUint::from(123u64).into());
 
         let sdp_withdraw_op = SDPWithdrawOp {
             declaration_id: DeclarationId([0x11; 32]),
             nonce: 42,
-            locked_note_id,
+            service_note_id,
         };
 
         let mantle_tx = RawMantleTx(Ops::new_unchecked(vec![Op::SDPWithdraw(sdp_withdraw_op)]));
@@ -626,6 +628,7 @@ mod tests {
 
         let config_op = ChannelConfigOp {
             channel: ChannelId::from([0xCC; 32]),
+            parent: MsgId::from([0xDD; 32]),
             keys: signing_key.public_key().into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
@@ -727,6 +730,7 @@ mod tests {
 
         let config_op = ChannelConfigOp {
             channel: ChannelId::from([0x33; 32]),
+            parent: MsgId::from([0x44; 32]),
             keys: [signing_key1.public_key(), signing_key2.public_key()].into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
@@ -734,10 +738,10 @@ mod tests {
             transfer_threshold: 0,
         };
 
-        let locked_note_sk = ZkKey::from(BigUint::from(1u64));
+        let service_note_sk = ZkKey::from(BigUint::from(1u64));
         let transfer_op = TransferOp {
             inputs: Inputs::new([NoteId(BigUint::from(777u64).into())]),
-            outputs: Outputs::new([Note::new(5000, locked_note_sk.to_public_key())]),
+            outputs: Outputs::new([Note::new(5000, service_note_sk.to_public_key())]),
         };
 
         let locator: Multiaddr = "/dns4/example.com/tcp/443".parse().unwrap();
@@ -747,7 +751,7 @@ mod tests {
             locators: Locator::new_unchecked(locator).into(),
             provider_id: ProviderId(signing_key1.public_key()),
             zk_id: zk_sk.to_public_key(),
-            locked_note_id: transfer_op
+            service_note_id: transfer_op
                 .outputs
                 .utxo_by_index(0, &transfer_op)
                 .unwrap()
@@ -772,7 +776,7 @@ mod tests {
         let op_ed25519_sig = signing_key1.sign_payload(&tx_hash.as_signing_bytes());
         let config_proof = ChannelMultiSigProof::try_new([].into()).unwrap();
         let zk_and_ed25519_proof = ZkAndEd25519Proof {
-            zk_sig: ZkKey::multi_sign(&[locked_note_sk, zk_sk], &tx_hash.to_fr()).unwrap(),
+            zk_sig: ZkKey::multi_sign(&[service_note_sk, zk_sk], &tx_hash.to_fr()).unwrap(),
             ed25519_sig: op_ed25519_sig,
         };
         let signed_tx = SignedMantleTx::new(
@@ -910,6 +914,7 @@ mod tests {
         let ops = vec![
             Op::ChannelConfig(ChannelConfigOp {
                 channel: ChannelId::from([0x22; 32]),
+                parent: MsgId::from([0x33; 32]),
                 keys: Ed25519Key::from_bytes(&[1; 32]).public_key().into(),
                 posting_timeframe: 0.into(),
                 posting_timeout: 0.into(),
@@ -983,6 +988,7 @@ mod tests {
     fn test_decode_reject_zero_key_count() {
         let encoded_config_op = ChannelConfigOp {
             channel: ChannelId::from([0x22; 32]),
+            parent: MsgId::from([0x33; 32]),
             // Using `new_unchecked` to bypass the constructor check since we're testing
             // `decode` directly.
             keys: Keys::new_unchecked([].into()),
@@ -1004,6 +1010,9 @@ mod tests {
 
         // ChannelId (32 bytes)
         valid_input.extend_from_slice(&[0x42; 32]);
+
+        // Parent MsgId (32 bytes)
+        valid_input.extend_from_slice(&[0x43; 32]);
 
         // KeyCount = MAX_KEY_COUNT
         valid_input.extend_from_slice(&u16::MAX.encode());
@@ -1104,7 +1113,7 @@ mod tests {
             locators: Locator::new_unchecked(invalid_locator).into(),
             provider_id: ProviderId(Ed25519Key::from_bytes(&[1; 32]).public_key()),
             zk_id: ZkKey::zero().to_public_key(),
-            locked_note_id: NoteId(BigUint::from(111u64).into()),
+            service_note_id: NoteId(BigUint::from(111u64).into()),
         };
 
         let encoded = op.encode();

@@ -419,6 +419,7 @@ mod body_root_test_vectors {
                 "ChannelConfig",
                 tx(Op::ChannelConfig(ChannelConfigOp {
                     channel: ChannelId::from([7u8; 32]),
+                    parent: MsgId::root(),
                     keys: Keys::try_from(vec![ed25519_pk(8), ed25519_pk(9)]).unwrap(),
                     posting_timeframe: SlotTimeframe::from(10u32),
                     posting_timeout: SlotTimeout::from(11u32),
@@ -473,7 +474,7 @@ mod body_root_test_vectors {
                         .into(),
                     provider_id: ProviderId(ed25519_pk(24)),
                     zk_id: zk_pk(25),
-                    locked_note_id: NoteId(Fr::from(26u64)),
+                    service_note_id: NoteId(Fr::from(26u64)),
                 })),
             ),
             // SDPWithdraw (0x21)
@@ -481,7 +482,7 @@ mod body_root_test_vectors {
                 "SDPWithdraw",
                 tx(Op::SDPWithdraw(WithdrawMessage {
                     declaration_id: DeclarationId([27u8; 32]),
-                    locked_note_id: NoteId(Fr::from(28u64)),
+                    service_note_id: NoteId(Fr::from(28u64)),
                     nonce: 29,
                 })),
             ),

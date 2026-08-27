@@ -8,7 +8,7 @@
 mod applier;
 mod db;
 mod error;
-mod local_write;
+mod functions;
 mod logos_sql;
 mod protocol;
 mod runtime;

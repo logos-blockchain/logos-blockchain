@@ -17,7 +17,7 @@ use crate::{
         ops::{SignedOp, ZkAndEd25519Proof},
         transactions::{hash::TxHashView, states::VerificationState},
     },
-    sdp::{Declaration, MinStake, locked_notes::LockedNotes},
+    sdp::{Declaration, MinStake, service_notes::ServiceNotes},
 };
 
 trait SDPDeclareValidationExt {
@@ -26,7 +26,7 @@ trait SDPDeclareValidationExt {
         note: Note,
         channels: &Channels,
         declarations: &Declarations,
-        locked_notes: &LockedNotes,
+        service_notes: &ServiceNotes,
         min_stake: &MinStake,
     ) -> Result<(), SdpError>;
 
@@ -42,7 +42,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         note: Note,
         channels: &Channels,
         declarations: &Declarations,
-        locked_notes: &LockedNotes,
+        service_notes: &ServiceNotes,
         min_stake: &MinStake,
     ) -> Result<(), SdpError> {
         // Check that the declaration doesn't already exist
@@ -52,22 +52,22 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         validate_service_scoped_uniqueness(self, declarations)?;
 
         // A channel note cannot be used as collateral for a service declaration.
-        if channels.is_channel_note(&self.locked_note_id) {
-            return Err(SdpError::ChannelNote(self.locked_note_id));
+        if channels.is_channel_note(&self.service_note_id) {
+            return Err(SdpError::ChannelNote(self.service_note_id));
         }
 
-        // Ensure value of locked note is sufficient for joining the service.
+        // Ensure value of service note is sufficient for joining the service.
         if note.value < min_stake.threshold {
             return Err(SdpError::NoteInsufficientValue {
-                note_id: self.locked_note_id,
+                note_id: self.service_note_id,
                 value: note.value,
             });
         }
 
-        // Ensure the note has not already been locked for this service.
-        if locked_notes.is_locked_for_service(&self.locked_note_id, &self.service_type) {
+        // Ensure the note has not already been used for this service.
+        if service_notes.is_used_for_service(&self.service_note_id, &self.service_type) {
             return Err(SdpError::NoteAlreadyUsedForService {
-                note_id: self.locked_note_id,
+                note_id: self.service_note_id,
                 service_type: self.service_type,
             });
         }
@@ -85,17 +85,17 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         let utxo = context
             .utxo_tree
             .utxos()
-            .get(&self.locked_note_id)
+            .get(&self.service_note_id)
             .expect("The operation should have been checked")
             .0;
 
-        context.locked_notes = context
-            .locked_notes
+        context.service_notes = context
+            .service_notes
             .lock(
                 &context.min_stake,
                 self.service_type,
                 utxo.note,
-                &self.locked_note_id,
+                &self.service_note_id,
             )
             .map_err(|_| SdpError::UnexpectedError)?;
 
@@ -135,7 +135,7 @@ pub struct SDPDeclarePreverificationContext<'a> {
 pub struct SDPDeclareVerificationContext<'a> {
     pub utxo_tree: &'a Utxos,
     pub channels: &'a Channels,
-    pub locked_notes: &'a LockedNotes,
+    pub service_notes: &'a ServiceNotes,
     pub tx_hash_view: &'a TxHashView,
     pub declarations: &'a Declarations,
     pub min_stake: &'a MinStake,
@@ -144,7 +144,7 @@ pub struct SDPDeclareVerificationContext<'a> {
 pub struct SDPDeclareGenesisValidationContext<'a> {
     pub utxo_tree: &'a Utxos,
     pub channels: &'a Channels,
-    pub locked_notes: &'a LockedNotes,
+    pub service_notes: &'a ServiceNotes,
     pub declarations: &'a Declarations,
     pub min_stake: &'a MinStake,
 }
@@ -153,7 +153,7 @@ pub struct SDPDeclareExecutionContext {
     pub utxo_tree: Utxos,
     pub epoch: Epoch,
     pub declarations: Declarations,
-    pub locked_notes: LockedNotes,
+    pub service_notes: ServiceNotes,
     pub min_stake: MinStake,
 }
 
@@ -188,13 +188,13 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPDeclareOp {
         context: &Self::Context<'_>,
     ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
         // Check that the note exist
-        let Some((utxo, _)) = context.utxo_tree.utxos().get(&self.locked_note_id) else {
-            return Err(SdpError::InexistingNote(self.locked_note_id));
+        let Some((utxo, _)) = context.utxo_tree.utxos().get(&self.service_note_id) else {
+            return Err(SdpError::InexistingNote(self.service_note_id));
         };
 
         // Defer the ZKP verification, so that the caller can batch it.
         // Ed25519 verification is done by `preverify`.
-        // Ensure locked note exists and ownership over the locked note and `zk_id`.
+        // Ensure service note exists and ownership over the service note and `zk_id`.
         let note = utxo.note;
         let inputs = public_inputs_from_pks(
             (*context.tx_hash_view.as_fr()).into(),
@@ -207,7 +207,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPDeclareOp {
             note,
             context.channels,
             context.declarations,
-            context.locked_notes,
+            context.service_notes,
             context.min_stake,
         )?;
 
@@ -241,8 +241,8 @@ impl VerifiableOperation<verification_mode::GenesisMode> for SDPDeclareOp {
         context: &Self::Context<'_>,
     ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
         // Check that the note exist
-        let Some((utxo, _)) = context.utxo_tree.utxos().get(&self.locked_note_id) else {
-            return Err(SdpError::InexistingNote(self.locked_note_id));
+        let Some((utxo, _)) = context.utxo_tree.utxos().get(&self.service_note_id) else {
+            return Err(SdpError::InexistingNote(self.service_note_id));
         };
         let note = utxo.note;
 
@@ -251,7 +251,7 @@ impl VerifiableOperation<verification_mode::GenesisMode> for SDPDeclareOp {
             note,
             context.channels,
             context.declarations,
-            context.locked_notes,
+            context.service_notes,
             context.min_stake,
         )?;
 
@@ -300,7 +300,7 @@ mod tests {
                 .public_key()
                 .into(),
             zk_id: ZkKey::from(BigUint::from(zk_sk)).to_public_key(),
-            locked_note_id: Fr::ZERO.into(),
+            service_note_id: Fr::ZERO.into(),
         }
     }
 

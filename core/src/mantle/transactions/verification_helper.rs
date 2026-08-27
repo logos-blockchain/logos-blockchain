@@ -16,13 +16,13 @@ use crate::{
             pow::{PowNullifier, PowReward, PowTarget},
         },
     },
-    sdp::{DeclarationId, MinStake, ServiceType, locked_notes::LockedNotes},
+    sdp::{DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
 };
 
 pub trait OperationVerificationHelper {
     fn get_channels(&self) -> &Channels;
 
-    fn get_locked_notes(&self) -> &LockedNotes;
+    fn get_service_notes(&self) -> &ServiceNotes;
 
     fn get_utxos(&self) -> &Utxos;
 
@@ -113,13 +113,13 @@ pub mod test_utils {
             },
             transactions::OperationVerificationHelper,
         },
-        sdp::{DeclarationId, MinStake, ServiceType, locked_notes::LockedNotes},
+        sdp::{DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
     };
 
     pub struct TestOperationVerificationHelper {
         channels: Channels,
         keys: HashMap<(ChannelId, ChannelKeyIndex), Ed25519PublicKey>,
-        locked_notes: LockedNotes,
+        service_notes: ServiceNotes,
         utxos: Utxos,
         declarations: Declarations,
         min_stake: MinStake,
@@ -146,7 +146,7 @@ pub mod test_utils {
             Self {
                 channels,
                 keys: keys.into_iter().collect(),
-                locked_notes: LockedNotes::new(),
+                service_notes: ServiceNotes::new(),
                 utxos: Utxos::new(),
                 declarations: Declarations::new_sync(),
                 min_stake: MinStake {
@@ -242,8 +242,8 @@ pub mod test_utils {
             &self.channels
         }
 
-        fn get_locked_notes(&self) -> &LockedNotes {
-            &self.locked_notes
+        fn get_service_notes(&self) -> &ServiceNotes {
+            &self.service_notes
         }
 
         fn get_utxos(&self) -> &Utxos {

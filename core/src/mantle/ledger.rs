@@ -19,7 +19,7 @@ use crate::{
         channel::Channels,
         ops::{OpId, channel::ChannelId},
     },
-    sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
+    sdp::{Declaration, DeclarationId, service_notes::ServiceNotes},
 };
 
 // ==============================================================================
@@ -114,8 +114,8 @@ pub type Value = u64;
 pub enum InputsError {
     #[error("Note: {0:?} isn't in the ledger")]
     InexistingNote(NoteId),
-    #[error("Locked note: {0:?}")]
-    LockedNote(NoteId),
+    #[error("Service note: {0:?}")]
+    ServiceNote(NoteId),
     #[error("Channel note: {0:?}")]
     ChannelNote(NoteId),
     #[error("Note is not a channel note of the expected channel: {0:?}")]
@@ -318,17 +318,17 @@ impl Inputs {
     }
 
     /// Validates that every input is spendable as a regular note: unique,
-    /// unlocked, not owned by a channel, and present in the ledger.
+    /// not in service, not owned by a channel, and present in the ledger.
     ///
     /// This is the `assert_spendable(inputs, None)` case of the spec.
     pub fn validate_not_in_channel(
         &self,
-        locked_notes: &LockedNotes,
+        service_notes: &ServiceNotes,
         channels: &Channels,
         utxos: &Utxos,
     ) -> Result<(), InputsError> {
         self.validate_uniqueness()?;
-        self.validate_unlocked_and_present(locked_notes, utxos)?;
+        self.validate_not_in_service_and_present(service_notes, utxos)?;
         for input in &self.0 {
             // A channel note is owned by a channel and cannot be spent directly.
             if channels.is_channel_note(input) {
@@ -339,19 +339,19 @@ impl Inputs {
     }
 
     /// Validates that every input is spendable as a channel note of
-    /// `channel_id`: unique, unlocked, present in the ledger, and registered as
-    /// a channel note owned by `channel_id`.
+    /// `channel_id`: unique, not in service, present in the ledger, and
+    /// registered as a channel note owned by `channel_id`.
     ///
     /// This is the `assert_spendable(inputs, channel_id)` case of the spec.
     pub fn validate_in_channel(
         &self,
-        locked_notes: &LockedNotes,
+        service_notes: &ServiceNotes,
         channels: &Channels,
         channel_id: &ChannelId,
         utxos: &Utxos,
     ) -> Result<(), InputsError> {
         self.validate_uniqueness()?;
-        self.validate_unlocked_and_present(locked_notes, utxos)?;
+        self.validate_not_in_service_and_present(service_notes, utxos)?;
         for input in &self.0 {
             if !channels.is_channel_note_of(input, channel_id) {
                 return Err(InputsError::NotAChannelNote(*input));
@@ -368,15 +368,15 @@ impl Inputs {
         Ok(())
     }
 
-    fn validate_unlocked_and_present(
+    fn validate_not_in_service_and_present(
         &self,
-        locked_notes: &LockedNotes,
+        service_notes: &ServiceNotes,
         utxos: &Utxos,
     ) -> Result<(), InputsError> {
         for input in &self.0 {
-            // Check the note isn't locked
-            if locked_notes.contains(input) {
-                return Err(InputsError::LockedNote(*input));
+            // Check the note isn't a service note
+            if service_notes.contains(input) {
+                return Err(InputsError::ServiceNote(*input));
             }
             // Check the note exist in the ledger
             if !utxos.contains(input) {

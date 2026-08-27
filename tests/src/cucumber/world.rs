@@ -31,7 +31,10 @@ use lb_libp2p::{Multiaddr, PeerId};
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
     LbcEnv, LbcK8sManualCluster, LbcManualCluster, NodeHttpClient, ScenarioBuilder,
-    ScenarioBuilderExt as _, configs::wallet::WalletAccount, env::set_default_env, workloads,
+    ScenarioBuilderExt as _,
+    configs::{deployment::SdpFundingConfig, wallet::WalletAccount},
+    env::set_default_env,
+    workloads,
 };
 use reqwest::Url;
 use testing_framework_core::{
@@ -114,6 +117,24 @@ pub struct ManualNodeConfigOverrides {
 pub enum ManualClusterKind {
     Generated,
     Devnet,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BlendDiagnosticPhase {
+    Baseline,
+    Outage,
+    Recovery,
+}
+
+impl BlendDiagnosticPhase {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Baseline => "baseline",
+            Self::Outage => "outage",
+            Self::Recovery => "recovery",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -986,6 +1007,16 @@ pub struct CucumberWorld {
     pub user_config_overrides: Vec<ConfigOverride>,
     /// Manual: Dynamic deployment-config overrides applied on node startup.
     pub deployment_config_overrides: Vec<ConfigOverride>,
+    /// Manual: Current phase of the tagged Blend/TSI diagnostic scenario.
+    pub blend_diagnostic_phase: Option<BlendDiagnosticPhase>,
+    /// Manual: Number of epoch-observation steps completed by the diagnostic
+    /// scenario.
+    pub blend_diagnostic_observation_count: u32,
+    /// Manual: Nodes that were successfully stopped during the diagnostic
+    /// outage phase.
+    pub blend_diagnostic_stopped_nodes: HashSet<String>,
+    /// Manual: SDP funding profile used by generated deployments.
+    pub sdp_funding_config: SdpFundingConfig,
     /// Manual: If set, nodes use a `DeploymentSettings` loaded from disk
     /// bypassing generated genesis/test deployment.
     pub deployment_config_override_path: Option<PathBuf>,
@@ -1209,6 +1240,16 @@ impl Debug for CucumberWorld {
                 "deployment_config_overrides",
                 &user_config_overrides_display(&self.deployment_config_overrides),
             )
+            .field("blend_diagnostic_phase", &self.blend_diagnostic_phase)
+            .field(
+                "blend_diagnostic_observation_count",
+                &self.blend_diagnostic_observation_count,
+            )
+            .field(
+                "blend_diagnostic_stopped_nodes",
+                &self.blend_diagnostic_stopped_nodes,
+            )
+            .field("sdp_funding_config", &self.sdp_funding_config)
             .field(
                 "deployment_config_override_path",
                 &deployment_config_override_path_display(
@@ -1424,6 +1465,11 @@ impl CucumberWorld {
     pub const fn set_prolonged_bootstrap_period(&mut self, period: Duration) {
         self.manual_node_config_overrides
             .set_prolonged_bootstrap_period(period);
+    }
+
+    /// Set the SDP funding profile for generated manual-cluster deployments.
+    pub const fn set_sdp_funding_config(&mut self, config: SdpFundingConfig) {
+        self.sdp_funding_config = config;
     }
 
     /// Get the best known height for the given node, if any. This is based on

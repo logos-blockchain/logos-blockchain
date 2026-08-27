@@ -5,7 +5,7 @@ use lb_core::{
     mantle::{
         Op, OpProof, SignedMantleTx,
         ops::channel::{
-            ChannelId, ChannelKeyIndex,
+            ChannelId, ChannelKeyIndex, MsgId,
             config::{ChannelConfigOp, Keys},
         },
         traits::Hashable as _,
@@ -29,10 +29,10 @@ use crate::{
         },
         utils::{
             decode_ed25519_public_key_hex, decode_hex_bincode, decode_mantle_tx_hex,
-            decode_msg_id_hex, decode_signed_mantle_tx_hex, encode_hex_bincode, ensure_tx_hash,
-            fixed_bytes, load_or_create_signing_key, node_client, print_channel_state,
-            query_channel_state, read_json, resolve_channel_id,
-            start_cli_sequencer_with_channel_state, timestamp, validate_kind, write_json,
+            decode_signed_mantle_tx_hex, encode_hex_bincode, ensure_tx_hash, fixed_bytes,
+            load_or_create_signing_key, node_client, print_channel_state, query_channel_state,
+            read_json, resolve_channel_id, start_cli_sequencer_with_channel_state, timestamp,
+            validate_kind, write_json,
         },
     },
 };
@@ -98,13 +98,14 @@ pub(crate) async fn run_config_prepare(args: ConfigPrepareArgs) -> RunResult<()>
         channel_state.ok_or_else(|| format!("channel state not found for {channel_id}"))?;
     let config_op = build_config_op(
         channel_id,
+        channel_state.config_tip_hash,
         authorized_keys.clone(),
         args.posting_timeframe,
         args.posting_timeout,
         args.configuration_threshold,
         args.transfer_threshold,
     )?;
-    let msg_id = config_op.id();
+    let config_id = config_op.id();
     let tx = lb_core::mantle::RawMantleTx([Op::ChannelConfig(config_op)].into());
     let tx_hash = tx.hash();
     let intent = ConfigIntent {
@@ -112,7 +113,7 @@ pub(crate) async fn run_config_prepare(args: ConfigPrepareArgs) -> RunResult<()>
         kind: ZONE_CONFIG_INTENT.to_owned(),
         channel_id: hex::encode(channel_id.as_ref()),
         tx_hash: hex::encode(tx_hash.as_ref()),
-        msg_id: hex::encode(msg_id.as_ref()),
+        config_id: hex::encode(config_id.as_ref()),
         required_threshold: channel_state.configuration_threshold,
         mantle_tx: hex::encode(tx.encode()),
         new_authorized_keys: authorized_keys
@@ -136,10 +137,10 @@ pub(crate) async fn run_config_prepare(args: ConfigPrepareArgs) -> RunResult<()>
     };
     write_json(&args.out, &intent)?;
     println!(
-        "{} zone_config: intent tx_hash={} msg_id={} required_threshold={}",
+        "{} zone_config: intent tx_hash={} config_id={} required_threshold={}",
         timestamp(),
         intent.tx_hash,
-        intent.msg_id,
+        intent.config_id,
         intent.required_threshold
     );
     Ok(())
@@ -244,16 +245,16 @@ pub(crate) fn run_config_combine(args: ConfigCombineArgs) -> RunResult<()> {
         kind: ZONE_SIGNED_CONFIG.to_owned(),
         channel_id: intent.channel_id,
         tx_hash: intent.tx_hash,
-        msg_id: intent.msg_id,
+        config_id: intent.config_id,
         signed_mantle_tx: hex::encode(encode_signed_mantle_tx(&signed_tx)),
         signatures: signature_entries,
     };
     write_json(&args.out, &signed)?;
     println!(
-        "{} zone_config: signed tx_hash={} msg_id={}",
+        "{} zone_config: signed tx_hash={} config_id={}",
         timestamp(),
         signed.tx_hash,
-        signed.msg_id
+        signed.config_id
     );
     Ok(())
 }
@@ -280,14 +281,17 @@ pub(crate) async fn run_config_submit(args: ConfigSubmitArgs) -> RunResult<()> {
     print_channel_state("zone_config before", &channel_id, channel_state.as_ref());
     let status_rx = sequencer.subscribe_tx_status();
     let goal = CommandGoal::Tx { tx_hash };
+    let tip_message = sequencer
+        .checkpoint()
+        .map_or_else(MsgId::root, |checkpoint| checkpoint.last_msg_id);
     let (_result, _checkpoint) = sequencer
         .handle()
-        .submit_signed_tx(signed_tx, decode_msg_id_hex(&signed.msg_id)?)?;
+        .submit_signed_tx(signed_tx, tip_message)?;
     println!(
-        "{} zone_config: submitted tx_hash={} msg_id={}",
+        "{} zone_config: submitted tx_hash={} config_id={}",
         timestamp(),
         signed.tx_hash,
-        signed.msg_id
+        signed.config_id
     );
     let wait_for = if args.wait_finalized {
         WaitFor::Finalized
@@ -352,6 +356,7 @@ fn authorized_keys_for_paths(
 
 fn build_config_op(
     channel_id: ChannelId,
+    parent: MsgId,
     authorized_keys: Vec<Ed25519PublicKey>,
     posting_timeframe: u32,
     posting_timeout: u32,
@@ -360,6 +365,7 @@ fn build_config_op(
 ) -> RunResult<ChannelConfigOp> {
     Ok(ChannelConfigOp {
         channel: channel_id,
+        parent,
         keys: Keys::try_from(authorized_keys)?,
         posting_timeframe: posting_timeframe.into(),
         posting_timeout: posting_timeout.into(),
@@ -393,8 +399,8 @@ fn validate_config_tx(tx: &lb_core::mantle::RawMantleTx, intent: &ConfigIntent) 
             _ => None,
         })
         .ok_or("config intent transaction has no ChannelConfig op")?;
-    if hex::encode(config.id().as_ref()) != intent.msg_id {
-        return Err("config intent msg_id does not match ChannelConfig op id".into());
+    if hex::encode(config.id().as_ref()) != intent.config_id {
+        return Err("config intent config_id does not match ChannelConfig op id".into());
     }
     if tx.ops().len() != 1 {
         return Err("config intent transaction must contain exactly one op".into());

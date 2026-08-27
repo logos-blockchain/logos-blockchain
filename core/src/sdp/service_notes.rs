@@ -18,42 +18,42 @@ pub enum Error {
         note_id: NoteId,
         service_type: ServiceType,
     },
-    #[error("Note {note_id:?} not locked for {service_type:?}")]
-    NoteNotLockedForService {
+    #[error("Note {note_id:?} not used for {service_type:?}")]
+    NoteNotUsedForService {
         note_id: NoteId,
         service_type: ServiceType,
     },
-    #[error("Note is not locked: {0:?}")]
-    NoteNotLocked(NoteId),
+    #[error("Note is not a service note: {0:?}")]
+    NotAServiceNote(NoteId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct LockedNotes {
-    locked_notes: rpds::HashTrieMapSync<NoteId, LockedNote>,
+pub struct ServiceNotes {
+    service_notes: rpds::HashTrieMapSync<NoteId, ServiceNote>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct LockedNote {
+struct ServiceNote {
     note: Note,
     services: HashSet<ServiceType>,
 }
 
-impl LockedNotes {
+impl ServiceNotes {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            locked_notes: rpds::HashTrieMapSync::new_sync(),
+            service_notes: rpds::HashTrieMapSync::new_sync(),
         }
     }
 
     #[must_use]
     pub fn get(&self, id: &NoteId) -> Option<&Note> {
-        self.locked_notes.get(id).map(|ln| &ln.note)
+        self.service_notes.get(id).map(|ln| &ln.note)
     }
 
     #[must_use]
     pub fn contains(&self, id: &NoteId) -> bool {
-        self.locked_notes.contains_key(id)
+        self.service_notes.contains_key(id)
     }
 
     pub fn lock(
@@ -70,28 +70,28 @@ impl LockedNotes {
             });
         }
 
-        if let Some(locked) = self.locked_notes.get_mut(note_id) {
-            if locked.services.contains(&service_type) {
+        if let Some(service_note) = self.service_notes.get_mut(note_id) {
+            if service_note.services.contains(&service_type) {
                 return Err(Error::NoteAlreadyUsedForService {
                     note_id: *note_id,
                     service_type,
                 });
             }
-            locked.services.insert(service_type);
+            service_note.services.insert(service_type);
         } else {
             let services = [service_type].into();
-            self.locked_notes = self
-                .locked_notes
-                .insert(*note_id, LockedNote { note, services });
+            self.service_notes = self
+                .service_notes
+                .insert(*note_id, ServiceNote { note, services });
         }
 
         Ok(self)
     }
 
     #[must_use]
-    pub fn is_locked_for_service(&self, note_id: &NoteId, service_type: &ServiceType) -> bool {
-        if let Some(locked) = self.locked_notes.get(note_id) {
-            if locked.services.contains(service_type) {
+    pub fn is_used_for_service(&self, note_id: &NoteId, service_type: &ServiceType) -> bool {
+        if let Some(service_note) = self.service_notes.get(note_id) {
+            if service_note.services.contains(service_type) {
                 return true;
             }
             return false;
@@ -100,21 +100,21 @@ impl LockedNotes {
     }
 
     pub fn unlock(&mut self, service_type: ServiceType, note_id: &NoteId) -> Result<Note, Error> {
-        if let Some(note) = self.locked_notes.get_mut(note_id) {
+        if let Some(note) = self.service_notes.get_mut(note_id) {
             if !note.services.remove(&service_type) {
-                return Err(Error::NoteNotLockedForService {
+                return Err(Error::NoteNotUsedForService {
                     note_id: *note_id,
                     service_type,
                 });
             }
             let res = note.note;
             if note.services.is_empty() {
-                self.locked_notes = self.locked_notes.remove(note_id);
+                self.service_notes = self.service_notes.remove(note_id);
             }
 
             Ok(res)
         } else {
-            Err(Error::NoteNotLocked(*note_id))
+            Err(Error::NotAServiceNote(*note_id))
         }
     }
 }
@@ -143,20 +143,20 @@ mod tests {
     fn test_lock_success() {
         let utxo = utxo();
         let note_id = utxo.id();
-        let locked_notes = LockedNotes::new();
+        let service_notes = ServiceNotes::new();
         let min_stake = MinStake {
             threshold: 1,
             timestamp: 0,
         };
 
-        let locked_notes_bn = locked_notes
+        let service_notes_bn = service_notes
             .lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id)
             .expect("Should be able to lock for BN service");
 
-        assert!(locked_notes_bn.contains(&note_id));
+        assert!(service_notes_bn.contains(&note_id));
         assert_eq!(
-            locked_notes_bn
-                .locked_notes
+            service_notes_bn
+                .service_notes
                 .get(&note_id)
                 .map(|ln| &ln.services),
             Some(&HashSet::from([ServiceType::BlendNetwork]))
@@ -167,18 +167,18 @@ mod tests {
     fn test_lock_fail_already_used() {
         let utxo = utxo();
         let note_id = utxo.id();
-        let locked_notes = LockedNotes::new();
+        let service_notes = ServiceNotes::new();
         let min_stake = MinStake {
             threshold: 1,
             timestamp: 0,
         };
 
-        let locked_notes_once = locked_notes
+        let service_notes_once = service_notes
             .lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id)
             .unwrap();
 
         let result =
-            locked_notes_once.lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id);
+            service_notes_once.lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id);
 
         assert!(result.is_err());
         assert_eq!(
@@ -194,13 +194,13 @@ mod tests {
     fn lock_fail_insufficient() {
         let utxo = utxo();
         let note_id = utxo.id();
-        let locked_notes = LockedNotes::new();
+        let service_notes = ServiceNotes::new();
         let min_stake = MinStake {
             threshold: 999_999,
             timestamp: 0,
         };
 
-        let result = locked_notes.lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id);
+        let result = service_notes.lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id);
 
         assert!(result.is_err());
         assert_eq!(
@@ -216,13 +216,13 @@ mod tests {
     fn test_lock_success_for_note() {
         let utxo = utxo();
         let note_id = utxo.id();
-        let locked_notes = LockedNotes::new();
+        let service_notes = ServiceNotes::new();
         let min_stake = MinStake {
             threshold: 1,
             timestamp: 0,
         };
 
-        let result = locked_notes.lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id);
+        let result = service_notes.lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id);
 
         assert!(result.is_ok());
     }
@@ -234,7 +234,7 @@ mod tests {
             threshold: 1,
             timestamp: 0,
         };
-        let mut locked = LockedNotes::new()
+        let mut locked = ServiceNotes::new()
             .lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &note_id)
             .unwrap();
 
@@ -243,16 +243,16 @@ mod tests {
             .expect("Should unlock the last service");
 
         assert!(!locked.contains(&note_id));
-        assert!(locked.locked_notes.is_empty());
+        assert!(locked.service_notes.is_empty());
     }
 
     #[test]
-    fn test_unlock_note_not_locked() {
+    fn test_unlock_note_not_a_service_note() {
         let note_id = utxo().id();
-        let mut empty_notes = LockedNotes::new();
+        let mut empty_notes = ServiceNotes::new();
         let result = empty_notes.unlock(ServiceType::BlendNetwork, &note_id);
 
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), Error::NoteNotLocked(note_id));
+        assert_eq!(result.unwrap_err(), Error::NotAServiceNote(note_id));
     }
 }

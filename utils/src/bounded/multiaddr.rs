@@ -1,4 +1,5 @@
 use multiaddr::Multiaddr;
+use serde::{Deserialize, Deserializer};
 
 use crate::bounded::{Bounded, BoundedError, BoundedLen, BoundedVec};
 
@@ -11,10 +12,18 @@ impl BoundedLen for Multiaddr {
 /// A `Multiaddr` whose byte length is statically enforced to be in the range
 /// `[MIN, MAX]`.
 ///
-/// A thin alias over [`Bounded`]. Length checking, (de)serialization, `Display`
-/// and unchecked construction all come from the generic wrapper; only the
-/// multiaddr-flavoured conversions live here.
+/// A thin alias over [`Bounded`]. Length checking, serialization, `Display` and
+/// unchecked construction come from the generic wrapper; multiaddr
+/// deserialization and the remaining multiaddr-flavoured conversions live
+/// here.
 pub type BoundedMultiaddr<const MIN: usize, const MAX: usize> = Bounded<Multiaddr, MIN, MAX>;
+
+impl<'de, const MIN: usize, const MAX: usize> Deserialize<'de> for BoundedMultiaddr<MIN, MAX> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Multiaddr::deserialize(deserializer)?;
+        Self::try_new(value).map_err(serde::de::Error::custom)
+    }
+}
 
 impl<const MIN: usize, const MAX: usize> BoundedMultiaddr<MIN, MAX> {
     /// Length in bytes (not `char`s), matching `Multiaddr` semantics.

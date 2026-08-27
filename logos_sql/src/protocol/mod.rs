@@ -2,19 +2,28 @@
 
 use std::fmt::{self, Display, Formatter};
 
-use bincode::Options as _;
+use blake2::{Blake2b, Digest as _, digest::consts::U32};
+use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode as _};
+use lb_utils::bounded::{NonEmptyBoundedVec, UpperBoundedVec};
+use lb_zone_sdk::node_types::Inscription;
 use rand::RngCore as _;
-pub use rusqlite::types::Value;
-use serde::{Deserialize, Serialize};
+use rusqlite::types::{ToSql, ToSqlOutput, Value};
 
 use crate::error::Error;
 
-const PAYLOAD_MARKER: [u8; 9] = *b"LOGOS_SQL";
-const PAYLOAD_VERSION: u16 = 1;
+mod codec;
+mod fixtures;
+
+// Every payload starts with this marker and version before the encoded body.
+pub const PAYLOAD_MARKER: [u8; 9] = *b"LOGOS_SQL";
+const PAYLOAD_VERSION: u16 = 2;
 const PAYLOAD_HEADER_LEN: usize = PAYLOAD_MARKER.len() + size_of::<u16>();
 
+// A complete λSQL transaction must fit into one channel inscription.
+const MAX_PAYLOAD_BYTES: usize = Inscription::MAX;
+
 /// Stable identity of one application write.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, BinaryCodec)]
 pub struct TxId([u8; 32]);
 
 impl Display for TxId {
@@ -54,112 +63,108 @@ impl From<TxId> for [u8; 32] {
     }
 }
 
-/// One parameterized SQL statement.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Statement {
-    sql: String,
-    #[serde(with = "serialized_values")]
-    params: Vec<Value>,
-}
+/// Validated SQL text carried by one statement.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SqlText(String);
 
-impl Statement {
-    /// Creates one non-empty statement.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `sql` is empty.
-    pub fn new(sql: String, params: Vec<Value>) -> Result<Self, Error> {
+impl SqlText {
+    fn new(sql: String) -> Result<Self, Error> {
         if sql.trim().is_empty() {
             return Err(Error::InvalidTransaction("statement SQL must not be empty"));
         }
 
-        Ok(Self { sql, params })
+        if sql.len() > MAX_PAYLOAD_BYTES {
+            return Err(Error::InvalidTransaction("statement SQL is too large"));
+        }
+
+        Ok(Self(sql))
     }
 
-    /// Returns the SQL text.
-    #[must_use]
-    pub fn sql(&self) -> &str {
-        &self.sql
-    }
-
-    /// Returns parameters in `SQLite` binding order.
-    #[must_use]
-    pub fn params(&self) -> &[Value] {
-        &self.params
+    fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
-mod serialized_values {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+/// One `SQLite` parameter with `λSQL`'s protocol validation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SqlParameter(Value);
 
-    use super::Value;
+impl TryFrom<Value> for SqlParameter {
+    type Error = Error;
 
-    /// Serializable representation of a `rusqlite` parameter value.
-    #[derive(Deserialize, Serialize)]
-    enum SqlValue {
-        Null,
-        Integer(i64),
-        Real(f64),
-        Text(String),
-        Blob(Vec<u8>),
-    }
-
-    impl From<&Value> for SqlValue {
-        fn from(value: &Value) -> Self {
-            match value {
-                Value::Null => Self::Null,
-                Value::Integer(value) => Self::Integer(*value),
-                Value::Real(value) => Self::Real(*value),
-                Value::Text(value) => Self::Text(value.clone()),
-                Value::Blob(value) => Self::Blob(value.clone()),
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match &value {
+            Value::Real(value) if !value.is_finite() => {
+                return Err(Error::InvalidTransaction("real parameters must be finite"));
             }
-        }
-    }
-
-    impl From<SqlValue> for Value {
-        fn from(value: SqlValue) -> Self {
-            match value {
-                SqlValue::Null => Self::Null,
-                SqlValue::Integer(value) => Self::Integer(value),
-                SqlValue::Real(value) => Self::Real(value),
-                SqlValue::Text(value) => Self::Text(value),
-                SqlValue::Blob(value) => Self::Blob(value),
+            Value::Text(value) if value.len() > MAX_PAYLOAD_BYTES => {
+                return Err(Error::InvalidTransaction("text parameter is too large"));
             }
+            Value::Blob(value) if value.len() > MAX_PAYLOAD_BYTES => {
+                return Err(Error::InvalidTransaction("blob parameter is too large"));
+            }
+            _ => {}
         }
+
+        Ok(Self(value))
+    }
+}
+
+impl ToSql for SqlParameter {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        self.0.to_sql()
+    }
+}
+
+impl SqlParameter {
+    pub fn into_value(self) -> Value {
+        self.0
+    }
+}
+
+/// One parameterized SQL statement.
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+pub struct Statement {
+    sql: SqlText,
+    params: UpperBoundedVec<SqlParameter, MAX_PAYLOAD_BYTES>,
+}
+
+impl Statement {
+    /// Creates one non-empty statement within the protocol limits.
+    pub fn new(sql: String, params: Vec<Value>) -> Result<Self, Error> {
+        if params.len() > MAX_PAYLOAD_BYTES {
+            return Err(Error::InvalidTransaction(
+                "statement has too many parameters",
+            ));
+        }
+
+        let sql = SqlText::new(sql)?;
+        let params = params
+            .into_iter()
+            .map(SqlParameter::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        let params = UpperBoundedVec::new_unchecked(params);
+
+        Ok(Self { sql, params })
     }
 
-    pub fn serialize<S>(values: &[Value], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        values
-            .iter()
-            .map(SqlValue::from)
-            .collect::<Vec<_>>()
-            .serialize(serializer)
+    pub fn sql(&self) -> &str {
+        self.sql.as_str()
     }
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Value>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Vec::<SqlValue>::deserialize(deserializer)
-            .map(|values| values.into_iter().map(Value::from).collect())
+    pub fn params(&self) -> &[SqlParameter] {
+        self.params.as_slice()
     }
 }
 
 /// Statements applied atomically at one channel position.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
 pub struct Transaction {
-    statements: Vec<Statement>,
+    statements: NonEmptyBoundedVec<Statement, MAX_PAYLOAD_BYTES>,
 }
 
 impl Transaction {
-    /// Creates a non-empty transaction.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if no statements are provided.
+    /// Creates a non-empty transaction within the protocol limits.
     pub fn new(statements: Vec<Statement>) -> Result<Self, Error> {
         if statements.is_empty() {
             return Err(Error::InvalidTransaction(
@@ -167,33 +172,104 @@ impl Transaction {
             ));
         }
 
-        Ok(Self { statements })
+        if statements.len() > MAX_PAYLOAD_BYTES {
+            return Err(Error::InvalidTransaction(
+                "transaction contains too many statements",
+            ));
+        }
+
+        Ok(Self {
+            statements: NonEmptyBoundedVec::new_unchecked(statements),
+        })
     }
 
-    /// Returns statements in execution order.
-    #[must_use]
     pub fn statements(&self) -> &[Statement] {
-        &self.statements
+        self.statements.as_slice()
+    }
+}
+
+/// `SQLite` function whose result must be reproduced during channel replay.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CapturedFunction {
+    Random,
+    RandomBlob,
+    Date,
+    Time,
+    DateTime,
+    JulianDay,
+    UnixEpoch,
+    Strftime,
+    TimeDiff,
+    CurrentDate,
+    CurrentTime,
+    CurrentTimestamp,
+}
+
+/// One captured `SQLite` function call and the value returned locally.
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+pub struct CapturedFunctionCall {
+    pub function: CapturedFunction,
+    pub result: SqlParameter,
+}
+
+impl CapturedFunctionCall {
+    pub fn new(function: CapturedFunction, result: Value) -> Result<Self, Error> {
+        Ok(Self {
+            function,
+            result: SqlParameter::try_from(result)?,
+        })
+    }
+}
+
+/// Function results captured while executing one replicated transaction.
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+pub struct CapturedFunctionCalls {
+    calls: UpperBoundedVec<CapturedFunctionCall, MAX_PAYLOAD_BYTES>,
+}
+
+impl CapturedFunctionCalls {
+    pub fn new(calls: Vec<CapturedFunctionCall>) -> Result<Self, Error> {
+        let calls = UpperBoundedVec::try_from(calls).map_err(|_| Error::InscriptionTooLarge)?;
+
+        Ok(Self { calls })
+    }
+
+    pub const fn empty() -> Self {
+        Self {
+            calls: UpperBoundedVec::new_unchecked(Vec::new()),
+        }
+    }
+
+    pub fn as_slice(&self) -> &[CapturedFunctionCall] {
+        self.calls.as_slice()
     }
 }
 
 /// Transaction payload carried by a `λSQL` channel inscription.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
 pub struct ChannelInscription {
     pub tx_id: TxId,
     pub transaction: Transaction,
+    pub captured_function_calls: CapturedFunctionCalls,
 }
 
 impl ChannelInscription {
-    fn encode(&self) -> Result<Vec<u8>, Error> {
-        let mut payload = Vec::from(PAYLOAD_MARKER);
+    pub fn encode(&self) -> Result<Vec<u8>, Error> {
+        let payload_len = payload_len(self.encoded_length())?;
+        let mut payload = Vec::with_capacity(payload_len);
+
+        payload.extend_from_slice(&PAYLOAD_MARKER);
         payload.extend_from_slice(&PAYLOAD_VERSION.to_le_bytes());
-        payload.extend(codec().serialize(self)?);
+        self.encode_into(&mut payload);
 
         Ok(payload)
     }
 
     pub fn decode(payload: &[u8]) -> Result<Self, Error> {
+        if payload.len() > MAX_PAYLOAD_BYTES {
+            return Err(Error::InvalidPayload("payload exceeds the protocol limit"));
+        }
+
         let (header, body) = payload
             .split_at_checked(PAYLOAD_HEADER_LEN)
             .ok_or(Error::InvalidPayload("header is missing"))?;
@@ -206,34 +282,59 @@ impl ChannelInscription {
         let version = u16::from_le_bytes([header[version_offset], header[version_offset + 1]]);
 
         if version != PAYLOAD_VERSION {
-            return Err(Error::UnsupportedProtocolVersion(version));
+            return Err(Error::InvalidPayload("protocol version is not supported"));
         }
 
-        codec()
-            .deserialize(body)
+        <Self as BinaryDecode>::decode_all(body, &())
             .map_err(|_| Error::InvalidPayload("body cannot be decoded"))
+    }
+
+    pub fn content_digest(&self) -> [u8; 32] {
+        Blake2b::<U32>::digest(self.encode_to_vec()).into()
     }
 }
 
 /// A local write after its identity and channel payload have been encoded.
 pub struct EncodedWrite {
     pub tx_id: TxId,
+    pub content_digest: [u8; 32],
     pub payload: Vec<u8>,
 }
 
 impl EncodedWrite {
-    pub fn new(transaction: &Transaction) -> Result<Self, Error> {
+    pub fn new(
+        transaction: &Transaction,
+        captured_function_calls: CapturedFunctionCalls,
+    ) -> Result<Self, Error> {
         let tx_id = TxId::generate();
 
         let channel_inscription = ChannelInscription {
             tx_id,
             transaction: transaction.clone(),
+            captured_function_calls,
         };
 
+        let content_digest = channel_inscription.content_digest();
         let payload = channel_inscription.encode()?;
 
-        Ok(Self { tx_id, payload })
+        Ok(Self {
+            tx_id,
+            content_digest,
+            payload,
+        })
     }
+}
+
+fn payload_len(body_len: usize) -> Result<usize, Error> {
+    let payload_len = PAYLOAD_HEADER_LEN
+        .checked_add(body_len)
+        .ok_or(Error::InscriptionTooLarge)?;
+
+    if payload_len > MAX_PAYLOAD_BYTES {
+        return Err(Error::InscriptionTooLarge);
+    }
+
+    Ok(payload_len)
 }
 
 /// Returns whether an inscription belongs to `λSQL`.
@@ -242,16 +343,14 @@ pub fn is_logos_sql_payload(payload: &[u8]) -> bool {
     payload.starts_with(&PAYLOAD_MARKER)
 }
 
-fn codec() -> impl bincode::Options {
-    bincode::DefaultOptions::new()
-        .with_little_endian()
-        .with_fixint_encoding()
-        .reject_trailing_bytes()
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{ChannelInscription, EncodedWrite, Statement, Transaction, TxId, Value};
+    use rusqlite::types::Value;
+
+    use super::{
+        CapturedFunctionCalls, ChannelInscription, EncodedWrite, MAX_PAYLOAD_BYTES, Statement,
+        Transaction, TxId,
+    };
 
     #[test]
     fn transaction_id_is_displayed_as_hex() {
@@ -271,11 +370,84 @@ mod tests {
         ])
         .expect("transaction should be valid");
 
-        let encoded = EncodedWrite::new(&transaction).expect("submission should encode");
+        let encoded = EncodedWrite::new(&transaction, CapturedFunctionCalls::empty())
+            .expect("payload should encode");
         let decoded = ChannelInscription::decode(&encoded.payload)
             .expect("channel inscription should decode");
 
         assert_eq!(decoded.tx_id, encoded.tx_id);
         assert_eq!(decoded.transaction, transaction);
+    }
+
+    #[test]
+    fn payload_rejects_trailing_bytes() {
+        let transaction = Transaction::new(vec![
+            Statement::new("SELECT 1".to_owned(), Vec::new()).expect("statement should be valid"),
+        ])
+        .expect("transaction should be valid");
+        let write = ChannelInscription {
+            tx_id: TxId::from([3; 32]),
+            transaction,
+            captured_function_calls: CapturedFunctionCalls::empty(),
+        };
+        let mut payload = write.encode().expect("payload should encode");
+        payload.push(0);
+
+        assert!(ChannelInscription::decode(&payload).is_err());
+    }
+
+    #[test]
+    fn payload_bytes_are_pinned() {
+        let transaction = Transaction::new(vec![
+            Statement::new("SELECT 1".to_owned(), Vec::new()).expect("statement should be valid"),
+        ])
+        .expect("transaction should be valid");
+        let write = ChannelInscription {
+            tx_id: TxId::from([3; 32]),
+            transaction,
+            captured_function_calls: CapturedFunctionCalls::empty(),
+        };
+
+        let expected = hex::decode(concat!(
+            "4c4f474f535f53514c0200",
+            "0303030303030303030303030303030303030303030303030303030303030303",
+            "010000000800000053454c45435420310000000000000000"
+        ))
+        .expect("fixture should be valid hex");
+
+        assert_eq!(write.encode().expect("payload should encode"), expected);
+    }
+
+    #[test]
+    fn content_digest_is_pinned() {
+        let transaction = Transaction::new(vec![
+            Statement::new("SELECT 1".to_owned(), Vec::new()).expect("statement should be valid"),
+        ])
+        .expect("transaction should be valid");
+        let write = ChannelInscription {
+            tx_id: TxId::from([3; 32]),
+            transaction,
+            captured_function_calls: CapturedFunctionCalls::empty(),
+        };
+
+        assert_eq!(
+            hex::encode(write.content_digest()),
+            "b119823633ba6fbe90618b226b0d68eae1805876a86c1057237aca6205874b30"
+        );
+    }
+
+    #[test]
+    fn complete_payload_must_fit_one_inscription() {
+        let transaction = Transaction::new(vec![
+            Statement::new(
+                "SELECT ?1".to_owned(),
+                vec![Value::Blob(vec![0; MAX_PAYLOAD_BYTES])],
+            )
+            .expect("statement should be valid"),
+        ])
+        .expect("transaction should be valid");
+        let result = EncodedWrite::new(&transaction, CapturedFunctionCalls::empty());
+
+        assert!(matches!(result, Err(crate::Error::InscriptionTooLarge)));
     }
 }

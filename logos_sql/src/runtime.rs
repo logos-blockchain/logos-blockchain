@@ -16,7 +16,6 @@ use crate::{
     applier,
     db::Databases,
     error::Error,
-    local_write,
     protocol::{Transaction, TxId},
 };
 
@@ -176,7 +175,7 @@ impl Runtime {
         } else if !self.sequencer_ready {
             Err(Error::SequencerNotReady)
         } else {
-            let committed = local_write::commit(&mut self.db, &transaction);
+            let committed = self.db.commit_local_write(&transaction);
 
             if let Ok(tx_id) = committed {
                 tracing::trace!(
@@ -229,10 +228,6 @@ impl Runtime {
     async fn retry_pending_work(&mut self) -> Result<(), Error> {
         if let Some(event) = self.event_pending_retry.take() {
             if let Err(error) = applier::on_event(&mut self.db, &event, self.channel_id) {
-                if !is_retryable_apply_error(&error) {
-                    return Err(error);
-                }
-
                 tracing::debug!(target: TARGET, %error, "applier retry failed");
                 self.event_pending_retry = Some(event);
             } else {
@@ -342,11 +337,4 @@ impl Runtime {
             || matches!(self.publish_state, PublishState::CheckpointPending { .. })
             || self.db.pending_publish()?.is_some())
     }
-}
-
-const fn is_retryable_apply_error(error: &Error) -> bool {
-    !matches!(
-        error,
-        Error::InvalidPayload(_) | Error::UnsupportedProtocolVersion(_)
-    )
 }

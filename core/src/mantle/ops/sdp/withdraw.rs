@@ -18,7 +18,7 @@ use crate::{
         ops::SignedOp,
         transactions::{hash::TxHashView, states::VerificationState},
     },
-    sdp::{self, locked_notes::LockedNotes},
+    sdp::{self, service_notes::ServiceNotes},
 };
 
 const LOG_TARGET: &str = mantle::sdp::message::WITHDRAW;
@@ -26,13 +26,13 @@ const LOG_TARGET: &str = mantle::sdp::message::WITHDRAW;
 pub struct SDPWithdrawValidationContext<'a> {
     pub declarations: &'a Declarations,
     pub epoch: Epoch,
-    pub locked_notes: &'a LockedNotes,
+    pub service_notes: &'a ServiceNotes,
     pub tx_hash_view: &'a TxHashView,
 }
 
 pub struct SDPWithdrawExecutionContext {
     pub declarations: Declarations,
-    pub locked_notes: LockedNotes,
+    pub service_notes: ServiceNotes,
     pub epoch: Epoch,
 }
 
@@ -79,23 +79,23 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPWithdrawOp {
             });
         }
 
-        // Check that the locked note is locked for this service
+        // Check that the service note is used for this service
         if !context
-            .locked_notes
-            .is_locked_for_service(&self.locked_note_id, &declaration.service_type)
+            .service_notes
+            .is_used_for_service(&self.service_note_id, &declaration.service_type)
         {
-            return Err(SdpError::NoteNotLockedForService {
-                note_id: self.locked_note_id,
+            return Err(SdpError::NoteNotUsedForService {
+                note_id: self.service_note_id,
                 service_type: declaration.service_type,
             });
         }
 
-        // Check that the locked note exist (it corresponds to the declaration locked
+        // Check that the service note exist (it corresponds to the declaration service
         // note)
-        if declaration.locked_note_id != self.locked_note_id {
-            return Err(SdpError::InvalidLockedNote {
-                note_id: self.locked_note_id,
-                expected: declaration.locked_note_id,
+        if declaration.service_note_id != self.service_note_id {
+            return Err(SdpError::InvalidServiceNote {
+                note_id: self.service_note_id,
+                expected: declaration.service_note_id,
             });
         }
 
@@ -108,11 +108,11 @@ impl VerifiableOperation<verification_mode::StandardMode> for SDPWithdrawOp {
         }
 
         // Defer the proof verification, so that the caller can batch it.
-        // Ensure locked note pk and zk_id attached to this declaration authorized this
+        // Ensure service note pk and zk_id attached to this declaration authorized this
         // Operation.
         let note = context
-            .locked_notes
-            .get(&self.locked_note_id)
+            .service_notes
+            .get(&self.service_note_id)
             .expect("The Operation has been checked above");
         let inputs = public_inputs_from_pks(
             (*context.tx_hash_view.as_fr()).into(),

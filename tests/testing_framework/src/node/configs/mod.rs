@@ -17,7 +17,7 @@ pub(crate) use dynamic::create_node_config_for_node;
 use lb_config::deployment::e2e_deployment_settings_with_genesis_block;
 pub use node_configs::GeneralConfig as Config;
 pub(crate) use node_configs::{
-    create_general_configs_from_ids as create_node_configs_from_ids,
+    create_general_configs_from_ids_with_additional_wallet_outputs_and_sdp_funding_config as create_node_configs_from_ids_with_additional_wallet_outputs_and_sdp_funding_config,
     network::{Libp2pNetworkLayout, NetworkParams},
 };
 
