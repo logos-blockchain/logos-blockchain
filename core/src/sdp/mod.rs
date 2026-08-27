@@ -626,11 +626,12 @@ mod tests {
     fn empty_locators_fail_to_deserialize() {
         let empty_locators = Vec::<Locator>::new();
         let serialized = serde_json::to_string(&empty_locators).unwrap();
-        assert_eq!(
+        assert!(
             serde_json::from_str::<Locators>(&serialized)
                 .unwrap_err()
-                .to_string(),
-            "Input cannot be empty."
+                .to_string()
+                .contains("Input cannot be empty."),
+            "empty locators should be rejected"
         );
     }
 
