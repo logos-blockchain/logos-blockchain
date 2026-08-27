@@ -305,7 +305,7 @@ where
             }
             Err((err, tracker)) => {
                 error!(%err, "active message tracker failed to handle tip");
-                self.active_message_tracker = Some(tracker);
+                self.active_message_tracker = tracker;
             }
         }
     }

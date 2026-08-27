@@ -79,7 +79,7 @@ where
     pub async fn handle_tip(
         mut self,
         tip: HeaderId,
-    ) -> Result<Direction<Intent, Provider>, (Error, Self)> {
+    ) -> Result<Direction<Intent, Provider>, (Error, Option<Self>)> {
         if std::mem::replace(&mut self.last_tip, tip) == tip {
             return Ok(Direction::Track(self)); // tip unchanged
         }
@@ -94,8 +94,8 @@ where
 
         let ledger = match self.ledger_state_provider.get(tip).await {
             Ok(Some(ledger)) => ledger,
-            Ok(None) => return Err((Error::LedgerStateNotFound(tip), self)),
-            Err(e) => return Err((Error::LedgerStateProvider(Box::new(e)), self)),
+            Ok(None) => return Err((Error::LedgerStateNotFound(tip), self.check_deadline())),
+            Err(e) => return Err((Error::LedgerStateProvider(Box::new(e)), self.decheck_deadline())),
         };
 
         match self.intent.status(&ledger) {
