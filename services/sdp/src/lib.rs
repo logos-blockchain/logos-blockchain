@@ -21,7 +21,7 @@ use lb_core::{
     sdp::{ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, WithdrawMessage},
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_ledger::{IntentStatus, LedgerState};
+use lb_ledger::{Intent, IntentStatus, LedgerState};
 use lb_services_utils::overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -109,7 +109,7 @@ where
     wallet_config: SdpWalletConfig,
     active_message_tracker_config: intent::Config,
     active_message_tracker:
-        Option<IntentTracker<ActiveMessage, CryptarchiaServiceApi<ChainService, RuntimeServiceId>>>,
+        Option<IntentTracker<Activity, CryptarchiaServiceApi<ChainService, RuntimeServiceId>>>,
     _phantom: std::marker::PhantomData<(ChainService, StateStorage)>,
 }
 
@@ -311,15 +311,18 @@ where
 
     async fn handle_active_message_tracker_outcome(
         &mut self,
-        outcome: intent::Outcome<ActiveMessage>,
+        outcome: intent::Outcome<Activity>,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
         chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
     ) {
         match outcome {
-            intent::Outcome::StatusChecked { intent, status } => {
+            intent::Outcome::StatusChecked {
+                intent: activity,
+                status,
+            } => {
                 self.handle_active_message_status(
-                    intent,
+                    activity,
                     status,
                     wallet_adapter,
                     mempool_adapter,
@@ -339,7 +342,7 @@ where
 
     async fn handle_active_message_status(
         &self,
-        message: ActiveMessage,
+        activity: Activity,
         status: IntentStatus,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
@@ -348,14 +351,8 @@ where
         match status {
             IntentStatus::NotApplied => {
                 trace!("active message status: not applied in the tip ledger: resubmitting it");
-                self.submit_activity(
-                    message.declaration_id,
-                    message.metadata,
-                    wallet_adapter,
-                    mempool_adapter,
-                    chain_api,
-                )
-                .await;
+                self.submit_activity(activity, wallet_adapter, mempool_adapter, chain_api)
+                    .await;
             }
             IntentStatus::Applied => {
                 trace!("active message status: applied in the tip ledger: keep tracking it");
@@ -512,18 +509,15 @@ where
             return;
         };
 
-        let Some((activity, tip)) = self
-            .submit_activity(
-                declaration_id,
-                metadata,
-                wallet_adapter,
-                mempool_adapter,
-                chain_api,
-            )
-            .await
-        else {
-            return;
+        let activity = Activity {
+            declaration_id,
+            metadata,
         };
+
+        let tip = self
+            .submit_activity(activity.clone(), wallet_adapter, mempool_adapter, chain_api)
+            .await
+            .map_or_default(Some);
 
         if self
             .active_message_tracker
@@ -542,19 +536,18 @@ where
     #[expect(clippy::cognitive_complexity, reason = "TODO: refactor")]
     async fn submit_activity(
         &self,
-        declaration_id: DeclarationId,
-        metadata: ActivityMetadata,
+        activity: Activity,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
         chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
-    ) -> Option<(ActiveMessage, HeaderId)> {
+    ) -> Option<HeaderId> {
         trace!(
-            epoch = ?metadata.submission_epoch(),
+            epoch = ?activity.metadata.submission_epoch(),
             "submitting activity message"
         );
 
         let Ok(ref declaration) = self
-            .try_fetch_runtime_declaration(declaration_id, chain_api)
+            .try_fetch_runtime_declaration(activity.declaration_id, chain_api)
             .await
         else {
             tracing::error!("Can't find declaration. Cannot post activity without declaration.");
@@ -566,15 +559,15 @@ where
             return None;
         };
         let activity = ActiveMessage {
-            declaration_id,
+            declaration_id: activity.declaration_id,
             nonce,
-            metadata,
+            metadata: activity.metadata,
         };
 
         let tx_builder = MantleTxBuilder::new();
 
         let signed_tx = match wallet_adapter
-            .active_tx(tx_builder, activity.clone(), &self.wallet_config)
+            .active_tx(tx_builder, activity, &self.wallet_config)
             .await
         {
             Ok(tx) => tx,
@@ -592,7 +585,7 @@ where
         }
 
         metrics::activity_success_total();
-        Some((activity, declaration.tip))
+        Some(declaration.tip)
     }
 
     #[expect(
@@ -691,6 +684,37 @@ where
         Ok(())
     }
 }
+
+#[derive(Debug, Clone)]
+struct Activity {
+    declaration_id: DeclarationId,
+    metadata: ActivityMetadata,
+}
+
+impl Intent for Activity {
+    type Error = IntentStatusCheckFailed;
+
+    /// The intent of an active message is to refresh the `Declaration::active`
+    /// field.
+    fn status(&self, ledger: &LedgerState) -> Result<IntentStatus, Self::Error> {
+        let declaration = ledger
+            .mantle_ledger()
+            .sdp_ledger()
+            .get_declaration(&self.declaration_id)
+            .ok_or_else(|| IntentStatusCheckFailed("declaration not exist".to_owned()))?;
+
+        // Check if the `active` field has been refreshed.
+        if declaration.active >= self.metadata.submission_epoch() {
+            Ok(IntentStatus::Applied)
+        } else {
+            Ok(IntentStatus::NotApplied)
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct IntentStatusCheckFailed(String);
 
 #[async_trait]
 impl<ChainService, RuntimeServiceId> intent::LedgerStateProvider

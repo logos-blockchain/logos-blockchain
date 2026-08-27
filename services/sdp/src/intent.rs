@@ -13,7 +13,7 @@ pub struct IntentTracker<Intent, Provider> {
     intent: Intent,
     config: Config,
     /// The last tip seen.
-    last_tip: HeaderId,
+    last_tip: Option<HeaderId>,
     /// Tip changes since the submission or the last status check.
     tip_changes: u64,
     /// Number of status checks so far.
@@ -37,7 +37,7 @@ impl<Intent, Provider> IntentTracker<Intent, Provider> {
     pub const fn new(
         intent: Intent,
         config: Config,
-        tip: HeaderId,
+        tip: Option<HeaderId>,
         ledger_state_provider: Provider,
     ) -> Self {
         Self {
@@ -80,7 +80,7 @@ where
             return Ok(Outcome::Exhausted);
         }
 
-        if std::mem::replace(&mut self.last_tip, tip) == tip {
+        if self.last_tip.replace(tip) == Some(tip) {
             return Ok(Outcome::WaitingforMoreTipChanges); // tip unchanged
         }
 
@@ -158,11 +158,11 @@ mod tests {
     #[tokio::test]
     async fn unchanged_tip_never_trigger_status_check() {
         let mut tracker = tracker(IntentStatus::NotApplied, 2, 3);
-        let tip = tracker.last_tip;
+        let tip = tracker.last_tip.unwrap();
 
         let out = tracker.handle_tip(tip).await.unwrap();
         assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
-        assert_eq!(tracker.last_tip, tip);
+        assert_eq!(tracker.last_tip, Some(tip));
         assert_eq!(tracker.tip_changes, 0);
         assert_eq!(tracker.status_checks, 0);
     }
@@ -317,7 +317,7 @@ mod tests {
         IntentTracker::new(
             intent,
             config(interval, max),
-            tip(0),
+            Some(tip(0)),
             MockLedgerStateProvider::at((1..).take((interval * max).try_into().unwrap())),
         )
     }
