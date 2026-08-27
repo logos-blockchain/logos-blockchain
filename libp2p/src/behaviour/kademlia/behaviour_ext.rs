@@ -31,7 +31,7 @@ impl<R: Clone + Send + RngCore + 'static> Behaviour<R> {
                 );
             }
             RoutingUpdate::Failed => {
-                tracing::error!(
+                tracing::debug!(
                     target: LOG_TARGET,
                     "Failed to add address {:?} to peer {:?}",
                     addr,

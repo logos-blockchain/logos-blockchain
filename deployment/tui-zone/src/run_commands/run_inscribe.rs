@@ -144,6 +144,7 @@ fn apply_finalized(items: &[FinalizedTx], state: &mut InMemoryZoneState) {
             FinalizedOp::Inscription(i) => Some(i.clone()),
             FinalizedOp::Deposit(_)
             | FinalizedOp::Withdraw(_)
+            | FinalizedOp::Config(_)
             | FinalizedOp::ChannelTransfer(_) => None,
         })
         .collect();

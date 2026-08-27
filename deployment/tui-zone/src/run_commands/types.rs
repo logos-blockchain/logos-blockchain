@@ -144,8 +144,8 @@ pub struct ConfigIntent {
     pub channel_id: String,
     /// Hex-encoded transaction hash that signers must sign.
     pub tx_hash: String,
-    /// Hex-encoded channel config message identifier.
-    pub msg_id: String,
+    /// Hex-encoded channel configuration identifier (config lineage).
+    pub config_id: String,
     /// Number of current authorized signatures required.
     pub required_threshold: u16,
     /// Hex-encoded mantle transaction bytes.
@@ -196,8 +196,8 @@ pub struct SignedConfigFile {
     pub channel_id: String,
     /// Hex-encoded signed transaction hash.
     pub tx_hash: String,
-    /// Hex-encoded channel config message identifier.
-    pub msg_id: String,
+    /// Hex-encoded channel configuration identifier (config lineage).
+    pub config_id: String,
     /// Hex-encoded signed mantle transaction bytes.
     pub signed_mantle_tx: String,
     /// Signature entries used to build the signed transaction.
