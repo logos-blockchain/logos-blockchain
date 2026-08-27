@@ -255,6 +255,7 @@ mod tests {
             }),
             Op::ChannelConfig(ChannelConfigOp {
                 channel: ChannelId::from([0x22; 32]),
+                parent: MsgId::from([0x33; 32]),
                 keys: signing_key.public_key().into(),
                 posting_timeframe: 1.into(),
                 posting_timeout: 2.into(),
@@ -459,6 +460,7 @@ mod tests {
 
         let config_op = ChannelConfigOp {
             channel: ChannelId::from([0xFF; 32]),
+            parent: MsgId::from([0xAA; 32]),
             keys: [
                 signing_key1.public_key(),
                 signing_key2.public_key(),
@@ -626,6 +628,7 @@ mod tests {
 
         let config_op = ChannelConfigOp {
             channel: ChannelId::from([0xCC; 32]),
+            parent: MsgId::from([0xDD; 32]),
             keys: signing_key.public_key().into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
@@ -727,6 +730,7 @@ mod tests {
 
         let config_op = ChannelConfigOp {
             channel: ChannelId::from([0x33; 32]),
+            parent: MsgId::from([0x44; 32]),
             keys: [signing_key1.public_key(), signing_key2.public_key()].into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
@@ -910,6 +914,7 @@ mod tests {
         let ops = vec![
             Op::ChannelConfig(ChannelConfigOp {
                 channel: ChannelId::from([0x22; 32]),
+                parent: MsgId::from([0x33; 32]),
                 keys: Ed25519Key::from_bytes(&[1; 32]).public_key().into(),
                 posting_timeframe: 0.into(),
                 posting_timeout: 0.into(),
@@ -983,6 +988,7 @@ mod tests {
     fn test_decode_reject_zero_key_count() {
         let encoded_config_op = ChannelConfigOp {
             channel: ChannelId::from([0x22; 32]),
+            parent: MsgId::from([0x33; 32]),
             // Using `new_unchecked` to bypass the constructor check since we're testing
             // `decode` directly.
             keys: Keys::new_unchecked([].into()),
@@ -1004,6 +1010,9 @@ mod tests {
 
         // ChannelId (32 bytes)
         valid_input.extend_from_slice(&[0x42; 32]);
+
+        // Parent MsgId (32 bytes)
+        valid_input.extend_from_slice(&[0x43; 32]);
 
         // KeyCount = MAX_KEY_COUNT
         valid_input.extend_from_slice(&u16::MAX.encode());

@@ -589,6 +589,7 @@ pub mod test_utils {
             configuration_threshold: 0,
 
             tip_message: MsgId::root(),
+            config_tip_hash: MsgId::root(),
             tip_slot: Slot::default(),
             tip_sequencer: u16::default(),
             tip_sequencer_starting_slot: Slot::default(),
@@ -641,7 +642,7 @@ mod tests {
         ledger::{Inputs, Outputs, OutputsError},
         ops::{
             channel::{
-                ChannelId, config::ChannelConfigOp, deposit::DepositOp,
+                ChannelId, MsgId, config::ChannelConfigOp, deposit::DepositOp,
                 verification::test_utils::create_channel_multi_sig_proof,
                 withdraw::ChannelWithdrawOp,
             },
@@ -656,6 +657,7 @@ mod tests {
     fn create_config_op(channel: ChannelId, signing_key: &Ed25519Key) -> ChannelConfigOp {
         ChannelConfigOp {
             channel,
+            parent: MsgId::root(),
             keys: signing_key.public_key().into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),

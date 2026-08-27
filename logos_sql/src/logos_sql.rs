@@ -34,6 +34,7 @@ pub struct LogosSqlConfig {
 /// `ZoneSDK` sequencer and the database writer. Dropping `LogosSql` aborts the
 /// task; call [`Self::shutdown`] to stop it gracefully and observe errors.
 pub struct LogosSql {
+    lib_path: PathBuf,
     live_path: PathBuf,
     runtime: Option<runtime::RuntimeHandle>,
 }
@@ -52,6 +53,7 @@ impl LogosSql {
         tokio::runtime::Handle::try_current().map_err(|_| Error::RuntimeUnavailable)?;
 
         let db = Databases::open(&config.state_dir)?;
+        let lib_path = db.lib_path().to_owned();
         let live_path = db.live_path().to_owned();
         let checkpoint = db.load_checkpoint()?;
         let node = NodeHttpClient::new(CommonHttpClient::new(None), config.node_url);
@@ -67,6 +69,7 @@ impl LogosSql {
         let runtime = runtime::spawn(sequencer, db, config.channel_id, checkpoint);
 
         let mut logos_sql = Self {
+            lib_path,
             live_path,
             runtime: Some(runtime),
         };
@@ -122,6 +125,18 @@ impl LogosSql {
     /// Returns an error when the database file cannot be opened.
     pub fn read_connection(&self) -> Result<Connection, Error> {
         Databases::open_reader(&self.live_path)
+    }
+
+    /// Opens a read-only connection to finalized state.
+    ///
+    /// Unlike [`Self::read_connection`], this state cannot be displaced by a
+    /// channel reorganization.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database file cannot be opened.
+    pub fn finalized_read_connection(&self) -> Result<Connection, Error> {
+        Databases::open_reader(&self.lib_path)
     }
 
     /// Stops the runtime after its current atomic operation and waits for it.
