@@ -119,6 +119,10 @@ pub enum WithdrawInputs {
 ///   `info.withdraws[i].op.inputs`. The SDK fills a fresh `parent_msg` and
 ///   reselects the transfer inputs per [`WithdrawInputs`] on each publish — the
 ///   original input selection need not be reproduced.
+/// - [`ChannelUpdateTx::AtomicDepositInscription`] →
+///   [`SequencerHandle::publish_atomic_deposit_inscription`](super::SequencerHandle::publish_atomic_deposit_inscription)
+///   with `info.inscription.payload` and `info.consumed_notes`. The SDK fills a
+///   fresh `parent_msg` on each publish.
 /// - [`ChannelUpdateTx::Custom`] → the `prepare_tx` + `submit_signed_tx` flow:
 ///   the SDK cannot demystify the tx, so it hands back the whole
 ///   [`SignedMantleTx`] and the caller's own logic decides how to parse and
@@ -132,6 +136,8 @@ pub enum ChannelUpdateTx {
     Inscription(InscriptionInfo),
     /// An atomic inscription+withdraw bundle.
     AtomicWithdraw(AtomicWithdrawInfo),
+    /// An atomic inscription+transfer bundle integrating an observed deposit.
+    AtomicDepositInscription(AtomicDepositInscriptionInfo),
     /// A tx shape the SDK cannot produce (bundled deposits, multi-inscribe,
     /// other custom-built txs), reported whole as a unit.
     Custom(SignedMantleTx<Unverified>),
@@ -143,6 +149,7 @@ impl ChannelUpdateTx {
         match self {
             Self::Inscription(i) => i.tx_hash,
             Self::AtomicWithdraw(a) => a.tx_hash,
+            Self::AtomicDepositInscription(a) => a.tx_hash,
             Self::Custom(tx) => tx.mantle_tx().hash(),
         }
     }
@@ -155,6 +162,7 @@ impl ChannelUpdateTx {
         match self {
             Self::Inscription(i) => Some(i),
             Self::AtomicWithdraw(a) => Some(&a.inscription),
+            Self::AtomicDepositInscription(a) => Some(&a.inscription),
             Self::Custom(_) => None,
         }
     }
@@ -409,6 +417,20 @@ pub struct ChannelUpdate {
     /// branches), so consumers dedup by `this_msg` against their own state
     /// there.
     pub adopted: Vec<ChannelUpdateTx>,
+    /// Channel deposits observed in this block, in on-chain op order. Surfaced
+    /// non-finalized so a consumer can integrate a deposit without waiting for
+    /// finalization — react to each by publishing an atomic deposit inscription
+    /// (see
+    /// [`SequencerHandle::publish_atomic_deposit_inscription`](super::SequencerHandle::publish_atomic_deposit_inscription)).
+    ///
+    /// Apply all `orphaned`/`adopted` state first, then process these: a block
+    /// is validated atomically, so a deposit that landed alongside adopted
+    /// inscriptions is safe to handle after them. Never carried in `orphaned` —
+    /// a deposit needs no revert (an un-integrated one is a consumer no-op, an
+    /// integrated one reverts via its own bundle in `orphaned`). Deduped by
+    /// deposit `op_id`: a reorg can re-surface the same deposit (its `op_id`
+    /// and re-created `NoteId`s are stable), so integrate each `op_id` once.
+    pub adopted_deposits: Vec<DepositInfo>,
 }
 
 /// Information about whose turn it is to post and the current posting
@@ -471,6 +493,22 @@ pub struct AtomicWithdrawInfo {
     pub inscription: InscriptionInfo,
     /// The withdraw ops carried by the bundle, in tx order.
     pub withdraws: Vec<WithdrawInfo>,
+}
+
+/// An inscription bundled atomically with a channel transfer that consumes an
+/// observed deposited note, in a single `MantleTx`. The transfer makes the
+/// inscription conditional on the deposit being on chain: if the deposit is not
+/// present the consumed note does not exist, the transfer fails, and the whole
+/// tx (inscription included) fails. All ops adopt/orphan/finalize as a unit.
+#[derive(Debug, Clone)]
+pub struct AtomicDepositInscriptionInfo {
+    /// Transaction hash of the bundled `MantleTx`.
+    pub tx_hash: TxHash,
+    /// The inscription op carried by the bundle.
+    pub inscription: InscriptionInfo,
+    /// The channel notes the bundled transfer consumes (the deposit being
+    /// integrated). Recovering an orphaned bundle re-supplies these.
+    pub consumed_notes: Vec<NoteId>,
 }
 
 /// A channel deposit observed in a finalized L1 block. Sequencers do not
@@ -556,6 +594,9 @@ pub enum PendingTx {
     /// A bundled inscription+withdraw(s) published via
     /// `publish_atomic_withdraw`.
     AtomicWithdraw(AtomicWithdrawInfo),
+    /// A bundled inscription+transfer integrating an observed deposit,
+    /// published via `publish_atomic_deposit_inscription`.
+    AtomicDepositInscription(AtomicDepositInscriptionInfo),
 }
 
 impl PendingTx {
@@ -565,6 +606,7 @@ impl PendingTx {
         match self {
             Self::Inscription(i) => i.tx_hash,
             Self::AtomicWithdraw(a) => a.tx_hash,
+            Self::AtomicDepositInscription(a) => a.tx_hash,
         }
     }
 
@@ -574,6 +616,7 @@ impl PendingTx {
         match self {
             Self::Inscription(i) => i,
             Self::AtomicWithdraw(a) => &a.inscription,
+            Self::AtomicDepositInscription(a) => &a.inscription,
         }
     }
 }

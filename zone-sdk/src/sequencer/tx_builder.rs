@@ -91,29 +91,31 @@ pub(super) fn attach_transfer_proof(
     Ok(channel_proofs)
 }
 
-/// Build per-op proofs for an atomic withdraw bundle. The same single-signer
-/// `ChannelMultiSigProof` is reused for every `ChannelTransfer` and
-/// `ChannelWithdraw` op (all sign the same tx hash with the same key), the
+/// Build per-op proofs for a single-signer atomic channel bundle
+/// (`publish_atomic_withdraw`'s `[inscribe, transfer, withdraw]` or
+/// `publish_atomic_deposit_inscription`'s `[inscribe, transfer]`). The same
+/// single-signer `ChannelMultiSigProof` is reused for every `ChannelTransfer`
+/// and `ChannelWithdraw` op (all sign the same tx hash with the same key), the
 /// inscription op carries an `Ed25519Sig` proof and the fee transfer — when
 /// the transaction was funded — carries the wallet's proof.
-pub(super) fn build_atomic_withdraw_ops_proofs(
+pub(super) fn build_atomic_bundle_ops_proofs(
     tx: &impl MantleTx,
     own_key_index: ChannelKeyIndex,
     own_sig: Ed25519Signature,
     transfer_proof: Option<&OpProof>,
 ) -> Result<OpsProofs, Error> {
-    let withdraw_proof =
+    let channel_proof =
         ChannelMultiSigProof::try_new([IndexedSignature::new(own_key_index, own_sig)].into())
             .map_err(|e| Error::Network(format!("multi-sig proof assembly failed: {e:?}")))?;
     let mut ops_proofs = OpsProofs::empty();
     for op in tx.ops() {
         match op {
-            // Both the channel transfer (recipient + change notes) and the
-            // withdraw (releasing the recipient notes) are single-signer
+            // Channel transfers (recipient/change or re-created deposit notes)
+            // and withdraws (releasing recipient notes) are single-signer
             // multi-sig proofs over the same funded tx hash.
             Op::ChannelTransfer(_) | Op::ChannelWithdraw(_) => {
                 ops_proofs
-                    .try_push(OpProof::ChannelMultiSigProof(withdraw_proof.clone()))
+                    .try_push(OpProof::ChannelMultiSigProof(channel_proof.clone()))
                     .map_err(|e| Error::Network(format!("too many operation proofs: {e:?}")))?;
             }
             Op::ChannelInscribe(_) => ops_proofs
@@ -131,7 +133,7 @@ pub(super) fn build_atomic_withdraw_ops_proofs(
             },
             _ => {
                 return Err(Error::Network(format!(
-                    "unexpected op in atomic withdraw bundle: {op:?}"
+                    "unexpected op in atomic channel bundle: {op:?}"
                 )));
             }
         }

@@ -160,7 +160,9 @@ async fn apply_channel_update(
     state: &mut InMemoryZoneState,
     sequencer: &mut ZoneSequencer<NodeHttpClient>,
 ) {
-    let ChannelUpdate { orphaned, adopted } = update;
+    let ChannelUpdate {
+        orphaned, adopted, ..
+    } = update;
     if orphaned.is_empty() {
         return;
     }

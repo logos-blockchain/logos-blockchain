@@ -1,6 +1,7 @@
 use lb_core::mantle::{
     SignedMantleTx,
     channel::{SlotTimeframe, SlotTimeout},
+    ledger::NoteId,
     ops::channel::{MsgId, config::Keys, inscribe::Inscription},
     transactions::{Ops, mantle_tx::RawMantleTx, states::Unverified},
 };
@@ -189,6 +190,31 @@ where
     ) -> Result<PublishReceipt, Error> {
         self.sequencer
             .do_publish_atomic_withdraw(inscribe, withdraws, inputs)
+            .await
+    }
+
+    /// Publish an atomic inscription+transfer bundle integrating an observed
+    /// deposit, without waiting for the deposit to finalize.
+    ///
+    /// Builds `[CHANNEL_INSCRIBE, CHANNEL_TRANSFER]`: the inscription records
+    /// the deposit in the zone's channel state, and the transfer consumes the
+    /// named deposited note(s) so the whole tx lands only if the deposit is on
+    /// chain. `consumed_notes` are the channel `NoteId`s of the observed
+    /// deposit (learned from `DepositInfo`); the SDK resolves their value and
+    /// key from the tracked channel-note set and re-creates each 1:1 under the
+    /// same key (a pure atomicity anchor).
+    ///
+    /// Same readiness/funding/threshold contract as
+    /// [`Self::publish_atomic_withdraw`]. Errors with [`Error::Network`] if a
+    /// named note is not in the tracked channel set (the deposit is not on this
+    /// branch, or was already consumed).
+    pub async fn publish_atomic_deposit_inscription(
+        &mut self,
+        inscribe: Inscription,
+        consumed_notes: Vec<NoteId>,
+    ) -> Result<PublishReceipt, Error> {
+        self.sequencer
+            .do_publish_atomic_deposit_inscription(inscribe, consumed_notes)
             .await
     }
 

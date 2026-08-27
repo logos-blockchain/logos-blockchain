@@ -121,6 +121,9 @@ where
             channel_update: ChannelUpdate {
                 orphaned: Vec::new(),
                 adopted: Vec::new(),
+                // Backfill is finalized history; deposits there surface via
+                // `finalized`, not as non-finalized `adopted_deposits`.
+                adopted_deposits: Vec::new(),
             },
             finalized: batch.items,
         });

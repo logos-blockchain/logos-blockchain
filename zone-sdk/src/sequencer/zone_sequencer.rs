@@ -13,7 +13,7 @@ use lb_core::{
     mantle::{
         Note, Op, SignedMantleTx, Value,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
-        ledger::{Inputs, Outputs},
+        ledger::{Inputs, NoteId, Outputs},
         ops::channel::{
             ChannelId, MsgId,
             channel_transfer::ChannelTransferOp,
@@ -43,14 +43,14 @@ use super::{
     slot_clock::SlotClock,
     state::{BlockChannelTx, TxState},
     tx_builder::{
-        build_atomic_withdraw_ops_proofs, create_channel_config_tx, create_inscribe_tx,
+        build_atomic_bundle_ops_proofs, create_channel_config_tx, create_inscribe_tx,
         find_own_key_index, fund_ops, prepare_tx as build_prepare_tx, sign_tx as build_sign_tx,
     },
     types::{
-        AtomicWithdrawInfo, ChannelWalletView, Error, Event, FundingConfig, InscriptionInfo,
-        PendingTx, PublishResult, SequencerChannelView, SequencerCheckpoint, SequencerConfig,
-        TurnNotification, TxSource, TxStatus, TxStatusUpdate, WithdrawArg, WithdrawInfo,
-        WithdrawInputs,
+        AtomicDepositInscriptionInfo, AtomicWithdrawInfo, ChannelWalletView, Error, Event,
+        FundingConfig, InscriptionInfo, PendingTx, PublishResult, SequencerChannelView,
+        SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource, TxStatus, TxStatusUpdate,
+        WithdrawArg, WithdrawInfo, WithdrawInputs,
     },
 };
 use crate::{adapter, adapter::BoxStream};
@@ -172,6 +172,11 @@ pub(super) enum ActorRequest {
         inscribe: Inscription,
         withdraws: Vec<WithdrawArg>,
         inputs: WithdrawInputs,
+        response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
+    },
+    PublishAtomicDepositInscription {
+        inscribe: Inscription,
+        consumed_notes: Vec<NoteId>,
         response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
     },
     ChannelConfig {
@@ -554,6 +559,18 @@ where
                     ),
                 );
             }
+            ActorRequest::PublishAtomicDepositInscription {
+                inscribe,
+                consumed_notes,
+                response_tx,
+            } => {
+                drop(
+                    response_tx.send(
+                        self.do_publish_atomic_deposit_inscription(inscribe, consumed_notes)
+                            .await,
+                    ),
+                );
+            }
             ActorRequest::ChannelConfig {
                 keys,
                 posting_timeframe,
@@ -788,7 +805,7 @@ where
         let (tx, transfer_proof) = fund_ops(&self.node, &self.config.funding, ops).await?;
         let own_sig = build_sign_tx(tx.hash(), &self.signing_key);
         let ops_proofs =
-            build_atomic_withdraw_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
+            build_atomic_bundle_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
         let signed_tx = SignedMantleTx::new(tx, ops_proofs);
 
         let tx_hash = signed_tx.mantle_tx().hash();
@@ -906,6 +923,156 @@ where
         };
 
         Ok((transfer_op, withdraw_op))
+    }
+
+    /// Core atomic-deposit-inscription logic. Builds the client-side bundle
+    /// `[CHANNEL_INSCRIBE, CHANNEL_TRANSFER]`: the inscription integrates an
+    /// observed deposit into the zone's channel state, and the transfer
+    /// consumes the deposited note(s) so the inscription lands only if the
+    /// deposit is on chain — integrating a deposit without waiting for
+    /// finalization. The transfer re-creates each consumed note 1:1 under
+    /// the same key (a pure atomicity anchor; it moves no value and re-keys
+    /// nothing).
+    ///
+    /// The caller names the deposited notes from an observed deposit; the SDK
+    /// resolves their value and key from the tracked channel-note set. Mirrors
+    /// [`Self::do_publish_atomic_withdraw`] for readiness/funding, parent,
+    /// status queueing and checkpointing. Scoped to single-signer channels.
+    pub(super) async fn do_publish_atomic_deposit_inscription(
+        &mut self,
+        inscribe: Inscription,
+        consumed_notes: Vec<NoteId>,
+    ) -> Result<PublishReceipt, Error> {
+        self.ensure_ready()?;
+        self.ensure_fundable()?;
+
+        if consumed_notes.is_empty() {
+            return Err(Error::Network(
+                "publish_atomic_deposit_inscription requires at least one deposited note".into(),
+            ));
+        }
+
+        // Use the cached channel state kept fresh by the drive loop.
+        let channel_state = self.channel_state.as_ref().ok_or_else(|| {
+            Error::Network(format!(
+                "publish_atomic_deposit_inscription requires channel state for {:?}",
+                self.channel_id
+            ))
+        })?;
+        if channel_state.transfer_threshold > 1 {
+            return Err(Error::Network(format!(
+                "publish_atomic_deposit_inscription requires transfer_threshold == 1, got {}",
+                channel_state.transfer_threshold
+            )));
+        }
+        let own_key_index = find_own_key_index(channel_state, &self.signing_key)?;
+
+        let transfer_op = self.build_deposit_transfer(&consumed_notes)?;
+
+        let parent = self.compute_publish_parent();
+        let inscription_op = InscriptionOp {
+            channel_id: self.channel_id,
+            inscription: inscribe.clone(),
+            parent,
+            signer: self.signing_key.public_key(),
+        };
+        let msg_id = inscription_op.id();
+
+        let ops = vec![
+            Op::ChannelInscribe(inscription_op),
+            Op::ChannelTransfer(transfer_op),
+        ];
+
+        let (tx, transfer_proof) = fund_ops(&self.node, &self.config.funding, ops).await?;
+        let own_sig = build_sign_tx(tx.hash(), &self.signing_key);
+        let ops_proofs =
+            build_atomic_bundle_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
+        let signed_tx = SignedMantleTx::new(tx, ops_proofs);
+
+        let tx_hash = signed_tx.mantle_tx().hash();
+
+        debug!(target: TARGET,
+            "Prepared atomic deposit inscription: payload={:?}, parent={}, msg_id={}, tx={}, notes={}",
+            String::from_utf8_lossy(&inscribe),
+            hex::encode(parent.as_ref()),
+            hex::encode(msg_id.as_ref()),
+            hex::encode(tx_hash.0),
+            consumed_notes.len(),
+        );
+
+        // Safe to unwrap — `ensure_ready` checks state.
+        let state = self.state.as_mut().unwrap();
+        state.submit_atomic_deposit_inscription(
+            signed_tx.clone(),
+            parent,
+            msg_id,
+            inscribe.clone(),
+            consumed_notes.clone(),
+        );
+        self.last_msg_id = msg_id;
+        self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
+
+        if self.can_publish_inscription_now() {
+            self.queue_publish_post(tx_hash, signed_tx);
+        }
+
+        self.publish_channel_view();
+
+        let checkpoint = self.publish_checkpoint().ok_or(Error::Unavailable {
+            reason: "checkpoint unavailable",
+        })?;
+
+        Ok((
+            PublishResult {
+                tx: PendingTx::AtomicDepositInscription(AtomicDepositInscriptionInfo {
+                    tx_hash,
+                    inscription: InscriptionInfo {
+                        tx_hash,
+                        parent_msg: parent,
+                        this_msg: msg_id,
+                        payload: inscribe,
+                    },
+                    consumed_notes,
+                }),
+            },
+            checkpoint,
+        ))
+    }
+
+    /// Build the transfer op for an atomic deposit inscription: consume the
+    /// named deposited notes and re-create each 1:1 under the same value and
+    /// key. The notes are resolved from the tracked channel-note set, so an
+    /// unknown or already-spent note (e.g. the deposit is not on this branch)
+    /// errors before funding.
+    fn build_deposit_transfer(
+        &self,
+        consumed_notes: &[NoteId],
+    ) -> Result<ChannelTransferOp, Error> {
+        let view = self.channel_wallet();
+        let by_id: HashMap<NoteId, (Value, _)> = view
+            .finalized
+            .iter()
+            .chain(view.unfinalized.iter())
+            .map(|n| (n.note_id, (n.value, n.pk)))
+            .collect();
+        let mut outputs = Vec::with_capacity(consumed_notes.len());
+        for id in consumed_notes {
+            let &(value, pk) = by_id.get(id).ok_or_else(|| {
+                Error::Network(
+                    "deposited note not found in the tracked channel set (deposit not on this \
+                     branch, or already consumed)"
+                        .into(),
+                )
+            })?;
+            outputs.push(Note::new(value, pk));
+        }
+        Ok(ChannelTransferOp {
+            channel_id: self.channel_id,
+            inputs: Inputs::try_new(consumed_notes.to_vec())
+                .map_err(|e| Error::Network(format!("invalid transfer inputs: {e:?}")))?,
+            outputs: Outputs::try_new(outputs)
+                .map_err(|e| Error::Network(format!("invalid transfer outputs: {e:?}")))?,
+        })
     }
 
     pub(super) async fn do_channel_config(
@@ -1247,6 +1414,17 @@ pub(super) fn track_pending_tx(
                 this_msg,
                 aw.inscription.payload,
                 aw.withdraws,
+            );
+            Some(this_msg)
+        }
+        Some(BlockChannelTx::AtomicDepositInscription(ad)) => {
+            let this_msg = ad.inscription.this_msg;
+            state.submit_atomic_deposit_inscription(
+                tx,
+                ad.inscription.parent_msg,
+                this_msg,
+                ad.inscription.payload,
+                ad.consumed_notes,
             );
             Some(this_msg)
         }

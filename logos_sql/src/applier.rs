@@ -153,6 +153,7 @@ mod tests {
             channel_update: ChannelUpdate {
                 orphaned: Vec::new(),
                 adopted: Vec::new(),
+                adopted_deposits: Vec::new(),
             },
             finalized: vec![FinalizedTx {
                 tx_hash: TxHash::from([1; 32]),
@@ -168,6 +169,7 @@ mod tests {
             channel_update: ChannelUpdate {
                 orphaned: vec![ChannelUpdateTx::Inscription(inscription(payload))],
                 adopted: Vec::new(),
+                adopted_deposits: Vec::new(),
             },
             finalized: Vec::new(),
         }
@@ -225,6 +227,7 @@ mod tests {
         let channel_update = ChannelUpdate {
             orphaned: Vec::new(),
             adopted: vec![ChannelUpdateTx::Inscription(inscription(&payload))],
+            adopted_deposits: Vec::new(),
         };
 
         assert!(update_contains_logos_sql(

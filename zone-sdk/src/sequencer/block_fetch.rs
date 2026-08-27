@@ -5,6 +5,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         SignedMantleTx,
+        ledger::NoteId,
         ops::{
             Op, OpId as _,
             channel::{ChannelId, MsgId, inscribe::Inscription},
@@ -22,10 +23,10 @@ use tracing::{debug, error, warn};
 use super::{
     TARGET,
     channel_wallet::{NoteOp, note_ops_from_txs},
-    state::{BlockChannelTx, ChannelUpdateInfo, TxState},
+    state::{BlockChannelTx, ChannelUpdateInfo, PendingBundle, TxState},
     types::{
-        AtomicWithdrawInfo, ChannelTransferInfo, ChannelUpdateTx, DepositInfo, Error, FinalizedOp,
-        FinalizedTx, InscriptionInfo, PendingTx, WithdrawInfo,
+        AtomicDepositInscriptionInfo, AtomicWithdrawInfo, ChannelTransferInfo, ChannelUpdateTx,
+        DepositInfo, Error, FinalizedOp, FinalizedTx, InscriptionInfo, PendingTx, WithdrawInfo,
     },
 };
 use crate::{
@@ -46,6 +47,10 @@ pub(super) struct BlockEventResult {
     /// its tx reached the chain (`OnChain` status) even when the tx didn't move
     /// the canonical channel chain.
     pub(super) mined_inscriptions: Vec<InscriptionInfo>,
+    /// Channel deposits observed in this block, in op order. Surfaced
+    /// non-finalized as `ChannelUpdate::adopted_deposits` so a consumer can
+    /// integrate a deposit without waiting for finalization.
+    pub(super) adopted_deposits: Vec<DepositInfo>,
 }
 
 struct PreparedBlockEvent<'a> {
@@ -63,6 +68,7 @@ struct PreparedBlockEvent<'a> {
     /// Channel-note ops of the live block, computed in the prepare phase.
     note_ops: Vec<NoteOp>,
     mined_inscriptions: Vec<InscriptionInfo>,
+    adopted_deposits: Vec<DepositInfo>,
 }
 
 /// Process a block event. Returns finalized tx hashes and optional channel
@@ -159,6 +165,12 @@ where
         &deposit_events,
         event.block.header.slot,
     );
+    let adopted_deposits = block_channel_deposits(
+        &event.block.transactions,
+        channel_id,
+        event.block.header.slot,
+        &deposit_events,
+    );
 
     Ok(PreparedBlockEvent {
         block: &event.block,
@@ -172,7 +184,27 @@ where
         channel_txs,
         note_ops,
         mined_inscriptions,
+        adopted_deposits,
     })
+}
+
+/// The channel deposits in a single block, in on-chain op order — the
+/// non-finalized counterpart of the finalized deposit stream, surfaced so a
+/// consumer can integrate a deposit before it finalizes.
+fn block_channel_deposits(
+    transactions: &[SignedMantleTx<Unverified>],
+    channel_id: ChannelId,
+    l1_slot: Slot,
+    deposit_events: &DepositEvents,
+) -> Vec<DepositInfo> {
+    extract_finalized_items(transactions, channel_id, l1_slot, deposit_events)
+        .into_iter()
+        .flat_map(|item| item.ops)
+        .filter_map(|op| match op {
+            FinalizedOp::Deposit(d) => Some(d),
+            _ => None,
+        })
+        .collect()
 }
 
 fn apply_prepared_block_event(
@@ -194,6 +226,7 @@ fn apply_prepared_block_event(
         channel_txs,
         note_ops,
         mined_inscriptions,
+        adopted_deposits,
     } = prepared;
 
     if state.is_none() {
@@ -292,6 +325,7 @@ fn apply_prepared_block_event(
         finalized_items: finalized_batch.items,
         channel_update,
         mined_inscriptions,
+        adopted_deposits,
     }
 }
 
@@ -308,9 +342,15 @@ fn observe_channel_inscriptions(
         .map(|tx| (tx.mantle_tx().hash(), tx))
         .collect();
     for block_tx in classified {
-        let (info, withdraws) = match block_tx {
-            BlockChannelTx::Inscription(i) => (i, None),
-            BlockChannelTx::AtomicWithdraw(a) => (&a.inscription, Some(a.withdraws.clone())),
+        let (info, bundle) = match block_tx {
+            BlockChannelTx::Inscription(i) => (i, PendingBundle::Plain),
+            BlockChannelTx::AtomicWithdraw(a) => {
+                (&a.inscription, PendingBundle::Withdraw(a.withdraws.clone()))
+            }
+            BlockChannelTx::AtomicDepositInscription(a) => (
+                &a.inscription,
+                PendingBundle::DepositInscription(a.consumed_notes.clone()),
+            ),
             BlockChannelTx::Config(_) | BlockChannelTx::Custom { .. } => continue,
         };
         let tx = by_hash
@@ -321,7 +361,7 @@ fn observe_channel_inscriptions(
             info.parent_msg,
             info.this_msg,
             info.payload.clone(),
-            withdraws,
+            bundle,
         );
     }
 }
@@ -376,6 +416,7 @@ pub(super) fn orphan_from_shed(entry: PendingTx) -> ChannelUpdateTx {
     match entry {
         PendingTx::Inscription(i) => ChannelUpdateTx::Inscription(i),
         PendingTx::AtomicWithdraw(a) => ChannelUpdateTx::AtomicWithdraw(a),
+        PendingTx::AtomicDepositInscription(a) => ChannelUpdateTx::AtomicDepositInscription(a),
     }
 }
 
@@ -878,6 +919,8 @@ pub(super) fn classify_channel_tx(
     let mut configs = 0usize;
     let mut withdraws: Vec<WithdrawInfo> = Vec::new();
     let mut transfers = 0usize;
+    let mut channel_transfers = 0usize;
+    let mut channel_transfer_inputs: Vec<NoteId> = Vec::new();
     let mut foreign_ops = false;
 
     for op in tx.mantle_tx().ops() {
@@ -924,6 +967,10 @@ pub(super) fn classify_channel_tx(
                     op: withdraw.clone(),
                 });
             }
+            Op::ChannelTransfer(transfer) if transfer.channel_id == channel_id => {
+                channel_transfers += 1;
+                channel_transfer_inputs.extend(transfer.inputs.iter().copied());
+            }
             Op::Transfer(_) => transfers += 1,
             _ => foreign_ops = true,
         }
@@ -935,25 +982,42 @@ pub(super) fn classify_channel_tx(
     }
 
     let clean = !foreign_ops && transfers <= 1;
-    Some(if clean && inscribes == 1 && configs == 0 {
-        let inscription = entries.pop().expect("exactly one inscribe entry");
-        if withdraws.is_empty() {
-            BlockChannelTx::Inscription(inscription)
+    Some(
+        if clean && inscribes == 1 && configs == 0 && channel_transfers <= 1 {
+            let inscription = entries.pop().expect("exactly one inscribe entry");
+            if !withdraws.is_empty() {
+                // `[inscribe, channel_transfer, withdraw…]` — the transfer moves
+                // channel notes to the recipient keys the withdraw releases.
+                BlockChannelTx::AtomicWithdraw(AtomicWithdrawInfo {
+                    tx_hash,
+                    inscription,
+                    withdraws,
+                })
+            } else if channel_transfers == 1 {
+                // `[inscribe, channel_transfer]` — the transfer consumes an observed
+                // deposited note, making the inscription conditional on the deposit.
+                BlockChannelTx::AtomicDepositInscription(AtomicDepositInscriptionInfo {
+                    tx_hash,
+                    inscription,
+                    consumed_notes: channel_transfer_inputs,
+                })
+            } else {
+                BlockChannelTx::Inscription(inscription)
+            }
+        } else if clean
+            && configs == 1
+            && inscribes == 0
+            && withdraws.is_empty()
+            && channel_transfers == 0
+        {
+            BlockChannelTx::Config(entries.pop().expect("exactly one config entry"))
         } else {
-            BlockChannelTx::AtomicWithdraw(AtomicWithdrawInfo {
-                tx_hash,
-                inscription,
-                withdraws,
-            })
-        }
-    } else if clean && configs == 1 && inscribes == 0 && withdraws.is_empty() {
-        BlockChannelTx::Config(entries.pop().expect("exactly one config entry"))
-    } else {
-        BlockChannelTx::Custom {
-            tx: tx.clone(),
-            entries,
-        }
-    })
+            BlockChannelTx::Custom {
+                tx: tx.clone(),
+                entries,
+            }
+        },
+    )
 }
 
 /// True iff this tx contains any op that advances our channel's tip pointer
@@ -976,7 +1040,7 @@ mod tests {
         crypto::Hash,
         events::{DepositNote, DepositRecreatedNotes},
         mantle::{
-            Note, NoteId, RawMantleTx, Value,
+            Note, RawMantleTx, Value,
             channel::{SlotTimeframe, SlotTimeout},
             ledger::{Inputs, Outputs},
             ops::{

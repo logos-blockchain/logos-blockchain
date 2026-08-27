@@ -483,7 +483,7 @@ where
         &mut self,
         result: BlockEventResult,
     ) -> (ChannelUpdate, Vec<FinalizedTx>, Vec<InscriptionInfo>) {
-        let channel_update = match result.channel_update {
+        let mut channel_update = match result.channel_update {
             Some(update) => {
                 Self::log_channel_update(&update);
 
@@ -500,8 +500,12 @@ where
             None => ChannelUpdate {
                 orphaned: Vec::new(),
                 adopted: Vec::new(),
+                adopted_deposits: Vec::new(),
             },
         };
+        // Observed deposits ride every processed block, independent of whether
+        // the lineage moved.
+        channel_update.adopted_deposits = result.adopted_deposits;
         (
             channel_update,
             result.finalized_items,
@@ -598,6 +602,8 @@ where
         ChannelUpdate {
             orphaned,
             adopted: u.adopted,
+            // Set by `apply_block_result` from the block's observed deposits.
+            adopted_deposits: Vec::new(),
         }
     }
 }
@@ -643,6 +649,7 @@ mod tests {
 
     use super::{
         super::{
+            state::PendingBundle,
             types::{FinalizedOp, SequencerConfig},
             zone_sequencer::track_pending_tx,
         },
@@ -1212,10 +1219,9 @@ mod tests {
         let pending = state
             .pending_inscription(&tx_hash)
             .expect("bundle should be in pending inscriptions");
-        let withdraws = pending
-            .withdraws
-            .as_ref()
-            .expect("bundle should carry Some(withdraws)");
+        let PendingBundle::Withdraw(withdraws) = &pending.bundle else {
+            panic!("bundle should be a withdraw bundle");
+        };
         assert_eq!(withdraws.len(), 1, "bundle should carry one WithdrawInfo");
         assert_eq!(withdraws[0].op, withdraw_op);
         assert!(
@@ -1244,7 +1250,7 @@ mod tests {
         let pending = state
             .pending_inscription(&tx_hash)
             .expect("plain inscription should be in pending inscriptions");
-        assert!(pending.withdraws.is_none());
+        assert!(matches!(pending.bundle, PendingBundle::Plain));
     }
 
     #[test]
