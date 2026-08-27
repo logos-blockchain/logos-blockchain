@@ -2212,6 +2212,7 @@ mod tests {
             accredited_keys: Arc::new(accredited_keys),
             configuration_threshold: 1,
             tip_message: MsgId::root(),
+            config_tip_hash: MsgId::root(),
             tip_slot: Slot::default(),
             tip_sequencer: 0,
             tip_sequencer_starting_slot: Slot::default(),

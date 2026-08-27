@@ -113,17 +113,47 @@ jobs:
       - name: Checkout
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
 
-      - name: Prepare release body by injecting release candidate-specific disclaimers
-        env:
-          IS_PRERELEASE: ${{ needs.configure-version.outputs.is_prerelease }}
+      - name: Prepare release body with the module version, bootstrap peers, and release candidate-specific disclaimers
         run: |
           set -euo pipefail
 
           TEMPLATE=.github/release/release-content.md
           DISCLAIMER_FILE=.github/release/rc-disclaimer.md
           OUTPUT=.github/release/release-content.generated.md
+          MODULE_VERSION_PLACEHOLDER='{{BLOCKCHAIN_MODULE_VERSION}}'
+          INITIAL_PEERS_PLACEHOLDER='{{INITIAL_PEERS}}'
 
-          cp "$TEMPLATE" "$OUTPUT"
+          for PLACEHOLDER in "$MODULE_VERSION_PLACEHOLDER" "$INITIAL_PEERS_PLACEHOLDER"; do
+            if ! grep -qF "$PLACEHOLDER" "$TEMPLATE"; then
+              echo "'$TEMPLATE' does not contain the '$PLACEHOLDER' placeholder. It must be present so the release notes match the release being prepared."
+              exit 1
+            fi
+          done
+
+          # The `blockchain_module` package is published under the same version as the node, for both
+          # releases and release candidates. Only the network they bootstrap against differs.
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            PEERS_FILE=.github/release/devnet-peers.txt
+          else
+            PEERS_FILE=.github/release/testnet-peers.txt
+          fi
+          # `sed`'s `r` command ignores a missing file, which would silently produce an empty peer list.
+          if [[ ! -s "$PEERS_FILE" ]]; then
+            echo "'$PEERS_FILE' is missing or empty. It must list the bootstrap peers to inject into the release notes."
+            exit 1
+          fi
+
+          echo "Setting '$MODULE_VERSION_PLACEHOLDER' to '$VERSION' and '$INITIAL_PEERS_PLACEHOLDER' to the contents of '$PEERS_FILE'."
+
+          sed -e "s|$MODULE_VERSION_PLACEHOLDER|$VERSION|g" \
+              -e "/$INITIAL_PEERS_PLACEHOLDER/r $PEERS_FILE" \
+              -e "/$INITIAL_PEERS_PLACEHOLDER/d" \
+              "$TEMPLATE" > "$OUTPUT"
+
+          if grep -n '{{' "$OUTPUT"; then
+            echo "'$OUTPUT' still contains unsubstituted placeholders (listed above)."
+            exit 1
+          fi
 
           if [[ "$IS_PRERELEASE" == "true" ]]; then
             { cat "$DISCLAIMER_FILE"; echo; cat "$OUTPUT"; } > "${OUTPUT}.tmp"

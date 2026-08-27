@@ -28,6 +28,7 @@ pub type Keys = NonEmptyBoundedVec<Ed25519PublicKey, CHANNEL_MAX_KEYS>;
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec)]
 pub struct ChannelConfigOp {
     pub channel: ChannelId,
+    pub parent: MsgId,
     pub keys: Keys,
     pub posting_timeframe: SlotTimeframe,
     pub posting_timeout: SlotTimeout,
@@ -96,6 +97,15 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
         // index. This is enforced by the proof structure that enforces it.
 
         if let Some(channel) = context.channels.channels.get(&self.channel).cloned() {
+            // Check the configuration extends the last configuration of the channel
+            if self.parent != channel.config_tip_hash {
+                return Err(Error::InvalidParent {
+                    channel_id: self.channel,
+                    parent: self.parent.into(),
+                    actual: channel.config_tip_hash.into(),
+                });
+            }
+
             // Check there is enough signatures
             let signatures = proof.signatures();
             if signatures.len() != channel.configuration_threshold as usize {
@@ -122,6 +132,13 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelConfigOp {
                     return Err(Error::InvalidSignature);
                 }
             }
+        } else if self.parent != MsgId::root() {
+            // Checked that the parent is ZERO because channel doesn't exist
+            return Err(Error::InvalidParent {
+                channel_id: self.channel,
+                parent: self.parent.into(),
+                actual: MsgId::root().into(),
+            });
         }
 
         Ok(None)
@@ -146,14 +163,15 @@ impl ExecutableOperation for ChannelConfigOp {
             channel.posting_timeout = self.posting_timeout.clone();
             channel.transfer_threshold = self.transfer_threshold;
             channel.tip_slot = context.block_slot;
-            channel.tip_message = self.id();
+            channel.config_tip_hash = self.id();
         } else {
             context.channels.channels = context.channels.channels.insert(
                 self.channel,
                 ChannelState {
                     accredited_keys: self.keys.clone().into(),
                     configuration_threshold: self.configuration_threshold,
-                    tip_message: self.id(),
+                    tip_message: MsgId::root(),
+                    config_tip_hash: self.id(),
                     tip_slot: context.block_slot,
                     tip_sequencer: 0,
                     tip_sequencer_starting_slot: context.block_slot,

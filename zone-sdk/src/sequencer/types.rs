@@ -45,6 +45,13 @@ pub struct SequencerCheckpoint {
     /// rebuilds the full set.
     #[serde(default)]
     pub channel_notes: Vec<ChannelNote>,
+    /// The finalized config-lineage tip as of `lib`. Restored so
+    /// `config_tip_at` keeps resolving the right config parent after a warm
+    /// restart, once the config's block has been pruned below LIB. Defaults
+    /// to [`MsgId::root`] for checkpoints written before this field existed
+    /// (matching the old reset-to-root behavior).
+    #[serde(default = "MsgId::root")]
+    pub finalized_config: MsgId,
 }
 
 /// Result of a publish operation.
@@ -119,6 +126,12 @@ pub enum WithdrawInputs {
 ///   `info.withdraws[i].op.inputs`. The SDK fills a fresh `parent_msg` and
 ///   reselects the transfer inputs per [`WithdrawInputs`] on each publish — the
 ///   original input selection need not be reproduced.
+/// - [`ChannelUpdateTx::Config`] → a config-only tx on the config lineage. Like
+///   [`ChannelUpdateTx::Custom`], recovery is the caller's: the SDK does not
+///   auto-resubmit a config (it cannot re-sign a multi-sig one). The caller
+///   routes it — a single-sig config back through `do_channel_config`, a
+///   multi-sig one through its own signing flow. The variant is a typed marker
+///   ("this orphan is a config"), not a re-publish trigger.
 /// - [`ChannelUpdateTx::Custom`] → the `prepare_tx` + `submit_signed_tx` flow:
 ///   the SDK cannot demystify the tx, so it hands back the whole
 ///   [`SignedMantleTx`] and the caller's own logic decides how to parse and
@@ -132,6 +145,9 @@ pub enum ChannelUpdateTx {
     Inscription(InscriptionInfo),
     /// An atomic inscription+withdraw bundle.
     AtomicWithdraw(AtomicWithdrawInfo),
+    /// A config-only tx (a single `ChannelConfig` op) on the config lineage.
+    /// Caller-recovered, like [`Self::Custom`] — never auto-resubmitted.
+    Config(SignedMantleTx<Unverified>),
     /// A tx shape the SDK cannot produce (bundled deposits, multi-inscribe,
     /// other custom-built txs), reported whole as a unit.
     Custom(SignedMantleTx<Unverified>),
@@ -143,7 +159,7 @@ impl ChannelUpdateTx {
         match self {
             Self::Inscription(i) => i.tx_hash,
             Self::AtomicWithdraw(a) => a.tx_hash,
-            Self::Custom(tx) => tx.mantle_tx().hash(),
+            Self::Config(tx) | Self::Custom(tx) => tx.mantle_tx().hash(),
         }
     }
 
@@ -155,7 +171,7 @@ impl ChannelUpdateTx {
         match self {
             Self::Inscription(i) => Some(i),
             Self::AtomicWithdraw(a) => Some(&a.inscription),
-            Self::Custom(_) => None,
+            Self::Config(_) | Self::Custom(_) => None,
         }
     }
 }
@@ -608,6 +624,9 @@ pub enum FinalizedOp {
     /// inscription+withdraw bundle (the bundling is implicit via the parent
     /// [`FinalizedTx::tx_hash`]).
     Withdraw(WithdrawInfo),
+    /// A config on the channel. `parent_msg`/`this_msg` are config-lineage
+    /// ids, not message-lineage ids, and the payload is empty.
+    Config(InscriptionInfo),
     /// A channel transfer op on the channel: notes re-keyed/re-denominated
     /// under channel authority.
     ChannelTransfer(ChannelTransferInfo),

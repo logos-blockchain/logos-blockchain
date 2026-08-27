@@ -67,6 +67,12 @@ impl DeferredZkpVerifications {
             Err(e) => Err(Error::MalformedLeaderClaimProof(format!("{e:?}"))),
         }
     }
+
+    #[cfg(any(test, feature = "unsafe-test-functions"))]
+    #[must_use]
+    pub fn zk_sigs(&self) -> &[(ZkSignProof, ZkSignVerifierInputs)] {
+        &self.zk_sigs
+    }
 }
 
 impl FromIterator<DeferredZkpVerification> for DeferredZkpVerifications {

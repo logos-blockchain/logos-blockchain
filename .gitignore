@@ -54,3 +54,7 @@ testnet/cfgsync/deployment-settings.yaml
 
 # Claude folder. We don't enforce any team-wide rules yet.
 .claude/**
+
+# Commit release template files
+!.github/release/devnet-peers.txt
+!.github/release/testnet-peers.txt
