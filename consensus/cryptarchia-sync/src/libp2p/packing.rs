@@ -28,8 +28,11 @@ where
     Message: Serialize + DeserializeOwned + Sync,
     Writer: AsyncWriteExt + Send + Unpin,
 {
-    let packed_message = message.to_bytes()?;
-    let length_prefix = checked_length_prefix(packed_message.len())?;
+    let packed_message = message.to_bounded_bytes::<MAX_MSG_LEN>()?;
+    let length_prefix: LenType = packed_message
+        .len()
+        .try_into()
+        .expect("MAX_MSG_LEN should fit in the frame length prefix");
 
     writer
         .write_all(&length_prefix.to_le_bytes())
@@ -37,21 +40,6 @@ where
         .map_err(Into::<PackingError>::into)?;
 
     writer.write_all(&packed_message).await.map_err(Into::into)
-}
-
-fn checked_length_prefix(actual: usize) -> Result<LenType> {
-    if actual > MAX_MSG_LEN {
-        return Err(PackingError::MessageTooLarge {
-            max: MAX_MSG_LEN,
-            actual,
-        });
-    }
-    actual
-        .try_into()
-        .map_err(|_| PackingError::MessageTooLarge {
-            max: MAX_MSG_LEN,
-            actual,
-        })
 }
 
 async fn read_data_length<R>(reader: &mut R) -> Result<usize>
@@ -87,16 +75,17 @@ where
 mod tests {
     use super::*;
 
-    #[test]
-    fn sender_rejects_messages_above_frame_limit() {
-        let error = checked_length_prefix(MAX_MSG_LEN + 1).unwrap_err();
+    #[tokio::test]
+    async fn sender_rejects_messages_above_frame_limit() {
+        let message = vec![0u8; MAX_MSG_LEN];
+        let mut writer = futures::io::Cursor::new(Vec::new());
+
+        let error = pack_to_writer(&message, &mut writer).await.unwrap_err();
+
         assert!(matches!(
             error,
-            PackingError::MessageTooLarge {
-                max: MAX_MSG_LEN,
-                actual,
-            }
-            if actual == MAX_MSG_LEN + 1
+            PackingError::Serialization(codec::Error::Serialize(_))
         ));
+        assert!(writer.into_inner().is_empty());
     }
 }
