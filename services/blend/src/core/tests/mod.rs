@@ -27,6 +27,7 @@ use crate::{
     core::{
         HandleEpochEventOutput,
         backends::BlendBackend,
+        epoch_stages::running::CurrentEpoch,
         handle_epoch_event, handle_epoch_transition_expired, handle_incoming_blend_message,
         initialize, post_initialize, retire, run_event_loop,
         state::ServiceState,
@@ -34,9 +35,10 @@ use crate::{
             MockKmsAdapter, MockProofsVerifier, NodeId, TestBlendBackend, TestBlendBackendEvent,
             TestPayloadDispatcher, backend_epoch_info, dummy_overwatch_resources,
             dummy_pol_private_inputs, new_crypto_processor, new_epoch_info, new_membership,
-            new_stream, outgoing_messages_recorder, recorded_set_epoch_private_calls,
-            reset_set_epoch_private_calls, reward_epoch_info, scheduler_epoch_info,
-            scheduler_settings, sdp_relay, settings, timing_settings, wait_for_blend_backend_event,
+            new_stream, outgoing_messages_recorder, published_epochs_recorder,
+            recorded_set_epoch_private_calls, reset_set_epoch_private_calls, reward_epoch_info,
+            scheduler_epoch_info, scheduler_settings, sdp_relay, seeded_release_delay_rng,
+            settings, timing_settings, wait_for_blend_backend_event,
         },
     },
     epoch::{CoreEpochInfo, CoreEpochPublicInfo},
@@ -1261,6 +1263,7 @@ async fn complete_old_epoch_after_main_loop_done() {
         &sdp_relay,
         None,
         state_updater,
+        seeded_release_delay_rng(),
     )
     .await;
     let mut backend_event_receiver = backend.subscribe_to_events();
@@ -1280,11 +1283,14 @@ async fn complete_old_epoch_after_main_loop_done() {
             &mut backend,
             &TestPayloadDispatcher,
             &sdp_relay,
-            message_scheduler.into(),
             &mut rng,
-            pending_transactions,
-            crypto_processor,
-            current_public_info,
+            CurrentEpoch::new(
+                crypto_processor,
+                message_scheduler.into(),
+                current_public_info,
+                pending_transactions,
+                None,
+            ),
             current_recovery_checkpoint,
         )
         .await;
@@ -1404,6 +1410,7 @@ async fn stop_on_empty_epoch() {
         &sdp_relay,
         None,
         state_updater,
+        seeded_release_delay_rng(),
     )
     .await;
 
@@ -1423,11 +1430,14 @@ async fn stop_on_empty_epoch() {
             &mut backend,
             &TestPayloadDispatcher,
             &sdp_relay,
-            message_scheduler.into(),
             &mut rng,
-            pending_transactions,
-            crypto_processor,
-            current_public_info,
+            CurrentEpoch::new(
+                crypto_processor,
+                message_scheduler.into(),
+                current_public_info,
+                pending_transactions,
+                None,
+            ),
             current_recovery_checkpoint,
         )
         .await;
@@ -1536,6 +1546,7 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
         &sdp_relay,
         None,
         state_updater,
+        seeded_release_delay_rng(),
     )
     .await;
 
@@ -1555,11 +1566,14 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
             &mut backend,
             &TestPayloadDispatcher,
             &sdp_relay,
-            message_scheduler.into(),
             &mut rng,
-            pending_transactions,
-            crypto_processor,
-            current_public_info,
+            CurrentEpoch::new(
+                crypto_processor,
+                message_scheduler.into(),
+                current_public_info,
+                pending_transactions,
+                None,
+            ),
             current_recovery_checkpoint,
         )
         .await;
@@ -1841,6 +1855,7 @@ async fn test_initialize_recovers_matching_saved_state() {
         &sdp_relay_1,
         Some(saved_state),
         state_updater,
+        seeded_release_delay_rng(),
     )
     .await;
 
@@ -1930,6 +1945,7 @@ async fn test_initialize_recovers_matching_saved_state() {
         &sdp_relay2,
         Some(stale_state),
         state_updater2,
+        seeded_release_delay_rng(),
     )
     .await;
 
@@ -2037,6 +2053,7 @@ async fn test_initialize_submits_activity_proof_for_the_previous_epoch() {
         &sdp_relay,
         Some(saved_state),
         state_updater,
+        seeded_release_delay_rng(),
     )
     .await;
 
@@ -2125,6 +2142,7 @@ async fn test_initialize_drops_activity_proof_older_than_one_epoch() {
         &sdp_relay,
         Some(stale_state),
         state_updater,
+        seeded_release_delay_rng(),
     )
     .await;
 
@@ -2206,6 +2224,7 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
         &sdp_relay,
         None,
         state_updater,
+        seeded_release_delay_rng(),
     )
     .await;
 
@@ -2221,11 +2240,14 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
             &mut backend,
             &TestPayloadDispatcher,
             &sdp_relay,
-            message_scheduler.into(),
             &mut rng,
-            pending_transactions,
-            crypto_processor,
-            current_public_info,
+            CurrentEpoch::new(
+                crypto_processor,
+                message_scheduler.into(),
+                current_public_info,
+                pending_transactions,
+                None,
+            ),
             current_recovery_checkpoint,
         )
         .await;
@@ -2258,6 +2280,160 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
         "the proposal should have been held until leadership proofs were possible",
     )
     .await;
+}
+
+/// A message queued before an epoch rotation still goes out afterwards, under
+/// the epoch it was minted for.
+///
+/// The previous epoch keeps releasing through its own scheduler for the length
+/// of its transition period, and each message it releases is published under
+/// that epoch so it reaches the peers still negotiated for it. Publishing it
+/// under the new epoch would fail their `PoQ` check and earn this node a
+/// `SpamReason::InvalidProofOfQuota`.
+///
+/// What is pinned here is that the message survives the rotation and is
+/// published under the epoch it was minted for. *Which* scheduler releases it
+/// is not: both the current epoch before the rotation and the previous epoch
+/// after it publish under epoch 0, and which one gets there first depends on
+/// how the round clock falls against an epoch arriving over a channel. Seeding
+/// the delayer fixes the round but not that race — measured at roughly three
+/// runs in eight exercising the previous-epoch path.
+///
+/// Pinning it needs a test that does not go through the loop at all, on
+/// [`CurrentEpochDuringTransition::next_event`] directly.
+#[test_log::test(tokio::test)]
+#[expect(clippy::too_many_lines, reason = "Test function.")]
+async fn the_previous_epoch_keeps_releasing_under_its_own_epoch() {
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let mut settings = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+    // No cover traffic, so the only message that can come out is the queued
+    // transaction. See the `PoW` liveness test for why this quota silences it.
+    settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
+    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+    let (inbound_relay, inbound_message_sender) = new_stream();
+    let (mut blend_message_stream, _blend_message_sender) = new_stream();
+    let (membership_stream, membership_sender) = new_stream();
+
+    let membership_info = MembershipInfo {
+        membership,
+        zk: Some(ZkInfo {
+            root: ZkHash::ZERO,
+            core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
+        }),
+    };
+    membership_sender
+        .send(test_blend_epoch_state(0, membership_info.clone()))
+        .await
+        .unwrap();
+
+    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources();
+
+    // Both installed before the service exists, so nothing is missed.
+    let mut published_epochs = published_epochs_recorder();
+
+    let (
+        mut remaining_epoch_stream,
+        current_public_info,
+        crypto_processor,
+        current_recovery_checkpoint,
+        pending_transactions,
+        message_scheduler,
+        mut backend,
+        mut rng,
+    ) = initialize::<
+        NodeId,
+        TestBlendBackend,
+        TestPayloadDispatcher,
+        MockCoreAndLeaderProofsGenerator,
+        MockProofsVerifier,
+        MockKmsAdapter,
+        RuntimeServiceId,
+    >(
+        settings.clone(),
+        membership_stream,
+        overwatch_handle.clone(),
+        MockKmsAdapter,
+        &sdp_relay,
+        None,
+        state_updater,
+        seeded_release_delay_rng(),
+    )
+    .await;
+
+    tokio::spawn(async move {
+        let secret_pol_info_stream =
+            post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
+        run_event_loop(
+            inbound_relay,
+            &mut blend_message_stream,
+            secret_pol_info_stream,
+            &mut remaining_epoch_stream,
+            &settings,
+            &mut backend,
+            &TestPayloadDispatcher,
+            &sdp_relay,
+            &mut rng,
+            CurrentEpoch::new(
+                crypto_processor,
+                message_scheduler.into(),
+                current_public_info,
+                pending_transactions,
+                None,
+            ),
+            current_recovery_checkpoint,
+        )
+        .await;
+    });
+
+    // Queued under epoch 0, and released on a round that has not come yet.
+    inbound_message_sender
+        .send(ServiceMessage::Blend(BlendPayload::Transaction(
+            b"transaction".to_vec(),
+        )))
+        .await
+        .unwrap();
+
+    // Answering a request proves the service went round the inbound arm again,
+    // so the transaction ahead of it is already queued when the epoch turns.
+    let (reply, answered) = oneshot::channel();
+    inbound_message_sender
+        .send(ServiceMessage::GetPendingTransactions { reply })
+        .await
+        .unwrap();
+    answered.await.unwrap();
+
+    membership_sender
+        .send(test_blend_epoch_state(1, membership_info))
+        .await
+        .unwrap();
+
+    // The rotation has to be observed before anything is asserted: a release
+    // that happened while epoch 0 was still current is also published under
+    // epoch 0, and would satisfy the assertion without the previous epoch
+    // having released anything at all.
+    // The first message out is the one the previous epoch still had queued: the
+    // rotation lands before it (measured at ~440µs against ~580µs), and nothing
+    // else is due, since this test's quota leaves no room for cover traffic.
+    //
+    // Generous next to the release round the message has to wait for, and only
+    // ever reached when the assertion has already failed.
+    let published_under = tokio::time::timeout(Duration::from_secs(10), published_epochs.recv())
+        .await
+        .expect("timed out: the previous epoch should still release what it had queued")
+        .expect("service stopped publishing");
+    assert_eq!(
+        published_under,
+        Epoch::from(0),
+        "a message minted under the previous epoch must be published under it, not the new one"
+    );
 }
 
 /// A block proposal that arrives before this epoch's secret `PoL` info still
@@ -2331,6 +2507,7 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
         &sdp_relay,
         None,
         state_updater,
+        seeded_release_delay_rng(),
     )
     .await;
 
@@ -2346,11 +2523,14 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
             &mut backend,
             &TestPayloadDispatcher,
             &sdp_relay,
-            message_scheduler.into(),
             &mut rng,
-            pending_transactions,
-            crypto_processor,
-            current_public_info,
+            CurrentEpoch::new(
+                crypto_processor,
+                message_scheduler.into(),
+                current_public_info,
+                pending_transactions,
+                None,
+            ),
             current_recovery_checkpoint,
         )
         .await;
@@ -2388,6 +2568,7 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
 /// and this test pins that down by getting a block proposal all the way out
 /// while the transaction is still waiting for its solution.
 #[test_log::test(tokio::test)]
+#[expect(clippy::too_many_lines, reason = "Test function.")]
 async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
@@ -2456,6 +2637,7 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
         &sdp_relay,
         None,
         state_updater,
+        seeded_release_delay_rng(),
     )
     .await;
 
@@ -2471,11 +2653,14 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
             &mut backend,
             &TestPayloadDispatcher,
             &sdp_relay,
-            message_scheduler.into(),
             &mut rng,
-            pending_transactions,
-            crypto_processor,
-            current_public_info,
+            CurrentEpoch::new(
+                crypto_processor,
+                message_scheduler.into(),
+                current_public_info,
+                pending_transactions,
+                None,
+            ),
             current_recovery_checkpoint,
         )
         .await;
