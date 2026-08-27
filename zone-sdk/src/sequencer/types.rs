@@ -18,7 +18,7 @@ use lb_core::{
         transactions::{TxHash, states::Unverified},
     },
 };
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
 
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
@@ -463,6 +463,10 @@ pub struct InscriptionInfo {
     pub this_msg: MsgId,
     /// The opaque inscription payload.
     pub payload: Inscription,
+    /// The accredited key that signed this inscription (the message author).
+    /// `None` for a channel-config entry, which is authorized by a threshold of
+    /// keys rather than a single signer and carries no author.
+    pub signer: Option<Ed25519PublicKey>,
 }
 
 /// A channel withdraw observed on chain or bundled in a pending atomic tx.

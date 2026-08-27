@@ -347,6 +347,7 @@ pub fn channel_inscriptions(
                 parent_msg: inscribe.parent,
                 this_msg: inscribe.id(),
                 payload: inscribe.inscription.clone(),
+                signer: Some(inscribe.signer),
             });
         }
     }
@@ -378,6 +379,7 @@ fn mined_config_entries(
                 parent_msg: config.parent,
                 this_msg: config.id(),
                 payload: [].into(),
+                signer: None,
             })
         })
         .collect()
@@ -648,6 +650,7 @@ fn extract_finalized_items(
                         parent_msg: inscribe.parent,
                         this_msg: inscribe.id(),
                         payload: inscribe.inscription.clone(),
+                        signer: Some(inscribe.signer),
                     };
                     ops.push(FinalizedOp::Inscription(info));
                 }
@@ -657,6 +660,7 @@ fn extract_finalized_items(
                         parent_msg: config.parent,
                         this_msg: config.id(),
                         payload: Inscription::new_unchecked(Vec::new()),
+                        signer: None,
                     }));
                 }
                 Op::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
@@ -901,6 +905,7 @@ pub(super) fn classify_channel_tx(
                     parent_msg: inscribe.parent,
                     this_msg,
                     payload: inscribe.inscription.clone(),
+                    signer: Some(inscribe.signer),
                 });
                 *block_tip = Some(this_msg);
             }
@@ -916,6 +921,7 @@ pub(super) fn classify_channel_tx(
                     parent_msg: config.parent,
                     this_msg: config.id(),
                     payload: [].into(),
+                    signer: None,
                 });
             }
             Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
