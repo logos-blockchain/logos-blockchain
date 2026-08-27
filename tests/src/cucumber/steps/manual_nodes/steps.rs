@@ -10,7 +10,9 @@ use lb_core::{codec::DeserializeOp as _, mantle::GenesisTime};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_testing_framework::{
-    USER_CONFIG_FILE, configs::deployment::NodeBinaryProfile, ensure_node_binary_built,
+    USER_CONFIG_FILE,
+    configs::deployment::{NodeBinaryProfile, SdpFundingConfig},
+    ensure_node_binary_built,
 };
 use time::{Duration as TimeDuration, OffsetDateTime};
 use tokio::time::{Instant, sleep};
@@ -29,7 +31,7 @@ use crate::{
             },
             manual_nodes::{
                 config_override::{set_deployment_config_override, set_user_config_override},
-                diagnostics::log_majority_outage_summary,
+                diagnostics::set_blend_diagnostic_parameter_set,
                 snapshots::validate_snapshot_path_component,
                 utils::{
                     NodesToStartUnordered, create_snapshot_all_nodes_with_wallet_state,
@@ -473,10 +475,12 @@ async fn step_restart_node(
     step: &Step,
     node_name: String,
 ) -> StepResult {
+    restart_node(world, &step.value, &node_name).await?;
     if world.blend_diagnostic_observation_count > 0 {
+        world.blend_diagnostic_stopped_nodes.remove(&node_name);
         world.blend_diagnostic_phase = Some(crate::cucumber::world::BlendDiagnosticPhase::Recovery);
     }
-    restart_node(world, &step.value, &node_name).await
+    Ok(())
 }
 
 #[when(expr = "I stop node {string}")]
@@ -484,15 +488,25 @@ async fn step_stop_node(world: &mut CucumberWorld, step: &Step, node_name: Strin
     if world.blend_diagnostic_observation_count > 0 {
         world.blend_diagnostic_phase = Some(crate::cucumber::world::BlendDiagnosticPhase::Outage);
     }
-    if node_name == "NODE_1"
-        && world.blend_diagnostic_phase
-            == Some(crate::cucumber::world::BlendDiagnosticPhase::Outage)
-        && !world.blend_diagnostic_outage_summary_logged
-    {
-        log_majority_outage_summary(world).await;
-        world.blend_diagnostic_outage_summary_logged = true;
+    stop_node(world, &step.value, &node_name).await?;
+    if world.blend_diagnostic_observation_count > 0 {
+        world.blend_diagnostic_stopped_nodes.insert(node_name);
     }
-    stop_node(world, &step.value, &node_name).await
+    Ok(())
+}
+
+#[given(expr = "the cluster uses Blend diagnostic parameter set {string}")]
+#[when(expr = "the cluster uses Blend diagnostic parameter set {string}")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Cucumber step arguments must use owned types"
+)]
+fn step_set_blend_diagnostic_parameter_set(
+    world: &mut CucumberWorld,
+    step: &Step,
+    parameter_set_name: String,
+) -> StepResult {
+    set_blend_diagnostic_parameter_set(world, &step.value, &parameter_set_name)
 }
 
 #[given(expr = "we use IBD peers")]
@@ -594,6 +608,26 @@ fn step_set_deployment_config_setting(
 #[when(expr = "the first {int} nodes are declared as blend providers")]
 fn step_blend_provider_count(world: &mut CucumberWorld, provider_count: usize) -> StepResult {
     world.blend_core_nodes = Some(provider_count);
+    rebuild_pending_local_manual_cluster(world)
+}
+
+#[given(expr = "the cluster uses SDP funding of {int} per provider split across {int} notes")]
+#[when(expr = "the cluster uses SDP funding of {int} per provider split across {int} notes")]
+fn step_set_sdp_funding(
+    world: &mut CucumberWorld,
+    total_value_per_node: u64,
+    target_notes_per_node: usize,
+) -> StepResult {
+    if target_notes_per_node == 0 {
+        return Err(StepError::InvalidArgument {
+            message: "SDP funding note count must be greater than zero".to_owned(),
+        });
+    }
+
+    world.set_sdp_funding_config(SdpFundingConfig::new(
+        total_value_per_node,
+        target_notes_per_node,
+    ));
     rebuild_pending_local_manual_cluster(world)
 }
 

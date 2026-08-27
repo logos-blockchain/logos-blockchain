@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+pub use lb_config::consensus::SdpFundingConfig;
 use lb_config::kms::key_id_for_preload_backend;
 use lb_core::{block::genesis::GenesisBlock, mantle::GenesisTime};
 use lb_node::config::{RunConfig, deployment::DeploymentSettings};
@@ -25,7 +26,9 @@ use crate::{
     node::{
         DeploymentPlan, NodePlan,
         configs::{
-            Config, create_node_configs_from_ids_with_additional_wallet_outputs, postprocess,
+            Config,
+            create_node_configs_from_ids_with_additional_wallet_outputs_and_sdp_funding_config,
+            postprocess,
         },
     },
 };
@@ -113,6 +116,7 @@ impl NodeBinaryProfile {
 pub struct TopologyConfig {
     pub n_nodes: usize,
     pub blend_core_nodes: usize,
+    pub sdp_funding_config: SdpFundingConfig,
     pub network_params: Arc<NetworkParams>,
     pub wallet_config: WalletConfig,
     pub scenario_base_dir: PathBuf,
@@ -195,6 +199,12 @@ impl TopologyConfig {
     }
 
     #[must_use]
+    pub const fn with_sdp_funding_config(mut self, sdp_funding_config: SdpFundingConfig) -> Self {
+        self.sdp_funding_config = sdp_funding_config;
+        self
+    }
+
+    #[must_use]
     pub fn node_config_override(&self, index: usize) -> Option<&RunConfig> {
         self.node_config_overrides.get(&index)
     }
@@ -210,6 +220,7 @@ impl Default for TopologyConfig {
         Self {
             n_nodes: 0,
             blend_core_nodes: 0,
+            sdp_funding_config: SdpFundingConfig::default(),
             network_params: Arc::new(NetworkParams::default()),
             wallet_config: WalletConfig::default(),
             scenario_base_dir: std::env::temp_dir(),
@@ -343,13 +354,14 @@ impl DeploymentBuilder {
 
         let blend_ports = allocate_blend_ports(node_count)?;
         let (mut node_configs, genesis_block) =
-            create_node_configs_from_ids_with_additional_wallet_outputs(
+            create_node_configs_from_ids_with_additional_wallet_outputs_and_sdp_funding_config(
                 &ids,
                 &blend_ports,
                 self.config.blend_core_nodes,
                 self.config.network_params.as_ref(),
                 self.config.test_context.as_deref(),
                 wallet_accounts.len(),
+                self.config.sdp_funding_config,
                 genesis_time,
             );
 
@@ -360,6 +372,7 @@ impl DeploymentBuilder {
             &wallet_accounts,
             key_id_for_preload_backend,
             self.config.test_context.as_deref(),
+            self.config.sdp_funding_config,
             genesis_time,
         );
 

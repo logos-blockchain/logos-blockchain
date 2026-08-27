@@ -31,7 +31,10 @@ use lb_libp2p::{Multiaddr, PeerId};
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
     LbcEnv, LbcK8sManualCluster, LbcManualCluster, NodeHttpClient, ScenarioBuilder,
-    ScenarioBuilderExt as _, configs::wallet::WalletAccount, env::set_default_env, workloads,
+    ScenarioBuilderExt as _,
+    configs::{deployment::SdpFundingConfig, wallet::WalletAccount},
+    env::set_default_env,
+    workloads,
 };
 use reqwest::Url;
 use testing_framework_core::{
@@ -982,8 +985,11 @@ pub struct CucumberWorld {
     /// Manual: Number of epoch-observation steps completed by the diagnostic
     /// scenario.
     pub blend_diagnostic_observation_count: u32,
-    /// Manual: Whether the majority-outage summary marker has been emitted.
-    pub blend_diagnostic_outage_summary_logged: bool,
+    /// Manual: Nodes that were successfully stopped during the diagnostic
+    /// outage phase.
+    pub blend_diagnostic_stopped_nodes: HashSet<String>,
+    /// Manual: SDP funding profile used by generated deployments.
+    pub sdp_funding_config: SdpFundingConfig,
     /// Manual: If set, nodes use a `DeploymentSettings` loaded from disk
     /// bypassing generated genesis/test deployment.
     pub deployment_config_override_path: Option<PathBuf>,
@@ -1209,9 +1215,10 @@ impl Debug for CucumberWorld {
                 &self.blend_diagnostic_observation_count,
             )
             .field(
-                "blend_diagnostic_outage_summary_logged",
-                &self.blend_diagnostic_outage_summary_logged,
+                "blend_diagnostic_stopped_nodes",
+                &self.blend_diagnostic_stopped_nodes,
             )
+            .field("sdp_funding_config", &self.sdp_funding_config)
             .field(
                 "deployment_config_override_path",
                 &deployment_config_override_path_display(
@@ -1427,6 +1434,11 @@ impl CucumberWorld {
     pub const fn set_prolonged_bootstrap_period(&mut self, period: Duration) {
         self.manual_node_config_overrides
             .set_prolonged_bootstrap_period(period);
+    }
+
+    /// Set the SDP funding profile for generated manual-cluster deployments.
+    pub const fn set_sdp_funding_config(&mut self, config: SdpFundingConfig) {
+        self.sdp_funding_config = config;
     }
 
     /// Get the best known height for the given node, if any. This is based on

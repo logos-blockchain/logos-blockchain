@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use lb_config::consensus::GENESIS_TRANSFER_OUTPUT_LIMIT;
+use lb_config::consensus::{GENESIS_TRANSFER_OUTPUT_LIMIT, SdpFundingConfig};
 use lb_core::{
     block::genesis::GenesisBlock,
     mantle::{GenesisTime, Note, ledger::Outputs, traits::GenesisTx as _},
@@ -12,9 +12,7 @@ use super::{
     Config,
     node_configs::{
         blend::GeneralBlendConfig,
-        consensus::{
-            ProviderInfo, TARGET_SDP_FUNDING_NOTES_PER_NODE, create_genesis_block_with_declarations,
-        },
+        consensus::{ProviderInfo, create_genesis_block_with_declarations},
     },
 };
 
@@ -36,6 +34,7 @@ fn fit_sdp_funding_outputs_to_genesis_capacity(
     transfer_op: &mut lb_core::mantle::ops::transfer::TransferOp,
     general_configs: &mut [Config],
     additional_wallet_outputs: usize,
+    sdp_funding_config: SdpFundingConfig,
 ) {
     let n_participants = general_configs.len();
     let funding_keys = general_configs
@@ -59,7 +58,8 @@ fn fit_sdp_funding_outputs_to_genesis_capacity(
             )
         });
     let max_sdp_notes_per_node = available_for_sdp / n_participants;
-    let selected_sdp_notes_per_node = max_sdp_notes_per_node.min(TARGET_SDP_FUNDING_NOTES_PER_NODE);
+    let selected_sdp_notes_per_node =
+        max_sdp_notes_per_node.min(sdp_funding_config.target_notes_per_node);
     let required_sdp_outputs = n_participants
         .checked_mul(selected_sdp_notes_per_node)
         .expect("SDP funding output count overflow while fitting genesis capacity");
@@ -73,28 +73,47 @@ fn fit_sdp_funding_outputs_to_genesis_capacity(
         "genesis contains too few SDP funding outputs for the selected split: current={current_sdp_outputs}, required={required_sdp_outputs}",
     );
 
+    let mut retained_per_key = HashMap::new();
     if current_sdp_outputs > required_sdp_outputs {
-        let mut retained_per_key = HashMap::new();
         let retained_notes = transfer_op
             .outputs
             .iter()
             .copied()
-            .filter(|note| {
+            .filter_map(|mut note| {
                 if !funding_keys.contains(&note.pk) {
-                    return true;
+                    return Some(note);
                 }
 
                 let retained = retained_per_key.entry(note.pk).or_insert(0);
                 if *retained >= selected_sdp_notes_per_node {
-                    return false;
+                    return None;
                 }
+                note.value = sdp_funding_note_value(
+                    sdp_funding_config,
+                    *retained,
+                    selected_sdp_notes_per_node,
+                );
                 *retained += 1;
-                true
+                Some(note)
             })
             .collect::<Vec<_>>();
         transfer_op.outputs = Outputs::try_new(retained_notes)
             .expect("trimmed genesis transfer outputs must fit the output bound");
+    } else {
+        for note in &mut transfer_op.outputs {
+            if funding_keys.contains(&note.pk) {
+                let retained = retained_per_key.entry(note.pk).or_insert(0);
+                note.value = sdp_funding_note_value(
+                    sdp_funding_config,
+                    *retained,
+                    selected_sdp_notes_per_node,
+                );
+                *retained += 1;
+            }
+        }
+    }
 
+    if current_sdp_outputs > required_sdp_outputs {
         for (output_index, note) in transfer_op.outputs.iter().enumerate() {
             if let Some(general) = general_configs
                 .iter_mut()
@@ -110,7 +129,25 @@ fn fit_sdp_funding_outputs_to_genesis_capacity(
     }
 }
 
+fn sdp_funding_note_value(
+    sdp_funding_config: SdpFundingConfig,
+    note_index: usize,
+    note_count: usize,
+) -> u64 {
+    let note_count = u64::try_from(note_count).expect("SDP funding split count should fit in u64");
+    let base_value = sdp_funding_config.total_value_per_node / note_count;
+    let remainder = sdp_funding_config.total_value_per_node % note_count;
+    base_value
+        + u64::from(
+            u64::try_from(note_index).expect("SDP note index should fit in u64") < remainder,
+        )
+}
+
 #[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Genesis postprocessing passes through all deployment inputs."
+)]
 pub fn apply_wallet_genesis_overrides(
     general_configs: &mut [Config],
     genesis_block: &GenesisBlock,
@@ -118,6 +155,7 @@ pub fn apply_wallet_genesis_overrides(
     wallet_accounts: &[(ZkKey, u64)],
     key_id_for_preload_backend: impl Fn(&Key) -> String,
     test_context: Option<&str>,
+    sdp_funding_config: SdpFundingConfig,
     genesis_time: GenesisTime,
 ) -> GenesisBlock {
     if wallet_accounts.is_empty() {
@@ -165,6 +203,7 @@ pub fn apply_wallet_genesis_overrides(
         &mut transfer_op,
         general_configs,
         wallet_accounts.len(),
+        sdp_funding_config,
     );
     for output in &mut transfer_op.outputs {
         if leader_keys.contains(&output.pk) {

@@ -1,10 +1,10 @@
-use std::{fs, time::Duration};
+use std::{fs, num::NonZero, time::Duration};
 
 use cucumber::{gherkin::Step, given, when};
 use hex::ToHex as _;
 use lb_chain_service::ChainServiceInfo;
 use lb_node::config::DeploymentSettings;
-use lb_testing_framework::{NodeHttpClient, USER_CONFIG_FILE};
+use lb_testing_framework::{NodeHttpClient, USER_CONFIG_FILE, configs::deployment::TopologyConfig};
 use time::OffsetDateTime;
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
@@ -12,11 +12,183 @@ use tracing::{info, warn};
 use crate::cucumber::{
     TARGET,
     error::{StepError, StepResult},
+    steps::manual_nodes::config_override::set_deployment_config_override,
     utils::{peer_id_from_node_yaml, user_config_from_node_yaml},
     world::{BlendDiagnosticPhase, CucumberWorld},
 };
 
 const DIAGNOSTIC: &str = "blend_tsi_outage";
+
+fn diagnostic_node_sort_number(node_name: &str) -> Option<u32> {
+    let number = node_name.strip_prefix("NODE_")?;
+    number.parse::<u32>().ok()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BlendDiagnosticParameterSet {
+    name: &'static str,
+    security_parameter: u32,
+    slot_duration_secs: u64,
+    epoch_stake_distribution_stabilization: u8,
+    epoch_period_nonce_buffer: u8,
+    epoch_period_nonce_stabilization: u8,
+}
+
+impl BlendDiagnosticParameterSet {
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "clean_control" => Some(Self {
+                name: "clean_control",
+                security_parameter: 10,
+                slot_duration_secs: 1,
+                epoch_stake_distribution_stabilization: 1,
+                epoch_period_nonce_buffer: 1,
+                epoch_period_nonce_stabilization: 1,
+            }),
+            "testnet_representative" => Some(Self {
+                name: "testnet_representative",
+                security_parameter: 5,
+                slot_duration_secs: 1,
+                epoch_stake_distribution_stabilization: 3,
+                epoch_period_nonce_buffer: 3,
+                epoch_period_nonce_stabilization: 4,
+            }),
+            "fast_repro" => Some(Self {
+                name: "fast_repro",
+                security_parameter: 3,
+                slot_duration_secs: 1,
+                epoch_stake_distribution_stabilization: 1,
+                epoch_period_nonce_buffer: 1,
+                epoch_period_nonce_stabilization: 1,
+            }),
+            _ => None,
+        }
+    }
+
+    const fn apply_to(&self, settings: &mut DeploymentSettings) {
+        settings.cryptarchia.security_param = NonZero::new(self.security_parameter)
+            .expect("named Blend diagnostic security parameter must be non-zero");
+        settings.time.slot_duration = Duration::from_secs(self.slot_duration_secs);
+        settings
+            .cryptarchia
+            .epoch_config
+            .epoch_stake_distribution_stabilization =
+            NonZero::new(self.epoch_stake_distribution_stabilization)
+                .expect("named Blend diagnostic phase must be non-zero");
+        settings.cryptarchia.epoch_config.epoch_period_nonce_buffer =
+            NonZero::new(self.epoch_period_nonce_buffer)
+                .expect("named Blend diagnostic phase must be non-zero");
+        settings
+            .cryptarchia
+            .epoch_config
+            .epoch_period_nonce_stabilization = NonZero::new(self.epoch_period_nonce_stabilization)
+            .expect("named Blend diagnostic phase must be non-zero");
+    }
+
+    fn effective_deployment_settings(self) -> DeploymentSettings {
+        let mut settings = DeploymentSettings::default();
+        settings.cryptarchia.slot_activation_coeff = TopologyConfig::default().active_slot_coeff;
+        self.apply_to(&mut settings);
+        settings
+    }
+}
+
+pub fn set_blend_diagnostic_parameter_set(
+    world: &mut CucumberWorld,
+    step: &str,
+    parameter_set_name: &str,
+) -> StepResult {
+    let parameter_set = BlendDiagnosticParameterSet::from_name(parameter_set_name).ok_or_else(|| {
+        StepError::InvalidArgument {
+            message: format!(
+                "unknown Blend diagnostic parameter set `{parameter_set_name}`; expected `clean_control`, `testnet_representative`, or `fast_repro`"
+            ),
+        }
+    })?;
+
+    let security_parameter = NonZero::new(parameter_set.security_parameter).ok_or_else(|| {
+        StepError::InvalidArgument {
+            message: format!(
+                "Blend diagnostic parameter set `{parameter_set_name}` has an invalid security parameter"
+            ),
+        }
+    })?;
+    world.set_cryptarchia_security_param(security_parameter);
+    set_deployment_config_override(
+        world,
+        step,
+        "time.slot_duration",
+        &format!("seconds({})", parameter_set.slot_duration_secs),
+    )?;
+    set_deployment_config_override(
+        world,
+        step,
+        "cryptarchia.epoch_config.epoch_stake_distribution_stabilization",
+        &parameter_set
+            .epoch_stake_distribution_stabilization
+            .to_string(),
+    )?;
+    set_deployment_config_override(
+        world,
+        step,
+        "cryptarchia.epoch_config.epoch_period_nonce_buffer",
+        &parameter_set.epoch_period_nonce_buffer.to_string(),
+    )?;
+    set_deployment_config_override(
+        world,
+        step,
+        "cryptarchia.epoch_config.epoch_period_nonce_stabilization",
+        &parameter_set.epoch_period_nonce_stabilization.to_string(),
+    )?;
+
+    let settings = parameter_set.effective_deployment_settings();
+    let slots_per_epoch = settings.cryptarchia.slots_per_epoch();
+    info!(
+        target: TARGET,
+        diagnostic = DIAGNOSTIC,
+        event = "blend_diagnostic_parameter_set",
+        parameter_set = parameter_set.name,
+        security_parameter = settings.cryptarchia.security_param.get(),
+        slot_duration_secs = settings.time.slot_duration.as_secs(),
+        epoch_stake_distribution_stabilization = settings
+            .cryptarchia
+            .epoch_config
+            .epoch_stake_distribution_stabilization
+            .get(),
+        epoch_period_nonce_buffer = settings
+            .cryptarchia
+            .epoch_config
+            .epoch_period_nonce_buffer
+            .get(),
+        epoch_period_nonce_stabilization = settings
+            .cryptarchia
+            .epoch_config
+            .epoch_period_nonce_stabilization
+            .get(),
+        slots_per_epoch,
+        "Blend diagnostic parameters: {}: k={}, phases={}/{}/{}, slots_per_epoch={}",
+        parameter_set.name,
+        settings.cryptarchia.security_param.get(),
+        settings
+            .cryptarchia
+            .epoch_config
+            .epoch_stake_distribution_stabilization
+            .get(),
+        settings
+            .cryptarchia
+            .epoch_config
+            .epoch_period_nonce_buffer
+            .get(),
+        settings
+            .cryptarchia
+            .epoch_config
+            .epoch_period_nonce_stabilization
+            .get(),
+        slots_per_epoch,
+    );
+
+    Ok(())
+}
 
 fn diagnostic_error(message: impl Into<String>) -> StepError {
     StepError::LogicalError {
@@ -364,6 +536,17 @@ fn log_diagnostic_identities(world: &CucumberWorld) -> StepResult {
     Ok(())
 }
 
+#[given("I log diagnostic outage summary")]
+#[when("I log diagnostic outage summary")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require a mutable world reference"
+)]
+async fn log_diagnostic_outage_summary_step(world: &mut CucumberWorld) -> StepResult {
+    log_majority_outage_summary(world).await;
+    Ok(())
+}
+
 pub async fn log_node_lifecycle_marker(
     world: &CucumberWorld,
     event: &str,
@@ -419,19 +602,15 @@ pub async fn log_majority_outage_summary(world: &CucumberWorld) {
         return;
     };
     let mut stopped_nodes: Vec<_> = world
-        .nodes_info
-        .keys()
-        .filter(|node| {
-            *node == "NODE_1"
-                || node.strip_prefix("NODE_").is_some_and(|number| {
-                    number
-                        .parse::<u8>()
-                        .is_ok_and(|number| (4..=10).contains(&number))
-                })
-        })
+        .blend_diagnostic_stopped_nodes
+        .iter()
         .cloned()
         .collect();
-    stopped_nodes.sort();
+    stopped_nodes.sort_by(|left, right| {
+        diagnostic_node_sort_number(left)
+            .cmp(&diagnostic_node_sort_number(right))
+            .then_with(|| left.cmp(right))
+    });
     let Ok(settings) = deployment_settings(world, "NODE_2") else {
         return;
     };
@@ -455,4 +634,63 @@ pub async fn log_majority_outage_summary(world: &CucumberWorld) {
         stopped_nodes = ?stopped_nodes,
         "Diagnostic majority Blend provider outage"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn named_parameter_sets_apply_expected_values_and_derive_epoch_length() {
+        for (name, security_parameter, phases) in [
+            ("clean_control", 10, (1, 1, 1)),
+            ("testnet_representative", 5, (3, 3, 4)),
+            ("fast_repro", 3, (1, 1, 1)),
+        ] {
+            let parameter_set =
+                BlendDiagnosticParameterSet::from_name(name).expect("profile should be known");
+            let settings = parameter_set.effective_deployment_settings();
+
+            assert_eq!(
+                settings.cryptarchia.security_param.get(),
+                security_parameter
+            );
+            assert_eq!(settings.time.slot_duration, Duration::from_secs(1));
+            assert_eq!(
+                (
+                    settings
+                        .cryptarchia
+                        .epoch_config
+                        .epoch_stake_distribution_stabilization
+                        .get(),
+                    settings
+                        .cryptarchia
+                        .epoch_config
+                        .epoch_period_nonce_buffer
+                        .get(),
+                    settings
+                        .cryptarchia
+                        .epoch_config
+                        .epoch_period_nonce_stabilization
+                        .get(),
+                ),
+                phases
+            );
+            assert!(settings.cryptarchia.slots_per_epoch() > 0);
+            let mut deployment_settings = DeploymentSettings::default();
+            deployment_settings.cryptarchia.slot_activation_coeff =
+                TopologyConfig::default().active_slot_coeff;
+            parameter_set.apply_to(&mut deployment_settings);
+            assert_eq!(
+                settings.cryptarchia.slots_per_epoch(),
+                deployment_settings.cryptarchia.slots_per_epoch()
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_named_parameter_set_is_rejected() {
+        assert!(BlendDiagnosticParameterSet::from_name("accelerated").is_none());
+        assert!(BlendDiagnosticParameterSet::from_name("unknown").is_none());
+    }
 }
