@@ -18,7 +18,7 @@ pub enum ChainSyncErrorKind {
     #[error("Stream error: {0}")]
     OpenStreamError(#[from] libp2p_stream::OpenStreamError),
 
-    #[error("Failed to unpack data from reader: {0}")]
+    #[error("Packing error: {0}")]
     PackingError(#[from] PackingError),
 
     #[error("Failed to receive data from channel: {0}")]

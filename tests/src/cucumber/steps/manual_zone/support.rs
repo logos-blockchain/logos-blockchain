@@ -74,6 +74,7 @@ fn finalized_inscriptions(finalized: &[FinalizedTx]) -> impl Iterator<Item = &In
             FinalizedOp::Inscription(info) => Some(info),
             FinalizedOp::Deposit(_)
             | FinalizedOp::Withdraw(_)
+            | FinalizedOp::Config(_)
             | FinalizedOp::ChannelTransfer(_) => None,
         })
 }
@@ -301,14 +302,20 @@ pub fn start_sorted_conflict_policy(
     to_policy_runtime(runner::spawn(sequencer, policy))
 }
 
-/// Inline policy: republish orphaned inscriptions that aren't already back on
-/// the canonical chain. Plain inscriptions only — bundles are not
-/// auto-republished (callers that issue bundles re-prepare with fresh withdraw
-/// nonces themselves). Assumes unique payloads, so the payload identifies the
-/// message; for repeating payloads see [`RepublishLineagePolicy`].
+/// Inline policy: republish orphaned inscriptions not already back on the
+/// canonical chain. Plain inscriptions only — bundles re-prepare themselves.
+/// Assumes unique payloads; for repeating payloads see
+/// [`RepublishLineagePolicy`].
+///
+/// Tracks canonical on-chain state keyed by id, decided by payload (see
+/// `on_event`): a dead twin's id leaves while a live twin keeps the payload
+/// covered, so a payload still on chain is never re-homed.
 #[derive(Default)]
 struct OrphanRepublishPolicy {
-    finalized: HashSet<Inscription>,
+    /// Canonical on-chain inscriptions by id (adopted-unfinalized + finalized).
+    /// Finalized entries are added and never removed — they can't be orphaned —
+    /// so this one set is the whole on-chain view.
+    canonical: HashMap<MsgId, Inscription>,
 }
 
 impl<Node> runner::Policy<Node> for OrphanRepublishPolicy
@@ -324,21 +331,34 @@ where
         else {
             return;
         };
-        // Add finalized payloads to state first.
-        self.finalized
-            .extend(finalized_inscriptions(finalized).map(|i| i.payload.clone()));
-        // Skip orphans whose payload is already on chain (adopted) or finalized
-        // — republishing them would duplicate.
-        let adopted: HashSet<&Inscription> = channel_update
+        // 1. Remove orphaned by id — a dead twin leaves, a live twin stays.
+        for entry in &channel_update.orphaned {
+            if let Some(info) = entry.inscription() {
+                self.canonical.remove(&info.this_msg);
+            }
+        }
+        // 2. Add finalized by id (permanent — finalized can't be orphaned).
+        for info in finalized_inscriptions(finalized) {
+            self.canonical.insert(info.this_msg, info.payload.clone());
+        }
+        // 3. Add adopted by id (this block's new canonical).
+        for info in channel_update
             .adopted
             .iter()
-            .filter_map(|tx| tx.inscription().map(|i| &i.payload))
-            .collect();
+            .filter_map(ChannelUpdateTx::inscription)
+        {
+            self.canonical.insert(info.this_msg, info.payload.clone());
+        }
+        // 4. Republish orphaned whose payload no canonical id still carries.
         for entry in &channel_update.orphaned {
             let ChannelUpdateTx::Inscription(info) = entry else {
                 continue;
             };
-            if adopted.contains(&info.payload) || self.finalized.contains(&info.payload) {
+            if self
+                .canonical
+                .values()
+                .any(|payload| *payload == info.payload)
+            {
                 continue;
             }
             if let Err(error) = sequencer.handle().publish(info.payload.clone()).await {
@@ -526,7 +546,9 @@ where
                 .iter()
                 .filter_map(|o| match o {
                     ChannelUpdateTx::Inscription(i) => Some(i.clone()),
-                    ChannelUpdateTx::AtomicWithdraw(_) | ChannelUpdateTx::Custom(_) => None,
+                    ChannelUpdateTx::AtomicWithdraw(_)
+                    | ChannelUpdateTx::Custom(_)
+                    | ChannelUpdateTx::Config(_) => None,
                 })
                 .collect();
             self.balances
@@ -591,7 +613,9 @@ where
             .iter()
             .filter_map(|o| match o {
                 ChannelUpdateTx::Inscription(i) => Some(i),
-                ChannelUpdateTx::AtomicWithdraw(_) | ChannelUpdateTx::Custom(_) => None,
+                ChannelUpdateTx::AtomicWithdraw(_)
+                | ChannelUpdateTx::Custom(_)
+                | ChannelUpdateTx::Config(_) => None,
             })
             .collect();
 
