@@ -824,14 +824,10 @@ async fn test_handle_epoch_event() {
         &mut PendingLocalMessages::new(),
     )
     .await;
-    let HandleEpochEventOutput::Retiring {
-        old_epoch_components,
-        ..
-    } = output
-    else {
+    let HandleEpochEventOutput::Retiring { retiring_epoch } = output else {
         panic!("expected Retiring output");
     };
-    assert_eq!(old_epoch_components.epoch(), epoch.strict_add(1.into()));
+    assert_eq!(retiring_epoch.epoch(), epoch.strict_add(1.into()));
 }
 
 /// On an epoch change where the membership actually changes (and the local node
@@ -1109,16 +1105,12 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
         &mut PendingLocalMessages::new(),
     )
     .await;
-    let HandleEpochEventOutput::Retiring {
-        old_epoch_components,
-        ..
-    } = output
-    else {
+    let HandleEpochEventOutput::Retiring { retiring_epoch } = output else {
         panic!("expected Retiring output for Empty epoch");
     };
     // The old processor/info should be from the epoch we were on before
     // the empty epoch arrived.
-    assert_eq!(old_epoch_components.epoch(), epoch);
+    assert_eq!(retiring_epoch.epoch(), epoch);
 }
 
 /// Handle a `NewEpoch(NonEmpty)` event where membership exists but the local
@@ -1193,15 +1185,11 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
     )
     .await;
 
-    let HandleEpochEventOutput::Retiring {
-        old_epoch_components,
-        ..
-    } = output
-    else {
+    let HandleEpochEventOutput::Retiring { retiring_epoch } = output else {
         panic!("expected Retiring output for NonEmpty epoch without local core path");
     };
 
-    assert_eq!(old_epoch_components.epoch(), epoch);
+    assert_eq!(retiring_epoch.epoch(), epoch);
 }
 
 /// Check if the service keeps running after it receives a new epoch where
@@ -1283,7 +1271,7 @@ async fn complete_old_epoch_after_main_loop_done() {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
 
-        let (old_epoch_components, old_epoch_blending_token_collector) = run_event_loop(
+        let retiring_epoch = run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
             secret_pol_info_stream,
@@ -1308,8 +1296,7 @@ async fn complete_old_epoch_after_main_loop_done() {
             TestPayloadDispatcher,
             sdp_relay,
             rng,
-            old_epoch_blending_token_collector,
-            old_epoch_components,
+            retiring_epoch,
         )
         .await;
     });
@@ -1427,7 +1414,7 @@ async fn stop_on_empty_epoch() {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
 
-        let (old_epoch_components, old_epoch_blending_token_collector) = run_event_loop(
+        let retiring_epoch = run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
             secret_pol_info_stream,
@@ -1452,8 +1439,7 @@ async fn stop_on_empty_epoch() {
             TestPayloadDispatcher,
             sdp_relay,
             rng,
-            old_epoch_blending_token_collector,
-            old_epoch_components,
+            retiring_epoch,
         )
         .await;
     });
@@ -1560,7 +1546,7 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
 
-        let (old_epoch_components, old_epoch_blending_token_collector) = run_event_loop(
+        let retiring_epoch = run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
             secret_pol_info_stream,
@@ -1585,8 +1571,7 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
             TestPayloadDispatcher,
             sdp_relay,
             rng,
-            old_epoch_blending_token_collector,
-            old_epoch_components,
+            retiring_epoch,
         )
         .await;
     });
