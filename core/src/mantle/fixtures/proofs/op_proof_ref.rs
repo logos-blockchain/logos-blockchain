@@ -1,21 +1,18 @@
-use std::sync::LazyLock;
-
 use lb_codec::codec_fixtures;
-use lb_groth16::CompressedGroth16Proof;
-use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 
+use super::proof_values::{
+    CHANNEL_MULTI_SIG, CHANNEL_MULTI_SIG_HEX, ED25519_SIG, ED25519_SIG_HEX, POC, POC_HEX,
+    ZK_AND_ED25519_SIGS, ZK_AND_ED25519_SIGS_HEX, ZK_SIG, ZK_SIG_HEX,
+};
 use crate::mantle::ops::{NoOpProof, OpProofRef};
-
-static ZK_SIG: LazyLock<ZkSignature> =
-    LazyLock::new(|| ZkSignature::new(CompressedGroth16Proof::from_bytes(&[1u8; 128])));
-
-static ED25519_SIG: LazyLock<Ed25519Signature> =
-    LazyLock::new(|| Ed25519Signature::from_bytes(&[1u8; 64]));
 
 codec_fixtures!(
     OpProofRef<'_>,
     encode_only,
     OpProofRef::None(&NoOpProof) => "",
-    OpProofRef::ZkSig(&ZK_SIG) => "0101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
-    OpProofRef::Ed25519Sig(&ED25519_SIG) => "01010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101"
+    OpProofRef::ZkSig(&ZK_SIG) => ZK_SIG_HEX,
+    OpProofRef::Ed25519Sig(&ED25519_SIG) => ED25519_SIG_HEX,
+    OpProofRef::ZkAndEd25519Sigs(&ZK_AND_ED25519_SIGS) => ZK_AND_ED25519_SIGS_HEX,
+    OpProofRef::PoC(&POC) => POC_HEX,
+    OpProofRef::ChannelMultiSigProof(&CHANNEL_MULTI_SIG) => CHANNEL_MULTI_SIG_HEX
 );

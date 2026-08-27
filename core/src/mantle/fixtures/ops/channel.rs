@@ -4,17 +4,19 @@ use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature};
 use crate::{
     mantle::{
         channel::{SlotTimeframe, SlotTimeout},
+        fixtures::ops::op_values::{
+            CHANNEL_CONFIG, CHANNEL_CONFIG_PAYLOAD_HEX, CHANNEL_TRANSFER,
+            CHANNEL_TRANSFER_PAYLOAD_HEX, CHANNEL_WITHDRAW, CHANNEL_WITHDRAW_PAYLOAD_HEX, DEPOSIT,
+            DEPOSIT_PAYLOAD_HEX, INSCRIPTION, INSCRIPTION_PAYLOAD_HEX,
+        },
         ledger::{Inputs, Outputs},
-        ops::{
-            Op,
-            channel::{
-                ChannelId, MsgId,
-                channel_transfer::ChannelTransferOp,
-                config::ChannelConfigOp,
-                deposit::{DepositOp, Metadata},
-                inscribe::InscriptionOp,
-                withdraw::ChannelWithdrawOp,
-            },
+        ops::channel::{
+            ChannelId, MsgId,
+            channel_transfer::ChannelTransferOp,
+            config::ChannelConfigOp,
+            deposit::{DepositOp, Metadata},
+            inscribe::InscriptionOp,
+            withdraw::ChannelWithdrawOp,
         },
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
@@ -32,6 +34,7 @@ codec_fixtures!(
         configuration_threshold: 0u16,
         transfer_threshold: 0u16,
     } => "000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    CHANNEL_CONFIG.clone() => CHANNEL_CONFIG_PAYLOAD_HEX,
 );
 codec_fixtures!(
     DepositOp,
@@ -40,6 +43,7 @@ codec_fixtures!(
         inputs: Inputs::empty(),
         metadata: Metadata::empty(),
     } => "00000000000000000000000000000000000000000000000000000000000000000000000000",
+    DEPOSIT.clone() => DEPOSIT_PAYLOAD_HEX,
 );
 codec_fixtures!(
     InscriptionOp,
@@ -49,6 +53,7 @@ codec_fixtures!(
         parent: MsgId::from([0u8; 32]),
         signer: Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap(),
     } => "00000000000000000000000000000000000000000000000000000000000000000700000067656e6573697300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    INSCRIPTION.clone() => INSCRIPTION_PAYLOAD_HEX,
 );
 codec_fixtures!(
     ChannelWithdrawOp,
@@ -56,6 +61,7 @@ codec_fixtures!(
         channel_id: ChannelId::from([0u8; 32]),
         inputs: Inputs::empty(),
     } => "000000000000000000000000000000000000000000000000000000000000000000",
+    CHANNEL_WITHDRAW.clone() => CHANNEL_WITHDRAW_PAYLOAD_HEX,
 );
 codec_fixtures!(
     ChannelTransferOp,
@@ -64,19 +70,7 @@ codec_fixtures!(
         inputs: Inputs::empty(),
         outputs: Outputs::empty(),
     } => "00000000000000000000000000000000000000000000000000000000000000000000",
-);
-
-// We just check that the enum discriminant tag is encoded correctly, so a
-// single fixture is fine here.
-codec_fixtures!(
-    Op,
-    Self::ChannelInscribe(
-        InscriptionOp::fixtures()
-            .into_iter()
-            .next()
-            .expect("InscriptionOp has a fixture")
-            .value
-    ) => "1100000000000000000000000000000000000000000000000000000000000000000700000067656e6573697300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    CHANNEL_TRANSFER.clone() => CHANNEL_TRANSFER_PAYLOAD_HEX,
 );
 
 codec_fixtures!(
