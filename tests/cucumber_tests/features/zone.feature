@@ -623,11 +623,7 @@ Feature: Zone SDK
       | MSG_2 |
     And I stop all nodes
 
-  # Ignored: this flow uses the manual `prepare_tx` path, which builds
-  # fee-less transactions — valid only while gas prices are zero and broken
-  # once they go non-zero. Kept out of @zone_ci so the gas-price flip needs
-  # no test changes; restore @zone_ci when prepare-time funding lands.
-  @zone_prepare_flow_pending_funding
+  @zone_ci
   # [tests/src/tests/zone_sdk/e2e.rs] test_subscribe_to_finalized_withdraw
   Scenario: Finalized withdraws are returned by the zone indexer and sequencer
     Given the genesis block has the following wallet resources:
@@ -662,11 +658,7 @@ Feature: Zone SDK
       | MSG_2 |
     And I stop all nodes
 
-  # A channel withdraw now only releases an existing channel note to the key it
-  # already carries, so paying a recipient an arbitrary amount first requires a
-  # CHANNEL_TRANSFER. The SDK's atomic withdraw flow is stubbed until channel
-  # notes are tracked; restore @zone_ci when that lands.
-  @zone_withdraw_pending_channel_notes
+  @zone_ci
   Scenario: Atomic withdraw bundle finalizes alongside multi-sequencer publishing
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
@@ -696,19 +688,61 @@ Feature: Zone SDK
       | MSG_A1 | a1   |
       | MSG_A2 | a2   |
     And sequencer "SEQ_B" publishes atomic withdraw "BUNDLE_1" with inscription "MSG_BURN":
-      | withdraw    | outputs |
-      | WITHDRAW_1A | 1       |
-      | WITHDRAW_1B | 1,2     |
+      | withdraw     | outputs |
+      | WITHDRAW_ALL | 1,1,2   |
     Then zone transaction "BUNDLE_1" is included in 240 seconds
     And zone transaction "BUNDLE_1" is finalized in 240 seconds
-    And the zone indexer returns finalized withdraw "WITHDRAW_1A" in 120 seconds
-    And the zone indexer returns finalized withdraw "WITHDRAW_1B" in 120 seconds
+    And the zone indexer returns finalized withdraw "WITHDRAW_ALL" in 120 seconds
     And the zone indexer returns messages in any order in 240 seconds:
       | alias    |
       | MSG_INIT |
       | MSG_A1   |
       | MSG_A2   |
       | MSG_BURN |
+    And I stop all nodes
+
+  @zone_ci
+  # A 10000 withdraw against a channel holding 255 dust notes (value 1) plus a
+  # single 10000 note exercises the Auto note-selection policy: it covers the
+  # amount with the big note and sweeps dust into the remaining input slots, up
+  # to the 255-input transaction limit — so the transfer consumes 255 inputs
+  # (the covering note + 254 swept dust) and compacts the channel wallet instead
+  # of leaving the dust unspent, while never exceeding the 255-input bound. The
+  # dust is minted by depositing one value-255 note and splitting it into 255
+  # value-1 notes in a single channel transfer (bounded by the 255-output
+  # limit), rather than one ZK-signed deposit per 32 notes (a deposit is capped
+  # at 32 inputs by the ZK signing-key limit).
+  Scenario: Withdrawal stays valid under a dust flood
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 1000000      |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A      |
+    When node "NODE_1" is at height 2 in 300 seconds
+    And wallet "WALLET_1A" sends 60 notes of 2000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+    And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
+    And I do a coin split for "WALLET_1A" of 1 UTXOs valued at 255 LGO tokens each
+    And I do a coin split for "WALLET_1A" of 1 UTXOs valued at 10000 LGO tokens each
+    And I start zone sequencer "SEQ_A" with indexer
+    And sequencer "SEQ_A" publishes the following zone messages:
+      | alias    | data                |
+      | MSG_INIT | initial inscription |
+    Then all zone messages are finalized in 120 seconds
+    When I submit zone deposit transaction "DEPOSIT_DUST_SEED" into channel of "SEQ_A" of 255 with metadata "Dust seed"
+    Then zone transaction "DEPOSIT_DUST_SEED" is included in 180 seconds
+    When I submit zone deposit transaction "DEPOSIT_BIG" into channel of "SEQ_A" of 10000 with metadata "Big note"
+    Then zone transaction "DEPOSIT_BIG" is finalized in 240 seconds
+    And the zone indexer returns finalized deposit "DEPOSIT_BIG" in 120 seconds
+    When sequencer "SEQ_A" splits deposit "DEPOSIT_DUST_SEED" into 255 dust notes as "SPLIT_DUST"
+    Then zone transaction "SPLIT_DUST" is finalized in 240 seconds
+    When sequencer "SEQ_A" submits zone withdraw transaction "WITHDRAW_DUST" with inscription "MSG_DUST" of 10000
+    Then zone transaction "WITHDRAW_DUST" is included in 240 seconds
+    And zone transaction "WITHDRAW_DUST" is finalized in 240 seconds
+    And the zone indexer returns finalized withdraw "WITHDRAW_DUST" in 240 seconds
+    And the zone indexer returns a finalized channel transfer consuming 255 inputs in 240 seconds
+    And sequencer "SEQ_A" finalizes withdraw "WITHDRAW_DUST" in 240 seconds
     And I stop all nodes
 
   @zone_ci

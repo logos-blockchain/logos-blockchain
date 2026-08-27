@@ -1,7 +1,9 @@
 use core::num::NonZeroU64;
+use std::sync::Arc;
 
 use lb_key_management_system_service::{backend::preload::KeyId, keys::UnsecuredEd25519Key};
 use lb_poq::Quota;
+use rayon::ThreadPool;
 
 use crate::{core::settings::CoverTrafficSettings, settings::TimingSettings};
 
@@ -28,6 +30,7 @@ pub struct RunningBlendConfig<BackendSettings> {
     pub minimum_network_size: NonZeroU64,
     pub cover: CoverTrafficSettings,
     pub data_replication_factor: u64,
+    pub pow_mining_pool: Arc<ThreadPool>,
 }
 
 impl<BackendSettings> RunningBlendConfig<BackendSettings> {

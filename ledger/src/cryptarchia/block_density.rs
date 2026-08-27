@@ -163,6 +163,7 @@ mod tests {
                     damping_num: 1.try_into().unwrap(),
                     damping_den_offset: 0,
                 },
+                reward: crate::cryptarchia::tests::disabled_reward_config(),
             },
         }
     }

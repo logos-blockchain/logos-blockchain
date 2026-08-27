@@ -6,7 +6,7 @@ mod poq_verification;
 #[cfg(test)]
 mod tests;
 
-use lb_blend_scheduling::membership::Membership;
+use lb_blend_membership::Membership;
 use lb_cryptarchia_engine::Epoch;
 use libp2p::{PeerId, StreamProtocol};
 

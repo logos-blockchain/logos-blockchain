@@ -121,6 +121,7 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use core::num::NonZeroU64;
+    use std::sync::Arc;
 
     use lb_blend::{
         message::{
@@ -147,6 +148,7 @@ mod tests {
     use lb_groth16::Fr;
     use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
     use lb_poq::Quota;
+    use rayon::ThreadPoolBuilder;
 
     use crate::{
         core::processor::{CoreCryptographicProcessor, Error},
@@ -398,6 +400,8 @@ mod tests {
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: key(local_id).0.derive_x25519(),
             num_blend_layers: NonZeroU64::new(1).unwrap(),
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+            spent_core_quota: Quota::ZERO,
         }
     }
 

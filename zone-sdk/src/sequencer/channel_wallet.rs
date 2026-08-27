@@ -8,21 +8,25 @@
 //! blocks, so branch changes need no revert logic — a different tip simply
 //! walks different blocks.
 
-use std::collections::HashMap;
+use std::{
+    cmp::Reverse,
+    collections::{HashMap, HashSet},
+};
 
 use lb_common_http_client::Slot;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        SignedMantleTx,
-        ledger::NoteId,
+        SignedMantleTx, Value,
+        ledger::{MAX_TRANSACTION_INPUTS, NoteId},
         ops::{Op, OpId as _, channel::ChannelId},
         traits::Hashable as _,
         transactions::{mantle_tx::MantleTx as _, states::Unverified},
     },
 };
+use lb_key_management_system_service::keys::ZkPublicKey;
 
-use super::types::{ChannelNote, ChannelWalletView};
+use super::types::{ChannelNote, ChannelWalletView, Error, WithdrawInputs};
 use crate::adapter::{DepositEvents, DepositOpKey};
 
 /// One channel-note mutation, in on-chain execution order.
@@ -161,12 +165,172 @@ pub(super) fn note_ops_from_txs(
     ops
 }
 
+/// Select the channel notes that fund a withdrawal of `amount`.
+///
+/// The spendable pool is the tip view — `finalized ++ unfinalized` — since a
+/// note on the tracked branch is spendable regardless of finality. `own_key`
+/// is the sequencer's own key, used to prefer notes it controls.
+///
+/// - [`WithdrawInputs::Explicit`] validates the caller's chosen ids against the
+///   pool: every id present, no duplicates, count within the input bound, and
+///   their combined value covers `amount`. The ids are returned in the given
+///   order.
+/// - [`WithdrawInputs::Auto`] covers `amount` with the newest notes first
+///   within an own-key-first tier — spending recent notes and preserving the
+///   older matured positions that carry live stake — falling back to
+///   largest-first when the newest notes cannot cover within the input bound.
+///   It then sweeps dust (notes too small to ever cover on their own, `value *
+///   MAX_TRANSACTION_INPUTS < amount`) into the remaining input slots, smallest
+///   and oldest first, so the channel wallet stays compact rather than letting
+///   an unspent dust set grow without bound.
+///
+/// Errors ([`Error::Network`]) when the choice is invalid, cannot cover
+/// `amount`, or would exceed the `MAX_TRANSACTION_INPUTS` limit.
+pub(super) fn select_channel_notes(
+    view: &ChannelWalletView,
+    own_key: ZkPublicKey,
+    amount: Value,
+    choice: &WithdrawInputs,
+) -> Result<Vec<NoteId>, Error> {
+    let pool: Vec<&ChannelNote> = view
+        .finalized
+        .iter()
+        .chain(view.unfinalized.iter())
+        .collect();
+
+    match choice {
+        WithdrawInputs::Explicit(ids) => {
+            if ids.len() > MAX_TRANSACTION_INPUTS {
+                return Err(Error::Network(format!(
+                    "explicit withdraw inputs ({}) exceed the {MAX_TRANSACTION_INPUTS}-input limit",
+                    ids.len()
+                )));
+            }
+            let by_id: HashMap<NoteId, Value> = pool.iter().map(|n| (n.note_id, n.value)).collect();
+            let mut seen = HashSet::with_capacity(ids.len());
+            let mut sum: Value = 0;
+            for id in ids {
+                if !seen.insert(*id) {
+                    return Err(Error::Network(format!(
+                        "duplicate explicit withdraw input: {id:?}"
+                    )));
+                }
+                let value = by_id.get(id).ok_or_else(|| {
+                    Error::Network(format!(
+                        "explicit withdraw input is not a spendable channel note: {id:?}"
+                    ))
+                })?;
+                sum = sum.checked_add(*value).ok_or_else(|| {
+                    Error::Network("explicit withdraw input value overflow".into())
+                })?;
+            }
+            if sum < amount {
+                return Err(Error::Network(format!(
+                    "explicit withdraw inputs cover {sum}, need {amount}"
+                )));
+            }
+            Ok(ids.clone())
+        }
+        WithdrawInputs::Auto => {
+            let (own, other): (Vec<&ChannelNote>, Vec<&ChannelNote>) =
+                pool.into_iter().partition(|n| n.pk == own_key);
+
+            let total = own
+                .iter()
+                .chain(&other)
+                .try_fold(0u64, |acc, n| acc.checked_add(n.value))
+                .ok_or_else(|| Error::Network("channel note value overflow".into()))?;
+            if total < amount {
+                return Err(Error::Network(format!(
+                    "insufficient channel funds: have {total}, need {amount}"
+                )));
+            }
+
+            // Cover the amount preferring the newest notes within an
+            // own-key-first tier: spending recent notes leaves the older,
+            // matured positions — the ones carrying live PoS/leadership stake —
+            // intact. Fall back to largest-first when the newest notes cannot
+            // cover within the input limit (e.g. the recent notes are all dust
+            // and the covering value sits in older large notes).
+            let cover = cover_from(&ordered(&own, &other, |n| Reverse(n.slot)), amount)
+                .or_else(|| cover_from(&ordered(&own, &other, |n| Reverse(n.value)), amount))
+                .ok_or_else(|| {
+                    Error::Network("cannot cover withdrawal under the 255-input limit".into())
+                })?;
+
+            // Sweep dust into the remaining input slots — smallest, then oldest,
+            // first — so the channel wallet stays compact instead of letting an
+            // unspent dust set grow without bound. The change note absorbs the
+            // swept value. Only genuine dust is swept: a note so small that even
+            // a full 255-input transaction of it could not cover `amount`
+            // (`value * MAX_TRANSACTION_INPUTS < amount`). That leaves medium and
+            // large positions — the matured stake preserved by the cover step —
+            // untouched, and such dust carries negligible stake anyway.
+            let taken: HashSet<NoteId> = cover.iter().copied().collect();
+            let mut sweep: Vec<&ChannelNote> = own
+                .iter()
+                .chain(&other)
+                .copied()
+                .filter(|n| {
+                    !taken.contains(&n.note_id)
+                        && n.value.saturating_mul(MAX_TRANSACTION_INPUTS as u64) < amount
+                })
+                .collect();
+            sweep.sort_by(|a, b| a.value.cmp(&b.value).then(a.slot.cmp(&b.slot)));
+
+            let mut selected = cover;
+            for note in sweep {
+                if selected.len() >= MAX_TRANSACTION_INPUTS {
+                    break;
+                }
+                selected.push(note.note_id);
+            }
+            Ok(selected)
+        }
+    }
+}
+
+/// Order `own` notes ahead of `other`, each sorted by `key` (natural order —
+/// wrap in [`Reverse`] for descending). Used to build a covering-preference
+/// order over the two tiers.
+fn ordered<'a, K: Ord>(
+    own: &[&'a ChannelNote],
+    other: &[&'a ChannelNote],
+    key: impl Fn(&ChannelNote) -> K,
+) -> Vec<&'a ChannelNote> {
+    let mut result = own.to_vec();
+    result.sort_by_key(|n| key(n));
+    let mut rest = other.to_vec();
+    rest.sort_by_key(|n| key(n));
+    result.extend(rest);
+    result
+}
+
+/// Accumulate `ordered` notes until their value covers `amount`, returning the
+/// selected ids. `None` if the notes cannot cover `amount` within
+/// [`MAX_TRANSACTION_INPUTS`].
+fn cover_from(ordered: &[&ChannelNote], amount: Value) -> Option<Vec<NoteId>> {
+    let mut selected = Vec::new();
+    let mut sum: Value = 0;
+    for note in ordered {
+        if sum >= amount {
+            break;
+        }
+        if selected.len() == MAX_TRANSACTION_INPUTS {
+            return None;
+        }
+        selected.push(note.note_id);
+        sum = sum.checked_add(note.value)?;
+    }
+    (sum >= amount).then_some(selected)
+}
+
 #[cfg(test)]
 mod tests {
     use lb_core::{
         events::DepositNote,
         mantle::{
-            Note, Value,
+            Note,
             ledger::{Inputs, Outputs},
             ops::channel::{
                 channel_transfer::ChannelTransferOp,
@@ -175,7 +339,6 @@ mod tests {
         },
     };
     use lb_groth16::Fr;
-    use lb_key_management_system_service::keys::ZkPublicKey;
 
     use super::*;
     use crate::test_support::header_id;
@@ -402,5 +565,212 @@ mod tests {
         let mut roundtripped = restored.export_base();
         roundtripped.sort_by_key(|n| n.note_id);
         assert_eq!(exported, roundtripped);
+    }
+
+    fn note(seed: u64, value: Value, pk: ZkPublicKey) -> ChannelNote {
+        note_at(seed, value, pk, 1)
+    }
+
+    fn note_at(seed: u64, value: Value, pk: ZkPublicKey, slot: u64) -> ChannelNote {
+        ChannelNote {
+            note_id: note_id(seed),
+            value,
+            pk,
+            slot: Slot::from(slot),
+        }
+    }
+
+    #[test]
+    fn auto_covers_with_the_newest_note_and_preserves_the_aged_one() {
+        let own = zk_pk(1);
+        // Two notes that each cover the amount: one aged (slot 1), one recent
+        // (slot 9). Auto spends the recent note and leaves the aged, matured
+        // position — the one carrying live stake — intact.
+        let view = ChannelWalletView {
+            finalized: vec![note_at(1, 10_000, own, 1), note_at(2, 10_000, own, 9)],
+            unfinalized: Vec::new(),
+        };
+
+        let selected = select_channel_notes(&view, own, 10_000, &WithdrawInputs::Auto).unwrap();
+
+        assert_eq!(selected, vec![note_id(2)]);
+    }
+
+    #[test]
+    fn auto_covers_with_multiple_newest_notes_when_no_single_note_covers() {
+        let own = zk_pk(1);
+        // No single note covers 700; newest-first takes the two most recent and
+        // leaves the oldest note untouched.
+        let view = ChannelWalletView {
+            finalized: vec![
+                note_at(1, 400, own, 3), // newest
+                note_at(2, 400, own, 2),
+                note_at(3, 400, own, 1), // oldest — preserved
+            ],
+            unfinalized: Vec::new(),
+        };
+
+        let selected = select_channel_notes(&view, own, 700, &WithdrawInputs::Auto).unwrap();
+
+        assert_eq!(selected, vec![note_id(1), note_id(2)]);
+    }
+
+    #[test]
+    fn auto_sweeps_dust_around_a_covering_note_up_to_the_input_bound() {
+        let own = zk_pk(1);
+        // A covering note plus a flood of newer dust. Auto covers with the big
+        // note and sweeps dust into the remaining slots, filling to the
+        // 255-input bound (1 cover + 254 dust) rather than leaving dust unspent.
+        let mut finalized = vec![note_at(1, 10_000, own, 1)];
+        finalized.extend((0..300).map(|i| note_at(1000 + i, 1, own, 2)));
+        let view = ChannelWalletView {
+            finalized,
+            unfinalized: Vec::new(),
+        };
+
+        let selected = select_channel_notes(&view, own, 10_000, &WithdrawInputs::Auto).unwrap();
+
+        assert_eq!(selected.len(), MAX_TRANSACTION_INPUTS);
+        assert!(selected.contains(&note_id(1)));
+        // Every other slot is a swept dust note.
+        assert_eq!(
+            selected.iter().filter(|id| **id != note_id(1)).count(),
+            MAX_TRANSACTION_INPUTS - 1
+        );
+    }
+
+    #[test]
+    fn auto_falls_back_to_largest_first_when_newest_notes_cannot_cover() {
+        let own = zk_pk(1);
+        // The newest notes are a dust flood that cannot cover the amount within
+        // 255 inputs; the covering value sits in an older large note. Newest-
+        // first would exhaust its budget on dust, so Auto falls back to
+        // largest-first, spends the large note, then sweeps dust.
+        let mut finalized = vec![note_at(1, 1_000, own, 1)]; // old, covers
+        finalized.extend((0..300).map(|i| note_at(1000 + i, 1, own, 5))); // newer dust
+        let view = ChannelWalletView {
+            finalized,
+            unfinalized: Vec::new(),
+        };
+
+        let selected = select_channel_notes(&view, own, 500, &WithdrawInputs::Auto).unwrap();
+
+        assert!(selected.contains(&note_id(1)));
+        assert_eq!(selected.len(), MAX_TRANSACTION_INPUTS);
+    }
+
+    #[test]
+    fn auto_errors_when_coverage_needs_more_than_the_input_bound() {
+        let own = zk_pk(1);
+        // The funds exist (300 total) but covering 256 needs 256 value-1 inputs,
+        // over the 255-input limit. Auto reports the limit error rather than
+        // returning an over-limit selection.
+        let finalized: Vec<ChannelNote> = (0..300).map(|i| note_at(1000 + i, 1, own, 1)).collect();
+        let view = ChannelWalletView {
+            finalized,
+            unfinalized: Vec::new(),
+        };
+
+        let err = select_channel_notes(&view, own, 256, &WithdrawInputs::Auto).unwrap_err();
+
+        assert!(matches!(err, Error::Network(_)));
+    }
+
+    #[test]
+    fn explicit_selection_returns_the_chosen_ids_in_order() {
+        let own = zk_pk(1);
+        let view = ChannelWalletView {
+            finalized: vec![note(1, 40, own), note(2, 60, own), note(3, 5, own)],
+            unfinalized: Vec::new(),
+        };
+        let ids = vec![note_id(2), note_id(1)];
+
+        let selected =
+            select_channel_notes(&view, own, 100, &WithdrawInputs::Explicit(ids.clone())).unwrap();
+
+        assert_eq!(selected, ids);
+    }
+
+    #[test]
+    fn explicit_selection_rejects_over_the_input_limit() {
+        let own = zk_pk(1);
+        let view = ChannelWalletView {
+            finalized: Vec::new(),
+            unfinalized: Vec::new(),
+        };
+        let ids: Vec<NoteId> = (0..=(MAX_TRANSACTION_INPUTS as u64)).map(note_id).collect();
+        assert!(ids.len() > MAX_TRANSACTION_INPUTS);
+
+        let err = select_channel_notes(&view, own, 1, &WithdrawInputs::Explicit(ids)).unwrap_err();
+
+        assert!(matches!(err, Error::Network(_)));
+    }
+
+    #[test]
+    fn explicit_selection_rejects_duplicate_ids() {
+        let own = zk_pk(1);
+        let view = ChannelWalletView {
+            finalized: vec![note(1, 100, own), note(2, 100, own)],
+            unfinalized: Vec::new(),
+        };
+
+        let ids = vec![note_id(1), note_id(1)];
+        let err =
+            select_channel_notes(&view, own, 100, &WithdrawInputs::Explicit(ids)).unwrap_err();
+
+        assert!(matches!(err, Error::Network(_)));
+    }
+
+    #[test]
+    fn explicit_selection_rejects_untracked_ids() {
+        let own = zk_pk(1);
+        let view = ChannelWalletView {
+            finalized: vec![note(1, 100, own)],
+            unfinalized: Vec::new(),
+        };
+
+        // `note_id(99)` is not in the tracked note set.
+        let ids = vec![note_id(99)];
+        let err =
+            select_channel_notes(&view, own, 100, &WithdrawInputs::Explicit(ids)).unwrap_err();
+
+        assert!(matches!(err, Error::Network(_)));
+    }
+
+    #[test]
+    fn explicit_selection_rejects_insufficient_coverage() {
+        let own = zk_pk(1);
+        let view = ChannelWalletView {
+            finalized: vec![note(1, 40, own), note(2, 30, own)],
+            unfinalized: Vec::new(),
+        };
+
+        // 40 + 30 = 70 < 100.
+        let ids = vec![note_id(1), note_id(2)];
+        let err =
+            select_channel_notes(&view, own, 100, &WithdrawInputs::Explicit(ids)).unwrap_err();
+
+        assert!(matches!(err, Error::Network(_)));
+    }
+
+    #[test]
+    fn explicit_reproduces_a_prior_selection_exactly() {
+        // A republish that wants the identical transfer inputs passes the
+        // previously resolved ids as `Explicit`; selection returns exactly them,
+        // in order. Reproduction is a caller choice — the inscription lineage,
+        // not the input set, is what prevents a double-withdraw (see
+        // [`WithdrawInputs`]).
+        let own = zk_pk(1);
+        let view = ChannelWalletView {
+            finalized: vec![note(1, 60, own), note(2, 40, own), note(3, 5, own)],
+            unfinalized: Vec::new(),
+        };
+
+        let prior = vec![note_id(2), note_id(1)];
+        let selected =
+            select_channel_notes(&view, own, 100, &WithdrawInputs::Explicit(prior.clone()))
+                .unwrap();
+
+        assert_eq!(selected, prior);
     }
 }

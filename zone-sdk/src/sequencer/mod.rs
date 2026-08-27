@@ -84,6 +84,6 @@ pub use types::{
     ChannelWalletView, DepositInfo, Error, Event, FinalizedOp, FinalizedTx, FundingConfig,
     InscriptionId, InscriptionInfo, PendingTx, PublishResult, SequencerChannelView,
     SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource, TxStatus, TxStatusUpdate,
-    WithdrawArg, WithdrawInfo,
+    WithdrawArg, WithdrawInfo, WithdrawInputs,
 };
 pub use zone_sequencer::ZoneSequencer;

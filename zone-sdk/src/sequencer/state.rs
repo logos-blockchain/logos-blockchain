@@ -536,12 +536,6 @@ impl TxState {
         self.pending.values().filter(|p| p.posted).count()
     }
 
-    /// Whether there are pending channel inscriptions.
-    #[must_use]
-    pub fn has_pending_inscriptions(&self) -> bool {
-        !self.pending.is_empty()
-    }
-
     /// Remove pending inscriptions whose lineage does NOT reach the current
     /// channel tip and that aren't already in a block on this branch.
     /// Returns the removed entries in **parent-before-child (BFS) order** so

@@ -141,6 +141,11 @@ pub fn run_node_from_config(
 ) -> Result<Overwatch<RuntimeServiceId>, DynError> {
     let blend_rewards_params = config.deployment.blend_reward_params();
 
+    // The PoW mining service must use the same acceptance window as consensus;
+    // read it from the cryptarchia deployment config before that config is
+    // moved into the cryptarchia service settings below.
+    let pow_slot_window = config.deployment.cryptarchia.pow_config.reward.slot_window;
+
     let storage_config = StorageConfig {
         user: config.user.storage,
     }
@@ -199,7 +204,7 @@ pub fn run_node_from_config(
     let pow_config = PoWConfig {
         user: config.user.pow,
     }
-    .into_pow_service_settings(recovery_data);
+    .into_pow_service_settings(recovery_data, pow_slot_window);
 
     let tracing_config = config::tracing::ServiceConfig {
         user: config.user.tracing,

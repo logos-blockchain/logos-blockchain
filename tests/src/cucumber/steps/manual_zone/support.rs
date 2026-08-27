@@ -12,21 +12,26 @@ use std::{
 };
 
 use lb_common_http_client::{CommonHttpClient, Slot};
-use lb_core::mantle::{
-    Note, Op, OpProof, RawMantleTx, Utxo, Value,
-    gas::GasCost,
-    ledger::{Inputs, Outputs, OutputsError},
-    ops::{
-        channel::{
-            ChannelId, MsgId,
-            deposit::{DepositOp, Metadata},
-            inscribe::{Inscription, InscriptionOp},
-            withdraw::ChannelWithdrawOp,
+use lb_core::{
+    mantle::{
+        Note, Op, OpProof, RawMantleTx, Utxo, Value,
+        gas::GasCost,
+        ledger::{Inputs, Outputs, OutputsError},
+        ops::{
+            OpId as _,
+            channel::{
+                ChannelId, MsgId,
+                channel_transfer::ChannelTransferOp,
+                deposit::{DepositOp, Metadata},
+                inscribe::{Inscription, InscriptionOp},
+                withdraw::ChannelWithdrawOp,
+            },
+            transfer::TransferOp,
         },
-        transfer::TransferOp,
+        traits::Hashable as _,
+        transactions::{OpsProofs, builder::MantleTxBuilder, states::Unverified},
     },
-    traits::Hashable as _,
-    transactions::{OpsProofs, builder::MantleTxBuilder, states::Unverified},
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 use lb_http_api_common::bodies::{
     channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
@@ -54,7 +59,7 @@ use super::runner::{
     self, ChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx, FundingConfig,
     InscriptionId, InscriptionInfo, PendingTx, PublishResult, SequencerChannelView,
     SequencerCheckpoint, SequencerClient, SequencerConfig, TurnNotification, TxStatus,
-    TxStatusUpdate, WithdrawArg,
+    TxStatusUpdate, WithdrawArg, WithdrawInputs,
 };
 
 /// Inscriptions in the just-finalized txs — the permanent, settled part of the
@@ -114,6 +119,8 @@ pub enum ZoneTestError {
     MissingExactFundingNote { value: Value },
     #[error("failed to submit zone deposit: {message}")]
     SubmitDeposit { message: String },
+    #[error("failed to submit zone channel split transfer: {message}")]
+    SplitTransfer { message: String },
     #[error("failed to sign zone transaction: {message}")]
     SignTransaction { message: String },
     #[error("failed to build atomic zone deposit transaction: {message}")]
@@ -163,6 +170,23 @@ pub struct ZoneWithdrawSubmission {
 pub struct ZoneDeposit {
     pub deposit: DepositOp,
     pub reserved_inputs: Vec<Utxo>,
+    /// The channel notes the deposit re-creates (1:1 with its inputs). Computed
+    /// deterministically from the deposit's `op_id` and its input notes so a
+    /// later channel transfer can spend them without waiting on the indexer.
+    pub channel_notes: Vec<Utxo>,
+}
+
+/// The channel notes a deposit re-creates: one per input, same note (value +
+/// pk), re-homed under the deposit's `op_id`. Matches the ledger's deposit
+/// execution (`DepositOp::outputs` re-creates inputs 1:1) and the zone-sdk's
+/// channel-note derivation.
+fn recreated_channel_notes(deposit: &DepositOp, reserved_inputs: &[Utxo]) -> Vec<Utxo> {
+    let op_id = deposit.op_id();
+    reserved_inputs
+        .iter()
+        .enumerate()
+        .map(|(index, utxo)| Utxo::new(op_id, index, utxo.note))
+        .collect()
 }
 
 pub type DiscardedPayloads = Arc<tokio::sync::Mutex<HashSet<Inscription>>>;
@@ -987,6 +1011,7 @@ pub async fn replay_finalized_history(
     // turn-gated), so the funding wallet is never exercised.
     let funding = FundingConfig {
         funding_pk: lb_groth16::Fr::from(1u64).into(),
+        change_pk: None,
         max_tx_fee: GasCost::new(u64::MAX),
         priority_fee_percent: FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT,
     };
@@ -1221,6 +1246,30 @@ pub async fn wait_for_withdraw(
     .await
 }
 
+/// Waits until the finalized channel history contains a channel transfer whose
+/// input set has exactly `expected_inputs` notes.
+///
+/// This is the on-chain record of the withdrawal's note selection: in the
+/// dust-flood scenario it proves best-fit largest-first consumed a single
+/// covering note rather than sweeping the >255-note dust flood into a transfer
+/// the ledger would reject.
+pub async fn wait_for_channel_transfer_input_count(
+    reader: &ZoneReaderConfig,
+    expected_inputs: usize,
+    timeout_duration: Duration,
+) -> Result<(), ZoneTestError> {
+    poll_replayed_history_until(
+        reader,
+        timeout_duration,
+        ZoneTestError::IndexerTimeout,
+        move |op| {
+            matches!(op, FinalizedOp::ChannelTransfer(transfer)
+                if transfer.op.inputs.len() == expected_inputs)
+        },
+    )
+    .await
+}
+
 async fn poll_replayed_history_until(
     reader: &ZoneReaderConfig,
     duration: Duration,
@@ -1430,13 +1479,17 @@ pub fn build_zone_deposit(
         .find(|utxo| utxo.note.value == amount)
         .ok_or(ZoneTestError::MissingExactFundingNote { value: amount })?;
 
+    let deposit = DepositOp {
+        channel_id,
+        inputs: Inputs::new([note.id()]),
+        metadata,
+    };
+    let reserved_inputs = vec![note];
+    let channel_notes = recreated_channel_notes(&deposit, &reserved_inputs);
     Ok(ZoneDeposit {
-        deposit: DepositOp {
-            channel_id,
-            inputs: Inputs::new([note.id()]),
-            metadata,
-        },
-        reserved_inputs: vec![note],
+        deposit,
+        reserved_inputs,
+        channel_notes,
     })
 }
 
@@ -1461,15 +1514,18 @@ pub fn build_zone_deposit_from_values(
     }
 
     let input_ids: Vec<_> = reserved_inputs.iter().map(Utxo::id).collect();
+    let deposit = DepositOp {
+        channel_id,
+        inputs: Inputs::try_new(input_ids).map_err(|error| ZoneTestError::SubmitDeposit {
+            message: format!("deposit input set exceeds bound: {error:?}"),
+        })?,
+        metadata,
+    };
+    let channel_notes = recreated_channel_notes(&deposit, &reserved_inputs);
     Ok(ZoneDeposit {
-        deposit: DepositOp {
-            channel_id,
-            inputs: Inputs::try_new(input_ids).map_err(|error| ZoneTestError::SubmitDeposit {
-                message: format!("deposit input set exceeds bound: {error:?}"),
-            })?,
-            metadata,
-        },
+        deposit,
         reserved_inputs,
+        channel_notes,
     })
 }
 
@@ -1506,6 +1562,93 @@ pub async fn submit_zone_deposit(
         })?;
 
     Ok(response.hash)
+}
+
+/// Splits one channel note into `dust_count` value-1 dust notes via a raw,
+/// node-funded `ChannelTransfer`, submitted straight to the node mempool (no
+/// zone-sdk involvement — mirrors how deposits are submitted).
+///
+/// The transfer is value-preserving, so the input note's value must equal
+/// `dust_count` (every output is value 1). The channel authorizes the transfer
+/// with the sequencer's accredited key at index 0 (single-signer channel,
+/// `transfer_threshold == 1`); the node appends and proves the fee transfer.
+pub async fn submit_zone_channel_split(
+    node_url: &Url,
+    channel_id: ChannelId,
+    signing_key: &Ed25519Key,
+    funding_pk: ZkPublicKey,
+    input_note: Utxo,
+    dust_count: usize,
+) -> Result<InscriptionId, ZoneTestError> {
+    let input_value = input_note.note.value;
+    if input_value != dust_count as u64 {
+        return Err(ZoneTestError::SplitTransfer {
+            message: format!(
+                "channel note value {input_value} must equal dust count {dust_count} \
+                 (each dust note is value 1)"
+            ),
+        });
+    }
+
+    let outputs =
+        Outputs::try_new(vec![Note::new(1, funding_pk); dust_count]).map_err(|error| {
+            ZoneTestError::SplitTransfer {
+                message: format!("dust outputs exceed bound: {error:?}"),
+            }
+        })?;
+    let transfer = ChannelTransferOp {
+        channel_id,
+        inputs: Inputs::new([input_note.id()]),
+        outputs,
+    };
+
+    let tx_builder = MantleTxBuilder::new()
+        .push_op(Op::ChannelTransfer(transfer))
+        .map_err(|error| ZoneTestError::SplitTransfer {
+            message: format!("too many ops: {error}"),
+        })?;
+
+    let node = NodeHttpClient::from_url(node_url.clone());
+    let response = node
+        .fund_tx(WalletFundRequestBody {
+            tip: None,
+            priority_fee_percent: 0,
+            tx_builder,
+            change_public_key: funding_pk,
+            funding_public_keys: vec![funding_pk],
+            max_tx_fee: GasCost::new(u64::MAX),
+        })
+        .await
+        .map_err(|error| ZoneTestError::SplitTransfer {
+            message: format!("funding failed: {error}"),
+        })?;
+
+    // The channel multi-sig proves the transfer over the funded tx hash; the
+    // funding appends its own fee transfer proof as the last op.
+    let funded_tx = response.funded_tx;
+    let tx_hash = funded_tx.hash();
+    let signature = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
+    let proof = ChannelMultiSigProof::try_new([IndexedSignature::new(0, signature)].into())
+        .map_err(|error| ZoneTestError::SplitTransfer {
+            message: format!("multi-sig proof assembly failed: {error:?}"),
+        })?;
+    let mut ops_proofs = OpsProofs::new_unchecked(vec![OpProof::ChannelMultiSigProof(proof)]);
+    if let Some(transfer_proof) = response.transfer_proof {
+        ops_proofs
+            .try_push(transfer_proof)
+            .map_err(|error| ZoneTestError::SplitTransfer {
+                message: format!("too many operation proofs: {error:?}"),
+            })?;
+    }
+
+    let signed_tx = SignedMantleTx::new(funded_tx, ops_proofs);
+    node.submit_transaction(&signed_tx)
+        .await
+        .map_err(|error| ZoneTestError::SplitTransfer {
+            message: format!("submit failed: {error}"),
+        })?;
+
+    Ok(tx_hash)
 }
 
 /// Builds and submits a single transaction that both creates the deposit note
@@ -1835,86 +1978,51 @@ fn build_atomic_deposit_op(
 /// Submits a channel withdraw signed by the active zone sequencer and publishes
 /// the withdraw inscription as part of the same SDK flow.
 ///
-/// TODO: rebuild on `CHANNEL_TRANSFER` + `CHANNEL_WITHDRAW`. A withdraw now
-///  only releases an existing channel note to the key it already carries, so
-///  paying a recipient an arbitrary amount first requires transferring a
-///  channel note to their key. That needs channel note tracking.
+/// The withdraw pays a single note of `amount` back to `funding_public_key`
+/// (self-withdraw). Inputs are selected automatically by the SDK
+/// (`WithdrawInputs::Auto`, best-fit largest-first, capped at 255 inputs).
 pub async fn submit_zone_withdraw(
-    _client: &SequencerClient,
+    client: &SequencerClient,
     _channel_id: ChannelId,
-    _funding_public_key: ZkPublicKey,
-    _amount: Value,
-    _inscription_data: Inscription,
+    funding_public_key: ZkPublicKey,
+    amount: Value,
+    inscription_data: Inscription,
 ) -> Result<ZoneWithdrawSubmission, ZoneTestError> {
-    Err(ZoneTestError::SubmitWithdraw {
-        message: "zone withdraw is unsupported until channel notes are tracked".to_owned(),
+    let (result, _cp) = client
+        .publish_atomic_withdraw(
+            inscription_data,
+            vec![WithdrawArg {
+                outputs: Outputs::new([Note::new(amount, funding_public_key)]),
+            }],
+            WithdrawInputs::Auto,
+        )
+        .await
+        .map_err(|error| ZoneTestError::SubmitWithdraw {
+            message: error.to_string(),
+        })?;
+
+    let PendingTx::AtomicWithdraw(info) = result.tx else {
+        return Err(ZoneTestError::SubmitWithdraw {
+            message: "publish_atomic_withdraw returned a non-AtomicWithdraw publish result"
+                .to_owned(),
+        });
+    };
+    let withdraw = info
+        .withdraws
+        .first()
+        .ok_or_else(|| ZoneTestError::SubmitWithdraw {
+            message: "atomic withdraw bundle had no withdraw ops".to_owned(),
+        })?
+        .op
+        .clone();
+
+    Ok(ZoneWithdrawSubmission {
+        withdraw,
+        publish: PublishResult {
+            tx: PendingTx::AtomicWithdraw(info),
+        },
     })
 }
-
-// pub async fn submit_zone_withdraw(
-//     client: &SequencerClient,
-//     channel_id: ChannelId,
-//     funding_public_key: ZkPublicKey,
-//     amount: Value,
-//     inscription_data: Inscription,
-// ) -> Result<ZoneWithdrawSubmission, ZoneTestError> {
-//     let withdraw = ChannelWithdrawOp {
-//         channel_id,
-//         outputs: Outputs::new([Note::new(amount, funding_public_key)]),
-//         withdraw_nonce: 0,
-//     };
-//
-//     let (tx, msg_id, inscription_sig) = client
-//         .prepare_tx(
-//             [Op::ChannelWithdraw(withdraw.clone())].into(),
-//             inscription_data,
-//         )
-//         .await
-//         .map_err(|error| ZoneTestError::SubmitWithdraw {
-//             message: error.to_string(),
-//         })?;
-//
-//     let withdraw_sig =
-//         client
-//             .sign_tx(&tx)
-//             .await
-//             .map_err(|error| ZoneTestError::SubmitWithdraw {
-//                 message: error.to_string(),
-//             })?;
-//
-//     let withdraw_proof =
-//         match ChannelMultiSigProof::try_new([IndexedSignature::new(0,
-// withdraw_sig)].into()) {             Ok(proof) => proof,
-//             Err(error) => {
-//                 return Err(ZoneTestError::SubmitWithdraw {
-//                     message: error.to_string(),
-//                 });
-//             }
-//         };
-//
-//     let signed_tx = SignedMantleTx::new(
-//         tx,
-//         vec![
-//             OpProof::ChannelMultiSigProof(withdraw_proof),
-//             OpProof::Ed25519Sig(inscription_sig),
-//         ],
-//     )
-//     .map_err(|error| ZoneTestError::SubmitWithdraw {
-//         message: error.to_string(),
-//     })?;
-//
-//     let (result, _cp) = client
-//         .submit_signed_tx(signed_tx, msg_id)
-//         .await
-//         .map_err(|error| ZoneTestError::SubmitWithdraw {
-//             message: error.to_string(),
-//         })?;
-//
-//     Ok(ZoneWithdrawSubmission {
-//         withdraw,
-//         publish: result,
-//     })
-// }
 
 /// Result of publishing an atomic inscription+withdraw bundle. Carries every
 /// withdraw op produced by the SDK (one per `WithdrawArg`, in submission
@@ -1960,7 +2068,7 @@ pub async fn publish_atomic_zone_withdraw(
         .collect::<Result<Vec<_>, ZoneTestError>>()?;
 
     let (result, _cp) = client
-        .publish_atomic_withdraw(inscription_data, withdraw_args)
+        .publish_atomic_withdraw(inscription_data, withdraw_args, WithdrawInputs::Auto)
         .await
         .map_err(|error| ZoneTestError::SubmitWithdraw {
             message: error.to_string(),

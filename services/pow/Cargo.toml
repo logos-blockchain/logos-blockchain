@@ -13,6 +13,7 @@ version.workspace     = true
 async-trait  = { workspace = true }
 futures      = { workspace = true }
 rand         = { workspace = true }
+rayon        = { workspace = true }
 serde        = { features = ["derive"], workspace = true }
 thiserror    = { workspace = true }
 tokio        = { features = ["sync"], workspace = true }

@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use lb_core::{
     crypto::{Hash, ZkHash},
     mantle::{
@@ -156,5 +158,9 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
 
     fn get_blocks_slot(&self) -> HashTrieMapSync<Hash, Slot> {
         self.ledger_state.pow.block_slots().clone()
+    }
+
+    fn get_pow_slot_window(&self) -> NonZeroU64 {
+        self.config.pow_config.reward.slot_window
     }
 }

@@ -1,5 +1,8 @@
 use core::{num::NonZeroU64, time::Duration};
-use std::fmt::{Debug, Display};
+use std::{
+    fmt::{Debug, Display},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use futures::StreamExt as _;
@@ -17,6 +20,7 @@ use lb_blend::{
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use overwatch::overwatch::{OverwatchHandle, commands::OverwatchCommand};
 use rand::{RngCore, rngs::OsRng};
+use rayon::ThreadPoolBuilder;
 use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -115,6 +119,7 @@ pub fn settings(
         minimum_network_size: NonZeroU64::new(minimum_network_size).unwrap(),
         cover: CoverTrafficSettings::default(),
         data_replication_factor: 0,
+        pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
     }
 }
 

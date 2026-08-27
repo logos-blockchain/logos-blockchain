@@ -4008,9 +4008,11 @@ name = "logos-blockchain-blend"
 version = "0.0.0"
 dependencies = [
  "logos-blockchain-blend-crypto",
+ "logos-blockchain-blend-membership",
  "logos-blockchain-blend-message",
  "logos-blockchain-blend-network",
  "logos-blockchain-blend-proofs",
+ "logos-blockchain-blend-provers",
  "logos-blockchain-blend-scheduling",
 ]
 
@@ -4026,6 +4028,16 @@ dependencies = [
  "num-bigint",
  "rs-merkle-tree",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "logos-blockchain-blend-membership"
+version = "0.0.0"
+dependencies = [
+ "logos-blockchain-key-management-system-keys",
+ "multiaddr",
+ "rand 0.8.6",
+ "serde",
 ]
 
 [[package]]
@@ -4067,9 +4079,10 @@ dependencies = [
  "libp2p",
  "libp2p-stream",
  "libp2p-swarm-test",
+ "logos-blockchain-blend-membership",
  "logos-blockchain-blend-message",
  "logos-blockchain-blend-proofs",
- "logos-blockchain-blend-scheduling",
+ "logos-blockchain-blend-provers",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
@@ -4107,18 +4120,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "logos-blockchain-blend-scheduling"
+name = "logos-blockchain-blend-provers"
 version = "0.0.0"
 dependencies = [
  "async-trait",
  "derivative",
- "fork_stream",
  "futures",
  "hex",
  "libp2p",
+ "logos-blockchain-blend-membership",
  "logos-blockchain-blend-message",
  "logos-blockchain-blend-proofs",
- "logos-blockchain-codec",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
@@ -4127,8 +4139,26 @@ dependencies = [
  "logos-blockchain-utils",
  "multiaddr",
  "rand 0.8.6",
- "serde",
+ "rayon",
  "test-log",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "logos-blockchain-blend-scheduling"
+version = "0.0.0"
+dependencies = [
+ "fork_stream",
+ "futures",
+ "logos-blockchain-blend-membership",
+ "logos-blockchain-blend-message",
+ "logos-blockchain-blend-proofs",
+ "logos-blockchain-blend-provers",
+ "logos-blockchain-cryptarchia-engine",
+ "logos-blockchain-log-targets",
+ "logos-blockchain-utils",
+ "rand 0.8.6",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -4166,6 +4196,7 @@ dependencies = [
  "logos-blockchain-utils",
  "overwatch",
  "rand 0.8.6",
+ "rayon",
  "serde",
  "serde_with",
  "test-log",
@@ -4182,6 +4213,7 @@ dependencies = [
  "cbindgen",
  "futures",
  "logos-blockchain-api-service",
+ "logos-blockchain-blend-service",
  "logos-blockchain-chain-leader-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
@@ -4484,6 +4516,7 @@ dependencies = [
  "logos-blockchain-poseidon2",
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
+ "logos-blockchain-zksign",
  "multiaddr",
  "num-bigint",
  "rand 0.8.6",
@@ -4733,6 +4766,7 @@ name = "logos-blockchain-ledger"
 version = "0.0.0"
 dependencies = [
  "derivative",
+ "divan",
  "logos-blockchain-blend-crypto",
  "logos-blockchain-blend-message",
  "logos-blockchain-blend-proofs",
@@ -4744,6 +4778,7 @@ dependencies = [
  "logos-blockchain-pol",
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
+ "logos-blockchain-zksign",
  "num-bigint",
  "rand 0.8.6",
  "rpds",
@@ -5004,6 +5039,7 @@ dependencies = [
  "logos-blockchain-zksign",
  "overwatch",
  "rand 0.8.6",
+ "rayon",
  "serde",
  "thiserror 2.0.18",
  "tokio",

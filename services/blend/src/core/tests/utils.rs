@@ -36,12 +36,13 @@ use lb_core::crypto::ZkHash;
 use lb_groth16::{AdditiveGroup as _, Fr, fr_from_bytes_unchecked, fr_to_bytes};
 use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_network_service::{NetworkService, backends::NetworkBackend};
-use lb_poq::CorePathAndSelectors;
+use lb_poq::{CorePathAndSelectors, KeyIndex};
 use lb_sdp_service::SdpMessage;
 use overwatch::{
     overwatch::{OverwatchHandle, commands::OverwatchCommand},
     services::{ServiceData, relay::OutboundRelay, state::StateUpdater},
 };
+use rayon::ThreadPoolBuilder;
 use tokio::sync::{
     broadcast::{self},
     mpsc, watch,
@@ -108,6 +109,7 @@ pub fn settings<BackendSettings>(
         minimum_network_size,
         data_replication_factor,
         activity_threshold_sensitivity: 1,
+        pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
     }
 }
 
@@ -473,6 +475,7 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
 {
     fn new(
         settings: ProofsGeneratorSettings,
+        _starting_key_index: KeyIndex,
         _core_proof_of_quota_generator: CorePoQGenerator,
     ) -> Self {
         Self(settings.public_inputs.leader.pol_epoch_nonce)

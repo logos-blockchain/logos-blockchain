@@ -1,5 +1,5 @@
 use lb_codec::{BinaryCodec, BinaryEncode as _};
-use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
+use lb_key_management_system_keys::keys::{ZkSignature, public_inputs_from_pks};
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
@@ -7,12 +7,13 @@ use crate::{
     events::{DepositNote, DepositRecreatedNotes, TxEvent, TxEventPayload},
     mantle::{
         Value,
+        batch::DeferredZkpVerification,
         channel::{Channels, Error},
         gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             ExecutableOperation, Inputs, InputsError, Outputs, PreverifiableOperation,
-            ProvableOperation, Utxos, VerifiableOperation, verification_mode,
-            verification_mode::VerificationMode,
+            ProvableOperation, Utxos, VerifiableOperation,
+            verification_mode::{self, VerificationMode},
         },
         ops::{OpId, SignedOp, channel::ChannelId},
         transactions::{
@@ -98,7 +99,11 @@ impl VerifiableOperation<verification_mode::StandardMode> for DepositOp {
     type Context<'a> = DepositValidationContext<'a>;
     type Error = Error;
 
-    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::Context<'_>,
+    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
         // Check that the channel exist
         if !context.channels.channels.contains_key(&self.channel_id) {
             return Err(Error::ChannelNotFound {
@@ -113,13 +118,14 @@ impl VerifiableOperation<verification_mode::StandardMode> for DepositOp {
             context.utxos,
         )?;
 
-        // Check the signature
+        // Defer the proof verification, so that the caller can batch it.
         let public_keys = self.inputs.get_pk(context.utxos)?;
-        if !ZkPublicKey::verify_multi(&public_keys, context.tx_hash_view.as_fr(), proof) {
-            return Err(Error::InvalidSignature);
-        }
-
-        Ok(())
+        let inputs = public_inputs_from_pks((*context.tx_hash_view.as_fr()).into(), &public_keys)
+            .map_err(|_| Error::InvalidSignature)?;
+        Ok(Some(DeferredZkpVerification::ZkSig(
+            *proof.as_proof(),
+            inputs,
+        )))
     }
 }
 

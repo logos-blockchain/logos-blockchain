@@ -3,6 +3,7 @@ use std::sync::LazyLock;
 use lb_codec::{BinaryCodec, BinaryEncode as _};
 use lb_groth16::{fr_from_bytes, fr_to_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_poc::PoCVerifierInput;
 use lb_poseidon2::{Digest, Fr, ZkHash};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -12,10 +13,12 @@ use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
         Note, Utxo, Value,
+        batch::DeferredZkpVerification,
         gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
-            VerifiableOperation, verification_mode, verification_mode::VerificationMode,
+            VerifiableOperation,
+            verification_mode::{self, VerificationMode},
         },
         ops::{OpId, SignedOp},
         transactions::{
@@ -217,7 +220,11 @@ impl VerifiableOperation<verification_mode::StandardMode> for LeaderClaimOp {
     type Context<'a> = LeaderClaimVerificationContext<'a>;
     type Error = LeaderClaimError;
 
-    fn verify(&self, proof: &Self::Proof, context: &Self::Context<'_>) -> Result<(), Self::Error> {
+    fn verify(
+        &self,
+        proof: &Self::Proof,
+        context: &Self::Context<'_>,
+    ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
         // Check that the nullifier isn't in the set
         if context.nullifiers.contains(&self.voucher_nullifier) {
             return Err(LeaderClaimError::DuplicatedVoucherNullifier);
@@ -228,16 +235,15 @@ impl VerifiableOperation<verification_mode::StandardMode> for LeaderClaimOp {
             return Err(LeaderClaimError::VouchersRootMismatch);
         }
 
-        // Check the proof of claim
-        if !proof.verify(&LeaderClaimPublic {
-            voucher_nullifier: self.voucher_nullifier.into(),
-            voucher_root: context.claimable_vouchers_root.0,
-            mantle_tx_hash: *context.tx_hash_view.as_fr(),
-        }) {
-            return Err(LeaderClaimError::InvalidPoC);
-        }
-
-        Ok(())
+        // Defer the proof verification, so that the caller can batch it.
+        Ok(Some(DeferredZkpVerification::LeaderClaim(
+            *proof.proof(),
+            PoCVerifierInput::new(
+                self.voucher_nullifier.into(),
+                context.claimable_vouchers_root.0,
+                *context.tx_hash_view.as_fr(),
+            ),
+        )))
     }
 }
 
@@ -287,7 +293,10 @@ mod tests {
     use lb_mmr::MerkleMountainRange;
 
     use super::*;
-    use crate::proofs::leader_claim_proof::LeaderClaimPrivate;
+    use crate::{
+        mantle::batch::{self, DeferredZkpVerifications},
+        proofs::leader_claim_proof::LeaderClaimPrivate,
+    };
 
     #[test]
     fn validate_accepts_valid_proof_of_claim() {
@@ -324,7 +333,14 @@ mod tests {
             tx_hash_view: &tx_hash_view,
         };
 
-        assert_eq!(op.verify(&proof, &context), Ok(()));
+        let deferred_zkp = op
+            .verify(&proof, &context)
+            .expect("stateful verification should succeed")
+            .expect("deferred ZKP verification should be returned");
+        std::iter::once(deferred_zkp)
+            .collect::<DeferredZkpVerifications>()
+            .verify()
+            .unwrap();
     }
 
     #[test]
@@ -427,9 +443,16 @@ mod tests {
         // The proof is verified against `op.voucher_nullifier`, which does not
         // match the proven voucher -> rejected. A voucher cannot be claimed under
         // a substituted nullifier.
-        assert_eq!(
-            op.verify(&proof, &context),
-            Err(LeaderClaimError::InvalidPoC)
-        );
+        let deferred_zkp = op
+            .verify(&proof, &context)
+            .expect("stateful verification should succeed")
+            .expect("deferred ZKP verification should be returned");
+        assert!(matches!(
+            std::iter::once(deferred_zkp)
+                .collect::<DeferredZkpVerifications>()
+                .verify()
+                .unwrap_err(),
+            batch::Error::InvalidLeaderClaimProofs
+        ));
     }
 }

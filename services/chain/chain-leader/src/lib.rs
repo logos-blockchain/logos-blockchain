@@ -649,11 +649,21 @@ where
                         ledger_config,
                         iter::once(&tx),
                     ) {
-                    Ok((new_state, _events)) => {
-                        ledger_state = new_state;
-                        valid_txs.push(tx);
-                        applied_any = true;
-                    }
+                    Ok((new_state, _events, deferred_zkps)) => match deferred_zkps.verify() {
+                        Ok(()) => {
+                            ledger_state = new_state;
+                            valid_txs.push(tx);
+                            applied_any = true;
+                        }
+                        Err(err) => {
+                            tracing::trace!(
+                                tx = ?tx.hash(),
+                                %err,
+                                "deferred ZKP verification failed during block assembly",
+                            );
+                            still_pending.push(tx);
+                        }
+                    },
                     Err(err) => {
                         tracing::trace!(
                             "tx {:?} not (yet) applicable during block assembly: {:?}",

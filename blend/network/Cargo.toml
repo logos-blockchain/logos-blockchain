@@ -17,9 +17,9 @@ either                        = { workspace = true }
 futures                       = { workspace = true }
 futures-timer                 = { workspace = true }
 hex                           = { workspace = true }
+lb-blend-membership           = { workspace = true }
 lb-blend-message              = { workspace = true }
 lb-blend-proofs               = { workspace = true }
-lb-blend-scheduling           = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
@@ -32,8 +32,9 @@ tracing                       = { workspace = true }
 
 [dev-dependencies]
 async-trait         = { workspace = true }
+lb-blend-membership = { features = ["unsafe-test-functions"], workspace = true }
 lb-blend-message    = { features = ["unsafe-test-functions"], workspace = true }
-lb-blend-scheduling = { features = ["unsafe-test-functions"], workspace = true }
+lb-blend-provers    = { features = ["unsafe-test-functions"], workspace = true }
 libp2p              = { features = ["plaintext", "tcp", "yamux"], workspace = true }
 libp2p-stream       = { workspace = true }
 libp2p-swarm-test   = { features = ["tokio"], workspace = true }

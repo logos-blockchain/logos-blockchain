@@ -164,6 +164,22 @@ impl CommonHttpClient {
         self.execute_request::<Res>(request).await
     }
 
+    pub async fn put<Req, Res>(
+        &self,
+        request_url: Url,
+        request_body: Option<&Req>,
+    ) -> Result<Res, Error>
+    where
+        Req: Serialize + ?Sized + Send + Sync,
+        Res: DeserializeOwned + Send + Sync,
+    {
+        let mut request = self.client.put(request_url);
+        if let Some(request_body) = request_body {
+            request = request.json(request_body);
+        }
+        self.execute_request::<Res>(request).await
+    }
+
     async fn execute_request<Res: DeserializeOwned>(
         &self,
         mut request: RequestBuilder,

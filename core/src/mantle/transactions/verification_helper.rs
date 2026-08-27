@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use rpds::HashTrieMapSync;
@@ -85,11 +87,15 @@ pub trait OperationVerificationHelper {
     /// Slots of the blocks a claim may anchor to, keyed by block hash;
     /// used for the window-of-acceptance check.
     fn get_blocks_slot(&self) -> HashTrieMapSync<Hash, Slot>;
+
+    /// Acceptance window, in slots, for the window-of-acceptance check.
+    /// Configured per-deployment.
+    fn get_pow_slot_window(&self) -> NonZeroU64;
 }
 
 #[cfg(test)]
 pub mod test_utils {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, num::NonZeroU64};
 
     use lb_cryptarchia_engine::{Epoch, Slot};
     use rpds::{HashTrieMapSync, HashTrieSetSync};
@@ -128,6 +134,7 @@ pub mod test_utils {
         current_epoch_nonce: ZkHash,
         previous_epoch_nonce: ZkHash,
         blocks_slot: HashTrieMapSync<Hash, Slot>,
+        pow_slot_window: NonZeroU64,
     }
 
     impl TestOperationVerificationHelper {
@@ -157,6 +164,7 @@ pub mod test_utils {
                 current_epoch_nonce: ZkHash::default(),
                 previous_epoch_nonce: ZkHash::default(),
                 blocks_slot: HashTrieMapSync::new_sync(),
+                pow_slot_window: NonZeroU64::new(100).expect("100 is not 0"),
             }
         }
 
@@ -219,6 +227,12 @@ pub mod test_utils {
             blocks_slot: impl IntoIterator<Item = (Hash, Slot)>,
         ) -> Self {
             self.blocks_slot = blocks_slot.into_iter().collect();
+            self
+        }
+
+        #[must_use]
+        pub const fn with_pow_slot_window(mut self, slot_window: NonZeroU64) -> Self {
+            self.pow_slot_window = slot_window;
             self
         }
     }
@@ -322,6 +336,10 @@ pub mod test_utils {
 
         fn get_blocks_slot(&self) -> HashTrieMapSync<Hash, Slot> {
             self.blocks_slot.clone()
+        }
+
+        fn get_pow_slot_window(&self) -> NonZeroU64 {
+            self.pow_slot_window
         }
     }
 }

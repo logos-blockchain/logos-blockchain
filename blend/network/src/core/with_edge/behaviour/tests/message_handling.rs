@@ -2,7 +2,7 @@ use core::time::Duration;
 
 use futures::{FutureExt as _, StreamExt as _, select};
 use futures_timer::Delay;
-use lb_blend_scheduling::serialize_encapsulated_message_with_verified_public_header;
+use lb_blend_message::serialize_encapsulated_message_with_verified_public_header;
 use lb_libp2p::SwarmEvent;
 use libp2p::PeerId;
 use libp2p_stream::Behaviour as StreamBehaviour;

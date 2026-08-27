@@ -16,7 +16,7 @@ pub use crate::keys::{
     },
     zk::{
         MAX_ZK_SIGNING_KEYS, PublicKey as ZkPublicKey, PublicKeys as ZkPublicKeys,
-        Signature as ZkSignature, UnsecuredZkKey, ZkKey,
+        Signature as ZkSignature, UnsecuredZkKey, ZkKey, public_inputs_from_pks,
     },
 };
 

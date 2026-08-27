@@ -49,7 +49,7 @@ use crate::{
         stake::StakeInference,
         tests::{config, generate_proof},
     },
-    mantle::{pow::PowState, sdp::SdpLedger},
+    mantle::sdp::SdpLedger,
 };
 
 type HeaderId = [u8; 32];
@@ -372,13 +372,13 @@ fn apply_block_to_ledger(
         .update_epoch_state::<HeaderId>(
             slot,
             &SdpLedger::new(0.into()),
-            &PowState::new(),
+            &crate::cryptarchia::tests::pow_state(),
             ledger.config(),
         )
         .expect("epoch state update");
     let id = block_id(parent, slot);
     let proof = generate_proof(&parent_state, &utxo, slot);
-    let (_, state, _) = ledger
+    let update = ledger
         .prepare_update::<_, _, MainnetGasProfile>(
             id,
             parent,
@@ -387,7 +387,9 @@ fn apply_block_to_ledger(
             uncle_slots,
             std::iter::empty::<&SignedMantleTx<Preverified>>(),
         )
-        .expect("ledger update");
-    ledger.commit_update(id, state);
+        .expect("ledger update")
+        .verify_batch_proofs()
+        .expect("batch proof verification");
+    ledger.commit_update(update);
     id
 }

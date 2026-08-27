@@ -4,21 +4,21 @@
 
 1. Download `logos-core` binaries:
 
-- `lgpd` (Logos Package Downloader): https://github.com/logos-co/logos-package-downloader/releases/tag/0.2.0
-- `lgpm` (Logos Package Manager): https://github.com/logos-co/logos-package-manager/releases/tag/0.2.0
-- `logoscore` (Logos Core CLI): https://github.com/logos-co/logos-logoscore-cli/releases/tag/0.2.0
+- `lgpd` (Logos Package Downloader): https://github.com/logos-co/logos-package-downloader/releases/latest
+- `lgpm` (Logos Package Manager): https://github.com/logos-co/logos-package-manager/releases/latest
+- `logoscore` (Logos Core CLI): https://github.com/logos-co/logos-logoscore-cli/releases/latest
 
 2. Download the Logos Blockchain module using the Logos Package Downloader:
 
 ```bash
-lgpd download blockchain_module --version 0.2.0 --output ./
-# writes ./blockchain_module-0.2.0.lgx
+lgpd download blockchain_module --version {{BLOCKCHAIN_MODULE_VERSION}} --output ./
+# writes ./blockchain_module-{{BLOCKCHAIN_MODULE_VERSION}}.lgx
 ```
 
 3. Install the Logos Blockchain module using the Logos Package Manager:
 
 ```bash
-lgpm --modules-dir ./modules install --file blockchain_module-0.2.0.lgx
+lgpm --modules-dir ./modules install --file blockchain_module-{{BLOCKCHAIN_MODULE_VERSION}}.lgx
 ```
 
 4. Launch the Logos Core CLI in daemon mode and load the blockchain module:
@@ -35,10 +35,7 @@ Generate a default configuration by connecting to the bootstrap peers:
 ```bash
 logoscore call blockchain_module generate_user_config '{
   "initial_peers": [
-    "/ip4/65.109.51.37/udp/3000/quic-v1/p2p/{TODO}",
-    "/ip4/65.109.51.37/udp/3001/quic-v1/p2p/{TODO}",
-    "/ip4/65.109.51.37/udp/3002/quic-v1/p2p/{TODO}",
-    "/ip4/65.109.51.37/udp/50001/quic-v1/p2p/{TODO}"
+{{INITIAL_PEERS}}
   ]
 }'
 ```
@@ -140,31 +137,6 @@ Having issues? Reach out to the Logos Blockchain team on [Discord][testnet-disco
     * If this is a release candidate but not the first one that has a GH release, then the previous tag is the version of previous release candidate for this release, e.g., `0.1.3-rc.2` compares against `0.1.3-rc.1`
     * If this is an actual release, then the previous tag is the latest release, e.g., `0.1.3` compares against `0.1.2`
 - [ ] Verify binaries are present for **Mac** and **Linux**
-- [ ] Replace `{TODO}` peer IDs:
-    * For a release candidate (for devnet), you must use:
-
-        ```
-            logoscore call blockchain_module generate_user_config '{
-                "initial_peers": [
-                    "/ip4/65.108.203.235/udp/3000/quic-v1/p2p/12D3KooWNbZTQ86TZ9MrZ2wm6iUFFj25AFTzFLUD7i6XkZHoUzU8",
-                    "/ip4/65.108.203.235/udp/3001/quic-v1/p2p/12D3KooWNhXaH4XTX6Pp66NDQZxZpXYQzeruwwraMvTxojz1QXPJ",
-                    "/ip4/65.108.203.235/udp/3002/quic-v1/p2p/12D3KooWNTLPg5uYPKgZCDvzyaWNwZNcwVKmfS2bNv52E9L9P7Hf",
-                    "/ip4/65.108.203.235/udp/50001/quic-v1/p2p/12D3KooWMULUG8RXC2esnfLcVzGHohf6KNPSswkCKa1mdpXz4tHH"
-                ]
-            }'
-        ```
-    * For a release (for testnet), you must use:
-
-        ```
-            logoscore call blockchain_module generate_user_config '{
-                "initial_peers": [
-                    "/ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWFrouXfmrR4nsLMtE7wu15DoMJ6VtoUtHinREZCvbWHar",
-                    "/ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWJRGau8M1rjT7R5e4YYsgdFhsMX35nRDtMwCDjxQkXAHz",
-                    "/ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWQXJavMDTRscjauFSgVAB1VLB6Rzpy2uY5SU9Tk7927tb",
-                    "/ip4/65.109.51.37/udp/50001/quic-v1/p2p/12D3KooWSQc7CcGtvWDPF1yCbBthFnQjprfCVHmfmNDUrSmqQsU1"
-                ]
-            }'
-        ```
 - [ ] Delete this checklist and publish
 
 [release-notion]: https://www.notion.so/nomos-tech/Internal-Devnet-Launch-February-2026-2fe261aa09df8025ad94e380933b4cf9#2ff261aa09df8058935ecb85aa587564

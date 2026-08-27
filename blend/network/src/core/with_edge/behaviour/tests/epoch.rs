@@ -1,7 +1,7 @@
 use core::time::Duration;
 
 use futures::StreamExt as _;
-use lb_blend_scheduling::membership::{Membership, Node};
+use lb_blend_membership::{Membership, Node};
 use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
 use lb_libp2p::SwarmEvent;
 use libp2p::{Multiaddr, PeerId};

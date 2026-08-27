@@ -9,9 +9,18 @@ use futures::StreamExt as _;
 use lb_core::{
     block::{Block, BlockTransactions, UncleHeaders},
     mantle::{
-        Note, SignedMantleTx, Utxo,
-        ops::leader_claim::{VoucherCm, VoucherSecret},
-        transactions::states::Preverified,
+        Note, Op, OpProof, RawMantleTx, SignedMantleTx, TxGasCalculator as _, Utxo,
+        gas::MainnetGasProfile,
+        ledger::{Inputs, Outputs},
+        ops::{
+            leader_claim::{VoucherCm, VoucherSecret},
+            transfer::TransferOp,
+        },
+        traits::Hashable as _,
+        transactions::{
+            GasPrices,
+            states::{Preverified, Unverified},
+        },
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic, check_winning},
     sdp::ServiceParameters,
@@ -22,7 +31,7 @@ use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 use lb_ledger::{
     LedgerState,
-    config::{BlendPoWConfig, ModulusShift, PoWConfig},
+    config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
 use lb_storage_service::{
@@ -336,6 +345,67 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     assert!(lib_rx.try_recv().is_err());
 }
 
+#[test]
+fn ledger_is_not_commited_if_block_contains_invalid_zkp() {
+    let config = ledger_config(NonZero::<u32>::new(1).unwrap());
+    let (zk_key, utxo) = utxo();
+    let genesis_id: HeaderId = [0; 32].into();
+    let mut cryptarchia = Cryptarchia::from_lib(
+        genesis_id,
+        LedgerState::from_utxos([utxo], &config),
+        genesis_id,
+        config,
+        lb_cryptarchia_engine::State::Bootstrapping,
+        Slot::new(0),
+        0,
+        UncleSlots::default(),
+    );
+
+    let fake_key = ZkKey::from(Fr::from(42u64));
+    assert_ne!(fake_key.to_public_key(), utxo.note.pk);
+    let (block, _) = try_build_block_with_transactions(
+        &cryptarchia,
+        genesis_id,
+        utxo,
+        &zk_key,
+        Slot::new(1),
+        UncleHeaders::empty(),
+        BlockTransactions::from([transfer_tx_with_fake_sig(utxo, &fake_key)]),
+    )
+    .expect("should find a winning slot");
+
+    let result = cryptarchia.try_apply_block(&block, block.header().slot());
+    assert!(matches!(result, Err(Error::BatchZkpVerification(_))));
+    assert!(
+        cryptarchia.ledger.state(&block.header().id()).is_none(),
+        "ledger state should not be committed"
+    );
+    assert_eq!(cryptarchia.tip(), genesis_id, "tip should not advance");
+}
+
+/// Creates a transfer tx with an fake sig.
+fn transfer_tx_with_fake_sig(utxo: Utxo, fake_key: &ZkKey) -> SignedMantleTx<Preverified> {
+    let mut output_note = Note::new(1, fake_key.to_public_key());
+    let fees = transfer_tx(utxo, output_note, fake_key)
+        .total_gas_cost::<MainnetGasProfile>(&GasPrices::default())
+        .unwrap();
+    output_note.value = utxo.note.value - fees.into_inner();
+
+    transfer_tx(utxo, output_note, fake_key)
+        .preverify()
+        .expect("a fake signature is only caught by the stateful checks")
+}
+
+fn transfer_tx(utxo: Utxo, output_note: Note, key: &ZkKey) -> SignedMantleTx<Unverified> {
+    let transfer_op = TransferOp::new(Inputs::new([utxo.id()]), Outputs::new([output_note]));
+    let mantle_tx = RawMantleTx([Op::Transfer(transfer_op)].into());
+    let ops_proofs = [OpProof::ZkSig(
+        ZkKey::multi_sign(std::slice::from_ref(key), &mantle_tx.hash().to_fr()).unwrap(),
+    )]
+    .into();
+    SignedMantleTx::new(mantle_tx, ops_proofs)
+}
+
 fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedMantleTx<Preverified>>) {
     let k = 3.try_into().unwrap();
     let config = ledger_config(k);
@@ -362,6 +432,24 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedMantleTx<Preverifie
     .unwrap();
 
     (cryptarchia, block)
+}
+
+/// A reward config with claiming disabled, standing in for a real deployment
+/// config in tests.
+fn disabled_reward_config() -> RewardPoWConfig {
+    RewardPoWConfig {
+        reward_pool_genesis: 1_000_000_000,
+        epoch_reward_genesis: 1_000_000,
+        initial_difficulty_seed: 1_000,
+        ema_smoothing_factor: 9,
+        ema_smoothing_precision: core::num::NonZeroU64::new(10).unwrap(),
+        target_claims_per_block: 100,
+        rate_num: 0,
+        rate_den: core::num::NonZeroU64::MIN,
+        target_claim_per_block: core::num::NonZeroU64::MIN,
+        expected_blocks_per_epoch: core::num::NonZeroU64::MIN,
+        slot_window: core::num::NonZeroU64::new(100).unwrap(),
+    }
 }
 
 #[must_use]
@@ -416,11 +504,12 @@ pub fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
                 max_step: 1.try_into().unwrap(),
                 target_transactions_per_block: 1.try_into().unwrap(),
             },
+            reward: disabled_reward_config(),
         },
     }
 }
 
-/// Builds a block by grinding through slots
+/// Builds a block with no trasaction by grinding through slots
 pub fn try_build_block(
     cryptarchia: &Cryptarchia,
     parent: HeaderId,
@@ -428,6 +517,27 @@ pub fn try_build_block(
     key: &ZkKey,
     start_slot: Slot,
     uncle_headers: UncleHeaders,
+) -> Option<(Block<SignedMantleTx<Preverified>>, Ed25519Key)> {
+    try_build_block_with_transactions(
+        cryptarchia,
+        parent,
+        utxo,
+        key,
+        start_slot,
+        uncle_headers,
+        BlockTransactions::empty(),
+    )
+}
+
+/// Builds a block carrying `transactions` by grinding through slots
+pub fn try_build_block_with_transactions(
+    cryptarchia: &Cryptarchia,
+    parent: HeaderId,
+    utxo: Utxo,
+    key: &ZkKey,
+    start_slot: Slot,
+    uncle_headers: UncleHeaders,
+    transactions: BlockTransactions<SignedMantleTx<Preverified>>,
 ) -> Option<(Block<SignedMantleTx<Preverified>>, Ed25519Key)> {
     let start_slot: u64 = start_slot.into();
     for slot in start_slot..=(start_slot + 1000) {
@@ -466,7 +576,7 @@ pub fn try_build_block(
             slot.into(),
             uncle_headers,
             proof,
-            BlockTransactions::empty(),
+            transactions,
             &signing_key,
         )
         .unwrap();

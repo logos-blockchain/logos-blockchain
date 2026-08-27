@@ -6,6 +6,7 @@ use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
         RawMantleTx, Value, VerificationError,
+        batch::DeferredZkpVerification,
         gas::{Gas, GasCost, GasOverflow, GasProfile, TxGasCalculator},
         ledger::{PreverifiableOperation, VerifiableOperation, verification_mode::StandardMode},
         ops::{
@@ -235,7 +236,7 @@ impl SignedMantleTx<Preverified> {
         proof: &OpProof,
         tx_hash_view: &TxHashView,
         helper: &impl OperationVerificationHelper,
-    ) -> Result<(), VerificationError> {
+    ) -> Result<Option<DeferredZkpVerification>, VerificationError> {
         match (op, proof) {
             (Op::ChannelInscribe(op), OpProof::Ed25519Sig(proof)) => {
                 let channel_inscribe_context = InscriptionValidationContext {
@@ -348,6 +349,7 @@ impl SignedMantleTx<Preverified> {
                     current_epoch_nonce: helper.get_current_epoch_nonce(),
                     previous_epoch_nonce: helper.get_previous_epoch_nonce(),
                     blocks_slot: helper.get_blocks_slot(),
+                    slot_window: helper.get_pow_slot_window(),
                 };
                 claim_pow_op
                     .verify(proof, &context)

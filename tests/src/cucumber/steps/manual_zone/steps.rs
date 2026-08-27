@@ -15,8 +15,8 @@ use super::{
         save_zone_checkpoint, start_named_sequencer,
         start_named_sequencer_with_pending_submit_depth, start_nodes_with_zone_resources,
         stop_zone_sequencer, submit_atomic_zone_deposit_transaction, submit_zone_channel_config,
-        submit_zone_deposit_transaction, submit_zone_multi_deposit_transaction,
-        submit_zone_withdraw_transaction,
+        submit_zone_channel_split_transaction, submit_zone_deposit_transaction,
+        submit_zone_multi_deposit_transaction, submit_zone_withdraw_transaction,
     },
     assertions::{
         assert_sorted_outcome, scan_indexer_for_payloads, wait_for_indexer_unordered,
@@ -27,9 +27,9 @@ use super::{
     support::{
         CustomRepublishDeps, PublishDeadline, balance_update_payload, collect_indexed_messages,
         collect_indexed_messages_exactly_once, ensure_zone_transactions_included,
-        parse_balance_payload, publish_message_with_retry, wait_for_channel_view,
-        wait_for_channel_wallet_counts, wait_for_channel_wallet_note, wait_for_deposit,
-        wait_for_exact_indexed_payload_count,
+        parse_balance_payload, publish_message_with_retry, wait_for_channel_transfer_input_count,
+        wait_for_channel_view, wait_for_channel_wallet_counts, wait_for_channel_wallet_note,
+        wait_for_deposit, wait_for_exact_indexed_payload_count,
         wait_for_finalized_deposit_via_sequencer_and_collect_mempool_pending,
         wait_for_finalized_withdraw_via_sequencer_and_collect_mempool_pending,
         wait_for_lib_advance, wait_for_on_chain_statuses_and_collect_mempool_pending,
@@ -694,6 +694,53 @@ async fn step_submit_zone_multi_deposit_transaction(
             .into_bytes()
             .try_into()
             .expect("Metadata too large for deposit op."),
+    )
+    .await
+}
+
+#[when(
+    expr = "I submit zone deposit transaction {string} into channel of {string} consuming {int} notes of value {int} with metadata {string}"
+)]
+async fn step_submit_zone_bulk_deposit_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    transaction_alias: String,
+    channel_alias: String,
+    count: usize,
+    value: u64,
+    metadata: String,
+) -> StepResult {
+    let input_values = vec![value; count];
+    submit_zone_multi_deposit_transaction(
+        world,
+        step,
+        transaction_alias,
+        channel_alias,
+        input_values,
+        metadata
+            .into_bytes()
+            .try_into()
+            .expect("Metadata too large for deposit op."),
+    )
+    .await
+}
+
+#[when(expr = "sequencer {string} splits deposit {string} into {int} dust notes as {string}")]
+async fn step_submit_zone_channel_split_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    deposit_alias: String,
+    dust_count: usize,
+    transaction_alias: String,
+) -> StepResult {
+    submit_zone_channel_split_transaction(
+        world,
+        step,
+        &sequencer_alias,
+        &deposit_alias,
+        dust_count,
+        transaction_alias,
     )
     .await
 }
@@ -1543,6 +1590,30 @@ async fn step_zone_indexer_returns_finalized_withdraw(
     wait_for_withdraw(indexer, &withdraw, Duration::from_secs(timeout_seconds))
         .await
         .map_err(|error| zone_step_error(step, &error))
+}
+
+#[cucumber::then(
+    expr = "the zone indexer returns a finalized channel transfer consuming {int} inputs in {int} seconds"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_zone_indexer_returns_finalized_channel_transfer_input_count(
+    world: &mut CucumberWorld,
+    step: &Step,
+    expected_inputs: usize,
+    timeout_seconds: u64,
+) -> StepResult {
+    let indexer = log_step_error(step, world.zone.indexer())?;
+
+    wait_for_channel_transfer_input_count(
+        indexer,
+        expected_inputs,
+        Duration::from_secs(timeout_seconds),
+    )
+    .await
+    .map_err(|error| zone_step_error(step, &error))
 }
 
 #[cucumber::then(

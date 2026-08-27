@@ -227,6 +227,10 @@ pub struct ZoneState {
     default_sequencer_alias: Option<String>,
     published_messages: HashMap<String, ZonePublishedMessage>,
     submitted_deposits: HashMap<String, (DepositOp, Value)>,
+    /// The channel notes each deposit re-created, keyed by deposit alias — so a
+    /// later channel split transfer can spend them without waiting on the
+    /// indexer.
+    deposit_channel_notes: HashMap<String, Vec<Utxo>>,
     submitted_withdraws: HashMap<String, ChannelWithdrawOp>,
     account_balances: HashMap<String, i64>,
     published_order: Vec<String>,
@@ -394,6 +398,24 @@ impl ZoneState {
 
     pub fn remember_submitted_deposit(&mut self, alias: String, deposit: DepositOp, amount: Value) {
         self.submitted_deposits.insert(alias, (deposit, amount));
+    }
+
+    pub fn remember_deposit_channel_notes(&mut self, alias: String, channel_notes: Vec<Utxo>) {
+        self.deposit_channel_notes.insert(alias, channel_notes);
+    }
+
+    pub fn resolve_deposit_channel_notes(
+        &self,
+        alias: impl AsRef<str>,
+    ) -> Result<&[Utxo], StepError> {
+        let alias = alias.as_ref();
+
+        self.deposit_channel_notes
+            .get(alias)
+            .map(Vec::as_slice)
+            .ok_or(StepError::LogicalError {
+                message: format!("Zone deposit channel notes for alias '{alias}' not found"),
+            })
     }
 
     pub fn resolve_submitted_deposit(
@@ -788,6 +810,7 @@ impl ZoneState {
         self.sequencers.clear();
         self.published_messages.clear();
         self.submitted_deposits.clear();
+        self.deposit_channel_notes.clear();
         self.submitted_withdraws.clear();
         self.account_balances.clear();
         self.published_order.clear();
@@ -931,6 +954,10 @@ pub struct CucumberWorld {
     pub wallets: SharedTrackedWallets,
     /// Manual: Mapping of scenario transaction aliases to submitted hashes.
     pub submitted_transactions: HashMap<String, TxHash>,
+    /// Manual: Wallet balances captured under a label, so a later step can
+    /// assert a wallet's balance strictly increased relative to the recorded
+    /// baseline (used by the `PoW` mining test to prove the reward landed).
+    pub recorded_wallet_balances: HashMap<String, u64>,
     /// Manual: Outcome of a transaction submission attempt, keyed by scenario
     /// alias, for scenarios that assert on submission being rejected rather
     /// than on later inclusion.
@@ -1145,6 +1172,10 @@ impl Debug for CucumberWorld {
             .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
             .field("wallets", &"SharedTrackedWallets")
             .field("submitted_transactions", &self.submitted_transactions.len())
+            .field(
+                "recorded_wallet_balances",
+                &self.recorded_wallet_balances.len(),
+            )
             .field("submission_outcomes", &self.submission_outcomes.len())
             .field("prepared_transactions", &self.prepared_transactions.len())
             .field("prepared_priority_fees", &self.prepared_priority_fees.len())

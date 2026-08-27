@@ -40,6 +40,21 @@ cryptarchia:
       max_step: 2
       damping_num: 1
       damping_den_offset: 1
+    reward:
+      # Token-reward PoW parameters. Payout is disabled by default
+      # (rate_num = 0), matching the pre-configurable behaviour.
+      reward_pool_genesis: 1000000000
+      epoch_reward_genesis: 1000000
+      initial_difficulty_seed: 1000
+      ema_smoothing_factor: 9
+      ema_smoothing_precision: 10
+      target_claims_per_block: 100
+      rate_num: 0
+      rate_den: 1
+      target_claim_per_block: 1
+      expected_blocks_per_epoch: 1
+      # Acceptance window in slots; must match the mining service.
+      slot_window: 100
   sdp_config:
     service_params:
       BN:
