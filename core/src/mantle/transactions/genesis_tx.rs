@@ -459,10 +459,18 @@ mod tests {
     // Helper function to create a basic signed transaction
     // Genesis transactions don't need verified proofs for Blob/Inscription ops
     fn create_trusted_tx(
-        mut ops: Vec<Op>,
+        ops: Vec<Op>,
         op_proofs_vec: Vec<OpProof>,
     ) -> SignedOps<Preverified, GenesisMode> {
         let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new([create_test_note(1000)]));
+        create_trusted_tx_with_transfer(transfer_op, ops.into_iter().collect(), op_proofs_vec)
+    }
+
+    fn create_trusted_tx_with_transfer(
+        transfer_op: TransferOp,
+        mut ops: Vec<Op>,
+        op_proofs_vec: Vec<OpProof>,
+    ) -> SignedOps<Preverified, GenesisMode> {
         let mut new_ops = vec![Op::Transfer(transfer_op)];
         new_ops.append(&mut ops);
         let mantle_tx = Ops::new_unchecked(new_ops);
@@ -474,7 +482,6 @@ mod tests {
         }
         SignedOps::from_parts_trusted(mantle_tx, op_proofs).unwrap()
     }
-
     #[test]
     fn test_inscription_fields() {
         // check inscription with channel id [1; 32] fails
@@ -727,5 +734,65 @@ mod tests {
         );
         let genesis_tx = GenesisTx::from_tx(tx).unwrap();
         assert_eq!(genesis_tx.cryptarchia_parameter(), param);
+    }
+
+    #[test]
+    fn from_tx_rejects_a_transfer_that_spends_an_input() {
+        let utxo = Utxo::new([0u8; 32], 0, create_test_note(1000));
+        let transfer_op = TransferOp::new(
+            Inputs::new([utxo.id()]),
+            Outputs::new([create_test_note(1000)]),
+        );
+        let tx = create_trusted_tx_with_transfer(
+            transfer_op,
+            vec![Op::ChannelInscribe(inscription_op(
+                ChannelId::from([0; 32]),
+                &cryptarchia_param(),
+                MsgId::root(),
+                Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+            ))],
+            vec![OpProof::Ed25519Sig(Ed25519Signature::zero())],
+        );
+
+        assert_eq!(GenesisTx::from_tx(tx), Err(Error::UnexpectedInput));
+    }
+
+    #[test]
+    fn into_genesis_ops_splits_the_transfer_the_inscription_and_the_declarations() {
+        let verifying_key = Ed25519PublicKey::from_bytes(&[0; 32]).unwrap();
+        let utxo = Utxo::new([0u8; 32], 0, create_test_note(1000));
+        let declare_op = sdp_declare_op(utxo, 0, verifying_key);
+        let inscribe_op = inscription_op(
+            ChannelId::from([0; 32]),
+            &cryptarchia_param(),
+            MsgId::root(),
+            verifying_key,
+        );
+        let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new([create_test_note(1000)]));
+        let tx = create_trusted_tx_with_transfer(
+            transfer_op.clone(),
+            vec![
+                Op::ChannelInscribe(inscribe_op.clone()),
+                Op::SDPDeclare(declare_op.clone()),
+            ],
+            vec![
+                OpProof::Ed25519Sig(Ed25519Signature::zero()),
+                Op::SDPDeclare(declare_op.clone()).sample_proof(),
+            ],
+        );
+        let genesis_tx = GenesisTx::from_tx(tx).expect("the genesis transaction is well formed");
+
+        let genesis_ops = genesis_tx.into_genesis_ops();
+
+        assert_eq!(genesis_ops.inscription.operation(), &inscribe_op);
+        assert_eq!(genesis_ops.transfer.operation(), &transfer_op);
+        assert_eq!(
+            genesis_ops
+                .declarations
+                .iter()
+                .map(SignedOperation::operation)
+                .collect::<Vec<_>>(),
+            vec![&declare_op]
+        );
     }
 }
