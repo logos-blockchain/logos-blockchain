@@ -190,7 +190,7 @@ pub mod placeholders {
 
     impl PlaceholderProof for ChannelMultiSigProof {
         fn placeholder() -> Self {
-            Self::new(IndexedSignatures::empty())
+            Self::new_unchecked(IndexedSignatures::empty())
         }
     }
 

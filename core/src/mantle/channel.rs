@@ -506,7 +506,8 @@ mod tests {
             channel_id,
             inputs: [note_id].into(),
         };
-        let empty_proof = ChannelMultiSigProof::new(IndexedSignatures::try_from(vec![]).unwrap());
+        let empty_proof =
+            ChannelMultiSigProof::new_unchecked(IndexedSignatures::try_from(vec![]).unwrap());
         let signed_withdraw: SignedOperation<_, _, StandardMode> =
             SignedOperation::new(withdraw_op, empty_proof).into_state_trusted();
 
@@ -532,7 +533,8 @@ mod tests {
             channel_id,
             inputs: [note_id].into(),
         };
-        let empty_proof = ChannelMultiSigProof::new(IndexedSignatures::try_from(vec![]).unwrap());
+        let empty_proof =
+            ChannelMultiSigProof::new_unchecked(IndexedSignatures::try_from(vec![]).unwrap());
         let signed_withdraw: SignedOperation<_, _, StandardMode> =
             SignedOperation::new(withdraw_op, empty_proof).into_state_trusted();
 

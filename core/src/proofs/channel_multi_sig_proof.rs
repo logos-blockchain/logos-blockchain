@@ -75,7 +75,7 @@ pub struct ChannelMultiSigProof {
 
 impl ChannelMultiSigProof {
     #[must_use]
-    pub const fn new(signatures: IndexedSignatures) -> Self {
+    pub const fn new_unchecked(signatures: IndexedSignatures) -> Self {
         Self { signatures }
     }
 
