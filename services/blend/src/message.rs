@@ -32,7 +32,7 @@ pub enum ProxyServiceMessage<InnerMessage> {
     Inner(InnerMessage),
     JoinAsCore {
         locator: Locator,
-        locked_note_id: NoteId,
+        service_note_id: NoteId,
         reply: oneshot::Sender<Result<DeclarationId, lb_sdp_service::api::Error>>,
     },
 }

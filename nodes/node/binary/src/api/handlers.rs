@@ -683,7 +683,7 @@ where
     make_request_and_return_response!(blend::blend_join_network::<BlendService, RuntimeServiceId>(
         &handle,
         req.locator,
-        req.locked_note_id
+        req.service_note_id
     ))
 }
 

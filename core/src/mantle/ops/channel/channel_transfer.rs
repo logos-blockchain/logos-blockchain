@@ -20,7 +20,7 @@ use crate::{
         transactions::{OperationVerificationHelper, hash::TxHashView, states::VerificationState},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
-    sdp::locked_notes::LockedNotes,
+    sdp::service_notes::ServiceNotes,
 };
 
 // ChannelTransfer = ChannelId Inputs Outputs — plain field-order concat.
@@ -45,7 +45,7 @@ impl OpId for ChannelTransferOp {
 
 pub struct ChannelTransferValidationContext<'a> {
     pub channels: &'a Channels,
-    pub locked_notes: &'a LockedNotes,
+    pub service_notes: &'a ServiceNotes,
     pub utxos: &'a Utxos,
     pub tx_hash_view: &'a TxHashView,
     pub op_index: usize,
@@ -117,7 +117,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for ChannelTransferOp 
 
         // Check that the inputs are valid and belong to the channel
         self.inputs.validate_in_channel(
-            context.locked_notes,
+            context.service_notes,
             context.channels,
             &self.channel_id,
             context.utxos,

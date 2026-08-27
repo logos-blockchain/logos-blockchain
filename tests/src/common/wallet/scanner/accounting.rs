@@ -19,7 +19,7 @@ pub struct ScannerAccounting {
     tracked_wallets: Vec<TrackedWalletKeys>,
     public_key_to_wallet: HashMap<ZkPublicKey, WalletId>,
     wallet_utxos: BTreeMap<WalletId, BTreeMap<NoteId, Utxo>>,
-    locked_note_ids: HashSet<NoteId>,
+    service_note_ids: HashSet<NoteId>,
     observed_transaction_hashes: BTreeSet<TxHash>,
 }
 
@@ -89,7 +89,7 @@ impl ScannerAccounting {
             tracked_wallets,
             public_key_to_wallet,
             wallet_utxos,
-            locked_note_ids: HashSet::new(),
+            service_note_ids: HashSet::new(),
             observed_transaction_hashes: BTreeSet::new(),
         })
     }
@@ -120,7 +120,7 @@ impl ScannerAccounting {
                     utxos_by_note
                         .iter()
                         .filter_map(|(note_id, utxo)| {
-                            (!self.locked_note_ids.contains(note_id)).then_some(*utxo)
+                            (!self.service_note_ids.contains(note_id)).then_some(*utxo)
                         })
                         .collect(),
                 )
@@ -167,10 +167,10 @@ impl ScannerAccounting {
                     }
                 }
                 Op::SDPDeclare(declaration) => {
-                    self.lock_note(declaration.locked_note_id);
+                    self.lock_note(declaration.service_note_id);
                 }
                 Op::SDPWithdraw(withdrawal) => {
-                    self.unlock_note(withdrawal.locked_note_id);
+                    self.unlock_note(withdrawal.service_note_id);
                 }
                 // `ChannelWithdraw` and `ChannelTransfer` only move notes in and
                 // out of a channel's ownership, which the wallet doesn't track.
@@ -187,7 +187,7 @@ impl ScannerAccounting {
     }
 
     fn remove_spent_note(&mut self, note_id: NoteId) {
-        self.locked_note_ids.remove(&note_id);
+        self.service_note_ids.remove(&note_id);
         for utxos_by_note in self.wallet_utxos.values_mut() {
             utxos_by_note.remove(&note_id);
         }
@@ -209,12 +209,12 @@ impl ScannerAccounting {
             .values()
             .any(|utxos_by_note| utxos_by_note.contains_key(&note_id))
         {
-            self.locked_note_ids.insert(note_id);
+            self.service_note_ids.insert(note_id);
         }
     }
 
     fn unlock_note(&mut self, note_id: NoteId) {
-        self.locked_note_ids.remove(&note_id);
+        self.service_note_ids.remove(&note_id);
     }
 }
 
@@ -285,7 +285,7 @@ mod tests {
         )
     }
 
-    fn sdp_declaration(locked_note_id: lb_core::mantle::NoteId) -> DeclarationMessage {
+    fn sdp_declaration(service_note_id: lb_core::mantle::NoteId) -> DeclarationMessage {
         let provider_key = Ed25519Key::from_bytes(&[42; 32]).public_key();
         let locator: Locator = "/ip4/127.0.0.1/tcp/9100"
             .parse()
@@ -296,7 +296,7 @@ mod tests {
             locators: locator.into(),
             provider_id: ProviderId::from(provider_key),
             zk_id: pk(9),
-            locked_note_id,
+            service_note_id,
         }
     }
 
@@ -392,7 +392,7 @@ mod tests {
             RawMantleTx(
                 [Op::SDPWithdraw(WithdrawMessage {
                     declaration_id: declaration.id(),
-                    locked_note_id: locked.id(),
+                    service_note_id: locked.id(),
                     nonce: 0,
                 })]
                 .into(),

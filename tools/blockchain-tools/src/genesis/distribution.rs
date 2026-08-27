@@ -71,13 +71,13 @@ pub enum DistributionError {
     #[error("Provider with ZK ID {0:?} is not a registered stakeholder")]
     ProviderNotStakeHolder(Box<ProviderInfo>),
 
-    #[error("Note already locked for service {0:?}")]
-    NoteLockedForService(ServiceType),
+    #[error("Note already used for service {0:?}")]
+    NoteAlreadyUsedForService(ServiceType),
 }
 
 /// `distribute` stake to stake holders.
 /// Provider has to be a stakeholder, because stake holders note id will be used
-/// as a locked note.
+/// as a service note.
 pub fn distribute<S, P>(
     stake_holders: S,
     providers: P,
@@ -92,7 +92,7 @@ where
 
     let transfer_op = GenesisTransferOp::new(stake_holders.into_iter(), faucet);
     let mut declarations = Vec::new();
-    let mut locked_services = HashSet::new();
+    let mut used_services = HashSet::new();
 
     for provider in providers {
         if !stake_holder_keys.contains(&provider.zk_id) {
@@ -101,8 +101,8 @@ where
             )));
         }
 
-        if !locked_services.insert((provider.zk_id, provider.service_type)) {
-            return Err(DistributionError::NoteLockedForService(
+        if !used_services.insert((provider.zk_id, provider.service_type)) {
+            return Err(DistributionError::NoteAlreadyUsedForService(
                 provider.service_type,
             ));
         }
@@ -113,7 +113,7 @@ where
                 locators: provider.locators,
                 provider_id: provider.provider_id.into(),
                 zk_id: provider.zk_id,
-                locked_note_id: utxo.id(),
+                service_note_id: utxo.id(),
             });
         }
     }
@@ -177,7 +177,7 @@ mod tests {
         assert_eq!(declarations.len(), 1);
         assert_eq!(declarations[0].zk_id, zk_id_1);
         assert_eq!(
-            declarations[0].locked_note_id,
+            declarations[0].service_note_id,
             transfer_op.utxo_by_index(0).unwrap().id(),
         );
     }
@@ -214,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn test_error_already_locked() {
+    fn test_error_already_used() {
         let zk_id = mock_zk_pk(1);
         let stake_holders = vec![StakeHolderInfo { zk_id, stake: 5000 }];
 
@@ -243,7 +243,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(DistributionError::NoteLockedForService(
+            Err(DistributionError::NoteAlreadyUsedForService(
                 ServiceType::BlendNetwork
             ))
         ));

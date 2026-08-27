@@ -1400,13 +1400,13 @@ async fn step_run_blend_sdp_declaration_cli(
     let user_config_path = node_user_config_path(world, &declarer_node_name)?;
     let locator = blend_core_locator_from_node_yaml(&user_config_path)?;
     let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
-    let locked_note_id =
+    let service_note_id =
         wait_for_blend_funded_note(world, &declarer_node_name, blend_zk_pk).await?;
-    let locked_note_id_json =
-        serde_json::to_string(&locked_note_id).map_err(|error| StepError::LogicalError {
-            message: format!("Failed to serialize locked note ID: {error}"),
+    let service_note_id_json =
+        serde_json::to_string(&service_note_id).map_err(|error| StepError::LogicalError {
+            message: format!("Failed to serialize service note ID: {error}"),
         })?;
-    let locked_note_id_hex = locked_note_id_json.trim_matches('"').to_owned();
+    let service_note_id_hex = service_note_id_json.trim_matches('"').to_owned();
 
     let declarer_api_base_url = world
         .nodes_info
@@ -1434,8 +1434,8 @@ async fn step_run_blend_sdp_declaration_cli(
         .arg(user_config_path)
         .arg("--blend-addr")
         .arg(format!("{locator}"))
-        .arg("--locked-note-id")
-        .arg(locked_note_id_hex)
+        .arg("--service-note-id")
+        .arg(service_note_id_hex)
         .arg("--node-address")
         .arg(declarer_api_base_url.to_string())
         .output()
@@ -1467,7 +1467,7 @@ async fn step_run_blend_sdp_declaration_api(
     let user_config_path = node_user_config_path(world, &declarer_node_name)?;
     let locator = blend_core_locator_from_node_yaml(&user_config_path)?;
     let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
-    let locked_note_id =
+    let service_note_id =
         wait_for_blend_funded_note(world, &declarer_node_name, blend_zk_pk).await?;
 
     let declarer_node_client = world
@@ -1481,7 +1481,7 @@ async fn step_run_blend_sdp_declaration_api(
         .clone();
 
     let declaration_id = declarer_node_client
-        .join_blend_network(locator, locked_note_id)
+        .join_blend_network(locator, service_note_id)
         .await
         .inspect_err(|error| {
             warn!(target: TARGET, "Step `{}` error: {error}", step.value);
@@ -1522,7 +1522,7 @@ async fn step_verify_blend_sdp_declaration_included(
     api_node_name: String,
 ) -> StepResult {
     let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
-    let locked_note_id =
+    let service_note_id =
         wait_for_blend_funded_note(world, &declarer_node_name, blend_zk_pk).await?;
 
     let step_timeout = Duration::from_secs(30);
@@ -1557,7 +1557,7 @@ async fn step_verify_blend_sdp_declaration_included(
         };
 
         if declarations.values().any(|declaration| {
-            declaration.locked_note_id == locked_note_id && declaration.zk_id == blend_zk_pk
+            declaration.service_note_id == service_note_id && declaration.zk_id == blend_zk_pk
         }) {
             info!(
                 target: TARGET,
