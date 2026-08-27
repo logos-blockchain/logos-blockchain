@@ -166,14 +166,14 @@ async fn wallet_onchain_value(
     step: &str,
     wallet_name: &str,
 ) -> Result<u64, StepError> {
-    let wallet =
-        world
-            .wallet_info
-            .get(wallet_name)
-            .cloned()
-            .ok_or_else(|| StepError::LogicalError {
-                message: format!("wallet '{wallet_name}' not found in world state"),
-            })?;
+    let wallet = world
+        .wallet_registry
+        .wallet_info
+        .get(wallet_name)
+        .cloned()
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("wallet '{wallet_name}' not found in world state"),
+        })?;
 
     let balance =
         current_wallet_output_balance(world, step, &wallet, WalletOutputState::OnChain).await?;
@@ -263,6 +263,7 @@ async fn step_wallet_balance_increased_by_claim_reward(
     let tx_hash = world.resolve_submitted_transaction(&claim_alias)?;
 
     let wallet = world
+        .wallet_registry
         .wallet_info
         .get(&wallet_name)
         .cloned()

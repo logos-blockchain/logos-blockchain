@@ -49,13 +49,13 @@ pub fn build_fork_group_scanner_configs(
         ),
     > = BTreeMap::new();
 
-    if world.node_groups.is_empty() {
+    if world.fork_groups.groups().is_empty() {
         groups.insert(
             String::new(),
             (world.all_node_names(), Vec::new(), BTreeMap::new()),
         );
     } else {
-        for (group_id, nodes) in &world.node_groups {
+        for (group_id, nodes) in world.fork_groups.groups() {
             groups.insert(
                 group_id.clone(),
                 (nodes.iter().cloned().collect(), Vec::new(), BTreeMap::new()),
@@ -63,19 +63,20 @@ pub fn build_fork_group_scanner_configs(
         }
     }
 
-    for wallet in world.wallet_info.values() {
+    for wallet in world.wallet_registry.wallet_info.values() {
         if !wallet.is_scanner_tracked_wallet() {
             continue;
         }
-        let group_id = if world.node_groups.is_empty() {
+        let group_id = if world.fork_groups.groups().is_empty() {
             world
-                .node_to_group
+                .fork_groups
+                .mapping()
                 .get(&wallet.node_name)
                 .cloned()
                 .unwrap_or_default()
         } else {
             world
-                .node_to_group
+                .fork_groups.mapping()
                 .get(&wallet.node_name)
                 .cloned()
                 .ok_or_else(|| StepError::LogicalError {
@@ -100,7 +101,7 @@ pub fn build_fork_group_scanner_configs(
             .insert(wallet.wallet_name.clone(), wallet.node_name.clone());
     }
 
-    if let Some(fee_wallet_account) = world.fee_state.wallet_account.clone() {
+    if let Some(fee_wallet_account) = world.wallet_registry.fee_state.wallet_account.clone() {
         let mut assigned = false;
         for (nodes, wallet_keys, wallet_to_node) in groups.values_mut() {
             if wallet_keys.is_empty() {
@@ -199,12 +200,12 @@ pub fn build_fork_group_scanner_configs(
             node_clients,
             wallet_to_node,
             group_nodes: nodes,
-            wallets: Arc::clone(&world.wallets),
-            observed_transaction_hashes: Arc::clone(&world.observed_transaction_hashes),
+            wallets: Arc::clone(&world.wallet_registry.wallets),
+            observed_transaction_hashes: Arc::clone(&world.scanner.observed_transaction_hashes),
             scanner_state: Arc::clone(&scanner_state),
             poll_interval: DEFAULT_SCANNER_POLL_INTERVAL,
             range_batch_size: DEFAULT_SCANNER_RANGE_BATCH_SIZE,
-            genesis_utxos: world.genesis_block_utxos.clone(),
+            genesis_utxos: world.chain.genesis_block_utxos.clone(),
             best_node_selector: Arc::clone(&selector),
         });
     }
@@ -221,7 +222,7 @@ fn scanner_seed_for_group(
 
     for seed in nodes
         .iter()
-        .filter_map(|node_name| world.wallet_scanner_seeds.get(node_name))
+        .filter_map(|node_name| world.scanner.seeds.get(node_name))
         .map(|seed| seed.filtered_for_wallets(wallet_keys))
     {
         let ScannerSeed::Snapshot {

@@ -51,8 +51,12 @@ pub async fn prepare_self_transfer_with_tip(
     let client = world.resolve_node_http_client(node_name)?;
     let prices = live_gas_prices(&client, step).await?;
 
-    let signed_tx =
-        fee_spec::self_transfer_paying_fee_at(&world.genesis_block_utxos, &account, &prices, tip);
+    let signed_tx = fee_spec::self_transfer_paying_fee_at(
+        &world.chain.genesis_block_utxos,
+        &account,
+        &prices,
+        tip,
+    );
 
     fee_spec::check_size_prediction(&signed_tx, &prices).map_err(|message| {
         StepError::StepFail {
@@ -195,11 +199,10 @@ fn record_prepared_priority_fee(
                 message: format!("Step `{}` error: {message}", step.value),
             },
         )?;
-    let funded_fee = fee_spec::net_balance_against(&world.genesis_block_utxos, signed_tx).map_err(
-        |message| StepError::StepFail {
+    let funded_fee = fee_spec::net_balance_against(&world.chain.genesis_block_utxos, signed_tx)
+        .map_err(|message| StepError::StepFail {
             message: format!("Step `{}` error: {message}", step.value),
-        },
-    )?;
+        })?;
     let expected_funded_fee = initial_mandatory_fee
         .checked_add(initial_reserve)
         .ok_or_else(|| StepError::StepFail {
@@ -294,6 +297,7 @@ pub async fn record_per_block_gas_prices(
 ) -> StepResult {
     let client = world.resolve_node_http_client(node_name)?;
     let genesis_id = world
+        .chain
         .genesis_block_id
         .ok_or_else(|| StepError::LogicalError {
             message: format!(
@@ -576,16 +580,16 @@ pub fn user_wallet_account(
     step: &Step,
     wallet_name: &str,
 ) -> Result<WalletAccount, StepError> {
-    let wallet_info =
-        world
-            .wallet_info
-            .get(wallet_name)
-            .ok_or_else(|| StepError::LogicalError {
-                message: format!(
-                    "Step `{}` error: unknown wallet `{wallet_name}`",
-                    step.value
-                ),
-            })?;
+    let wallet_info = world
+        .wallet_registry
+        .wallet_info
+        .get(wallet_name)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!(
+                "Step `{}` error: unknown wallet `{wallet_name}`",
+                step.value
+            ),
+        })?;
 
     match &wallet_info.wallet_type {
         WalletType::User { wallet_account } => Ok(wallet_account.clone()),
