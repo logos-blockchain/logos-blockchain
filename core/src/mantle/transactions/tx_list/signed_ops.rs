@@ -6,7 +6,7 @@ use crate::mantle::Op;
 use crate::mantle::{
     GasProfile, OpProofRef, TxGasCalculator, TxHash, VerificationError,
     gas::{Gas, GasCost, GasOverflow},
-    ledger::verification_mode::{StandardMode, VerificationMode},
+    ledger::verification_mode::{GenesisMode, StandardMode, VerificationMode},
     ops::{SignedOp, signed_op_error::OpProofMismatch},
     traits::{
         Hashable, MantleTx, PreverifiedMantleTransaction, SignedMantleTx, StorageSize, hashable,
@@ -65,19 +65,6 @@ impl<Mode: VerificationMode> SignedOps<Unverified, Mode> {
         Ok(signed_ops)
     }
 
-    /// Converts a `SignedOps<Unverified, Mode>` into a
-    /// `SignedOps<Preverified, Mode>` without performing any
-    /// verification.
-    ///
-    /// This function is intended for
-    /// [`GenesisTx`](crate::mantle::transactions::genesis_tx::GenesisTx) and
-    /// testing purposes only.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn into_preverified_trusted(self) -> SignedOps<Preverified, Mode> {
-        self.into_state_trusted()
-    }
-
     /// Pairs every op with a placeholder proof of the kind that op requires.
     ///
     /// The proofs are structurally valid but cryptographically meaningless, so
@@ -97,6 +84,15 @@ impl<Mode: VerificationMode> SignedOps<Unverified, Mode> {
 }
 
 impl SignedOps<Unverified, StandardMode> {
+    /// Converts a `SignedOps<Unverified, StandardMode>` into a
+    /// `SignedOps<Preverified, StandardMode>` without performing any
+    /// verification.
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
+    pub fn into_preverified_trusted_standard(self) -> SignedOps<Preverified, StandardMode> {
+        self.into_state_trusted()
+    }
+
     /// Runs stateless verification on the transaction, ensuring that each
     /// operation has a corresponding proof and that the proofs are of the
     /// correct type.
@@ -117,7 +113,17 @@ impl SignedOps<Unverified, StandardMode> {
     }
 }
 
-impl<Mode: VerificationMode> SignedOps<Preverified, Mode> {
+impl SignedOps<Unverified, GenesisMode> {
+    /// Converts a `SignedOps<Unverified, GenesisMode>` into a
+    /// `SignedOps<Preverified, GenesisMode>` without performing any
+    /// verification.
+    #[must_use]
+    pub fn into_preverified_trusted_genesis(self) -> SignedOps<Preverified, GenesisMode> {
+        self.into_state_trusted()
+    }
+}
+
+impl SignedOps<Preverified, GenesisMode> {
     /// Creates a new `SignedMantleTx<Preverified>` without performing any
     /// verification.
     ///
@@ -126,7 +132,7 @@ impl<Mode: VerificationMode> SignedOps<Preverified, Mode> {
     /// testing purposes only.
     #[doc(hidden)]
     pub fn from_parts_trusted(ops: Ops, ops_proofs: OpProofs) -> Result<Self, Error> {
-        Ok(SignedOps::from_parts(ops, ops_proofs)?.into_preverified_trusted())
+        Ok(SignedOps::from_parts(ops, ops_proofs)?.into_preverified_trusted_genesis())
     }
 }
 

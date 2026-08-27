@@ -2343,7 +2343,7 @@ mod tests {
 
         SignedOps::from_parts(ops, op_proofs)
             .unwrap()
-            .into_preverified_trusted()
+            .into_preverified_trusted_standard()
     }
 
     fn test_leader_proof() -> Groth16LeaderProof {

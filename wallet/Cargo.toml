@@ -28,6 +28,7 @@ tracing                       = { workspace = true }
 
 [dev-dependencies]
 bincode               = { workspace = true }
+lb-core               = { workspace = true, features = ["test-utils"] }
 lb-cryptarchia-engine = { workspace = true }
 lb-groth16            = { workspace = true }
 lb-pol                = { workspace = true }
