@@ -106,8 +106,8 @@ use crate::{
     membership::{self, ZkInfo, chain::BlendEpochState},
     message::{BlendPayload, ProcessedMessage, ServiceMessage},
     pending::{
-        Discarded, LocalEncapsulation, NextLocalMessage, PendingLocalMessages,
-        resolve_encapsulation,
+        EncapsulationResult, LocalEncapsulation, MessageKind, NextLocalMessage, PendingProposals,
+        PendingTransactions, next_local_message, resolve_encapsulation,
     },
 };
 
@@ -404,7 +404,7 @@ where
             current_public_info,
             crypto_processor,
             current_recovery_checkpoint,
-            pending_messages,
+            pending_transactions,
             message_scheduler,
             mut backend,
             mut rng,
@@ -458,9 +458,8 @@ where
                 crypto_processor,
                 message_scheduler.into(),
                 current_public_info,
-                pending_messages,
-                None,
             ),
+            pending_transactions,
             current_recovery_checkpoint,
         )
         .await;
@@ -525,7 +524,7 @@ async fn initialize<
         ProofsVerifier,
     >,
     ServiceState<Backend::Settings, Dispatcher::Settings>,
-    PendingLocalMessages,
+    PendingTransactions,
     SchedulerWrapper<BlakeRng, ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
     Backend,
     BlakeRng,
@@ -768,9 +767,9 @@ where
 
     // The transactions a previous run had queued, back in the shared queue that
     // also holds proposals.
-    let mut pending_messages = PendingLocalMessages::new();
+    let mut pending_transactions = PendingTransactions::new();
     for transaction in current_recovery_checkpoint.pending_transactions() {
-        pending_messages.queue_transaction(transaction.clone());
+        pending_transactions.queue(transaction.clone());
     }
 
     (
@@ -778,7 +777,7 @@ where
         current_epoch_public_info,
         crypto_processor,
         current_recovery_checkpoint,
-        pending_messages,
+        pending_transactions,
         message_scheduler,
         backend,
         rng,
@@ -842,6 +841,7 @@ async fn run_event_loop<
     sdp_relay: &OutboundRelay<SdpMessage>,
     rng: &mut Rng,
     current_epoch: CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
+    mut pending_transactions: PendingTransactions,
     mut recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
 ) -> RetiringEpoch<Rng, ProofsVerifier>
 where
@@ -854,7 +854,8 @@ where
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     RuntimeServiceId: Sync + Send,
 {
-    let mut current_epoch_stage = Stage::Current(Box::new(current_epoch));
+    let mut latest_secret_pol_info: Option<PolEpochInfo> = None;
+    let mut current_epoch_stage = current_epoch.into();
     loop {
         let epoch_outcome = match current_epoch_stage {
             Stage::Current(current) => {
@@ -869,6 +870,8 @@ where
                     sdp_relay,
                     rng,
                     *current,
+                    &mut pending_transactions,
+                    &mut latest_secret_pol_info,
                     recovery_checkpoint,
                 )
                 .await
@@ -885,6 +888,8 @@ where
                     sdp_relay,
                     rng,
                     *during_transition,
+                    &mut pending_transactions,
+                    &mut latest_secret_pol_info,
                     recovery_checkpoint,
                 )
                 .await
@@ -920,6 +925,41 @@ enum Stage<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng> {
             >,
         >,
     ),
+}
+
+impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
+    From<CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>>
+    for Stage<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
+{
+    fn from(
+        value: CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
+    ) -> Self {
+        Self::Current(Box::new(value))
+    }
+}
+
+impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
+    From<
+        CurrentEpochDuringTransition<
+            NodeId,
+            CorePoQGenerator,
+            ProofsGenerator,
+            ProofsVerifier,
+            Rng,
+        >,
+    > for Stage<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
+{
+    fn from(
+        value: CurrentEpochDuringTransition<
+            NodeId,
+            CorePoQGenerator,
+            ProofsGenerator,
+            ProofsVerifier,
+            Rng,
+        >,
+    ) -> Self {
+        Self::DuringTransition(Box::new(value))
+    }
 }
 
 /// How a stage ended.
@@ -972,6 +1012,8 @@ async fn run_current_epoch<
     sdp_relay: &OutboundRelay<SdpMessage>,
     rng: &mut Rng,
     mut current_epoch: CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
+    pending_transactions: &mut PendingTransactions,
+    latest_secret_pol_info: &mut Option<PolEpochInfo>,
     mut recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
 ) -> StageOutcome<
     NodeId,
@@ -995,20 +1037,30 @@ where
     loop {
         tokio::select! {
             Some(msg) = inbound_relay.next() => {
-                recovery_checkpoint = handle_service_message(msg, &mut current_epoch, blend_config, backend, recovery_checkpoint).await;
+                recovery_checkpoint = handle_service_message(msg, current_epoch.proposals_mut(), pending_transactions, blend_config, backend, recovery_checkpoint).await;
             }
             Some(incoming_message) = blend_messages.next() => {
                 let (scheduler, crypto) = current_epoch.decapsulation_borrows();
                 recovery_checkpoint = handle_incoming_blend_message(incoming_message, scheduler, None, crypto.receiver(), None, recovery_checkpoint);
             }
-            event = current_epoch.next_event() => {
-                recovery_checkpoint = handle_current_epoch_event(event, &mut current_epoch, rng, backend, payload_dispatcher, recovery_checkpoint).await;
+            event = current_epoch.next_event(pending_transactions) => {
+                recovery_checkpoint = handle_current_epoch_event(event, &mut current_epoch, pending_transactions, rng, backend, payload_dispatcher, recovery_checkpoint).await;
             }
             Some(pol_secret_info) = secret_pol_info_stream.next() => {
-                apply_or_hold_secret_pol_info(pol_secret_info, &mut current_epoch);
+                apply_or_hold_secret_pol_info(pol_secret_info, &mut current_epoch, latest_secret_pol_info);
             }
             Some(epoch_event) = remaining_epoch_stream.next() => {
-                return rotate::<_, _, _, Dispatcher, _, _, _, RuntimeServiceId>(epoch_event, current_epoch.into_components(), blend_config, backend, sdp_relay, recovery_checkpoint).await;
+                match epoch_event {
+                    // Not an epoch change, so this stage keeps everything it
+                    // has — queued proposals included. There is nothing to
+                    // drain here, but the expiry still has to be acknowledged.
+                    EpochEvent::TransitionPeriodExpired => {
+                        recovery_checkpoint = complete_transition_period(backend, sdp_relay, recovery_checkpoint).await;
+                    }
+                    EpochEvent::NewEpoch(new_epoch_info) => {
+                        return rotate::<_, _, _, Dispatcher, _, _, _, RuntimeServiceId>(new_epoch_info, current_epoch.into_components(), latest_secret_pol_info, blend_config, backend, recovery_checkpoint).await;
+                    }
+                }
             }
         }
     }
@@ -1052,6 +1104,8 @@ async fn run_during_transition<
         ProofsVerifier,
         Rng,
     >,
+    pending_transactions: &mut PendingTransactions,
+    latest_secret_pol_info: &mut Option<PolEpochInfo>,
     mut recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
 ) -> StageOutcome<
     NodeId,
@@ -1075,16 +1129,16 @@ where
     loop {
         tokio::select! {
             Some(msg) = inbound_relay.next() => {
-                recovery_checkpoint = handle_service_message(msg, during_transition.current_mut(), blend_config, backend, recovery_checkpoint).await;
+                recovery_checkpoint = handle_service_message(msg, during_transition.current_mut().proposals_mut(), pending_transactions, blend_config, backend, recovery_checkpoint).await;
             }
             Some(incoming_message) = blend_messages.next() => {
                 let (scheduler, previous_scheduler, crypto, previous_crypto) = during_transition.decapsulation_borrows();
                 recovery_checkpoint = handle_incoming_blend_message(incoming_message, scheduler, Some(previous_scheduler), crypto.receiver(), Some(previous_crypto), recovery_checkpoint);
             }
-            event = during_transition.next_event() => {
+            event = during_transition.next_event(pending_transactions) => {
                 match event {
                     DuringTransitionEvent::Current(event) => {
-                        recovery_checkpoint = handle_current_epoch_event(event, during_transition.current_mut(), rng, backend, payload_dispatcher, recovery_checkpoint).await;
+                        recovery_checkpoint = handle_current_epoch_event(event, during_transition.current_mut(), pending_transactions, rng, backend, payload_dispatcher, recovery_checkpoint).await;
                     }
                     DuringTransitionEvent::PreviousEpochReleaseRound(round_info, previous_epoch) => {
                         handle_release_round_for_old_epoch(round_info, rng, backend, payload_dispatcher, previous_epoch).await;
@@ -1092,10 +1146,22 @@ where
                 }
             }
             Some(pol_secret_info) = secret_pol_info_stream.next() => {
-                apply_or_hold_secret_pol_info(pol_secret_info, during_transition.current_mut());
+                apply_or_hold_secret_pol_info(pol_secret_info, during_transition.current_mut(), latest_secret_pol_info);
             }
             Some(epoch_event) = remaining_epoch_stream.next() => {
-                return rotate::<_, _, _, Dispatcher, _, _, _, RuntimeServiceId>(epoch_event, during_transition.into_components(), blend_config, backend, sdp_relay, recovery_checkpoint).await;
+                match epoch_event {
+                    // The epoch being drained is finished with, but this one is
+                    // not: `end_transition` keeps it whole, proposals and all.
+                    EpochEvent::TransitionPeriodExpired => {
+                        return StageOutcome::NewEpoch {
+                            next: during_transition.end_transition().into(),
+                            recovery_checkpoint: Box::new(complete_transition_period(backend, sdp_relay, recovery_checkpoint).await),
+                        };
+                    }
+                    EpochEvent::NewEpoch(new_epoch_info) => {
+                        return rotate::<_, _, _, Dispatcher, _, _, _, RuntimeServiceId>(new_epoch_info, during_transition.into_components(), latest_secret_pol_info, blend_config, backend, recovery_checkpoint).await;
+                    }
+                }
             }
         }
     }
@@ -1105,21 +1171,13 @@ where
 async fn handle_service_message<
     NodeId,
     Backend,
-    Rng,
-    ProofsGenerator,
     ProofsVerifier,
-    CorePoQGenerator,
     NetworkSettings,
     RuntimeServiceId,
 >(
     message: ServiceMessage<NodeId>,
-    current_epoch: &mut CurrentEpoch<
-        NodeId,
-        CorePoQGenerator,
-        ProofsGenerator,
-        ProofsVerifier,
-        Rng,
-    >,
+    pending_proposals: &mut PendingProposals,
+    pending_transactions: &mut PendingTransactions,
     blend_config: &RunningBlendConfig<Backend::Settings>,
     backend: &Backend,
     recovery_checkpoint: ServiceState<Backend::Settings, NetworkSettings>,
@@ -1132,16 +1190,14 @@ where
         ServiceMessage::Blend(BlendPayload::Transaction(transaction)) => {
             queue_transaction_for_encapsulation(
                 transaction,
-                current_epoch.pending_local_messages_mut(),
+                pending_transactions,
                 recovery_checkpoint,
             )
         }
         ServiceMessage::Blend(BlendPayload::BlockProposal(proposal)) => {
             let copies = NonZeroU64::new(blend_config.data_replication_factor.strict_add(1))
                 .expect("A block proposal is always sent at least once.");
-            current_epoch
-                .pending_local_messages_mut()
-                .queue_proposal(proposal, copies);
+            pending_proposals.queue(proposal, copies);
             recovery_checkpoint
         }
         ServiceMessage::GetNetworkInfo { reply } => {
@@ -1150,15 +1206,7 @@ where
             recovery_checkpoint
         }
         ServiceMessage::GetPendingTransactions { reply } => {
-            drop(
-                reply.send(
-                    current_epoch
-                        .pending_local_messages()
-                        .transactions()
-                        .cloned()
-                        .collect(),
-                ),
-            );
+            drop(reply.send(pending_transactions.iter().cloned().collect()));
             recovery_checkpoint
         }
     }
@@ -1184,6 +1232,7 @@ async fn handle_current_epoch_event<
         ProofsVerifier,
         Rng,
     >,
+    pending_transactions: &mut PendingTransactions,
     rng: &mut Rng,
     backend: &Backend,
     payload_dispatcher: &Dispatcher,
@@ -1198,33 +1247,44 @@ where
     ProofsVerifier: ProofsVerifierTrait,
 {
     match event {
-        CurrentEpochEvent::Encapsulated(Ok(encapsulation)) => {
-            let (pending_messages, crypto_processor, scheduler) =
-                current_epoch.scheduling_borrows();
-            match *encapsulation {
-                LocalEncapsulation::ProposalCopy(message) => {
-                    let checkpoint = schedule_local_encapsulated_message(
+        CurrentEpochEvent::Encapsulated(encapsulation_result) => match encapsulation_result {
+            EncapsulationResult::Complete(encapsulation) => {
+                let LocalEncapsulation { message, kind } = *encapsulation;
+                let (proposals, crypto_processor, scheduler) = current_epoch.scheduling_borrows();
+                match kind {
+                    MessageKind::Proposal => {
+                        let checkpoint = schedule_local_encapsulated_message(
+                            &message,
+                            crypto_processor,
+                            scheduler,
+                            recovery_checkpoint,
+                        );
+                        proposals.mark_copy_as_sent();
+                        checkpoint
+                    }
+                    MessageKind::Transaction => handle_local_transaction(
                         &message,
+                        pending_transactions,
                         crypto_processor,
                         scheduler,
                         recovery_checkpoint,
-                    );
-                    pending_messages.mark_proposal_copy_as_sent();
-                    checkpoint
+                    ),
                 }
-                LocalEncapsulation::Transaction(message) => handle_local_transaction(
-                    &message,
-                    pending_messages,
-                    crypto_processor,
-                    scheduler,
-                    recovery_checkpoint,
-                ),
             }
-        }
-        CurrentEpochEvent::Encapsulated(Err(())) => discard_unencapsulatable_message(
-            current_epoch.pending_local_messages_mut(),
-            recovery_checkpoint,
-        ),
+            // The head of whichever queue it came from can never be
+            // encapsulated, so it goes rather than blocking everything behind
+            // it.
+            EncapsulationResult::Discard(MessageKind::Proposal) => {
+                current_epoch.proposals_mut().discard_head();
+                recovery_checkpoint
+            }
+            EncapsulationResult::Discard(MessageKind::Transaction) => {
+                discard_unencapsulatable_transaction(pending_transactions, recovery_checkpoint)
+            }
+            EncapsulationResult::Retry => unreachable!(
+                "`encapsulate_next_local_message` turns the encapsulation result into the `None` that disables its branch, so that the loop waits rather than spinning on a branch with nothing to do."
+            ),
+        },
         CurrentEpochEvent::ReleaseRound(round_info) => {
             handle_release_round(
                 round_info,
@@ -1250,6 +1310,7 @@ fn apply_or_hold_secret_pol_info<NodeId, CorePoQGenerator, ProofsGenerator, Proo
         ProofsVerifier,
         Rng,
     >,
+    latest_secret_pol_info: &mut Option<PolEpochInfo>,
 ) where
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
 {
@@ -1259,11 +1320,11 @@ fn apply_or_hold_secret_pol_info<NodeId, CorePoQGenerator, ProofsGenerator, Proo
             pol_secret_info.winning_pol_info_stream,
             pol_secret_info.epoch,
         );
-        *current_epoch.latest_secret_pol_info_mut() = None;
+        *latest_secret_pol_info = None;
     } else {
         // Belongs to an upcoming epoch: keep it to seed that epoch's processor
         // when the rotation happens.
-        *current_epoch.latest_secret_pol_info_mut() = Some(pol_secret_info);
+        *latest_secret_pol_info = Some(pol_secret_info);
     }
 }
 
@@ -1279,11 +1340,11 @@ async fn rotate<
     CorePoQGenerator,
     RuntimeServiceId,
 >(
-    epoch_event: EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>>,
+    new_epoch_info: MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>,
     components: Components<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
+    latest_secret_pol_info: &mut Option<PolEpochInfo>,
     blend_config: &RunningBlendConfig<Backend::Settings>,
     backend: &mut Backend,
-    sdp_relay: &OutboundRelay<SdpMessage>,
     recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
 ) -> StageOutcome<
     NodeId,
@@ -1302,60 +1363,27 @@ where
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
-    let (
-        crypto_processor,
-        message_scheduler,
-        current_epoch_info,
-        mut pending_messages,
-        mut latest_secret_pol_info,
-    ) = components;
+    // The epoch's own components go in; whatever it also held — its queued
+    // proposals — is dropped here, which is the whole reason they live on it.
+    let (crypto_processor, message_scheduler, _) = components;
     match handle_epoch_event(
-        epoch_event,
+        new_epoch_info,
         blend_config,
         crypto_processor,
         message_scheduler,
-        current_epoch_info,
         recovery_checkpoint,
         backend,
-        sdp_relay,
-        &mut latest_secret_pol_info,
-        &mut pending_messages,
+        latest_secret_pol_info,
     )
     .await
     {
         HandleEpochEventOutput::Transitioning {
-            new_crypto_processor,
-            new_scheduler,
-            new_epoch_info,
+            current_epoch,
             new_recovery_checkpoint,
             old_epoch_components,
         } => StageOutcome::NewEpoch {
-            next: Stage::DuringTransition(Box::new(CurrentEpochDuringTransition::new(
-                CurrentEpoch::new(
-                    new_crypto_processor,
-                    new_scheduler,
-                    new_epoch_info,
-                    pending_messages,
-                    latest_secret_pol_info,
-                ),
-                *old_epoch_components,
-            ))),
-            recovery_checkpoint: Box::new(new_recovery_checkpoint),
-        },
-        HandleEpochEventOutput::TransitionCompleted {
-            current_crypto_processor,
-            current_scheduler,
-            new_recovery_checkpoint,
-            current_epoch_info,
-        } => StageOutcome::NewEpoch {
-            next: Stage::Current(Box::new(CurrentEpoch::new(
-                current_crypto_processor,
-                current_scheduler,
-                current_epoch_info,
-                pending_messages,
-                latest_secret_pol_info,
-            ))),
-            recovery_checkpoint: Box::new(new_recovery_checkpoint),
+            next: CurrentEpochDuringTransition::new(*current_epoch, *old_epoch_components).into(),
+            recovery_checkpoint: new_recovery_checkpoint,
         },
         HandleEpochEventOutput::Retiring { retiring_epoch } => {
             StageOutcome::Retiring(retiring_epoch)
@@ -1367,13 +1395,13 @@ where
 /// proofs.
 fn queue_transaction_for_encapsulation<BackendSettings, NetworkSettings>(
     transaction: Vec<u8>,
-    pending_messages: &mut PendingLocalMessages,
+    pending_transactions: &mut PendingTransactions,
     current_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
 ) -> ServiceState<BackendSettings, NetworkSettings>
 where
     BackendSettings: Clone,
 {
-    pending_messages.queue_transaction(transaction.clone());
+    pending_transactions.queue(transaction.clone());
     let mut state_updater = current_recovery_checkpoint.start_updating();
     state_updater.queue_unencapsulated_transaction(transaction);
     state_updater.commit_changes()
@@ -1397,68 +1425,59 @@ where
 /// anything else is looked at, so one that keeps failing would take everything
 /// queued behind it down with it.
 async fn encapsulate_next_local_message<NodeId, ProofsGenerator, ProofsVerifier, CorePoQGenerator>(
-    pending_messages: &PendingLocalMessages,
+    pending_proposals: &PendingProposals,
+    pending_transactions: &PendingTransactions,
     cryptographic_processor: &mut CurrentEpochCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
         ProofsGenerator,
         ProofsVerifier,
     >,
-) -> Option<Result<LocalEncapsulation, ()>>
+) -> Option<EncapsulationResult>
 where
     NodeId: Eq + Hash + 'static,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
 {
-    type Wrap = fn(EncapsulatedMessageWithVerifiedPublicHeader) -> LocalEncapsulation;
-
-    let (encapsulated, wrap_fn): (_, Wrap) = match pending_messages.next()? {
+    let (kind, encapsulated) = match next_local_message(pending_proposals, pending_transactions)? {
         NextLocalMessage::ProposalCopy(proposal) => (
+            MessageKind::Proposal,
             cryptographic_processor
                 .encapsulate_block_proposal_payload(proposal)
                 .await,
-            LocalEncapsulation::ProposalCopy,
         ),
         NextLocalMessage::Transaction(transaction) => (
+            MessageKind::Transaction,
             cryptographic_processor
                 .encapsulate_transaction_payload(transaction)
                 .await,
-            LocalEncapsulation::Transaction,
         ),
     };
 
-    resolve_encapsulation(encapsulated, wrap_fn)
-}
-
-/// Drops proposals left over from the epoch that just ended, saying so if there
-/// were any.
-fn discard_stale_proposals(pending_messages: &mut PendingLocalMessages) {
-    let discarded_proposals = pending_messages.discard_proposals();
-    if discarded_proposals > 0 {
-        tracing::warn!(
-            target: LOG_TARGET,
-            "Dropping {discarded_proposals} block proposal(s) still queued when the epoch ended."
-        );
+    match resolve_encapsulation(encapsulated, kind) {
+        // Not something the caller acts on, and handing it back would be worse
+        // than useless: the branch this feeds would then complete immediately
+        // every time round with nothing to do, which is a busy loop rather than
+        // a wait. `None` fails the branch's pattern and disables it instead.
+        EncapsulationResult::Retry => None,
+        processed => Some(processed),
     }
 }
 
 /// Drops the queued message that cannot be encapsulated, taking it out of the
 /// recovery state too so a restart does not bring it back to fail again.
-fn discard_unencapsulatable_message<BackendSettings, NetworkSettings>(
-    pending_messages: &mut PendingLocalMessages,
+fn discard_unencapsulatable_transaction<BackendSettings, NetworkSettings>(
+    pending_transactions: &mut PendingTransactions,
     current_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
 ) -> ServiceState<BackendSettings, NetworkSettings>
 where
     BackendSettings: Clone,
 {
-    match pending_messages.discard_head() {
-        // Proposals are not persisted, so there is nothing else to undo.
-        Some(Discarded::Proposal(_)) | None => current_recovery_checkpoint,
-        Some(Discarded::Transaction(transaction)) => {
-            let mut state_updater = current_recovery_checkpoint.start_updating();
-            state_updater.dequeue_unencapsulated_transaction(&transaction);
-            state_updater.commit_changes()
-        }
-    }
+    let Some(transaction) = pending_transactions.discard_head() else {
+        return current_recovery_checkpoint;
+    };
+    let mut state_updater = current_recovery_checkpoint.start_updating();
+    state_updater.dequeue_unencapsulated_transaction(&transaction);
+    state_updater.commit_changes()
 }
 
 /// Processes a transaction whose wait for a `PoW` solution is over.
@@ -1472,7 +1491,7 @@ fn handle_local_transaction<
     CorePoQGenerator,
 >(
     encapsulation: &EncapsulatedMessageWithVerifiedPublicHeader,
-    pending_messages: &mut PendingLocalMessages,
+    pending_transactions: &mut PendingTransactions,
     cryptographic_processor: &CurrentEpochCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1499,7 +1518,7 @@ where
         current_recovery_checkpoint,
     );
 
-    let transaction = pending_messages.mark_transaction_as_sent();
+    let transaction = pending_transactions.mark_as_sent();
     let mut state_updater = recovery_checkpoint.start_updating();
     state_updater.dequeue_unencapsulated_transaction(&transaction);
     state_updater.commit_changes()
@@ -1567,9 +1586,7 @@ async fn retire<
 /// available, leadership-proof generation is enabled on the new processor right
 /// away. It ignores the transition period expiration event and returns the
 /// previous cryptographic processor as is.
-#[expect(clippy::too_many_arguments, reason = "necessary for epoch handling")]
 #[expect(clippy::too_many_lines, reason = "necessary for epoch handling")]
-#[expect(clippy::cognitive_complexity, reason = "necessary for epoch handling")]
 async fn handle_epoch_event<
     NodeId,
     ProofsGenerator,
@@ -1580,7 +1597,7 @@ async fn handle_epoch_event<
     CorePoQGenerator,
     RuntimeServiceId,
 >(
-    event: EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>>,
+    new_epoch_info: MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>,
     settings: &RunningBlendConfig<Backend::Settings>,
     current_cryptographic_processor: CurrentEpochCryptographicProcessor<
         NodeId,
@@ -1593,12 +1610,9 @@ async fn handle_epoch_event<
         ProcessedMessage,
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
-    current_epoch_info: CoreEpochPublicInfo<NodeId>,
     current_recovery_checkpoint: ServiceState<Backend::Settings, NetworkSettings>,
     backend: &mut Backend,
-    sdp_relay: &OutboundRelay<SdpMessage>,
     current_secret_info: &mut Option<PolEpochInfo>,
-    pending_messages: &mut PendingLocalMessages,
 ) -> HandleEpochEventOutput<
     NodeId,
     Rng,
@@ -1615,8 +1629,8 @@ where
     ProofsVerifier: ProofsVerifierTrait,
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
 {
-    match event {
-        EpochEvent::NewEpoch(MaybeEmptyCoreEpochInfo::NonEmpty(core_epoch_info)) => {
+    match new_epoch_info {
+        MaybeEmptyCoreEpochInfo::NonEmpty(core_epoch_info) => {
             let CoreEpochInfo {
                 core_poq_generator: new_core_poq_generator,
                 public: new_epoch_info,
@@ -1628,11 +1642,6 @@ where
             // Queued proposals go with it, and for the same reason: the rotation
             // is what makes them unsendable. Anything not yet encapsulated would
             // now draw on the new epoch's leadership quota — one message's worth
-            // per winning slot — spending it on a block the chain has moved past
-            // instead of on the one this node is about to produce. What was
-            // already encapsulated is not here; it is in the old scheduler, which
-            // goes on releasing it for the transition period.
-            discard_stale_proposals(pending_messages);
             let (
                 _,
                 _,
@@ -1744,26 +1753,28 @@ where
 
             let (new_scheduler, old_scheduler) = current_scheduler
                 .rotate_epoch(new_scheduler_epoch_info, settings.scheduler_settings());
+            let new_recovery_checkpoint = ServiceState::with_epoch(
+                new_epoch_info.epoch,
+                pending_transactions,
+                new_epoch_blending_token_collector,
+                Some(old_epoch_blending_token_collector),
+                state_updater,
+            )
+            .expect("service state should be created successfully");
             HandleEpochEventOutput::Transitioning {
-                new_crypto_processor: new_processor,
-                new_scheduler,
+                current_epoch: Box::new(CurrentEpoch::new(
+                    new_processor,
+                    new_scheduler,
+                    new_epoch_info,
+                )),
                 old_epoch_components: Box::new(TransitioningEpoch::new(
                     old_cryptographic_processor,
                     old_scheduler,
                 )),
-                new_recovery_checkpoint: ServiceState::with_epoch(
-                    new_epoch_info.epoch,
-                    pending_transactions,
-                    new_epoch_blending_token_collector,
-                    Some(old_epoch_blending_token_collector),
-                    state_updater,
-                )
-                .expect("service state should be created successfully"),
-                new_epoch_info,
+                new_recovery_checkpoint: Box::new(new_recovery_checkpoint),
             }
         }
-        EpochEvent::NewEpoch(MaybeEmptyCoreEpochInfo::Empty { epoch, epoch_nonce }) => {
-            discard_stale_proposals(pending_messages);
+        MaybeEmptyCoreEpochInfo::Empty { epoch, epoch_nonce } => {
             tracing::info!(target: LOG_TARGET, "New epoch event received, but no epoch info is available due to empty membership set.");
             let old_cryptographic_processor = current_cryptographic_processor.rotate_epoch();
             let (_, _, _, _, _, current_epoch_blending_token_collector, _, _) =
@@ -1788,21 +1799,37 @@ where
                 )),
             }
         }
-        EpochEvent::TransitionPeriodExpired => {
-            let mut state_updater = current_recovery_checkpoint.start_updating();
-
-            if let Some(old_token_collector) = state_updater.clear_old_epoch_token_collector() {
-                handle_epoch_transition_expired(backend, old_token_collector, sdp_relay).await;
-            }
-
-            HandleEpochEventOutput::TransitionCompleted {
-                current_crypto_processor: current_cryptographic_processor,
-                current_scheduler,
-                current_epoch_info,
-                new_recovery_checkpoint: state_updater.commit_changes(),
-            }
-        }
     }
+}
+
+/// Handles [`EpochEvent::TransitionPeriodExpired`]: the epoch that was being
+/// drained is finished with, and what it earned is submitted.
+///
+/// Takes nothing belonging to the current epoch, because the transition period
+/// ending is not an epoch change — which is what lets the caller keep that
+/// epoch whole rather than taking it apart and putting it back together.
+async fn complete_transition_period<
+    Backend,
+    NodeId,
+    Rng,
+    ProofsVerifier,
+    NetworkSettings,
+    RuntimeServiceId,
+>(
+    backend: &mut Backend,
+    sdp_relay: &OutboundRelay<SdpMessage>,
+    current_recovery_checkpoint: ServiceState<Backend::Settings, NetworkSettings>,
+) -> ServiceState<Backend::Settings, NetworkSettings>
+where
+    Backend: BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId>,
+    NodeId: Clone + Eq + Hash + Send,
+    NetworkSettings: Clone,
+{
+    let mut state_updater = current_recovery_checkpoint.start_updating();
+    if let Some(old_token_collector) = state_updater.clear_old_epoch_token_collector() {
+        handle_epoch_transition_expired(backend, old_token_collector, sdp_relay).await;
+    }
+    state_updater.commit_changes()
 }
 
 /// Handles [`EpochEvent::TransitionPeriodExpired`].
@@ -1841,35 +1868,10 @@ enum HandleEpochEventOutput<
     CorePoQGenerator,
 > {
     Transitioning {
-        new_crypto_processor: CurrentEpochCryptographicProcessor<
-            NodeId,
-            CorePoQGenerator,
-            ProofsGenerator,
-            ProofsVerifier,
-        >,
-        new_scheduler: EpochMessageScheduler<
-            Rng,
-            ProcessedMessage,
-            EncapsulatedMessageWithVerifiedPublicHeader,
-        >,
-        new_epoch_info: CoreEpochPublicInfo<NodeId>,
-        new_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
+        current_epoch:
+            Box<CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>>,
+        new_recovery_checkpoint: Box<ServiceState<BackendSettings, NetworkSettings>>,
         old_epoch_components: Box<TransitioningEpoch<Rng, ProofsVerifier>>,
-    },
-    TransitionCompleted {
-        current_crypto_processor: CurrentEpochCryptographicProcessor<
-            NodeId,
-            CorePoQGenerator,
-            ProofsGenerator,
-            ProofsVerifier,
-        >,
-        current_scheduler: EpochMessageScheduler<
-            Rng,
-            ProcessedMessage,
-            EncapsulatedMessageWithVerifiedPublicHeader,
-        >,
-        current_epoch_info: CoreEpochPublicInfo<NodeId>,
-        new_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
     },
     Retiring {
         retiring_epoch: Box<RetiringEpoch<Rng, ProofsVerifier>>,

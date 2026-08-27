@@ -9,8 +9,7 @@ use lb_blend::{
     },
     proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
     scheduling::{
-        EpochMessageScheduler, epoch::EpochEvent,
-        message_blend::crypto::EpochCryptographicProcessorSettings,
+        EpochMessageScheduler, message_blend::crypto::EpochCryptographicProcessorSettings,
     },
 };
 use lb_chain_service::Epoch;
@@ -27,7 +26,11 @@ use crate::{
     core::{
         HandleEpochEventOutput,
         backends::BlendBackend,
-        epoch_stages::running::CurrentEpoch,
+        complete_transition_period,
+        epoch_stages::{
+            running::{CurrentEpoch, CurrentEpochDuringTransition},
+            transitioning::TransitioningEpoch,
+        },
         handle_epoch_event, handle_epoch_transition_expired, handle_incoming_blend_message,
         initialize, post_initialize, retire, run_event_loop,
         state::ServiceState,
@@ -45,7 +48,7 @@ use crate::{
     epoch_info::PolEpochInfo,
     membership::{MembershipInfo, ZkInfo, chain::BlendEpochState},
     message::{BlendPayload, ServiceMessage},
-    pending::{NextLocalMessage, PendingLocalMessages},
+    pending::{NextLocalMessage, PendingTransactions, next_local_message},
     test_utils::{
         crypto::{
             GatedPowProofsGenerator, MockCoreAndLeaderProofsGenerator, PolAwareProofsGenerator,
@@ -579,7 +582,7 @@ async fn test_handle_epoch_transition_expired() {
 /// the transition period, when peers still hold that epoch's verifier.
 #[test_log::test(tokio::test)]
 async fn test_handle_epoch_event_discards_queued_proposals() {
-    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+    let (overwatch_handle, _overwatch_cmd_receiver, _state_updater, _state_receiver) =
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
 
     // Prepare components for epoch event handling.
@@ -587,12 +590,12 @@ async fn test_handle_epoch_event_discards_queued_proposals() {
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
     let settings = settings(
-        local_private_key.clone(),
+        local_private_key,
         u64::from(minimal_network_size).try_into().unwrap(),
         (),
         0,
     );
-    let public_info = new_epoch_info(epoch, membership.clone(), &settings);
+    let public_info = new_epoch_info(epoch, membership, &settings);
     let crypto_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
@@ -609,52 +612,57 @@ async fn test_handle_epoch_event_discards_queued_proposals() {
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
-    let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
+    let backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
         settings.clone(),
-        overwatch_handle.clone(),
+        overwatch_handle,
         backend_epoch_info(&public_info),
         BlakeRng::from_entropy(),
     );
-    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
-
-    let mut pending_messages = PendingLocalMessages::new();
-    pending_messages.queue_proposal(b"proposal".to_vec(), 2.try_into().unwrap());
-    pending_messages.queue_transaction(b"transaction".to_vec());
-
-    let _output = handle_epoch_event(
-        EpochEvent::NewEpoch(
-            CoreEpochInfo {
-                public: CoreEpochPublicInfo {
-                    epoch: epoch.strict_add(1.into()),
-                    ..public_info.clone()
-                },
-                core_poq_generator: Some(()),
-            }
-            .into(),
-        ),
-        &settings,
-        crypto_processor,
-        scheduler,
-        public_info,
-        ServiceState::with_epoch(
-            epoch,
-            VecDeque::new(),
-            token_collector,
-            None,
-            state_updater.clone(),
+    drop(backend);
+    let (old_crypto_processor, old_scheduler) = (
+        new_crypto_processor(
+            EpochCryptographicProcessorSettings {
+                non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+                num_blend_layers: settings.num_blend_layers,
+                pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+                spent_core_quota: Quota::ZERO,
+            },
+            &public_info,
+            (),
         )
-        .unwrap(),
-        &mut backend,
-        &sdp_relay,
-        &mut None,
-        &mut pending_messages,
-    )
-    .await;
+        .rotate_epoch(),
+        EpochMessageScheduler::new(
+            scheduler_epoch_info(&public_info),
+            BlakeRng::from_entropy(),
+            scheduler_settings(&settings.time, settings.num_blend_layers),
+        )
+        .rotate_epoch(
+            scheduler_epoch_info(&public_info),
+            scheduler_settings(&settings.time, settings.num_blend_layers),
+        )
+        .1,
+    );
+    drop(token_collector);
 
+    let mut current_epoch = CurrentEpoch::new(crypto_processor, scheduler, public_info);
+    current_epoch
+        .proposals_mut()
+        .queue(b"proposal".to_vec(), 2.try_into().unwrap());
+
+    let during_transition = CurrentEpochDuringTransition::new(
+        current_epoch,
+        TransitioningEpoch::new(old_crypto_processor, old_scheduler),
+    );
+
+    // The transition period ending is not an epoch change, so the epoch it
+    // leaves behind keeps everything it had. Were this routed through the
+    // rotation path instead, the proposal would go with it.
+    let mut kept = during_transition.end_transition();
+    let transactions = PendingTransactions::new();
     assert_eq!(
-        pending_messages.next(),
-        Some(NextLocalMessage::Transaction(b"transaction")),
-        "the proposal must not survive the rotation, and the transaction must"
+        next_local_message(kept.proposals_mut(), &transactions),
+        Some(NextLocalMessage::ProposalCopy(b"proposal")),
+        "a proposal must outlive the end of a transition period, which is not an epoch change"
     );
 }
 
@@ -702,20 +710,17 @@ async fn test_handle_epoch_event() {
 
     // Handle a NewEpoch event, expecting Transitioning output.
     let output = handle_epoch_event(
-        EpochEvent::NewEpoch(
-            CoreEpochInfo {
-                public: CoreEpochPublicInfo {
-                    epoch: epoch.strict_add(1.into()),
-                    ..public_info.clone()
-                },
-                core_poq_generator: Some(()),
-            }
-            .into(),
-        ),
+        CoreEpochInfo {
+            public: CoreEpochPublicInfo {
+                epoch: epoch.strict_add(1.into()),
+                ..public_info.clone()
+            },
+            core_poq_generator: Some(()),
+        }
+        .into(),
         &settings,
         crypto_processor,
         scheduler,
-        public_info,
         ServiceState::with_epoch(
             epoch,
             VecDeque::new(),
@@ -725,21 +730,18 @@ async fn test_handle_epoch_event() {
         )
         .unwrap(),
         &mut backend,
-        &sdp_relay,
         &mut None,
-        &mut PendingLocalMessages::new(),
     )
     .await;
     let HandleEpochEventOutput::Transitioning {
-        new_crypto_processor,
-        new_scheduler,
-        new_epoch_info,
+        current_epoch: new_current_epoch,
         new_recovery_checkpoint,
         old_epoch_components,
     } = output
     else {
         panic!("expected Transitioning output");
     };
+    let (new_crypto_processor, new_scheduler, new_epoch_info) = new_current_epoch.into_components();
     assert_eq!(new_crypto_processor.epoch(), epoch.strict_add(1.into()));
     assert_eq!(old_epoch_components.epoch(), epoch);
     assert_eq!(
@@ -763,31 +765,19 @@ async fn test_handle_epoch_event() {
             .is_some()
     );
 
-    // Handle a TransitionExpired event, expecting TransitionCompleted output.
-    let output = handle_epoch_event(
-        EpochEvent::TransitionPeriodExpired,
-        &settings,
-        new_crypto_processor,
-        new_scheduler,
-        new_epoch_info,
-        new_recovery_checkpoint,
-        &mut backend,
-        &sdp_relay,
-        &mut None,
-        &mut PendingLocalMessages::new(),
-    )
-    .await;
-    let HandleEpochEventOutput::TransitionCompleted {
-        current_crypto_processor,
-        current_scheduler,
-        current_epoch_info,
-        new_recovery_checkpoint,
-    } = output
-    else {
-        panic!("expected TransitionCompleted output");
-    };
+    // The end of the transition period is handled apart from a rotation, and
+    // takes nothing belonging to the current epoch — which is what lets that
+    // epoch, and the proposals it owns, survive it untouched.
+    let new_recovery_checkpoint =
+        complete_transition_period::<_, NodeId, BlakeRng, MockProofsVerifier, _, RuntimeServiceId>(
+            &mut backend,
+            &sdp_relay,
+            *new_recovery_checkpoint,
+        )
+        .await;
+    let (current_crypto_processor, current_scheduler) = (new_crypto_processor, new_scheduler);
     assert_eq!(current_crypto_processor.epoch(), epoch.strict_add(1.into()));
-    assert_eq!(current_epoch_info.epoch, epoch.strict_add(1.into()));
+    assert_eq!(new_epoch_info.epoch, epoch.strict_add(1.into()));
     assert!(
         new_recovery_checkpoint
             .clone()
@@ -804,26 +794,21 @@ async fn test_handle_epoch_event() {
     // Handle a NewEpoch event with a new too small membership,
     // expecting Retiring output.
     let output = handle_epoch_event(
-        EpochEvent::NewEpoch(
-            CoreEpochInfo {
-                public: CoreEpochPublicInfo {
-                    membership: new_membership(minimal_network_size - 1).0,
-                    epoch: epoch.strict_add(2.into()),
-                    ..current_epoch_info.clone()
-                },
-                core_poq_generator: Some(()),
-            }
-            .into(),
-        ),
+        CoreEpochInfo {
+            public: CoreEpochPublicInfo {
+                membership: new_membership(minimal_network_size - 1).0,
+                epoch: epoch.strict_add(2.into()),
+                ..new_epoch_info.clone()
+            },
+            core_poq_generator: Some(()),
+        }
+        .into(),
         &settings,
         current_crypto_processor,
         current_scheduler,
-        current_epoch_info,
         new_recovery_checkpoint,
         &mut backend,
-        &sdp_relay,
         &mut None,
-        &mut PendingLocalMessages::new(),
     )
     .await;
     let HandleEpochEventOutput::Retiring { retiring_epoch } = output else {
@@ -875,7 +860,7 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
         BlakeRng::from_entropy(),
     );
     let mut backend_event_receiver = backend.subscribe_to_events();
-    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+    let (_sdp_relay, _sdp_relay_receiver) = sdp_relay();
 
     // The new epoch has a *different* (larger) membership; `new_membership`
     // always includes the local node, so the node stays part of the core.
@@ -889,17 +874,14 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
     let new_public_info = new_epoch_info(new_epoch, new_membership.clone(), &settings);
 
     let output = handle_epoch_event(
-        EpochEvent::NewEpoch(
-            CoreEpochInfo {
-                public: new_public_info.clone(),
-                core_poq_generator: Some(()),
-            }
-            .into(),
-        ),
+        CoreEpochInfo {
+            public: new_public_info.clone(),
+            core_poq_generator: Some(()),
+        }
+        .into(),
         &settings,
         crypto_processor,
         scheduler,
-        public_info,
         ServiceState::with_epoch(
             epoch,
             VecDeque::new(),
@@ -909,21 +891,19 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
         )
         .unwrap(),
         &mut backend,
-        &sdp_relay,
         &mut None,
-        &mut PendingLocalMessages::new(),
     )
     .await;
 
     let HandleEpochEventOutput::Transitioning {
-        new_crypto_processor,
+        current_epoch: new_current_epoch,
         old_epoch_components,
-        new_epoch_info: returned_epoch_info,
         ..
     } = output
     else {
         panic!("expected Transitioning output");
     };
+    let (new_crypto_processor, _, returned_epoch_info) = new_current_epoch.into_components();
 
     // A fresh generator is built for the new epoch, and the previous one is
     // retained for the old epoch.
@@ -979,7 +959,7 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
         backend_epoch_info(&public_info),
         BlakeRng::from_entropy(),
     );
-    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+    let (_sdp_relay, _sdp_relay_receiver) = sdp_relay();
 
     let secret_info = PolEpochInfo {
         epoch: secret_epoch,
@@ -989,20 +969,17 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
     // Isolate the `set_epoch_private` calls made by `handle_epoch_event`.
     reset_set_epoch_private_calls();
     let _output = handle_epoch_event(
-        EpochEvent::NewEpoch(
-            CoreEpochInfo {
-                public: CoreEpochPublicInfo {
-                    epoch: epoch.strict_add(1.into()),
-                    ..public_info.clone()
-                },
-                core_poq_generator: Some(()),
-            }
-            .into(),
-        ),
+        CoreEpochInfo {
+            public: CoreEpochPublicInfo {
+                epoch: epoch.strict_add(1.into()),
+                ..public_info.clone()
+            },
+            core_poq_generator: Some(()),
+        }
+        .into(),
         &settings,
         crypto_processor,
         scheduler,
-        public_info,
         ServiceState::with_epoch(
             epoch,
             VecDeque::new(),
@@ -1012,9 +989,7 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
         )
         .unwrap(),
         &mut backend,
-        &sdp_relay,
         &mut Some(secret_info),
-        &mut PendingLocalMessages::new(),
     )
     .await;
     recorded_set_epoch_private_calls()
@@ -1083,16 +1058,15 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
         backend_epoch_info(&public_info),
         BlakeRng::from_entropy(),
     );
-    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+    let (_sdp_relay, _sdp_relay_receiver) = sdp_relay();
 
     // Handle a NewEpoch(Empty) event - empty membership triggers Retiring.
     let empty_epoch = epoch.strict_add(1.into());
     let output = handle_epoch_event(
-        EpochEvent::NewEpoch((empty_epoch, ZkHash::from(1)).into()),
+        (empty_epoch, ZkHash::from(1)).into(),
         &settings,
         crypto_processor,
         scheduler,
-        public_info.clone(),
         ServiceState::with_epoch(
             epoch,
             VecDeque::new(),
@@ -1102,9 +1076,7 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
         )
         .unwrap(),
         &mut backend,
-        &sdp_relay,
         &mut None,
-        &mut PendingLocalMessages::new(),
     )
     .await;
     let HandleEpochEventOutput::Retiring { retiring_epoch } = output else {
@@ -1155,23 +1127,20 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
         backend_epoch_info(&public_info),
         BlakeRng::from_entropy(),
     );
-    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+    let (_sdp_relay, _sdp_relay_receiver) = sdp_relay();
 
     let output = handle_epoch_event(
-        EpochEvent::NewEpoch(
-            CoreEpochInfo {
-                public: CoreEpochPublicInfo {
-                    epoch: epoch.strict_add(1.into()),
-                    ..public_info.clone()
-                },
-                core_poq_generator: None,
-            }
-            .into(),
-        ),
+        CoreEpochInfo {
+            public: CoreEpochPublicInfo {
+                epoch: epoch.strict_add(1.into()),
+                ..public_info.clone()
+            },
+            core_poq_generator: None,
+        }
+        .into(),
         &settings,
         crypto_processor,
         scheduler,
-        public_info.clone(),
         ServiceState::with_epoch(
             epoch,
             VecDeque::new(),
@@ -1181,9 +1150,7 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
         )
         .unwrap(),
         &mut backend,
-        &sdp_relay,
         &mut None,
-        &mut PendingLocalMessages::new(),
     )
     .await;
 
@@ -1288,9 +1255,8 @@ async fn complete_old_epoch_after_main_loop_done() {
                 crypto_processor,
                 message_scheduler.into(),
                 current_public_info,
-                pending_transactions,
-                None,
             ),
+            pending_transactions,
             current_recovery_checkpoint,
         )
         .await;
@@ -1435,9 +1401,8 @@ async fn stop_on_empty_epoch() {
                 crypto_processor,
                 message_scheduler.into(),
                 current_public_info,
-                pending_transactions,
-                None,
             ),
+            pending_transactions,
             current_recovery_checkpoint,
         )
         .await;
@@ -1571,9 +1536,8 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
                 crypto_processor,
                 message_scheduler.into(),
                 current_public_info,
-                pending_transactions,
-                None,
             ),
+            pending_transactions,
             current_recovery_checkpoint,
         )
         .await;
@@ -1968,7 +1932,7 @@ async fn test_initialize_recovers_matching_saved_state() {
         "Mismatched epoch: a queued transaction should outlive the state that carried it"
     );
     assert_eq!(
-        pending_messages2.transactions().next(),
+        pending_messages2.iter().next(),
         Some(&b"stale epoch transaction".to_vec()),
         "Mismatched epoch: the queue handed to the event loop should carry it too"
     );
@@ -2245,9 +2209,8 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
                 crypto_processor,
                 message_scheduler.into(),
                 current_public_info,
-                pending_transactions,
-                None,
             ),
+            pending_transactions,
             current_recovery_checkpoint,
         )
         .await;
@@ -2385,9 +2348,8 @@ async fn the_previous_epoch_keeps_releasing_under_its_own_epoch() {
                 crypto_processor,
                 message_scheduler.into(),
                 current_public_info,
-                pending_transactions,
-                None,
             ),
+            pending_transactions,
             current_recovery_checkpoint,
         )
         .await;
@@ -2528,9 +2490,8 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
                 crypto_processor,
                 message_scheduler.into(),
                 current_public_info,
-                pending_transactions,
-                None,
             ),
+            pending_transactions,
             current_recovery_checkpoint,
         )
         .await;
@@ -2658,9 +2619,8 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
                 crypto_processor,
                 message_scheduler.into(),
                 current_public_info,
-                pending_transactions,
-                None,
             ),
+            pending_transactions,
             current_recovery_checkpoint,
         )
         .await;

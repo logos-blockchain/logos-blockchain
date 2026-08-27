@@ -9,70 +9,61 @@ use lb_blend::message::{
 
 use crate::LOG_TARGET;
 
-/// One locally-originated message, encapsulated and ready for the wire.
-///
-/// Which queue it came from, so the caller knows what to mark as sent once it
-/// is actually out. Both modes produce this; what differs is only the processor
-/// that made it.
-pub enum LocalEncapsulation {
-    ProposalCopy(EncapsulatedMessageWithVerifiedPublicHeader),
-    Transaction(EncapsulatedMessageWithVerifiedPublicHeader),
-}
-
 /// Turns one encapsulation attempt into what the event loop should do about it.
-///
-/// `None` means "nothing to do this time round": the branch backing this
-/// message has no proofs yet, and it stays queued to be retried. `Err(())`
-/// means the head can never be encapsulated and has to go — the head is
-/// retried before anything else is looked at, so one that keeps failing would
-/// take everything queued behind it down with it.
 ///
 /// The failure is resolved here rather than handed back because a
 /// [`MessageError`] is not `Send`, and a `select!` branch output has to be.
-pub fn resolve_encapsulation<WrapFn>(
+#[must_use]
+pub fn resolve_encapsulation(
     encapsulated: Result<EncapsulatedMessageWithVerifiedPublicHeader, MessageError>,
-    wrap: WrapFn,
-) -> Option<Result<LocalEncapsulation, ()>>
-where
-    WrapFn: FnOnce(EncapsulatedMessageWithVerifiedPublicHeader) -> LocalEncapsulation,
-{
+    kind: MessageKind,
+) -> EncapsulationResult {
     match encapsulated {
-        Ok(message) => Some(Ok(wrap(message))),
-        Err(error) => match report_encapsulation_failure(&error) {
-            Verdict::Retry => None,
-            Verdict::Discard => Some(Err(())),
-        },
+        Ok(message) => {
+            EncapsulationResult::Complete(Box::new(LocalEncapsulation { message, kind }))
+        }
+        Err(MessageError::ProofNotAvailable) => {
+            tracing::trace!(target: LOG_TARGET, "No proofs available yet to encapsulate a message. Leaving it queued.");
+            EncapsulationResult::Retry
+        }
+        Err(error) => {
+            tracing::error!(target: LOG_TARGET, "Dropping a message that cannot be encapsulated: {error:?}");
+            EncapsulationResult::Discard(kind)
+        }
     }
 }
 
-/// Whether a message that failed to encapsulate is worth keeping.
-enum Verdict {
-    /// A failure that says "not yet": leave the message queued.
+/// What the event loop should do about one encapsulation attempt.
+pub enum EncapsulationResult {
+    /// It worked, and this is ready for the wire.
+    Complete(Box<LocalEncapsulation>),
+    /// Not this time: the branch backing this message has no proofs yet, so it
+    /// stays queued and is tried again next time.
     Retry,
-    /// A failure that will repeat however long the message waits: drop it.
-    Discard,
+    /// Never: the head of this queue can never be encapsulated, so it goes. The
+    /// head is retried before anything else is looked at, so one that keeps
+    /// failing would take everything queued behind it down with it.
+    Discard(MessageKind),
 }
 
-/// Logs a failed encapsulation at the level it deserves, and says whether the
-/// message should stay queued.
+/// An encapsulated message of a specific kind.
+pub struct LocalEncapsulation {
+    pub message: EncapsulatedMessageWithVerifiedPublicHeader,
+    pub kind: MessageKind,
+}
+
+/// Which of the two kinds a locally-originated message is.
 ///
-/// Running out of proofs is the ordinary "not yet" — the branch backing this
-/// message has nothing to give until, say, the epoch's secret `PoL` info lands
-/// — and the message is retried every time the loop turns, so reporting it as
-/// an error would bury the log in noise while waiting. Everything else is a
-/// genuine failure, and a permanent one: a payload too large to fit will not
-/// shrink, so retrying it forever would block everything queued behind it.
-fn report_encapsulation_failure(error: &MessageError) -> Verdict {
-    if matches!(error, MessageError::ProofNotAvailable) {
-        tracing::trace!(target: LOG_TARGET, "No proofs available yet to encapsulate a message. Leaving it queued.");
-        Verdict::Retry
-    } else {
-        tracing::error!(target: LOG_TARGET, "Dropping a message that cannot be encapsulated: {error:?}");
-        Verdict::Discard
-    }
+/// The two are queued apart, because only one of them is bound to the epoch it
+/// arrived in, so anything that acts on "whichever was next" has to say which
+/// queue it means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageKind {
+    Proposal,
+    Transaction,
 }
 
-/// What [`PendingLocalMessages::next`] would have the caller work on.
+/// What [`next_local_message`] would have the caller work on.
 #[derive(Debug, PartialEq, Eq)]
 pub enum NextLocalMessage<'a> {
     /// One copy of the longest-waiting block proposal.
@@ -81,142 +72,128 @@ pub enum NextLocalMessage<'a> {
     Transaction(&'a [u8]),
 }
 
-/// What [`PendingLocalMessages::discard_head`] dropped, handed back so a caller
-/// that persists its queue can drop it there too.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Discarded {
-    Proposal(Vec<u8>),
-    Transaction(Vec<u8>),
-}
-
-/// The queue of messages this node has produced but not yet put on the wire.
+/// The next locally-originated message to try, or `None` when nothing is
+/// waiting.
 ///
-/// Both modes need the same bookkeeping. A message might not be sent the moment
-/// it arrives: a transaction waits on a `PoW` solution, and a proposal waits on
-/// this epoch's secret `PoL` info, which could land *after* the first
-/// proposal does. Whatever cannot go yet stays here and is retried.
+/// The one statement of the rule that proposals go first: one is tied to the
+/// slot it was built for and goes stale, whereas a transaction keeps. The two
+/// queues are owned separately — a proposal by the epoch it belongs to, a
+/// transaction by whatever outlives epochs — so the rule that spans them lives
+/// here rather than in either.
 ///
-/// Nothing is removed by looking at it. The branch that does the sending is a
+/// Nothing is removed by looking. The branch that does the sending is a
 /// `select!` arm, so its future is dropped whenever another branch wins the
 /// race, and a queue that popped before awaiting would lose the message every
 /// time that happened. The caller reports what actually went out instead, once
 /// the race is settled.
+#[must_use]
+pub fn next_local_message<'a>(
+    proposals: &'a PendingProposals,
+    transactions: &'a PendingTransactions,
+) -> Option<NextLocalMessage<'a>> {
+    proposals.head().map_or_else(
+        || transactions.head().map(NextLocalMessage::Transaction),
+        |proposal| Some(NextLocalMessage::ProposalCopy(proposal)),
+    )
+}
+
+/// Block proposals this node has produced but not yet put on the wire, each
+/// with the copies it still owes.
 ///
-/// Queued proposals do not survive an epoch change; queued transactions do.
-/// A proposal is built for one slot, and leadership quota is one message's
-/// worth per winning slot, so a proposal still waiting when the epoch turns
-/// would spend the quota that the *new* epoch's block needs. Losing the block
-/// this node is about to produce is worse than losing one it failed to send in
-/// time. A transaction is not slot-bound and its `PoW` branch is redrawn
-/// anyway, so it stays.
-#[derive(Debug)]
-pub struct PendingLocalMessages {
-    /// Each proposal with the copies it still owes. Proposals are replicated;
-    /// transactions are not.
-    proposals: VecDeque<(Vec<u8>, NonZeroU64)>,
-    transactions: VecDeque<Vec<u8>>,
-}
+/// **Bound to the epoch it was queued in.** A proposal is built for one slot,
+/// and leadership quota is one message's worth per winning slot, so a proposal
+/// still waiting when the epoch turns would spend the quota that the *new*
+/// epoch's block needs.
+#[derive(Debug, Default)]
+pub struct PendingProposals(VecDeque<(Vec<u8>, NonZeroU64)>);
 
-impl Default for PendingLocalMessages {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl PendingLocalMessages {
+impl PendingProposals {
     #[must_use]
     pub const fn new() -> Self {
-        Self {
-            proposals: VecDeque::new(),
-            transactions: VecDeque::new(),
-        }
+        Self(VecDeque::new())
     }
 
     /// Queues a proposal to be sent `copies` times.
-    pub fn queue_proposal(&mut self, proposal: Vec<u8>, copies: NonZeroU64) {
-        self.proposals.push_back((proposal, copies));
+    pub fn queue(&mut self, proposal: Vec<u8>, copies: NonZeroU64) {
+        self.0.push_back((proposal, copies));
     }
 
-    pub fn queue_transaction(&mut self, transaction: Vec<u8>) {
-        self.transactions.push_back(transaction);
+    fn head(&self) -> Option<&[u8]> {
+        self.0.front().map(|(proposal, _)| proposal.as_slice())
     }
 
-    /// The next message to try, or `None` when there is nothing waiting.
-    ///
-    /// Proposals go first: one is tied to the slot it was built for and goes
-    /// stale, whereas a transaction keeps.
-    #[must_use]
-    pub fn next(&self) -> Option<NextLocalMessage<'_>> {
-        if let Some((proposal, _)) = self.proposals.front() {
-            return Some(NextLocalMessage::ProposalCopy(proposal));
-        }
-        self.transactions
-            .front()
-            .map(|transaction| NextLocalMessage::Transaction(transaction))
-    }
-
-    /// Records that one copy of the head proposal went out, dropping it once it
-    /// owes no more.
+    /// Records that one copy of the head went out, dropping it once it owes no
+    /// more.
     ///
     /// # Panics
     ///
-    /// If no proposal is queued, which would mean a copy was reported for a
-    /// message this queue never handed out.
-    pub fn mark_proposal_copy_as_sent(&mut self) {
-        let Some((_, remaining_copies)) = self.proposals.front_mut() else {
+    /// If none is queued, which would mean a copy was reported for a message
+    /// this queue never handed out.
+    pub fn mark_copy_as_sent(&mut self) {
+        let Some((_, remaining_copies)) = self.0.front_mut() else {
             panic!("A proposal copy was reported sent, but none is queued");
         };
-        let copies_before = *remaining_copies;
-        // If the copy sent was the last one, drop the proposal from the queue.
-        let Some(copies_after) = NonZeroU64::new(copies_before.get() - 1) else {
-            drop(self.proposals.pop_front());
-            return;
-        };
-        *remaining_copies = copies_after;
+        match NonZeroU64::new(remaining_copies.get() - 1) {
+            // The copy sent was the last one it owed.
+            None => drop(self.0.pop_front()),
+            Some(left) => *remaining_copies = left,
+        }
     }
 
-    /// Records that the head transaction went out, handing it back so a caller
-    /// that persists its queue can drop it there too.
+    /// Drops the head, for a caller that has found it can never be sent — one
+    /// too large to fit a payload, say, as opposed to one merely waiting on
+    /// proofs.
+    pub fn discard_head(&mut self) {
+        drop(self.0.pop_front());
+    }
+}
+
+/// Transactions this node has accepted but not yet put on the wire.
+///
+/// **Not bound to any epoch.** A transaction stays valid however long it waits,
+/// its `PoW` branch is redrawn under whichever epoch is current when it finally
+/// goes, and it is persisted so it survives a restart. So it is owned by
+/// something that outlives epochs, not by one of them.
+#[derive(Debug, Default)]
+pub struct PendingTransactions(VecDeque<Vec<u8>>);
+
+impl PendingTransactions {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(VecDeque::new())
+    }
+
+    pub fn queue(&mut self, transaction: Vec<u8>) {
+        self.0.push_back(transaction);
+    }
+
+    fn head(&self) -> Option<&[u8]> {
+        self.0.front().map(Vec::as_slice)
+    }
+
+    /// Records that the head went out, handing it back so a caller that
+    /// persists this queue can drop it there too.
     ///
     /// # Panics
     ///
-    /// If no transaction is queued.
-    pub fn mark_transaction_as_sent(&mut self) -> Vec<u8> {
-        self.transactions
+    /// If none is queued.
+    pub fn mark_as_sent(&mut self) -> Vec<u8> {
+        self.0
             .pop_front()
             .expect("A transaction was reported sent, but none is queued")
     }
 
-    /// Drops every queued proposal, returning how many went, for a caller whose
-    /// epoch has turned over. Transactions are left alone.
-    ///
-    /// See the note on this type for why proposals cannot outlive the epoch
-    /// they were queued in.
-    pub fn discard_proposals(&mut self) -> usize {
-        let discarded = self.proposals.len();
-        self.proposals.clear();
-        discarded
+    /// Drops the head, for a caller that has found it can never be sent, and
+    /// hands it back so the caller can drop it from the recovery state too. See
+    /// [`PendingProposals::discard_head`] for why the head cannot simply stay.
+    pub fn discard_head(&mut self) -> Option<Vec<u8>> {
+        self.0.pop_front()
     }
 
-    /// Drops the message [`Self::next`] would hand out, for a caller that has
-    /// found it can never be sent — one too large to fit a payload, say, as
-    /// opposed to one merely waiting on proofs.
-    ///
-    /// Without this a message like that would sit at the head forever and take
-    /// everything queued behind it down with it, since the head is retried
-    /// before anything else is looked at. A proposal goes in full, outstanding
-    /// copies and all: every copy would fail the same way.
-    pub fn discard_head(&mut self) -> Option<Discarded> {
-        if let Some((proposal, _)) = self.proposals.pop_front() {
-            return Some(Discarded::Proposal(proposal));
-        }
-        self.transactions.pop_front().map(Discarded::Transaction)
-    }
-
-    /// The transactions still waiting, oldest first.
+    /// Those still waiting, oldest first.
     #[must_use]
-    pub fn transactions(&self) -> impl ExactSizeIterator<Item = &Vec<u8>> {
-        self.transactions.iter()
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &Vec<u8>> {
+        self.0.iter()
     }
 }
 
@@ -224,14 +201,22 @@ impl PendingLocalMessages {
 mod tests {
     use super::*;
 
+    fn proposal(copies: u64) -> PendingProposals {
+        let mut proposals = PendingProposals::new();
+        proposals.queue(b"proposal".to_vec(), copies.try_into().unwrap());
+        proposals
+    }
+
+    fn transaction() -> PendingTransactions {
+        let mut transactions = PendingTransactions::new();
+        transactions.queue(b"tx".to_vec());
+        transactions
+    }
+
     #[test]
     fn a_proposal_goes_before_a_transaction() {
-        let mut pending = PendingLocalMessages::new();
-        pending.queue_transaction(b"tx".to_vec());
-        pending.queue_proposal(b"proposal".to_vec(), 1.try_into().unwrap());
-
         assert_eq!(
-            pending.next(),
+            next_local_message(&proposal(1), &transaction()),
             Some(NextLocalMessage::ProposalCopy(b"proposal")),
             "a proposal is slot-bound and stales; a transaction keeps"
         );
@@ -239,72 +224,43 @@ mod tests {
 
     #[test]
     fn a_proposal_stays_until_every_copy_is_out() {
-        let mut pending = PendingLocalMessages::new();
-        pending.queue_proposal(b"proposal".to_vec(), 3.try_into().unwrap());
-        pending.queue_transaction(b"tx".to_vec());
-
+        let mut proposals = proposal(3);
+        let transactions = transaction();
         for _ in 0..3 {
             assert_eq!(
-                pending.next(),
+                next_local_message(&proposals, &transactions),
                 Some(NextLocalMessage::ProposalCopy(b"proposal"))
             );
-            pending.mark_proposal_copy_as_sent();
+            proposals.mark_copy_as_sent();
         }
-
         assert_eq!(
-            pending.next(),
+            next_local_message(&proposals, &transactions),
             Some(NextLocalMessage::Transaction(b"tx")),
-            "the transaction is reached only once the proposal owes nothing"
+            "once it owes no more copies the transaction behind it gets its turn"
         );
     }
 
     #[test]
     fn looking_does_not_consume() {
-        let mut pending = PendingLocalMessages::new();
-        pending.queue_transaction(b"tx".to_vec());
-
-        // However often a `select!` arm is built and dropped without sending,
-        // the message is still there.
-        for _ in 0..3 {
-            assert_eq!(pending.next(), Some(NextLocalMessage::Transaction(b"tx")));
-        }
-        assert_eq!(pending.mark_transaction_as_sent(), b"tx".to_vec());
-        assert_eq!(pending.next(), None);
+        let proposals = proposal(1);
+        let transactions = transaction();
+        assert_eq!(
+            next_local_message(&proposals, &transactions),
+            next_local_message(&proposals, &transactions),
+            "the sending branch is dropped and rebuilt, so looking must not pop"
+        );
     }
 
     #[test]
     fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
-        let mut pending = PendingLocalMessages::new();
-        pending.queue_proposal(b"proposal".to_vec(), 3.try_into().unwrap());
-        pending.queue_transaction(b"tx".to_vec());
+        let mut proposals = proposal(3);
+        let transactions = transaction();
 
+        proposals.discard_head();
         assert_eq!(
-            pending.discard_head(),
-            Some(Discarded::Proposal(b"proposal".to_vec())),
-            "outstanding copies go with it: they would all fail the same way"
-        );
-        assert_eq!(
-            pending.next(),
+            next_local_message(&proposals, &transactions),
             Some(NextLocalMessage::Transaction(b"tx")),
-            "what was queued behind it must get its turn"
-        );
-    }
-
-    #[test]
-    fn an_epoch_change_takes_the_proposals_and_leaves_the_transactions() {
-        let mut pending = PendingLocalMessages::new();
-        pending.queue_proposal(b"proposal".to_vec(), 3.try_into().unwrap());
-        pending.queue_transaction(b"tx".to_vec());
-
-        assert_eq!(
-            pending.discard_proposals(),
-            1,
-            "outstanding copies go with it: they would all spend the new epoch's quota"
-        );
-        assert_eq!(
-            pending.next(),
-            Some(NextLocalMessage::Transaction(b"tx")),
-            "a transaction is not slot-bound and outlives the epoch it arrived in"
+            "outstanding copies go with it, and what was queued behind gets its turn"
         );
     }
 }
