@@ -458,14 +458,18 @@ impl LedgerState {
             + EXECUTION_MARKET_EMA_PREV_WEIGHT
                 * u128::from(self.average_execution_gas.into_inner());
         let new_average_execution_gas: Gas =
-            ((avg_numerator / EXECUTION_MARKET_EMA_DENOMINATOR) as Value).into();
+            Value::try_from(avg_numerator / EXECUTION_MARKET_EMA_DENOMINATOR)
+                .expect("execution market average gas must fit into Value")
+                .into();
 
         // Then update the `execution_base_fee` using the new average
         let fee_numerator = u128::from(self.execution_base_fee.into_inner())
             * (EXECUTION_MARKET_BASE_FEE_NUMERATOR
                 + u128::from(new_average_execution_gas.into_inner()));
         let new_base_fee =
-            (fee_numerator.div_ceil(EXECUTION_MARKET_BASE_FEE_DENOMINATOR) as Value).into();
+            Value::try_from(fee_numerator.div_ceil(EXECUTION_MARKET_BASE_FEE_DENOMINATOR))
+                .expect("execution market base fee must fit into Value")
+                .into();
 
         Self {
             average_execution_gas: new_average_execution_gas,
@@ -2514,6 +2518,18 @@ pub mod tests {
             (ledger.execution_base_fee, ledger.average_execution_gas),
             (30_290.into(), 1_720_000.into())
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "execution market base fee must fit into Value")]
+    fn execution_market_panics_when_base_fee_exceeds_value() {
+        let mut ledger = LedgerState::from_utxos([], &config(), Fr::ZERO);
+        ledger.execution_base_fee = Value::try_from(EXECUTION_MARKET_BASE_FEE_DENOMINATOR)
+            .unwrap()
+            .into();
+        ledger.average_execution_gas = u64::MAX.into();
+
+        let _ = ledger.update_execution_market(u64::MAX.into());
     }
 
     #[test]
