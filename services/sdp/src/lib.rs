@@ -21,7 +21,7 @@ use lb_core::{
     sdp::{ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, WithdrawMessage},
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_ledger::LedgerState;
+use lb_ledger::{IntentStatus, LedgerState};
 use lb_services_utils::overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -34,7 +34,7 @@ use tracing::{debug, error, trace};
 
 pub use crate::{api::SdpServiceApi, intent::Config as ActiveMessageTrackerConfig};
 use crate::{
-    intent::{Direction, IntentTracker},
+    intent::IntentTracker,
     mempool::SdpMempoolAdapter,
     state::{SdpState, SdpStateStorage},
     wallet::{SdpWalletAdapter, SdpWalletConfig},
@@ -288,63 +288,77 @@ where
         mempool_adapter: &MempoolAdapter,
         chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
     ) {
-        let Some(tracker) = self.active_message_tracker.take() else {
+        let Some(tracker) = self.active_message_tracker.as_mut() else {
             trace!("no active message tracker exists");
             return;
         };
 
         match tracker.handle_tip(event.tip).await {
-            Ok(direction) => {
-                self.handle_active_message_tracker_direction(
-                    direction,
+            Ok(outcome) => {
+                self.handle_active_message_tracker_outcome(
+                    outcome,
                     wallet_adapter,
                     mempool_adapter,
                     chain_api,
                 )
                 .await;
             }
-            Err((err, tracker)) => {
+            Err(err) => {
                 error!(%err, "active message tracker failed to handle tip");
-                self.active_message_tracker = tracker;
             }
         }
     }
 
-    async fn handle_active_message_tracker_direction(
+    async fn handle_active_message_tracker_outcome(
         &mut self,
-        direction: Direction<ActiveMessage, CryptarchiaServiceApi<ChainService, RuntimeServiceId>>,
+        outcome: intent::Outcome<ActiveMessage>,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
         chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
     ) {
-        match direction {
-            Direction::ResubmitAndTrack { intent, tracker } => {
-                self.active_message_tracker = Some(tracker);
-                self.submit_activity(
-                    intent.declaration_id,
-                    intent.metadata,
+        match outcome {
+            intent::Outcome::StatusChecked { intent, status } => {
+                self.handle_active_message_status(
+                    intent,
+                    status,
                     wallet_adapter,
                     mempool_adapter,
                     chain_api,
                 )
                 .await;
             }
-            Direction::ResubmitAndDone(intent) => {
+            intent::Outcome::WaitingforMoreTipChanges => {
+                trace!("active message tracker waiting for more tip changes before status check");
+            }
+            intent::Outcome::Exhausted => {
+                debug!("active message tracker exhausted: dropping the tracker");
+                self.active_message_tracker = None;
+            }
+        }
+    }
+
+    async fn handle_active_message_status(
+        &self,
+        message: ActiveMessage,
+        status: IntentStatus,
+        wallet_adapter: &WalletAdapter,
+        mempool_adapter: &MempoolAdapter,
+        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+    ) {
+        match status {
+            IntentStatus::NotApplied => {
+                trace!("active message status: not applied in the tip ledger: resubmitting it");
                 self.submit_activity(
-                    intent.declaration_id,
-                    intent.metadata,
+                    message.declaration_id,
+                    message.metadata,
                     wallet_adapter,
                     mempool_adapter,
                     chain_api,
                 )
                 .await;
             }
-            Direction::Track(tracker) => {
-                self.active_message_tracker = Some(tracker);
-                trace!("no active message to resubmit");
-            }
-            Direction::Done => {
-                debug!("active message tracker has completed");
+            IntentStatus::Applied => {
+                trace!("active message status: applied in the tip ledger: keep tracking it");
             }
         }
     }

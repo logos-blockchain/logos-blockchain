@@ -5,7 +5,6 @@ use lb_core::header::HeaderId;
 use lb_ledger::{IntentStatus, LedgerState};
 use overwatch::DynError;
 use serde::{Deserialize, Serialize};
-use tracing::debug;
 
 /// Tracks the status of a submitted intent on the ledger.
 ///
@@ -54,7 +53,7 @@ impl<Intent, Provider> IntentTracker<Intent, Provider> {
 
 impl<Intent, Provider> IntentTracker<Intent, Provider>
 where
-    Intent: lb_ledger::Intent + Clone,
+    Intent: lb_ledger::Intent<Error: Send + Sync + 'static> + Clone,
     Provider: LedgerStateProvider,
 {
     /// Feeds a new tip to the tracker. A tip the tracker has already seen is
@@ -76,17 +75,18 @@ where
     /// or is not applicable, because a chain reorg can change its status.
     /// Instead, it keeps tracking the intent for up to
     /// [`Config::max_status_checks`].
-    pub async fn handle_tip(
-        mut self,
-        tip: HeaderId,
-    ) -> Result<Direction<Intent, Provider>, (Error, Option<Self>)> {
+    pub async fn handle_tip(&mut self, tip: HeaderId) -> Result<Outcome<Intent>, Error> {
+        if self.status_checks >= self.config.max_status_checks.get() {
+            return Ok(Outcome::Exhausted);
+        }
+
         if std::mem::replace(&mut self.last_tip, tip) == tip {
-            return Ok(Direction::Track(self)); // tip unchanged
+            return Ok(Outcome::WaitingforMoreTipChanges); // tip unchanged
         }
 
         self.tip_changes = self.tip_changes.saturating_add(1);
         if self.tip_changes < self.config.status_check_interval_in_tip_changes.get() {
-            return Ok(Direction::Track(self)); // not time to check the status yet
+            return Ok(Outcome::WaitingforMoreTipChanges); // not time to check the status yet
         }
 
         self.tip_changes = 0;
@@ -94,45 +94,29 @@ where
 
         let ledger = match self.ledger_state_provider.get(tip).await {
             Ok(Some(ledger)) => ledger,
-            Ok(None) => return Err((Error::LedgerStateNotFound(tip), self.check_deadline())),
-            Err(e) => return Err((Error::LedgerStateProvider(Box::new(e)), self.decheck_deadline())),
+            Ok(None) => return Err(Error::LedgerStateNotFound(tip)),
+            Err(e) => {
+                return Err(Error::LedgerStateProvider(Box::new(e)));
+            }
         };
 
         match self.intent.status(&ledger) {
-            Ok(IntentStatus::NotApplied) => {
-                let intent = self.intent.clone();
-                match self.check_deadline() {
-                    Some(tracker) => Ok(Direction::ResubmitAndTrack { intent, tracker }),
-                    None => Ok(Direction::ResubmitAndDone(intent)),
-                }
-            }
-            Ok(IntentStatus::Applied) => self.check_deadline().map_or_else(
-                || Ok(Direction::Done),
-                |tracker| Ok(Direction::Track(tracker)),
-            ),
-            Err(err) => {
-                debug!(%err, "failed to check status of intent");
-                self.check_deadline().map_or_else(
-                    || Ok(Direction::Done),
-                    |tracker| Ok(Direction::Track(tracker)),
-                )
-            }
+            Ok(status) => Ok(Outcome::StatusChecked {
+                intent: self.intent.clone(),
+                status,
+            }),
+            Err(e) => Err(Error::StatusCheckFailed(Box::new(e))),
         }
-    }
-
-    fn check_deadline(self) -> Option<Self> {
-        (self.status_checks < self.config.max_status_checks.get()).then_some(self)
     }
 }
 
-pub enum Direction<Intent, Provider> {
-    ResubmitAndTrack {
+pub enum Outcome<Intent> {
+    StatusChecked {
         intent: Intent,
-        tracker: IntentTracker<Intent, Provider>,
+        status: IntentStatus,
     },
-    ResubmitAndDone(Intent),
-    Track(IntentTracker<Intent, Provider>),
-    Done,
+    WaitingforMoreTipChanges,
+    Exhausted,
 }
 
 #[async_trait]
@@ -148,6 +132,8 @@ pub enum Error {
     LedgerStateNotFound(HeaderId),
     #[error("ledger state provider error: {0}")]
     LedgerStateProvider(DynError),
+    #[error("intent status check failed: {0}")]
+    StatusCheckFailed(DynError),
 }
 
 #[cfg(test)]
@@ -171,10 +157,11 @@ mod tests {
 
     #[tokio::test]
     async fn unchanged_tip_never_trigger_status_check() {
-        let tracker = tracker(IntentStatus::NotApplied, 2, 3);
+        let mut tracker = tracker(IntentStatus::NotApplied, 2, 3);
         let tip = tracker.last_tip;
 
-        let tracker = expect_track(tracker.handle_tip(tip).await);
+        let out = tracker.handle_tip(tip).await.unwrap();
+        assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
         assert_eq!(tracker.last_tip, tip);
         assert_eq!(tracker.tip_changes, 0);
         assert_eq!(tracker.status_checks, 0);
@@ -182,91 +169,134 @@ mod tests {
 
     #[tokio::test]
     async fn status_check_is_triggered_after_interval() {
-        let tracker = tracker(IntentStatus::Applied, 2, 3);
+        let mut tracker = tracker(IntentStatus::Applied, 2, 3);
 
-        let tracker = expect_track(tracker.handle_tip(tip(1)).await);
+        let out = tracker.handle_tip(tip(1)).await.unwrap();
+        assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
         assert_eq!(tracker.status_checks, 0);
         assert_eq!(tracker.tip_changes, 1);
-        let tracker = expect_track(tracker.handle_tip(tip(2)).await);
+
+        let out = tracker.handle_tip(tip(2)).await.unwrap();
+        expect_applied(&out);
         assert_eq!(tracker.status_checks, 1);
         assert_eq!(tracker.tip_changes, 0); // was reset
 
-        let tracker = expect_track(tracker.handle_tip(tip(3)).await);
+        let out = tracker.handle_tip(tip(3)).await.unwrap();
+        assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
         assert_eq!(tracker.status_checks, 1);
         assert_eq!(tracker.tip_changes, 1);
-        let tracker = expect_track(tracker.handle_tip(tip(4)).await);
+
+        let out = tracker.handle_tip(tip(4)).await.unwrap();
+        expect_applied(&out);
         assert_eq!(tracker.status_checks, 2);
         assert_eq!(tracker.tip_changes, 0); // was reset
 
-        let tracker = expect_track(tracker.handle_tip(tip(5)).await);
+        let out = tracker.handle_tip(tip(5)).await.unwrap();
+        assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
         assert_eq!(tracker.status_checks, 2);
         assert_eq!(tracker.tip_changes, 1);
-        expect_done(tracker.handle_tip(tip(6)).await);
+
+        let out = tracker.handle_tip(tip(6)).await.unwrap();
+        expect_applied(&out);
+        assert_eq!(tracker.status_checks, 3);
+        assert_eq!(tracker.tip_changes, 0); // was reset
+
+        let out = tracker.handle_tip(tip(7)).await.unwrap();
+        assert!(matches!(out, Outcome::Exhausted));
     }
 
     #[tokio::test]
     async fn resubmit_if_intent_not_applied() {
-        let tracker = tracker(IntentStatus::NotApplied, 2, 3);
+        let mut tracker = tracker(IntentStatus::NotApplied, 2, 3);
 
-        let tracker = expect_track(tracker.handle_tip(tip(1)).await);
-        let tracker = expect_resubmit_and_track(tracker.handle_tip(tip(2)).await);
-        let tracker = expect_track(tracker.handle_tip(tip(3)).await);
-        let tracker = expect_resubmit_and_track(tracker.handle_tip(tip(4)).await);
-        let tracker = expect_track(tracker.handle_tip(tip(5)).await);
-        expect_resubmit_and_done(tracker.handle_tip(tip(6)).await);
+        let out = tracker.handle_tip(tip(1)).await.unwrap();
+        assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
+
+        let out = tracker.handle_tip(tip(2)).await.unwrap();
+        expect_not_applied(&out);
+
+        let out = tracker.handle_tip(tip(3)).await.unwrap();
+        assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
+
+        let out = tracker.handle_tip(tip(4)).await.unwrap();
+        expect_not_applied(&out);
+
+        let out = tracker.handle_tip(tip(5)).await.unwrap();
+        assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
+
+        let out = tracker.handle_tip(tip(6)).await.unwrap();
+        expect_not_applied(&out);
+
+        let out = tracker.handle_tip(tip(7)).await.unwrap();
+        assert!(matches!(out, Outcome::Exhausted));
     }
 
     #[tokio::test]
     async fn resubmit_after_applied_intent_reverted() {
         let status = Arc::new(Mutex::new(Some(IntentStatus::Applied)));
-        let tracker = tracker_with(MockIntent(Arc::clone(&status)), 2, 3);
+        let mut tracker = tracker_with(MockIntent(Arc::clone(&status)), 2, 3);
 
-        let tracker = expect_track(tracker.handle_tip(tip(1)).await);
-        let tracker = expect_track(tracker.handle_tip(tip(2)).await);
+        let out = tracker.handle_tip(tip(1)).await.unwrap();
+        assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
+        let out = tracker.handle_tip(tip(2)).await.unwrap();
+        expect_applied(&out);
 
         // e.g., a reorg reverted the applied intent.
         *status.lock().unwrap() = Some(IntentStatus::NotApplied);
-        let tracker = expect_track(tracker.handle_tip(tip(3)).await);
-        expect_resubmit_and_track(tracker.handle_tip(tip(4)).await);
+        let out = tracker.handle_tip(tip(1)).await.unwrap();
+        assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
+        let out = tracker.handle_tip(tip(2)).await.unwrap();
+        expect_not_applied(&out);
     }
 
     #[tokio::test]
     async fn keep_tracking_if_status_check_failed() {
         let status = Arc::new(Mutex::new(None));
-        let tracker = tracker_with(MockIntent(Arc::clone(&status)), 2, 3);
+        let mut tracker = tracker_with(MockIntent(Arc::clone(&status)), 2, 3);
 
-        let tracker = expect_track(tracker.handle_tip(tip(1)).await);
-        let tracker = expect_track(tracker.handle_tip(tip(2)).await);
-        let tracker = expect_track(tracker.handle_tip(tip(3)).await);
-        let tracker = expect_track(tracker.handle_tip(tip(4)).await);
-        let tracker = expect_track(tracker.handle_tip(tip(5)).await);
-        expect_done(tracker.handle_tip(tip(6)).await);
+        let out = tracker.handle_tip(tip(1)).await.unwrap();
+        assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
+        tracker.handle_tip(tip(2)).await.err().unwrap();
+
+        let out = tracker.handle_tip(tip(3)).await.unwrap();
+        assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
+        tracker.handle_tip(tip(4)).await.err().unwrap();
+
+        let out = tracker.handle_tip(tip(5)).await.unwrap();
+        assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
+        tracker.handle_tip(tip(6)).await.err().unwrap();
+
+        let out = tracker.handle_tip(tip(7)).await.unwrap();
+        assert!(matches!(out, Outcome::Exhausted));
     }
 
     #[tokio::test]
     async fn resubmit_after_status_check_becomes_available_again() {
         let status = Arc::new(Mutex::new(None));
-        let tracker = tracker_with(MockIntent(Arc::clone(&status)), 2, 3);
+        let mut tracker = tracker_with(MockIntent(Arc::clone(&status)), 2, 3);
 
-        let tracker = expect_track(tracker.handle_tip(tip(1)).await);
-        let tracker = expect_track(tracker.handle_tip(tip(2)).await);
+        let out = tracker.handle_tip(tip(1)).await.unwrap();
+        assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
+        tracker.handle_tip(tip(2)).await.err().unwrap();
 
         // e.g., the intent became applicable after a chain reorg.
         *status.lock().unwrap() = Some(IntentStatus::NotApplied);
-        let tracker = expect_track(tracker.handle_tip(tip(3)).await);
-        expect_resubmit_and_track(tracker.handle_tip(tip(4)).await);
+        let out = tracker.handle_tip(tip(3)).await.unwrap();
+        assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
+        let out = tracker.handle_tip(tip(4)).await.unwrap();
+        expect_not_applied(&out);
     }
 
     #[tokio::test]
     async fn status_check_counts_error() {
-        let tracker = tracker(IntentStatus::Applied, 2, 3);
+        let mut tracker = tracker(IntentStatus::Applied, 2, 3);
 
-        let tracker = expect_track(tracker.handle_tip(tip(1)).await);
+        let out = tracker.handle_tip(tip(1)).await.unwrap();
+        assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
         assert_eq!(tracker.status_checks, 0);
 
         let unknown_tip = tip(99);
-        let Err((Error::LedgerStateNotFound(_), tracker)) = tracker.handle_tip(unknown_tip).await
-        else {
+        let Err(Error::LedgerStateNotFound(_)) = tracker.handle_tip(unknown_tip).await else {
             panic!("expected error");
         };
         assert_eq!(tracker.status_checks, 1);
@@ -274,7 +304,6 @@ mod tests {
     }
 
     type MockTracker = IntentTracker<MockIntent, MockLedgerStateProvider>;
-    type MockResult = Result<Direction<MockIntent, MockLedgerStateProvider>, (Error, MockTracker)>;
 
     fn tracker(status: IntentStatus, interval: u64, max: u64) -> MockTracker {
         tracker_with(
@@ -293,36 +322,24 @@ mod tests {
         )
     }
 
-    fn expect_track(result: MockResult) -> MockTracker {
-        match result {
-            Ok(Direction::Track(tracker)) => tracker,
-            Ok(_) => panic!("unexpected direction"),
-            Err((e, _)) => panic!("unexpected error: {e}"),
-        }
+    fn expect_applied(out: &Outcome<MockIntent>) {
+        assert!(matches!(
+            out,
+            Outcome::StatusChecked {
+                status: IntentStatus::Applied,
+                ..
+            }
+        ));
     }
 
-    fn expect_done(result: MockResult) {
-        match result {
-            Ok(Direction::Done) => (),
-            Ok(_) => panic!("unexpected direction"),
-            Err((e, _)) => panic!("unexpected error: {e}"),
-        }
-    }
-
-    fn expect_resubmit_and_track(result: MockResult) -> MockTracker {
-        match result {
-            Ok(Direction::ResubmitAndTrack { tracker, .. }) => tracker,
-            Ok(_) => panic!("unexpected direction"),
-            Err((e, _)) => panic!("unexpected error: {e}"),
-        }
-    }
-
-    fn expect_resubmit_and_done(result: MockResult) {
-        match result {
-            Ok(Direction::ResubmitAndDone(_)) => (),
-            Ok(_) => panic!("unexpected direction"),
-            Err((e, _)) => panic!("unexpected error: {e}"),
-        }
+    fn expect_not_applied(out: &Outcome<MockIntent>) {
+        assert!(matches!(
+            out,
+            Outcome::StatusChecked {
+                status: IntentStatus::NotApplied,
+                ..
+            }
+        ));
     }
 
     fn config(interval: u64, max: u64) -> Config {
