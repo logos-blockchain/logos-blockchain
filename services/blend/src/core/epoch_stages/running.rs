@@ -14,9 +14,8 @@ use crate::{
         encapsulate_next_local_message,
         epoch_stages::{OldEpochScheduler, transitioning::TransitioningEpoch},
     },
-    epoch_info::PolEpochInfo,
     message::ProcessedMessage,
-    pending::{LocalEncapsulation, PendingLocalMessages},
+    pending::{EncapsulationResult, PendingProposals, PendingTransactions},
 };
 
 type MessageScheduler<Rng> =
@@ -25,7 +24,7 @@ type MessageScheduler<Rng> =
 /// What scheduling a locally-encapsulated message borrows: see
 /// [`CurrentEpoch::scheduling_borrows`].
 type SchedulingBorrows<'a, NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng> = (
-    &'a mut PendingLocalMessages,
+    &'a mut PendingProposals,
     &'a CryptoProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
     &'a mut MessageScheduler<Rng>,
 );
@@ -39,13 +38,11 @@ type DecapsulationBorrows<'a, NodeId, CorePoQGenerator, ProofsGenerator, ProofsV
     &'a OldEpochCryptographicProcessor<ProofsVerifier>,
 );
 
-/// What a rotation consumes: see [`RunningEpoch::into_components`].
+/// What a rotation consumes: see [`CurrentEpoch::into_components`].
 pub type Components<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng> = (
     CryptoProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
     MessageScheduler<Rng>,
     CoreEpochPublicInfo<NodeId>,
-    PendingLocalMessages,
-    Option<PolEpochInfo>,
 );
 type Round = RoundInfo<ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>;
 
@@ -55,11 +52,7 @@ pub struct CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifie
     crypto: CryptoProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
     scheduler: MessageScheduler<Rng>,
     epoch_info: CoreEpochPublicInfo<NodeId>,
-    pending: PendingLocalMessages,
-    /// Secret `PoL` info for an epoch this node has not reached yet, held until
-    /// the rotation that can use it. `None` once applied, or when none is
-    /// outstanding.
-    latest_secret_pol_info: Option<PolEpochInfo>,
+    proposals: PendingProposals,
 }
 
 impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
@@ -69,16 +62,17 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
         crypto: CryptoProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
         scheduler: MessageScheduler<Rng>,
         epoch_info: CoreEpochPublicInfo<NodeId>,
-        pending: PendingLocalMessages,
-        latest_secret_pol_info: Option<PolEpochInfo>,
     ) -> Self {
         Self {
             crypto,
             scheduler,
             epoch_info,
-            pending,
-            latest_secret_pol_info,
+            proposals: PendingProposals::new(),
         }
+    }
+
+    pub const fn proposals_mut(&mut self) -> &mut PendingProposals {
+        &mut self.proposals
     }
 
     pub const fn crypto_processor_mut(
@@ -91,26 +85,14 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
         &self.epoch_info
     }
 
-    pub const fn pending_local_messages(&self) -> &PendingLocalMessages {
-        &self.pending
-    }
-
-    pub const fn pending_local_messages_mut(&mut self) -> &mut PendingLocalMessages {
-        &mut self.pending
-    }
-
-    pub const fn latest_secret_pol_info_mut(&mut self) -> &mut Option<PolEpochInfo> {
-        &mut self.latest_secret_pol_info
-    }
-
-    /// The three parts the paths that schedule a locally-encapsulated message
-    /// need at once: they read the processor for its epoch, write the message
-    /// into the scheduler, and mark the queue. Borrowing them through one
-    /// method keeps them disjoint.
+    /// The two parts the paths that schedule a locally-encapsulated message
+    /// need at once: they read the processor for its epoch and write the
+    /// message into the scheduler. Borrowing them through one method keeps them
+    /// disjoint.
     pub const fn scheduling_borrows(
         &mut self,
     ) -> SchedulingBorrows<'_, NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng> {
-        (&mut self.pending, &self.crypto, &mut self.scheduler)
+        (&mut self.proposals, &self.crypto, &mut self.scheduler)
     }
 
     /// The two parts decapsulating an incoming message minted under *this*
@@ -127,23 +109,18 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
     pub fn into_components(
         self,
     ) -> Components<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng> {
-        (
-            self.crypto,
-            self.scheduler,
-            self.epoch_info,
-            self.pending,
-            self.latest_secret_pol_info,
-        )
+        (self.crypto, self.scheduler, self.epoch_info)
     }
 }
 
 /// Something the current epoch produced on its own, as opposed to something
 /// that arrived from outside it.
 pub enum CurrentEpochEvent {
-    /// A queued message now has proofs behind it, or never will. Boxed
-    /// because it dwarfs the other variant, and every event pays for the
-    /// largest one.
-    Encapsulated(Result<Box<LocalEncapsulation>, ()>),
+    /// A queued message now has proofs behind it, or never will.
+    ///
+    /// Never [`Encapsulation::Retry`]: that one means "nothing to act on", and
+    /// is what disables the branch below rather than a value to report.
+    Encapsulated(EncapsulationResult),
     /// This epoch's scheduler says it is time to release.
     ReleaseRound(Round),
 }
@@ -163,14 +140,14 @@ where
     /// and for the same reasons: nothing here commits before its await. The
     /// queue is only read, a partial proof draw is left on the encapsulator
     /// rather than in this frame, and the scheduler keeps its timers.
-    pub async fn next_event(&mut self) -> CurrentEpochEvent {
-        let pending = &self.pending;
+    pub async fn next_event(&mut self, transactions: &PendingTransactions) -> CurrentEpochEvent {
+        let proposals = &self.proposals;
         let crypto = &mut self.crypto;
         let scheduler = &mut self.scheduler;
 
         tokio::select! {
-            Some(encapsulation) = encapsulate_next_local_message(pending, crypto) => {
-                CurrentEpochEvent::Encapsulated(encapsulation.map(Box::new))
+            Some(encapsulation) = encapsulate_next_local_message(proposals, transactions, crypto) => {
+                CurrentEpochEvent::Encapsulated(encapsulation)
             }
             Some(round_info) = scheduler.next() => CurrentEpochEvent::ReleaseRound(round_info),
         }
@@ -233,6 +210,17 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
         )
     }
 
+    /// Gives up the epoch being drained, leaving the current one whole —
+    /// proposals included, because a transition period ending is not an epoch
+    /// change. What the drained epoch still held is dropped: past its
+    /// transition period no peer would accept what it releases, having rotated
+    /// its verifier on.
+    pub fn end_transition(
+        self,
+    ) -> CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng> {
+        self.current
+    }
+
     /// Splits into the parts a rotation consumes. The epoch being drained goes
     /// with them: a rotation replaces it with the epoch that has just ended,
     /// and one older than that has no peers left that would accept it.
@@ -263,13 +251,16 @@ where
     ///
     /// Cancel-safe on the same terms as [`CurrentEpoch::next_event`], which it
     /// wraps.
-    pub async fn next_event(&mut self) -> DuringTransitionEvent {
+    pub async fn next_event(
+        &mut self,
+        transactions: &PendingTransactions,
+    ) -> DuringTransitionEvent {
         let previous_epoch = self.previous.epoch();
         let current = &mut self.current;
         let previous = &mut self.previous;
 
         tokio::select! {
-            event = current.next_event() => DuringTransitionEvent::Current(event),
+            event = current.next_event(transactions) => DuringTransitionEvent::Current(event),
             Some(round_info) = previous.scheduler_mut().next() => {
                 DuringTransitionEvent::PreviousEpochReleaseRound(round_info, previous_epoch)
             }
