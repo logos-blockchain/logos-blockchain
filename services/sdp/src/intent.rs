@@ -5,6 +5,7 @@ use lb_core::header::HeaderId;
 use lb_ledger::{IntentStatus, LedgerState};
 use overwatch::DynError;
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 /// Tracks the status of a submitted intent on the ledger.
 ///
@@ -98,14 +99,19 @@ where
         };
 
         match self.intent.status(&ledger) {
-            IntentStatus::NotApplied => {
+            Ok(IntentStatus::NotApplied) => {
                 let intent = self.intent.clone();
                 match self.check_deadline() {
                     Some(tracker) => Ok(Direction::ResubmitAndTrack { intent, tracker }),
                     None => Ok(Direction::ResubmitAndDone(intent)),
                 }
             }
-            IntentStatus::Applied | IntentStatus::Inapplicable => {
+            Ok(IntentStatus::Applied) => self.check_deadline().map_or_else(
+                || Ok(Direction::Done),
+                |tracker| Ok(Direction::Track(tracker)),
+            ),
+            Err(err) => {
+                debug!(%err, "failed to check status of intent");
                 self.check_deadline().map_or_else(
                     || Ok(Direction::Done),
                     |tracker| Ok(Direction::Track(tracker)),
@@ -212,21 +218,22 @@ mod tests {
 
     #[tokio::test]
     async fn resubmit_after_applied_intent_reverted() {
-        let status = Arc::new(Mutex::new(IntentStatus::Applied));
+        let status = Arc::new(Mutex::new(Some(IntentStatus::Applied)));
         let tracker = tracker_with(MockIntent(Arc::clone(&status)), 2, 3);
 
         let tracker = expect_track(tracker.handle_tip(tip(1)).await);
         let tracker = expect_track(tracker.handle_tip(tip(2)).await);
 
         // e.g., a reorg reverted the applied intent.
-        *status.lock().unwrap() = IntentStatus::NotApplied;
+        *status.lock().unwrap() = Some(IntentStatus::NotApplied);
         let tracker = expect_track(tracker.handle_tip(tip(3)).await);
         expect_resubmit_and_track(tracker.handle_tip(tip(4)).await);
     }
 
     #[tokio::test]
-    async fn keep_tracking_if_intent_inapplicable() {
-        let tracker = tracker(IntentStatus::Inapplicable, 2, 3);
+    async fn keep_tracking_if_status_check_failed() {
+        let status = Arc::new(Mutex::new(None));
+        let tracker = tracker_with(MockIntent(Arc::clone(&status)), 2, 3);
 
         let tracker = expect_track(tracker.handle_tip(tip(1)).await);
         let tracker = expect_track(tracker.handle_tip(tip(2)).await);
@@ -237,15 +244,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resubmit_after_inapplicable_intent_reverted() {
-        let status = Arc::new(Mutex::new(IntentStatus::Inapplicable));
+    async fn resubmit_after_status_check_becomes_available_again() {
+        let status = Arc::new(Mutex::new(None));
         let tracker = tracker_with(MockIntent(Arc::clone(&status)), 2, 3);
 
         let tracker = expect_track(tracker.handle_tip(tip(1)).await);
         let tracker = expect_track(tracker.handle_tip(tip(2)).await);
 
         // e.g., the intent became applicable after a chain reorg.
-        *status.lock().unwrap() = IntentStatus::NotApplied;
+        *status.lock().unwrap() = Some(IntentStatus::NotApplied);
         let tracker = expect_track(tracker.handle_tip(tip(3)).await);
         expect_resubmit_and_track(tracker.handle_tip(tip(4)).await);
     }
@@ -270,7 +277,11 @@ mod tests {
     type MockResult = Result<Direction<MockIntent, MockLedgerStateProvider>, (Error, MockTracker)>;
 
     fn tracker(status: IntentStatus, interval: u64, max: u64) -> MockTracker {
-        tracker_with(MockIntent(Arc::new(Mutex::new(status))), interval, max)
+        tracker_with(
+            MockIntent(Arc::new(Mutex::new(Some(status)))),
+            interval,
+            max,
+        )
     }
 
     fn tracker_with(intent: MockIntent, interval: u64, max: u64) -> MockTracker {
@@ -327,13 +338,22 @@ mod tests {
 
     /// An intent whose status is set by the test, ignoring the ledger state.
     #[derive(Clone)]
-    struct MockIntent(Arc<Mutex<IntentStatus>>);
+    struct MockIntent(Arc<Mutex<Option<IntentStatus>>>);
 
     impl Intent for MockIntent {
-        fn status(&self, _: &LedgerState) -> IntentStatus {
-            *self.0.lock().unwrap()
+        type Error = MockIntentStatusCheckFailed;
+
+        fn status(&self, _: &LedgerState) -> Result<IntentStatus, Self::Error> {
+            self.0
+                .lock()
+                .unwrap()
+                .map_or_else(|| Err(MockIntentStatusCheckFailed), Ok)
         }
     }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("no status")]
+    struct MockIntentStatusCheckFailed;
 
     /// Provides a static ledger state only at the given tips.
     #[derive(Debug)]

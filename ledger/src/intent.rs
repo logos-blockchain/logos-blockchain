@@ -5,7 +5,9 @@ use crate::LedgerState;
 /// For example, the submitter can rebuild/resubmit a transaction if the intent
 /// is not applied in time.
 pub trait Intent {
-    fn status(&self, ledger: &LedgerState) -> IntentStatus;
+    type Error: std::error::Error;
+
+    fn status(&self, ledger: &LedgerState) -> Result<IntentStatus, Self::Error>;
 }
 
 /// How an intent stands against a ledger state.
@@ -15,7 +17,4 @@ pub enum IntentStatus {
     Applied,
     /// The intent has not been applied to the ledger yet.
     NotApplied,
-    /// The intent cannot be applied to the ledger.
-    /// e.g., because its target is gone.
-    Inapplicable,
 }

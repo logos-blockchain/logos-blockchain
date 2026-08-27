@@ -279,26 +279,29 @@ fn is_active(declaration: &Declaration, current_epoch: Epoch, config: ServicePar
 }
 
 impl Intent for ActiveMessage {
+    type Error = IntentStatusCheckFailed;
+
     /// The intent of an active message is to refresh the `Declaration::active`
     /// field.
-    fn status(&self, ledger: &LedgerState) -> IntentStatus {
-        let Some(declaration) = ledger
+    fn status(&self, ledger: &LedgerState) -> Result<IntentStatus, Self::Error> {
+        let declaration = ledger
             .mantle_ledger()
             .sdp_ledger()
             .get_declaration(&self.declaration_id)
-        else {
-            // The declaration doesn't exist (e.g., withdrawn).
-            return IntentStatus::Inapplicable;
-        };
+            .ok_or_else(|| IntentStatusCheckFailed("declaration not exist".to_owned()))?;
 
         // Check if the `active` field has been refreshed.
         if declaration.active >= self.metadata.submission_epoch() {
-            IntentStatus::Applied
+            Ok(IntentStatus::Applied)
         } else {
-            IntentStatus::NotApplied
+            Ok(IntentStatus::NotApplied)
         }
     }
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct IntentStatusCheckFailed(String);
 
 /// A SDP state of the mantle ledger
 ///
