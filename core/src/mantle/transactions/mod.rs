@@ -14,7 +14,10 @@ use std::sync::LazyLock;
 pub use builder::{MantleTxBuilder, TxBuilderError};
 pub use errors::VerificationError;
 pub use gas::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GasPrices};
-pub use genesis_tx::{CryptarchiaParameter, GenesisTime, GenesisTx};
+pub use genesis_tx::{
+    CryptarchiaParameter, GENESIS_REQUIRED_OPS, GenesisDeclarations, GenesisTime, GenesisTx,
+    MAX_GENESIS_DECLARATIONS,
+};
 pub use hash::TxHash;
 pub use tx_list::{OpProofRefs, OpProofs, OpRefs, Ops, SignedOps, TxBoundedVec, TxList};
 pub use verification_helper::OperationVerificationHelper;

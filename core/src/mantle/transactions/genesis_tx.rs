@@ -2,7 +2,7 @@ use core::fmt::{self, Display, Formatter};
 
 use lb_codec::{BinaryCodec, BinaryDecode, BinaryEncode, DecodeError};
 use lb_groth16::Fr;
-use lb_utils::bounded::{BoundedString, BoundedVec};
+use lb_utils::bounded::{BoundedString, BoundedVec, UpperBoundedVec};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -19,12 +19,22 @@ use crate::{
         },
         traits::{GenesisTx as GenesisTxTrait, Hashable, MantleTx, genesis::GenesisOps, hashable},
         transactions::{
-            OpRefs, SignedOps,
+            MAX_OPS_PER_TX, OpRefs, SignedOps,
             hash::TxHash,
             states::{Preverified, Unverified},
         },
     },
 };
+
+/// The genesis transaction structure is always:
+/// `Transfer` + `ChannelInscribe` + zero or more `SDPDeclareOp`.
+/// With maximum operations bounded in `Ops`.
+pub const GENESIS_REQUIRED_OPS: usize = 2;
+pub const MAX_GENESIS_DECLARATIONS: usize = MAX_OPS_PER_TX - GENESIS_REQUIRED_OPS; // 253
+pub type GenesisDeclarations = UpperBoundedVec<
+    SignedOperation<SDPDeclareOp, Preverified, GenesisMode>,
+    MAX_GENESIS_DECLARATIONS,
+>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenesisTx {
@@ -209,15 +219,18 @@ impl GenesisTxTrait for GenesisTx {
         }
         .into_state_trusted();
 
-        let declarations = signed_ops
-            .filter_map(|signed_op| {
-                if let SignedOp::SDPDeclare(signed_operation) = signed_op {
-                    Some(signed_operation)
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let declarations = {
+            let declarations_vec = signed_ops
+                .filter_map(|signed_op| {
+                    if let SignedOp::SDPDeclare(signed_operation) = signed_op {
+                        Some(signed_operation)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            GenesisDeclarations::new_unchecked(declarations_vec)
+        };
 
         GenesisOps {
             transfer,

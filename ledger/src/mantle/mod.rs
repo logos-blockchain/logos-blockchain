@@ -21,7 +21,7 @@ use lb_core::{
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferError,
         },
-        transactions::states::{Preverified, Verified},
+        transactions::{GenesisDeclarations, states::Verified},
     },
     sdp::service_notes::ServiceNotes,
 };
@@ -78,7 +78,7 @@ impl LedgerState {
 
     pub fn from_genesis_tx(
         signed_operation_inscription: SignedOperation<InscriptionOp, Verified, GenesisMode>,
-        signed_operation_declarations: Vec<SignedOperation<SDPDeclareOp, Preverified, GenesisMode>>,
+        signed_operation_declarations: GenesisDeclarations,
         config: &Config,
         utxo_tree: &UtxoTree,
         epoch_state: &EpochState,

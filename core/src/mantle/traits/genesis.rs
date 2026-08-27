@@ -1,20 +1,15 @@
 use crate::mantle::{
     CryptarchiaParameter,
     ledger::verification_mode::GenesisMode,
-    ops::{
-        SignedOperation, channel::inscribe::InscriptionOp, sdp::SDPDeclareOp, transfer::TransferOp,
-    },
+    ops::{SignedOperation, channel::inscribe::InscriptionOp, transfer::TransferOp},
     traits::{Hashable, MantleTx},
-    transactions::{
-        hash::TxHash,
-        states::{Preverified, Verified},
-    },
+    transactions::{GenesisDeclarations, hash::TxHash, states::Verified},
 };
 
 pub struct GenesisOps {
     pub transfer: SignedOperation<TransferOp, Verified, GenesisMode>,
     pub inscription: SignedOperation<InscriptionOp, Verified, GenesisMode>,
-    pub declarations: Vec<SignedOperation<SDPDeclareOp, Preverified, GenesisMode>>,
+    pub declarations: GenesisDeclarations,
 }
 
 /// A genesis transaction as specified in the

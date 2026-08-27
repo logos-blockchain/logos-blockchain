@@ -17,7 +17,8 @@ use crate::{
             transfer::TransferOp,
         },
         transactions::{
-            GenesisTx, MAX_OPS_PER_TX, OpProofs, Ops, SignedOps, VerificationError, genesis_tx,
+            GENESIS_REQUIRED_OPS, GenesisTx, MAX_GENESIS_DECLARATIONS, OpProofs, Ops, SignedOps,
+            VerificationError, genesis_tx,
         },
     },
 };
@@ -206,11 +207,6 @@ impl core::ops::Deref for GenesisBlock {
 // ── Typestate markers
 // ─────────────────────────────────────────────────────────
 
-/// The genesis transaction structure is always `Transfer` + `ChannelInscribe` +
-/// zero or more `SDPDeclareOp`, with maximum operations bounded in `Ops`.
-const GENESIS_REQUIRED_OPS: usize = 2;
-
-pub const MAX_GENESIS_DECLARATIONS: usize = MAX_OPS_PER_TX - GENESIS_REQUIRED_OPS; // 253
 pub type GenesisSDPDeclareOps = UpperBoundedVec<SDPDeclareOp, MAX_GENESIS_DECLARATIONS>;
 
 /// Typestate marker: builder has no input yet.
@@ -1308,7 +1304,7 @@ mod tests {
                 channel::{ChannelId, MsgId, inscribe::Inscription},
             },
             traits::MantleTx as _,
-            transactions::states::Preverified,
+            transactions::{MAX_OPS_PER_TX, states::Preverified},
         },
         sdp::{Locator, ProviderId, ServiceType},
     };
