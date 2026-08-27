@@ -221,7 +221,10 @@ mod tests {
     use super::on_event;
     use crate::{
         db::Databases,
-        protocol::{ChannelInscription, EncodedWrite, PAYLOAD_MARKER, Statement, Transaction},
+        protocol::{
+            CapturedFunctionCalls, ChannelInscription, EncodedWrite, PAYLOAD_MARKER, Statement,
+            Transaction,
+        },
     };
 
     const CHANNEL_ID: [u8; 32] = [9; 32];
@@ -278,7 +281,8 @@ mod tests {
     }
 
     fn encoded_write(transaction: &Transaction) -> EncodedWrite {
-        EncodedWrite::new(transaction).expect("payload should encode")
+        EncodedWrite::new(transaction, CapturedFunctionCalls::empty())
+            .expect("payload should encode")
     }
 
     fn item_count(path: &std::path::Path) -> i64 {
@@ -431,26 +435,28 @@ mod tests {
         let live_path = db.live_path().to_owned();
 
         let setup = transaction("CREATE TABLE items(value INTEGER NOT NULL)", Vec::new());
-        let setup_encoded = EncodedWrite::new(&setup).expect("setup write should encode");
-
-        db.commit_local_write(&setup, &setup_encoded)
+        let setup_tx_id = db
+            .commit_local_write(&setup)
             .expect("setup write should commit");
-        db.mark_publish_complete(setup_encoded.tx_id)
+        db.mark_publish_complete(setup_tx_id)
             .expect("setup publish should be complete");
 
         let insert = transaction(
             "INSERT INTO items(value) VALUES (?1)",
             vec![Value::Integer(1)],
         );
-        let insert_encoded = EncodedWrite::new(&insert).expect("insert write should encode");
-
-        db.commit_local_write(&insert, &insert_encoded)
+        db.commit_local_write(&insert)
             .expect("insert write should commit");
+        let insert_payload = db
+            .pending_publish()
+            .expect("pending write should load")
+            .expect("pending write should exist")
+            .payload;
 
         let event = blocks_processed(
             checkpoint(2, 2),
             vec![ChannelUpdateTx::Inscription(inscription(
-                &insert_encoded.payload,
+                &insert_payload,
                 2,
             ))],
             Vec::new(),
@@ -567,6 +573,7 @@ mod tests {
         let conflicting = ChannelInscription {
             tx_id: first.tx_id,
             transaction: transaction("CREATE TABLE conflicting_write(value INTEGER)", Vec::new()),
+            captured_function_calls: CapturedFunctionCalls::empty(),
         }
         .encode()
         .expect("conflicting write should encode");
@@ -618,7 +625,7 @@ mod tests {
         .payload;
         let version_offset = PAYLOAD_MARKER.len();
         unsupported[version_offset..version_offset + size_of::<u16>()]
-            .copy_from_slice(&2u16.to_le_bytes());
+            .copy_from_slice(&3u16.to_le_bytes());
 
         let following = encoded_write(&transaction(
             "CREATE TABLE following_write(value INTEGER)",
@@ -659,11 +666,15 @@ mod tests {
         let live_path = db.live_path().to_owned();
 
         let local = transaction("CREATE TABLE local_write(value INTEGER)", Vec::new());
-        let local_encoded = EncodedWrite::new(&local).expect("local write should encode");
-
-        db.commit_local_write(&local, &local_encoded)
+        let local_tx_id = db
+            .commit_local_write(&local)
             .expect("local write should commit");
-        db.mark_publish_complete(local_encoded.tx_id)
+        let local_payload = db
+            .pending_publish()
+            .expect("pending write should load")
+            .expect("pending write should exist")
+            .payload;
+        db.mark_publish_complete(local_tx_id)
             .expect("local publish should be complete");
 
         let adopted = encoded_write(&transaction(
@@ -676,10 +687,7 @@ mod tests {
                 &adopted.payload,
                 2,
             ))],
-            vec![ChannelUpdateTx::Inscription(inscription(
-                &local_encoded.payload,
-                1,
-            ))],
+            vec![ChannelUpdateTx::Inscription(inscription(&local_payload, 1))],
             Vec::new(),
         );
 
