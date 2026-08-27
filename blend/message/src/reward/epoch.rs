@@ -5,10 +5,13 @@ use lb_blend_proofs::quota::Quota;
 use lb_core::crypto::ZkHash;
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::{Fr, FrBytes, fr_to_bytes};
+use lb_log_targets::blend;
 use lb_utils::math::{F64Ge1, NonNegativeF64};
 use serde::{Deserialize, Serialize};
 
 use crate::reward::{BlendingToken, activity, token::HammingDistance};
+
+const LOG_TARGET: &str = blend::message::REWARD;
 
 /// Epoch-specific information to compute an activity proof.
 pub struct EpochInfo {
@@ -81,11 +84,18 @@ impl BlendingTokenEvaluation {
         next_epoch_randomness: EpochRandomness,
     ) -> Option<HammingDistance> {
         let distance = self.distance(token, next_epoch_randomness);
+        let satisfies_activity_threshold = distance <= self.activity_threshold;
         tracing::trace!(
-            "Evaluated blending token {:?} for activity proof. Calculated Hamming distance = {distance:?}",
-            token.signing_key()
+            target: LOG_TARGET,
+            diagnostic = "blend_tsi_outage",
+            event = "blend_activity_token_distance",
+            token_signing_key = ?token.signing_key(),
+            calculated_hamming_distance = distance.value(),
+            activity_threshold = self.activity_threshold.value(),
+            satisfies_activity_threshold,
+            "Evaluated blending token for activity proof"
         );
-        (distance <= self.activity_threshold).then_some(distance)
+        satisfies_activity_threshold.then_some(distance)
     }
 
     #[must_use]

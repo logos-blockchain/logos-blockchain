@@ -104,20 +104,10 @@ impl OldEpochBlendingTokenCollector {
             .tokens
             .into_iter()
             .filter_map(|token| {
-                let token_signing_key = *token.signing_key();
-
-                let distance = self
-                    .collector
+                self.collector
                     .token_evaluation
                     .evaluate(&token, self.next_epoch_randomness)
-                    .map(|distance| (token, distance));
-
-                tracing::trace!(
-                    LOG_TARGET,
-                    "Evaluated token {token_signing_key:?} with distance {distance:?}",
-                );
-
-                distance
+                    .map(|distance| (token, distance))
             })
             .min_by_key(|(_, distance)| *distance)
             .map(|(token, distance)| (ActivityProof::new(self.collector.epoch, token), distance));
