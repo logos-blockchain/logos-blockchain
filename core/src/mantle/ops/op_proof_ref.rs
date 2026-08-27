@@ -12,7 +12,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 pub enum OpProofRef<'a> {
     Ed25519Sig(&'a Ed25519Signature),
     ZkSig(&'a ZkSignature),
