@@ -504,14 +504,9 @@ fn log_canonical_tsi_transition(
         return;
     };
     let to_epoch = u32::from(committed_state.epoch_state().epoch);
-    let transitions = parent_state.tsi_epoch_transitions_for(to_epoch);
-    if transitions.is_empty() {
-        return;
-    }
-
     let tsi = parent_state.tsi_diagnostic();
     let ledger_config = cryptarchia.ledger.config();
-    for transition in transitions {
+    for transition in parent_state.tsi_epoch_transitions_for(to_epoch) {
         let boundary_slot = ledger_config.epoch_config.starting_slot(
             &transition.to_epoch.into(),
             ledger_config.consensus_config.base_period_length(),

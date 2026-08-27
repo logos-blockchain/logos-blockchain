@@ -15,6 +15,53 @@ pub use crate::reward::epoch::{BlendingTokenEvaluation, EpochRandomness, Error};
 
 const LOG_TARGET: &str = blend::message::REWARD;
 
+#[derive(Debug)]
+struct ActivityTokenEvaluationDiagnostic {
+    proof_epoch: u32,
+    activity_threshold: u64,
+    candidate_hamming_distances: Vec<u64>,
+}
+
+impl ActivityTokenEvaluationDiagnostic {
+    fn capture(collector: &OldEpochBlendingTokenCollector) -> Option<Self> {
+        tracing::enabled!(target: LOG_TARGET, tracing::Level::DEBUG).then(|| Self {
+            proof_epoch: u32::from(collector.collector.epoch()),
+            activity_threshold: collector
+                .collector
+                .token_evaluation
+                .activity_threshold()
+                .value(),
+            candidate_hamming_distances: collector
+                .collector
+                .tokens
+                .iter()
+                .map(|token| {
+                    collector
+                        .collector
+                        .token_evaluation
+                        .distance(token, collector.next_epoch_randomness)
+                        .value()
+                })
+                .collect(),
+        })
+    }
+
+    fn log(self, activity_proof_generated: bool) {
+        let candidate_blending_token_count = self.candidate_hamming_distances.len();
+        tracing::debug!(
+            target: LOG_TARGET,
+            diagnostic = "blend_tsi_outage",
+            event = "blend_activity_token_evaluation",
+            proof_epoch = self.proof_epoch,
+            candidate_blending_token_count,
+            activity_threshold = self.activity_threshold,
+            candidate_hamming_distances = ?self.candidate_hamming_distances,
+            activity_proof_generated,
+            "Evaluated Blend activity tokens"
+        );
+    }
+}
+
 /// Holds blending tokens collected during a single epoch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpochBlendingTokenCollector {
@@ -83,22 +130,7 @@ impl OldEpochBlendingTokenCollector {
         // Find the blending token with the smallest Hamming distance,
         // which is <= activity threshold.
         // Capture DEBUG-only token diagnostics before the tokens are consumed below.
-        let candidate_hamming_distances =
-            tracing::enabled!(target: LOG_TARGET, tracing::Level::DEBUG).then(|| {
-                self.collector
-                    .tokens
-                    .iter()
-                    .map(|token| {
-                        self.collector
-                            .token_evaluation
-                            .distance(token, self.next_epoch_randomness)
-                            .value()
-                    })
-                    .collect::<Vec<_>>()
-            });
-        // Capture these scalars before consuming the token set below.
-        let proof_epoch = u32::from(self.collector.epoch());
-        let activity_threshold = self.collector.token_evaluation.activity_threshold().value();
+        let diagnostic = ActivityTokenEvaluationDiagnostic::capture(&self);
         let winning_activity_proof_with_distance = self
             .collector
             .tokens
@@ -112,18 +144,8 @@ impl OldEpochBlendingTokenCollector {
             .min_by_key(|(_, distance)| *distance)
             .map(|(token, distance)| (ActivityProof::new(self.collector.epoch, token), distance));
 
-        if let Some(candidate_hamming_distances) = candidate_hamming_distances {
-            tracing::debug!(
-                target: LOG_TARGET,
-                diagnostic = "blend_tsi_outage",
-                event = "blend_activity_token_evaluation",
-                proof_epoch,
-                candidate_blending_token_count = candidate_hamming_distances.len(),
-                activity_threshold,
-                ?candidate_hamming_distances,
-                activity_proof_generated = winning_activity_proof_with_distance.is_some(),
-                "Evaluated Blend activity tokens"
-            );
+        if let Some(diagnostic) = diagnostic {
+            diagnostic.log(winning_activity_proof_with_distance.is_some());
         }
 
         let (winning_activity_proof, distance) = winning_activity_proof_with_distance?;

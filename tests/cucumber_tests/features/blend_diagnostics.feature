@@ -1,7 +1,7 @@
 Feature: Blend diagnostics
 
   @blend_debug @blend_tsi_diagnostic
-  Scenario Outline: Observe TSI after majority Blend provider outage and partial recovery [<parameter_set>]
+  Scenario Outline: Observe TSI after majority Blend provider outage and partial recovery parameter_set=<parameter_set>
     Given I have a cluster with capacity of 10 nodes
     And the first 10 nodes are declared as blend providers
     And the cluster uses Blend diagnostic parameter set "<parameter_set>"
