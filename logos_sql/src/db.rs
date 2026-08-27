@@ -2,6 +2,7 @@
 
 use std::{
     fs,
+    ops::Deref,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -16,6 +17,7 @@ use rusqlite::{
 
 use crate::{
     error::Error,
+    functions::FunctionOverrides,
     protocol::{ChannelInscription, EncodedWrite, Transaction, TxId},
 };
 
@@ -40,7 +42,7 @@ const PENDING_WRITE_SCHEMA: &str = "
 const APPLIED_WRITE_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS __logos_sql_applied_writes (
         tx_id BLOB PRIMARY KEY CHECK (length(tx_id) = 32),
-        transaction_digest BLOB NOT NULL CHECK (length(transaction_digest) = 32)
+        content_digest BLOB NOT NULL CHECK (length(content_digest) = 32)
     ) STRICT;
 ";
 
@@ -81,6 +83,7 @@ const INSERT_REJECTED_WRITE: &str = "
     VALUES (?1, ?2, ?3)
     ON CONFLICT (this_msg) DO NOTHING
 ";
+
 const INSERT_PENDING_WRITE: &str = "
     INSERT INTO __logos_sql_pending_write (singleton, tx_id, payload)
     VALUES (1, ?1, ?2)
@@ -98,13 +101,13 @@ const MARK_PUBLISH_COMPLETE: &str = "
 ";
 
 const SELECT_APPLIED_WRITE: &str = "
-    SELECT transaction_digest
+    SELECT content_digest
     FROM __logos_sql_applied_writes
     WHERE tx_id = ?1
 ";
 
 const INSERT_APPLIED_WRITE: &str = "
-    INSERT INTO __logos_sql_applied_writes (tx_id, transaction_digest)
+    INSERT INTO __logos_sql_applied_writes (tx_id, content_digest)
     VALUES (?1, ?2)
 ";
 
@@ -115,6 +118,19 @@ const WRITER_PRAGMAS: &str = "
 
 const FOREIGN_KEYS_PRAGMA: &str = "PRAGMA foreign_keys = ON;";
 
+// These functions depend on one connection, database file, or SQLite build.
+// Their results cannot be reproduced from the ordered channel history.
+const UNSUPPORTED_FUNCTIONS: [&str; 9] = [
+    "changes",
+    "last_insert_rowid",
+    "load_extension",
+    "sqlite_compileoption_get",
+    "sqlite_compileoption_used",
+    "sqlite_offset",
+    "sqlite_source_id",
+    "sqlite_version",
+    "total_changes",
+];
 /// Raw database representation of a write waiting for publication.
 struct StoredPendingPublish {
     tx_id: Vec<u8>,
@@ -137,10 +153,24 @@ pub struct PendingPublish {
     pub payload: Vec<u8>,
 }
 
+/// A replicated database connection and the function state attached to it.
+struct ReplicatedDatabase {
+    connection: Connection,
+    functions: FunctionOverrides,
+}
+
+impl Deref for ReplicatedDatabase {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.connection
+    }
+}
+
 /// Owns the participant-local database connections.
 pub struct Databases {
-    lib: Connection,
-    live: Connection,
+    lib: ReplicatedDatabase,
+    live: ReplicatedDatabase,
     control: Connection,
     lib_path: PathBuf,
     live_path: PathBuf,
@@ -157,7 +187,7 @@ impl Databases {
 
         let lib = open_writer(&lib_path)?;
         let live = open_writer(&live_path)?;
-        let control = open_writer(&control_path)?;
+        let control = open_connection(&control_path)?;
 
         for connection in [&lib, &live] {
             connection.execute_batch(PENDING_WRITE_SCHEMA)?;
@@ -236,26 +266,21 @@ impl Databases {
     }
     /// Commits application effects and their pending publish record together in
     /// `LIVE.db`.
-    pub(crate) fn commit_local_write(
-        &mut self,
-        transaction: &Transaction,
-        encoded: &EncodedWrite,
-    ) -> Result<TxId, Error> {
+    pub(crate) fn commit_local_write(&mut self, transaction: &Transaction) -> Result<TxId, Error> {
         if self.pending_publish()?.is_some() {
             return Err(Error::PublishPending);
         }
 
-        let db_transaction = self.live.transaction()?;
+        let capture = self.live.functions.capture();
+        let db_transaction = self.live.connection.transaction()?;
 
-        // TODO: Capture nondeterministic function results and include them in
-        // the transaction published to other participants.
         apply_statements(&db_transaction, transaction)?;
-
-        let transaction_digest = transaction.digest();
+        let captured_function_calls = capture.finish()?;
+        let encoded = EncodedWrite::new(transaction, captured_function_calls)?;
 
         db_transaction.execute(
             INSERT_APPLIED_WRITE,
-            params![encoded.tx_id.as_ref(), transaction_digest],
+            params![encoded.tx_id.as_ref(), encoded.content_digest],
         )?;
 
         db_transaction.execute(
@@ -281,10 +306,10 @@ impl Databases {
         &mut self,
         write: &ChannelInscription,
     ) -> Result<(), Error> {
-        let transaction_digest = write.transaction.digest();
+        let content_digest = write.content_digest();
 
-        is_write_applied(&self.lib, write.tx_id, &transaction_digest)?;
-        is_write_applied(&self.live, write.tx_id, &transaction_digest)?;
+        is_write_applied(&self.lib.connection, write.tx_id, &content_digest)?;
+        is_write_applied(&self.live.connection, write.tx_id, &content_digest)?;
 
         // LIB and LIVE are separate SQLite files. If LIVE fails after LIB
         // commits, the checkpoint remains behind. Redelivery then skips LIB
@@ -307,6 +332,7 @@ impl Databases {
     pub(crate) fn pending_publish(&self) -> Result<Option<PendingPublish>, Error> {
         let record = self
             .live
+            .connection
             .query_row(SELECT_PENDING_PUBLISH, [], StoredPendingPublish::from_row)
             .optional()?;
 
@@ -323,7 +349,10 @@ impl Databases {
     }
 
     pub(crate) fn mark_publish_complete(&self, tx_id: TxId) -> Result<(), Error> {
-        let changed = self.live.execute(MARK_PUBLISH_COMPLETE, [tx_id.as_ref()])?;
+        let changed = self
+            .live
+            .connection
+            .execute(MARK_PUBLISH_COMPLETE, [tx_id.as_ref()])?;
 
         if changed != 1 {
             return Err(Error::InvalidLocalState(
@@ -343,7 +372,17 @@ impl Databases {
     }
 }
 
-fn open_writer(path: &Path) -> Result<Connection, Error> {
+fn open_writer(path: &Path) -> Result<ReplicatedDatabase, Error> {
+    let connection = open_connection(path)?;
+    let functions = FunctionOverrides::install(&connection)?;
+
+    Ok(ReplicatedDatabase {
+        connection,
+        functions,
+    })
+}
+
+fn open_connection(path: &Path) -> Result<Connection, Error> {
     let conn = Connection::open(path)?;
 
     configure_connection(&conn)?;
@@ -360,17 +399,24 @@ fn configure_connection(conn: &Connection) -> Result<(), Error> {
 }
 
 fn apply_channel_write(
-    connection: &mut Connection,
+    database: &mut ReplicatedDatabase,
     write: &ChannelInscription,
 ) -> Result<(), Error> {
-    let transaction_digest = write.transaction.digest();
-    let db_transaction = connection.transaction()?;
+    let content_digest = write.content_digest();
+    let replay = database.functions.replay(&write.captured_function_calls);
+    let db_transaction = database.connection.transaction()?;
 
-    if is_write_applied(&db_transaction, write.tx_id, &transaction_digest)? {
+    if is_write_applied(&db_transaction, write.tx_id, &content_digest)? {
         return Ok(());
     }
 
     if let Err(error) = apply_statements(&db_transaction, &write.transaction) {
+        if replay.failed() {
+            return Err(Error::InvalidPayload(
+                "captured SQLite function call does not match replay",
+            ));
+        }
+
         return match error {
             Error::Database(error) if is_deterministic_sql_error(&error) => {
                 Err(Error::RejectedSql(error))
@@ -379,9 +425,11 @@ fn apply_channel_write(
         };
     }
 
+    replay.finish()?;
+
     db_transaction.execute(
         INSERT_APPLIED_WRITE,
-        params![write.tx_id.as_ref(), transaction_digest],
+        params![write.tx_id.as_ref(), content_digest],
     )?;
     db_transaction.commit()?;
 
@@ -391,7 +439,7 @@ fn apply_channel_write(
 fn is_write_applied(
     connection: &Connection,
     tx_id: TxId,
-    transaction_digest: &[u8; 32],
+    content_digest: &[u8; 32],
 ) -> Result<bool, Error> {
     let stored_digest = connection
         .query_row(SELECT_APPLIED_WRITE, [tx_id.as_ref()], |row| {
@@ -400,7 +448,7 @@ fn is_write_applied(
         .optional()?;
 
     if let Some(stored_digest) = stored_digest {
-        if stored_digest.as_slice() != transaction_digest {
+        if stored_digest.as_slice() != content_digest {
             return Err(Error::InvalidPayload(
                 "transaction id was reused for different content",
             ));
@@ -482,7 +530,14 @@ fn authorize_application_sql(context: AuthContext<'_>) -> Authorization {
             | AuthAction::Detach { .. }
             | AuthAction::Pragma { .. }
     ) || is_temporary_object_action(context.action)
-        || action_uses_reserved_name(context.action);
+        || action_uses_reserved_name(context.action)
+        || matches!(
+            context.action,
+            AuthAction::Function { function_name }
+                if UNSUPPORTED_FUNCTIONS
+                    .iter()
+                    .any(|name| function_name.eq_ignore_ascii_case(name))
+        );
 
     if denied {
         Authorization::Deny
@@ -567,14 +622,16 @@ mod tests {
         node_types::{HeaderId, MsgId, Slot},
         sequencer::SequencerCheckpoint,
     };
-    use rusqlite::types::Value;
+    use rusqlite::{Connection, types::Value};
     use tempfile::TempDir;
 
     use super::Databases;
     use crate::{
         error::Error,
-        local_write,
-        protocol::{ChannelInscription, EncodedWrite, Statement, Transaction, TxId},
+        protocol::{
+            CapturedFunction, CapturedFunctionCall, CapturedFunctionCalls, ChannelInscription,
+            Statement, Transaction, TxId,
+        },
     };
 
     fn checkpoint(byte: u8, slot: u64) -> SequencerCheckpoint {
@@ -606,11 +663,17 @@ mod tests {
         .expect("transaction should be valid")
     }
 
-    fn encoded_write(transaction: &Transaction) -> EncodedWrite {
-        EncodedWrite::new(transaction).expect("write should encode")
+    fn row_values(connection: &Connection, table: &str) -> Vec<Value> {
+        connection
+            .query_row(&format!("SELECT * FROM {table}"), [], |row| {
+                (0..row.as_ref().column_count())
+                    .map(|column| row.get(column))
+                    .collect()
+            })
+            .expect("captured row should be readable")
     }
 
-    fn assert_application_sql_rejected(sql: &str) {
+    fn rejected_application_sql(sql: &str) -> Error {
         let dir = TempDir::new().expect("temporary directory should be created");
         let mut db = Databases::open(dir.path()).expect("databases should open");
 
@@ -619,11 +682,25 @@ mod tests {
             .expect("application table should be created");
 
         let transaction = transaction(sql);
-        let encoded = encoded_write(&transaction);
-
         let error = db
-            .commit_local_write(&transaction, &encoded)
+            .commit_local_write(&transaction)
             .expect_err("application SQL should be rejected");
+
+        assert!(
+            db.pending_publish()
+                .expect("pending publication should load")
+                .is_none()
+        );
+
+        error
+    }
+
+    fn assert_application_sql_rejected(sql: &str) {
+        assert!(matches!(rejected_application_sql(sql), Error::Database(_)));
+    }
+
+    fn assert_application_sql_denied(sql: &str) {
+        let error = rejected_application_sql(sql);
 
         assert!(matches!(
             error,
@@ -631,16 +708,9 @@ mod tests {
                 if error.sqlite_error_code()
                     == Some(rusqlite::ErrorCode::AuthorizationForStatementDenied)
         ));
-        assert!(
-            db.pending_publish()
-                .expect("pending publication should load")
-                .is_none()
-        );
     }
 
-    fn internal_schema(
-        connection: &rusqlite::Connection,
-    ) -> Vec<(String, String, String, Option<String>)> {
+    fn internal_schema(connection: &Connection) -> Vec<(String, String, String, Option<String>)> {
         let mut statement = connection
             .prepare(
                 "SELECT type, name, tbl_name, sql
@@ -690,9 +760,8 @@ mod tests {
             .expect("application table should be created");
 
         let transaction = insert("hello");
-        let encoded = encoded_write(&transaction);
-
-        db.commit_local_write(&transaction, &encoded)
+        let tx_id = db
+            .commit_local_write(&transaction)
             .expect("write should commit");
 
         let count: i64 = db
@@ -706,7 +775,7 @@ mod tests {
                 .expect("pending publish should load")
                 .expect("pending publish should exist")
                 .tx_id,
-            encoded.tx_id
+            tx_id
         );
     }
 
@@ -728,13 +797,15 @@ mod tests {
             .expect("application table should be created");
 
         let transaction = insert("hello");
-        let first_tx_id =
-            local_write::commit(&mut db, &transaction).expect("first write should commit");
+        let first_tx_id = db
+            .commit_local_write(&transaction)
+            .expect("first write should commit");
         db.mark_publish_complete(first_tx_id)
             .expect("first publication should complete");
 
-        let second_tx_id =
-            local_write::commit(&mut db, &transaction).expect("second write should commit");
+        let second_tx_id = db
+            .commit_local_write(&transaction)
+            .expect("second write should commit");
 
         assert_ne!(second_tx_id, first_tx_id);
 
@@ -744,6 +815,193 @@ mod tests {
             .expect("row should be readable");
 
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn function_results_are_replayed_exactly() {
+        let dir = TempDir::new().expect("temporary directory should be created");
+        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let schema = "CREATE TABLE captured(
+            random_value,
+            random_blob_value,
+            date_value,
+            time_value,
+            datetime_value,
+            julian_day_value,
+            unix_epoch_value,
+            strftime_value,
+            time_diff_value,
+            current_date_value,
+            current_time_value,
+            current_timestamp_value
+        )";
+
+        for connection in [&db.lib, &db.live] {
+            connection
+                .execute(schema, [])
+                .expect("application table should be created");
+        }
+
+        let write = transaction(
+            "INSERT INTO captured VALUES (
+                random(),
+                randomblob(16),
+                date('now'),
+                time('now'),
+                datetime('now'),
+                julianday('now'),
+                unixepoch('now'),
+                strftime('%s', 'now'),
+                timediff('now', 'now'),
+                CURRENT_DATE,
+                CURRENT_TIME,
+                CURRENT_TIMESTAMP
+            )",
+        );
+        db.commit_local_write(&write)
+            .expect("local write should commit");
+
+        let pending = db
+            .pending_publish()
+            .expect("pending publish should load")
+            .expect("pending publish should exist");
+        let channel_inscription =
+            ChannelInscription::decode(&pending.payload).expect("payload should decode");
+        let functions = channel_inscription
+            .captured_function_calls
+            .as_slice()
+            .iter()
+            .map(|call| call.function)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            functions,
+            vec![
+                CapturedFunction::Random,
+                CapturedFunction::RandomBlob,
+                CapturedFunction::Date,
+                CapturedFunction::Time,
+                CapturedFunction::DateTime,
+                CapturedFunction::JulianDay,
+                CapturedFunction::UnixEpoch,
+                CapturedFunction::Strftime,
+                CapturedFunction::TimeDiff,
+                CapturedFunction::CurrentDate,
+                CapturedFunction::CurrentTime,
+                CapturedFunction::CurrentTimestamp,
+            ]
+        );
+
+        db.apply_finalized_write(&channel_inscription)
+            .expect("captured write should replay");
+
+        assert_eq!(
+            row_values(&db.live, "captured"),
+            row_values(&db.lib, "captured")
+        );
+    }
+
+    #[test]
+    fn function_calls_inside_defaults_and_triggers_are_captured() {
+        let dir = TempDir::new().expect("temporary directory should be created");
+        let mut db = Databases::open(dir.path()).expect("databases should open");
+        let schema = "
+            CREATE TABLE items(
+                value TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE audit(random_value INTEGER);
+            CREATE TRIGGER audit_insert AFTER INSERT ON items BEGIN
+                INSERT INTO audit VALUES (random());
+            END;
+        ";
+
+        for connection in [&db.lib, &db.live] {
+            connection
+                .execute_batch(schema)
+                .expect("application schema should be created");
+        }
+
+        let write = transaction("INSERT INTO items(value) VALUES ('hello')");
+        db.commit_local_write(&write)
+            .expect("local write should commit");
+
+        let pending = db
+            .pending_publish()
+            .expect("pending publish should load")
+            .expect("pending publish should exist");
+        let channel_inscription =
+            ChannelInscription::decode(&pending.payload).expect("payload should decode");
+
+        assert_eq!(
+            channel_inscription.captured_function_calls.as_slice().len(),
+            2
+        );
+
+        db.apply_finalized_write(&channel_inscription)
+            .expect("trigger write should replay");
+
+        assert_eq!(row_values(&db.live, "items"), row_values(&db.lib, "items"));
+        assert_eq!(row_values(&db.live, "audit"), row_values(&db.lib, "audit"));
+    }
+
+    #[test]
+    fn missing_function_result_rejects_channel_inscription() {
+        let dir = TempDir::new().expect("temporary directory should be created");
+        let mut db = Databases::open(dir.path()).expect("databases should open");
+
+        db.live
+            .execute("CREATE TABLE items(value INTEGER)", [])
+            .expect("application table should be created");
+
+        let write = ChannelInscription {
+            tx_id: TxId::from([7; 32]),
+            transaction: transaction("INSERT INTO items VALUES (random())"),
+            captured_function_calls: CapturedFunctionCalls::empty(),
+        };
+
+        let error = db
+            .apply_adopted_write(&write)
+            .expect_err("missing result should reject the write");
+
+        assert!(matches!(error, Error::InvalidPayload(_)));
+        assert_eq!(
+            db.live
+                .query_row("SELECT count(*) FROM items", [], |row| row.get::<_, i64>(0))
+                .expect("row count should be readable"),
+            0
+        );
+    }
+
+    #[test]
+    fn unused_function_result_rejects_channel_inscription() {
+        let dir = TempDir::new().expect("temporary directory should be created");
+        let mut db = Databases::open(dir.path()).expect("databases should open");
+
+        db.live
+            .execute("CREATE TABLE items(value INTEGER)", [])
+            .expect("application table should be created");
+
+        let captured = CapturedFunctionCall::new(CapturedFunction::Random, Value::Integer(7))
+            .expect("captured result should be valid");
+        let write = ChannelInscription {
+            tx_id: TxId::from([7; 32]),
+            transaction: transaction("INSERT INTO items VALUES (1)"),
+            captured_function_calls: CapturedFunctionCalls::new(vec![captured])
+                .expect("captured calls should be valid"),
+        };
+
+        let error = db
+            .apply_adopted_write(&write)
+            .expect_err("unused result should reject the write");
+
+        assert!(matches!(error, Error::InvalidPayload(_)));
+        assert_eq!(
+            db.live
+                .query_row("SELECT count(*) FROM items", [], |row| row.get::<_, i64>(0))
+                .expect("row count should be readable"),
+            0
+        );
     }
 
     #[test]
@@ -759,10 +1017,12 @@ mod tests {
         let first = ChannelInscription {
             tx_id,
             transaction: insert("first"),
+            captured_function_calls: CapturedFunctionCalls::empty(),
         };
         let conflicting = ChannelInscription {
             tx_id,
             transaction: insert("conflicting"),
+            captured_function_calls: CapturedFunctionCalls::empty(),
         };
 
         db.apply_adopted_write(&first)
@@ -797,10 +1057,12 @@ mod tests {
         let first = ChannelInscription {
             tx_id,
             transaction: insert("first"),
+            captured_function_calls: CapturedFunctionCalls::empty(),
         };
         let conflicting = ChannelInscription {
             tx_id,
             transaction: insert("conflicting"),
+            captured_function_calls: CapturedFunctionCalls::empty(),
         };
 
         db.apply_adopted_write(&first)
@@ -825,9 +1087,7 @@ mod tests {
         let dir = TempDir::new().expect("temporary directory should be created");
         let mut db = Databases::open(dir.path()).expect("databases should open");
         let transaction = transaction("CREATE TABLE items(value TEXT NOT NULL)");
-        let encoded = encoded_write(&transaction);
-
-        db.commit_local_write(&transaction, &encoded)
+        db.commit_local_write(&transaction)
             .expect("schema write should commit");
 
         db.live
@@ -854,9 +1114,7 @@ mod tests {
                 Statement::new(control.to_owned(), Vec::new()).expect("statement should be valid"),
             ])
             .expect("transaction should be valid");
-            let encoded = encoded_write(&transaction);
-
-            db.commit_local_write(&transaction, &encoded)
+            db.commit_local_write(&transaction)
                 .expect_err("transaction control should be rejected");
 
             let count: i64 = db
@@ -879,7 +1137,7 @@ mod tests {
             "PRAGMA synchronous = OFF",
             "ATTACH DATABASE ':memory:' AS other",
         ] {
-            assert_application_sql_rejected(sql);
+            assert_application_sql_denied(sql);
         }
     }
 
@@ -894,7 +1152,19 @@ mod tests {
             "CREATE TRIGGER __logos_sql_trigger AFTER INSERT ON items BEGIN SELECT 1; END",
             "CREATE TABLE __LOGOS_SQL_mixed_case(value INTEGER)",
         ] {
-            assert_application_sql_rejected(sql);
+            assert_application_sql_denied(sql);
+        }
+    }
+
+    #[test]
+    fn connection_dependent_functions_are_rejected() {
+        for function in [
+            "changes()",
+            "last_insert_rowid()",
+            "sqlite_version()",
+            "total_changes()",
+        ] {
+            assert_application_sql_rejected(&format!("SELECT {function}"));
         }
     }
 
@@ -904,7 +1174,7 @@ mod tests {
             "CREATE TEMP TABLE temporary_items(value INTEGER)",
             "CREATE TEMP VIEW temporary_items AS SELECT 1",
         ] {
-            assert_application_sql_rejected(sql);
+            assert_application_sql_denied(sql);
         }
     }
 
@@ -913,9 +1183,8 @@ mod tests {
         let dir = TempDir::new().expect("temporary directory should be created");
         let mut db = Databases::open(dir.path()).expect("databases should open");
         let transaction = transaction("CREATE TABLE aaaaaaaaaa\u{65e5}(value INTEGER)");
-        let encoded = encoded_write(&transaction);
 
-        db.commit_local_write(&transaction, &encoded)
+        db.commit_local_write(&transaction)
             .expect("non-reserved Unicode name should be accepted");
     }
 

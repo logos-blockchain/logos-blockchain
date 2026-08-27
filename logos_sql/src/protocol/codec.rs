@@ -4,13 +4,30 @@ use lb_codec::{BinaryDecode, BinaryEncode, DecodeError};
 use lb_utils::bounded::UpperBoundedVec;
 use rusqlite::types::Value;
 
-use super::{MAX_PAYLOAD_BYTES, SqlParameter, SqlText};
+use super::{CapturedFunction, MAX_PAYLOAD_BYTES, SqlParameter, SqlText};
 
+// Stable wire tags for SQLite value variants. Existing values must never be
+// renumbered because inscriptions remain part of the channel history.
 const NULL: u8 = 0;
 const INTEGER: u8 = 1;
 const REAL: u8 = 2;
 const TEXT: u8 = 3;
 const BLOB: u8 = 4;
+
+// Stable wire tags for captured SQLite functions. New functions may be
+// appended, but existing values must keep their encoding.
+const RANDOM: u8 = 0;
+const RANDOM_BLOB: u8 = 1;
+const DATE: u8 = 2;
+const TIME: u8 = 3;
+const DATE_TIME: u8 = 4;
+const JULIAN_DAY: u8 = 5;
+const UNIX_EPOCH: u8 = 6;
+const STRFTIME: u8 = 7;
+const TIME_DIFF: u8 = 8;
+const CURRENT_DATE: u8 = 9;
+const CURRENT_TIME: u8 = 10;
+const CURRENT_TIMESTAMP: u8 = 11;
 
 type BoundedBytes = UpperBoundedVec<u8, MAX_PAYLOAD_BYTES>;
 
@@ -18,6 +35,64 @@ type BoundedBytes = UpperBoundedVec<u8, MAX_PAYLOAD_BYTES>;
 // leaf encoders in lockstep with the bounded collection decoder.
 const _: () = assert!(MAX_PAYLOAD_BYTES > u16::MAX as usize);
 const _: () = assert!(MAX_PAYLOAD_BYTES <= u32::MAX as usize);
+
+impl BinaryEncode for CapturedFunction {
+    fn encoded_length(&self) -> usize {
+        size_of::<u8>()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        let discriminant = match self {
+            Self::Random => RANDOM,
+            Self::RandomBlob => RANDOM_BLOB,
+            Self::Date => DATE,
+            Self::Time => TIME,
+            Self::DateTime => DATE_TIME,
+            Self::JulianDay => JULIAN_DAY,
+            Self::UnixEpoch => UNIX_EPOCH,
+            Self::Strftime => STRFTIME,
+            Self::TimeDiff => TIME_DIFF,
+            Self::CurrentDate => CURRENT_DATE,
+            Self::CurrentTime => CURRENT_TIME,
+            Self::CurrentTimestamp => CURRENT_TIMESTAMP,
+        };
+
+        discriminant.encode_into(out);
+    }
+}
+
+impl BinaryDecode for CapturedFunction {
+    type Context = ();
+
+    fn decode<'input>(
+        input: &'input [u8],
+        (): &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, discriminant) = <u8 as BinaryDecode>::decode(input, &())?;
+
+        let function = match discriminant {
+            RANDOM => Self::Random,
+            RANDOM_BLOB => Self::RandomBlob,
+            DATE => Self::Date,
+            TIME => Self::Time,
+            DATE_TIME => Self::DateTime,
+            JULIAN_DAY => Self::JulianDay,
+            UNIX_EPOCH => Self::UnixEpoch,
+            STRFTIME => Self::Strftime,
+            TIME_DIFF => Self::TimeDiff,
+            CURRENT_DATE => Self::CurrentDate,
+            CURRENT_TIME => Self::CurrentTime,
+            CURRENT_TIMESTAMP => Self::CurrentTimestamp,
+            _ => {
+                return Err(DecodeError::unknown_discriminant::<Self>(u64::from(
+                    discriminant,
+                )));
+            }
+        };
+
+        Ok((input, function))
+    }
+}
 
 impl BinaryEncode for SqlText {
     fn encoded_length(&self) -> usize {

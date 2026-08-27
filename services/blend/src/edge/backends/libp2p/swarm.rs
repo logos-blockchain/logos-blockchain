@@ -260,7 +260,7 @@ where
             .unwrap();
         let new_dial_attempt_number = dial_attempt.attempt_number.checked_add(1).unwrap();
         if new_dial_attempt_number > self.max_dial_attempts_per_connection {
-            error!(
+            warn!(
                 target: LOG_TARGET,
                 "Giving up on message delivery: peer {peer_id:?} was not reachable after {} attempts. Dropping the message.",
                 self.max_dial_attempts_per_connection

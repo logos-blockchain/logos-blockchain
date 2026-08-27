@@ -16,7 +16,6 @@ use crate::{
     applier,
     db::Databases,
     error::Error,
-    local_write,
     protocol::{Transaction, TxId},
 };
 
@@ -176,7 +175,7 @@ impl Runtime {
         } else if !self.sequencer_ready {
             Err(Error::SequencerNotReady)
         } else {
-            let committed = local_write::commit(&mut self.db, &transaction);
+            let committed = self.db.commit_local_write(&transaction);
 
             if let Ok(tx_id) = committed {
                 tracing::trace!(
