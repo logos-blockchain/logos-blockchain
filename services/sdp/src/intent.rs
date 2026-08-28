@@ -60,21 +60,21 @@ where
     /// ignored.
     ///
     /// Every [`Config::status_check_interval_in_tip_changes`] tip changes,
-    /// the tracker checks the status of the intent against the ledger.
-    /// If the status is [`IntentStatus::NotApplied`], it returns
-    /// [`Direction::ResubmitAndTrack`] so that the caller resubmits the
-    /// intent and keeps tracking it. Otherwise, it returns
-    /// [`Direction::Track`] so that the caller keeps tracking the intent
-    /// without resubmitting it.
+    /// the tracker checks the status of the intent against the tip ledger.
     ///
-    /// On the [`Config::max_status_checks`]-th check, the tracker returns
-    /// [`Direction::ResubmitAndDone`] or [`Direction::Done`] instead,
-    /// depending on the status, and the tracking ends.
+    /// If it is not yet time to check the intent status, this function returns
+    /// [`Outcome::WaitingforMoreTipChanges`].
+    /// If the status is checked successfully, this function returns
+    /// [`Outcome::StatusChecked`], so that the caller can handle it
+    /// accordingly.
+    /// If the status check is failed, this function returns
+    /// [`Outcome::StatusCheckFailed`].
+    /// In all of the above cases, the caller can keep calling ths function
+    /// to continue the tracking.
     ///
-    /// The tracker does not stop tracking even if the intent has been applied
-    /// or is not applicable, because a chain reorg can change its status.
-    /// Instead, it keeps tracking the intent for up to
-    /// [`Config::max_status_checks`].
+    /// After [`Config::max_status_checks`] checks, this function always returns
+    /// [`Outcome::Exhaust`] without any status check. The caller can stop
+    /// calling this function in this case.
     pub async fn handle_tip(&mut self, tip: HeaderId) -> Result<Outcome<Intent>, Error> {
         if self.status_checks >= self.config.max_status_checks.get() {
             return Ok(Outcome::Exhausted);
