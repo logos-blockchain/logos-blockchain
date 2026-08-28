@@ -206,7 +206,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resubmit_if_intent_not_applied() {
+    async fn intent_not_applied() {
         let mut tracker = tracker(IntentStatus::NotApplied, 2, 3);
 
         let out = tracker.handle_tip(tip(1)).await.unwrap();
@@ -232,7 +232,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resubmit_after_applied_intent_reverted() {
+    async fn applied_intent_reverted() {
         let status = Arc::new(Mutex::new(Some(IntentStatus::Applied)));
         let mut tracker = tracker_with(MockIntent(Arc::clone(&status)), 2, 3);
 
@@ -250,7 +250,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn keep_tracking_if_status_check_failed() {
+    async fn status_check_failed() {
         let status = Arc::new(Mutex::new(None));
         let mut tracker = tracker_with(MockIntent(Arc::clone(&status)), 2, 3);
 
@@ -271,7 +271,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resubmit_after_status_check_becomes_available_again() {
+    async fn status_check_becomes_available_again() {
         let status = Arc::new(Mutex::new(None));
         let mut tracker = tracker_with(MockIntent(Arc::clone(&status)), 2, 3);
 
