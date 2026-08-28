@@ -169,14 +169,6 @@ Visit our [GitHub releases page][github-releases-page] to get instructions on ho
 
 You can visit the [Devnet dashboard][devnet-dashboard] to get more info about the current devnet deployment.
 
-### L2 Demo
-
-```bash
-cd deployment/l2-sequencer-archival-demo
-docker compose up
-# Web UI → http://localhost:8200
-```
-
 ### Generating Documentation
 
 ```bash
