@@ -6,8 +6,8 @@ use core::{
 use futures::{StreamExt as _, task::noop_waker_ref};
 use lb_blend_proofs::quota::Quota;
 use lb_cryptarchia_engine::Epoch;
-use lb_utils::chacha_rng::ChaCha20Rng;
 use rand::SeedableRng as _;
+use rand_chacha::ChaCha20Rng;
 use tokio_stream::iter;
 
 use crate::{

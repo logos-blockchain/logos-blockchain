@@ -15,8 +15,8 @@ use lb_core::{crypto::ZkHash, sdp::ActivityMetadata};
 use lb_groth16::AdditiveGroup as _;
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_poq::{CORE_MERKLE_TREE_HEIGHT, Quota};
-use lb_utils::chacha_rng::ChaCha20Rng;
 use rand::SeedableRng as _;
+use rand_chacha::ChaCha20Rng;
 use rayon::ThreadPoolBuilder;
 
 use crate::{

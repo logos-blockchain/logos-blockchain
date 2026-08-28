@@ -65,7 +65,6 @@ use lb_services_utils::{
     wait_until_services_are_ready,
 };
 use lb_time_service::TimeService;
-use lb_utils::chacha_rng::ChaCha20Rng;
 use overwatch::{
     OpaqueServiceResourcesHandle,
     overwatch::OverwatchHandle,
@@ -76,6 +75,7 @@ use overwatch::{
     },
 };
 use rand::{RngCore, SeedableRng as _, seq::SliceRandom as _};
+use rand_chacha::ChaCha20Rng;
 use tokio::sync::oneshot;
 use tracing::{debug, error, info};
 

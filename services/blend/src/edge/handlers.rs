@@ -11,9 +11,9 @@ use lb_blend::{
     },
 };
 use lb_chain_service::Epoch;
-use lb_utils::chacha_rng::ChaCha20Rng;
 use overwatch::overwatch::OverwatchHandle;
 use rand::SeedableRng as _;
+use rand_chacha::ChaCha20Rng;
 
 use crate::edge::{LOG_TARGET, RunningSettings as Settings, backends::BlendBackend};
 

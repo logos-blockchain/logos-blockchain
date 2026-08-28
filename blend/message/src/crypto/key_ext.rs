@@ -1,6 +1,7 @@
 use lb_blend_crypto::cipher::Cipher;
 use lb_key_management_system_keys::keys::{SharedKey, UnsecuredEd25519Key};
-use lb_utils::chacha_rng::{ChaCha20Rng, SeedableRng as _};
+use rand::SeedableRng as _;
+use rand_chacha::ChaCha20Rng;
 use zeroize::ZeroizeOnDrop;
 
 // This extension trait must go here instead of `logos-blockchain-blend-crypto`

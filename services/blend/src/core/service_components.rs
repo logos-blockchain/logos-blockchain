@@ -1,4 +1,4 @@
-use lb_utils::chacha_rng::ChaCha20Rng;
+use rand_chacha::ChaCha20Rng;
 use tokio::sync::oneshot;
 
 use crate::{

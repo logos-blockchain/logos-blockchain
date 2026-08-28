@@ -1,5 +1,6 @@
 use blake2::{Blake2b512, digest::Digest as _};
-use lb_utils::chacha_rng::{ChaCha20Rng, RngCore as _, SeedableRng as _};
+use rand::{RngCore as _, SeedableRng as _};
+use rand_chacha::ChaCha20Rng;
 
 pub mod cipher;
 pub mod merkle;

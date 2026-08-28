@@ -38,7 +38,8 @@ lb-utils                         = { workspace = true }
 libp2p                           = { features = ["dns"], workspace = true }
 libp2p-stream                    = { workspace = true }
 overwatch                        = { workspace = true }
-rand                             = { workspace = true }
+rand                             = { features = ["getrandom"], workspace = true }
+rand_chacha                      = { workspace = true }
 rayon                            = { workspace = true }
 serde                            = { workspace = true }
 serde_with                       = { workspace = true }

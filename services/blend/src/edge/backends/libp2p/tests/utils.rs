@@ -1,9 +1,9 @@
 use core::num::{NonZeroU64, NonZeroUsize};
 
 use lb_blend::scheduling::membership::Membership;
-use lb_utils::chacha_rng::ChaCha20Rng;
 use libp2p::{PeerId, identity::Keypair};
 use rand::SeedableRng as _;
+use rand_chacha::ChaCha20Rng;
 use tokio::sync::mpsc;
 
 use crate::{

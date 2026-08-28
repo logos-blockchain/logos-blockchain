@@ -22,12 +22,12 @@ use lb_blend::{
 use lb_chain_service::Epoch;
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use lb_libp2p::{Protocol, SwarmEvent};
-use lb_utils::chacha_rng::ChaCha20Rng;
 use libp2p::{
     Multiaddr, PeerId, Swarm, allow_block_list, core::transport::ListenerId, identity::Keypair,
 };
 use libp2p_swarm_test::SwarmExt as _;
 use rand::SeedableRng as _;
+use rand_chacha::ChaCha20Rng;
 use tokio::{
     sync::{broadcast, mpsc},
     time::{Interval, interval},

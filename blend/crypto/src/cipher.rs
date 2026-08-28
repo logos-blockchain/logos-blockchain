@@ -1,4 +1,5 @@
-use lb_utils::chacha_rng::{ChaCha20Rng, RngCore as _};
+use rand::RngCore as _;
+use rand_chacha::ChaCha20Rng;
 
 use crate::{blake2b512, chacha20_rng};
 

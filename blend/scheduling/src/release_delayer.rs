@@ -175,8 +175,8 @@ mod tests {
     use std::num::NonZeroU64;
 
     use futures::{StreamExt as _, io::empty, task::noop_waker_ref};
-    use lb_utils::chacha_rng::ChaCha20Rng;
     use rand::SeedableRng as _;
+    use rand_chacha::ChaCha20Rng;
     use tokio_stream::iter;
 
     use crate::release_delayer::EpochProcessedMessageDelayer;
