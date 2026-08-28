@@ -55,6 +55,7 @@ pub struct WithdrawValidationContext<'a> {
     pub helper: &'a dyn OperationVerificationHelper,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct WithdrawExecutionContext {
     pub channels: Channels,
     pub tx_hash: TxHash,
