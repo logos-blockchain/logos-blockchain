@@ -8,6 +8,7 @@ use lb_pow_service::{
 };
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::http::DynError;
 
@@ -100,15 +101,19 @@ where
 ///
 /// The whole body is optional, and so is the key inside it: both omitted mean
 /// "use the node's auto-claim target".
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, ToSchema)]
 pub struct PoWClaimRequestBody {
+    // `ZkPublicKey` encodes through `serde_fr` as a 32-byte hex string, but it
+    // lives in `lb-key-management-system-keys`, which sits below `lb-core` in
+    // the dependency graph and so cannot reach `lb_core::utils::hex_bytes_schema`.
     #[serde(default)]
+    #[schema(value_type = Option<String>)]
     pub claim_address: Option<ZkPublicKey>,
 }
 
 /// The id of the reward-claim transaction submitted by a claim request, or
 /// `null` when there were no rewards to claim.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct PoWClaimResponseBody {
     pub tx_hash: Option<TxHash>,
 }

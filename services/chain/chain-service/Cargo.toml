@@ -37,7 +37,7 @@ time                       = { workspace = true }
 tokio                      = { workspace = true }
 tracing                    = { workspace = true }
 tracing-futures            = { features = ["std-future"], workspace = true }
-utoipa                     = { optional = true, workspace = true }
+utoipa                     = { features = ["macros"], optional = true, workspace = true }
 
 [dev-dependencies]
 lb-core                       = { workspace = true }
@@ -50,4 +50,4 @@ tempfile                      = { workspace = true }
 
 [features]
 default = []
-openapi = ["dep:utoipa"]
+openapi = ["dep:utoipa", "lb-core/openapi", "lb-cryptarchia-engine/openapi"]

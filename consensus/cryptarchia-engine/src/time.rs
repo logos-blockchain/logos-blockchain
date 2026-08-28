@@ -209,6 +209,16 @@ impl TryFrom<u64> for Epoch {
     }
 }
 
+#[cfg(feature = "openapi")]
+impl utoipa::PartialSchema for Slot {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        u64::schema()
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl utoipa::ToSchema for Slot {}
+
 impl From<u64> for Slot {
     fn from(slot: u64) -> Self {
         Self(slot)

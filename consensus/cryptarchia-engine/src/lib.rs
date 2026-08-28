@@ -21,6 +21,7 @@ pub(crate) const LOG_TARGET: &str = "cryptarchia::engine";
 pub type UncleSlots = UpperBoundedVec<Slot, MAX_UNCLES>;
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub enum State {
     Bootstrapping,
     Online,

@@ -27,6 +27,8 @@ thiserror  = { workspace = true }
 time       = { workspace = true }
 tokio      = { features = ["time"], optional = true, workspace = true }
 tracing    = { workspace = true }
+utoipa     = { features = ["macros"], optional = true, workspace = true }
 
 [features]
-tokio = ["dep:tokio"]
+openapi = ["dep:utoipa"]
+tokio   = ["dep:tokio"]

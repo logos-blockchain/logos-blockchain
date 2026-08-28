@@ -26,9 +26,9 @@ lb-blend-service                 = { workspace = true }
 lb-chain-broadcast-service       = { workspace = true }
 lb-chain-leader-service          = { workspace = true }
 lb-chain-network-service         = { workspace = true }
-lb-chain-service                 = { workspace = true }
-lb-core                          = { workspace = true }
-lb-cryptarchia-engine            = { workspace = true }
+lb-chain-service                 = { features = ["openapi"], workspace = true }
+lb-core                          = { features = ["openapi"], workspace = true }
+lb-cryptarchia-engine            = { features = ["openapi"], workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { features = ["unsafe"], workspace = true }
@@ -64,7 +64,7 @@ tracing                          = { workspace = true }
 url                              = { workspace = true }
 
 # openapi related dependencies
-utoipa = { workspace = true }
+utoipa = { features = ["macros"], workspace = true }
 # XCompiling from Unix has issues downloading assets. Also, building with Nix can't download assets.
 utoipa-swagger-ui = { features = ["axum", "vendored"], workspace = true }
 
@@ -80,6 +80,7 @@ validator  = { features = ["derive"], workspace = true }
 tikv-jemallocator = { optional = true, workspace = true }
 
 [dev-dependencies]
+boon             = { workspace = true }
 bytes            = { workspace = true }
 rand             = { workspace = true }
 serde_urlencoded = { workspace = true }

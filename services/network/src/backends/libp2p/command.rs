@@ -37,14 +37,18 @@ pub struct Dial {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Libp2pInfo {
+    #[cfg_attr(feature = "openapi", schema(value_type = Vec<String>))]
     pub listen_addresses: Vec<Multiaddr>,
+    #[cfg_attr(feature = "openapi", schema(value_type = String))]
     pub peer_id: PeerId,
     #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Vec<String>))]
     pub connected_peers: Vec<PeerId>,
     pub n_peers: usize,
     pub n_connections: u32,
     pub n_pending_connections: u32,
     #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Vec<String>))]
     pub discovered_peers: Vec<PeerId>,
     #[serde(default)]
     pub n_discovered_peers: usize,

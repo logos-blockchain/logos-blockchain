@@ -113,6 +113,24 @@ type BoundedMultiaddr = lb_utils::bounded::multiaddr::BoundedMultiaddr<0, MAX_LO
 #[serde(try_from = "Multiaddr")]
 pub struct Locator(BoundedMultiaddr);
 
+#[cfg(feature = "openapi")]
+impl utoipa::PartialSchema for Locator {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        utoipa::openapi::schema::ObjectBuilder::new()
+            .schema_type(utoipa::openapi::schema::Type::String)
+            .max_length(Some(MAX_LOCATOR_BYTE_SIZE))
+            .description(Some(
+                "Multiaddress, e.g. `/ip4/127.0.0.1/tcp/3000`.".to_owned(),
+            ))
+            .examples(["/ip4/127.0.0.1/tcp/3000"])
+            .build()
+            .into()
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl utoipa::ToSchema for Locator {}
+
 impl Locator {
     #[must_use]
     pub const fn new_unchecked(addr: Multiaddr) -> Self {
