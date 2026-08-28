@@ -17,7 +17,7 @@ use lb_log_targets::wallet;
 use lb_wallet::{Voucher, Vouchers, WalletBlock, WalletError, WalletState};
 use overwatch::services::state::StateUpdater;
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{KeyId, WalletServiceError, WalletServiceSettings};
 
@@ -310,6 +310,22 @@ impl<'u> ServiceState<'u> {
         new_immutable_blocks_count: u64,
         pruned_nullifiers: impl IntoIterator<Item = VoucherNullifier>,
     ) {
+        // The wallet must already hold a `WalletState` for `new_lib`, otherwise
+        // `update_state` cannot persist the recovery state. The service backfills
+        // up to `new_lib` before calling us; if it still isn't present (e.g. the
+        // block is not yet in storage) we skip advancing rather than panicking,
+        // keeping `self.lib` pointing at a block whose state exists. A later
+        // block application or LIB update advances the LIB once the gap is filled.
+        if !self.wallet.has_processed_block(new_lib) {
+            warn!(
+                target: wallet::SERVICE,
+                ?new_lib,
+                current_lib = ?self.lib,
+                "Skipping LIB advance: wallet has not applied the new LIB block yet"
+            );
+            return;
+        }
+
         self.lib = new_lib;
         self.wallet.prune_states(pruned_blocks);
         self.wallet.prune_vouchers(pruned_nullifiers);
@@ -554,20 +570,23 @@ mod tests {
         }
     }
 
-    /// Reproduces the wallet-service crash seen the first time a bootstrapping
-    /// node switches to Online:
+    /// Regression test for the wallet-service crash seen the first time a
+    /// bootstrapping node switches to Online:
     ///
     /// During bootstrap the engine never advances the LIB, so no `LibUpdate`
     /// is broadcast and the wallet's `state.lib` stays at its starting point.
     /// `switch_to_online()` then jumps the chain LIB to the tip's k-th
     /// ancestor without broadcasting a `LibUpdate`. The first block processed
     /// afterwards broadcasts a `LibUpdate` whose `new_lib` can be a block the
-    /// wallet has not applied yet (its frontier lags during IBD), and
-    /// `handle_lib_update` has no backfill path, so the wallet service dies:
+    /// wallet has not applied yet (its frontier lags during IBD).
+    ///
+    /// The service backfills up to `new_lib` before advancing (see
+    /// `handle_lib_update`). This test covers the `advance_lib` safety net for
+    /// the case the block is still missing: it must skip the advance and keep
+    /// the current LIB rather than panicking with
     /// "`WalletState` at LIB must exist: `UnknownBlock(...)`".
     #[test]
-    #[should_panic(expected = "WalletState at LIB must exist")]
-    fn lib_update_for_unapplied_block_panics() {
+    fn lib_update_for_unapplied_block_skips_advance() {
         use std::sync::Arc;
 
         use lb_services_utils::overwatch::RecoveryData;
@@ -603,5 +622,9 @@ mod tests {
             1,
             Vec::<VoucherNullifier>::new(),
         );
+
+        // No panic: the advance is skipped and the LIB stays at a block whose
+        // WalletState exists.
+        assert_eq!(state.lib(), genesis);
     }
 }
