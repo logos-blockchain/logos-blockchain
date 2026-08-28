@@ -661,12 +661,15 @@ mod tests {
     #[test]
     fn execute_issues_reward_utxo_and_registers_nullifier() {
         let op = claim_op(CURRENT_EPOCH);
-        let signed_operation = SignedOperation::new(op, NoOpProof)
+        let verified_signed_operation = SignedOperation::new(op, NoOpProof)
             .into_preverified(&())
             .unwrap()
             .into_verified(&accepting_context(&HashTrieMapSync::new_sync()))
             .unwrap();
-        let operation = signed_operation.operation().clone();
+        let (signed_operation, _) = verified_signed_operation.into_parts();
+        let puzzle_ticket = signed_operation.operation().get_puzzle_ticket();
+        let operation_op_id = signed_operation.operation().op_id();
+        let operation_public_key = signed_operation.operation().public_key;
         let epoch_reward = 10;
         let tx_hash = TxHash::from([11u8; 32]);
 
@@ -683,19 +686,16 @@ mod tests {
 
         // The spent solution is recorded against the anchor block's slot,
         // and the pool pays out sigma_e.
-        assert_eq!(
-            ctx.nullifiers.get(&operation.get_puzzle_ticket()),
-            Some(&Slot::from(45u64))
-        );
+        assert_eq!(ctx.nullifiers.get(&puzzle_ticket), Some(&Slot::from(45u64)));
         assert_eq!(ctx.reward_pool, 990);
 
         // The reward note lands in the UTXO set, payable to the op's key
         // (§5.3 execution step 3). Regression: the persistent-tree insert
         // result used to be discarded, so the note never reached the set.
         let expected_utxo = Utxo {
-            op_id: operation.op_id(),
+            op_id: operation_op_id,
             output_index: 0,
-            note: Note::new(epoch_reward, operation.public_key),
+            note: Note::new(epoch_reward, operation_public_key),
         };
         assert_eq!(ctx.utxos.get(&expected_utxo.id()), Some(expected_utxo));
 
@@ -713,8 +713,8 @@ mod tests {
             panic!("expected PoWRewardClaimed tx event");
         };
         assert_eq!(*event_tx_hash, tx_hash);
-        assert_eq!(*op_id, operation.op_id());
-        assert_eq!(*pow_nullifier, operation.get_puzzle_ticket());
+        assert_eq!(*op_id, operation_op_id);
+        assert_eq!(*pow_nullifier, puzzle_ticket);
         assert_eq!(*utxo, expected_utxo);
         assert!(events.next().is_none());
     }
@@ -728,11 +728,13 @@ mod tests {
         // and aborts loudly rather than minting a reward note the pool
         // cannot back.
         let op = claim_op(CURRENT_EPOCH);
-        let signed_operation = SignedOperation::new(op, NoOpProof)
+        let verified_signed_operation = SignedOperation::new(op, NoOpProof)
             .into_preverified(&())
             .unwrap()
             .into_verified(&accepting_context(&HashTrieMapSync::new_sync()))
             .unwrap();
+        let (signed_operation, _) = verified_signed_operation.into_parts();
+
         drop(signed_operation.execute(ClaimPoWRewardExecutionContext {
             reward_pool: 5,
             epoch_reward: 10,

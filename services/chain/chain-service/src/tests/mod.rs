@@ -13,7 +13,6 @@ use lb_core::{
         gas::MainnetGasProfile,
         ledger::{Inputs, Outputs, verification_mode::StandardMode},
         ops::{
-            SignedOp,
             leader_claim::{VoucherCm, VoucherSecret},
             transfer::TransferOp,
         },

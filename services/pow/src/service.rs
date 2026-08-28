@@ -23,9 +23,9 @@ use lb_core::{
     events::{Event, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
-        MantleTransaction, Note, NoteId, Op, OpProof, Utxo, Value,
+        Note, NoteId, Op, OpProof, SignedOps, Utxo, Value,
         gas::MainnetGasProfile,
-        ledger::{Inputs, InputsError, Outputs},
+        ledger::{Inputs, InputsError, Outputs, verification_mode::StandardMode},
         ops::{
             NoOpProof, OpId as _,
             pow::{ClaimPowRewardOp, PowNullifier},
@@ -33,8 +33,10 @@ use lb_core::{
         },
         traits::Hashable as _,
         transactions::{
-            GasPrices, MAX_OPS_PER_TX, MantleTxBuilder, MantleTxContext, MantleTxGasContext,
-            OpProofs, TxBuilderError, hash::TxHash, states::Unverified,
+            GasPrices, MAX_OPS_PER_TX, MantleTxBuilder, OpProofs, TxBuilderError,
+            hash::TxHash,
+            states::Unverified,
+            tx_list::ops::{OpsContext, OpsGasContext},
         },
     },
 };
@@ -121,6 +123,8 @@ pub enum PoWError {
     UntrackedClaimTargets(Vec<ZkPublicKey>),
     #[error("no claim address given and no auto-claim target is below its threshold")]
     NoClaimTarget,
+    #[error("failed to build signed transaction: {0}")]
+    SignedOps(#[from] lb_core::mantle::transactions::tx_list::signed_ops::Error),
 }
 
 /// Max inputs a single `Transfer` op can carry: its `ZkSig` is a
@@ -1269,7 +1273,7 @@ async fn build_reward_claim_tx(
     ledger_state: &LedgerState,
     reward_pool: Value,
     tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
-) -> Result<(MantleTransaction<Unverified>, usize), PoWError> {
+) -> Result<(SignedOps<Unverified, StandardMode>, usize), PoWError> {
     // The reward value and gas prices are read at `ledger_state`; they must
     // match the state the tx applies against, or the reconstructed UTXOs / fee
     // will be off.
@@ -1291,12 +1295,12 @@ async fn build_reward_claim_tx_inner(
     reward_pool: Value,
     gas_prices: GasPrices,
     tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
-) -> Result<(MantleTransaction<Unverified>, usize), PoWError> {
+) -> Result<(SignedOps<Unverified, StandardMode>, usize), PoWError> {
     if reward_value == 0 {
         return Err(PoWError::RewardsDisabled);
     }
-    let context = MantleTxContext {
-        gas_context: MantleTxGasContext::new(HashMap::new(), HashMap::new(), gas_prices),
+    let context = OpsContext {
+        gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), gas_prices),
         leader_reward_amount: 0,
     };
 
@@ -1352,7 +1356,8 @@ async fn build_reward_claim_tx_inner(
         }
         ops_proofs.try_push(OpProof::ZkSig(zk_sig))?;
     }
-    Ok((MantleTransaction::new(mantle_tx, ops_proofs), claim_count))
+    let tx = SignedOps::from_parts(mantle_tx, ops_proofs)?;
+    Ok((tx, claim_count))
 }
 
 /// Builds the `Transfer` ops spending `note_ids`, grouped into batches of up to
@@ -1429,7 +1434,7 @@ fn change_outputs(
 /// whichever node exits the blend network decodes what it expects.
 async fn publish_reward_claim<BlendService, RuntimeServiceId>(
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
-    signed_tx: MantleTransaction<Unverified>,
+    signed_tx: SignedOps<Unverified, StandardMode>,
 ) -> Result<(), PoWError>
 where
     BlendService: BlendServiceData,
@@ -1450,7 +1455,7 @@ fn estimate_reward_claim_fee(
     tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
     note_ids: &[NoteId],
     claim_address: ZkPublicKey,
-    context: &MantleTxContext,
+    context: &OpsContext,
 ) -> Result<Value, PoWError> {
     // Change values don't affect gas, so probe with zero-value outputs.
     let num_groups = note_ids.len().div_ceil(MAX_TRANSFER_INPUTS);
@@ -1469,11 +1474,14 @@ mod tests {
     use lb_core::{
         header::HeaderId,
         mantle::{
-            MantleTransaction, Note, NoteId, Op, OpProof, Utxo,
+            Note, NoteId, OpProofRef, OpRef, SignedOps, Utxo,
+            ledger::verification_mode::StandardMode,
             ops::{OpId as _, pow::ClaimPowRewardOp},
+            traits::MantleTx as _,
             transactions::{
-                GasPrices, MAX_OPS_PER_TX, MantleTxBuilder, MantleTxContext, MantleTxGasContext,
-                mantle_tx::MantleTx as _, states::Unverified,
+                GasPrices, MAX_OPS_PER_TX, MantleTxBuilder,
+                states::Unverified,
+                tx_list::ops::{OpsContext, OpsGasContext},
             },
         },
     };
@@ -1508,9 +1516,9 @@ mod tests {
         (secret_key, claim)
     }
 
-    fn context() -> MantleTxContext {
-        MantleTxContext {
-            gas_context: MantleTxGasContext::new(
+    fn context() -> OpsContext {
+        OpsContext {
+            gas_context: OpsGasContext::new(
                 HashMap::default(),
                 HashMap::default(),
                 GasPrices::new(1, 1),
@@ -1522,11 +1530,14 @@ mod tests {
     /// Asserts a built tx respects the transaction's own structural limits: the
     /// op budget, the per-transfer signing-key limit, and a correctly-typed
     /// proof per op (the last via the ledger's stateless `preverify`).
-    fn assert_within_tx_limits(tx: &MantleTransaction<Unverified>) {
-        let ops = tx.mantle_tx().ops();
-        assert!(ops.len() <= MAX_OPS_PER_TX, "op count exceeds the tx limit");
-        for op in ops.iter() {
-            if let Op::Transfer(transfer) = op {
+    fn assert_within_tx_limits(tx: &SignedOps<Unverified, StandardMode>) {
+        let op_refs = tx.op_refs();
+        assert!(
+            op_refs.len() <= MAX_OPS_PER_TX,
+            "op count exceeds the tx limit"
+        );
+        for op_ref in op_refs {
+            if let OpRef::Transfer(transfer) = op_ref {
                 assert!(
                     (&transfer.inputs).into_iter().count() <= MAX_TRANSFER_INPUTS,
                     "transfer inputs exceed the signing-key limit"
@@ -1732,21 +1743,21 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let ops = tx.ops();
+        let ops = tx.op_refs();
 
         assert_eq!(ops.len(), 42); // 40 claims + 2 transfers
         assert!(
             ops[..32]
                 .iter()
-                .all(|op| matches!(op, Op::ClaimPowReward(_)))
+                .all(|op| matches!(op, OpRef::ClaimPowReward(_)))
         );
-        assert!(matches!(ops[32], Op::Transfer(_)));
+        assert!(matches!(ops[32], OpRef::Transfer(_)));
         assert!(
             ops[33..41]
                 .iter()
-                .all(|op| matches!(op, Op::ClaimPowReward(_)))
+                .all(|op| matches!(op, OpRef::ClaimPowReward(_)))
         );
-        assert!(matches!(ops[41], Op::Transfer(_)));
+        assert!(matches!(ops[41], OpRef::Transfer(_)));
     }
 
     #[test]
@@ -1775,20 +1786,20 @@ mod tests {
 
         assert_eq!(claimed, 1);
         assert_within_tx_limits(&tx);
-        let ops = tx.mantle_tx().ops();
+        let ops = tx.op_refs();
         assert_eq!(ops.len(), 2);
-        assert!(matches!(ops[0], Op::ClaimPowReward(_)));
-        let Op::Transfer(transfer) = &ops[1] else {
+        assert!(matches!(ops[0], OpRef::ClaimPowReward(_)));
+        let OpRef::Transfer(transfer) = &ops[1] else {
             panic!("second op should be a transfer");
         };
         let inputs: Vec<NoteId> = (&transfer.inputs).into_iter().copied().collect();
         assert_eq!(inputs, vec![expected_note]);
 
         // A `None` proof for the claim, a `ZkSig` for the transfer.
-        let proofs = tx.ops_proofs();
+        let proofs = tx.op_proof_refs();
         assert_eq!(proofs.len(), 2);
-        assert!(matches!(proofs[0], OpProof::None(_)));
-        assert!(matches!(proofs[1], OpProof::ZkSig(_)));
+        assert!(matches!(proofs[0], OpProofRef::None(_)));
+        assert!(matches!(proofs[1], OpProofRef::ZkSig(_)));
     }
 
     #[tokio::test]
@@ -1834,10 +1845,10 @@ mod tests {
 
         assert_eq!(claimed, 2); // only two of the five tickets fit the pool
         assert_within_tx_limits(&tx);
-        let ops = tx.mantle_tx().ops();
+        let ops = tx.op_refs();
         let claims = ops
             .iter()
-            .filter(|op| matches!(op, Op::ClaimPowReward(_)))
+            .filter(|op| matches!(op, OpRef::ClaimPowReward(_)))
             .count();
         assert_eq!(claims, 2); // 2 claims + 1 transfer
         assert_eq!(ops.len(), 3);
@@ -1918,10 +1929,10 @@ mod tests {
 
         assert_eq!(claimed, cap);
         assert_within_tx_limits(&tx);
-        let ops = tx.mantle_tx().ops();
+        let ops = tx.op_refs();
         let claims = ops
             .iter()
-            .filter(|op| matches!(op, Op::ClaimPowReward(_)))
+            .filter(|op| matches!(op, OpRef::ClaimPowReward(_)))
             .count();
         let transfers = ops.len() - claims;
         assert_eq!(claims, cap);

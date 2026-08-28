@@ -2,15 +2,10 @@ use std::{iter::Enumerate, vec::IntoIter};
 
 use crate::mantle::{
     VerificationError,
-    batch::DeferredZkpVerification,
     ledger::verification_mode::StandardMode,
-    ops::SignedOp,
+    ops::{SignedOp, signed_op::VerifiedSignedOp},
     traits::Hashable as _,
-    transactions::{
-        OperationVerificationHelper, SignedOps,
-        hash::TxHashView,
-        states::{Preverified, Verified},
-    },
+    transactions::{OperationVerificationHelper, SignedOps, hash::TxHashView, states::Preverified},
 };
 
 pub struct VerifiedOperations {
@@ -55,15 +50,7 @@ impl VerifiedOperations {
     pub fn next(
         &mut self,
         helper: &impl OperationVerificationHelper,
-    ) -> Option<
-        Result<
-            (
-                SignedOp<Verified, StandardMode>,
-                Option<DeferredZkpVerification>,
-            ),
-            VerificationError,
-        >,
-    > {
+    ) -> Option<Result<VerifiedSignedOp<StandardMode>, VerificationError>> {
         let (index, signed_op) = self.signed_ops.next()?;
         let verify_result = signed_op.into_verified(index, &self.tx_hash_view, helper);
         Some(verify_result.map_err(|(_signed_op, error)| error))

@@ -20,9 +20,9 @@ use rpds::HashTrieSetSync;
 /// The Ed25519 author of a tx's channel inscription op, if it carries one — the
 /// signer stored on the pending entry's `signed_tx`, recovered for lineage
 /// reconstruction.
-fn inscription_signer(tx: &MantleTransaction<Unverified>) -> Option<Ed25519PublicKey> {
-    tx.mantle_tx().ops().iter().find_map(|op| match op {
-        Op::ChannelInscribe(inscribe) => Some(inscribe.signer),
+fn inscription_signer(tx: &SignedOps<Unverified, StandardMode>) -> Option<Ed25519PublicKey> {
+    tx.op_refs_iter().find_map(|op| match op {
+        OpRef::ChannelInscribe(inscribe) => Some(inscribe.signer),
         _ => None,
     })
 }
@@ -76,7 +76,7 @@ fn opaque_lineage(
     let mut last_msg = None;
     let mut config_parent = None;
     let mut last_config = None;
-    for op in tx.mantle_tx().ops() {
+    for op in tx.op_refs_iter() {
         match op {
             OpRef::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
                 if last_msg.is_none() {
@@ -852,7 +852,7 @@ impl TxState {
     pub fn shed_stale_pending_configs(
         &mut self,
         tip: HeaderId,
-    ) -> Vec<MantleTransaction<Unverified>> {
+    ) -> Vec<SignedOps<Unverified, StandardMode>> {
         if self.pending_other.is_empty() {
             return Vec::new();
         }
@@ -1428,13 +1428,7 @@ impl TxState {
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{
-        Op,
-        Op::ChannelInscribe,
-        ops::channel::inscribe::InscriptionOp,
-        transactions::{OpProofs, Ops},
-    };
-    use lb_key_management_system_service::keys::Ed25519PublicKey;
+    use lb_core::mantle::{Op, ops::channel::inscribe::InscriptionOp, transactions::Ops};
 
     use super::*;
     use crate::test_support::header_id;
@@ -1831,7 +1825,7 @@ mod tests {
             transfer_threshold: 1,
         };
         let ops = Ops::from([Op::ChannelConfig(config)]);
-        let config_tx = SignedOps::from_parts(ops, OpProofs::empty()).unwrap();
+        let config_tx = SignedOps::from_ops_with_placeholder_proofs(ops);
         state.submit_other(config_tx, channel_id);
 
         assert_eq!(
@@ -1935,7 +1929,7 @@ mod tests {
 
     /// Build a pure `[config]` tx for the zero channel; `data` varies the
     /// payload so ids differ.
-    fn config_tx(parent: MsgId, data: u32) -> (MantleTransaction<Unverified>, MsgId) {
+    fn config_tx(parent: MsgId, data: u32) -> (SignedOps<Unverified, StandardMode>, MsgId) {
         use lb_core::mantle::{
             channel::{SlotTimeframe, SlotTimeout},
             ops::channel::config::{ChannelConfigOp, Keys},
@@ -1950,10 +1944,8 @@ mod tests {
             transfer_threshold: 1,
         };
         let config_msg = config.id();
-        let tx = MantleTransaction::new(
-            RawMantleTx([Op::ChannelConfig(config)].into()),
-            OpProofs::empty(),
-        );
+        let tx =
+            SignedOps::from_ops_with_placeholder_proofs(Ops::from([Op::ChannelConfig(config)]));
         (tx, config_msg)
     }
 
@@ -1962,12 +1954,12 @@ mod tests {
     /// `Custom { config_entries }` shape is exercised separately in
     /// `mixed_config_tx_is_custom_but_advances_the_config_tip`).
     fn config_block_tx(
-        tx: &MantleTransaction<Unverified>,
+        tx: &SignedOps<Unverified, StandardMode>,
         this_msg: MsgId,
         parent: MsgId,
     ) -> BlockChannelTx {
         BlockChannelTx::Config(InscriptionInfo {
-            tx_hash: tx.mantle_tx().hash(),
+            tx_hash: tx.hash(),
             parent_msg: parent,
             this_msg,
             payload: [].into(),
@@ -2010,7 +2002,7 @@ mod tests {
 
         let shed = state.shed_stale_pending_configs(b2);
         assert_eq!(shed.len(), 1);
-        assert_eq!(shed[0].mantle_tx().hash(), stale_hash);
+        assert_eq!(shed[0].hash(), stale_hash);
         assert!(!state.pending_other_contains(&stale_hash));
     }
 
@@ -2080,9 +2072,9 @@ mod tests {
         // One pending config chains on the now-superseded root; another chains
         // on the chain tip C2.
         let (stale, _) = config_tx(MsgId::root(), 3);
-        let stale_hash = stale.mantle_tx().hash();
+        let stale_hash = stale.hash();
         let (on_tip, _) = config_tx(c2_msg, 4);
-        let on_tip_hash = on_tip.mantle_tx().hash();
+        let on_tip_hash = on_tip.hash();
         state.submit_other(stale, channel_id);
         state.submit_other(on_tip, channel_id);
 
@@ -2110,7 +2102,7 @@ mod tests {
         // is kept.
         let shed = state.shed_stale_pending_configs(b1);
         assert_eq!(shed.len(), 1);
-        assert_eq!(shed[0].mantle_tx().hash(), stale_hash);
+        assert_eq!(shed[0].hash(), stale_hash);
         assert!(!state.pending_other_contains(&stale_hash));
         assert!(state.pending_other_contains(&on_tip_hash));
     }
@@ -2125,7 +2117,7 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
 
         let (config, config_msg) = config_tx(MsgId::root(), 1);
-        let config_hash = config.mantle_tx().hash();
+        let config_hash = config.hash();
         // Build the block entry before `submit_other` moves the tx.
         let block_tx = config_block_tx(&config, config_msg, MsgId::root());
         state.submit_other(config, channel_id);
@@ -2170,7 +2162,7 @@ mod tests {
         // Our config C chains on B and is pending; its block hasn't arrived, so
         // it is in no safe set.
         let (c_config, _c_msg) = config_tx(b_msg, 2);
-        let c_hash = c_config.mantle_tx().hash();
+        let c_hash = c_config.hash();
         state.submit_other(c_config, channel_id);
 
         // C extends the local tip B, so it survives.

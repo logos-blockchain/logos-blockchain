@@ -15,9 +15,9 @@ use lb_chain_service::{
 use lb_core::{
     header::HeaderId,
     mantle::{
-        traits::Hashable as _,
         NoteId, SignedOps,
         ledger::verification_mode::StandardMode,
+        traits::Hashable as _,
         transactions::{MantleTxBuilder, states::Preverified},
     },
     sdp::{

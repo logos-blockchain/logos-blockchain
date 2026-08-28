@@ -1383,7 +1383,7 @@ mod tests {
         let dangling_tx = create_config_tx(dangling_config.clone(), &signing_key);
         let result = state
             .clone()
-            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &dangling_tx);
+            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, dangling_tx);
         assert!(matches!(
             result,
             Err(LedgerError::VerificationError(
@@ -1400,7 +1400,7 @@ mod tests {
         };
         let rooted_tx = create_config_tx(rooted_config.clone(), &signing_key);
         let new_state = state
-            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &rooted_tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, rooted_tx)
             .unwrap()
             .0;
         let channel = new_state
@@ -1433,7 +1433,7 @@ mod tests {
             &Key::Ed25519(signing_key.clone()),
         );
         state = state
-            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &first_tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, first_tx)
             .unwrap()
             .0;
 
@@ -1463,14 +1463,14 @@ mod tests {
                 &Key::Ed25519(signing_key.clone()),
             );
             state = state
-                .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &tx)
+                .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, tx)
                 .unwrap()
                 .0;
         }
 
         // The configuration is still valid and leaves the message tip untouched
         let new_state = state
-            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &config_tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, config_tx)
             .unwrap()
             .0;
         let channel = new_state
@@ -1502,7 +1502,7 @@ mod tests {
         };
         let config1_tx = create_config_tx(config1.clone(), &signing_key);
         state = state
-            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &config1_tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, config1_tx.clone())
             .unwrap()
             .0;
         let config2 = ChannelConfigOp {
@@ -1511,7 +1511,7 @@ mod tests {
         };
         let config2_tx = create_config_tx(config2, &signing_key);
         state = state
-            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &config2_tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, config2_tx)
             .unwrap()
             .0;
 
@@ -1519,7 +1519,7 @@ mod tests {
         // reorganization abandons its block
         let result = state
             .clone()
-            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &config1_tx);
+            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, config1_tx);
         assert!(matches!(
             result,
             Err(LedgerError::VerificationError(
@@ -1536,8 +1536,7 @@ mod tests {
             ..config1
         };
         let sibling_tx = create_config_tx(sibling, &signing_key);
-        let result =
-            state.try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &sibling_tx);
+        let result = state.try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, sibling_tx);
         assert!(matches!(
             result,
             Err(LedgerError::VerificationError(
@@ -1567,7 +1566,7 @@ mod tests {
             &Key::Ed25519(signing_key.clone()),
         );
         state = state
-            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &first_tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, first_tx)
             .unwrap()
             .0;
 
@@ -1583,7 +1582,7 @@ mod tests {
         };
         let config_tx = create_config_tx(config_op.clone(), &signing_key);
         state = state
-            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &config_tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, config_tx)
             .unwrap()
             .0;
 
@@ -1599,7 +1598,7 @@ mod tests {
             &Key::Ed25519(signing_key),
         );
         let new_state = state
-            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &second_tx)
+            .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, second_tx)
             .unwrap()
             .0;
         let channel = new_state
@@ -1645,7 +1644,7 @@ mod tests {
         let ops = vec![Op::ChannelDeposit(deposit.clone())];
         let tx = create_multi_signed_tx(ops, vec![&Key::Zk(sk)]);
         let tx_hash = tx.hash();
-        let result = ledger_state.try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &tx);
+        let result = ledger_state.try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, tx);
         let (new_state, balance, events, deferred_zkps) = result.unwrap();
         deferred_zkps.verify().unwrap();
 
@@ -2497,8 +2496,6 @@ mod tests {
         // Try to claim the reward using the same nullifier.
         let tx_hash = TxHash::from([0u8; 32]);
         let tx_hash_view = TxHashView::from(tx_hash);
-        // Use a dummy proof since duplication is detected before proof verification
-        let proof = Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
         let err = preverified_signed_operation
             .verify(&LeaderClaimVerificationContext {
                 nullifiers: leaders.nullifiers(),

@@ -845,7 +845,11 @@ where
         let own_sig = build_sign_tx(tx.hash(), &self.signing_key);
         let ops_proofs =
             build_atomic_bundle_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
-        let signed_tx = SignedOps::from_parts(tx, ops_proofs).expect("proofs should match"); // TODO: Double check
+        let signed_tx = SignedOps::from_parts(tx, ops_proofs).map_err(|error| {
+            Error::Network(format!(
+                "failed to build signed atomic withdraw tx: {error:?}"
+            ))
+        })?;
 
         let tx_hash = signed_tx.hash();
         let withdraw_infos = vec![WithdrawInfo {
@@ -1349,7 +1353,7 @@ where
         info!(target: TARGET, "Submitted tx including inscription {:?}", id);
 
         let (payload, signer) = tx
-            .iter()
+            .op_refs_iter()
             .find_map(|op| match op {
                 OpRef::ChannelInscribe(i) if i.channel_id == self.channel_id => {
                     Some((i.inscription.clone(), Some(i.signer)))

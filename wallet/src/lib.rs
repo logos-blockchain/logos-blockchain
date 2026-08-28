@@ -591,11 +591,11 @@ fn op_id_ref(op_ref: &OpRef) -> Option<Hash> {
 /// Build a [`WalletOp`] for an op together with the event (if any) it
 /// emitted in this block. Returns `None` for ops the wallet doesn't track.
 fn transform_op(op: &OpRef<'_>, event: Option<TxEventPayload>) -> Option<WalletOp> {
-    match op {
-        OpRef::Transfer(op) => Some(WalletOp::Transfer(*op.clone())),
-        OpRef::ChannelDeposit(op) => Some(WalletOp::ChannelDeposit(*op.clone())),
-        OpRef::ChannelTransfer(op) => Some(WalletOp::ChannelTransfer(*op.clone())),
-        OpRef::ChannelWithdraw(op) => Some(WalletOp::ChannelWithdraw(*op.clone())),
+    match *op {
+        OpRef::Transfer(op) => Some(WalletOp::Transfer(op.clone())),
+        OpRef::ChannelDeposit(op) => Some(WalletOp::ChannelDeposit(op.clone())),
+        OpRef::ChannelTransfer(op) => Some(WalletOp::ChannelTransfer(op.clone())),
+        OpRef::ChannelWithdraw(op) => Some(WalletOp::ChannelWithdraw(op.clone())),
         OpRef::SDPDeclare(op) => Some(WalletOp::Lock(op.service_note_id)),
         OpRef::LeaderClaim(_) => match event.expect("event for LeaderClaim op must exist") {
             TxEventPayload::LeaderRewardClaimed { utxo, .. } => Some(WalletOp::LeaderClaim(utxo)),

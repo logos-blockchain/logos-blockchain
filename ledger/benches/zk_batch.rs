@@ -26,13 +26,13 @@ use std::{
 use lb_core::{
     header::HeaderId,
     mantle::{
-        MantleTransaction, Note, Op, OpProof, Utxo,
+        Note, Op, OpProof, SignedOps, Utxo,
         batch::DeferredZkpVerifications,
         gas::MainnetGasProfile,
-        ledger::{Inputs, Outputs},
+        ledger::{Inputs, Outputs, verification_mode::StandardMode},
         ops::transfer::TransferOp,
         traits::Hashable as _,
-        transactions::{mantle_tx::RawMantleTx, states::Preverified},
+        transactions::{OpProofs, Ops, states::Preverified},
     },
     sdp::{MinStake, ServiceParameters, ServiceType},
 };
@@ -71,7 +71,8 @@ mod single_block {
         let pool = &*TX_POOL;
         bencher
             .counter(ItemsCount::new(txs_per_block))
-            .bench(|| apply_batched(&pool.genesis, &pool.txs[..txs_per_block]));
+            .with_inputs(|| pool.txs[..txs_per_block].to_vec())
+            .bench_values(|txs| apply_batched(&pool.genesis, txs.into_iter()));
     }
 
     /// Processes a block without batched proof verification.
@@ -80,7 +81,8 @@ mod single_block {
         let pool = &*TX_POOL;
         bencher
             .counter(ItemsCount::new(txs_per_block))
-            .bench(|| apply_sequential(&pool.genesis, &pool.txs[..txs_per_block]));
+            .with_inputs(|| pool.txs[..txs_per_block].to_vec())
+            .bench_values(|txs| apply_sequential(&pool.genesis, txs.into_iter()));
     }
 
     /// Verify/execute txs in a block, without verifying proofs.
@@ -90,7 +92,8 @@ mod single_block {
         let pool = &*TX_POOL;
         bencher
             .counter(ItemsCount::new(txs_per_block))
-            .bench(|| apply(&pool.genesis, &pool.txs[..txs_per_block]).0);
+            .with_inputs(|| pool.txs[..txs_per_block].to_vec())
+            .bench_values(|txs| apply(&pool.genesis, txs.into_iter()).0);
     }
 }
 
@@ -113,26 +116,44 @@ mod multi_block_with_per_block_batching {
     #[divan::bench(args = TXS_PER_BLOCK, sample_count = SAMPLE_COUNT)]
     fn batched_proofs(bencher: Bencher, txs_per_block: usize) {
         let pool = &*TX_POOL;
-        bencher.counter(ItemsCount::new(N_BLOCKS)).bench(|| {
-            let mut state = pool.genesis.clone();
-            for txs in pool.txs.chunks(txs_per_block).take(N_BLOCKS) {
-                state = apply_batched(&state, txs);
-            }
-            state
-        });
+        bencher
+            .counter(ItemsCount::new(N_BLOCKS))
+            .with_inputs(|| {
+                pool.txs
+                    .chunks(txs_per_block)
+                    .take(N_BLOCKS)
+                    .map(<[_]>::to_vec)
+                    .collect::<Vec<_>>()
+            })
+            .bench_values(|blocks| {
+                let mut state = pool.genesis.clone();
+                for txs in blocks {
+                    state = apply_batched(&state, txs.into_iter());
+                }
+                state
+            });
     }
 
     /// Processes multiple blocks without batched proof verification.
     #[divan::bench(args = TXS_PER_BLOCK, sample_count = SAMPLE_COUNT)]
     fn sequential_proofs(bencher: Bencher, txs_per_block: usize) {
         let pool = &*TX_POOL;
-        bencher.counter(ItemsCount::new(N_BLOCKS)).bench(|| {
-            let mut state = pool.genesis.clone();
-            for txs in pool.txs.chunks(txs_per_block).take(N_BLOCKS) {
-                state = apply_sequential(&state, txs);
-            }
-            state
-        });
+        bencher
+            .counter(ItemsCount::new(N_BLOCKS))
+            .with_inputs(|| {
+                pool.txs
+                    .chunks(txs_per_block)
+                    .take(N_BLOCKS)
+                    .map(<[_]>::to_vec)
+                    .collect::<Vec<_>>()
+            })
+            .bench_values(|blocks| {
+                let mut state = pool.genesis.clone();
+                for txs in blocks {
+                    state = apply_sequential(&state, txs.into_iter());
+                }
+                state
+            });
     }
 }
 
@@ -147,7 +168,7 @@ mod multi_block_with_per_block_batching {
 struct TxPool {
     config: Config,
     genesis: LedgerState,
-    txs: Vec<MantleTransaction<Preverified>>,
+    txs: Vec<SignedOps<Preverified, StandardMode>>,
 }
 
 static TX_POOL: LazyLock<TxPool> = LazyLock::new(|| {
@@ -181,13 +202,19 @@ static TX_POOL: LazyLock<TxPool> = LazyLock::new(|| {
     }
 });
 
-fn apply_batched(state: &LedgerState, txs: &[MantleTransaction<Preverified>]) -> LedgerState {
+fn apply_batched(
+    state: &LedgerState,
+    txs: impl Iterator<Item = SignedOps<Preverified, StandardMode>>,
+) -> LedgerState {
     let (state, deferred) = apply(state, txs);
     deferred.verify().expect("proofs should verify");
     state
 }
 
-fn apply_sequential(state: &LedgerState, txs: &[MantleTransaction<Preverified>]) -> LedgerState {
+fn apply_sequential(
+    state: &LedgerState,
+    txs: impl Iterator<Item = SignedOps<Preverified, StandardMode>>,
+) -> LedgerState {
     let (state, deferred) = apply(state, txs);
     for (proof, inputs) in deferred.zk_sigs() {
         assert!(verify(proof, inputs).expect("proof should verify"));
@@ -197,28 +224,29 @@ fn apply_sequential(state: &LedgerState, txs: &[MantleTransaction<Preverified>])
 
 fn apply(
     state: &LedgerState,
-    txs: &[MantleTransaction<Preverified>],
+    txs: impl Iterator<Item = SignedOps<Preverified, StandardMode>>,
 ) -> (LedgerState, DeferredZkpVerifications) {
     let (state, _, deferred) = state
         .clone()
-        .try_apply_contents::<_, HeaderId, MainnetGasProfile>(&TX_POOL.config, txs.iter())
+        .try_apply_contents::<_, HeaderId, MainnetGasProfile>(&TX_POOL.config, txs)
         .expect("block should apply");
     (state, deferred)
 }
 
 /// Builds a transaction with a `Transfer` operation that spends `utxo` and
 /// sends the very little amount to `key`.
-fn build_tx(utxo: Utxo, key: &ZkKey) -> MantleTransaction<Preverified> {
+fn build_tx(utxo: Utxo, key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
     let transfer_op = TransferOp::new(
         Inputs::new([utxo.id()]),
         // Most of the tx's value goes as a tip, to withstand gas cost increases.
         Outputs::new([Note::new(1, key.to_public_key())]),
     );
-    let mantle_tx = RawMantleTx([Op::Transfer(transfer_op)].into());
-    let signature =
-        ZkKey::multi_sign(std::slice::from_ref(key), &mantle_tx.hash().to_fr()).unwrap();
+    let ops = Ops::from([Op::Transfer(transfer_op)]);
+    let signature = ZkKey::multi_sign(std::slice::from_ref(key), &ops.hash().to_fr()).unwrap();
+    let op_proofs = OpProofs::from([OpProof::ZkSig(signature)]);
 
-    MantleTransaction::new(mantle_tx, [OpProof::ZkSig(signature)].into())
+    SignedOps::from_parts(ops, op_proofs)
+        .expect("transaction should build")
         .preverify()
         .expect("transaction should preverify")
 }

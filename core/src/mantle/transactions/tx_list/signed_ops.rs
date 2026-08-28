@@ -4,7 +4,7 @@ use lb_utils::bounded::BoundedError;
 #[cfg(feature = "test-utils")]
 use crate::mantle::Op;
 use crate::mantle::{
-    GasProfile, OpProofRef, TxGasCalculator, TxHash, VerificationError,
+    GasProfile, OpProofRef, OpRef, TxGasCalculator, TxHash, VerificationError,
     gas::{Gas, GasCost, GasOverflow},
     ledger::verification_mode::{GenesisMode, StandardMode, VerificationMode},
     ops::{SignedOp, signed_op_error::OpProofMismatch},
@@ -147,6 +147,10 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOps<State, Mode> {
     #[must_use]
     pub fn op_refs(&self) -> OpRefs<'_> {
         TxList(self.0.map_ref(SignedOp::operation))
+    }
+
+    pub fn op_refs_iter(&self) -> impl Iterator<Item = OpRef<'_>> {
+        self.iter().map(SignedOp::operation)
     }
 
     #[must_use]
@@ -507,7 +511,7 @@ mod tests {
         ledger::{Inputs, Outputs, OutputsError, verification_mode::StandardMode},
         ops::{
             channel::{
-                ChannelId, config::ChannelConfigOp, deposit::DepositOp,
+                ChannelId, MsgId, config::ChannelConfigOp, deposit::DepositOp,
                 verification::test_utils::create_channel_multi_sig_proof,
                 withdraw::ChannelWithdrawOp,
             },
@@ -527,6 +531,7 @@ mod tests {
     fn create_config_op(channel: ChannelId, signing_key: &Ed25519Key) -> ChannelConfigOp {
         ChannelConfigOp {
             channel,
+            parent: MsgId::root(),
             keys: signing_key.public_key().into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),

@@ -46,7 +46,7 @@ enum DirectWalletSourceError {
 /// genesis gas prices.
 #[expect(
     clippy::implicit_hasher,
-    reason = "The thresholds map is forwarded to MantleTxGasContext, which requires the default hasher."
+    reason = "The thresholds map is forwarded to OpsGasContext, which requires the default hasher."
 )]
 pub async fn funded_signed_tx(
     node: &NodeHttpClient,

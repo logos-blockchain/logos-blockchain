@@ -35,6 +35,8 @@ use crate::mantle::{
     },
 };
 
+pub type VerifiedSignedOp<Mode> = (SignedOp<Verified, Mode>, Option<DeferredZkpVerification>);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SignedOp<State: VerificationState, Mode: VerificationMode> {
     ChannelInscribe(SignedOperation<InscriptionOp, State, Mode>),
@@ -216,10 +218,7 @@ where
 
 fn map_verify_success<T>(
     verified_signed_operation: VerifiedSignedOperation<T, StandardMode>,
-) -> (
-    SignedOp<Verified, StandardMode>,
-    Option<DeferredZkpVerification>,
-)
+) -> VerifiedSignedOp<StandardMode>
 where
     T: ProvableOperation,
     SignedOp<Verified, StandardMode>: From<SignedOperation<T, Verified, StandardMode>>,
@@ -242,13 +241,7 @@ impl SignedOp<Preverified, StandardMode> {
         op_index: usize,
         tx_hash_view: &TxHashView,
         helper: &impl OperationVerificationHelper,
-    ) -> Result<
-        (
-            SignedOp<Verified, StandardMode>,
-            Option<DeferredZkpVerification>,
-        ),
-        (Self, VerificationError),
-    > {
+    ) -> Result<VerifiedSignedOp<StandardMode>, (Self, VerificationError)> {
         match self {
             Self::ChannelInscribe(op) => {
                 let channel_inscribe_context = InscriptionValidationContext {

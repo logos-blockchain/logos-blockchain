@@ -160,6 +160,8 @@ pub enum Error {
     RewardsError(#[from] RewardsError),
     #[error(transparent)]
     SdpOp(#[from] lb_core::mantle::ops::sdp::SdpError),
+    #[error("Invalid deferral")]
+    InvalidDeferral,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -333,8 +335,12 @@ impl SdpLedger {
                 })
                 .map_err(|(_signed_operation, error)| error)?;
 
+            let (signed_operation, None) = verified_declaration.into_parts() else {
+                return Err(Error::InvalidDeferral);
+            };
+
             let (result, events) =
-                sdp.try_apply_genesis_sdp_declaration(utxo_tree, verified_declaration, config)?;
+                sdp.try_apply_genesis_sdp_declaration(utxo_tree, signed_operation, config)?;
             sdp = result;
             all_events.extend(events);
         }
@@ -1393,6 +1399,7 @@ mod tests {
             ed25519_sig: Ed25519Signature::zero(),
         };
         let signed_operation_declare = SignedOperation::new(declare_op, proof).into_state_trusted();
+        let operation_service_note_id = signed_operation_declare.operation().service_note_id;
 
         // Initialize ledger with service config and declare
         let epoch0 = dummy_epoch_state(0.into());
@@ -1451,7 +1458,7 @@ mod tests {
         assert!(
             sdp_ledger
                 .service_notes()
-                .is_used_for_service(&declare_op.service_note_id, &ServiceType::BlendNetwork),
+                .is_used_for_service(&operation_service_note_id, &ServiceType::BlendNetwork),
             "the provider's note must still be used by the service before the withdrawn epoch is reached"
         );
 
@@ -1473,7 +1480,7 @@ mod tests {
         assert!(
             !sdp_ledger
                 .service_notes()
-                .is_used_for_service(&declare_op.service_note_id, &ServiceType::BlendNetwork),
+                .is_used_for_service(&operation_service_note_id, &ServiceType::BlendNetwork),
             "the provider's note must no longer be used by the service at the withdrawn epoch"
         );
     }

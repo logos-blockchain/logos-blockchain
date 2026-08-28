@@ -288,7 +288,8 @@ impl MantleTxBuilder {
     /// transaction, plus the funding inputs that will be appended as a
     /// transfer during build.
     pub fn notes_consumed_or_used_in_service(&self) -> impl Iterator<Item = NoteId> {
-        self.iter()
+        self.ops
+            .iter()
             .flat_map(|op| {
                 let inputs: &[NoteId] = match op {
                     Op::Transfer(transfer) => transfer.inputs.as_ref(),

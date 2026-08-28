@@ -302,8 +302,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        mantle::batch::{self, DeferredZkpVerifications},
-        proofs::leader_claim_proof::LeaderClaimPrivate,
+        mantle::batch::DeferredZkpVerifications, proofs::leader_claim_proof::LeaderClaimPrivate,
     };
 
     #[test]
@@ -486,15 +485,9 @@ mod tests {
             voucher_nullifier: bogus_nf,
             pk: ZkPublicKey::zero(),
         };
-        let nullifiers = rpds::HashTrieSetSync::new_sync();
-        let tx_hash_view = TxHashView::from(tx_hash);
 
+        let tx_hash_view = TxHashView::from(tx_hash);
         let preverification_context = LeaderClaimPreverificationContext {
-            tx_hash_view: &tx_hash_view,
-        };
-        let verification_context = LeaderClaimVerificationContext {
-            nullifiers: &nullifiers,
-            claimable_vouchers_root: &voucher_root,
             tx_hash_view: &tx_hash_view,
         };
 
@@ -502,20 +495,12 @@ mod tests {
         // match the proven voucher -> rejected during preverify. A voucher
         // cannot be claimed under a substituted nullifier.
         let unverified_signed_operation = SignedOperation::new(op, proof);
-        let preverified_signed_operation = unverified_signed_operation
-            .into_preverified(&preverification_context)
-            .expect("preverify should accept a valid proof");
-        let verified_signed_operation = preverified_signed_operation
-            .into_verified(&verification_context)
-            .expect("verify should accept a valid claim");
+        let preverified_signed_operation_result =
+            unverified_signed_operation.into_preverified(&preverification_context);
 
         assert!(matches!(
-            std::iter::once(verified_signed_operation)
-                .filter_map(|verified_signed_operation| verified_signed_operation.deferred_zkp)
-                .collect::<DeferredZkpVerifications>()
-                .verify()
-                .unwrap_err(),
-            batch::Error::InvalidLeaderClaimProofs
+            preverified_signed_operation_result,
+            Err(LeaderClaimError::InvalidPoC)
         ));
     }
 }

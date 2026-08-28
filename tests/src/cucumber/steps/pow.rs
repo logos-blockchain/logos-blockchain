@@ -1,7 +1,7 @@
 use std::{collections::HashSet, time::Duration};
 
 use cucumber::{gherkin::Step, then, when};
-use lb_core::mantle::{Op, traits::Hashable as _, transactions::hash::TxHash};
+use lb_core::mantle::{OpRef, traits::Hashable as _, transactions::hash::TxHash};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_testing_framework::NodeHttpClient;
 use tokio::time::{Instant, sleep};
@@ -231,9 +231,9 @@ async fn claim_reward_credited_to(
         |block| {
             let tx = block.transactions.iter().find(|tx| tx.hash() == tx_hash)?;
             let credited = tx
-                .ops_with_proof()
-                .filter_map(|(op, _proof)| match op {
-                    Op::Transfer(transfer) => Some(transfer),
+                .op_refs_iter()
+                .filter_map(|op| match op {
+                    OpRef::Transfer(transfer) => Some(transfer),
                     _ => None,
                 })
                 .flat_map(|transfer| transfer.outputs.iter())

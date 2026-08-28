@@ -19,7 +19,7 @@ use lb_core::{
     mantle::{
         SignedOps, Value,
         ledger::{MAX_TRANSACTION_INPUTS, NoteId, verification_mode::StandardMode},
-        ops::{Op, OpId as _, OpRef, channel::ChannelId},
+        ops::{OpId as _, OpRef, channel::ChannelId},
         traits::Hashable as _,
         transactions::states::Unverified,
     },
@@ -343,7 +343,7 @@ mod tests {
     use lb_core::{
         events::DepositNote,
         mantle::{
-            Note, Op, Value,
+            Note, Op,
             ledger::{Inputs, Outputs},
             ops::channel::{
                 channel_transfer::ChannelTransferOp,

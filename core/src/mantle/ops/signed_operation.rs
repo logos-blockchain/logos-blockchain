@@ -145,7 +145,11 @@ where
     const GAS_COST: Gas = T::GAS_COST;
 }
 
-#[expect(dead_code, reason = "TODO: use SignedOp::verify")]
+pub type VerifiedSignedOperationParts<T, Mode> = (
+    SignedOperation<T, Verified, Mode>,
+    Option<DeferredZkpVerification>,
+);
+
 pub struct VerifiedSignedOperation<T: ProvableOperation, Mode: VerificationMode> {
     signed_operation: SignedOperation<T, Verified, Mode>,
     pub(crate) deferred_zkp: Option<DeferredZkpVerification>,
@@ -162,12 +166,7 @@ impl<T: ProvableOperation, Mode: VerificationMode> VerifiedSignedOperation<T, Mo
         &self.deferred_zkp
     }
 
-    pub fn into_parts(
-        self,
-    ) -> (
-        SignedOperation<T, Verified, Mode>,
-        Option<DeferredZkpVerification>,
-    ) {
+    pub fn into_parts(self) -> VerifiedSignedOperationParts<T, Mode> {
         (self.signed_operation, self.deferred_zkp)
     }
 }

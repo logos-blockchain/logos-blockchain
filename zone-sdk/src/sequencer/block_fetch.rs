@@ -484,7 +484,7 @@ fn mined_config_entries(
             if mined.iter().any(|info| info.tx_hash == tx_hash) {
                 return None;
             }
-            let config = tx.ops().iter().find_map(|op| match op {
+            let config = tx.op_refs_iter().find_map(|op| match op {
                 OpRef::ChannelConfig(config) if config.channel == channel_id => Some(config),
                 _ => None,
             })?;
@@ -1121,15 +1121,18 @@ pub(super) fn classify_channel_tx(
 /// config-only shape [`classify_channel_tx`] reports as
 /// [`BlockChannelTx::Config`]. Mirrors that rule so a shed config is typed the
 /// same way it was classified on chain.
-fn is_pure_config(tx: &MantleTransaction<Unverified>, channel_id: ChannelId) -> bool {
+fn is_pure_config<Mode: VerificationMode>(
+    tx: &SignedOps<Unverified, Mode>,
+    channel_id: ChannelId,
+) -> bool {
     let mut configs = 0usize;
     let mut transfers = 0usize;
-    for op in tx.mantle_tx().ops() {
+    for op in tx.op_refs_iter() {
         match op {
-            Op::ChannelConfig(config) if config.channel == channel_id => configs += 1,
-            Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => return false,
-            Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => return false,
-            Op::Transfer(_) => transfers += 1,
+            OpRef::ChannelConfig(config) if config.channel == channel_id => configs += 1,
+            OpRef::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => return false,
+            OpRef::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => return false,
+            OpRef::Transfer(_) => transfers += 1,
             _ => return false,
         }
     }
@@ -1139,7 +1142,7 @@ fn is_pure_config(tx: &MantleTransaction<Unverified>, channel_id: ChannelId) -> 
 /// Type a shed pending tx for orphan reporting: a config-only tx as
 /// [`ChannelUpdateTx::Config`], anything else as [`ChannelUpdateTx::Custom`].
 pub(super) fn classify_shed_other(
-    tx: MantleTransaction<Unverified>,
+    tx: SignedOps<Unverified, StandardMode>,
     channel_id: ChannelId,
 ) -> ChannelUpdateTx {
     if is_pure_config(&tx, channel_id) {
@@ -1577,9 +1580,9 @@ mod tests {
             channel_id,
             MsgId::root(),
         ))]);
-        let config_hash = config_tx.mantle_tx().hash();
+        let config_hash = config_tx.hash();
         match classify_shed_other(config_tx, channel_id) {
-            ChannelUpdateTx::Config(tx) => assert_eq!(tx.mantle_tx().hash(), config_hash),
+            ChannelUpdateTx::Config(tx) => assert_eq!(tx.hash(), config_hash),
             other => panic!("expected Config, got {other:?}"),
         }
 
@@ -1619,7 +1622,7 @@ mod tests {
             Op::ChannelConfig(config),
             Op::ChannelInscribe(inscribe_op(channel_id, MsgId::root(), b"m")),
         ]);
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.hash();
 
         // Classification keeps the config in `config_entries`.
         let classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);

@@ -520,7 +520,7 @@ where
             .map(ChannelUpdateTx::tx_hash)
             .collect();
         for tx in stale_configs {
-            if !seen.contains(&tx.mantle_tx().hash()) {
+            if !seen.contains(&tx.hash()) {
                 channel_update
                     .orphaned
                     .push(classify_shed_other(tx, self.channel_id));
@@ -678,7 +678,7 @@ mod tests {
         mantle::{
             Note, Op, SignedOps, Utxo,
             channel::{SlotTimeframe, SlotTimeout},
-            ledger::Inputs,
+            ledger::{Inputs, verification_mode::StandardMode},
             ops::{
                 OpProof, OpProofRef, OpRef,
                 channel::{
@@ -689,7 +689,6 @@ mod tests {
                     withdraw::ChannelWithdrawOp,
                 },
             },
-            traits::Hashable as _,
             transactions::{OpProofs, Ops, states::Unverified},
         },
     };
@@ -1140,7 +1139,7 @@ mod tests {
             transfer_threshold: 1,
         };
         let config_tx = unverified_tx_with_ops(vec![Op::ChannelConfig(config_op)]);
-        let config_hash = config_tx.mantle_tx().hash();
+        let config_hash = config_tx.hash();
         let config_block = api_block(2, 1, 2, vec![config_tx]);
 
         // Second connection (the config block) is gated behind `up` so it
@@ -1752,7 +1751,7 @@ mod tests {
         };
         assert!(proof.signatures().is_empty());
         assert_eq!(
-            config_op_of(&signed_tx).parent,
+            config_op_of(&signed_ops).parent,
             MsgId::root(),
             "claiming an unclaimed channel must be rooted at ZERO"
         );
@@ -1817,12 +1816,11 @@ mod tests {
         );
     }
 
-    fn config_op_of(tx: &MantleTransaction<Unverified>) -> ChannelConfigOp {
-        tx.mantle_tx()
-            .ops()
+    fn config_op_of(tx: &SignedOps<Unverified, StandardMode>) -> ChannelConfigOp {
+        tx.op_refs()
             .iter()
-            .find_map(|op| match op {
-                Op::ChannelConfig(config) => Some(config.clone()),
+            .find_map(|op| match *op {
+                OpRef::ChannelConfig(config) => Some(config.clone()),
                 _ => None,
             })
             .expect("tx should carry a config op")

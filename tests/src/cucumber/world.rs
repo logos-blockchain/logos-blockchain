@@ -1098,7 +1098,7 @@ pub struct TransactionState {
     /// than on later inclusion.
     submission_outcomes: HashMap<String, Result<(), String>>,
     /// Manual: Exact signed transactions prepared for later submission.
-    prepared_transactions: HashMap<String, MantleTransaction<Preverified>>,
+    prepared_transactions: HashMap<String, SignedOps<Preverified, StandardMode>>,
     /// Manual: Initial fee arithmetic for percentage-funded transactions
     /// prepared by the fee-market steps.
     prepared_priority_fees: HashMap<String, PreparedPriorityFee>,

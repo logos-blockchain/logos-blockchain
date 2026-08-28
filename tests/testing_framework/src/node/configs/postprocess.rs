@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use lb_config::consensus::{GENESIS_TRANSFER_OUTPUT_LIMIT, SdpFundingConfig};
 use lb_core::{
     block::genesis::GenesisBlock,
-    mantle::{GenesisTime, Note, ledger::Outputs, traits::GenesisTx as _},
+    mantle::{GenesisTime, Note, ledger::Outputs},
     sdp::{Locator, ServiceType},
 };
 use lb_key_management_system_service::keys::{Key, ZkKey};
