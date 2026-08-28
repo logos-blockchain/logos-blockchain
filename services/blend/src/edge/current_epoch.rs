@@ -178,7 +178,7 @@ where
                     zk: zk_info,
                 },
             },
-            proposals: PendingProposals::new(),
+            proposals: PendingProposals::new(epoch),
         }))
     }
 
