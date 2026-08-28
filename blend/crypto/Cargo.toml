@@ -23,5 +23,4 @@ rs-merkle-tree = { features = ["memory_store"], workspace = true }
 thiserror      = { workspace = true }
 
 [dev-dependencies]
-nistrs     = { workspace = true }
 num-bigint = { workspace = true }
