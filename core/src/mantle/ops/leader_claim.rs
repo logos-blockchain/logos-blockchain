@@ -585,7 +585,10 @@ mod tests {
             .expect("verify should accept a valid claim");
 
         std::iter::once(deferred_zkp)
-            .filter_map(|verified_signed_operation| verified_signed_operation.deferred_zkp)
+            .filter_map(|verified_signed_operation| {
+                let (_signed_operation, deferred_zkp) = verified_signed_operation.into_parts();
+                deferred_zkp
+            })
             .collect::<DeferredZkpVerifications>()
             .verify()
             .unwrap();
