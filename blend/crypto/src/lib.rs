@@ -1,4 +1,7 @@
-use blake2::{Blake2b512, digest::Digest as _};
+use blake2::{
+    Blake2b,
+    digest::{Digest as _, consts::U32},
+};
 use rand::{RngCore as _, SeedableRng as _};
 use rand_chacha::ChaCha20Rng;
 
@@ -37,20 +40,11 @@ fn pseudo_random_bytes(buf: &mut [u8], domain: &[u8], key: &[u8]) {
 }
 
 /// Derives the 32-byte CSPRBG seed for a domain and key, per the spec's
-/// ChaCha20-Based PRNG Construction: the first 32 bytes of the
-/// domain-separated BLAKE2b-512 digest.
+/// ChaCha20-Based PRNG Construction: the domain-separated BLAKE2b-256 digest
+/// is the seed.
 pub(crate) fn chacha20_seed(domain: &[u8], key: &[u8]) -> [u8; 32] {
-    blake2b512(&[domain, key])[..32]
-        .try_into()
-        .expect("a BLAKE2b-512 digest is longer than 32 bytes")
-}
-
-/// Computes the BLAKE2b-512 hash of the concatenated inputs.
-#[must_use]
-pub fn blake2b512(inputs: &[&[u8]]) -> [u8; 64] {
-    let mut hasher = Blake2b512::new();
-    for input in inputs {
-        hasher.update(input);
-    }
+    let mut hasher = Blake2b::<U32>::new();
+    hasher.update(domain);
+    hasher.update(key);
     hasher.finalize().into()
 }
