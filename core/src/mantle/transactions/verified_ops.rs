@@ -79,16 +79,21 @@ mod tests {
     use crate::mantle::{
         Note, Utxo, VerificationError,
         channel::{Channels, Error},
-        ledger::Inputs,
+        ledger::{Inputs, verification_mode::StandardMode},
         ops::channel::{ChannelId, config::Keys},
+        traits::Hashable as _,
         transactions::{
+            SignedOps,
+            states::Preverified,
             tx_list::signed_ops::test_utils::{create_withdraw_tx, make_channel_state},
             verification_helper::test_utils::TestOperationVerificationHelper,
         },
     };
 
-    #[test]
-    fn helper_backed_verification_accepts_valid_channel_withdraw() {
+    fn valid_withdraw() -> (
+        SignedOps<Preverified, StandardMode>,
+        TestOperationVerificationHelper,
+    ) {
         let channel_id = ChannelId::from([8u8; 32]);
         let key0 = Ed25519Key::from_bytes(&[8; 32]);
         let key1 = Ed25519Key::from_bytes(&[9; 32]);
@@ -123,6 +128,13 @@ mod tests {
         )
         .with_utxos(vec![utxo]);
 
+        (signed_tx, helper)
+    }
+
+    #[test]
+    fn helper_backed_verification_accepts_valid_channel_withdraw() {
+        let (signed_tx, helper) = valid_withdraw();
+
         signed_tx
             .into_verified()
             .next(&helper)
@@ -147,5 +159,28 @@ mod tests {
             verification_result.err().unwrap(),
             VerificationError::ChannelVerificationError(Error::InvalidSignature)
         );
+    }
+
+    #[test]
+    fn next_returns_none_once_the_operations_are_exhausted() {
+        let (signed_tx, helper) = valid_withdraw();
+        let verified_ops = signed_tx.into_verified();
+
+        let (verified_ops, _) = verified_ops
+            .next(&helper)
+            .expect("Cursor should yield the WithdrawOp")
+            .expect("WithdrawOp should verify");
+
+        assert!(verified_ops.next(&helper).is_none());
+    }
+
+    #[test]
+    fn tx_hash_view_carries_the_transaction_hash() {
+        let (signed_tx, _helper) = valid_withdraw();
+        let tx_hash = signed_tx.hash();
+
+        let verified_ops = signed_tx.into_verified();
+
+        assert_eq!(verified_ops.tx_hash_view().tx_hash(), &tx_hash);
     }
 }
