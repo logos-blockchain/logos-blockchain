@@ -15,7 +15,7 @@ use lb_core::{crypto::ZkHash, sdp::ActivityMetadata};
 use lb_groth16::AdditiveGroup as _;
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_poq::{CORE_MERKLE_TREE_HEIGHT, Quota};
-use lb_utils::blake_rng::BlakeRng;
+use lb_utils::chacha_rng::ChaCha20Rng;
 use rand::SeedableRng as _;
 use rayon::ThreadPoolBuilder;
 
@@ -106,7 +106,7 @@ async fn test_handle_incoming_blend_message() {
     let scheduler_settings = scheduler_settings(&timing_settings(), settings.num_blend_layers);
     let mut scheduler = EpochMessageScheduler::new(
         scheduler_epoch_info(&public_info),
-        BlakeRng::from_entropy(),
+        ChaCha20Rng::from_entropy(),
         scheduler_settings,
     );
     let recovery_checkpoint = ServiceState::with_epoch(
@@ -360,7 +360,7 @@ async fn test_duplicate_decapsulated_replica_handled_gracefully() {
     let scheduler_settings = scheduler_settings(&timing_settings(), settings.num_blend_layers);
     let mut scheduler = EpochMessageScheduler::new(
         scheduler_epoch_info(&public_info),
-        BlakeRng::from_entropy(),
+        ChaCha20Rng::from_entropy(),
         scheduler_settings,
     );
     let recovery_checkpoint = ServiceState::with_epoch(
@@ -457,7 +457,7 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
     let scheduler_settings = scheduler_settings(&timing_settings(), settings.num_blend_layers);
     let mut scheduler = EpochMessageScheduler::new(
         scheduler_epoch_info(&public_info_1),
-        BlakeRng::from_entropy(),
+        ChaCha20Rng::from_entropy(),
         scheduler_settings,
     );
     let recovery_checkpoint = ServiceState::with_epoch(
@@ -513,7 +513,7 @@ async fn test_handle_epoch_transition_expired() {
         settings.clone(),
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
-        BlakeRng::from_entropy(),
+        ChaCha20Rng::from_entropy(),
     );
     let mut backend_event_receiver = backend.subscribe_to_events();
 
@@ -536,7 +536,7 @@ async fn test_handle_epoch_transition_expired() {
     let (sdp_relay, mut sdp_relay_receiver) = sdp_relay();
 
     // Call `handle_epoch_transition_expired`.
-    handle_epoch_transition_expired::<_, NodeId, BlakeRng, MockProofsVerifier, _>(
+    handle_epoch_transition_expired::<_, NodeId, ChaCha20Rng, MockProofsVerifier, _>(
         &mut backend,
         token_collector,
         &sdp_relay,
@@ -591,7 +591,7 @@ async fn test_handle_epoch_event() {
     );
     let scheduler = EpochMessageScheduler::new(
         scheduler_epoch_info(&public_info),
-        BlakeRng::from_entropy(),
+        ChaCha20Rng::from_entropy(),
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
@@ -599,7 +599,7 @@ async fn test_handle_epoch_event() {
         settings.clone(),
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
-        BlakeRng::from_entropy(),
+        ChaCha20Rng::from_entropy(),
     );
     let mut backend_event_receiver = backend.subscribe_to_events();
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
@@ -766,7 +766,7 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
     );
     let scheduler = EpochMessageScheduler::new(
         scheduler_epoch_info(&public_info),
-        BlakeRng::from_entropy(),
+        ChaCha20Rng::from_entropy(),
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
@@ -774,7 +774,7 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
         settings.clone(),
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
-        BlakeRng::from_entropy(),
+        ChaCha20Rng::from_entropy(),
     );
     let mut backend_event_receiver = backend.subscribe_to_events();
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
@@ -870,7 +870,7 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
     );
     let scheduler = EpochMessageScheduler::new(
         scheduler_epoch_info(&public_info),
-        BlakeRng::from_entropy(),
+        ChaCha20Rng::from_entropy(),
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
@@ -878,7 +878,7 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
         settings.clone(),
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
-        BlakeRng::from_entropy(),
+        ChaCha20Rng::from_entropy(),
     );
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
 
@@ -973,7 +973,7 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
     );
     let scheduler = EpochMessageScheduler::new(
         scheduler_epoch_info(&public_info),
-        BlakeRng::from_entropy(),
+        ChaCha20Rng::from_entropy(),
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
@@ -981,7 +981,7 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
         settings.clone(),
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
-        BlakeRng::from_entropy(),
+        ChaCha20Rng::from_entropy(),
     );
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
 
@@ -1048,7 +1048,7 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
     );
     let scheduler = EpochMessageScheduler::new(
         scheduler_epoch_info(&public_info),
-        BlakeRng::from_entropy(),
+        ChaCha20Rng::from_entropy(),
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
@@ -1056,7 +1056,7 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
         settings.clone(),
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
-        BlakeRng::from_entropy(),
+        ChaCha20Rng::from_entropy(),
     );
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
 
@@ -1589,7 +1589,7 @@ async fn test_proof_generator_epoch_binding() {
     let scheduler_settings = scheduler_settings(&timing_settings(), settings.num_blend_layers);
     let mut scheduler_0 = EpochMessageScheduler::new(
         scheduler_epoch_info(&public_info_0),
-        BlakeRng::from_entropy(),
+        ChaCha20Rng::from_entropy(),
         scheduler_settings,
     );
     let recovery_checkpoint = ServiceState::with_epoch(
@@ -1620,7 +1620,7 @@ async fn test_proof_generator_epoch_binding() {
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
     let mut scheduler_0_only = EpochMessageScheduler::new(
         scheduler_epoch_info(&public_info_0),
-        BlakeRng::from_entropy(),
+        ChaCha20Rng::from_entropy(),
         scheduler_settings,
     );
     let recovery_checkpoint = ServiceState::with_epoch(
@@ -1653,7 +1653,7 @@ async fn test_proof_generator_epoch_binding() {
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
     let mut scheduler_1 = EpochMessageScheduler::new(
         scheduler_epoch_info(&public_info_1),
-        BlakeRng::from_entropy(),
+        ChaCha20Rng::from_entropy(),
         scheduler_settings,
     );
     let recovery_checkpoint = ServiceState::with_epoch(

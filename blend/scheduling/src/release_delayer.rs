@@ -175,7 +175,7 @@ mod tests {
     use std::num::NonZeroU64;
 
     use futures::{StreamExt as _, io::empty, task::noop_waker_ref};
-    use lb_utils::blake_rng::BlakeRng;
+    use lb_utils::chacha_rng::ChaCha20Rng;
     use rand::SeedableRng as _;
     use tokio_stream::iter;
 
@@ -186,7 +186,7 @@ mod tests {
         let mut delayer = EpochProcessedMessageDelayer::<_, _, ()> {
             maximum_release_delay_in_rounds: NonZeroU64::new(3).expect("Non-zero usize"),
             next_release_round: 1u128.into(),
-            rng: BlakeRng::from_entropy(),
+            rng: ChaCha20Rng::from_entropy(),
             round_clock: iter([0u128]).map(Into::into),
             unreleased_messages: vec![],
         };
@@ -202,7 +202,7 @@ mod tests {
         let mut delayer = EpochProcessedMessageDelayer::<_, _, ()> {
             maximum_release_delay_in_rounds: NonZeroU64::new(3).expect("Non-zero usize"),
             next_release_round: 1u128.into(),
-            rng: BlakeRng::from_entropy(),
+            rng: ChaCha20Rng::from_entropy(),
             round_clock: iter([1u128]).map(Into::into),
             unreleased_messages: vec![],
         };
@@ -219,7 +219,7 @@ mod tests {
         let mut delayer = EpochProcessedMessageDelayer::<_, _, ()> {
             maximum_release_delay_in_rounds: NonZeroU64::new(3).expect("Non-zero usize"),
             next_release_round: 1u128.into(),
-            rng: BlakeRng::from_entropy(),
+            rng: ChaCha20Rng::from_entropy(),
             round_clock: iter([1u128]).map(Into::into),
             unreleased_messages: vec![()],
         };
@@ -239,7 +239,7 @@ mod tests {
         let mut delayer = EpochProcessedMessageDelayer::<_, _, bool> {
             maximum_release_delay_in_rounds: NonZeroU64::new(3).expect("Non-zero usize"),
             next_release_round: 1u128.into(),
-            rng: BlakeRng::from_entropy(),
+            rng: ChaCha20Rng::from_entropy(),
             round_clock: empty(),
             unreleased_messages: vec![],
         };

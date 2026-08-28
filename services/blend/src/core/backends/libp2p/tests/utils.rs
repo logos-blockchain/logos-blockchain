@@ -22,7 +22,7 @@ use lb_blend::{
 use lb_chain_service::Epoch;
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use lb_libp2p::{Protocol, SwarmEvent};
-use lb_utils::blake_rng::BlakeRng;
+use lb_utils::chacha_rng::ChaCha20Rng;
 use libp2p::{
     Multiaddr, PeerId, Swarm, allow_block_list, core::transport::ListenerId, identity::Keypair,
 };
@@ -79,7 +79,7 @@ impl ProofsVerifier for TestProofsVerifier {
     }
 }
 
-pub type InnerSwarm = BlendSwarm<BlakeRng, TestObservationWindowProvider, TestProofsVerifier>;
+pub type InnerSwarm = BlendSwarm<ChaCha20Rng, TestObservationWindowProvider, TestProofsVerifier>;
 
 pub struct TestSwarm {
     pub swarm: InnerSwarm,
@@ -99,7 +99,7 @@ pub fn new_nodes_with_empty_address(
         .map(|identity| Node {
             id: identity.public().into(),
             address: Multiaddr::empty(),
-            public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
+            public_key: UnsecuredEd25519Key::generate_with_chacha_rng().public_key(),
         })
         .collect::<Vec<_>>();
     (ids.into_iter(), nodes)
@@ -182,7 +182,7 @@ impl SwarmBuilder {
             swarm_message_receiver,
             incoming_message_sender,
             self.public_info,
-            BlakeRng::from_entropy(),
+            ChaCha20Rng::from_entropy(),
             self.max_dial_attempts
                 .unwrap_or_else(|| 3u64.try_into().unwrap()),
             1usize.try_into().unwrap(),
@@ -332,7 +332,7 @@ impl SwarmExt for Swarm<BlendBehaviour<TestObservationWindowProvider, TestProofs
             Node {
                 address,
                 id: *self.local_peer_id(),
-                public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
+                public_key: UnsecuredEd25519Key::generate_with_chacha_rng().public_key(),
             },
             memory_addr_listener_id,
         )

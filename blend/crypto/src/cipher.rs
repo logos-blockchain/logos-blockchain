@@ -1,6 +1,6 @@
-use lb_utils::blake_rng::{BlakeRng, RngCore as _, SeedableRng as _};
+use lb_utils::chacha_rng::{ChaCha20Rng, RngCore as _};
 
-use crate::blake2b512;
+use crate::{blake2b512, chacha20_rng};
 
 /// A cipher that encrypts/decrypts data using XOR with pseudo-random bytes.
 ///
@@ -10,12 +10,12 @@ use crate::blake2b512;
 /// a cipher initialized from a given seed can be decrypted by another cipher
 /// created from the same seed, as long as the data sequence is consumed in the
 /// same order.
-pub struct Cipher(BlakeRng);
+pub struct Cipher(ChaCha20Rng);
 
 impl Cipher {
     #[must_use]
     pub fn new(domain: &[u8], seed: &[u8]) -> Self {
-        Self(BlakeRng::from_seed(blake2b512(&[domain, seed]).into()))
+        Self(chacha20_rng(&blake2b512(&[domain, seed])))
     }
 
     /// Encrypts data in-place by XOR operation with a pseudo-random bytes.

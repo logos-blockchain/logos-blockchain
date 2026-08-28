@@ -65,7 +65,7 @@ use lb_services_utils::{
     wait_until_services_are_ready,
 };
 use lb_time_service::TimeService;
-use lb_utils::blake_rng::BlakeRng;
+use lb_utils::chacha_rng::ChaCha20Rng;
 use overwatch::{
     OpaqueServiceResourcesHandle,
     overwatch::OverwatchHandle,
@@ -137,7 +137,7 @@ pub struct BlendService<
     StateStorage,
     RuntimeServiceId,
 > where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId>,
     Dispatcher: PayloadDispatcher<RuntimeServiceId>,
     StateStorage: RecoveryBackendTrait<
             RuntimeServiceId,
@@ -185,7 +185,7 @@ impl<
         RuntimeServiceId,
     >
 where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId>,
     Dispatcher: PayloadDispatcher<RuntimeServiceId>,
     StateStorage: RecoveryBackendTrait<
             RuntimeServiceId,
@@ -227,7 +227,7 @@ impl<
         RuntimeServiceId,
     >
 where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
     NodeId: membership::node_id::TryFrom + Clone + Debug + Send + Eq + Hash + Sync + 'static,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
     ProofsGenerator:
@@ -513,13 +513,13 @@ async fn initialize<
     >,
     ServiceState<Backend::Settings, Dispatcher::Settings>,
     VecDeque<Vec<u8>>,
-    SchedulerWrapper<BlakeRng, ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
+    SchedulerWrapper<ChaCha20Rng, ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
     Backend,
-    BlakeRng,
+    ChaCha20Rng,
 )
 where
     NodeId: Clone + Debug + Eq + Hash + Send + 'static,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Sync,
     Dispatcher: PayloadDispatcher<RuntimeServiceId>,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<KmsAdapter::CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
@@ -723,7 +723,7 @@ where
             core_quota: epoch_core_quota.saturating_sub(spent_core_quota),
             epoch: current_epoch_public_info.epoch,
         },
-        BlakeRng::from_entropy(),
+        ChaCha20Rng::from_entropy(),
         blend_config.scheduler_settings(),
         // We don't consume the map because we will remove the items one by one once they
         // will be scheduled for release.
@@ -747,11 +747,11 @@ where
             // relaying it, so it needs its own verifier for the epoch.
             proofs_verifier: ProofsVerifier::new(current_epoch_poq_verification_inputs),
         },
-        BlakeRng::from_entropy(),
+        ChaCha20Rng::from_entropy(),
     );
 
     // Rng for releasing messages.
-    let rng = BlakeRng::from_entropy();
+    let rng = ChaCha20Rng::from_entropy();
 
     let pending_transactions = current_recovery_checkpoint.pending_transactions().clone();
 
@@ -845,7 +845,7 @@ async fn run_event_loop<
 where
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync + Send,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Sync + Send,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator> + Send,
     CorePoQGenerator: Send + Sync,
@@ -1097,7 +1097,7 @@ async fn retire<
 ) where
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
     CorePoQGenerator: Send + Sync,
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
@@ -1175,7 +1175,7 @@ where
     Rng: rand::Rng + Clone + Unpin,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId>,
 {
     match event {
         EpochEvent::NewEpoch(MaybeEmptyCoreEpochInfo::NonEmpty(core_epoch_info)) => {
@@ -1916,7 +1916,7 @@ async fn handle_release_round<
 where
     NodeId: Eq + Hash + 'static,
     Rng: RngCore + Send,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Sync,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
@@ -2005,7 +2005,7 @@ async fn handle_release_round_for_old_epoch<
 ) where
     NodeId: Eq + Hash + 'static,
     Rng: RngCore + Send,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Sync,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
 {
     // The old epoch never generates cover traffic, so the cover flag is always
@@ -2087,7 +2087,7 @@ fn build_futures_to_release_processed_messages<
 ) -> Vec<BoxFuture<'fut, ()>>
 where
     NodeId: Eq + Hash + 'static,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Sync,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
 {
     processed_messages_to_release

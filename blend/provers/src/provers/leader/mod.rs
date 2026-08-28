@@ -109,7 +109,7 @@ fn create_proof_stream(
                 // first polls the future — which only happens when the consumer polls the
                 // stream — causing avoidable latency when the consumer is idle.
                 let task = spawn_blocking("logos/blend/leader-poq-blocking", move || {
-                    let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_blake_rng();
+                    let ephemeral_signing_key = UnsecuredEd25519Key::generate_with_chacha_rng();
                     let (proof_of_quota, secret_selection_randomness) = VerifiedProofOfQuota::new(
                         &PublicInputs {
                             signing_key: ephemeral_signing_key.public_key().into_inner(),

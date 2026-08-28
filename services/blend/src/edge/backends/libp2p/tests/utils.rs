@@ -1,7 +1,7 @@
 use core::num::{NonZeroU64, NonZeroUsize};
 
 use lb_blend::scheduling::membership::Membership;
-use lb_utils::blake_rng::BlakeRng;
+use lb_utils::chacha_rng::ChaCha20Rng;
 use libp2p::{PeerId, identity::Keypair};
 use rand::SeedableRng as _;
 use tokio::sync::mpsc;
@@ -12,7 +12,7 @@ use crate::{
 };
 
 pub struct TestSwarm {
-    pub swarm: BlendSwarm<BlakeRng>,
+    pub swarm: BlendSwarm<ChaCha20Rng>,
     pub command_sender: mpsc::Sender<Command>,
 }
 
@@ -50,7 +50,7 @@ impl SwarmBuilder {
             command_receiver,
             self.max_dial_attempts
                 .unwrap_or_else(|| 3u64.try_into().unwrap()),
-            BlakeRng::from_entropy(),
+            ChaCha20Rng::from_entropy(),
             PROTOCOL_NAME,
             self.replication_factor
                 .unwrap_or_else(|| 1usize.try_into().unwrap()),

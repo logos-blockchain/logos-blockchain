@@ -548,7 +548,7 @@ fn epoch_based_dummy_proofs(epoch: ZkHash) -> BlendLayerProof {
             bytes[..epoch_bytes.len()].copy_from_slice(&epoch_bytes);
             bytes
         }),
-        ephemeral_signing_key: UnsecuredEd25519Key::generate_with_blake_rng(),
+        ephemeral_signing_key: UnsecuredEd25519Key::generate_with_chacha_rng(),
     }
 }
 

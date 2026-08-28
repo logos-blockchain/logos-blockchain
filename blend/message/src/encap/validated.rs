@@ -165,7 +165,7 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
                     payload_body,
                     encapsulation_layers,
                 )?,
-                UnsecuredEd25519Key::generate_with_blake_rng(),
+                UnsecuredEd25519Key::generate_with_chacha_rng(),
                 VerifiedProofOfQuota::from_bytes_unchecked(random_sized_bytes()),
             ),
             |(part, signing_key, proof_of_quota), (i, input)| {

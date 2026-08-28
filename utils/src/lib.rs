@@ -6,7 +6,7 @@ pub mod types;
 pub mod yaml;
 
 #[cfg(feature = "rng")]
-pub mod blake_rng;
+pub mod chacha_rng;
 
 #[cfg(feature = "time")]
 pub mod bounded_duration;

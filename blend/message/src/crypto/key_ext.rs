@@ -1,6 +1,6 @@
 use lb_blend_crypto::cipher::Cipher;
 use lb_key_management_system_keys::keys::{SharedKey, UnsecuredEd25519Key};
-use lb_utils::blake_rng::{BlakeRng, SeedableRng as _};
+use lb_utils::chacha_rng::{ChaCha20Rng, SeedableRng as _};
 use zeroize::ZeroizeOnDrop;
 
 // This extension trait must go here instead of `logos-blockchain-blend-crypto`
@@ -8,12 +8,12 @@ use zeroize::ZeroizeOnDrop;
 // `key-management-system-keys`. Also, these extension functions are mostly used
 // in this crate, so it makes most sense for them to be defined here.
 pub trait Ed25519SecretKeyExt: ZeroizeOnDrop {
-    fn generate_with_blake_rng() -> Self;
+    fn generate_with_chacha_rng() -> Self;
 }
 
 impl Ed25519SecretKeyExt for UnsecuredEd25519Key {
-    fn generate_with_blake_rng() -> Self {
-        Self::generate(&mut BlakeRng::from_entropy())
+    fn generate_with_chacha_rng() -> Self {
+        Self::generate(&mut ChaCha20Rng::from_entropy())
     }
 }
 

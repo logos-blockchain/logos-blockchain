@@ -236,7 +236,7 @@ mod tests {
     use ark_ff::AdditiveGroup as _;
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
-    use lb_utils::blake_rng::RngCore as _;
+    use lb_utils::chacha_rng::RngCore as _;
     use rand::thread_rng;
 
     use super::*;
