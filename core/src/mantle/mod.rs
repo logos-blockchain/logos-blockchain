@@ -1,6 +1,6 @@
 pub mod channel;
 mod channel_notes;
-mod fixtures;
+pub(crate) mod fixtures;
 pub mod gas;
 pub mod ledger;
 pub mod mock;

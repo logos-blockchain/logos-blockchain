@@ -224,7 +224,50 @@ impl_from_operation! {
 
 #[cfg(test)]
 mod tests {
-    use crate::mantle::{Op, OpProof, transactions::Ops};
+    use crate::mantle::{
+        Op, OpProof, fixtures::ops::op_values::TRANSFER, ledger::ProvableOperation as _,
+        ops::transfer::TransferOp, transactions::Ops,
+    };
+
+    #[test]
+    fn serialize_to_json_tags_the_payload_with_the_opcode() {
+        let op = Op::Transfer(TRANSFER.clone());
+        let encoded_op = serde_json::to_value(&op).expect("the human-readable arm serializes");
+
+        assert_eq!(
+            encoded_op.get("opcode").expect("the json has an opcode"),
+            &serde_json::json!(TransferOp::CODE)
+        );
+    }
+
+    #[test]
+    fn serialize_to_binary_leads_the_payload_with_the_opcode() {
+        let op = Op::Transfer(TRANSFER.clone());
+        let envelope = bincode::serialize(&op).expect("the binary arm serializes");
+        let encoded_op = &envelope[size_of::<u64>()..];
+
+        assert_eq!(encoded_op.first(), Some(&TransferOp::CODE));
+    }
+
+    #[test]
+    fn deserialize_from_json_selects_the_variant_matching_the_opcode() {
+        let op = Op::Transfer(TRANSFER.clone());
+        let encoded_op = serde_json::to_value(&op).expect("the human-readable arm serializes");
+        let decoded_op =
+            serde_json::from_value::<Op>(encoded_op).expect("the human-readable arm deserializes");
+
+        assert!(matches!(decoded_op, Op::Transfer(_)));
+    }
+
+    #[test]
+    fn deserialize_from_binary_reads_the_encoded_operation() {
+        let op = Op::Transfer(TRANSFER.clone());
+        let encoded_op = bincode::serialize(&op).expect("the binary arm serializes");
+        let decoded_op =
+            bincode::deserialize::<Op>(&encoded_op).expect("the binary arm deserializes");
+
+        assert!(matches!(decoded_op, Op::Transfer(_)));
+    }
 
     #[test]
     fn sample_proof_matches_the_kind_each_op_requires() {

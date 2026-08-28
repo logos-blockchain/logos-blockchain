@@ -43,3 +43,32 @@ impl<const CODE: u8, Inner> OpWire<CODE, Inner> {
         self.payload
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ConstU8;
+
+    #[test]
+    fn serialize_writes_the_opcode() {
+        assert_eq!(
+            serde_json::to_value(ConstU8::<7>).expect("the opcode serializes"),
+            serde_json::json!(7)
+        );
+    }
+
+    #[test]
+    fn deserialize_accepts_the_expected_opcode() {
+        serde_json::from_value::<ConstU8<7>>(serde_json::json!(7))
+            .map(|_| ())
+            .expect("7 is the expected opcode");
+    }
+
+    #[test]
+    fn deserialize_rejects_another_opcode() {
+        let error = serde_json::from_value::<ConstU8<7>>(serde_json::json!(8))
+            .map(|_| ())
+            .expect_err("8 is not the expected opcode");
+
+        assert!(error.to_string().contains("Invalid opcode 8, expected 7"));
+    }
+}
