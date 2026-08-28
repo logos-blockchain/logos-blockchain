@@ -61,10 +61,10 @@ use crate::{
         error::{StepError, StepResult},
         fee_reserve::{SCENARIO_FEE_ACCOUNT_NAME, ScenarioFeeState},
         steps::{
-            manual_zone::runner::{
+            tokio_console::profile::TokioConsoleProfile,
+            zone::runner::{
                 Event, InscriptionId, SequencerCheckpoint, SequencerClient, TxStatusUpdate,
             },
-            tokio_console::profile::TokioConsoleProfile,
         },
         utils::{make_builder, shared_host_bin_path},
         wallet::snapshot::WalletSnapshot,
