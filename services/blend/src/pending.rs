@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 use lb_blend::message::{
     Error as MessageError, encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
 };
+use lb_chain_service::Epoch;
 
 use crate::LOG_TARGET;
 
@@ -104,22 +105,28 @@ pub fn next_local_message<'a>(
 /// and leadership quota is one message's worth per winning slot, so a proposal
 /// still waiting when the epoch turns would spend the quota that the *new*
 /// epoch's block needs.
-#[derive(Debug, Default)]
-pub struct PendingProposals(VecDeque<(Vec<u8>, NonZeroU64)>);
+#[derive(Debug)]
+pub struct PendingProposals {
+    epoch: Epoch,
+    queued: VecDeque<(Vec<u8>, NonZeroU64)>,
+}
 
 impl PendingProposals {
     #[must_use]
-    pub const fn new() -> Self {
-        Self(VecDeque::new())
+    pub const fn new(epoch: Epoch) -> Self {
+        Self {
+            epoch,
+            queued: VecDeque::new(),
+        }
     }
 
     /// Queues a proposal to be sent `copies` times.
     pub fn queue(&mut self, proposal: Vec<u8>, copies: NonZeroU64) {
-        self.0.push_back((proposal, copies));
+        self.queued.push_back((proposal, copies));
     }
 
     fn head(&self) -> Option<&[u8]> {
-        self.0.front().map(|(proposal, _)| proposal.as_slice())
+        self.queued.front().map(|(proposal, _)| proposal.as_slice())
     }
 
     /// Records that one copy of the head went out, dropping it once it owes no
@@ -130,12 +137,12 @@ impl PendingProposals {
     /// If none is queued, which would mean a copy was reported for a message
     /// this queue never handed out.
     pub fn mark_copy_as_sent(&mut self) {
-        let Some((_, remaining_copies)) = self.0.front_mut() else {
+        let Some((_, remaining_copies)) = self.queued.front_mut() else {
             panic!("A proposal copy was reported sent, but none is queued");
         };
         match NonZeroU64::new(remaining_copies.get() - 1) {
             // The copy sent was the last one it owed.
-            None => drop(self.0.pop_front()),
+            None => drop(self.queued.pop_front()),
             Some(left) => *remaining_copies = left,
         }
     }
@@ -144,7 +151,20 @@ impl PendingProposals {
     /// too large to fit a payload, say, as opposed to one merely waiting on
     /// proofs.
     pub fn discard_head(&mut self) {
-        drop(self.0.pop_front());
+        drop(self.queued.pop_front());
+    }
+}
+
+impl Drop for PendingProposals {
+    fn drop(&mut self) {
+        let dropping = self.queued.len();
+        if dropping > 0 {
+            tracing::warn!(
+                target: LOG_TARGET,
+                "Dropping {dropping} block proposal(s) queued under epoch {:?} without sending them.",
+                self.epoch
+            );
+        }
     }
 }
 
@@ -202,7 +222,7 @@ mod tests {
     use super::*;
 
     fn proposal(copies: u64) -> PendingProposals {
-        let mut proposals = PendingProposals::new();
+        let mut proposals = PendingProposals::new(Epoch::new(1));
         proposals.queue(b"proposal".to_vec(), copies.try_into().unwrap());
         proposals
     }

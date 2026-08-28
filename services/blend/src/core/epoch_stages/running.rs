@@ -63,11 +63,12 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
         scheduler: MessageScheduler<Rng>,
         epoch_info: CoreEpochPublicInfo<NodeId>,
     ) -> Self {
+        let proposals = PendingProposals::new(epoch_info.epoch);
         Self {
             crypto,
             scheduler,
             epoch_info,
-            proposals: PendingProposals::new(),
+            proposals,
         }
     }
 
@@ -118,7 +119,8 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
 pub enum CurrentEpochEvent {
     /// A queued message now has proofs behind it, or never will.
     ///
-    /// Never [`Encapsulation::Retry`]: that one means "nothing to act on", and
+    /// Never [`EncapsulationResult::Retry`]: that one means "nothing to act
+    /// on", and
     /// is what disables the branch below rather than a value to report.
     Encapsulated(EncapsulationResult),
     /// This epoch's scheduler says it is time to release.
