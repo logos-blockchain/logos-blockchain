@@ -279,10 +279,10 @@ impl MantleTxBuilder {
         Value::try_from(numerator / 100).map_err(|_| GasOverflow.into())
     }
 
-    /// Returns all note IDs already consumed or locked by this transaction,
-    /// plus the funding inputs that will be appended as a transfer during
-    /// build.
-    pub fn consumed_or_locked_notes(&self) -> impl Iterator<Item = NoteId> {
+    /// Returns all note IDs already consumed or used in a service by this
+    /// transaction, plus the funding inputs that will be appended as a
+    /// transfer during build.
+    pub fn notes_consumed_or_used_in_service(&self) -> impl Iterator<Item = NoteId> {
         self.mantle_tx
             .ops()
             .iter()
@@ -293,8 +293,8 @@ impl MantleTxBuilder {
                     _ => &[],
                 };
                 let locked = match op {
-                    Op::SDPDeclare(declare) => Some(declare.locked_note_id),
-                    Op::SDPWithdraw(withdraw) => Some(withdraw.locked_note_id),
+                    Op::SDPDeclare(declare) => Some(declare.service_note_id),
+                    Op::SDPWithdraw(withdraw) => Some(withdraw.service_note_id),
                     _ => None,
                 };
                 inputs.iter().copied().chain(locked)
@@ -640,10 +640,10 @@ mod tests {
     }
 
     #[test]
-    fn consumed_or_locked_notes() {
+    fn notes_consumed_or_used_in_service() {
         let deposit_input = NoteId(Fr::from(1u64));
-        let declare_locked = NoteId(Fr::from(2u64));
-        let withdraw_locked = NoteId(Fr::from(3u64));
+        let declare_service_note = NoteId(Fr::from(2u64));
+        let withdraw_service_note = NoteId(Fr::from(3u64));
         let transfer_input = Utxo::new([0u8; 32], 0, Note::new(50, ZkPublicKey::zero()));
 
         let builder = MantleTxBuilder::new()
@@ -658,36 +658,36 @@ mod tests {
                 locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
                 provider_id: ProviderId(Ed25519Key::from_bytes(&[0; 32]).public_key()),
                 zk_id: ZkPublicKey::zero(),
-                locked_note_id: declare_locked,
+                service_note_id: declare_service_note,
             }))
             .unwrap()
             .push_op(Op::SDPWithdraw(SDPWithdrawOp {
                 declaration_id: DeclarationId([0; 32]),
-                locked_note_id: withdraw_locked,
+                service_note_id: withdraw_service_note,
                 nonce: 1,
             }))
             .unwrap()
             .add_ledger_input(transfer_input)
             .unwrap();
 
-        let consumed_or_locked: Vec<_> = builder.consumed_or_locked_notes().collect();
+        let consumed_or_used: Vec<_> = builder.notes_consumed_or_used_in_service().collect();
         assert!(
-            consumed_or_locked.contains(&deposit_input),
+            consumed_or_used.contains(&deposit_input),
             "should contain deposit input"
         );
         assert!(
-            consumed_or_locked.contains(&declare_locked),
-            "should contain declare locked note"
+            consumed_or_used.contains(&declare_service_note),
+            "should contain declare service note"
         );
         assert!(
-            consumed_or_locked.contains(&withdraw_locked),
-            "should contain withdraw locked note"
+            consumed_or_used.contains(&withdraw_service_note),
+            "should contain withdraw service note"
         );
         assert!(
-            consumed_or_locked.contains(&transfer_input.id()),
+            consumed_or_used.contains(&transfer_input.id()),
             "should contain transfer input"
         );
-        assert_eq!(consumed_or_locked.len(), 4);
+        assert_eq!(consumed_or_used.len(), 4);
     }
 
     #[test]

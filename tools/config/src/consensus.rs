@@ -475,7 +475,7 @@ pub fn create_genesis_block_with_declarations(
             locators: provider.locator.clone().into(),
             provider_id: provider.provider_id(),
             zk_id: provider.zk_id(),
-            locked_note_id: utxo.id(),
+            service_note_id: utxo.id(),
         };
         ops.push(Op::SDPDeclare(declaration));
     }

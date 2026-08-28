@@ -23,14 +23,14 @@ codec_fixtures!(
         locators: [Locator::new_unchecked("/ip4/127.0.0.1/udp/3000/quic-v1".parse().unwrap())].into(),
         provider_id: ProviderId(Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap()),
         zk_id: ZkPublicKey::new(Fr::from(1u64)),
-        locked_note_id: Fr::from(0u64).into(),
+        service_note_id: Fr::from(0u64).into(),
     } => "00010b00047f00000191020bb8cd03000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
 );
 codec_fixtures!(
     WithdrawMessage,
     Self {
         declaration_id: DeclarationId([0u8; _]),
-        locked_note_id: Fr::from(1u64).into(),
+        service_note_id: Fr::from(1u64).into(),
         nonce: 2u64
     } => "000000000000000000000000000000000000000000000000000000000000000002000000000000000100000000000000000000000000000000000000000000000000000000000000",
 );

@@ -1,8 +1,14 @@
 use core::{
+    marker::PhantomData,
     ops::Deref,
     slice::{Iter, IterMut},
 };
 use std::{ops::DerefMut, str::FromStr, vec::IntoIter};
+
+use serde::{
+    Deserialize, Deserializer,
+    de::{Error as _, SeqAccess, Visitor},
+};
 
 use crate::bounded::{Bounded, BoundedError, BoundedLen};
 
@@ -15,14 +21,84 @@ impl<T> BoundedLen for Vec<T> {
 /// `Vec<T>` whose length is statically enforced to be in the range `[MIN,
 /// MAX]`.
 ///
-/// A thin alias over [`Bounded`]: the length checking, (de)serialization and
-/// construction machinery lives on the generic wrapper, while the operations
-/// below are the ones that only make sense for a `Vec`.
+/// A thin alias over [`Bounded`]: the length checking and construction
+/// machinery lives on the generic wrapper, while sequence deserialization and
+/// the operations below are the ones that only make sense for a `Vec`.
 ///
 /// The invariant is enforced at every checked construction site
 /// ([`TryFrom<Vec<T>>`](Self::try_from), deserialization), so an instance can
 /// never be shorter than `MIN` nor longer than `MAX`.
 pub type BoundedVec<T, const MIN: usize, const MAX: usize> = Bounded<Vec<T>, MIN, MAX>;
+
+impl<'de, T, const MIN: usize, const MAX: usize> Deserialize<'de> for Bounded<Vec<T>, MIN, MAX>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserialize_bounded_sequence(deserializer)
+    }
+}
+
+/// Deserialize a sequence directly into a bounded vector.
+///
+/// Sequence formats may provide a length through [`SeqAccess::size_hint`].
+/// When that length exceeds `MAX`, it is rejected before any element is
+/// decoded. Formats without a reliable hint are still bounded by stopping at
+/// the first element beyond `MAX`.
+pub fn deserialize_bounded_sequence<'de, T, const MIN: usize, const MAX: usize, D>(
+    deserializer: D,
+) -> Result<BoundedVec<T, MIN, MAX>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    deserializer.deserialize_seq(BoundedSequenceVisitor {
+        marker: PhantomData,
+    })
+}
+
+struct BoundedSequenceVisitor<T, const MIN: usize, const MAX: usize> {
+    marker: PhantomData<T>,
+}
+
+impl<'de, T, const MIN: usize, const MAX: usize> Visitor<'de>
+    for BoundedSequenceVisitor<T, MIN, MAX>
+where
+    T: Deserialize<'de>,
+{
+    type Value = BoundedVec<T, MIN, MAX>;
+
+    fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(formatter, "a sequence with between {MIN} and {MAX} items")
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let size_hint = sequence.size_hint();
+        if let Some(size_hint) = size_hint.filter(|&size_hint| size_hint > MAX) {
+            return Err(A::Error::custom(BoundedError::TooManyItems {
+                count: size_hint,
+                max: MAX,
+            }));
+        }
+
+        let capacity = size_hint.unwrap_or(0).min(MAX);
+        let mut values = Vec::with_capacity(capacity);
+        while let Some(value) = sequence.next_element()? {
+            if values.len() == MAX {
+                return Err(A::Error::custom(BoundedError::TooManyItems {
+                    count: MAX.saturating_add(1),
+                    max: MAX,
+                }));
+            }
+            values.push(value);
+        }
+
+        BoundedVec::try_from(values).map_err(A::Error::custom)
+    }
+}
 
 impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
     /// Constructs an empty vector.
@@ -343,12 +419,31 @@ pub type MaxBoundedVec<T> = UpperBoundedVec<T, { usize::MAX }>;
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use serde::{Deserialize, Deserializer};
+
     use crate::bounded::{BoundedError, BoundedVec, UpperBoundedVec};
 
     /// Concrete instantiation used across the tests: between 2 and 4 elements.
     type TestBoundedVectorMin2 = BoundedVec<u8, 2, 4>;
     type TestBoundedVectorMin1 = BoundedVec<u8, 1, 4>;
     type TestBoundedVectorMin0 = BoundedVec<u8, 0, 4>;
+
+    static ELEMENT_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+    static ELEMENT_ATTEMPTS_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    struct CountingByte;
+
+    impl<'de> Deserialize<'de> for CountingByte {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            ELEMENT_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+            u8::deserialize(deserializer).map(|_| Self)
+        }
+    }
 
     #[test]
     fn from_accepts_single_element_construction() {
@@ -547,6 +642,15 @@ mod tests {
     }
 
     #[test]
+    fn deserialize_accepts_inputs_at_bounds() {
+        let min: TestBoundedVectorMin2 = serde_json::from_str("[1,2]").unwrap();
+        assert_eq!(min.as_slice(), &[1, 2]);
+
+        let max: TestBoundedVectorMin2 = serde_json::from_str("[1,2,3,4]").unwrap();
+        assert_eq!(max.as_slice(), &[1, 2, 3, 4]);
+    }
+
+    #[test]
     fn serialize_then_deserialize_roundtrips() {
         let original = TestBoundedVectorMin2::try_from(vec![5, 6, 7, 8]).unwrap();
         let json = serde_json::to_string(&original).unwrap();
@@ -580,6 +684,39 @@ mod tests {
             err.to_string().contains("exceeds static maximum"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn deserialize_json_stops_after_at_most_one_element_past_maximum() {
+        let _test_guard = ELEMENT_ATTEMPTS_TEST_LOCK.lock().unwrap();
+        ELEMENT_ATTEMPTS.store(0, Ordering::Relaxed);
+
+        let result = serde_json::from_str::<BoundedVec<CountingByte, 0, 4>>("[1,2,3,4,5,6]");
+
+        assert!(result.is_err());
+        assert!(ELEMENT_ATTEMPTS.load(Ordering::Relaxed) <= 5);
+    }
+
+    #[test]
+    fn deserialize_binary_rejects_oversized_length_before_decoding_elements() {
+        let _test_guard = ELEMENT_ATTEMPTS_TEST_LOCK.lock().unwrap();
+        ELEMENT_ATTEMPTS.store(0, Ordering::Relaxed);
+        let encoded = bincode::serialize(&vec![1u8; 5]).unwrap();
+
+        let result = bincode::deserialize::<BoundedVec<CountingByte, 0, 4>>(&encoded);
+
+        assert!(result.is_err());
+        assert_eq!(ELEMENT_ATTEMPTS.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn deserialize_binary_preserves_the_vector_wire_format() {
+        let original = TestBoundedVectorMin2::try_from(vec![5, 6, 7]).unwrap();
+        let encoded = bincode::serialize(&original).unwrap();
+        let restored = bincode::deserialize::<TestBoundedVectorMin2>(&encoded).unwrap();
+
+        assert_eq!(restored, original);
+        assert_eq!(encoded, bincode::serialize(&vec![5u8, 6, 7]).unwrap());
     }
 
     #[test]

@@ -257,7 +257,7 @@ impl SignedMantleTx<Preverified> {
             (Op::ChannelDeposit(op), OpProof::ZkSig(proof)) => {
                 let channel_deposit_context = DepositValidationContext {
                     channels: helper.get_channels(),
-                    locked_notes: helper.get_locked_notes(),
+                    service_notes: helper.get_service_notes(),
                     utxos: helper.get_utxos(),
                     tx_hash_view,
                 };
@@ -267,7 +267,7 @@ impl SignedMantleTx<Preverified> {
             (Op::ChannelWithdraw(channel_withdraw_op), OpProof::ChannelMultiSigProof(proof)) => {
                 let channel_withdraw_context = WithdrawValidationContext {
                     channels: helper.get_channels(),
-                    locked_notes: helper.get_locked_notes(),
+                    service_notes: helper.get_service_notes(),
                     utxos: helper.get_utxos(),
                     tx_hash_view,
                     helper,
@@ -279,7 +279,7 @@ impl SignedMantleTx<Preverified> {
             }
             (Op::ChannelTransfer(op), OpProof::ChannelMultiSigProof(proof)) => {
                 let context = ChannelTransferValidationContext {
-                    locked_notes: helper.get_locked_notes(),
+                    service_notes: helper.get_service_notes(),
                     channels: helper.get_channels(),
                     utxos: helper.get_utxos(),
                     tx_hash_view,
@@ -293,7 +293,7 @@ impl SignedMantleTx<Preverified> {
                 let context = SDPDeclareVerificationContext {
                     utxo_tree: helper.get_utxos(),
                     channels: helper.get_channels(),
-                    locked_notes: helper.get_locked_notes(),
+                    service_notes: helper.get_service_notes(),
                     tx_hash_view,
                     declarations: helper.get_declarations_by_service(op.service_type)?,
                     min_stake: helper.get_min_stake(),
@@ -305,7 +305,7 @@ impl SignedMantleTx<Preverified> {
                 let context = SDPWithdrawValidationContext {
                     declarations: helper.get_declarations_by_id(&op.declaration_id)?,
                     epoch: helper.get_epoch(),
-                    locked_notes: helper.get_locked_notes(),
+                    service_notes: helper.get_service_notes(),
                     tx_hash_view,
                 };
                 op.verify(proof, &context)
@@ -331,7 +331,7 @@ impl SignedMantleTx<Preverified> {
             }
             (Op::Transfer(op), OpProof::ZkSig(proof)) => {
                 let context = TransferValidationContext {
-                    locked_notes: helper.get_locked_notes(),
+                    service_notes: helper.get_service_notes(),
                     channels: helper.get_channels(),
                     utxos: helper.get_utxos(),
                     tx_hash_view,

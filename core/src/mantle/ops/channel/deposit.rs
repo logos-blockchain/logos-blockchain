@@ -21,7 +21,7 @@ use crate::{
             states::VerificationState,
         },
     },
-    sdp::locked_notes::LockedNotes,
+    sdp::service_notes::ServiceNotes,
 };
 
 pub const MAX_METADATA_SIZE: usize = u32::MAX as usize;
@@ -60,7 +60,7 @@ impl OpId for DepositOp {
 
 pub struct DepositValidationContext<'a> {
     pub channels: &'a Channels,
-    pub locked_notes: &'a LockedNotes,
+    pub service_notes: &'a ServiceNotes,
     pub utxos: &'a Utxos,
     pub tx_hash_view: &'a TxHashView,
 }
@@ -113,7 +113,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for DepositOp {
 
         // Check that inputs are spendable and not already channel notes
         self.inputs.validate_not_in_channel(
-            context.locked_notes,
+            context.service_notes,
             context.channels,
             context.utxos,
         )?;

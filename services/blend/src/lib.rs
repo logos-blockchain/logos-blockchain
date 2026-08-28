@@ -295,12 +295,12 @@ where
                 },
                 Some(message) = inbound_relay.next() => {
                     match message {
-                        ProxyServiceMessage::JoinAsCore { locator, locked_note_id, reply } => {
+                        ProxyServiceMessage::JoinAsCore { locator, service_note_id, reply } => {
                             reply.send(
                                 submit_blend_sdp_declaration(
                                     &sdp_service_api,
                                     locator,
-                                    locked_note_id,
+                                    service_note_id,
                                     non_ephemeral_signing_key_public,
                                     zk_public_key,
                                 )
@@ -324,7 +324,7 @@ where
 async fn submit_blend_sdp_declaration<SdpService>(
     sdp_service_api: &SdpServiceApi<SdpService>,
     locator: Locator,
-    locked_note_id: NoteId,
+    service_note_id: NoteId,
     non_ephemeral_signing_key_public: Ed25519PublicKey,
     zk_id: ZkPublicKey,
 ) -> Result<DeclarationId, lb_sdp_service::api::Error>
@@ -333,11 +333,11 @@ where
 {
     tracing::info!(
         target: LOG_TARGET,
-        "Submitting Blend service declaration to SDP with locator {locator:?} and locked note id {locked_note_id:?}",
+        "Submitting Blend service declaration to SDP with locator {locator:?} and service note id {service_note_id:?}",
     );
     let sdp_declaration = DeclarationMessage {
         locators: [locator].into(),
-        locked_note_id,
+        service_note_id,
         provider_id: ProviderId(non_ephemeral_signing_key_public),
         service_type: ServiceType::BlendNetwork,
         zk_id,

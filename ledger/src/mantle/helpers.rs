@@ -13,7 +13,7 @@ use lb_core::{
         },
         transactions::{OperationVerificationHelper, VerificationError},
     },
-    sdp::{DeclarationId, MinStake, ServiceType, locked_notes::LockedNotes},
+    sdp::{DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
@@ -47,8 +47,8 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
         self.ledger_state.channels()
     }
 
-    fn get_locked_notes(&self) -> &LockedNotes {
-        self.ledger_state.locked_notes()
+    fn get_service_notes(&self) -> &ServiceNotes {
+        self.ledger_state.service_notes()
     }
 
     fn get_utxos(&self) -> &Utxos {

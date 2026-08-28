@@ -113,11 +113,8 @@ pub enum MerklePathError {
 
 mod serde_siblings {
     use lb_groth16::{Fr, serde::serde_fr_vec};
-    use lb_utils::bounded::UpperBoundedVec;
-    use serde::{
-        Deserialize, Deserializer, Serializer,
-        de::{SeqAccess, Visitor},
-    };
+    use lb_utils::bounded::{UpperBoundedVec, deserialize_bounded_sequence};
+    use serde::{Deserialize, Deserializer, Serializer};
 
     use super::{MAX_MERKLE_PATH_SIBLINGS, MerklePathSiblings};
 
@@ -135,35 +132,15 @@ mod serde_siblings {
         #[derive(Deserialize)]
         struct FrWrap(#[serde(with = "lb_groth16::serde::serde_fr")] Fr);
 
-        struct SiblingsVisitor;
-
-        impl<'de> Visitor<'de> for SiblingsVisitor {
-            type Value = Vec<Fr>;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("a sequence of MMR sibling field elements")
-            }
-
-            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-            where
-                A: SeqAccess<'de>,
-            {
-                let mut siblings = Vec::with_capacity(MAX_MERKLE_PATH_SIBLINGS);
-                while let Some(FrWrap(sibling)) = sequence.next_element()? {
-                    if siblings.len() == MAX_MERKLE_PATH_SIBLINGS {
-                        return Err(serde::de::Error::custom(format_args!(
-                            "MMR path contains more than {MAX_MERKLE_PATH_SIBLINGS} siblings"
-                        )));
-                    }
-                    siblings.push(sibling);
-                }
-                Ok(siblings)
-            }
-        }
-
-        let siblings = deserializer.deserialize_seq(SiblingsVisitor)?;
-        UpperBoundedVec::<Fr, MAX_MERKLE_PATH_SIBLINGS>::try_from(siblings)
-            .map_err(serde::de::Error::custom)
+        let siblings =
+            deserialize_bounded_sequence::<FrWrap, 0, MAX_MERKLE_PATH_SIBLINGS, D>(deserializer)?;
+        Ok(UpperBoundedVec::new_unchecked(
+            siblings
+                .into_inner()
+                .into_iter()
+                .map(|FrWrap(sibling)| sibling)
+                .collect(),
+        ))
     }
 }
 

@@ -62,7 +62,7 @@ enum SdpSubCommand {
     ///
     /// The command validates that:
     /// - the SDP funding key has non-zero balance
-    /// - `--locked-note-id` exists for the Blend ZK key before submitting the
+    /// - `--service-note-id` exists for the Blend ZK key before submitting the
     ///   declaration.
     PostBlendDeclaration(PostBlendDeclarationArgs),
 }
@@ -90,7 +90,7 @@ struct PostBlendDeclarationArgs {
 
     /// Note ID to lock for the Blend declaration (HEX-encoded field element).
     #[arg(long, value_name = "NOTE_ID_HEX", value_parser = parse_hex_serde::<NoteId>)]
-    locked_note_id: NoteId,
+    service_note_id: NoteId,
 
     /// Base node URL, for example `http://localhost:8080`.
     #[arg(long, value_name = "NODE_URL", default_value = "http://localhost:8080")]
@@ -117,7 +117,7 @@ where
 
 async fn post_blend_declaration(
     PostBlendDeclarationArgs {
-        locked_note_id,
+        service_note_id,
         blend_addr,
         node_address,
         user_config_path,
@@ -139,7 +139,7 @@ async fn post_blend_declaration(
         CommonHttpClient::new(credentials)
     };
 
-    validate_config_values(&client, node_address.clone(), &user_config, locked_note_id)
+    validate_config_values(&client, node_address.clone(), &user_config, service_note_id)
         .await
         .with_context(|| "Failed to validate values from user config")?;
 
@@ -148,7 +148,7 @@ async fn post_blend_declaration(
             &node_address,
             JoinBlendRequestBody {
                 locator: blend_addr,
-                locked_note_id,
+                service_note_id,
             },
         )
         .await
@@ -162,7 +162,7 @@ async fn validate_config_values(
     client: &CommonHttpClient,
     node_address: Url,
     config: &UserConfig,
-    locked_note_id: NoteId,
+    service_note_id: NoteId,
 ) -> Result<()> {
     let sdp_wallet_funding_pk = config.sdp.wallet.funding_pk;
     verify_sdp_wallet_funding_pk_balance(client, node_address.clone(), sdp_wallet_funding_pk)
@@ -171,7 +171,7 @@ async fn validate_config_values(
 
     let zk_id = extract_blend_zk_key(config)?;
 
-    verify_locked_note_id_value(client, node_address, zk_id, locked_note_id).await?;
+    verify_service_note_id_value(client, node_address, zk_id, service_note_id).await?;
 
     Ok(())
 }
@@ -213,11 +213,11 @@ async fn verify_sdp_wallet_funding_pk_balance(
     Ok(())
 }
 
-async fn verify_locked_note_id_value(
+async fn verify_service_note_id_value(
     client: &CommonHttpClient,
     node_address: Url,
     zk_id: ZkPublicKey,
-    locked_note_id: NoteId,
+    service_note_id: NoteId,
 ) -> Result<()> {
     let WalletBalanceResponseBody { notes, .. } = client
         .get_wallet_balance(node_address, zk_id, None)
@@ -227,9 +227,9 @@ async fn verify_locked_note_id_value(
     // Preflight guard: fail early when the provided note does not belong to the
     // declaration ZK key according to the wallet view at `node_address`.
     // TODO: Also verify minimum stake amount once that threshold is exposed here.
-    if !notes.contains_key(&locked_note_id) {
+    if !notes.contains_key(&service_note_id) {
         bail!(
-            "Locked note ID '{locked_note_id:?}' was not found in wallet notes for provided Blend ZK ID",
+            "Service note ID '{service_note_id:?}' was not found in wallet notes for provided Blend ZK ID",
         );
     }
     Ok(())

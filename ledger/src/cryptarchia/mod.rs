@@ -1295,7 +1295,7 @@ pub mod tests {
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
             provider_id: signing_key.public_key().into(),
             zk_id: zk_key.to_public_key(),
-            locked_note_id: sdp_utxo.id(),
+            service_note_id: sdp_utxo.id(),
         };
         let config = ledger.config().clone();
 

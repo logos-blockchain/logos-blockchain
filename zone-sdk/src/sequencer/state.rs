@@ -12,7 +12,18 @@ use lb_core::{
         transactions::{hash::TxHash, mantle_tx::MantleTx as _, states::Unverified},
     },
 };
+use lb_key_management_system_service::keys::Ed25519PublicKey;
 use rpds::HashTrieSetSync;
+
+/// The Ed25519 author of a tx's channel inscription op, if it carries one — the
+/// signer stored on the pending entry's `signed_tx`, recovered for lineage
+/// reconstruction.
+fn inscription_signer(tx: &SignedMantleTx<Unverified>) -> Option<Ed25519PublicKey> {
+    tx.mantle_tx().ops().iter().find_map(|op| match op {
+        Op::ChannelInscribe(inscribe) => Some(inscribe.signer),
+        _ => None,
+    })
+}
 
 use super::{
     channel_wallet::{ChannelWallet, NoteOp},
@@ -1292,6 +1303,7 @@ impl TxState {
                     parent_msg: pending.parent_msg,
                     this_msg: pending.this_msg,
                     payload: pending.payload.clone(),
+                    signer: inscription_signer(&pending.signed_tx),
                 });
                 queue.push_back(pending.this_msg);
             }
@@ -1342,7 +1354,6 @@ mod tests {
         Op::ChannelInscribe, RawMantleTx, ops::channel::inscribe::InscriptionOp,
         transactions::OpsProofs,
     };
-    use lb_key_management_system_service::keys::Ed25519PublicKey;
 
     use super::*;
     use crate::test_support::header_id;
@@ -1830,6 +1841,11 @@ mod tests {
         MsgId::from(bytes)
     }
 
+    /// A throwaway inscription author for test fixtures (never asserted on).
+    fn test_signer() -> Ed25519PublicKey {
+        Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()
+    }
+
     /// Submit a fake pending inscription with lineage metadata.
     fn submit_fake_inscription(
         state: &mut TxState,
@@ -1881,6 +1897,7 @@ mod tests {
             parent_msg: parent,
             this_msg,
             payload: [].into(),
+            signer: None,
         })
     }
 
@@ -2103,6 +2120,7 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: msg_id(1),
             payload: [1].into(),
+            signer: Some(test_signer()),
         };
         state.process_block(
             b1,
@@ -2164,6 +2182,7 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: msg_id(1),
             payload: [1].into(),
+            signer: Some(test_signer()),
         };
         state.process_block(
             b1,
@@ -2227,6 +2246,7 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
             payload: [99].into(),
+            signer: Some(test_signer()),
         };
         // Mirror the observed inscription into pending before the safe-set
         // build, as `handle_block_event` does — the pending set reflects the
@@ -2289,6 +2309,7 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
             payload: [99].into(),
+            signer: Some(test_signer()),
         };
         state.process_block(
             block2,
@@ -2366,6 +2387,7 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
             payload: [99].into(),
+            signer: Some(test_signer()),
         };
         state.process_block(
             block2,
