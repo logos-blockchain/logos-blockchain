@@ -51,7 +51,6 @@ use lb_core::mantle::{
     transactions::{GasPrices, hash::TxHash},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
-use lb_tui_zone::run_commands::{ZONE_FILE_TRANSFER_VERSION, ZONE_WALLET_FUNDS_EXPORT};
 use lb_wallet::WalletError;
 use serde::Serialize;
 use tokio::time::{Instant, sleep};
@@ -759,8 +758,6 @@ fn log_wallet_state_balance(wallet_name: &str, public_key_hex: &str, state: &Wal
 
 #[derive(Serialize)]
 struct WalletFundsExport {
-    version: u8,
-    kind: &'static str,
     wallet: String,
     node_url: String,
     public_key: String,
@@ -799,8 +796,6 @@ async fn export_funds(
     let selected = select_utxos_covering(available_utxos.clone(), value)?;
     let selected_value = selected.iter().map(|utxo| utxo.note.value).sum();
     let export = WalletFundsExport {
-        version: ZONE_FILE_TRANSFER_VERSION,
-        kind: ZONE_WALLET_FUNDS_EXPORT,
         wallet: wallet.wallet_name.clone(),
         node_url: format!(
             "{}",
