@@ -30,15 +30,12 @@ pub struct WalletConfig {
 pub struct ActiveMessageTrackerConfig {
     /// Interval between status checks of a submitted activity, in tip changes.
     pub status_check_interval_in_tip_changes: NonZeroU64,
-    /// Max number of status checks for a submitted activity.
-    pub max_status_checks: NonZeroU64,
 }
 
 impl Default for ActiveMessageTrackerConfig {
     fn default() -> Self {
         Self {
             status_check_interval_in_tip_changes: NonZeroU64::new(3).unwrap(),
-            max_status_checks: NonZeroU64::new(5).unwrap(),
         }
     }
 }

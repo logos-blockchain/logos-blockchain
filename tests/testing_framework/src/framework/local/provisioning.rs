@@ -730,7 +730,6 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
             },
             active_message_tracker: ActiveMessageTrackerConfig {
                 status_check_interval_in_tip_changes: NonZeroU64::new(3).unwrap(),
-                max_status_checks: NonZeroU64::new(5).unwrap(),
             },
         },
         wallet: {

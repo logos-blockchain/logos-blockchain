@@ -293,7 +293,7 @@ where
             return;
         };
 
-        match tracker.handle_tip(event.tip).await {
+        match tracker.handle_tip(event.tip, event.lib).await {
             Ok(outcome) => {
                 self.handle_active_message_tracker_outcome(
                     outcome,
@@ -333,8 +333,8 @@ where
             intent::Outcome::WaitingforMoreTipChanges => {
                 trace!("active message tracker waiting for more tip changes before status check");
             }
-            intent::Outcome::Exhausted => {
-                debug!("active message tracker exhausted: dropping the tracker");
+            intent::Outcome::Finalized => {
+                debug!("active message intent has been finalized in the LIB: dropping the tracker");
                 self.active_message_tracker = None;
             }
         }

@@ -23,7 +23,6 @@ impl ServiceConfig {
                     .user
                     .active_message_tracker
                     .status_check_interval_in_tip_changes,
-                max_status_checks: self.user.active_message_tracker.max_status_checks,
             },
             recovery_data,
         }

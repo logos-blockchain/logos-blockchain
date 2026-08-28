@@ -16,8 +16,6 @@ pub struct IntentTracker<Intent, Provider> {
     last_tip: Option<HeaderId>,
     /// Tip changes since the submission or the last status check.
     tip_changes: u64,
-    /// Number of status checks so far.
-    status_checks: u64,
     /// API to fetch the ledger state.
     ledger_state_provider: Provider,
 }
@@ -29,8 +27,6 @@ pub struct IntentTracker<Intent, Provider> {
 pub struct Config {
     /// Interval between status checks of a submitted activity, in tip changes.
     pub status_check_interval_in_tip_changes: NonZeroU64,
-    /// Max number of status checks for a submitted activity.
-    pub max_status_checks: NonZeroU64,
 }
 
 impl<Intent, Provider> IntentTracker<Intent, Provider> {
@@ -45,7 +41,6 @@ impl<Intent, Provider> IntentTracker<Intent, Provider> {
             config,
             last_tip: tip,
             tip_changes: 0,
-            status_checks: 0,
             ledger_state_provider,
         }
     }
@@ -53,8 +48,8 @@ impl<Intent, Provider> IntentTracker<Intent, Provider> {
 
 impl<Intent, Provider> IntentTracker<Intent, Provider>
 where
-    Intent: lb_ledger::Intent<Error: Send + Sync + 'static> + Clone,
-    Provider: LedgerStateProvider,
+    Intent: lb_ledger::Intent<Error: Send + Sync + 'static> + Sync + Clone,
+    Provider: LedgerStateProvider + Sync,
 {
     /// Feeds a new tip to the tracker. A tip the tracker has already seen is
     /// ignored.
@@ -72,12 +67,16 @@ where
     /// In all of the above cases, the caller can keep calling ths function
     /// to continue the tracking.
     ///
-    /// After [`Config::max_status_checks`] checks, this function always returns
-    /// [`Outcome::Exhaust`] without any status check. The caller can stop
-    /// calling this function in this case.
-    pub async fn handle_tip(&mut self, tip: HeaderId) -> Result<Outcome<Intent>, Error> {
-        if self.status_checks >= self.config.max_status_checks.get() {
-            return Ok(Outcome::Exhausted);
+    /// If the intent appears in the ledger of `lib`, this function returns
+    /// [`Outcome::Finalized`]. The caller can stop calling this function in
+    /// this case.
+    pub async fn handle_tip(
+        &mut self,
+        tip: HeaderId,
+        lib: HeaderId,
+    ) -> Result<Outcome<Intent>, Error> {
+        if matches!(self.check_status(lib).await?, IntentStatus::Applied) {
+            return Ok(Outcome::Finalized);
         }
 
         if self.last_tip.replace(tip) == Some(tip) {
@@ -88,35 +87,43 @@ where
         if self.tip_changes < self.config.status_check_interval_in_tip_changes.get() {
             return Ok(Outcome::WaitingforMoreTipChanges); // not time to check the status yet
         }
-
         self.tip_changes = 0;
-        self.status_checks = self.status_checks.saturating_add(1);
 
-        let ledger = match self.ledger_state_provider.get(tip).await {
-            Ok(Some(ledger)) => ledger,
-            Ok(None) => return Err(Error::LedgerStateNotFound(tip)),
-            Err(e) => {
-                return Err(Error::LedgerStateProvider(Box::new(e)));
-            }
-        };
+        let status = self.check_status(tip).await?;
+        Ok(Outcome::StatusChecked {
+            intent: self.intent.clone(),
+            status,
+        })
+    }
 
-        match self.intent.status(&ledger) {
-            Ok(status) => Ok(Outcome::StatusChecked {
-                intent: self.intent.clone(),
-                status,
-            }),
-            Err(e) => Err(Error::StatusCheckFailed(Box::new(e))),
-        }
+    async fn check_status(&self, block: HeaderId) -> Result<IntentStatus, Error> {
+        let ledger = self.get_ledger_state(block).await?;
+        self.intent
+            .status(&ledger)
+            .map_err(|e| Error::StatusCheckFailed(Box::new(e)))
+    }
+
+    async fn get_ledger_state(&self, block: HeaderId) -> Result<LedgerState, Error> {
+        self.ledger_state_provider
+            .get(block)
+            .await
+            .map_err(|e| Error::LedgerStateProvider(Box::new(e)))?
+            .ok_or(Error::LedgerStateNotFound(block))
     }
 }
 
+/// Return type of [`IntentTracker::handle_tip`].
 pub enum Outcome<Intent> {
+    /// Intent status checked against the tip ledger.
     StatusChecked {
         intent: Intent,
         status: IntentStatus,
     },
+    /// Intent status check is triggered every
+    /// [`Config::status_check_interval_in_tip_changes`] tip changes.
     WaitingforMoreTipChanges,
-    Exhausted,
+    /// Intent finalized on the LIB ledger.
+    Finalized,
 }
 
 #[async_trait]
@@ -139,13 +146,16 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::HashSet,
         convert::Infallible,
         num::NonZero,
         sync::{Arc, Mutex},
     };
 
-    use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
+    use lb_core::{
+        mantle::{Note, Utxo},
+        sdp::{MinStake, ServiceParameters, ServiceType},
+    };
+    use lb_key_management_system_keys::keys::ZkPublicKey;
     use lb_ledger::{
         Intent,
         config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
@@ -157,168 +167,177 @@ mod tests {
 
     #[tokio::test]
     async fn unchanged_tip_never_trigger_status_check() {
-        let mut tracker = tracker(IntentStatus::NotApplied, 2, 3);
+        let mut tracker = tracker(IntentStatus::NotApplied, IntentStatus::NotApplied, 2);
         let tip = tracker.last_tip.unwrap();
 
-        let out = tracker.handle_tip(tip).await.unwrap();
+        let out = tracker.handle_tip(tip, LIB.into()).await.unwrap();
         assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
         assert_eq!(tracker.last_tip, Some(tip));
         assert_eq!(tracker.tip_changes, 0);
-        assert_eq!(tracker.status_checks, 0);
     }
 
     #[tokio::test]
     async fn status_check_is_triggered_after_interval() {
-        let mut tracker = tracker(IntentStatus::Applied, 2, 3);
+        let mut tracker = tracker(IntentStatus::Applied, IntentStatus::NotApplied, 2);
 
-        let out = tracker.handle_tip(tip(1)).await.unwrap();
+        let out = tracker.handle_tip(tip(1), LIB.into()).await.unwrap();
         assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
-        assert_eq!(tracker.status_checks, 0);
         assert_eq!(tracker.tip_changes, 1);
 
-        let out = tracker.handle_tip(tip(2)).await.unwrap();
+        let out = tracker.handle_tip(tip(2), LIB.into()).await.unwrap();
         expect_applied(&out);
-        assert_eq!(tracker.status_checks, 1);
         assert_eq!(tracker.tip_changes, 0); // was reset
 
-        let out = tracker.handle_tip(tip(3)).await.unwrap();
+        let out = tracker.handle_tip(tip(3), LIB.into()).await.unwrap();
         assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
-        assert_eq!(tracker.status_checks, 1);
         assert_eq!(tracker.tip_changes, 1);
 
-        let out = tracker.handle_tip(tip(4)).await.unwrap();
+        let out = tracker.handle_tip(tip(4), LIB.into()).await.unwrap();
         expect_applied(&out);
-        assert_eq!(tracker.status_checks, 2);
         assert_eq!(tracker.tip_changes, 0); // was reset
-
-        let out = tracker.handle_tip(tip(5)).await.unwrap();
-        assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
-        assert_eq!(tracker.status_checks, 2);
-        assert_eq!(tracker.tip_changes, 1);
-
-        let out = tracker.handle_tip(tip(6)).await.unwrap();
-        expect_applied(&out);
-        assert_eq!(tracker.status_checks, 3);
-        assert_eq!(tracker.tip_changes, 0); // was reset
-
-        let out = tracker.handle_tip(tip(7)).await.unwrap();
-        assert!(matches!(out, Outcome::Exhausted));
     }
 
     #[tokio::test]
     async fn intent_not_applied() {
-        let mut tracker = tracker(IntentStatus::NotApplied, 2, 3);
+        let mut tracker = tracker(IntentStatus::NotApplied, IntentStatus::NotApplied, 2);
 
-        let out = tracker.handle_tip(tip(1)).await.unwrap();
+        let out = tracker.handle_tip(tip(1), LIB.into()).await.unwrap();
         assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
 
-        let out = tracker.handle_tip(tip(2)).await.unwrap();
+        let out = tracker.handle_tip(tip(2), LIB.into()).await.unwrap();
         expect_not_applied(&out);
 
-        let out = tracker.handle_tip(tip(3)).await.unwrap();
+        let out = tracker.handle_tip(tip(3), LIB.into()).await.unwrap();
         assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
 
-        let out = tracker.handle_tip(tip(4)).await.unwrap();
+        let out = tracker.handle_tip(tip(4), LIB.into()).await.unwrap();
         expect_not_applied(&out);
-
-        let out = tracker.handle_tip(tip(5)).await.unwrap();
-        assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
-
-        let out = tracker.handle_tip(tip(6)).await.unwrap();
-        expect_not_applied(&out);
-
-        let out = tracker.handle_tip(tip(7)).await.unwrap();
-        assert!(matches!(out, Outcome::Exhausted));
     }
 
     #[tokio::test]
     async fn applied_intent_reverted() {
-        let status = Arc::new(Mutex::new(Some(IntentStatus::Applied)));
-        let mut tracker = tracker_with(MockIntent(Arc::clone(&status)), 2, 3);
+        let status_in_tip = Arc::new(Mutex::new(Some(IntentStatus::Applied)));
+        let mut tracker = tracker_with(
+            MockIntent {
+                status_in_tip: Arc::clone(&status_in_tip),
+                status_in_lib: Arc::new(Mutex::new(Some(IntentStatus::NotApplied))),
+            },
+            2,
+        );
 
-        let out = tracker.handle_tip(tip(1)).await.unwrap();
+        let out = tracker.handle_tip(tip(1), LIB.into()).await.unwrap();
         assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
-        let out = tracker.handle_tip(tip(2)).await.unwrap();
+        let out = tracker.handle_tip(tip(2), LIB.into()).await.unwrap();
         expect_applied(&out);
 
         // e.g., a reorg reverted the applied intent.
-        *status.lock().unwrap() = Some(IntentStatus::NotApplied);
-        let out = tracker.handle_tip(tip(1)).await.unwrap();
+        *status_in_tip.lock().unwrap() = Some(IntentStatus::NotApplied);
+        let out = tracker.handle_tip(tip(1), LIB.into()).await.unwrap();
         assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
-        let out = tracker.handle_tip(tip(2)).await.unwrap();
+        let out = tracker.handle_tip(tip(2), LIB.into()).await.unwrap();
         expect_not_applied(&out);
     }
 
     #[tokio::test]
     async fn status_check_failed() {
-        let status = Arc::new(Mutex::new(None));
-        let mut tracker = tracker_with(MockIntent(Arc::clone(&status)), 2, 3);
+        let status_in_tip = Arc::new(Mutex::new(None));
+        let mut tracker = tracker_with(
+            MockIntent {
+                status_in_tip: Arc::clone(&status_in_tip),
+                status_in_lib: Arc::new(Mutex::new(Some(IntentStatus::NotApplied))),
+            },
+            2,
+        );
 
-        let out = tracker.handle_tip(tip(1)).await.unwrap();
+        let out = tracker.handle_tip(tip(1), LIB.into()).await.unwrap();
         assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
-        tracker.handle_tip(tip(2)).await.err().unwrap();
+        tracker.handle_tip(tip(2), LIB.into()).await.err().unwrap();
 
-        let out = tracker.handle_tip(tip(3)).await.unwrap();
+        let out = tracker.handle_tip(tip(3), LIB.into()).await.unwrap();
         assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
-        tracker.handle_tip(tip(4)).await.err().unwrap();
-
-        let out = tracker.handle_tip(tip(5)).await.unwrap();
-        assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
-        tracker.handle_tip(tip(6)).await.err().unwrap();
-
-        let out = tracker.handle_tip(tip(7)).await.unwrap();
-        assert!(matches!(out, Outcome::Exhausted));
+        tracker.handle_tip(tip(4), LIB.into()).await.err().unwrap();
     }
 
     #[tokio::test]
     async fn status_check_becomes_available_again() {
-        let status = Arc::new(Mutex::new(None));
-        let mut tracker = tracker_with(MockIntent(Arc::clone(&status)), 2, 3);
+        let status_in_tip = Arc::new(Mutex::new(None));
+        let mut tracker = tracker_with(
+            MockIntent {
+                status_in_tip: Arc::clone(&status_in_tip),
+                status_in_lib: Arc::new(Mutex::new(Some(IntentStatus::NotApplied))),
+            },
+            2,
+        );
 
-        let out = tracker.handle_tip(tip(1)).await.unwrap();
+        let out = tracker.handle_tip(tip(1), LIB.into()).await.unwrap();
         assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
-        tracker.handle_tip(tip(2)).await.err().unwrap();
+        tracker.handle_tip(tip(2), LIB.into()).await.err().unwrap();
 
         // e.g., the intent became applicable after a chain reorg.
-        *status.lock().unwrap() = Some(IntentStatus::NotApplied);
-        let out = tracker.handle_tip(tip(3)).await.unwrap();
+        *status_in_tip.lock().unwrap() = Some(IntentStatus::NotApplied);
+        let out = tracker.handle_tip(tip(3), LIB.into()).await.unwrap();
         assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
-        let out = tracker.handle_tip(tip(4)).await.unwrap();
+        let out = tracker.handle_tip(tip(4), LIB.into()).await.unwrap();
         expect_not_applied(&out);
     }
 
     #[tokio::test]
-    async fn status_check_counts_error() {
-        let mut tracker = tracker(IntentStatus::Applied, 2, 3);
+    async fn intent_finalized() {
+        let status_in_lib = Arc::new(Mutex::new(Some(IntentStatus::NotApplied)));
+        let mut tracker = tracker_with(
+            MockIntent {
+                status_in_tip: Arc::new(Mutex::new(Some(IntentStatus::NotApplied))),
+                status_in_lib: Arc::clone(&status_in_lib),
+            },
+            2,
+        );
 
-        let out = tracker.handle_tip(tip(1)).await.unwrap();
+        let out = tracker.handle_tip(tip(1), LIB.into()).await.unwrap();
         assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
-        assert_eq!(tracker.status_checks, 0);
+        let out = tracker.handle_tip(tip(2), LIB.into()).await.unwrap();
+        expect_not_applied(&out);
 
-        let unknown_tip = tip(99);
-        let Err(Error::LedgerStateNotFound(_)) = tracker.handle_tip(unknown_tip).await else {
-            panic!("expected error");
-        };
-        assert_eq!(tracker.status_checks, 1);
-        assert_eq!(tracker.tip_changes, 0); // was reset
+        // the intent appears in the LIB ledger state, finally.
+        *status_in_lib.lock().unwrap() = Some(IntentStatus::Applied);
+        let out = tracker.handle_tip(tip(3), LIB.into()).await.unwrap();
+        assert!(matches!(out, Outcome::Finalized));
+    }
+
+    #[tokio::test]
+    async fn lib_ledger_state_fetch_error() {
+        let status_in_lib = Arc::new(Mutex::new(None));
+        let mut tracker = tracker_with(
+            MockIntent {
+                status_in_tip: Arc::new(Mutex::new(Some(IntentStatus::NotApplied))),
+                status_in_lib: Arc::clone(&status_in_lib),
+            },
+            2,
+        );
+
+        tracker.handle_tip(tip(1), LIB.into()).await.err().unwrap();
+
+        // LIB ledger state becomes available again
+        *status_in_lib.lock().unwrap() = Some(IntentStatus::Applied);
+        let out = tracker.handle_tip(tip(2), LIB.into()).await.unwrap();
+        assert!(matches!(out, Outcome::Finalized));
     }
 
     type MockTracker = IntentTracker<MockIntent, MockLedgerStateProvider>;
 
-    fn tracker(status: IntentStatus, interval: u64, max: u64) -> MockTracker {
-        tracker_with(
-            MockIntent(Arc::new(Mutex::new(Some(status)))),
-            interval,
-            max,
-        )
+    fn tracker(
+        status_in_tip: IntentStatus,
+        status_in_lib: IntentStatus,
+        interval: u64,
+    ) -> MockTracker {
+        tracker_with(MockIntent::new(status_in_tip, status_in_lib), interval)
     }
 
-    fn tracker_with(intent: MockIntent, interval: u64, max: u64) -> MockTracker {
+    fn tracker_with(intent: MockIntent, interval: u64) -> MockTracker {
         IntentTracker::new(
             intent,
-            config(interval, max),
-            Some(tip(0)),
-            MockLedgerStateProvider::at((1..).take((interval * max).try_into().unwrap())),
+            config(interval),
+            Some(LIB.into()),
+            MockLedgerStateProvider,
         )
     }
 
@@ -342,10 +361,9 @@ mod tests {
         ));
     }
 
-    fn config(interval: u64, max: u64) -> Config {
+    fn config(interval: u64) -> Config {
         Config {
             status_check_interval_in_tip_changes: interval.try_into().unwrap(),
-            max_status_checks: max.try_into().unwrap(),
         }
     }
 
@@ -353,18 +371,44 @@ mod tests {
         [n; 32].into()
     }
 
-    /// An intent whose status is set by the test, ignoring the ledger state.
+    /// An intent whose status is set by the test.
+    ///
+    /// [`MockIntent::status`] returns the status set by the test without
+    /// checking the ledger state.
     #[derive(Clone)]
-    struct MockIntent(Arc<Mutex<Option<IntentStatus>>>);
+    struct MockIntent {
+        status_in_tip: Arc<Mutex<Option<IntentStatus>>>,
+        status_in_lib: Arc<Mutex<Option<IntentStatus>>>,
+    }
+
+    impl MockIntent {
+        fn new(status_in_tip: IntentStatus, status_in_lib: IntentStatus) -> Self {
+            Self {
+                status_in_tip: Arc::new(Mutex::new(Some(status_in_tip))),
+                status_in_lib: Arc::new(Mutex::new(Some(status_in_lib))),
+            }
+        }
+    }
 
     impl Intent for MockIntent {
         type Error = MockIntentStatusCheckFailed;
 
-        fn status(&self, _: &LedgerState) -> Result<IntentStatus, Self::Error> {
-            self.0
-                .lock()
-                .unwrap()
-                .map_or_else(|| Err(MockIntentStatusCheckFailed), Ok)
+        /// Returns the status set by the test.
+        ///
+        /// If the ledger state is for LIB, it returns [`Self::status_in_lib`].
+        /// Otherwise, it returns [`Self::status_in_tip`].
+        fn status(&self, ledger: &LedgerState) -> Result<IntentStatus, Self::Error> {
+            if ledger == &lib_ledger_state() {
+                self.status_in_lib
+                    .lock()
+                    .unwrap()
+                    .map_or_else(|| Err(MockIntentStatusCheckFailed), Ok)
+            } else {
+                self.status_in_tip
+                    .lock()
+                    .unwrap()
+                    .map_or_else(|| Err(MockIntentStatusCheckFailed), Ok)
+            }
         }
     }
 
@@ -372,25 +416,26 @@ mod tests {
     #[error("no status")]
     struct MockIntentStatusCheckFailed;
 
-    /// Provides a static ledger state only at the given tips.
+    /// Provides a static ledger state.
     #[derive(Debug)]
-    struct MockLedgerStateProvider(HashSet<HeaderId>);
+    struct MockLedgerStateProvider;
 
-    impl MockLedgerStateProvider {
-        fn at(tips: impl IntoIterator<Item = u8>) -> Self {
-            Self(tips.into_iter().map(tip).collect())
-        }
-    }
+    const LIB: [u8; 32] = [0; 32];
+    const UNKNOWN_BLOCK: [u8; 32] = [u8::MAX; 32];
 
     #[async_trait]
     impl LedgerStateProvider for MockLedgerStateProvider {
         type Error = Infallible;
 
+        /// Returns the static LIB ledger state if `block` is the static `LIB`.
+        /// Otherwise, returns the static tip ledger state.
         async fn get(&self, block: HeaderId) -> Result<Option<LedgerState>, Self::Error> {
-            if self.0.contains(&block) {
-                Ok(Some(ledger_state()))
-            } else {
+            if block == LIB.into() {
+                Ok(Some(lib_ledger_state()))
+            } else if block == UNKNOWN_BLOCK.into() {
                 Ok(None)
+            } else {
+                Ok(Some(tip_ledger_state()))
             }
         }
     }
@@ -411,7 +456,15 @@ mod tests {
         }
     }
 
-    fn ledger_state() -> LedgerState {
+    fn lib_ledger_state() -> LedgerState {
+        ledger_state([Utxo::new([0; 32], 0, Note::new(1, ZkPublicKey::zero()))])
+    }
+
+    fn tip_ledger_state() -> LedgerState {
+        ledger_state([])
+    }
+
+    fn ledger_state(utxos: impl IntoIterator<Item = Utxo>) -> LedgerState {
         let consensus_config = lb_cryptarchia_engine::Config::new(
             NonZero::new(2).unwrap(),
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
@@ -426,7 +479,7 @@ mod tests {
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
         LedgerState::from_utxos(
-            [],
+            utxos,
             &lb_ledger::Config {
                 epoch_config,
                 consensus_config,
