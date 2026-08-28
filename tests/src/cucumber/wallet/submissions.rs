@@ -342,7 +342,7 @@ async fn validate_signed_submissions_against_live_prices(
         })?;
     if let Some(policy) = fee_policy {
         let current_epoch =
-            consensus.cryptarchia_info.slot.into_inner() / world.slots_per_epoch.get();
+            consensus.cryptarchia_info.slot.into_inner() / world.chain.slots_per_epoch.get();
         let valid_through_epoch = u64::from(policy.horizon.valid_through_epoch.into_inner());
         if current_epoch > valid_through_epoch {
             return Err(StepError::FeeHorizonExceeded {
@@ -397,7 +397,7 @@ pub(crate) async fn validate_fee_horizon_after_wallet_batch(
     prepared_count: usize,
 ) -> Result<(), StepError> {
     let (_, _, consensus) = sanitize_best_node_info(world, wallet_name, None).await?;
-    let current_epoch = consensus.slot.into_inner() / world.slots_per_epoch.get();
+    let current_epoch = consensus.slot.into_inner() / world.chain.slots_per_epoch.get();
     let valid_through_epoch = u64::from(policy.horizon.valid_through_epoch.into_inner());
     if current_epoch > valid_through_epoch {
         return Err(StepError::FeeHorizonExceededAfterWalletBatch {
@@ -919,7 +919,8 @@ fn record_wallet_submission(
 
     let wallet_name = wallet.wallet_name.as_str();
     let group_key = world
-        .node_to_group
+        .fork_groups
+        .mapping()
         .get(&wallet.node_name)
         .cloned()
         .unwrap_or_default();
@@ -943,7 +944,7 @@ fn record_wallet_submission(
         spent_fee = signed_submission.spent_fee(),
     );
 
-    world.fee_state.reserve_for_wallet(
+    world.wallet_registry.fee_state.reserve_for_wallet(
         wallet_name.to_owned(),
         group_key,
         recorded.into_fee_sponsor_reserved_inputs(),
@@ -984,6 +985,7 @@ fn scenario_fee_account_state(
     let group_key = group_key_for_wallet(world, wallet_name)?;
 
     world
+        .wallet_registry
         .fee_state
         .funding_source_for_group(&group_key, available_utxos)
         .map_err(|error| scenario_fee_funding_error(wallet_name, &error))
@@ -1000,7 +1002,8 @@ fn scenario_fee_funding_error(wallet_name: &str, error: &ScenarioFeeFundingError
 fn group_key_for_wallet(world: &CucumberWorld, wallet_name: &str) -> Result<String, StepError> {
     let wallet = world.resolve_wallet(wallet_name)?;
     Ok(world
-        .node_to_group
+        .fork_groups
+        .mapping()
         .get(&wallet.node_name)
         .cloned()
         .unwrap_or_default())

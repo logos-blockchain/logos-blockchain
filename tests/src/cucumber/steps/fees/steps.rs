@@ -86,6 +86,7 @@ async fn step_gas_prices_at_genesis_equal_reference(
     reference: GasPricesReference,
 ) -> StepResult {
     let genesis_block_id = world
+        .chain
         .genesis_block_id
         .ok_or_else(|| StepError::LogicalError {
             message: format!(

@@ -135,26 +135,26 @@ pub async fn assert_tracked_wallet_fees_equal_sponsored_fee_account_spend(
     )
     .await?;
 
-    let sponsored_genesis_account =
-        world
-            .fee_state
-            .sponsored_genesis_account
-            .ok_or_else(|| StepError::LogicalError {
-                message: format!(
-                    "Step `{step_value}` error: no sponsored genesis fee account configured"
-                ),
-            })?;
+    let sponsored_genesis_account = world
+        .wallet_registry
+        .fee_state
+        .sponsored_genesis_account
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!(
+                "Step `{step_value}` error: no sponsored genesis fee account configured"
+            ),
+        })?;
 
-    let fee_wallet_account =
-        world
-            .fee_state
-            .wallet_account
-            .clone()
-            .ok_or_else(|| StepError::LogicalError {
-                message: format!(
-                    "Step `{step_value}` error: sponsored fee wallet account not initialized"
-                ),
-            })?;
+    let fee_wallet_account = world
+        .wallet_registry
+        .fee_state
+        .wallet_account
+        .clone()
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!(
+                "Step `{step_value}` error: sponsored fee wallet account not initialized"
+            ),
+        })?;
 
     let initial_sponsored_balance = (sponsored_genesis_account.token_count.get() as u64)
         * sponsored_genesis_account.token_value.get();
@@ -223,7 +223,8 @@ pub async fn wait_for_observed_transaction_hashes<S: BuildHasher + Sync>(
         if start.elapsed() >= timeout {
             let missing_set = missing.into_iter().collect::<HashSet<_>>();
             let scanner_status = world
-                .wallet_scanner_state
+                .scanner
+                .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .groups
@@ -288,6 +289,7 @@ pub async fn wait_for_wallet_output_state(
     })?;
 
     let wallet = world
+        .wallet_registry
         .wallet_info
         .get(&wallet_name)
         .ok_or(StepError::LogicalError {
