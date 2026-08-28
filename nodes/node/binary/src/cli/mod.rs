@@ -10,7 +10,6 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;
-use lb_tui_zone::cli::NodeKeyArgs;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use libp2p::Multiaddr;
 
@@ -131,8 +130,6 @@ pub enum Command {
     AddKey(Box<AddKeyArgs>),
     /// Remove a key with title from a keystore.
     RemoveKey(Box<RemoveKeyArgs>),
-    /// Publish text inscriptions as zone blocks
-    Inscribe(NodeKeyArgs),
     /// Generate stakeholder.yaml and provider.yaml from a user config
     Participate(ParticipateArgs),
     /// Print the libp2p `PeerId` derived from the node key in a user config

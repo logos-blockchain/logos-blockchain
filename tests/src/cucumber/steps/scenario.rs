@@ -17,7 +17,7 @@ fn deployer_is(world: &mut CucumberWorld, deployer: String) -> StepResult {
 #[expect(clippy::needless_pass_by_ref_mut, reason = "Required by Cucumber")]
 fn auto_deployer(world: &mut CucumberWorld) -> StepResult {
     let _unused = world
-        .deployer
+        .lifecycle.deployer
         .ok_or(StepError::MissingDeployer)
         .inspect_err(|e| {
             println!(

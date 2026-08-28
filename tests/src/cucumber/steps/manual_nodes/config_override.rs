@@ -80,7 +80,12 @@ pub fn set_user_config_override(
     raw_path: &str,
     raw_value: &str,
 ) -> StepResult {
-    set_override(&mut world.user_config_overrides, step, raw_path, raw_value)
+    set_override(
+        &mut world.startup.user_config_overrides,
+        step,
+        raw_path,
+        raw_value,
+    )
 }
 
 pub fn set_deployment_config_override(
@@ -90,7 +95,7 @@ pub fn set_deployment_config_override(
     raw_value: &str,
 ) -> StepResult {
     set_override(
-        &mut world.deployment_config_overrides,
+        &mut world.startup.deployment_config_overrides,
         step,
         raw_path,
         raw_value,
@@ -785,9 +790,9 @@ mod tests {
         )
         .expect("deployment time override");
 
-        apply_user_config_overrides(&mut config, &world.user_config_overrides)
+        apply_user_config_overrides(&mut config, &world.startup.user_config_overrides)
             .expect("apply user overrides");
-        apply_deployment_config_overrides(&mut config, &world.deployment_config_overrides)
+        apply_deployment_config_overrides(&mut config, &world.startup.deployment_config_overrides)
             .expect("apply deployment overrides");
 
         assert_eq!(
@@ -876,9 +881,9 @@ mod tests {
         )
         .expect("node_key hex string override");
 
-        apply_user_config_overrides(&mut config, &world.user_config_overrides)
+        apply_user_config_overrides(&mut config, &world.startup.user_config_overrides)
             .expect("apply user overrides");
-        apply_deployment_config_overrides(&mut config, &world.deployment_config_overrides)
+        apply_deployment_config_overrides(&mut config, &world.startup.deployment_config_overrides)
             .expect("apply deployment overrides");
 
         assert!(

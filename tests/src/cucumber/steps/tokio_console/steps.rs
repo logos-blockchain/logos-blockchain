@@ -25,7 +25,7 @@ pub(super) struct TokioConsoleResourcesRow {
 #[given("I will have tokio console profile nodes:")]
 #[when("I will have tokio console profile nodes:")]
 fn step_tokio_console_profile_nodes(world: &mut CucumberWorld, step: &Step) -> StepResult {
-    if world.local_cluster.is_some() {
+    if world.cluster.local_cluster.is_some() {
         return Err(StepError::LogicalError {
             message: format!("'{}' must be precede cluster definition", step.value),
         });

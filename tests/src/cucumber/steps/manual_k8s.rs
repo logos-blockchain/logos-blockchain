@@ -38,7 +38,7 @@ async fn step_k8s_manual_cluster(world: &mut CucumberWorld, nodes_count: usize) 
             },
         })?;
 
-    world.k8s_manual_cluster = Some(cluster);
+    world.cluster.k8s_manual_cluster = Some(cluster);
     world.set_deployer(DeployerKind::K8s);
     Ok(())
 }
@@ -134,6 +134,7 @@ async fn step_k8s_manual_start_nodes_with_wallet_resources(
     }
 
     let cluster = world
+        .cluster
         .k8s_manual_cluster
         .as_ref()
         .ok_or(StepError::LogicalError {
@@ -168,6 +169,6 @@ async fn step_k8s_manual_node_has_peers(
 async fn step_k8s_manual_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
     world.reset_wallet_scanner_after_current_iteration().await;
     stop_active_manual_cluster(world)?;
-    world.k8s_manual_cluster = None;
+    world.cluster.k8s_manual_cluster = None;
     Ok(())
 }
