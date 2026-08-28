@@ -40,7 +40,9 @@ pub(crate) fn request_faucet_funds(
     number_of_rounds: NonZero<usize>,
     wallets: &[String],
 ) -> StepResult {
-    if world.faucet_base_url.is_none() || world.public_cryptarchia_endpoint_peers.is_none() {
+    if world.wallet_registry.faucet_base_url.is_none()
+        || world.startup.public_cryptarchia_endpoint_peers.is_none()
+    {
         warn!(
             target: TARGET,
             "Step `{}` error: Faucet details not set.",
@@ -52,6 +54,7 @@ pub(crate) fn request_faucet_funds(
     }
     let faucet_task = FaucetTask::new(
         world
+            .wallet_registry
             .faucet_base_url
             .clone()
             .expect("checked above")
@@ -59,14 +62,15 @@ pub(crate) fn request_faucet_funds(
         wallets,
         number_of_rounds,
         world
+            .startup
             .public_cryptarchia_endpoint_peers
             .clone()
             .expect("checked above"),
     );
-    if let Some(handles) = &mut world.faucet_task_handles {
+    if let Some(handles) = &mut world.wallet_registry.faucet_task_handles {
         handles.push(faucet_task.spawn(1000, step));
     } else {
-        world.faucet_task_handles = Some(vec![faucet_task.spawn(1000, step)]);
+        world.wallet_registry.faucet_task_handles = Some(vec![faucet_task.spawn(1000, step)]);
     }
 
     Ok(())

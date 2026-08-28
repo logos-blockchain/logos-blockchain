@@ -69,13 +69,13 @@ pub enum SdpError {
         message_nonce: Nonce,
         declaration_nonce: Nonce,
     },
-    #[error("Note is not locked: {0:?}")]
-    NoteNotLocked(NoteId),
-    #[error("Note {note_id:?} not locked for {service_type:?}")]
-    NoteNotLockedForService {
+    #[error("Note is not a service note: {0:?}")]
+    NotAServiceNote(NoteId),
+    #[error("Note {note_id:?} not used for {service_type:?}")]
+    NoteNotUsedForService {
         note_id: NoteId,
         service_type: ServiceType,
     },
     #[error("Note {note_id:?} is not corresponding to the one in the declaration {expected:?}")]
-    InvalidLockedNote { note_id: NoteId, expected: NoteId },
+    InvalidServiceNote { note_id: NoteId, expected: NoteId },
 }

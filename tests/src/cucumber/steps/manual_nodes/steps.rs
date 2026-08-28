@@ -11,7 +11,10 @@ use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_testing_framework::{
     USER_CONFIG_FILE,
-    configs::{deployment::NodeBinaryProfile, wallet::WalletAccount},
+    configs::{
+        deployment::{NodeBinaryProfile, SdpFundingConfig},
+        wallet::WalletAccount,
+    },
     ensure_node_binary_built,
 };
 use time::{Duration as TimeDuration, OffsetDateTime};
@@ -31,6 +34,7 @@ use crate::{
             },
             manual_nodes::{
                 config_override::{set_deployment_config_override, set_user_config_override},
+                diagnostics::set_blend_diagnostic_parameter_set,
                 snapshots::validate_snapshot_path_component,
                 utils::{
                     NodesToStartUnordered, create_snapshot_all_nodes_with_wallet_state,
@@ -135,13 +139,13 @@ async fn step_chain_starts_from_now(
 
     let genesis_time = resolve_step_genesis_time(&step.value, OffsetDateTime::now_utc(), seconds)?;
     validate_genesis_time_change(
-        world.genesis_time,
+        world.lifecycle.genesis_time,
         !world.nodes_info.is_empty(),
         genesis_time,
     )?;
 
     world.set_genesis_time(genesis_time);
-    if world.nodes_info.is_empty() && world.manual_cluster_spec.is_some() {
+    if world.nodes_info.is_empty() && world.cluster.manual_cluster_spec.is_some() {
         rebuild_pending_local_manual_cluster(world)?;
     }
 
@@ -158,9 +162,12 @@ async fn step_genesis_time_has_not_passed(
     step: &Step,
     seconds: u64,
 ) -> StepResult {
-    let genesis_time = world.genesis_time.ok_or_else(|| StepError::LogicalError {
-        message: "the scenario has no configured genesis time".to_owned(),
-    })?;
+    let genesis_time = world
+        .lifecycle
+        .genesis_time
+        .ok_or_else(|| StepError::LogicalError {
+            message: "the scenario has no configured genesis time".to_owned(),
+        })?;
     let genesis_datetime = OffsetDateTime::from(genesis_time);
     let timeout = Duration::from_secs(seconds);
     let started_waiting = Instant::now();
@@ -234,12 +241,12 @@ fn step_cluster_has_wallet_resources(world: &mut CucumberWorld, step: &Step) -> 
         })?;
 
     verify_genesis_wallet_resources_table_indexes(table, &step.value)?;
-    world.genesis_tokens.clear();
+    world.chain.genesis_tokens.clear();
     for row in table.rows.iter().skip(1) {
         let (account_index, token_count, token_amount) =
             parse_genesis_wallet_tokens_row(&step.value, row)?;
 
-        world.genesis_tokens.push(GenesisTokens {
+        world.chain.genesis_tokens.push(GenesisTokens {
             account_index,
             token_count,
             token_amount,
@@ -263,6 +270,7 @@ fn step_sponsored_genesis_fee_account(
     let token_value = non_zero!("genesis fee token value", token_value)?;
 
     world
+        .wallet_registry
         .fee_state
         .set_sponsored_genesis_account(token_count, token_value);
     Ok(())
@@ -594,37 +602,56 @@ async fn step_node_has_peers(
 }
 
 #[when(expr = "I restart node {string}")]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require the world as the first `&mut` argument"
-)]
 async fn step_restart_node(
     world: &mut CucumberWorld,
     step: &Step,
     node_name: String,
 ) -> StepResult {
-    restart_node(world, &step.value, &node_name).await
+    restart_node(world, &step.value, &node_name).await?;
+    if world.blend_diagnostics.observation_count > 0 {
+        world.blend_diagnostics.stopped_nodes.remove(&node_name);
+        world.blend_diagnostics.phase =
+            Some(crate::cucumber::world::BlendDiagnosticPhase::Recovery);
+    }
+    Ok(())
 }
 
 #[when(expr = "I stop node {string}")]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require the world as the first `&mut` argument"
-)]
 async fn step_stop_node(world: &mut CucumberWorld, step: &Step, node_name: String) -> StepResult {
-    stop_node(world, &step.value, &node_name).await
+    if world.blend_diagnostics.observation_count > 0 {
+        world.blend_diagnostics.phase = Some(crate::cucumber::world::BlendDiagnosticPhase::Outage);
+    }
+    stop_node(world, &step.value, &node_name).await?;
+    if world.blend_diagnostics.observation_count > 0 {
+        world.blend_diagnostics.stopped_nodes.insert(node_name);
+    }
+    Ok(())
+}
+
+#[given(expr = "the cluster uses Blend diagnostic parameter set {string}")]
+#[when(expr = "the cluster uses Blend diagnostic parameter set {string}")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Cucumber step arguments must use owned types"
+)]
+fn step_set_blend_diagnostic_parameter_set(
+    world: &mut CucumberWorld,
+    step: &Step,
+    parameter_set_name: String,
+) -> StepResult {
+    set_blend_diagnostic_parameter_set(world, &step.value, &parameter_set_name)
 }
 
 #[given(expr = "we use IBD peers")]
 #[when(expr = "we use IBD peers")]
 const fn step_we_use_ibd_peers(world: &mut CucumberWorld) {
-    world.populate_ibd_peers_from_initial_peers = Some(true);
+    world.startup.populate_ibd_peers_from_initial_peers = Some(true);
 }
 
 #[given(expr = "we join an external network")]
 #[when(expr = "we join an external network")]
 const fn step_we_join_external_network(world: &mut CucumberWorld) {
-    world.join_external_network = Some(true);
+    world.startup.join_external_network = Some(true);
 }
 
 #[given(expr = "we will have distinct node groups to query wallet balances:")]
@@ -648,36 +675,22 @@ fn step_define_node_groups(world: &mut CucumberWorld, step: &Step) -> Result<(),
         });
     }
 
-    world.node_groups.clear();
-    world.node_to_group.clear();
+    let assignments = table
+        .rows
+        .iter()
+        .skip(1)
+        .map(|row| {
+            if row.len() != 2 {
+                return Err(StepError::LogicalError {
+                    message: "Each node-group row must have exactly two columns".to_owned(),
+                });
+            }
 
-    for row in table.rows.iter().skip(1) {
-        if row.len() != 2 {
-            return Err(StepError::LogicalError {
-                message: "Each node-group row must have exactly two columns".to_owned(),
-            });
-        }
+            Ok((row[0].trim().to_owned(), row[1].trim().to_owned()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
-        let group_name = row[0].trim().to_owned();
-        let node_name = row[1].trim().to_owned();
-
-        if let Some(existing_group) = world.node_to_group.get(&node_name) {
-            return Err(StepError::LogicalError {
-                message: format!(
-                    "Node `{node_name}` appears in both group `{existing_group}` and `{group_name}`"
-                ),
-            });
-        }
-
-        world
-            .node_groups
-            .entry(group_name.clone())
-            .or_default()
-            .insert(node_name.clone());
-        world.node_to_group.insert(node_name, group_name);
-    }
-
-    Ok(())
+    world.fork_groups.replace_all(assignments)
 }
 
 #[given(expr = "I have user config override {string} as {string}")]
@@ -713,14 +726,34 @@ fn step_set_deployment_config_setting(
 #[given(expr = "the first {int} nodes are declared as blend providers")]
 #[when(expr = "the first {int} nodes are declared as blend providers")]
 fn step_blend_provider_count(world: &mut CucumberWorld, provider_count: usize) -> StepResult {
-    world.blend_core_nodes = Some(provider_count);
+    world.cluster.blend_core_nodes = Some(provider_count);
+    rebuild_pending_local_manual_cluster(world)
+}
+
+#[given(expr = "the cluster uses SDP funding of {int} per provider split across {int} notes")]
+#[when(expr = "the cluster uses SDP funding of {int} per provider split across {int} notes")]
+fn step_set_sdp_funding(
+    world: &mut CucumberWorld,
+    total_value_per_node: u64,
+    target_notes_per_node: usize,
+) -> StepResult {
+    if target_notes_per_node == 0 {
+        return Err(StepError::InvalidArgument {
+            message: "SDP funding note count must be greater than zero".to_owned(),
+        });
+    }
+
+    world.set_sdp_funding_config(SdpFundingConfig::new(
+        total_value_per_node,
+        target_notes_per_node,
+    ));
     rebuild_pending_local_manual_cluster(world)
 }
 
 #[given(expr = "no nodes are declared as blend providers")]
 #[when(expr = "no nodes are declared as blend providers")]
 fn step_no_blend_providers(world: &mut CucumberWorld) -> StepResult {
-    world.blend_core_nodes = Some(0);
+    world.cluster.blend_core_nodes = Some(0);
     rebuild_pending_local_manual_cluster(world)
 }
 
@@ -741,8 +774,8 @@ fn step_set_snapshot_all_nodes_on_stop(
     }
     validate_snapshot_path_component(&snapshot_name, "Snapshot name")?;
     let snapshot_name = snapshot_name.trim().to_owned();
-    world.snapshot_save_config.node_state = Some(snapshot_name.clone());
-    world.snapshot_save_config.extensions = Some(snapshot_name);
+    world.snapshots.save.node_state = Some(snapshot_name.clone());
+    world.snapshots.save.extensions = Some(snapshot_name);
     Ok(())
 }
 
@@ -761,12 +794,12 @@ fn step_set_node_snapshot_on_startup(
     validate_snapshot_path_component(&node_name, "Node name")?;
 
     let snapshot_name = snapshot_name.trim().to_owned();
-    world.node_snapshot_on_startup = Some(NodeSnapshot {
+    world.snapshots.node_snapshot_on_startup = Some(NodeSnapshot {
         name: snapshot_name.clone(),
         node: node_name.trim().to_owned(),
     });
-    world.snapshot_restore_config.extensions = Some(snapshot_name);
-    if let Some(snapshot_name) = world.snapshot_restore_config.extensions.clone() {
+    world.snapshots.restore.extensions = Some(snapshot_name);
+    if let Some(snapshot_name) = world.snapshots.restore.extensions.clone() {
         prepare_wallet_snapshot_restore_if_present(&snapshot_name, world)?;
     }
     Ok(())
@@ -886,7 +919,7 @@ fn step_set_public_cryptarchia_endpoint_peers(
             ),
         });
     }
-    world.public_cryptarchia_endpoint_peers = Some(endpoint_peers);
+    world.startup.public_cryptarchia_endpoint_peers = Some(endpoint_peers);
 
     Ok(())
 }
@@ -894,7 +927,8 @@ fn step_set_public_cryptarchia_endpoint_peers(
 #[given(expr = "all peers must be mode online after startup in {int} seconds")]
 #[when(expr = "all peers must be mode online after startup in {int} seconds")]
 const fn step_all_nodes_to_be_mode_online(world: &mut CucumberWorld, on_line_time_out: u64) {
-    world.require_all_peers_mode_online_at_startup = Some(Duration::from_secs(on_line_time_out));
+    world.startup.require_all_peers_mode_online_at_startup =
+        Some(Duration::from_secs(on_line_time_out));
 }
 
 #[given("I have initial peers:")]
@@ -924,7 +958,7 @@ fn step_set_initial_peers(world: &mut CucumberWorld, step: &Step) -> StepResult 
         peers.push(peer);
     }
 
-    world.initial_peers_override = Some(peers);
+    world.startup.initial_peers_override = Some(peers);
     Ok(())
 }
 
@@ -955,8 +989,8 @@ fn step_set_ibd_peers(world: &mut CucumberWorld, step: &Step) -> StepResult {
         peers.insert(peer);
     }
 
-    world.ibd_peers_override = Some(peers);
-    world.populate_ibd_peers_from_initial_peers = Some(true);
+    world.startup.ibd_peers_override = Some(peers);
+    world.startup.populate_ibd_peers_from_initial_peers = Some(true);
     Ok(())
 }
 
@@ -1054,6 +1088,7 @@ async fn step_wait_all_nodes_responsive(
     time_out_seconds: u64,
 ) -> StepResult {
     let cluster = world
+        .cluster
         .local_cluster
         .as_ref()
         .ok_or(StepError::LogicalError {
@@ -1229,7 +1264,7 @@ async fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
         .map(|(node_name, info)| (node_name.clone(), info.started_node.name.clone()))
         .collect();
 
-    if world.snapshot_save_config.extensions.is_some() {
+    if world.snapshots.save.extensions.is_some() {
         prepare_all_wallets_snapshot(world).await?;
     }
 
@@ -1237,11 +1272,11 @@ async fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
     world.zone.clear();
     stop_active_manual_cluster(world)?;
 
-    if let Some(snapshot_name) = world.snapshot_save_config.node_state.take() {
+    if let Some(snapshot_name) = world.snapshots.save.node_state.take() {
         create_snapshots_all_nodes(world, &snapshot_name)?;
     }
 
-    if let Some(snapshot_name) = world.snapshot_save_config.extensions.take() {
+    if let Some(snapshot_name) = world.snapshots.save.extensions.take() {
         save_prepared_all_wallets_snapshot(&snapshot_name, world)?;
     }
 
@@ -1400,13 +1435,13 @@ async fn step_run_blend_sdp_declaration_cli(
     let user_config_path = node_user_config_path(world, &declarer_node_name)?;
     let locator = blend_core_locator_from_node_yaml(&user_config_path)?;
     let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
-    let locked_note_id =
+    let service_note_id =
         wait_for_blend_funded_note(world, &declarer_node_name, blend_zk_pk).await?;
-    let locked_note_id_json =
-        serde_json::to_string(&locked_note_id).map_err(|error| StepError::LogicalError {
-            message: format!("Failed to serialize locked note ID: {error}"),
+    let service_note_id_json =
+        serde_json::to_string(&service_note_id).map_err(|error| StepError::LogicalError {
+            message: format!("Failed to serialize service note ID: {error}"),
         })?;
-    let locked_note_id_hex = locked_note_id_json.trim_matches('"').to_owned();
+    let service_note_id_hex = service_note_id_json.trim_matches('"').to_owned();
 
     let declarer_api_base_url = world
         .nodes_info
@@ -1434,8 +1469,8 @@ async fn step_run_blend_sdp_declaration_cli(
         .arg(user_config_path)
         .arg("--blend-addr")
         .arg(format!("{locator}"))
-        .arg("--locked-note-id")
-        .arg(locked_note_id_hex)
+        .arg("--service-note-id")
+        .arg(service_note_id_hex)
         .arg("--node-address")
         .arg(declarer_api_base_url.to_string())
         .output()
@@ -1467,7 +1502,7 @@ async fn step_run_blend_sdp_declaration_api(
     let user_config_path = node_user_config_path(world, &declarer_node_name)?;
     let locator = blend_core_locator_from_node_yaml(&user_config_path)?;
     let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
-    let locked_note_id =
+    let service_note_id =
         wait_for_blend_funded_note(world, &declarer_node_name, blend_zk_pk).await?;
 
     let declarer_node_client = world
@@ -1481,7 +1516,7 @@ async fn step_run_blend_sdp_declaration_api(
         .clone();
 
     let declaration_id = declarer_node_client
-        .join_blend_network(locator, locked_note_id)
+        .join_blend_network(locator, service_note_id)
         .await
         .inspect_err(|error| {
             warn!(target: TARGET, "Step `{}` error: {error}", step.value);
@@ -1522,7 +1557,7 @@ async fn step_verify_blend_sdp_declaration_included(
     api_node_name: String,
 ) -> StepResult {
     let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
-    let locked_note_id =
+    let service_note_id =
         wait_for_blend_funded_note(world, &declarer_node_name, blend_zk_pk).await?;
 
     let step_timeout = Duration::from_secs(30);
@@ -1557,7 +1592,7 @@ async fn step_verify_blend_sdp_declaration_included(
         };
 
         if declarations.values().any(|declaration| {
-            declaration.locked_note_id == locked_note_id && declaration.zk_id == blend_zk_pk
+            declaration.service_note_id == service_note_id && declaration.zk_id == blend_zk_pk
         }) {
             info!(
                 target: TARGET,

@@ -133,7 +133,7 @@ pub(crate) async fn build_cycle_fee_policy(
     let horizon = build_fee_horizon(
         tip,
         u64::from(consensus.cryptarchia_info.slot),
-        world.slots_per_epoch,
+        world.chain.slots_per_epoch,
         epochs_headroom,
         live_prices,
     )
@@ -930,13 +930,16 @@ fn clear_wallet_encumbrances(
     }
 
     world.with_wallets_mut(|wallets| wallets.clear_encumbrances(wallet_name))?;
-    world.fee_state.clear_wallet_reservations(wallet_name);
+    world
+        .wallet_registry
+        .fee_state
+        .clear_wallet_reservations(wallet_name);
     info!(target: TARGET, "Cleared encumbrances for wallet '{wallet_name}'");
     Ok(())
 }
 
 fn clear_all_wallet_encumbrances(world: &mut CucumberWorld, step: &str) -> StepResult {
-    let wallet_names: Vec<String> = world.wallet_info.keys().cloned().collect();
+    let wallet_names: Vec<String> = world.wallet_registry.wallet_info.keys().cloned().collect();
 
     for wallet_name in wallet_names {
         clear_wallet_encumbrances(world, step, &wallet_name)?;
@@ -986,6 +989,7 @@ fn request_faucet_funds_all_user_wallets(
         message: "Invalid value for 'rounds': '0'".to_owned(),
     })?;
     let all_wallets_pk_hex = world
+        .wallet_registry
         .wallet_info
         .values()
         .filter(|w| w.is_user_wallet())
@@ -1003,6 +1007,7 @@ fn request_faucet_funds_all_funding_wallets(
         message: "Invalid value for 'rounds': '0'".to_owned(),
     })?;
     let all_wallets_pk_hex = world
+        .wallet_registry
         .wallet_info
         .values()
         .filter(|wallet| wallet.is_node_funding_wallet())

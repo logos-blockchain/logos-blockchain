@@ -22,7 +22,7 @@ use lb_core::{
         },
         traits::GenesisTx,
     },
-    sdp::locked_notes::LockedNotes,
+    sdp::service_notes::ServiceNotes,
 };
 use lb_cryptarchia_engine::Slot;
 use lb_mmr::MerkleMountainRange;
@@ -107,8 +107,8 @@ impl LedgerState {
     }
 
     #[must_use]
-    pub const fn locked_notes(&self) -> &LockedNotes {
-        self.sdp.locked_notes()
+    pub const fn service_notes(&self) -> &ServiceNotes {
+        self.sdp.service_notes()
     }
 
     #[must_use]

@@ -152,7 +152,10 @@ async fn main() {
                 );
 
                 if let Some(world) = world {
-                    let path = world.scenario_base_dir.join("debug_dump_file.log");
+                    let path = world
+                        .lifecycle
+                        .scenario_base_dir
+                        .join("debug_dump_file.log");
                     if let Some(parent) = path.parent() {
                         let _unused = std::fs::create_dir_all(parent);
                     }
@@ -171,7 +174,10 @@ async fn main() {
                     }
 
                     unregister_system_monitor_output_file(
-                        &world.scenario_base_dir.join("system_stats.ndjson"),
+                        &world
+                            .lifecycle
+                            .scenario_base_dir
+                            .join("system_stats.ndjson"),
                     );
                 }
             })

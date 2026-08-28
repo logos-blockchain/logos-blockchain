@@ -108,7 +108,8 @@ pub struct ChannelState {
                                      * configuration */
 
     // Message Ordering
-    pub tip_message: MsgId,
+    pub tip_message: MsgId,     // last message of the channel
+    pub config_tip_hash: MsgId, // last configuration of the channel
 
     // Decentralized Sequencing
     pub tip_slot: Slot,
@@ -279,6 +280,7 @@ mod tests {
                 .into(),
             configuration_threshold: 0,
             tip_message: MsgId::root(),
+            config_tip_hash: MsgId::root(),
             transfer_threshold: 0,
         }
     }
@@ -330,6 +332,7 @@ mod tests {
                         accredited_keys: Keys::from(test_public_key(11)).into(),
                         configuration_threshold: 1,
                         tip_message: MsgId::root(),
+                        config_tip_hash: MsgId::root(),
                         tip_slot: Slot::default(),
                         tip_sequencer: 0,
                         tip_sequencer_starting_slot: Slot::default(),
@@ -345,6 +348,7 @@ mod tests {
                             .into(),
                         configuration_threshold: 1,
                         tip_message: MsgId::root(),
+                        config_tip_hash: MsgId::root(),
                         tip_slot: Slot::default(),
                         tip_sequencer: 0,
                         tip_sequencer_starting_slot: Slot::default(),

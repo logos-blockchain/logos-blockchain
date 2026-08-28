@@ -51,8 +51,8 @@ pub enum SdpError {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SdpSettings {
     /// Declaration ID for this node (set after posting declaration).
-    /// On startup, the full declaration info (`zk_id`, `locked_note_id`, nonce)
-    /// will be fetched from the ledger.
+    /// On startup, the full declaration info (`zk_id`, `service_note_id`,
+    /// nonce) will be fetched from the ledger.
     pub declaration_id: Option<DeclarationId>,
     pub wallet_config: SdpWalletConfig,
     #[serde(skip)]
@@ -72,7 +72,7 @@ impl StorageRecoverySettings for SdpSettings {
 pub struct RuntimeDeclaration {
     pub id: DeclarationId,
     pub zk_id: ZkPublicKey,
-    pub locked_note_id: NoteId,
+    pub service_note_id: NoteId,
     pub nonce: u64,
 }
 
@@ -317,7 +317,7 @@ where
         Ok(Some(RuntimeDeclaration {
             id: declaration_id,
             zk_id: declaration.zk_id,
-            locked_note_id: declaration.locked_note_id,
+            service_note_id: declaration.service_note_id,
             nonce: declaration.nonce,
         }))
     }
@@ -481,7 +481,7 @@ where
 
         let withdraw_message = WithdrawMessage {
             declaration_id,
-            locked_note_id: declaration.locked_note_id,
+            service_note_id: declaration.service_note_id,
             nonce,
         };
 

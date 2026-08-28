@@ -25,7 +25,7 @@ fn apply_blend_core_nodes(
     mut config: TopologyConfig,
     nodes_count: usize,
 ) -> Result<TopologyConfig, StepError> {
-    let blend_core_nodes = world.blend_core_nodes.unwrap_or(nodes_count);
+    let blend_core_nodes = world.cluster.blend_core_nodes.unwrap_or(nodes_count);
 
     if blend_core_nodes > nodes_count {
         return Err(StepError::InvalidArgument {
@@ -44,7 +44,7 @@ pub fn build_manual_cluster_deployment(
     world: &mut CucumberWorld,
     nodes_count: usize,
 ) -> Result<DeploymentPlan, StepError> {
-    let genesis_time = world.genesis_time.unwrap_or_else(|| {
+    let genesis_time = world.lifecycle.genesis_time.unwrap_or_else(|| {
         let genesis_time = resolve_automatic_genesis_time();
         world.set_genesis_time(genesis_time);
         genesis_time
@@ -52,7 +52,8 @@ pub fn build_manual_cluster_deployment(
     let config = TopologyConfig::with_node_numbers(nodes_count)
         .with_allow_multiple_genesis_tokens(true)
         .with_allow_zero_value_genesis_tokens(true)
-        .with_test_context(world.test_context.clone())
+        .with_test_context(world.lifecycle.test_context.clone())
+        .with_sdp_funding_config(world.cluster.sdp_funding_config)
         .with_node_binary_profile(if world.tokio_console_profile_enabled() {
             NodeBinaryProfile::TokioConsole
         } else {
@@ -61,7 +62,7 @@ pub fn build_manual_cluster_deployment(
     let mut config = apply_blend_core_nodes(world, config, nodes_count)?;
     config = config.with_genesis_time(genesis_time);
 
-    for genesis_token in &world.genesis_tokens {
+    for genesis_token in &world.chain.genesis_tokens {
         let wallet_account = WalletAccount::deterministic(
             genesis_token.account_index as u64,
             genesis_token.token_amount,
@@ -69,6 +70,7 @@ pub fn build_manual_cluster_deployment(
         )?;
 
         world
+            .wallet_registry
             .wallet_accounts
             .insert(genesis_token.account_index, wallet_account.clone());
         for _ in 0..genesis_token.token_count {
@@ -76,23 +78,24 @@ pub fn build_manual_cluster_deployment(
         }
     }
 
-    world.fee_state.wallet_account = match world.fee_state.sponsored_genesis_account {
-        Some(sponsored_genesis_account) => {
-            let scenario_fee_wallet_account =
-                create_scenario_fee_wallet_account(sponsored_genesis_account.token_value)?;
+    world.wallet_registry.fee_state.wallet_account =
+        match world.wallet_registry.fee_state.sponsored_genesis_account {
+            Some(sponsored_genesis_account) => {
+                let scenario_fee_wallet_account =
+                    create_scenario_fee_wallet_account(sponsored_genesis_account.token_value)?;
 
-            for _ in 0..sponsored_genesis_account.token_count.get() {
-                config
-                    .wallet_config
-                    .accounts
-                    .push(scenario_fee_wallet_account.clone());
+                for _ in 0..sponsored_genesis_account.token_count.get() {
+                    config
+                        .wallet_config
+                        .accounts
+                        .push(scenario_fee_wallet_account.clone());
+                }
+                Some(scenario_fee_wallet_account)
             }
-            Some(scenario_fee_wallet_account)
-        }
-        None => None,
-    };
+            None => None,
+        };
 
-    world.node_provisioned_wallet_pks = config
+    world.wallet_registry.node_provisioned_wallet_pks = config
         .wallet_config
         .accounts
         .iter()
@@ -107,11 +110,11 @@ pub fn build_manual_cluster_deployment(
         })?;
 
     if let Some(genesis_block) = deployment.config.genesis_block.clone() {
-        world.genesis_block_utxos =
+        world.chain.genesis_block_utxos =
             crate::cucumber::steps::manual_nodes::utils::genesis_block_utxos(
                 &genesis_block.genesis_tx(),
             );
-        world.genesis_block_id = Some(genesis_block.header().id());
+        world.chain.genesis_block_id = Some(genesis_block.header().id());
     }
 
     Ok(deployment)
@@ -125,9 +128,9 @@ pub fn install_local_manual_cluster(
     let deployer = LbcLocalDeployer::new();
     let cluster = deployer.manual_cluster_from_descriptors(deployment);
 
-    world.local_cluster = Some(cluster);
-    world.k8s_manual_cluster = None;
-    world.manual_cluster_spec = Some(spec);
+    world.cluster.local_cluster = Some(cluster);
+    world.cluster.k8s_manual_cluster = None;
+    world.cluster.manual_cluster_spec = Some(spec);
 
     Ok(())
 }
@@ -136,7 +139,7 @@ fn build_devnet_manual_cluster_deployment(
     world: &mut CucumberWorld,
     nodes_count: usize,
 ) -> Result<DeploymentPlan, StepError> {
-    let genesis_time = world.genesis_time.unwrap_or_else(|| {
+    let genesis_time = world.lifecycle.genesis_time.unwrap_or_else(|| {
         let genesis_time = resolve_automatic_genesis_time();
         world.set_genesis_time(genesis_time);
         genesis_time
@@ -145,15 +148,16 @@ fn build_devnet_manual_cluster_deployment(
     // Wallet keys are derived later, and node startup may switch deployment
     // settings, so locally generated genesis outputs are not meaningful for
     // wallet tracking.
-    world.genesis_block_utxos.clear();
-    world.genesis_block_id = None;
-    world.wallet_accounts.clear();
-    world.node_provisioned_wallet_pks.clear();
+    world.chain.genesis_block_utxos.clear();
+    world.chain.genesis_block_id = None;
+    world.wallet_registry.wallet_accounts.clear();
+    world.wallet_registry.node_provisioned_wallet_pks.clear();
 
     let config = TopologyConfig::with_node_numbers(nodes_count)
         .with_allow_multiple_genesis_tokens(true)
         .with_allow_zero_value_genesis_tokens(true)
-        .with_test_context(world.test_context.clone())
+        .with_test_context(world.lifecycle.test_context.clone())
+        .with_sdp_funding_config(world.cluster.sdp_funding_config)
         .with_node_binary_profile(if world.tokio_console_profile_enabled() {
             NodeBinaryProfile::TokioConsole
         } else {
@@ -184,7 +188,7 @@ fn build_manual_cluster_from_spec(
 
 pub fn rebuild_pending_local_manual_cluster(world: &mut CucumberWorld) -> StepResult {
     if world.nodes_info.is_empty() {
-        if let Some(spec) = world.manual_cluster_spec {
+        if let Some(spec) = world.cluster.manual_cluster_spec {
             return install_local_manual_cluster(world, spec);
         }
 
@@ -197,12 +201,12 @@ pub fn rebuild_pending_local_manual_cluster(world: &mut CucumberWorld) -> StepRe
 }
 
 pub fn stop_active_manual_cluster(world: &CucumberWorld) -> StepResult {
-    if let Some(cluster) = world.local_cluster.as_ref() {
+    if let Some(cluster) = world.cluster.local_cluster.as_ref() {
         cluster.stop_all();
         return Ok(());
     }
 
-    if let Some(cluster) = world.k8s_manual_cluster.as_ref() {
+    if let Some(cluster) = world.cluster.k8s_manual_cluster.as_ref() {
         cluster.stop_all();
         return Ok(());
     }
@@ -217,7 +221,7 @@ pub async fn start_manual_node(
     node_name: &str,
     options: StartNodeOptions<LbcEnv>,
 ) -> Result<StartedNode<LbcEnv>, StepError> {
-    if let Some(cluster) = world.local_cluster.as_ref() {
+    if let Some(cluster) = world.cluster.local_cluster.as_ref() {
         return Box::pin(cluster.start_node_with(node_name, options))
             .await
             .map_err(|e| StepError::LogicalError {
@@ -225,7 +229,7 @@ pub async fn start_manual_node(
             });
     }
 
-    if let Some(cluster) = world.k8s_manual_cluster.as_ref() {
+    if let Some(cluster) = world.cluster.k8s_manual_cluster.as_ref() {
         return Box::pin(cluster.start_node_with(node_name, options))
             .await
             .map_err(|e| StepError::LogicalError {
@@ -239,7 +243,7 @@ pub async fn start_manual_node(
 }
 
 pub async fn wait_manual_node_ready(world: &CucumberWorld, node_name: &str) -> StepResult {
-    if let Some(cluster) = world.local_cluster.as_ref() {
+    if let Some(cluster) = world.cluster.local_cluster.as_ref() {
         return cluster
             .wait_node_ready(node_name)
             .await
@@ -248,7 +252,7 @@ pub async fn wait_manual_node_ready(world: &CucumberWorld, node_name: &str) -> S
             });
     }
 
-    if let Some(cluster) = world.k8s_manual_cluster.as_ref() {
+    if let Some(cluster) = world.cluster.k8s_manual_cluster.as_ref() {
         return cluster
             .wait_node_ready(node_name)
             .await
@@ -266,7 +270,7 @@ pub fn manual_node_client(
     world: &CucumberWorld,
     node_name: &str,
 ) -> Result<NodeHttpClient, StepError> {
-    if let Some(cluster) = world.local_cluster.as_ref() {
+    if let Some(cluster) = world.cluster.local_cluster.as_ref() {
         return cluster
             .node_client(node_name)
             .ok_or_else(|| StepError::LogicalError {
@@ -274,7 +278,7 @@ pub fn manual_node_client(
             });
     }
 
-    if let Some(cluster) = world.k8s_manual_cluster.as_ref() {
+    if let Some(cluster) = world.cluster.k8s_manual_cluster.as_ref() {
         return cluster
             .node_client(node_name)
             .ok_or_else(|| StepError::LogicalError {
@@ -373,7 +377,11 @@ pub fn build_user_wallets(
 ) -> Result<HashMap<String, WalletInfo>, StepError> {
     let mut wallet_info = HashMap::new();
     for wallet in wallet_start_info {
-        let wallet_account = match world.wallet_accounts.get(&wallet.account_index) {
+        let wallet_account = match world
+            .wallet_registry
+            .wallet_accounts
+            .get(&wallet.account_index)
+        {
             Some(wallet_account) => wallet_account.clone(),
             None => WalletAccount::deterministic(wallet.account_index as u64, 0, true).map_err(
                 |source| StepError::LogicalError {
@@ -407,6 +415,7 @@ pub async fn insert_started_node_info<S: BuildHasher>(
     let wallet_info: HashMap<String, WalletInfo> = wallet_info.into_iter().collect();
 
     world
+        .wallet_registry
         .wallet_info
         .extend(wallet_info.iter().map(|(k, v)| (k.clone(), v.clone())));
 
@@ -437,7 +446,7 @@ mod tests {
         let mut world = CucumberWorld::default();
         world.set_test_context("pending-genesis-rebuild".to_owned());
         world.set_genesis_time(GenesisTime::new(1_000));
-        world.manual_cluster_spec = Some(ManualClusterSpec {
+        world.cluster.manual_cluster_spec = Some(ManualClusterSpec {
             kind: ManualClusterKind::Generated,
             capacity: 0,
         });
@@ -453,6 +462,6 @@ mod tests {
 
         assert_eq!(first_genesis_time, GenesisTime::new(1_000));
         assert_eq!(rebuilt.config().genesis_time(), first_genesis_time);
-        assert_eq!(world.genesis_time, Some(first_genesis_time));
+        assert_eq!(world.lifecycle.genesis_time, Some(first_genesis_time));
     }
 }

@@ -215,7 +215,8 @@ fn build_tracked_wallet_keys(
 
     for wallet in wallets {
         let group_key = world
-            .node_to_group
+            .fork_groups
+            .mapping()
             .get(&wallet.node_name)
             .cloned()
             .unwrap_or_default();
@@ -257,7 +258,8 @@ fn active_wallet_feed_source_ids(world: &CucumberWorld) -> Vec<String> {
 
 fn wallet_feed_source_id<'a>(world: &'a CucumberWorld, node_name: &str) -> &'a str {
     world
-        .node_to_group
+        .fork_groups
+        .mapping()
         .get(node_name)
         .map_or("", String::as_str)
 }
@@ -266,7 +268,7 @@ fn add_scenario_fee_wallet_keys(
     world: &CucumberWorld,
     wallet_keys: &mut TrackedWalletKeysBySource,
 ) {
-    let Some(fee_wallet_account) = world.fee_state.wallet_account.clone() else {
+    let Some(fee_wallet_account) = world.wallet_registry.fee_state.wallet_account.clone() else {
         return;
     };
 
@@ -293,6 +295,7 @@ fn apply_scenario_fee_observations(
         observations.insert(
             wallet_id.clone(),
             world
+                .wallet_registry
                 .fee_state
                 .state_observation_for(wallet_id, wallet_on_chain_utxos),
         );
@@ -405,10 +408,11 @@ async fn update_fee_wallet_cache(
     wallet_name: &str,
     available_utxos: &mut WalletUtxos,
 ) -> Result<(), StepError> {
-    if world.fee_state.wallet_account.is_some() {
+    if world.wallet_registry.fee_state.wallet_account.is_some() {
         let wallet = world.resolve_wallet(wallet_name)?;
         let group_key = world
-            .node_to_group
+            .fork_groups
+            .mapping()
             .get(&wallet.node_name)
             .cloned()
             .unwrap_or_default();

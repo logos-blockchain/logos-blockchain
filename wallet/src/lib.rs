@@ -46,7 +46,7 @@ pub use crate::voucher::{Voucher, Vouchers};
 const LOG_TARGET: &str = wallet::CORE;
 
 /// A lightweight projection of a `Block<Tx>` carrying only what the wallet
-/// needs to mirror the ledger's effect on UTXOs and the SDP lock set.
+/// needs to mirror the ledger's effect on UTXOs and the SDP service notes.
 ///
 /// `header_ops` are applied first, then `txs`, matching the ledger's
 /// header -> contents processing order.
@@ -68,7 +68,7 @@ pub struct WalletTx {
 /// A wallet-relevant effect produced by the block header processing.
 #[derive(Clone, Debug)]
 pub enum HeaderOp {
-    /// An SDP-locked note has been unlocked.
+    /// A service note has been unlocked.
     Unlock(NoteId),
     /// An SDP reward UTXO was minted.
     SdpReward(Utxo),
@@ -152,7 +152,7 @@ impl WalletBlock {
 pub struct WalletState {
     pub utxos: rpds::HashTrieMapSync<NoteId, Utxo>,
     pub pk_index: rpds::HashTrieMapSync<ZkPublicKey, rpds::HashTrieSetSync<NoteId>>,
-    pub locked_notes: rpds::HashTrieSetSync<NoteId>,
+    pub service_notes: rpds::HashTrieSetSync<NoteId>,
     /// Notes known by the wallet but currently owned by a channel. They stay
     /// in `utxos` and are still eligible for `PoL`, but must be gated out of
     /// wallet-driven spending.
@@ -177,10 +177,10 @@ impl WalletState {
     ) -> Self {
         let mut utxos = rpds::HashTrieMapSync::new_sync();
         let mut pk_index = rpds::HashTrieMapSync::new_sync();
-        let mut locked_notes = rpds::HashTrieSetSync::new_sync();
+        let mut service_notes = rpds::HashTrieSetSync::new_sync();
         let mut channel_notes = rpds::HashTrieSetSync::new_sync();
 
-        let all_locked_notes = ledger.mantle_ledger().sdp_ledger().locked_notes();
+        let all_service_notes = ledger.mantle_ledger().sdp_ledger().service_notes();
         let channels = ledger.mantle_ledger().channels();
         for (_, (utxo, _)) in ledger.latest_utxos().utxos().iter() {
             if known_keys.contains_key(&utxo.note.pk) {
@@ -195,8 +195,8 @@ impl WalletState {
                     .insert(note_id);
                 pk_index = pk_index.insert(utxo.note.pk, note_set);
 
-                if all_locked_notes.contains(&note_id) {
-                    locked_notes = locked_notes.insert(note_id);
+                if all_service_notes.contains(&note_id) {
+                    service_notes = service_notes.insert(note_id);
                 }
 
                 // A channel note keeps the depositor's key but is owned by the channel:
@@ -211,7 +211,7 @@ impl WalletState {
         Self {
             utxos,
             pk_index,
-            locked_notes,
+            service_notes,
             channel_notes,
             epoch: ledger.epoch_state().epoch,
             vouchers: ledger.mantle_ledger().vouchers().clone(),
@@ -246,12 +246,12 @@ impl WalletState {
     ) -> Result<MantleTxBuilder, WalletError> {
         // Get all UTXOs owned by the provided PKs, excluding the following notes:
         // - Notes that are being consumed/locked by the tx
-        // - Notes that are already locked in Ledger
+        // - Notes that are already service notes in Ledger
         // - Notes currently owned by a channel (deposited)
         // - Notes excluded by the caller (e.g. reserved for in-flight txs)
         let excluded_notes = tx_builder
-            .consumed_or_locked_notes()
-            .chain(self.locked_notes.iter().copied())
+            .notes_consumed_or_used_in_service()
+            .chain(self.service_notes.iter().copied())
             .chain(self.channel_notes.iter().copied())
             .chain(excluded_notes.iter().copied())
             .collect::<HashSet<_>>();
@@ -354,7 +354,7 @@ impl WalletState {
     ) -> Result<Self, WalletError> {
         let mut utxos = self.utxos.clone();
         let mut pk_index = self.pk_index.clone();
-        let mut locked_notes = self.locked_notes.clone();
+        let mut service_notes = self.service_notes.clone();
         let mut channel_notes = self.channel_notes.clone();
 
         // Header-level effects come first, matching the ledger's
@@ -364,7 +364,7 @@ impl WalletState {
                 HeaderOp::Unlock(note_id) => {
                     // When unlocking notes, we don't check if the notes are owned
                     // by the wallet because they will be ignored automatically.
-                    locked_notes.remove_mut(note_id);
+                    service_notes.remove_mut(note_id);
                 }
                 HeaderOp::SdpReward(utxo) => {
                     insert_utxo_if_owned(*utxo, known_keys, &mut utxos, &mut pk_index);
@@ -421,7 +421,7 @@ impl WalletState {
                     }
                     WalletOp::Lock(note_id) => {
                         if utxos.contains_key(note_id) {
-                            locked_notes.insert_mut(*note_id);
+                            service_notes.insert_mut(*note_id);
                         }
                     }
                     WalletOp::LeaderClaim(utxo) | WalletOp::ClaimPoW(utxo) => {
@@ -437,7 +437,7 @@ impl WalletState {
         Ok(Self {
             utxos,
             pk_index,
-            locked_notes,
+            service_notes,
             channel_notes,
             epoch: block.epoch,
             vouchers,
@@ -596,7 +596,7 @@ fn transform_op(op: &Op, event: Option<TxEventPayload>) -> Option<WalletOp> {
         Op::ChannelDeposit(deposit) => Some(WalletOp::ChannelDeposit(deposit.clone())),
         Op::ChannelTransfer(op) => Some(WalletOp::ChannelTransfer(op.clone())),
         Op::ChannelWithdraw(op) => Some(WalletOp::ChannelWithdraw(op.clone())),
-        Op::SDPDeclare(declaration) => Some(WalletOp::Lock(declaration.locked_note_id)),
+        Op::SDPDeclare(declaration) => Some(WalletOp::Lock(declaration.service_note_id)),
         Op::LeaderClaim(_) => match event.expect("event for LeaderClaim op must exist") {
             TxEventPayload::LeaderRewardClaimed { utxo, .. } => Some(WalletOp::LeaderClaim(utxo)),
             TxEventPayload::Deposit { .. } => {
@@ -1070,7 +1070,7 @@ mod tests {
             outputs: Outputs::new([Note::new(100, alice), Note::new(4, alice)]),
         };
         // immediately lock the 2nd note from `transfer1`
-        let locked_note = transfer1.outputs.utxo_by_index(1, &transfer1).unwrap().id();
+        let service_note = transfer1.outputs.utxo_by_index(1, &transfer1).unwrap().id();
 
         let block_1 = WalletBlock {
             id: HeaderId::from([1; 32]),
@@ -1082,7 +1082,7 @@ mod tests {
             txs: [WalletTx {
                 ops: [
                     WalletOp::Transfer(transfer1.clone()),
-                    WalletOp::Lock(locked_note),
+                    WalletOp::Lock(service_note),
                 ]
                 .into(),
             }]
@@ -1090,7 +1090,7 @@ mod tests {
         };
 
         wallet.apply_block(&block_1).unwrap();
-        assert_locked_notes(&wallet, block_1.id, [locked_note]);
+        assert_service_notes(&wallet, block_1.id, [service_note]);
         // v1 is tracked but not yet claimable (no epoch transition yet)
         assert_tracked_but_not_snapshotted_voucher(&wallet, block_1.id, &v1_cm);
 
@@ -1109,11 +1109,11 @@ mod tests {
             epoch: 2.into(),
             voucher_cm: v2_cm,
             // Unlock the previously locked note
-            header_ops: vec![HeaderOp::Unlock(locked_note)],
+            header_ops: vec![HeaderOp::Unlock(service_note)],
             txs: [WalletTx {
                 ops: [
                     WalletOp::Transfer(transfer2.clone()),
-                    // Unknown locked note that will be ignored
+                    // Unknown service note that will be ignored
                     WalletOp::Lock(NoteId::from(Fr::ONE)),
                 ]
                 .into(),
@@ -1121,7 +1121,7 @@ mod tests {
             .into(),
         };
         wallet.apply_block(&block_2).unwrap();
-        assert_locked_notes(&wallet, block_2.id, []);
+        assert_service_notes(&wallet, block_2.id, []);
         // v1 is now claimable after epoch transition
         assert_snapshotted_voucher(&wallet, block_2.id, &v1_cm);
         // v2 is ours, but not yet snapshotted
@@ -1417,8 +1417,8 @@ mod tests {
 
         let mut wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
-        // Lock `utxo1` deliberately to ensure that `fund_tx` excludes locked notes
-        wallet_state.locked_notes = wallet_state.locked_notes.insert(utxo1.id());
+        // Lock `utxo1` deliberately to ensure that `fund_tx` excludes service notes
+        wallet_state.service_notes = wallet_state.service_notes.insert(utxo1.id());
 
         let context = MantleTxContext {
             gas_context: MantleTxGasContext::from_channels(
@@ -1665,15 +1665,15 @@ mod tests {
     }
 
     #[test]
-    fn test_fund_tx_all_locked_notes() {
+    fn test_fund_tx_all_service_notes() {
         let alice = pk(1);
         let utxo = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
         let ledger_state = LedgerState::from_utxos([utxo], &ledger_config());
 
         let mut wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
-        // Lock `utxo` deliberately to ensure that `fund_tx` excludes locked notes
-        wallet_state.locked_notes = wallet_state.locked_notes.insert(utxo.id());
+        // Lock `utxo` deliberately to ensure that `fund_tx` excludes service notes
+        wallet_state.service_notes = wallet_state.service_notes.insert(utxo.id());
 
         // Use non-zero gas prices so the transaction actually owes a fee and
         // therefore needs funding.
@@ -1926,13 +1926,16 @@ mod tests {
         }
     }
 
-    fn assert_locked_notes<KeyId>(
+    fn assert_service_notes<KeyId>(
         wallet: &Wallet<KeyId, TestVoucherId>,
         tip: HeaderId,
         notes: impl IntoIterator<Item = NoteId>,
     ) {
         let wallet_state = wallet.wallet_state_at(tip).unwrap();
-        assert_eq!(wallet_state.locked_notes, HashTrieSetSync::from_iter(notes));
+        assert_eq!(
+            wallet_state.service_notes,
+            HashTrieSetSync::from_iter(notes)
+        );
     }
 
     fn assert_snapshotted_voucher<KeyId>(

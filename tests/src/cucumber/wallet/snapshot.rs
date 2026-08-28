@@ -69,8 +69,8 @@ impl WalletSnapshot {
     /// tips, so this avoids racing against fresh per-node consensus queries
     /// while nodes are still running.
     fn from_scanner_state(world: &CucumberWorld) -> Result<Self, StepError> {
-        let wallet_info = world.wallet_info.clone();
-        let wallet_accounts = world.wallet_accounts.clone();
+        let wallet_info = world.wallet_registry.wallet_info.clone();
+        let wallet_accounts = world.wallet_registry.wallet_accounts.clone();
         if wallet_info.is_empty() && wallet_accounts.is_empty() {
             return Ok(Self {
                 wallet_info,
@@ -82,7 +82,8 @@ impl WalletSnapshot {
         let scanner_groups = {
             let scanner_state =
                 world
-                    .wallet_scanner_state
+                    .scanner
+                    .state
                     .lock()
                     .map_err(|_| StepError::LogicalError {
                         message: "Wallet scanner state lock poisoned while preparing snapshot"
@@ -158,8 +159,14 @@ impl WalletSnapshot {
     }
 
     fn apply_metadata(&self, world: &mut CucumberWorld) {
-        world.wallet_info.clone_from(&self.wallet_info);
-        world.wallet_accounts.clone_from(&self.wallet_accounts);
+        world
+            .wallet_registry
+            .wallet_info
+            .clone_from(&self.wallet_info);
+        world
+            .wallet_registry
+            .wallet_accounts
+            .clone_from(&self.wallet_accounts);
     }
 
     async fn apply_for_node(
@@ -227,7 +234,7 @@ impl WalletSnapshot {
             );
             wallets.replace_current_wallets_utxos(runtime_wallet_utxos.clone());
         })?;
-        world.wallet_scanner_seeds.insert(
+        world.scanner.seeds.insert(
             runtime_node_name.to_owned(),
             ScannerSeed::Snapshot {
                 wallet_utxos: runtime_wallet_utxos,
@@ -275,7 +282,7 @@ pub async fn prepare_all_wallets_snapshot(world: &mut CucumberWorld) -> StepResu
         .wait_for_wallet_scanner_catch_up(Duration::from_secs(30))
         .await?;
     let snapshot = WalletSnapshot::from_scanner_state(world)?;
-    world.snapshot_save_config.prepared_wallet_snapshot = Some(snapshot);
+    world.snapshots.save.prepared_wallet_snapshot = Some(snapshot);
 
     Ok(())
 }
@@ -288,7 +295,7 @@ pub fn save_prepared_all_wallets_snapshot(
     snapshot_name: &str,
     world: &mut CucumberWorld,
 ) -> StepResult {
-    let Some(snapshot) = world.snapshot_save_config.prepared_wallet_snapshot.take() else {
+    let Some(snapshot) = world.snapshots.save.prepared_wallet_snapshot.take() else {
         return Err(StepError::LogicalError {
             message: format!("wallet snapshot `{snapshot_name}` was not prepared before shutdown"),
         });
@@ -346,7 +353,7 @@ pub fn prepare_wallet_snapshot_restore_if_present(
 
     clear_wallet_snapshot_state(world)?;
     snapshot.apply_metadata(world);
-    world.observed_transaction_hashes = Arc::new(Mutex::new(HashSet::new()));
+    world.scanner.observed_transaction_hashes = Arc::new(Mutex::new(HashSet::new()));
 
     Ok(())
 }
@@ -374,7 +381,7 @@ pub async fn restore_wallet_snapshot_if_present(
     snapshot
         .apply_for_node(snapshot_node_name, runtime_node_name, client, world)
         .await?;
-    world.observed_transaction_hashes = Arc::new(Mutex::new(HashSet::new()));
+    world.scanner.observed_transaction_hashes = Arc::new(Mutex::new(HashSet::new()));
 
     Ok(())
 }
@@ -406,12 +413,13 @@ fn wallet_ids_for_source(
 }
 
 fn scanner_group_node_names(world: &CucumberWorld, group_id: &str) -> Vec<String> {
-    if world.node_groups.is_empty() {
+    if world.fork_groups.groups().is_empty() {
         return world.nodes_info.keys().cloned().collect();
     }
 
     world
-        .node_groups
+        .fork_groups
+        .groups()
         .get(group_id)
         .map(|nodes| nodes.iter().cloned().collect())
         .unwrap_or_default()
@@ -433,16 +441,16 @@ fn read_wallet_snapshot_if_present(
 }
 
 fn clear_wallet_snapshot_state(world: &mut CucumberWorld) -> StepResult {
-    world.wallet_info.clear();
-    world.wallet_accounts.clear();
-    world.fee_state.clear_reservations();
+    world.wallet_registry.wallet_info.clear();
+    world.wallet_registry.wallet_accounts.clear();
+    world.wallet_registry.fee_state.clear_reservations();
     world.with_wallets_mut(|wallets| {
         wallets.replace_from_state(TrackedWalletsState::default());
     })?;
 
     world.reset_wallet_scanner();
-    world.wallet_scanner_seeds.clear();
-    world.observed_transaction_hashes = Arc::new(Mutex::new(HashSet::new()));
+    world.scanner.seeds.clear();
+    world.scanner.observed_transaction_hashes = Arc::new(Mutex::new(HashSet::new()));
 
     Ok(())
 }

@@ -253,10 +253,12 @@ where
                 lib,
                 lib_slot,
                 channel_notes,
+                finalized_config,
             } = cp;
             let finalized_msg =
                 restored_pending_channel_tip(&pending_txs, channel_id).unwrap_or(last_msg_id);
             let mut tx_state = TxState::new(lib, finalized_msg);
+            tx_state.set_finalized_config(finalized_config);
             tx_state.restore_channel_notes(channel_notes);
             for (_hash, tx) in pending_txs {
                 track_pending_tx(&mut tx_state, tx, channel_id);
@@ -702,6 +704,7 @@ where
             parent_msg: parent,
             this_msg: new_msg_id,
             payload: data.clone(),
+            signer: Some(self.signing_key.public_key()),
         };
 
         // Safe to unwrap — `ensure_ready` checks state.
@@ -854,6 +857,7 @@ where
                         parent_msg: parent,
                         this_msg: msg_id,
                         payload: inscribe,
+                        signer: Some(self.signing_key.public_key()),
                     },
                     withdraws: withdraw_infos,
                 }),
@@ -1031,6 +1035,7 @@ where
                         parent_msg: parent,
                         this_msg: msg_id,
                         payload: inscribe,
+                        signer: Some(self.signing_key.public_key()),
                     },
                     consumed_notes,
                 }),
@@ -1118,10 +1123,26 @@ where
             }
         };
 
+        // The configuration extends our *local* config tip — the same view the
+        // config shed evaluates against — so a config we submit is never
+        // transiently orphaned by an ahead-of-us node config tip. If we are
+        // behind the node the parent is stale, so the config simply does not
+        // land (parent mismatch) and is orphaned and resubmitted once we catch
+        // up — the same self-healing path an inscription takes. Single-signer
+        // only, so we always sign with our own key; multi-sig configs are
+        // rejected above and go through the consumer's `submit_signed_tx` flow.
+        // We chain on the mined tip, not a config of ours still in flight: a
+        // reconfiguration lands one at a time.
+        let parent = match (self.state.as_ref(), self.current_tip) {
+            (Some(state), Some(tip)) => state.config_tip_at(tip),
+            _ => MsgId::root(),
+        };
+
         let signed_tx = create_channel_config_tx(
             &self.node,
             &self.config.funding,
             self.channel_id,
+            parent,
             signer,
             keys,
             posting_timeframe,
@@ -1153,6 +1174,8 @@ where
                 parent_msg: self.last_msg_id,
                 this_msg: self.last_msg_id,
                 payload: Inscription::new_unchecked(Vec::new()),
+                // Config entry: authorized by a key threshold, no single author.
+                signer: None,
             }),
         };
         let publish_receipt = (publish_result, checkpoint);
@@ -1171,11 +1194,12 @@ where
         let id = tx.mantle_tx().hash();
         let derived_tip = track_pending_tx(state, tx.clone(), self.channel_id);
         let parent_msg = self.last_msg_id;
-        // The tip the tx leaves behind is defined by its ops (the last
-        // tip-advancing one — e.g. a config after an inscribe resets it), so
-        // the caller's `msg_id` is only a fallback for txs without one.
-        let new_tip = derived_tip.unwrap_or(msg_id);
-        if new_tip != msg_id {
+        // The tip the tx leaves behind is defined by its inscriptions (the
+        // last one); a tx without any — e.g. a pure config — leaves the tip
+        // unchanged and has no tip for the caller's `msg_id` to match, so
+        // only a mis-declared inscription tip is worth warning about.
+        let new_tip = derived_tip.unwrap_or(self.last_msg_id);
+        if derived_tip.is_some_and(|derived| derived != msg_id) {
             warn!(target: TARGET,
                 "submit_signed_tx: caller msg_id {:?} is not the tx's resulting channel tip {:?}; \
                  using the derived tip",
@@ -1187,17 +1211,17 @@ where
 
         info!(target: TARGET, "Submitted tx including inscription {:?}", id);
 
-        let payload = tx
+        let (payload, signer) = tx
             .mantle_tx()
             .ops()
             .iter()
             .find_map(|op| match op {
                 Op::ChannelInscribe(i) if i.channel_id == self.channel_id => {
-                    Some(i.inscription.clone())
+                    Some((i.inscription.clone(), Some(i.signer)))
                 }
                 _ => None,
             })
-            .unwrap_or_else(|| Inscription::new_unchecked(Vec::new()));
+            .unwrap_or_else(|| (Inscription::new_unchecked(Vec::new()), None));
 
         self.queue_publish_post(id, tx);
 
@@ -1212,6 +1236,7 @@ where
                     parent_msg,
                     this_msg: new_tip,
                     payload,
+                    signer,
                 }),
             },
             checkpoint,
@@ -1365,6 +1390,7 @@ pub(super) fn build_checkpoint(
         lib: state.lib(),
         lib_slot,
         channel_notes: state.channel_notes_base(),
+        finalized_config: state.finalized_config(),
     }
 }
 

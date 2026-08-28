@@ -2,8 +2,8 @@
 //! inclusive `[MIN, MAX]` range.
 //!
 //! [`Bounded`] captures the machinery shared by every length-bounded type in
-//! the codebase — bound checking, unchecked/checked construction, transparent
-//! serialization and validating deserialization — so that concrete bounded
+//! the codebase — bound checking, unchecked/checked construction, and
+//! transparent serialization — so that concrete bounded
 //! types (`BoundedVec`, chain IDs, locators, …) reduce to a type alias plus
 //! whatever operations are natural for the wrapped type.
 //!
@@ -19,10 +19,13 @@ pub mod vec;
 
 use core::fmt::{self, Display, Formatter};
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Serialize, Serializer};
 pub use string::BoundedString;
 use thiserror::Error;
-pub use vec::{BoundedVec, LowerBoundedVec, MaxBoundedVec, NonEmptyBoundedVec, UpperBoundedVec};
+pub use vec::{
+    BoundedVec, LowerBoundedVec, MaxBoundedVec, NonEmptyBoundedVec, UpperBoundedVec,
+    deserialize_bounded_sequence,
+};
 
 #[derive(Debug, Error, Eq, PartialEq, Clone)]
 pub enum BoundedError {
@@ -34,13 +37,19 @@ pub enum BoundedError {
     TooManyItems { count: usize, max: usize },
     #[error("Index {index} is out of bounds for length {len}")]
     IndexOutOfBounds { index: usize, len: usize },
+    #[error("Requested capacity {capacity} is out of bounds [{min}, {max}]")]
+    CapacityOutOfBounds {
+        min: usize,
+        max: usize,
+        capacity: usize,
+    },
 }
 
 /// The measured length of a value, in whatever unit is natural for its type:
 /// element count for collections, byte length for text.
 ///
 /// Implementing this for a type unlocks the ergonomic checked constructors on
-/// [`Bounded`] ([`Bounded::new`], `TryFrom`, `Deserialize`, [`Bounded::len`]).
+/// [`Bounded`] ([`Bounded::new`], `TryFrom`, [`Bounded::len`]).
 /// Foreign types that cannot get an impl here can still be bounded manually via
 /// [`Bounded::check_len`] + [`Bounded::new_unchecked`].
 pub trait BoundedLen {
@@ -144,16 +153,5 @@ where
 {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.0.serialize(serializer)
-    }
-}
-
-// Deserialize the inner `T`, then re-establish the bound before wrapping.
-impl<'de, T, const MIN: usize, const MAX: usize> Deserialize<'de> for Bounded<T, MIN, MAX>
-where
-    T: BoundedLen + Deserialize<'de>,
-{
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let inner = T::deserialize(deserializer)?;
-        Self::try_new(inner).map_err(serde::de::Error::custom)
     }
 }

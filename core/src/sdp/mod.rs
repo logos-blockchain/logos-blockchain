@@ -1,5 +1,5 @@
 pub mod blend;
-pub mod locked_notes;
+pub mod service_notes;
 
 use core::{
     fmt::{self, Display, Formatter},
@@ -363,7 +363,7 @@ display_hex_bytes_newtype!(DeclarationId);
 pub struct Declaration {
     pub service_type: ServiceType,
     pub provider_id: ProviderId,
-    pub locked_note_id: NoteId,
+    pub service_note_id: NoteId,
     pub locators: Locators,
     pub zk_id: ZkPublicKey,
     /// The epoch of the block that contained the declaration
@@ -395,7 +395,7 @@ impl Declaration {
         Self {
             service_type: declaration_msg.service_type,
             provider_id: declaration_msg.provider_id,
-            locked_note_id: declaration_msg.locked_note_id,
+            service_note_id: declaration_msg.service_note_id,
             locators: declaration_msg.locators.clone(),
             zk_id: declaration_msg.zk_id,
             created: epoch,
@@ -464,7 +464,7 @@ pub struct DeclarationMessage {
     pub locators: Locators,
     pub provider_id: ProviderId,
     pub zk_id: ZkPublicKey,
-    pub locked_note_id: NoteId,
+    pub service_note_id: NoteId,
 }
 
 impl DeclarationMessage {
@@ -507,7 +507,7 @@ impl DeclarationMessage {
 pub struct WithdrawMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,
-    pub locked_note_id: NoteId,
+    pub service_note_id: NoteId,
 }
 
 // ActiveMessage = DeclarationId Nonce Metadata — plain field-order concat.
@@ -626,11 +626,12 @@ mod tests {
     fn empty_locators_fail_to_deserialize() {
         let empty_locators = Vec::<Locator>::new();
         let serialized = serde_json::to_string(&empty_locators).unwrap();
-        assert_eq!(
+        assert!(
             serde_json::from_str::<Locators>(&serialized)
                 .unwrap_err()
-                .to_string(),
-            "Input cannot be empty."
+                .to_string()
+                .contains("Input cannot be empty."),
+            "empty locators should be rejected"
         );
     }
 
@@ -643,13 +644,13 @@ mod tests {
                 .unwrap(),
             provider_id: Ed25519Key::from_bytes(&[0; _]).public_key().into(),
             zk_id: ZkPublicKey::zero(),
-            locked_note_id: Fr::ZERO.into(),
+            service_note_id: Fr::ZERO.into(),
         };
 
         let declaration = Declaration::new(Epoch::new(10), &msg);
         assert_eq!(declaration.service_type, msg.service_type);
         assert_eq!(declaration.provider_id, msg.provider_id);
-        assert_eq!(declaration.locked_note_id, msg.locked_note_id);
+        assert_eq!(declaration.service_note_id, msg.service_note_id);
         assert_eq!(declaration.locators, msg.locators);
         assert_eq!(declaration.zk_id, msg.zk_id);
         assert_eq!(declaration.created, Epoch::new(10));
@@ -664,7 +665,7 @@ mod tests {
             locators: locators.try_into().unwrap(),
             provider_id: Ed25519Key::from_bytes(&[1; _]).public_key().into(),
             zk_id: ZkPublicKey::new(Fr::from(3u64)),
-            locked_note_id: Fr::from(2u64).into(),
+            service_note_id: Fr::from(2u64).into(),
         }
     }
 

@@ -107,7 +107,7 @@ cryptarchia:
             - /ip4/127.0.0.1/udp/3400/quic-v1
             provider_id: aa70aafc48536ae13168ed4845981a40cbd2dc1c38df88d04c46250e9ad65ce0
             zk_id: '852efb444db8c3c811625850df39425f43aeffc69571192c0be9f72523256e0a'
-            locked_note_id: a4405fdbd782bd39c4e388ac470c98fdca3e9edfdf7d2672bc63223d75dab721
+            service_note_id: a4405fdbd782bd39c4e388ac470c98fdca3e9edfdf7d2672bc63223d75dab721
       ops_proofs:
       - !ZkSig
         pi_a: '0000000000000000000000000000000000000000000000000000000000000000'

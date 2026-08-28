@@ -64,6 +64,9 @@ const fn map_notes_bounded_error(error: &BoundedError) -> Error {
             len: *len,
         },
         BoundedError::EmptyInput => Error::EmptyNotes,
+        BoundedError::CapacityOutOfBounds { .. } => {
+            panic!("CapacityOutOfBounds should not occur here")
+        }
     }
 }
 
@@ -838,6 +841,9 @@ where
             BoundedError::EmptyInput | BoundedError::TooFewItems { .. } => {
                 unreachable!("GenesisSDPDeclareOps has a zero minimum bound")
             }
+            BoundedError::CapacityOutOfBounds { .. } => {
+                unreachable!("CapacityOutOfBounds should not occur here")
+            }
             BoundedError::IndexOutOfBounds { .. } => {
                 unreachable!("construction cannot produce an index error")
             }
@@ -1337,11 +1343,11 @@ mod tests {
     }
 
     fn make_sdp_decl(id: u8) -> SDPDeclareOp {
-        // Distinguish declarations by locked_note_id and zk_id; always use the
+        // Distinguish declarations by service_note_id and zk_id; always use the
         // zero Ed25519 key since not all 32-byte arrays are valid curve points.
         SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
-            locked_note_id: NoteId(Fr::from(u64::from(id))),
+            service_note_id: NoteId(Fr::from(u64::from(id))),
             zk_id: ZkPublicKey::from(BigUint::from(u64::from(id) + 1)),
             provider_id: ProviderId(Ed25519PublicKey::from_bytes(&[0; 32]).unwrap()),
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),

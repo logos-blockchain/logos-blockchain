@@ -4500,7 +4500,6 @@ dependencies = [
  "bincode",
  "blake2",
  "bytes",
- "const-hex",
  "divan",
  "hasher",
  "hex",
@@ -4566,55 +4565,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "logos-blockchain-demo-archiver"
-version = "0.0.0"
-dependencies = [
- "async-stream",
- "axum 0.7.9",
- "clap",
- "futures",
- "hex",
- "logos-blockchain-chain-broadcast-service",
- "logos-blockchain-common-http-client",
- "logos-blockchain-core",
- "logos-blockchain-demo-sequencer",
- "owo-colors",
- "redb",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tower-http",
- "url",
-]
-
-[[package]]
-name = "logos-blockchain-demo-sequencer"
-version = "0.0.0"
-dependencies = [
- "axum 0.7.9",
- "hex",
- "logos-blockchain-common-http-client",
- "logos-blockchain-core",
- "logos-blockchain-key-management-system-service",
- "owo-colors",
- "rand 0.8.6",
- "redb",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tower-http",
- "tracing",
- "tracing-subscriber 0.3.23",
-]
-
-[[package]]
 name = "logos-blockchain-dynamic-merkle"
 version = "0.0.0"
 dependencies = [
@@ -4656,6 +4606,7 @@ dependencies = [
  "bincode",
  "generic-array 1.4.3",
  "hex",
+ "logos-blockchain-utils",
  "num-bigint",
  "rand 0.8.6",
  "serde",
@@ -4926,7 +4877,6 @@ dependencies = [
  "logos-blockchain-time-service",
  "logos-blockchain-tracing",
  "logos-blockchain-tracing-service",
- "logos-blockchain-tui-zone",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
  "logos-blockchain-wallet-service",
@@ -5467,6 +5417,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rpds",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -5477,16 +5428,18 @@ name = "logos-sql"
 version = "0.0.0"
 dependencies = [
  "bincode",
+ "blake2",
  "clap",
  "hex",
+ "logos-blockchain-codec",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-log-targets",
+ "logos-blockchain-utils",
  "logos-blockchain-zone-sdk",
  "rand 0.8.6",
  "reqwest 0.12.28",
  "rusqlite",
- "serde",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -7214,15 +7167,6 @@ dependencies = [
  "rustls-pki-types",
  "time",
  "yasna",
-]
-
-[[package]]
-name = "redb"
-version = "2.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8eca1e9d98d5a7e9002d0013e18d5a9b000aee942eb134883a82f06ebffb6c01"
-dependencies = [
- "libc",
 ]
 
 [[package]]

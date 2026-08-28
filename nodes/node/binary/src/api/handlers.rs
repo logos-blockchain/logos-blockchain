@@ -683,7 +683,7 @@ where
     make_request_and_return_response!(blend::blend_join_network::<BlendService, RuntimeServiceId>(
         &handle,
         req.locator,
-        req.locked_note_id
+        req.service_note_id
     ))
 }
 
@@ -2212,6 +2212,7 @@ mod tests {
             accredited_keys: Arc::new(accredited_keys),
             configuration_threshold: 1,
             tip_message: MsgId::root(),
+            config_tip_hash: MsgId::root(),
             tip_slot: Slot::default(),
             tip_sequencer: 0,
             tip_sequencer_starting_slot: Slot::default(),

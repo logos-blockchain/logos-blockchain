@@ -18,7 +18,7 @@ use crate::{
         ops::{OpId, SignedOp},
         transactions::{hash::TxHashView, states::VerificationState},
     },
-    sdp::locked_notes::LockedNotes,
+    sdp::service_notes::ServiceNotes,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
@@ -80,7 +80,7 @@ pub enum TransferError {
 }
 
 pub struct TransferValidationContext<'a> {
-    pub locked_notes: &'a LockedNotes,
+    pub service_notes: &'a ServiceNotes,
     pub channels: &'a Channels,
     pub utxos: &'a Utxos,
     pub tx_hash_view: &'a TxHashView,
@@ -124,7 +124,7 @@ impl VerifiableOperation<verification_mode::StandardMode> for TransferOp {
     ) -> Result<Option<DeferredZkpVerification>, Self::Error> {
         // Validate Inputs
         self.inputs.validate_not_in_channel(
-            context.locked_notes,
+            context.service_notes,
             context.channels,
             context.utxos,
         )?;

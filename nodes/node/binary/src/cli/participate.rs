@@ -96,7 +96,7 @@ fn build_blend_data(
         locators: locators.clone(),
         provider_id: ProviderId(provider_id),
         zk_id: blend_key.to_public_key(),
-        locked_note_id: NoteId::from(Fr::ZERO),
+        service_note_id: NoteId::from(Fr::ZERO),
     }
     .id();
 
