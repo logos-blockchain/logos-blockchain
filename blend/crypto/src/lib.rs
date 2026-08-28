@@ -32,17 +32,17 @@ pub fn pseudo_random_sized_bytes<const SIZE: usize>(domain: &[u8], key: &[u8]) -
 /// Writes pseudo-random bytes to the given buffer,
 /// using [`ChaCha20Rng`] which is seeded with a hash of the domain and key.
 fn pseudo_random_bytes(buf: &mut [u8], domain: &[u8], key: &[u8]) {
-    let mut rng = chacha20_rng(&blake2b512(&[domain, key]));
+    let mut rng = ChaCha20Rng::from_seed(chacha20_seed(domain, key));
     rng.fill_bytes(buf);
 }
 
-/// Builds the CSPRBG defined by the ChaCha20-Based PRNG Construction of the
-/// spec: a [`ChaCha20Rng`] keyed with the first 32 bytes of the seed.
-#[must_use]
-pub fn chacha20_rng(seed: &[u8; 64]) -> ChaCha20Rng {
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&seed[..32]);
-    ChaCha20Rng::from_seed(key)
+/// Derives the 32-byte CSPRBG seed for a domain and key, per the spec's
+/// ChaCha20-Based PRNG Construction: the first 32 bytes of the
+/// domain-separated BLAKE2b-512 digest.
+pub(crate) fn chacha20_seed(domain: &[u8], key: &[u8]) -> [u8; 32] {
+    blake2b512(&[domain, key])[..32]
+        .try_into()
+        .expect("a BLAKE2b-512 digest is longer than 32 bytes")
 }
 
 /// Computes the BLAKE2b-512 hash of the concatenated inputs.

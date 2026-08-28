@@ -1,7 +1,7 @@
-use rand::RngCore as _;
+use rand::{RngCore as _, SeedableRng as _};
 use rand_chacha::ChaCha20Rng;
 
-use crate::{blake2b512, chacha20_rng};
+use crate::chacha20_seed;
 
 /// A cipher that encrypts/decrypts data using XOR with pseudo-random bytes.
 ///
@@ -16,7 +16,7 @@ pub struct Cipher(ChaCha20Rng);
 impl Cipher {
     #[must_use]
     pub fn new(domain: &[u8], seed: &[u8]) -> Self {
-        Self(chacha20_rng(&blake2b512(&[domain, seed])))
+        Self(ChaCha20Rng::from_seed(chacha20_seed(domain, seed)))
     }
 
     /// Encrypts data in-place by XOR operation with a pseudo-random bytes.
