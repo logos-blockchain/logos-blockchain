@@ -69,9 +69,11 @@ impl<Mode: VerificationMode> SignedOps<Unverified, Mode> {
     /// `SignedOps<Preverified, Mode>` without performing any
     /// verification.
     ///
-    /// This function is intended for
-    /// [`GenesisTx`](crate::mantle::transactions::genesis_tx::GenesisTx) and
-    /// testing purposes only.
+    /// This function is for tests outside this crate.
+    /// [`GenesisTx`](crate::mantle::transactions::genesis_tx::GenesisTx) is the
+    /// only production caller of a trusted conversion, and it reaches
+    /// [`Self::into_state_trusted`] directly.
+    #[cfg(any(test, feature = "test-utils"))]
     #[doc(hidden)]
     #[must_use]
     pub fn into_preverified_trusted(self) -> SignedOps<Preverified, Mode> {
@@ -129,7 +131,7 @@ impl<Mode: VerificationMode> SignedOps<Preverified, Mode> {
     /// testing purposes only.
     #[doc(hidden)]
     pub fn from_parts_trusted(ops: Ops, ops_proofs: OpProofs) -> Result<Self, Error> {
-        Ok(SignedOps::from_parts(ops, ops_proofs)?.into_preverified_trusted())
+        Ok(SignedOps::from_parts(ops, ops_proofs)?.into_state_trusted())
     }
 }
 
@@ -168,7 +170,9 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOps<State, Mode> {
     /// [`GenesisTx`](crate::mantle::transactions::genesis_tx::GenesisTx) and
     /// testing purposes only.
     #[doc(hidden)]
-    fn into_state_trusted<NewState: VerificationState>(self) -> SignedOps<NewState, Mode> {
+    pub(crate) fn into_state_trusted<NewState: VerificationState>(
+        self,
+    ) -> SignedOps<NewState, Mode> {
         let new_state_signed_ops = self
             .into_iter()
             .map(SignedOp::into_state_trusted)

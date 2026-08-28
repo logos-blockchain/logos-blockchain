@@ -246,8 +246,8 @@ impl<'de> Deserialize<'de> for GenesisTx {
     where
         D: serde::Deserializer<'de>,
     {
-        let tx = SignedOps::<Unverified, GenesisMode>::deserialize(deserializer)?
-            .into_preverified_trusted();
+        let tx =
+            SignedOps::<Unverified, GenesisMode>::deserialize(deserializer)?.into_state_trusted();
         Self::from_tx(tx).map_err(serde::de::Error::custom)
     }
 }

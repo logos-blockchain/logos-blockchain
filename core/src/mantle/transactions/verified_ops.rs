@@ -78,18 +78,26 @@ mod tests {
     use num_bigint::BigUint;
 
     use crate::mantle::{
-        Note, Utxo, VerificationError,
+        Note, Op, OpProof, OpRef, Utxo, VerificationError,
         channel::{Channels, Error},
-        ledger::Inputs,
-        ops::channel::{ChannelId, config::Keys},
+        ledger::{Inputs, verification_mode::StandardMode},
+        ops::channel::{
+            ChannelId, config::Keys, verification::test_utils::create_channel_multi_sig_proof,
+            withdraw::ChannelWithdrawOp,
+        },
+        traits::Hashable as _,
         transactions::{
+            OpProofs, Ops, SignedOps,
+            states::Preverified,
             tx_list::signed_ops::test_utils::{create_withdraw_tx, make_channel_state},
             verification_helper::test_utils::TestOperationVerificationHelper,
         },
     };
 
-    #[test]
-    fn helper_backed_verification_accepts_valid_channel_withdraw() {
+    fn valid_withdraw() -> (
+        SignedOps<Preverified, StandardMode>,
+        TestOperationVerificationHelper,
+    ) {
         let channel_id = ChannelId::from([8u8; 32]);
         let key0 = Ed25519Key::from_bytes(&[8; 32]);
         let key1 = Ed25519Key::from_bytes(&[9; 32]);
@@ -124,6 +132,85 @@ mod tests {
         )
         .with_utxos(vec![utxo]);
 
+        (signed_tx, helper)
+    }
+
+    fn utxo(seed: u8) -> Utxo {
+        Utxo {
+            op_id: [seed; 32],
+            output_index: 0,
+            note: Note::new(10, ZkKey::from(BigUint::from(seed)).to_public_key()),
+        }
+    }
+
+    fn withdraw_pair_whose_first_op_fails() -> (
+        SignedOps<Preverified, StandardMode>,
+        TestOperationVerificationHelper,
+        ChannelWithdrawOp,
+    ) {
+        let channel_id = ChannelId::from([12u8; 32]);
+        let accredited_key = Ed25519Key::from_bytes(&[12; 32]);
+        let unaccredited_key = Ed25519Key::from_bytes(&[13; 32]);
+
+        let first_utxo = utxo(1);
+        let second_utxo = utxo(2);
+        let first_op = ChannelWithdrawOp {
+            channel_id,
+            inputs: Inputs::from([first_utxo.id()]),
+        };
+        let second_op = ChannelWithdrawOp {
+            channel_id,
+            inputs: Inputs::from([second_utxo.id()]),
+        };
+
+        let ops = Ops::new_unchecked(vec![
+            Op::ChannelWithdraw(first_op),
+            Op::ChannelWithdraw(second_op.clone()),
+        ]);
+        let tx_hash = ops.hash();
+        let op_proofs = OpProofs::from([
+            OpProof::ChannelMultiSigProof(create_channel_multi_sig_proof(
+                &tx_hash,
+                &[&unaccredited_key],
+            )),
+            OpProof::ChannelMultiSigProof(create_channel_multi_sig_proof(
+                &tx_hash,
+                &[&accredited_key],
+            )),
+        ]);
+        let signed_tx = SignedOps::from_parts(ops, op_proofs)
+            .expect("Each withdraw op is paired with a channel multi-signature proof.")
+            .preverify()
+            .expect("Both withdraw ops have a non-empty input list.");
+
+        let channels = {
+            let mut channels = Channels::new();
+            let channel_state = make_channel_state(
+                1,
+                Some(Keys::new_unchecked(vec![accredited_key.public_key()])),
+            );
+            channels.channels.insert_mut(channel_id, channel_state);
+            let channels = channels
+                .register_channel_note(&first_utxo.id(), &channel_id)
+                .expect("The first note is not owned by another channel.");
+            channels
+                .register_channel_note(&second_utxo.id(), &channel_id)
+                .expect("The second note is not owned by another channel.")
+        };
+
+        let helper = TestOperationVerificationHelper::new(
+            channels,
+            [((channel_id, 0), accredited_key.public_key())],
+        )
+        .with_utxos(vec![first_utxo, second_utxo]);
+
+        (signed_tx, helper, second_op)
+    }
+
+    #[test]
+    fn helper_backed_verification_accepts_valid_channel_withdraw() {
+        let (signed_tx, helper) = valid_withdraw();
+
         signed_tx
             .into_verified()
             .next(&helper)
@@ -150,5 +237,49 @@ mod tests {
                 Error::InvalidSignature
             ))
         );
+    }
+
+    #[test]
+    fn next_verifies_the_operation_that_follows_the_one_that_failed() {
+        let (signed_tx, helper, second_op) = withdraw_pair_whose_first_op_fails();
+        let mut verified_ops = signed_tx.into_verified();
+
+        assert_eq!(
+            verified_ops.next(&helper),
+            Some(Err(VerificationError::ChannelVerificationError(
+                Error::InvalidSignature
+            )))
+        );
+
+        let verified = verified_ops
+            .next(&helper)
+            .expect("Cursor should yield the second WithdrawOp")
+            .expect("The second WithdrawOp should verify");
+
+        assert_eq!(verified.operation(), OpRef::ChannelWithdraw(&second_op));
+        assert!(verified_ops.next(&helper).is_none());
+    }
+
+    #[test]
+    fn next_returns_none_once_the_operations_are_exhausted() {
+        let (signed_tx, helper) = valid_withdraw();
+        let mut verified_ops = signed_tx.into_verified();
+
+        verified_ops
+            .next(&helper)
+            .expect("Cursor should yield the WithdrawOp")
+            .expect("WithdrawOp should verify");
+
+        assert!(verified_ops.next(&helper).is_none());
+    }
+
+    #[test]
+    fn tx_hash_view_carries_the_transaction_hash() {
+        let (signed_tx, _helper) = valid_withdraw();
+        let tx_hash = signed_tx.hash();
+
+        let verified_ops = signed_tx.into_verified();
+
+        assert_eq!(verified_ops.tx_hash_view().tx_hash(), &tx_hash);
     }
 }

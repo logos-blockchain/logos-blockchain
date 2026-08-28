@@ -34,6 +34,7 @@ thiserror                     = { workspace = true }
 tracing                       = { workspace = true }
 
 [dev-dependencies]
+lb-core    = { features = ["test-utils"], workspace = true }
 rand       = { features = ["std", "std_rng"], workspace = true }
 serde_json = { features = ["alloc"], workspace = true }
 

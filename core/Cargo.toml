@@ -53,5 +53,6 @@ harness = false
 name    = "mantle_tx_components"
 
 [features]
-default = []
-samples = []
+default    = []
+samples    = []
+test-utils = []
