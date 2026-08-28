@@ -75,28 +75,28 @@ fn log_sdp_activity_selected_for_proposal<Tx>(block: &Block<Tx>, ledger_state: &
 where
     Tx: MantleTxWithProofs,
 {
-    for tx in block.transactions_iter() {
-        for op in tx.mantle_tx().ops() {
-            let Op::SDPActive(active) = op else {
-                continue;
-            };
-            let provider_id = ledger_state
-                .mantle_ledger()
-                .sdp_ledger()
-                .get_declaration(&active.declaration_id)
-                .map(|declaration| declaration.provider_id);
-            tracing::debug!(
-                diagnostic = "blend_tsi_outage",
-                event = "sdp_activity_selected_for_proposal",
-                tx_id = ?tx.hash(),
-                provider_id = ?provider_id,
-                declaration_id = ?active.declaration_id,
-                proof_epoch = activity_origin_epoch(&active.metadata),
-                proposal_block_id = %block.header().id(),
-                proposal_slot = u64::from(block.header().slot()),
-                "Selected SDP activity transaction for proposal"
-            );
-        }
+    for (tx, active) in block.transactions_iter().flat_map(|tx| {
+        tx.mantle_tx().ops().iter().filter_map(move |op| match op {
+            Op::SDPActive(active) => Some((tx, active)),
+            _ => None,
+        })
+    }) {
+        let provider_id = ledger_state
+            .mantle_ledger()
+            .sdp_ledger()
+            .get_declaration(&active.declaration_id)
+            .map(|declaration| declaration.provider_id);
+        tracing::debug!(
+            diagnostic = "blend_tsi_outage",
+            event = "sdp_activity_selected_for_proposal",
+            tx_id = ?tx.hash(),
+            provider_id = ?provider_id,
+            declaration_id = ?active.declaration_id,
+            proof_epoch = activity_origin_epoch(&active.metadata),
+            proposal_block_id = %block.header().id(),
+            proposal_slot = u64::from(block.header().slot()),
+            "Selected SDP activity transaction for proposal"
+        );
     }
 }
 

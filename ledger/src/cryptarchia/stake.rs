@@ -25,11 +25,15 @@ impl StakeInference {
     }
 
     pub fn expected_block_density(&self) -> u64 {
-        let coefficient_with_precision =
-            (self.slot_activation_coefficient * PRECISION as f64).trunc() as u64;
-        (u128::from(self.period) * u128::from(coefficient_with_precision) / u128::from(PRECISION))
+        (self.expected_density_with_precision::<PRECISION>() / i128::from(PRECISION))
             .try_into()
             .expect("Expected block density must fit in a u64")
+    }
+
+    fn expected_density_with_precision<const PRECISION: u64>(&self) -> i128 {
+        let slot_activation_coefficient_with_precision: i128 =
+            (self.slot_activation_coefficient * PRECISION as f64).trunc() as i128;
+        i128::from(self.period()) * slot_activation_coefficient_with_precision
     }
 
     pub fn total_stake_inference<const PRECISION: u64>(
@@ -39,14 +43,11 @@ impl StakeInference {
     ) -> u64 {
         let learning_rate_with_precision: u64 =
             f64::trunc(self.learning_rate * PRECISION as f64) as u64;
-        let slot_activation_coefficient_with_precision: i128 =
-            (self.slot_activation_coefficient * PRECISION as f64).trunc() as i128;
         let total_stake_estimate_with_precision: i128 =
             i128::from(total_stake_estimate) * i128::from(PRECISION);
         let measured_block_density_with_precision: i128 =
             i128::from(measured_block_density) * i128::from(PRECISION);
-        let expected_density_with_precision: i128 =
-            i128::from(self.period()) * slot_activation_coefficient_with_precision;
+        let expected_density_with_precision = self.expected_density_with_precision::<PRECISION>();
         let density_difference_with_precision: i128 =
             expected_density_with_precision - measured_block_density_with_precision;
         let slot_activation_error_with_precision: i128 = total_stake_estimate_with_precision
@@ -176,16 +177,10 @@ mod tests {
     #[test]
     fn test_expected_block_density_uses_wide_intermediate() {
         let period = u64::MAX;
-        let slot_activation_coefficient = 0.5;
+        let slot_activation_coefficient = 1.0;
         let inference = StakeInference::new(LEARNING_RATE, slot_activation_coefficient, period);
-        let coefficient_with_precision =
-            (slot_activation_coefficient * PRECISION as f64).trunc() as u64;
-        let expected: u64 = (u128::from(period) * u128::from(coefficient_with_precision)
-            / u128::from(PRECISION))
-        .try_into()
-        .unwrap();
 
-        assert_eq!(inference.expected_block_density(), expected);
+        assert_eq!(inference.expected_block_density(), u64::MAX);
     }
 
     fn stake_inference_from(config: &Config) -> StakeInference {
