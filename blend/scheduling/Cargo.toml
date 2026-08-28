@@ -21,7 +21,6 @@ lb-blend-proofs       = { workspace = true }
 lb-blend-provers      = { workspace = true }
 lb-cryptarchia-engine = { workspace = true }
 lb-log-targets        = { workspace = true }
-lb-utils              = { features = ["tokio"], workspace = true }
 rand                  = { features = ["alloc"], workspace = true }
 thiserror             = { workspace = true }
 tokio                 = { workspace = true }
@@ -35,5 +34,5 @@ rand             = { features = ["getrandom"], workspace = true }
 rand_chacha      = { workspace = true }
 
 [features]
-tokio-task-names      = ["lb-utils/tokio-task-names"]
+tokio-task-names      = []
 unsafe-test-functions = []

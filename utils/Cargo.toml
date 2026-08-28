@@ -36,7 +36,7 @@ tokio            = ["dep:futures", "dep:tokio"]
 tokio-task-names = ["tokio", "tokio/rt", "tokio/tracing"]
 
 [dev-dependencies]
-bincode     = { workspace = true }
-serde_json  = { features = ["alloc"], workspace = true }
-serde_with  = { features = ["macros"], workspace = true }
-tempfile    = { workspace = true }
+bincode    = { workspace = true }
+serde_json = { features = ["alloc"], workspace = true }
+serde_with = { features = ["macros"], workspace = true }
+tempfile   = { workspace = true }

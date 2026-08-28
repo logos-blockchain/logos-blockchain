@@ -4132,7 +4132,6 @@ dependencies = [
  "logos-blockchain-blend-provers",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-log-targets",
- "logos-blockchain-utils",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "thiserror 2.0.18",
