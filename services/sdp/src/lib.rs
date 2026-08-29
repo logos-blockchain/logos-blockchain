@@ -40,11 +40,6 @@ use crate::{
     wallet::{SdpWalletAdapter, SdpWalletConfig},
 };
 
-fn activity_proof_epoch(metadata: &ActivityMetadata) -> u32 {
-    match metadata {
-        ActivityMetadata::Blend(proof) => u32::from(proof.epoch),
-    }
-}
 #[derive(Debug, Error)]
 pub enum SdpError {
     #[error("Declaration {0:?} not found in ledger")]
@@ -387,14 +382,16 @@ where
     ) {
         let tx_builder = MantleTxBuilder::new();
         let declaration_id = declaration.id();
+        let provider_id = declaration.provider_id;
+        let zk_id = declaration.zk_id;
 
         tracing::debug!(
             diagnostic = "blend_tsi_outage",
-            event = "sdp_declaration_submitted",
-            provider_id = ?declaration.provider_id,
+            event = "sdp_declaration_submission_requested",
+            provider_id = ?provider_id,
             declaration_id = ?declaration_id,
-            zk_id = ?declaration.zk_id,
-            "Created SDP declaration transaction"
+            zk_id = ?zk_id,
+            "Requested SDP declaration transaction submission"
         );
 
         let signed_tx = match wallet_adapter
@@ -409,11 +406,32 @@ where
             }
         };
 
+        let tx_id = signed_tx.hash();
+        tracing::debug!(
+            diagnostic = "blend_tsi_outage",
+            event = "sdp_declaration_tx_created",
+            provider_id = ?provider_id,
+            declaration_id = ?declaration_id,
+            zk_id = ?zk_id,
+            tx_id = ?tx_id,
+            "Created SDP declaration transaction"
+        );
+
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
             tracing::error!("Failed to post declaration to mempool: {:?}", e);
             metrics::declaration_mempool_failures_total();
             return;
         }
+
+        tracing::info!(
+            diagnostic = "blend_tsi_outage",
+            event = "sdp_declaration_submitted",
+            provider_id = ?provider_id,
+            declaration_id = ?declaration_id,
+            zk_id = ?zk_id,
+            tx_id = ?tx_id,
+            "Submitted SDP declaration transaction"
+        );
 
         if let Err(e) = reply_channel.send(Ok(declaration_id)) {
             tracing::error!("Failed to send post declaration response: {:?}", e);
@@ -462,9 +480,9 @@ where
             return;
         };
 
-        let proof_epoch = activity_proof_epoch(&metadata);
+        let proof_epoch = u32::from(metadata.origin_epoch());
 
-        tracing::info!(
+        tracing::debug!(
             diagnostic = "blend_tsi_outage",
             event = "sdp_activity_submission_requested",
             proof_epoch,
@@ -490,7 +508,7 @@ where
         {
             Ok(tx) => tx,
             Err(e) => {
-                tracing::warn!(
+                tracing::error!(
                     diagnostic = "blend_tsi_outage",
                     event = "sdp_activity_tx_failed",
                     proof_epoch,
@@ -523,7 +541,7 @@ where
         );
 
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
-            tracing::warn!(
+            tracing::error!(
                 diagnostic = "blend_tsi_outage",
                 event = "sdp_activity_tx_failed",
                 proof_epoch,

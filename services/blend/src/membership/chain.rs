@@ -45,42 +45,35 @@ pub type BlendEpochStateStream<NodeId> =
     Pin<Box<dyn Stream<Item = BlendEpochState<NodeId>> + Send + 'static>>;
 
 fn log_membership_transition<NodeId>(
+    component: &'static str,
     epoch: Epoch,
     slot: lb_cryptarchia_engine::Slot,
     membership: &lb_blend::scheduling::membership::Membership<NodeId>,
-    minimum_network_size: usize,
 ) where
     NodeId: Debug + Eq + Hash,
 {
     if !tracing::enabled!(target: LOG_TARGET, tracing::Level::INFO) {
         return;
     }
-    let mode = if membership.size() < minimum_network_size {
-        "broadcast"
-    } else if membership.contains_local() {
-        "core"
-    } else {
-        "edge"
-    };
     let local_node_id = membership
         .local_index()
         .and_then(|index| membership.get_node_at(index))
         .map(|node| format!("{:?}", node.id));
-    let membership_identities: Vec<_> = (0..membership.size())
+    let membership_node_ids: Vec<_> = (0..membership.size())
         .filter_map(|index| membership.get_node_at(index))
         .map(|node| format!("{:?}", node.id))
         .collect();
     tracing::info!(
         target: LOG_TARGET,
         diagnostic = "blend_tsi_outage",
-        event = "blend_epoch_transition",
+        event = "blend_membership_latched",
+        component,
         epoch = u32::from(epoch),
         slot = u64::from(slot),
         local_node_id = ?local_node_id,
         local_is_member = membership.contains_local(),
-        mode,
         membership_count = membership.size(),
-        membership_identities = ?membership_identities,
+        membership_node_ids = ?membership_node_ids,
         "Rebuilt Blend epoch membership"
     );
 }
@@ -99,7 +92,7 @@ pub async fn subscribe<ChainService, NodeId, TimeRuntimeBackend, RuntimeServiceI
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     signing_public_key: Ed25519PublicKey,
     zk_public_key: Option<ZkPublicKey>,
-    minimum_network_size: usize,
+    component: &'static str,
 ) -> BlendEpochStateStream<NodeId>
 where
     ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
@@ -145,16 +138,9 @@ where
             chain_service,
             signing_public_key,
             zk_public_key,
-            minimum_network_size,
+            component,
         ),
-        async move |(
-            mut ticks,
-            mut last_epoch,
-            chain_api,
-            signing_pk,
-            zk_pk,
-            minimum_network_size,
-        )| {
+        async move |(mut ticks, mut last_epoch, chain_api, signing_pk, zk_pk, component)| {
             loop {
                 let SlotTick { epoch, slot } = ticks.next().await?;
                 if Some(epoch) == last_epoch {
@@ -176,7 +162,7 @@ where
                             &signing_pk,
                             zk_pk,
                         );
-                        let membership_provider_ids = if tracing::enabled!(target: LOG_TARGET, tracing::Level::INFO)
+                        let membership_node_ids = if tracing::enabled!(target: LOG_TARGET, tracing::Level::INFO)
                         {
                             (0..membership_info.membership.size())
                                 .filter_map(|index| membership_info.membership.get_node_at(index))
@@ -189,6 +175,7 @@ where
                             target: LOG_TARGET,
                             diagnostic = "blend_tsi_outage",
                             event = "blend_epoch_state_latched",
+                            component,
                             clock_epoch = u32::from(epoch),
                             clock_slot = u64::from(slot),
                             epoch_state_epoch = u32::from(epoch_state.epoch),
@@ -198,7 +185,7 @@ where
                             lottery_1 = ?epoch_state.lottery_1,
                             blend_pow_difficulty = ?epoch_state.blend_pow_difficulty,
                             membership_count = membership_info.membership.size(),
-                            membership_provider_ids = ?membership_provider_ids,
+                            membership_node_ids = ?membership_node_ids,
                             source_tip_id = %source_tip_id,
                             source_tip_slot = u64::from(source_tip_slot),
                             source_tip_height,
@@ -208,10 +195,10 @@ where
                         );
                         last_epoch = Some(epoch);
                         log_membership_transition(
+                            component,
                             epoch,
                             slot,
                             &membership_info.membership,
-                            minimum_network_size,
                         );
                         let item = BlendEpochState {
                             epoch,
@@ -224,14 +211,7 @@ where
                         };
                         return Some((
                             item,
-                            (
-                                ticks,
-                                last_epoch,
-                                chain_api,
-                                signing_pk,
-                                zk_pk,
-                                minimum_network_size,
-                            ),
+                            (ticks, last_epoch, chain_api, signing_pk, zk_pk, component),
                         ));
                     }
                     Ok(Err(e)) => {

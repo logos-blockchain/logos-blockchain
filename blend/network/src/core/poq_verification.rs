@@ -54,7 +54,7 @@ pub fn spawn_poq_verification<Verifier>(
 {
     let verifier = Arc::clone(verifier);
     let message_id = message.id();
-    let sender_identity = *message.signing_key();
+    let sender_signing_key = *message.signing_key();
     pending_verifications.push(Box::pin(async move {
         let verification_result = spawn_blocking("logos/blend/verify-poq", move || {
             // The verification error is rendered here because it is not `Send`, so it
@@ -73,9 +73,9 @@ pub fn spawn_poq_verification<Verifier>(
                     event = "blend_poq_verification",
                     result = "success",
                     blend_epoch = u32::from(epoch),
-                    sender_identity = ?sender_identity,
+                    sender_signing_key = ?sender_signing_key,
                     message_id = ?message_id,
-                    peer = ?sender,
+                    peer_id = ?sender,
                     "Incoming Blend PoQ verified"
                 );
                 PoQVerificationOutcome::Verified {
@@ -91,9 +91,9 @@ pub fn spawn_poq_verification<Verifier>(
                     event = "blend_poq_verification_failed",
                     result = "failure",
                     blend_epoch = u32::from(epoch),
-                    sender_identity = ?sender_identity,
+                    sender_signing_key = ?sender_signing_key,
                     message_id = ?message_id,
-                    peer = ?sender,
+                    peer_id = ?sender,
                     error = %e,
                     "Incoming Blend PoQ verification failed"
                 );
@@ -109,9 +109,9 @@ pub fn spawn_poq_verification<Verifier>(
                     event = "blend_poq_verification_task_failed",
                     result = "error",
                     blend_epoch = u32::from(epoch),
-                    sender_identity = ?sender_identity,
+                    sender_signing_key = ?sender_signing_key,
                     message_id = ?message_id,
-                    peer = ?sender,
+                    peer_id = ?sender,
                     error = ?e,
                     "Incoming Blend PoQ verification task failed"
                 );

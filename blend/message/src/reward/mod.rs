@@ -11,6 +11,7 @@ use lb_log_targets::blend;
 use serde::{Deserialize, Serialize};
 pub use token::{BlendingToken, HammingDistance};
 
+use crate::reward::epoch::TokenEvaluation;
 pub use crate::reward::epoch::{BlendingTokenEvaluation, EpochRandomness, Error};
 
 const LOG_TARGET: &str = blend::message::REWARD;
@@ -23,7 +24,7 @@ struct ActivityTokenEvaluationDiagnostic {
 }
 
 impl ActivityTokenEvaluationDiagnostic {
-    fn capture(collector: &OldEpochBlendingTokenCollector) -> Option<Self> {
+    fn new(collector: &OldEpochBlendingTokenCollector) -> Option<Self> {
         tracing::enabled!(target: LOG_TARGET, tracing::Level::DEBUG).then(|| Self {
             proof_epoch: u32::from(collector.collector.epoch()),
             activity_threshold: collector
@@ -31,19 +32,13 @@ impl ActivityTokenEvaluationDiagnostic {
                 .token_evaluation
                 .activity_threshold()
                 .value(),
-            candidate_hamming_distances: collector
-                .collector
-                .tokens
-                .iter()
-                .map(|token| {
-                    collector
-                        .collector
-                        .token_evaluation
-                        .distance(token, collector.next_epoch_randomness)
-                        .value()
-                })
-                .collect(),
+            candidate_hamming_distances: Vec::new(),
         })
+    }
+
+    fn record(&mut self, evaluation: TokenEvaluation) {
+        self.candidate_hamming_distances
+            .push(evaluation.distance.value());
     }
 
     fn log(self, activity_proof_generated: bool) {
@@ -129,17 +124,22 @@ impl OldEpochBlendingTokenCollector {
     pub fn compute_activity_proof(self) -> Option<ActivityProof> {
         // Find the blending token with the smallest Hamming distance,
         // which is <= activity threshold.
-        // Capture DEBUG-only token diagnostics before the tokens are consumed below.
-        let diagnostic = ActivityTokenEvaluationDiagnostic::capture(&self);
+        let mut diagnostic = ActivityTokenEvaluationDiagnostic::new(&self);
         let winning_activity_proof_with_distance = self
             .collector
             .tokens
             .into_iter()
             .filter_map(|token| {
-                self.collector
+                let evaluation = self
+                    .collector
                     .token_evaluation
-                    .evaluate(&token, self.next_epoch_randomness)
-                    .map(|distance| (token, distance))
+                    .evaluate_token(&token, self.next_epoch_randomness);
+                if let Some(diagnostic) = &mut diagnostic {
+                    diagnostic.record(evaluation);
+                }
+                evaluation
+                    .satisfies_activity_threshold
+                    .then_some((token, evaluation.distance))
             })
             .min_by_key(|(_, distance)| *distance)
             .map(|(token, distance)| (ActivityProof::new(self.collector.epoch, token), distance));

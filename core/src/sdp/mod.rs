@@ -523,6 +523,16 @@ pub enum ActivityMetadata {
     Blend(Box<blend::ActivityProof>),
 }
 
+impl ActivityMetadata {
+    /// Returns the epoch whose activity is proven by this metadata.
+    #[must_use]
+    pub const fn origin_epoch(&self) -> Epoch {
+        match self {
+            Self::Blend(proof) => proof.epoch,
+        }
+    }
+}
+
 const ACTIVE_METADATA_BLEND_TYPE: u8 = 1;
 
 impl BinaryEncode for ActivityMetadata {

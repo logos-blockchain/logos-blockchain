@@ -364,7 +364,7 @@ where
                 overwatch_handle,
                 non_ephemeral_signing_key.public_key(),
                 Some(zk_public_key),
-                blend_config.minimum_network_size.get() as usize,
+                "blend_core_service",
             )
             .await;
 
@@ -2186,18 +2186,39 @@ async fn submit_activity_proof(
     proof: ActivityProof,
     sdp_relay: &OutboundRelay<SdpMessage>,
 ) -> Result<(), RelayError> {
+    let proof_epoch = proof.epoch();
     debug!(
         target: LOG_TARGET,
         diagnostic = "blend_tsi_outage",
-        event = "sdp_activity_proof_submitted",
-        epoch = u32::from(proof.epoch()),
-        provider_identity = ?proof.token().signing_key(),
-        "Submitting activity proof for the old epoch"
+        event = "sdp_activity_proof_submission_requested",
+        proof_epoch = u32::from(proof_epoch),
+        signing_key = ?proof.token().signing_key(),
+        "Requested activity proof submission to SDP"
     );
-    sdp_relay
+    let result = sdp_relay
         .send(SdpMessage::PostActivity {
             metadata: ActivityMetadata::Blend(Box::new((&proof).into())),
         })
         .await
-        .map_err(|(e, _)| e)
+        .map_err(|(e, _)| e);
+    match &result {
+        Ok(()) => debug!(
+            target: LOG_TARGET,
+            diagnostic = "blend_tsi_outage",
+            event = "sdp_activity_proof_submitted",
+            proof_epoch = u32::from(proof_epoch),
+            signing_key = ?proof.token().signing_key(),
+            "Submitted activity proof to SDP"
+        ),
+        Err(error) => error!(
+            target: LOG_TARGET,
+            diagnostic = "blend_tsi_outage",
+            event = "sdp_activity_proof_submission_failed",
+            proof_epoch = u32::from(proof_epoch),
+            signing_key = ?proof.token().signing_key(),
+            error = ?error,
+            "Failed to submit activity proof to SDP"
+        ),
+    }
+    result
 }

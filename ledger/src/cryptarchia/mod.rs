@@ -2,7 +2,6 @@ mod block_density;
 mod stake;
 #[cfg(test)]
 mod test;
-mod tsi;
 
 use std::sync::{Arc, LazyLock};
 
@@ -24,7 +23,6 @@ use lb_core::{
 use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
 use lb_groth16::{Fr, fr_from_bytes};
 use lb_utxotree::MerklePath;
-pub use tsi::{TsiDiagnostic, TsiEpochTransition};
 
 use crate::{
     cryptarchia::{
@@ -58,7 +56,6 @@ const STORAGE_MARKET_CLAMP_DOWN_NUMERATOR: u128 = 7;
 const STORAGE_MARKET_CLAMP_UP_NUMERATOR: u128 = 9;
 
 pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
-
 use super::{Balance, Config, LedgerError, mantle};
 use crate::WINDOW_SIZE;
 
@@ -302,19 +299,10 @@ impl LedgerState {
             // case 2)
 
             // infer new total stake
-            let measured_block_density = self.block_density.current_block_density();
             let total_stake = self.stake_inference.total_stake_inference::<PRECISION>(
                 self.epoch_state.total_stake,
-                measured_block_density,
+                self.block_density.current_block_density(),
             );
-            let transition = TsiEpochTransition {
-                from_epoch: u32::from(current_epoch),
-                to_epoch: u32::from(new_epoch),
-                old_total_stake: self.epoch_state.total_stake,
-                new_total_stake: total_stake,
-                measured_block_density,
-            };
-            tsi::log_update(&self, config, &transition, slot);
             let (lottery_0, lottery_1) = config
                 .lottery_constants()
                 .compute_lottery_values(total_stake);
@@ -377,33 +365,15 @@ impl LedgerState {
             // case 3)
 
             // First, infer total stake using block density of the current epoch
-            let measured_block_density = self.block_density.current_block_density();
             let mut total_stake = self.stake_inference.total_stake_inference::<PRECISION>(
                 self.epoch_state.total_stake,
-                measured_block_density,
+                self.block_density.current_block_density(),
             );
-            let transition = TsiEpochTransition {
-                from_epoch: u32::from(current_epoch),
-                to_epoch: u32::from(next_epoch_state.epoch()),
-                old_total_stake: self.epoch_state.total_stake,
-                new_total_stake: total_stake,
-                measured_block_density,
-            };
-            tsi::log_update(&self, config, &transition, slot);
             // Adjust total stake with zero block density for skipped epochs
-            for from_epoch in u32::from(next_epoch_state.epoch())..u32::from(new_epoch) {
-                let old_total_stake = total_stake;
+            for _ in u32::from(next_epoch_state.epoch())..u32::from(new_epoch) {
                 total_stake = self
                     .stake_inference
                     .total_stake_inference::<PRECISION>(total_stake, 0);
-                let transition = TsiEpochTransition {
-                    from_epoch,
-                    to_epoch: from_epoch + 1,
-                    old_total_stake,
-                    new_total_stake: total_stake,
-                    measured_block_density: 0,
-                };
-                tsi::log_update(&self, config, &transition, slot);
             }
             let (lottery_0, lottery_1) = config
                 .lottery_constants()
@@ -667,18 +637,6 @@ impl LedgerState {
     #[must_use]
     pub const fn next_epoch_state(&self) -> &EpochState {
         &self.next_epoch_state
-    }
-
-    #[must_use]
-    pub fn tsi_diagnostic(&self) -> TsiDiagnostic {
-        tsi::diagnostic(self)
-    }
-
-    pub fn tsi_epoch_transitions_for(
-        &self,
-        to_epoch: Epoch,
-    ) -> impl Iterator<Item = TsiEpochTransition> + '_ {
-        tsi::epoch_transitions_for(self, to_epoch)
     }
 
     /// Seeds the genesis epoch-state snapshots with the genesis SDP ledger.

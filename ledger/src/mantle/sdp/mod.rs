@@ -446,14 +446,14 @@ impl SdpLedger {
             tracing::info!(
                 target: LOG_TARGET,
                 diagnostic = "blend_tsi_outage",
-                event = "sdp_declaration_applied",
+                event = "sdp_genesis_declaration_applied",
+                canonical = true,
                 provider_id = ?declaration.provider_id,
                 declaration_id = ?op.id(),
                 ledger_epoch = u32::from(self.epoch),
                 ledger_slot = 0u64,
                 initial_active_epoch = u32::from(declaration.active),
                 inactivity_period,
-                is_genesis_declaration = true,
                 "Applied genesis SDP declaration"
             );
         }
@@ -469,7 +469,7 @@ impl SdpLedger {
         op: &SDPDeclareOp,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
-        let Some(service_state) = self.services.get_mut(&op.service_type) else {
+        let Some(service_state) = self.services.get(&op.service_type) else {
             return Err(Error::ServiceNotFound(op.service_type));
         };
 
@@ -485,7 +485,10 @@ impl SdpLedger {
         )?;
 
         self.service_notes = result.service_notes;
-        service_state.update_declarations(result.declarations);
+        self.services
+            .get_mut(&op.service_type)
+            .expect("service was checked before execution")
+            .update_declarations(result.declarations);
         Ok((self, events))
     }
 
@@ -495,7 +498,7 @@ impl SdpLedger {
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let (service, _) = self.get_service(&op.declaration_id, config)?;
-        let Some(service_state) = self.services.get_mut(&service) else {
+        let Some(service_state) = self.services.get(&service) else {
             return Err(Error::ServiceNotFound(service));
         };
 
@@ -510,6 +513,10 @@ impl SdpLedger {
             .expect("the declaration should be in the list after execution")
             .provider_id;
 
+        let service_state = self
+            .services
+            .get_mut(&service)
+            .expect("service was checked before execution");
         service_state.update_declarations(result.declarations);
         service_state.update_rewards(provider_id, &op.metadata, &config.service_rewards_params)?;
 
@@ -764,6 +771,53 @@ mod tests {
             .active_declarations(epoch, &config.service_params)
             .for_service(&ServiceType::BlendNetwork)
             .is_some_and(|m| m.contains_key(decl_id))
+    }
+
+    #[test]
+    fn failed_activity_does_not_return_partially_updated_ledger() {
+        let config = setup(ServiceParameters {
+            inactivity_period: 2.try_into().unwrap(),
+            epoch: 0.into(),
+        });
+        let epoch0 = dummy_epoch_state(0.into());
+        let ledger = dummy_sdp_ledger(0.into(), &config);
+        let (_utxo_sk, utxo) = utxo_with_sk();
+        let signing_key = create_signing_key();
+        let zk_key = create_zk_key(1);
+        let declare_op = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            service_note_id: utxo.id(),
+            zk_id: zk_key.to_public_key(),
+            provider_id: ProviderId(signing_key.public_key()),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+        };
+        let (ledger, _) = ledger
+            .try_apply_sdp_declaration(&utxo_tree(vec![utxo]), &declare_op, &config)
+            .unwrap();
+        let original = ledger.clone();
+        let active_op = SDPActiveOp {
+            declaration_id: declare_op.id(),
+            nonce: 1,
+            metadata: ActivityMetadata::Blend(Box::new(generate_activity_proof(
+                &zk_key,
+                &epoch0,
+                &epoch0,
+                &config.service_rewards_params.blend,
+            ))),
+        };
+
+        // The freshly-created rewards state has no target epoch yet, so reward
+        // calculation fails after operation execution has produced its updated
+        // declaration context. The consuming API must not return that partial
+        // state to its caller.
+        assert_eq!(
+            ledger
+                .clone()
+                .apply_active_msg(&active_op, &config)
+                .unwrap_err(),
+            Error::RewardsError(RewardsError::TargetEpochNotSet)
+        );
+        assert_eq!(ledger, original);
     }
 
     /// `active_declarations` must drop entries that have gone inactive (i.e.,

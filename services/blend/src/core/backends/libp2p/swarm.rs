@@ -380,7 +380,7 @@ where
                             diagnostic = "blend_tsi_outage",
                             event = "blend_peer_negotiation_failure",
                             epoch = u32::from(self.current_epoch_info.epoch),
-                            peer = ?peer,
+                            peer_id = ?peer,
                             reason = "connection_failure",
                             "Outbound Blend peer connection failed"
                         );
@@ -401,7 +401,7 @@ where
                             diagnostic = "blend_tsi_outage",
                             event = "blend_peer_negotiation_failure",
                             epoch = u32::from(self.current_epoch_info.epoch),
-                            peer = ?peer,
+                            peer_id = ?peer,
                             reason = ?upgrade_error,
                             "Outbound connection upgrade failed; trying with a different peer if necessary"
                         );
@@ -426,7 +426,7 @@ where
                     diagnostic = "blend_tsi_outage",
                     event = "blend_peer_negotiation_failure",
                     epoch = u32::from(self.current_epoch_info.epoch),
-                    peer = ?peer,
+                    peer_id = ?peer,
                     reason = ?reason,
                     "Inbound Blend peer connection upgrade failed"
                 );

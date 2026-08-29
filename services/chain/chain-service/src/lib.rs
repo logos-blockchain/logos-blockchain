@@ -194,7 +194,12 @@ pub enum Query {
     },
     GetEpochState {
         slot: Slot,
-        track_source: bool,
+        reply_channel: oneshot::Sender<Result<EpochState, Error>>,
+    },
+    /// Returns the epoch state and registers the exact chain source for stale
+    /// source correlation when that source later leaves the canonical chain.
+    GetEpochStateWithSource {
+        slot: Slot,
         reply_channel: oneshot::Sender<Result<EpochStateQueryResult, Error>>,
     },
     GetEpochConfig {
@@ -321,6 +326,13 @@ pub struct Cryptarchia {
     pub genesis_id: HeaderId,
 }
 
+pub(crate) struct TryApplyBlockOutcome {
+    pub(crate) pruned_blocks: PrunedBlocks<HeaderId>,
+    pub(crate) reorged_blocks: ReorgedBlocks<HeaderId>,
+    pub(crate) newly_canonical_blocks: Vec<HeaderId>,
+    pub(crate) events: Events,
+}
+
 impl Cryptarchia {
     /// Initialize a new [`Cryptarchia`] instance.
     #[must_use]
@@ -388,11 +400,31 @@ impl Cryptarchia {
     }
 
     /// Try to apply a block to the chain.
+    #[cfg(test)]
     fn try_apply_block<'tx, Tx>(
         &mut self,
         block: &Block<Tx>,
         current_slot: Slot,
     ) -> Result<(PrunedBlocks<HeaderId>, ReorgedBlocks<HeaderId>, Events), Error>
+    where
+        Tx: PreverifiedMantleTx + 'tx + MantleTxWithProofs<Context = GasPrices>,
+    {
+        let outcome = self.try_apply_block_with_state_retention(block, current_slot)?;
+        self.prune_ledger_states(outcome.pruned_blocks.all());
+        Ok((
+            outcome.pruned_blocks,
+            outcome.reorged_blocks,
+            outcome.events,
+        ))
+    }
+
+    /// Apply a block while retaining pruned ledger states until the caller has
+    /// observed any canonical transition represented by the result.
+    pub(crate) fn try_apply_block_with_state_retention<'tx, Tx>(
+        &mut self,
+        block: &Block<Tx>,
+        current_slot: Slot,
+    ) -> Result<TryApplyBlockOutcome, Error>
     where
         Tx: PreverifiedMantleTx + 'tx + MantleTxWithProofs<Context = GasPrices>,
     {
@@ -438,9 +470,9 @@ impl Cryptarchia {
             })?
             .verify_batch_proofs()?;
 
-        let (pruned_blocks, reorged_blocks) = self
+        let outcome = self
             .consensus
-            .receive_block(id, parent, slot, block.uncle_headers().slots())
+            .receive_block_with_canonical_change(id, parent, slot, block.uncle_headers().slots())
             .map_err(|err| match err {
                 lb_cryptarchia_engine::Error::ParentMissing(parent) => Error::ParentMissing {
                     parent,
@@ -451,15 +483,16 @@ impl Cryptarchia {
 
         let events = self.ledger.commit_update(update);
 
-        // Prune the ledger states of all the pruned blocks.
-        self.prune_ledger_states(pruned_blocks.all());
-
         metrics::emit_consensus_metrics(&self.consensus, &self.ledger);
         metrics::emit_block_imported_metric();
-        Ok((pruned_blocks, reorged_blocks, events))
+        Ok(TryApplyBlockOutcome {
+            pruned_blocks: outcome.pruned_blocks,
+            reorged_blocks: outcome.reorged_blocks,
+            newly_canonical_blocks: outcome.newly_canonical_blocks,
+            events,
+        })
     }
 
-    #[cfg(test)]
     fn epoch_state_for_slot(&self, slot: Slot) -> Result<EpochState, Error> {
         Ok(self.epoch_state_for_slot_with_source(slot)?.epoch_state)
     }
@@ -491,7 +524,10 @@ impl Cryptarchia {
     ///
     /// Details on which blocks are pruned can be found in the
     /// [`lb_cryptarchia_engine::Cryptarchia::receive_block`].
-    fn prune_ledger_states<'a>(&'a mut self, blocks: impl Iterator<Item = &'a HeaderId>) {
+    pub(crate) fn prune_ledger_states<'a>(
+        &'a mut self,
+        blocks: impl Iterator<Item = &'a HeaderId>,
+    ) {
         let mut pruned_states_count = 0usize;
         for block in blocks {
             if self.ledger.prune_state_at(block) {
@@ -1000,9 +1036,9 @@ where
             )
             .await
             {
-                Ok((new_pruned_blocks, _, _)) => {
+                Ok(outcome) => {
                     debug!(target: LOG_TARGET, "{}/{} blocks applied during initialization", i + 1, n_blocks);
-                    pruned_blocks.extend(&new_pruned_blocks);
+                    pruned_blocks.extend(&outcome.pruned_blocks);
                 }
                 Err(e) => {
                     error!(target: LOG_TARGET, "Error processing block: {:?}", e);

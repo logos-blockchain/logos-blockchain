@@ -11,7 +11,7 @@ use std::hash::Hash;
 
 pub use config::Config;
 use cryptarchia::LedgerState as CryptarchiaLedger;
-pub use cryptarchia::{EpochState, TsiDiagnostic, TsiEpochTransition, UtxoTree};
+pub use cryptarchia::{EpochState, UtxoTree};
 use lb_core::{
     block::BlockNumber,
     crypto::Hash as BlockHash,
@@ -34,7 +34,6 @@ use lb_core::{
         transactions::{GasPrices, MantleTxGasContext, hash::TxHash, mantle_tx::MantleTxContext},
     },
     proofs::leader_proof,
-    sdp::ActivityMetadata,
 };
 use lb_cryptarchia_engine::{Slot, UncleSlots};
 use lb_groth16::{AdditiveGroup as _, Fr};
@@ -88,12 +87,6 @@ const BLEND_REWARD_SHARE_DENOMINATOR: u128 = 10;
 const POW_REWARD_SHARE_NUMERATOR: u128 = 0;
 const POW_REWARD_SHARE_DENOMINATOR: u128 = 4;
 const EXECUTION_GAS_LIMIT: Gas = Gas::new(3_193_460);
-
-fn activity_origin_epoch(metadata: &ActivityMetadata) -> u32 {
-    match metadata {
-        ActivityMetadata::Blend(proof) => u32::from(proof.epoch),
-    }
-}
 
 // While individual notes are constrained to be `u64`, intermediate calculations
 // may overflow, so we use `i128` to avoid that and to easily represent negative
@@ -589,19 +582,6 @@ impl LedgerState {
         self.cryptarchia_ledger.next_epoch_state()
     }
 
-    #[must_use]
-    pub fn tsi_diagnostic(&self) -> TsiDiagnostic {
-        self.cryptarchia_ledger.tsi_diagnostic()
-    }
-
-    pub fn tsi_epoch_transitions_for(
-        &self,
-        to_epoch: u32,
-    ) -> impl Iterator<Item = TsiEpochTransition> + '_ {
-        self.cryptarchia_ledger
-            .tsi_epoch_transitions_for(to_epoch.into())
-    }
-
     /// Computes the epoch state for a given slot.
     ///
     /// This handles the case where epochs have been skipped (no blocks
@@ -678,7 +658,6 @@ impl LedgerState {
             ledger_slot = u64::from(self.cryptarchia_ledger.slot()),
             initial_active_epoch = u32::from(declaration.active),
             inactivity_period,
-            is_genesis_declaration = false,
             "Evaluated SDP declaration on a candidate block"
         );
     }
@@ -689,15 +668,11 @@ impl LedgerState {
         result: &MantleLedger,
         config: &Config,
         tx_hash: &TxHash,
+        previous_active_epoch: Option<lb_cryptarchia_engine::Epoch>,
     ) {
         if !tracing::enabled!(tracing::Level::TRACE) {
             return;
         }
-        let previous_active_epoch = self
-            .mantle_ledger
-            .sdp_ledger()
-            .get_declaration(&op.declaration_id)
-            .map(|declaration| declaration.active);
         let Some(new_declaration) = result.sdp_ledger().get_declaration(&op.declaration_id) else {
             return;
         };
@@ -715,9 +690,7 @@ impl LedgerState {
             event = "sdp_activity_applied",
             evaluation_context = "candidate",
             canonical = false,
-            epoch = u32::from(epoch),
-            slot = u64::from(slot),
-            proof_epoch = activity_origin_epoch(&op.metadata),
+            proof_epoch = u32::from(op.metadata.origin_epoch()),
             ledger_epoch = u32::from(epoch),
             ledger_slot = u64::from(slot),
             tx_id = ?tx_hash,
@@ -726,7 +699,6 @@ impl LedgerState {
             previous_active_epoch = ?previous_active_epoch,
             new_active_epoch = ?new_declaration.active,
             active_until_epoch = u32::from(new_declaration.active).saturating_add(inactivity_period),
-            activity_origin_epoch = activity_origin_epoch(&op.metadata),
             "Evaluated SDP activity message on a candidate block"
         );
     }
@@ -801,22 +773,32 @@ impl LedgerState {
                 tx_events.extend(events);
             }
             Op::SDPDeclare(op) => {
-                let (result, events) = self.mantle_ledger.clone().try_apply_sdp_declaration(
+                let (mantle_ledger, events) = self.mantle_ledger.try_apply_sdp_declaration(
                     op,
                     self.cryptarchia_ledger.latest_utxos(),
                     config,
                 )?;
-                self.log_sdp_declaration_evaluation(op, &result, config);
-                self.mantle_ledger = result;
+                self.mantle_ledger = mantle_ledger;
+                self.log_sdp_declaration_evaluation(op, &self.mantle_ledger, config);
                 tx_events.extend(events);
             }
             Op::SDPActive(op) => {
-                let (result, events) = self
-                    .mantle_ledger
-                    .clone()
-                    .try_apply_sdp_active(op, config)?;
-                self.log_sdp_activity_evaluation(op, &result, config, tx_hash);
-                self.mantle_ledger = result;
+                let previous_active_epoch = tracing::enabled!(tracing::Level::TRACE).then(|| {
+                    self.mantle_ledger
+                        .sdp_ledger()
+                        .get_declaration(&op.declaration_id)
+                        .map(|declaration| declaration.active)
+                });
+                let (mantle_ledger, events) =
+                    self.mantle_ledger.try_apply_sdp_active(op, config)?;
+                self.mantle_ledger = mantle_ledger;
+                self.log_sdp_activity_evaluation(
+                    op,
+                    &self.mantle_ledger,
+                    config,
+                    tx_hash,
+                    previous_active_epoch.flatten(),
+                );
                 tx_events.extend(events);
             }
             Op::SDPWithdraw(op) => {
@@ -974,7 +956,7 @@ mod tests {
             channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
             leader_claim_proof::Groth16LeaderClaimProof,
         },
-        sdp::{DeclarationId, Nonce},
+        sdp::{ActivityMetadata, DeclarationId, Nonce},
     };
     use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{CompressedGroth16Proof, Field as _};

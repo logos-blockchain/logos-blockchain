@@ -1,9 +1,5 @@
 use core::fmt::{self, Debug, Display};
-use std::{
-    collections::{HashMap, HashSet},
-    pin::Pin,
-    time::Duration,
-};
+use std::{collections::HashSet, pin::Pin, time::Duration};
 
 use bytes::Bytes;
 use futures::StreamExt as _;
@@ -109,7 +105,7 @@ where
             slot_timer,
             state_recording_timer,
             prolonged_bootstrap_period,
-            epoch_state_query_sources: HashMap::new(),
+            epoch_state_query_sources: crate::service::EpochStateQuerySourceTracker::default(),
         }
     }
 

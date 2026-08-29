@@ -20,22 +20,6 @@ impl StakeInference {
         self.period
     }
 
-    pub const fn learning_rate(&self) -> f64 {
-        self.learning_rate
-    }
-
-    pub fn expected_block_density(&self) -> u64 {
-        (self.expected_density_with_precision::<PRECISION>() / i128::from(PRECISION))
-            .try_into()
-            .expect("Expected block density must fit in a u64")
-    }
-
-    fn expected_density_with_precision<const PRECISION: u64>(&self) -> i128 {
-        let slot_activation_coefficient_with_precision: i128 =
-            (self.slot_activation_coefficient * PRECISION as f64).trunc() as i128;
-        i128::from(self.period()) * slot_activation_coefficient_with_precision
-    }
-
     pub fn total_stake_inference<const PRECISION: u64>(
         &self,
         total_stake_estimate: u64,
@@ -43,11 +27,14 @@ impl StakeInference {
     ) -> u64 {
         let learning_rate_with_precision: u64 =
             f64::trunc(self.learning_rate * PRECISION as f64) as u64;
+        let slot_activation_coefficient_with_precision: i128 =
+            (self.slot_activation_coefficient * PRECISION as f64).trunc() as i128;
         let total_stake_estimate_with_precision: i128 =
             i128::from(total_stake_estimate) * i128::from(PRECISION);
         let measured_block_density_with_precision: i128 =
             i128::from(measured_block_density) * i128::from(PRECISION);
-        let expected_density_with_precision = self.expected_density_with_precision::<PRECISION>();
+        let expected_density_with_precision: i128 =
+            i128::from(self.period()) * slot_activation_coefficient_with_precision;
         let density_difference_with_precision: i128 =
             expected_density_with_precision - measured_block_density_with_precision;
         let slot_activation_error_with_precision: i128 = total_stake_estimate_with_precision
@@ -60,6 +47,8 @@ impl StakeInference {
             (total_stake_estimate_with_precision - correction) / i128::from(PRECISION);
 
         tracing::debug!(
+            diagnostic = "blend_tsi_outage",
+            event = "tsi_calculated",
             old_total_stake = total_stake_estimate,
             new_total_stake = new_total_stake_estimate,
             measured_density = measured_block_density,
@@ -172,15 +161,6 @@ mod tests {
             result <= total_stake_estimate,
             "result({result}) must be <= total_stake_estimate({total_stake_estimate})"
         );
-    }
-
-    #[test]
-    fn test_expected_block_density_uses_wide_intermediate() {
-        let period = u64::MAX;
-        let slot_activation_coefficient = 1.0;
-        let inference = StakeInference::new(LEARNING_RATE, slot_activation_coefficient, period);
-
-        assert_eq!(inference.expected_block_density(), u64::MAX);
     }
 
     fn stake_inference_from(config: &Config) -> StakeInference {

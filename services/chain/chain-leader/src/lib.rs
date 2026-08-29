@@ -29,7 +29,6 @@ use lb_core::{
         transactions::{hash::TxHash, mantle_tx::MantleTx as _, states::Preverified},
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
-    sdp::ActivityMetadata,
 };
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
@@ -65,12 +64,6 @@ use crate::{
     relays::CryptarchiaConsensusRelays,
 };
 
-fn activity_origin_epoch(metadata: &ActivityMetadata) -> u32 {
-    match metadata {
-        ActivityMetadata::Blend(proof) => u32::from(proof.epoch),
-    }
-}
-
 fn log_sdp_activity_selected_for_proposal<Tx>(block: &Block<Tx>, ledger_state: &LedgerState)
 where
     Tx: MantleTxWithProofs,
@@ -92,7 +85,7 @@ where
             tx_id = ?tx.hash(),
             provider_id = ?provider_id,
             declaration_id = ?active.declaration_id,
-            proof_epoch = activity_origin_epoch(&active.metadata),
+            proof_epoch = u32::from(active.metadata.origin_epoch()),
             proposal_block_id = %block.header().id(),
             proposal_slot = u64::from(block.header().slot()),
             "Selected SDP activity transaction for proposal"
