@@ -733,24 +733,13 @@ Feature: Zone SDK
       | alias    | data                |
       | MSG_INIT | initial inscription |
     Then all zone messages are finalized in 120 seconds
-    # SEQ_B runs like a zone: its drive loop reacts to the deposit the moment it
-    # is observed on the channel branch (via the ChannelUpdate) by publishing an
-    # atomic withdraw — no finalization wait. The transfer consuming the
-    # deposited note is what makes the withdraw atomic with (and safe before) the
-    # deposit finalizing.
     When I start zone sequencer "SEQ_B" withdrawing observed deposits with outputs "1,1,2"
     And sequencer "SEQ_A" publishes the following zone messages:
       | alias  | data |
       | MSG_A1 | a1   |
       | MSG_A2 | a2   |
     When I submit zone deposit transaction "DEPOSIT_1" into channel of "SEQ_A" of 5 with metadata "Mint 5 for atomic withdraw"
-    # No waiting on the deposit: SEQ_B's drive loop reacts to it the moment it is
-    # observed on the branch and publishes the withdraw. The assertions below
-    # wait for the whole reaction to finalize.
     Then the zone indexer returns a finalized channel transfer consuming 1 inputs in 240 seconds
-    # SEQ_A's messages have a fixed order (INIT published first; A2 chains off
-    # A1). SEQ_B's reactive withdraw inscription is the only one whose slot
-    # floats (different sequencer, round-robin), and it is not asserted here.
     And the zone indexer returns messages in this order:
       | alias    |
       | MSG_INIT |
@@ -791,10 +780,6 @@ Feature: Zone SDK
     Then zone transaction "DEPOSIT_DUST_SEED" is included in 180 seconds
     When I submit zone deposit transaction "DEPOSIT_BIG" into channel of "SEQ_A" of 10000 with metadata "Big note"
     Then zone transaction "DEPOSIT_BIG" is included in 240 seconds
-    # No finalization wait: the split and withdraw consume the deposited notes as
-    # soon as they are observed on the branch — the transfers consuming those
-    # notes make the whole chain atomic with (and safe before) the deposits
-    # finalizing.
     And the channel wallet of "SEQ_A" contains a note of value 255 in 240 seconds
     And the channel wallet of "SEQ_A" contains a note of value 10000 in 240 seconds
     When sequencer "SEQ_A" splits deposit "DEPOSIT_DUST_SEED" into 255 dust notes as "SPLIT_DUST"

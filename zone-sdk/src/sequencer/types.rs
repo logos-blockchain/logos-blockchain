@@ -439,13 +439,12 @@ pub struct ChannelUpdate {
     /// (see
     /// [`SequencerHandle::publish_atomic_deposit_inscription`](super::SequencerHandle::publish_atomic_deposit_inscription)).
     ///
-    /// Apply all `orphaned`/`adopted` state first, then process these: a block
-    /// is validated atomically, so a deposit that landed alongside adopted
-    /// inscriptions is safe to handle after them. Never carried in `orphaned` —
-    /// a deposit needs no revert (an un-integrated one is a consumer no-op, an
-    /// integrated one reverts via its own bundle in `orphaned`). Deduped by
-    /// deposit `op_id`: a reorg can re-surface the same deposit (its `op_id`
-    /// and re-created `NoteId`s are stable), so integrate each `op_id` once.
+    /// Process these after applying `orphaned`/`adopted` (a block is atomic, so
+    /// a deposit landing alongside adopted inscriptions is safe to handle after
+    /// them). A branch change can re-surface the same deposit here more than
+    /// once; integrate it only on its first appearance and ignore the rest.
+    /// From then on, track the resubmission and orphaning of the atomic deposit
+    /// inscription you published (through `orphaned`), not this field.
     pub adopted_deposits: Vec<DepositInfo>,
 }
 
