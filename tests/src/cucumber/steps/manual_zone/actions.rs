@@ -4,8 +4,9 @@ use cucumber::gherkin::Step;
 use futures::future::join_all;
 use lb_common_http_client::CommonHttpClient;
 use lb_core::mantle::{
-    TxHash, Utxo,
+    Note, TxHash, Utxo,
     gas::GasCost,
+    ledger::Outputs,
     ops::channel::{config::Keys, deposit::Metadata, inscribe::Inscription},
 };
 use lb_key_management_system_service::keys::Ed25519Key;
@@ -23,16 +24,18 @@ use tracing::warn;
 
 use super::{
     errors::{log_step_error, zone_step_error},
-    runner::{Event, PublishResult, SequencerCheckpoint, SequencerClient},
+    runner::{Event, PublishResult, SequencerCheckpoint, SequencerClient, WithdrawArg},
     steps::DEFAULT_ZONE_SEQUENCER,
     support::{
-        AtomicZoneDepositRequest, CustomRepublishDeps, DiscardedPayloads, PublishDeadline,
-        ZoneAccountBalances, ZoneDeposit, build_zone_deposit, build_zone_deposit_from_values,
-        ensure_zone_transactions_included, keygen, publish_atomic_zone_withdraw,
-        publish_message_with_retry, sequencer_config, sequencer_config_with_pending_submit_depth,
-        start_balance_aware_policy, start_custom_republish_policy, start_republish_lineage_policy,
-        start_sequencer_event_loop, start_sorted_conflict_policy, submit_atomic_zone_deposit,
-        submit_zone_channel_split, submit_zone_deposit, submit_zone_withdraw,
+        AtomicWithdrawPlan, AtomicZoneDepositRequest, CustomRepublishDeps, DepositReaction,
+        DiscardedPayloads, PublishDeadline, ZoneAccountBalances, ZoneDeposit, build_zone_deposit,
+        build_zone_deposit_from_values, ensure_zone_transactions_included, keygen,
+        publish_atomic_zone_withdraw, publish_message_with_retry, sequencer_config,
+        sequencer_config_with_pending_submit_depth, start_balance_aware_policy,
+        start_custom_republish_policy, start_deposit_reaction_policy,
+        start_republish_lineage_policy, start_sequencer_event_loop, start_sorted_conflict_policy,
+        submit_atomic_zone_deposit, submit_zone_channel_split, submit_zone_deposit,
+        submit_zone_withdraw,
     },
     tables::{ConcurrentZoneMessageRow, ZoneNodeResourcesRow, group_zone_messages_by_sequencer},
 };
@@ -85,6 +88,12 @@ pub(super) enum DriveMode {
     },
     CustomRepublish {
         deps: Box<CustomRepublishDeps>,
+    },
+    /// Reacts to each observed deposit in the drive loop by publishing the
+    /// atomic withdraw `react` returns — mimicking a zone's on-deposit
+    /// callback.
+    DepositReaction {
+        react: DepositReaction,
     },
 }
 
@@ -842,6 +851,40 @@ pub(super) async fn start_named_sequencer(
     .await
 }
 
+/// Start `sequencer_alias` reacting to observed deposits (in its drive loop) by
+/// publishing an atomic withdraw of `output_amounts` — one note each to the
+/// sequencer's funding wallet — plus an indexer. Mimics a zone's on-deposit
+/// callback: no wait for finalization, the reaction runs the moment the deposit
+/// is seen on the channel branch.
+pub(super) async fn start_deposit_reaction_sequencer(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: &str,
+    output_amounts: Vec<u64>,
+) -> StepResult {
+    let recipient = log_step_error(step, sequencer_funding(world, sequencer_alias))?.funding_pk;
+    let react: DepositReaction = Box::new(move |_deposit| {
+        let notes: Vec<Note> = output_amounts
+            .iter()
+            .map(|&amount| Note::new(amount, recipient))
+            .collect();
+        let outputs = Outputs::try_new(notes).ok()?;
+        Some(AtomicWithdrawPlan {
+            inscription: make_inscription("burn observed deposit"),
+            withdraws: vec![WithdrawArg { outputs }],
+        })
+    });
+    start_named_sequencer(
+        world,
+        step,
+        sequencer_alias,
+        None,
+        DriveMode::DepositReaction { react },
+    )
+    .await?;
+    initialize_zone_indexer(world, step, sequencer_alias)
+}
+
 /// Fund sequencer transactions from the node's own funding wallet.
 fn sequencer_funding(
     world: &CucumberWorld,
@@ -1010,6 +1053,9 @@ fn start_sequencer_runtime(
         ),
         DriveMode::CustomRepublish { deps } => {
             from_policy_runtime(start_custom_republish_policy(sequencer, *deps), None)
+        }
+        DriveMode::DepositReaction { react } => {
+            from_policy_runtime(start_deposit_reaction_policy(sequencer, react), None)
         }
     }
 }

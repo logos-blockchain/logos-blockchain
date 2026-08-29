@@ -1282,7 +1282,7 @@ mod tests {
         let pending = state
             .pending_inscription(&tx_hash)
             .expect("bundle should be in pending inscriptions");
-        let PendingBundle::Withdraw(withdraws) = &pending.bundle else {
+        let PendingBundle::Withdraw { withdraws, .. } = &pending.bundle else {
             panic!("bundle should be a withdraw bundle");
         };
         assert_eq!(withdraws.len(), 1, "bundle should carry one WithdrawInfo");

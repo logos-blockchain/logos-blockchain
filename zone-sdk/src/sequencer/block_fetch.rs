@@ -5,7 +5,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         SignedMantleTx,
-        ledger::NoteId,
+        ledger::{NoteId, Outputs},
         ops::{
             Op, OpId as _,
             channel::{ChannelId, MsgId, inscribe::Inscription},
@@ -347,9 +347,13 @@ fn observe_channel_inscriptions(
     for block_tx in classified {
         let (info, bundle) = match block_tx {
             BlockChannelTx::Inscription(i) => (i, PendingBundle::Plain),
-            BlockChannelTx::AtomicWithdraw(a) => {
-                (&a.inscription, PendingBundle::Withdraw(a.withdraws.clone()))
-            }
+            BlockChannelTx::AtomicWithdraw(a) => (
+                &a.inscription,
+                PendingBundle::Withdraw {
+                    withdraws: a.withdraws.clone(),
+                    outputs: a.outputs.clone(),
+                },
+            ),
             BlockChannelTx::AtomicDepositInscription(a) => (
                 &a.inscription,
                 PendingBundle::DepositInscription(a.consumed_notes.clone()),
@@ -998,6 +1002,11 @@ pub(super) fn classify_channel_tx(
                     tx_hash,
                     inscription,
                     withdraws,
+                    // Recipient outputs are only needed to re-issue our *own*
+                    // orphaned bundle, which recovers them from the pending
+                    // entry (see `submit_atomic_withdraw`). An observed bundle is
+                    // never re-issued by us, so it carries none.
+                    outputs: Outputs::empty(),
                 })
             } else if channel_transfers == 1 {
                 // `[inscribe, channel_transfer]` — the transfer consumes an observed
@@ -1083,7 +1092,7 @@ mod tests {
         mantle::{
             Note, RawMantleTx, Value,
             channel::{SlotTimeframe, SlotTimeout},
-            ledger::{Inputs, Outputs},
+            ledger::Inputs,
             ops::{
                 OpProof,
                 channel::{

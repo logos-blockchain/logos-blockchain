@@ -816,6 +816,10 @@ where
             tx_hash,
             op: withdraw_op,
         }];
+        // The recipient notes the bundle releases — carried so an orphaned
+        // bundle can be re-issued from its report.
+        let outputs = Outputs::try_new(recipient_outputs)
+            .map_err(|e| Error::Network(format!("invalid withdraw outputs: {e:?}")))?;
 
         debug!(target: TARGET,
             "Prepared atomic withdraw: payload={:?}, parent={}, msg_id={}, tx={}, amount={}",
@@ -834,6 +838,7 @@ where
             msg_id,
             inscribe.clone(),
             withdraw_infos.clone(),
+            outputs.clone(),
         );
         self.last_msg_id = msg_id;
         self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
@@ -860,6 +865,7 @@ where
                         signer: Some(self.signing_key.public_key()),
                     },
                     withdraws: withdraw_infos,
+                    outputs,
                 }),
             },
             checkpoint,
@@ -1440,6 +1446,7 @@ pub(super) fn track_pending_tx(
                 this_msg,
                 aw.inscription.payload,
                 aw.withdraws,
+                aw.outputs,
             );
             Some(this_msg)
         }

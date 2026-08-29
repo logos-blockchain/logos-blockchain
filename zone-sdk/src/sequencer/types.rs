@@ -122,10 +122,10 @@ pub enum WithdrawInputs {
 ///   `info.payload`
 /// - [`ChannelUpdateTx::AtomicWithdraw`] →
 ///   [`SequencerHandle::publish_atomic_withdraw`](super::SequencerHandle::publish_atomic_withdraw)
-///   with `info.inscription.payload` and `WithdrawArg`s reconstructed from
-///   `info.withdraws[i].op.inputs`. The SDK fills a fresh `parent_msg` and
-///   reselects the transfer inputs per [`WithdrawInputs`] on each publish — the
-///   original input selection need not be reproduced.
+///   with `info.inscription.payload` and a single `WithdrawArg { outputs:
+///   info.outputs }`. The SDK fills a fresh `parent_msg` and reselects the
+///   transfer inputs per [`WithdrawInputs`] on each publish — the original
+///   input selection need not be reproduced.
 /// - [`ChannelUpdateTx::AtomicDepositInscription`] →
 ///   [`SequencerHandle::publish_atomic_deposit_inscription`](super::SequencerHandle::publish_atomic_deposit_inscription)
 ///   with `info.inscription.payload` and `info.consumed_notes`. The SDK fills a
@@ -513,6 +513,11 @@ pub struct AtomicWithdrawInfo {
     pub inscription: InscriptionInfo,
     /// The withdraw ops carried by the bundle, in tx order.
     pub withdraws: Vec<WithdrawInfo>,
+    /// The recipient notes the bundle releases (the transfer outputs the
+    /// withdraw consumes, change excluded). Enough to re-issue the bundle from
+    /// its orphan report as a single [`WithdrawArg`] — the note IDs in
+    /// `withdraws[i].op.inputs` alone can't recover the recipient value + key.
+    pub outputs: Outputs,
 }
 
 /// An inscription bundled atomically with a channel transfer that consumes an

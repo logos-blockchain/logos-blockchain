@@ -4,7 +4,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         SignedMantleTx,
-        ledger::NoteId,
+        ledger::{NoteId, Outputs},
         ops::{
             Op,
             channel::{ChannelId, MsgId, inscribe::Inscription},
@@ -102,8 +102,12 @@ pub enum PendingBundle {
     /// A plain inscription.
     Plain,
     /// An atomic inscription+withdraw bundle: the tx's `Op::ChannelWithdraw`
-    /// ops, in tx order.
-    Withdraw(Vec<WithdrawInfo>),
+    /// ops (in tx order) plus the recipient notes it releases (for re-issue
+    /// from an orphan report).
+    Withdraw {
+        withdraws: Vec<WithdrawInfo>,
+        outputs: Outputs,
+    },
     /// An atomic inscription+transfer bundle integrating a deposit: the channel
     /// notes the bundled transfer consumes.
     DepositInscription(Vec<NoteId>),
@@ -306,7 +310,8 @@ impl TxState {
     }
 
     /// Submit an atomic inscription+withdraw bundle for tracking. `withdraws`
-    /// must mirror the `Op::ChannelWithdraw` ops in the bundle, in tx order.
+    /// must mirror the `Op::ChannelWithdraw` ops in the bundle, in tx order;
+    /// `outputs` are the recipient notes it releases (for orphan re-issue).
     pub fn submit_atomic_withdraw(
         &mut self,
         signed_tx: SignedMantleTx<Unverified>,
@@ -314,13 +319,14 @@ impl TxState {
         this_msg: MsgId,
         payload: Inscription,
         withdraws: Vec<WithdrawInfo>,
+        outputs: Outputs,
     ) {
         self.insert_pending(
             signed_tx,
             parent_msg,
             this_msg,
             payload,
-            PendingBundle::Withdraw(withdraws),
+            PendingBundle::Withdraw { withdraws, outputs },
         );
     }
 
@@ -728,11 +734,12 @@ impl TxState {
                 if eligible.contains(&info.tx_hash) && seen.insert(info.tx_hash) {
                     let tx_hash = info.tx_hash;
                     let entry = match self.pending.get(&tx_hash).map(|p| &p.bundle) {
-                        Some(PendingBundle::Withdraw(withdraws)) => {
+                        Some(PendingBundle::Withdraw { withdraws, outputs }) => {
                             PendingTx::AtomicWithdraw(AtomicWithdrawInfo {
                                 tx_hash,
                                 inscription: info,
                                 withdraws: withdraws.clone(),
+                                outputs: outputs.clone(),
                             })
                         }
                         Some(PendingBundle::DepositInscription(consumed_notes)) => {
@@ -1242,11 +1249,12 @@ impl TxState {
         }
         // Not in any held block — the lineage bridged through a pending link.
         match self.pending.get(&info.tx_hash).map(|p| &p.bundle) {
-            Some(PendingBundle::Withdraw(withdraws)) => {
+            Some(PendingBundle::Withdraw { withdraws, outputs }) => {
                 Some(ChannelUpdateTx::AtomicWithdraw(AtomicWithdrawInfo {
                     tx_hash: info.tx_hash,
                     inscription: info.clone(),
                     withdraws: withdraws.clone(),
+                    outputs: outputs.clone(),
                 }))
             }
             Some(PendingBundle::DepositInscription(consumed_notes)) => Some(

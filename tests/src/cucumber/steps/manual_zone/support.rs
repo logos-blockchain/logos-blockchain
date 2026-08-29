@@ -13,6 +13,7 @@ use std::{
 
 use lb_common_http_client::{CommonHttpClient, Slot};
 use lb_core::{
+    crypto::Hash,
     mantle::{
         Note, Op, OpProof, RawMantleTx, Utxo, Value,
         gas::GasCost,
@@ -56,8 +57,8 @@ use tokio::{
 use tracing::warn;
 
 use super::runner::{
-    self, ChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx, FundingConfig,
-    InscriptionId, InscriptionInfo, PendingTx, PublishResult, SequencerChannelView,
+    self, ChannelUpdate, ChannelUpdateTx, DepositInfo, Event, FinalizedOp, FinalizedTx,
+    FundingConfig, InscriptionId, InscriptionInfo, PendingTx, PublishResult, SequencerChannelView,
     SequencerCheckpoint, SequencerClient, SequencerConfig, TurnNotification, TxStatus,
     TxStatusUpdate, WithdrawArg, WithdrawInputs,
 };
@@ -300,6 +301,66 @@ pub fn start_sorted_conflict_policy(
         state: SortedConflictState::new(Arc::clone(discarded)),
     };
     to_policy_runtime(runner::spawn(sequencer, policy))
+}
+
+/// The atomic withdraw a zone-mimicking policy publishes in reaction to an
+/// observed deposit — its inscription plus the recipient outputs.
+pub struct AtomicWithdrawPlan {
+    pub inscription: Inscription,
+    pub withdraws: Vec<WithdrawArg>,
+}
+
+/// A test's reaction to a newly observed deposit: given the deposit, the atomic
+/// withdraw to publish (or `None` to ignore it). This is the zone's on-deposit
+/// callback — it runs inside the drive loop with the full [`DepositInfo`].
+pub type DepositReaction = Box<dyn FnMut(&DepositInfo) -> Option<AtomicWithdrawPlan> + Send>;
+
+/// Drive a sequencer like a zone: on every `ChannelUpdate` its drive loop
+/// reacts to each newly observed deposit (via `adopted_deposits`) by running
+/// `react` and publishing the resulting atomic withdraw — no wait for
+/// finalization. The withdraw's transfer consuming the deposited note is what
+/// makes it atomic with the deposit landing.
+pub fn start_deposit_reaction_policy(
+    sequencer: ZoneSequencer<ZoneNodeHttpClient>,
+    react: DepositReaction,
+) -> PolicyRuntime {
+    let policy = DepositReactionPolicy {
+        reacted: HashSet::new(),
+        react,
+    };
+    to_policy_runtime(runner::spawn(sequencer, policy))
+}
+
+struct DepositReactionPolicy {
+    /// Deposits already reacted to, keyed by `op_id` (fire once each).
+    reacted: HashSet<Hash>,
+    react: DepositReaction,
+}
+
+impl<Node> runner::Policy<Node> for DepositReactionPolicy
+where
+    Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
+{
+    async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
+        let Event::BlocksProcessed { channel_update, .. } = event else {
+            return;
+        };
+        for deposit in &channel_update.adopted_deposits {
+            if !self.reacted.insert(deposit.op_id) {
+                continue;
+            }
+            let Some(plan) = (self.react)(deposit) else {
+                continue;
+            };
+            if let Err(error) = sequencer
+                .handle()
+                .publish_atomic_withdraw(plan.inscription, plan.withdraws, WithdrawInputs::Auto)
+                .await
+            {
+                warn!(%error, "deposit-reaction withdraw failed");
+            }
+        }
+    }
 }
 
 /// Inline policy: republish orphaned inscriptions not already back on the
