@@ -441,10 +441,16 @@ pub struct ChannelUpdate {
     ///
     /// Process these after applying `orphaned`/`adopted` (a block is atomic, so
     /// a deposit landing alongside adopted inscriptions is safe to handle after
-    /// them). A branch change can re-surface the same deposit here more than
-    /// once; integrate it only on its first appearance and ignore the rest.
-    /// From then on, track the resubmission and orphaning of the atomic deposit
-    /// inscription you published (through `orphaned`), not this field.
+    /// them). Reconcile, don't fire once: a branch change can re-surface the
+    /// same deposit here more than once, and it can also reorg out. Publish an
+    /// atomic deposit inscription for a deposit only while it is on the current
+    /// branch (its re-created note is in the channel wallet) and no inscription
+    /// consuming it is already in flight — and republish if yours is orphaned
+    /// (reported in `orphaned`). The bundle's transfer consumes the deposited
+    /// note, so it can only land where the deposit is; this converges the
+    /// [inscription, transfer] onto the deposit's branch without waiting for
+    /// the deposit to finalize, and re-fires if the deposit reorgs out and
+    /// re-mines.
     pub adopted_deposits: Vec<DepositInfo>,
 }
 

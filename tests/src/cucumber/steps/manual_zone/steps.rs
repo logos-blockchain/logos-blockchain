@@ -12,9 +12,10 @@ use super::{
         DriveMode, initialize_zone_indexer, publish_atomic_zone_withdraw_transaction,
         publish_zone_messages, publish_zone_messages_concurrently,
         register_zone_sequencers_with_shared_key, remember_published_zone_message,
-        save_zone_checkpoint, start_deposit_reaction_sequencer, start_named_sequencer,
-        start_named_sequencer_with_pending_submit_depth, start_nodes_with_zone_resources,
-        stop_zone_sequencer, submit_atomic_zone_deposit_transaction, submit_zone_channel_config,
+        save_zone_checkpoint, start_deposit_reaction_sequencer, start_deposit_withdraw_sequencer,
+        start_named_sequencer, start_named_sequencer_with_pending_submit_depth,
+        start_nodes_with_zone_resources, stop_zone_sequencer,
+        submit_atomic_zone_deposit_transaction, submit_zone_channel_config,
         submit_zone_channel_split_transaction, submit_zone_deposit_transaction,
         submit_zone_multi_deposit_transaction, submit_zone_withdraw_transaction,
     },
@@ -184,7 +185,7 @@ async fn start_sequencer_with_indexer(
 }
 
 #[when(
-    expr = "I start zone sequencer {string} withdrawing observed deposits with outputs {string}"
+    expr = "I start zone sequencer {string} integrating then withdrawing observed deposits with outputs {string}"
 )]
 async fn step_start_zone_sequencer_deposit_reaction(
     world: &mut CucumberWorld,
@@ -192,7 +193,7 @@ async fn step_start_zone_sequencer_deposit_reaction(
     sequencer_alias: String,
     outputs: String,
 ) -> StepResult {
-    let output_amounts = outputs
+    let withdraw_outputs = outputs
         .split(',')
         .map(|amount| {
             amount
@@ -203,7 +204,38 @@ async fn step_start_zone_sequencer_deposit_reaction(
                 })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    start_deposit_reaction_sequencer(world, step, &sequencer_alias, output_amounts).await
+    start_deposit_reaction_sequencer(world, step, &sequencer_alias, withdraw_outputs).await
+}
+
+#[when(
+    expr = "I start zone sequencer {string} withdrawing observed deposit of {int} with outputs {string}"
+)]
+async fn step_start_zone_sequencer_deposit_withdraw(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    target_amount: u64,
+    outputs: String,
+) -> StepResult {
+    let withdraw_outputs = outputs
+        .split(',')
+        .map(|amount| {
+            amount
+                .trim()
+                .parse::<u64>()
+                .map_err(|error| StepError::InvalidArgument {
+                    message: format!("invalid withdraw output amount '{amount}': {error}"),
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    start_deposit_withdraw_sequencer(
+        world,
+        step,
+        &sequencer_alias,
+        target_amount,
+        withdraw_outputs,
+    )
+    .await
 }
 
 #[when("I start zone sequencers:")]
