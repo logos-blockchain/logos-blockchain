@@ -5105,6 +5105,7 @@ dependencies = [
  "logos-blockchain-libp2p",
  "logos-blockchain-mmr",
  "logos-blockchain-node",
+ "logos-blockchain-pow-service",
  "logos-blockchain-storage-service",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",

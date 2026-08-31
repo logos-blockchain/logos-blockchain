@@ -961,3 +961,54 @@ mod tests {
         assert_eq!(result.as_str(), Some("1.200000000"));
     }
 }
+
+#[cfg(test)]
+mod auto_claim_override_tests {
+    use std::num::NonZeroU64;
+
+    use lb_node::config::UserConfig;
+    use lb_pow_service::{AutoClaimSettings, AutoClaimTick, ClaimTarget};
+    use lb_testing_framework::configs::wallet::WalletAccount;
+
+    use super::{ConfigOverride, apply_overrides};
+
+    /// The auto-claim configuration step stages a `pow.auto_claim` override
+    /// built from [`AutoClaimSettings`]. Patching it into a real user config
+    /// has to survive the YAML round-trip the override machinery performs,
+    /// so this pins the serialized shape against the config the node
+    /// actually parses — a mismatch here would only otherwise surface as a
+    /// node that fails to boot midway through the (slow) cucumber scenario.
+    #[test]
+    fn staged_auto_claim_override_round_trips_into_a_user_config() {
+        let account = WalletAccount::deterministic(1, 0, true).expect("deterministic account");
+        let settings = AutoClaimSettings {
+            targets: vec![ClaimTarget {
+                public_key: account.public_key(),
+                threshold: 1_000_000_000,
+            }],
+            tick: AutoClaimTick::Slots(NonZeroU64::new(1).expect("1 is non-zero")),
+        };
+        let value = serde_yaml::to_value(&settings).expect("settings should serialize");
+
+        let raw = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../nodes/node/standalone-node-config.yaml"
+        ))
+        .expect("standalone config should exist");
+        let mut config: UserConfig =
+            serde_yaml::from_str(&raw).expect("standalone config should deserialize");
+
+        apply_overrides(
+            &mut config,
+            &[ConfigOverride {
+                path: "pow.auto_claim".to_owned(),
+                value,
+            }],
+            "user",
+        )
+        .expect("auto-claim override should apply");
+
+        assert_eq!(config.pow.auto_claim.targets, settings.targets);
+        assert_eq!(config.pow.auto_claim.tick, settings.tick);
+    }
+}
