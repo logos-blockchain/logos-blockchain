@@ -643,6 +643,7 @@ where
         metrics::withdrawal_success_total();
 
         self.declaration_id = None;
+        self.active_message_tracker = None;
         self.service_resources_handle
             .state_updater
             .update(Some(SdpState::from(self.declaration_id)));
