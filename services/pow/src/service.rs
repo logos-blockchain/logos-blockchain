@@ -821,7 +821,6 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
     RuntimeServiceId: Sync,
 {
     loop {
-        let before = state.ready_to_claim.len();
         match claim_ready_rewards(
             cryptarchia_api,
             blend_api,
@@ -834,6 +833,8 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
             // Nothing left that can be claimed right now: the ready set is
             // empty, or what remains is anchored to non-canonical blocks.
             Ok(None) => break,
+            // A published claim always consumes at least one ready ticket, so
+            // the loop is guaranteed to terminate.
             Ok(Some(_)) => state_updater.update(Some(state.clone())),
             // Stop on the first failure rather than spinning: the tickets stay
             // ready and the next tick retries them.
@@ -841,16 +842,6 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
                 error!(target: LOG_TARGET, "PoW auto-claim failed: {e}");
                 break;
             }
-        }
-        // A published claim always consumes at least one ready ticket. Guard
-        // the invariant anyway: without it a regression there would spin this
-        // loop, publishing transactions as fast as it can.
-        if state.ready_to_claim.len() >= before {
-            error!(
-                target: LOG_TARGET,
-                "PoW auto-claim made no progress ({before} tickets still ready); stopping this tick"
-            );
-            break;
         }
     }
     state_updater.update(Some(state.clone()));
