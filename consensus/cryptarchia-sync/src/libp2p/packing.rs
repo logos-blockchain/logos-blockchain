@@ -29,19 +29,14 @@ where
     Message: BoundedSerializeOp + DeserializeOwned + Sync,
     Writer: AsyncWriteExt + Send + Unpin,
 {
-    if <Message::Bytes as BoundedBytes>::MAX > MAX_MSG_LEN {
-        return Err(PackingError::MessageTooLarge {
-            max: MAX_MSG_LEN,
-            actual: <Message::Bytes as BoundedBytes>::MAX,
-        });
+    const {
+        assert!(MAX_MSG_LEN <= LenType::MAX as usize);
+        assert!(<Message::Bytes as BoundedBytes>::MAX <= MAX_MSG_LEN);
     }
 
     let packed_message = message.to_bounded_bytes()?;
     let packed_message = packed_message.as_ref();
-    let length_prefix: LenType = packed_message
-        .len()
-        .try_into()
-        .expect("MAX_MSG_LEN should fit in the frame length prefix");
+    let length_prefix = packed_message.len() as LenType;
 
     writer
         .write_all(&length_prefix.to_le_bytes())
@@ -85,17 +80,7 @@ mod tests {
     use bytes::Bytes;
 
     use super::*;
-    use crate::{
-        libp2p::messages::{DownloadBlocksResponse, RequestMessage},
-        messages::GetTipResponse,
-    };
-
-    fn assert_valid_message_bound<T>()
-    where
-        T: BoundedSerializeOp,
-    {
-        assert!(<T::Bytes as BoundedBytes>::MAX <= MAX_MSG_LEN);
-    }
+    use crate::libp2p::messages::DownloadBlocksResponse;
 
     #[tokio::test]
     async fn sender_rejects_messages_above_frame_limit() {
@@ -109,12 +94,5 @@ mod tests {
             PackingError::Serialization(codec::Error::Serialize(_))
         ));
         assert!(writer.into_inner().is_empty());
-    }
-
-    #[test]
-    fn production_messages_have_bounded_serialization() {
-        assert_valid_message_bound::<RequestMessage>();
-        assert_valid_message_bound::<DownloadBlocksResponse>();
-        assert_valid_message_bound::<GetTipResponse>();
     }
 }
