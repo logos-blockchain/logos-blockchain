@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use lb_core::{
     mantle::{Value, gas::GasCost},
     sdp::DeclarationId,
@@ -12,6 +14,8 @@ pub struct Config {
     #[serde(default)]
     pub declaration_id: Option<DeclarationId>,
     pub wallet: WalletConfig,
+    #[serde(default)]
+    pub active_message_tracker: ActiveMessageTrackerConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -19,6 +23,21 @@ pub struct WalletConfig {
     #[serde(default = "default_max_tx_fee")]
     pub max_tx_fee: GasCost,
     pub funding_pk: ZkPublicKey,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
+pub struct ActiveMessageTrackerConfig {
+    /// Interval between status checks of a submitted activity, in tip changes.
+    pub status_check_interval_in_tip_changes: NonZeroU64,
+}
+
+impl Default for ActiveMessageTrackerConfig {
+    fn default() -> Self {
+        Self {
+            status_check_interval_in_tip_changes: NonZeroU64::new(3).unwrap(),
+        }
+    }
 }
 
 const fn default_max_tx_fee() -> GasCost {
@@ -31,13 +50,14 @@ pub struct RequiredValues {
 
 impl Config {
     #[must_use]
-    pub const fn with_required_values(RequiredValues { funding_pk }: RequiredValues) -> Self {
+    pub fn with_required_values(RequiredValues { funding_pk }: RequiredValues) -> Self {
         Self {
             wallet: WalletConfig {
                 funding_pk,
                 max_tx_fee: default_max_tx_fee(),
             },
             declaration_id: None,
+            active_message_tracker: ActiveMessageTrackerConfig::default(),
         }
     }
 

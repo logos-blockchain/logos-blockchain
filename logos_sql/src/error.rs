@@ -57,7 +57,8 @@ pub enum Error {
     #[error("LogosSql::start must be called from within a Tokio runtime")]
     RuntimeUnavailable,
 
-    /// The sequencer has not completed backfill and cannot accept writes yet.
+    /// The sequencer is starting or its latest readiness checkpoint has not
+    /// yet been applied.
     #[error("the zone sequencer is not ready to accept writes")]
     SequencerNotReady,
 
