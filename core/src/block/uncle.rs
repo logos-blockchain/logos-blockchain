@@ -4,7 +4,10 @@ use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
-use crate::header::{Header, HeaderId};
+use crate::{
+    block::Error,
+    header::{Header, HeaderId},
+};
 
 /// Signed headers of the uncles referenced by a block.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
@@ -76,7 +79,8 @@ impl SignedHeader {
         &self.signature
     }
 
-    pub fn verify(&self) -> Result<(), crate::block::HeaderError> {
-        crate::block::verify_header_alone(&self.header, &self.signature)
+    pub fn verify(&self) -> Result<(), Error> {
+        crate::block::verify_header_alone(&self.header)?;
+        crate::block::verify_signature(&self.header, &self.signature)
     }
 }
