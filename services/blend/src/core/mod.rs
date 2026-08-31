@@ -1412,11 +1412,9 @@ where
 /// Proposals go first: one is tied to the slot it was built for and goes stale,
 /// whereas a transaction keeps.
 ///
-/// Neither queue is popped here: `select!` drops this future whenever another
-/// branch wins the race, and a future that popped before awaiting would take
-/// the message down with it every time that happened. The caller updates the
-/// queues once the race is settled, which is also why only one copy of a
-/// proposal is wrapped per call.
+/// Neither queue is popped here due to `tokio-select` cancellation safety. The
+/// caller updates the queues once the race is settled, which is also why only
+/// one copy of a proposal is wrapped per call.
 ///
 /// Returns `None` when there is nothing to hand back — nothing queued, or the
 /// branch that would back the message has no proofs yet. Both mean "do nothing
