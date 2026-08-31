@@ -1,3 +1,4 @@
+use core::num::NonZeroU64;
 use std::{
     collections::VecDeque,
     fmt::{Debug, Display},
@@ -97,6 +98,10 @@ use crate::{
     kms::PreloadKmsService,
     membership::{self, ZkInfo, chain::BlendEpochState},
     message::{BlendPayload, ProcessedMessage, ServiceMessage},
+    pending::{
+        Discarded, LocalEncapsulation, NextLocalMessage, PendingLocalMessages,
+        resolve_encapsulation,
+    },
 };
 
 pub mod backends;
@@ -392,7 +397,7 @@ where
             current_public_info,
             crypto_processor,
             current_recovery_checkpoint,
-            pending_transactions,
+            pending_messages,
             message_scheduler,
             mut backend,
             mut rng,
@@ -442,7 +447,7 @@ where
             &sdp_relay,
             message_scheduler.into(),
             &mut rng,
-            pending_transactions,
+            pending_messages,
             crypto_processor,
             current_public_info,
             current_recovery_checkpoint,
@@ -508,7 +513,7 @@ async fn initialize<
         ProofsVerifier,
     >,
     ServiceState<Backend::Settings, Dispatcher::Settings>,
-    VecDeque<Vec<u8>>,
+    PendingLocalMessages,
     SchedulerWrapper<BlakeRng, ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
     Backend,
     BlakeRng,
@@ -749,14 +754,19 @@ where
     // Rng for releasing messages.
     let rng = BlakeRng::from_entropy();
 
-    let pending_transactions = current_recovery_checkpoint.pending_transactions().clone();
+    // The transactions a previous run had queued, back in the shared queue that
+    // also holds proposals.
+    let mut pending_messages = PendingLocalMessages::new();
+    for transaction in current_recovery_checkpoint.pending_transactions() {
+        pending_messages.queue_transaction(transaction.clone());
+    }
 
     (
         remaining_epoch_stream,
         current_epoch_public_info,
         crypto_processor,
         current_recovery_checkpoint,
-        pending_transactions,
+        pending_messages,
         message_scheduler,
         backend,
         rng,
@@ -824,7 +834,7 @@ async fn run_event_loop<
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
     rng: &mut Rng,
-    mut pending_transactions: VecDeque<Vec<u8>>,
+    mut pending_messages: PendingLocalMessages,
     mut crypto_processor: CurrentEpochCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -858,24 +868,39 @@ where
             Some(msg) = inbound_relay.next() => {
                 match msg {
                     ServiceMessage::Blend(BlendPayload::Transaction(transaction)) => {
-                        recovery_checkpoint = queue_transaction_for_encapsulation(transaction, &mut pending_transactions, recovery_checkpoint);
+                        recovery_checkpoint = queue_transaction_for_encapsulation(transaction, &mut pending_messages, recovery_checkpoint);
                     }
                     ServiceMessage::Blend(BlendPayload::BlockProposal(proposal)) => {
-                        recovery_checkpoint = handle_local_block_proposal(&proposal, blend_config.data_replication_factor, &mut crypto_processor, &mut message_scheduler, recovery_checkpoint).await;
+                        let copies = NonZeroU64::new(blend_config.data_replication_factor.strict_add(1)).unwrap();
+                        pending_messages.queue_proposal(proposal, copies);
                     }
                     ServiceMessage::GetNetworkInfo { reply } => {
                         let info = backend.network_info().await;
                         drop(reply.send(info));
                     }
                     ServiceMessage::GetPendingTransactions { reply } => {
-                        drop(reply.send(pending_transactions.iter().cloned().collect()));
+                        drop(reply.send(pending_messages.transactions().cloned().collect()));
                     }
                 }
             }
-            // A queued transaction leaves as soon as a `PoW` solution backs it. The
-            // search is awaited here, so the rest of the loop keeps turning while it runs.
-            Some(encapsulation) = encapsulate_next_transaction(&pending_transactions, &mut crypto_processor) => {
-                recovery_checkpoint = handle_local_transaction(&encapsulation, &mut pending_transactions, &crypto_processor, &mut message_scheduler, recovery_checkpoint);
+            // A queued message leaves as soon as proofs back it — a `PoW` solution
+            // for a transaction, this epoch's secret `PoL` info for a proposal. Both
+            // are awaited here so the rest of the loop keeps turning meanwhile, and
+            // both share one branch because both need the processor mutably and
+            // `select!` builds every branch future before any of them wins.
+            Some(encapsulation) = encapsulate_next_local_message(&pending_messages, &mut crypto_processor) => {
+                match encapsulation {
+                    Ok(LocalEncapsulation::ProposalCopy(message)) => {
+                        recovery_checkpoint = schedule_local_encapsulated_message(&message, &crypto_processor, &mut message_scheduler, recovery_checkpoint);
+                        pending_messages.mark_proposal_copy_as_sent();
+                    }
+                    Ok(LocalEncapsulation::Transaction(message)) => {
+                        recovery_checkpoint = handle_local_transaction(&message, &mut pending_messages, &crypto_processor, &mut message_scheduler, recovery_checkpoint);
+                    }
+                    Err(()) => {
+                        recovery_checkpoint = discard_unencapsulatable_message(&mut pending_messages, recovery_checkpoint);
+                    }
+                }
             }
             Some(incoming_message) = blend_messages.next() => {
                 let (old_cryptographic_processor, old_scheduler) = old_epoch_components
@@ -911,7 +936,7 @@ where
                 }
             }
             Some(epoch_event) = remaining_epoch_stream.next() => {
-                match handle_epoch_event(epoch_event, blend_config, crypto_processor, message_scheduler, current_epoch_info, recovery_checkpoint, backend, sdp_relay, &mut latest_secret_pol_info).await {
+                match handle_epoch_event(epoch_event, blend_config, crypto_processor, message_scheduler, current_epoch_info, recovery_checkpoint, backend, sdp_relay, &mut latest_secret_pol_info, &mut pending_messages).await {
                     // Current epoch info updated to new one
                     HandleEpochEventOutput::Transitioning { new_crypto_processor, new_scheduler, new_epoch_info, new_recovery_checkpoint, old_epoch_components: transitioning_epoch } => {
                         crypto_processor = new_crypto_processor;
@@ -943,58 +968,98 @@ where
 /// proofs.
 fn queue_transaction_for_encapsulation<BackendSettings, NetworkSettings>(
     transaction: Vec<u8>,
-    pending_transactions: &mut VecDeque<Vec<u8>>,
+    pending_messages: &mut PendingLocalMessages,
     current_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
 ) -> ServiceState<BackendSettings, NetworkSettings>
 where
     BackendSettings: Clone,
 {
-    pending_transactions.push_back(transaction.clone());
+    pending_messages.queue_transaction(transaction.clone());
     let mut state_updater = current_recovery_checkpoint.start_updating();
     state_updater.queue_unencapsulated_transaction(transaction);
     state_updater.commit_changes()
 }
 
-/// Encapsulates the transaction that has been waiting longest, once a `PoW`
-/// solution backs its layer proofs.
+/// Encapsulates one locally-originated message, once proofs back it.
 ///
-/// The transaction is only read here, never taken off the queue: `select!`
-/// drops this future whenever another branch wins the race, and a future that
-/// popped before awaiting would take the transaction down with it every time
-/// that happened. It comes off the queue in [`handle_local_transaction`]
-/// instead, which runs after the race is settled.
+/// Proposals go first: one is tied to the slot it was built for and goes stale,
+/// whereas a transaction keeps.
 ///
-/// Returns `None` when there is nothing to hand back — either nothing is
-/// queued, or the transaction at the head could not be encapsulated — which is
-/// what leaves the `select!` branch free to wait on the others. The two are not
-/// worth telling apart here: in both cases the right move is to do nothing this
-/// time round.
+/// Neither queue is popped here: `select!` drops this future whenever another
+/// branch wins the race, and a future that popped before awaiting would take
+/// the message down with it every time that happened. The caller updates the
+/// queues once the race is settled, which is also why only one copy of a
+/// proposal is wrapped per call.
 ///
-/// A transaction that fails to encapsulate therefore stays queued and is tried
-/// again.
-async fn encapsulate_next_transaction<NodeId, ProofsGenerator, ProofsVerifier, CorePoQGenerator>(
-    pending_transactions: &VecDeque<Vec<u8>>,
+/// Returns `None` when there is nothing to hand back — nothing queued, or the
+/// branch that would back the message has no proofs yet. Both mean "do nothing
+/// this time round", and the message stays queued for the next. `Err(())` means
+/// the head can never be encapsulated and has to go: the head is retried before
+/// anything else is looked at, so one that keeps failing would take everything
+/// queued behind it down with it.
+async fn encapsulate_next_local_message<NodeId, ProofsGenerator, ProofsVerifier, CorePoQGenerator>(
+    pending_messages: &PendingLocalMessages,
     cryptographic_processor: &mut CurrentEpochCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
         ProofsGenerator,
         ProofsVerifier,
     >,
-) -> Option<EncapsulatedMessageWithVerifiedPublicHeader>
+) -> Option<Result<LocalEncapsulation, ()>>
 where
     NodeId: Eq + Hash + 'static,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
 {
-    let transaction = pending_transactions.front()?;
-    cryptographic_processor
-        .encapsulate_transaction_payload(transaction)
-        .await
-        // Reported here rather than handed back: the encapsulation error is not
-        // `Send`, and a `select!` branch output has to be.
-        .inspect_err(|e| {
-            tracing::error!(target: LOG_TARGET, "Failed to encapsulate transaction: {e:?}");
-        })
-        .ok()
+    type Wrap = fn(EncapsulatedMessageWithVerifiedPublicHeader) -> LocalEncapsulation;
+
+    let (encapsulated, wrap_fn): (_, Wrap) = match pending_messages.next()? {
+        NextLocalMessage::ProposalCopy(proposal) => (
+            cryptographic_processor
+                .encapsulate_block_proposal_payload(proposal)
+                .await,
+            LocalEncapsulation::ProposalCopy,
+        ),
+        NextLocalMessage::Transaction(transaction) => (
+            cryptographic_processor
+                .encapsulate_transaction_payload(transaction)
+                .await,
+            LocalEncapsulation::Transaction,
+        ),
+    };
+
+    resolve_encapsulation(encapsulated, wrap_fn)
+}
+
+/// Drops proposals left over from the epoch that just ended, saying so if there
+/// were any.
+fn discard_stale_proposals(pending_messages: &mut PendingLocalMessages) {
+    let discarded_proposals = pending_messages.discard_proposals();
+    if discarded_proposals > 0 {
+        tracing::warn!(
+            target: LOG_TARGET,
+            "Dropping {discarded_proposals} block proposal(s) still queued when the epoch ended."
+        );
+    }
+}
+
+/// Drops the queued message that cannot be encapsulated, taking it out of the
+/// recovery state too so a restart does not bring it back to fail again.
+fn discard_unencapsulatable_message<BackendSettings, NetworkSettings>(
+    pending_messages: &mut PendingLocalMessages,
+    current_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
+) -> ServiceState<BackendSettings, NetworkSettings>
+where
+    BackendSettings: Clone,
+{
+    match pending_messages.discard_head() {
+        // Proposals are not persisted, so there is nothing else to undo.
+        Some(Discarded::Proposal(_)) | None => current_recovery_checkpoint,
+        Some(Discarded::Transaction(transaction)) => {
+            let mut state_updater = current_recovery_checkpoint.start_updating();
+            state_updater.dequeue_unencapsulated_transaction(&transaction);
+            state_updater.commit_changes()
+        }
+    }
 }
 
 /// Processes a transaction whose wait for a `PoW` solution is over.
@@ -1012,7 +1077,7 @@ fn handle_local_transaction<
     CorePoQGenerator,
 >(
     encapsulation: &EncapsulatedMessageWithVerifiedPublicHeader,
-    pending_transactions: &mut VecDeque<Vec<u8>>,
+    pending_messages: &mut PendingLocalMessages,
     cryptographic_processor: &CurrentEpochCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1039,9 +1104,7 @@ where
         current_recovery_checkpoint,
     );
 
-    let transaction = pending_transactions
-        .pop_front()
-        .expect("Branch only yields while a transaction is queued.");
+    let transaction = pending_messages.mark_transaction_as_sent();
     let mut state_updater = recovery_checkpoint.start_updating();
     state_updater.dequeue_unencapsulated_transaction(&transaction);
     state_updater.commit_changes()
@@ -1141,6 +1204,7 @@ async fn handle_epoch_event<
     backend: &mut Backend,
     sdp_relay: &OutboundRelay<SdpMessage>,
     current_secret_info: &mut Option<PolEpochInfo>,
+    pending_messages: &mut PendingLocalMessages,
 ) -> HandleEpochEventOutput<
     NodeId,
     Rng,
@@ -1167,6 +1231,14 @@ where
             // its processor into a receive-only one for the transition period drops
             // the generators, and with them the `PoW` mining they have in flight.
             let old_cryptographic_processor = current_cryptographic_processor.rotate_epoch();
+            // Queued proposals go with it, and for the same reason: the rotation
+            // is what makes them unsendable. Anything not yet encapsulated would
+            // now draw on the new epoch's leadership quota — one message's worth
+            // per winning slot — spending it on a block the chain has moved past
+            // instead of on the one this node is about to produce. What was
+            // already encapsulated is not here; it is in the old scheduler, which
+            // goes on releasing it for the transition period.
+            discard_stale_proposals(pending_messages);
             let (
                 _,
                 _,
@@ -1290,6 +1362,7 @@ where
             }
         }
         EpochEvent::NewEpoch(MaybeEmptyCoreEpochInfo::Empty { epoch, epoch_nonce }) => {
+            discard_stale_proposals(pending_messages);
             tracing::info!(target: LOG_TARGET, "New epoch event received, but no epoch info is available due to empty membership set.");
             let old_cryptographic_processor = current_cryptographic_processor.rotate_epoch();
             let (_, _, _, _, _, current_epoch_blending_token_collector, _, _) =
@@ -1402,70 +1475,6 @@ enum HandleEpochEventOutput<
         /// of core.
         old_token_collector: OldEpochBlendingTokenCollector,
     },
-}
-
-/// Processes a block proposal handed over by another service.
-///
-/// Leadership proofs are ready the moment the epoch's secret `PoL` info is, so
-/// unlike a transaction this can be encapsulated where it arrives without
-/// holding up the event loop.
-///
-/// `data_replication_factor` extra copies go out alongside the first. Block
-/// proposals are replicated and transactions are not: the spec's per-solution
-/// `PoW` quota `Q_W` is `ß_max`, i.e. exactly one message's worth of
-/// encapsulations, whereas the leadership quota `Q_L` budgets for the extra
-/// copies on top.
-async fn handle_local_block_proposal<
-    NodeId,
-    Rng,
-    BackendSettings,
-    NetworkSettings,
-    ProofsGenerator,
-    ProofsVerifier,
-    CorePoQGenerator,
->(
-    proposal: &[u8],
-    data_replication_factor: u64,
-    cryptographic_processor: &mut CurrentEpochCryptographicProcessor<
-        NodeId,
-        CorePoQGenerator,
-        ProofsGenerator,
-        ProofsVerifier,
-    >,
-    scheduler: &mut EpochMessageScheduler<
-        Rng,
-        ProcessedMessage,
-        EncapsulatedMessageWithVerifiedPublicHeader,
-    >,
-    current_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
-) -> ServiceState<BackendSettings, NetworkSettings>
-where
-    NodeId: Eq + Hash + Send + 'static,
-    Rng: RngCore + Clone + Send + Unpin,
-    BackendSettings: Clone + Send + Sync,
-    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
-    ProofsVerifier: ProofsVerifierTrait,
-{
-    let mut recovery_checkpoint = current_recovery_checkpoint;
-    for _ in 0..data_replication_factor.strict_add(1) {
-        let Ok(wrapped_message) = cryptographic_processor
-            .encapsulate_block_proposal_payload(proposal)
-            .await
-            .inspect_err(|e| {
-                tracing::error!(target: LOG_TARGET, "Failed to wrap message: {e:?}");
-            })
-        else {
-            return recovery_checkpoint;
-        };
-
-        recovery_checkpoint = schedule_local_encapsulated_message(
-            &wrapped_message,
-            cryptographic_processor,
-            scheduler,
-            recovery_checkpoint,
-        );
-    }
-    recovery_checkpoint
 }
 
 /// Schedules a locally-generated, already-encapsulated data message for

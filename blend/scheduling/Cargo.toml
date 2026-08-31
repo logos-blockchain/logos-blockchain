@@ -34,4 +34,4 @@ lb-blend-proofs  = { features = ["unsafe-test-functions"], workspace = true }
 
 [features]
 tokio-task-names      = ["lb-utils/tokio-task-names"]
-unsafe-test-functions = []
+unsafe-test-functions = ["lb-blend-membership/unsafe-test-functions"]

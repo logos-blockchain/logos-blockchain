@@ -3,7 +3,10 @@ use std::{collections::VecDeque, sync::Arc};
 
 use futures::{StreamExt as _, stream::repeat};
 use lb_blend::{
-    message::reward::{ActivityProof, BlendingToken, EpochBlendingTokenCollector},
+    message::{
+        MAX_PAYLOAD_BODY_SIZE,
+        reward::{ActivityProof, BlendingToken, EpochBlendingTokenCollector},
+    },
     proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
     scheduling::{
         EpochMessageScheduler, epoch::EpochEvent,
@@ -18,6 +21,7 @@ use lb_poq::{CORE_MERKLE_TREE_HEIGHT, Quota};
 use lb_utils::blake_rng::BlakeRng;
 use rand::SeedableRng as _;
 use rayon::ThreadPoolBuilder;
+use tokio::sync::oneshot;
 
 use crate::{
     core::{
@@ -39,12 +43,13 @@ use crate::{
     epoch_info::PolEpochInfo,
     membership::{MembershipInfo, ZkInfo, chain::BlendEpochState},
     message::{BlendPayload, ServiceMessage},
+    pending::{NextLocalMessage, PendingLocalMessages},
     test_utils::{
         crypto::{
-            GatedPowProofsGenerator, MockCoreAndLeaderProofsGenerator, PowGate,
-            recorded_starting_core_key_indices, reset_starting_core_key_indices,
+            GatedPowProofsGenerator, MockCoreAndLeaderProofsGenerator, PolAwareProofsGenerator,
+            PowGate, recorded_starting_core_key_indices, reset_starting_core_key_indices,
         },
-        epoch::OncePolStreamProvider,
+        epoch::{GatedPolStreamProvider, OncePolStreamProvider, PolGate},
     },
 };
 
@@ -562,6 +567,95 @@ async fn test_handle_epoch_transition_expired() {
     assert_eq!(*activity_proof, (&ActivityProof::new(epoch, token)).into());
 }
 
+/// A proposal still queued when the epoch rotates is dropped; a transaction is
+/// not.
+///
+/// Leadership quota is one message's worth per winning slot, so a proposal that
+/// missed its epoch would spend the quota the new epoch's own block needs.
+/// Already-encapsulated messages are unaffected: they have left the queue for
+/// the scheduler, and the previous epoch's scheduler keeps releasing them for
+/// the transition period, when peers still hold that epoch's verifier.
+#[test_log::test(tokio::test)]
+async fn test_handle_epoch_event_discards_queued_proposals() {
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+
+    // Prepare components for epoch event handling.
+    let epoch = 0.into();
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let settings = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+    let public_info = new_epoch_info(epoch, membership.clone(), &settings);
+    let crypto_processor = new_crypto_processor(
+        EpochCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.num_blend_layers,
+            pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+            spent_core_quota: Quota::ZERO,
+        },
+        &public_info,
+        (),
+    );
+    let scheduler = EpochMessageScheduler::new(
+        scheduler_epoch_info(&public_info),
+        BlakeRng::from_entropy(),
+        scheduler_settings(&settings.time, settings.num_blend_layers),
+    );
+    let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
+        settings.clone(),
+        overwatch_handle.clone(),
+        backend_epoch_info(&public_info),
+        BlakeRng::from_entropy(),
+    );
+    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+
+    let mut pending_messages = PendingLocalMessages::new();
+    pending_messages.queue_proposal(b"proposal".to_vec(), 2.try_into().unwrap());
+    pending_messages.queue_transaction(b"transaction".to_vec());
+
+    let _output = handle_epoch_event(
+        EpochEvent::NewEpoch(
+            CoreEpochInfo {
+                public: CoreEpochPublicInfo {
+                    epoch: epoch.strict_add(1.into()),
+                    ..public_info.clone()
+                },
+                core_poq_generator: Some(()),
+            }
+            .into(),
+        ),
+        &settings,
+        crypto_processor,
+        scheduler,
+        public_info,
+        ServiceState::with_epoch(
+            epoch,
+            VecDeque::new(),
+            token_collector,
+            None,
+            state_updater.clone(),
+        )
+        .unwrap(),
+        &mut backend,
+        &sdp_relay,
+        &mut None,
+        &mut pending_messages,
+    )
+    .await;
+
+    assert_eq!(
+        pending_messages.next(),
+        Some(NextLocalMessage::Transaction(b"transaction")),
+        "the proposal must not survive the rotation, and the transaction must"
+    );
+}
+
 #[test_log::test(tokio::test)]
 #[expect(clippy::too_many_lines, reason = "Test function.")]
 async fn test_handle_epoch_event() {
@@ -631,6 +725,7 @@ async fn test_handle_epoch_event() {
         &mut backend,
         &sdp_relay,
         &mut None,
+        &mut PendingLocalMessages::new(),
     )
     .await;
     let HandleEpochEventOutput::Transitioning {
@@ -677,6 +772,7 @@ async fn test_handle_epoch_event() {
         &mut backend,
         &sdp_relay,
         &mut None,
+        &mut PendingLocalMessages::new(),
     )
     .await;
     let HandleEpochEventOutput::TransitionCompleted {
@@ -725,6 +821,7 @@ async fn test_handle_epoch_event() {
         &mut backend,
         &sdp_relay,
         &mut None,
+        &mut PendingLocalMessages::new(),
     )
     .await;
     let HandleEpochEventOutput::Retiring {
@@ -816,6 +913,7 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
         &mut backend,
         &sdp_relay,
         &mut None,
+        &mut PendingLocalMessages::new(),
     )
     .await;
 
@@ -918,6 +1016,7 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
         &mut backend,
         &sdp_relay,
         &mut Some(secret_info),
+        &mut PendingLocalMessages::new(),
     )
     .await;
     recorded_set_epoch_private_calls()
@@ -1007,6 +1106,7 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
         &mut backend,
         &sdp_relay,
         &mut None,
+        &mut PendingLocalMessages::new(),
     )
     .await;
     let HandleEpochEventOutput::Retiring {
@@ -1089,6 +1189,7 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
         &mut backend,
         &sdp_relay,
         &mut None,
+        &mut PendingLocalMessages::new(),
     )
     .await;
 
@@ -1824,7 +1925,7 @@ async fn test_initialize_recovers_matching_saved_state() {
         _current_public_info2,
         _crypto_processor2,
         recovered_checkpoint2,
-        pending_transactions2,
+        pending_messages2,
         _message_scheduler2,
         _backend2,
         _rng2,
@@ -1866,7 +1967,7 @@ async fn test_initialize_recovers_matching_saved_state() {
         "Mismatched epoch: a queued transaction should outlive the state that carried it"
     );
     assert_eq!(
-        pending_transactions2.front(),
+        pending_messages2.transactions().next(),
         Some(&b"stale epoch transaction".to_vec()),
         "Mismatched epoch: the queue handed to the event loop should carry it too"
     );
@@ -2046,6 +2147,251 @@ async fn test_initialize_drops_activity_proof_older_than_one_epoch() {
         sdp_relay_receiver.try_recv().is_err(),
         "a collector more than one epoch old should be dropped, not submitted"
     );
+}
+
+/// A block proposal that arrives before this epoch's secret `PoL` info still
+/// goes out once it lands.
+///
+/// Leadership proofs only become possible when the secret `PoL` info reaches
+/// the processor, and that regularly happens *after* the first proposal does —
+/// most visibly at startup, when the node wins the very first slot it is asked
+/// to lead. The proposal used to be encapsulated where it arrived, fail, and be
+/// dropped with an error, silently losing a block this node had just produced.
+#[test_log::test(tokio::test)]
+async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let mut settings = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+    // No cover traffic, so the only message that can come out is the proposal.
+    // See the `PoW` liveness test for why this quota silences it.
+    settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
+    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+
+    let (inbound_relay, inbound_message_sender) = new_stream();
+    let (mut blend_message_stream, _blend_message_sender) = new_stream();
+    let (membership_stream, membership_sender) = new_stream();
+
+    let membership_info = MembershipInfo {
+        membership,
+        zk: Some(ZkInfo {
+            root: ZkHash::ZERO,
+            core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
+        }),
+    };
+    membership_sender
+        .send(test_blend_epoch_state(0, membership_info))
+        .await
+        .unwrap();
+
+    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources();
+
+    // Both installed before the service exists, so nothing is missed.
+    let pol_gate = PolGate::setup();
+    let mut outgoing_messages = outgoing_messages_recorder();
+
+    let (
+        mut remaining_epoch_stream,
+        current_public_info,
+        crypto_processor,
+        current_recovery_checkpoint,
+        pending_transactions,
+        message_scheduler,
+        mut backend,
+        mut rng,
+    ) = initialize::<
+        NodeId,
+        TestBlendBackend,
+        TestPayloadDispatcher,
+        PolAwareProofsGenerator,
+        MockProofsVerifier,
+        MockKmsAdapter,
+        RuntimeServiceId,
+    >(
+        settings.clone(),
+        membership_stream,
+        overwatch_handle.clone(),
+        MockKmsAdapter,
+        &sdp_relay,
+        None,
+        state_updater,
+    )
+    .await;
+
+    tokio::spawn(async move {
+        let secret_pol_info_stream =
+            post_initialize::<GatedPolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
+        run_event_loop(
+            inbound_relay,
+            &mut blend_message_stream,
+            secret_pol_info_stream,
+            &mut remaining_epoch_stream,
+            &settings,
+            &mut backend,
+            &TestPayloadDispatcher,
+            &sdp_relay,
+            message_scheduler.into(),
+            &mut rng,
+            pending_transactions,
+            crypto_processor,
+            current_public_info,
+            current_recovery_checkpoint,
+        )
+        .await;
+    });
+
+    // The gate is shut, so the leadership branch has nothing to give: this is the
+    // window the proposal used to die in.
+    inbound_message_sender
+        .send(ServiceMessage::Blend(BlendPayload::BlockProposal(
+            b"proposal".to_vec(),
+        )))
+        .await
+        .unwrap();
+
+    // Answering a request proves the service went round the inbound arm again,
+    // so the proposal ahead of it has already been handled. Without this the
+    // gate could open first and the test would pass on a proposal that was
+    // never queued at all.
+    let (reply, answered) = oneshot::channel();
+    inbound_message_sender
+        .send(ServiceMessage::GetPendingTransactions { reply })
+        .await
+        .unwrap();
+    answered.await.unwrap();
+
+    pol_gate.release();
+
+    expect_outgoing_message(
+        &mut outgoing_messages,
+        "the proposal should have been held until leadership proofs were possible",
+    )
+    .await;
+}
+
+/// A block proposal that arrives before this epoch's secret `PoL` info still
+/// goes out once it lands.
+///
+/// Leadership proofs only become possible when the secret `PoL` info reaches
+/// the processor, and that regularly happens *after* the first proposal does —
+/// most visibly at startup, when the node wins the very first slot it is asked
+/// to lead. The proposal used to be encapsulated where it arrived, fail, and be
+/// dropped with an error, silently losing a block this node had just produced.
+#[test_log::test(tokio::test)]
+async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let mut settings = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+    // No cover traffic, so the only message that can come out is the one this
+    // test expects. See the `PoW` liveness test for why this quota silences it.
+    settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
+    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+
+    let (inbound_relay, inbound_message_sender) = new_stream();
+    let (mut blend_message_stream, _blend_message_sender) = new_stream();
+    let (membership_stream, membership_sender) = new_stream();
+
+    let membership_info = MembershipInfo {
+        membership,
+        zk: Some(ZkInfo {
+            root: ZkHash::ZERO,
+            core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
+        }),
+    };
+    membership_sender
+        .send(test_blend_epoch_state(0, membership_info))
+        .await
+        .unwrap();
+
+    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources();
+
+    // Installed before the service exists, so nothing is missed.
+    let mut outgoing_messages = outgoing_messages_recorder();
+
+    let (
+        mut remaining_epoch_stream,
+        current_public_info,
+        crypto_processor,
+        current_recovery_checkpoint,
+        pending_transactions,
+        message_scheduler,
+        mut backend,
+        mut rng,
+    ) = initialize::<
+        NodeId,
+        TestBlendBackend,
+        TestPayloadDispatcher,
+        MockCoreAndLeaderProofsGenerator,
+        MockProofsVerifier,
+        MockKmsAdapter,
+        RuntimeServiceId,
+    >(
+        settings.clone(),
+        membership_stream,
+        overwatch_handle.clone(),
+        MockKmsAdapter,
+        &sdp_relay,
+        None,
+        state_updater,
+    )
+    .await;
+
+    tokio::spawn(async move {
+        let secret_pol_info_stream =
+            post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
+        run_event_loop(
+            inbound_relay,
+            &mut blend_message_stream,
+            secret_pol_info_stream,
+            &mut remaining_epoch_stream,
+            &settings,
+            &mut backend,
+            &TestPayloadDispatcher,
+            &sdp_relay,
+            message_scheduler.into(),
+            &mut rng,
+            pending_transactions,
+            crypto_processor,
+            current_public_info,
+            current_recovery_checkpoint,
+        )
+        .await;
+    });
+
+    // One byte over what a payload can hold, so encapsulating it fails the same
+    // way however long it waits.
+    inbound_message_sender
+        .send(ServiceMessage::Blend(BlendPayload::BlockProposal(vec![
+            0;
+            MAX_PAYLOAD_BODY_SIZE + 1
+        ])))
+        .await
+        .unwrap();
+    inbound_message_sender
+        .send(ServiceMessage::Blend(BlendPayload::Transaction(
+            b"transaction".to_vec(),
+        )))
+        .await
+        .unwrap();
+
+    expect_outgoing_message(
+        &mut outgoing_messages,
+        "the transaction behind the oversized proposal should still go out",
+    )
+    .await;
 }
 
 /// A transaction waits for a `PoW` solution without holding up anything else.
