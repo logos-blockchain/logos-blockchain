@@ -194,7 +194,19 @@ wallet:
     9750fa86471fddc69749aa9f8568ef6635e64d9f9aa815e8cb932cea183c8e18: 9750fa86471fddc69749aa9f8568ef6635e64d9f9aa815e8cb932cea183c8e18
   voucher_master_key_id: cce9796339efd968df9cd463bc2248e4b29c86409496e8b2599da8c4c1074d22
 pow:
-  claim_address: 39e16b432574571a6bcd8ee36e370589641bd9f35367f6f97a972453c46c3225
+  auto_claim:
+    # How often to try claiming: `seconds` paces off the wall clock, `slots`
+    # off chain progress.
+    tick:
+      unit: seconds
+      value: 300
+    # Keys mined rewards are paid to, each with the balance it should reach.
+    # Auto-claim pays whichever listed key currently holds the least while
+    # still being below its threshold, and stops once all of them are
+    # satisfied. Every key here must also appear in `wallet.known_keys`, or the
+    # node refuses to start. Empty means claims only happen on demand, through
+    # `POST /pow/claim`.
+    targets: []
 tracing:
   logger:
     file:
