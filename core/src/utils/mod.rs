@@ -21,13 +21,7 @@ macro_rules! serde_bytes_newtype {
             where
                 S: serde::Serializer,
             {
-                if serializer.is_human_readable() {
-                    const_hex::const_encode::<$len, false>(&self.0)
-                        .as_str()
-                        .serialize(serializer)
-                } else {
-                    self.0.serialize(serializer)
-                }
+                lb_utils::serde::serialize_bytes_array(self.0, serializer)
             }
         }
 
@@ -36,14 +30,7 @@ macro_rules! serde_bytes_newtype {
             where
                 D: serde::Deserializer<'de>,
             {
-                if deserializer.is_human_readable() {
-                    let hex = String::deserialize(deserializer)?;
-                    const_hex::decode_to_array(hex)
-                        .map(Self)
-                        .map_err(serde::de::Error::custom)
-                } else {
-                    <[u8; $len]>::deserialize(deserializer).map(Self)
-                }
+                lb_utils::serde::deserialize_bytes_array::<$len, D>(deserializer).map(Self)
             }
         }
     };

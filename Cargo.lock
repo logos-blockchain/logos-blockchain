@@ -4500,7 +4500,6 @@ dependencies = [
  "bincode",
  "blake2",
  "bytes",
- "const-hex",
  "divan",
  "hasher",
  "hex",
@@ -4607,6 +4606,7 @@ dependencies = [
  "bincode",
  "generic-array 1.4.3",
  "hex",
+ "logos-blockchain-utils",
  "num-bigint",
  "rand 0.8.6",
  "serde",
@@ -4877,7 +4877,6 @@ dependencies = [
  "logos-blockchain-time-service",
  "logos-blockchain-tracing",
  "logos-blockchain-tracing-service",
- "logos-blockchain-tui-zone",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
  "logos-blockchain-wallet-service",
@@ -5103,7 +5102,6 @@ dependencies = [
  "logos-blockchain-mmr",
  "logos-blockchain-node",
  "logos-blockchain-storage-service",
- "logos-blockchain-tui-zone",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
@@ -5219,30 +5217,6 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber 0.3.23",
-]
-
-[[package]]
-name = "logos-blockchain-tui-zone"
-version = "0.0.0"
-dependencies = [
- "bincode",
- "chrono",
- "clap",
- "hex",
- "logos-blockchain-codec",
- "logos-blockchain-core",
- "logos-blockchain-groth16",
- "logos-blockchain-key-management-system-service",
- "logos-blockchain-zone-sdk",
- "rand 0.8.6",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-appender",
- "tracing-subscriber 0.3.23",
- "uuid",
 ]
 
 [[package]]
@@ -9384,7 +9358,6 @@ checksum = "144d6b123cef80b301b8f72a9e2ca4370ddec21950d0a103dd22c437006d2db7"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
- "serde_core",
  "wasm-bindgen",
 ]
 

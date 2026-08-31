@@ -44,7 +44,6 @@ members = [
   "consensus/cryptarchia-sync",
   "core",
   "deployment/faucet",
-  "deployment/tui-zone",
   "kms/keys",
   "kms/macros",
   "kms/operators",
@@ -158,7 +157,6 @@ lb-testing-framework               = { default-features = false, package = "test
 lb-time-service                    = { default-features = false, package = "logos-blockchain-time-service", path = "./services/time" }
 lb-tracing                         = { default-features = false, package = "logos-blockchain-tracing", path = "./tracing" }
 lb-tracing-service                 = { default-features = false, package = "logos-blockchain-tracing-service", path = "./services/tracing" }
-lb-tui-zone                        = { default-features = false, package = "logos-blockchain-tui-zone", path = "./deployment/tui-zone" }
 lb-tx-service                      = { default-features = false, package = "logos-blockchain-tx-service", path = "./services/tx-service" }
 lb-utils                           = { default-features = false, package = "logos-blockchain-utils", path = "./utils" }
 lb-utxotree                        = { default-features = false, package = "logos-blockchain-utxotree", path = "merkle/utxotree" }

@@ -47,17 +47,87 @@ pub mod serde {
         }
     }
 
-    fn deserialize_human_readable_bytes_array<'de, const N: usize, D: serde::Deserializer<'de>>(
+    struct FixedBytesVisitor<const N: usize>;
+
+    impl<const N: usize> FixedBytesVisitor<N> {
+        fn decode_hex<E>(hex: &str) -> Result<[u8; N], E>
+        where
+            E: serde::de::Error,
+        {
+            let hex = hex.strip_prefix("0x").unwrap_or(hex);
+            let expected_hex_len = N.saturating_mul(2);
+            if hex.len() != expected_hex_len {
+                return Err(E::custom(format_args!(
+                    "expected {N} bytes, got {}",
+                    hex.len() / 2
+                )));
+            }
+
+            const_hex::decode_to_array::<_, N>(hex).map_err(E::custom)
+        }
+    }
+
+    impl<'de, const N: usize> serde::de::Visitor<'de> for FixedBytesVisitor<N> {
+        type Value = [u8; N];
+
+        fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            write!(formatter, "a hex string or an array of {N} bytes")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Self::decode_hex(value)
+        }
+
+        fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            self.visit_str(value)
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            self.visit_str(&value)
+        }
+
+        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            if let Some(size_hint) = sequence.size_hint()
+                && size_hint > N
+            {
+                return Err(serde::de::Error::custom(format_args!(
+                    "expected {N} bytes, got at least {size_hint}"
+                )));
+            }
+
+            let mut output = [0u8; N];
+            for (i, byte) in output.iter_mut().enumerate() {
+                *byte = sequence
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::invalid_length(i, &self))?;
+            }
+
+            if sequence.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                return Err(serde::de::Error::custom(format_args!(
+                    "expected {N} bytes, got more than {N}"
+                )));
+            }
+
+            Ok(output)
+        }
+    }
+
+    fn deserialize_human_readable_hex_array<'de, const N: usize, D: serde::Deserializer<'de>>(
         deserializer: D,
     ) -> Result<[u8; N], D::Error> {
-        use std::borrow::Cow;
-
-        use serde::Deserialize as _;
-        let s: Cow<str> = Cow::deserialize(deserializer)?;
-        let mut output = [0u8; N];
-        const_hex::decode_to_slice(s.as_ref(), &mut output)
-            .map(|()| output)
-            .map_err(<D::Error as serde::de::Error>::custom)
+        deserializer.deserialize_str(FixedBytesVisitor::<N>)
     }
 
     fn deserialize_human_unreadable_bytes_array<
@@ -101,7 +171,19 @@ pub mod serde {
         deserializer: D,
     ) -> Result<[u8; N], D::Error> {
         if deserializer.is_human_readable() {
-            deserialize_human_readable_bytes_array(deserializer)
+            deserialize_human_readable_hex_array(deserializer)
+        } else {
+            deserialize_human_unreadable_bytes_array(deserializer)
+        }
+    }
+
+    pub fn deserialize_bytes_array_or_seq<'de, const N: usize, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<[u8; N], D::Error> {
+        if deserializer.is_human_readable() {
+            // This path intentionally accepts both the hex string and byte-array
+            // representations, so it must dispatch through `deserialize_any`.
+            deserializer.deserialize_any(FixedBytesVisitor::<N>)
         } else {
             deserialize_human_unreadable_bytes_array(deserializer)
         }
@@ -109,19 +191,31 @@ pub mod serde {
 
     #[cfg(test)]
     mod tests {
+        use super::{
+            deserialize_bytes_array, deserialize_bytes_array_or_seq, serialize_bytes_array,
+        };
+
         /// 64 bytes exceeds serde's built-in 32-element array support, so this
         /// exercises the explicit tuple path on both ends.
         struct Bytes64([u8; 64]);
 
         impl serde::Serialize for Bytes64 {
             fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-                super::serialize_bytes_array(self.0, serializer)
+                serialize_bytes_array(self.0, serializer)
             }
         }
 
         impl<'de> serde::Deserialize<'de> for Bytes64 {
             fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-                super::deserialize_bytes_array(deserializer).map(Self)
+                deserialize_bytes_array(deserializer).map(Self)
+            }
+        }
+
+        struct Bytes64OrSeq([u8; 64]);
+
+        impl<'de> serde::Deserialize<'de> for Bytes64OrSeq {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                deserialize_bytes_array_or_seq(deserializer).map(Self)
             }
         }
 
@@ -154,6 +248,43 @@ pub mod serde {
             assert_eq!(json, format!("\"{}\"", "ab".repeat(64)));
             let decoded: Bytes64 = serde_json::from_str(&json).unwrap();
             assert_eq!(decoded.0, [0xABu8; 64]);
+        }
+
+        #[test]
+        fn json_hex_rejects_oversized_input() {
+            let json = format!("\"{}\"", "ab".repeat(65));
+            assert!(serde_json::from_str::<Bytes64>(&json).is_err());
+        }
+
+        #[test]
+        fn json_hex_rejects_malformed_input() {
+            let json = format!("\"{}\"", "gg".repeat(64));
+            assert!(serde_json::from_str::<Bytes64>(&json).is_err());
+        }
+
+        #[test]
+        fn json_sequence_roundtrips_without_an_intermediate_vec() {
+            let json = serde_json::to_string(&vec![0xABu8; 64]).unwrap();
+            let decoded: Bytes64OrSeq = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded.0, [0xABu8; 64]);
+        }
+
+        #[test]
+        fn json_sequence_requires_exact_length() {
+            let short = serde_json::to_string(&vec![0xABu8; 63]).unwrap();
+            let long = serde_json::to_string(&vec![0xABu8; 65]).unwrap();
+
+            assert!(serde_json::from_str::<Bytes64OrSeq>(&short).is_err());
+            assert!(serde_json::from_str::<Bytes64OrSeq>(&long).is_err());
+        }
+
+        #[test]
+        fn json_sequence_rejects_out_of_range_byte() {
+            let mut values = vec![0u16; 64];
+            values[0] = 256;
+
+            let json = serde_json::to_string(&values).unwrap();
+            assert!(serde_json::from_str::<Bytes64OrSeq>(&json).is_err());
         }
     }
 
