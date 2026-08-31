@@ -1188,6 +1188,11 @@ pub struct CucumberWorld {
     /// assert a wallet's balance strictly increased relative to the recorded
     /// baseline (used by the `PoW` mining test to prove the reward landed).
     pub recorded_wallet_balances: HashMap<String, u64>,
+    /// Manual: Per-node key that mined `PoW` rewards are claimed to, recorded
+    /// when the node's mining wallet is declared. The claim step names it on
+    /// each request, since the node no longer carries a claim address in its
+    /// configuration.
+    pub mining_claim_addresses: HashMap<String, ZkPublicKey>,
 }
 
 impl Drop for CucumberWorld {
@@ -1330,6 +1335,7 @@ impl Debug for CucumberWorld {
                 "recorded_wallet_balances",
                 &self.recorded_wallet_balances.len(),
             )
+            .field("mining_claim_addresses", &self.mining_claim_addresses.len())
             .field("submission_outcomes", &self.txs.submission_outcomes.len())
             .field(
                 "prepared_transactions",

@@ -70,8 +70,8 @@ use crate::{
             sync::{WalletSendReadiness, wait_wallet_send_ready},
         },
         world::{
-            ConfigOverride, CucumberWorld, GenesisTokens, ManualClusterKind, ManualClusterSpec,
-            NodeSnapshot, PublicCryptarchiaEndpointPeer,
+            CucumberWorld, GenesisTokens, ManualClusterKind, ManualClusterSpec, NodeSnapshot,
+            PublicCryptarchiaEndpointPeer,
         },
     },
     non_zero,
@@ -334,9 +334,10 @@ async fn step_start_nodes_with_wallet_resources(
 
 /// Starts mining nodes, each carrying one or more wallet resources of which
 /// exactly one is flagged `is_mining_wallet`. That wallet's public key is
-/// derived and applied as the node's `pow.claim_address`, so mined rewards are
-/// paid to a wallet the test tracks. Multiple mining nodes are supported; each
-/// gets its own single mining wallet / claim address.
+/// derived and recorded as the node's claim address, so the claim step can
+/// name it and mined rewards land in a wallet the test tracks. Multiple mining
+/// nodes are supported; each gets its own single mining wallet / claim
+/// address.
 #[given("I start mining nodes with wallet resources:")]
 #[when("I start mining nodes with wallet resources:")]
 async fn step_start_mining_nodes_with_wallet_resources(
@@ -354,7 +355,6 @@ async fn step_start_mining_nodes_with_wallet_resources(
     verify_mining_node_wallet_resources_table_indexes(table, &step.value)?;
 
     let mut nodes_to_start: NodesToStartUnordered = HashMap::new();
-    let mut node_claim_overrides: HashMap<String, ConfigOverride> = HashMap::new();
     let mut node_mining_wallet_count: HashMap<String, usize> = HashMap::new();
     for row in table.rows.iter().skip(1) {
         let (node_name, wallet_start_info, is_mining_wallet, connected_to) =
@@ -373,22 +373,9 @@ async fn step_start_mining_nodes_with_wallet_resources(
                             step.value, wallet_start_info.wallet_name
                         ),
                     })?;
-            let value = serde_yaml::to_value(account.public_key()).map_err(|source| {
-                StepError::InvalidArgument {
-                    message: format!(
-                        "Step `{}` error: failed to serialize mining wallet public key for \
-                            `{}`: {source}",
-                        step.value, wallet_start_info.wallet_name
-                    ),
-                }
-            })?;
-            node_claim_overrides.insert(
-                node_name.clone(),
-                ConfigOverride {
-                    path: "pow.claim_address".to_owned(),
-                    value,
-                },
-            );
+            world
+                .mining_claim_addresses
+                .insert(node_name.clone(), account.public_key());
         }
 
         let entry = nodes_to_start
@@ -427,9 +414,6 @@ async fn step_start_mining_nodes_with_wallet_resources(
     for (node_name, wallet_start_info, mut initial_peers) in nodes_to_start_ordered {
         initial_peers.sort();
         initial_peers.dedup();
-        let extra_user_overrides = node_claim_overrides
-            .get(&node_name)
-            .map_or(&[][..], std::slice::from_ref);
         start_node(
             world,
             &step.value,
@@ -437,7 +421,7 @@ async fn step_start_mining_nodes_with_wallet_resources(
             &wallet_start_info,
             &initial_peers,
             false,
-            extra_user_overrides,
+            &[],
         )
         .await?;
     }
