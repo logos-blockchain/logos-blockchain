@@ -1,5 +1,6 @@
 pub mod behaviour;
 pub mod config;
+pub mod dial_error_ext;
 pub mod protocol_name;
 mod swarm;
 
@@ -7,6 +8,7 @@ pub use config::{
     AutonatClientSettings, ChainSyncSettings, GatewaySettings, IdentifySettings, KademliaSettings,
     NatMappingSettings, NatSettings, SwarmConfig, TraversalSettings, secret_key_serde,
 };
+pub use dial_error_ext::DialErrorExt;
 pub use lb_cryptarchia_sync::{self as cryptarchia_sync, Event};
 pub use libp2p::{
     self, PeerId, SwarmBuilder, Transport,
