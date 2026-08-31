@@ -1,13 +1,15 @@
 use core::fmt::{Debug, Display};
 use std::{
     collections::{HashMap, HashSet},
+    future::ready,
     marker::PhantomData,
     num::{NonZeroU64, NonZeroUsize},
+    pin::Pin,
     sync::Arc,
     time::Duration,
 };
 
-use futures::StreamExt as _;
+use futures::{Stream, StreamExt as _};
 use lb_blend_service::{
     api::{ApiError as BlendApiError, BlendServiceApi, BlendServiceData},
     message::{BlendPayload, TransactionTooLarge},
@@ -46,11 +48,13 @@ use lb_services_utils::{
 use lb_storage_service::{
     StorageService, backends::StorageBackend, recovery::StorageRecoveryBackend,
 };
+use lb_time_service::{TimeService, TimeServiceMessage, backends::TimeBackend};
 use lb_utils::bounded::BoundedError;
 use lb_wallet_service::api::{WalletApi, WalletApiError, WalletServiceData};
 use lb_zksign::ZkSignError;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
+    overwatch::OverwatchHandle,
     services::{
         AsServiceId, ServiceCore, ServiceData,
         state::{ServiceState, StateUpdater},
@@ -283,18 +287,38 @@ impl ServiceState for PoWServiceState {
     }
 }
 
-pub struct PoWService<CryptarchiaService, BlendService, WalletService, Storage, RuntimeServiceId>
-where
+pub struct PoWService<
+    CryptarchiaService,
+    BlendService,
+    WalletService,
+    TimeBackendType,
+    Storage,
+    RuntimeServiceId,
+> where
     Storage: StorageBackend + Send + Sync + 'static,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     state: PoWServiceState,
     settings: PoWServiceSettings,
-    _phantom: PhantomData<(CryptarchiaService, BlendService, WalletService, Storage)>,
+    _phantom: PhantomData<(
+        CryptarchiaService,
+        BlendService,
+        WalletService,
+        TimeBackendType,
+        Storage,
+    )>,
 }
 
-impl<CryptarchiaService, BlendService, WalletService, Storage, RuntimeServiceId> ServiceData
-    for PoWService<CryptarchiaService, BlendService, WalletService, Storage, RuntimeServiceId>
+impl<CryptarchiaService, BlendService, WalletService, TimeBackendType, Storage, RuntimeServiceId>
+    ServiceData
+    for PoWService<
+        CryptarchiaService,
+        BlendService,
+        WalletService,
+        TimeBackendType,
+        Storage,
+        RuntimeServiceId,
+    >
 where
     Storage: StorageBackend + Send + Sync + 'static,
 {
@@ -307,9 +331,23 @@ where
 }
 
 #[async_trait::async_trait]
-impl<Tx, CryptarchiaService, BlendService, WalletService, Storage, RuntimeServiceId>
-    ServiceCore<RuntimeServiceId>
-    for PoWService<CryptarchiaService, BlendService, WalletService, Storage, RuntimeServiceId>
+impl<
+    Tx,
+    CryptarchiaService,
+    BlendService,
+    WalletService,
+    TimeBackendType,
+    Storage,
+    RuntimeServiceId,
+> ServiceCore<RuntimeServiceId>
+    for PoWService<
+        CryptarchiaService,
+        BlendService,
+        WalletService,
+        TimeBackendType,
+        Storage,
+        RuntimeServiceId,
+    >
 where
     Tx: Send + Sync + 'static,
     CryptarchiaService: CryptarchiaServiceData<Tx = Tx> + Sync + 'static,
@@ -318,6 +356,8 @@ where
     <BlendService as ServiceData>::Message: Send + 'static,
     WalletService: WalletServiceData + Send + Sync + 'static,
     <WalletService as ServiceData>::Message: Send + 'static,
+    TimeBackendType: TimeBackend + Send + Sync + 'static,
+    TimeBackendType::Settings: Send + Sync,
     Storage: StorageBackend + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Clone
@@ -330,6 +370,7 @@ where
         + AsServiceId<CryptarchiaService>
         + AsServiceId<BlendService>
         + AsServiceId<WalletService>
+        + AsServiceId<TimeService<TimeBackendType, RuntimeServiceId>>
         + AsServiceId<StorageService<Storage, RuntimeServiceId>>,
 {
     fn init(
@@ -360,9 +401,9 @@ where
             _phantom,
         } = self;
 
-        // The PoW service must not mine or claim until the chain is synced: wait
-        // for the chain service to become ready and reach the Online mode before
-        // starting.
+        // The PoW service must not mine or claim until the chain is synced:
+        // wait for the chain service to become ready and reach the
+        // Online mode before starting.
         wait_until_services_are_ready!(
             &service_resources_handle.overwatch_handle,
             None,
@@ -441,20 +482,15 @@ where
         let auto_claim = &settings.auto_claim;
         let mut auto_claiming = !auto_claim.targets.is_empty();
 
-        // Wall-clock ticker, only consulted for `AutoClaimTick::Seconds`. It is
-        // always constructed so the `select!` arm has a stream to poll; the arm
-        // itself is gated on the configured tick kind.
-        let mut claim_interval =
-            IntervalStream::new(tokio::time::interval(match auto_claim.tick {
-                AutoClaimTick::Seconds(seconds) => Duration::from_secs(seconds.get()),
-                // Irrelevant but must be non-zero: the arm below never fires in
-                // slot mode.
-                AutoClaimTick::Slots(_) => Duration::from_secs(u64::from(u32::MAX)),
-            }));
-        let time_ticked = matches!(auto_claim.tick, AutoClaimTick::Seconds(_));
-        // Tip slot of the last slot-driven auto-claim, so the next one fires a
-        // whole period later. `None` until the first block is observed.
-        let mut last_claim_slot: Option<Slot> = None;
+        // One stream for either pacing, so the run loop has a single arm and
+        // neither kind needs a guard. Slot pacing rides the time service's own
+        // slot clock rather than block arrivals, so it keeps ticking through a
+        // gap in block production.
+        let mut claim_ticks = auto_claim_tick_stream::<TimeBackendType, _>(
+            auto_claim.tick,
+            &service_resources_handle.overwatch_handle,
+        )
+        .await?;
 
         service_resources_handle.status_updater.notify_ready();
 
@@ -530,32 +566,13 @@ where
                     state_updater.update(Some(state.clone()));
                 }
                 // A block was processed: retire any pending claim whose reward
-                // note it minted (i.e. the claim has settled on chain), and
-                // drive the slot-paced auto-claim ticker off the new tip.
+                // note it minted (i.e. the claim has settled on chain).
                 Some(processed_block) = processed_blocks.next() => {
-                    let tip_slot = processed_block.as_ref().ok().map(|block| block.tip_slot);
                     retire_settled_claims(&cryptarchia_api, &mut state, &state_updater, processed_block).await;
-
-                    if let (AutoClaimTick::Slots(period), Some(tip_slot)) = (auto_claim.tick, tip_slot)
-                        && auto_claiming
-                        && slot_period_elapsed(last_claim_slot, tip_slot, period)
-                    {
-                        last_claim_slot = Some(tip_slot);
-                        auto_claiming = run_auto_claim(
-                            &cryptarchia_api,
-                            &blend_api,
-                            &wallet_api,
-                            &auto_claim.targets,
-                            &mut state,
-                            &state_updater,
-                            settings.slot_window,
-                        )
-                        .await;
-                    }
                 }
-                // Time-paced auto-claim: drain the ready tickets into the
-                // neediest target.
-                Some(_) = claim_interval.next(), if auto_claiming && time_ticked => {
+                // Auto-claim tick: drain the ready tickets into the neediest
+                // target.
+                Some(()) = claim_ticks.next(), if auto_claiming => {
                     auto_claiming = run_auto_claim(
                         &cryptarchia_api,
                         &blend_api,
@@ -572,13 +589,77 @@ where
     }
 }
 
+/// Builds the auto-claim ticker for the configured pacing.
+///
+/// Both kinds collapse to the same `Stream<Item = ()>` so the run loop needs a
+/// single `select!` arm. Slot pacing subscribes to the time service's slot
+/// clock rather than counting block arrivals: the two agree while the chain is
+/// producing, but only the clock keeps ticking through a lull, which is when a
+/// backlog of unclaimed tickets is most likely to be sitting around.
+async fn auto_claim_tick_stream<TimeBackendType, RuntimeServiceId>(
+    tick: AutoClaimTick,
+    overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
+) -> Result<Pin<Box<dyn Stream<Item = ()> + Send>>, DynError>
+where
+    TimeBackendType: TimeBackend + Send + Sync + 'static,
+    TimeBackendType::Settings: Send + Sync,
+    RuntimeServiceId:
+        Debug + Sync + Display + AsServiceId<TimeService<TimeBackendType, RuntimeServiceId>>,
+{
+    match tick {
+        AutoClaimTick::Seconds(seconds) => Ok(Box::pin(
+            IntervalStream::new(tokio::time::interval(Duration::from_secs(seconds.get())))
+                .map(|_| ()),
+        )),
+        AutoClaimTick::Slots(period) => {
+            let time_relay = overwatch_handle
+                .relay::<TimeService<TimeBackendType, RuntimeServiceId>>()
+                .await?;
+            let (sender, receiver) = oneshot::channel();
+            time_relay
+                .send(TimeServiceMessage::Subscribe { sender })
+                .await
+                .map_err(|(e, _)| DynError::from(format!("{e} while subscribing to slot ticks")))?;
+            let slot_ticks = receiver.await?;
+
+            // The stream emits every slot, so thin it down to one item per
+            // period. `None` fires on the first slot seen rather than waiting
+            // out a full period from an arbitrary starting point.
+            //
+            // The item is a nested `Option` on purpose: `scan` ends the stream
+            // once its closure resolves to `None`, so a skipped slot has to
+            // yield `Some(None)` to keep the ticker alive. `filter_map` then
+            // drops those inner `None`s, leaving one item per elapsed period.
+            Ok(Box::pin(
+                slot_ticks
+                    .scan(None, move |state, slot_tick| match state {
+                        Some(last_claim)
+                            if slot_period_elapsed(*last_claim, slot_tick.slot, period) =>
+                        {
+                            *state = Some(slot_tick.slot);
+                            ready(Some(Some(())))
+                        }
+                        None => {
+                            *state = Some(slot_tick.slot);
+                            ready(Some(Some(())))
+                        }
+                        _ => {
+                            // non-elapsed periods
+                            ready(Some(None))
+                        }
+                    })
+                    .filter_map(ready),
+            ))
+        }
+    }
+}
+
 /// Whether `period` slots have passed since the last slot-paced auto-claim.
 ///
 /// The first observed tip counts as elapsed, so a freshly started node claims
 /// as soon as it sees a block rather than waiting out a full period.
-fn slot_period_elapsed(last_claim_slot: Option<Slot>, tip_slot: Slot, period: NonZeroU64) -> bool {
-    last_claim_slot
-        .is_none_or(|last| u64::from(tip_slot).saturating_sub(u64::from(last)) >= period.get())
+fn slot_period_elapsed(last_claim_slot: Slot, tip_slot: Slot, period: NonZeroU64) -> bool {
+    u64::from(tip_slot).saturating_sub(u64::from(last_claim_slot)) >= period.get()
 }
 
 /// Rejects any auto-claim target the wallet does not track.
@@ -836,7 +917,8 @@ where
     BlendService::NodeId: Send,
     RuntimeServiceId: Sync,
 {
-    // Size the batch against the current tip — the state the tx applies against.
+    // Size the batch against the current tip — the state the tx applies
+    // against.
     let info = cryptarchia_api.info().await?.cryptarchia_info;
 
     // Drop any tickets whose window has closed before building the batch, so an
@@ -869,10 +951,11 @@ where
         return Ok(None);
     }
 
-    // Only mutate the ready set once the tx is built and published, so a failure
-    // leaves every ticket in place for a later retry. The builder caps the batch
-    // (op limit / reward pool) and claims a prefix of `tickets` (the canonical
-    // ones, in ready order); move exactly those to the pending set.
+    // Only mutate the ready set once the tx is built and published, so a
+    // failure leaves every ticket in place for a later retry. The builder
+    // caps the batch (op limit / reward pool) and claims a prefix of
+    // `tickets` (the canonical ones, in ready order); move exactly those to
+    // the pending set.
     let (signed_tx, claimed_count) =
         build_reward_claim_tx(claim_address, &ledger_state, &tickets).await?;
     // Capture the tx id before publishing consumes the signed tx, so it can be
@@ -1140,17 +1223,17 @@ async fn build_reward_claim_tx_inner(
         })
         .collect();
 
-    // Size the change against the final tx shape, then spread the fee across the
-    // transfer outputs.
+    // Size the change against the final tx shape, then spread the fee across
+    // the transfer outputs.
     let fee = estimate_reward_claim_fee(tickets, &note_ids, claim_address, &context)?;
     let change_outputs = change_outputs(&note_ids, reward_value, fee)?;
     let transfers = transfer_ops(&note_ids, claim_address, &change_outputs)?;
 
     let mantle_tx = push_reward_claim_ops(MantleTxBuilder::new(), tickets, transfers)?.build()?;
 
-    // Sign each transfer with the keys owning its input notes (a multi-signature
-    // over the whole tx hash). Signing is a ZK proof (CPU-heavy), so run it off
-    // the async runtime.
+    // Sign each transfer with the keys owning its input notes (a
+    // multi-signature over the whole tx hash). Signing is a ZK proof
+    // (CPU-heavy), so run it off the async runtime.
     let tx_fr = mantle_tx.hash().to_fr();
     let sk_groups: Vec<Vec<UnsecuredZkKey>> = tickets
         .chunks(MAX_TRANSFER_INPUTS)
@@ -1420,30 +1503,20 @@ mod tests {
     }
 
     #[test]
-    fn slot_period_elapsed_fires_on_the_first_observed_tip() {
-        let period = NonZeroU64::new(10).unwrap();
-        assert!(slot_period_elapsed(None, Slot::new(3), period));
-    }
-
-    #[test]
     fn slot_period_elapsed_waits_out_a_whole_period() {
         let period = NonZeroU64::new(10).unwrap();
-        let last = Some(Slot::new(100));
+        let last = Slot::new(100);
         assert!(!slot_period_elapsed(last, Slot::new(109), period));
         assert!(slot_period_elapsed(last, Slot::new(110), period));
         assert!(slot_period_elapsed(last, Slot::new(200), period));
     }
 
     #[test]
-    fn slot_period_elapsed_does_not_fire_on_a_reorg_to_an_older_tip() {
-        // A tip below the last claim slot saturates to zero rather than
-        // wrapping into a huge elapsed count.
+    fn slot_period_elapsed_does_not_fire_on_a_reorg_to_an_older_slot() {
+        // A slot below the last claim saturates to zero rather than wrapping
+        // into a huge elapsed count.
         let period = NonZeroU64::new(10).unwrap();
-        assert!(!slot_period_elapsed(
-            Some(Slot::new(100)),
-            Slot::new(90),
-            period
-        ));
+        assert!(!slot_period_elapsed(Slot::new(100), Slot::new(90), period));
     }
 
     #[test]
@@ -1725,7 +1798,8 @@ mod tests {
 
     #[test]
     fn claimable_rewards_info_reports_remaining_window_per_ticket() {
-        // SLOT_WINDOW is 100, so a block at slot S is claimable up to slot S + 100.
+        // SLOT_WINDOW is 100, so a block at slot S is claimable up to slot S +
+        // 100.
         let tickets = [winning_ticket(50), winning_ticket(90)];
         let info = claimable_rewards_info(&tickets, Slot::new(100), SLOT_WINDOW);
         assert_eq!(info.claimable_tickets, 2);
@@ -1735,7 +1809,8 @@ mod tests {
 
     #[test]
     fn claimable_rewards_info_includes_the_last_valid_slot() {
-        // A block at slot 50 is still claimable at exactly slot 150 (gap == window).
+        // A block at slot 50 is still claimable at exactly slot 150 (gap ==
+        // window).
         let info = claimable_rewards_info(&[winning_ticket(50)], Slot::new(150), SLOT_WINDOW);
         assert_eq!(info.claimable_tickets, 1);
         assert_eq!(info.slots_until_expiry, vec![Slot::new(0)]);
@@ -1767,7 +1842,8 @@ mod tests {
 
     #[test]
     fn prune_expired_tickets_keeps_tickets_at_the_window_boundary() {
-        // A block at slot 50 is still claimable at exactly slot 150 (gap == window).
+        // A block at slot 50 is still claimable at exactly slot 150 (gap ==
+        // window).
         let mut state = PoWServiceState {
             ready_to_claim: vec![winning_ticket(50)],
             pending_to_claim: vec![],
