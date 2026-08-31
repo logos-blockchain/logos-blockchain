@@ -17,7 +17,7 @@ use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
 use futures::{StreamExt as _, future::join_all};
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
-    block::{Block, BlockTransactions, Proposal, verify_header_alone},
+    block::{Block, BlockTransactions, Proposal, verify_header_alone, verify_signature},
     header::HeaderId,
     mantle::{
         traits::{Hashable, MantleTxWithProofs},
@@ -543,6 +543,7 @@ where
         );
     }
 
+    #[expect(clippy::cognitive_complexity, reason = "TODO: refactor")]
     async fn handle_incoming_proposal(
         &self,
         proposal: Proposal,
@@ -575,19 +576,24 @@ where
         }
 
         // The header must stand on its own before any mempool scanning.
-        // `references` is unauthenticated, so tampered copies of a genuine
-        // proposal are cheap to mint, and reconstruction walks the mempool once
-        // per reference. A bad signature is a property of the proposal itself —
-        // identical at every node — so it is final and recorded against
-        // `block_id`.
-        if let Err(e) = verify_header_alone(proposal.header(), proposal.signature()) {
+        // `references` and `signature` are unauthenticated, so tampered copies of a
+        // genuine proposal are cheap to mint, and reconstruction walks the
+        // mempool once per reference.
+        if let Err(e) = verify_header_alone(proposal.header()) {
             let e = Error::InvalidHeader(e);
             metrics::consensus_observe_proposal_reconstruct_err("network", &e);
-            error!(
-                target: LOG_TARGET, %e, ?block_id,
-                "Proposal header failed the checks that need the header alone",
-            );
+            error!(target: LOG_TARGET, %e, ?block_id, "Invalid proposal header");
             orphan_downloader.insert_rejected_block(block_id);
+            return;
+        }
+
+        // Verify the block signature.
+        // Don't cache the rejected block for orphan downloader because it is easy to
+        // tamper a signature, which is not authenticated by the block ID.
+        if let Err(e) = verify_signature(proposal.header(), proposal.signature()) {
+            let e = Error::InvalidBlock(e.to_string());
+            metrics::consensus_observe_proposal_reconstruct_err("network", &e);
+            error!(target: LOG_TARGET, %e, ?block_id, "Block signature verification failed");
             return;
         }
 
