@@ -1,16 +1,19 @@
-use lb_core::mantle::{
-    SignedMantleTx,
-    channel::{SlotTimeframe, SlotTimeout},
-    ops::channel::{MsgId, config::Keys, inscribe::Inscription},
-    transactions::{Ops, mantle_tx::RawMantleTx, states::Unverified},
+use lb_core::{
+    mantle::{
+        SignedMantleTx,
+        channel::{SlotTimeframe, SlotTimeout},
+        ops::channel::{MsgId, config::Keys, inscribe::Inscription},
+        transactions::{Ops, mantle_tx::RawMantleTx, states::Unverified},
+    },
+    proofs::channel_multi_sig_proof::IndexedSignature,
 };
 use lb_key_management_system_service::keys::Ed25519Signature;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use super::{
     types::{
-        ChannelWalletView, Error, Event, SequencerChannelView, SequencerCheckpoint,
-        TurnNotification, TxStatusUpdate, WithdrawArg, WithdrawInputs,
+        ChannelWalletView, Error, Event, PreparedChannelConfig, SequencerChannelView,
+        SequencerCheckpoint, TurnNotification, TxStatusUpdate, WithdrawArg, WithdrawInputs,
     },
     zone_sequencer::ActorRequest,
 };
@@ -109,6 +112,49 @@ impl SequencerClient {
             posting_timeout,
             configuration_threshold,
             transfer_threshold,
+            response_tx,
+        })?;
+        Self::recv(response_rx).await?
+    }
+
+    /// Build and fund a channel-config tx for external multi-sig signing.
+    ///
+    /// Async counterpart of
+    /// [`super::SequencerHandle::prepare_channel_config`].
+    pub async fn prepare_channel_config(
+        &self,
+        keys: Keys,
+        posting_timeframe: SlotTimeframe,
+        posting_timeout: SlotTimeout,
+        configuration_threshold: u16,
+        transfer_threshold: u16,
+    ) -> Result<PreparedChannelConfig, Error> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(ActorRequest::PrepareChannelConfig {
+            keys,
+            posting_timeframe,
+            posting_timeout,
+            configuration_threshold,
+            transfer_threshold,
+            response_tx,
+        })?;
+        Self::recv(response_rx).await?
+    }
+
+    /// Submit a [`PreparedChannelConfig`] with its externally-collected
+    /// signatures.
+    ///
+    /// Async counterpart of
+    /// [`super::SequencerHandle::submit_channel_config`].
+    pub async fn submit_channel_config(
+        &self,
+        prepared: PreparedChannelConfig,
+        signatures: Vec<IndexedSignature>,
+    ) -> Result<PublishReceipt, Error> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.send(ActorRequest::SubmitChannelConfig {
+            prepared: Box::new(prepared),
+            signatures,
             response_tx,
         })?;
         Self::recv(response_rx).await?

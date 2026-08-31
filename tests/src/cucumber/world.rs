@@ -26,7 +26,7 @@ use lb_core::{
     },
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
-use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
+use lb_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, ZkPublicKey};
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
@@ -309,6 +309,20 @@ impl ZoneState {
             .ok_or(StepError::LogicalError {
                 message: format!("Zone sequencer '{alias}' is not registered"),
             })
+    }
+
+    /// The signing key of whichever registered sequencer holds `public_key`,
+    /// if any. Used to collect multi-sig channel-config signatures from the
+    /// accredited key set a `PreparedChannelConfig` reports.
+    #[must_use]
+    pub fn sequencer_signing_key_for_public(
+        &self,
+        public_key: &Ed25519PublicKey,
+    ) -> Option<&Ed25519Key> {
+        self.sequencers
+            .values()
+            .find(|sequencer| sequencer.signing_key.public_key() == *public_key)
+            .map(|sequencer| &sequencer.signing_key)
     }
 
     pub fn sequencer_channel_id(&self, alias: &str) -> Result<ChannelId, StepError> {

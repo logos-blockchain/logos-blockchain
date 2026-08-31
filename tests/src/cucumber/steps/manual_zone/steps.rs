@@ -16,7 +16,8 @@ use super::{
         start_named_sequencer_with_pending_submit_depth, start_nodes_with_zone_resources,
         stop_zone_sequencer, submit_atomic_zone_deposit_transaction, submit_zone_channel_config,
         submit_zone_channel_split_transaction, submit_zone_deposit_transaction,
-        submit_zone_multi_deposit_transaction, submit_zone_withdraw_transaction,
+        submit_zone_multi_deposit_transaction, submit_zone_multisig_channel_config,
+        submit_zone_withdraw_transaction,
     },
     assertions::{
         assert_sorted_outcome, scan_indexer_for_payloads, wait_for_indexer_unordered,
@@ -639,6 +640,30 @@ async fn step_submit_zone_channel_config_transaction_from_table(
         row.authorized_sequencers,
         row.posting_timeframe,
         row.posting_timeout,
+    )
+    .await
+}
+
+#[when(
+    expr = "sequencer {string} submits zone multisig config transaction {string} with threshold {int} authorizing:"
+)]
+async fn step_submit_zone_multisig_channel_config_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    transaction_alias: String,
+    configuration_threshold: u16,
+) -> StepResult {
+    let authorized_aliases =
+        single_column_table(step, "alias", "authorized zone sequencer aliases")?;
+
+    submit_zone_multisig_channel_config(
+        world,
+        step,
+        &sequencer_alias,
+        transaction_alias,
+        authorized_aliases,
+        configuration_threshold,
     )
     .await
 }

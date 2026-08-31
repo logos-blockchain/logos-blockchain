@@ -192,12 +192,81 @@ where
     Ok((signed_tx, msg_id))
 }
 
-/// Build and fund a `ChannelConfig` transaction.
+/// Build and fund a `ChannelConfig` transaction, returning the funded raw
+/// transaction and the fee-transfer proof (present whenever funding appended a
+/// fee transfer).
+///
+/// This is the signature-agnostic half of building a config tx: it produces the
+/// exact bytes the accredited keys must sign, without committing to how many
+/// signatures will be collected. [`assemble_channel_config_tx`] completes the
+/// tx once the signatures are in hand.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the channel config op fields plus the funding context"
+)]
+pub(super) async fn build_and_fund_config<Node>(
+    node: &Node,
+    funding: &FundingConfig,
+    channel_id: ChannelId,
+    parent: MsgId,
+    keys: Keys,
+    posting_timeframe: SlotTimeframe,
+    posting_timeout: SlotTimeout,
+    configuration_threshold: u16,
+    transfer_threshold: u16,
+) -> Result<(RawMantleTx, Option<OpProof>), Error>
+where
+    Node: adapter::Node + Sync,
+{
+    let config_op = ChannelConfigOp {
+        channel: channel_id,
+        parent,
+        keys,
+        posting_timeframe,
+        posting_timeout,
+        configuration_threshold,
+        transfer_threshold,
+    };
+
+    fund_ops(node, funding, vec![Op::ChannelConfig(config_op)]).await
+}
+
+/// Assemble a fully-signed channel-config tx from a funded config tx, the
+/// fee-transfer proof, and the collected accredited-key signatures.
+///
+/// `signatures` must be indexed against the channel's *current* (pre-update)
+/// `accredited_keys` — the list the ledger verifies against — and strictly
+/// ascending by index. Pass an empty vec to configure an unclaimed channel,
+/// whose configuration requires no signatures (the empty multi-sig proof).
+pub(super) fn assemble_channel_config_tx(
+    config_tx: RawMantleTx,
+    transfer_proof: Option<OpProof>,
+    signatures: Vec<IndexedSignature>,
+) -> Result<SignedMantleTx<Unverified>, Error> {
+    let signatures = signatures
+        .try_into()
+        .map_err(|e| Error::Network(format!("too many channel-config signatures: {e:?}")))?;
+    let proof = ChannelMultiSigProof::try_new(signatures)
+        .map_err(|e| Error::Network(format!("multi-sig proof assembly failed: {e:?}")))?;
+    let ops_proofs = attach_transfer_proof(
+        &config_tx,
+        [OpProof::ChannelMultiSigProof(proof)].into(),
+        transfer_proof,
+    )?;
+
+    Ok(SignedMantleTx::new(config_tx, ops_proofs))
+}
+
+/// Build, fund, and single-signer-sign a `ChannelConfig` transaction.
 ///
 /// `signer` is the sequencer's signing key paired with its index in the
 /// channel's *current* (pre-update) `accredited_keys` — that is the list the
 /// ledger verifies the signature against. Pass `None` for an unclaimed
 /// channel, whose configuration requires no signatures.
+///
+/// Multi-sig callers build the funded tx with [`build_and_fund_config`],
+/// collect the signatures out-of-band, then finish with
+/// [`assemble_channel_config_tx`].
 #[expect(
     clippy::too_many_arguments,
     reason = "mirrors the channel config op fields plus the funding context"
@@ -217,36 +286,25 @@ pub(super) async fn create_channel_config_tx<Node>(
 where
     Node: adapter::Node + Sync,
 {
-    let config_op = ChannelConfigOp {
-        channel: channel_id,
+    let (config_tx, transfer_proof) = build_and_fund_config(
+        node,
+        funding,
+        channel_id,
         parent,
         keys,
         posting_timeframe,
         posting_timeout,
         configuration_threshold,
         transfer_threshold,
-    };
+    )
+    .await?;
 
-    let (config_tx, transfer_proof) =
-        fund_ops(node, funding, vec![Op::ChannelConfig(config_op)]).await?;
-
-    let tx_hash = config_tx.hash();
     let signatures = signer
-        .map(|(index, key)| {
-            IndexedSignature::new(index, key.sign_payload(tx_hash.as_signing_bytes().as_ref()))
-        })
+        .map(|(index, key)| IndexedSignature::new(index, sign_tx(config_tx.hash(), key)))
         .into_iter()
-        .collect::<Vec<_>>()
-        .try_into()
-        .unwrap();
-    let proof = ChannelMultiSigProof::try_new(signatures).unwrap();
-    let ops_proofs = attach_transfer_proof(
-        &config_tx,
-        [OpProof::ChannelMultiSigProof(proof)].into(),
-        transfer_proof,
-    )?;
+        .collect::<Vec<_>>();
 
-    Ok(SignedMantleTx::new(config_tx, ops_proofs))
+    assemble_channel_config_tx(config_tx, transfer_proof, signatures)
 }
 
 pub(super) fn prepare_tx(

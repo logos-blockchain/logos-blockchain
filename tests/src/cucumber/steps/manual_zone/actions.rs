@@ -12,7 +12,7 @@ use lb_key_management_system_service::keys::Ed25519Key;
 use lb_testing_framework::NodeHttpClient;
 use lb_zone_sdk::{
     adapter::NodeHttpClient as ZoneNodeHttpClient,
-    sequencer::{FundingConfig, ZoneSequencer},
+    sequencer::{FundingConfig, IndexedSignature, ZoneSequencer},
 };
 use tokio::{
     sync::broadcast,
@@ -283,6 +283,120 @@ pub(super) async fn submit_zone_channel_config(
             message: format!("Zone channel_config failed: {error}"),
         })?;
 
+    record_submitted_config(
+        world,
+        sequencer_alias,
+        transaction_alias,
+        &result,
+        post_call_checkpoint,
+        &mut checkpoint_rx,
+    )
+    .await
+}
+
+/// Multi-sig counterpart of [`submit_zone_channel_config`].
+///
+/// Builds and funds the config via the SDK's `prepare_channel_config`, signs
+/// the returned `sign_payload` with every accredited key the prepared config
+/// reports (looked up from the registered sequencers, indexed ascending), and
+/// submits the fully-signed tx via `submit_channel_config`. An unclaimed
+/// channel reports no accredited keys, so the claiming config is submitted with
+/// no signatures; a claimed N-of-M channel is reconfigured with the required
+/// signatures collected from the key holders.
+pub(super) async fn submit_zone_multisig_channel_config(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: &str,
+    transaction_alias: String,
+    authorized_aliases: Vec<String>,
+    configuration_threshold: u16,
+) -> StepResult {
+    let client = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?.clone();
+
+    let authorized_keys = authorized_aliases
+        .iter()
+        .map(|alias| {
+            world
+                .zone
+                .sequencer_signing_key(alias)
+                .map(Ed25519Key::public_key)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // A single fixed sequencer at index 0 (no round-robin) — the test only
+    // exercises the multi-sig config path, not posting rotation.
+    let prepared = client
+        .prepare_channel_config(
+            Keys::new_unchecked(authorized_keys),
+            0.into(),
+            0.into(),
+            configuration_threshold,
+            ZONE_CHANNEL_DEPOSIT_THRESHOLD,
+        )
+        .await
+        .map_err(|error| StepError::LogicalError {
+            message: format!("Zone prepare_channel_config failed: {error}"),
+        })?;
+
+    // Sign the prepared payload with each current accredited key, indexed by
+    // its position in the accredited list (ascending). Empty for a claiming
+    // (unclaimed-channel) config, which needs no signatures.
+    let mut signatures = Vec::with_capacity(prepared.accredited_keys.len());
+    for (index, public_key) in prepared.accredited_keys.iter().enumerate() {
+        let signing_key = world
+            .zone
+            .sequencer_signing_key_for_public(public_key)
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!(
+                    "no registered zone sequencer holds accredited key {public_key:?}"
+                ),
+            })?;
+        let index = u16::try_from(index).map_err(|_| StepError::LogicalError {
+            message: "accredited key index exceeds u16".to_owned(),
+        })?;
+        signatures.push(IndexedSignature::new(
+            index,
+            signing_key.sign_payload(&prepared.sign_payload),
+        ));
+    }
+
+    let mut checkpoint_rx = world
+        .zone
+        .checkpoint_receiver(sequencer_alias)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("Zone sequencer '{sequencer_alias}' has no checkpoint watch"),
+        })?;
+    checkpoint_rx.mark_unchanged();
+
+    let (result, post_call_checkpoint) = client
+        .submit_channel_config(prepared, signatures)
+        .await
+        .map_err(|error| StepError::LogicalError {
+        message: format!("Zone submit_channel_config failed: {error}"),
+    })?;
+
+    record_submitted_config(
+        world,
+        sequencer_alias,
+        transaction_alias,
+        &result,
+        post_call_checkpoint,
+        &mut checkpoint_rx,
+    )
+    .await
+}
+
+/// Record a submitted channel-config tx: resolve the checkpoint that contains
+/// it (inline if already present, else wait for the drive task to re-publish),
+/// remember it, and register the submitted transaction for later assertions.
+async fn record_submitted_config(
+    world: &mut CucumberWorld,
+    sequencer_alias: &str,
+    transaction_alias: String,
+    result: &PublishResult,
+    post_call_checkpoint: SequencerCheckpoint,
+    checkpoint_rx: &mut tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
+) -> StepResult {
     // Sanity-check the inline checkpoint already mentions our tx; the
     // event-stream watcher below also catches it once the drive task
     // re-publishes its checkpoint after the next block.
@@ -296,7 +410,7 @@ pub(super) async fn submit_zone_channel_config(
     } else {
         timeout(
             Duration::from_secs(30),
-            wait_for_checkpoint_with_tx(&mut checkpoint_rx, tx_hash),
+            wait_for_checkpoint_with_tx(checkpoint_rx, tx_hash),
         )
         .await
         .map_err(|_| StepError::LogicalError {

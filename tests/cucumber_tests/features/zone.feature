@@ -279,6 +279,39 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
+  # Exercises the SDK's prepare -> sign -> submit multi-sig channel-config flow.
+  # SEQ_A and SEQ_B share one channel with distinct keys. The channel is first
+  # claimed with a 2-of-2 accredited key set (unclaimed -> no signatures), then
+  # reconfigured: prepare_channel_config hands back the funded config and the
+  # payload BOTH accredited keys must sign; the fully-signed tx is submitted and
+  # must be included and finalized like any config.
+  Scenario: Two-of-two multi-sig channel config is finalized
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers   |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B |
+    When node "NODE_1" is at height 1 in 120 seconds
+    And wallet "WALLET_1A" sends 30 notes of 1000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+    And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
+    And I start zone sequencer "SEQ_A" with indexer
+    # Claim the channel with a 2-of-2 accredited key set (no signatures required).
+    And sequencer "SEQ_A" submits zone multisig config transaction "CHANNEL_CONFIG_1" with threshold 2 authorizing:
+      | alias |
+      | SEQ_A |
+      | SEQ_B |
+    Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
+    # Reconfigure the 2-of-2 channel: both accredited keys sign the prepared config.
+    When sequencer "SEQ_A" submits zone multisig config transaction "CHANNEL_CONFIG_2" with threshold 2 authorizing:
+      | alias |
+      | SEQ_A |
+      | SEQ_B |
+    Then zone transaction "CHANNEL_CONFIG_2" is finalized in 180 seconds
+    And I stop all nodes
+
+  @zone_ci
   Scenario: Round-robin waits for turn and submits pending messages
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
