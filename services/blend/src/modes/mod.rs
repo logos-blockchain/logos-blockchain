@@ -1,23 +1,33 @@
 mod broadcast;
-mod core;
-mod edge;
-mod ondemand;
 
+use core::hash::Hash;
 use std::fmt::Debug;
 
+use lb_blend::scheduling::membership::Membership;
 use lb_log_targets::blend;
-use overwatch::services::relay::RelayError;
 
-#[cfg(test)]
-pub use crate::modes::broadcast::tests as broadcast_tests;
-pub use crate::modes::{broadcast::BroadcastMode, core::CoreMode, edge::EdgeMode};
+pub use crate::modes::broadcast::{BroadcastMode, run_broadcast_mode};
 
 const LOG_TARGET: &str = blend::service::MODES;
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("Overwatch error: {0}")]
-    Overwatch(#[from] overwatch::DynError),
-    #[error("Overwatch relay error: {0}")]
-    OverwatchRelay(#[from] RelayError),
+#[derive(Debug, PartialEq, Eq)]
+pub enum Mode {
+    Core,
+    Edge,
+    Broadcast,
+}
+
+impl Mode {
+    pub fn choose<NodeId>(membership: &Membership<NodeId>, minimal_network_size: usize) -> Self
+    where
+        NodeId: Eq + Hash,
+    {
+        if membership.size() < minimal_network_size {
+            Self::Broadcast
+        } else if membership.contains_local() {
+            Self::Core
+        } else {
+            Self::Edge
+        }
+    }
 }

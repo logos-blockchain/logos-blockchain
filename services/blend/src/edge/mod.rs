@@ -1,7 +1,7 @@
 pub mod backends;
 mod current_epoch;
 mod handlers;
-pub(crate) mod service_components;
+pub mod service_components;
 pub mod settings;
 #[cfg(test)]
 mod tests;
@@ -10,8 +10,6 @@ use core::num::NonZeroU64;
 use std::{
     fmt::{Debug, Display},
     hash::Hash,
-    marker::PhantomData,
-    time::Duration,
 };
 
 use backends::BlendBackend;
@@ -26,28 +24,25 @@ use lb_key_management_system_service::{
     operators::ed25519::exfiltrate_secret_key::LeakSecretKeyOperator,
 };
 use lb_log_targets::blend;
-use lb_services_utils::wait_until_services_are_ready;
 use lb_time_service::TimeService;
-use overwatch::{
-    OpaqueServiceResourcesHandle,
-    overwatch::OverwatchHandle,
-    services::{
-        AsServiceId, ServiceCore, ServiceData,
-        resources::ServiceResourcesHandle,
-        state::{NoOperator, NoState},
-    },
-};
+use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
 use settings::StartingBlendConfig;
 use tokio::sync::oneshot;
 use tracing::{debug, error, info};
 
 use crate::{
-    edge::{current_epoch::CurrentEpoch, handlers::Error, settings::RunningBlendConfig},
+    edge::{
+        current_epoch::CurrentEpoch,
+        handlers::Error,
+        service_components::{Components, EdgeBackendSettingsOf},
+        settings::RunningBlendConfig,
+    },
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     kms::PreloadKmsService,
     membership::{self, chain::BlendEpochState, node_id},
     message::{BlendPayload, NetworkInfo, ServiceMessage},
     pending::{EncapsulationResult, LocalEncapsulation, MessageKind, PendingTransactions},
+    service_components::Components as CommonComponents,
 };
 
 const LOG_TARGET: &str = blend::service::EDGE;
@@ -55,65 +50,39 @@ const LOG_TARGET: &str = blend::service::EDGE;
 type RunningSettings<Backend, NodeId, RuntimeServiceId> =
     RunningBlendConfig<<Backend as BlendBackend<NodeId, RuntimeServiceId>>::Settings>;
 
-pub struct BlendService<
-    Backend,
-    NodeId,
-    ProofsGenerator,
-    TimeBackend,
-    ChainService,
-    PolInfoProvider,
+type CurrentEpochOf<EdgeMode, RuntimeServiceId> = CurrentEpoch<
+    <EdgeMode as Components<RuntimeServiceId>>::Backend,
+    <EdgeMode as CommonComponents<RuntimeServiceId>>::NodeId,
+    <EdgeMode as Components<RuntimeServiceId>>::ProofsGenerator,
     RuntimeServiceId,
-> where
-    Backend: BlendBackend<NodeId, RuntimeServiceId>,
-    NodeId: Clone,
-{
-    service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    _phantom: PhantomData<(ProofsGenerator, TimeBackend, ChainService, PolInfoProvider)>,
-}
+>;
 
-impl<Backend, NodeId, ProofsGenerator, TimeBackend, ChainService, PolInfoProvider, RuntimeServiceId>
-    ServiceData
-    for BlendService<
-        Backend,
-        NodeId,
-        ProofsGenerator,
-        TimeBackend,
-        ChainService,
-        PolInfoProvider,
-        RuntimeServiceId,
-    >
+/// Runs the node for as long as it is an edge node.
+pub(crate) async fn run_edge_mode<EdgeService, RuntimeServiceId>(
+    inbound_relay: &mut (impl Stream<Item = ServiceMessage<EdgeService::NodeId>> + Send + Unpin),
+    overwatch_handle: OverwatchHandle<RuntimeServiceId>,
+    settings: StartingBlendConfig<EdgeBackendSettingsOf<EdgeService, RuntimeServiceId>>,
+    notify_ready: impl Fn(),
+) -> Result<(), overwatch::DynError>
 where
-    Backend: BlendBackend<NodeId, RuntimeServiceId>,
-    NodeId: Clone,
-{
-    type Settings = StartingBlendConfig<Backend::Settings>;
-    type State = NoState<Self::Settings>;
-    type StateOperator = NoOperator<Self::State>;
-    type Message = ServiceMessage<NodeId>;
-}
-
-#[async_trait::async_trait]
-impl<Backend, NodeId, ProofsGenerator, TimeBackend, ChainService, PolInfoProvider, RuntimeServiceId>
-    ServiceCore<RuntimeServiceId>
-    for BlendService<
-        Backend,
-        NodeId,
-        ProofsGenerator,
-        TimeBackend,
-        ChainService,
-        PolInfoProvider,
-        RuntimeServiceId,
-    >
-where
-    Backend: BlendBackend<NodeId, RuntimeServiceId> + Send + Sync,
-    NodeId: Clone + Debug + Eq + Hash + Send + Sync + node_id::TryFrom + 'static,
-    ProofsGenerator: LeaderAndPowProofsGenerator + Send,
-    TimeBackend: lb_time_service::backends::TimeBackend + Send,
-    ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
-    PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
-    RuntimeServiceId: AsServiceId<Self>
-        + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
-        + AsServiceId<ChainService>
+    EdgeService: Components<
+            RuntimeServiceId,
+            NodeId: Clone + Debug + Eq + Hash + Send + Sync + node_id::TryFrom + 'static,
+            Backend: BlendBackend<
+                <EdgeService as Components<RuntimeServiceId>>::NodeId,
+                RuntimeServiceId,
+            > + Send
+                         + Sync,
+            ProofsGenerator: LeaderAndPowProofsGenerator + Send,
+            TimeBackend: lb_time_service::backends::TimeBackend + Send,
+            ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
+            PolInfoProvider: PolInfoProviderTrait<
+                RuntimeServiceId,
+                Stream: Send + Unpin + 'static,
+            > + Send,
+        >,
+    RuntimeServiceId: AsServiceId<TimeService<EdgeService::TimeBackend, RuntimeServiceId>>
+        + AsServiceId<EdgeService::ChainService>
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>
         + Display
         + Debug
@@ -123,103 +92,69 @@ where
         + Unpin
         + 'static,
 {
-    fn init(
-        service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-        _initial_state: Self::State,
-    ) -> Result<Self, overwatch::DynError> {
-        Ok(Self {
-            service_resources_handle,
-            _phantom: PhantomData,
-        })
-    }
+    // No readiness wait: the supervisor did one for every service any mode
+    // needs, before the first mode started.
+    let kms = KmsServiceApi::<PreloadKmsService<_>, RuntimeServiceId>::new(
+        overwatch_handle.relay::<PreloadKmsService<_>>().await?,
+    );
 
-    async fn run(mut self) -> Result<(), overwatch::DynError> {
-        let Self {
-            service_resources_handle:
-                ServiceResourcesHandle {
-                    inbound_relay,
-                    overwatch_handle,
-                    settings_handle,
-                    status_updater,
-                    ..
-                },
-            ..
-        } = self;
-
-        let settings = settings_handle.notifier().get_updated_settings();
-
-        wait_until_services_are_ready!(
-            &overwatch_handle,
-            Some(Duration::from_mins(1)),
-            TimeService<_, _>,
-            PreloadKmsService<_>
-        )
-        .await?;
-
-        let kms = KmsServiceApi::<PreloadKmsService<_>, RuntimeServiceId>::new(
-            overwatch_handle.relay::<PreloadKmsService<_>>().await?,
-        );
-
-        // TODO: This will go once we do not need to pass the secret key anymore, i.e.,
-        // when we have libp2p integration with KMS.
-        let non_ephemeral_signing_key = {
-            let (sender, receiver) = oneshot::channel();
-            kms.execute(
-                settings.non_ephemeral_signing_key_id,
-                KeyOperators::Ed25519(Box::new(LeakSecretKeyOperator::new(sender))),
-            )
-            .await
-            .expect("Failed to interact with KMS to fetch non-ephemeral signing key.");
-            receiver
-                .await
-                .expect("Failed to retrieve non-ephemeral signing key from KMS.")
-        };
-        let local_node_id =
-            NodeId::try_from_provider_id(&non_ephemeral_signing_key.public_key().to_bytes())
-                .expect("non-ephemeral signing key should decode into a valid node id");
-
-        let public_epoch_stream =
-            membership::chain::subscribe::<ChainService, NodeId, TimeBackend, RuntimeServiceId>(
-                &overwatch_handle,
-                non_ephemeral_signing_key.public_key(),
-                // No ZK stuff needs to be computed by edge nodes, so no ZK key is specified here.
-                None,
-            )
-            .await;
-
-        run::<Backend, _, ProofsGenerator, PolInfoProvider, _>(
-            UninitializedEpochEventStream::new(
-                public_epoch_stream,
-                settings.time.epoch_transition_period,
-            ),
-            Box::pin(inbound_relay),
-            local_node_id,
-            RunningSettings::<Backend, _, _> {
-                backend: settings.backend,
-                cover: settings.cover,
-                non_ephemeral_signing_key,
-                num_blend_layers: settings.num_blend_layers,
-                minimum_network_size: settings.minimum_network_size,
-                time: settings.time,
-                data_replication_factor: settings.data_replication_factor,
-                pow_mining_pool: new_mining_pool(),
-            },
-            &overwatch_handle,
-            || {
-                status_updater.notify_ready();
-                info!(
-                    target: LOG_TARGET,
-                    "Service '{}' is ready.",
-                    <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
-                );
-            },
+    // TODO: This will go once we do not need to pass the secret key anymore, i.e.,
+    // when we have libp2p integration with KMS.
+    let non_ephemeral_signing_key = {
+        let (sender, receiver) = oneshot::channel();
+        kms.execute(
+            settings.non_ephemeral_signing_key_id,
+            KeyOperators::Ed25519(Box::new(LeakSecretKeyOperator::new(sender))),
         )
         .await
-        .map_err(|e| {
-            error!(target: LOG_TARGET, "Edge blend service is being terminated with error: {e:?}");
-            e.into()
-        })
-    }
+        .expect("Failed to interact with KMS to fetch non-ephemeral signing key.");
+        receiver
+            .await
+            .expect("Failed to retrieve non-ephemeral signing key from KMS.")
+    };
+    let local_node_id = <EdgeService::NodeId as node_id::TryFrom>::try_from_provider_id(
+        &non_ephemeral_signing_key.public_key().to_bytes(),
+    )
+    .expect("non-ephemeral signing key should decode into a valid node id");
+
+    let public_epoch_stream = membership::chain::subscribe::<
+        EdgeService::ChainService,
+        EdgeService::NodeId,
+        EdgeService::TimeBackend,
+        RuntimeServiceId,
+    >(
+        &overwatch_handle,
+        non_ephemeral_signing_key.public_key(),
+        // No ZK stuff needs to be computed by edge nodes, so no ZK key is specified here.
+        None,
+    )
+    .await;
+
+    run::<EdgeService, _>(
+        UninitializedEpochEventStream::new(
+            public_epoch_stream,
+            settings.time.epoch_transition_period,
+        ),
+        inbound_relay,
+        local_node_id,
+        RunningSettings::<<EdgeService as Components<RuntimeServiceId>>::Backend, _, _> {
+            backend: settings.backend,
+            cover: settings.cover,
+            non_ephemeral_signing_key,
+            num_blend_layers: settings.num_blend_layers,
+            minimum_network_size: settings.minimum_network_size,
+            time: settings.time,
+            data_replication_factor: settings.data_replication_factor,
+            pow_mining_pool: new_mining_pool(),
+        },
+        &overwatch_handle,
+        notify_ready,
+    )
+    .await
+    .map_err(|e| {
+        error!(target: LOG_TARGET, "Edge blend service is being terminated with error: {e:?}");
+        e.into()
+    })
 }
 
 /// Run the event loop of the service.
@@ -246,21 +181,32 @@ where
     clippy::cognitive_complexity,
     reason = "TODO: address this in a dedicated refactor"
 )]
-async fn run<Backend, NodeId, ProofsGenerator, PolInfoProvider, RuntimeServiceId>(
+async fn run<EdgeMode, RuntimeServiceId>(
     public_epoch_stream: UninitializedEpochEventStream<
-        impl Stream<Item = BlendEpochState<NodeId>> + Unpin,
+        impl Stream<Item = BlendEpochState<EdgeMode::NodeId>> + Unpin,
     >,
-    mut inbound_relay: impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin,
-    local_node_id: NodeId,
-    settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
+    inbound_relay: &mut (impl Stream<Item = ServiceMessage<EdgeMode::NodeId>> + Send + Unpin),
+    local_node_id: EdgeMode::NodeId,
+    settings: RunningSettings<
+        <EdgeMode as Components<RuntimeServiceId>>::Backend,
+        <EdgeMode as CommonComponents<RuntimeServiceId>>::NodeId,
+        RuntimeServiceId,
+    >,
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     notify_ready: impl Fn(),
 ) -> Result<(), Error>
 where
-    Backend: BlendBackend<NodeId, RuntimeServiceId> + Sync + Send,
-    NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
-    ProofsGenerator: LeaderAndPowProofsGenerator + Send,
-    PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Unpin>,
+    EdgeMode: Components<
+            RuntimeServiceId,
+            NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
+            Backend: BlendBackend<
+                <EdgeMode as CommonComponents<RuntimeServiceId>>::NodeId,
+                RuntimeServiceId,
+            > + Sync
+                         + Send,
+            ProofsGenerator: LeaderAndPowProofsGenerator + Send,
+            PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Unpin>,
+        >,
     RuntimeServiceId: Clone + Send + Sync,
 {
     let (current_epoch_info, mut remaining_public_epoch_stream) = public_epoch_stream
@@ -281,25 +227,27 @@ where
     // No need to wait for the PoL stream to return an element. We just move on and
     // will have a `None` handler until secret info for an epoch is passed to this
     // service.
-    let mut secret_pol_info_stream = PolInfoProvider::subscribe(overwatch_handle)
+    let mut secret_pol_info_stream = EdgeMode::PolInfoProvider::subscribe(overwatch_handle)
         .await
         .expect("Should not fail to subscribe to secret PoL info stream.");
 
     let mut current_secret_epoch_info: Option<PolEpochInfo> = None;
     // The epoch owns its proposals, so a new one takes them with it; a
     // transaction is not slot-bound and outlives every epoch it waits through.
-    let mut current_epoch: CurrentEpoch<Backend, NodeId, ProofsGenerator, RuntimeServiceId> =
-        match CurrentEpoch::try_new(current_epoch_info, &settings) {
-            Err(Error::NetworkIsTooSmall(_)) => {
-                info!(target: LOG_TARGET, "Initial membership does not satisfy edge node condition, edge service shutting down.");
-                return Ok(());
-            }
-            Err(e) => {
-                error!(target: LOG_TARGET, "Error with the initial epoch: {e:?}, edge service shutting down.");
-                return Err(e);
-            }
-            Ok(epoch) => epoch,
-        };
+    let mut current_epoch: CurrentEpochOf<EdgeMode, RuntimeServiceId> = match CurrentEpoch::try_new(
+        current_epoch_info,
+        &settings,
+    ) {
+        Err(Error::NetworkIsTooSmall(_)) => {
+            info!(target: LOG_TARGET, "Initial membership does not satisfy edge node condition, edge service shutting down.");
+            return Ok(());
+        }
+        Err(e) => {
+            error!(target: LOG_TARGET, "Error with the initial epoch: {e:?}, edge service shutting down.");
+            return Err(e);
+        }
+        Ok(epoch) => epoch,
+    };
     let mut pending_transactions = PendingTransactions::new();
 
     loop {

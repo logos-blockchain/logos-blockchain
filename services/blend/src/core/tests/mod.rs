@@ -24,7 +24,7 @@ use tokio::sync::oneshot;
 
 use crate::{
     core::{
-        HandleEpochEventOutput,
+        HandleEpochEventOutput, LooseCoreComponents,
         backends::BlendBackend,
         complete_transition_period,
         epoch_stages::{
@@ -32,7 +32,7 @@ use crate::{
             transitioning::TransitioningEpoch,
         },
         handle_epoch_event, handle_epoch_transition_expired, handle_incoming_blend_message,
-        initialize, post_initialize, retire, run_event_loop,
+        initialize, post_initialize, retire, run_event_loop, spawn_drain,
         state::ServiceState,
         tests::utils::{
             MockKmsAdapter, MockProofsVerifier, NodeId, TestBlendBackend, TestBlendBackendEvent,
@@ -62,6 +62,37 @@ mod utils;
 
 type RuntimeServiceId = ();
 
+/// The component bundle these tests blend under.
+///
+/// The backend, dispatcher, verifier and rng are fixed because nothing in the
+/// argument lists pins them — `complete_transition_period` takes only a backend
+/// and a checkpoint, and two dispatchers can share a settings type, so the
+/// projection alone leaves `C` ambiguous. The two generators stay open: tests
+/// swap them to gate proofs.
+/// Both bundles have to be named at every call site: an associated-type
+/// projection does not determine the type it projects from, so neither `C` nor
+/// `Core` is recoverable from the arguments. One alias per generator the tests
+/// blend with.
+type MockComponents = TestComponents<MockCoreAndLeaderProofsGenerator, ()>;
+type PolAwareComponents = TestComponents<PolAwareProofsGenerator, ()>;
+type GatedPowComponents = TestComponents<GatedPowProofsGenerator, ()>;
+
+/// The settings type only ties the recovery state to a service; it carries no
+/// data, and these tests drive the loop directly rather than through Overwatch.
+type TestSettings = ();
+
+type TestComponents<ProofsGenerator, CorePoQGenerator> = LooseCoreComponents<
+    TestBlendBackend,
+    NodeId,
+    TestPayloadDispatcher,
+    ProofsGenerator,
+    MockProofsVerifier,
+    CorePoQGenerator,
+    BlakeRng,
+    TestSettings,
+    RuntimeServiceId,
+>;
+
 fn test_blend_epoch_state(
     epoch: u32,
     membership_info: MembershipInfo<NodeId>,
@@ -83,7 +114,7 @@ fn test_blend_epoch_state(
 #[expect(clippy::too_many_lines, reason = "Test function.")]
 async fn test_handle_incoming_blend_message() {
     let (_, _, state_updater, _state_receiver) =
-        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+        dummy_overwatch_resources::<TestSettings, RuntimeServiceId>();
 
     // Prepare a encapsulated message.
     let mut epoch = 0.into();
@@ -321,7 +352,7 @@ async fn test_handle_incoming_blend_message() {
 #[test_log::test(tokio::test)]
 async fn test_duplicate_decapsulated_replica_handled_gracefully() {
     let (_, _, state_updater, _state_receiver) =
-        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+        dummy_overwatch_resources::<TestSettings, RuntimeServiceId>();
 
     // Size-1 membership: the only node is the local node, so every encapsulated
     // message is fully decapsulated locally into its inner `NetworkMessage`.
@@ -418,7 +449,7 @@ async fn test_duplicate_decapsulated_replica_handled_gracefully() {
 #[test_log::test(tokio::test)]
 async fn test_handle_incoming_blend_message_with_invalid_poq() {
     let (_, _, state_updater, _state_receiver) =
-        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+        dummy_overwatch_resources::<TestSettings, RuntimeServiceId>();
 
     let minimal_network_size = 1;
     let (membership, local_private_key) = new_membership(minimal_network_size);
@@ -501,7 +532,7 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
 
 #[test_log::test(tokio::test)]
 async fn test_handle_epoch_transition_expired() {
-    let (overwatch_handle, _, _, _) = dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+    let (overwatch_handle, _, _, _) = dummy_overwatch_resources::<TestSettings, RuntimeServiceId>();
 
     // Prepare settings.
     let epoch = 0.into();
@@ -583,7 +614,7 @@ async fn test_handle_epoch_transition_expired() {
 #[test_log::test(tokio::test)]
 async fn test_handle_epoch_event_discards_queued_proposals() {
     let (overwatch_handle, _overwatch_cmd_receiver, _state_updater, _state_receiver) =
-        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+        dummy_overwatch_resources::<TestSettings, RuntimeServiceId>();
 
     // Prepare components for epoch event handling.
     let epoch = 0.into();
@@ -670,7 +701,7 @@ async fn test_handle_epoch_event_discards_queued_proposals() {
 #[expect(clippy::too_many_lines, reason = "Test function.")]
 async fn test_handle_epoch_event() {
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
-        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+        dummy_overwatch_resources::<TestSettings, RuntimeServiceId>();
 
     // Prepare components for epoch event handling.
     let epoch = 0.into();
@@ -768,13 +799,12 @@ async fn test_handle_epoch_event() {
     // The end of the transition period is handled apart from a rotation, and
     // takes nothing belonging to the current epoch — which is what lets that
     // epoch, and the proposals it owns, survive it untouched.
-    let new_recovery_checkpoint =
-        complete_transition_period::<_, NodeId, BlakeRng, MockProofsVerifier, _, RuntimeServiceId>(
-            &mut backend,
-            &sdp_relay,
-            *new_recovery_checkpoint,
-        )
-        .await;
+    let new_recovery_checkpoint = complete_transition_period::<MockComponents, _>(
+        &mut backend,
+        &sdp_relay,
+        *new_recovery_checkpoint,
+    )
+    .await;
     let (current_crypto_processor, current_scheduler) = (new_crypto_processor, new_scheduler);
     assert_eq!(current_crypto_processor.epoch(), epoch.strict_add(1.into()));
     assert_eq!(new_epoch_info.epoch, epoch.strict_add(1.into()));
@@ -825,7 +855,7 @@ async fn test_handle_epoch_event() {
 #[test_log::test(tokio::test)]
 async fn test_handle_epoch_event_membership_change_rewires_backend_and_generators() {
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
-        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+        dummy_overwatch_resources::<TestSettings, RuntimeServiceId>();
 
     let epoch = 0.into();
     let minimal_network_size = 2;
@@ -926,7 +956,7 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
 
 async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> {
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
-        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+        dummy_overwatch_resources::<TestSettings, RuntimeServiceId>();
     let epoch = 0.into();
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
@@ -1024,7 +1054,7 @@ async fn test_handle_epoch_event_applies_matching_secret_to_new_generator() {
 #[test_log::test(tokio::test)]
 async fn test_handle_epoch_event_empty_epoch_retires() {
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
-        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+        dummy_overwatch_resources::<TestSettings, RuntimeServiceId>();
 
     let epoch = 0.into();
     let minimal_network_size = 2;
@@ -1093,7 +1123,7 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
 #[test_log::test(tokio::test)]
 async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
-        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+        dummy_overwatch_resources::<TestSettings, RuntimeServiceId>();
 
     let epoch = 0.into();
     let minimal_network_size = 2;
@@ -1217,11 +1247,11 @@ async fn complete_old_epoch_after_main_loop_done() {
     ) = initialize::<
         NodeId,
         TestBlendBackend,
-        TestPayloadDispatcher,
         MockCoreAndLeaderProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
         RuntimeServiceId,
+        TestSettings,
     >(
         settings.clone(),
         membership_stream,
@@ -1241,7 +1271,7 @@ async fn complete_old_epoch_after_main_loop_done() {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
 
-        let retiring_epoch = run_event_loop(
+        let retiring_epoch = run_event_loop::<MockComponents, _>(
             inbound_relay,
             &mut blend_message_stream,
             secret_pol_info_stream,
@@ -1261,7 +1291,7 @@ async fn complete_old_epoch_after_main_loop_done() {
         )
         .await;
 
-        retire(
+        retire::<MockComponents, _>(
             blend_message_stream.map(|(msg, _)| msg),
             remaining_epoch_stream,
             backend,
@@ -1363,11 +1393,11 @@ async fn stop_on_empty_epoch() {
     ) = initialize::<
         NodeId,
         TestBlendBackend,
-        TestPayloadDispatcher,
         MockCoreAndLeaderProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
         RuntimeServiceId,
+        TestSettings,
     >(
         settings.clone(),
         membership_stream,
@@ -1387,7 +1417,7 @@ async fn stop_on_empty_epoch() {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
 
-        let retiring_epoch = run_event_loop(
+        let retiring_epoch = run_event_loop::<MockComponents, _>(
             inbound_relay,
             &mut blend_message_stream,
             secret_pol_info_stream,
@@ -1407,7 +1437,7 @@ async fn stop_on_empty_epoch() {
         )
         .await;
 
-        retire(
+        retire::<MockComponents, _>(
             blend_message_stream.map(|(msg, _)| msg),
             remaining_epoch_stream,
             backend,
@@ -1498,11 +1528,11 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
     ) = initialize::<
         NodeId,
         TestBlendBackend,
-        TestPayloadDispatcher,
         MockCoreAndLeaderProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
         RuntimeServiceId,
+        TestSettings,
     >(
         settings.clone(),
         membership_stream,
@@ -1522,7 +1552,7 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
 
-        let retiring_epoch = run_event_loop(
+        let retiring_epoch = run_event_loop::<MockComponents, _>(
             inbound_relay,
             &mut blend_message_stream,
             secret_pol_info_stream,
@@ -1542,7 +1572,7 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
         )
         .await;
 
-        retire(
+        retire::<MockComponents, _>(
             blend_message_stream.map(|(msg, _)| msg),
             remaining_epoch_stream,
             backend,
@@ -1637,7 +1667,7 @@ async fn test_proof_generator_epoch_binding() {
 
     // Epoch 0 message should be decapsulable by epoch 0 processor.
     let (_, _, state_updater, _state_receiver) =
-        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+        dummy_overwatch_resources::<TestSettings, RuntimeServiceId>();
     let scheduler_settings = scheduler_settings(&timing_settings(), settings.num_blend_layers);
     let mut scheduler_0 = EpochMessageScheduler::new(
         scheduler_epoch_info(&public_info_0),
@@ -1669,7 +1699,7 @@ async fn test_proof_generator_epoch_binding() {
     // Epoch 1 message should NOT be decapsulable by epoch 0 processor
     // (wrong PoQ proofs for epoch 0).
     let (_, _, state_updater, _state_receiver) =
-        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+        dummy_overwatch_resources::<TestSettings, RuntimeServiceId>();
     let mut scheduler_0_only = EpochMessageScheduler::new(
         scheduler_epoch_info(&public_info_0),
         BlakeRng::from_entropy(),
@@ -1702,7 +1732,7 @@ async fn test_proof_generator_epoch_binding() {
 
     // Epoch 1 message should be decapsulable by epoch 1 processor.
     let (_, _, state_updater, _state_receiver) =
-        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+        dummy_overwatch_resources::<TestSettings, RuntimeServiceId>();
     let mut scheduler_1 = EpochMessageScheduler::new(
         scheduler_epoch_info(&public_info_1),
         BlakeRng::from_entropy(),
@@ -1806,11 +1836,11 @@ async fn test_initialize_recovers_matching_saved_state() {
     ) = initialize::<
         NodeId,
         TestBlendBackend,
-        TestPayloadDispatcher,
         MockCoreAndLeaderProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
         RuntimeServiceId,
+        TestSettings,
     >(
         settings.clone(),
         membership_stream,
@@ -1896,11 +1926,11 @@ async fn test_initialize_recovers_matching_saved_state() {
     ) = initialize::<
         NodeId,
         TestBlendBackend,
-        TestPayloadDispatcher,
         MockCoreAndLeaderProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
         RuntimeServiceId,
+        TestSettings,
     >(
         settings.clone(),
         membership_stream2,
@@ -2004,11 +2034,11 @@ async fn test_initialize_submits_activity_proof_for_the_previous_epoch() {
     ) = initialize::<
         NodeId,
         TestBlendBackend,
-        TestPayloadDispatcher,
         MockCoreAndLeaderProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
         RuntimeServiceId,
+        TestSettings,
     >(
         settings.clone(),
         membership_stream,
@@ -2093,11 +2123,11 @@ async fn test_initialize_drops_activity_proof_older_than_one_epoch() {
     let (.., _rng) = initialize::<
         NodeId,
         TestBlendBackend,
-        TestPayloadDispatcher,
         MockCoreAndLeaderProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
         RuntimeServiceId,
+        TestSettings,
     >(
         settings.clone(),
         membership_stream,
@@ -2175,11 +2205,11 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
     ) = initialize::<
         NodeId,
         TestBlendBackend,
-        TestPayloadDispatcher,
         PolAwareProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
         RuntimeServiceId,
+        TestSettings,
     >(
         settings.clone(),
         membership_stream,
@@ -2195,7 +2225,7 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
     tokio::spawn(async move {
         let secret_pol_info_stream =
             post_initialize::<GatedPolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
-        run_event_loop(
+        run_event_loop::<PolAwareComponents, _>(
             inbound_relay,
             &mut blend_message_stream,
             secret_pol_info_stream,
@@ -2314,11 +2344,11 @@ async fn the_previous_epoch_keeps_releasing_under_its_own_epoch() {
     ) = initialize::<
         NodeId,
         TestBlendBackend,
-        TestPayloadDispatcher,
         MockCoreAndLeaderProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
         RuntimeServiceId,
+        TestSettings,
     >(
         settings.clone(),
         membership_stream,
@@ -2334,7 +2364,7 @@ async fn the_previous_epoch_keeps_releasing_under_its_own_epoch() {
     tokio::spawn(async move {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
-        run_event_loop(
+        run_event_loop::<MockComponents, _>(
             inbound_relay,
             &mut blend_message_stream,
             secret_pol_info_stream,
@@ -2456,11 +2486,11 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
     ) = initialize::<
         NodeId,
         TestBlendBackend,
-        TestPayloadDispatcher,
         MockCoreAndLeaderProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
         RuntimeServiceId,
+        TestSettings,
     >(
         settings.clone(),
         membership_stream,
@@ -2476,7 +2506,7 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
     tokio::spawn(async move {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
-        run_event_loop(
+        run_event_loop::<MockComponents, _>(
             inbound_relay,
             &mut blend_message_stream,
             secret_pol_info_stream,
@@ -2585,11 +2615,11 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
     ) = initialize::<
         NodeId,
         TestBlendBackend,
-        TestPayloadDispatcher,
         GatedPowProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
         RuntimeServiceId,
+        TestSettings,
     >(
         settings.clone(),
         membership_stream,
@@ -2605,7 +2635,7 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
     tokio::spawn(async move {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
-        run_event_loop(
+        run_event_loop::<GatedPowComponents, _>(
             inbound_relay,
             &mut blend_message_stream,
             secret_pol_info_stream,
@@ -2673,4 +2703,148 @@ async fn expect_outgoing_message(
         .await
         .unwrap_or_else(|_| panic!("timed out: {expectation}"))
         .unwrap_or_else(|| panic!("service stopped sending: {expectation}"));
+}
+
+/// Leaving core mode hands the old epoch to a task of its own and returns.
+///
+/// `Instance::EdgeAfterCore` used to assert this structurally — the draining
+/// core stayed alive as its own Overwatch service while the next mode ran. With
+/// one service there is no such state to inspect, so the property is pinned
+/// behaviourally instead: with a transition period far longer than the test, a
+/// mode that awaited its drain could not return at all.
+#[expect(clippy::too_many_lines, reason = "Test function.")]
+#[expect(
+    clippy::async_yields_async,
+    reason = "Handing the drain's handle out is the point: the mode must not await it."
+)]
+#[test_log::test(tokio::test)]
+async fn leaving_core_mode_does_not_wait_for_the_drain() {
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+
+    // Create settings.
+    let mut settings = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+    // Long enough that the drain cannot possibly finish during the test, so the
+    // only way the assertion below passes is if the mode never waited for it.
+    settings.time.epoch_transition_period = Duration::from_secs(3600);
+
+    // Prepare streams.
+    let (inbound_relay, _inbound_message_sender) = new_stream();
+    let (mut blend_message_stream, _blend_message_sender) = new_stream();
+    let (membership_stream, membership_sender) = new_stream();
+
+    // Send the initial membership info that the service will expect to receive
+    // immediately.
+    let mut membership_info = MembershipInfo {
+        membership: membership.clone(),
+        zk: Some(ZkInfo {
+            root: ZkHash::ZERO,
+            core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
+        }),
+    };
+    membership_sender
+        .send(test_blend_epoch_state(0, membership_info.clone()))
+        .await
+        .unwrap();
+
+    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+
+    // Prepare dummy Overwatch resources.
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources();
+
+    // Initialize the service.
+    let (
+        mut remaining_epoch_stream,
+        current_public_info,
+        crypto_processor,
+        current_recovery_checkpoint,
+        pending_transactions,
+        message_scheduler,
+        mut backend,
+        mut rng,
+    ) = initialize::<
+        NodeId,
+        TestBlendBackend,
+        MockCoreAndLeaderProofsGenerator,
+        MockProofsVerifier,
+        MockKmsAdapter,
+        RuntimeServiceId,
+        TestSettings,
+    >(
+        settings.clone(),
+        membership_stream,
+        overwatch_handle.clone(),
+        MockKmsAdapter,
+        &sdp_relay,
+        None,
+        state_updater,
+        seeded_release_delay_rng(),
+    )
+    .await;
+
+    // Run the event loop of the service in a separate task.
+    let settings_cloned = settings.clone();
+    let join_handle = tokio::spawn(async move {
+        let secret_pol_info_stream =
+            post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
+
+        let retiring_epoch = run_event_loop::<MockComponents, _>(
+            inbound_relay,
+            &mut blend_message_stream,
+            secret_pol_info_stream,
+            &mut remaining_epoch_stream,
+            &settings_cloned,
+            &mut backend,
+            &TestPayloadDispatcher,
+            &sdp_relay,
+            &mut rng,
+            CurrentEpoch::new(
+                crypto_processor,
+                message_scheduler.into(),
+                current_public_info,
+            ),
+            pending_transactions,
+            current_recovery_checkpoint,
+        )
+        .await;
+
+        spawn_drain::<MockComponents, _>(
+            blend_message_stream.map(|(msg, _)| msg),
+            remaining_epoch_stream,
+            backend,
+            TestPayloadDispatcher,
+            sdp_relay,
+            rng,
+            retiring_epoch,
+        )
+    });
+
+    // One epoch change, straight below the minimum, so the node stops being a
+    // core node and the event loop hands back the epoch it is leaving.
+    membership_info.membership = new_membership(minimal_network_size.checked_sub(1).unwrap()).0;
+    membership_sender
+        .send(test_blend_epoch_state(1, membership_info))
+        .await
+        .unwrap();
+
+    // The mode must return here. If it awaited the drain instead of spawning
+    // it, this would sit for the whole hour-long transition period set above
+    // and the timeout would fire.
+    let drain = tokio::time::timeout(Duration::from_secs(5), join_handle)
+        .await
+        .expect("core mode must return without waiting for the drain to finish")
+        .expect("core mode should not panic");
+
+    assert!(
+        !drain.is_finished(),
+        "the drain still owes a transition period's worth of releases, so it must still be running \
+         alongside whatever mode comes next"
+    );
+    drain.abort();
 }

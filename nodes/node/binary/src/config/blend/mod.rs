@@ -2,15 +2,9 @@ use lb_blend_service::{
     core::{
         backends::libp2p::Libp2pBlendBackendSettings as Libp2pCoreBlendBackendSettings,
         dispatcher::libp2p::Libp2pBroadcastSettings,
-        settings::{
-            CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings,
-            StartingBlendConfig as BlendCoreSettings, ZkSettings,
-        },
+        settings::{CoverTrafficSettings, MessageDelayerSettings, SchedulerSettings, ZkSettings},
     },
-    edge::{
-        backends::libp2p::Libp2pBlendBackendSettings as Libp2pEdgeBlendBackendSettings,
-        settings::StartingBlendConfig as BlendEdgeSettings,
-    },
+    edge::backends::libp2p::Libp2pBlendBackendSettings as Libp2pEdgeBlendBackendSettings,
     settings::{
         CommonSettings, CoreSettings, EdgeSettings, Settings as BlendSettings, TimingSettings,
     },
@@ -38,25 +32,21 @@ pub struct ServiceConfig {
 
 impl ServiceConfig {
     #[must_use]
-    pub fn into_blend_services_settings(
+    pub fn into_blend_service_settings(
         self,
         recovery_data: RecoveryData,
         time_deployment: &TimeDeploymentSettings,
         cryptarchia_deployment: &CryptarchiaDeploymentSettings,
-    ) -> (
-        BlendSettings<
-            Libp2pCoreBlendBackendSettings,
-            Libp2pEdgeBlendBackendSettings,
-            Libp2pBroadcastSettings,
-        >,
-        BlendCoreSettings<Libp2pCoreBlendBackendSettings, Libp2pBroadcastSettings>,
-        BlendEdgeSettings<Libp2pEdgeBlendBackendSettings>,
-    ) {
+    ) -> BlendSettings<
+        Libp2pCoreBlendBackendSettings,
+        Libp2pEdgeBlendBackendSettings,
+        Libp2pBroadcastSettings,
+    > {
         let slots_per_epoch = cryptarchia_deployment.slots_per_epoch();
         let slots_per_block = cryptarchia_deployment.average_slots_per_block();
         let slot_duration = time_deployment.slot_duration;
 
-        let blend_service_settings = BlendSettings::<
+        BlendSettings::<
             Libp2pCoreBlendBackendSettings,
             Libp2pEdgeBlendBackendSettings,
             Libp2pBroadcastSettings,
@@ -139,13 +129,6 @@ impl ServiceConfig {
                     replication_factor: self.user.edge.backend.replication_factor,
                 },
             },
-        };
-        let blend_core_settings: BlendCoreSettings<_, _> = blend_service_settings.clone().into();
-        let blend_edge_settings: BlendEdgeSettings<_> = blend_service_settings.clone().into();
-        (
-            blend_service_settings,
-            blend_core_settings,
-            blend_edge_settings,
-        )
+        }
     }
 }

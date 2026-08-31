@@ -32,14 +32,14 @@ mod serde {
         /// Consume the serializable state to create an actual state object, by
         /// passing it an Overwatch
         /// [`overwatch::services::state::StateUpdater`].
-        pub fn try_into_state_with_state_updater<BackendSettings, NetworkSettings>(
+        pub fn try_into_state_with_state_updater<ServiceSettings>(
             self,
             state_updater: overwatch::services::state::StateUpdater<
-                Option<RecoveryServiceState<BackendSettings, NetworkSettings>>,
+                Option<RecoveryServiceState<ServiceSettings>>,
             >,
-        ) -> Result<ServiceState<BackendSettings, NetworkSettings>, error::EpochMismatch>
+        ) -> Result<ServiceState<ServiceSettings>, error::EpochMismatch>
         where
-            BackendSettings: Clone,
+            ServiceSettings: Clone,
         {
             ServiceState::new(
                 self.last_seen_epoch,
@@ -54,10 +54,8 @@ mod serde {
         }
     }
 
-    impl<BackendSettings, NetworkSettings> From<ServiceState<BackendSettings, NetworkSettings>>
-        for SerializableServiceState
-    {
-        fn from(value: ServiceState<BackendSettings, NetworkSettings>) -> Self {
+    impl<ServiceSettings> From<ServiceState<ServiceSettings>> for SerializableServiceState {
+        fn from(value: ServiceState<ServiceSettings>) -> Self {
             let (
                 last_seen_epoch,
                 spent_core_quota,
@@ -99,7 +97,7 @@ mod service {
     };
 
     /// Recovery state for Blend core service.
-    pub struct ServiceState<BackendSettings, NetworkSettings> {
+    pub struct ServiceState<ServiceSettings> {
         /// The last epoch that was saved.
         last_seen_epoch: Epoch,
         /// The last value for the core quota allowance for the epoch that is
@@ -112,12 +110,11 @@ mod service {
         pending_transactions: VecDeque<Vec<u8>>,
         current_epoch_token_collector: EpochBlendingTokenCollector,
         old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
-        state_updater: overwatch::services::state::StateUpdater<
-            Option<RecoveryServiceState<BackendSettings, NetworkSettings>>,
-        >,
+        state_updater:
+            overwatch::services::state::StateUpdater<Option<RecoveryServiceState<ServiceSettings>>>,
     }
 
-    impl<BackendSettings, NetworkSettings> Clone for ServiceState<BackendSettings, NetworkSettings> {
+    impl<ServiceSettings> Clone for ServiceState<ServiceSettings> {
         fn clone(&self) -> Self {
             Self {
                 last_seen_epoch: self.last_seen_epoch,
@@ -132,7 +129,7 @@ mod service {
         }
     }
 
-    impl<BackendSettings, NetworkSettings> Debug for ServiceState<BackendSettings, NetworkSettings> {
+    impl<ServiceSettings> Debug for ServiceState<ServiceSettings> {
         fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
             f.debug_struct("ServiceState")
                 .field("last_seen_epoch", &self.last_seen_epoch)
@@ -149,9 +146,9 @@ mod service {
         }
     }
 
-    impl<BackendSettings, NetworkSettings> ServiceState<BackendSettings, NetworkSettings>
+    impl<ServiceSettings> ServiceState<ServiceSettings>
     where
-        BackendSettings: Clone,
+        ServiceSettings: Clone,
     {
         // Creates a new instance with the provided fields, and saves it using
         // `state_updater`.
@@ -168,7 +165,7 @@ mod service {
             current_epoch_token_collector: EpochBlendingTokenCollector,
             old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
             state_updater: overwatch::services::state::StateUpdater<
-                Option<RecoveryServiceState<BackendSettings, NetworkSettings>>,
+                Option<RecoveryServiceState<ServiceSettings>>,
             >,
         ) -> Result<Self, error::EpochMismatch> {
             // Check if `current_epoch_token_collector` has the correct epoch number.
@@ -221,7 +218,7 @@ mod service {
             current_epoch_token_collector: EpochBlendingTokenCollector,
             old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
             state_updater: overwatch::services::state::StateUpdater<
-                Option<RecoveryServiceState<BackendSettings, NetworkSettings>>,
+                Option<RecoveryServiceState<ServiceSettings>>,
             >,
         ) -> Result<Self, error::EpochMismatch> {
             Self::new(
@@ -241,11 +238,11 @@ mod service {
         }
     }
 
-    impl<BackendSettings, NetworkSettings> ServiceState<BackendSettings, NetworkSettings> {
+    impl<ServiceSettings> ServiceState<ServiceSettings> {
         /// Consume `self` to return a [`StateUpdater`], which can be used to
         /// batch changes before they are stored using the underlying
         /// [`overwatch::services::state::StateUpdater`].
-        pub const fn start_updating(self) -> StateUpdater<BackendSettings, NetworkSettings> {
+        pub const fn start_updating(self) -> StateUpdater<ServiceSettings> {
             StateUpdater::new(self)
         }
 
@@ -313,9 +310,7 @@ mod service {
             VecDeque<Vec<u8>>,
             EpochBlendingTokenCollector,
             Option<OldEpochBlendingTokenCollector>,
-            overwatch::services::state::StateUpdater<
-                Option<RecoveryServiceState<BackendSettings, NetworkSettings>>,
-            >,
+            overwatch::services::state::StateUpdater<Option<RecoveryServiceState<ServiceSettings>>>,
         ) {
             (
                 self.last_seen_epoch,
@@ -423,22 +418,22 @@ mod state_updater {
     /// A state updater which gathers changes to the underlying [`ServiceState`]
     /// before committing them via the underlying
     /// [`overwatch::services::state::StateUpdater`].
-    pub struct StateUpdater<BackendSettings, NetworkSettings> {
-        inner: ServiceState<BackendSettings, NetworkSettings>,
+    pub struct StateUpdater<ServiceSettings> {
+        inner: ServiceState<ServiceSettings>,
         /// Flag indicating whether ANY changes happened since this object
         /// creation.
         changed: bool,
     }
 
-    impl<BackendSettings, NetworkSettings> StateUpdater<BackendSettings, NetworkSettings> {
-        pub(super) const fn new(inner: ServiceState<BackendSettings, NetworkSettings>) -> Self {
+    impl<ServiceSettings> StateUpdater<ServiceSettings> {
+        pub(super) const fn new(inner: ServiceState<ServiceSettings>) -> Self {
             Self {
                 inner,
                 changed: false,
             }
         }
 
-        pub fn into_inner(self) -> ServiceState<BackendSettings, NetworkSettings> {
+        pub fn into_inner(self) -> ServiceState<ServiceSettings> {
             self.inner
         }
 
@@ -544,11 +539,11 @@ mod state_updater {
         }
     }
 
-    impl<BackendSettings, NetworkSettings> StateUpdater<BackendSettings, NetworkSettings>
+    impl<ServiceSettings> StateUpdater<ServiceSettings>
     where
-        BackendSettings: Clone,
+        ServiceSettings: Clone,
     {
-        pub fn commit_changes(self) -> ServiceState<BackendSettings, NetworkSettings> {
+        pub fn commit_changes(self) -> ServiceState<ServiceSettings> {
             if self.changed {
                 self.inner.save();
             }
@@ -563,10 +558,7 @@ mod recovery_state {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::core::{
-        settings::StartingBlendConfig as BlendConfig,
-        state::{ServiceState, serde::SerializableServiceState},
-    };
+    use crate::core::state::{ServiceState, serde::SerializableServiceState};
 
     #[derive(Clone, Serialize, Deserialize)]
     /// Recovery state type as expected by the file-based recovery operator.
@@ -577,17 +569,20 @@ mod recovery_state {
     ///
     /// If Overwatch will start supporting optional states, this type will most
     /// likely go.
-    pub struct RecoveryServiceState<BackendSettings, NetworkSettings> {
+    pub struct RecoveryServiceState<ServiceSettings> {
         pub service_state: Option<SerializableServiceState>,
-        /// Type-level tie to the service's settings only — neither settings
-        /// type contributes any persisted data.
-        _phantom: PhantomData<fn() -> (BackendSettings, NetworkSettings)>,
+        /// Type-level tie to the service's settings, which contribute no
+        /// persisted data. Overwatch requires `ServiceState::Settings` to equal
+        /// `ServiceData::Settings`, so this *is* that settings type rather than
+        /// the pieces it is built from — one service covering three modes takes
+        /// one settings struct, and it is not the core mode's.
+        _phantom: PhantomData<fn() -> ServiceSettings>,
     }
 
-    impl<BackendSettings, NetworkSettings> From<ServiceState<BackendSettings, NetworkSettings>>
-        for RecoveryServiceState<BackendSettings, NetworkSettings>
+    impl<ServiceSettings> From<ServiceState<ServiceSettings>>
+        for RecoveryServiceState<ServiceSettings>
     {
-        fn from(value: ServiceState<BackendSettings, NetworkSettings>) -> Self {
+        fn from(value: ServiceState<ServiceSettings>) -> Self {
             Self {
                 _phantom: PhantomData,
                 service_state: Some(value.into()),
@@ -595,11 +590,11 @@ mod recovery_state {
         }
     }
 
-    impl<BackendSettings, NetworkSettings> overwatch::services::state::ServiceState
-        for RecoveryServiceState<BackendSettings, NetworkSettings>
+    impl<ServiceSettings> overwatch::services::state::ServiceState
+        for RecoveryServiceState<ServiceSettings>
     {
         type Error = Infallible;
-        type Settings = BlendConfig<BackendSettings, NetworkSettings>;
+        type Settings = ServiceSettings;
 
         fn from_settings(_: &Self::Settings) -> Result<Self, Self::Error> {
             Ok(Self {

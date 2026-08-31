@@ -1,62 +1,29 @@
-use std::{
-    fmt::{Debug, Display},
-    marker::PhantomData,
-    time::Duration,
-};
+use std::{hash::Hash, marker::PhantomData};
 
-use lb_network_service::message::BackendNetworkMsg;
-use lb_services_utils::wait_until_services_are_ready;
-use overwatch::{
-    overwatch::OverwatchHandle,
-    services::{AsServiceId, ServiceData},
-};
+use futures::{Stream, StreamExt as _};
+use lb_blend::scheduling::epoch::EpochEvent;
+use tracing::debug;
 
 use crate::{
-    core::{dispatcher::PayloadDispatcher, service_components::MessageComponents},
-    message::{BlendPayload, NetworkInfo},
-    modes::Error,
+    core::dispatcher::PayloadDispatcher,
+    membership::MembershipInfo,
+    message::{NetworkInfo, ServiceMessage},
+    modes::{LOG_TARGET, Mode},
 };
 
 pub struct BroadcastMode<Adapter, NodeId, RuntimeServiceId> {
     adapter: Adapter,
     node_id: NodeId,
-    _phantom: PhantomData<(NodeId, RuntimeServiceId)>,
+    _phantom: PhantomData<fn() -> RuntimeServiceId>,
 }
 
-impl<Adapter, NodeId, RuntimeServiceId> BroadcastMode<Adapter, NodeId, RuntimeServiceId>
-where
-    Adapter: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
-{
-    pub async fn new<NetworkService>(
-        overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
-        node_id: NodeId,
-        network_settings: Adapter::Settings,
-    ) -> Result<Self, Error>
-    where
-        NetworkService:
-            ServiceData<Message = BackendNetworkMsg<Adapter::Backend, RuntimeServiceId>>,
-        RuntimeServiceId: AsServiceId<NetworkService>
-            + AsServiceId<Adapter::MempoolService>
-            + Debug
-            + Display
-            + Send
-            + Sync
-            + 'static,
-    {
-        wait_until_services_are_ready!(
-            &overwatch_handle,
-            Some(Duration::from_mins(1)),
-            NetworkService
-        )
-        .await?;
-        let relay = overwatch_handle.relay::<NetworkService>().await?;
-        let mempool_relay = overwatch_handle.relay::<Adapter::MempoolService>().await?;
-        let adapter = Adapter::new(relay, mempool_relay, network_settings);
-        Ok(Self {
+impl<Adapter, NodeId, RuntimeServiceId> BroadcastMode<Adapter, NodeId, RuntimeServiceId> {
+    pub const fn new(adapter: Adapter, node_id: NodeId) -> Self {
+        Self {
             adapter,
             node_id,
             _phantom: PhantomData,
-        })
+        }
     }
 }
 
@@ -66,45 +33,79 @@ where
     NodeId: Clone + Send + Sync,
     RuntimeServiceId: Send + Sync + 'static,
 {
-    pub async fn handle_inbound_message<Message>(&self, message: Message) -> Result<(), Error>
-    where
-        Message: MessageComponents<NodeId, Payload: Into<BlendPayload>> + Send + Sync + 'static,
-    {
-        match message.try_into_network_info_request() {
-            Ok(reply) => {
+    /// Answers a message from another service.
+    pub async fn handle_inbound_message(&self, message: ServiceMessage<NodeId>) {
+        match message {
+            // A node in broadcast mode does no blending — it has no membership
+            // to blend through — so the payload goes straight out.
+            ServiceMessage::Blend(payload) => self.adapter.dispatch(payload).await,
+            ServiceMessage::GetNetworkInfo { reply } => {
                 drop(reply.send(Some(NetworkInfo {
                     node_id: self.node_id.clone(),
                     core_info: None,
                 })));
-                Ok(())
             }
-            // Nothing waits for a `PoW` solution here: a node in broadcast mode
-            // does no blending, so a transaction goes straight to the mempool
-            // instead of queueing for one.
-            Err(message) => match message.try_into_pending_transactions_request() {
-                Ok(reply) => {
-                    drop(reply.send(Vec::new()));
-                    Ok(())
+            // Nothing waits for a `PoW` solution here: a transaction goes
+            // straight to the mempool instead of queueing for one, so there is
+            // never anything pending to report.
+            ServiceMessage::GetPendingTransactions { reply } => {
+                drop(reply.send(Vec::new()));
+            }
+        }
+    }
+}
+
+/// Runs the node for as long as it is a broadcast node, and reports the mode it
+/// should switch to.
+pub async fn run_broadcast_mode<Adapter, NodeId, RuntimeServiceId>(
+    mode: BroadcastMode<Adapter, NodeId, RuntimeServiceId>,
+    inbound_relay: &mut (impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin),
+    epoch_stream: &mut (impl Stream<Item = EpochEvent<MembershipInfo<NodeId>>> + Send + Unpin),
+    minimum_network_size: usize,
+) -> Option<Mode>
+where
+    Adapter: PayloadDispatcher<RuntimeServiceId> + Send + Sync + 'static,
+    NodeId: Clone + Eq + Hash + Send + Sync,
+    RuntimeServiceId: Send + Sync + 'static,
+{
+    loop {
+        tokio::select! {
+            Some(message) = inbound_relay.next() => {
+                mode.handle_inbound_message(message).await;
+            }
+            Some(epoch_event) = epoch_stream.next() => {
+                // A transition period expiring is not a mode change: there is
+                // nothing draining here to expire.
+                if let EpochEvent::NewEpoch(MembershipInfo { membership, .. }) = epoch_event {
+                    let next = Mode::choose(&membership, minimum_network_size);
+                    if !matches!(next, Mode::Broadcast) {
+                        return Some(next);
+                    }
                 }
-                Err(message) => {
-                    // Forward directly to the dispatcher.
-                    self.adapter.dispatch(message.into_payload().into()).await;
-                    Ok(())
-                }
-            },
+            }
+            else => {
+                debug!(target: LOG_TARGET, "All input streams terminated, broadcast mode shutting down.");
+                return None;
+            }
         }
     }
 }
 
 #[cfg(test)]
 pub mod tests {
-    use futures::StreamExt as _;
-    use lb_network_service::{NetworkService, backends::NetworkBackend, message::NetworkMsg};
+    use core::time::Duration;
+
+    use lb_network_service::{
+        NetworkService,
+        backends::NetworkBackend,
+        message::{BackendNetworkMsg, NetworkMsg},
+    };
+    use lb_services_utils::wait_until_services_are_ready;
     use overwatch::{
         DynError, OpaqueServiceResourcesHandle,
-        overwatch::OverwatchRunner,
+        overwatch::{OverwatchHandle, OverwatchRunner},
         services::{
-            ServiceCore,
+            AsServiceId, ServiceCore, ServiceData,
             relay::OutboundRelay,
             state::{NoOperator, NoState},
         },
@@ -114,7 +115,21 @@ pub mod tests {
     use tracing::{debug, info};
 
     use super::*;
-    use crate::test_utils::mempool::TestMempoolService;
+    use crate::{message::BlendPayload, test_utils::mempool::TestMempoolService};
+
+    // The supervisor builds one dispatcher and hands each mode its
+    // own handle; this test does the same rather than having the mode
+    // reach for relays itself.
+    async fn dispatcher(handle: &OverwatchHandle<RuntimeServiceId>) -> TestPayloadDispatcher {
+        <TestPayloadDispatcher as PayloadDispatcher<RuntimeServiceId>>::new(
+            handle.relay::<TestNetworkService>().await.unwrap(),
+            handle
+                .relay::<TestMempoolService<RuntimeServiceId>>()
+                .await
+                .unwrap(),
+            (),
+        )
+    }
 
     #[test_log::test(test)]
     fn broadcast_mode() {
@@ -130,17 +145,14 @@ pub mod tests {
             .await
             .unwrap();
 
-            // Create the BroadcastMode
-            let mut mode = BroadcastMode::<TestPayloadDispatcher, (), RuntimeServiceId>::new::<
-                TestNetworkService,
-            >(app.handle(), (), ())
-            .await
-            .unwrap();
+            let mut mode =
+                BroadcastMode::<_, (), RuntimeServiceId>::new(dispatcher(app.handle()).await, ());
 
             // Check if the mode broadcasts a message correctly.
-            mode.handle_inbound_message(TestMessage(b"hello".to_vec()))
-                .await
-                .unwrap();
+            mode.handle_inbound_message(ServiceMessage::Blend(BlendPayload::BlockProposal(
+                b"hello".to_vec(),
+            )))
+            .await;
             assert_eq!(
                 mode.adapter
                     .broadcasted_messages_receiver
@@ -150,15 +162,36 @@ pub mod tests {
                 b"hello".to_vec()
             );
 
-            // Check if the mode can be created again.
-            let mut mode = BroadcastMode::<TestPayloadDispatcher, (), RuntimeServiceId>::new::<
-                TestNetworkService,
-            >(app.handle(), (), ())
-            .await
-            .unwrap();
-            mode.handle_inbound_message(TestMessage(b"world".to_vec()))
+            // A broadcast node still answers the two request messages, which
+            // the old `try_into_*` shim left untested because the test message
+            // could not represent them.
+            let (reply, response) = oneshot::channel();
+            mode.handle_inbound_message(ServiceMessage::GetNetworkInfo { reply })
+                .await;
+            let info = response
                 .await
-                .unwrap();
+                .unwrap()
+                .expect("a broadcast node reports itself");
+            assert!(
+                info.core_info.is_none(),
+                "a broadcast node has no membership, so no core peers to report"
+            );
+
+            let (reply, response) = oneshot::channel();
+            mode.handle_inbound_message(ServiceMessage::GetPendingTransactions { reply })
+                .await;
+            assert!(
+                response.await.unwrap().is_empty(),
+                "nothing queues for a `PoW` solution here: a transaction goes straight out"
+            );
+
+            // Check if the mode can be created again.
+            let mut mode =
+                BroadcastMode::<_, (), RuntimeServiceId>::new(dispatcher(app.handle()).await, ());
+            mode.handle_inbound_message(ServiceMessage::Blend(BlendPayload::BlockProposal(
+                b"world".to_vec(),
+            )))
+            .await;
             assert_eq!(
                 mode.adapter
                     .broadcasted_messages_receiver
@@ -288,35 +321,6 @@ pub mod tests {
                 .send(message)
                 .await
                 .unwrap();
-        }
-    }
-
-    #[derive(Debug)]
-    pub struct TestMessage(Vec<u8>);
-
-    impl<NodeId> MessageComponents<NodeId> for TestMessage {
-        type Payload = BlendPayload;
-
-        fn into_payload(self) -> Self::Payload {
-            BlendPayload::BlockProposal(self.0)
-        }
-
-        fn try_into_pending_transactions_request(
-            self,
-        ) -> Result<oneshot::Sender<Vec<Vec<u8>>>, Self>
-        where
-            Self: Sized,
-        {
-            Err(self)
-        }
-
-        fn try_into_network_info_request(
-            self,
-        ) -> Result<oneshot::Sender<Option<NetworkInfo<NodeId>>>, Self>
-        where
-            Self: Sized,
-        {
-            Err(self)
         }
     }
 

@@ -1,14 +1,14 @@
 use core::num::NonZeroU64;
+// Only the test-only components bundle below needs this.
+#[cfg(test)]
+use std::marker::PhantomData;
 use std::{
     collections::VecDeque,
     fmt::{Debug, Display},
     hash::Hash,
-    marker::PhantomData,
     sync::Arc,
-    time::Duration,
 };
 
-use async_trait::async_trait;
 use backends::BlendBackend;
 use dispatcher::PayloadDispatcher;
 use fork_stream::StreamExt as _;
@@ -61,22 +61,18 @@ use lb_log_targets::blend;
 use lb_network_service::NetworkService;
 use lb_poq::Quota;
 use lb_sdp_service::SdpMessage;
-use lb_services_utils::{
-    overwatch::{RecoveryOperator, recovery::operators::RecoveryBackend as RecoveryBackendTrait},
-    wait_until_services_are_ready,
-};
 use lb_time_service::TimeService;
 use lb_utils::blake_rng::BlakeRng;
 use overwatch::{
-    OpaqueServiceResourcesHandle,
     overwatch::OverwatchHandle,
     services::{
-        AsServiceId, ServiceCore, ServiceData,
+        AsServiceId, ServiceData,
         relay::{OutboundRelay, RelayError},
         state::StateUpdater,
     },
 };
 use rand::{RngCore, SeedableRng as _, seq::SliceRandom as _};
+use service_components::{BackendSettingsOf, Components};
 use tokio::sync::oneshot;
 use tracing::{debug, error, info};
 
@@ -86,8 +82,8 @@ use crate::{
         epoch_stages::{
             retiring::RetiringEpoch,
             running::{
-                Components, CurrentEpoch, CurrentEpochDuringTransition, CurrentEpochEvent,
-                DuringTransitionEvent,
+                Components as EpochComponents, CurrentEpoch, CurrentEpochDuringTransition,
+                CurrentEpochEvent, DuringTransitionEvent,
             },
             transitioning::TransitioningEpoch,
         },
@@ -109,6 +105,7 @@ use crate::{
         EncapsulationResult, LocalEncapsulation, MessageKind, NextLocalMessage, PendingProposals,
         PendingTransactions, next_local_message, resolve_encapsulation,
     },
+    service_components::{Components, NetworkSettingsOf as CoreNetworkSettingsOf},
 };
 
 pub mod backends;
@@ -116,12 +113,12 @@ pub mod dispatcher;
 pub mod kms;
 pub mod settings;
 
-pub(super) mod service_components;
+pub mod service_components;
 
 mod epoch_stages;
 mod processor;
 mod scheduler;
-mod state;
+pub(crate) mod state;
 #[cfg(test)]
 mod tests;
 pub use state::RecoveryServiceState as CoreServiceState;
@@ -138,353 +135,6 @@ type OldEpochCryptographicProcessor<ProofsVerifier> =
 /// independent of each other. For example, the blend backend can use the
 /// libp2p network stack, while the network adapter can use the other network
 /// backend.
-pub struct BlendService<
-    Backend,
-    NodeId,
-    Dispatcher,
-    SdpService,
-    ProofsGenerator,
-    ProofsVerifier,
-    TimeBackend,
-    ChainService,
-    PolInfoProvider,
-    StateStorage,
-    RuntimeServiceId,
-> where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
-    Dispatcher: PayloadDispatcher<RuntimeServiceId>,
-    StateStorage: RecoveryBackendTrait<
-            RuntimeServiceId,
-            State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>,
-        > + Send
-        + Sync,
-{
-    service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    last_saved_state: Option<ServiceState<Backend::Settings, Dispatcher::Settings>>,
-    _phantom: PhantomData<(
-        Backend,
-        SdpService,
-        ProofsGenerator,
-        TimeBackend,
-        ChainService,
-        PolInfoProvider,
-        StateStorage,
-    )>,
-}
-
-impl<
-    Backend,
-    NodeId,
-    Dispatcher,
-    SdpService,
-    ProofsGenerator,
-    ProofsVerifier,
-    TimeBackend,
-    ChainService,
-    PolInfoProvider,
-    StateStorage,
-    RuntimeServiceId,
-> ServiceData
-    for BlendService<
-        Backend,
-        NodeId,
-        Dispatcher,
-        SdpService,
-        ProofsGenerator,
-        ProofsVerifier,
-        TimeBackend,
-        ChainService,
-        PolInfoProvider,
-        StateStorage,
-        RuntimeServiceId,
-    >
-where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
-    Dispatcher: PayloadDispatcher<RuntimeServiceId>,
-    StateStorage: RecoveryBackendTrait<
-            RuntimeServiceId,
-            State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>,
-        > + Send
-        + Sync,
-{
-    type Settings = StartingBlendConfig<Backend::Settings, Dispatcher::Settings>;
-    type State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>;
-    type StateOperator = RecoveryOperator<StateStorage>;
-    type Message = ServiceMessage<NodeId>;
-}
-
-#[async_trait]
-impl<
-    Backend,
-    NodeId,
-    Dispatcher,
-    SdpService,
-    ProofsGenerator,
-    ProofsVerifier,
-    TimeBackend,
-    ChainService,
-    PolInfoProvider,
-    StateStorage,
-    RuntimeServiceId,
-> ServiceCore<RuntimeServiceId>
-    for BlendService<
-        Backend,
-        NodeId,
-        Dispatcher,
-        SdpService,
-        ProofsGenerator,
-        ProofsVerifier,
-        TimeBackend,
-        ChainService,
-        PolInfoProvider,
-        StateStorage,
-        RuntimeServiceId,
-    >
-where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
-    NodeId: membership::node_id::TryFrom + Clone + Debug + Send + Eq + Hash + Sync + 'static,
-    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
-    ProofsGenerator:
-        CoreLeaderAndPowProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>> + Send,
-    SdpService: ServiceData<Message = SdpMessage> + Send,
-    ProofsVerifier: ProofsVerifierTrait + Send + Sync,
-    TimeBackend: lb_time_service::backends::TimeBackend + Send,
-    ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
-    PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
-    StateStorage: RecoveryBackendTrait<
-            RuntimeServiceId,
-            State = RecoveryServiceState<Backend::Settings, Dispatcher::Settings>,
-        > + Send
-        + Sync,
-    RuntimeServiceId: AsServiceId<NetworkService<Dispatcher::Backend, RuntimeServiceId>>
-        + AsServiceId<Dispatcher::MempoolService>
-        + AsServiceId<SdpService>
-        + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
-        + AsServiceId<ChainService>
-        + AsServiceId<PreloadKmsService<RuntimeServiceId>>
-        + AsServiceId<Self>
-        + Clone
-        + Debug
-        + Display
-        + Sync
-        + Send
-        + Unpin
-        + 'static,
-{
-    fn init(
-        service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-        recovery_initial_state: Self::State,
-    ) -> Result<Self, overwatch::DynError> {
-        let state_updater = service_resources_handle.state_updater.clone();
-        Ok(Self {
-            service_resources_handle,
-            // We consume the serializable state into the state type we interact with in the
-            // service. If the persisted state is inconsistent (e.g. an epoch
-            // mismatch from version skew or a partial write), discard it rather
-            // than panicking: `run` already falls back to a fresh state when
-            // none was recovered, which avoids a crash loop on every start.
-            last_saved_state: recovery_initial_state.service_state.and_then(|s| {
-                match s.try_into_state_with_state_updater(state_updater) {
-                    Ok(state) => Some(state),
-                    Err(error) => {
-                        tracing::error!(
-                            target: LOG_TARGET,
-                            "Discarding inconsistent recovery state and starting fresh: {error:?}"
-                        );
-                        None
-                    }
-                }
-            }),
-            _phantom: PhantomData,
-        })
-    }
-
-    #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
-    async fn run(mut self) -> Result<(), overwatch::DynError> {
-        let Self {
-            service_resources_handle:
-                OpaqueServiceResourcesHandle::<Self, RuntimeServiceId> {
-                    ref mut inbound_relay,
-                    ref overwatch_handle,
-                    ref settings_handle,
-                    ref status_updater,
-                    state_updater,
-                },
-            last_saved_state,
-            ..
-        } = self;
-
-        let blend_config = settings_handle.notifier().get_updated_settings();
-
-        wait_until_services_are_ready!(
-            &overwatch_handle,
-            Some(Duration::from_mins(1)),
-            NetworkService<_, _>,
-            TimeService<_, _>,
-            SdpService,
-            PreloadKmsService<_>
-        )
-        .await?;
-
-        let payload_dispatcher = async {
-            let network_relay = overwatch_handle
-                .relay::<NetworkService<_, _>>()
-                .await
-                .expect("Relay with network service should be available.");
-            let mempool_relay = overwatch_handle
-                .relay::<Dispatcher::MempoolService>()
-                .await
-                .expect("Relay with mempool service should be available.");
-            Dispatcher::new(network_relay, mempool_relay, blend_config.network.clone())
-        }
-        .await;
-
-        let kms_api = async {
-            let kms_outbound_relay = overwatch_handle
-                .relay::<PreloadKmsService<_>>()
-                .await
-                .expect("Relay with KMS service should be available.");
-
-            KmsServiceApi::new(kms_outbound_relay)
-        }
-        .await;
-
-        let PublicKeyEncoding::Zk(zk_public_key) = kms_api
-            .public_key(blend_config.zk.secret_key_kms_id.clone())
-            .await
-            .expect("ZK public key for provided ID should be stored in KMS.")
-        else {
-            panic!("Key with specified ID is not a ZK key.");
-        };
-
-        // TODO: This will go once we do not need to pass the secret key anymore, i.e.,
-        // when we have libp2p integration with KMS.
-        let non_ephemeral_signing_key = {
-            let (sender, receiver) = oneshot::channel();
-            kms_api
-                .execute(
-                    blend_config.non_ephemeral_signing_key_id.clone(),
-                    KeyOperators::Ed25519(Box::new(LeakSecretKeyOperator::new(sender))),
-                )
-                .await
-                .expect("Failed to interact with KMS to fetch non-ephemeral signing key.");
-            receiver
-                .await
-                .expect("Failed to retrieve non-ephemeral signing key from KMS.")
-        };
-
-        let public_epoch_stream =
-            membership::chain::subscribe::<ChainService, NodeId, TimeBackend, RuntimeServiceId>(
-                overwatch_handle,
-                non_ephemeral_signing_key.public_key(),
-                Some(zk_public_key),
-            )
-            .await;
-
-        let sdp_relay = overwatch_handle
-            .relay::<SdpService>()
-            .await
-            .expect("Relay with SDP service should be available.");
-
-        // Initialize components for the service.
-        let running_blend_config = RunningBlendConfig {
-            backend: blend_config.backend,
-            non_ephemeral_signing_key,
-            num_blend_layers: blend_config.num_blend_layers,
-            minimum_network_size: blend_config.minimum_network_size,
-            scheduler: blend_config.scheduler,
-            time: blend_config.time,
-            zk: blend_config.zk,
-            data_replication_factor: blend_config.data_replication_factor,
-            activity_threshold_sensitivity: blend_config.activity_threshold_sensitivity,
-            pow_mining_pool: new_mining_pool(),
-        };
-        let (
-            mut remaining_epoch_stream,
-            current_public_info,
-            crypto_processor,
-            current_recovery_checkpoint,
-            pending_transactions,
-            message_scheduler,
-            mut backend,
-            mut rng,
-        ) = initialize::<
-            NodeId,
-            Backend,
-            Dispatcher,
-            ProofsGenerator,
-            ProofsVerifier,
-            KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
-            RuntimeServiceId,
-        >(
-            running_blend_config.clone(),
-            public_epoch_stream,
-            overwatch_handle.clone(),
-            kms_api,
-            &sdp_relay,
-            last_saved_state,
-            state_updater,
-            BlakeRng::from_entropy(),
-        )
-        .await;
-
-        status_updater.notify_ready();
-        tracing::info!(
-            target: LOG_TARGET,
-            "Service '{}' is ready.",
-            <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
-        );
-
-        // Initialize more components that can be successfully created after
-        // `notify_ready()`.
-        let secret_pol_info_stream = post_initialize::<PolInfoProvider, _>(overwatch_handle).await;
-
-        let mut blend_messages = backend.listen_to_incoming_messages();
-
-        // Run the main event loop while the node is a core node across multiple
-        // epochs. When the node becomes a non-core node in a new epoch, the
-        // epoch it is leaving behind is handed over for the retirement phase.
-        let retiring_epoch = run_event_loop(
-            inbound_relay,
-            &mut blend_messages,
-            secret_pol_info_stream,
-            &mut remaining_epoch_stream,
-            &running_blend_config,
-            &mut backend,
-            &payload_dispatcher,
-            &sdp_relay,
-            &mut rng,
-            CurrentEpoch::new(
-                crypto_processor,
-                message_scheduler.into(),
-                current_public_info,
-            ),
-            pending_transactions,
-            current_recovery_checkpoint,
-        )
-        .await;
-
-        // The main event loop has ended because the node is no longer a core node
-        // in the new epoch.
-        // Before terminating the service, complete the old epoch during a single
-        // epoch transition period.
-        retire(
-            // We don't need epoch numbers anymore since we know we are dealing with a single,
-            // past epoch.
-            blend_messages.map(|(message, _)| message),
-            remaining_epoch_stream,
-            backend,
-            payload_dispatcher,
-            sdp_relay,
-            rng,
-            retiring_epoch,
-        )
-        .await;
-
-        Ok(())
-    }
-}
-
 /// Initialize the components for the [`BlendService`].
 #[expect(clippy::too_many_lines, reason = "Need to initialize many components")]
 #[expect(
@@ -495,21 +145,19 @@ where
 async fn initialize<
     NodeId,
     Backend,
-    Dispatcher,
     ProofsGenerator,
     ProofsVerifier,
     KmsAdapter,
     RuntimeServiceId,
+    ServiceSettings,
 >(
     blend_config: RunningBlendConfig<Backend::Settings>,
     public_epoch_stream: impl Stream<Item = BlendEpochState<NodeId>> + Send + Unpin + 'static,
     overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     kms_adapter: KmsAdapter,
     sdp_relay: &OutboundRelay<SdpMessage>,
-    mut last_saved_state: Option<ServiceState<Backend::Settings, Dispatcher::Settings>>,
-    state_updater: StateUpdater<
-        Option<RecoveryServiceState<Backend::Settings, Dispatcher::Settings>>,
-    >,
+    mut last_saved_state: Option<ServiceState<ServiceSettings>>,
+    state_updater: StateUpdater<Option<RecoveryServiceState<ServiceSettings>>>,
     release_delay_rng: BlakeRng,
 ) -> (
     impl Stream<Item = EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, KmsAdapter::CorePoQGenerator>>>
@@ -523,16 +171,16 @@ async fn initialize<
         ProofsGenerator,
         ProofsVerifier,
     >,
-    ServiceState<Backend::Settings, Dispatcher::Settings>,
+    ServiceState<ServiceSettings>,
     PendingTransactions,
     SchedulerWrapper<BlakeRng, ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
     Backend,
     BlakeRng,
 )
 where
+    ServiceSettings: Clone + Send + Sync,
     NodeId: Clone + Debug + Eq + Hash + Send + 'static,
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
-    Dispatcher: PayloadDispatcher<RuntimeServiceId>,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<KmsAdapter::CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
     // To avoid bubbling up generics everywhere in the configs (current Overwatch limitation), we
@@ -812,17 +460,8 @@ where
 //
 // Returns the old epoch components when the node is no longer a core node.
 #[expect(clippy::too_many_arguments, reason = "categorize args")]
-async fn run_event_loop<
-    NodeId,
-    Backend,
-    Rng,
-    Dispatcher,
-    ProofsGenerator,
-    ProofsVerifier,
-    CorePoQGenerator,
-    RuntimeServiceId,
->(
-    mut inbound_relay: impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin,
+async fn run_event_loop<Core, RuntimeServiceId>(
+    mut inbound_relay: impl Stream<Item = ServiceMessage<Core::NodeId>> + Send + Unpin,
     blend_messages: &mut (
              impl Stream<Item = (EncapsulatedMessageWithVerifiedPublicHeader, Epoch)>
              + Send
@@ -831,31 +470,31 @@ async fn run_event_loop<
          ),
     mut secret_pol_info_stream: impl Stream<Item = PolEpochInfo> + Send + Unpin,
     remaining_epoch_stream: &mut (
-             impl Stream<Item = EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>>>
-             + Unpin
-             + Send
+             impl Stream<Item = EpochEvent<EpochInfoOf<Core, RuntimeServiceId>>> + Unpin + Send
          ),
-    blend_config: &RunningBlendConfig<Backend::Settings>,
-    backend: &mut Backend,
-    payload_dispatcher: &Dispatcher,
+    blend_config: &RunningBlendConfig<BackendSettingsOf<Core, RuntimeServiceId>>,
+    backend: &mut Core::Backend,
+    payload_dispatcher: &Core::Dispatcher,
     sdp_relay: &OutboundRelay<SdpMessage>,
-    rng: &mut Rng,
-    current_epoch: CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
+    rng: &mut Core::Rng,
+    current_epoch: CurrentEpochOf<Core, RuntimeServiceId>,
     mut pending_transactions: PendingTransactions,
-    mut recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
-) -> RetiringEpoch<Rng, ProofsVerifier>
+    mut recovery_checkpoint: CheckpointOf<Core, RuntimeServiceId>,
+) -> RetiringEpochOf<Core, RuntimeServiceId>
 where
-    NodeId: Clone + Eq + Hash + Send + Sync + 'static,
-    Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync + Send,
-    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
-    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator> + Send,
-    CorePoQGenerator: Send + Sync,
-    ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    Core: Components<RuntimeServiceId, Settings: Clone + Send + Sync>,
+    Core::NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
+    Core::Rng: rand::Rng + Clone + Send + Unpin,
+    Core::ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    Core::CorePoQGenerator: Send + Sync,
+    Core::Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
+    Core::Backend:
+        BlendBackend<Core::NodeId, BlakeRng, Core::ProofsVerifier, RuntimeServiceId> + Send + Sync,
+    Core::ProofsGenerator: CoreLeaderAndPowProofsGenerator<Core::CorePoQGenerator> + Send,
     RuntimeServiceId: Sync + Send,
 {
     let mut latest_secret_pol_info: Option<PolEpochInfo> = None;
-    let mut current_epoch_stage = current_epoch.into();
+    let mut current_epoch_stage: Stage<Core, RuntimeServiceId> = current_epoch.into();
     loop {
         let epoch_outcome = match current_epoch_stage {
             Stage::Current(current) => {
@@ -911,89 +550,121 @@ where
     }
 }
 
+/// The projections of [`Components`] this module spells out repeatedly, named
+/// once each so the signatures below do not have to.
+type CurrentEpochOf<Core, RuntimeServiceId> = CurrentEpoch<
+    <Core as Components<RuntimeServiceId>>::NodeId,
+    <Core as Components<RuntimeServiceId>>::CorePoQGenerator,
+    <Core as Components<RuntimeServiceId>>::ProofsGenerator,
+    <Core as Components<RuntimeServiceId>>::ProofsVerifier,
+    <Core as Components<RuntimeServiceId>>::Rng,
+>;
+type DuringTransitionOf<Core, RuntimeServiceId> = CurrentEpochDuringTransition<
+    <Core as Components<RuntimeServiceId>>::NodeId,
+    <Core as Components<RuntimeServiceId>>::CorePoQGenerator,
+    <Core as Components<RuntimeServiceId>>::ProofsGenerator,
+    <Core as Components<RuntimeServiceId>>::ProofsVerifier,
+    <Core as Components<RuntimeServiceId>>::Rng,
+>;
+type EpochComponentsOf<Core, RuntimeServiceId> = EpochComponents<
+    <Core as Components<RuntimeServiceId>>::NodeId,
+    <Core as Components<RuntimeServiceId>>::CorePoQGenerator,
+    <Core as Components<RuntimeServiceId>>::ProofsGenerator,
+    <Core as Components<RuntimeServiceId>>::ProofsVerifier,
+    <Core as Components<RuntimeServiceId>>::Rng,
+>;
+type RetiringEpochOf<Core, RuntimeServiceId> = RetiringEpoch<
+    <Core as Components<RuntimeServiceId>>::Rng,
+    <Core as Components<RuntimeServiceId>>::ProofsVerifier,
+>;
+type EpochInfoOf<Core, RuntimeServiceId> = MaybeEmptyCoreEpochInfo<
+    <Core as Components<RuntimeServiceId>>::NodeId,
+    <Core as Components<RuntimeServiceId>>::CorePoQGenerator,
+>;
+/// The recovery state as the loop threads it: moved and returned rather than
+/// borrowed, because committing it consumes the builder.
+type CheckpointOf<Core, RuntimeServiceId> =
+    ServiceState<<Core as Components<RuntimeServiceId>>::Settings>;
+
 /// Which stage of its life the node's blending is in.
-enum Stage<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng> {
-    Current(Box<CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>>),
-    DuringTransition(
-        Box<
-            CurrentEpochDuringTransition<
-                NodeId,
-                CorePoQGenerator,
-                ProofsGenerator,
-                ProofsVerifier,
-                Rng,
-            >,
-        >,
-    ),
+enum Stage<Core, RuntimeServiceId>
+where
+    Core: Components<RuntimeServiceId, Settings: Clone + Send + Sync>,
+    Core::NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
+    Core::Rng: rand::Rng + Clone + Send + Unpin,
+    Core::ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    Core::CorePoQGenerator: Send + Sync,
+    Core::Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
+    Core::Backend:
+        BlendBackend<Core::NodeId, BlakeRng, Core::ProofsVerifier, RuntimeServiceId> + Send + Sync,
+    Core::ProofsGenerator: CoreLeaderAndPowProofsGenerator<Core::CorePoQGenerator> + Send,
+{
+    Current(Box<CurrentEpochOf<Core, RuntimeServiceId>>),
+    DuringTransition(Box<DuringTransitionOf<Core, RuntimeServiceId>>),
 }
 
-impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
-    From<CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>>
-    for Stage<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
+impl<Core, RuntimeServiceId> From<CurrentEpochOf<Core, RuntimeServiceId>>
+    for Stage<Core, RuntimeServiceId>
+where
+    Core: Components<RuntimeServiceId, Settings: Clone + Send + Sync>,
+    Core::NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
+    Core::Rng: rand::Rng + Clone + Send + Unpin,
+    Core::ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    Core::CorePoQGenerator: Send + Sync,
+    Core::Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
+    Core::Backend:
+        BlendBackend<Core::NodeId, BlakeRng, Core::ProofsVerifier, RuntimeServiceId> + Send + Sync,
+    Core::ProofsGenerator: CoreLeaderAndPowProofsGenerator<Core::CorePoQGenerator> + Send,
 {
-    fn from(
-        value: CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
-    ) -> Self {
+    fn from(value: CurrentEpochOf<Core, RuntimeServiceId>) -> Self {
         Self::Current(Box::new(value))
     }
 }
 
-impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
-    From<
-        CurrentEpochDuringTransition<
-            NodeId,
-            CorePoQGenerator,
-            ProofsGenerator,
-            ProofsVerifier,
-            Rng,
-        >,
-    > for Stage<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
+impl<Core, RuntimeServiceId> From<DuringTransitionOf<Core, RuntimeServiceId>>
+    for Stage<Core, RuntimeServiceId>
+where
+    Core: Components<RuntimeServiceId, Settings: Clone + Send + Sync>,
+    Core::NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
+    Core::Rng: rand::Rng + Clone + Send + Unpin,
+    Core::ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    Core::CorePoQGenerator: Send + Sync,
+    Core::Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
+    Core::Backend:
+        BlendBackend<Core::NodeId, BlakeRng, Core::ProofsVerifier, RuntimeServiceId> + Send + Sync,
+    Core::ProofsGenerator: CoreLeaderAndPowProofsGenerator<Core::CorePoQGenerator> + Send,
 {
-    fn from(
-        value: CurrentEpochDuringTransition<
-            NodeId,
-            CorePoQGenerator,
-            ProofsGenerator,
-            ProofsVerifier,
-            Rng,
-        >,
-    ) -> Self {
+    fn from(value: DuringTransitionOf<Core, RuntimeServiceId>) -> Self {
         Self::DuringTransition(Box::new(value))
     }
 }
 
 /// How a stage ended.
-enum StageOutcome<
-    NodeId,
-    CorePoQGenerator,
-    ProofsGenerator,
-    ProofsVerifier,
-    Rng,
-    BackendSettings,
-    NetworkSettings,
-> {
+enum StageOutcome<Core, RuntimeServiceId>
+where
+    Core: Components<RuntimeServiceId, Settings: Clone + Send + Sync>,
+    Core::NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
+    Core::Rng: rand::Rng + Clone + Send + Unpin,
+    Core::ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    Core::CorePoQGenerator: Send + Sync,
+    Core::Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
+    Core::Backend:
+        BlendBackend<Core::NodeId, BlakeRng, Core::ProofsVerifier, RuntimeServiceId> + Send + Sync,
+    Core::ProofsGenerator: CoreLeaderAndPowProofsGenerator<Core::CorePoQGenerator> + Send,
+{
     /// An epoch event moved the node to another stage.
     NewEpoch {
-        next: Stage<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
-        recovery_checkpoint: Box<ServiceState<BackendSettings, NetworkSettings>>,
+        next: Stage<Core, RuntimeServiceId>,
+        recovery_checkpoint: Box<CheckpointOf<Core, RuntimeServiceId>>,
     },
     /// The node is no longer a core node, or Blend is disabled.
-    Retiring(Box<RetiringEpoch<Rng, ProofsVerifier>>),
+    Retiring(Box<RetiringEpochOf<Core, RuntimeServiceId>>),
 }
 
 /// The stage with no previous epoch left to drain.
 #[expect(clippy::too_many_arguments, reason = "categorize args")]
-async fn run_current_epoch<
-    NodeId,
-    Backend,
-    Rng,
-    Dispatcher,
-    ProofsGenerator,
-    ProofsVerifier,
-    CorePoQGenerator,
-    RuntimeServiceId,
->(
-    inbound_relay: &mut (impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin),
+async fn run_current_epoch<Core, RuntimeServiceId>(
+    inbound_relay: &mut (impl Stream<Item = ServiceMessage<Core::NodeId>> + Send + Unpin),
     blend_messages: &mut (
              impl Stream<Item = (EncapsulatedMessageWithVerifiedPublicHeader, Epoch)>
              + Send
@@ -1002,49 +673,41 @@ async fn run_current_epoch<
          ),
     secret_pol_info_stream: &mut (impl Stream<Item = PolEpochInfo> + Send + Unpin),
     remaining_epoch_stream: &mut (
-             impl Stream<Item = EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>>>
-             + Unpin
-             + Send
+             impl Stream<Item = EpochEvent<EpochInfoOf<Core, RuntimeServiceId>>> + Unpin + Send
          ),
-    blend_config: &RunningBlendConfig<Backend::Settings>,
-    backend: &mut Backend,
-    payload_dispatcher: &Dispatcher,
+    blend_config: &RunningBlendConfig<BackendSettingsOf<Core, RuntimeServiceId>>,
+    backend: &mut Core::Backend,
+    payload_dispatcher: &Core::Dispatcher,
     sdp_relay: &OutboundRelay<SdpMessage>,
-    rng: &mut Rng,
-    mut current_epoch: CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
+    rng: &mut Core::Rng,
+    mut current_epoch: CurrentEpochOf<Core, RuntimeServiceId>,
     pending_transactions: &mut PendingTransactions,
     latest_secret_pol_info: &mut Option<PolEpochInfo>,
-    mut recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
-) -> StageOutcome<
-    NodeId,
-    CorePoQGenerator,
-    ProofsGenerator,
-    ProofsVerifier,
-    Rng,
-    Backend::Settings,
-    Dispatcher::Settings,
->
+    mut recovery_checkpoint: CheckpointOf<Core, RuntimeServiceId>,
+) -> StageOutcome<Core, RuntimeServiceId>
 where
-    NodeId: Clone + Eq + Hash + Send + Sync + 'static,
-    Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync + Send,
-    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
-    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator> + Send,
-    CorePoQGenerator: Send + Sync,
-    ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    Core: Components<RuntimeServiceId, Settings: Clone + Send + Sync>,
+    Core::NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
+    Core::Rng: rand::Rng + Clone + Send + Unpin,
+    Core::ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    Core::CorePoQGenerator: Send + Sync,
+    Core::Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
+    Core::Backend:
+        BlendBackend<Core::NodeId, BlakeRng, Core::ProofsVerifier, RuntimeServiceId> + Send + Sync,
+    Core::ProofsGenerator: CoreLeaderAndPowProofsGenerator<Core::CorePoQGenerator> + Send,
     RuntimeServiceId: Sync + Send,
 {
     loop {
         tokio::select! {
             Some(msg) = inbound_relay.next() => {
-                recovery_checkpoint = handle_service_message(msg, current_epoch.proposals_mut(), pending_transactions, blend_config, backend, recovery_checkpoint).await;
+                recovery_checkpoint = handle_service_message::<Core, RuntimeServiceId>(msg, current_epoch.proposals_mut(), pending_transactions, blend_config, backend, recovery_checkpoint).await;
             }
             Some(incoming_message) = blend_messages.next() => {
                 let (scheduler, crypto) = current_epoch.decapsulation_borrows();
                 recovery_checkpoint = handle_incoming_blend_message(incoming_message, scheduler, None, crypto.receiver(), None, recovery_checkpoint);
             }
             event = current_epoch.next_event(pending_transactions) => {
-                recovery_checkpoint = handle_current_epoch_event(event, &mut current_epoch, pending_transactions, rng, backend, payload_dispatcher, recovery_checkpoint).await;
+                recovery_checkpoint = handle_current_epoch_event::<Core, RuntimeServiceId>(event, &mut current_epoch, pending_transactions, rng, backend, payload_dispatcher, recovery_checkpoint).await;
             }
             Some(pol_secret_info) = secret_pol_info_stream.next() => {
                 apply_or_hold_secret_pol_info(pol_secret_info, &mut current_epoch, latest_secret_pol_info);
@@ -1055,10 +718,10 @@ where
                     // has — queued proposals included. There is nothing to
                     // drain here, but the expiry still has to be acknowledged.
                     EpochEvent::TransitionPeriodExpired => {
-                        recovery_checkpoint = complete_transition_period(backend, sdp_relay, recovery_checkpoint).await;
+                        recovery_checkpoint = complete_transition_period::<Core, RuntimeServiceId>(backend, sdp_relay, recovery_checkpoint).await;
                     }
                     EpochEvent::NewEpoch(new_epoch_info) => {
-                        return rotate::<_, _, _, Dispatcher, _, _, _, RuntimeServiceId>(new_epoch_info, current_epoch.into_components(), latest_secret_pol_info, blend_config, backend, recovery_checkpoint).await;
+                        return rotate::<Core, RuntimeServiceId>(new_epoch_info, current_epoch.into_components(), latest_secret_pol_info, blend_config, backend, recovery_checkpoint).await;
                     }
                 }
             }
@@ -1069,17 +732,8 @@ where
 /// The stage in which the epoch before this one is still within its transition
 /// period, so both are live.
 #[expect(clippy::too_many_arguments, reason = "categorize args")]
-async fn run_during_transition<
-    NodeId,
-    Backend,
-    Rng,
-    Dispatcher,
-    ProofsGenerator,
-    ProofsVerifier,
-    CorePoQGenerator,
-    RuntimeServiceId,
->(
-    inbound_relay: &mut (impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin),
+async fn run_during_transition<Core, RuntimeServiceId>(
+    inbound_relay: &mut (impl Stream<Item = ServiceMessage<Core::NodeId>> + Send + Unpin),
     blend_messages: &mut (
              impl Stream<Item = (EncapsulatedMessageWithVerifiedPublicHeader, Epoch)>
              + Send
@@ -1088,48 +742,34 @@ async fn run_during_transition<
          ),
     secret_pol_info_stream: &mut (impl Stream<Item = PolEpochInfo> + Send + Unpin),
     remaining_epoch_stream: &mut (
-             impl Stream<Item = EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>>>
-             + Unpin
-             + Send
+             impl Stream<Item = EpochEvent<EpochInfoOf<Core, RuntimeServiceId>>> + Unpin + Send
          ),
-    blend_config: &RunningBlendConfig<Backend::Settings>,
-    backend: &mut Backend,
-    payload_dispatcher: &Dispatcher,
+    blend_config: &RunningBlendConfig<BackendSettingsOf<Core, RuntimeServiceId>>,
+    backend: &mut Core::Backend,
+    payload_dispatcher: &Core::Dispatcher,
     sdp_relay: &OutboundRelay<SdpMessage>,
-    rng: &mut Rng,
-    mut during_transition: CurrentEpochDuringTransition<
-        NodeId,
-        CorePoQGenerator,
-        ProofsGenerator,
-        ProofsVerifier,
-        Rng,
-    >,
+    rng: &mut Core::Rng,
+    mut during_transition: DuringTransitionOf<Core, RuntimeServiceId>,
     pending_transactions: &mut PendingTransactions,
     latest_secret_pol_info: &mut Option<PolEpochInfo>,
-    mut recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
-) -> StageOutcome<
-    NodeId,
-    CorePoQGenerator,
-    ProofsGenerator,
-    ProofsVerifier,
-    Rng,
-    Backend::Settings,
-    Dispatcher::Settings,
->
+    mut recovery_checkpoint: CheckpointOf<Core, RuntimeServiceId>,
+) -> StageOutcome<Core, RuntimeServiceId>
 where
-    NodeId: Clone + Eq + Hash + Send + Sync + 'static,
-    Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync + Send,
-    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
-    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator> + Send,
-    CorePoQGenerator: Send + Sync,
-    ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    Core: Components<RuntimeServiceId, Settings: Clone + Send + Sync>,
+    Core::NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
+    Core::Rng: rand::Rng + Clone + Send + Unpin,
+    Core::ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    Core::CorePoQGenerator: Send + Sync,
+    Core::Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
+    Core::Backend:
+        BlendBackend<Core::NodeId, BlakeRng, Core::ProofsVerifier, RuntimeServiceId> + Send + Sync,
+    Core::ProofsGenerator: CoreLeaderAndPowProofsGenerator<Core::CorePoQGenerator> + Send,
     RuntimeServiceId: Sync + Send,
 {
     loop {
         tokio::select! {
             Some(msg) = inbound_relay.next() => {
-                recovery_checkpoint = handle_service_message(msg, during_transition.current_mut().proposals_mut(), pending_transactions, blend_config, backend, recovery_checkpoint).await;
+                recovery_checkpoint = handle_service_message::<Core, RuntimeServiceId>(msg, during_transition.current_mut().proposals_mut(), pending_transactions, blend_config, backend, recovery_checkpoint).await;
             }
             Some(incoming_message) = blend_messages.next() => {
                 let (scheduler, previous_scheduler, crypto, previous_crypto) = during_transition.decapsulation_borrows();
@@ -1138,7 +778,7 @@ where
             event = during_transition.next_event(pending_transactions) => {
                 match event {
                     DuringTransitionEvent::Current(event) => {
-                        recovery_checkpoint = handle_current_epoch_event(event, during_transition.current_mut(), pending_transactions, rng, backend, payload_dispatcher, recovery_checkpoint).await;
+                        recovery_checkpoint = handle_current_epoch_event::<Core, RuntimeServiceId>(event, during_transition.current_mut(), pending_transactions, rng, backend, payload_dispatcher, recovery_checkpoint).await;
                     }
                     DuringTransitionEvent::PreviousEpochReleaseRound(round_info, previous_epoch) => {
                         handle_release_round_for_old_epoch(round_info, rng, backend, payload_dispatcher, previous_epoch).await;
@@ -1155,11 +795,11 @@ where
                     EpochEvent::TransitionPeriodExpired => {
                         return StageOutcome::NewEpoch {
                             next: during_transition.end_transition().into(),
-                            recovery_checkpoint: Box::new(complete_transition_period(backend, sdp_relay, recovery_checkpoint).await),
+                            recovery_checkpoint: Box::new(complete_transition_period::<Core, RuntimeServiceId>(backend, sdp_relay, recovery_checkpoint).await),
                         };
                     }
                     EpochEvent::NewEpoch(new_epoch_info) => {
-                        return rotate::<_, _, _, Dispatcher, _, _, _, RuntimeServiceId>(new_epoch_info, during_transition.into_components(), latest_secret_pol_info, blend_config, backend, recovery_checkpoint).await;
+                        return rotate::<Core, RuntimeServiceId>(new_epoch_info, during_transition.into_components(), latest_secret_pol_info, blend_config, backend, recovery_checkpoint).await;
                     }
                 }
             }
@@ -1168,23 +808,24 @@ where
 }
 
 /// Answers a message from another service, which both stages do the same way.
-async fn handle_service_message<
-    NodeId,
-    Backend,
-    ProofsVerifier,
-    NetworkSettings,
-    RuntimeServiceId,
->(
-    message: ServiceMessage<NodeId>,
+async fn handle_service_message<Core, RuntimeServiceId>(
+    message: ServiceMessage<Core::NodeId>,
     pending_proposals: &mut PendingProposals,
     pending_transactions: &mut PendingTransactions,
-    blend_config: &RunningBlendConfig<Backend::Settings>,
-    backend: &Backend,
-    recovery_checkpoint: ServiceState<Backend::Settings, NetworkSettings>,
-) -> ServiceState<Backend::Settings, NetworkSettings>
+    blend_config: &RunningBlendConfig<BackendSettingsOf<Core, RuntimeServiceId>>,
+    backend: &Core::Backend,
+    recovery_checkpoint: CheckpointOf<Core, RuntimeServiceId>,
+) -> CheckpointOf<Core, RuntimeServiceId>
 where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
-    NetworkSettings: Clone,
+    Core: Components<RuntimeServiceId, Settings: Clone + Send + Sync>,
+    Core::NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
+    Core::Rng: rand::Rng + Clone + Send + Unpin,
+    Core::ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    Core::CorePoQGenerator: Send + Sync,
+    Core::Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
+    Core::Backend:
+        BlendBackend<Core::NodeId, BlakeRng, Core::ProofsVerifier, RuntimeServiceId> + Send + Sync,
+    Core::ProofsGenerator: CoreLeaderAndPowProofsGenerator<Core::CorePoQGenerator> + Send,
 {
     match message {
         ServiceMessage::Blend(BlendPayload::Transaction(transaction)) => {
@@ -1214,37 +855,25 @@ where
 
 /// Acts on something the current epoch produced, which both stages do the same
 /// way.
-async fn handle_current_epoch_event<
-    NodeId,
-    Backend,
-    Rng,
-    Dispatcher,
-    ProofsGenerator,
-    ProofsVerifier,
-    CorePoQGenerator,
-    RuntimeServiceId,
->(
+async fn handle_current_epoch_event<Core, RuntimeServiceId>(
     event: CurrentEpochEvent,
-    current_epoch: &mut CurrentEpoch<
-        NodeId,
-        CorePoQGenerator,
-        ProofsGenerator,
-        ProofsVerifier,
-        Rng,
-    >,
+    current_epoch: &mut CurrentEpochOf<Core, RuntimeServiceId>,
     pending_transactions: &mut PendingTransactions,
-    rng: &mut Rng,
-    backend: &Backend,
-    payload_dispatcher: &Dispatcher,
-    recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
-) -> ServiceState<Backend::Settings, Dispatcher::Settings>
+    rng: &mut Core::Rng,
+    backend: &Core::Backend,
+    payload_dispatcher: &Core::Dispatcher,
+    recovery_checkpoint: CheckpointOf<Core, RuntimeServiceId>,
+) -> CheckpointOf<Core, RuntimeServiceId>
 where
-    NodeId: Eq + Hash + Send + Sync + 'static,
-    Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
-    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
-    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
-    ProofsVerifier: ProofsVerifierTrait,
+    Core: Components<RuntimeServiceId, Settings: Clone + Send + Sync>,
+    Core::NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
+    Core::Rng: rand::Rng + Clone + Send + Unpin,
+    Core::ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    Core::CorePoQGenerator: Send + Sync,
+    Core::Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
+    Core::Backend:
+        BlendBackend<Core::NodeId, BlakeRng, Core::ProofsVerifier, RuntimeServiceId> + Send + Sync,
+    Core::ProofsGenerator: CoreLeaderAndPowProofsGenerator<Core::CorePoQGenerator> + Send,
 {
     match event {
         CurrentEpochEvent::Encapsulated(encapsulation_result) => match encapsulation_result {
@@ -1330,38 +959,24 @@ fn apply_or_hold_secret_pol_info<NodeId, CorePoQGenerator, ProofsGenerator, Proo
 
 /// Turns an epoch event into the stage that follows, which is the only thing
 /// either stage ends on.
-async fn rotate<
-    NodeId,
-    Backend,
-    Rng,
-    Dispatcher,
-    ProofsGenerator,
-    ProofsVerifier,
-    CorePoQGenerator,
-    RuntimeServiceId,
->(
-    new_epoch_info: MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>,
-    components: Components<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
+async fn rotate<Core, RuntimeServiceId>(
+    new_epoch_info: EpochInfoOf<Core, RuntimeServiceId>,
+    components: EpochComponentsOf<Core, RuntimeServiceId>,
     latest_secret_pol_info: &mut Option<PolEpochInfo>,
-    blend_config: &RunningBlendConfig<Backend::Settings>,
-    backend: &mut Backend,
-    recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
-) -> StageOutcome<
-    NodeId,
-    CorePoQGenerator,
-    ProofsGenerator,
-    ProofsVerifier,
-    Rng,
-    Backend::Settings,
-    Dispatcher::Settings,
->
+    blend_config: &RunningBlendConfig<BackendSettingsOf<Core, RuntimeServiceId>>,
+    backend: &mut Core::Backend,
+    recovery_checkpoint: CheckpointOf<Core, RuntimeServiceId>,
+) -> StageOutcome<Core, RuntimeServiceId>
 where
-    NodeId: Clone + Eq + Hash + Send,
-    Rng: rand::Rng + Clone + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
-    Dispatcher: PayloadDispatcher<RuntimeServiceId>,
-    ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
-    ProofsVerifier: ProofsVerifierTrait,
+    Core: Components<RuntimeServiceId, Settings: Clone + Send + Sync>,
+    Core::NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
+    Core::Rng: rand::Rng + Clone + Send + Unpin,
+    Core::ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    Core::CorePoQGenerator: Send + Sync,
+    Core::Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
+    Core::Backend:
+        BlendBackend<Core::NodeId, BlakeRng, Core::ProofsVerifier, RuntimeServiceId> + Send + Sync,
+    Core::ProofsGenerator: CoreLeaderAndPowProofsGenerator<Core::CorePoQGenerator> + Send,
 {
     // The epoch's own components go in; whatever it also held — its queued
     // proposals — is dropped here, which is the whole reason they live on it.
@@ -1393,13 +1008,13 @@ where
 
 /// Records a transaction as waiting for a `PoW` solution to back its layer
 /// proofs.
-fn queue_transaction_for_encapsulation<BackendSettings, NetworkSettings>(
+fn queue_transaction_for_encapsulation<ServiceSettings>(
     transaction: Vec<u8>,
     pending_transactions: &mut PendingTransactions,
-    current_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
-) -> ServiceState<BackendSettings, NetworkSettings>
+    current_recovery_checkpoint: ServiceState<ServiceSettings>,
+) -> ServiceState<ServiceSettings>
 where
-    BackendSettings: Clone,
+    ServiceSettings: Clone + Send + Sync,
 {
     pending_transactions.queue(transaction.clone());
     let mut state_updater = current_recovery_checkpoint.start_updating();
@@ -1412,11 +1027,9 @@ where
 /// Proposals go first: one is tied to the slot it was built for and goes stale,
 /// whereas a transaction keeps.
 ///
-/// Neither queue is popped here: `select!` drops this future whenever another
-/// branch wins the race, and a future that popped before awaiting would take
-/// the message down with it every time that happened. The caller updates the
-/// queues once the race is settled, which is also why only one copy of a
-/// proposal is wrapped per call.
+/// Neither queue is popped here for `tokio::select!` cancellation safety. The
+/// caller updates the queues once the race is settled, which is also why only
+/// one copy of a proposal is wrapped per call.
 ///
 /// Returns `None` when there is nothing to hand back — nothing queued, or the
 /// branch that would back the message has no proofs yet. Both mean "do nothing
@@ -1465,12 +1078,12 @@ where
 
 /// Drops the queued message that cannot be encapsulated, taking it out of the
 /// recovery state too so a restart does not bring it back to fail again.
-fn discard_unencapsulatable_transaction<BackendSettings, NetworkSettings>(
+fn discard_unencapsulatable_transaction<ServiceSettings>(
     pending_transactions: &mut PendingTransactions,
-    current_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
-) -> ServiceState<BackendSettings, NetworkSettings>
+    current_recovery_checkpoint: ServiceState<ServiceSettings>,
+) -> ServiceState<ServiceSettings>
 where
-    BackendSettings: Clone,
+    ServiceSettings: Clone + Send + Sync,
 {
     let Some(transaction) = pending_transactions.discard_head() else {
         return current_recovery_checkpoint;
@@ -1484,8 +1097,7 @@ where
 fn handle_local_transaction<
     NodeId,
     Rng,
-    BackendSettings,
-    NetworkSettings,
+    ServiceSettings,
     ProofsGenerator,
     ProofsVerifier,
     CorePoQGenerator,
@@ -1503,12 +1115,12 @@ fn handle_local_transaction<
         ProcessedMessage,
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
-    current_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
-) -> ServiceState<BackendSettings, NetworkSettings>
+    current_recovery_checkpoint: ServiceState<ServiceSettings>,
+) -> ServiceState<ServiceSettings>
 where
     NodeId: Eq + Hash + Send + 'static,
     Rng: RngCore + Clone + Send + Unpin,
-    BackendSettings: Clone + Send + Sync,
+    ServiceSettings: Clone + Send + Sync,
     ProofsVerifier: ProofsVerifierTrait,
 {
     let recovery_checkpoint = schedule_local_encapsulated_message(
@@ -1526,35 +1138,29 @@ where
 
 /// Processes the old epoch during the epoch transition period
 /// before retiring the core service.
-async fn retire<
-    NodeId,
-    Backend,
-    Rng,
-    Dispatcher,
-    ProofsVerifier,
-    CorePoQGenerator,
-    RuntimeServiceId,
->(
+async fn retire<Core, RuntimeServiceId>(
     mut blend_messages: impl Stream<Item = EncapsulatedMessageWithVerifiedPublicHeader>
     + Unpin
     + Send
     + 'static,
-    mut remaining_epoch_stream: impl Stream<
-        Item = EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>>,
-    > + Send
+    mut remaining_epoch_stream: impl Stream<Item = EpochEvent<EpochInfoOf<Core, RuntimeServiceId>>>
+    + Send
     + Unpin,
-    mut backend: Backend,
-    payload_dispatcher: Dispatcher,
+    mut backend: Core::Backend,
+    payload_dispatcher: Core::Dispatcher,
     sdp_relay: OutboundRelay<SdpMessage>,
-    mut rng: Rng,
-    mut retiring_epoch: RetiringEpoch<Rng, ProofsVerifier>,
+    mut rng: Core::Rng,
+    mut retiring_epoch: RetiringEpochOf<Core, RuntimeServiceId>,
 ) where
-    NodeId: Clone + Eq + Hash + Send + Sync + 'static,
-    Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
-    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
-    CorePoQGenerator: Send + Sync,
-    ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    Core: Components<RuntimeServiceId, Settings: Clone + Send + Sync>,
+    Core::NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
+    Core::Rng: rand::Rng + Clone + Send + Unpin,
+    Core::ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    Core::CorePoQGenerator: Send + Sync,
+    Core::Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
+    Core::Backend:
+        BlendBackend<Core::NodeId, BlakeRng, Core::ProofsVerifier, RuntimeServiceId> + Send + Sync,
+    Core::ProofsGenerator: CoreLeaderAndPowProofsGenerator<Core::CorePoQGenerator> + Send,
     RuntimeServiceId: Send + Sync,
 {
     loop {
@@ -1592,10 +1198,10 @@ async fn handle_epoch_event<
     ProofsGenerator,
     ProofsVerifier,
     Backend,
-    NetworkSettings,
     Rng,
     CorePoQGenerator,
     RuntimeServiceId,
+    ServiceSettings,
 >(
     new_epoch_info: MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>,
     settings: &RunningBlendConfig<Backend::Settings>,
@@ -1610,7 +1216,7 @@ async fn handle_epoch_event<
         ProcessedMessage,
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
-    current_recovery_checkpoint: ServiceState<Backend::Settings, NetworkSettings>,
+    current_recovery_checkpoint: ServiceState<ServiceSettings>,
     backend: &mut Backend,
     current_secret_info: &mut Option<PolEpochInfo>,
 ) -> HandleEpochEventOutput<
@@ -1618,11 +1224,11 @@ async fn handle_epoch_event<
     Rng,
     ProofsGenerator,
     ProofsVerifier,
-    Backend::Settings,
-    NetworkSettings,
+    ServiceSettings,
     CorePoQGenerator,
 >
 where
+    ServiceSettings: Clone + Send + Sync,
     NodeId: Eq + Hash + Clone + Send,
     Rng: rand::Rng + Clone + Unpin,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
@@ -1808,22 +1414,21 @@ where
 /// Takes nothing belonging to the current epoch, because the transition period
 /// ending is not an epoch change — which is what lets the caller keep that
 /// epoch whole rather than taking it apart and putting it back together.
-async fn complete_transition_period<
-    Backend,
-    NodeId,
-    Rng,
-    ProofsVerifier,
-    NetworkSettings,
-    RuntimeServiceId,
->(
-    backend: &mut Backend,
+async fn complete_transition_period<Core, RuntimeServiceId>(
+    backend: &mut Core::Backend,
     sdp_relay: &OutboundRelay<SdpMessage>,
-    current_recovery_checkpoint: ServiceState<Backend::Settings, NetworkSettings>,
-) -> ServiceState<Backend::Settings, NetworkSettings>
+    current_recovery_checkpoint: CheckpointOf<Core, RuntimeServiceId>,
+) -> CheckpointOf<Core, RuntimeServiceId>
 where
-    Backend: BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId>,
-    NodeId: Clone + Eq + Hash + Send,
-    NetworkSettings: Clone,
+    Core: Components<RuntimeServiceId, Settings: Clone + Send + Sync>,
+    Core::NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
+    Core::Rng: rand::Rng + Clone + Send + Unpin,
+    Core::ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    Core::CorePoQGenerator: Send + Sync,
+    Core::Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
+    Core::Backend:
+        BlendBackend<Core::NodeId, BlakeRng, Core::ProofsVerifier, RuntimeServiceId> + Send + Sync,
+    Core::ProofsGenerator: CoreLeaderAndPowProofsGenerator<Core::CorePoQGenerator> + Send,
 {
     let mut state_updater = current_recovery_checkpoint.start_updating();
     if let Some(old_token_collector) = state_updater.clear_old_epoch_token_collector() {
@@ -1863,14 +1468,13 @@ enum HandleEpochEventOutput<
     Rng,
     ProofsGenerator,
     ProofsVerifier,
-    BackendSettings,
-    NetworkSettings,
+    ServiceSettings,
     CorePoQGenerator,
 > {
     Transitioning {
         current_epoch:
             Box<CurrentEpoch<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>>,
-        new_recovery_checkpoint: Box<ServiceState<BackendSettings, NetworkSettings>>,
+        new_recovery_checkpoint: Box<ServiceState<ServiceSettings>>,
         old_epoch_components: Box<TransitioningEpoch<Rng, ProofsVerifier>>,
     },
     Retiring {
@@ -1892,8 +1496,7 @@ enum HandleEpochEventOutput<
 fn schedule_local_encapsulated_message<
     NodeId,
     Rng,
-    BackendSettings,
-    NetworkSettings,
+    ServiceSettings,
     ProofsGenerator,
     ProofsVerifier,
     CorePoQGenerator,
@@ -1910,12 +1513,12 @@ fn schedule_local_encapsulated_message<
         ProcessedMessage,
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
-    current_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
-) -> ServiceState<BackendSettings, NetworkSettings>
+    current_recovery_checkpoint: ServiceState<ServiceSettings>,
+) -> ServiceState<ServiceSettings>
 where
     NodeId: Eq + Hash + Send + 'static,
     Rng: RngCore + Clone + Send + Unpin,
-    BackendSettings: Clone + Send + Sync,
+    ServiceSettings: Clone + Send + Sync,
     ProofsVerifier: ProofsVerifierTrait,
 {
     let mut state_updater = current_recovery_checkpoint.start_updating();
@@ -2004,7 +1607,7 @@ where
 /// included, which is what gated it from being relayed to the rest of the
 /// network — so all that is left here is to decapsulate it with the current or
 /// old epoch's cryptographic processor, depending on the epoch it comes from.
-fn handle_incoming_blend_message<Rng, BackendSettings, NetworkSettings, ProofsVerifier>(
+fn handle_incoming_blend_message<Rng, ProofsVerifier, ServiceSettings>(
     (verified_message, epoch): (EncapsulatedMessageWithVerifiedPublicHeader, Epoch),
     scheduler: &mut EpochMessageScheduler<
         Rng,
@@ -2020,11 +1623,11 @@ fn handle_incoming_blend_message<Rng, BackendSettings, NetworkSettings, ProofsVe
     >,
     cryptographic_processor: &ReceiverCryptographicProcessor<ProofsVerifier>,
     old_epoch_cryptographic_processor: Option<&OldEpochCryptographicProcessor<ProofsVerifier>>,
-    current_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
-) -> ServiceState<BackendSettings, NetworkSettings>
+    current_recovery_checkpoint: ServiceState<ServiceSettings>,
+) -> ServiceState<ServiceSettings>
 where
     Rng: RngCore + Clone + Send + Unpin,
-    BackendSettings: Clone,
+    ServiceSettings: Clone + Send + Sync,
     ProofsVerifier: ProofsVerifierTrait,
 {
     if epoch == cryptographic_processor.epoch() {
@@ -2113,23 +1716,18 @@ fn handle_incoming_blend_message_from_old_epoch<Rng, ProofsVerifier>(
 ///
 /// It updates the recovery checkpoint by storing the scheduled message
 /// and the collected tokens.
-fn handle_decapsulated_incoming_message_from_current_epoch<
-    Rng,
-    BackendSettings,
-    NetworkSettings,
-    ProofsVerifier,
->(
+fn handle_decapsulated_incoming_message_from_current_epoch<Rng, ServiceSettings, ProofsVerifier>(
     multi_layer_decapsulation_output: MultiLayerDecapsulationOutput,
     scheduler: &mut EpochMessageScheduler<
         Rng,
         ProcessedMessage,
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
-    current_recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
+    current_recovery_checkpoint: ServiceState<ServiceSettings>,
     cryptographic_processor: &ReceiverCryptographicProcessor<ProofsVerifier>,
-) -> ServiceState<BackendSettings, NetworkSettings>
+) -> ServiceState<ServiceSettings>
 where
-    BackendSettings: Clone,
+    ServiceSettings: Clone + Send + Sync,
     ProofsVerifier: ProofsVerifierTrait,
 {
     let mut state_updater = current_recovery_checkpoint.start_updating();
@@ -2159,23 +1757,18 @@ where
 /// and collects the blending tokens obtained from the decapsulation.
 ///
 /// It updates the recovery checkpoint by storing the collected tokens.
-fn handle_decapsulated_incoming_message_from_old_epoch<
-    Rng,
-    BackendSettings,
-    NetworkSettings,
-    ProofsVerifier,
->(
+fn handle_decapsulated_incoming_message_from_old_epoch<Rng, ServiceSettings, ProofsVerifier>(
     multi_layer_decapsulation_output: MultiLayerDecapsulationOutput,
     scheduler: &mut OldEpochMessageScheduler<
         Rng,
         ProcessedMessage,
         EncapsulatedMessageWithVerifiedPublicHeader,
     >,
-    recovery_checkpoint: ServiceState<BackendSettings, NetworkSettings>,
+    recovery_checkpoint: ServiceState<ServiceSettings>,
     old_cryptographic_processor: &OldEpochCryptographicProcessor<ProofsVerifier>,
-) -> ServiceState<BackendSettings, NetworkSettings>
+) -> ServiceState<ServiceSettings>
 where
-    BackendSettings: Clone,
+    ServiceSettings: Clone + Send + Sync,
     ProofsVerifier: ProofsVerifierTrait,
 {
     let (_, blending_tokens) = schedule_decapsulated_incoming_message(
@@ -2280,6 +1873,7 @@ async fn handle_release_round<
     ProofsVerifier,
     CorePoQGenerator,
     RuntimeServiceId,
+    ServiceSettings,
 >(
     RoundInfo {
         data_messages,
@@ -2294,9 +1888,10 @@ async fn handle_release_round<
     rng: &mut Rng,
     backend: &Backend,
     payload_dispatcher: &Dispatcher,
-    current_recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
-) -> ServiceState<Backend::Settings, Dispatcher::Settings>
+    current_recovery_checkpoint: ServiceState<ServiceSettings>,
+) -> ServiceState<ServiceSettings>
 where
+    ServiceSettings: Clone + Send + Sync,
     NodeId: Eq + Hash + 'static,
     Rng: RngCore + Send,
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
@@ -2411,7 +2006,16 @@ async fn handle_release_round_for_old_epoch<
             });
 
     let mut futures = data_messages_relay_futures
-        .chain(build_futures_to_release_processed_messages(
+        // Nothing is persisted on this path — the old epoch's releases are
+        // already accounted for — so the settings type is free.
+        .chain(build_futures_to_release_processed_messages::<
+            _,
+            _,
+            _,
+            _,
+            _,
+            (),
+        >(
             processed_messages,
             backend,
             payload_dispatcher,
@@ -2461,14 +2065,16 @@ fn build_futures_to_release_processed_messages<
     Dispatcher,
     ProofsVerifier,
     RuntimeServiceId,
+    ServiceSettings,
 >(
     processed_messages_to_release: Vec<ProcessedMessage>,
     backend: &'fut Backend,
     payload_dispatcher: &'fut Dispatcher,
-    mut state_updater: Option<&mut ServiceStateUpdater<Backend::Settings, Dispatcher::Settings>>,
+    mut state_updater: Option<&mut ServiceStateUpdater<ServiceSettings>>,
     epoch: Epoch,
 ) -> Vec<BoxFuture<'fut, ()>>
 where
+    ServiceSettings: Clone + Send + Sync,
     NodeId: Eq + Hash + 'static,
     Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
@@ -2511,8 +2117,7 @@ where
 /// the blending tokens collected in the `state_updater`.
 async fn generate_and_try_to_decapsulate_cover_message<
     NodeId,
-    BackendSettings,
-    NetworkSettings,
+    ServiceSettings,
     ProofsGenerator,
     ProofsVerifier,
     CorePoQGenerator,
@@ -2523,11 +2128,11 @@ async fn generate_and_try_to_decapsulate_cover_message<
         ProofsGenerator,
         ProofsVerifier,
     >,
-    state_updater: &mut state::StateUpdater<BackendSettings, NetworkSettings>,
+    state_updater: &mut state::StateUpdater<ServiceSettings>,
 ) -> Option<EncapsulatedMessage>
 where
     NodeId: Eq + Hash + 'static,
-    BackendSettings: Sync,
+    ServiceSettings: Sync,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
@@ -2575,4 +2180,308 @@ async fn submit_activity_proof(
         })
         .await
         .map_err(|(e, _)| e)
+}
+
+/// Hands the epoch being left behind to a task of its own, and returns without
+/// waiting for it.
+///
+/// The epoch still owes a transition period's worth of releases and an activity
+/// proof, and that has to happen *alongside* whatever mode runs next — a node
+/// that awaited here would stop sending for a whole transition period. Before
+/// the merge this concurrency came from the drain being a separate Overwatch
+/// service; now it is a separate task, which is the same thing without the
+/// service boundary.
+///
+/// A named function rather than an inline `tokio::spawn` so the hand-off has a
+/// seam a test can drive: the bootstrap around it needs live relays, this does
+/// not.
+pub(crate) fn spawn_drain<Core, RuntimeServiceId>(
+    blend_messages: impl Stream<Item = EncapsulatedMessageWithVerifiedPublicHeader>
+    + Unpin
+    + Send
+    + 'static,
+    remaining_epoch_stream: impl Stream<Item = EpochEvent<EpochInfoOf<Core, RuntimeServiceId>>>
+    + Send
+    + Unpin
+    + 'static,
+    backend: <Core as Components<RuntimeServiceId>>::Backend,
+    payload_dispatcher: Core::Dispatcher,
+    sdp_relay: OutboundRelay<SdpMessage>,
+    rng: <Core as Components<RuntimeServiceId>>::Rng,
+    retiring_epoch: RetiringEpochOf<Core, RuntimeServiceId>,
+) -> tokio::task::JoinHandle<()>
+where
+    Core: Components<
+            RuntimeServiceId,
+            NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
+            Rng: rand::Rng + Clone + Send + Unpin + 'static,
+            ProofsVerifier: ProofsVerifierTrait + Send + Sync + 'static,
+            CorePoQGenerator: Send + Sync + 'static,
+            ProofsGenerator: CoreLeaderAndPowProofsGenerator<
+                <Core as Components<RuntimeServiceId>>::CorePoQGenerator,
+            > + Send
+                                 + 'static,
+            Backend: BlendBackend<
+                <Core as Components<RuntimeServiceId>>::NodeId,
+                BlakeRng,
+                <Core as Components<RuntimeServiceId>>::ProofsVerifier,
+                RuntimeServiceId,
+            > + Send
+                         + Sync
+                         + 'static,
+            Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync + 'static,
+            Settings: Clone + Send + Sync + 'static,
+        > + 'static,
+    RuntimeServiceId: Send + Sync + 'static,
+{
+    tokio::spawn(retire::<Core, RuntimeServiceId>(
+        blend_messages,
+        remaining_epoch_stream,
+        backend,
+        payload_dispatcher,
+        sdp_relay,
+        rng,
+        retiring_epoch,
+    ))
+}
+
+/// Runs the node for as long as it is a core node, then drains the epoch it is
+/// leaving behind.
+///
+/// A free function rather than a `ServiceCore::run` body: the supervisor calls
+/// this in-process for whichever mode the membership selects, instead of
+/// starting and stopping an Overwatch service per mode. Everything Overwatch
+/// used to supply through `self` arrives as an argument.
+#[expect(
+    clippy::too_many_lines,
+    reason = "One linear bootstrap; splitting it would hide the order."
+)]
+pub(crate) async fn run_core_mode<Core, RuntimeServiceId>(
+    inbound_relay: &mut (impl Stream<Item = ServiceMessage<Core::NodeId>> + Send + Unpin),
+    overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
+    payload_dispatcher: Core::Dispatcher,
+    blend_config: StartingBlendConfig<
+        BackendSettingsOf<Core, RuntimeServiceId>,
+        CoreNetworkSettingsOf<Core, RuntimeServiceId>,
+    >,
+    last_saved_state: Option<CheckpointOf<Core, RuntimeServiceId>>,
+    state_updater: StateUpdater<
+        Option<RecoveryServiceState<<Core as Components<RuntimeServiceId>>::Settings>>,
+    >,
+    notify_ready: impl FnOnce(),
+) -> Result<(), overwatch::DynError>
+where
+    // `Rng` and `CorePoQGenerator` are pinned rather than free: the release
+    // scheduler is seeded from entropy here, and the core `PoQ` generator comes
+    // from the KMS adapter this bootstrap builds. A bundle naming anything else
+    // would not fit what `initialize` hands back.
+    // The drain outlives this function as its own task, so the bundle itself
+    // has to be `'static`, not just what it names.
+    Core: Components<
+            RuntimeServiceId,
+            Rng = BlakeRng,
+            CorePoQGenerator = PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>,
+            NodeId: membership::node_id::TryFrom
+                        + Clone
+                        + Debug
+                        + Eq
+                        + Hash
+                        + Send
+                        + Sync
+                        + 'static,
+            // The drain outlives this function as its own task, so everything
+            // it carries has to be `'static`.
+            Settings: Clone + Send + Sync + 'static,
+            Backend: BlendBackend<
+                <Core as Components<RuntimeServiceId>>::NodeId,
+                BlakeRng,
+                <Core as Components<RuntimeServiceId>>::ProofsVerifier,
+                RuntimeServiceId,
+            > + Send
+                         + Sync
+                         + 'static,
+            Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync + 'static,
+            ProofsGenerator: CoreLeaderAndPowProofsGenerator<
+                PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>,
+            > + Send
+                                 + 'static,
+            ProofsVerifier: ProofsVerifierTrait + Send + Sync + 'static,
+            SdpService: ServiceData<Message = SdpMessage> + Send,
+            TimeBackend: lb_time_service::backends::TimeBackend + Send,
+            ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
+            PolInfoProvider: PolInfoProviderTrait<
+                RuntimeServiceId,
+                Stream: Send + Unpin + 'static,
+            > + Send,
+        > + 'static,
+    RuntimeServiceId: AsServiceId<
+            NetworkService<
+                <Core::Dispatcher as PayloadDispatcher<RuntimeServiceId>>::Backend,
+                RuntimeServiceId,
+            >,
+        > + AsServiceId<<Core::Dispatcher as PayloadDispatcher<RuntimeServiceId>>::MempoolService>
+        + AsServiceId<Core::SdpService>
+        + AsServiceId<TimeService<Core::TimeBackend, RuntimeServiceId>>
+        + AsServiceId<Core::ChainService>
+        + AsServiceId<PreloadKmsService<RuntimeServiceId>>
+        + Clone
+        + Debug
+        + Display
+        + Sync
+        + Send
+        + Unpin
+        + 'static,
+{
+    // No readiness wait and no dispatcher to build: the supervisor did both
+    // once, before any mode started.
+    let kms_api = async {
+        let kms_outbound_relay = overwatch_handle
+            .relay::<PreloadKmsService<_>>()
+            .await
+            .expect("Relay with KMS service should be available.");
+
+        KmsServiceApi::new(kms_outbound_relay)
+    }
+    .await;
+
+    let PublicKeyEncoding::Zk(zk_public_key) = kms_api
+        .public_key(blend_config.zk.secret_key_kms_id.clone())
+        .await
+        .expect("ZK public key for provided ID should be stored in KMS.")
+    else {
+        panic!("Key with specified ID is not a ZK key.");
+    };
+
+    // TODO: This will go once we do not need to pass the secret key anymore, i.e.,
+    // when we have libp2p integration with KMS.
+    let non_ephemeral_signing_key = {
+        let (sender, receiver) = oneshot::channel();
+        kms_api
+            .execute(
+                blend_config.non_ephemeral_signing_key_id.clone(),
+                KeyOperators::Ed25519(Box::new(LeakSecretKeyOperator::new(sender))),
+            )
+            .await
+            .expect("Failed to interact with KMS to fetch non-ephemeral signing key.");
+        receiver
+            .await
+            .expect("Failed to retrieve non-ephemeral signing key from KMS.")
+    };
+
+    let public_epoch_stream = membership::chain::subscribe::<
+        Core::ChainService,
+        Core::NodeId,
+        Core::TimeBackend,
+        RuntimeServiceId,
+    >(
+        overwatch_handle,
+        non_ephemeral_signing_key.public_key(),
+        Some(zk_public_key),
+    )
+    .await;
+
+    let sdp_relay = overwatch_handle
+        .relay::<Core::SdpService>()
+        .await
+        .expect("Relay with SDP service should be available.");
+
+    // Initialize components for the service.
+    let running_blend_config = RunningBlendConfig {
+        backend: blend_config.backend,
+        non_ephemeral_signing_key,
+        num_blend_layers: blend_config.num_blend_layers,
+        minimum_network_size: blend_config.minimum_network_size,
+        scheduler: blend_config.scheduler,
+        time: blend_config.time,
+        zk: blend_config.zk,
+        data_replication_factor: blend_config.data_replication_factor,
+        activity_threshold_sensitivity: blend_config.activity_threshold_sensitivity,
+        pow_mining_pool: new_mining_pool(),
+    };
+    let (
+        mut remaining_epoch_stream,
+        current_public_info,
+        crypto_processor,
+        current_recovery_checkpoint,
+        pending_transactions,
+        message_scheduler,
+        mut backend,
+        mut rng,
+    ) = initialize::<
+        Core::NodeId,
+        <Core as Components<RuntimeServiceId>>::Backend,
+        <Core as Components<RuntimeServiceId>>::ProofsGenerator,
+        <Core as Components<RuntimeServiceId>>::ProofsVerifier,
+        KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
+        RuntimeServiceId,
+        <Core as Components<RuntimeServiceId>>::Settings,
+    >(
+        running_blend_config.clone(),
+        public_epoch_stream,
+        overwatch_handle.clone(),
+        kms_api,
+        &sdp_relay,
+        last_saved_state,
+        state_updater,
+        BlakeRng::from_entropy(),
+    )
+    .await;
+
+    notify_ready();
+
+    // Initialize more components that can be successfully created after
+    // `notify_ready()`.
+    let secret_pol_info_stream =
+        post_initialize::<Core::PolInfoProvider, _>(overwatch_handle).await;
+
+    let mut blend_messages = backend.listen_to_incoming_messages();
+
+    // Run the main event loop while the node is a core node across multiple
+    // epochs. When the node becomes a non-core node in a new epoch, the
+    // epoch it is leaving behind is handed over for the retirement phase.
+    let retiring_epoch = run_event_loop::<Core, RuntimeServiceId>(
+        inbound_relay,
+        &mut blend_messages,
+        secret_pol_info_stream,
+        &mut remaining_epoch_stream,
+        &running_blend_config,
+        &mut backend,
+        &payload_dispatcher,
+        &sdp_relay,
+        &mut rng,
+        CurrentEpoch::new(
+            crypto_processor,
+            message_scheduler.into(),
+            current_public_info,
+        ),
+        pending_transactions,
+        current_recovery_checkpoint,
+    )
+    .await;
+
+    // The main event loop has ended because the node is no longer a core node
+    // in the new epoch. The epoch it is leaving still owes a transition
+    // period's worth of releases and an activity proof, and that has to happen
+    // *alongside* whatever mode runs next — a node that blocked here would stop
+    // sending for a whole transition period. Before the merge this concurrency
+    // came from the drain being a separate Overwatch service; now it is a
+    // separate task, which is the same thing without the service boundary.
+    //
+    // The backend it carries keeps listening while it drains. That is safe for
+    // the same reason it always was: the mode that follows either dials only
+    // (edge) or opens no swarm at all (broadcast), so nothing contends for the
+    // port.
+    drop(spawn_drain::<Core, RuntimeServiceId>(
+        // We don't need epoch numbers anymore since we know we are dealing with a single,
+        // past epoch.
+        blend_messages.map(|(message, _)| message),
+        remaining_epoch_stream,
+        backend,
+        payload_dispatcher,
+        sdp_relay,
+        rng,
+        retiring_epoch,
+    ));
+
+    Ok(())
 }

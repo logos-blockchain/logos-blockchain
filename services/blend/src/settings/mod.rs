@@ -1,3 +1,4 @@
+use lb_services_utils::overwatch::{RecoveryData, StorageRecoverySettings};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -13,6 +14,16 @@ mod edge;
 pub use self::edge::EdgeSettings;
 mod timing;
 pub use self::timing::TimingSettings;
+
+impl<CoreBackendSettings, EdgeBackendSettings, NetworkSettings> StorageRecoverySettings
+    for Settings<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>
+{
+    const RECOVERY_KEY_SUFFIX: &'static [u8] = b"blend";
+
+    fn recovery_data(&self) -> &RecoveryData {
+        &self.common.recovery_data
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Settings<CoreBackendSettings, EdgeBackendSettings, NetworkSettings> {

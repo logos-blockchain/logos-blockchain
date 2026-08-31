@@ -1,4 +1,4 @@
-use core::cell::RefCell;
+use core::{cell::RefCell, marker::PhantomData};
 use std::{num::NonZeroU64, pin::Pin, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
@@ -57,6 +57,7 @@ use crate::{
         dispatcher::PayloadDispatcher,
         kms::KmsPoQAdapter,
         processor::CoreCryptographicProcessor,
+        service_components::Components as CoreComponents,
         settings::{
             CoverTrafficSettings, MessageDelayerSettings, RunningBlendConfig as BlendConfig,
             SchedulerSettings, ZkSettings,
@@ -66,9 +67,9 @@ use crate::{
     },
     epoch::CoreEpochPublicInfo,
     message::{BlendPayload, NetworkInfo},
+    service_components::Components as CommonComponents,
     settings::TimingSettings,
-    test_utils,
-    test_utils::mempool::TestMempoolService,
+    test_utils::{self, mempool::TestMempoolService},
 };
 
 pub type NodeId = [u8; 32];
@@ -367,19 +368,18 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for TestNetworkBackend {
 }
 
 #[expect(clippy::type_complexity, reason = "a test utility")]
-pub fn dummy_overwatch_resources<BackendSettings, NetworkSettings, RuntimeServiceId>() -> (
+pub fn dummy_overwatch_resources<ServiceSettings, RuntimeServiceId>() -> (
     OverwatchHandle<RuntimeServiceId>,
     mpsc::Receiver<OverwatchCommand<RuntimeServiceId>>,
-    StateUpdater<Option<RecoveryServiceState<BackendSettings, NetworkSettings>>>,
-    watch::Receiver<Option<RecoveryServiceState<BackendSettings, NetworkSettings>>>,
+    StateUpdater<Option<RecoveryServiceState<ServiceSettings>>>,
+    watch::Receiver<Option<RecoveryServiceState<ServiceSettings>>>,
 ) {
     let (cmd_sender, cmd_receiver) = mpsc::channel(CHANNEL_SIZE);
     let handle =
         OverwatchHandle::<RuntimeServiceId>::new(tokio::runtime::Handle::current(), cmd_sender);
     let (state_sender, state_receiver) = watch::channel(None);
-    let state_updater = StateUpdater::<
-        Option<RecoveryServiceState<BackendSettings, NetworkSettings>>,
-    >::new(Arc::new(state_sender));
+    let state_updater =
+        StateUpdater::<Option<RecoveryServiceState<ServiceSettings>>>::new(Arc::new(state_sender));
 
     (handle, cmd_receiver, state_updater, state_receiver)
 }
@@ -611,4 +611,99 @@ impl<RuntimeServiceId> KmsPoQAdapter<RuntimeServiceId> for MockKmsAdapter {
 pub fn sdp_relay() -> (OutboundRelay<SdpMessage>, mpsc::Receiver<SdpMessage>) {
     let (sender, receiver) = mpsc::channel(10);
     (OutboundRelay::new(sender), receiver)
+}
+
+/// A [`CoreComponents`] bundle assembled from loose type parameters.
+///
+/// Production code never needs this: the node writes one bundle and the service
+/// takes it whole. The tests do, because they drive the event loop directly
+/// with a different backend, dispatcher and generator per case, and a bundle is
+/// what those functions ask for.
+pub struct LooseCoreComponents<
+    Backend,
+    NodeId,
+    Dispatcher,
+    ProofsGenerator,
+    ProofsVerifier,
+    CorePoQGenerator,
+    Rng,
+    Settings,
+    RuntimeServiceId,
+>(
+    PhantomData<
+        fn() -> (
+            Backend,
+            NodeId,
+            Dispatcher,
+            ProofsGenerator,
+            ProofsVerifier,
+            CorePoQGenerator,
+            Rng,
+            Settings,
+            RuntimeServiceId,
+        ),
+    >,
+);
+
+impl<
+    Backend,
+    NodeId,
+    Dispatcher,
+    ProofsGenerator,
+    ProofsVerifier,
+    CorePoQGenerator,
+    Rng,
+    Settings,
+    RuntimeServiceId,
+> CommonComponents<RuntimeServiceId>
+    for LooseCoreComponents<
+        Backend,
+        NodeId,
+        Dispatcher,
+        ProofsGenerator,
+        ProofsVerifier,
+        CorePoQGenerator,
+        Rng,
+        Settings,
+        RuntimeServiceId,
+    >
+{
+    type Settings = Settings;
+    type NodeId = NodeId;
+    type Dispatcher = Dispatcher;
+    type TimeBackend = ();
+    type ChainService = ();
+    type PolInfoProvider = ();
+    type SdpService = ();
+    type StateStorage = ();
+}
+
+impl<
+    Backend,
+    NodeId,
+    Dispatcher,
+    ProofsGenerator,
+    ProofsVerifier,
+    CorePoQGenerator,
+    Rng,
+    Settings,
+    RuntimeServiceId,
+> CoreComponents<RuntimeServiceId>
+    for LooseCoreComponents<
+        Backend,
+        NodeId,
+        Dispatcher,
+        ProofsGenerator,
+        ProofsVerifier,
+        CorePoQGenerator,
+        Rng,
+        Settings,
+        RuntimeServiceId,
+    >
+{
+    type Rng = Rng;
+    type ProofsVerifier = ProofsVerifier;
+    type CorePoQGenerator = CorePoQGenerator;
+    type Backend = Backend;
+    type ProofsGenerator = ProofsGenerator;
 }

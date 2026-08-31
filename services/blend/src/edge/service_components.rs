@@ -1,33 +1,14 @@
-use crate::edge::{BlendService, backends::BlendBackend};
+use crate::{edge::backends::BlendBackend, service_components::Components as CommonComponents};
 
-/// Exposes associated types for external modules that depend on
-/// [`BlendService`], without requiring them to specify its generic parameters.
-pub trait ServiceComponents {
+/// What an edge node needs on top of [`crate::service_components::Components`].
+pub trait Components<RuntimeServiceId>: CommonComponents<RuntimeServiceId> {
+    type Backend;
     type ProofsGenerator;
-    type BackendSettings;
-    /// Chain service, used by the proxy to derive membership from the chain.
-    type ChainService;
-    /// Time backend, used by the proxy to subscribe to slot ticks.
-    type TimeBackend;
 }
 
-impl<Backend, NodeId, ProofsGenerator, TimeBackend, ChainService, PolInfoProvider, RuntimeServiceId>
-    ServiceComponents
-    for BlendService<
-        Backend,
-        NodeId,
-        ProofsGenerator,
-        TimeBackend,
-        ChainService,
-        PolInfoProvider,
+/// The deployment settings the edge backend is built from.
+pub type EdgeBackendSettingsOf<Edge, RuntimeServiceId> =
+    <<Edge as Components<RuntimeServiceId>>::Backend as BlendBackend<
+        <Edge as CommonComponents<RuntimeServiceId>>::NodeId,
         RuntimeServiceId,
-    >
-where
-    Backend: BlendBackend<NodeId, RuntimeServiceId>,
-    NodeId: Clone,
-{
-    type BackendSettings = Backend::Settings;
-    type ProofsGenerator = ProofsGenerator;
-    type ChainService = ChainService;
-    type TimeBackend = TimeBackend;
-}
+    >>::Settings;

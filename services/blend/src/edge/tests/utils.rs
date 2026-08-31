@@ -27,14 +27,39 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::{
     core::settings::CoverTrafficSettings,
     edge::{
-        backends::BlendBackend, handlers::Error, run, settings::RunningBlendConfig as BlendConfig,
-        tests::test_blend_epoch_state,
+        backends::BlendBackend, handlers::Error, run, service_components::Components,
+        settings::RunningBlendConfig as BlendConfig, tests::test_blend_epoch_state,
     },
     epoch_info::PolInfoProvider,
     message::ServiceMessage,
+    service_components::Components,
     settings::TimingSettings,
     test_utils::{crypto::mock_blend_proof, epoch::OncePolStreamProvider, membership::key},
 };
+
+/// An [`EdgeComponents`] bundle assembled from the test doubles.
+///
+/// Mirrors the core's test-only bundle: production writes one bundle and the
+/// service takes it whole, while these tests drive the edge loop directly. The
+/// members the edge loop never touches are `()`, which is what keeping
+/// [`Components`] unbounded buys.
+pub struct TestEdgeComponents<PolProvider>(core::marker::PhantomData<fn() -> PolProvider>);
+
+impl<PolProvider> Components<usize> for TestEdgeComponents<PolProvider> {
+    type Settings = ();
+    type NodeId = NodeId;
+    type Dispatcher = ();
+    type TimeBackend = ();
+    type ChainService = ();
+    type PolInfoProvider = PolProvider;
+    type SdpService = ();
+    type StateStorage = ();
+}
+
+impl<PolProvider> Components<usize> for TestEdgeComponents<PolProvider> {
+    type Backend = TestBackend;
+    type ProofsGenerator = MockLeaderProofsGenerator;
+}
 
 pub struct MockLeaderProofsGenerator;
 
@@ -106,15 +131,9 @@ where
 
     let settings = settings(local_node, minimal_network_size, node_id_sender);
     let join_handle = tokio::spawn(async move {
-        Box::pin(run::<
-            TestBackend,
-            _,
-            MockLeaderProofsGenerator,
-            PolProvider,
-            _,
-        >(
+        Box::pin(run::<TestEdgeComponents<PolProvider>, usize>(
             UninitializedEpochEventStream::new(epoch_stream, Duration::ZERO),
-            ReceiverStream::new(msg_receiver),
+            &mut ReceiverStream::new(msg_receiver),
             local_node,
             settings,
             &overwatch_handle(),

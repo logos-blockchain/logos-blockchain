@@ -63,8 +63,6 @@ pub(crate) type TracingService = Tracing<RuntimeServiceId>;
 pub(crate) type NetworkService =
     lb_network_service::NetworkService<NetworkBackend, RuntimeServiceId>;
 
-pub(crate) type BlendCoreService = generic_services::blend::BlendCoreService<RuntimeServiceId>;
-pub(crate) type BlendEdgeService = generic_services::blend::BlendEdgeService<RuntimeServiceId>;
 pub(crate) type BlendService = generic_services::blend::BlendService<RuntimeServiceId>;
 
 pub(crate) type BlockBroadcastService =
@@ -116,8 +114,6 @@ pub type SystemSigService = SystemSig<RuntimeServiceId>;
 pub struct LogosBlockchain {
     network: NetworkService,
     blend: BlendService,
-    blend_core: BlendCoreService,
-    blend_edge: BlendEdgeService,
     mempool: MempoolService,
     cryptarchia: CryptarchiaService,
     chain_network: ChainNetworkService,
@@ -153,11 +149,11 @@ pub fn run_node_from_config(
 
     let recovery_data = load_recovery_data(storage_config.clone())?;
 
-    let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
+    let blend_config = BlendConfig {
         user: config.user.blend,
         deployment: config.deployment.blend,
     }
-    .into_blend_services_settings(
+    .into_blend_service_settings(
         recovery_data.clone(),
         &config.deployment.time,
         &config.deployment.cryptarchia,
@@ -223,8 +219,6 @@ pub fn run_node_from_config(
         LogosBlockchainServiceSettings {
             network: network_service_config,
             blend: blend_config,
-            blend_core: blend_core_config,
-            blend_edge: blend_edge_config,
             block_broadcast: (),
             mempool: mempool_service_config,
             cryptarchia: chain_service_config,
@@ -251,11 +245,6 @@ pub async fn get_services_to_start(
     app: &Overwatch<RuntimeServiceId>,
 ) -> Result<Vec<RuntimeServiceId>, OverwatchError> {
     let mut service_ids = app.handle().retrieve_service_ids().await?;
-
-    // Exclude core and edge blend services, which will be started
-    // on demand by the blend service.
-    let blend_inner_service_ids = [RuntimeServiceId::BlendCore, RuntimeServiceId::BlendEdge];
-    service_ids.retain(|value| !blend_inner_service_ids.contains(value));
 
     // Start tracing first so the global subscriber is installed before the
     // rest of the node services spawn their long-running tasks.

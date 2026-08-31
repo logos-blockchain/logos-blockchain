@@ -231,11 +231,11 @@ fn service_settings_receive_recovery_data() {
 
     let deployment_settings = DeploymentSettings::default();
 
-    let (blend_service_settings, _, _) = BlendServiceConfig {
+    let blend_service_settings = BlendServiceConfig {
         user: user_config.blend.clone(),
         deployment: deployment_settings.blend,
     }
-    .into_blend_services_settings(
+    .into_blend_service_settings(
         recovery_data.clone(),
         &deployment_settings.time,
         &deployment_settings.cryptarchia,

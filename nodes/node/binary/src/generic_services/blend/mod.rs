@@ -1,3 +1,8 @@
+use core::{
+    fmt::{Debug, Display},
+    marker::PhantomData,
+};
+
 use axum::async_trait;
 use lb_blend::{
     message::crypto::key_ext::Ed25519SecretKeyExt as _,
@@ -8,11 +13,19 @@ use lb_blend::{
         leader_and_pow::RealLeaderAndPowProofsGenerator,
     },
 };
-use lb_blend_service::{RealProofsVerifier, core::kms::PreloadKMSBackendCorePoQGenerator};
+use lb_blend_service::{
+    Components, RealProofsVerifier,
+    core::{kms::PreloadKMSBackendCorePoQGenerator, service_components::Components},
+    edge::service_components::Components,
+};
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
-use lb_storage_service::{backends::rocksdb::RocksBackend, recovery::StorageRecoveryBackend};
+use lb_storage_service::{
+    StorageService, backends::rocksdb::RocksBackend, recovery::StorageRecoveryBackend,
+};
 use lb_time_service::backends::NtpTimeBackend;
+use lb_utils::blake_rng::BlakeRng;
 use libp2p::PeerId;
+use overwatch::services::AsServiceId;
 
 use crate::generic_services::{
     CryptarchiaService, MempoolNetworkAdapter, MempoolPool, SdpService, blend::pol::PolInfoProvider,
@@ -29,30 +42,17 @@ pub type BlendPayloadDispatcher<RuntimeServiceId> =
         RuntimeServiceId,
     >;
 
-pub type BlendCoreRecoveryBackend<RuntimeServiceId> = StorageRecoveryBackend<
-    lb_blend_service::core::CoreServiceState<
-        lb_blend_service::core::backends::libp2p::Libp2pBlendBackendSettings,
-        BlendBroadcastSettings<RuntimeServiceId>,
-    >,
-    lb_blend_service::core::settings::StartingBlendConfig<
-        lb_blend_service::core::backends::libp2p::Libp2pBlendBackendSettings,
-        BlendBroadcastSettings<RuntimeServiceId>,
-    >,
-    RocksBackend,
-    RuntimeServiceId,
+/// Everything the node configures Blend with, across all three modes.
+pub type BlendSettings<RuntimeServiceId> = lb_blend_service::settings::Settings<
+    lb_blend_service::core::backends::libp2p::Libp2pBlendBackendSettings,
+    lb_blend_service::edge::backends::libp2p::Libp2pBlendBackendSettings,
+    BlendBroadcastSettings<RuntimeServiceId>,
 >;
 
-pub type BlendCoreService<RuntimeServiceId> = lb_blend_service::core::BlendService<
-    lb_blend_service::core::backends::libp2p::Libp2pBlendBackend<RealProofsVerifier>,
-    PeerId,
-    BlendPayloadDispatcher<RuntimeServiceId>,
-    SdpService<RuntimeServiceId>,
-    RealCoreLeaderAndPowProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>,
-    RealProofsVerifier,
-    NtpTimeBackend,
-    CryptarchiaService<RuntimeServiceId>,
-    PolInfoProvider,
-    BlendCoreRecoveryBackend<RuntimeServiceId>,
+pub type BlendRecoveryBackend<RuntimeServiceId> = StorageRecoveryBackend<
+    lb_blend_service::core::CoreServiceState<BlendSettings<RuntimeServiceId>>,
+    BlendSettings<RuntimeServiceId>,
+    RocksBackend,
     RuntimeServiceId,
 >;
 
@@ -77,21 +77,71 @@ impl LeaderProofsGenerator for MockLeaderProofsGenerator {
     }
 }
 
-pub type BlendEdgeService<RuntimeServiceId> = lb_blend_service::edge::BlendService<
-    lb_blend_service::edge::backends::libp2p::Libp2pBlendBackend,
-    PeerId,
-    RealLeaderAndPowProofsGenerator,
-    NtpTimeBackend,
-    CryptarchiaService<RuntimeServiceId>,
-    PolInfoProvider,
-    RuntimeServiceId,
->;
-pub type BlendService<RuntimeServiceId> = lb_blend_service::BlendService<
-    BlendCoreService<RuntimeServiceId>,
-    BlendEdgeService<RuntimeServiceId>,
-    SdpService<RuntimeServiceId>,
-    RuntimeServiceId,
->;
+/// This node's answer to "which collaborators does Blend run on?", stated once.
+///
+/// The three service aliases above described the *old* shape, where a proxy
+/// started and stopped one Overwatch service per mode. Blend is one service
+/// now, so what it needs is the leaf types, named together: the common ones
+/// through [`Components`], and each mode's own through its bundle.
+pub struct BlendComponents<RuntimeServiceId>(PhantomData<fn() -> RuntimeServiceId>);
+
+impl<RuntimeServiceId> Components<RuntimeServiceId> for BlendComponents<RuntimeServiceId>
+where
+    RuntimeServiceId: Debug
+        + Display
+        + Clone
+        + Send
+        + Sync
+        + 'static
+        + AsServiceId<StorageService<RocksBackend, RuntimeServiceId>>,
+{
+    type Settings = BlendSettings<RuntimeServiceId>;
+    type NodeId = PeerId;
+    type Dispatcher = BlendPayloadDispatcher<RuntimeServiceId>;
+    type TimeBackend = NtpTimeBackend;
+    type ChainService = CryptarchiaService<RuntimeServiceId>;
+    type PolInfoProvider = PolInfoProvider;
+    type SdpService = SdpService<RuntimeServiceId>;
+    type StateStorage = BlendRecoveryBackend<RuntimeServiceId>;
+}
+
+impl<RuntimeServiceId> Components<RuntimeServiceId> for BlendComponents<RuntimeServiceId>
+where
+    RuntimeServiceId: Debug
+        + Display
+        + Clone
+        + Send
+        + Sync
+        + 'static
+        + AsServiceId<StorageService<RocksBackend, RuntimeServiceId>>,
+{
+    type Rng = BlakeRng;
+    type ProofsVerifier = RealProofsVerifier;
+    type CorePoQGenerator = PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>;
+    type Backend = lb_blend_service::core::backends::libp2p::Libp2pBlendBackend<RealProofsVerifier>;
+    type ProofsGenerator =
+        RealCoreLeaderAndPowProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>;
+}
+
+impl<RuntimeServiceId> Components<RuntimeServiceId> for BlendComponents<RuntimeServiceId>
+where
+    RuntimeServiceId: Debug
+        + Display
+        + Clone
+        + Send
+        + Sync
+        + 'static
+        + AsServiceId<StorageService<RocksBackend, RuntimeServiceId>>,
+{
+    type Backend = lb_blend_service::edge::backends::libp2p::Libp2pBlendBackend;
+    // The edge and core proofs generators are pinned to the same verification
+    // logic here, which is what the old two-service wiring could only ask for
+    // by convention.
+    type ProofsGenerator = RealLeaderAndPowProofsGenerator;
+}
+
+pub type BlendService<RuntimeServiceId> =
+    lb_blend_service::BlendService<BlendComponents<RuntimeServiceId>, RuntimeServiceId>;
 
 pub type BlendBroadcastSettings<RuntimeServiceId> = <BlendPayloadDispatcher<RuntimeServiceId> as lb_blend_service::core::dispatcher::PayloadDispatcher<
     RuntimeServiceId,

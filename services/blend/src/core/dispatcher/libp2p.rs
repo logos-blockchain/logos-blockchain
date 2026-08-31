@@ -43,6 +43,25 @@ where
     _phantom: PhantomData<(MempoolNetAdapter, RuntimeServiceId)>,
 }
 
+/// Cloning hands out another pair of relay senders, not another dispatcher:
+/// the service builds one and gives each mode its own handle, which that mode
+/// drops when it ends. A derive would demand `Clone` of the two phantom
+/// parameters, which carry no value.
+impl<MempoolNetAdapter, Mempool, RuntimeServiceId> Clone
+    for Libp2pPayloadDispatcher<MempoolNetAdapter, Mempool, RuntimeServiceId>
+where
+    Mempool: RecoverableMempool<BlockId = HeaderId>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            network_relay: self.network_relay.clone(),
+            mempool_relay: self.mempool_relay.clone(),
+            settings: self.settings.clone(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
 /// Settings used to broadcast messages to the network service that uses libp2p
 /// backend.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
