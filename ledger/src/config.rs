@@ -107,9 +107,8 @@ pub struct PoWConfig {
 /// Covers the genesis endowment, the reward-difficulty (`d_reward`) EMA
 /// controller, the per-epoch payout rate, and the claim acceptance window.
 /// There is deliberately no `Default`: every value must be supplied by the
-/// deployment configuration. The shipped deployments set `rate_num = 0`, which
-/// disables claiming (matching the network behaviour before these values were
-/// configurable).
+/// deployment configuration. A `rate_num` of `0` disables claiming entirely;
+/// the shipped deployments enable it.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 // Validate the deployment-controlled invariants on deserialization, so an
 // invalid config is rejected at load time (see [`RewardPoWConfig::validate`])
