@@ -1,10 +1,11 @@
 use std::ptr;
 
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_node::{PoWService, RuntimeServiceId};
 
 use crate::{
     LogosBlockchainNode, OperationStatus,
-    api::cryptarchia::Hash,
+    api::{cryptarchia::Hash, wallet::parse_public_key},
     errors::OperationStatusCode,
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
@@ -119,6 +120,116 @@ pub unsafe extern "C" fn pow_stop_mining(node: *const LogosBlockchainNode) -> Op
     OperationStatus::OK
 }
 
+/// Enables unattended `PoW` claiming.
+///
+/// This is a synchronous wrapper around the asynchronous
+/// [`start_auto_claim`](lb_api_service::http::pow::start_auto_claim) function.
+/// It has no effect when the node has no `auto_claim` targets configured, and
+/// the service stops itself again once every target reaches its threshold.
+///
+/// # Arguments
+///
+/// - `node`: A [`LogosBlockchainNode`] instance.
+///
+/// # Returns
+///
+/// An [`OperationStatus`] error on failure, or [`OperationStatus::OK`] on
+/// success.
+pub(crate) fn pow_start_auto_claim_sync(node: &LogosBlockchainNode) -> StatusResult<()> {
+    node.get_runtime_handle().block_on(async {
+        lb_api_service::http::pow::start_auto_claim::<PoWService, RuntimeServiceId>(
+            node.get_overwatch_handle(),
+        )
+        .await
+        .map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::RelayError,
+                format!("Failed to start PoW auto-claim: {error}"),
+            )
+        })
+    })
+}
+
+/// Enables unattended `PoW` claiming.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a [`LogosBlockchainNode`] instance.
+///
+/// # Returns
+///
+/// An [`OperationStatus`] error on failure, or [`OperationStatus::OK`] on
+/// success.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer. The caller
+/// must ensure that `node` is non-null and points to a valid
+/// [`LogosBlockchainNode`] instance.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pow_start_auto_claim(node: *const LogosBlockchainNode) -> OperationStatus {
+    return_error_if_null_pointer!(node);
+
+    let node = unsafe { &*node };
+    unwrap_or_return_error!(pow_start_auto_claim_sync(node));
+
+    OperationStatus::OK
+}
+
+/// Disables unattended `PoW` claiming. Manual claims keep working.
+///
+/// This is a synchronous wrapper around the asynchronous
+/// [`stop_auto_claim`](lb_api_service::http::pow::stop_auto_claim) function.
+///
+/// # Arguments
+///
+/// - `node`: A [`LogosBlockchainNode`] instance.
+///
+/// # Returns
+///
+/// An [`OperationStatus`] error on failure, or [`OperationStatus::OK`] on
+/// success.
+pub(crate) fn pow_stop_auto_claim_sync(node: &LogosBlockchainNode) -> StatusResult<()> {
+    node.get_runtime_handle().block_on(async {
+        lb_api_service::http::pow::stop_auto_claim::<PoWService, RuntimeServiceId>(
+            node.get_overwatch_handle(),
+        )
+        .await
+        .map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::RelayError,
+                format!("Failed to stop PoW auto-claim: {error}"),
+            )
+        })
+    })
+}
+
+/// Disables unattended `PoW` claiming. Manual claims keep working.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a [`LogosBlockchainNode`] instance.
+///
+/// # Returns
+///
+/// An [`OperationStatus`] error on failure, or [`OperationStatus::OK`] on
+/// success.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer. The caller
+/// must ensure that `node` is non-null and points to a valid
+/// [`LogosBlockchainNode`] instance.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pow_stop_auto_claim(node: *const LogosBlockchainNode) -> OperationStatus {
+    return_error_if_null_pointer!(node);
+
+    let node = unsafe { &*node };
+    unwrap_or_return_error!(pow_stop_auto_claim_sync(node));
+
+    OperationStatus::OK
+}
+
 /// Builds and publishes a reward-claim transaction for the currently claimable
 /// tickets.
 ///
@@ -134,10 +245,14 @@ pub unsafe extern "C" fn pow_stop_mining(node: *const LogosBlockchainNode) -> Op
 /// A [`Result`] containing the submitted transaction hash on success. Returns
 /// [`OperationStatusCode::NotFound`] when there are no rewards to claim, or
 /// another [`OperationStatus`] error on failure.
-pub(crate) fn pow_claim_sync(node: &LogosBlockchainNode) -> StatusResult<lb_core::mantle::TxHash> {
+pub(crate) fn pow_claim_sync(
+    node: &LogosBlockchainNode,
+    claim_address: Option<ZkPublicKey>,
+) -> StatusResult<lb_core::mantle::TxHash> {
     let tx_hash = node.get_runtime_handle().block_on(async {
         lb_api_service::http::pow::claim::<PoWService, RuntimeServiceId>(
             node.get_overwatch_handle(),
+            claim_address,
         )
         .await
         .map_err(|error| {
@@ -164,6 +279,9 @@ pub type FfiPoWClaimResult = FfiStatusResult<Hash>;
 /// # Arguments
 ///
 /// - `node`: A non-null pointer to a [`LogosBlockchainNode`] instance.
+/// - `claim_address`: A pointer to the 32-byte little-endian public key the
+///   rewards are paid to, or null to pay whichever auto-claim target is
+///   currently furthest below its threshold.
 ///
 /// # Returns
 ///
@@ -173,15 +291,27 @@ pub type FfiPoWClaimResult = FfiStatusResult<Hash>;
 ///
 /// # Safety
 ///
-/// This function is unsafe because it dereferences a raw pointer. The caller
+/// This function is unsafe because it dereferences raw pointers. The caller
 /// must ensure that `node` is non-null and points to a valid
-/// [`LogosBlockchainNode`] instance.
+/// [`LogosBlockchainNode`] instance, and that `claim_address` is either null
+/// or points to at least 32 readable bytes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pow_claim(node: *const LogosBlockchainNode) -> FfiPoWClaimResult {
+pub unsafe extern "C" fn pow_claim(
+    node: *const LogosBlockchainNode,
+    claim_address: *const u8,
+) -> FfiPoWClaimResult {
     return_error_if_null_pointer!(node);
 
+    let claim_address = if claim_address.is_null() {
+        None
+    } else {
+        Some(unwrap_or_return_error!(unsafe {
+            parse_public_key(claim_address)
+        }))
+    };
+
     let node = unsafe { &*node };
-    let tx_hash = unwrap_or_return_error!(pow_claim_sync(node));
+    let tx_hash = unwrap_or_return_error!(pow_claim_sync(node, claim_address));
 
     let Ok(tx_hash_array): Result<Hash, _> =
         tx_hash.as_signing_bytes().iter().as_slice().try_into()
