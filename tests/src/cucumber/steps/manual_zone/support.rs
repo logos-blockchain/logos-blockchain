@@ -303,11 +303,8 @@ pub fn start_sorted_conflict_policy(
     to_policy_runtime(runner::spawn(sequencer, policy))
 }
 
-/// Drive a sequencer like a zone through the full deposit lifecycle, reacting
-/// in the drive loop with no wait for finalization: integrate each observed
-/// deposit with an atomic deposit inscription, then — once that inscription is
-/// mined and the re-created note is selectable — withdraw it to `recipient`,
-/// split into `withdraw_outputs`. See [`DepositLifecyclePolicy`].
+/// Reactively drive the full deposit lifecycle (integrate, then withdraw the
+/// re-created note), no wait for finalization. See [`DepositLifecyclePolicy`].
 pub fn start_deposit_lifecycle_policy(
     sequencer: ZoneSequencer<ZoneNodeHttpClient>,
     withdraw_outputs: Vec<u64>,
@@ -321,53 +318,21 @@ pub fn start_deposit_lifecycle_policy(
     to_policy_runtime(runner::spawn(sequencer, policy))
 }
 
-/// A deposit the lifecycle policy is driving, keyed by `op_id`. Each phase's
-/// presence on our branch is matched by the deposit's `op_id` carried in the
-/// inscription payload — so a *foreign* sequencer's step for the same deposit
-/// (visible in `adopted`) counts too, and we never duplicate it.
 struct DepositLifecycleState {
-    /// The deposit's re-created channel notes — on our branch ⇔ present in the
-    /// wallet.
     notes: Vec<NoteId>,
-    /// An integration for this deposit is on our branch: set by our own publish
-    /// or by seeing it in `adopted`, cleared by seeing it in `orphaned`.
     integrated: bool,
-    /// A withdraw for this deposit is on our branch; same bookkeeping.
     withdrawn: bool,
 }
 
-/// Zone-mimicking policy exercising the whole deposit lifecycle without waiting
-/// for finalization, reconciled against branch state on every `ChannelUpdate`
-/// so it stays correct across forks — and across concurrent sequencers.
-///
-/// Each phase's presence on our branch is matched by the deposit's `op_id`,
-/// carried in the inscription payload: `adopted` sets it, `orphaned` clears it,
-/// and our own publish sets it (the SDK does not echo our own writes back in
-/// `adopted`). So a step already taken — by us, or by another sequencer sharing
-/// the channel — is never taken twice. Each update it fires whatever is missing
-/// for a deposit on our branch:
-///
-/// 1. **Integrate.** No integration for the deposit → publish `[INSCRIBE,
-///    CHANNEL_TRANSFER]` consuming the deposit's exact notes, named with its
-///    `op_id`. It chains on the current tip, landing on the branch we observed
-///    the deposit on.
-/// 2. **Withdraw.** The integration mined — the deposit note it consumed has
-///    left the branch — and no withdraw exists → publish an atomic withdraw of
-///    the re-created note, named with the same `op_id`. It chains on the
-///    integration, so it lands only after it.
-///
-/// A shed integration takes its dependent withdraw with it (both appear in
-/// `orphaned`), so the next update re-publishes the chain once on the branch we
-/// are now on.
+/// Reconciles each observed deposit against branch state (fork- and
+/// multi-sequencer-correct), matching phases by the deposit's `op_id`:
+/// integrate it, then withdraw the re-created note.
 struct DepositLifecyclePolicy {
     withdraw_outputs: Vec<u64>,
     recipient: ZkPublicKey,
     deposits: HashMap<Hash, DepositLifecycleState>,
 }
 
-/// The inscription payload naming a deposit's integration / withdraw — used
-/// both to publish the step and to recognize it (ours or a foreign sequencer's)
-/// in `adopted`/`orphaned`.
 fn integrate_payload(op_id: &Hash) -> Inscription {
     make_inscription(&format!("integrate deposit {op_id:?}"))
 }
@@ -376,30 +341,43 @@ fn withdraw_payload(op_id: &Hash) -> Inscription {
     make_inscription(&format!("withdraw deposit {op_id:?}"))
 }
 
-/// Fold a `ChannelUpdate` tx list into the phase flags: for every tracked
-/// deposit whose integration or withdraw payload appears in `txs`, set that
-/// flag to `present`. `adopted` calls this with `true`, `orphaned` with
-/// `false`.
+fn mark_payload(
+    deposits: &mut HashMap<Hash, DepositLifecycleState>,
+    payload: &Inscription,
+    present: bool,
+) {
+    for (op_id, state) in deposits.iter_mut() {
+        if *payload == integrate_payload(op_id) {
+            state.integrated = present;
+        } else if *payload == withdraw_payload(op_id) {
+            state.withdrawn = present;
+        }
+    }
+}
+
+/// Set each phase flag to `present` for deposits whose payload appears in
+/// `txs`.
 fn apply_channel_txs(
     deposits: &mut HashMap<Hash, DepositLifecycleState>,
     txs: &[ChannelUpdateTx],
     present: bool,
 ) {
     for tx in txs {
-        let Some(payload) = tx.inscription().map(|info| &info.payload) else {
-            continue;
-        };
-        for (op_id, state) in deposits.iter_mut() {
-            if *payload == integrate_payload(op_id) {
-                state.integrated = present;
-            } else if *payload == withdraw_payload(op_id) {
-                state.withdrawn = present;
-            }
+        if let Some(payload) = tx.inscription().map(|info| &info.payload) {
+            mark_payload(deposits, payload, present);
         }
     }
 }
 
-/// Publish an atomic deposit inscription consuming `notes`; return its tx hash.
+/// Mark finalized steps present — canonical, so never un-set.
+fn apply_finalized(deposits: &mut HashMap<Hash, DepositLifecycleState>, finalized: &[FinalizedTx]) {
+    for op in finalized.iter().flat_map(|tx| tx.ops.iter()) {
+        if let FinalizedOp::Inscription(info) = op {
+            mark_payload(deposits, &info.payload, true);
+        }
+    }
+}
+
 async fn publish_deposit_inscription<Node>(
     sequencer: &mut ZoneSequencer<Node>,
     inscription: Inscription,
@@ -421,9 +399,6 @@ where
     }
 }
 
-/// Publish an atomic withdraw releasing `withdraw_outputs` to `recipient`,
-/// under `inscription` (which names the deposit it settles); return its tx
-/// hash.
 async fn publish_deposit_withdraw<Node>(
     sequencer: &mut ZoneSequencer<Node>,
     inscription: Inscription,
@@ -460,7 +435,12 @@ where
     Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
 {
     async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
-        let Event::BlocksProcessed { channel_update, .. } = event else {
+        let Event::BlocksProcessed {
+            channel_update,
+            finalized,
+            ..
+        } = event
+        else {
             return;
         };
 
@@ -470,9 +450,6 @@ where
             deposits,
         } = self;
 
-        // Discover deposits from the update's adopted set, then fold the whole
-        // update's channel txs into the phase flags before deciding: `adopted`
-        // marks steps present on our branch, `orphaned` marks them gone.
         for deposit in &channel_update.adopted_deposits {
             deposits
                 .entry(deposit.op_id)
@@ -482,12 +459,11 @@ where
                     withdrawn: false,
                 });
         }
-        apply_channel_txs(deposits, &channel_update.adopted, true);
+        // orphaned first, then adopted/finalized (canonical) which win.
         apply_channel_txs(deposits, &channel_update.orphaned, false);
+        apply_channel_txs(deposits, &channel_update.adopted, true);
+        apply_finalized(deposits, finalized);
 
-        // Branch-correct mined notes. A deposit's notes present ⇒ it is on our
-        // branch and not yet integrated; absent while integrated ⇒ the
-        // integration mined and consumed them, so the re-created note is ready.
         let wallet: HashSet<NoteId> = {
             let view = sequencer.channel_wallet();
             view.finalized
@@ -497,7 +473,6 @@ where
                 .collect()
         };
 
-        // Fire whatever step is missing for each deposit.
         for (op_id, state) in deposits.iter_mut() {
             if state.notes.is_empty() {
                 continue;
@@ -524,12 +499,8 @@ where
     }
 }
 
-/// Drive a sequencer to withdraw a specific observed deposit (matched by
-/// `target_amount`) in the drive loop, reconciled against branch state — the
-/// single-phase sibling of [`start_deposit_lifecycle_policy`] with no
-/// integration step. `withdraw_outputs` are the recipient amounts (`Auto`
-/// sweeps any other channel notes to cover them, e.g. a dust flood). See
-/// [`DepositWithdrawPolicy`].
+/// Single-phase sibling of [`start_deposit_lifecycle_policy`]: reactively
+/// withdraw the deposit of `target_amount`, `Auto` sweeping other notes.
 pub fn start_deposit_withdraw_policy(
     sequencer: ZoneSequencer<ZoneNodeHttpClient>,
     target_amount: u64,
@@ -545,19 +516,14 @@ pub fn start_deposit_withdraw_policy(
     to_policy_runtime(runner::spawn(sequencer, policy))
 }
 
-/// A deposit the withdraw policy is driving, keyed by `op_id`.
 struct DepositWithdrawState {
     notes: Vec<NoteId>,
     withdraw_tx: Option<InscriptionId>,
 }
 
-/// Single-phase reconcile: react to the observed deposit of `target_amount` by
-/// publishing an atomic withdraw that consumes it (its transfer gates the whole
-/// bundle on the deposit; `Auto` sweeps any other channel notes to cover
-/// `withdraw_outputs`). Reconciled against branch state each `ChannelUpdate`:
-/// fire the withdraw while the deposit is on our branch and none is live; a
-/// withdraw in `orphaned` is dropped from the live set so the next update
-/// re-publishes it once on the branch we are now on.
+/// Reactively withdraw the deposit of `target_amount` (no integration step),
+/// reconciled against branch state; the withdraw consumes the deposit note
+/// directly, so a foreign withdraw removes it and we back off.
 struct DepositWithdrawPolicy {
     target_amount: u64,
     withdraw_outputs: Vec<u64>,
@@ -565,7 +531,6 @@ struct DepositWithdrawPolicy {
     deposits: HashMap<Hash, DepositWithdrawState>,
 }
 
-/// Clear the withdraw slot of any of our withdraws reported orphaned.
 fn drop_shed_withdraws(
     deposits: &mut HashMap<Hash, DepositWithdrawState>,
     orphaned: &[ChannelUpdateTx],
@@ -596,8 +561,6 @@ where
             deposits,
         } = self;
 
-        // Discover only the target deposit (by amount), then drop any of our
-        // withdraws shed off the branch we are now on.
         for deposit in &channel_update.adopted_deposits {
             if deposit.amount == *target_amount {
                 deposits
@@ -619,7 +582,6 @@ where
                 .collect()
         };
 
-        // Withdraw the deposit while it is on our branch and no withdraw is live.
         for (op_id, state) in deposits.iter_mut() {
             let deposit_on_branch =
                 !state.notes.is_empty() && state.notes.iter().all(|id| wallet.contains(id));

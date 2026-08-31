@@ -87,16 +87,12 @@ pub(super) enum DriveMode {
     CustomRepublish {
         deps: Box<CustomRepublishDeps>,
     },
-    /// Drives each observed deposit through its full lifecycle in the drive
-    /// loop: integrate with an atomic deposit inscription, then withdraw the
-    /// re-created note into `withdraw_outputs` to `recipient`.
+    /// Integrate then withdraw each observed deposit.
     DepositReaction {
         withdraw_outputs: Vec<u64>,
         recipient: ZkPublicKey,
     },
-    /// Reacts to the observed deposit of `target_amount` by withdrawing
-    /// `withdraw_outputs` to `recipient` in the drive loop — single-phase, no
-    /// integration.
+    /// Withdraw the observed deposit of `target_amount`.
     DepositWithdraw {
         target_amount: u64,
         withdraw_outputs: Vec<u64>,
@@ -858,11 +854,7 @@ pub(super) async fn start_named_sequencer(
     .await
 }
 
-/// Start `sequencer_alias` reacting to observed deposits (in its drive loop) by
-/// integrating each with an atomic deposit inscription, then withdrawing the
-/// re-created note into `withdraw_outputs` once the inscription mines — plus an
-/// indexer. Mimics a zone's on-deposit lifecycle: no wait for finalization, the
-/// reactions run the moment each step is observed on the channel branch.
+/// Start `sequencer_alias` with the deposit-lifecycle policy and an indexer.
 pub(super) async fn start_deposit_reaction_sequencer(
     world: &mut CucumberWorld,
     step: &Step,
@@ -884,10 +876,7 @@ pub(super) async fn start_deposit_reaction_sequencer(
     initialize_zone_indexer(world, step, sequencer_alias)
 }
 
-/// Start `sequencer_alias` reacting to the observed deposit of `target_amount`
-/// (in its drive loop) by withdrawing `withdraw_outputs` to its funding key —
-/// single-phase, no integration — plus an indexer. No wait for finalization;
-/// the withdraw fires the moment the deposit is seen on the channel branch.
+/// Start `sequencer_alias` with the deposit-withdraw policy and an indexer.
 pub(super) async fn start_deposit_withdraw_sequencer(
     world: &mut CucumberWorld,
     step: &Step,

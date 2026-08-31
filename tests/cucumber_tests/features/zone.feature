@@ -713,12 +713,9 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
-  # A deposit is observed non-finalized, integrated with an atomic deposit
-  # inscription, and — once that inscription mines — the re-created note is
-  # withdrawn, all in the drive loop without waiting for finalization. Deposit 5
-  # → withdraw "1,1,2" leaves a value-1 channel note as change, and that note can
-  # only exist if both the integration inscription and the withdraw landed, so
-  # its finalization proves the whole chain.
+  # Deposit 5 → withdraw "1,1,2" leaves a value-1 change note that can only exist
+  # if both the integration inscription and the withdraw landed, so its
+  # finalization proves the whole reactive chain.
   Scenario: Observed deposit is integrated then withdrawn without waiting for finalization
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
@@ -765,11 +762,8 @@ Feature: Zone SDK
   # value-1 notes in a single channel transfer (bounded by the 255-output
   # limit), rather than one ZK-signed deposit per 32 notes (a deposit is capped
   # at 32 inputs by the ZK signing-key limit).
-  #
-  # The withdraw is reactive: SEQ_A's drive loop reacts to the big deposit and
-  # publishes the sweeping withdraw, reconciled against branch state — no wait
-  # for finalization to act. The dust exists before the big deposit lands, so the
-  # reactive withdraw sweeps it (consuming 255 inputs).
+  # The withdraw is reactive: SEQ_A reacts to the big deposit and publishes the
+  # sweeping withdraw. Dust exists before the big deposit, so it is swept.
   Scenario: Reactive withdrawal stays valid under a dust flood
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |

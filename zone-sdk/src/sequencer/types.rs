@@ -113,36 +113,22 @@ pub enum WithdrawInputs {
     Explicit(Vec<NoteId>),
 }
 
-/// A tx reported in a [`ChannelUpdate`], in both `adopted` and `orphaned`.
+/// A tx reported in a [`ChannelUpdate`]'s `adopted`/`orphaned`.
 ///
-/// The variants mirror the submission flows, so an orphaned entry is
-/// recovered with the same method that produced it:
+/// Variants mirror the submission flows, so an orphaned entry is recovered with
+/// the method that produced it (the SDK fills a fresh `parent_msg` each time):
 /// - [`ChannelUpdateTx::Inscription`] →
-///   [`SequencerHandle::publish`](super::SequencerHandle::publish) with
-///   `info.payload`
+///   [`publish`](super::SequencerHandle::publish) with `info.payload`.
 /// - [`ChannelUpdateTx::AtomicWithdraw`] →
-///   [`SequencerHandle::publish_atomic_withdraw`](super::SequencerHandle::publish_atomic_withdraw)
-///   with `info.inscription.payload` and a single `WithdrawArg { outputs:
-///   info.outputs }`. The SDK fills a fresh `parent_msg` and reselects the
-///   transfer inputs per [`WithdrawInputs`] on each publish — the original
-///   input selection need not be reproduced.
+///   [`publish_atomic_withdraw`](super::SequencerHandle::publish_atomic_withdraw)
+///   with `info.inscription.payload` and `WithdrawArg { outputs: info.outputs
+///   }`.
 /// - [`ChannelUpdateTx::AtomicDepositInscription`] →
-///   [`SequencerHandle::publish_atomic_deposit_inscription`](super::SequencerHandle::publish_atomic_deposit_inscription)
-///   with `info.inscription.payload` and `info.consumed_notes`. The SDK fills a
-///   fresh `parent_msg` on each publish.
-/// - [`ChannelUpdateTx::Config`] → a config-only tx on the config lineage. Like
-///   [`ChannelUpdateTx::Custom`], recovery is the caller's: the SDK does not
-///   auto-resubmit a config (it cannot re-sign a multi-sig one). The caller
-///   routes it — a single-sig config back through `do_channel_config`, a
-///   multi-sig one through its own signing flow. The variant is a typed marker
-///   ("this orphan is a config"), not a re-publish trigger.
-/// - [`ChannelUpdateTx::Custom`] → the `prepare_tx` + `submit_signed_tx` flow:
-///   the SDK cannot demystify the tx, so it hands back the whole
-///   [`SignedMantleTx`] and the caller's own logic decides how to parse and
-///   whether/how to rebuild it (an orphaned tx cannot be re-posted as-is — its
-///   parent slot is consumed).
-///   [`channel_inscriptions`](super::channel_inscriptions) extracts the tx's
-///   channel inscriptions the way the SDK sees them.
+///   [`publish_atomic_deposit_inscription`](super::SequencerHandle::publish_atomic_deposit_inscription)
+///   with `info.inscription.payload` and `info.consumed_notes`.
+/// - [`ChannelUpdateTx::Config`] / [`ChannelUpdateTx::Custom`] →
+///   caller-recovered; the SDK cannot re-sign a multi-sig config or rebuild a
+///   custom tx, so it never auto-resubmits them.
 #[derive(Debug, Clone)]
 pub enum ChannelUpdateTx {
     /// A published message.
@@ -433,24 +419,16 @@ pub struct ChannelUpdate {
     /// branches), so consumers dedup by `this_msg` against their own state
     /// there.
     pub adopted: Vec<ChannelUpdateTx>,
-    /// Channel deposits observed in this block, in on-chain op order. Surfaced
-    /// non-finalized so a consumer can integrate a deposit without waiting for
-    /// finalization — react to each by publishing an atomic deposit inscription
-    /// (see
-    /// [`SequencerHandle::publish_atomic_deposit_inscription`](super::SequencerHandle::publish_atomic_deposit_inscription)).
+    /// Channel deposits observed in this block. Surfaced non-finalized so a
+    /// consumer can integrate a deposit without waiting for finalization, via
+    /// [`publish_atomic_deposit_inscription`](super::SequencerHandle::publish_atomic_deposit_inscription).
     ///
-    /// Process these after applying `orphaned`/`adopted` (a block is atomic, so
-    /// a deposit landing alongside adopted inscriptions is safe to handle after
-    /// them). Reconcile, don't fire once: a branch change can re-surface the
-    /// same deposit here more than once, and it can also reorg out. Publish an
-    /// atomic deposit inscription for a deposit only while it is on the current
-    /// branch (its re-created note is in the channel wallet) and no inscription
-    /// consuming it is already in flight — and republish if yours is orphaned
-    /// (reported in `orphaned`). The bundle's transfer consumes the deposited
-    /// note, so it can only land where the deposit is; this converges the
-    /// [inscription, transfer] onto the deposit's branch without waiting for
-    /// the deposit to finalize, and re-fires if the deposit reorgs out and
-    /// re-mines.
+    /// Reconcile against branch state, don't fire once: a branch change can
+    /// re-surface the same deposit or reorg it out. Publish an inscription for
+    /// a deposit only while it is on the current branch and none consuming
+    /// it is already in flight, and republish if yours is reported in
+    /// `orphaned`. The bundle's transfer consumes the deposited note, so it
+    /// can only land where the deposit is.
     pub adopted_deposits: Vec<DepositInfo>,
 }
 

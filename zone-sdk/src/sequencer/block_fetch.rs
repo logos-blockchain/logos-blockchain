@@ -996,21 +996,17 @@ pub(super) fn classify_channel_tx(
         if clean && inscribes == 1 && configs == 0 && channel_transfers <= 1 {
             let inscription = entries.pop().expect("exactly one inscribe entry");
             if !withdraws.is_empty() {
-                // `[inscribe, channel_transfer, withdraw…]` — the transfer moves
-                // channel notes to the recipient keys the withdraw releases.
+                // `[inscribe, channel_transfer, withdraw…]`.
                 BlockChannelTx::AtomicWithdraw(AtomicWithdrawInfo {
                     tx_hash,
                     inscription,
                     withdraws,
-                    // Recipient outputs are only needed to re-issue our *own*
-                    // orphaned bundle, which recovers them from the pending
-                    // entry (see `submit_atomic_withdraw`). An observed bundle is
-                    // never re-issued by us, so it carries none.
+                    // Only re-issue of our own orphaned bundle needs these; an
+                    // observed one carries none.
                     outputs: Outputs::empty(),
                 })
             } else if channel_transfers == 1 {
-                // `[inscribe, channel_transfer]` — the transfer consumes an observed
-                // deposited note, making the inscription conditional on the deposit.
+                // `[inscribe, channel_transfer]` — transfer consumes the deposited note.
                 BlockChannelTx::AtomicDepositInscription(AtomicDepositInscriptionInfo {
                     tx_hash,
                     inscription,

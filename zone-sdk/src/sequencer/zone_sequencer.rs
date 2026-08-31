@@ -935,19 +935,10 @@ where
         Ok((transfer_op, withdraw_op))
     }
 
-    /// Core atomic-deposit-inscription logic. Builds the client-side bundle
-    /// `[CHANNEL_INSCRIBE, CHANNEL_TRANSFER]`: the inscription integrates an
-    /// observed deposit into the zone's channel state, and the transfer
-    /// consumes the deposited note(s) so the inscription lands only if the
-    /// deposit is on chain — integrating a deposit without waiting for
-    /// finalization. The transfer re-creates each consumed note 1:1 under
-    /// the same key (a pure atomicity anchor; it moves no value and re-keys
-    /// nothing).
-    ///
-    /// The caller names the deposited notes from an observed deposit; the SDK
-    /// resolves their value and key from the tracked channel-note set. Mirrors
-    /// [`Self::do_publish_atomic_withdraw`] for readiness/funding, parent,
-    /// status queueing and checkpointing. Scoped to single-signer channels.
+    /// Builds and publishes `[CHANNEL_INSCRIBE, CHANNEL_TRANSFER]`: the
+    /// transfer consumes the named deposited notes (re-creating each 1:1),
+    /// gating the inscription on the deposit. Mirrors
+    /// [`Self::do_publish_atomic_withdraw`]; single-signer channels.
     pub(super) async fn do_publish_atomic_deposit_inscription(
         &mut self,
         inscribe: Inscription,
@@ -1050,11 +1041,9 @@ where
         ))
     }
 
-    /// Build the transfer op for an atomic deposit inscription: consume the
-    /// named deposited notes and re-create each 1:1 under the same value and
-    /// key. The notes are resolved from the tracked channel-note set, so an
-    /// unknown or already-spent note (e.g. the deposit is not on this branch)
-    /// errors before funding.
+    /// Consume the named deposited notes and re-create each 1:1; errors if a
+    /// note is not in the tracked channel-note set (deposit not on this
+    /// branch).
     fn build_deposit_transfer(
         &self,
         consumed_notes: &[NoteId],

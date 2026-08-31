@@ -193,21 +193,13 @@ where
             .await
     }
 
-    /// Publish an atomic inscription+transfer bundle integrating an observed
-    /// deposit, without waiting for the deposit to finalize.
-    ///
-    /// Builds `[CHANNEL_INSCRIBE, CHANNEL_TRANSFER]`: the inscription records
-    /// the deposit in the zone's channel state, and the transfer consumes the
-    /// named deposited note(s) so the whole tx lands only if the deposit is on
-    /// chain. `consumed_notes` are the channel `NoteId`s of the observed
-    /// deposit (learned from `DepositInfo`); the SDK resolves their value and
-    /// key from the tracked channel-note set and re-creates each 1:1 under the
-    /// same key (a pure atomicity anchor).
-    ///
-    /// Same readiness/funding/threshold contract as
-    /// [`Self::publish_atomic_withdraw`]. Errors with [`Error::Network`] if a
-    /// named note is not in the tracked channel set (the deposit is not on this
-    /// branch, or was already consumed).
+    /// Integrate an observed deposit without waiting for finalization: publish
+    /// `[CHANNEL_INSCRIBE, CHANNEL_TRANSFER]`, the transfer consuming
+    /// `consumed_notes` (the deposit's channel `NoteId`s from `DepositInfo`) so
+    /// the tx lands only if the deposit is on chain. Same contract as
+    /// [`Self::publish_atomic_withdraw`]; [`Error::Network`] if a note is not
+    /// in the tracked set (deposit not on this branch, or already
+    /// consumed).
     pub async fn publish_atomic_deposit_inscription(
         &mut self,
         inscribe: Inscription,
