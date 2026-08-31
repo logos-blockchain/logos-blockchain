@@ -1,15 +1,6 @@
-//! The previous epoch's pipeline, kept alive while the transition period runs.
-
-use lb_blend::{
-    message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
-    scheduling::message_scheduler::OldEpochMessageScheduler,
-};
 use lb_chain_service::Epoch;
 
-use crate::{core::OldEpochCryptographicProcessor as Processor, message::ProcessedMessage};
-
-type Scheduler<Rng> =
-    OldEpochMessageScheduler<Rng, ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>;
+use crate::core::{OldEpochCryptographicProcessor as Processor, epoch_stages::OldEpochScheduler};
 
 /// An epoch that has ended but is not finished with.
 ///
@@ -20,26 +11,27 @@ type Scheduler<Rng> =
 /// had to keep in step; pairing them makes "an old epoch is transitioning" a
 /// single fact rather than an invariant held by hand.
 ///
-/// The blending tokens the old epoch is still earning are deliberately *not*
-/// here: while the service is running they are collected into the persisted
-/// recovery state, and only a node on its way out of core keeps them
-/// separately, because by then there is no recovery state left to hold them.
+/// The blending tokens the old epoch is still earning are *not* here, because
+/// while the service is running the persisted recovery state owns them — which
+/// is what carries them across a restart. A node on its way out of core has
+/// consumed that state, so it pairs this with the tokens itself: see
+/// [`RetiringEpoch`].
 pub struct TransitioningEpoch<Rng, ProofsVerifier> {
     crypto: Processor<ProofsVerifier>,
-    scheduler: Scheduler<Rng>,
+    scheduler: OldEpochScheduler<Rng>,
 }
 
 impl<Rng, ProofsVerifier> TransitioningEpoch<Rng, ProofsVerifier> {
-    pub const fn new(crypto: Processor<ProofsVerifier>, scheduler: Scheduler<Rng>) -> Self {
+    pub const fn new(crypto: Processor<ProofsVerifier>, scheduler: OldEpochScheduler<Rng>) -> Self {
         Self { crypto, scheduler }
     }
 
     #[cfg(test)]
-    pub const fn scheduler(&self) -> &Scheduler<Rng> {
+    pub const fn scheduler(&self) -> &OldEpochScheduler<Rng> {
         &self.scheduler
     }
 
-    pub const fn scheduler_mut(&mut self) -> &mut Scheduler<Rng> {
+    pub const fn scheduler_mut(&mut self) -> &mut OldEpochScheduler<Rng> {
         &mut self.scheduler
     }
 
@@ -52,12 +44,7 @@ impl<Rng, ProofsVerifier> TransitioningEpoch<Rng, ProofsVerifier> {
     /// Both halves at once, which the incoming-message path needs: it reads the
     /// old processor to decapsulate and writes the old scheduler to queue the
     /// result. Borrowing them through one method keeps that disjoint.
-    pub const fn split_mut(&mut self) -> (&Processor<ProofsVerifier>, &mut Scheduler<Rng>) {
+    pub const fn split_mut(&mut self) -> (&Processor<ProofsVerifier>, &mut OldEpochScheduler<Rng>) {
         (&self.crypto, &mut self.scheduler)
-    }
-
-    /// Splits into the halves a retiring node drives directly.
-    pub fn into_components(self) -> (Processor<ProofsVerifier>, Scheduler<Rng>) {
-        (self.crypto, self.scheduler)
     }
 }
