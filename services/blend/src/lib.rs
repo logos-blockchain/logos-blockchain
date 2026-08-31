@@ -61,12 +61,12 @@ pub mod epoch_info;
 pub mod membership;
 pub mod message;
 pub(crate) mod metrics;
-pub mod pending;
 pub mod settings;
 
 mod instance;
 mod kms;
 mod modes;
+mod pending;
 mod service_components;
 pub use self::service_components::ServiceComponents;
 

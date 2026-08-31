@@ -33,10 +33,6 @@ where
     NodeId: Clone,
     ProofsGenerator: LeaderAndPowProofsGenerator,
 {
-    #[cfg(test)]
-    pub const fn epoch(&self) -> Epoch {
-        self.cryptographic_processor.epoch()
-    }
 }
 
 impl<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
@@ -52,35 +48,7 @@ where
     /// edge node condition:
     /// 1. The membership size is at least `settings.minimum_network_size`.
     /// 2. The local node is not a core node.
-    pub fn try_new_with_edge_condition_check(
-        settings: Settings<Backend, NodeId, RuntimeServiceId>,
-        membership: Membership<NodeId>,
-        public_info: PoQVerificationInputsMinusSigningKey,
-        winning_pol_info_stream: WinningPolInfoStream,
-        overwatch_handle: OverwatchHandle<RuntimeServiceId>,
-        epoch: Epoch,
-    ) -> Result<Self, Error>
-    where
-        NodeId: Eq + Hash,
-    {
-        let membership_size = membership.size();
-        if membership_size < settings.minimum_network_size.get() as usize {
-            Err(Error::NetworkIsTooSmall(membership_size))
-        } else if membership.contains_local() {
-            Err(Error::LocalIsCoreNode)
-        } else {
-            Ok(Self::new(
-                settings,
-                membership,
-                public_info,
-                winning_pol_info_stream,
-                overwatch_handle,
-                epoch,
-            ))
-        }
-    }
-
-    fn new(
+    pub(super) fn new(
         settings: Settings<Backend, NodeId, RuntimeServiceId>,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
