@@ -822,10 +822,17 @@ where
 }
 
 /// Publishes claim transactions to `claim_address` until no ready ticket can be
-/// claimed.
+/// claimed, or the reward pool runs dry.
 ///
 /// One transaction only carries so many claims (the op budget and the reward
 /// pool both cap it), so emptying a backlog takes several rounds.
+///
+/// The pool is tracked here rather than re-read per round. A published claim
+/// does not reach the tip until it settles, so the tip keeps reporting the same
+/// unspent pool and would re-authorise funds this loop has already committed —
+/// emitting a burst of transactions the chain then rejects. Drawing down a
+/// local balance stops the loop when the funds are spoken for; the next tick
+/// starts again from whatever the chain actually reports.
 async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
     blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
@@ -839,6 +846,15 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
     BlendService::NodeId: Send,
     RuntimeServiceId: Sync,
 {
+    // The running balance every claim in this drain spends against, opened at
+    // whatever the chain currently reports.
+    let mut available_pool = match current_reward_pool(cryptarchia_api).await {
+        Ok(pool) => pool,
+        Err(e) => {
+            error!(target: LOG_TARGET, "Failed to read the PoW reward pool: {e}");
+            return;
+        }
+    };
     loop {
         match claim_ready_rewards(
             cryptarchia_api,
@@ -846,6 +862,7 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
             claim_address,
             state,
             slot_window,
+            available_pool,
         )
         .await
         {
@@ -854,9 +871,21 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
             Ok(None) => break,
             // A published claim always consumes at least one ready ticket, so
             // the loop is guaranteed to terminate.
-            Ok(Some(_)) => state_updater.update(Some(state.clone())),
-            // Stop on the first failure rather than spinning: the tickets stay
-            // ready and the next tick retries them.
+            Ok(Some(claim)) => {
+                available_pool = claim.remaining_pool;
+                state_updater.update(Some(state.clone()));
+            }
+            // `RewardPoolExhausted` is the expected end of a drain once the
+            // pool is spent, so it is not worth an error. Anything else stops
+            // the loop too, leaving the tickets ready for the next tick.
+            Err(PoWError::RewardPoolExhausted) => {
+                info!(
+                    target: LOG_TARGET,
+                    "PoW reward pool spent; {} ticket(s) still ready",
+                    state.ready_to_claim.len()
+                );
+                break;
+            }
             Err(e) => {
                 error!(target: LOG_TARGET, "PoW auto-claim failed: {e}");
                 break;
@@ -895,18 +924,54 @@ where
             .await?
             .ok_or(PoWError::NoClaimTarget)?,
     };
-    claim_ready_rewards(
+    // A one-off claim has no run to accumulate over, so its balance is simply
+    // the pool the chain reports right now, and the leftover is discarded.
+    let available_pool = current_reward_pool(cryptarchia_api).await?;
+    Ok(claim_ready_rewards(
         cryptarchia_api,
         blend_api,
         claim_address,
         state,
         slot_window,
+        available_pool,
     )
-    .await
+    .await?
+    .map(|claim| claim.tx_hash))
+}
+
+/// The reward pool at the current tip: the opening balance for a run of claims.
+async fn current_reward_pool<CryptarchiaService, RuntimeServiceId>(
+    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+) -> Result<Value, PoWError>
+where
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
+    RuntimeServiceId: Sync,
+{
+    let tip = cryptarchia_api.info().await?.cryptarchia_info.tip;
+    let ledger_state = cryptarchia_api
+        .get_ledger_state(tip)
+        .await?
+        .ok_or(PoWError::LedgerStateUnavailable(tip))?;
+    Ok(ledger_state.mantle_ledger().pow.reward_pool())
+}
+
+/// A published reward-claim transaction.
+struct PublishedClaim {
+    tx_hash: TxHash,
+    /// The reward pool left over once this claim is paid for, to be carried
+    /// into the next claim of the same run.
+    remaining_pool: Value,
 }
 
 /// Builds and publishes a reward-claim transaction for every ticket currently
 /// ready to claim, moving the claimed tickets to the pending set on success.
+///
+/// `available_pool` is the reward pool this batch may spend; the balance left
+/// over comes back in [`PublishedClaim::remaining_pool`]. A run of claims
+/// therefore threads one balance from call to call rather than re-reading the
+/// chain: a published claim does not reach the tip until it settles, so the tip
+/// would keep re-authorising funds already committed. Open the run with
+/// [`current_reward_pool`].
 ///
 /// On any failure the ready set is left untouched so the tickets can be
 /// retried.
@@ -916,7 +981,8 @@ async fn claim_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
     claim_address: ZkPublicKey,
     state: &mut PoWServiceState,
     slot_window: NonZeroU64,
-) -> Result<Option<TxHash>, PoWError>
+    available_pool: Value,
+) -> Result<Option<PublishedClaim>, PoWError>
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
     BlendService: BlendServiceData,
@@ -963,7 +1029,7 @@ where
     // `tickets` (the canonical ones, in ready order); move exactly those to
     // the pending set.
     let (signed_tx, claimed_count) =
-        build_reward_claim_tx(claim_address, &ledger_state, &tickets).await?;
+        build_reward_claim_tx(claim_address, &ledger_state, available_pool, &tickets).await?;
     // Capture the tx id before publishing consumes the signed tx, so it can be
     // reported back to the caller.
     let tx_hash = signed_tx.hash();
@@ -989,7 +1055,16 @@ where
         state.ready_to_claim.len()
     );
     state.pending_to_claim.extend(claimed);
-    Ok(Some(tx_hash))
+    // Debit what this claim committed. The builder sized the batch against
+    // `available_pool`, so this cannot underflow; saturating only guards a
+    // future change to that invariant.
+    let remaining_pool = available_pool.saturating_sub(
+        (claimed_count as Value).saturating_mul(ledger_state.mantle_ledger().pow.epoch_reward()),
+    );
+    Ok(Some(PublishedClaim {
+        tx_hash,
+        remaining_pool,
+    }))
 }
 
 /// Whether a ticket anchored to a block at `block_slot` is still within its
@@ -1171,22 +1246,26 @@ const fn max_claims_by_ops() -> usize {
 /// freshly minted UTXOs, reconstructed here from the same data the ledger uses,
 /// and is signed by those notes' owning keys.
 ///
-/// Only as many claims are taken as the reward pool can fund and the per-tx op
+/// Only as many claims are taken as `reward_pool` can fund and the per-tx op
 /// limit allows. Returns the signed tx together with the number of tickets (a
 /// prefix of `tickets`) it actually claims.
+///
+/// `reward_pool` is passed in rather than read from `ledger_state` so a caller
+/// publishing several transactions back to back can draw down its own running
+/// balance; see [`drain_ready_rewards`].
 async fn build_reward_claim_tx(
     claim_address: ZkPublicKey,
     ledger_state: &LedgerState,
+    reward_pool: Value,
     tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
 ) -> Result<(SignedMantleTx<Unverified>, usize), PoWError> {
-    // Value each claim will mint and the pool that funds them, read at
-    // `ledger_state`; they must match the state the tx applies against, or the
-    // reconstructed UTXOs / fee will be off.
-    let pow = &ledger_state.mantle_ledger().pow;
+    // The reward value and gas prices are read at `ledger_state`; they must
+    // match the state the tx applies against, or the reconstructed UTXOs / fee
+    // will be off.
     build_reward_claim_tx_inner(
         claim_address,
-        pow.epoch_reward(),
-        pow.reward_pool(),
+        ledger_state.mantle_ledger().pow.epoch_reward(),
+        reward_pool,
         ledger_state.get_gas_prices(),
         tickets,
     )
@@ -1751,6 +1830,63 @@ mod tests {
             .count();
         assert_eq!(claims, 2); // 2 claims + 1 transfer
         assert_eq!(ops.len(), 3);
+    }
+
+    /// The drain loop spends against a running balance rather than the tip's
+    /// pool, which cannot fall until earlier claims settle. Walking the same
+    /// arithmetic the loop performs shows it converging instead of
+    /// re-authorising the same funds every round.
+    #[tokio::test]
+    async fn successive_claims_draw_the_pool_down_to_exhaustion() {
+        // Pool funds three claims in total; each round is capped at one because
+        // only one ticket is offered at a time.
+        let mut available_pool = 3 * REWARD;
+        let mut rounds = 0;
+        loop {
+            let tickets = vec![ticket()];
+            match build_reward_claim_tx_inner(
+                ZkPublicKey::zero(),
+                REWARD,
+                available_pool,
+                GasPrices::new(1, 1),
+                &tickets,
+            )
+            .await
+            {
+                Ok((_, claimed)) => {
+                    assert_eq!(claimed, 1);
+                    available_pool -= claimed as u64 * REWARD;
+                    rounds += 1;
+                }
+                // The pool is spent: this is how the drain loop learns to stop.
+                Err(PoWError::RewardPoolExhausted) => break,
+                Err(e) => panic!("unexpected error: {e}"),
+            }
+            assert!(rounds <= 3, "drawdown failed to converge");
+        }
+        assert_eq!(rounds, 3);
+        assert_eq!(available_pool, 0);
+    }
+
+    /// Re-reading the tip each round — what the loop did before — never
+    /// converges, because a published claim cannot change the tip until it
+    /// settles. This pins the behaviour the drawdown exists to prevent.
+    #[tokio::test]
+    async fn a_pool_that_never_falls_would_authorise_claims_forever() {
+        let stale_pool = 3 * REWARD;
+        for _ in 0..10 {
+            let tickets = vec![ticket()];
+            let (_, claimed) = build_reward_claim_tx_inner(
+                ZkPublicKey::zero(),
+                REWARD,
+                stale_pool,
+                GasPrices::new(1, 1),
+                &tickets,
+            )
+            .await
+            .expect("a stale pool keeps funding claims");
+            assert_eq!(claimed, 1);
+        }
     }
 
     #[tokio::test]
