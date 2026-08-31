@@ -835,7 +835,7 @@ async fn step_perform_stress_continuous_cycles_next_user_wallet(
 #[given(expr = "I have a faucet with URL {string}")]
 #[when(expr = "I have a faucet with URL {string}")]
 fn step_faucet_details(world: &mut CucumberWorld, base_url: String) {
-    world.faucet_base_url = Some(base_url);
+    world.wallet_registry.faucet_base_url = Some(base_url);
 }
 
 #[given(expr = "I request {int} rounds of faucet funds for wallet {string}")]
@@ -872,6 +872,7 @@ fn step_request_faucet_funds_for_all_wallets(
     number_of_rounds: usize,
 ) -> StepResult {
     let all_wallets_pk_hex = world
+        .wallet_registry
         .wallet_info
         .values()
         .map(WalletInfo::public_key_hex)
@@ -893,6 +894,7 @@ fn step_request_faucet_funds_for_all_user_wallets(
     number_of_rounds: usize,
 ) -> StepResult {
     let all_wallets_pk_hex = world
+        .wallet_registry
         .wallet_info
         .values()
         .filter(|w| w.is_user_wallet())
@@ -915,6 +917,7 @@ fn step_request_faucet_funds_for_all_funding_wallets(
     number_of_rounds: usize,
 ) -> StepResult {
     let all_wallets_pk_hex = world
+        .wallet_registry
         .wallet_info
         .values()
         .filter(|wallet| wallet.is_node_funding_wallet())

@@ -282,11 +282,12 @@ pub async fn observe_epoch_transitions(
         )));
     }
 
-    if world.blend_diagnostic_phase.is_none() {
-        world.blend_diagnostic_phase = Some(BlendDiagnosticPhase::Baseline);
+    if world.blend_diagnostics.phase.is_none() {
+        world.blend_diagnostics.phase = Some(BlendDiagnosticPhase::Baseline);
     }
     let phase = world
-        .blend_diagnostic_phase
+        .blend_diagnostics
+        .phase
         .expect("diagnostic phase was initialized above");
     let settings = deployment_settings(world, node_name)?;
     let client = world.resolve_node_http_client(node_name)?;
@@ -433,8 +434,8 @@ async fn wait_for_epoch_transitions(
             );
         }
         if current_observed_epoch >= observation.target_epoch {
-            world.blend_diagnostic_observation_count =
-                world.blend_diagnostic_observation_count.saturating_add(1);
+            world.blend_diagnostics.observation_count =
+                world.blend_diagnostics.observation_count.saturating_add(1);
             return Ok(());
         }
         sleep(observation.poll_interval).await;
@@ -511,6 +512,7 @@ fn log_diagnostic_identities(world: &CucumberWorld) -> StepResult {
         let user_config_path = node_info.runtime_dir.join(USER_CONFIG_FILE);
         let user_config = user_config_from_node_yaml(&user_config_path)?;
         let peer_id = world
+            .cluster
             .node_peer_ids
             .get(&node_name)
             .copied()
@@ -553,7 +555,7 @@ pub async fn log_node_lifecycle_marker(
     node_name: &str,
     stage: &str,
 ) {
-    let Some(phase) = world.blend_diagnostic_phase else {
+    let Some(phase) = world.blend_diagnostics.phase else {
         return;
     };
     let Some((settings, consensus)) = lifecycle_reference_consensus(world, event, node_name).await
@@ -598,11 +600,12 @@ async fn lifecycle_reference_consensus(
 }
 
 pub async fn log_majority_outage_summary(world: &CucumberWorld) {
-    let Some(BlendDiagnosticPhase::Outage) = world.blend_diagnostic_phase else {
+    let Some(BlendDiagnosticPhase::Outage) = world.blend_diagnostics.phase else {
         return;
     };
     let mut stopped_nodes: Vec<_> = world
-        .blend_diagnostic_stopped_nodes
+        .blend_diagnostics
+        .stopped_nodes
         .iter()
         .cloned()
         .collect();

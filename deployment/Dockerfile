@@ -14,17 +14,7 @@ COPY . .
 RUN apt-get update && apt-get install -yq \
     build-essential git clang libssl-dev pkg-config ca-certificates curl unzip
 
-# Install Bun for L2 demo frontend.
-RUN curl -fsSL https://bun.sh/install | bash
-ENV PATH="/root/.bun/bin:$PATH"
-
-# Build Frontend Webapp
-WORKDIR /logos-blockchain/deployment/l2-sequencer-archival-demo/webapp
-RUN bun install --frozen-lockfile
-RUN VITE_SEQUENCER_URL=/api/sequencer VITE_ARCHIVER_URL=/api/archiver bun run build
-
 # Build Rust Binaries
-WORKDIR /logos-blockchain
 RUN cargo build --locked --release
 
 # ===========================
@@ -43,13 +33,7 @@ RUN apt-get update && apt-get install -yq \
 
 # Copy Binaries
 COPY --from=builder /logos-blockchain/target/release/logos-blockchain-node /usr/bin/
-COPY --from=builder /logos-blockchain/target/release/logos-blockchain-demo-sequencer /usr/bin/
-COPY --from=builder /logos-blockchain/target/release/logos-blockchain-demo-archiver /usr/bin/
 COPY --from=builder /logos-blockchain/target/release/logos-blockchain-faucet /usr/bin/
-
-# Copy Frontend & Nginx config
-COPY --from=builder /logos-blockchain/deployment/l2-sequencer-archival-demo/webapp/dist /var/www/l2-demo
-COPY --from=builder /logos-blockchain/deployment/l2-sequencer-archival-demo/nginx/nginx.conf /etc/nginx/nginx.conf
 
 # Copy Scripts
 COPY --from=builder /logos-blockchain/deployment/scripts /opt/scripts

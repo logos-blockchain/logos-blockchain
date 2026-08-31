@@ -43,7 +43,6 @@ lb-mmr                           = { workspace = true }
 lb-node                          = { features = ["testing"], workspace = true }
 lb-storage-service               = { features = ["rocksdb-backend"], workspace = true }
 lb-testing-framework             = { workspace = true }
-lb-tui-zone                      = { workspace = true }
 lb-tx-service                    = { workspace = true }
 lb-utils                         = { workspace = true }
 lb-wallet                        = { workspace = true }

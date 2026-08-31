@@ -1,39 +1,24 @@
 pub mod serde_fr {
     use ark_bn254::Fr;
-    use serde::{Deserialize as _, Deserializer, Serialize as _, Serializer};
+    use lb_utils::serde::{deserialize_bytes_array, serialize_bytes_array};
+    use serde::{Deserializer, Serializer};
 
-    use crate::{FrBytes, fr_from_bytes, fr_to_bytes};
+    use crate::{fr_from_bytes, fr_to_bytes};
 
     pub fn serialize<S>(item: &Fr, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         let bytes = fr_to_bytes(item);
-        if serializer.is_human_readable() {
-            let hex = hex::encode(bytes); // Convert `Fr` to hex representation
-            serializer.serialize_str(&hex)
-        } else {
-            bytes.serialize(serializer)
-        }
+        serialize_bytes_array(bytes, serializer)
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Fr, D::Error>
     where
         D: Deserializer<'de>,
     {
-        if deserializer.is_human_readable() {
-            let hex_str = String::deserialize(deserializer)?;
-            let bytes: FrBytes = hex::decode(hex_str)
-                .map_err(serde::de::Error::custom)?
-                .try_into()
-                .map_err(|b: Vec<u8>| {
-                    serde::de::Error::custom(format!("Bytes length is not 32, got: {:?}", b.len()))
-                })?;
-            Ok(fr_from_bytes(&bytes).map_err(serde::de::Error::custom)?) // Parse from hex
-        } else {
-            let sized_bytes = <[u8; 32]>::deserialize(deserializer)?;
-            Ok(fr_from_bytes(&sized_bytes).map_err(serde::de::Error::custom)?)
-        }
+        let bytes = deserialize_bytes_array::<32, D>(deserializer)?;
+        fr_from_bytes(&bytes).map_err(serde::de::Error::custom)
     }
 
     #[cfg(test)]
@@ -58,6 +43,19 @@ pub mod serde_fr {
             let v = bincode::serialize(&fr1).unwrap();
             let fr2: FrDeser = bincode::deserialize(&v).unwrap();
             assert_eq!(fr1, fr2);
+        }
+
+        #[test]
+        fn test_deserialize_rejects_oversized_json_hex() {
+            let json = format!("\"{}\"", "00".repeat(33));
+            assert!(serde_json::from_str::<FrDeser>(&json).is_err());
+        }
+
+        #[test]
+        fn test_deserialize_rejects_out_of_range_json_hex() {
+            let json = format!("\"{}\"", "ff".repeat(32));
+            let error = serde_json::from_str::<FrDeser>(&json).unwrap_err();
+            assert!(error.to_string().contains("bigger than the modulus"));
         }
     }
 }

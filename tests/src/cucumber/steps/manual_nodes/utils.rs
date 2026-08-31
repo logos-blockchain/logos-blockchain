@@ -410,7 +410,13 @@ pub(crate) fn ensure_fee_sponsorship_and_fork_groups_are_not_mixed(
     world: &CucumberWorld,
     step_value: &str,
 ) -> StepResult {
-    if world.fee_state.sponsored_genesis_account.is_some() && !world.node_groups.is_empty() {
+    if world
+        .wallet_registry
+        .fee_state
+        .sponsored_genesis_account
+        .is_some()
+        && !world.fork_groups.groups().is_empty()
+    {
         return Err(StepError::InvalidArgument {
             message: format!(
                 "Step `{step_value}` error: sponsored fee accounts cannot be combined with distinct node groups in the same scenario"
@@ -426,6 +432,7 @@ pub(crate) async fn wait_for_all_nodes_to_be_synced_to_chain(
     step: &str,
 ) -> StepResult {
     let public_cryptarchia_endpoint_peers = world
+        .startup
         .public_cryptarchia_endpoint_peers
         .clone()
         .unwrap_or_default();
@@ -486,7 +493,7 @@ async fn catch_up_known_wallet_tracking_after_chain_sync(
     world: &mut CucumberWorld,
     step: &str,
 ) -> StepResult {
-    if world.wallet_info.is_empty() {
+    if world.wallet_registry.wallet_info.is_empty() {
         return Ok(());
     }
 
@@ -746,7 +753,7 @@ pub async fn start_node(
     immediate_start: bool,
     extra_user_overrides: &[ConfigOverride],
 ) -> StepResult {
-    if world.local_cluster.is_none() {
+    if world.cluster.local_cluster.is_none() {
         return Err(StepError::LogicalError {
             message: "No local cluster available".into(),
         });
@@ -770,16 +777,18 @@ pub async fn start_node(
     }
     let is_bootstrap_node = startup_settings.is_bootstrap_node;
     let join_external_network = startup_settings.join_external_network;
-    let persist_dir = world.scenario_base_dir.join(node_name);
+    let persist_dir = world.lifecycle.scenario_base_dir.join(node_name);
     let runtime_dir_prefix = format!("{node_name}_");
     let final_dir_ignore_list = matching_child_dirs(&persist_dir, &runtime_dir_prefix);
     let tokio_console_node = startup_settings.tokio_console_node.clone();
     let scenario_wallet_key_ids = world
+        .wallet_registry
         .wallet_accounts
         .values()
         .map(wallet_account_key_id)
         .chain(
             world
+                .wallet_registry
                 .fee_state
                 .wallet_account
                 .iter()
@@ -806,7 +815,11 @@ pub async fn start_node(
         });
 
     let started_node = {
-        let cluster = world.local_cluster.as_ref().expect("local cluster checked");
+        let cluster = world
+            .cluster
+            .local_cluster
+            .as_ref()
+            .expect("local cluster checked");
         Box::pin(cluster.start_node_with(node_name, start_options))
             .await
             .inspect_err(|e| {
@@ -815,14 +828,17 @@ pub async fn start_node(
     };
 
     let node_final_dir = extract_child_dir_name(
-        &world.scenario_base_dir,
+        &world.lifecycle.scenario_base_dir,
         &runtime_dir_prefix,
         &final_dir_ignore_list,
     )
     .inspect_err(|e| {
         warn!(target: TARGET, "Step `{step}` error: {e}");
     })?;
-    let node_runtime_dir = world.scenario_base_dir.join(node_final_dir.clone());
+    let node_runtime_dir = world
+        .lifecycle
+        .scenario_base_dir
+        .join(node_final_dir.clone());
     populate_slots_per_epoch_from_deployment(world, &node_runtime_dir)?;
     let started_node_name = started_node.name.clone();
     info!(
@@ -834,10 +850,15 @@ pub async fn start_node(
     // `StartNodeOptions::with_persist_dir` currently creates a fresh runtime
     // directory for each launch. Seed that runtime directory and restart once
     // to effectively initialize from a named snapshot.
-    let restored_node_snapshot = if let Some(node_snapshot) = world.node_snapshot_on_startup.clone()
+    let restored_node_snapshot = if let Some(node_snapshot) =
+        world.snapshots.node_snapshot_on_startup.clone()
     {
         let stop_result = {
-            let cluster = world.local_cluster.as_ref().expect("local cluster checked");
+            let cluster = world
+                .cluster
+                .local_cluster
+                .as_ref()
+                .expect("local cluster checked");
             cluster
                 .stop_node(&started_node_name)
                 .await
@@ -853,7 +874,11 @@ pub async fn start_node(
         populate_slots_per_epoch_from_deployment(world, &node_runtime_dir)?;
 
         let restart_result = {
-            let cluster = world.local_cluster.as_ref().expect("local cluster checked");
+            let cluster = world
+                .cluster
+                .local_cluster
+                .as_ref()
+                .expect("local cluster checked");
             cluster
                 .restart_node(&started_node_name)
                 .await
@@ -875,7 +900,7 @@ pub async fn start_node(
     // Scrape the final node directory name to get the correct path to the node's
     // YAML file for extracting the peer ID, since the actual directory name has
     // a random suffix added by the deployer.
-    world.node_peer_ids.insert(
+    world.cluster.node_peer_ids.insert(
         node_name.to_owned(),
         peer_id_from_node_yaml(&node_runtime_dir.join(USER_CONFIG_FILE))?,
     );
@@ -894,6 +919,7 @@ pub async fn start_node(
     })?;
 
     world
+        .wallet_registry
         .wallet_info
         .extend(wallet_info.iter().map(|(k, v)| (k.clone(), v.clone())));
 
@@ -913,7 +939,7 @@ pub async fn start_node(
     );
 
     if let Some(node_snapshot) = restored_node_snapshot
-        && let Some(snapshot_name) = world.snapshot_restore_config.extensions.clone()
+        && let Some(snapshot_name) = world.snapshots.restore.extensions.clone()
     {
         restore_wallet_snapshot_if_present(
             &snapshot_name,
@@ -931,14 +957,18 @@ pub async fn start_node(
     // All nodes are required to be network ready responsive, and bootstrap nodes
     // must be `Mode::OnLine` for IBD of other peers to succeed
     if !immediate_start {
-        let cluster = world.local_cluster.as_ref().expect("local cluster checked");
+        let cluster = world
+            .cluster
+            .local_cluster
+            .as_ref()
+            .expect("local cluster checked");
         ensure_node_ready(
             cluster,
             &client,
             node_name,
             &started_node_name,
             is_bootstrap_node,
-            world.require_all_peers_mode_online_at_startup,
+            world.startup.require_all_peers_mode_online_at_startup,
             startup_settings.join_external_network,
         )
         .await
@@ -947,7 +977,7 @@ pub async fn start_node(
         })?;
     }
 
-    if world.node_snapshot_on_startup.is_some() {
+    if world.snapshots.node_snapshot_on_startup.is_some() {
         match client.consensus_info().await {
             Ok(info) => {
                 info!(
@@ -1000,6 +1030,7 @@ fn check_tokio_console_port(node_name: &str, port: u16) {
 /// node is down.
 pub async fn stop_node(world: &CucumberWorld, step: &str, node_name: &str) -> StepResult {
     let cluster = world
+        .cluster
         .local_cluster
         .as_ref()
         .ok_or(StepError::LogicalError {
@@ -1031,6 +1062,7 @@ pub async fn stop_node(world: &CucumberWorld, step: &str, node_name: &str) -> St
 
 pub async fn restart_node(world: &CucumberWorld, step: &str, node_name: &str) -> StepResult {
     let cluster = world
+        .cluster
         .local_cluster
         .as_ref()
         .ok_or(StepError::LogicalError {
@@ -1063,7 +1095,7 @@ pub async fn restart_node(world: &CucumberWorld, step: &str, node_name: &str) ->
         // TODO: Add `is_bootstrap_node` to world
         false,
         None,
-        world.join_external_network.unwrap_or_default(),
+        world.startup.join_external_network.unwrap_or_default(),
     )
     .await
     .inspect_err(|e| {
@@ -1136,27 +1168,29 @@ fn get_startup_settings(
             .collect::<Result<Vec<String>, StepError>>()?;
         PeerSelection::Named(named)
     };
-    let mut ibd_peers = world.ibd_peers_override.clone().unwrap_or_default();
+    let mut ibd_peers = world.startup.ibd_peers_override.clone().unwrap_or_default();
     let populate_ibd_peers_from_initial_peers = world
+        .startup
         .populate_ibd_peers_from_initial_peers
         .unwrap_or_default();
     if populate_ibd_peers_from_initial_peers {
         for peer in initial_peers {
-            if let Some(peer_id) = world.node_peer_ids.get(peer) {
+            if let Some(peer_id) = world.cluster.node_peer_ids.get(peer) {
                 ibd_peers.insert(*peer_id);
             }
         }
     }
     let is_bootstrap_node = initial_peers.is_empty();
-    let initial_peers_override = world.initial_peers_override.clone();
-    let join_external_network = world.join_external_network.unwrap_or_default();
+    let initial_peers_override = world.startup.initial_peers_override.clone();
+    let join_external_network = world.startup.join_external_network.unwrap_or_default();
     let deployment_settings_override = world
+        .startup
         .deployment_config_override_path
         .clone()
         .map(|path| load_run_config(&path))
         .transpose()?;
-    let user_config_overrides = world.user_config_overrides.clone();
-    let deployment_config_overrides = world.deployment_config_overrides.clone();
+    let user_config_overrides = world.startup.user_config_overrides.clone();
+    let deployment_config_overrides = world.startup.deployment_config_overrides.clone();
     let tokio_console_node = world.tokio_console_profile.node(node_name).cloned();
 
     Ok(StartupSettings {
@@ -1166,7 +1200,7 @@ fn get_startup_settings(
         initial_peers_override,
         join_external_network,
         deployment_settings_override,
-        manual_node_config_overrides: world.manual_node_config_overrides.clone(),
+        manual_node_config_overrides: world.startup.manual_node_config_overrides.clone(),
         user_config_overrides,
         deployment_config_overrides,
         tokio_console_node,
@@ -1292,7 +1326,7 @@ fn populate_slots_per_epoch_from_deployment(
             path.display()
         ),
     })?;
-    world.slots_per_epoch = slots_per_epoch;
+    world.chain.slots_per_epoch = slots_per_epoch;
     info!(
         target: TARGET,
         "Loaded effective epoch configuration from '{}': slots_per_epoch={slots_per_epoch}",
@@ -1514,7 +1548,11 @@ fn compile_wallet_in_map(
 ) -> Result<WalletInfoMap, StepError> {
     let mut wallet_info: WalletInfoMap = HashMap::new();
     for wallet in wallet_start_info {
-        let wallet_account = match world.wallet_accounts.get(&wallet.account_index) {
+        let wallet_account = match world
+            .wallet_registry
+            .wallet_accounts
+            .get(&wallet.account_index)
+        {
             Some(wallet_account) => wallet_account.clone(),
             None => {
                 if join_external_network {
@@ -1554,11 +1592,13 @@ fn compile_wallet_in_map(
     let node_wallet_keys =
         node_wallet_keys_from_node_yaml(&node_runtime_dir.join(USER_CONFIG_FILE))?;
     let user_wallets_by_pk = world
+        .wallet_registry
         .wallet_accounts
         .values()
         .map(|account| (account.public_key_hex(), account.label.clone()))
         .chain(
             world
+                .wallet_registry
                 .fee_state
                 .wallet_account
                 .iter()

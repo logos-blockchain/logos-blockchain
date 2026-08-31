@@ -18,14 +18,14 @@ async fn run_scenario(world: &mut CucumberWorld) -> StepResult {
         DeployerKind::K8s => run_k8s_scenario(world).await,
     };
 
-    world.run.result = Some(result.map_err(|error| error.to_string()));
+    world.lifecycle.run.result = Some(result.map_err(|error| error.to_string()));
 
     Ok(())
 }
 
 #[then(expr = "scenario should succeed")]
 fn scenario_should_succeed(world: &mut CucumberWorld) -> StepResult {
-    match world.run.result.take() {
+    match world.lifecycle.run.result.take() {
         Some(Ok(())) => Ok(()),
         Some(Err(message)) => Err(StepError::RunFailed { message }),
         None => Err(StepError::RunFailed {
@@ -35,7 +35,7 @@ fn scenario_should_succeed(world: &mut CucumberWorld) -> StepResult {
 }
 
 fn selected_deployer(world: &CucumberWorld) -> Result<DeployerKind, StepError> {
-    world.deployer.ok_or(StepError::MissingDeployer)
+    world.lifecycle.deployer.ok_or(StepError::MissingDeployer)
 }
 
 async fn run_local_scenario(world: &CucumberWorld) -> StepResult {

@@ -384,7 +384,12 @@ pub async fn drain_all_node_wallets(
     node_name: &str,
     receiver_wallet_name: &str,
 ) -> StepResult {
-    if world.fee_state.sponsored_genesis_account.is_some() {
+    if world
+        .wallet_registry
+        .fee_state
+        .sponsored_genesis_account
+        .is_some()
+    {
         return Err(StepError::LogicalError {
             message: "Draining user wallets with sponsored fee accounts not supported".to_owned(),
         });

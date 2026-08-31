@@ -72,31 +72,31 @@ pub async fn wallet_debited_exactly_fee(
     timeout_secs: u64,
 ) -> StepResult {
     let account = actions::user_wallet_account(world, step, wallet_name)?;
-    let wallet_info =
-        world
-            .wallet_info
-            .get(wallet_name)
-            .ok_or_else(|| StepError::LogicalError {
-                message: format!(
-                    "Step `{}` error: unknown wallet `{wallet_name}`",
-                    step.value
-                ),
-            })?;
+    let wallet_info = world
+        .wallet_registry
+        .wallet_info
+        .get(wallet_name)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!(
+                "Step `{}` error: unknown wallet `{wallet_name}`",
+                step.value
+            ),
+        })?;
     let client = world.resolve_node_http_client(&wallet_info.node_name.clone())?;
     let signed_tx = world.resolve_prepared_transaction(transaction_alias)?;
 
     let genesis_funds: u64 = world
+        .chain
         .genesis_block_utxos
         .iter()
         .filter(|utxo| utxo.note.pk == account.public_key())
         .map(|utxo| utxo.note.value)
         .sum();
 
-    let burned = fee_spec::net_balance_against(&world.genesis_block_utxos, &signed_tx).map_err(
-        |message| StepError::StepFail {
+    let burned = fee_spec::net_balance_against(&world.chain.genesis_block_utxos, &signed_tx)
+        .map_err(|message| StepError::StepFail {
             message: format!("Step `{}` error: {message}", step.value),
-        },
-    )?;
+        })?;
 
     let expected = genesis_funds - burned;
 
@@ -141,10 +141,12 @@ pub async fn prepared_transaction_tip_absorbed_fee_increase(
     let signed_tx = world.resolve_prepared_transaction(transaction_alias)?;
     let client = world.resolve_node_http_client(node_name)?;
     let prices = actions::live_gas_prices(&client, step).await?;
-    let remaining_tip = fee_spec::fee_surplus_at(&world.genesis_block_utxos, &signed_tx, &prices)
-        .map_err(|message| StepError::StepFail {
-        message: format!("Step `{}` error: {message}", step.value),
-    })?;
+    let remaining_tip =
+        fee_spec::fee_surplus_at(&world.chain.genesis_block_utxos, &signed_tx, &prices).map_err(
+            |message| StepError::StepFail {
+                message: format!("Step `{}` error: {message}", step.value),
+            },
+        )?;
 
     if !(0 < remaining_tip && remaining_tip < i128::from(original_tip)) {
         return Err(StepError::StepFail {

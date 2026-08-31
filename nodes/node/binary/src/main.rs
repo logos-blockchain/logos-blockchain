@@ -38,10 +38,6 @@ async fn main() -> Result<()> {
             Command::RemoveKey(remove_args) => {
                 return logos_blockchain_node::cli::keys::run_remove_key(*remove_args);
             }
-            Command::Inscribe(inscribe_args) => {
-                lb_tui_zone::run_commands::run_inscribe::run_inscribe(inscribe_args).await;
-                return Ok(());
-            }
             Command::Participate(participate_args) => {
                 return logos_blockchain_node::cli::participate::run(&participate_args);
             }

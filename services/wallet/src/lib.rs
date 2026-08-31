@@ -459,7 +459,7 @@ where
                     Self::handle_new_block(event.block_id, &mut state, &storage_adapter, &cryptarchia_api, &epoch_config).await;
                 }
                 Ok(lib_update) = lib_receiver.recv() => {
-                    Self::handle_lib_update(&lib_update, &storage_adapter, &mut state).await;
+                    Self::handle_lib_update(&lib_update, &storage_adapter, &mut state, &cryptarchia_api,  &epoch_config).await;
                 }
             }
         }
@@ -1456,8 +1456,40 @@ where
         lib_update: &LibUpdate,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         state: &mut ServiceState<'_>,
+        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        epoch_config: &EpochConfig,
     ) {
         log_lib_update(lib_update);
+
+        // The wallet's frontier can lag the chain's LIB: during bootstrap the
+        // engine jumps the LIB (e.g. on switch-to-online) without broadcasting
+        // intermediate updates, so `new_lib` may be a block the wallet never
+        // applied. Backfill up to it first, mirroring `handle_new_block`, so the
+        // subsequent `advance_lib` finds the `WalletState` it needs.
+        if !state.wallet().has_processed_block(lib_update.new_lib) {
+            debug!(
+                target: LOG_TARGET,
+                new_lib = ?lib_update.new_lib,
+                "Wallet missing new LIB block, backfilling before advancing LIB"
+            );
+            if let Err(e) = Self::backfill_missing_blocks(
+                lib_update.new_lib,
+                state,
+                storage_adapter,
+                cryptarchia_api,
+                epoch_config,
+            )
+            .await
+            {
+                error!(
+                    target: LOG_TARGET,
+                    new_lib = ?lib_update.new_lib,
+                    err = %e,
+                    "Failed to backfill wallet to new LIB; skipping LIB advance"
+                );
+                return;
+            }
+        }
 
         let claimed_nullifiers = Self::collect_claimed_nullifiers_from_blocks(
             lib_update.pruned_blocks.immutable_blocks.values(),

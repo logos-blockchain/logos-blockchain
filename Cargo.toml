@@ -44,9 +44,6 @@ members = [
   "consensus/cryptarchia-sync",
   "core",
   "deployment/faucet",
-  "deployment/l2-sequencer-archival-demo/archiver",
-  "deployment/l2-sequencer-archival-demo/sequencer",
-  "deployment/tui-zone",
   "kms/keys",
   "kms/macros",
   "kms/operators",
@@ -131,7 +128,6 @@ lb-config                          = { default-features = false, package = "logo
 lb-core                            = { default-features = false, package = "logos-blockchain-core", path = "./core" }
 lb-cryptarchia-engine              = { default-features = false, package = "logos-blockchain-cryptarchia-engine", path = "./consensus/cryptarchia-engine" }
 lb-cryptarchia-sync                = { default-features = false, package = "logos-blockchain-cryptarchia-sync", path = "./consensus/cryptarchia-sync" }
-lb-demo-sequencer                  = { default-features = false, package = "logos-blockchain-demo-sequencer", path = "./deployment/l2-sequencer-archival-demo/sequencer" }
 lb-dynamic-merkle                  = { default-features = false, package = "logos-blockchain-dynamic-merkle", path = "merkle/dynamic-merkle" }
 lb-faucet                          = { default-features = false, package = "logos-blockchain-faucet", path = "./deployment/faucet" }
 lb-groth16                         = { default-features = false, package = "logos-blockchain-groth16", path = "./zk/groth16" }
@@ -161,7 +157,6 @@ lb-testing-framework               = { default-features = false, package = "test
 lb-time-service                    = { default-features = false, package = "logos-blockchain-time-service", path = "./services/time" }
 lb-tracing                         = { default-features = false, package = "logos-blockchain-tracing", path = "./tracing" }
 lb-tracing-service                 = { default-features = false, package = "logos-blockchain-tracing-service", path = "./services/tracing" }
-lb-tui-zone                        = { default-features = false, package = "logos-blockchain-tui-zone", path = "./deployment/tui-zone" }
 lb-tx-service                      = { default-features = false, package = "logos-blockchain-tx-service", path = "./services/tx-service" }
 lb-utils                           = { default-features = false, package = "logos-blockchain-utils", path = "./utils" }
 lb-utxotree                        = { default-features = false, package = "logos-blockchain-utxotree", path = "merkle/utxotree" }

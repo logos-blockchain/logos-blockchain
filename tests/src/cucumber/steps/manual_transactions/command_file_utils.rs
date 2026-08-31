@@ -51,7 +51,6 @@ use lb_core::mantle::{
     transactions::{GasPrices, hash::TxHash},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
-use lb_tui_zone::run_commands::{ZONE_FILE_TRANSFER_VERSION, ZONE_WALLET_FUNDS_EXPORT};
 use lb_wallet::WalletError;
 use serde::Serialize;
 use tokio::time::{Instant, sleep};
@@ -133,7 +132,7 @@ pub(crate) async fn build_cycle_fee_policy(
     let horizon = build_fee_horizon(
         tip,
         u64::from(consensus.cryptarchia_info.slot),
-        world.slots_per_epoch,
+        world.chain.slots_per_epoch,
         epochs_headroom,
         live_prices,
     )
@@ -759,8 +758,6 @@ fn log_wallet_state_balance(wallet_name: &str, public_key_hex: &str, state: &Wal
 
 #[derive(Serialize)]
 struct WalletFundsExport {
-    version: u8,
-    kind: &'static str,
     wallet: String,
     node_url: String,
     public_key: String,
@@ -799,8 +796,6 @@ async fn export_funds(
     let selected = select_utxos_covering(available_utxos.clone(), value)?;
     let selected_value = selected.iter().map(|utxo| utxo.note.value).sum();
     let export = WalletFundsExport {
-        version: ZONE_FILE_TRANSFER_VERSION,
-        kind: ZONE_WALLET_FUNDS_EXPORT,
         wallet: wallet.wallet_name.clone(),
         node_url: format!(
             "{}",
@@ -930,13 +925,16 @@ fn clear_wallet_encumbrances(
     }
 
     world.with_wallets_mut(|wallets| wallets.clear_encumbrances(wallet_name))?;
-    world.fee_state.clear_wallet_reservations(wallet_name);
+    world
+        .wallet_registry
+        .fee_state
+        .clear_wallet_reservations(wallet_name);
     info!(target: TARGET, "Cleared encumbrances for wallet '{wallet_name}'");
     Ok(())
 }
 
 fn clear_all_wallet_encumbrances(world: &mut CucumberWorld, step: &str) -> StepResult {
-    let wallet_names: Vec<String> = world.wallet_info.keys().cloned().collect();
+    let wallet_names: Vec<String> = world.wallet_registry.wallet_info.keys().cloned().collect();
 
     for wallet_name in wallet_names {
         clear_wallet_encumbrances(world, step, &wallet_name)?;
@@ -986,6 +984,7 @@ fn request_faucet_funds_all_user_wallets(
         message: "Invalid value for 'rounds': '0'".to_owned(),
     })?;
     let all_wallets_pk_hex = world
+        .wallet_registry
         .wallet_info
         .values()
         .filter(|w| w.is_user_wallet())
@@ -1003,6 +1002,7 @@ fn request_faucet_funds_all_funding_wallets(
         message: "Invalid value for 'rounds': '0'".to_owned(),
     })?;
     let all_wallets_pk_hex = world
+        .wallet_registry
         .wallet_info
         .values()
         .filter(|wallet| wallet.is_node_funding_wallet())
