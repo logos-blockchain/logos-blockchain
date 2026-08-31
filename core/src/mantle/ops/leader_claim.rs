@@ -14,17 +14,13 @@ use crate::{
     mantle::{
         Note, Utxo, Value,
         batch::DeferredZkpVerification,
-        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        gas::{Gas, MainnetGasProfile, OperationGas},
         ledger::{
             ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
-            VerifiableOperation,
-            verification_mode::{self, VerificationMode},
+            VerifiableOperation, verification_mode,
         },
-        ops::{OpId, SignedOp},
-        transactions::{
-            hash::{TxHash, TxHashView},
-            states::VerificationState,
-        },
+        ops::OpId,
+        transactions::hash::{TxHash, TxHashView},
     },
     proofs::leader_claim_proof::{
         Groth16LeaderClaimProof, LeaderClaimProof as _, LeaderClaimPublic,
@@ -277,14 +273,6 @@ impl ExecutableOperation for LeaderClaimOp {
                 },
             )],
         ))
-    }
-}
-
-impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOp<LeaderClaimOp, State, Mode>
-{
-    fn gas_multiplier(&self) -> Value {
-        1
     }
 }
 

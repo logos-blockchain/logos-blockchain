@@ -6,17 +6,15 @@ use thiserror::Error;
 use crate::{
     events::TxEvent,
     mantle::{
-        Value,
         batch::DeferredZkpVerification,
         channel::Channels,
-        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        gas::{Gas, MainnetGasProfile, OperationGas},
         ledger::{
             self, ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation,
-            Utxo, Utxos, VerifiableOperation,
-            verification_mode::{self, VerificationMode},
+            Utxo, Utxos, VerifiableOperation, verification_mode,
         },
-        ops::{OpId, SignedOp},
-        transactions::{hash::TxHashView, states::VerificationState},
+        ops::OpId,
+        transactions::hash::TxHashView,
     },
     sdp::service_notes::ServiceNotes,
 };
@@ -153,14 +151,6 @@ impl ExecutableOperation for TransferOp {
         // Add outputs from the ledger
         utxos = self.outputs.execute(utxos, self);
         Ok((utxos, Vec::new()))
-    }
-}
-
-impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOp<TransferOp, State, Mode>
-{
-    fn gas_multiplier(&self) -> Value {
-        1
     }
 }
 

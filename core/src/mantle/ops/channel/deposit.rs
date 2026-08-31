@@ -6,20 +6,15 @@ use serde::{Deserialize, Serialize};
 use crate::{
     events::{DepositNote, DepositRecreatedNotes, TxEvent, TxEventPayload},
     mantle::{
-        Value,
         batch::DeferredZkpVerification,
         channel::{Channels, Error},
-        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        gas::{Gas, MainnetGasProfile, OperationGas},
         ledger::{
             ExecutableOperation, Inputs, InputsError, Outputs, PreverifiableOperation,
-            ProvableOperation, Utxos, VerifiableOperation,
-            verification_mode::{self, VerificationMode},
+            ProvableOperation, Utxos, VerifiableOperation, verification_mode,
         },
-        ops::{OpId, SignedOp, channel::ChannelId},
-        transactions::{
-            hash::{TxHash, TxHashView},
-            states::VerificationState,
-        },
+        ops::{OpId, channel::ChannelId},
+        transactions::hash::{TxHash, TxHashView},
     },
     sdp::service_notes::ServiceNotes,
 };
@@ -174,14 +169,6 @@ impl ExecutableOperation for DepositOp {
         .collect();
 
         Ok((context, events))
-    }
-}
-
-impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOp<DepositOp, State, Mode>
-{
-    fn gas_multiplier(&self) -> Value {
-        1
     }
 }
 

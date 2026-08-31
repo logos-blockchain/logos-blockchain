@@ -6,10 +6,7 @@ use futures::StreamExt as _;
 use lb_core::{
     block::Block,
     events::Events,
-    mantle::{
-        traits::{MantleTxWithProofs, PreverifiedMantleTx},
-        transactions::GasPrices,
-    },
+    mantle::traits::{MantleTxWithProofs, PreverifiedMantleTx},
 };
 use lb_cryptarchia_sync::{GetTipResponse, ProviderResponse};
 use lb_network_service::message::ChainSyncEvent;
@@ -36,7 +33,7 @@ impl Debug for Following {
 impl<Tx, Storage, RuntimeServiceId> Service<Following, Tx, Storage, RuntimeServiceId>
 where
     Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+        + MantleTxWithProofs
         + Debug
         + Clone
         + Eq

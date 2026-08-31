@@ -30,7 +30,6 @@ use lb_core::{
     mantle::{
         gas::MainnetGasProfile,
         traits::{MantleTxWithProofs, PreverifiedMantleTx},
-        transactions::GasPrices,
     },
     sdp::{Declaration, DeclarationId},
 };
@@ -376,7 +375,7 @@ impl Cryptarchia {
         current_slot: Slot,
     ) -> Result<(PrunedBlocks<HeaderId>, ReorgedBlocks<HeaderId>, Events), Error>
     where
-        Tx: PreverifiedMantleTx + 'tx + MantleTxWithProofs<Context = GasPrices>,
+        Tx: PreverifiedMantleTx + 'tx + MantleTxWithProofs,
     {
         let header = block.header();
         let id = header.id();
@@ -569,7 +568,7 @@ impl<Tx, Storage, TimeBackend, RuntimeServiceId> ServiceCore<RuntimeServiceId>
     for CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
     Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+        + MantleTxWithProofs
         + Debug
         + Clone
         + Eq
@@ -747,7 +746,7 @@ impl<Tx, Storage, TimeBackend, RuntimeServiceId>
     CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
     Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+        + MantleTxWithProofs
         + Debug
         + Clone
         + Eq

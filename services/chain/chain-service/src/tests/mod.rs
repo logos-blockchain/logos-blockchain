@@ -9,7 +9,8 @@ use futures::StreamExt as _;
 use lb_core::{
     block::{Block, BlockTransactions, UncleHeaders},
     mantle::{
-        Note, Op, OpProof, RawMantleTx, SignedMantleTx, TxGasCalculator as _, Utxo,
+        Note, Op, OpProof, RawMantleTx, SignedMantleTx, Utxo,
+        channel::Channels,
         gas::MainnetGasProfile,
         ledger::{Inputs, Outputs},
         ops::{
@@ -18,7 +19,7 @@ use lb_core::{
         },
         traits::Hashable as _,
         transactions::{
-            GasPrices,
+            GasPrices, MantleTxGasContext,
             states::{Preverified, Unverified},
         },
     },
@@ -386,8 +387,10 @@ fn ledger_is_not_commited_if_block_contains_invalid_zkp() {
 /// Creates a transfer tx with an fake sig.
 fn transfer_tx_with_fake_sig(utxo: Utxo, fake_key: &ZkKey) -> SignedMantleTx<Preverified> {
     let mut output_note = Note::new(1, fake_key.to_public_key());
+    let gas_context = MantleTxGasContext::from_channels(&Channels::new(), GasPrices::default());
     let fees = transfer_tx(utxo, output_note, fake_key)
-        .total_gas_cost::<MainnetGasProfile>(&GasPrices::default())
+        .mantle_tx()
+        .minimum_total_gas_cost::<MainnetGasProfile>(&gas_context)
         .unwrap();
     output_note.value = utxo.note.value - fees.into_inner();
 

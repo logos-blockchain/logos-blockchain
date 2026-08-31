@@ -37,11 +37,8 @@ pub fn encode_signed_mantle_tx<State: VerificationState>(tx: &SignedMantleTx<Sta
 /// Predicts the minimum encoded size of the transaction once signed.
 ///
 /// Proof sizes are fixed per op type or dictated by the channel thresholds
-/// the ledger enforces, so the prediction is exact — except for a
-/// `ChannelConfig` op creating a new channel. In this case, the ledger skips
-/// proof verifications, so this function assumes 0 proofs.
-/// Attaching more proofs than predicted is allowed, but if the tx is funded
-/// based on the predicted size, it may end up paying insufficient fees.
+/// the ledger enforces, a channel-creating `ChannelConfig` being verified
+/// against a threshold of 0.
 #[must_use]
 pub fn minimum_signed_mantle_tx_size(tx: &RawMantleTx, context: &MantleTxGasContext) -> usize {
     let mantle_tx_size = tx.encode().len();
@@ -55,11 +52,8 @@ pub fn minimum_signed_mantle_tx_size(tx: &RawMantleTx, context: &MantleTxGasCont
 
             // ChannelMultiSigProof
             //
-            // For existing channels, the ledger enforces exactly
-            // `configuration_threshold` proofs.
-            //
-            // On the other hand, for new channels, the ledger skips proof verifications.
-            // So, this function predicts the tx size assuming that 0 proofs will be added for this operation.
+            // The ledger enforces exactly `configuration_threshold` proofs,
+            // which is 0 for a channel that does not exist yet.
             Op::ChannelConfig(operation) => {
                 let threshold = context
                     .configuration_threshold(&operation.channel)

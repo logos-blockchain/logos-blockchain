@@ -1,12 +1,15 @@
 //! Assertions behind the fee-market steps: gas price checks, the spec
 //! reference comparison, and on-chain fee accounting.
 
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use cucumber::gherkin::Step;
 use lb_core::{
     header::HeaderId,
-    mantle::gas::{GasPrice, MainnetGasProfile, TxGasCalculator as _},
+    mantle::{
+        gas::{GasPrice, MainnetGasProfile},
+        transactions::MantleTxGasContext,
+    },
 };
 use tracing::info;
 
@@ -192,8 +195,10 @@ pub async fn prepared_transaction_percentage_reserve_absorbed_fee_increase(
     let signed_tx = world.resolve_prepared_transaction(transaction_alias)?;
     let client = world.resolve_node_http_client(node_name)?;
     let prices = actions::live_gas_prices(&client, step).await?;
+    let gas_context = MantleTxGasContext::new(HashMap::new(), HashMap::new(), prices.clone());
     let current_mandatory_fee = signed_tx
-        .total_gas_cost::<MainnetGasProfile>(&prices)
+        .mantle_tx()
+        .minimum_total_gas_cost::<MainnetGasProfile>(&gas_context)
         .map_err(|source| StepError::StepFail {
             message: format!(
                 "Step `{}` error: current mandatory fee calculation failed: {source}",

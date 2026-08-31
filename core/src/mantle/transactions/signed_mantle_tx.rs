@@ -5,9 +5,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
-        RawMantleTx, Value, VerificationError,
+        RawMantleTx, VerificationError,
         batch::DeferredZkpVerification,
-        gas::{Gas, GasCost, GasOverflow, GasProfile, TxGasCalculator},
         ledger::{PreverifiableOperation, VerifiableOperation, verification_mode::StandardMode},
         ops::{
             Op, OpProof,
@@ -31,7 +30,7 @@ use crate::{
             mantle_tx::OpWithProof,
         },
         transactions::{
-            GasPrices, OperationVerificationHelper, OpsProofs, VerifiedOps,
+            OperationVerificationHelper, OpsProofs, VerifiedOps,
             codec::{decode_signed_mantle_tx, encode_signed_mantle_tx},
             hash::{TxHash, TxHashView},
             mantle_tx::MantleTx as _,
@@ -393,63 +392,6 @@ impl<State: VerificationState> MantleTxWithProofs for SignedMantleTx<State> {
     }
 }
 
-impl<State: VerificationState> TxGasCalculator for SignedMantleTx<State> {
-    type Context = GasPrices;
-
-    fn total_gas_cost<Profile: GasProfile>(
-        &self,
-        context: &Self::Context,
-    ) -> Result<GasCost, GasOverflow> {
-        let execution_gas = TxGasCalculator::execution_gas_consumption::<Profile>(self, context)?;
-        let execution_gas_cost =
-            GasCost::calculate(execution_gas, context.execution_base_gas_price)?;
-        let storage_gas_cost = TxGasCalculator::storage_gas_cost(self, context)?;
-
-        execution_gas_cost.checked_add(storage_gas_cost)
-    }
-
-    fn storage_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow> {
-        let storage_gas = TxGasCalculator::storage_gas_consumption(self, context)?;
-        GasCost::calculate(storage_gas, context.storage_gas_price)
-    }
-
-    fn execution_gas_consumption<Profile: GasProfile>(
-        &self,
-        _context: &Self::Context,
-    ) -> Result<Gas, GasOverflow> {
-        self.mantle_tx
-            .ops()
-            .iter()
-            .zip(self.ops_proofs.iter())
-            .map(|(op, proof)| signed_op_execution_gas::<Profile>(op, proof))
-            .try_fold(Gas::from(0), |total, gas| total.checked_add(gas?))
-    }
-
-    fn storage_gas_consumption(&self, _context: &Self::Context) -> Result<Gas, GasOverflow> {
-        Ok(self.gas_storage_size().into())
-    }
-}
-
-fn signed_op_execution_gas<Profile: GasProfile>(
-    op: &Op,
-    proof: &OpProof,
-) -> Result<Gas, GasOverflow> {
-    // Signed transactions are charged after execution, when a config op may
-    // already have replaced the channel threshold. The validated proof length
-    // preserves the threshold that was actually checked.
-    let signature_count = match (op, proof) {
-        (
-            Op::ChannelConfig(_) | Op::ChannelWithdraw(_) | Op::ChannelTransfer(_),
-            OpProof::ChannelMultiSigProof(proof),
-        ) => proof.signatures().len(),
-        _ => return Ok(op.execution_gas::<Profile>()),
-    };
-    let multiplier = Value::try_from(signature_count)
-        .expect("channel multi-signature proofs are bounded to u16::MAX signatures");
-
-    op.execution_gas::<Profile>().checked_mul(multiplier)
-}
-
 impl<State: VerificationState> StorageSize for SignedMantleTx<State> {
     fn storage_size(&self) -> usize {
         self.gas_storage_size() as usize
@@ -637,20 +579,21 @@ mod tests {
     use super::*;
     use crate::mantle::{
         Note, NoteId, Utxo,
-        channel::Error,
+        channel::{Channels, Error},
         gas::MainnetGasProfile,
         ledger::{Inputs, Outputs, OutputsError},
         ops::{
             channel::{
                 ChannelId, MsgId, config::ChannelConfigOp, deposit::DepositOp,
-                verification::test_utils::create_channel_multi_sig_proof,
                 withdraw::ChannelWithdrawOp,
             },
             transfer::{TransferError, TransferOp},
         },
         transactions::{
-            MantleTxGasContext,
-            signed_mantle_tx::test_utils::{create_test_inscribe_op, create_test_mantle_tx},
+            GasPrices, MantleTxGasContext, op_execution_gas,
+            signed_mantle_tx::test_utils::{
+                create_test_inscribe_op, create_test_mantle_tx, make_channel_state,
+            },
         },
     };
 
@@ -715,58 +658,59 @@ mod tests {
         assert_eq!(gas.into_inner(), expected_total_gas);
     }
 
+    // The thresholds pricing an operation are the ones the channel holds, not
+    // the ones the config payload proposes, which are 1 here.
     #[test]
-    fn signed_execution_gas_uses_multi_signature_proof_lengths() {
-        let config_keys = [
-            Ed25519Key::from_bytes(&[1; 32]),
-            Ed25519Key::from_bytes(&[2; 32]),
-            Ed25519Key::from_bytes(&[3; 32]),
-        ];
-        let withdraw_keys = [
-            Ed25519Key::from_bytes(&[4; 32]),
-            Ed25519Key::from_bytes(&[5; 32]),
-        ];
-        let config_signers = [&config_keys[0], &config_keys[1], &config_keys[2]];
-        let withdraw_signers = [&withdraw_keys[0], &withdraw_keys[1]];
+    fn execution_gas_uses_channel_state_thresholds() {
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
 
         let config_channel = ChannelId::from([6; 32]);
         let deposit_channel = ChannelId::from([7; 32]);
         let withdraw_channel = ChannelId::from([8; 32]);
 
-        let mantle_tx = create_test_mantle_tx(vec![
-            Op::ChannelConfig(create_config_op(config_channel, &config_keys[0])),
-            Op::ChannelDeposit(create_deposit_op(deposit_channel)),
-            Op::ChannelWithdraw(create_withdraw_op(withdraw_channel)),
-        ]);
+        let mut config_state = make_channel_state(1, None);
+        config_state.configuration_threshold = 3;
 
-        let tx_hash = mantle_tx.hash();
-        let config_proof = create_channel_multi_sig_proof(&tx_hash, &config_signers);
-        let deposit_proof = ZkKey::multi_sign(&[], &tx_hash.to_fr()).unwrap();
-        let withdraw_proof = create_channel_multi_sig_proof(&tx_hash, &withdraw_signers);
+        let mut channels = Channels::new();
+        channels.channels = channels
+            .channels
+            .insert(config_channel, config_state)
+            .insert(withdraw_channel, make_channel_state(2, None));
 
-        let signed_tx = SignedMantleTx::new(
-            mantle_tx,
-            [
-                OpProof::ChannelMultiSigProof(config_proof),
-                OpProof::ZkSig(deposit_proof),
-                OpProof::ChannelMultiSigProof(withdraw_proof),
-            ]
-            .into(),
-        );
-
-        let gas_prices = GasPrices::new(1, 0);
-        let gas = TxGasCalculator::execution_gas_consumption::<MainnetGasProfile>(
-            &signed_tx,
-            &gas_prices,
+        let config_gas = op_execution_gas::<MainnetGasProfile>(
+            &Op::ChannelConfig(create_config_op(config_channel, &signing_key)),
+            &channels,
+        )
+        .unwrap();
+        let deposit_gas = op_execution_gas::<MainnetGasProfile>(
+            &Op::ChannelDeposit(create_deposit_op(deposit_channel)),
+            &channels,
+        )
+        .unwrap();
+        let withdraw_gas = op_execution_gas::<MainnetGasProfile>(
+            &Op::ChannelWithdraw(create_withdraw_op(withdraw_channel)),
+            &channels,
         )
         .unwrap();
 
-        let expected_config_gas = config_keys.len() as u64 * 56;
-        let expected_deposit_gas = 590;
-        let expected_withdraw_gas = withdraw_keys.len() as u64 * 56;
-        let expected_total_gas = expected_config_gas + expected_deposit_gas + expected_withdraw_gas;
+        assert_eq!(config_gas.into_inner(), 3 * 56);
+        assert_eq!(deposit_gas.into_inner(), 590);
+        assert_eq!(withdraw_gas.into_inner(), 2 * 56);
+    }
 
-        assert_eq!(gas.into_inner(), expected_total_gas);
+    // A config creating a channel is verified against a threshold of 0, so it
+    // verifies no signature and consumes no execution gas.
+    #[test]
+    fn execution_gas_of_a_channel_creating_config_is_zero() {
+        let signing_key = Ed25519Key::from_bytes(&[1; 32]);
+
+        let gas = op_execution_gas::<MainnetGasProfile>(
+            &Op::ChannelConfig(create_config_op(ChannelId::from([9; 32]), &signing_key)),
+            &Channels::new(),
+        )
+        .unwrap();
+
+        assert_eq!(gas.into_inner(), 0);
     }
 
     #[test]

@@ -7,10 +7,7 @@ use lb_core::{
     block::Block,
     events::Events,
     header::HeaderId,
-    mantle::{
-        traits::{GenesisTx as _, MantleTxWithProofs, PreverifiedMantleTx},
-        transactions::GasPrices,
-    },
+    mantle::traits::{GenesisTx as _, MantleTxWithProofs, PreverifiedMantleTx},
 };
 use lb_cryptarchia_engine::Slot;
 use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
@@ -54,7 +51,7 @@ impl Debug for AwaitingGenesisTime {
 impl<Tx, Storage, RuntimeServiceId> Service<AwaitingGenesisTime, Tx, Storage, RuntimeServiceId>
 where
     Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+        + MantleTxWithProofs
         + Debug
         + Clone
         + Eq
