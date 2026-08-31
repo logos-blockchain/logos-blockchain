@@ -16,7 +16,7 @@ use lb_blend_service::{
 };
 use lb_chain_service::{
     ProcessedBlockEvent, Slot,
-    api::{CryptarchiaServiceApi, CryptarchiaServiceData},
+    api::{ApiError as ChainApiError, CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
     codec::{Error as CodecError, SerializeOp as _},
@@ -57,11 +57,15 @@ use overwatch::{
     overwatch::OverwatchHandle,
     services::{
         AsServiceId, ServiceCore, ServiceData,
+        relay::RelayError,
         state::{ServiceState, StateUpdater},
     },
 };
 use serde::{Deserialize, Serialize};
-use tokio::{sync::oneshot, task::JoinError};
+use tokio::{
+    sync::oneshot::{self, error::RecvError},
+    task::JoinError,
+};
 use tokio_stream::wrappers::{BroadcastStream, IntervalStream, errors::BroadcastStreamRecvError};
 use tracing::{
     error,
@@ -100,6 +104,23 @@ pub enum PoWError {
     PayloadTooLarge(#[from] TransactionTooLarge),
     #[error("failed to publish to the blend network: {0}")]
     Publish(#[from] BlendApiError),
+    #[error("failed to query the chain service: {0}")]
+    Chain(#[from] ChainApiError),
+    #[error("failed to query the wallet service: {0}")]
+    Wallet(#[from] WalletApiError),
+    #[error("ledger state unavailable for tip {0:?}")]
+    LedgerStateUnavailable(HeaderId),
+    #[error("failed to reach the time service: {0}")]
+    TimeRelay(RelayError),
+    #[error("the time service dropped the slot-tick subscription response: {0}")]
+    SlotTickSubscription(#[from] RecvError),
+    #[error(
+        "PoW auto-claim targets are not tracked by the wallet (add them to `wallet.known_keys`): \
+         {0:?}"
+    )]
+    UntrackedClaimTargets(Vec<ZkPublicKey>),
+    #[error("no claim address given and no auto-claim target is below its threshold")]
+    NoClaimTarget,
 }
 
 /// Max inputs a single `Transfer` op can carry: its `ZkSig` is a
@@ -128,7 +149,7 @@ pub enum PoWServiceMessage {
         /// Key the claimed rewards are paid to. `None` falls back to the key
         /// auto-claim would pick right now (see [`select_claim_target`]).
         claim_address: Option<ZkPublicKey>,
-        response: oneshot::Sender<Result<Option<TxHash>, DynError>>,
+        response: oneshot::Sender<Result<Option<TxHash>, PoWError>>,
     },
     ClaimableRewardsInfo {
         response: oneshot::Sender<ClaimableRewardsInfo>,
@@ -599,7 +620,7 @@ where
 async fn auto_claim_tick_stream<TimeBackendType, RuntimeServiceId>(
     tick: AutoClaimTick,
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
-) -> Result<Pin<Box<dyn Stream<Item = ()> + Send>>, DynError>
+) -> Result<Pin<Box<dyn Stream<Item = ()> + Send>>, PoWError>
 where
     TimeBackendType: TimeBackend + Send + Sync + 'static,
     TimeBackendType::Settings: Send + Sync,
@@ -614,12 +635,13 @@ where
         AutoClaimTick::Slots(period) => {
             let time_relay = overwatch_handle
                 .relay::<TimeService<TimeBackendType, RuntimeServiceId>>()
-                .await?;
+                .await
+                .map_err(PoWError::TimeRelay)?;
             let (sender, receiver) = oneshot::channel();
             time_relay
                 .send(TimeServiceMessage::Subscribe { sender })
                 .await
-                .map_err(|(e, _)| DynError::from(format!("{e} while subscribing to slot ticks")))?;
+                .map_err(|(relay_error, _)| PoWError::TimeRelay(relay_error))?;
             let slot_ticks = receiver.await?;
 
             // The stream emits every slot, so thin it down to one item per
@@ -672,7 +694,7 @@ fn slot_period_elapsed(last_claim_slot: Slot, tip_slot: Slot, period: NonZeroU64
 async fn validate_claim_targets<WalletService, RuntimeServiceId>(
     wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
     targets: &[ClaimTarget],
-) -> Result<(), DynError>
+) -> Result<(), PoWError>
 where
     WalletService: WalletServiceData,
     RuntimeServiceId: AsServiceId<WalletService> + Debug + Display + Sync,
@@ -693,10 +715,7 @@ where
     if unknown.is_empty() {
         return Ok(());
     }
-    Err(DynError::from(format!(
-        "PoW auto-claim targets are not tracked by the wallet (add them to `wallet.known_keys`): \
-         {unknown:?}"
-    )))
+    Err(PoWError::UntrackedClaimTargets(unknown))
 }
 
 /// Picks the auto-claim target to pay next: among the targets still below their
@@ -858,7 +877,7 @@ async fn manual_claim<CryptarchiaService, BlendService, WalletService, RuntimeSe
     targets: &[ClaimTarget],
     state: &mut PoWServiceState,
     slot_window: NonZeroU64,
-) -> Result<Option<TxHash>, DynError>
+) -> Result<Option<TxHash>, PoWError>
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
     BlendService: BlendServiceData,
@@ -874,11 +893,7 @@ where
         Some(claim_address) => claim_address,
         None => select_claim_target(wallet_api, targets)
             .await?
-            .ok_or_else(|| {
-                DynError::from(
-                    "no claim address given and no auto-claim target is below its threshold",
-                )
-            })?,
+            .ok_or(PoWError::NoClaimTarget)?,
     };
     claim_ready_rewards(
         cryptarchia_api,
@@ -901,7 +916,7 @@ async fn claim_ready_rewards<CryptarchiaService, BlendService, RuntimeServiceId>
     claim_address: ZkPublicKey,
     state: &mut PoWServiceState,
     slot_window: NonZeroU64,
-) -> Result<Option<TxHash>, DynError>
+) -> Result<Option<TxHash>, PoWError>
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
     BlendService: BlendServiceData,
@@ -922,7 +937,7 @@ where
     let ledger_state = cryptarchia_api
         .get_ledger_state(info.tip)
         .await?
-        .ok_or_else(|| DynError::from("tip ledger state unavailable"))?;
+        .ok_or(PoWError::LedgerStateUnavailable(info.tip))?;
 
     // Build the tx only from tickets whose anchor block is still on the
     // canonical chain: on chain `accept_claim` requires the block to be in this
@@ -1082,7 +1097,7 @@ async fn prune_settled_pending<CryptarchiaService, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
     state: &mut PoWServiceState,
     block_id: HeaderId,
-) -> Result<usize, DynError>
+) -> Result<usize, PoWError>
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
     RuntimeServiceId: Sync,

@@ -5,7 +5,7 @@ use lb_key_management_system_keys::keys::ZkPublicKey;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use tokio::sync::oneshot;
 
-use crate::service::{ClaimableRewardsInfo, PoWServiceMessage};
+use crate::service::{ClaimableRewardsInfo, PoWError, PoWServiceMessage};
 
 /// Marker trait for the `PoW` service, used to parametrize [`PoWServiceApi`]
 /// over the concrete service type while pinning its message type.
@@ -145,5 +145,5 @@ pub enum ApiError {
     #[error("Failed to establish connection to pow-service: {0}")]
     CommsFailure(String),
     #[error("Failed to claim PoW rewards: {0}")]
-    ClaimFailed(overwatch::DynError),
+    ClaimFailed(#[from] PoWError),
 }
