@@ -5,6 +5,7 @@ use lb_core::header::HeaderId;
 use lb_ledger::{IntentStatus, LedgerState};
 use overwatch::DynError;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 /// Tracks the status of a submitted intent on the ledger.
 ///
@@ -69,14 +70,20 @@ where
     ///
     /// If the intent appears in the ledger of `lib`, this function returns
     /// [`Outcome::Finalized`]. The caller can stop calling this function in
-    /// this case.
+    /// this case. If the status check against the LIB ledger fails, the intent
+    /// is considered not finalized yet, and the tracking continues as above.
     pub async fn handle_tip(
         &mut self,
         tip: HeaderId,
         lib: HeaderId,
     ) -> Result<Outcome<Intent>, Error> {
-        if matches!(self.check_status(lib).await?, IntentStatus::Applied) {
-            return Ok(Outcome::Finalized);
+        // Check the intent state in LIB ledger first.
+        match self.check_status(lib).await {
+            Ok(IntentStatus::Applied) => return Ok(Outcome::Finalized),
+            Ok(IntentStatus::NotApplied) => {}
+            Err(err) => {
+                warn!(%err, "failed to check the intent status in the LIB ledger: continuing tracking");
+            }
         }
 
         if self.last_tip.replace(tip) == Some(tip) {
@@ -304,7 +311,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lib_ledger_state_fetch_error() {
+    async fn lib_status_check_failure_does_not_stop_tracking() {
         let status_in_lib = Arc::new(Mutex::new(None));
         let mut tracker = tracker_with(
             MockIntent {
@@ -314,11 +321,36 @@ mod tests {
             2,
         );
 
-        tracker.handle_tip(tip(1), LIB.into()).await.err().unwrap();
+        // The tip status check continues while the LIB status check fails.
+        let out = tracker.handle_tip(tip(1), LIB.into()).await.unwrap();
+        assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
+        let out = tracker.handle_tip(tip(2), LIB.into()).await.unwrap();
+        expect_not_applied(&out);
+
+        // LIB status check becomes available again
+        *status_in_lib.lock().unwrap() = Some(IntentStatus::Applied);
+        let out = tracker.handle_tip(tip(3), LIB.into()).await.unwrap();
+        assert!(matches!(out, Outcome::Finalized));
+    }
+
+    #[tokio::test]
+    async fn lib_ledger_state_not_found_does_not_stop_tracking() {
+        let mut tracker = tracker(IntentStatus::NotApplied, IntentStatus::Applied, 2);
+
+        // The tip status check continues while the LIB ledger state is missing.
+        let out = tracker
+            .handle_tip(tip(1), UNKNOWN_BLOCK.into())
+            .await
+            .unwrap();
+        assert!(matches!(out, Outcome::WaitingforMoreTipChanges));
+        let out = tracker
+            .handle_tip(tip(2), UNKNOWN_BLOCK.into())
+            .await
+            .unwrap();
+        expect_not_applied(&out);
 
         // LIB ledger state becomes available again
-        *status_in_lib.lock().unwrap() = Some(IntentStatus::Applied);
-        let out = tracker.handle_tip(tip(2), LIB.into()).await.unwrap();
+        let out = tracker.handle_tip(tip(3), LIB.into()).await.unwrap();
         assert!(matches!(out, Outcome::Finalized));
     }
 
