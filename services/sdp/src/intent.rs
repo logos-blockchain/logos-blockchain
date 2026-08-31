@@ -45,6 +45,10 @@ impl<Intent, Provider> IntentTracker<Intent, Provider> {
             ledger_state_provider,
         }
     }
+
+    pub const fn intent(&self) -> &Intent {
+        &self.intent
+    }
 }
 
 impl<Intent, Provider> IntentTracker<Intent, Provider>

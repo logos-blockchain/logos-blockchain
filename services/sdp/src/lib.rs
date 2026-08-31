@@ -9,7 +9,7 @@ use std::fmt::{Debug, Display};
 
 use async_trait::async_trait;
 use lb_chain_service::{
-    ChainServiceInfo, ProcessedBlockEvent,
+    ChainServiceInfo, Epoch, ProcessedBlockEvent,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
@@ -30,7 +30,7 @@ use overwatch::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::oneshot;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
 pub use crate::{api::SdpServiceApi, intent::Config as ActiveMessageTrackerConfig};
 use crate::{
@@ -110,6 +110,8 @@ where
     active_message_tracker_config: intent::Config,
     active_message_tracker:
         Option<IntentTracker<Activity, CryptarchiaServiceApi<ChainService, RuntimeServiceId>>>,
+    /// Activity message restored from the previous run, to be tracked again.
+    restored_activity: Option<Activity>,
     _phantom: std::marker::PhantomData<(ChainService, StateStorage)>,
 }
 
@@ -165,6 +167,7 @@ where
             wallet_config: settings.wallet_config,
             active_message_tracker_config: settings.active_message_tracker,
             active_message_tracker: None,
+            restored_activity: initial_state.pending_activity,
             _phantom: std::marker::PhantomData,
         })
     }
@@ -193,6 +196,7 @@ where
             CryptarchiaServiceApi::new(chain_relay);
 
         self.validate_initial_declaration_status(&chain_api).await?;
+        self.restore_active_message_tracker(&chain_api).await;
 
         let mut new_blocks = chain_api.subscribe_new_blocks().await?;
 
@@ -336,6 +340,7 @@ where
             intent::Outcome::Finalized => {
                 debug!("active message intent has been finalized in the LIB: dropping the tracker");
                 self.active_message_tracker = None;
+                self.update_state();
             }
         }
     }
@@ -492,9 +497,7 @@ where
         }
 
         self.declaration_id = Some(declaration_id);
-        self.service_resources_handle
-            .state_updater
-            .update(Some(SdpState::from(self.declaration_id)));
+        self.update_state();
     }
 
     async fn handle_post_activity(
@@ -531,6 +534,7 @@ where
         {
             debug!("active message tracker replaced");
         }
+        self.update_state();
     }
 
     #[expect(clippy::cognitive_complexity, reason = "TODO: refactor")]
@@ -644,9 +648,7 @@ where
 
         self.declaration_id = None;
         self.active_message_tracker = None;
-        self.service_resources_handle
-            .state_updater
-            .update(Some(SdpState::from(self.declaration_id)));
+        self.update_state();
     }
 
     async fn handle_set_current_declaration_id(
@@ -678,16 +680,77 @@ where
         };
 
         self.declaration_id = validated_id;
-        self.service_resources_handle
-            .state_updater
-            .update(Some(SdpState::from(self.declaration_id)));
+        self.update_state();
 
         Ok(())
     }
+
+    /// Tracks the active message restored from the previous run again,
+    /// unless it belongs to another declaration or its submission epoch has
+    /// already passed.
+    async fn restore_active_message_tracker(
+        &mut self,
+        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+    ) {
+        let Some(activity) = self.restored_activity.take() else {
+            return;
+        };
+
+        match self
+            .validate_restored_active_message(&activity, chain_api)
+            .await
+        {
+            Ok(()) => {
+                debug!("creating tracker for the restored active message");
+                self.active_message_tracker = Some(IntentTracker::new(
+                    activity,
+                    self.active_message_tracker_config.clone(),
+                    None,
+                    chain_api.clone(),
+                ));
+            }
+            Err(reason) => {
+                warn!(%reason, "dropping the stale restored active message");
+                self.update_state();
+            }
+        }
+    }
+
+    async fn validate_restored_active_message(
+        &self,
+        activity: &Activity,
+        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+    ) -> Result<(), DynError> {
+        let tip_epoch = self.fetch_tip_epoch(chain_api).await?;
+        Ok(activity.validate(self.declaration_id, tip_epoch)?)
+    }
+
+    async fn fetch_tip_epoch(
+        &self,
+        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+    ) -> Result<Epoch, DynError> {
+        let tip = chain_api.info().await?.cryptarchia_info.tip;
+        let ledger_state = chain_api
+            .get_ledger_state(tip)
+            .await?
+            .ok_or_else(|| format!("ledger state not found for tip {tip:?}"))?;
+        Ok(ledger_state.epoch_state().epoch)
+    }
+
+    /// Updates/persists the service state.
+    fn update_state(&self) {
+        let pending_activity = self
+            .active_message_tracker
+            .as_ref()
+            .map(|tracker| tracker.intent().clone());
+        self.service_resources_handle
+            .state_updater
+            .update(Some(SdpState::new(self.declaration_id, pending_activity)));
+    }
 }
 
-#[derive(Debug, Clone)]
-struct Activity {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Activity {
     declaration_id: DeclarationId,
     metadata: ActivityMetadata,
 }
@@ -713,6 +776,48 @@ impl Intent for Activity {
     }
 }
 
+impl Activity {
+    /// Validates [`Activity`] against `declaration_id` and `tip_epoch`.
+    ///
+    /// If the activity has a different declaration ID or has the submission
+    /// epoch older than the `tip_epoch`, this function returns an error.
+    ///
+    /// This can be used to check whether an active message restored from
+    /// the service state is still valid.
+    fn validate(
+        &self,
+        declaration_id: Option<DeclarationId>,
+        tip_epoch: Epoch,
+    ) -> Result<(), InvalidActiveMessageError> {
+        if Some(self.declaration_id) != declaration_id {
+            return Err(InvalidActiveMessageError::AnotherDeclaration);
+        }
+
+        let submission_epoch = self.metadata.submission_epoch();
+        if submission_epoch < tip_epoch {
+            return Err(InvalidActiveMessageError::Stale {
+                submission_epoch,
+                tip_epoch,
+            });
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum InvalidActiveMessageError {
+    #[error("active message belongs to another declaration")]
+    AnotherDeclaration,
+    #[error(
+        "active message is stale: submission_epoch({submission_epoch:?}) < tip_epoch({tip_epoch:?})"
+    )]
+    Stale {
+        submission_epoch: Epoch,
+        tip_epoch: Epoch,
+    },
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct IntentStatusCheckFailed(String);
@@ -728,5 +833,60 @@ where
 
     async fn get(&self, block: HeaderId) -> Result<Option<LedgerState>, Self::Error> {
         Ok(self.get_ledger_state(block).await?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
+    use lb_core::sdp::blend::ActivityProof;
+    use lb_key_management_system_keys::keys::Ed25519Key;
+
+    use super::*;
+
+    const DECLARATION_ID: DeclarationId = DeclarationId([1; 32]);
+
+    #[test]
+    fn restored_active_message_of_another_declaration_is_invalid() {
+        let activity = activity(1);
+        assert!(matches!(
+            activity.validate(Some(DeclarationId([2; 32])), 2.into()),
+            Err(InvalidActiveMessageError::AnotherDeclaration)
+        ));
+        assert!(matches!(
+            activity.validate(None, 2.into()),
+            Err(InvalidActiveMessageError::AnotherDeclaration)
+        ));
+    }
+
+    #[test]
+    fn stale_restored_active_message_is_invalid() {
+        let activity = activity(1);
+        assert_eq!(activity.metadata.submission_epoch(), Epoch::new(2));
+        assert!(matches!(
+            activity.validate(Some(DECLARATION_ID), 3.into()),
+            Err(InvalidActiveMessageError::Stale { .. })
+        ));
+    }
+
+    #[test]
+    fn restored_active_message_not_older_than_tip_epoch_is_valid() {
+        let activity = activity(1);
+        assert_eq!(activity.metadata.submission_epoch(), Epoch::new(2));
+        activity.validate(Some(DECLARATION_ID), 2.into()).unwrap();
+        // the tip epoch lags behind the submission epoch
+        activity.validate(Some(DECLARATION_ID), 1.into()).unwrap();
+    }
+
+    fn activity(proof_epoch: u32) -> Activity {
+        Activity {
+            declaration_id: DECLARATION_ID,
+            metadata: ActivityMetadata::Blend(Box::new(ActivityProof {
+                epoch: proof_epoch.into(),
+                signing_key: Ed25519Key::from_bytes(&[0; _]).public_key(),
+                proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0; _]).into(),
+                proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0; _]).into(),
+            })),
+        }
     }
 }
