@@ -144,6 +144,7 @@ pub type SdpService<RuntimeServiceId> = lb_sdp_service::SdpService<
 pub type PoWService<RuntimeServiceId> = lb_pow_service::PoWService<
     CryptarchiaService<RuntimeServiceId>,
     BlendService<RuntimeServiceId>,
+    WalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>,
     RocksBackend,
     RuntimeServiceId,
 >;

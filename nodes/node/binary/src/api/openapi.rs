@@ -28,6 +28,8 @@ use utoipa::OpenApi;
         crate::api::handlers::leader_claim,
         crate::api::handlers::pow_start_mining,
         crate::api::handlers::pow_stop_mining,
+        crate::api::handlers::pow_start_auto_claim,
+        crate::api::handlers::pow_stop_auto_claim,
         crate::api::handlers::pow_claim,
         crate::api::handlers::pow_claimable_rewards,
         crate::api::handlers::immutable_blocks,

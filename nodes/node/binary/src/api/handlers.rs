@@ -1384,8 +1384,45 @@ where
 }
 
 #[utoipa::path(
+    put,
+    path = paths::POW_START_AUTO_CLAIM,
+    responses(
+        (status = 200, description = "PoW auto-claim started"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn pow_start_auto_claim<PoW, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    PoW: PoWServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
+{
+    make_request_and_return_response!(pow::start_auto_claim::<PoW, RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    put,
+    path = paths::POW_STOP_AUTO_CLAIM,
+    responses(
+        (status = 200, description = "PoW auto-claim stopped"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn pow_stop_auto_claim<PoW, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    PoW: PoWServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
+{
+    make_request_and_return_response!(pow::stop_auto_claim::<PoW, RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
     post,
     path = paths::POW_CLAIM,
+    request_body = Option<lb_api_service::http::pow::PoWClaimRequestBody>,
     responses(
         (status = 200, description = "PoW reward-claim transactions submitted", body = lb_api_service::http::pow::PoWClaimResponseBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
@@ -1393,12 +1430,16 @@ where
 )]
 pub async fn pow_claim<PoW, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    // An absent or empty body means "pay the auto-claim target", so the body
+    // is optional rather than required.
+    body: Option<Json<pow::PoWClaimRequestBody>>,
 ) -> Response
 where
     PoW: PoWServiceData,
     RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
 {
-    make_request_and_return_response!(pow::claim::<PoW, RuntimeServiceId>(&handle))
+    let claim_address = body.and_then(|Json(body)| body.claim_address);
+    make_request_and_return_response!(pow::claim::<PoW, RuntimeServiceId>(&handle, claim_address))
 }
 
 #[utoipa::path(

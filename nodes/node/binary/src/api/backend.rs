@@ -56,7 +56,8 @@ use crate::{
         handlers::{
             blend_join_network, channel, channel_deposit, leader_claim, post_activity,
             post_declaration, post_set_declaration_id, post_withdrawal, pow_claim,
-            pow_claimable_rewards, pow_start_mining, pow_stop_mining,
+            pow_claimable_rewards, pow_start_auto_claim, pow_start_mining, pow_stop_auto_claim,
+            pow_stop_mining,
         },
         openapi::ApiDoc,
         tracing::reload_tracing_filter,
@@ -344,6 +345,14 @@ where
             .route(
                 paths::POW_STOP_MINING,
                 routing::put(pow_stop_mining::<PoWService, RuntimeServiceId>),
+            )
+            .route(
+                paths::POW_START_AUTO_CLAIM,
+                routing::put(pow_start_auto_claim::<PoWService, RuntimeServiceId>),
+            )
+            .route(
+                paths::POW_STOP_AUTO_CLAIM,
+                routing::put(pow_stop_auto_claim::<PoWService, RuntimeServiceId>),
             )
             .route(
                 paths::POW_CLAIM,
