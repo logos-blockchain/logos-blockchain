@@ -773,10 +773,6 @@ impl<ObservationWindowClockProvider, ProofsVerifier>
 
     /// Handle an unhealthy connection if it exists in the current epoch.
     /// If not, it is ignored.
-    #[expect(
-        dead_code,
-        reason = "TODO: We currently do not handle unhealthy cases."
-    )]
     fn handle_unhealthy_connection(&mut self, (peer_id, connection_id): (PeerId, ConnectionId)) {
         // Notify swarm only on first transition into unhealthy state.
         if let Some(prev_state) = self.update_state_for_negotiated_peer(
@@ -1264,14 +1260,8 @@ where
                         "Peer {peer_id:?} has been marked as spammy by its connection handler. NOT TAKING ANY ACTIONS ON THIS."
                     );
                 }
-                // TODO: Re-add logic once Blend observation window values calculation is fixed.
                 ToBehaviour::UnhealthyPeer => {
-                    // self.handle_unhealthy_connection((peer_id,
-                    // connection_id));
-                    tracing::trace!(
-                        target: LOG_TARGET,
-                        "Peer {peer_id:?} has been marked as unhealthy by its connection handler. NOT TAKING ANY ACTIONS ON THIS."
-                    );
+                    self.handle_unhealthy_connection((peer_id, connection_id));
                 }
                 ToBehaviour::HealthyPeer => {
                     self.handle_healthy_connection((peer_id, connection_id));

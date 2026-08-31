@@ -84,7 +84,6 @@ async fn detect_spammy_peer() {
     }
 }
 
-#[ignore = "TODO: enable this logic after investigating epoch transition issues. Test disabled because we don't let connections turn unhealthy now until we have proper observation window values."]
 #[test(tokio::test)]
 async fn detect_unhealthy_peer() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
@@ -145,7 +144,6 @@ async fn detect_unhealthy_peer() {
     );
 }
 
-#[ignore = "TODO: enable this logic after investigating epoch transition issues. Test disabled because we don't let connections turn unhealthy now until we have proper observation window values."]
 #[test(tokio::test)]
 async fn restore_healthy_peer() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);

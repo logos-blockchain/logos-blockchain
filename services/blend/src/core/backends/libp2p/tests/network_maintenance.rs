@@ -15,7 +15,6 @@ use crate::{
     test_utils::TestEncapsulatedMessage,
 };
 
-#[ignore = "TODO: enable this logic after investigating epoch transition issues. Test disabled because we don't let connections turn unhealthy because of too little messages now until we have proper observation window values."]
 #[test(tokio::test)]
 async fn on_unhealthy_peer() {
     let (mut identities, mut nodes) = new_nodes_with_empty_address(3);
