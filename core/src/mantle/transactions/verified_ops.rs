@@ -25,21 +25,19 @@ impl VerifiedOperations {
         }
     }
 
-    /// Yields the next operation, in order, if it passes verification.
+    /// Yields the next operation if it passes verification.
     ///
-    /// # Important
+    /// Verification by spec is linear:
+    /// each operation is checked against the state its predecessors produced.
     ///
-    /// **Callers must abort on the first error.**
-    ///
-    /// Verification by spec is linear: each operation is checked against the
-    /// state its predecessors produced. A failed operation is still
-    /// consumed, so calling this again verifies the *next* one against a
-    /// state that the failed one never contributed to, which can wrongly
-    /// succeed.
+    /// The cursor is handed back only on success, so a failure ends the
+    /// sequence by construction: there is no way to verify an operation
+    /// against a state its predecessor never contributed to.
     ///
     /// # Returns
     ///
-    /// - `Some(Ok(op))` if the next operation is successfully verified.
+    /// - `Some(Ok((Self, VerifiedSignedOp<StandardMode>)))` if the next
+    ///   operation is successfully verified.
     /// - `Some(Err(error))` if the next operation fails verification.
     /// - `None` if there are no more operations to verify.
     ///
@@ -48,12 +46,17 @@ impl VerifiedOperations {
     /// Returns [`VerificationError`] if the operation at the current index
     /// fails verification.
     pub fn next(
-        &mut self,
+        mut self,
         helper: &impl OperationVerificationHelper,
-    ) -> Option<Result<VerifiedSignedOp<StandardMode>, VerificationError>> {
+    ) -> Option<Result<(Self, VerifiedSignedOp<StandardMode>), VerificationError>> {
         let (index, signed_op) = self.signed_ops.next()?;
         let verify_result = signed_op.into_verified(index, &self.tx_hash_view, helper);
-        Some(verify_result.map_err(|(_signed_op, error)| error))
+
+        Some(
+            verify_result
+                .map(|verified_operation| (self, verified_operation))
+                .map_err(|(_signed_op, error)| error),
+        )
     }
 
     #[must_use]

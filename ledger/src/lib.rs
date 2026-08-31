@@ -909,7 +909,7 @@ impl LedgerState {
     where
         Tx: PreverifiedMantleTransaction,
     {
-        let mut verified_ops = tx.into_verified_operations();
+        let mut verified_operations = tx.into_verified_operations();
 
         let mut balance: Balance = 0;
         let mut tx_events = Vec::new();
@@ -922,21 +922,22 @@ impl LedgerState {
                 config,
             );
 
-            // On Error (failed verification), the transaction is considered invalid and
-            // rejected.
-            let Some((op, deferred_zkp)) = verified_ops.next(&helper).transpose()? else {
+            let Some((remaining_verified_operations, (signed_op, deferred_zkp))) =
+                verified_operations.next(&helper).transpose()?
+            else {
                 // All operations have been processed, exit the loop.
                 break;
             };
+            verified_operations = remaining_verified_operations;
 
             if let Some(deferred) = deferred_zkp {
                 deferred_zkps.push(deferred);
             }
 
             (self, balance, tx_events) = self.try_apply_op::<_, Profile>(
-                op,
+                signed_op,
                 config,
-                verified_ops.tx_hash_view().tx_hash(),
+                verified_operations.tx_hash_view().tx_hash(),
                 balance,
                 tx_events,
             )?;
