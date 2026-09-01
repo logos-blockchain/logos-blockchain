@@ -70,71 +70,86 @@ pub(in super::super) async fn submit_zone_channel_config(
     .await
 }
 
-/// Multi-sig counterpart of [`submit_zone_channel_config`].
-///
-/// Builds and funds the config via the SDK's `prepare_channel_config`, signs
-/// the returned `sign_payload` with every accredited key the prepared config
-/// reports (looked up from the registered sequencers, indexed ascending), and
-/// submits the fully-signed tx via `submit_channel_config`. An unclaimed
-/// channel reports no accredited keys, so the claiming config is submitted with
-/// no signatures; a claimed N-of-M channel is reconfigured with the required
-/// signatures collected from the key holders.
-pub(in super::super) async fn submit_zone_multisig_channel_config(
+/// Builds and funds the config, storing it for the per-signer steps. Reads
+/// only public keys; `threshold` sets both the config and transfer thresholds.
+pub(in super::super) async fn prepare_zone_channel_config(
     world: &mut CucumberWorld,
     step: &Step,
     sequencer_alias: &str,
     transaction_alias: String,
     authorized_aliases: Vec<String>,
-    configuration_threshold: u16,
+    threshold: u16,
 ) -> StepResult {
     let client = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?.clone();
 
     let authorized_keys = authorized_aliases
         .iter()
-        .map(|alias| {
-            world
-                .zone
-                .sequencer_signing_key(alias)
-                .map(Ed25519Key::public_key)
-        })
+        .map(|alias| world.zone.sequencer_public_key(alias))
         .collect::<Result<Vec<_>, _>>()?;
 
-    // A single fixed sequencer at index 0 (no round-robin) — the test only
-    // exercises the multi-sig config path, not posting rotation.
     let prepared = client
         .prepare_channel_config(
             Keys::new_unchecked(authorized_keys),
             0.into(),
             0.into(),
-            configuration_threshold,
-            ZONE_CHANNEL_DEPOSIT_THRESHOLD,
+            threshold,
+            threshold,
         )
         .await
         .map_err(|error| StepError::LogicalError {
             message: format!("Zone prepare_channel_config failed: {error}"),
         })?;
 
-    // Sign the prepared payload with each current accredited key, indexed by
-    // its position in the accredited list (ascending). Empty for a claiming
-    // (unclaimed-channel) config, which needs no signatures.
-    let mut signatures = Vec::with_capacity(prepared.accredited_keys.len());
-    for (index, public_key) in prepared.accredited_keys.iter().enumerate() {
-        let signing_key = world
-            .zone
-            .sequencer_signing_key_for_public(public_key)
-            .ok_or_else(|| StepError::LogicalError {
-                message: format!(
-                    "no registered zone sequencer holds accredited key {public_key:?}"
-                ),
-            })?;
-        let index = u16::try_from(index).map_err(|_| StepError::LogicalError {
-            message: "accredited key index exceeds u16".to_owned(),
+    world
+        .zone
+        .remember_prepared_config(transaction_alias, prepared);
+
+    Ok(())
+}
+
+/// One participant's independent signature, using only `signer_alias`'s own
+/// key — never another party's.
+pub(in super::super) fn sign_prepared_zone_channel_config(
+    world: &mut CucumberWorld,
+    step: &Step,
+    signer_alias: &str,
+    transaction_alias: String,
+) -> StepResult {
+    let signing_key = log_step_error(step, world.zone.sequencer_signing_key(signer_alias))?;
+    let signer_public = signing_key.public_key();
+    let prepared = log_step_error(step, world.zone.prepared_config(&transaction_alias))?;
+
+    let index = prepared
+        .accredited_keys
+        .iter()
+        .position(|key| *key == signer_public)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!(
+                "sequencer '{signer_alias}' is not in the accredited set of prepared config '{transaction_alias}'",
+            ),
         })?;
-        signatures.push(IndexedSignature::new(
-            index,
-            signing_key.sign_payload(&prepared.sign_payload),
-        ));
-    }
+    let index = u16::try_from(index).map_err(|_| StepError::LogicalError {
+        message: "accredited key index exceeds u16".to_owned(),
+    })?;
+    let signature = IndexedSignature::new(index, signing_key.sign_payload(&prepared.sign_payload));
+
+    world
+        .zone
+        .add_prepared_config_signature(transaction_alias, signature);
+
+    Ok(())
+}
+
+/// Gathers the collected signatures and submits the fully-signed config.
+pub(in super::super) async fn submit_prepared_zone_channel_config(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: &str,
+    transaction_alias: String,
+) -> StepResult {
+    let client = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?.clone();
+    let prepared = log_step_error(step, world.zone.prepared_config(&transaction_alias))?.clone();
+    let signatures = world.zone.prepared_config_signatures(&transaction_alias);
 
     let mut checkpoint_rx = world
         .zone
@@ -162,9 +177,8 @@ pub(in super::super) async fn submit_zone_multisig_channel_config(
     .await
 }
 
-/// Record a submitted channel-config tx: resolve the checkpoint that contains
-/// it (inline if already present, else wait for the drive task to re-publish),
-/// remember it, and register the submitted transaction for later assertions.
+/// Resolve the checkpoint containing a submitted config tx and record it for
+/// later assertions.
 async fn record_submitted_config(
     world: &mut CucumberWorld,
     sequencer_alias: &str,
@@ -173,9 +187,6 @@ async fn record_submitted_config(
     post_call_checkpoint: SequencerCheckpoint,
     checkpoint_rx: &mut tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
 ) -> StepResult {
-    // Sanity-check the inline checkpoint already mentions our tx; the
-    // event-stream watcher below also catches it once the drive task
-    // re-publishes its checkpoint after the next block.
     let tx_hash = result.inscription_id();
     let checkpoint = if post_call_checkpoint
         .pending_txs
