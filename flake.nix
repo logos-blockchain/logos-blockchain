@@ -57,10 +57,18 @@
           pkgs = mkPkgs system;
           rustToolchain = pkgs.rust-bin.stable.${rustVersion}.default;
           craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
+          # `craneLib.filterCargoSources` keeps only *.rs, *.toml, Cargo.lock and
+          # .cargo/config, so any non-Rust file pulled in with include_str!/
+          # include_bytes! has to be allowed through explicitly or the build
+          # fails with "couldn't read ...: No such file or directory".
+          assetSuffixes = [
+            ".hex"
+            "nodes/node/binary/src/config/deployment/settings.yaml"
+          ];
           src = pkgs.lib.cleanSourceWith {
             src = craneLib.path ./.;
             filter = path: type:
-              (pkgs.lib.hasSuffix "nodes/node/binary/src/config/deployment/settings.yaml" path) ||
+              (pkgs.lib.any (suffix: pkgs.lib.hasSuffix suffix path) assetSuffixes) ||
               (craneLib.filterCargoSources path type);
           };
           crateName = craneLib.crateNameFromCargoToml { inherit src; };
@@ -87,12 +95,12 @@
             RUSTFLAGS = "-L ${pkgs.libiconv}/lib";
           };
 
-          logosBlockchainDependencies = craneLib.buildDepsOnly (commonArgs);
+          logosBlockchainDependencies = craneLib.buildDepsOnly commonArgs;
 
           logosBlockChainC = craneLib.buildPackage (
             commonArgs
             // {
-              inherit logosBlockchainDependencies;
+              cargoArtifacts = logosBlockchainDependencies;
 
               postInstall = ''
                 mkdir -p $out/include
