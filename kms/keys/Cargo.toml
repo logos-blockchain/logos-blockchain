@@ -32,6 +32,7 @@ subtle                          = { workspace = true }
 thiserror                       = { workspace = true }
 tokio                           = { features = ["rt"], workspace = true }
 tracing                         = { workspace = true }
+utoipa                          = { features = ["macros"], optional = true, workspace = true }
 x25519-dalek                    = { features = ["serde", "static_secrets", "zeroize"], workspace = true }
 zeroize                         = { workspace = true }
 
@@ -41,4 +42,5 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 
 [features]
-unsafe = []
+openapi = ["dep:utoipa", "lb-utils/openapi"]
+unsafe  = []

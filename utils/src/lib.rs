@@ -8,6 +8,9 @@ pub mod yaml;
 #[cfg(feature = "time")]
 pub mod bounded_duration;
 
+#[cfg(feature = "openapi")]
+pub mod openapi;
+
 #[cfg(feature = "tokio")]
 pub mod tokio;
 

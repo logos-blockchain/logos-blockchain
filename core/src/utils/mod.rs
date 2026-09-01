@@ -37,7 +37,7 @@ macro_rules! serde_bytes_newtype {
         #[cfg(feature = "openapi")]
         impl utoipa::PartialSchema for $newtype {
             fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
-                $crate::utils::hex_bytes_schema($len)
+                lb_utils::openapi::hex_bytes_schema($len)
             }
         }
 
@@ -48,27 +48,6 @@ macro_rules! serde_bytes_newtype {
 
 pub(crate) use display_hex_bytes_newtype;
 pub(crate) use serde_bytes_newtype;
-
-/// The documented schema for a fixed-size byte value encoded by
-/// [`lb_utils::serde::serialize_bytes_array`].
-///
-/// Human-readable formats encode as unprefixed lowercase hex; the
-/// deserializer additionally tolerates a `0x` prefix and uppercase, which the
-/// pattern reflects.
-#[cfg(feature = "openapi")]
-pub(crate) fn hex_bytes_schema(
-    bytes: usize,
-) -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
-    let hex_len = bytes * 2;
-    utoipa::openapi::schema::ObjectBuilder::new()
-        .schema_type(utoipa::openapi::schema::Type::String)
-        .pattern(Some(format!("^(0x)?[0-9a-fA-F]{{{hex_len}}}$")))
-        .min_length(Some(hex_len))
-        .max_length(Some(hex_len + 2))
-        .description(Some(format!("{bytes}-byte value, hex encoded.")))
-        .build()
-        .into()
-}
 
 #[cfg(all(test, feature = "openapi"))]
 mod schema_conformance_tests {

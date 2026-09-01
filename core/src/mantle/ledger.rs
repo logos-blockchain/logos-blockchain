@@ -465,7 +465,7 @@ pub struct NoteId(#[serde(with = "serde_fr")] pub Fr);
 #[cfg(feature = "openapi")]
 impl utoipa::PartialSchema for NoteId {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
-        crate::utils::hex_bytes_schema(size_of::<lb_groth16::FrBytes>())
+        lb_utils::openapi::hex_bytes_schema(size_of::<lb_groth16::FrBytes>())
     }
 }
 

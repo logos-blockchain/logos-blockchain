@@ -28,8 +28,10 @@ thiserror      = { workspace = true }
 time           = { features = ["serde-human-readable"], optional = true, workspace = true }
 tokio          = { optional = true, workspace = true }
 tracing        = { workspace = true }
+utoipa         = { features = ["macros"], optional = true, workspace = true }
 
 [features]
+openapi          = ["dep:utoipa"]
 serde            = ["const-hex/alloc", "serde/alloc"]
 time             = ["dep:humantime", "dep:serde_with", "dep:time"]
 tokio            = ["dep:futures", "dep:tokio"]

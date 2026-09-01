@@ -4684,6 +4684,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "utoipa",
  "x25519-dalek",
  "zeroize",
 ]
@@ -5300,6 +5301,7 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+ "utoipa",
 ]
 
 [[package]]

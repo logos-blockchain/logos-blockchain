@@ -103,11 +103,7 @@ where
 /// "use the node's auto-claim target".
 #[derive(Serialize, Deserialize, Default, ToSchema)]
 pub struct PoWClaimRequestBody {
-    // `ZkPublicKey` encodes through `serde_fr` as a 32-byte hex string, but it
-    // lives in `lb-key-management-system-keys`, which sits below `lb-core` in
-    // the dependency graph and so cannot reach `lb_core::utils::hex_bytes_schema`.
     #[serde(default)]
-    #[schema(value_type = Option<String>)]
     pub claim_address: Option<ZkPublicKey>,
 }
 
