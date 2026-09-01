@@ -47,10 +47,10 @@ use super::{
         find_own_key_index, fund_ops, prepare_tx as build_prepare_tx, sign_tx as build_sign_tx,
     },
     types::{
-        AtomicDepositInscriptionInfo, AtomicWithdrawInfo, ChannelWalletView, Error, Event,
-        FundingConfig, InscriptionInfo, PendingTx, PublishResult, SequencerChannelView,
-        SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource, TxStatus, TxStatusUpdate,
-        WithdrawArg, WithdrawInfo, WithdrawInputs,
+        AtomicWithdrawInfo, ChannelWalletView, Error, Event, FundingConfig, InscriptionInfo,
+        PendingTx, PinDepositInfo, PublishResult, SequencerChannelView, SequencerCheckpoint,
+        SequencerConfig, TurnNotification, TxSource, TxStatus, TxStatusUpdate, WithdrawArg,
+        WithdrawInfo, WithdrawInputs,
     },
 };
 use crate::{adapter, adapter::BoxStream};
@@ -174,7 +174,7 @@ pub(super) enum ActorRequest {
         inputs: WithdrawInputs,
         response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
     },
-    PublishAtomicDepositInscription {
+    PublishPinDeposit {
         inscribe: Inscription,
         consumed_notes: Vec<NoteId>,
         response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
@@ -561,17 +561,12 @@ where
                     ),
                 );
             }
-            ActorRequest::PublishAtomicDepositInscription {
+            ActorRequest::PublishPinDeposit {
                 inscribe,
                 consumed_notes,
                 response_tx,
             } => {
-                drop(
-                    response_tx.send(
-                        self.do_publish_atomic_deposit_inscription(inscribe, consumed_notes)
-                            .await,
-                    ),
-                );
+                drop(response_tx.send(self.do_publish_pin_deposit(inscribe, consumed_notes).await));
             }
             ActorRequest::ChannelConfig {
                 keys,
@@ -939,7 +934,7 @@ where
     /// transfer consumes the named deposited notes (re-creating each 1:1),
     /// gating the inscription on the deposit. Mirrors
     /// [`Self::do_publish_atomic_withdraw`]; single-signer channels.
-    pub(super) async fn do_publish_atomic_deposit_inscription(
+    pub(super) async fn do_publish_pin_deposit(
         &mut self,
         inscribe: Inscription,
         consumed_notes: Vec<NoteId>,
@@ -949,26 +944,28 @@ where
 
         if consumed_notes.is_empty() {
             return Err(Error::Network(
-                "publish_atomic_deposit_inscription requires at least one deposited note".into(),
+                "publish_pin_deposit requires at least one deposited note".into(),
             ));
         }
 
         // Use the cached channel state kept fresh by the drive loop.
         let channel_state = self.channel_state.as_ref().ok_or_else(|| {
             Error::Network(format!(
-                "publish_atomic_deposit_inscription requires channel state for {:?}",
+                "publish_pin_deposit requires channel state for {:?}",
                 self.channel_id
             ))
         })?;
         if channel_state.transfer_threshold > 1 {
             return Err(Error::Network(format!(
-                "publish_atomic_deposit_inscription requires transfer_threshold == 1, got {}",
+                "publish_pin_deposit requires transfer_threshold == 1, got {}",
                 channel_state.transfer_threshold
             )));
         }
         let own_key_index = find_own_key_index(channel_state, &self.signing_key)?;
 
         let transfer_op = self.build_deposit_transfer(&consumed_notes)?;
+        // The bounded input set is exactly what the transfer consumes.
+        let consumed_inputs = transfer_op.inputs.clone();
 
         let parent = self.compute_publish_parent();
         let inscription_op = InscriptionOp {
@@ -993,7 +990,7 @@ where
         let tx_hash = signed_tx.mantle_tx().hash();
 
         debug!(target: TARGET,
-            "Prepared atomic deposit inscription: payload={:?}, parent={}, msg_id={}, tx={}, notes={}",
+            "Prepared pin-deposit: payload={:?}, parent={}, msg_id={}, tx={}, notes={}",
             String::from_utf8_lossy(&inscribe),
             hex::encode(parent.as_ref()),
             hex::encode(msg_id.as_ref()),
@@ -1003,12 +1000,12 @@ where
 
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
-        state.submit_atomic_deposit_inscription(
+        state.submit_pin_deposit(
             signed_tx.clone(),
             parent,
             msg_id,
             inscribe.clone(),
-            consumed_notes.clone(),
+            consumed_inputs.clone(),
         );
         self.last_msg_id = msg_id;
         self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
@@ -1025,7 +1022,7 @@ where
 
         Ok((
             PublishResult {
-                tx: PendingTx::AtomicDepositInscription(AtomicDepositInscriptionInfo {
+                tx: PendingTx::PinDeposit(PinDepositInfo {
                     tx_hash,
                     inscription: InscriptionInfo {
                         tx_hash,
@@ -1034,7 +1031,7 @@ where
                         payload: inscribe,
                         signer: Some(self.signing_key.public_key()),
                     },
-                    consumed_notes,
+                    consumed_notes: consumed_inputs,
                 }),
             },
             checkpoint,
@@ -1439,9 +1436,9 @@ pub(super) fn track_pending_tx(
             );
             Some(this_msg)
         }
-        Some(BlockChannelTx::AtomicDepositInscription(ad)) => {
+        Some(BlockChannelTx::PinDeposit(ad)) => {
             let this_msg = ad.inscription.this_msg;
-            state.submit_atomic_deposit_inscription(
+            state.submit_pin_deposit(
                 tx,
                 ad.inscription.parent_msg,
                 this_msg,

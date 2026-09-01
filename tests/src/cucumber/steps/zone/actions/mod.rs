@@ -84,7 +84,7 @@ pub(super) enum DriveMode {
     CustomRepublish {
         deps: Box<CustomRepublishDeps>,
     },
-    /// Integrate then withdraw each observed deposit.
+    /// Pin then withdraw each observed deposit.
     DepositReaction {
         withdraw_outputs: Vec<u64>,
         recipient: ZkPublicKey,

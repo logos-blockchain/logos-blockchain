@@ -93,7 +93,7 @@ pub(super) fn attach_transfer_proof(
 
 /// Build per-op proofs for a single-signer atomic channel bundle
 /// (`publish_atomic_withdraw`'s `[inscribe, transfer, withdraw]` or
-/// `publish_atomic_deposit_inscription`'s `[inscribe, transfer]`). The same
+/// `publish_pin_deposit`'s `[inscribe, transfer]`). The same
 /// single-signer `ChannelMultiSigProof` is reused for every `ChannelTransfer`
 /// and `ChannelWithdraw` op (all sign the same tx hash with the same key), the
 /// inscription op carries an `Ed25519Sig` proof and the fee transfer — when

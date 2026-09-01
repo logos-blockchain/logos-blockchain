@@ -193,20 +193,20 @@ where
             .await
     }
 
-    /// Integrate an observed deposit without waiting for finalization: publish
+    /// Pin an observed deposit without waiting for finalization: publish
     /// `[CHANNEL_INSCRIBE, CHANNEL_TRANSFER]`, the transfer consuming
     /// `consumed_notes` (the deposit's channel `NoteId`s from `DepositInfo`) so
     /// the tx lands only if the deposit is on chain. Same contract as
     /// [`Self::publish_atomic_withdraw`]; [`Error::Network`] if a note is not
     /// in the tracked set (deposit not on this branch, or already
     /// consumed).
-    pub async fn publish_atomic_deposit_inscription(
+    pub async fn publish_pin_deposit(
         &mut self,
         inscribe: Inscription,
         consumed_notes: Vec<NoteId>,
     ) -> Result<PublishReceipt, Error> {
         self.sequencer
-            .do_publish_atomic_deposit_inscription(inscribe, consumed_notes)
+            .do_publish_pin_deposit(inscribe, consumed_notes)
             .await
     }
 

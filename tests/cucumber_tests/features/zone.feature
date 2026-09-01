@@ -736,7 +736,7 @@ Feature: Zone SDK
       | alias    | data                |
       | MSG_INIT | initial inscription |
     Then all zone messages are finalized in 120 seconds
-    When I start zone sequencer "SEQ_B" integrating then withdrawing observed deposits with outputs "1,1,2"
+    When I start zone sequencer "SEQ_B" pinning then withdrawing observed deposits with outputs "1,1,2"
     And sequencer "SEQ_A" publishes the following zone messages:
       | alias  | data |
       | MSG_A1 | a1   |

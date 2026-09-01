@@ -73,7 +73,7 @@ async fn start_sequencer_with_indexer(
 }
 
 #[when(
-    expr = "I start zone sequencer {string} integrating then withdrawing observed deposits with outputs {string}"
+    expr = "I start zone sequencer {string} pinning then withdrawing observed deposits with outputs {string}"
 )]
 async fn step_start_zone_sequencer_deposit_reaction(
     world: &mut CucumberWorld,

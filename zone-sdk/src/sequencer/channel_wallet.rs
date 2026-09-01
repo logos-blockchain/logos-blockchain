@@ -110,6 +110,19 @@ impl ChannelWallet {
     pub fn restore_base(&mut self, notes: Vec<ChannelNote>) {
         self.base = notes.into_iter().map(|n| (n.note_id, n)).collect();
     }
+
+    /// Find a tracked note by id, anywhere in the wallet (the finalized base
+    /// or any unfinalized overlay). A `NoteId` is a content commitment, so
+    /// `id → (value, pk)` is a function and any tracked copy is authoritative
+    /// regardless of branch — enough to recover a consumed note's value/key.
+    pub(super) fn find_note(&self, id: &NoteId) -> Option<&ChannelNote> {
+        self.base.get(id).or_else(|| {
+            self.overlay.values().flatten().find_map(|op| match op {
+                NoteOp::Add(note) if note.note_id == *id => Some(note),
+                NoteOp::Add(_) | NoteOp::Remove(_) => None,
+            })
+        })
+    }
 }
 
 /// Extract the channel-note ops of a block's transactions for `channel_id`,

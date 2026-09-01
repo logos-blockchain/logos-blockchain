@@ -123,9 +123,9 @@ pub enum WithdrawInputs {
 ///   [`publish_atomic_withdraw`](super::SequencerHandle::publish_atomic_withdraw)
 ///   with `info.inscription.payload` and `WithdrawArg { outputs: info.outputs
 ///   }`.
-/// - [`ChannelUpdateTx::AtomicDepositInscription`] →
-///   [`publish_atomic_deposit_inscription`](super::SequencerHandle::publish_atomic_deposit_inscription)
-///   with `info.inscription.payload` and `info.consumed_notes`.
+/// - [`ChannelUpdateTx::PinDeposit`] →
+///   [`publish_pin_deposit`](super::SequencerHandle::publish_pin_deposit) with
+///   `info.inscription.payload` and `info.consumed_notes`.
 /// - [`ChannelUpdateTx::Config`] / [`ChannelUpdateTx::Custom`] →
 ///   caller-recovered; the SDK cannot re-sign a multi-sig config or rebuild a
 ///   custom tx, so it never auto-resubmits them.
@@ -135,8 +135,8 @@ pub enum ChannelUpdateTx {
     Inscription(InscriptionInfo),
     /// An atomic inscription+withdraw bundle.
     AtomicWithdraw(AtomicWithdrawInfo),
-    /// An atomic inscription+transfer bundle integrating an observed deposit.
-    AtomicDepositInscription(AtomicDepositInscriptionInfo),
+    /// An atomic inscription+transfer bundle pinning an observed deposit.
+    PinDeposit(PinDepositInfo),
     /// A config-only tx (a single `ChannelConfig` op) on the config lineage.
     /// Caller-recovered, like [`Self::Custom`] — never auto-resubmitted.
     Config(SignedMantleTx<Unverified>),
@@ -151,7 +151,7 @@ impl ChannelUpdateTx {
         match self {
             Self::Inscription(i) => i.tx_hash,
             Self::AtomicWithdraw(a) => a.tx_hash,
-            Self::AtomicDepositInscription(a) => a.tx_hash,
+            Self::PinDeposit(a) => a.tx_hash,
             Self::Config(tx) | Self::Custom(tx) => tx.mantle_tx().hash(),
         }
     }
@@ -164,7 +164,7 @@ impl ChannelUpdateTx {
         match self {
             Self::Inscription(i) => Some(i),
             Self::AtomicWithdraw(a) => Some(&a.inscription),
-            Self::AtomicDepositInscription(a) => Some(&a.inscription),
+            Self::PinDeposit(a) => Some(&a.inscription),
             Self::Config(_) | Self::Custom(_) => None,
         }
     }
@@ -420,8 +420,8 @@ pub struct ChannelUpdate {
     /// there.
     pub adopted: Vec<ChannelUpdateTx>,
     /// Channel deposits observed in this block. Surfaced non-finalized so a
-    /// consumer can integrate a deposit without waiting for finalization, via
-    /// [`publish_atomic_deposit_inscription`](super::SequencerHandle::publish_atomic_deposit_inscription).
+    /// consumer can pin a deposit without waiting for finalization, via
+    /// [`publish_pin_deposit`](super::SequencerHandle::publish_pin_deposit).
     ///
     /// Reconcile against branch state, don't fire once: a branch change can
     /// re-surface the same deposit or reorg it out. Publish an inscription for
@@ -509,14 +509,14 @@ pub struct AtomicWithdrawInfo {
 /// present the consumed note does not exist, the transfer fails, and the whole
 /// tx (inscription included) fails. All ops adopt/orphan/finalize as a unit.
 #[derive(Debug, Clone)]
-pub struct AtomicDepositInscriptionInfo {
+pub struct PinDepositInfo {
     /// Transaction hash of the bundled `MantleTx`.
     pub tx_hash: TxHash,
     /// The inscription op carried by the bundle.
     pub inscription: InscriptionInfo,
     /// The channel notes the bundled transfer consumes (the deposit being
-    /// integrated). Recovering an orphaned bundle re-supplies these.
-    pub consumed_notes: Vec<NoteId>,
+    /// pinned). Recovering an orphaned bundle re-supplies these.
+    pub consumed_notes: Inputs,
 }
 
 /// A channel deposit observed in a finalized L1 block. Sequencers do not
@@ -602,9 +602,9 @@ pub enum PendingTx {
     /// A bundled inscription+withdraw(s) published via
     /// `publish_atomic_withdraw`.
     AtomicWithdraw(AtomicWithdrawInfo),
-    /// A bundled inscription+transfer integrating an observed deposit,
-    /// published via `publish_atomic_deposit_inscription`.
-    AtomicDepositInscription(AtomicDepositInscriptionInfo),
+    /// A bundled inscription+transfer pinning an observed deposit,
+    /// published via `publish_pin_deposit`.
+    PinDeposit(PinDepositInfo),
 }
 
 impl PendingTx {
@@ -614,7 +614,7 @@ impl PendingTx {
         match self {
             Self::Inscription(i) => i.tx_hash,
             Self::AtomicWithdraw(a) => a.tx_hash,
-            Self::AtomicDepositInscription(a) => a.tx_hash,
+            Self::PinDeposit(a) => a.tx_hash,
         }
     }
 
@@ -624,7 +624,7 @@ impl PendingTx {
         match self {
             Self::Inscription(i) => i,
             Self::AtomicWithdraw(a) => &a.inscription,
-            Self::AtomicDepositInscription(a) => &a.inscription,
+            Self::PinDeposit(a) => &a.inscription,
         }
     }
 }

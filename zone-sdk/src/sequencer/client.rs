@@ -92,18 +92,18 @@ impl SequencerClient {
         Self::recv(response_rx).await?
     }
 
-    /// Publish an atomic inscription+transfer bundle integrating an observed
+    /// Publish an atomic inscription+transfer bundle pinning an observed
     /// deposit.
     ///
     /// Async counterpart of
-    /// [`super::SequencerHandle::publish_atomic_deposit_inscription`].
-    pub async fn publish_atomic_deposit_inscription(
+    /// [`super::SequencerHandle::publish_pin_deposit`].
+    pub async fn publish_pin_deposit(
         &self,
         inscribe: Inscription,
         consumed_notes: Vec<NoteId>,
     ) -> Result<PublishReceipt, Error> {
         let (response_tx, response_rx) = oneshot::channel();
-        self.send(ActorRequest::PublishAtomicDepositInscription {
+        self.send(ActorRequest::PublishPinDeposit {
             inscribe,
             consumed_notes,
             response_tx,

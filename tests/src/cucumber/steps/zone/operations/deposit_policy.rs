@@ -4,7 +4,7 @@ use super::{
     ZoneNodeHttpClient, ZoneSequencer, make_inscription, runner, to_policy_runtime, warn,
 };
 
-/// Reactively drive the full deposit lifecycle (integrate, then withdraw the
+/// Reactively drive the full deposit lifecycle (pin, then withdraw the
 /// re-created note), no wait for finalization. See [`DepositLifecyclePolicy`].
 pub fn start_deposit_lifecycle_policy(
     sequencer: ZoneSequencer<ZoneNodeHttpClient>,
@@ -21,21 +21,21 @@ pub fn start_deposit_lifecycle_policy(
 
 struct DepositLifecycleState {
     notes: Vec<NoteId>,
-    integrated: bool,
+    pinned: bool,
     withdrawn: bool,
 }
 
 /// Reconciles each observed deposit against branch state (fork- and
 /// multi-sequencer-correct), matching phases by the deposit's `op_id`:
-/// integrate it, then withdraw the re-created note.
+/// pin it, then withdraw the re-created note.
 struct DepositLifecyclePolicy {
     withdraw_outputs: Vec<u64>,
     recipient: ZkPublicKey,
     deposits: HashMap<Hash, DepositLifecycleState>,
 }
 
-fn integrate_payload(op_id: &Hash) -> Inscription {
-    make_inscription(&format!("integrate deposit {op_id:?}"))
+fn pin_payload(op_id: &Hash) -> Inscription {
+    make_inscription(&format!("pin deposit {op_id:?}"))
 }
 
 fn withdraw_payload(op_id: &Hash) -> Inscription {
@@ -48,8 +48,8 @@ fn mark_payload(
     present: bool,
 ) {
     for (op_id, state) in deposits.iter_mut() {
-        if *payload == integrate_payload(op_id) {
-            state.integrated = present;
+        if *payload == pin_payload(op_id) {
+            state.pinned = present;
         } else if *payload == withdraw_payload(op_id) {
             state.withdrawn = present;
         }
@@ -89,12 +89,12 @@ where
 {
     match sequencer
         .handle()
-        .publish_atomic_deposit_inscription(inscription, notes)
+        .publish_pin_deposit(inscription, notes)
         .await
     {
         Ok((result, _)) => Some(result.inscription_id()),
         Err(error) => {
-            warn!(%error, "deposit-integration inscription failed");
+            warn!(%error, "deposit-pin inscription failed");
             None
         }
     }
@@ -156,7 +156,7 @@ where
                 .entry(deposit.op_id)
                 .or_insert_with(|| DepositLifecycleState {
                     notes: deposit.notes.iter().map(|note| note.note_id).collect(),
-                    integrated: false,
+                    pinned: false,
                     withdrawn: false,
                 });
         }
@@ -179,15 +179,15 @@ where
                 continue;
             }
             let deposit_on_branch = state.notes.iter().all(|id| wallet.contains(id));
-            if !state.integrated && deposit_on_branch {
-                let inscription = integrate_payload(op_id);
+            if !state.pinned && deposit_on_branch {
+                let inscription = pin_payload(op_id);
                 if publish_deposit_inscription(sequencer, inscription, state.notes.clone())
                     .await
                     .is_some()
                 {
-                    state.integrated = true;
+                    state.pinned = true;
                 }
-            } else if !state.withdrawn && state.integrated && !deposit_on_branch {
+            } else if !state.withdrawn && state.pinned && !deposit_on_branch {
                 let inscription = withdraw_payload(op_id);
                 if publish_deposit_withdraw(sequencer, inscription, withdraw_outputs, *recipient)
                     .await
@@ -222,7 +222,7 @@ struct DepositWithdrawState {
     withdraw_tx: Option<InscriptionId>,
 }
 
-/// Reactively withdraw the deposit of `target_amount` (no integration step),
+/// Reactively withdraw the deposit of `target_amount` (no pin step),
 /// reconciled against branch state; the withdraw consumes the deposit note
 /// directly, so a foreign withdraw removes it and we back off.
 struct DepositWithdrawPolicy {
