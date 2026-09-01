@@ -1,48 +1,34 @@
-use crate::{
-    core::dispatcher::PayloadDispatcher,
-    edge::{BlendService, backends::BlendBackend},
-};
+use crate::{core::dispatcher::PayloadDispatcher, edge::backends::BlendBackend};
 
-/// Exposes associated types for external modules that depend on
-/// [`BlendService`], without requiring them to specify its generic parameters.
-pub trait ServiceComponents {
+pub trait Components<RuntimeServiceId> {
+    /// How this node is identified in a membership.
+    type NodeId;
+    /// The libp2p behaviour an edge node dials out with. It never listens,
+    /// which is why a draining core backend and a new edge one can coexist.
+    type Backend;
+    /// Supplies this node's proofs — leadership and `PoW`, but no core branch:
+    /// an edge node holds no core quota.
     type ProofsGenerator;
-    type BackendSettings;
-    type PayloadDispatcher;
-    /// Chain service, used by the proxy to derive membership from the chain.
-    type ChainService;
-    /// Time backend, used by the proxy to subscribe to slot ticks.
+    /// Where slot ticks come from.
     type TimeBackend;
+    /// Where membership and epoch state come from.
+    type ChainService;
+    /// Where this node's winning-slot `PoL` info comes from.
+    type PolInfoProvider;
+    /// Blend's exit door. An edge node needs one so it can watch its own
+    /// messages come back off the wire, and re-send the ones that never did.
+    type Dispatcher;
 }
 
-impl<
-    Backend,
-    NodeId,
-    ProofsGenerator,
-    Dispatcher,
-    TimeBackend,
-    ChainService,
-    PolInfoProvider,
-    RuntimeServiceId,
-> ServiceComponents
-    for BlendService<
-        Backend,
-        NodeId,
-        ProofsGenerator,
-        Dispatcher,
-        TimeBackend,
-        ChainService,
-        PolInfoProvider,
+/// The deployment settings the edge backend is built from.
+pub type EdgeBackendSettingsOf<Edge, RuntimeServiceId> =
+    <<Edge as Components<RuntimeServiceId>>::Backend as BlendBackend<
+        <Edge as Components<RuntimeServiceId>>::NodeId,
         RuntimeServiceId,
-    >
-where
-    Backend: BlendBackend<NodeId, RuntimeServiceId>,
-    NodeId: Clone,
-    Dispatcher: PayloadDispatcher<RuntimeServiceId>,
-{
-    type BackendSettings = Backend::Settings;
-    type PayloadDispatcher = Dispatcher;
-    type ProofsGenerator = ProofsGenerator;
-    type ChainService = ChainService;
-    type TimeBackend = TimeBackend;
-}
+    >>::Settings;
+
+/// The deployment settings the dispatcher republishes through.
+pub type EdgeNetworkSettingsOf<Edge, RuntimeServiceId> =
+    <<Edge as Components<RuntimeServiceId>>::Dispatcher as PayloadDispatcher<
+        RuntimeServiceId,
+    >>::Settings;

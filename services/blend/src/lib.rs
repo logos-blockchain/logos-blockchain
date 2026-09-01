@@ -8,7 +8,13 @@ use std::{
 use async_trait::async_trait;
 use futures::StreamExt as _;
 pub use lb_blend::message::{crypto::proofs::RealProofsVerifier, encap::ProofsVerifier};
-use lb_blend::scheduling::epoch::UninitializedEpochEventStream;
+use lb_blend::scheduling::{
+    epoch::UninitializedEpochEventStream,
+    message_blend::provers::{
+        core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
+        leader_and_pow::LeaderAndPowProofsGenerator,
+    },
+};
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     mantle::NoteId,
@@ -21,7 +27,9 @@ use lb_key_management_system_service::{
 use lb_log_targets::blend;
 use lb_network_service::NetworkService;
 use lb_sdp_service::{SdpMessage, SdpServiceApi};
-use lb_services_utils::wait_until_services_are_ready;
+use lb_services_utils::{
+    overwatch::recovery::RecoveryBackend as RecoveryBackendTrait, wait_until_services_are_ready,
+};
 use lb_time_service::TimeService;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -30,30 +38,37 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
+use rand_chacha::ChaCha20Rng;
 use tracing::{debug, error, info};
 
 use crate::{
+    broadcast::{BlendService as BroadcastBlendService, Components as BroadcastComponents},
     core::{
+        BlendService as CoreBlendService,
+        backends::BlendBackend as CoreBlendBackend,
         dispatcher::PayloadDispatcher as PayloadDispatcherTrait,
+        kms::PreloadKMSBackendCorePoQGenerator,
         service_components::{
-            BlendBackendSettingsOfService, ChainNetworkOfService, MempoolOfService,
-            MessageComponents, NetworkBackendOfService, PayloadDispatcherSettingsOfService,
-            ServiceComponents as CoreServiceComponents,
+            BackendSettingsOf, ChainNetworkOfComponents, Components as CoreComponents,
+            MempoolOfComponents, NetworkBackendOfComponents, NetworkSettingsOf,
+            RecoveryStateOf as CoreRecoveryStateOf,
         },
     },
-    edge::service_components::ServiceComponents as EdgeServiceComponents,
-    instance::{Instance, Mode},
-    kms::PreloadKmsService,
-    membership::{
-        MembershipInfo,
-        chain::BlendEpochState,
-        node_id::{self, TryFrom as _},
+    edge::{
+        BlendService as EdgeBlendService,
+        backends::BlendBackend as EdgeBlendBackend,
+        service_components::{Components as EdgeComponents, EdgeBackendSettingsOf},
     },
-    message::{BlendPayload, ProxyServiceMessage},
+    epoch_info::PolInfoProvider as PolInfoProviderTrait,
+    kms::PreloadKmsService,
+    membership::{MembershipInfo, chain::BlendEpochState, node_id},
+    message::{ProxyServiceMessage, ServiceMessage},
+    orchestrator::Instance,
     settings::Settings,
 };
 
 pub mod api;
+pub mod broadcast;
 pub mod core;
 pub mod delivery;
 pub mod edge;
@@ -64,84 +79,153 @@ pub mod message;
 pub(crate) mod metrics;
 pub mod settings;
 
-mod instance;
 mod kms;
-mod modes;
+mod mode;
+mod orchestrator;
 mod pending;
 mod service_components;
-pub use self::service_components::ServiceComponents;
+pub use self::{mode::Mode, service_components::ServiceComponents};
 
 #[cfg(test)]
 mod test_utils;
 
 const LOG_TARGET: &str = blend::service::ROOT;
 
-pub struct BlendService<CoreService, EdgeService, SdpService, RuntimeServiceId>
+/// The Blend orchestrator.
+///
+/// It owns no blending of its own: it watches the membership, works out which
+/// mode the node should be in with [`Mode::choose`], and starts or stops the
+/// service for that mode.
+///
+/// Five type parameters, and three of them are the modes' own bundles rather
+/// than the services themselves — the orchestrator derives the service types
+/// from them, so a node names its collaborators once per mode and nowhere else.
+pub struct BlendService<Core, Edge, Broadcast, SdpService, RuntimeServiceId>
 where
-    CoreService: ServiceData + CoreServiceComponents<RuntimeServiceId>,
-    EdgeService: EdgeServiceComponents,
+    Core: CoreComponents<RuntimeServiceId>,
+    Core::Backend:
+        CoreBlendBackend<Core::NodeId, ChaCha20Rng, Core::ProofsVerifier, RuntimeServiceId>,
+    Core::Dispatcher: PayloadDispatcherTrait<RuntimeServiceId>,
+    Edge: EdgeComponents<
+            RuntimeServiceId,
+            NodeId: Clone,
+            Dispatcher: PayloadDispatcherTrait<RuntimeServiceId>,
+        >,
+    Edge::Backend: EdgeBlendBackend<Edge::NodeId, RuntimeServiceId>,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    _phantom: PhantomData<(CoreService, EdgeService, SdpService)>,
+    #[expect(clippy::type_complexity, reason = "Marker field.")]
+    _phantom: PhantomData<fn() -> (Core, Edge, Broadcast, SdpService)>,
 }
 
-impl<CoreService, EdgeService, SdpService, RuntimeServiceId> ServiceData
-    for BlendService<CoreService, EdgeService, SdpService, RuntimeServiceId>
+impl<Core, Edge, Broadcast, SdpService, RuntimeServiceId> ServiceData
+    for BlendService<Core, Edge, Broadcast, SdpService, RuntimeServiceId>
 where
-    CoreService: ServiceData + CoreServiceComponents<RuntimeServiceId>,
-    EdgeService: EdgeServiceComponents,
+    Core: CoreComponents<RuntimeServiceId>,
+    Core::Backend:
+        CoreBlendBackend<Core::NodeId, ChaCha20Rng, Core::ProofsVerifier, RuntimeServiceId>,
+    Core::Dispatcher: PayloadDispatcherTrait<RuntimeServiceId>,
+    Edge: EdgeComponents<
+            RuntimeServiceId,
+            NodeId: Clone,
+            Dispatcher: PayloadDispatcherTrait<RuntimeServiceId>,
+        >,
+    Edge::Backend: EdgeBlendBackend<Edge::NodeId, RuntimeServiceId>,
 {
     type Settings = Settings<
-        BlendBackendSettingsOfService<CoreService, RuntimeServiceId>,
-        <EdgeService as EdgeServiceComponents>::BackendSettings,
-        PayloadDispatcherSettingsOfService<CoreService, RuntimeServiceId>,
+        BackendSettingsOf<Core, RuntimeServiceId>,
+        EdgeBackendSettingsOf<Edge, RuntimeServiceId>,
+        NetworkSettingsOf<Core, RuntimeServiceId>,
     >;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
-    type Message = ProxyServiceMessage<CoreService::Message>;
+    type Message = ProxyServiceMessage<ServiceMessage<Core::NodeId>>;
 }
 
-#[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "One linear bootstrap, then the mode loop."
+)]
 #[async_trait]
-impl<CoreService, EdgeService, SdpService, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for BlendService<CoreService, EdgeService, SdpService, RuntimeServiceId>
+impl<Core, Edge, Broadcast, SdpService, RuntimeServiceId> ServiceCore<RuntimeServiceId>
+    for BlendService<Core, Edge, Broadcast, SdpService, RuntimeServiceId>
 where
-    CoreService: ServiceData<
-            Message: MessageComponents<CoreService::NodeId, Payload: Into<BlendPayload>>
-                         + Send
-                         + Sync
-                         + 'static,
-        > + CoreServiceComponents<
+    Core: CoreComponents<
             RuntimeServiceId,
-            PayloadDispatcher: PayloadDispatcherTrait<RuntimeServiceId> + Send + Sync + 'static,
-            NodeId: Clone + Debug + Hash + Eq + Send + Sync + node_id::TryFrom + 'static,
-            BackendSettings: Clone + Send + Sync,
-        > + Send
-        + 'static,
-    EdgeService: ServiceData<Message = CoreService::Message>
-        // We tie the core and edge proofs generator to be the same type, to avoid mistakes in the
-        // node configuration where the two services use different verification logic
-        + EdgeServiceComponents<
-            BackendSettings: Clone + Send + Sync,
-            ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
+            NodeId: Clone + Debug + Eq + Hash + Send + Sync + node_id::TryFrom + 'static,
+            Backend: CoreBlendBackend<
+                Core::NodeId,
+                ChaCha20Rng,
+                Core::ProofsVerifier,
+                RuntimeServiceId,
+                Settings: Clone + Send + Sync,
+            > + Send
+                         + Sync,
+            Dispatcher: PayloadDispatcherTrait<RuntimeServiceId, Settings: Clone + Send + Sync>
+                            + Send
+                            + Sync
+                            + 'static,
+            ProofsGenerator: CoreLeaderAndPowProofsGenerator<
+                PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>,
+            > + Send,
+            ProofsVerifier: ProofsVerifier + Send + Sync,
             TimeBackend: lb_time_service::backends::TimeBackend + Send,
+            ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
+            PolInfoProvider: PolInfoProviderTrait<
+                RuntimeServiceId,
+                Stream: Send + Unpin + 'static,
+            > + Send,
+            SdpService: ServiceData<Message = SdpMessage> + Send,
+            StateStorage: RecoveryBackendTrait<
+                RuntimeServiceId,
+                State = CoreRecoveryStateOf<Core, RuntimeServiceId>,
+            > + Send
+                              + Sync,
         > + Send
         + 'static,
+    Edge: EdgeComponents<
+            RuntimeServiceId,
+            NodeId = Core::NodeId,
+            Dispatcher = Core::Dispatcher,
+            ChainService = Core::ChainService,
+            TimeBackend = Core::TimeBackend,
+            Backend: EdgeBlendBackend<
+                Core::NodeId,
+                RuntimeServiceId,
+                Settings: Clone + Send + Sync,
+            > + Send
+                         + Sync,
+            ProofsGenerator: LeaderAndPowProofsGenerator + Send,
+            PolInfoProvider: PolInfoProviderTrait<
+                RuntimeServiceId,
+                Stream: Send + Unpin + 'static,
+            > + Send,
+        > + Send
+        + 'static,
+    Broadcast: BroadcastComponents<
+            RuntimeServiceId,
+            NodeId = Core::NodeId,
+            Dispatcher = Core::Dispatcher,
+            ChainService = Core::ChainService,
+            TimeBackend = Core::TimeBackend,
+        > + Send
+        + 'static,
+    Core::Backend:
+        CoreBlendBackend<Core::NodeId, ChaCha20Rng, Core::ProofsVerifier, RuntimeServiceId>,
+    Core::Dispatcher: PayloadDispatcherTrait<RuntimeServiceId>,
+    Edge::Backend: EdgeBlendBackend<Core::NodeId, RuntimeServiceId>,
     SdpService: ServiceData<Message = SdpMessage> + Send,
     RuntimeServiceId: AsServiceId<Self>
-        + AsServiceId<CoreService>
-        + AsServiceId<EdgeService>
-        + AsServiceId<<EdgeService as EdgeServiceComponents>::ChainService>
+        + AsServiceId<CoreBlendService<Core, RuntimeServiceId>>
+        + AsServiceId<EdgeBlendService<Edge, RuntimeServiceId>>
+        + AsServiceId<BroadcastBlendService<Broadcast, RuntimeServiceId>>
+        + AsServiceId<Core::ChainService>
+        + AsServiceId<TimeService<Core::TimeBackend, RuntimeServiceId>>
+        + AsServiceId<PreloadKmsService<RuntimeServiceId>>
         + AsServiceId<
-            TimeService<<EdgeService as EdgeServiceComponents>::TimeBackend, RuntimeServiceId>,
-        > + AsServiceId<PreloadKmsService<RuntimeServiceId>>
-        + AsServiceId<
-            NetworkService<
-                NetworkBackendOfService<CoreService, RuntimeServiceId>,
-                RuntimeServiceId,
-            >,
-        > + AsServiceId<MempoolOfService<CoreService, RuntimeServiceId>>
-        + AsServiceId<ChainNetworkOfService<CoreService, RuntimeServiceId>>
+            NetworkService<NetworkBackendOfComponents<Core, RuntimeServiceId>, RuntimeServiceId>,
+        > + AsServiceId<MempoolOfComponents<Core, RuntimeServiceId>>
+        + AsServiceId<ChainNetworkOfComponents<Core, RuntimeServiceId>>
         + AsServiceId<SdpService>
         + Debug
         + Display
@@ -175,14 +259,14 @@ where
         } = self;
 
         let settings = settings_handle.notifier().get_updated_settings();
-        let minimal_network_size = settings.common.minimum_network_size.get() as usize;
+        let minimal_network_size = settings.common.minimum_network_size;
 
         wait_until_services_are_ready!(
             &overwatch_handle,
             Some(Duration::from_mins(1)),
             PreloadKmsService<_>,
             SdpService,
-            <EdgeService as EdgeServiceComponents>::ChainService
+            Core::ChainService
         )
         .await?;
 
@@ -208,20 +292,12 @@ where
         else {
             panic!("Non-ephemeral signing key must be an Ed25519 key");
         };
-        let local_node_id =
-            CoreService::NodeId::try_from_provider_id(non_ephemeral_signing_key_public.as_bytes())
-                .expect("non-ephemeral signing public key should decode into a valid node id");
 
         // Wait until the chain becomes Online mode before subscribing to memberships.
         // Chain service provides the correct epoch state only after the chain becomes
         // Online.
-        let chain_api = CryptarchiaServiceApi::<
-            <EdgeService as EdgeServiceComponents>::ChainService,
-            RuntimeServiceId,
-        >::new(
-            overwatch_handle
-                .relay::<<EdgeService as EdgeServiceComponents>::ChainService>()
-                .await?,
+        let chain_api = CryptarchiaServiceApi::<Core::ChainService, RuntimeServiceId>::new(
+            overwatch_handle.relay::<Core::ChainService>().await?,
         );
         info!(target: LOG_TARGET, "Waiting for chain to become Online mode");
         chain_api
@@ -231,9 +307,9 @@ where
         info!(target: LOG_TARGET, "Chain is now Online.");
 
         let membership_stream = membership::chain::subscribe::<
-            <EdgeService as EdgeServiceComponents>::ChainService,
-            CoreService::NodeId,
-            <EdgeService as EdgeServiceComponents>::TimeBackend,
+            Core::ChainService,
+            Core::NodeId,
+            Core::TimeBackend,
             RuntimeServiceId,
         >(
             overwatch_handle,
@@ -241,7 +317,7 @@ where
             // We don't need to generate secret zk info in the proxy service, so we ignore the
             // secret key at this level.
             None,
-            "blend_proxy_service",
+            "blend_orchestrator_service",
         )
         .await
         // We take only the membership info from the epoch stream since the proxy service does not
@@ -267,11 +343,17 @@ where
             "current membership is ready",
         );
 
-        let mut instance = Instance::<CoreService, EdgeService, RuntimeServiceId>::new(
+        // The orchestrator no longer builds a mode: it starts a service. What
+        // broadcast mode needs — a dispatcher, a node id, network settings —
+        // is now that service's business.
+        let mut instance = Instance::<
+            CoreBlendService<Core, RuntimeServiceId>,
+            EdgeBlendService<Edge, RuntimeServiceId>,
+            BroadcastBlendService<Broadcast, RuntimeServiceId>,
+            RuntimeServiceId,
+        >::new(
             Mode::choose(&membership, minimal_network_size),
-            local_node_id.clone(),
             overwatch_handle,
-            settings.common.broadcast.clone(),
         )
         .await?;
 
@@ -291,8 +373,6 @@ where
                             epoch_event,
                             overwatch_handle,
                             minimal_network_size,
-                            local_node_id.clone(),
-                            settings.common.broadcast.clone(),
                         )
                         .await?;
                 },

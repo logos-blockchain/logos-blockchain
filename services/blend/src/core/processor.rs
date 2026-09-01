@@ -1,8 +1,4 @@
-use std::{
-    hash::Hash,
-    num::NonZeroU64,
-    ops::{Deref, DerefMut},
-};
+use std::ops::{Deref, DerefMut};
 
 pub use lb_blend::scheduling::message_blend::crypto::core_and_leader::receive::EpochCryptographicProcessor as ReceiverCryptographicProcessor;
 use lb_blend::{
@@ -48,33 +44,7 @@ where
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
 {
-    pub fn try_new_with_core_condition_check(
-        membership: Membership<NodeId>,
-        minimum_network_size: NonZeroU64,
-        settings: EpochCryptographicProcessorSettings,
-        public_info: PoQVerificationInputsMinusSigningKey,
-        core_proof_of_quota_generator: CorePoQGenerator,
-        epoch: Epoch,
-    ) -> Result<Self, Error>
-    where
-        NodeId: Eq + Hash,
-    {
-        if membership.size() < minimum_network_size.get() as usize {
-            Err(Error::NetworkIsTooSmall(membership.size()))
-        } else if !membership.contains_local() {
-            Err(Error::LocalIsNotCoreNode)
-        } else {
-            Ok(Self::new(
-                membership,
-                settings,
-                public_info,
-                core_proof_of_quota_generator,
-                epoch,
-            ))
-        }
-    }
-
-    fn new(
+    pub fn new(
         membership: Membership<NodeId>,
         settings: EpochCryptographicProcessorSettings,
         public_info: PoQVerificationInputsMinusSigningKey,
@@ -110,14 +80,6 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier> DerefMut
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("Network is too small: {0}")]
-    NetworkIsTooSmall(usize),
-    #[error("Local node is not a core node")]
-    LocalIsNotCoreNode,
-}
-
 #[cfg(test)]
 mod tests {
     use core::num::NonZeroU64;
@@ -151,9 +113,9 @@ mod tests {
     use rayon::ThreadPoolBuilder;
 
     use crate::{
-        core::processor::{CoreCryptographicProcessor, Error},
+        core::processor::CoreCryptographicProcessor,
         test_utils::{
-            crypto::{MockCoreAndLeaderProofsGenerator, MockProofsVerifier, StaticFetchVerifier},
+            crypto::{MockCoreAndLeaderProofsGenerator, StaticFetchVerifier},
             membership::{key, membership},
         },
     };
@@ -175,61 +137,6 @@ mod tests {
             },
             pow: PowInputs::disabled(),
         }
-    }
-
-    #[test]
-    fn try_new_with_valid_membership() {
-        let local_id = NodeId(1);
-        let core_nodes = [NodeId(1)];
-        CoreCryptographicProcessor::<_, _, MockCoreAndLeaderProofsGenerator, MockProofsVerifier>::try_new_with_core_condition_check(
-            membership(&core_nodes, local_id),
-            NonZeroU64::new(1).unwrap(),
-            settings(local_id),
-            mock_verification_inputs(),
-            (),
-            Epoch::new(0)
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn try_new_with_small_membership() {
-        let local_id = NodeId(1);
-        let core_nodes = [NodeId(1)];
-        let result = CoreCryptographicProcessor::<
-            _,
-            _,
-            MockCoreAndLeaderProofsGenerator,
-            MockProofsVerifier,
-        >::try_new_with_core_condition_check(
-            membership(&core_nodes, local_id),
-            NonZeroU64::new(2).unwrap(),
-            settings(local_id),
-            mock_verification_inputs(),
-            (),
-            Epoch::new(0),
-        );
-        assert!(matches!(result, Err(Error::NetworkIsTooSmall(1))));
-    }
-
-    #[test]
-    fn try_new_with_local_node_not_core() {
-        let local_id = NodeId(1);
-        let core_nodes = [NodeId(2)];
-        let result = CoreCryptographicProcessor::<
-            _,
-            _,
-            MockCoreAndLeaderProofsGenerator,
-            MockProofsVerifier,
-        >::try_new_with_core_condition_check(
-            membership(&core_nodes, local_id),
-            NonZeroU64::new(1).unwrap(),
-            settings(local_id),
-            mock_verification_inputs(),
-            (),
-            Epoch::new(0),
-        );
-        assert!(matches!(result, Err(Error::LocalIsNotCoreNode)));
     }
 
     #[test]
