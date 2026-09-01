@@ -967,11 +967,7 @@ pub mod tests {
         let state = state
             .update_epoch_state::<HeaderId>(slot.into(), sdp, pow, config)
             .unwrap();
-        *pow = pow.try_apply_header(
-            &previous_epoch_state,
-            state.epoch_state(),
-            &config.pow_config.reward,
-        );
+        *pow = pow.try_apply_header(&previous_epoch_state, state.epoch_state(), config);
         pow.record_block_txs(txs_in_block);
         state
     }
@@ -1124,7 +1120,6 @@ pub mod tests {
             rate_num: 0,
             rate_den: NonZeroU64::MIN,
             target_claim_per_block: NonZeroU64::MIN,
-            expected_blocks_per_epoch: NonZeroU64::MIN,
             slot_window: NonZeroU64::new(100).expect("100 is non-zero"),
         }
     }

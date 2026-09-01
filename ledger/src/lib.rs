@@ -2402,21 +2402,24 @@ mod tests {
                 rate_num: 0,
                 rate_den: NonZeroU64::MIN,
                 target_claim_per_block: NonZeroU64::MIN,
-                expected_blocks_per_epoch: NonZeroU64::MIN,
                 slot_window: NonZeroU64::new(100).expect("100 is non-zero"),
             }
         }
 
         /// A payout rate of `1/100`: `sigma_e = pool / 100`, used to give the
-        /// `PoW` state a nonzero per-claim reward in tests.
-        fn test_pool_config() -> RewardPoWConfig {
-            RewardPoWConfig {
+        /// `PoW` state a nonzero per-claim reward in tests. The denominator is
+        /// `rate_den (1) * target_claim_per_block (10) *
+        /// expected_blocks_per_epoch (10, derived from the test consensus
+        /// schedule)`.
+        fn test_pool_config() -> Config {
+            let mut config = config();
+            config.pow_config.reward = RewardPoWConfig {
                 rate_num: 1,
                 rate_den: NonZeroU64::MIN,
                 target_claim_per_block: NonZeroU64::new(10).expect("10 is non-zero"),
-                expected_blocks_per_epoch: NonZeroU64::new(10).expect("10 is non-zero"),
                 ..disabled_reward_config()
-            }
+            };
+            config
         }
 
         /// A ledger state with a funded `PoW` pool (1000, `sigma_e` = 10) and
@@ -2535,10 +2538,7 @@ mod tests {
             let config = config();
             let mut state = LedgerState::from_utxos([utxo()], &config);
             // The default reward config disables claiming (`rate_num = 0`).
-            state
-                .mantle_ledger
-                .pow
-                .add_rewards_to_pool(&disabled_reward_config());
+            state.mantle_ledger.pow.add_rewards_to_pool(&config);
             assert_eq!(state.mantle_ledger.pow.epoch_reward(), 0);
 
             let err = state

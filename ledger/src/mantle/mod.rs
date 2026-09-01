@@ -155,9 +155,9 @@ impl LedgerState {
             self.sdp
                 .try_apply_header(&config.sdp_config, last_epoch_state, epoch_state)?;
         self.sdp = new_sdp;
-        self.pow =
-            self.pow
-                .try_apply_header(last_epoch_state, epoch_state, &config.pow_config.reward);
+        self.pow = self
+            .pow
+            .try_apply_header(last_epoch_state, epoch_state, config);
         Ok((self, effect))
     }
 

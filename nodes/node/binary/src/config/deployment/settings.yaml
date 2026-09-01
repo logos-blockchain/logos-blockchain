@@ -53,8 +53,11 @@ cryptarchia:
       reward_pool_genesis: 300000000000
       # Forced by the pool and the payout rate:
       # W0 * rate_num / (rate_den * target_claim_per_block *
-      # expected_blocks_per_epoch) = 3e11 / (10 * 1 * 1200).
-      epoch_reward_genesis: 25000000
+      # expected_blocks_per_epoch) = 3e11 / (10 * 1 * 300).
+      # `expected_blocks_per_epoch` is not a config value: the ledger derives
+      # it from the consensus schedule as `10k`, which is 300 at
+      # `security_param: 30`.
+      epoch_reward_genesis: 100000000
       # A larger seed starts the difficulty *harder*; 0 is the most permissive
       # start this construction admits.
       initial_difficulty_seed: 0
@@ -68,8 +71,6 @@ cryptarchia:
       rate_num: 1
       rate_den: 10
       target_claim_per_block: 1
-      # 10k blocks per epoch; not a free choice.
-      expected_blocks_per_epoch: 1200
       # Acceptance window in slots; must match the mining service. Ten
       # block-intervals of tolerance for a claim to reach a block.
       slot_window: 300
