@@ -5012,11 +5012,15 @@ name = "logos-blockchain-sdp-service"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "logos-blockchain-blend-proofs",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
+ "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-key-management-system-keys",
+ "logos-blockchain-ledger",
  "logos-blockchain-services-utils",
  "logos-blockchain-tracing",
+ "logos-blockchain-utils",
  "overwatch",
  "serde",
  "thiserror 2.0.18",
