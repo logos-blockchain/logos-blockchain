@@ -197,7 +197,7 @@ pub unsafe extern "C" fn shutdown_node(node: *mut LogosBlockchainNode) -> Operat
 
 #[cfg(test)]
 mod test {
-    use std::{ffi::CString, path::PathBuf, sync::LazyLock};
+    use std::{ffi::CString, path::PathBuf, sync::LazyLock, time::Duration};
 
     use lb_node::UserConfig;
     use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
@@ -225,6 +225,22 @@ mod test {
         assert!(file.exists());
         file
     });
+
+    /// How long to let a freshly started node settle before shutting it down.
+    ///
+    /// [`start_lb_node`] returns once Overwatch has *spawned* the services,
+    /// not once they are ready, so without this the node is torn down while
+    /// its service tasks are still reaching their first await. Shutting down
+    /// inside that window deadlocks in Overwatch: `blocking_wait_finished`
+    /// never returns and the whole test binary hangs. Measured on Linux: 7 of
+    /// 12 runs hung with no delay, 0 of 12 hung with 250ms, 0 of 12 with 2s.
+    /// Two seconds keeps a wide margin over the observed window without
+    /// making the test slow.
+    ///
+    /// This is a workaround, not a fix — the deadlock is in Overwatch's
+    /// shutdown path and has to be addressed there.
+    /// TODO: Remove after <https://github.com/logos-co/Overwatch/issues/150> is fixed
+    const STARTUP_SETTLE: Duration = Duration::from_secs(2);
 
     struct TestConfigPaths {
         _temp_dir: TempDir,
@@ -294,6 +310,10 @@ mod test {
         );
         let node = start_status.value;
 
+        // Let the service tasks get past the window in which shutting down
+        // deadlocks Overwatch. See [`STARTUP_SETTLE`].
+        std::thread::sleep(STARTUP_SETTLE);
+
         let shutdown_status = unsafe { shutdown_node(node) };
 
         assert!(
@@ -309,8 +329,8 @@ mod test {
     fn start_applies_environment_overrides() {
         let test_paths = TestConfigPaths::new();
 
-        // SAFETY: serialized via `#[serial]`; removed before any assertion so no
-        // other test observes it.
+        // SAFETY: serialized via `#[serial]`; removed before any assertion so
+        // no other test observes it.
         unsafe { std::env::set_var("HTTP_HOST", "not-a-socket-address") };
 
         let start_status = start_lb_node(
