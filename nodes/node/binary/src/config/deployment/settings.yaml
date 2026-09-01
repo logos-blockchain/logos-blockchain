@@ -2,8 +2,8 @@ blend:
   common:
     num_blend_layers: 1
     minimum_network_size: 2
-    protocol_name: /logos-blockchain/blend/X.Y.Z
-    data_replication_factor: 0
+    protocol_name: /logos-blockchain-devnet-0.3.0-rc.1/blend/1.0.0
+    data_replication_factor: 1
   core:
     scheduler:
       cover:
@@ -14,65 +14,37 @@ blend:
     normalization_constant: 1.03
     activity_threshold_sensitivity: 1
 network:
-  kademlia_protocol_name: /logos-blockchain/kad/X.Y.Z
-  identify_protocol_name: /logos-blockchain/identify/X.Y.Z
-  chain_sync_protocol_name: /logos-blockchain/chainsync/X.Y.Z
+  kademlia_protocol_name: /logos-blockchain-devnet-0.3.0-rc.1/kad/1.0.0
+  identify_protocol_name: /logos-blockchain-devnet-0.3.0-rc.1/identify/1.0.0
+  chain_sync_protocol_name: /logos-blockchain-devnet-0.3.0-rc.1/chainsync/1.0.0
 cryptarchia:
   epoch_config:
     epoch_stake_distribution_stabilization: 3
     epoch_period_nonce_buffer: 3
     epoch_period_nonce_stabilization: 4
-  security_param: 30
+  security_param: 120
   slot_activation_coeff:
     numerator: 1
-    denominator: 20
-  learning_rate: 0.5
+    denominator: 30
+  learning_rate: 1.0
   uncle_reference_window_in_block: 12
   pow_config:
     blend:
-      # BLEND_DIFFICULTY_BASE, as the exponent n in p / 2^n: the Blend PoW
-      # threshold at the reference load. Fixed by the EmPoWering
-      # specification from a measurement on the target hardware itself
-      # (Raspberry Pi 5, one core), at which one solution is around fifty
-      # seconds of work.
       base_difficulty: 19
-      # The reference load the threshold is calibrated at, so it has to be the
-      # load the network actually carries: two transactions per block. A
-      # theoretical capacity here would pin the threshold off its calibrated
-      # point.
       target_transactions_per_block: 2
       max_step: 2
       damping_num: 1
       damping_den_offset: 1
     reward:
-      # Token-reward PoW parameters, sized for the target network of ~200
-      # mining nodes over the two-week epoch schedule.
-      #
-      # Pool sized to put 200 nodes over the minimum stake, with margin for
-      # mining being spread unevenly across them.
       reward_pool_genesis: 300000000000
-      # Forced by the pool and the payout rate:
-      # W0 * rate_num / (rate_den * target_claim_per_block *
-      # expected_blocks_per_epoch) = 3e11 / (10 * 1 * 300).
-      # `expected_blocks_per_epoch` is not a config value: the ledger derives
-      # it from the consensus schedule as `10k`, which is 300 at
-      # `security_param: 30`.
-      epoch_reward_genesis: 100000000
-      # A larger seed starts the difficulty *harder*; 0 is the most permissive
-      # start this construction admits.
+      epoch_reward_genesis: 25000000
       initial_difficulty_seed: 0
       ema_smoothing_factor: 9
       ema_smoothing_precision: 10
-      # One claim per block: claims are transactions, and the per-block
-      # transaction budget is 2. Must track `target_claim_per_block` below.
       target_claims_per_block: 1
-      # rho = rate_num / rate_den = 1/10 of the pool per epoch, which
-      # distributes 97% of it across the two weeks.
       rate_num: 1
       rate_den: 10
       target_claim_per_block: 1
-      # Acceptance window in slots; must match the mining service. Ten
-      # block-intervals of tolerance for a claim to reach a block.
       slot_window: 300
   sdp_config:
     service_params:
@@ -80,15 +52,15 @@ cryptarchia:
         inactivity_period: 2
         epoch: 0
     min_stake:
-      threshold: 1
+      threshold: 1000000000
       timestamp: 0
-  gossipsub_protocol: /logos-blockchain/cryptarchia/X.Y.Z
+  gossipsub_protocol: /logos-blockchain-devnet-0.3.0-rc.1/cryptarchia/1.0.0
   genesis_block:
     header:
       version: Bedrock
       parent_block: '0000000000000000000000000000000000000000000000000000000000000000'
       slot: 0
-      body_root: 'f9403475ca1264e8d8dd9512ea1bcee1e90f139beaf209c0d71e206ec9d8a310'
+      body_root: eac0bcd1c44106180dd0667b116bf66902e729f991422796b4fbfaa90747bf80
       proof_of_leadership:
         proof: '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
         entropy_contribution: '0000000000000000000000000000000000000000000000000000000000000000'
@@ -99,25 +71,356 @@ cryptarchia:
     transactions:
     - mantle_tx:
         ops:
-          - opcode: 0
-            payload:
-              inputs: []
-              outputs: []
-          - opcode: 17
-            payload:
-              channel_id: '0000000000000000000000000000000000000000000000000000000000000000'
-              inscription: '10000000000000007374616e64616c6f6e652d6c6f63616c9169fe692d2ddf918544bca603c5a291c7dd1b902d6769ff4b00021506780e075c06051a'
-              parent: '0000000000000000000000000000000000000000000000000000000000000000'
-              signer: '0000000000000000000000000000000000000000000000000000000000000000'
+        - opcode: 0
+          payload:
+            inputs: []
+            outputs:
+            - value: 100000000000000
+              pk: 62c84f14ee182e0daade80fb62dd3d8fd574ea68ebd0ba66f680aecb96345b29
+            - value: 200000000000000
+              pk: e3752c1d69ab82d4b2f60aeec185eeed729d418fc07191e4d14bbaa9fa546a16
+            - value: 200000000000000
+              pk: 941201a4509c64cbe5ce994f23c3bdc53d6e2ba03ca6bab8196116be3896eb0f
+            - value: 1000000000
+              pk: daebceddc9ef45acd72a7ca35f3d2d1c74e207eda6e274a4ca360159de8e0210
+            - value: 100000000000000
+              pk: 918b04708fc209af93bd425fa6f7b1f46c1a185b25e8d6861139e2c458f55a05
+            - value: 200000000000000
+              pk: 7edef6fb1b78278e387e057e46998067e3e12ee55ccf3bff5577be04d553eb1e
+            - value: 200000000000000
+              pk: b541e4699a309096e01753703b1a7ad4e58d877b9a61c451b846446f3f387f27
+            - value: 1000000000
+              pk: dc9803310f8ea8571723c6e3e568ff0d6bb81eccd28777ed99fc1a4f68cf0400
+            - value: 100000000000000
+              pk: 60f5f3dc232743afde0998d4e9b05e293e52d58deb85cfb1330174f69fa7322f
+            - value: 200000000000000
+              pk: da81f09bee68872b38366789387c3d33377f3e66fdef3b293579af53374fa708
+            - value: 200000000000000
+              pk: 988ff525200e7910b3c8af9abb2b945aeb2b8d6dab6f702c63326a0c0c7bc304
+            - value: 1000000000
+              pk: 8a9f02e0c130a6ee1a86ec4bd76ceef2e2c37e733f3efc4e256eec96df6d352a
+            - value: 100000000000000
+              pk: 6ef994707f2fd705e8b39b54aa2a42c8580b594bb8fe6cc80042524dc2e06621
+            - value: 200000000000000
+              pk: 94f9afc599dee8c16c7ed64f422fbdd62c1277c13973afe2b3c032c669d74e16
+            - value: 200000000000000
+              pk: 88b9456889510dcfcd27172ef0d834ab3e9d87c79629c5fe8724d8197843ec1e
+            - value: 1000000000
+              pk: 8362830159cc5f0967936720a0f5c4990339c6c4b7b5f53efac848e2a66e2007
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 8000000000000
+              pk: 41fe2b86b637fdb7944effe8b21af9a905e432a1c4f5d6d9f1ec0593ae8d7b04
+            - value: 18446744073709551615
+              pk: 3956ddb6ed8cb0b002f9839bfecd1d31f852594b46c3dee8d72df926be3bb625
+        - opcode: 17
+          payload:
+            channel_id: '0000000000000000000000000000000000000000000000000000000000000000'
+            inscription: 0a302e332e302d72632e31a819976a2d2ddf918544bca603c5a291c7dd1b902d6769ff4b00021506780e075c06051a
+            parent: '0000000000000000000000000000000000000000000000000000000000000000'
+            signer: '0000000000000000000000000000000000000000000000000000000000000000'
+        - opcode: 32
+          payload:
+            service_type: BN
+            locators:
+            - /ip4/65.108.203.235/udp/3400/quic-v1
+            provider_id: 5818cc65db81aeedc499082d5d2320d0174a3b7b04191191153da535ca753cdf
+            zk_id: daebceddc9ef45acd72a7ca35f3d2d1c74e207eda6e274a4ca360159de8e0210
+            service_note_id: fe3fdeadcd42a91353f638ecc9a4eb59d3131115978426516760ddc9e88e792b
+        - opcode: 32
+          payload:
+            service_type: BN
+            locators:
+            - /ip4/65.108.203.235/udp/3401/quic-v1
+            provider_id: 188245c021abfe362c07d3aa887d727dc45828d5d7d94de7843ed56c5c738aee
+            zk_id: dc9803310f8ea8571723c6e3e568ff0d6bb81eccd28777ed99fc1a4f68cf0400
+            service_note_id: c904c8277ae02ecc09f8ef6f7e7a0a27709a87b332aaa7cdca4bf1fdc579d90f
+        - opcode: 32
+          payload:
+            service_type: BN
+            locators:
+            - /ip4/65.108.203.235/udp/3402/quic-v1
+            provider_id: 7eef1970220c1ebbb7ecfde7a1402a1c1dd56f887c19b54f074f42414a14080f
+            zk_id: 8a9f02e0c130a6ee1a86ec4bd76ceef2e2c37e733f3efc4e256eec96df6d352a
+            service_note_id: 9aa2067705c463d67ca491bea1cd34e9f1d823c33da9074f6fe4523fc1ef7a0a
+        - opcode: 32
+          payload:
+            service_type: BN
+            locators:
+            - /ip4/65.108.203.235/udp/50002/quic-v1
+            provider_id: 015e73fefc8b54813f28636293edd83cd9b3384830e7dd483e58502ab399c00e
+            zk_id: 8362830159cc5f0967936720a0f5c4990339c6c4b7b5f53efac848e2a66e2007
+            service_note_id: f6c5e6bf9d13f81b45986ff3c70e0ef508e49793a34ed3a114122f97ea0a1f16
       ops_proofs:
-        - !ZkSig
+      - !ZkSig
+        pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
+        pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+        pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
+      - !Ed25519Sig '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+      - !ZkAndEd25519Sigs
+        zk_sig:
           pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
           pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
           pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
-        - !Ed25519Sig '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
-  faucet_pk: '0000000000000000000000000000000000000000000000000000000000000000'
+        ed25519_sig: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+      - !ZkAndEd25519Sigs
+        zk_sig:
+          pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
+          pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+          pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
+        ed25519_sig: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+      - !ZkAndEd25519Sigs
+        zk_sig:
+          pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
+          pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+          pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
+        ed25519_sig: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+      - !ZkAndEd25519Sigs
+        zk_sig:
+          pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
+          pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+          pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
+        ed25519_sig: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+  faucet_pk: 3956ddb6ed8cb0b002f9839bfecd1d31f852594b46c3dee8d72df926be3bb625
 time:
   slot_duration: '1.000000000'
 mempool:
-  pubsub_topic: /logos-blockchain/mempool/X.Y.Z
-  tx_ttl: '86400.000000000'
+  pubsub_topic: /logos-blockchain-devnet-0.3.0-rc.1/mempool/1.0.0
