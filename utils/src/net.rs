@@ -7,20 +7,23 @@ use std::{
 const TEST_PORT_BLOCK_SIZE: u16 = 256;
 const TEST_PORT_RANGE_START: u16 = 20_000;
 const TEST_PORT_RANGE_END: u16 = 55_000;
+const TEST_PORT_CLAIM_RANGE_START: u16 = TEST_PORT_RANGE_END + 1;
 
 static USED_TCP_PORTS: LazyLock<Mutex<HashSet<u16>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 static USED_UDP_PORTS: LazyLock<Mutex<HashSet<u16>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
 /// A process-local allocator backed by a kernel-owned TCP socket lease.
 ///
+/// Each block maps to a dedicated claim port above the test data-port range.
 /// The lease remains bound for the lifetime of the allocator, so concurrent
 /// processes cannot reserve the same block. The operating system releases it
 /// automatically if the process terminates abnormally. Before accepting a
-/// block, all remaining ports are probed so blocks still used by orphaned child
+/// block, all data ports are probed so blocks still used by orphaned child
 /// processes are skipped.
 #[derive(Debug)]
 pub struct ReservedPortBlock {
     lease: TcpListener,
+    block_start: u16,
     tcp_next: u16,
     tcp_end: u16,
     udp_next: u16,
@@ -34,28 +37,30 @@ impl ReservedPortBlock {
         let max_block_start =
             TEST_PORT_RANGE_END.checked_sub(TEST_PORT_BLOCK_SIZE.saturating_sub(1))?;
 
-        for block_start in
-            (TEST_PORT_RANGE_START..=max_block_start).step_by(usize::from(TEST_PORT_BLOCK_SIZE))
+        for (block_index, block_start) in (TEST_PORT_RANGE_START..=max_block_start)
+            .step_by(usize::from(TEST_PORT_BLOCK_SIZE))
+            .enumerate()
         {
             let tcp_end = block_start + (TEST_PORT_BLOCK_SIZE / 2) - 1;
             let udp_next = tcp_end + 1;
             let udp_end = block_start + TEST_PORT_BLOCK_SIZE - 1;
+            let claim_port =
+                TEST_PORT_CLAIM_RANGE_START.checked_add(u16::try_from(block_index).ok()?)?;
 
             // Holding this socket is the cross-process claim. Unlike a claim
             // file, it cannot become stale or be removed by an ABA race.
-            let Ok(lease) = TcpListener::bind(("127.0.0.1", block_start)) else {
+            let Ok(lease) = TcpListener::bind(("127.0.0.1", claim_port)) else {
                 continue;
             };
 
-            if !all_ports_available(block_start + 1, tcp_end, udp_next, udp_end) {
+            if !all_ports_available(block_start, tcp_end, udp_next, udp_end) {
                 continue;
             }
 
             return Some(Self {
                 lease,
-                // The first TCP port is kept bound as the block lease and is
-                // therefore intentionally not returned to callers.
-                tcp_next: block_start + 1,
+                block_start,
+                tcp_next: block_start,
                 tcp_end,
                 udp_next,
                 udp_end,
@@ -67,7 +72,13 @@ impl ReservedPortBlock {
 
     /// Returns the first port in this allocator's reserved block.
     #[must_use]
-    pub fn block_start(&self) -> Option<u16> {
+    pub const fn block_start(&self) -> u16 {
+        self.block_start
+    }
+
+    /// Returns the dedicated TCP port that owns this block's kernel lease.
+    #[must_use]
+    pub fn claim_port(&self) -> Option<u16> {
         self.lease.local_addr().ok().map(|address| address.port())
     }
 
@@ -168,7 +179,10 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use super::ReservedPortBlock;
+    use super::{
+        ReservedPortBlock, TEST_PORT_BLOCK_SIZE, TEST_PORT_CLAIM_RANGE_START, TEST_PORT_RANGE_END,
+        TEST_PORT_RANGE_START,
+    };
 
     const CHILD_MARKER_ENV: &str = "LOGOS_PORT_BLOCK_TEST_MARKER";
     const CHILD_RELEASE_ENV: &str = "LOGOS_PORT_BLOCK_TEST_RELEASE";
@@ -239,6 +253,54 @@ mod tests {
     }
 
     #[test]
+    fn reservation_preserves_full_tcp_and_udp_halves() {
+        let mut allocator = ReservedPortBlock::try_new().expect("a test port block should exist");
+        let block_start = allocator.block_start();
+        let half_block_size = TEST_PORT_BLOCK_SIZE / 2;
+        let expected_tcp_end = block_start + half_block_size - 1;
+        let expected_udp_start = block_start + half_block_size;
+        let expected_block_end = block_start + TEST_PORT_BLOCK_SIZE - 1;
+        let claim_port = allocator
+            .claim_port()
+            .expect("lease address should be available");
+
+        assert_eq!(allocator.tcp_next, block_start);
+        assert_eq!(allocator.tcp_end, expected_tcp_end);
+        assert_eq!(allocator.udp_next, expected_udp_start);
+        assert_eq!(allocator.udp_end, expected_block_end);
+        assert_eq!(allocator.tcp_end - allocator.tcp_next + 1, half_block_size);
+        assert_eq!(allocator.udp_end - allocator.udp_next + 1, half_block_size);
+        assert_eq!(
+            allocator.next_tcp_port(),
+            Some(block_start),
+            "the first TCP data port must remain allocatable"
+        );
+        assert!(
+            claim_port >= TEST_PORT_CLAIM_RANGE_START,
+            "the lease must use the dedicated claim range"
+        );
+        assert!(
+            claim_port > TEST_PORT_RANGE_END,
+            "the lease must not consume a data port"
+        );
+
+        let candidate_count =
+            ((TEST_PORT_RANGE_END - TEST_PORT_RANGE_START + 1) / TEST_PORT_BLOCK_SIZE) as usize;
+        let claim_port_capacity = usize::from(u16::MAX - TEST_PORT_CLAIM_RANGE_START) + 1;
+        let claim_range_end = TEST_PORT_CLAIM_RANGE_START
+            + u16::try_from(candidate_count).expect("candidate count should fit in u16")
+            - 1;
+        assert!(
+            claim_port_capacity >= candidate_count,
+            "the claim range must cover every candidate block"
+        );
+        assert!(
+            claim_port <= claim_range_end,
+            "the lease must map into the candidate block's claim range"
+        );
+    }
+
+    #[test]
     #[ignore = "helper process invoked by reservations_are_unique_across_processes"]
     fn reservation_child_process() {
         const TIMEOUT: Duration = Duration::from_secs(20);
@@ -252,9 +314,7 @@ mod tests {
         );
         let allocator = ReservedPortBlock::try_new().expect("child should reserve a port block");
 
-        let block_start = allocator
-            .block_start()
-            .expect("lease address should be available");
+        let block_start = allocator.block_start();
         fs::write(&marker_path, block_start.to_string()).expect("child marker should be written");
 
         let deadline = Instant::now() + TIMEOUT;
