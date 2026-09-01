@@ -236,3 +236,45 @@ impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
         Some(mock_blend_proof())
     }
 }
+
+/// A generator whose leadership branch, like the real one, has nothing to give
+/// until this epoch's secret `PoL` info arrives.
+///
+/// `RealCoreAndLeaderProofsGenerator` holds its leader generator behind an
+/// `Option` that `set_epoch_private` fills, and returns `None` until then — so
+/// a proposal encapsulated before that point fails outright rather than
+/// waiting.
+pub struct PolAwareProofsGenerator {
+    leadership_available: bool,
+}
+
+#[async_trait]
+impl<CorePoQGenerator> CoreLeaderAndPowProofsGenerator<CorePoQGenerator>
+    for PolAwareProofsGenerator
+{
+    fn new(
+        _settings: ProofsGeneratorSettings,
+        _starting_key_index: KeyIndex,
+        _core_proof_of_quota_generator: CorePoQGenerator,
+    ) -> Self {
+        Self {
+            leadership_available: false,
+        }
+    }
+
+    fn set_epoch_private(&mut self, _: WinningPolInfoStream, _: Epoch) {
+        self.leadership_available = true;
+    }
+
+    async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
+        Some(mock_blend_proof())
+    }
+
+    async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof> {
+        self.leadership_available.then(mock_blend_proof)
+    }
+
+    async fn get_next_pow_proof(&mut self) -> Option<BlendLayerProof> {
+        Some(mock_blend_proof())
+    }
+}

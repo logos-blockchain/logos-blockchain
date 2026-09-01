@@ -1,7 +1,10 @@
 use std::{hash::Hash, marker::PhantomData, sync::Arc};
 
 use lb_blend::{
-    message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
+    message::{
+        Error as MessageError, crypto::proofs::PoQVerificationInputsMinusSigningKey,
+        encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
+    },
     scheduling::{
         membership::Membership,
         message_blend::{
@@ -15,7 +18,7 @@ use overwatch::overwatch::OverwatchHandle;
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
 
-use crate::edge::{LOG_TARGET, RunningSettings as Settings, backends::BlendBackend};
+use crate::edge::{RunningSettings as Settings, backends::BlendBackend};
 
 pub struct MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId> {
     cryptographic_processor: EpochCryptographicProcessor<NodeId, ProofsGenerator>,
@@ -30,10 +33,6 @@ where
     NodeId: Clone,
     ProofsGenerator: LeaderAndPowProofsGenerator,
 {
-    #[cfg(test)]
-    pub const fn epoch(&self) -> Epoch {
-        self.cryptographic_processor.epoch()
-    }
 }
 
 impl<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
@@ -49,35 +48,7 @@ where
     /// edge node condition:
     /// 1. The membership size is at least `settings.minimum_network_size`.
     /// 2. The local node is not a core node.
-    pub fn try_new_with_edge_condition_check(
-        settings: Settings<Backend, NodeId, RuntimeServiceId>,
-        membership: Membership<NodeId>,
-        public_info: PoQVerificationInputsMinusSigningKey,
-        winning_pol_info_stream: WinningPolInfoStream,
-        overwatch_handle: OverwatchHandle<RuntimeServiceId>,
-        epoch: Epoch,
-    ) -> Result<Self, Error>
-    where
-        NodeId: Eq + Hash,
-    {
-        let membership_size = membership.size();
-        if membership_size < settings.minimum_network_size.get() as usize {
-            Err(Error::NetworkIsTooSmall(membership_size))
-        } else if membership.contains_local() {
-            Err(Error::LocalIsCoreNode)
-        } else {
-            Ok(Self::new(
-                settings,
-                membership,
-                public_info,
-                winning_pol_info_stream,
-                overwatch_handle,
-                epoch,
-            ))
-        }
-    }
-
-    fn new(
+    pub(super) fn new(
         settings: Settings<Backend, NodeId, RuntimeServiceId>,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
@@ -116,39 +87,48 @@ where
     Backend: BlendBackend<NodeId, RuntimeServiceId> + Sync,
     ProofsGenerator: LeaderAndPowProofsGenerator,
 {
-    /// Blend a block proposal, spending leadership quota on its layer proofs.
-    pub async fn handle_block_proposal_to_blend(&mut self, proposal: &[u8]) {
-        let Ok(message) = self
-            .cryptographic_processor
+    /// Encapsulate a block proposal, spending leadership quota on its layer
+    /// proofs.
+    ///
+    /// A failure is handed back raw for
+    /// [`resolve_encapsulation`](crate::pending::resolve_encapsulation) to
+    /// judge, since only it knows whether the message stays queued. Leadership
+    /// proofs are not simply there for the asking: they need this epoch's
+    /// secret `PoL` info, which can land after the first proposal does.
+    pub async fn encapsulate_block_proposal(
+        &mut self,
+        proposal: &[u8],
+    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, MessageError> {
+        self.cryptographic_processor
             .encapsulate_block_proposal_payload(proposal)
             .await
-            .inspect_err(|e| {
-                tracing::error!(target: LOG_TARGET, "Failed to encapsulate block proposal: {e:?}");
-            })
-        else {
-            return;
-        };
-        self.backend.send(message).await;
     }
 
-    /// Blend a transaction, whose layer proofs are backed by a proof of work.
+    /// Encapsulate a transaction, whose layer proofs are backed by a proof of
+    /// work.
     ///
-    /// Unlike a block proposal this cannot be answered on demand: the proofs
-    /// come from a puzzle search, so the caller has to be somewhere it can
-    /// afford to wait.
-    /// Returns `None` if the transaction could not be encapsulated, so the
-    /// caller can leave it queued and try again rather than losing it.
-    pub async fn handle_transaction_to_blend(&mut self, transaction: &[u8]) -> Option<()> {
-        let message = self
-            .cryptographic_processor
+    /// Those proofs come from a puzzle search, so the caller has to be
+    /// somewhere it can afford to wait. A failure is handed back raw, as above.
+    pub async fn encapsulate_transaction(
+        &mut self,
+        transaction: &[u8],
+    ) -> Result<EncapsulatedMessageWithVerifiedPublicHeader, MessageError> {
+        self.cryptographic_processor
             .encapsulate_transaction_payload(transaction)
             .await
-            .inspect_err(|e| {
-                tracing::error!(target: LOG_TARGET, "Failed to encapsulate transaction: {e:?}");
-            })
-            .ok()?;
+    }
+
+    /// Hand a finished message to the backend.
+    ///
+    /// Kept apart from the encapsulation that produced it so the caller can put
+    /// this where cancellation cannot reach it — see
+    /// [`send_local_encapsulated_message`](super::send_local_encapsulated_message).
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "The exclusive borrow is what keeps this future `Send` without a `Sync` bound."
+    )]
+    pub async fn send(&mut self, message: EncapsulatedMessageWithVerifiedPublicHeader) {
         self.backend.send(message).await;
-        Some(())
     }
 }
 

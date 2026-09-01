@@ -42,6 +42,8 @@ use overwatch::{
     overwatch::{OverwatchHandle, commands::OverwatchCommand},
     services::{ServiceData, relay::OutboundRelay, state::StateUpdater},
 };
+use rand::SeedableRng as _;
+use rand_chacha::ChaCha20Rng;
 use rayon::ThreadPoolBuilder;
 use tokio::sync::{
     broadcast::{self},
@@ -113,6 +115,22 @@ pub fn settings<BackendSettings>(
     }
 }
 
+/// The seed every test's release delayer is built from.
+const RELEASE_DELAY_SEED: u64 = 1;
+
+/// A release delayer that draws the same delays on every run.
+///
+/// `initialize` takes this rather than drawing from entropy so that how many
+/// rounds a message waits is a fixed property of a test rather than a fresh
+/// draw each time. Note what this does *not* buy: the delay is in whole rounds
+/// (`release_delayer` picks from `[1, max]`, never zero), so it fixes which
+/// round a message goes out on, not how that round falls against events driven
+/// from elsewhere — an epoch rotation arriving over a channel, say. A test that
+/// depends on such an ordering needs more than this.
+pub fn seeded_release_delay_rng() -> ChaCha20Rng {
+    ChaCha20Rng::seed_from_u64(RELEASE_DELAY_SEED)
+}
+
 pub fn timing_settings() -> TimingSettings {
     TimingSettings {
         rounds_per_epoch: 10.try_into().unwrap(),
@@ -169,9 +187,10 @@ where
     async fn publish(
         &self,
         _msg: EncapsulatedMessageWithVerifiedPublicHeader,
-        _intended_epoch: Epoch,
+        intended_epoch: Epoch,
     ) {
         note_outgoing_message();
+        note_published_epoch(intended_epoch);
     }
 
     async fn rotate_epoch(&mut self, new_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>) {
@@ -248,6 +267,10 @@ thread_local! {
     /// Installed by [`record_outgoing_messages`] for the duration of a test.
     static OUTGOING_MESSAGES: RefCell<Option<mpsc::UnboundedSender<()>>> =
         const { RefCell::new(None) };
+
+    /// Installed by [`published_epochs_recorder`] for the duration of a test.
+    static PUBLISHED_EPOCHS: RefCell<Option<mpsc::UnboundedSender<Epoch>>> =
+        const { RefCell::new(None) };
 }
 
 /// Starts recording every message the service sends onwards, whether it goes
@@ -263,6 +286,24 @@ fn note_outgoing_message() {
     OUTGOING_MESSAGES.with_borrow(|recorder| {
         if let Some(sender) = recorder.as_ref() {
             let _ = sender.send(());
+        }
+    });
+}
+
+/// Records the epoch each message is published under, which is what tells a
+/// transitioning epoch's release apart from the current one's. Separate from
+/// [`outgoing_messages_recorder`], which also counts payloads handed to the
+/// local dispatcher and so has no epoch to report.
+pub fn published_epochs_recorder() -> mpsc::UnboundedReceiver<Epoch> {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    PUBLISHED_EPOCHS.with_borrow_mut(|recorder| *recorder = Some(sender));
+    receiver
+}
+
+fn note_published_epoch(intended_epoch: Epoch) {
+    PUBLISHED_EPOCHS.with_borrow(|recorder| {
+        if let Some(sender) = recorder.as_ref() {
+            let _ = sender.send(intended_epoch);
         }
     });
 }

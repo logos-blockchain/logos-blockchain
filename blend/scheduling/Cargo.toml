@@ -35,4 +35,4 @@ rand_chacha      = { workspace = true }
 
 [features]
 tokio-task-names      = []
-unsafe-test-functions = []
+unsafe-test-functions = ["lb-blend-membership/unsafe-test-functions"]

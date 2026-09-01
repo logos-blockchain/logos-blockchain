@@ -301,6 +301,21 @@ fn test_serde() {
     );
 }
 
+#[test]
+fn test_serde_json_roundtrip() {
+    let header = HeaderId([0xAB; 32]);
+    let json = serde_json::to_string(&header).unwrap();
+
+    assert_eq!(json, format!("\"{}\"", "ab".repeat(32)));
+    assert_eq!(serde_json::from_str::<HeaderId>(&json).unwrap(), header);
+}
+
+#[test]
+fn test_serde_json_rejects_oversized_hex() {
+    let json = format!("\"{}\"", "ab".repeat(33));
+    assert!(serde_json::from_str::<HeaderId>(&json).is_err());
+}
+
 /// Body-root / `HeaderId` test-vector generator.
 ///
 /// This module does not assert library behaviour: it *emits* reference test

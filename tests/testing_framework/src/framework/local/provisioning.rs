@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     env, fs, io,
     net::{Ipv4Addr, UdpSocket},
+    num::NonZeroU64,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -18,6 +19,7 @@ use lb_node::{
     config::{
         self, RunConfig,
         deployment::DeploymentSettings,
+        sdp::serde::ActiveMessageTrackerConfig,
         tracing::serde::{
             Level,
             logger::{self, AppenderType},
@@ -725,6 +727,9 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
             wallet: sdp::serde::WalletConfig {
                 max_tx_fee: mantle::Value::MAX.into(),
                 funding_pk: config.consensus_config.funding_sk.as_public_key(),
+            },
+            active_message_tracker: ActiveMessageTrackerConfig {
+                status_check_interval_in_tip_changes: NonZeroU64::new(3).unwrap(),
             },
         },
         wallet: {

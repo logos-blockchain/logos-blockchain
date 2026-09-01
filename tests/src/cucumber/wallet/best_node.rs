@@ -70,7 +70,8 @@ impl BestNodeInfo {
         wallet_name: &str,
     ) -> Result<String, StepError> {
         let wallet_node_name = world.resolve_wallet_node_name(wallet_name)?;
-        let Some(node) = self.for_wallet_node(&wallet_node_name, &world.node_to_group) else {
+        let Some(node) = self.for_wallet_node(&wallet_node_name, world.fork_groups.mapping())
+        else {
             return Err(StepError::LogicalError {
                 message: format!("Best node for '{wallet_name}' not found in world state"),
             });
@@ -107,7 +108,8 @@ pub async fn sanitize_best_node_info<'a>(
 
     let mut last_msg = String::new();
     if let Some(best_info) = best_node_info
-        && let Some(node) = best_info.for_wallet_node(&wallet_node_name, &world.node_to_group)
+        && let Some(node) =
+            best_info.for_wallet_node(&wallet_node_name, world.fork_groups.mapping())
     {
         if let Some(selection) = resolve_cached_best_node(world, node).await? {
             return Ok(selection);
@@ -142,14 +144,15 @@ pub async fn determine_best_node(
     }
 
     let mut node_to_group = BTreeMap::new();
-    if world.node_groups.is_empty() {
+    if world.fork_groups.groups().is_empty() {
         for node_name in &candidates {
             node_to_group.insert(node_name.clone(), String::new());
         }
     } else {
         for node_name in &candidates {
             let group = world
-                .node_to_group
+                .fork_groups
+                .mapping()
                 .get(node_name)
                 .ok_or(StepError::LogicalError {
                     message: format!("Node '{node_name}' is not in any configured node group"),
@@ -237,7 +240,7 @@ async fn resolve_selected_best_node<'a>(
     best_info: &BestNodeInfo,
 ) -> Result<(String, &'a NodeHttpClient, CryptarchiaInfo), StepError> {
     let selected = best_info
-        .for_wallet_node(wallet_node_name, &world.node_to_group)
+        .for_wallet_node(wallet_node_name, world.fork_groups.mapping())
         .ok_or(StepError::LogicalError {
             message: format!("No best-node entry found for wallet node '{wallet_node_name}'"),
         })?;
@@ -320,21 +323,24 @@ fn resolve_candidate_nodes(
     world: &CucumberWorld,
     wallet_node_name: &str,
 ) -> Result<(String, Vec<String>), StepError> {
-    if world.node_groups.is_empty() {
+    if world.fork_groups.groups().is_empty() {
         let mut candidates = world.all_node_names();
         candidates.sort();
         return Ok((String::new(), candidates));
     }
 
-    let group_name = world
-        .node_to_group
-        .get(wallet_node_name)
-        .ok_or(StepError::LogicalError {
-            message: format!("Node '{wallet_node_name}' is not in any configured node group"),
-        })?;
+    let group_name =
+        world
+            .fork_groups
+            .mapping()
+            .get(wallet_node_name)
+            .ok_or(StepError::LogicalError {
+                message: format!("Node '{wallet_node_name}' is not in any configured node group"),
+            })?;
 
     let mut candidates = world
-        .node_groups
+        .fork_groups
+        .groups()
         .get(group_name)
         .ok_or(StepError::LogicalError {
             message: format!("Node group '{group_name}' was not found in scenario state"),

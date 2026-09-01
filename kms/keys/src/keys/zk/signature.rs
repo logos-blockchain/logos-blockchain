@@ -66,7 +66,7 @@ macro_rules! declare_serde_generic_array {
                 GenericArray,
                 typenum::{Unsigned, $size},
             };
-            use serde::{Deserialize as _, Deserializer, Serializer};
+            use serde::{Deserializer, Serializer};
 
             pub fn serialize<S: Serializer>(
                 bytes: &GenericArray<u8, $size>,
@@ -89,60 +89,10 @@ macro_rules! declare_serde_generic_array {
             pub fn deserialize<'de, D: Deserializer<'de>>(
                 deserializer: D,
             ) -> Result<GenericArray<u8, $size>, D::Error> {
-                if deserializer.is_human_readable() {
-                    #[derive(serde::Deserialize)]
-                    #[serde(untagged)]
-                    enum StringOrSeq {
-                        Hex(String),
-                        Seq(Vec<u8>),
-                    }
-
-                    let bytes = match StringOrSeq::deserialize(deserializer)? {
-                        StringOrSeq::Hex(s) => hex::decode(&s).map_err(serde::de::Error::custom)?,
-                        StringOrSeq::Seq(b) => b,
-                    };
-
-                    if bytes.len() != $size::USIZE {
-                        return Err(serde::de::Error::custom(format!(
-                            "expected {} bytes, got {}",
-                            $size::USIZE,
-                            bytes.len()
-                        )));
-                    }
-
-                    GenericArray::try_from_iter(bytes)
-                        .map_err(|e| serde::de::Error::custom(e.to_string()))
-                } else {
-                    struct ArrayVisitor;
-
-                    impl<'de> serde::de::Visitor<'de> for ArrayVisitor {
-                        type Value = GenericArray<u8, $size>;
-
-                        fn expecting(
-                            &self,
-                            formatter: &mut core::fmt::Formatter,
-                        ) -> core::fmt::Result {
-                            write!(formatter, "an array of {} bytes", $size::USIZE)
-                        }
-
-                        fn visit_seq<A: serde::de::SeqAccess<'de>>(
-                            self,
-                            mut seq: A,
-                        ) -> Result<Self::Value, A::Error> {
-                            let mut output = GenericArray::<u8, $size>::default();
-                            for (i, byte) in output.iter_mut().enumerate() {
-                                *byte = seq
-                                    .next_element()?
-                                    .ok_or_else(|| serde::de::Error::invalid_length(i, &self))?;
-                            }
-                            Ok(output)
-                        }
-                    }
-
-                    // Mirrors `serialize`: a fixed-size tuple read back
-                    // without a length prefix.
-                    deserializer.deserialize_tuple($size::USIZE, ArrayVisitor)
-                }
+                let bytes = lb_utils::serde::deserialize_bytes_array_or_seq::<{ $size::USIZE }, D>(
+                    deserializer,
+                )?;
+                Ok(GenericArray::from(bytes))
             }
         }
     };
@@ -185,6 +135,29 @@ mod tests {
 
         let err = serde_yaml::from_str::<Signature>(yaml).unwrap_err();
         assert!(err.to_string().contains("expected 64 bytes"));
+    }
+
+    #[test]
+    fn signature_accepts_fixed_size_json_byte_arrays() {
+        let json = serde_json::json!({
+            "pi_a": vec![0u8; 32],
+            "pi_b": vec![0u8; 64],
+            "pi_c": vec![0u8; 32],
+        });
+
+        assert!(serde_json::from_value::<Signature>(json).is_ok());
+    }
+
+    #[test]
+    fn signature_rejects_oversized_json_byte_arrays() {
+        let json = serde_json::json!({
+            "pi_a": vec![0u8; 33],
+            "pi_b": vec![0u8; 64],
+            "pi_c": vec![0u8; 32],
+        });
+
+        let err = serde_json::from_value::<Signature>(json).unwrap_err();
+        assert!(err.to_string().contains("expected 32 bytes"));
     }
 
     #[test]

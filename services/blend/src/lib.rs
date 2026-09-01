@@ -66,6 +66,7 @@ pub mod settings;
 mod instance;
 mod kms;
 mod modes;
+mod pending;
 mod service_components;
 pub use self::service_components::ServiceComponents;
 

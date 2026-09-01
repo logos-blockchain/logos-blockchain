@@ -8,9 +8,13 @@ use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use lb_libp2p::{Protocol, SwarmEvent};
 use libp2p::{Multiaddr, PeerId};
 use test_log::test;
-use tokio::time;
+use tokio::{spawn, time};
 
 use crate::{
+    core::backends::libp2p::core_swarm_test_utils::{
+        BlendBehaviourBuilder, SwarmBuilder as CoreSwarmBuilder, SwarmExt as _,
+        TestSwarm as CoreTestSwarm, new_nodes_with_empty_address,
+    },
     edge::backends::libp2p::{
         swarm::Command,
         tests::utils::{SwarmBuilder as EdgeSwarmBuilder, TestSwarm as EdgeTestSwarm},
@@ -174,5 +178,118 @@ async fn stalled_send_does_not_block_command_processing() {
         swarm.pending_dials().len(),
         1,
         "The command should be processed even though a send is stalled"
+    );
+}
+
+/// A dial that fails because the host at the declared address presents a
+/// different identity than the membership expects (`DialError::WrongPeerId`)
+/// must not be retried: no number of attempts changes the remote's key.
+///
+/// This is the failure that took down Blend on testnet v0.2.1 — every declared
+/// locator pointed at a host holding a different key, and because the error was
+/// funnelled into the same backoff ladder as a timeout it was reported as
+/// "peer was not reachable after N attempts" rather than as a configuration
+/// fault.
+#[test(tokio::test)]
+async fn edge_does_not_retry_unrecoverable_dial_failure() {
+    // A real listening swarm, whose address we will pair with the wrong peer id.
+    let (mut identities, nodes) = new_nodes_with_empty_address(1);
+    let CoreTestSwarm {
+        swarm: mut listening_swarm,
+        ..
+    } = CoreSwarmBuilder::new(identities.next().unwrap(), &nodes)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
+    let (listening_node, _) = listening_swarm
+        .listen_and_return_membership_entry(None)
+        .await;
+    spawn(async move { listening_swarm.run().await });
+
+    // The membership points at the right address but the wrong identity.
+    let wrong_peer_id = PeerId::random();
+    let EdgeTestSwarm { mut swarm, .. } =
+        EdgeSwarmBuilder::new(Membership::new_without_local(from_ref(&Node {
+            address: listening_node.address.clone(),
+            id: wrong_peer_id,
+            public_key: UnsecuredEd25519Key::generate_with_chacha_rng().public_key(),
+        })))
+        // Generous retry budget: if the error were treated as recoverable we
+        // would see further attempts after the backoff below.
+        .with_max_dial_attempts(3)
+        .build();
+
+    swarm.send_message(&TestEncapsulatedMessage::new(b"test-payload"));
+
+    // The first (and only) dial fails with a wrong-peer-id error.
+    swarm
+        .poll_next_until(|event| {
+            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == Some(wrong_peer_id)
+        })
+        .await;
+
+    // The first backoff would be 2^1 = 2s. Wait past it: no second attempt may
+    // be made, and the peer must be gone from the pending dials.
+    let no_second_attempt = time::timeout(
+        time::Duration::from_secs(4),
+        swarm.poll_next_until(|event| {
+            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == Some(wrong_peer_id)
+        }),
+    )
+    .await;
+    assert!(
+        no_second_attempt.is_err(),
+        "an unrecoverable dial failure must not be retried"
+    );
+    assert!(
+        swarm.pending_dials().is_empty(),
+        "the abandoned peer must not be left pending"
+    );
+}
+
+/// A peer abandoned as unrecoverable stays excluded for the rest of the
+/// membership's life, so later messages are not spent re-dialing it.
+#[test(tokio::test)]
+async fn edge_excludes_unrecoverable_peer_from_later_sends() {
+    let (mut identities, nodes) = new_nodes_with_empty_address(1);
+    let CoreTestSwarm {
+        swarm: mut listening_swarm,
+        ..
+    } = CoreSwarmBuilder::new(identities.next().unwrap(), &nodes)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
+    let (listening_node, _) = listening_swarm
+        .listen_and_return_membership_entry(None)
+        .await;
+    spawn(async move { listening_swarm.run().await });
+
+    let wrong_peer_id = PeerId::random();
+    let EdgeTestSwarm { mut swarm, .. } =
+        EdgeSwarmBuilder::new(Membership::new_without_local(from_ref(&Node {
+            address: listening_node.address.clone(),
+            id: wrong_peer_id,
+            public_key: UnsecuredEd25519Key::generate_with_chacha_rng().public_key(),
+        })))
+        .build();
+
+    swarm.send_message(&TestEncapsulatedMessage::new(b"first"));
+    swarm
+        .poll_next_until(|event| {
+            let SwarmEvent::OutgoingConnectionError { peer_id, .. } = event else {
+                return false;
+            };
+            *peer_id == Some(wrong_peer_id)
+        })
+        .await;
+
+    // The only member is now known-unusable, so a second message finds no peer
+    // to dial at all rather than repeating the doomed dial.
+    swarm.send_message(&TestEncapsulatedMessage::new(b"second"));
+    assert!(
+        swarm.pending_dials().is_empty(),
+        "a peer abandoned as unrecoverable must not be chosen for later messages"
     );
 }

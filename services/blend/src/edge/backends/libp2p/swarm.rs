@@ -16,7 +16,7 @@ use lb_blend::{
         serialize_encapsulated_message_with_verified_public_header,
     },
 };
-use lb_libp2p::{DialError, DialOpts, SwarmEvent};
+use lb_libp2p::{DialError, DialErrorExt as _, DialOpts, SwarmEvent};
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
     identity::Keypair,
@@ -103,6 +103,10 @@ where
     pending_events: PendingEvents,
     protocol_name: StreamProtocol,
     replication_factor: NonZeroUsize,
+    /// Peers whose dial failed for a reason that retrying cannot fix (see
+    /// [`DialErrorExt::is_recoverable`]). They are excluded from peer selection
+    /// for the lifetime of this swarm, which spans one epoch's membership.
+    unrecoverable_peers: HashSet<PeerId>,
 }
 
 #[derive(Debug)]
@@ -157,6 +161,7 @@ where
             max_dial_attempts_per_connection: settings.max_dial_attempts_per_peer_per_message,
             protocol_name: settings.protocol_name.into_inner(),
             replication_factor,
+            unrecoverable_peers: HashSet::new(),
         }
     }
 
@@ -190,6 +195,7 @@ where
             swarm: inner_swarm,
             protocol_name,
             replication_factor,
+            unrecoverable_peers: HashSet::new(),
         }
     }
 
@@ -215,7 +221,9 @@ where
     /// A single set of `replication_factor` peers is chosen at random for the
     /// message. Each chosen peer is then retried with exponential backoff (see
     /// [`Self::schedule_retry`]); if a peer is still unreachable after all
-    /// attempts, the message is dropped for that peer.
+    /// attempts, the message is dropped for that peer. A peer that fails
+    /// unrecoverably is replaced by a different one instead of being retried
+    /// (see [`Self::abandon_peer_and_redial`]).
     fn dial_and_schedule_message(&mut self, msg: &EncapsulatedMessageWithVerifiedPublicHeader) {
         let peers = self.choose_peers();
         if peers.is_empty() {
@@ -223,27 +231,96 @@ where
             return;
         }
         for node in peers {
-            let (peer_id, address) = (node.id, node.address);
-            let opts = dial_opts(peer_id, address.clone());
-            let connection_id = opts.connection_id();
+            self.dial_peer_with_message(node.id, node.address, msg.clone());
+        }
+    }
 
-            let Entry::Vacant(empty_entry) = self.pending_dials.entry((peer_id, connection_id))
-            else {
-                panic!(
-                    "Dial attempt for peer {peer_id:?} and connection {connection_id:?} should not be present in storage."
-                );
-            };
-            empty_entry.insert(DialAttempt {
-                address,
-                attempt_number: 1.try_into().unwrap(),
-                message: msg.clone(),
-            });
+    /// Dial a single peer, recording the message to be sent once the
+    /// connection is established.
+    fn dial_peer_with_message(
+        &mut self,
+        peer_id: PeerId,
+        address: Multiaddr,
+        message: EncapsulatedMessageWithVerifiedPublicHeader,
+    ) {
+        let opts = dial_opts(peer_id, address.clone());
+        let connection_id = opts.connection_id();
 
-            if let Err(e) = self.swarm.dial(opts) {
-                error!(target: LOG_TARGET, "Failed to dial peer {peer_id:?} on connection {connection_id:?}: {e:?}");
+        let Entry::Vacant(empty_entry) = self.pending_dials.entry((peer_id, connection_id)) else {
+            panic!(
+                "Dial attempt for peer {peer_id:?} and connection {connection_id:?} should not be present in storage."
+            );
+        };
+        empty_entry.insert(DialAttempt {
+            address,
+            attempt_number: 1.try_into().unwrap(),
+            message,
+        });
+
+        if let Err(e) = self.swarm.dial(opts) {
+            error!(target: LOG_TARGET, "Failed to dial peer {peer_id:?} on connection {connection_id:?}: {e:?}");
+            // `Swarm::dial` rejects some dials synchronously (no address, our
+            // own id, a behaviour refusing it). Those carry the same
+            // recoverable/unrecoverable distinction as an asynchronous
+            // `OutgoingConnectionError` and must be classified identically.
+            if e.is_recoverable() {
                 self.schedule_retry(peer_id, connection_id);
+            } else {
+                self.abandon_peer_and_redial(peer_id, connection_id, &e);
             }
         }
+    }
+
+    /// Drop a peer that can never be dialed successfully and send its message
+    /// to a different peer instead.
+    ///
+    /// Unlike [`Self::schedule_retry`], this does not re-dial the same peer:
+    /// the failure is permanent for as long as the current membership stands,
+    /// so the peer is excluded from further selection and the message is
+    /// re-targeted immediately rather than after exhausting a backoff ladder.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "Tracing macros add a lot of code under the hood."
+    )]
+    fn abandon_peer_and_redial(
+        &mut self,
+        peer_id: PeerId,
+        connection_id: ConnectionId,
+        error: &DialError,
+    ) {
+        self.unrecoverable_peers.insert(peer_id);
+
+        let Some(dial_attempt) = self.pending_dials.remove(&(peer_id, connection_id)) else {
+            debug!(target: LOG_TARGET, "No pending dial for peer {peer_id:?} on connection {connection_id:?}. Nothing to re-target.");
+            return;
+        };
+
+        error!(
+            target: LOG_TARGET,
+            "Unrecoverable dial failure for peer {peer_id:?} at {:?}: {error}. Not retrying; excluding it from this membership and choosing another peer.",
+            dial_attempt.address
+        );
+
+        let Some(replacement) = self.choose_replacement_peer() else {
+            warn!(target: LOG_TARGET, "No alternative peer available to send the message to. Dropping the message.");
+            return;
+        };
+        debug!(target: LOG_TARGET, "Re-targeting message from peer {peer_id:?} to {:?}", replacement.id);
+        self.dial_peer_with_message(replacement.id, replacement.address, dial_attempt.message);
+    }
+
+    /// Pick one peer that is neither known-unusable nor already being dialed.
+    fn choose_replacement_peer(&mut self) -> Option<Node<PeerId>> {
+        let exclude: HashSet<PeerId> = self
+            .unrecoverable_peers
+            .iter()
+            .chain(self.pending_dials.keys().map(|(peer_id, _)| peer_id))
+            .copied()
+            .collect();
+        self.membership
+            .filter_and_choose_remote_nodes(&mut self.rng, 1, &exclude)
+            .next()
+            .cloned()
     }
 
     /// Schedule a retry for a failed dial attempt with exponential backoff.
@@ -292,9 +369,17 @@ where
     }
 
     fn choose_peers(&mut self) -> Vec<Node<PeerId>> {
-        let peers_to_choose = self.membership.size().min(self.replication_factor.get());
+        let available = self
+            .membership
+            .size()
+            .saturating_sub(self.unrecoverable_peers.len());
+        let peers_to_choose = available.min(self.replication_factor.get());
         self.membership
-            .filter_and_choose_remote_nodes(&mut self.rng, peers_to_choose, &HashSet::new())
+            .filter_and_choose_remote_nodes(
+                &mut self.rng,
+                peers_to_choose,
+                &self.unrecoverable_peers,
+            )
             .cloned()
             .collect()
     }
@@ -384,7 +469,11 @@ where
 
         if let Err(e) = self.swarm.dial(opts) {
             error!(target: LOG_TARGET, "Failed to redial peer {peer_id:?}: {e:?}");
-            self.schedule_retry(peer_id, connection_id);
+            if e.is_recoverable() {
+                self.schedule_retry(peer_id, connection_id);
+            } else {
+                self.abandon_peer_and_redial(peer_id, connection_id, &e);
+            }
         }
     }
 
@@ -400,6 +489,11 @@ where
             debug!(target: LOG_TARGET, "No PeerId set. Ignoring: peer_id:{peer_id:?}, connection_id:{connection_id}");
             return;
         };
+
+        if !error.is_recoverable() {
+            self.abandon_peer_and_redial(peer_id, connection_id, error);
+            return;
+        }
 
         self.schedule_retry(peer_id, connection_id);
     }
