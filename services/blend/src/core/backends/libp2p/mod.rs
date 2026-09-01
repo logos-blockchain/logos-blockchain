@@ -18,6 +18,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 
 use crate::{
+    metrics,
     core::{
         backends::{
             BackendEpochInfo, BlendBackend,
@@ -29,7 +30,6 @@ use crate::{
         settings::RunningBlendConfig as BlendConfig,
     },
     message::NetworkInfo,
-    metrics,
 };
 
 const LOG_TARGET: &str = blend::backend::LIBP2P;

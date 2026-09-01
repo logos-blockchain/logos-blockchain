@@ -20,13 +20,10 @@ use overwatch::overwatch::OverwatchHandle;
 use tracing::debug;
 
 use crate::{
-    edge::{
-        LOG_TARGET, RunningSettings,
-        backends::BlendBackend,
-        handlers::{Error, MessageHandler},
-    },
+    edge::{LOG_TARGET, RunningSettings, backends::BlendBackend, handlers::MessageHandler},
     epoch_info::PolEpochInfo,
     membership::{MembershipInfo, ZkInfo, chain::BlendEpochState},
+    mode::Mode,
     pending::{
         EncapsulationResult, MessageKind, NextLocalMessage, PendingProposals, PendingTransactions,
         next_local_message, resolve_encapsulation,
@@ -140,12 +137,10 @@ where
     /// A new epoch, which by definition has no handler yet: one needs secret
     /// `PoL` info that has not been matched to it.
     ///
-    /// Fails when the membership says this node has no business being an edge
-    /// node of this epoch, which shuts the service down. Doing it here is what
-    /// makes the rest of this type unconditional: a `CurrentEpoch` that exists
-    /// is one whose membership was accepted, so nothing downstream has to ask
-    /// again — and the handler, which used to re-check the same two conditions,
-    /// no longer does.
+    /// `None` when the membership no longer calls for edge mode, which shuts
+    /// the service down. Deciding it here is what makes the rest of this type
+    /// unconditional: a `CurrentEpoch` that exists is one whose membership was
+    /// accepted, so nothing downstream has to ask again.
     pub fn try_new(
         BlendEpochState {
             aged,
@@ -157,20 +152,15 @@ where
             pow_difficulty,
         }: BlendEpochState<NodeId>,
         settings: &RunningSettings<Backend, NodeId, RuntimeServiceId>,
-    ) -> Result<Self, Error> {
-        let Some(zk_info) = zk else {
-            return Err(Error::NetworkIsTooSmall(0));
-        };
-
-        let membership_size = membership.size();
-        if membership_size < settings.minimum_network_size.get() as usize {
-            return Err(Error::NetworkIsTooSmall(membership_size));
-        }
-        if membership.contains_local() {
-            return Err(Error::LocalIsCoreNode);
+    ) -> Option<Self> {
+        if Mode::choose(&membership, settings.minimum_network_size) != Mode::Edge {
+            return None;
         }
 
-        Ok(Self::AwaitingSecretInfo(AwaitingSecretInfo {
+        let zk_info =
+            zk.expect("A membership large enough to blend through carries its `zk` info.");
+
+        Some(Self::AwaitingSecretInfo(AwaitingSecretInfo {
             info: ValidBlendEpochState {
                 epoch,
                 nonce,

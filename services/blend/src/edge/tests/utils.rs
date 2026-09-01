@@ -27,8 +27,8 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::{
     core::settings::CoverTrafficSettings,
     edge::{
-        backends::BlendBackend, handlers::Error, run, settings::RunningBlendConfig as BlendConfig,
-        tests::test_blend_epoch_state,
+        backends::BlendBackend, run, service_components::Components as EdgeComponents,
+        settings::RunningBlendConfig as BlendConfig, tests::test_blend_epoch_state,
     },
     epoch_info::PolInfoProvider,
     message::ServiceMessage,
@@ -60,6 +60,23 @@ const TEST_MAX_BLEND_DELAY: NonZeroU64 = NonZeroU64::new(5).unwrap();
 pub const TEST_DELIVERY_DEADLINE: NonZeroU64 =
     max_data_message_delay_in_rounds(TEST_BLEND_LAYERS, TEST_MAX_BLEND_DELAY);
 
+/// The edge bundle these tests run against.
+///
+/// Production names one bundle and the service takes it whole; the tests drive
+/// the loop directly with a different `PoL` provider per case, so the bundle is
+/// generic over that one member.
+pub struct TestEdgeComponents<PolProvider>(core::marker::PhantomData<fn() -> PolProvider>);
+
+impl<PolProvider> EdgeComponents<usize> for TestEdgeComponents<PolProvider> {
+    type NodeId = NodeId;
+    type Backend = TestBackend;
+    type ProofsGenerator = MockLeaderProofsGenerator;
+    type TimeBackend = ();
+    type ChainService = ();
+    type PolInfoProvider = PolProvider;
+    type Dispatcher = TestPayloadDispatcher;
+}
+
 pub struct MockLeaderProofsGenerator;
 
 #[async_trait]
@@ -83,7 +100,7 @@ impl LeaderAndPowProofsGenerator for MockLeaderProofsGenerator {
 /// What [`spawn_run`] hands back: the running service, the channels that drive
 /// it, and both sides of its exit door.
 pub struct RunningEdgeService {
-    pub handle: JoinHandle<Result<(), Error>>,
+    pub handle: JoinHandle<()>,
     pub epochs: mpsc::Sender<Membership<NodeId>>,
     pub messages: mpsc::Sender<ServiceMessage<NodeId>>,
     pub blended_to: mpsc::Receiver<NodeId>,
@@ -149,23 +166,16 @@ where
     settings.abstain_on_failure = abstain_on_failure;
     let (payload_dispatcher, broadcasting_channel) = TestPayloadDispatcher::new();
     let join_handle = tokio::spawn(async move {
-        Box::pin(run::<
-            TestBackend,
-            _,
-            MockLeaderProofsGenerator,
-            TestPayloadDispatcher,
-            PolProvider,
-            _,
-        >(
+        Box::pin(run::<TestEdgeComponents<PolProvider>, usize>(
             UninitializedEpochEventStream::new(epoch_stream, Duration::ZERO),
-            ReceiverStream::new(msg_receiver),
+            &mut ReceiverStream::new(msg_receiver),
             local_node,
             settings,
             payload_dispatcher,
             &overwatch_handle(),
             || {},
         ))
-        .await
+        .await;
     });
 
     RunningEdgeService {
