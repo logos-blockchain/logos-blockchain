@@ -17,6 +17,7 @@ async-trait                   = { workspace = true }
 lb-chain-service              = { workspace = true }
 lb-core                       = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
+lb-ledger                     = { workspace = true }
 lb-services-utils             = { workspace = true }
 lb-tracing                    = { workspace = true }
 overwatch                     = { workspace = true }
@@ -25,3 +26,9 @@ thiserror                     = { workspace = true }
 time                          = { workspace = true }
 tokio                         = { workspace = true }
 tracing                       = { workspace = true }
+
+[dev-dependencies]
+lb-blend-proofs       = { workspace = true }
+lb-cryptarchia-engine = { workspace = true }
+lb-utils              = { workspace = true }
+tokio                 = { features = ["macros", "rt"], workspace = true }

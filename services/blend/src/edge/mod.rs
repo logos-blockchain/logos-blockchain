@@ -1,12 +1,13 @@
 pub mod backends;
+mod current_epoch;
 mod handlers;
 pub(crate) mod service_components;
 pub mod settings;
 #[cfg(test)]
 mod tests;
 
+use core::num::NonZeroU64;
 use std::{
-    collections::VecDeque,
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
@@ -15,15 +16,9 @@ use std::{
 
 use backends::BlendBackend;
 use futures::{Stream, StreamExt as _};
-use lb_blend::{
-    message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
-    proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs, PowInputs},
-    scheduling::{
-        epoch::{EpochEvent, UninitializedEpochEventStream},
-        message_blend::provers::{
-            leader_and_pow::LeaderAndPowProofsGenerator, pow::new_mining_pool,
-        },
-    },
+use lb_blend::scheduling::{
+    epoch::{EpochEvent, UninitializedEpochEventStream},
+    message_blend::provers::{leader_and_pow::LeaderAndPowProofsGenerator, pow::new_mining_pool},
 };
 use lb_chain_service::api::CryptarchiaServiceData;
 use lb_key_management_system_service::{
@@ -47,14 +42,12 @@ use tokio::sync::oneshot;
 use tracing::{debug, error, info};
 
 use crate::{
-    edge::{
-        handlers::{Error, MessageHandler},
-        settings::RunningBlendConfig,
-    },
+    edge::{current_epoch::CurrentEpoch, handlers::Error, settings::RunningBlendConfig},
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     kms::PreloadKmsService,
     membership::{self, chain::BlendEpochState, node_id},
     message::{BlendPayload, NetworkInfo, ServiceMessage},
+    pending::{EncapsulationResult, LocalEncapsulation, MessageKind, PendingTransactions},
 };
 
 const LOG_TARGET: &str = blend::service::EDGE;
@@ -270,7 +263,7 @@ where
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Unpin>,
     RuntimeServiceId: Clone + Send + Sync,
 {
-    let (mut current_epoch_info, mut remaining_public_epoch_stream) = public_epoch_stream
+    let (current_epoch_info, mut remaining_public_epoch_stream) = public_epoch_stream
         .await_first_ready()
         .await
         .expect("The current epoch info must be available.");
@@ -293,17 +286,26 @@ where
         .expect("Should not fail to subscribe to secret PoL info stream.");
 
     let mut current_secret_epoch_info: Option<PolEpochInfo> = None;
-    // Transactions waiting for a `PoW` solution to back their layer proofs.
-    let mut pending_transactions: VecDeque<Vec<u8>> = VecDeque::new();
-    let mut current_epoch_message_handler: Option<
-        MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
-    > = None;
+    // The epoch owns its proposals, so a new one takes them with it; a
+    // transaction is not slot-bound and outlives every epoch it waits through.
+    let mut current_epoch: CurrentEpoch<Backend, NodeId, ProofsGenerator, RuntimeServiceId> =
+        match CurrentEpoch::try_new(current_epoch_info, &settings) {
+            Err(Error::NetworkIsTooSmall(_)) => {
+                info!(target: LOG_TARGET, "Initial membership does not satisfy edge node condition, edge service shutting down.");
+                return Ok(());
+            }
+            Err(e) => {
+                error!(target: LOG_TARGET, "Error with the initial epoch: {e:?}, edge service shutting down.");
+                return Err(e);
+            }
+            Ok(epoch) => epoch,
+        };
+    let mut pending_transactions = PendingTransactions::new();
 
     loop {
         tokio::select! {
             Some(EpochEvent::NewEpoch(new_public_epoch_info)) = remaining_public_epoch_stream.next() => {
-                current_epoch_info = new_public_epoch_info;
-                match handle_new_epoch_event(&current_epoch_info, &mut current_secret_epoch_info, &mut current_epoch_message_handler, settings.clone(), overwatch_handle.clone()) {
+                match CurrentEpoch::try_new(new_public_epoch_info, &settings) {
                     Err(Error::NetworkIsTooSmall(_)) => {
                         info!(target: LOG_TARGET, "New membership does not satisfy edge node condition, edge service shutting down.");
                         return Ok(());
@@ -312,38 +314,25 @@ where
                         error!(target: LOG_TARGET, "Error when handling new public epoch: {e:?}, edge service shutting down.");
                         return Err(e);
                     }
-                    Ok(()) => {}
+                    // The epoch this replaces takes its queued proposals with
+                    // it: they were built for slots it owned, and blending them
+                    // under the new one would spend the quota its own block
+                    // needs.
+                    Ok(next) => current_epoch = next.with_available_secret_info(&mut current_secret_epoch_info, settings.clone(), overwatch_handle.clone()),
                 }
             }
             Some(new_secret_pol_info) = secret_pol_info_stream.next() => {
                 current_secret_epoch_info = Some(new_secret_pol_info);
-                match handle_new_epoch_event(&current_epoch_info, &mut current_secret_epoch_info, &mut current_epoch_message_handler, settings.clone(), overwatch_handle.clone()) {
-                    Err(Error::NetworkIsTooSmall(_)) => {
-                        info!(target: LOG_TARGET, "New membership does not satisfy edge node condition, edge service shutting down.");
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        error!(target: LOG_TARGET, "Error when handling new secret epoch: {e:?}, edge service shutting down.");
-                        return Err(e);
-                    }
-                    Ok(()) => {}
-                }
+                current_epoch = current_epoch.with_available_secret_info(&mut current_secret_epoch_info, settings.clone(), overwatch_handle.clone());
             }
             Some(message) = inbound_relay.next() => {
                 match message {
                     ServiceMessage::Blend(BlendPayload::Transaction(transaction)) => {
-                        pending_transactions.push_back(transaction);
+                        pending_transactions.queue(transaction);
                     }
                     ServiceMessage::Blend(BlendPayload::BlockProposal(proposal)) => {
-                        // TODO: Investigate why secret PoL info at times arrives after the block proposal.
-                        let Some(handler) = current_epoch_message_handler.as_mut() else {
-                            tracing::warn!(target: LOG_TARGET, "Received a message to blend, but no active message handler is available to process it because the secret PoL info for the current epoch is not yet available. Ignoring the message.");
-                            continue;
-                        };
-                        let message_copies = settings.data_replication_factor.checked_add(1).expect("Data replication factor should not overflow when incremented.");
-                        for _ in 0..message_copies {
-                            handler.handle_block_proposal_to_blend(&proposal).await;
-                        }
+                        let proposal_copies = NonZeroU64::new(settings.data_replication_factor.checked_add(1).expect("Data replication factor should not overflow when incremented.")).expect("Number of block proposal copies cannot be zero by definition.");
+                        current_epoch.queue_proposal(proposal, proposal_copies);
                     }
                     ServiceMessage::GetNetworkInfo { reply } => {
                         drop(reply.send(Some(NetworkInfo {
@@ -358,8 +347,24 @@ where
             }
             // A queued transaction leaves as soon as a `PoW` solution backs it, awaited
             // here as one branch among the others so the loop keeps turning meanwhile.
-            Some(()) = blend_next_transaction(&pending_transactions, &mut current_epoch_message_handler) => {
-                drop(pending_transactions.pop_front());
+            // Both kinds share one branch because both need the handler mutably,
+            // and `select!` builds every branch future before any of them wins.
+            Some(encapsulation_result) = current_epoch.encapsulate_next_local_message(&pending_transactions) => {
+                match encapsulation_result {
+                    EncapsulationResult::Complete(encapsulation) => {
+                        let LocalEncapsulation { message, kind } = *encapsulation;
+                        current_epoch.send(message).await;
+                        match kind {
+                            MessageKind::Proposal => current_epoch.proposals_mut().mark_copy_as_sent(),
+                            MessageKind::Transaction => drop(pending_transactions.mark_as_sent()),
+                        }
+                    }
+                    // The head of whichever queue it came from can never be
+                    // encapsulated, so it goes rather than blocking the rest.
+                    EncapsulationResult::Discard(MessageKind::Proposal) => current_epoch.proposals_mut().discard_head(),
+                    EncapsulationResult::Discard(MessageKind::Transaction) => drop(pending_transactions.discard_head()),
+                    EncapsulationResult::Retry => unreachable!("`Retry` is never returned by `encapsulate_next_local_message`"),
+                }
             }
             else => {
                 // All input streams have terminated (e.g. disorderly shutdown).
@@ -369,126 +374,4 @@ where
             }
         }
     }
-}
-
-/// Blends the transaction that has been waiting longest, once a `PoW` solution
-/// backs its layer proofs.
-///
-/// The transaction is only read here, never taken off the queue: `select!`
-/// drops this future whenever another branch wins the race, and one that popped
-/// before awaiting would take the transaction down with it every time that
-/// happened. It comes off the queue in the branch handler instead, which runs
-/// once the race is settled.
-///
-/// Returns `None` when there is nothing to blend — no transaction queued, or no
-/// handler for this epoch yet — which is what leaves the `select!` branch free
-/// to wait on the others.
-async fn blend_next_transaction<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
-    pending_transactions: &VecDeque<Vec<u8>>,
-    current_epoch_message_handler: &mut Option<
-        MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
-    >,
-) -> Option<()>
-where
-    Backend: BlendBackend<NodeId, RuntimeServiceId> + Sync,
-    NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
-    ProofsGenerator: LeaderAndPowProofsGenerator + Send,
-{
-    let transaction = pending_transactions.front()?;
-    current_epoch_message_handler
-        .as_mut()?
-        .handle_transaction_to_blend(transaction)
-        .await
-}
-
-fn handle_new_epoch_event<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
-    current_public_epoch_info: &BlendEpochState<NodeId>,
-    maybe_current_secret_epoch_info: &mut Option<PolEpochInfo>,
-    current_epoch_message_handler: &mut Option<
-        MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
-    >,
-    settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
-    overwatch_handle: OverwatchHandle<RuntimeServiceId>,
-) -> Result<(), Error>
-where
-    Backend: BlendBackend<NodeId, RuntimeServiceId>,
-    NodeId: Clone + Send + Eq + Hash + 'static,
-    ProofsGenerator: LeaderAndPowProofsGenerator,
-{
-    // Whatever happens on a new epoch, we shut down the previous handler.
-    // It will be rebuilt below if the current public and secret info line up
-    // on the same epoch.
-    drop(current_epoch_message_handler.take());
-
-    let Some(zk_info) = &current_public_epoch_info.membership_info.zk else {
-        return Err(Error::NetworkIsTooSmall(0));
-    };
-
-    // Validate the edge node condition up front so the service shuts down on
-    // an invalid membership regardless of whether secret PoL info is available
-    // yet for the current epoch.
-    let membership_size = current_public_epoch_info.membership_info.membership.size();
-    if membership_size < settings.minimum_network_size.get() as usize {
-        return Err(Error::NetworkIsTooSmall(membership_size));
-    }
-    if current_public_epoch_info
-        .membership_info
-        .membership
-        .contains_local()
-    {
-        return Err(Error::LocalIsCoreNode);
-    }
-
-    let Some(current_secret_epoch_info) = maybe_current_secret_epoch_info.take() else {
-        assert!(
-            current_epoch_message_handler.is_none(),
-            "If there is no secret PoL info, there should not be an active message handler."
-        );
-        debug!(target: LOG_TARGET, "No secret PoL info available for the new epoch, cannot create message handler until it arrives.");
-        return Ok(());
-    };
-
-    if current_secret_epoch_info.epoch != current_public_epoch_info.epoch {
-        debug!(target: LOG_TARGET, "Secret PoL info is for epoch {:?} which does not match the current public epoch {:?}, cannot create message handler until they line up.", current_secret_epoch_info.epoch, current_public_epoch_info.epoch);
-        // Re-instate the stream since we need it for when the new public epoch info
-        // will arrive. We chose this over not calling `.take()` here and use
-        // `.take().unwrap()` below instead.
-        *maybe_current_secret_epoch_info = Some(current_secret_epoch_info);
-        return Ok(());
-    }
-
-    let new_public_inputs = PoQVerificationInputsMinusSigningKey {
-        core: CoreInputs {
-            quota: settings.cover.epoch_core_quota(
-                settings.num_blend_layers,
-                &settings.time,
-                current_public_epoch_info.membership_info.membership.size(),
-            ),
-            zk_root: zk_info.root,
-        },
-        leader: LeaderInputs {
-            lottery_0: current_public_epoch_info.lottery_0,
-            lottery_1: current_public_epoch_info.lottery_1,
-            pol_epoch_nonce: current_public_epoch_info.nonce,
-            pol_ledger_aged: current_public_epoch_info.aged,
-            message_quota: settings.epoch_leadership_quota(),
-        },
-        pow: PowInputs {
-            pow_blend_difficulty: current_public_epoch_info.pow_difficulty,
-            pow_quota: settings.epoch_pow_quota(),
-        },
-    };
-
-    debug!(target: LOG_TARGET, "Creating new handler for epoch {:?}", current_public_epoch_info.epoch);
-    let new_handler = MessageHandler::try_new_with_edge_condition_check(
-        settings,
-        current_public_epoch_info.membership_info.membership.clone(),
-        new_public_inputs,
-        current_secret_epoch_info.winning_pol_info_stream,
-        overwatch_handle,
-        current_public_epoch_info.epoch,
-    )?;
-
-    *current_epoch_message_handler = Some(new_handler);
-    Ok(())
 }

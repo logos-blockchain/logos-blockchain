@@ -95,13 +95,18 @@ impl LogosSql {
     /// )
     ///     .bind(42i64)
     ///     .bind("Write documentation");
+    /// let tx_id = transaction.tx_id();
     ///
-    /// logos_sql.execute(transaction).await
+    /// assert_eq!(logos_sql.execute(transaction).await?, tx_id);
+    /// Ok(tx_id)
     /// # }
     /// ```
     ///
     /// A successful return means the SQL effects and recovery record are
     /// committed locally. Publication and finality remain asynchronous.
+    /// [`TransactionBuilder::tx_id`] exposes the same identity before the
+    /// asynchronous call, allowing the application to record how transaction
+    /// outcomes map to its own operations.
     ///
     /// # Errors
     ///
@@ -109,12 +114,36 @@ impl LogosSql {
     /// protocol, validation or the local commit fails, the sequencer is not
     /// ready, or the runtime has halted.
     pub async fn execute(&self, transaction: TransactionBuilder) -> Result<TxId, Error> {
-        let transaction = transaction.finish()?;
+        let (tx_id, transaction) = transaction.finish()?;
 
         self.runtime
             .as_ref()
             .ok_or(Error::RuntimeStopped)?
-            .execute(transaction)
+            .execute(tx_id, transaction)
+            .await
+    }
+
+    /// Returns local writes whose channel position was removed by a conflict
+    /// or reorganization.
+    ///
+    /// Logos SQL does not execute these writes again. The returned set is
+    /// durable across restarts but provisional: a later reorganization that
+    /// restores the original channel position removes its `TxId` from the
+    /// set. This API does not yet report when a displacement becomes final.
+    /// Repeated calls return the same IDs until such a restoration because
+    /// the current API has no application acknowledgement operation.
+    /// An application that retries before finality must therefore make the
+    /// replacement safe if the original write returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the runtime is no longer available or its local
+    /// outcome state cannot be read.
+    pub async fn displaced_writes(&self) -> Result<Vec<TxId>, Error> {
+        self.runtime
+            .as_ref()
+            .ok_or(Error::RuntimeStopped)?
+            .displaced_writes()
             .await
     }
 

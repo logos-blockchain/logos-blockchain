@@ -3,7 +3,7 @@
 //! Applications read through a normal `SQLite` connection and submit replicated
 //! writes through [`LogosSql::execute`]. One runtime task owns the zone
 //! sequencer and database writer, so the SQL effects and pending publication
-//! record commit together before the payload is given to `ZoneSDK`.
+//! commit together before the payload is given to `ZoneSDK`.
 
 mod applier;
 mod db;

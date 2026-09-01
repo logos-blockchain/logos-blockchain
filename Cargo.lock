@@ -5012,11 +5012,15 @@ name = "logos-blockchain-sdp-service"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "logos-blockchain-blend-proofs",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
+ "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-key-management-system-keys",
+ "logos-blockchain-ledger",
  "logos-blockchain-services-utils",
  "logos-blockchain-tracing",
+ "logos-blockchain-utils",
  "overwatch",
  "serde",
  "thiserror 2.0.18",
@@ -5102,7 +5106,6 @@ dependencies = [
  "logos-blockchain-mmr",
  "logos-blockchain-node",
  "logos-blockchain-storage-service",
- "logos-blockchain-tui-zone",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
@@ -5218,30 +5221,6 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber 0.3.23",
-]
-
-[[package]]
-name = "logos-blockchain-tui-zone"
-version = "0.0.0"
-dependencies = [
- "bincode",
- "chrono",
- "clap",
- "hex",
- "logos-blockchain-codec",
- "logos-blockchain-core",
- "logos-blockchain-groth16",
- "logos-blockchain-key-management-system-service",
- "logos-blockchain-zone-sdk",
- "rand 0.8.6",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-appender",
- "tracing-subscriber 0.3.23",
- "uuid",
 ]
 
 [[package]]
@@ -9383,7 +9362,6 @@ checksum = "144d6b123cef80b301b8f72a9e2ca4370ddec21950d0a103dd22c437006d2db7"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
- "serde_core",
  "wasm-bindgen",
 ]
 

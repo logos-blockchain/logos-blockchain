@@ -1,15 +1,16 @@
 use std::io;
 
 use futures::{AsyncReadExt, AsyncWriteExt};
-use lb_core::codec::{self, DeserializeOp as _, SerializeOp as _};
+use lb_core::codec::{self, BoundedBytes, BoundedSerializeOp, DeserializeOp as _};
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
+
+use super::MAX_MSG_LEN;
 
 type Result<T> = std::result::Result<T, PackingError>;
 
 type LenType = u32;
 const MAX_MSG_LEN_BYTES: usize = size_of::<LenType>();
-const MAX_MSG_LEN: usize = 16 * 1024 * 1024; // 16 MiB;
 
 #[derive(Debug, Error)]
 pub enum PackingError {
@@ -25,33 +26,24 @@ pub enum PackingError {
 
 pub async fn pack_to_writer<Message, Writer>(message: &Message, writer: &mut Writer) -> Result<()>
 where
-    Message: Serialize + DeserializeOwned + Sync,
+    Message: BoundedSerializeOp + DeserializeOwned + Sync,
     Writer: AsyncWriteExt + Send + Unpin,
 {
-    let packed_message = message.to_bytes()?;
-    let length_prefix = checked_length_prefix(packed_message.len())?;
+    const {
+        assert!(MAX_MSG_LEN <= LenType::MAX as usize);
+        assert!(<Message::Bytes as BoundedBytes>::MAX <= MAX_MSG_LEN);
+    }
+
+    let packed_message = message.to_bounded_bytes()?;
+    let packed_message = packed_message.as_ref();
+    let length_prefix = packed_message.len() as LenType;
 
     writer
         .write_all(&length_prefix.to_le_bytes())
         .await
         .map_err(Into::<PackingError>::into)?;
 
-    writer.write_all(&packed_message).await.map_err(Into::into)
-}
-
-fn checked_length_prefix(actual: usize) -> Result<LenType> {
-    if actual > MAX_MSG_LEN {
-        return Err(PackingError::MessageTooLarge {
-            max: MAX_MSG_LEN,
-            actual,
-        });
-    }
-    actual
-        .try_into()
-        .map_err(|_| PackingError::MessageTooLarge {
-            max: MAX_MSG_LEN,
-            actual,
-        })
+    writer.write_all(packed_message).await.map_err(Into::into)
 }
 
 async fn read_data_length<R>(reader: &mut R) -> Result<usize>
@@ -85,18 +77,22 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use bytes::Bytes;
 
-    #[test]
-    fn sender_rejects_messages_above_frame_limit() {
-        let error = checked_length_prefix(MAX_MSG_LEN + 1).unwrap_err();
+    use super::*;
+    use crate::libp2p::messages::DownloadBlocksResponse;
+
+    #[tokio::test]
+    async fn sender_rejects_messages_above_frame_limit() {
+        let message = DownloadBlocksResponse::Block(Bytes::from(vec![0u8; MAX_MSG_LEN]));
+        let mut writer = futures::io::Cursor::new(Vec::new());
+
+        let error = pack_to_writer(&message, &mut writer).await.unwrap_err();
+
         assert!(matches!(
             error,
-            PackingError::MessageTooLarge {
-                max: MAX_MSG_LEN,
-                actual,
-            }
-            if actual == MAX_MSG_LEN + 1
+            PackingError::Serialization(codec::Error::Serialize(_))
         ));
+        assert!(writer.into_inner().is_empty());
     }
 }
