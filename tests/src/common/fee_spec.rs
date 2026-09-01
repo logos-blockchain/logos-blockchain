@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
     Note, Op, SignedMantleTx, Utxo,
-    gas::{MainnetGasProfile, TxGasCalculator as _},
+    gas::MainnetGasProfile,
     traits::Hashable as _,
     transactions::{
         GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext,
@@ -294,8 +294,10 @@ pub fn fee_surplus_at<State: VerificationState>(
     prices: &GasPrices,
 ) -> Result<i128, String> {
     let paid = net_balance_against(genesis_utxos, tx)?;
+    let gas_context = MantleTxGasContext::new(HashMap::new(), HashMap::new(), prices.clone());
     let required = tx
-        .total_gas_cost::<MainnetGasProfile>(prices)
+        .mantle_tx()
+        .minimum_total_gas_cost::<MainnetGasProfile>(&gas_context)
         .map_err(|source| format!("transaction gas cost calculation failed: {source}"))?;
 
     Ok(i128::from(paid) - i128::from(required.into_inner()))

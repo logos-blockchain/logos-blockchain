@@ -5,10 +5,7 @@ use futures::StreamExt as _;
 use lb_core::{
     block::Block,
     events::Events,
-    mantle::{
-        traits::{MantleTxWithProofs, PreverifiedMantleTx},
-        transactions::GasPrices,
-    },
+    mantle::traits::{MantleTxWithProofs, PreverifiedMantleTx},
 };
 use lb_cryptarchia_engine::{PrunedBlocks, Slot};
 use lb_cryptarchia_sync::HeaderId;
@@ -42,7 +39,7 @@ impl Debug for ProlongedBootstrapPeriod {
 impl<Tx, Storage, RuntimeServiceId> Service<ProlongedBootstrapPeriod, Tx, Storage, RuntimeServiceId>
 where
     Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+        + MantleTxWithProofs
         + Debug
         + Clone
         + Eq

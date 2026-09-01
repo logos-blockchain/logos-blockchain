@@ -5,10 +5,7 @@ use futures::StreamExt as _;
 use lb_core::{
     block::Block,
     events::Events,
-    mantle::{
-        traits::{MantleTxWithProofs, PreverifiedMantleTx},
-        transactions::GasPrices,
-    },
+    mantle::traits::{MantleTxWithProofs, PreverifiedMantleTx},
 };
 use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
 use serde::{Serialize, de::DeserializeOwned};
@@ -46,7 +43,7 @@ impl Debug for InitialBlockDownload {
 impl<Tx, Storage, RuntimeServiceId> Service<InitialBlockDownload, Tx, Storage, RuntimeServiceId>
 where
     Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+        + MantleTxWithProofs
         + Debug
         + Clone
         + Eq

@@ -107,25 +107,6 @@ impl Display for GasCost {
     }
 }
 
-pub trait TxGasCalculator {
-    type Context;
-
-    /// Returns the gas cost of this operation.
-    fn total_gas_cost<Profile: GasProfile>(
-        &self,
-        context: &Self::Context,
-    ) -> Result<GasCost, GasOverflow>;
-
-    fn storage_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow>;
-
-    fn execution_gas_consumption<Profile: GasProfile>(
-        &self,
-        context: &Self::Context,
-    ) -> Result<Gas, GasOverflow>;
-
-    fn storage_gas_consumption(&self, context: &Self::Context) -> Result<Gas, GasOverflow>;
-}
-
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 #[error("Gas overflow")]
 pub struct GasOverflow;
@@ -142,17 +123,4 @@ impl GasProfile for MainnetGasProfile {}
 
 pub trait OperationGas<Profile: GasProfile> {
     const GAS_COST: Gas;
-}
-
-pub trait SignedOperationExecutionGas {
-    /// The factor `execution_gas` scales the operation's base gas cost by.
-    fn gas_multiplier(&self) -> Value;
-
-    /// Calculates the execution gas.
-    fn execution_gas<Profile: GasProfile>(&self) -> Result<Gas, GasOverflow>
-    where
-        Self: OperationGas<Profile>,
-    {
-        Self::GAS_COST.checked_mul(self.gas_multiplier())
-    }
 }

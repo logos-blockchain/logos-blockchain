@@ -16,10 +16,7 @@ use lb_core::{
     block::{Block, SignedHeader, UncleHeaders},
     events::Events,
     header::HeaderId,
-    mantle::{
-        traits::{MantleTxWithProofs, PreverifiedMantleTx},
-        transactions::GasPrices,
-    },
+    mantle::traits::{MantleTxWithProofs, PreverifiedMantleTx},
 };
 use lb_cryptarchia_engine::{PrunedBlocks, Slot};
 use lb_cryptarchia_sync::{BlocksUnavailableReason, ProviderResponse};
@@ -71,7 +68,7 @@ impl<Phase, Tx, Storage, RuntimeServiceId> Service<Phase, Tx, Storage, RuntimeSe
 where
     Phase: phases::Phase,
     Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+        + MantleTxWithProofs
         + Debug
         + Clone
         + Eq
@@ -366,7 +363,7 @@ pub async fn process_block<Tx, Storage, RuntimeServiceId>(
 ) -> Result<(PrunedBlocks<HeaderId>, Vec<Tx>), Error>
 where
     Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+        + MantleTxWithProofs
         + Debug
         + Clone
         + Eq
@@ -495,7 +492,7 @@ pub fn get_block_ids<Tx, Storage, RuntimeServiceId>(
 ) -> Pin<Box<dyn Stream<Item = Result<HeaderId, Error>> + Send>>
 where
     Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+        + MantleTxWithProofs
         + Debug
         + Clone
         + Eq
@@ -554,7 +551,7 @@ pub fn load_block_ids_from_storage<Tx, Storage, RuntimeServiceId>(
 ) -> impl Stream<Item = Result<HeaderId, Error>>
 where
     Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+        + MantleTxWithProofs
         + Debug
         + Clone
         + Eq
@@ -615,7 +612,7 @@ pub async fn delete_stale_blocks_from_storage<Tx, Storage, RuntimeServiceId>(
 ) -> HashSet<HeaderId>
 where
     Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+        + MantleTxWithProofs
         + Debug
         + Clone
         + Eq
@@ -660,7 +657,7 @@ async fn delete_blocks_from_storage<Headers, Tx, Storage, RuntimeServiceId>(
 where
     Headers: Iterator<Item = HeaderId> + Send,
     Tx: PreverifiedMantleTx
-        + MantleTxWithProofs<Context = GasPrices>
+        + MantleTxWithProofs
         + Debug
         + Clone
         + Eq

@@ -10,7 +10,6 @@ use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
         OpProof, SignedMantleTx,
-        gas::{Gas, GasCost, GasOverflow, GasProfile, TxGasCalculator},
         ops::{
             Op,
             channel::{ChannelId, MsgId, inscribe::InscriptionOp},
@@ -157,36 +156,6 @@ impl Hashable for GenesisTx {
 
     fn as_signing(&self) -> Vec<u8> {
         self.tx.as_signing()
-    }
-}
-
-impl TxGasCalculator for GenesisTx {
-    type Context = ();
-
-    fn total_gas_cost<Profile: GasProfile>(
-        &self,
-        _context: &Self::Context,
-    ) -> Result<GasCost, GasOverflow> {
-        // Genesis transactions have zero gas cost as per spec
-        Ok(0.into())
-    }
-
-    fn storage_gas_cost(&self, _context: &Self::Context) -> Result<GasCost, GasOverflow> {
-        // Genesis transactions have zero gas cost as per spec
-        Ok(0.into())
-    }
-
-    fn execution_gas_consumption<Profile: GasProfile>(
-        &self,
-        _context: &Self::Context,
-    ) -> Result<Gas, GasOverflow> {
-        // Genesis transactions have zero gas cost as per spec
-        Ok(0.into())
-    }
-
-    fn storage_gas_consumption(&self, _context: &Self::Context) -> Result<Gas, GasOverflow> {
-        // Genesis transactions have zero gas cost as per spec
-        Ok(0.into())
     }
 }
 

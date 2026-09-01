@@ -32,7 +32,10 @@ use lb_core::{
             pow::{ClaimPoWRewardExecutionContext, PowReward},
         },
         traits::{GenesisTx, MantleTxWithProofs, PreverifiedMantleTx},
-        transactions::{GasPrices, MantleTxGasContext, hash::TxHash, mantle_tx::MantleTxContext},
+        transactions::{
+            GasPrices, MantleTxGasContext, hash::TxHash, mantle_tx::MantleTxContext,
+            op_execution_gas,
+        },
     },
     proofs::leader_proof,
 };
@@ -93,6 +96,16 @@ const EXECUTION_GAS_LIMIT: Gas = Gas::new(3_193_460);
 // may overflow, so we use `i128` to avoid that and to easily represent negative
 // balances which may arise in special circumstances (e.g. rewards calculation).
 pub type Balance = i128;
+
+// What applying one transaction yields: the new state, the transaction balance,
+// the execution gas its operations consumed, the events and the deferred ZKPs.
+type AppliedTxOutcome = (
+    LedgerState,
+    Balance,
+    Gas,
+    Vec<TxEvent>,
+    DeferredZkpVerifications,
+);
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum LedgerError<Id> {
@@ -171,7 +184,7 @@ where
         txs: impl Iterator<Item = &'tx Tx>,
     ) -> Result<PreparedUpdate<Id>, LedgerError<Id>>
     where
-        Tx: PreverifiedMantleTx<Context = GasPrices> + 'tx,
+        Tx: PreverifiedMantleTx + 'tx,
         LeaderProof: leader_proof::LeaderProof,
         Profile: GasProfile,
         Id: Into<BlockHash>,
@@ -242,7 +255,7 @@ impl LedgerState {
         config: &Config,
     ) -> Result<(Self, Events, DeferredZkpVerifications), LedgerError<Id>>
     where
-        Tx: PreverifiedMantleTx<Context = GasPrices> + 'tx,
+        Tx: PreverifiedMantleTx + 'tx,
         LeaderProof: leader_proof::LeaderProof,
         Profile: GasProfile,
         Id: Into<BlockHash>,
@@ -461,7 +474,7 @@ impl LedgerState {
         txs: impl Iterator<Item = &'tx Tx>,
     ) -> Result<(Self, Vec<TxEvent>, DeferredZkpVerifications), LedgerError<Id>>
     where
-        Tx: PreverifiedMantleTx<Context = GasPrices> + 'tx,
+        Tx: PreverifiedMantleTx + 'tx,
     {
         let mut total_block_execution_gas: Gas = 0.into();
         let mut total_block_storage_gas: Gas = 0.into();
@@ -472,9 +485,11 @@ impl LedgerState {
 
         for tx in txs {
             let balance;
+            let execution_gas;
             let events;
             let deferred;
-            (self, balance, events, deferred) = self.try_apply_tx::<_, _, Profile>(config, tx)?;
+            (self, balance, execution_gas, events, deferred) =
+                self.try_apply_tx::<_, _, Profile>(config, tx)?;
             tx_events.extend(events);
             deferred_zkps.extend(deferred);
 
@@ -482,8 +497,14 @@ impl LedgerState {
                 execution_base_gas_price: *self.cryptarchia_ledger.execution_base_fee(),
                 storage_gas_price: *self.cryptarchia_ledger.storage_gas_price(),
             };
+            // The permanent storage gas is the encoded size of the signed transaction.
+            let storage_gas = Gas::new(tx.storage_size() as u64);
+            let execution_base_fees =
+                GasCost::calculate(execution_gas, gas_prices.execution_base_gas_price)?;
+            let permanent_storage_fees =
+                GasCost::calculate(storage_gas, gas_prices.storage_gas_price)?;
             // Check the transaction is balanced
-            let total_gas_cost = tx.total_gas_cost::<Profile>(&gas_prices)?;
+            let total_gas_cost = execution_base_fees.checked_add(permanent_storage_fees)?;
             tracing::debug!(
                 balance,
                 total_gas_cost = total_gas_cost.into_inner(),
@@ -499,19 +520,13 @@ impl LedgerState {
             }
 
             // Update the total of fee burned and tipped in the block
-            let tx_fee_burned = GasCost::calculate(
-                tx.execution_gas_consumption::<Profile>(&gas_prices)?,
-                gas_prices.execution_base_gas_price,
-            )?
-            .checked_add(tx.storage_gas_cost(&gas_prices)?)?;
+            let tx_fee_burned = total_gas_cost;
 
             let tx_fee_tip = GasCost::from(balance as Value).checked_sub(tx_fee_burned)?;
             total_fee_burned = total_fee_burned.checked_add(tx_fee_burned)?;
             total_fee_tip = total_fee_tip.checked_add(tx_fee_tip)?;
-            total_block_execution_gas = total_block_execution_gas
-                .checked_add(tx.execution_gas_consumption::<Profile>(&gas_prices)?)?;
-            total_block_storage_gas =
-                total_block_storage_gas.checked_add(tx.storage_gas_consumption(&gas_prices)?)?;
+            total_block_execution_gas = total_block_execution_gas.checked_add(execution_gas)?;
+            total_block_storage_gas = total_block_storage_gas.checked_add(storage_gas)?;
 
             // Check that the block is not exceeding the Gas limit
             if total_block_execution_gas > EXECUTION_GAS_LIMIT {
@@ -786,7 +801,8 @@ impl LedgerState {
     /// # Returns
     ///
     /// On success, returns the updated ledger state, the net balance change of
-    /// the transaction, and any events emitted during execution.
+    /// the transaction, the execution gas its operations consumed, and any
+    /// events emitted during execution.
     ///
     /// If any operation fails verification or execution, returns a
     /// [`LedgerError`] describing the failure.
@@ -794,13 +810,14 @@ impl LedgerState {
         mut self,
         config: &Config,
         tx: &'tx Tx,
-    ) -> Result<(Self, Balance, Vec<TxEvent>, DeferredZkpVerifications), LedgerError<Id>>
+    ) -> Result<AppliedTxOutcome, LedgerError<Id>>
     where
-        Tx: PreverifiedMantleTx + 'tx + MantleTxWithProofs<Context = GasPrices>,
+        Tx: PreverifiedMantleTx + 'tx + MantleTxWithProofs,
     {
         let mut verified_ops = tx.verified_ops();
 
         let mut balance: Balance = 0;
+        let mut execution_gas = Gas::new(0);
         let mut tx_events = Vec::new();
         let mut deferred_zkps = DeferredZkpVerifications::new();
 
@@ -816,6 +833,12 @@ impl LedgerState {
             if let Some(deferred) = deferred_zkp {
                 deferred_zkps.push(deferred);
             }
+            // Price the operation against the state it was just verified
+            // against, before executing it.
+            execution_gas = execution_gas.checked_add(op_execution_gas::<Profile>(
+                op,
+                self.mantle_ledger.channels(),
+            )?)?;
             (self, balance, tx_events) = self.try_apply_op::<_, Profile>(
                 op,
                 config,
@@ -825,7 +848,7 @@ impl LedgerState {
             )?;
         }
 
-        Ok((self, balance, tx_events, deferred_zkps))
+        Ok((self, balance, execution_gas, tx_events, deferred_zkps))
     }
 
     fn update_pow_reward_difficulty(&mut self, claims_in_block: u64, config: &Config) {
@@ -841,7 +864,8 @@ mod tests {
     use lb_core::{
         events::DepositNote,
         mantle::{
-            Note, OpProof, RawMantleTx, SignedMantleTx, TxGasCalculator as _,
+            Note, OpProof, RawMantleTx, SignedMantleTx,
+            channel::Channels,
             gas::MainnetGasProfile,
             ledger::{Inputs, Outputs, Utxos, VerifiableOperation as _},
             ops::{
@@ -857,7 +881,7 @@ mod tests {
                 sdp::SDPActiveOp,
                 transfer::TransferOp,
             },
-            traits::Hashable as _,
+            traits::{Hashable as _, StorageSize as _},
             transactions::{
                 Ops, OpsProofs,
                 hash::TxHashView,
@@ -1104,9 +1128,11 @@ mod tests {
             std::slice::from_ref(&sk),
         );
 
-        let default_gas_prices = GasPrices::default();
+        let gas_context =
+            MantleTxGasContext::from_channels(&Channels::new(), GasPrices::default());
         let fees = tx
-            .total_gas_cost::<MainnetGasProfile>(&default_gas_prices)
+            .mantle_tx()
+            .minimum_total_gas_cost::<MainnetGasProfile>(&gas_context)
             .unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
 
@@ -1170,7 +1196,7 @@ mod tests {
         let result = state.try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &tx);
         assert!(result.is_ok());
 
-        let (new_state, _, events, deferred_zkps) = result.unwrap();
+        let (new_state, _, _, events, deferred_zkps) = result.unwrap();
         deferred_zkps.verify().unwrap();
 
         assert!(
@@ -1218,7 +1244,7 @@ mod tests {
         let result = state.try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &tx);
         assert!(result.is_ok());
 
-        let (new_state, _, events, deferred_zkps) = result.unwrap();
+        let (new_state, _, _, events, deferred_zkps) = result.unwrap();
         deferred_zkps.verify().unwrap();
 
         assert!(
@@ -1523,7 +1549,7 @@ mod tests {
         let ops = vec![Op::ChannelDeposit(deposit.clone())];
         let tx = create_multi_signed_tx(ops, vec![&Key::Zk(sk)]);
         let result = ledger_state.try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &tx);
-        let (new_state, balance, events, deferred_zkps) = result.unwrap();
+        let (new_state, balance, _, events, deferred_zkps) = result.unwrap();
         deferred_zkps.verify().unwrap();
 
         // The deposited note is consumed and re-created as a channel note under
@@ -1646,7 +1672,7 @@ mod tests {
             ledger_state.try_apply_tx::<_, HeaderId, MainnetGasProfile>(&test_config, &signed_tx);
         assert!(result.is_ok());
 
-        let (new_state, tx_balance, events, deferred_zkps) = result.unwrap();
+        let (new_state, tx_balance, _, events, deferred_zkps) = result.unwrap();
         deferred_zkps.verify().unwrap();
 
         assert_eq!(tx_balance, 0);
@@ -2153,8 +2179,11 @@ mod tests {
             std::slice::from_ref(&sk),
         );
         // Pays 2925 fees = 2705 execution base fee + 0 execution tip + 220 storage
+        let gas_context =
+            MantleTxGasContext::from_channels(&Channels::new(), ledger.get_gas_prices());
         let fees = tx
-            .total_gas_cost::<MainnetGasProfile>(&ledger.get_gas_prices())
+            .mantle_tx()
+            .minimum_total_gas_cost::<MainnetGasProfile>(&gas_context)
             .unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk])
@@ -2195,8 +2224,11 @@ mod tests {
         update_ledger_prices(&mut ledger, 1, 1);
         // The tx pays 794 fees = 590 execution base fee + 0 execution tip + 204
         // storage
+        let gas_context =
+            MantleTxGasContext::from_channels(&Channels::new(), ledger.get_gas_prices());
         let fees = tx
-            .total_gas_cost::<MainnetGasProfile>(&ledger.get_gas_prices())
+            .mantle_tx()
+            .minimum_total_gas_cost::<MainnetGasProfile>(&gas_context)
             .unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
         let tx = create_tx(
@@ -2263,9 +2295,7 @@ mod tests {
 
         // The tx must consume a non-zero amount of storage gas for the check to
         // be meaningful.
-        let storage_gas = tx
-            .storage_gas_consumption(&ledger.get_gas_prices())
-            .unwrap();
+        let storage_gas = Gas::new(tx.storage_size() as u64);
         assert!(storage_gas.into_inner() > 0);
 
         let (applied, _, _) = ledger
@@ -2599,7 +2629,7 @@ mod tests {
             let pool_before = state.mantle_ledger.pow.reward_pool();
             let epoch_reward = state.mantle_ledger.pow.epoch_reward();
 
-            let (state, _balance, events, deferred_zkps) = state
+            let (state, _balance, _, events, deferred_zkps) = state
                 .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&config, &claim_tx())
                 .expect("claim should validate and execute");
             deferred_zkps.verify().unwrap();
@@ -2639,7 +2669,7 @@ mod tests {
             // Replaying the same solution is caught by the nullifier check
             // during tx-level validation.
             let (state, config) = claim_accepting_state();
-            let (state, _, _, deferred_zkps) = state
+            let (state, _, _, _, deferred_zkps) = state
                 .try_apply_tx::<_, HeaderId, MainnetGasProfile>(&config, &claim_tx())
                 .expect("first claim should succeed");
             deferred_zkps.verify().unwrap();

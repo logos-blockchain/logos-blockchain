@@ -10,7 +10,7 @@ pub mod batch;
 mod channel_notes;
 mod fixtures;
 
-pub use gas::{GasProfile, TxGasCalculator};
+pub use gas::GasProfile;
 pub use ledger::{Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof};
 pub use transactions::{

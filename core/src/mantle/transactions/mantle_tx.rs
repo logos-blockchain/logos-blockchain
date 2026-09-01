@@ -117,13 +117,41 @@ impl StorageSize for RawMantleTx {
     }
 }
 
+/// The Execution Gas of an Operation, derived from the Operation and the
+/// channel state it is validated against. The proof is never an input.
+pub fn op_execution_gas<Profile: GasProfile>(
+    op: &Op,
+    channels: &Channels,
+) -> Result<Gas, GasOverflow> {
+    // A channel that does not exist yet has no accredited key, so its
+    // threshold is 0.
+    let threshold = match op {
+        Op::ChannelConfig(operation) => channels
+            .channels
+            .get(&operation.channel)
+            .map_or(0, |channel| channel.configuration_threshold),
+        Op::ChannelWithdraw(operation) => channels
+            .channels
+            .get(&operation.channel_id)
+            .map_or(0, |channel| channel.transfer_threshold),
+        Op::ChannelTransfer(operation) => channels
+            .channels
+            .get(&operation.channel_id)
+            .map_or(0, |channel| channel.transfer_threshold),
+        _ => return Ok(op.execution_gas::<Profile>()),
+    };
+
+    op.execution_gas::<Profile>()
+        .checked_mul(Value::from(threshold))
+}
+
 fn contextual_op_execution_gas<Profile: GasProfile>(
     op: &Op,
     context: &MantleTxGasContext,
 ) -> Result<Gas, GasOverflow> {
     let multiplier = match op {
-        // Existing channels require the `configuration_threshold` proofs.
-        // For new channels, the ledger skips proof verification. So, use 0.
+        // Existing channels require the `configuration_threshold` proofs, a
+        // channel that does not exist yet requires 0.
         Op::ChannelConfig(operation) => context
             .configuration_threshold(&operation.channel)
             .unwrap_or(0),

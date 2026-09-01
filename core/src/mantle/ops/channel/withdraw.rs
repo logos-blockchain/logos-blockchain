@@ -4,20 +4,19 @@ use serde::{Deserialize, Serialize};
 use crate::{
     events::TxEvent,
     mantle::{
-        TxHash, Value,
+        TxHash,
         batch::DeferredZkpVerification,
         channel::{Channels, Error},
-        gas::{Gas, MainnetGasProfile, OperationGas, SignedOperationExecutionGas},
+        gas::{Gas, MainnetGasProfile, OperationGas},
         ledger::{
             ExecutableOperation, Inputs, PreverifiableOperation, ProvableOperation, Utxos,
-            VerifiableOperation,
-            verification_mode::{self, VerificationMode},
+            VerifiableOperation, verification_mode,
         },
         ops::{
-            OpId, SignedOp,
+            OpId,
             channel::{ChannelId, verification::verify_channel_multi_sig},
         },
-        transactions::{OperationVerificationHelper, hash::TxHashView, states::VerificationState},
+        transactions::{OperationVerificationHelper, hash::TxHashView},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
     sdp::service_notes::ServiceNotes,
@@ -51,8 +50,6 @@ pub struct WithdrawExecutionContext {
 }
 
 impl ProvableOperation for ChannelWithdrawOp {
-    // `SignedOperationExecutionGas::gas_multiplier` below reads this proof's
-    // signature count. If this changes, update that too.
     type Proof = ChannelMultiSigProof;
 }
 
@@ -156,16 +153,6 @@ impl ExecutableOperation for ChannelWithdrawOp {
         }
 
         Ok((context, Vec::new()))
-    }
-}
-
-impl<State: VerificationState, Mode: VerificationMode> SignedOperationExecutionGas
-    for SignedOp<ChannelWithdrawOp, State, Mode>
-{
-    fn gas_multiplier(&self) -> Value {
-        let signature_count = self.proof().signatures().len();
-        Value::try_from(signature_count)
-            .expect("Channel multi-signature proofs are bound to u16::MAX signatures.")
     }
 }
 
