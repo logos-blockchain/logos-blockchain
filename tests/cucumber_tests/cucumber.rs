@@ -27,9 +27,9 @@ use cucumber::{
     writer::Verbosity,
 };
 use lb_testing_framework::{
-    hash_str, is_truthy_env, reap_all_stale_port_blocks, record_system_monitor_event,
-    register_system_monitor_output_file, release_reserved_port_block,
-    resolve_automatic_genesis_time, unregister_system_monitor_output_file,
+    hash_str, is_truthy_env, record_system_monitor_event, register_system_monitor_output_file,
+    release_reserved_port_block, resolve_automatic_genesis_time,
+    unregister_system_monitor_output_file,
 };
 use logos_blockchain_tests::cucumber::{
     defaults::{
@@ -71,7 +71,6 @@ fn increment_attempts(
 
 #[tokio::main]
 async fn main() {
-    reap_all_stale_port_blocks();
     println!("args: {:?}", std::env::args());
 
     let deployer = selected_deployer();
@@ -187,7 +186,7 @@ async fn main() {
         .run(get_feature_path_for_deployer(deployer))
         .await;
 
-    // Clean up manually reserved handshake port block files for this process
+    // Release this process's reserved port block before exiting.
     release_reserved_port_block();
 
     if failed.execution_has_failed() {

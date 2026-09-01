@@ -19,7 +19,7 @@ mod unique_persistent;
 pub mod workloads;
 pub use unique_persistent::{
     get_reserved_available_tcp_port, get_reserved_available_udp_port, hash_str,
-    reap_all_stale_port_blocks, release_reserved_port_block, unique_test_context,
+    release_reserved_port_block, unique_test_context,
 };
 
 pub static IS_DEBUG_TRACING: LazyLock<bool> = LazyLock::new(env::debug_tracing);
