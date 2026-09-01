@@ -18,51 +18,41 @@ use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::config::{RunConfig, cryptarchia::deployment::EpochConfig};
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig as TfTopologyConfig,
+    configs::wallet::{WalletAccount, WalletConfig},
 };
 use lb_utils::math::NonNegativeRatio;
 use lb_zone_sdk::Slot;
 use logos_blockchain_tests::{
     common::manual_cluster::{
-        ManualNodeLayout, start_local_manual_cluster_with_layout, wait_for_nodes_tip_slot,
+        LocalManualClusterHarnessBase, build_local_manual_cluster, wait_for_nodes_tip_slot,
     },
     cucumber::defaults::E2E_ARTIFACTS_DIR,
 };
-use testing_framework_core::scenario::{DynError, StartedNode};
+use testing_framework_core::scenario::{DynError, PeerSelection, StartNodeOptions, StartedNode};
 use tokio::time::sleep;
 
 const NODE_COUNT: usize = 2;
+/// Number of genesis notes given to each node's SDP funding wallet, so that a
+/// note encumbered by a rejected activity tx doesn't block resubmissions.
+const SDP_FUNDING_NOTES: usize = 5;
 
 /// End-to-end test for blend SDP activity proofs:
 ///
-/// 1. Spawn two validators with blend declarations in the genesis transaction.
-/// 2. Wait past `inactivity_period` so that any activity messages produced by
-///    the nodes have to refresh the `active` field on the declarations.
+/// 1. Spawn two validators with blend declarations in the genesis transaction,
+///    each with a dedicated SDP funding wallet holding multiple notes.
+/// 2. Wait `inactivity_period * 3` epochs so that any activity messages
+///    produced by the nodes have to refresh the `active` field on the
+///    declarations repeatedly.
 /// 3. Verify that each declaration's `active` epoch has advanced past its
 ///    initial value, proving that the nodes automatically submitted valid
 ///    activity messages that the ledger accepted.
 #[tokio::test]
 async fn sdp_blend_activity() {
     let slots_per_epoch = Arc::new(AtomicU64::new(0));
-    let (_base, nodes) = start_local_manual_cluster_with_layout(
-        "sdp-blend-activity",
-        "mantle-sdp",
-        DeploymentBuilder::new(
-            TfTopologyConfig::with_node_numbers(NODE_COUNT)
-                .with_test_context(Some("sdp_blend_activity".to_owned())),
-        ),
-        NODE_COUNT,
-        ManualNodeLayout::SelectNodeSeed(0),
-        {
-            let slots_per_epoch = Arc::clone(&slots_per_epoch);
-            move |config| Ok::<_, DynError>(test_config(config, &slots_per_epoch))
-        },
-        Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
-    )
-    .await;
+    let (_base, nodes) = start_nodes_with_sdp_wallets(&slots_per_epoch).await;
     let slots_per_epoch = slots_per_epoch.load(Ordering::Relaxed);
 
     let node0 = &nodes[0];
-    let node1 = &nodes[1];
 
     // Verify both nodes have blend declarations from genesis.
     let declarations = wait_for_declarations(&node0.client, Duration::from_secs(30)).await;
@@ -77,19 +67,20 @@ async fn sdp_blend_activity() {
     let provider_zk_ids: Vec<ZkPublicKey> = declarations.values().map(|d| d.zk_id).collect();
     let initial_balances = collect_provider_balances(&nodes, &provider_zk_ids).await;
 
-    // Wait past `inactivity_period` so any activity messages produced by the
-    // nodes have to refresh the `active` field on the declarations.
-    let initial_active_epoch = declarations.values().next().unwrap().active;
-    let target_epoch = initial_active_epoch
-        .strict_add(INACTIVITY_PERIOD)
-        .strict_add(Epoch::new(2)); // +1 margin
-    let target_slot = Slot::new(u64::from(u32::from(target_epoch)) * slots_per_epoch);
-    wait_for_nodes_tip_slot(
-        &[&node0.client, &node1.client],
-        target_slot,
-        Duration::from_secs(500),
-    )
-    .await;
+    // Run well beyond `inactivity_period` so that the nodes have to refresh
+    // the `active` field on the declarations repeatedly.
+    let test_epochs = NumberOfEpochs::new(INACTIVITY_PERIOD.into_inner() * 3);
+    let target_epoch = declarations
+        .values()
+        .next()
+        .unwrap()
+        .active
+        .strict_add(test_epochs);
+    let storage_prices = wait_for_epoch(&nodes, target_epoch, slots_per_epoch).await;
+    // The activity txs are storage usage, so the storage gas price is expected
+    // to rise, which makes activity txs funded against the previous epoch's
+    // price rejected and resubmitted. Printed for reference only.
+    println!("storage gas prices per epoch: {storage_prices:?}");
 
     // Each declaration's `active` epoch must have advanced past its initial
     // value, proving activity messages were submitted and accepted.
@@ -123,6 +114,87 @@ async fn sdp_blend_activity() {
         anyone_paid,
         "expected at least one provider's wallet balance to grow; no reward UTXOs were credited",
     );
+}
+
+/// Starts `NODE_COUNT` nodes, each with a dedicated SDP funding wallet holding
+/// `SDP_FUNDING_NOTES` genesis notes.
+async fn start_nodes_with_sdp_wallets(
+    slots_per_epoch: &Arc<AtomicU64>,
+) -> (LocalManualClusterHarnessBase, Vec<StartedNode<LbcEnv>>) {
+    let sdp_wallets: Vec<WalletAccount> = (0..NODE_COUNT as u64)
+        .map(|n| WalletAccount::deterministic(n, 1_000_000, false).unwrap())
+        .collect();
+    let mut accounts = Vec::with_capacity(NODE_COUNT * SDP_FUNDING_NOTES);
+    for sdp_wallet in &sdp_wallets {
+        accounts.extend(std::iter::repeat_n(sdp_wallet.clone(), SDP_FUNDING_NOTES));
+    }
+
+    let base = build_local_manual_cluster(
+        "sdp-blend-activity",
+        "mantle-sdp",
+        DeploymentBuilder::new(
+            TfTopologyConfig::with_node_numbers(NODE_COUNT)
+                .with_allow_multiple_genesis_tokens(true)
+                .with_test_context(Some("sdp_blend_activity".to_owned())),
+        )
+        .with_wallet_config(WalletConfig { accounts }),
+        Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
+    );
+
+    let mut nodes: Vec<StartedNode<LbcEnv>> = Vec::with_capacity(NODE_COUNT);
+    for (index, sdp_wallet) in sdp_wallets.iter().enumerate() {
+        let peers = nodes.first().map_or(PeerSelection::None, |seed| {
+            PeerSelection::Named(vec![seed.name.clone()])
+        });
+        let sdp_funding_pk = sdp_wallet.public_key();
+        let slots_per_epoch = Arc::clone(slots_per_epoch);
+        let node = Box::pin(
+            base.cluster().start_node_with(
+                &index.to_string(),
+                StartNodeOptions::default()
+                    .with_peers(peers)
+                    .with_persist_dir(base.scenario_base_dir().join(format!("node-{index}")))
+                    .create_patch(move |mut config: RunConfig| {
+                        config.user.sdp.wallet.funding_pk = sdp_funding_pk;
+                        Ok::<_, DynError>(test_config(config, &slots_per_epoch))
+                    }),
+            ),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("starting node-{index} should succeed: {error}"));
+        nodes.push(node);
+    }
+    base.cluster()
+        .wait_network_ready()
+        .await
+        .expect("manual cluster should become ready");
+
+    (base, nodes)
+}
+
+/// Waits until all nodes reach `target_epoch`, recording the storage gas
+/// price of the first node at every epoch boundary.
+async fn wait_for_epoch(
+    nodes: &[StartedNode<LbcEnv>],
+    target_epoch: Epoch,
+    slots_per_epoch: u64,
+) -> Vec<Value> {
+    let clients: Vec<&NodeHttpClient> = nodes.iter().map(|node| &node.client).collect();
+    let mut storage_prices = Vec::new();
+    for epoch in 0..=u32::from(target_epoch) {
+        wait_for_nodes_tip_slot(
+            &clients,
+            Slot::new(u64::from(epoch) * slots_per_epoch),
+            Duration::from_secs(120),
+        )
+        .await;
+        let gas_prices = clients[0]
+            .gas_prices(None)
+            .await
+            .expect("gas prices should be available");
+        storage_prices.push(gas_prices.storage_gas_price.into_inner());
+    }
+    storage_prices
 }
 
 const INACTIVITY_PERIOD: NumberOfEpochs = NumberOfEpochs::new(2);
