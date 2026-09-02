@@ -149,7 +149,10 @@ pub(in super::super) async fn submit_prepared_zone_channel_config(
 ) -> StepResult {
     let client = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?.clone();
     let prepared = log_step_error(step, world.zone.prepared_config(&transaction_alias))?.clone();
-    let signatures = world.zone.prepared_config_signatures(&transaction_alias);
+    // Collected in arbitrary signer order; the proof requires strictly
+    // ascending index order, so canonicalize before submitting.
+    let mut signatures = world.zone.prepared_config_signatures(&transaction_alias);
+    signatures.sort_unstable();
 
     let mut checkpoint_rx = world
         .zone

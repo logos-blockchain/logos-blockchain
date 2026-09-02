@@ -293,6 +293,7 @@ Feature: Zone SDK
     And wallet "WALLET_1A" sends 30 notes of 1000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
     And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
     And I start zone sequencer "SEQ_A" with indexer
+    And I start zone sequencer "SEQ_B"
     And sequencer "SEQ_A" prepares zone config transaction "CHANNEL_CONFIG_1" with threshold 1 authorizing:
       | alias |
       | SEQ_A |
@@ -310,9 +311,9 @@ Feature: Zone SDK
       | SEQ_A |
       | SEQ_B |
       | SEQ_C |
-    And sequencer "SEQ_A" signs prepared zone config transaction "CHANNEL_CONFIG_3"
     And sequencer "SEQ_B" signs prepared zone config transaction "CHANNEL_CONFIG_3"
-    And sequencer "SEQ_A" submits prepared zone config transaction "CHANNEL_CONFIG_3"
+    And sequencer "SEQ_A" signs prepared zone config transaction "CHANNEL_CONFIG_3"
+    And sequencer "SEQ_B" submits prepared zone config transaction "CHANNEL_CONFIG_3"
     Then zone transaction "CHANNEL_CONFIG_3" is finalized in 180 seconds
     And I stop all nodes
 
