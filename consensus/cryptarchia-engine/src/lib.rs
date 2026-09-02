@@ -21,6 +21,7 @@ pub(crate) const LOG_TARGET: &str = "cryptarchia::engine";
 pub type UncleSlots = UpperBoundedVec<Slot, MAX_UNCLES>;
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub enum State {
     Bootstrapping,
     Online,
@@ -389,6 +390,13 @@ pub enum Error<Id> {
     InvalidSlot(Id),
 }
 
+/// Result of accepting a block into the block tree and applying fork choice.
+pub struct ReceiveBlockOutcome<Id> {
+    pub pruned_blocks: PrunedBlocks<Id>,
+    pub reorged_blocks: ReorgedBlocks<Id>,
+    pub newly_canonical_blocks: Vec<Id>,
+}
+
 /// Information about a fork's divergence from the canonical branch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForkDivergenceInfo<Id> {
@@ -437,6 +445,24 @@ where
         slot: Slot,
         uncle_slots: UncleSlots,
     ) -> Result<(PrunedBlocks<Id>, ReorgedBlocks<Id>), Error<Id>> {
+        let outcome = self.receive_block_with_canonical_change(id, parent, slot, uncle_slots)?;
+        Ok((outcome.pruned_blocks, outcome.reorged_blocks))
+    }
+
+    /// Apply a block and report the complete canonical segment adopted by the
+    /// fork-choice change, in chronological order.
+    ///
+    /// Unlike [`ReorgedBlocks`], which contains only the blocks removed from
+    /// the old local chain, `newly_canonical_blocks` also includes blocks that
+    /// were received earlier while their branch was non-canonical.
+    #[must_use = "Returns the canonical-change result produced by the update"]
+    pub fn receive_block_with_canonical_change(
+        &mut self,
+        id: Id,
+        parent: Id,
+        slot: Slot,
+        uncle_slots: UncleSlots,
+    ) -> Result<ReceiveBlockOutcome<Id>, Error<Id>> {
         let old_local_chain = self.local_chain.clone();
 
         self.branches.apply_header(id, parent, slot, uncle_slots)?;
@@ -444,8 +470,9 @@ where
 
         // Before `update_lib` which may prune blocks,
         // collect the reorged blocks in the old local chain.
-        let reorged_blocks = if self.local_chain.id == old_local_chain.id {
-            ReorgedBlocks::new()
+        let (reorged_blocks, newly_canonical_blocks) = if self.local_chain.id == old_local_chain.id
+        {
+            (ReorgedBlocks::new(), Vec::new())
         } else {
             // It's safer to compute LCA here, not in `fork_choice`,
             // because `fork_choice` may walk through multiple candidates
@@ -454,16 +481,28 @@ where
                 .branches
                 .lca(&old_local_chain, &self.local_chain)
                 .expect("old and new local chains must have a common ancestor");
-            ReorgedBlocks(
+            let reorged_blocks = ReorgedBlocks(
                 self.branches
                     .walk_back_to_block(&old_local_chain, lca.id())
                     .collect(),
-            )
+            );
+            let newly_canonical_blocks = self
+                .branches
+                .walk_back_to_block(&self.local_chain, lca.id())
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            (reorged_blocks, newly_canonical_blocks)
         };
 
         let pruned_blocks = self.update_lib();
 
-        Ok((pruned_blocks, reorged_blocks))
+        Ok(ReceiveBlockOutcome {
+            pruned_blocks,
+            reorged_blocks,
+            newly_canonical_blocks,
+        })
     }
 
     /// Attempts to update the LIB.
@@ -1121,6 +1160,34 @@ pub mod tests {
             }
             assert_eq!(engine.tip(), parent);
         }
+    }
+
+    #[test]
+    fn newly_canonical_blocks_include_previously_received_fork_blocks() {
+        // G - b1 - b2 - b3 (local chain)
+        //       \
+        //        f1 - f2 - f3 (received first, selected only at f3)
+        let mut engine = create_canonical_chain(4.try_into().unwrap(), Some(config_with(10)));
+        let fork_parent = hash(&1u64);
+        let f1 = hash(&"fork-1");
+        let f2 = hash(&"fork-2");
+        let f3 = hash(&"fork-3");
+
+        let outcome = engine
+            .receive_block_with_canonical_change(f1, fork_parent, 4.into(), UncleSlots::default())
+            .unwrap();
+        assert!(outcome.newly_canonical_blocks.is_empty());
+
+        let outcome = engine
+            .receive_block_with_canonical_change(f2, f1, 5.into(), UncleSlots::default())
+            .unwrap();
+        assert!(outcome.newly_canonical_blocks.is_empty());
+
+        let outcome = engine
+            .receive_block_with_canonical_change(f3, f2, 6.into(), UncleSlots::default())
+            .unwrap();
+        assert_eq!(engine.tip(), f3);
+        assert_eq!(outcome.newly_canonical_blocks, vec![f1, f2, f3]);
     }
 
     /// Check that reorged blocks are as below:

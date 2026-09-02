@@ -105,6 +105,7 @@ where
             slot_timer,
             state_recording_timer,
             prolonged_bootstrap_period,
+            epoch_state_query_sources: crate::service::EpochStateQuerySourceTracker::default(),
         }
     }
 

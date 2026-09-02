@@ -98,7 +98,7 @@ pub async fn start_node(
             warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
     // Merge per-node user config overrides (e.g. a mining node's derived
-    // `pow.claim_address`) on top of the scenario-wide ones, upserting by path.
+    // `pow.auto_claim`) on top of the scenario-wide ones, upserting by path.
     for extra in extra_user_overrides {
         if let Some(existing) = startup_settings
             .user_config_overrides

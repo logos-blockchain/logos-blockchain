@@ -1,5 +1,5 @@
 use core::num::NonZeroU32;
-use std::num::{NonZero, NonZeroU64};
+use std::num::{NonZero, NonZeroU64, NonZeroU128};
 
 use lb_core::mantle::ops::pow::PowReward;
 use lb_cryptarchia_engine::{Epoch, Slot};
@@ -32,6 +32,34 @@ impl Config {
     pub const fn epoch_length(&self) -> u64 {
         self.epoch_config
             .epoch_length(self.consensus_config.base_period_length())
+    }
+
+    /// `N_b`: the number of blocks a full epoch is expected to produce.
+    ///
+    /// Deliberately derived rather than configured. It is fixed by the epoch
+    /// schedule and the slot activation coefficient — it works out to `10k`
+    /// for the standard 3/3/4 phase split — so a hand-set value that disagreed
+    /// with them would silently mis-scale the per-claim `PoW` reward.
+    #[must_use]
+    pub const fn expected_blocks_per_epoch(&self) -> NonZeroU64 {
+        lb_cryptarchia_engine::expected_blocks_per_epoch(
+            self.epoch_length(),
+            self.consensus_config.slot_activation_coeff(),
+        )
+    }
+
+    /// Full denominator of the per-epoch payout rate:
+    /// `rate_den * target_claim_per_block * expected_blocks_per_epoch`.
+    ///
+    /// Widened to `u128`: the first two factors are bounded to `u64` by
+    /// [`RewardPoWConfig::validate`] at config-load time, and the third is a
+    /// `u64`, so the product fits but need not fit in a `u64`.
+    #[must_use]
+    pub fn claim_rate_denominator(&self) -> NonZeroU128 {
+        let configured = self.pow_config.reward.claim_rate_scale();
+        let denominator =
+            u128::from(configured.get()) * u128::from(self.expected_blocks_per_epoch().get());
+        NonZeroU128::new(denominator).expect("product of non-zero values is non-zero")
     }
 
     /// The slot at which the nonce for a given epoch is snapshotted
@@ -107,9 +135,8 @@ pub struct PoWConfig {
 /// Covers the genesis endowment, the reward-difficulty (`d_reward`) EMA
 /// controller, the per-epoch payout rate, and the claim acceptance window.
 /// There is deliberately no `Default`: every value must be supplied by the
-/// deployment configuration. The shipped deployments set `rate_num = 0`, which
-/// disables claiming (matching the network behaviour before these values were
-/// configurable).
+/// deployment configuration. A `rate_num` of `0` disables claiming entirely;
+/// the shipped deployments enable it.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 // Validate the deployment-controlled invariants on deserialization, so an
 // invalid config is rejected at load time (see [`RewardPoWConfig::validate`])
@@ -136,11 +163,10 @@ pub struct RewardPoWConfig {
     /// Denominator scale of the per-epoch payout rate.
     pub rate_den: NonZeroU64,
     /// Expected number of reward claims per block, a factor of the payout-rate
-    /// denominator.
+    /// denominator. The remaining factor, the expected number of blocks per
+    /// epoch, is derived from the consensus schedule — see
+    /// [`Config::expected_blocks_per_epoch`].
     pub target_claim_per_block: NonZeroU64,
-    /// Expected number of blocks per epoch, a factor of the payout-rate
-    /// denominator.
-    pub expected_blocks_per_epoch: NonZeroU64,
     /// Acceptance window, in slots: how far back a claim's anchor block (and
     /// its nullifier) may be from the current block.
     pub slot_window: NonZeroU64,
@@ -159,7 +185,6 @@ struct RewardPoWConfigFields {
     rate_num: u64,
     rate_den: NonZeroU64,
     target_claim_per_block: NonZeroU64,
-    expected_blocks_per_epoch: NonZeroU64,
     slot_window: NonZeroU64,
 }
 
@@ -177,7 +202,6 @@ impl TryFrom<RewardPoWConfigFields> for RewardPoWConfig {
             rate_num: fields.rate_num,
             rate_den: fields.rate_den,
             target_claim_per_block: fields.target_claim_per_block,
-            expected_blocks_per_epoch: fields.expected_blocks_per_epoch,
             slot_window: fields.slot_window,
         };
         config.validate()?;
@@ -193,14 +217,12 @@ pub enum RewardPoWConfigError {
     )]
     EmaSmoothingFactorExceedsPrecision { factor: u64, precision: NonZeroU64 },
     #[error(
-        "claim rate denominator overflows u64: rate_den ({rate_den}) * \
-         target_claim_per_block ({target_claim_per_block}) * \
-         expected_blocks_per_epoch ({expected_blocks_per_epoch})"
+        "claim rate scale overflows u64: rate_den ({rate_den}) * \
+         target_claim_per_block ({target_claim_per_block})"
     )]
-    ClaimRateDenominatorOverflow {
+    ClaimRateScaleOverflow {
         rate_den: NonZeroU64,
         target_claim_per_block: NonZeroU64,
-        expected_blocks_per_epoch: NonZeroU64,
     },
 }
 
@@ -213,7 +235,8 @@ impl RewardPoWConfig {
     /// # Errors
     ///
     /// Returns [`RewardPoWConfigError`] if the EMA smoothing factor exceeds the
-    /// precision, or the payout-rate denominator overflows `u64`.
+    /// precision, or the configured part of the payout-rate denominator
+    /// overflows `u64`.
     pub fn validate(&self) -> Result<(), RewardPoWConfigError> {
         if self.ema_smoothing_factor > self.ema_smoothing_precision.get() {
             return Err(RewardPoWConfigError::EmaSmoothingFactorExceedsPrecision {
@@ -222,36 +245,37 @@ impl RewardPoWConfig {
             });
         }
         // Discard the value; this call only checks that it does not overflow.
-        self.checked_claim_rate_denominator()?;
+        self.checked_claim_rate_scale()?;
         Ok(())
     }
 
-    /// Full denominator of the per-epoch payout rate, or
-    /// [`RewardPoWConfigError::ClaimRateDenominatorOverflow`] if the product
-    /// overflows `u64`.
-    fn checked_claim_rate_denominator(&self) -> Result<NonZeroU64, RewardPoWConfigError> {
+    /// The configured factors of the payout-rate denominator,
+    /// `rate_den * target_claim_per_block`, or
+    /// [`RewardPoWConfigError::ClaimRateScaleOverflow`] if they overflow
+    /// `u64`. The remaining factor, `expected_blocks_per_epoch`, is derived
+    /// from the consensus schedule and applied by
+    /// [`Config::claim_rate_denominator`].
+    fn checked_claim_rate_scale(&self) -> Result<NonZeroU64, RewardPoWConfigError> {
         let product = self
             .rate_den
             .get()
             .checked_mul(self.target_claim_per_block.get())
-            .and_then(|partial| partial.checked_mul(self.expected_blocks_per_epoch.get()))
-            .ok_or(RewardPoWConfigError::ClaimRateDenominatorOverflow {
+            .ok_or(RewardPoWConfigError::ClaimRateScaleOverflow {
                 rate_den: self.rate_den,
                 target_claim_per_block: self.target_claim_per_block,
-                expected_blocks_per_epoch: self.expected_blocks_per_epoch,
             })?;
         Ok(NonZeroU64::new(product).expect("product of non-zero values is non-zero"))
     }
 
-    /// Full denominator of the per-epoch payout rate:
-    /// `rate_den * target_claim_per_block * expected_blocks_per_epoch`.
+    /// The configured factors of the payout-rate denominator:
+    /// `rate_den * target_claim_per_block`.
     ///
     /// The product is guaranteed not to overflow by [`Self::validate`], which
     /// runs on deserialization.
     #[must_use]
-    pub fn claim_rate_denominator(&self) -> NonZeroU64 {
-        self.checked_claim_rate_denominator()
-            .expect("claim rate denominator overflow is rejected at config-load time")
+    pub fn claim_rate_scale(&self) -> NonZeroU64 {
+        self.checked_claim_rate_scale()
+            .expect("claim rate scale overflow is rejected at config-load time")
     }
 }
 
@@ -288,7 +312,7 @@ impl BlendPoWConfig {
 #[cfg(test)]
 mod tests {
     use std::{
-        num::{NonZero, NonZeroU64},
+        num::{NonZero, NonZeroU64, NonZeroU128},
         sync::Arc,
     };
 
@@ -315,7 +339,6 @@ mod tests {
             rate_num: 0,
             rate_den: NonZeroU64::MIN,
             target_claim_per_block: NonZeroU64::MIN,
-            expected_blocks_per_epoch: NonZeroU64::MIN,
             slot_window: NonZeroU64::new(100).expect("100 is non-zero"),
         }
     }
@@ -347,19 +370,16 @@ mod tests {
     }
 
     #[test]
-    fn reward_config_rejects_claim_rate_denominator_overflow() {
-        // rate_den * target_claim_per_block * expected_blocks_per_epoch would
-        // exceed u64::MAX.
+    fn reward_config_rejects_claim_rate_scale_overflow() {
+        // rate_den * target_claim_per_block would exceed u64::MAX.
         let mut config = disabled_reward_config();
         config.rate_den = NonZeroU64::MAX;
         config.target_claim_per_block = NonZeroU64::new(2).unwrap();
-        config.expected_blocks_per_epoch = NonZeroU64::MIN;
         assert_eq!(
             config.validate(),
-            Err(RewardPoWConfigError::ClaimRateDenominatorOverflow {
+            Err(RewardPoWConfigError::ClaimRateScaleOverflow {
                 rate_den: config.rate_den,
                 target_claim_per_block: config.target_claim_per_block,
-                expected_blocks_per_epoch: config.expected_blocks_per_epoch,
             })
         );
     }
@@ -522,6 +542,34 @@ mod tests {
     fn nonce_snapshot_panics_at_epoch_zero() {
         let config = epoch_zero_test_config();
         let _ = config.nonce_snapshot(0.into());
+    }
+
+    #[test]
+    fn expected_blocks_per_epoch_is_ten_k() {
+        // k = 5 and f = 1/2, so the epoch spans 100 slots and half of them are
+        // expected to carry a block — the `10k` the payout rate assumes.
+        let config = epoch_zero_test_config();
+        assert_eq!(config.epoch_length(), 100);
+        assert_eq!(
+            config.expected_blocks_per_epoch(),
+            NonZeroU64::new(50).unwrap()
+        );
+        assert_eq!(
+            u64::from(config.expected_blocks_per_epoch()),
+            10 * u64::from(config.consensus_config.security_param().get())
+        );
+    }
+
+    #[test]
+    fn claim_rate_denominator_folds_in_the_derived_block_count() {
+        let mut config = epoch_zero_test_config();
+        config.pow_config.reward.rate_den = NonZeroU64::new(10).unwrap();
+        config.pow_config.reward.target_claim_per_block = NonZeroU64::new(3).unwrap();
+        // rate_den * target_claim_per_block * expected_blocks_per_epoch.
+        assert_eq!(
+            config.claim_rate_denominator(),
+            NonZeroU128::new(10 * 3 * 50).unwrap()
+        );
     }
 
     #[test]

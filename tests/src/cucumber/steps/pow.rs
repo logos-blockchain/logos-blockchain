@@ -127,12 +127,22 @@ async fn step_claim_pow_rewards(
             warn!(target: TARGET, "Step `{}` error: {e}", step.value);
         })?;
 
+    // Nodes carry no claim address in their configuration, so the request
+    // names the mining wallet recorded when the node was started.
+    let claim_address = world
+        .mining_claim_addresses
+        .get(&node_name)
+        .copied()
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("no mining claim address recorded for node `{node_name}`"),
+        })?;
+
     // The node only produces a claim transaction once it has mined at least one
     // winning ticket, so poll `claim` until it submits one (or we time out).
     let deadline = Duration::from_secs(timeout_seconds);
     let started = Instant::now();
     let tx_hash = loop {
-        match node.claim_pow_rewards().await {
+        match node.claim_pow_rewards(Some(claim_address)).await {
             Ok(Some(tx_hash)) => break tx_hash,
             Ok(None) => {}
             Err(e) => {
@@ -270,8 +280,8 @@ async fn step_wallet_balance_increased_by_claim_reward(
         .ok_or_else(|| StepError::LogicalError {
             message: format!("wallet '{wallet_name}' not found in world state"),
         })?;
-    // The reward beneficiary is this wallet's public key, which is what the
-    // miner's `claim_address` was pointed at.
+    // The reward beneficiary is this wallet's public key, which is the address
+    // the claim request named.
     let claim_address = wallet.public_key()?;
     let node = world.resolve_node_http_client(&wallet.node_name)?;
 

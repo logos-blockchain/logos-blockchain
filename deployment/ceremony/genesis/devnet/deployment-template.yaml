@@ -36,25 +36,44 @@ cryptarchia:
       # (Raspberry Pi 5, one core), at which one solution is around fifty
       # seconds of work.
       base_difficulty: 19
-      target_transactions_per_block: 512
+      # The reference load the threshold is calibrated at, so it has to be the
+      # load the network actually carries: two transactions per block. A
+      # theoretical capacity here would pin the threshold off its calibrated
+      # point.
+      target_transactions_per_block: 2
       max_step: 2
       damping_num: 1
       damping_den_offset: 1
     reward:
-      # Token-reward PoW parameters. Payout is disabled by default
-      # (rate_num = 0), matching the pre-configurable behaviour.
-      reward_pool_genesis: 1000000000
-      epoch_reward_genesis: 1000000
-      initial_difficulty_seed: 1000
+      # Token-reward PoW parameters, sized for the target network of ~200
+      # mining nodes over the two-week epoch schedule.
+      #
+      # Pool sized to put 200 nodes over the minimum stake, with margin for
+      # mining being spread unevenly across them.
+      reward_pool_genesis: 300000000000
+      # Forced by the pool and the payout rate:
+      # W0 * rate_num / (rate_den * target_claim_per_block *
+      # expected_blocks_per_epoch) = 3e11 / (10 * 1 * 1200).
+      # `expected_blocks_per_epoch` is not a config value: the ledger derives
+      # it from the consensus schedule as `10k`, which is 1200 at
+      # `security_param: 120`.
+      epoch_reward_genesis: 25000000
+      # A larger seed starts the difficulty *harder*; 0 is the most permissive
+      # start this construction admits.
+      initial_difficulty_seed: 0
       ema_smoothing_factor: 9
       ema_smoothing_precision: 10
-      target_claims_per_block: 100
-      rate_num: 0
-      rate_den: 1
+      # One claim per block: claims are transactions, and the per-block
+      # transaction budget is 2. Must track `target_claim_per_block` below.
+      target_claims_per_block: 1
+      # rho = rate_num / rate_den = 1/10 of the pool per epoch, which
+      # distributes 97% of it across the two weeks.
+      rate_num: 1
+      rate_den: 10
       target_claim_per_block: 1
-      expected_blocks_per_epoch: 1
-      # Acceptance window in slots; must match the mining service.
-      slot_window: 100
+      # Acceptance window in slots; must match the mining service. Ten
+      # block-intervals of tolerance for a claim to reach a block.
+      slot_window: 300
   sdp_config:
     service_params:
       BN:

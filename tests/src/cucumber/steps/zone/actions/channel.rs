@@ -1,7 +1,7 @@
 use super::{
-    AtomicZoneDepositRequest, CucumberWorld, Duration, Ed25519Key, Inscription, Keys, Metadata,
-    PublishDeadline, PublishResult, SequencerCheckpoint, Step, StepError, StepResult, TxHash, Utxo,
-    WalletInfo, WalletReservedInputs, ZONE_CHANNEL_DEPOSIT_THRESHOLD,
+    AtomicZoneDepositRequest, CucumberWorld, Duration, Ed25519Key, IndexedSignature, Inscription,
+    Keys, Metadata, PublishDeadline, PublishResult, SequencerCheckpoint, Step, StepError,
+    StepResult, TxHash, Utxo, WalletInfo, WalletReservedInputs, ZONE_CHANNEL_DEPOSIT_THRESHOLD,
     ZONE_CHANNEL_WITHDRAW_THRESHOLD, ZoneDeposit, ZoneTestError, build_zone_deposit,
     build_zone_deposit_from_values, current_available_utxos_for_wallet, log_step_error,
     make_inscription, publish_atomic_zone_withdraw, submit_atomic_zone_deposit,
@@ -59,9 +59,137 @@ pub(in super::super) async fn submit_zone_channel_config(
             message: format!("Zone channel_config failed: {error}"),
         })?;
 
-    // Sanity-check the inline checkpoint already mentions our tx; the
-    // event-stream watcher below also catches it once the drive task
-    // re-publishes its checkpoint after the next block.
+    record_submitted_config(
+        world,
+        sequencer_alias,
+        transaction_alias,
+        &result,
+        post_call_checkpoint,
+        &mut checkpoint_rx,
+    )
+    .await
+}
+
+/// Builds and funds the config, storing it for the per-signer steps. Reads
+/// only public keys; `threshold` sets both the config and transfer thresholds.
+pub(in super::super) async fn prepare_zone_channel_config(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: &str,
+    transaction_alias: String,
+    authorized_aliases: Vec<String>,
+    threshold: u16,
+) -> StepResult {
+    let client = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?.clone();
+
+    let authorized_keys = authorized_aliases
+        .iter()
+        .map(|alias| world.zone.sequencer_public_key(alias))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let prepared = client
+        .prepare_channel_config(
+            Keys::new_unchecked(authorized_keys),
+            0.into(),
+            0.into(),
+            threshold,
+            threshold,
+        )
+        .await
+        .map_err(|error| StepError::LogicalError {
+            message: format!("Zone prepare_channel_config failed: {error}"),
+        })?;
+
+    world
+        .zone
+        .remember_prepared_config(transaction_alias, prepared);
+
+    Ok(())
+}
+
+/// One participant's independent signature, using only `signer_alias`'s own
+/// key — never another party's.
+pub(in super::super) fn sign_prepared_zone_channel_config(
+    world: &mut CucumberWorld,
+    step: &Step,
+    signer_alias: &str,
+    transaction_alias: String,
+) -> StepResult {
+    let signing_key = log_step_error(step, world.zone.sequencer_signing_key(signer_alias))?;
+    let signer_public = signing_key.public_key();
+    let prepared = log_step_error(step, world.zone.prepared_config(&transaction_alias))?;
+
+    let index = prepared
+        .accredited_keys
+        .iter()
+        .position(|key| *key == signer_public)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!(
+                "sequencer '{signer_alias}' is not in the accredited set of prepared config '{transaction_alias}'",
+            ),
+        })?;
+    let index = u16::try_from(index).map_err(|_| StepError::LogicalError {
+        message: "accredited key index exceeds u16".to_owned(),
+    })?;
+    let signature = IndexedSignature::new(index, signing_key.sign_payload(&prepared.sign_payload));
+
+    world
+        .zone
+        .add_prepared_config_signature(transaction_alias, signature);
+
+    Ok(())
+}
+
+/// Gathers the collected signatures and submits the fully-signed config.
+pub(in super::super) async fn submit_prepared_zone_channel_config(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: &str,
+    transaction_alias: String,
+) -> StepResult {
+    let client = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?.clone();
+    let prepared = log_step_error(step, world.zone.prepared_config(&transaction_alias))?.clone();
+    // Collected in arbitrary signer order; the proof requires strictly
+    // ascending index order, so canonicalize before submitting.
+    let mut signatures = world.zone.prepared_config_signatures(&transaction_alias);
+    signatures.sort_unstable();
+
+    let mut checkpoint_rx = world
+        .zone
+        .checkpoint_receiver(sequencer_alias)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("Zone sequencer '{sequencer_alias}' has no checkpoint watch"),
+        })?;
+    checkpoint_rx.mark_unchanged();
+
+    let (result, post_call_checkpoint) = client
+        .submit_channel_config(prepared, signatures)
+        .await
+        .map_err(|error| StepError::LogicalError {
+        message: format!("Zone submit_channel_config failed: {error}"),
+    })?;
+
+    record_submitted_config(
+        world,
+        sequencer_alias,
+        transaction_alias,
+        &result,
+        post_call_checkpoint,
+        &mut checkpoint_rx,
+    )
+    .await
+}
+
+/// Resolve the checkpoint containing a submitted config tx and record it for
+/// later assertions.
+async fn record_submitted_config(
+    world: &mut CucumberWorld,
+    sequencer_alias: &str,
+    transaction_alias: String,
+    result: &PublishResult,
+    post_call_checkpoint: SequencerCheckpoint,
+    checkpoint_rx: &mut tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
+) -> StepResult {
     let tx_hash = result.inscription_id();
     let checkpoint = if post_call_checkpoint
         .pending_txs
@@ -72,7 +200,7 @@ pub(in super::super) async fn submit_zone_channel_config(
     } else {
         timeout(
             Duration::from_secs(30),
-            wait_for_checkpoint_with_tx(&mut checkpoint_rx, tx_hash),
+            wait_for_checkpoint_with_tx(checkpoint_rx, tx_hash),
         )
         .await
         .map_err(|_| StepError::LogicalError {

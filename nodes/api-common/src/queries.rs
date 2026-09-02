@@ -2,7 +2,7 @@ use std::num::NonZero;
 
 use serde::{Deserialize, Serialize};
 use url::Url;
-use utoipa::IntoParams;
+use utoipa::{IntoParams, ToSchema};
 use validator::Validate;
 
 use crate::{MAX_BLOCKS_STREAM_BLOCKS, MAX_BLOCKS_STREAM_CHUNK_SIZE};
@@ -36,13 +36,13 @@ pub struct BlocksStreamQuery {
     /// - otherwise defaults to `100`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[validate(custom(function = "validate_blocks_limit"))]
-    #[param(minimum = 1, maximum = 630_720_000, default = 100, example = 100)]
+    #[param(value_type = usize, minimum = 1, maximum = 630_720_000, default = 100, example = 100)]
     pub blocks_limit: Option<NonZero<usize>>,
     /// Server chunk size hint for streamed delivery. Defaults to `100` ,
     /// maximum `1000`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[validate(custom(function = "validate_server_batch_size"))]
-    #[param(minimum = 1, maximum = 1_000, default = 100, example = 100)]
+    #[param(value_type = usize, minimum = 1, maximum = 1_000, default = 100, example = 100)]
     pub server_batch_size: Option<NonZero<usize>>,
     /// When true, include only immutable blocks.
     /// If `slot_to` is omitted, the default anchor is LIB slot.
@@ -116,7 +116,7 @@ impl BlocksStreamQuery {
 }
 
 /// Sort order for blocks in the `get_blocks_range_stream` method.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BlockSortOrder {
     /// Ascending order (oldest to newest).
@@ -126,7 +126,7 @@ pub enum BlockSortOrder {
 }
 
 /// Filter for block types in the `get_blocks_range_stream` method.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BlockFilter {
     /// Includes only immutable blocks.

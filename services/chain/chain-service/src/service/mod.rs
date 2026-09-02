@@ -4,7 +4,7 @@ pub mod phases;
 
 use core::fmt::{Debug, Display};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     pin::Pin,
     time::Duration,
 };
@@ -17,11 +17,13 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
+        ops::Op,
         traits::{MantleTxWithProofs, PreverifiedMantleTx},
-        transactions::GasPrices,
+        transactions::{GasPrices, mantle_tx::MantleTx as _},
     },
+    sdp::ServiceType,
 };
-use lb_cryptarchia_engine::{PrunedBlocks, Slot};
+use lb_cryptarchia_engine::{Epoch, PrunedBlocks, Slot};
 use lb_cryptarchia_sync::{BlocksUnavailableReason, ProviderResponse};
 use lb_network_service::message::ChainSyncEvent;
 use lb_storage_service::{api::chain::StorageChainApi, backends::StorageBackend};
@@ -32,16 +34,81 @@ use overwatch::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::{broadcast, mpsc, oneshot};
-use tracing::{debug, error, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
-    ChainServiceInfo, ConsensusMsg, Cryptarchia, CryptarchiaConsensusState, Error, LOG_TARGET,
-    LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo, Query, metrics,
+    ChainServiceInfo, ConsensusMsg, Cryptarchia, CryptarchiaConsensusState, EpochStateQueryResult,
+    Error, LOG_TARGET, LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo, Query, metrics,
     notifier::ChainOnlineNotifier,
     relays::{BroadcastRelay, CryptarchiaConsensusRelays},
     storage::{StorageAdapter as _, adapters::StorageAdapter},
     sync::block_provider::BlockProvider,
 };
+
+pub struct ProcessBlockOutcome<Tx> {
+    pub pruned_blocks: PrunedBlocks<HeaderId>,
+    pub reorged_block_ids: Vec<HeaderId>,
+    pub reorged_txs: Vec<Tx>,
+}
+
+// Source tips normally leave this map when they pass the LIB. These small
+// limits also protect the diagnostic path during a long LIB stall.
+const MAX_QUERY_SOURCES_PER_TIP: usize = 8;
+const MAX_QUERY_SOURCE_TIPS: usize = 64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EpochStateQuerySource {
+    requested_epoch: Epoch,
+    requested_slot: Slot,
+    source_tip_slot: Slot,
+    source_lib_id: HeaderId,
+    source_lib_slot: Slot,
+}
+
+#[derive(Default)]
+struct EpochStateQuerySourceTracker {
+    sources_by_tip: HashMap<HeaderId, Vec<EpochStateQuerySource>>,
+}
+
+impl EpochStateQuerySourceTracker {
+    fn record(&mut self, source_tip_id: HeaderId, source: EpochStateQuerySource) {
+        let sources = self.sources_by_tip.entry(source_tip_id).or_default();
+        if !sources.contains(&source) {
+            sources.push(source);
+            if sources.len() > MAX_QUERY_SOURCES_PER_TIP {
+                sources.remove(0);
+            }
+        }
+        self.enforce_tip_limit();
+    }
+
+    fn take_for_tip(&mut self, tip_id: &HeaderId) -> Option<Vec<EpochStateQuerySource>> {
+        self.sources_by_tip.remove(tip_id)
+    }
+
+    fn retire_behind_lib(&mut self, lib_slot: Slot) {
+        self.sources_by_tip.retain(|_, sources| {
+            sources.retain(|source| source.source_tip_slot > lib_slot);
+            !sources.is_empty()
+        });
+    }
+
+    fn enforce_tip_limit(&mut self) {
+        while self.sources_by_tip.len() > MAX_QUERY_SOURCE_TIPS {
+            let oldest_source_tip = self
+                .sources_by_tip
+                .iter()
+                .min_by_key(|(_, sources)| {
+                    sources.iter().map(|source| source.source_tip_slot).max()
+                })
+                .map(|(source_tip_id, _)| *source_tip_id);
+            let Some(oldest_source_tip) = oldest_source_tip else {
+                break;
+            };
+            self.sources_by_tip.remove(&oldest_source_tip);
+        }
+    }
+}
 
 /// The chain service in the phase `P`.
 pub struct Service<Phase, Tx, Storage, RuntimeServiceId>
@@ -65,6 +132,7 @@ where
     slot_timer: lb_time_service::EpochSlotTickStream,
     state_recording_timer: tokio::time::Interval,
     prolonged_bootstrap_period: Duration,
+    epoch_state_query_sources: EpochStateQuerySourceTracker,
 }
 
 impl<Phase, Tx, Storage, RuntimeServiceId> Service<Phase, Tx, Storage, RuntimeServiceId>
@@ -107,6 +175,7 @@ where
             slot_timer: self.slot_timer,
             state_recording_timer: self.state_recording_timer,
             prolonged_bootstrap_period: self.prolonged_bootstrap_period,
+            epoch_state_query_sources: self.epoch_state_query_sources,
         }
     }
 
@@ -117,9 +186,9 @@ where
         reply_channel: oneshot::Sender<Result<(HeaderId, Vec<Tx>), Error>>,
     ) {
         match self.process_block_and_update_state(block).await {
-            Ok(reorged_txs) => {
+            Ok(outcome) => {
                 reply_channel
-                    .send(Ok((self.cryptarchia.tip(), reorged_txs)))
+                    .send(Ok((self.cryptarchia.tip(), outcome.reorged_txs)))
                     .unwrap_or_else(|_| {
                         error!("Could not send process block result through channel");
                     });
@@ -136,8 +205,12 @@ where
     /// Process a block and update the service state accordingly.
     ///
     /// On error, the service state is not mutated.
-    async fn process_block_and_update_state(&mut self, block: Block<Tx>) -> Result<Vec<Tx>, Error> {
-        let (pruned_blocks, reorged_txs) = process_block(
+    async fn process_block_and_update_state(
+        &mut self,
+        block: Block<Tx>,
+    ) -> Result<ProcessBlockOutcome<Tx>, Error> {
+        let previous_lib_slot = self.cryptarchia.lib_branch().slot();
+        let outcome = process_block(
             &mut self.cryptarchia,
             block,
             self.current_slot,
@@ -147,8 +220,19 @@ where
         )
         .await?;
 
+        self.log_epoch_state_query_sources_became_stale(
+            outcome
+                .reorged_block_ids
+                .iter()
+                .copied()
+                .chain(outcome.pruned_blocks.stale_blocks().copied()),
+        );
+        if self.cryptarchia.lib_branch().slot() > previous_lib_slot {
+            self.retire_epoch_state_query_sources_behind_lib();
+        }
+
         self.storage_blocks_to_remove = delete_stale_blocks_from_storage(
-            pruned_blocks.stale_blocks().copied(),
+            outcome.pruned_blocks.stale_blocks().copied(),
             &self.storage_blocks_to_remove,
             self.relays.storage_adapter(),
         )
@@ -156,12 +240,51 @@ where
 
         self.record_recovery_state();
 
-        Ok(reorged_txs)
+        Ok(outcome)
+    }
+
+    fn log_epoch_state_query_sources_became_stale(
+        &mut self,
+        stale_block_ids: impl IntoIterator<Item = HeaderId>,
+    ) {
+        let canonical_tip = self.cryptarchia.tip_branch();
+        let mut reported_source_tips = HashSet::new();
+
+        for stale_block_id in stale_block_ids {
+            if !reported_source_tips.insert(stale_block_id) {
+                continue;
+            }
+            let Some(query_sources) = self.epoch_state_query_sources.take_for_tip(&stale_block_id)
+            else {
+                continue;
+            };
+
+            for query_source in query_sources {
+                warn!(
+                    target: LOG_TARGET,
+                    diagnostic = "blend_tsi_outage",
+                    event = "epoch_state_query_source_became_stale",
+                    requested_epoch = u32::from(query_source.requested_epoch),
+                    requested_slot = u64::from(query_source.requested_slot),
+                    source_tip_id = %stale_block_id,
+                    source_lib_id = %query_source.source_lib_id,
+                    source_lib_slot = u64::from(query_source.source_lib_slot),
+                    stale_at_slot = u64::from(self.current_slot),
+                    canonical_tip_id = %canonical_tip.id(),
+                    "Epoch-state query source tip became non-canonical"
+                );
+            }
+        }
+    }
+
+    fn retire_epoch_state_query_sources_behind_lib(&mut self) {
+        let lib_slot = self.cryptarchia.lib_branch().slot();
+        self.epoch_state_query_sources.retire_behind_lib(lib_slot);
     }
 
     /// Serve a read-only query. Available in every phase.
     #[expect(clippy::too_many_lines, reason = "TODO: refactor into funcs")]
-    async fn process_query(&self, query: Query) {
+    async fn process_query(&mut self, query: Query) {
         match query {
             Query::Info { reply_channel } => {
                 reply_channel
@@ -267,6 +390,19 @@ where
                     error!("Could not send epoch state through channel");
                 });
             }
+            Query::GetEpochStateWithSource {
+                slot,
+                reply_channel,
+            } => {
+                let result = self.cryptarchia.epoch_state_for_slot_with_source(slot);
+                if let Ok(query_result) = &result {
+                    self.track_epoch_state_query_source(query_result);
+                    log_epoch_state_query(query_result);
+                }
+                reply_channel.send(result).unwrap_or_else(|_| {
+                    error!("Could not send epoch state through channel");
+                });
+            }
             Query::GetEpochConfig { reply_channel } => {
                 let config = self.cryptarchia.ledger.config();
                 reply_channel
@@ -299,6 +435,18 @@ where
                     });
             }
         }
+    }
+
+    fn track_epoch_state_query_source(&mut self, query_result: &EpochStateQueryResult) {
+        let query_source = EpochStateQuerySource {
+            requested_epoch: query_result.requested_epoch,
+            requested_slot: query_result.requested_slot,
+            source_tip_slot: query_result.source_tip_slot,
+            source_lib_id: query_result.source_lib_id,
+            source_lib_slot: query_result.source_lib_slot,
+        };
+        self.epoch_state_query_sources
+            .record(query_result.source_tip_id, query_source);
     }
 
     /// Selects uncles for a new block extending `parent` at `slot`.
@@ -346,6 +494,268 @@ where
     }
 }
 
+fn log_epoch_state_query(result: &EpochStateQueryResult) {
+    if !tracing::enabled!(target: LOG_TARGET, tracing::Level::DEBUG) {
+        return;
+    }
+    let returned_active_declaration_count = result
+        .epoch_state
+        .active_declarations
+        .iter()
+        .map(|(_, declarations)| declarations.len())
+        .sum::<usize>();
+
+    debug!(
+        target: LOG_TARGET,
+        diagnostic = "blend_tsi_outage",
+        event = "epoch_state_query",
+        requested_slot = u64::from(result.requested_slot),
+        requested_epoch = u32::from(result.requested_epoch),
+        source_tip_id = %result.source_tip_id,
+        source_tip_slot = u64::from(result.source_tip_slot),
+        source_tip_height = result.source_tip_height,
+        source_lib_id = %result.source_lib_id,
+        source_lib_slot = u64::from(result.source_lib_slot),
+        returned_epoch = u32::from(result.epoch_state.epoch),
+        returned_nonce = ?result.epoch_state.nonce,
+        returned_aged_utxo_root = ?result.epoch_state.utxo_merkle_root(),
+        returned_lottery_0 = ?result.epoch_state.lottery_0,
+        returned_lottery_1 = ?result.epoch_state.lottery_1,
+        returned_blend_pow_difficulty = ?result.epoch_state.blend_pow_difficulty,
+        returned_active_declaration_count,
+        "Epoch state synthesized from chain tip"
+    );
+}
+
+fn log_canonical_tsi_transition<Tx>(cryptarchia: &Cryptarchia, block: &Block<Tx>) {
+    let parent_id = block.header().parent();
+    let source_block_id = block.header().id();
+    let (Some(parent_state), Some(committed_state)) = (
+        cryptarchia.ledger.state(&parent_id),
+        cryptarchia.ledger.state(&source_block_id),
+    ) else {
+        return;
+    };
+    let from_epoch = parent_state.epoch_state().epoch;
+    let to_epoch = committed_state.epoch_state().epoch;
+    if from_epoch == to_epoch {
+        return;
+    }
+
+    let skipped_epochs = u32::from(to_epoch)
+        .saturating_sub(u32::from(from_epoch))
+        .saturating_sub(1);
+    info!(
+        target: LOG_TARGET,
+        diagnostic = "blend_tsi_outage",
+        event = "tsi_epoch_committed",
+        canonical = true,
+        from_epoch = u32::from(from_epoch),
+        to_epoch = u32::from(to_epoch),
+        skipped_epochs,
+        source_block_slot = u64::from(block.header().slot()),
+        source_block_id = %source_block_id,
+        old_total_stake = parent_state.epoch_state().total_stake,
+        new_total_stake = committed_state.epoch_state().total_stake,
+        "Canonical TSI epoch state committed"
+    );
+}
+
+fn log_canonical_sdp_activity<Tx>(cryptarchia: &Cryptarchia, parent_id: HeaderId, block: &Block<Tx>)
+where
+    Tx: MantleTxWithProofs,
+{
+    let (Some(parent_state), Some(committed_state)) = (
+        cryptarchia.ledger.state(&parent_id),
+        cryptarchia.ledger.state(&block.header().id()),
+    ) else {
+        return;
+    };
+
+    for tx in block.transactions_iter() {
+        for op in tx.mantle_tx().ops() {
+            let Op::SDPActive(active) = op else {
+                continue;
+            };
+            let Some(previous_declaration) = parent_state
+                .mantle_ledger()
+                .sdp_ledger()
+                .get_declaration(&active.declaration_id)
+            else {
+                continue;
+            };
+            let Some(new_declaration) = committed_state
+                .mantle_ledger()
+                .sdp_ledger()
+                .get_declaration(&active.declaration_id)
+            else {
+                continue;
+            };
+            let inactivity_period = cryptarchia
+                .ledger
+                .config()
+                .sdp_config
+                .service_params
+                .get(&new_declaration.service_type)
+                .map_or(0, |params| {
+                    params.inactivity_period.into_inner().into_inner()
+                });
+
+            info!(
+                target: LOG_TARGET,
+                diagnostic = "blend_tsi_outage",
+                event = "sdp_activity_committed",
+                canonical = true,
+                provider_id = ?new_declaration.provider_id,
+                declaration_id = ?active.declaration_id,
+                proof_epoch = u32::from(active.metadata.origin_epoch()),
+                tx_id = ?tx.hash(),
+                block_id = %block.header().id(),
+                block_slot = u64::from(block.header().slot()),
+                epoch = u32::from(committed_state.epoch_state().epoch),
+                previous_active_epoch = u32::from(previous_declaration.active),
+                new_active_epoch = u32::from(new_declaration.active),
+                active_until_epoch = u32::from(new_declaration.active).saturating_add(inactivity_period),
+                "Canonical SDP activity committed"
+            );
+        }
+    }
+}
+
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "Snapshot diagnostics keep the frozen decision fields together."
+)]
+fn log_blend_snapshot_provider_decisions(
+    target_epoch: Epoch,
+    snapshot_slot: Slot,
+    active_declarations: &lb_core::sdp::Declarations,
+    source_declarations: &lb_core::sdp::Declarations,
+    summary_event: &'static str,
+    provider_event: &'static str,
+) {
+    let Some(all_blend_declarations) = source_declarations.for_service(&ServiceType::BlendNetwork)
+    else {
+        return;
+    };
+    let active_blend_declarations = active_declarations.for_service(&ServiceType::BlendNetwork);
+
+    if tracing::enabled!(target: LOG_TARGET, tracing::Level::DEBUG) {
+        let active_provider_ids: Vec<_> = active_blend_declarations
+            .map(|active| {
+                active
+                    .values()
+                    .map(|declaration| format!("{:?}", declaration.provider_id))
+                    .collect()
+            })
+            .unwrap_or_default();
+        debug!(
+            target: LOG_TARGET,
+            diagnostic = "blend_tsi_outage",
+            event = summary_event,
+            canonical = true,
+            epoch = u32::from(target_epoch),
+            snapshot_slot = u64::from(snapshot_slot),
+            active_blend_declaration_count = active_blend_declarations.map_or(0, HashMap::len),
+            active_provider_ids = ?active_provider_ids,
+            "Canonical frozen active Blend declarations snapshot"
+        );
+    }
+
+    for (declaration_id, declaration) in all_blend_declarations {
+        let snapshot_declaration =
+            active_blend_declarations.and_then(|active| active.get(declaration_id));
+        match snapshot_declaration {
+            Some(snapshot_declaration) => {
+                debug!(
+                    target: LOG_TARGET,
+                    diagnostic = "blend_tsi_outage",
+                    event = provider_event,
+                    canonical = true,
+                    target_epoch = u32::from(target_epoch),
+                    snapshot_slot = u64::from(snapshot_slot),
+                    provider_id = ?snapshot_declaration.provider_id,
+                    declaration_id = ?declaration_id,
+                    snapshot_active_epoch = u32::from(snapshot_declaration.active),
+                    snapshot_withdraw_at = ?snapshot_declaration.withdraw_at.map(u32::from),
+                    frozen_included = true,
+                    "Canonical frozen Blend provider snapshot decision"
+                );
+            }
+            None => {
+                // The frozen EpochState retains only included declarations. The
+                // historical active fields for an excluded provider are therefore
+                // unavailable here and must not be reconstructed from the current
+                // ledger declaration.
+                debug!(
+                    target: LOG_TARGET,
+                    diagnostic = "blend_tsi_outage",
+                    event = provider_event,
+                    canonical = true,
+                    target_epoch = u32::from(target_epoch),
+                    snapshot_slot = u64::from(snapshot_slot),
+                    provider_id = ?declaration.provider_id,
+                    declaration_id = ?declaration_id,
+                    frozen_included = false,
+                    "Canonical frozen Blend provider snapshot decision"
+                );
+            }
+        }
+    }
+}
+
+fn log_canonical_blend_snapshots<Tx>(cryptarchia: &Cryptarchia, block: &Block<Tx>) {
+    let parent_id = block.header().parent();
+    let source_block_id = block.header().id();
+    let (Some(parent_state), Some(committed_state)) = (
+        cryptarchia.ledger.state(&parent_id),
+        cryptarchia.ledger.state(&source_block_id),
+    ) else {
+        return;
+    };
+
+    if parent_id == cryptarchia.genesis_id {
+        log_blend_snapshot_provider_decisions(
+            Epoch::new(0),
+            0.into(),
+            &committed_state.epoch_state().active_declarations,
+            &parent_state.mantle_ledger().sdp_ledger().declarations(),
+            "blend_genesis_snapshot",
+            "blend_genesis_snapshot_provider_decision",
+        );
+        log_blend_snapshot_provider_decisions(
+            Epoch::new(1),
+            0.into(),
+            &committed_state.next_epoch_state().active_declarations,
+            &parent_state.mantle_ledger().sdp_ledger().declarations(),
+            "blend_genesis_snapshot",
+            "blend_genesis_snapshot_provider_decision",
+        );
+    }
+
+    let config = cryptarchia.ledger.config();
+    for epoch_state in [
+        committed_state.epoch_state(),
+        committed_state.next_epoch_state(),
+    ] {
+        let target_epoch = epoch_state.epoch;
+        if target_epoch <= Epoch::new(1) {
+            continue;
+        }
+        let snapshot_slot = config.stake_distribution_snapshot(target_epoch);
+        if parent_state.slot() < snapshot_slot && committed_state.slot() >= snapshot_slot {
+            log_blend_snapshot_provider_decisions(
+                target_epoch,
+                snapshot_slot,
+                &epoch_state.active_declarations,
+                &parent_state.mantle_ledger().sdp_ledger().declarations(),
+                "blend_canonical_snapshot",
+                "blend_canonical_snapshot_provider_decision",
+            );
+        }
+    }
+}
+
 /// Try to add a [`Block`] to [`Cryptarchia`].
 ///
 /// A [`Block`] is only added if it's valid.
@@ -363,7 +773,7 @@ pub async fn process_block<Tx, Storage, RuntimeServiceId>(
     relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
     new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
     lib_broadcaster: &broadcast::Sender<LibUpdate>,
-) -> Result<(PrunedBlocks<HeaderId>, Vec<Tx>), Error>
+) -> Result<ProcessBlockOutcome<Tx>, Error>
 where
     Tx: PreverifiedMantleTx
         + MantleTxWithProofs<Context = GasPrices>
@@ -387,14 +797,13 @@ where
     let prev_lib = cryptarchia.lib();
 
     let mut candidate = cryptarchia.clone();
-    let (pruned_blocks, reorged_blocks, events) =
-        candidate.try_apply_block(&block, current_slot)?;
+    let applied = candidate.try_apply_block_with_state_retention(&block, current_slot)?;
     let new_lib = candidate.lib();
 
     let tx_count = block.transactions_iter().count();
 
     let immutable_blocks = immutable_blocks_index(
-        &pruned_blocks,
+        &applied.pruned_blocks,
         Some(prev_lib),
         new_lib,
         candidate.consensus.lib_branch().slot(),
@@ -406,12 +815,20 @@ where
             header.id(),
             header.parent(),
             block.clone(),
-            events,
+            applied.events,
             immutable_blocks,
         )
         .await
         .map_err(|e| Error::Storage(format!("Failed to store block data: {e}")))?;
 
+    log_newly_canonical_blocks(
+        &candidate,
+        &block,
+        &applied.newly_canonical_blocks,
+        relays.storage_adapter(),
+    )
+    .await;
+    candidate.prune_ledger_states(applied.pruned_blocks.all());
     *cryptarchia = candidate;
     metrics::emit_block_transactions_metric(tx_count);
 
@@ -435,9 +852,9 @@ where
         log_lib_advanced(
             &prev_lib,
             &new_lib,
-            pruned_blocks.stale_blocks().count(),
-            pruned_blocks.immutable_blocks().len(),
-            reorged_blocks.len(),
+            applied.pruned_blocks.stale_blocks().count(),
+            applied.pruned_blocks.immutable_blocks().len(),
+            applied.reorged_blocks.len(),
         );
 
         let height = cryptarchia
@@ -458,8 +875,8 @@ where
         let lib_update = LibUpdate {
             new_lib: cryptarchia.lib(),
             pruned_blocks: PrunedBlocksInfo {
-                stale_blocks: pruned_blocks.stale_blocks().copied().collect(),
-                immutable_blocks: pruned_blocks.immutable_blocks().clone(),
+                stale_blocks: applied.pruned_blocks.stale_blocks().copied().collect(),
+                immutable_blocks: applied.pruned_blocks.immutable_blocks().clone(),
             },
         };
 
@@ -469,7 +886,8 @@ where
     }
 
     let reorged_txs: Vec<_> = join_all(
-        reorged_blocks
+        applied
+            .reorged_blocks
             .iter()
             .map(|id| relays.storage_adapter().get_block(id)),
     )
@@ -479,7 +897,64 @@ where
     .flat_map(Block::into_transactions)
     .collect();
 
-    Ok((pruned_blocks, reorged_txs))
+    Ok(ProcessBlockOutcome {
+        pruned_blocks: applied.pruned_blocks,
+        reorged_block_ids: applied.reorged_blocks.iter().copied().collect(),
+        reorged_txs,
+    })
+}
+
+async fn log_newly_canonical_blocks<Tx, Storage, RuntimeServiceId>(
+    cryptarchia: &Cryptarchia,
+    applied_block: &Block<Tx>,
+    newly_canonical_blocks: &[HeaderId],
+    storage: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
+) where
+    Tx: PreverifiedMantleTx
+        + MantleTxWithProofs<Context = GasPrices>
+        + Debug
+        + Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + Send
+        + Sync
+        + Unpin
+        + 'static,
+    Storage: StorageBackend + Send + Sync + 'static,
+    <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
+    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
+    RuntimeServiceId: Display + 'static,
+{
+    if !tracing::enabled!(target: LOG_TARGET, tracing::Level::INFO) {
+        return;
+    }
+
+    for block_id in newly_canonical_blocks {
+        let canonical_block = if *block_id == applied_block.header().id() {
+            Some(applied_block.clone())
+        } else {
+            storage.get_block(block_id).await
+        };
+        let Some(canonical_block) = canonical_block else {
+            warn!(
+                target: LOG_TARGET,
+                diagnostic = "blend_tsi_outage",
+                event = "canonical_diagnostic_block_unavailable",
+                block_id = %block_id,
+                "Could not load a newly canonical block for diagnostics"
+            );
+            continue;
+        };
+        log_canonical_sdp_activity(
+            cryptarchia,
+            canonical_block.header().parent(),
+            &canonical_block,
+        );
+        log_canonical_blend_snapshots(cryptarchia, &canonical_block);
+        log_canonical_tsi_transition(cryptarchia, &canonical_block);
+    }
 }
 
 /// Returns block IDs from descendant (inclusive) to ancestor
@@ -820,5 +1295,49 @@ fn log_lib_advanced(
             target: LOG_TARGET,
             "LIB advanced from {prev_lib:?} to {new_lib:?}; stale_blocks={stale_blocks_count}, immutable_blocks={immutable_blocks_count}, reorged_blocks={reorged_blocks_count}",
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn epoch_state_query_sources_are_bounded_and_retired_after_lib() {
+        let source_tip_id = HeaderId::from([1; 32]);
+        let source_lib_id = HeaderId::from([2; 32]);
+        let mut tracker = EpochStateQuerySourceTracker::default();
+
+        for requested_slot in 0..=MAX_QUERY_SOURCES_PER_TIP {
+            tracker.record(
+                source_tip_id,
+                EpochStateQuerySource {
+                    requested_epoch: Epoch::new(requested_slot as u32),
+                    requested_slot: (requested_slot as u64).into(),
+                    source_tip_slot: 10.into(),
+                    source_lib_id,
+                    source_lib_slot: 9.into(),
+                },
+            );
+        }
+
+        let sources = tracker
+            .take_for_tip(&source_tip_id)
+            .expect("source tip should be tracked");
+        assert_eq!(sources.len(), MAX_QUERY_SOURCES_PER_TIP);
+        assert_eq!(sources[0].requested_slot, 1.into());
+
+        tracker.record(
+            source_tip_id,
+            EpochStateQuerySource {
+                requested_epoch: Epoch::new(1),
+                requested_slot: 1.into(),
+                source_tip_slot: 10.into(),
+                source_lib_id,
+                source_lib_slot: 9.into(),
+            },
+        );
+        tracker.retire_behind_lib(10.into());
+        assert!(tracker.take_for_tip(&source_tip_id).is_none());
     }
 }

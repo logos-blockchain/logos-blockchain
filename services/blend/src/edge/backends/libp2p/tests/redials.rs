@@ -34,7 +34,7 @@ async fn edge_drops_message_after_exhausting_attempts() {
         EdgeSwarmBuilder::new(Membership::new_without_local(from_ref(&Node {
             address: empty_multiaddr.clone(),
             id: random_peer_id,
-            public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
+            public_key: UnsecuredEd25519Key::generate_with_chacha_rng().public_key(),
         })))
         .with_max_dial_attempts(3)
         .build();
@@ -91,7 +91,7 @@ async fn edge_redial_uses_exponential_backoff() {
         EdgeSwarmBuilder::new(Membership::new_without_local(from_ref(&Node {
             address: empty_multiaddr,
             id: random_peer_id,
-            public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
+            public_key: UnsecuredEd25519Key::generate_with_chacha_rng().public_key(),
         })))
         .build();
     let message = TestEncapsulatedMessage::new(b"test-payload");
@@ -155,7 +155,7 @@ async fn stalled_send_does_not_block_command_processing() {
     } = EdgeSwarmBuilder::new(Membership::new_without_local(from_ref(&Node {
         address,
         id: peer_id,
-        public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
+        public_key: UnsecuredEd25519Key::generate_with_chacha_rng().public_key(),
     })))
     .build();
 
@@ -210,7 +210,7 @@ async fn edge_does_not_retry_unrecoverable_dial_failure() {
         EdgeSwarmBuilder::new(Membership::new_without_local(from_ref(&Node {
             address: listening_node.address.clone(),
             id: wrong_peer_id,
-            public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
+            public_key: UnsecuredEd25519Key::generate_with_chacha_rng().public_key(),
         })))
         // Generous retry budget: if the error were treated as recoverable we
         // would see further attempts after the backoff below.
@@ -271,7 +271,7 @@ async fn edge_excludes_unrecoverable_peer_from_later_sends() {
         EdgeSwarmBuilder::new(Membership::new_without_local(from_ref(&Node {
             address: listening_node.address.clone(),
             id: wrong_peer_id,
-            public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
+            public_key: UnsecuredEd25519Key::generate_with_chacha_rng().public_key(),
         })))
         .build();
 

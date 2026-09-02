@@ -1,10 +1,11 @@
 use super::{
-    CucumberWorld, Step, StepResult, publish_atomic_zone_withdraw_transaction,
-    save_zone_checkpoint, single_column_table, start_named_sequencer_with_startup,
-    submit_atomic_zone_deposit_transaction, submit_zone_channel_config,
-    submit_zone_channel_split_transaction, submit_zone_deposit_transaction,
-    submit_zone_multi_deposit_transaction, submit_zone_withdraw_transaction, when,
-    zone_atomic_withdraw_rows, zone_config_row,
+    CucumberWorld, Step, StepResult, prepare_zone_channel_config,
+    publish_atomic_zone_withdraw_transaction, save_zone_checkpoint,
+    sign_prepared_zone_channel_config, single_column_table, start_named_sequencer_with_startup,
+    submit_atomic_zone_deposit_transaction, submit_prepared_zone_channel_config,
+    submit_zone_channel_config, submit_zone_channel_split_transaction,
+    submit_zone_deposit_transaction, submit_zone_multi_deposit_transaction,
+    submit_zone_withdraw_transaction, when, zone_atomic_withdraw_rows, zone_config_row,
 };
 
 #[when(expr = "I save current checkpoint of sequencer {string} as {string}")]
@@ -87,6 +88,54 @@ async fn step_submit_zone_channel_config_transaction_with_posting_window(
         posting_timeout,
     )
     .await
+}
+
+#[when(
+    expr = "sequencer {string} prepares zone config transaction {string} with threshold {int} authorizing:"
+)]
+async fn step_prepare_zone_channel_config(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    transaction_alias: String,
+    threshold: u16,
+) -> StepResult {
+    let authorized_aliases =
+        single_column_table(step, "alias", "authorized zone sequencer aliases")?;
+
+    prepare_zone_channel_config(
+        world,
+        step,
+        &sequencer_alias,
+        transaction_alias,
+        authorized_aliases,
+        threshold,
+    )
+    .await
+}
+
+#[when(expr = "sequencer {string} signs prepared zone config transaction {string}")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Cucumber string captures are provided as owned `String`s"
+)]
+fn step_sign_prepared_zone_channel_config(
+    world: &mut CucumberWorld,
+    step: &Step,
+    signer_alias: String,
+    transaction_alias: String,
+) -> StepResult {
+    sign_prepared_zone_channel_config(world, step, &signer_alias, transaction_alias)
+}
+
+#[when(expr = "sequencer {string} submits prepared zone config transaction {string}")]
+async fn step_submit_prepared_zone_channel_config(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    transaction_alias: String,
+) -> StepResult {
+    submit_prepared_zone_channel_config(world, step, &sequencer_alias, transaction_alias).await
 }
 
 #[when(expr = "sequencer {string} submits zone config transaction:")]

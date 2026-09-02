@@ -271,16 +271,23 @@ impl NodeHttpClient {
     }
 
     /// Submits the mined-but-unclaimed `PoW` rewards as a single reward-claim
-    /// transaction, returning its hash. Returns `None` when there is nothing
-    /// to claim yet.
-    pub async fn claim_pow_rewards(&self) -> Result<Option<TxHash>, Error> {
+    /// transaction paid to `claim_address`, returning its hash. Returns `None`
+    /// when there is nothing to claim yet.
+    ///
+    /// A `None` address defers to the node's auto-claim configuration, which
+    /// fails when the node has no target below its threshold.
+    pub async fn claim_pow_rewards(
+        &self,
+        claim_address: Option<ZkPublicKey>,
+    ) -> Result<Option<TxHash>, Error> {
         let request_url = Self::join_path(&self.base_url, POW_CLAIM)?;
+        let body = PowClaimRequestBody { claim_address };
 
         let response: PowClaimResponseBody = self
             .with_timeout(
                 "PoW claim request",
                 self.http_client
-                    .post::<(), PowClaimResponseBody>(request_url, &()),
+                    .post::<PowClaimRequestBody, PowClaimResponseBody>(request_url, &body),
             )
             .await?;
 
@@ -376,6 +383,13 @@ impl NodeHttpClient {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct DialPeerRequestBody {
     addr: Multiaddr,
+}
+
+/// Mirrors the node's `PoWClaimRequestBody`: the key the claimed rewards are
+/// paid to, or `null` to defer to the node's auto-claim configuration.
+#[derive(Clone, Debug, Serialize)]
+struct PowClaimRequestBody {
+    claim_address: Option<ZkPublicKey>,
 }
 
 /// Mirrors the node's `PoWClaimResponseBody`: the hash of the submitted

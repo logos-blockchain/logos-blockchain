@@ -29,6 +29,11 @@ impl ActivityProof {
     }
 
     #[must_use]
+    pub const fn epoch(&self) -> Epoch {
+        self.epoch
+    }
+
+    #[must_use]
     pub const fn token(&self) -> &BlendingToken {
         &self.token
     }

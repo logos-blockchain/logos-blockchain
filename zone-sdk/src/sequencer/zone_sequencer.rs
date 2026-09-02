@@ -29,6 +29,7 @@ use lb_core::{
             states::Unverified,
         },
     },
+    proofs::channel_multi_sig_proof::IndexedSignature,
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -43,14 +44,15 @@ use super::{
     slot_clock::SlotClock,
     state::{BlockChannelTx, TxState},
     tx_builder::{
-        build_atomic_bundle_ops_proofs, create_channel_config_tx, create_inscribe_tx,
-        find_own_key_index, fund_ops, prepare_tx as build_prepare_tx, sign_tx as build_sign_tx,
+        assemble_channel_config_tx, build_and_fund_config, build_atomic_bundle_ops_proofs,
+        create_channel_config_tx, create_inscribe_tx, find_own_key_index, fund_ops,
+        prepare_tx as build_prepare_tx, sign_tx as build_sign_tx,
     },
     types::{
         AtomicWithdrawInfo, ChannelWalletView, Error, Event, FundingConfig, InscriptionInfo,
-        PendingTx, PinDepositInfo, PublishResult, SequencerChannelView, SequencerCheckpoint,
-        SequencerConfig, TurnNotification, TxSource, TxStatus, TxStatusUpdate, WithdrawArg,
-        WithdrawInfo, WithdrawInputs,
+        PendingTx, PinDepositInfo, PreparedChannelConfig, PublishResult, SequencerChannelView,
+        SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource, TxStatus, TxStatusUpdate,
+        WithdrawArg, WithdrawInfo, WithdrawInputs,
     },
 };
 use crate::{adapter, adapter::BoxStream};
@@ -186,6 +188,21 @@ pub(super) enum ActorRequest {
         configuration_threshold: u16,
         transfer_threshold: u16,
         response_tx: oneshot::Sender<Result<(PublishReceipt, SignedMantleTx<Unverified>), Error>>,
+    },
+    PrepareChannelConfig {
+        keys: Keys,
+        posting_timeframe: SlotTimeframe,
+        posting_timeout: SlotTimeout,
+        configuration_threshold: u16,
+        transfer_threshold: u16,
+        response_tx: oneshot::Sender<Result<PreparedChannelConfig, Error>>,
+    },
+    SubmitChannelConfig {
+        // Boxed: `PreparedChannelConfig` is much larger than the other
+        // variants' payloads, so keep it off the enum's inline footprint.
+        prepared: Box<PreparedChannelConfig>,
+        signatures: Vec<IndexedSignature>,
+        response_tx: oneshot::Sender<Result<PublishReceipt, Error>>,
     },
     SubmitSignedTx {
         tx: SignedMantleTx<Unverified>,
@@ -588,6 +605,34 @@ where
                         .await,
                     ),
                 );
+            }
+            ActorRequest::PrepareChannelConfig {
+                keys,
+                posting_timeframe,
+                posting_timeout,
+                configuration_threshold,
+                transfer_threshold,
+                response_tx,
+            } => {
+                drop(
+                    response_tx.send(
+                        self.do_prepare_channel_config(
+                            keys,
+                            posting_timeframe,
+                            posting_timeout,
+                            configuration_threshold,
+                            transfer_threshold,
+                        )
+                        .await,
+                    ),
+                );
+            }
+            ActorRequest::SubmitChannelConfig {
+                prepared,
+                signatures,
+                response_tx,
+            } => {
+                drop(response_tx.send(self.do_submit_channel_config(*prepared, signatures)));
             }
             ActorRequest::SubmitSignedTx {
                 tx,
@@ -1172,6 +1217,110 @@ where
         };
         let publish_receipt = (publish_result, checkpoint);
         Ok((publish_receipt, signed_tx))
+    }
+
+    /// Build and fund a channel-config tx for external multi-sig signing,
+    /// without mutating state.
+    ///
+    /// The returned [`PreparedChannelConfig`] carries the funded tx (opaque),
+    /// the exact `sign_payload` each accredited key must sign, and the
+    /// channel's current accredited keys / `configuration_threshold` so the
+    /// caller knows whom to collect signatures from. Configuring the tx flows
+    /// through the same config-lineage parent detection
+    /// ([`super::state::TxState::config_tip_at`]) as the single-sig
+    /// [`Self::do_channel_config`]. The caller collects the signatures
+    /// out-of-band and submits via [`Self::do_submit_channel_config`].
+    ///
+    /// For an unclaimed channel the accredited-key list is empty and the
+    /// threshold `0` — the caller submits with no signatures (the empty
+    /// multi-sig proof), which the Mantle spec accepts for a claiming config.
+    ///
+    /// Takes `&mut self` for parity with the other async build/fund methods so
+    /// the resulting future stays `Send` (a `&self` future would instead
+    /// require `ZoneSequencer: Sync`, which the boxed block stream is not),
+    /// even though it does not mutate sequencer state.
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "&mut self keeps the async future Send; a &self future would require Sync"
+    )]
+    pub(super) async fn do_prepare_channel_config(
+        &mut self,
+        keys: Keys,
+        posting_timeframe: SlotTimeframe,
+        posting_timeout: SlotTimeout,
+        configuration_threshold: u16,
+        transfer_threshold: u16,
+    ) -> Result<PreparedChannelConfig, Error> {
+        self.ensure_ready()?;
+        self.ensure_fundable()?;
+
+        // Same config-lineage parent as `do_channel_config`: extend our local
+        // config tip so the config we prepare is never transiently orphaned by
+        // an ahead-of-us node config tip.
+        let parent = match (self.state.as_ref(), self.current_tip) {
+            (Some(state), Some(tip)) => state.config_tip_at(tip),
+            _ => MsgId::root(),
+        };
+
+        let (tx, transfer_proof) = build_and_fund_config(
+            &self.node,
+            &self.config.funding,
+            self.channel_id,
+            parent,
+            keys,
+            posting_timeframe,
+            posting_timeout,
+            configuration_threshold,
+            transfer_threshold,
+        )
+        .await?;
+
+        // The current (pre-update) accredited list is what the ledger verifies
+        // the collected signatures against — empty/0 for an unclaimed channel.
+        let (accredited_keys, signing_threshold) = self.channel_state.as_ref().map_or_else(
+            || (Vec::new(), 0),
+            |channel| {
+                (
+                    channel.accredited_keys.iter().copied().collect(),
+                    channel.configuration_threshold,
+                )
+            },
+        );
+
+        let sign_payload = tx.hash().as_signing_bytes().as_ref().to_vec();
+
+        Ok(PreparedChannelConfig {
+            tx,
+            transfer_proof,
+            sign_payload,
+            accredited_keys,
+            signing_threshold,
+        })
+    }
+
+    /// Assemble a prepared config tx with its externally-collected signatures
+    /// and submit it.
+    ///
+    /// `signatures` must be indexed against
+    /// [`PreparedChannelConfig::accredited_keys`] and strictly ascending by
+    /// index. Once assembled, the fully-signed config tx is a plain
+    /// `[CHANNEL_CONFIG, TRANSFER(fee)]` — identical in shape to a single-sig
+    /// config — so it flows through the same submit path as
+    /// [`Self::do_submit_signed_tx`] (track → `submit_other`, queue post,
+    /// checkpoint, tx status), keyed on the current message tip.
+    pub(super) fn do_submit_channel_config(
+        &mut self,
+        prepared: PreparedChannelConfig,
+        signatures: Vec<IndexedSignature>,
+    ) -> Result<PublishReceipt, Error> {
+        let signed_tx =
+            assemble_channel_config_tx(prepared.tx, prepared.transfer_proof, signatures)?;
+        // A pure config leaves the message tip unchanged, so the caller's
+        // `msg_id` is our current tip — `do_submit_signed_tx` derives no
+        // inscription tip from it and routes it to `submit_other`, exactly as
+        // `do_channel_config` does.
+        let msg_id = self.last_msg_id;
+        self.do_submit_signed_tx(signed_tx, msg_id)
     }
 
     pub(super) fn do_submit_signed_tx(

@@ -239,6 +239,7 @@ where
             // We don't need to generate secret zk info in the proxy service, so we ignore the
             // secret key at this level.
             None,
+            "blend_proxy_service",
         )
         .await
         // We take only the membership info from the epoch stream since the proxy service does not

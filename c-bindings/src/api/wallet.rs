@@ -813,7 +813,7 @@ pub unsafe extern "C" fn transfer_funds(
 /// # Safety
 ///
 /// `pointer` must be non-null and point to at least 32 readable bytes.
-unsafe fn parse_public_key(pointer: *const u8) -> StatusResult<ZkPublicKey> {
+pub(crate) unsafe fn parse_public_key(pointer: *const u8) -> StatusResult<ZkPublicKey> {
     let bytes = unsafe { std::slice::from_raw_parts(pointer, 32) };
     fr_from_bytes(bytes).map(ZkPublicKey::new).map_err(|error| {
         OperationStatus::error(

@@ -38,12 +38,12 @@ use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519K
 use lb_network_service::{NetworkService, backends::NetworkBackend};
 use lb_poq::{CorePathAndSelectors, KeyIndex};
 use lb_sdp_service::SdpMessage;
-use lb_utils::blake_rng::BlakeRng;
 use overwatch::{
     overwatch::{OverwatchHandle, commands::OverwatchCommand},
     services::{ServiceData, relay::OutboundRelay, state::StateUpdater},
 };
 use rand::SeedableRng as _;
+use rand_chacha::ChaCha20Rng;
 use rayon::ThreadPoolBuilder;
 use tokio::sync::{
     broadcast::{self},
@@ -127,8 +127,8 @@ const RELEASE_DELAY_SEED: u64 = 1;
 /// round a message goes out on, not how that round falls against events driven
 /// from elsewhere — an epoch rotation arriving over a channel, say. A test that
 /// depends on such an ordering needs more than this.
-pub fn seeded_release_delay_rng() -> BlakeRng {
-    BlakeRng::seed_from_u64(RELEASE_DELAY_SEED)
+pub fn seeded_release_delay_rng() -> ChaCha20Rng {
+    ChaCha20Rng::seed_from_u64(RELEASE_DELAY_SEED)
 }
 
 pub fn timing_settings() -> TimingSettings {
@@ -589,7 +589,7 @@ fn epoch_based_dummy_proofs(epoch: ZkHash) -> BlendLayerProof {
             bytes[..epoch_bytes.len()].copy_from_slice(&epoch_bytes);
             bytes
         }),
-        ephemeral_signing_key: UnsecuredEd25519Key::generate_with_blake_rng(),
+        ephemeral_signing_key: UnsecuredEd25519Key::generate_with_chacha_rng(),
     }
 }
 

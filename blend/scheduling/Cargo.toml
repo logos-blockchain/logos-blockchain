@@ -21,7 +21,6 @@ lb-blend-proofs       = { workspace = true }
 lb-blend-provers      = { workspace = true }
 lb-cryptarchia-engine = { workspace = true }
 lb-log-targets        = { workspace = true }
-lb-utils              = { features = ["rng", "tokio"], workspace = true }
 rand                  = { features = ["alloc"], workspace = true }
 thiserror             = { workspace = true }
 tokio                 = { workspace = true }
@@ -31,7 +30,9 @@ tracing               = { workspace = true }
 [dev-dependencies]
 lb-blend-message = { features = ["unsafe-test-functions"], workspace = true }
 lb-blend-proofs  = { features = ["unsafe-test-functions"], workspace = true }
+rand             = { features = ["getrandom"], workspace = true }
+rand_chacha      = { workspace = true }
 
 [features]
-tokio-task-names      = ["lb-utils/tokio-task-names"]
+tokio-task-names      = []
 unsafe-test-functions = ["lb-blend-membership/unsafe-test-functions"]

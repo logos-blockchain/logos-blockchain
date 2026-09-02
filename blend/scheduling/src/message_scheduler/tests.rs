@@ -6,8 +6,8 @@ use core::{
 use futures::{StreamExt as _, task::noop_waker_ref};
 use lb_blend_proofs::quota::Quota;
 use lb_cryptarchia_engine::Epoch;
-use lb_utils::blake_rng::BlakeRng;
 use rand::SeedableRng as _;
+use rand_chacha::ChaCha20Rng;
 use tokio_stream::iter;
 
 use crate::{
@@ -22,7 +22,7 @@ use crate::{
 
 #[tokio::test]
 async fn no_substream_ready_and_no_data_messages() {
-    let rng = BlakeRng::from_entropy();
+    let rng = ChaCha20Rng::from_entropy();
     let rounds = [Round::from(0)];
     let mut scheduler = EpochMessageScheduler::<_, (), ()>::with_test_values(
         // No cover messages to emit, tick will yield round `0`.
@@ -48,7 +48,7 @@ async fn no_substream_ready_and_no_data_messages() {
 
 #[tokio::test]
 async fn no_substream_ready_with_data_messages() {
-    let rng = BlakeRng::from_entropy();
+    let rng = ChaCha20Rng::from_entropy();
     let rounds = [Round::from(0)];
     let mut scheduler = EpochMessageScheduler::<_, (), u32>::with_test_values(
         // No cover messages to emit, tick will yield round `0`.
@@ -82,7 +82,7 @@ async fn no_substream_ready_with_data_messages() {
 
 #[tokio::test]
 async fn cover_traffic_substream_ready() {
-    let rng = BlakeRng::from_entropy();
+    let rng = ChaCha20Rng::from_entropy();
     let rounds = [Round::from(0)];
     let mut scheduler = EpochMessageScheduler::<_, (), u32>::with_test_values(
         // 1 cover message over 1 round: guaranteed emission.
@@ -113,7 +113,7 @@ async fn cover_traffic_substream_ready() {
 
 #[tokio::test]
 async fn release_delayer_substream_ready() {
-    let rng = BlakeRng::from_entropy();
+    let rng = ChaCha20Rng::from_entropy();
     let rounds = [Round::from(0)];
     let mut scheduler = EpochMessageScheduler::<_, u32, u32>::with_test_values(
         // No cover messages to emit.
@@ -144,7 +144,7 @@ async fn release_delayer_substream_ready() {
 
 #[tokio::test]
 async fn both_substreams_ready() {
-    let rng = BlakeRng::from_entropy();
+    let rng = ChaCha20Rng::from_entropy();
     let rounds = [Round::from(0)];
     let mut scheduler = EpochMessageScheduler::<_, u32, ()>::with_test_values(
         // 1 cover message over 1 round: guaranteed emission.
@@ -176,7 +176,7 @@ async fn both_substreams_ready() {
 
 #[tokio::test]
 async fn round_change() {
-    let rng = BlakeRng::from_entropy();
+    let rng = ChaCha20Rng::from_entropy();
     let rounds = [
         Round::from(0),
         Round::from(1),
@@ -244,7 +244,7 @@ async fn round_change() {
 
 #[tokio::test]
 async fn rotate_epoch_leaves_queued_data_messages_with_the_old_epoch() {
-    let rng = BlakeRng::from_entropy();
+    let rng = ChaCha20Rng::from_entropy();
     let rounds = [Round::from(0)];
     let scheduler = EpochMessageScheduler::<_, (), u32>::with_test_values(
         EpochCoverTraffic::with_test_values(Box::new(iter(rounds)), 0, 1.into(), rng.clone(), 0),
@@ -282,13 +282,13 @@ fn old_epoch_scheduler(
     next_release_round: u128,
     unreleased_processed_messages: Vec<u32>,
     data_messages: Vec<u32>,
-) -> OldEpochMessageScheduler<BlakeRng, u32, u32> {
+) -> OldEpochMessageScheduler<ChaCha20Rng, u32, u32> {
     let rounds = [Round::from(0)];
     OldEpochMessageScheduler {
         release_delayer: EpochProcessedMessageDelayer::with_test_values(
             NonZeroU64::try_from(1).unwrap(),
             next_release_round.into(),
-            BlakeRng::from_entropy(),
+            ChaCha20Rng::from_entropy(),
             Box::new(iter(rounds)),
             unreleased_processed_messages,
         ),

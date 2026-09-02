@@ -40,8 +40,10 @@ strum                         = { features = ["derive"], workspace = true }
 thiserror                     = { workspace = true }
 time                          = { workspace = true }
 tracing                       = { workspace = true }
+utoipa                        = { features = ["macros"], optional = true, workspace = true }
 
 [dev-dependencies]
+boon       = { workspace = true }
 divan      = { workspace = true }
 hasher     = { workspace = true }
 rand       = { workspace = true }
@@ -54,4 +56,5 @@ name    = "mantle_tx_components"
 
 [features]
 default               = []
+openapi               = ["dep:utoipa", "lb-utils/openapi"]
 unsafe-test-functions = []

@@ -66,7 +66,6 @@ use lb_services_utils::{
     wait_until_services_are_ready,
 };
 use lb_time_service::TimeService;
-use lb_utils::blake_rng::BlakeRng;
 use overwatch::{
     OpaqueServiceResourcesHandle,
     overwatch::OverwatchHandle,
@@ -77,6 +76,7 @@ use overwatch::{
     },
 };
 use rand::{RngCore, SeedableRng as _, seq::SliceRandom as _};
+use rand_chacha::ChaCha20Rng;
 use tokio::sync::oneshot;
 use tracing::{debug, error, info};
 
@@ -151,7 +151,7 @@ pub struct BlendService<
     StateStorage,
     RuntimeServiceId,
 > where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId>,
     Dispatcher: PayloadDispatcher<RuntimeServiceId>,
     StateStorage: RecoveryBackendTrait<
             RuntimeServiceId,
@@ -199,7 +199,7 @@ impl<
         RuntimeServiceId,
     >
 where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId>,
     Dispatcher: PayloadDispatcher<RuntimeServiceId>,
     StateStorage: RecoveryBackendTrait<
             RuntimeServiceId,
@@ -241,7 +241,7 @@ impl<
         RuntimeServiceId,
     >
 where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
     NodeId: membership::node_id::TryFrom + Clone + Debug + Send + Eq + Hash + Sync + 'static,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
     ProofsGenerator:
@@ -378,6 +378,7 @@ where
                 overwatch_handle,
                 non_ephemeral_signing_key.public_key(),
                 Some(zk_public_key),
+                "blend_core_service",
             )
             .await;
 
@@ -424,7 +425,7 @@ where
             &sdp_relay,
             last_saved_state,
             state_updater,
-            BlakeRng::from_entropy(),
+            ChaCha20Rng::from_entropy(),
         )
         .await;
 
@@ -510,7 +511,7 @@ async fn initialize<
     state_updater: StateUpdater<
         Option<RecoveryServiceState<Backend::Settings, Dispatcher::Settings>>,
     >,
-    release_delay_rng: BlakeRng,
+    release_delay_rng: ChaCha20Rng,
 ) -> (
     impl Stream<Item = EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, KmsAdapter::CorePoQGenerator>>>
     + Unpin
@@ -525,13 +526,13 @@ async fn initialize<
     >,
     ServiceState<Backend::Settings, Dispatcher::Settings>,
     PendingTransactions,
-    SchedulerWrapper<BlakeRng, ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
+    SchedulerWrapper<ChaCha20Rng, ProcessedMessage, EncapsulatedMessageWithVerifiedPublicHeader>,
     Backend,
-    BlakeRng,
+    ChaCha20Rng,
 )
 where
     NodeId: Clone + Debug + Eq + Hash + Send + 'static,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Sync,
     Dispatcher: PayloadDispatcher<RuntimeServiceId>,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<KmsAdapter::CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
@@ -759,11 +760,11 @@ where
             // relaying it, so it needs its own verifier for the epoch.
             proofs_verifier: ProofsVerifier::new(current_epoch_poq_verification_inputs),
         },
-        BlakeRng::from_entropy(),
+        ChaCha20Rng::from_entropy(),
     );
 
     // Rng for releasing messages.
-    let rng = BlakeRng::from_entropy();
+    let rng = ChaCha20Rng::from_entropy();
 
     // The transactions a previous run had queued, back in the shared queue that
     // also holds proposals.
@@ -847,7 +848,7 @@ async fn run_event_loop<
 where
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync + Send,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Sync + Send,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator> + Send,
     CorePoQGenerator: Send + Sync,
@@ -1027,7 +1028,7 @@ async fn run_current_epoch<
 where
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync + Send,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Sync + Send,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator> + Send,
     CorePoQGenerator: Send + Sync,
@@ -1119,7 +1120,7 @@ async fn run_during_transition<
 where
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync + Send,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Sync + Send,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator> + Send,
     CorePoQGenerator: Send + Sync,
@@ -1183,7 +1184,7 @@ async fn handle_service_message<
     recovery_checkpoint: ServiceState<Backend::Settings, NetworkSettings>,
 ) -> ServiceState<Backend::Settings, NetworkSettings>
 where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Sync,
     NetworkSettings: Clone,
 {
     match message {
@@ -1241,7 +1242,7 @@ async fn handle_current_epoch_event<
 where
     NodeId: Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Sync,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
@@ -1358,7 +1359,7 @@ async fn rotate<
 where
     NodeId: Clone + Eq + Hash + Send,
     Rng: rand::Rng + Clone + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId>,
     Dispatcher: PayloadDispatcher<RuntimeServiceId>,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
@@ -1549,7 +1550,7 @@ async fn retire<
 ) where
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Send + Sync,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
     CorePoQGenerator: Send + Sync,
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
@@ -1625,7 +1626,7 @@ where
     Rng: rand::Rng + Clone + Unpin,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId>,
 {
     match new_epoch_info {
         MaybeEmptyCoreEpochInfo::NonEmpty(core_epoch_info) => {
@@ -2297,7 +2298,7 @@ async fn handle_release_round<
 where
     NodeId: Eq + Hash + 'static,
     Rng: RngCore + Send,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Sync,
     ProofsGenerator: CoreLeaderAndPowProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
@@ -2386,7 +2387,7 @@ async fn handle_release_round_for_old_epoch<
 ) where
     NodeId: Eq + Hash + 'static,
     Rng: RngCore + Send,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Sync,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
 {
     // The old epoch never generates cover traffic, so the cover flag is always
@@ -2468,7 +2469,7 @@ fn build_futures_to_release_processed_messages<
 ) -> Vec<BoxFuture<'fut, ()>>
 where
     NodeId: Eq + Hash + 'static,
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Sync,
     Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
 {
     processed_messages_to_release
@@ -2566,11 +2567,39 @@ async fn submit_activity_proof(
     proof: ActivityProof,
     sdp_relay: &OutboundRelay<SdpMessage>,
 ) -> Result<(), RelayError> {
-    debug!(target: LOG_TARGET, "Submitting activity proof for the old epoch");
-    sdp_relay
+    let proof_epoch = proof.epoch();
+    debug!(
+        target: LOG_TARGET,
+        diagnostic = "blend_tsi_outage",
+        event = "sdp_activity_proof_submission_requested",
+        proof_epoch = u32::from(proof_epoch),
+        signing_key = ?proof.token().signing_key(),
+        "Requested activity proof submission to SDP"
+    );
+    let result = sdp_relay
         .send(SdpMessage::PostActivity {
             metadata: ActivityMetadata::Blend(Box::new((&proof).into())),
         })
         .await
-        .map_err(|(e, _)| e)
+        .map_err(|(e, _)| e);
+    match &result {
+        Ok(()) => debug!(
+            target: LOG_TARGET,
+            diagnostic = "blend_tsi_outage",
+            event = "sdp_activity_proof_submitted",
+            proof_epoch = u32::from(proof_epoch),
+            signing_key = ?proof.token().signing_key(),
+            "Submitted activity proof to SDP"
+        ),
+        Err(error) => error!(
+            target: LOG_TARGET,
+            diagnostic = "blend_tsi_outage",
+            event = "sdp_activity_proof_submission_failed",
+            proof_epoch = u32::from(proof_epoch),
+            signing_key = ?proof.token().signing_key(),
+            error = ?error,
+            "Failed to submit activity proof to SDP"
+        ),
+    }
+    result
 }

@@ -462,6 +462,16 @@ impl<'input> IntoIterator for &'input Inputs {
 #[serde(transparent)]
 pub struct NoteId(#[serde(with = "serde_fr")] pub Fr);
 
+#[cfg(feature = "openapi")]
+impl utoipa::PartialSchema for NoteId {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        lb_utils::openapi::hex_bytes_schema(size_of::<lb_groth16::FrBytes>())
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl utoipa::ToSchema for NoteId {}
+
 impl NoteId {
     #[must_use]
     pub const fn as_fr(&self) -> &Fr {

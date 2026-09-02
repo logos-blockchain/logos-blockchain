@@ -12,7 +12,7 @@ use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use lb_testing_framework::NodeHttpClient;
 use lb_zone_sdk::{
     adapter::NodeHttpClient as ZoneNodeHttpClient,
-    sequencer::{FundingConfig, ZoneSequencer},
+    sequencer::{FundingConfig, IndexedSignature, ZoneSequencer},
 };
 use tokio::{
     sync::broadcast,
@@ -135,11 +135,12 @@ mod publishing;
 mod sequencer;
 
 pub(super) use channel::{
-    publish_atomic_zone_withdraw_transaction, remember_published_zone_message,
-    save_zone_checkpoint, stop_zone_sequencer, submit_atomic_zone_deposit_transaction,
-    submit_zone_channel_config, submit_zone_channel_split_transaction,
-    submit_zone_deposit_transaction, submit_zone_multi_deposit_transaction,
-    submit_zone_withdraw_transaction,
+    prepare_zone_channel_config, publish_atomic_zone_withdraw_transaction,
+    remember_published_zone_message, save_zone_checkpoint, sign_prepared_zone_channel_config,
+    stop_zone_sequencer, submit_atomic_zone_deposit_transaction,
+    submit_prepared_zone_channel_config, submit_zone_channel_config,
+    submit_zone_channel_split_transaction, submit_zone_deposit_transaction,
+    submit_zone_multi_deposit_transaction, submit_zone_withdraw_transaction,
 };
 pub(super) use cluster::{
     register_zone_sequencers_with_shared_key, start_nodes_with_zone_resources,

@@ -7,7 +7,6 @@ no-default-features = true
 
 [advisories]
 ignore = [
-  { id = "RUSTSEC-2024-0370", reason = "`proc-macro-error` is unmaintained; consider using an alternative. Use `cargo tree -p proc-macro-error -i > tmp.txt` to check the dependency tree." },
   { id = "RUSTSEC-2024-0388", reason = "`derivative` is unmaintained; consider using an alternative. Use `cargo tree -p derivative -i > tmp.txt` to check the dependency tree." },
   { id = "RUSTSEC-2024-0436", reason = "`paste` has a security vulnerability; consider using an alternative. Use `cargo tree -p paste -i > tmp.txt` to check the dependency tree." },
   { id = "RUSTSEC-2025-0055", reason = "`tracing-subscriber` v0.2.25 pulled in by ark-relations v0.4.0 - will be addressed before mainnet" },
@@ -15,8 +14,8 @@ ignore = [
   { id = "RUSTSEC-2026-0118", reason = "`hickory-proto` can enter an unbounded DNSSEC NSEC3 validation loop and exhaust memory; pulled in through libp2p." },
   { id = "RUSTSEC-2026-0119", reason = "`hickory-proto` DNS message compression can cause CPU exhaustion during encoding; pulled in through libp2p." },
   { id = "RUSTSEC-2026-0173", reason = "`proc-macro-error2` is unmaintained." },
-  { id = "RUSTSEC-2026-0194", reason = "`quick-xml` is used by pprof and will not parse untrusted XML." },
-  { id = "RUSTSEC-2026-0195", reason = "`quick-xml` is used by cucumber and will not parse untrusted XML." },
+  { id = "RUSTSEC-2026-0194", reason = "`quick-xml` v0.26 is pulled in by pprof (via inferno) and will not parse untrusted XML." },
+  { id = "RUSTSEC-2026-0195", reason = "`quick-xml` v0.26 is pulled in by pprof (via inferno) and will not parse untrusted XML." },
 ]
 unused-ignored-advisory = "deny"
 yanked = "deny"

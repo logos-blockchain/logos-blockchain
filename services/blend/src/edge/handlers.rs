@@ -14,9 +14,9 @@ use lb_blend::{
     },
 };
 use lb_chain_service::Epoch;
-use lb_utils::blake_rng::BlakeRng;
 use overwatch::overwatch::OverwatchHandle;
 use rand::SeedableRng as _;
+use rand_chacha::ChaCha20Rng;
 
 use crate::edge::{RunningSettings as Settings, backends::BlendBackend};
 
@@ -69,7 +69,7 @@ where
             settings.backend,
             overwatch_handle,
             membership,
-            BlakeRng::from_entropy(),
+            ChaCha20Rng::from_entropy(),
             settings.non_ephemeral_signing_key,
         );
         Self {

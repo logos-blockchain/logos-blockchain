@@ -70,6 +70,9 @@ pub struct UserConfig {
     #[serde(default)]
     pub kms: KmsConfig,
     pub wallet: WalletConfig,
+    /// Optional: an omitted section leaves mining on its defaults and
+    /// auto-claim off.
+    #[serde(default)]
     pub pow: PoWConfig,
     #[serde(default)]
     pub tracing: TracingConfig,
@@ -82,7 +85,6 @@ pub struct RequiredValues {
     pub cryptarchia: CryptarchiaConfig,
     pub sdp: SdpConfig,
     pub wallet: WalletConfig,
-    pub pow: PoWConfig,
 }
 
 impl UserConfig {
@@ -93,9 +95,11 @@ impl UserConfig {
             cryptarchia: required_values.cryptarchia,
             sdp: required_values.sdp,
             wallet: required_values.wallet,
-            pow: required_values.pow,
 
             api: ApiConfig::default(),
+            // Mining defaults, auto-claim off: unattended claiming is opt-in
+            // through `pow.auto_claim.targets`.
+            pow: PoWConfig::default(),
             kms: KmsConfig::default(),
             network: NetworkConfig::default(),
             state: StateConfig::default(),

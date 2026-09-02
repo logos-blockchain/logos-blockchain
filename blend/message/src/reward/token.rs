@@ -85,6 +85,11 @@ pub struct HammingDistance(u64);
 impl HammingDistance {
     pub const MAX: Self = Self(u64::MAX);
 
+    #[must_use]
+    pub const fn value(self) -> u64 {
+        self.0
+    }
+
     /// Computes the Hamming distance between two byte slices.
     /// (i.e. the number of differing bits)
     ///

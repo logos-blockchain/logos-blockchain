@@ -1,14 +1,17 @@
-use lb_core::mantle::{
-    SignedMantleTx,
-    channel::{SlotTimeframe, SlotTimeout},
-    ledger::NoteId,
-    ops::channel::{MsgId, config::Keys, inscribe::Inscription},
-    transactions::{Ops, mantle_tx::RawMantleTx, states::Unverified},
+use lb_core::{
+    mantle::{
+        SignedMantleTx,
+        channel::{SlotTimeframe, SlotTimeout},
+        ledger::NoteId,
+        ops::channel::{MsgId, config::Keys, inscribe::Inscription},
+        transactions::{Ops, mantle_tx::RawMantleTx, states::Unverified},
+    },
+    proofs::channel_multi_sig_proof::IndexedSignature,
 };
 use lb_key_management_system_service::keys::Ed25519Signature;
 
 use super::{
-    types::{ChannelWalletView, Error, WithdrawArg, WithdrawInputs},
+    types::{ChannelWalletView, Error, PreparedChannelConfig, WithdrawArg, WithdrawInputs},
     zone_sequencer::ZoneSequencer,
 };
 use crate::{adapter, sequencer::zone_sequencer::PublishReceipt};
@@ -157,6 +160,57 @@ where
                 transfer_threshold,
             )
             .await
+    }
+
+    /// Build and fund a channel-config tx for external multi-sig signing.
+    ///
+    /// The multi-sig counterpart of [`Self::channel_config`]: instead of
+    /// signing with the sequencer's own key, it hands back a
+    /// [`PreparedChannelConfig`] carrying the funded tx, the `sign_payload`
+    /// each accredited key must sign, and the channel's current accredited
+    /// keys / `configuration_threshold`. The caller collects a signature from
+    /// each required key holder over `sign_payload`, then submits the
+    /// fully-signed tx via [`Self::submit_channel_config`]. Does not mutate
+    /// sequencer state.
+    ///
+    /// The config-lineage parent is auto-detected exactly as in
+    /// [`Self::channel_config`], so the prepared config extends the current
+    /// config tip. For an unclaimed channel the returned accredited-key list
+    /// is empty and the threshold `0` — submit with no signatures.
+    pub async fn prepare_channel_config(
+        &mut self,
+        keys: Keys,
+        posting_timeframe: SlotTimeframe,
+        posting_timeout: SlotTimeout,
+        configuration_threshold: u16,
+        transfer_threshold: u16,
+    ) -> Result<PreparedChannelConfig, Error> {
+        self.sequencer
+            .do_prepare_channel_config(
+                keys,
+                posting_timeframe,
+                posting_timeout,
+                configuration_threshold,
+                transfer_threshold,
+            )
+            .await
+    }
+
+    /// Submit a [`PreparedChannelConfig`] with its externally-collected
+    /// signatures.
+    ///
+    /// `signatures` must be indexed against
+    /// [`PreparedChannelConfig::accredited_keys`] and strictly ascending by
+    /// index. Assembles the fully-signed config tx and enqueues it for posting
+    /// on the drive loop's in-flight pool — the returned [`PublishReceipt`]
+    /// reflects the queued state, not a network acknowledgement.
+    pub fn submit_channel_config(
+        &mut self,
+        prepared: PreparedChannelConfig,
+        signatures: Vec<IndexedSignature>,
+    ) -> Result<PublishReceipt, Error> {
+        self.sequencer
+            .do_submit_channel_config(prepared, signatures)
     }
 
     /// Publish an atomic inscription+withdraw bundle.

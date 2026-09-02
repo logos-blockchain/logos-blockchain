@@ -536,7 +536,7 @@ fn decapsulate_empty_private_headers_returns_error() {
         );
         let verified_public_header = VerifiedPublicHeader::new(
             VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
-            UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
+            UnsecuredEd25519Key::generate_with_chacha_rng().public_key(),
             [0u8; _].into(),
         );
         EncapsulatedMessageWithVerifiedPublicHeader::from_components(verified_public_header, part)
@@ -638,14 +638,14 @@ fn try_new_fully_encapsulated(
 
 fn generate_inputs(cnt: usize) -> (Vec<EncapsulationInput>, Vec<X25519PrivateKey>) {
     let recipient_signing_keys =
-        core::iter::repeat_with(UnsecuredEd25519Key::generate_with_blake_rng)
+        core::iter::repeat_with(UnsecuredEd25519Key::generate_with_chacha_rng)
             .take(cnt)
             .collect::<Vec<_>>();
     let inputs = recipient_signing_keys
         .iter()
         .map(|recipient_signing_key| {
             EncapsulationInput::try_new(
-                UnsecuredEd25519Key::generate_with_blake_rng(),
+                UnsecuredEd25519Key::generate_with_chacha_rng(),
                 &recipient_signing_key.public_key(),
                 VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
                 VerifiedProofOfSelection::from_bytes_unchecked([0; _]),

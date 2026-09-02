@@ -30,6 +30,7 @@ use lb_core::{
             },
             leader_claim::LeaderClaimExecutionContext,
             pow::{ClaimPoWRewardExecutionContext, PowReward},
+            sdp::{SDPActiveOp, SDPDeclareOp},
         },
         traits::{GenesisTx, MantleTxWithProofs, PreverifiedMantleTx},
         transactions::{GasPrices, MantleTxGasContext, hash::TxHash, mantle_tx::MantleTxContext},
@@ -252,9 +253,8 @@ impl LedgerState {
         // claims may anchor to. This is the canonical apply path, where the
         // block's id is known — unlike a proposer's direct
         // `try_apply_header` call for a block still being built.
-        state
-            .mantle_ledger
-            .add_seen_block(block_id.into(), slot, config);
+        let block_hash: BlockHash = block_id.into();
+        state.mantle_ledger.add_seen_block(block_hash, slot, config);
         // Count the block's transactions into the epoch totals the Blend `PoW`
         // difficulty is retargeted from, for the same reason as above: only a
         // block that is actually applied, contents included, belongs in the
@@ -630,6 +630,81 @@ impl LedgerState {
         }
     }
 
+    fn log_sdp_declaration_evaluation(
+        &self,
+        op: &SDPDeclareOp,
+        result: &MantleLedger,
+        config: &Config,
+    ) {
+        if !tracing::enabled!(tracing::Level::TRACE) {
+            return;
+        }
+        let Some(declaration) = result.sdp_ledger().get_declaration(&op.id()) else {
+            return;
+        };
+        let inactivity_period = config
+            .sdp_config
+            .service_params
+            .get(&declaration.service_type)
+            .map_or(0, |parameters| {
+                parameters.inactivity_period.into_inner().into_inner()
+            });
+        tracing::trace!(
+            diagnostic = "blend_tsi_outage",
+            event = "sdp_declaration_applied",
+            evaluation_context = "candidate",
+            canonical = false,
+            provider_id = ?declaration.provider_id,
+            declaration_id = ?op.id(),
+            ledger_epoch = u32::from(self.cryptarchia_ledger.epoch_state().epoch),
+            ledger_slot = u64::from(self.cryptarchia_ledger.slot()),
+            initial_active_epoch = u32::from(declaration.active),
+            inactivity_period,
+            "Evaluated SDP declaration on a candidate block"
+        );
+    }
+
+    fn log_sdp_activity_evaluation(
+        &self,
+        op: &SDPActiveOp,
+        result: &MantleLedger,
+        config: &Config,
+        tx_hash: &TxHash,
+        previous_active_epoch: Option<lb_cryptarchia_engine::Epoch>,
+    ) {
+        if !tracing::enabled!(tracing::Level::TRACE) {
+            return;
+        }
+        let Some(new_declaration) = result.sdp_ledger().get_declaration(&op.declaration_id) else {
+            return;
+        };
+        let slot = self.cryptarchia_ledger.slot();
+        let epoch = self.cryptarchia_ledger.epoch_state().epoch;
+        let inactivity_period = config
+            .sdp_config
+            .service_params
+            .get(&new_declaration.service_type)
+            .map_or(0, |parameters| {
+                parameters.inactivity_period.into_inner().into_inner()
+            });
+        tracing::trace!(
+            diagnostic = "blend_tsi_outage",
+            event = "sdp_activity_applied",
+            evaluation_context = "candidate",
+            canonical = false,
+            proof_epoch = u32::from(op.metadata.origin_epoch()),
+            ledger_epoch = u32::from(epoch),
+            ledger_slot = u64::from(slot),
+            tx_id = ?tx_hash,
+            provider_id = ?new_declaration.provider_id,
+            declaration_id = ?op.declaration_id,
+            previous_active_epoch = ?previous_active_epoch,
+            new_active_epoch = ?new_declaration.active,
+            active_until_epoch = u32::from(new_declaration.active).saturating_add(inactivity_period),
+            "Evaluated SDP activity message on a candidate block"
+        );
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "This will be refactored in an upcoming PR."
@@ -700,17 +775,32 @@ impl LedgerState {
                 tx_events.extend(events);
             }
             Op::SDPDeclare(op) => {
-                let (result, events) = self.mantle_ledger.try_apply_sdp_declaration(
+                let (mantle_ledger, events) = self.mantle_ledger.try_apply_sdp_declaration(
                     op,
                     self.cryptarchia_ledger.latest_utxos(),
                     config,
                 )?;
-                self.mantle_ledger = result;
+                self.mantle_ledger = mantle_ledger;
+                self.log_sdp_declaration_evaluation(op, &self.mantle_ledger, config);
                 tx_events.extend(events);
             }
             Op::SDPActive(op) => {
-                let (result, events) = self.mantle_ledger.try_apply_sdp_active(op, config)?;
-                self.mantle_ledger = result;
+                let previous_active_epoch = tracing::enabled!(tracing::Level::TRACE).then(|| {
+                    self.mantle_ledger
+                        .sdp_ledger()
+                        .get_declaration(&op.declaration_id)
+                        .map(|declaration| declaration.active)
+                });
+                let (mantle_ledger, events) =
+                    self.mantle_ledger.try_apply_sdp_active(op, config)?;
+                self.mantle_ledger = mantle_ledger;
+                self.log_sdp_activity_evaluation(
+                    op,
+                    &self.mantle_ledger,
+                    config,
+                    tx_hash,
+                    previous_active_epoch.flatten(),
+                );
                 tx_events.extend(events);
             }
             Op::SDPWithdraw(op) => {
@@ -854,7 +944,6 @@ mod tests {
                     withdraw::ChannelWithdrawOp,
                 },
                 leader_claim::{LeaderClaimError, LeaderClaimOp, LeaderClaimVerificationContext},
-                sdp::SDPActiveOp,
                 transfer::TransferOp,
             },
             traits::Hashable as _,
@@ -2402,21 +2491,24 @@ mod tests {
                 rate_num: 0,
                 rate_den: NonZeroU64::MIN,
                 target_claim_per_block: NonZeroU64::MIN,
-                expected_blocks_per_epoch: NonZeroU64::MIN,
                 slot_window: NonZeroU64::new(100).expect("100 is non-zero"),
             }
         }
 
         /// A payout rate of `1/100`: `sigma_e = pool / 100`, used to give the
-        /// `PoW` state a nonzero per-claim reward in tests.
-        fn test_pool_config() -> RewardPoWConfig {
-            RewardPoWConfig {
+        /// `PoW` state a nonzero per-claim reward in tests. The denominator is
+        /// `rate_den (1) * target_claim_per_block (10) *
+        /// expected_blocks_per_epoch (10, derived from the test consensus
+        /// schedule)`.
+        fn test_pool_config() -> Config {
+            let mut config = config();
+            config.pow_config.reward = RewardPoWConfig {
                 rate_num: 1,
                 rate_den: NonZeroU64::MIN,
                 target_claim_per_block: NonZeroU64::new(10).expect("10 is non-zero"),
-                expected_blocks_per_epoch: NonZeroU64::new(10).expect("10 is non-zero"),
                 ..disabled_reward_config()
-            }
+            };
+            config
         }
 
         /// A ledger state with a funded `PoW` pool (1000, `sigma_e` = 10) and
@@ -2535,10 +2627,7 @@ mod tests {
             let config = config();
             let mut state = LedgerState::from_utxos([utxo()], &config);
             // The default reward config disables claiming (`rate_num = 0`).
-            state
-                .mantle_ledger
-                .pow
-                .add_rewards_to_pool(&disabled_reward_config());
+            state.mantle_ledger.pow.add_rewards_to_pool(&config);
             assert_eq!(state.mantle_ledger.pow.epoch_reward(), 0);
 
             let err = state

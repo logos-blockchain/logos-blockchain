@@ -192,6 +192,7 @@ axum                               = { default-features = false, version = "0.7.
 backon                             = { default-features = false, version = "1.3.0" }
 bincode                            = { default-features = false, version = "1.3" }
 blake2                             = { default-features = false, version = "0.10" }
+boon                               = { default-features = false, version = "0.6" }
 bytes                              = { default-features = false, version = "1.3" }
 cbindgen                           = { default-features = false, version = "0.29" }
 chrono                             = { default-features = false, version = "0.4" }
@@ -200,7 +201,7 @@ clap                               = { default-features = false, version = "4" }
 color-eyre                         = { default-features = false, version = "0.6.0" }
 console-subscriber                 = { default-features = false, version = "0.5" }
 const-hex                          = { default-features = false, version = "1" }
-cucumber                           = { default-features = false, version = "=0.22.0" }
+cucumber                           = { default-features = false, version = "=0.23.0" }
 derivative                         = { default-features = false, version = "2" }
 dhat                               = { default-features = false, version = "0.3.3" }
 divan                              = { default-features = false, version = "0.1" }
@@ -227,7 +228,6 @@ lru                                = { default-features = false, version = "0.18
 multiaddr                          = { default-features = false, version = "0.18" }
 natpmp                             = { default-features = false, version = "0.5" }
 netdev                             = { default-features = false, version = "0.31" }
-nistrs                             = { default-features = false, version = "0.1.2" }
 num-bigint                         = { default-features = false, version = "0.4" }
 num-traits                         = { default-features = false, version = "0.2.19" }
 num_enum                           = { default-features = false, version = "0.7.4" }
@@ -295,8 +295,8 @@ tracing-loki          = { default-features = false, version = "0.2.5" }
 tracing-opentelemetry = { default-features = false, version = "0.33.0" }
 tracing-subscriber    = { default-features = false, version = "0.3" }
 url                   = { default-features = false, version = "2" }
-utoipa                = { default-features = false, version = "4.0" }
-utoipa-swagger-ui     = { default-features = false, version = "7.0" }
+utoipa                = { default-features = false, version = "5.0" }
+utoipa-swagger-ui     = { default-features = false, version = "8.0" }
 uuid                  = { default-features = false, version = "1" }
 validator             = { default-features = false, version = "0.20.0" }
 x25519-dalek          = { default-features = false, version = "2" }

@@ -16,9 +16,13 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         NoteId, SignedMantleTx,
+        traits::Hashable as _,
         transactions::{MantleTxBuilder, states::Preverified},
     },
-    sdp::{ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, WithdrawMessage},
+    sdp::{
+        ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, ProviderId,
+        WithdrawMessage,
+    },
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_ledger::{Intent, IntentStatus, LedgerState};
@@ -80,6 +84,14 @@ pub struct RuntimeDeclaration {
     pub service_note_id: NoteId,
     pub nonce: u64,
     pub tip: HeaderId,
+}
+
+#[derive(Clone, Debug)]
+struct RuntimeDeclarationContext {
+    declaration: RuntimeDeclaration,
+    chain_epoch: u32,
+    chain_slot: u64,
+    provider_id: ProviderId,
 }
 
 pub enum SdpMessage {
@@ -374,7 +386,7 @@ where
         &self,
         declaration_id: DeclarationId,
         chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
-    ) -> Result<RuntimeDeclaration, SdpError> {
+    ) -> Result<RuntimeDeclarationContext, SdpError> {
         self.fetch_declaration_from_ledger(chain_api, declaration_id)
             .await?
             .map_or_else(
@@ -384,8 +396,8 @@ where
                 },
                 |declaration| {
                     tracing::info!(
-                        ?declaration.id,
-                        declaration.nonce,
+                        ?declaration.declaration.id,
+                        declaration.declaration.nonce,
                         "Loaded declaration from ledger"
                     );
                     Ok(declaration)
@@ -398,7 +410,7 @@ where
         &self,
         chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
         declaration_id: DeclarationId,
-    ) -> Result<Option<RuntimeDeclaration>, DynError> {
+    ) -> Result<Option<RuntimeDeclarationContext>, DynError> {
         // Get current chain info to find the tip
         let ChainServiceInfo {
             cryptarchia_info, ..
@@ -419,12 +431,17 @@ where
             return Ok(None);
         };
 
-        Ok(Some(RuntimeDeclaration {
-            id: declaration_id,
-            zk_id: declaration.zk_id,
-            service_note_id: declaration.service_note_id,
-            nonce: declaration.nonce,
-            tip,
+        Ok(Some(RuntimeDeclarationContext {
+            declaration: RuntimeDeclaration {
+                id: declaration_id,
+                zk_id: declaration.zk_id,
+                service_note_id: declaration.service_note_id,
+                nonce: declaration.nonce,
+                tip,
+            },
+            chain_epoch: u32::from(ledger_state.epoch_state().epoch),
+            chain_slot: u64::from(ledger_state.slot()),
+            provider_id: declaration.provider_id,
         }))
     }
 
@@ -471,6 +488,17 @@ where
     ) {
         let tx_builder = MantleTxBuilder::new();
         let declaration_id = declaration.id();
+        let provider_id = declaration.provider_id;
+        let zk_id = declaration.zk_id;
+
+        tracing::debug!(
+            diagnostic = "blend_tsi_outage",
+            event = "sdp_declaration_submission_requested",
+            provider_id = ?provider_id,
+            declaration_id = ?declaration_id,
+            zk_id = ?zk_id,
+            "Requested SDP declaration transaction submission"
+        );
 
         let signed_tx = match wallet_adapter
             .declare_tx(tx_builder, *declaration, &self.wallet_config)
@@ -484,11 +512,32 @@ where
             }
         };
 
+        let tx_id = signed_tx.hash();
+        tracing::debug!(
+            diagnostic = "blend_tsi_outage",
+            event = "sdp_declaration_tx_created",
+            provider_id = ?provider_id,
+            declaration_id = ?declaration_id,
+            zk_id = ?zk_id,
+            tx_id = ?tx_id,
+            "Created SDP declaration transaction"
+        );
+
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
             tracing::error!("Failed to post declaration to mempool: {:?}", e);
             metrics::declaration_mempool_failures_total();
             return;
         }
+
+        tracing::info!(
+            diagnostic = "blend_tsi_outage",
+            event = "sdp_declaration_submitted",
+            provider_id = ?provider_id,
+            declaration_id = ?declaration_id,
+            zk_id = ?zk_id,
+            tx_id = ?tx_id,
+            "Submitted SDP declaration transaction"
+        );
 
         if let Err(e) = reply_channel.send(Ok(declaration_id)) {
             tracing::error!("Failed to send post declaration response: {:?}", e);
@@ -537,7 +586,11 @@ where
         self.update_state();
     }
 
-    #[expect(clippy::cognitive_complexity, reason = "TODO: refactor")]
+    #[expect(
+        clippy::cognitive_complexity,
+        clippy::too_many_lines,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn submit_activity(
         &self,
         activity: Activity,
@@ -550,7 +603,12 @@ where
             "submitting activity message"
         );
 
-        let Ok(ref declaration) = self
+        let Ok(RuntimeDeclarationContext {
+            declaration,
+            chain_epoch,
+            chain_slot,
+            provider_id,
+        }) = self
             .try_fetch_runtime_declaration(activity.declaration_id, chain_api)
             .await
         else {
@@ -562,8 +620,23 @@ where
             tracing::error!("Can't bump nonce");
             return None;
         };
-        let activity = ActiveMessage {
-            declaration_id: activity.declaration_id,
+
+        let proof_epoch = u32::from(activity.metadata.origin_epoch());
+
+        tracing::debug!(
+            diagnostic = "blend_tsi_outage",
+            event = "sdp_activity_submission_requested",
+            proof_epoch,
+            chain_epoch,
+            chain_slot,
+            provider_id = ?provider_id,
+            zk_id = ?declaration.zk_id,
+            declaration_id = ?declaration.id,
+            "Requested SDP activity transaction submission"
+        );
+
+        let active_message = ActiveMessage {
+            declaration_id: declaration.id,
             nonce,
             metadata: activity.metadata,
         };
@@ -571,23 +644,74 @@ where
         let tx_builder = MantleTxBuilder::new();
 
         let signed_tx = match wallet_adapter
-            .active_tx(tx_builder, activity, &self.wallet_config)
+            .active_tx(tx_builder, active_message, &self.wallet_config)
             .await
         {
             Ok(tx) => tx,
             Err(e) => {
-                tracing::error!("Failed to create activity transaction: {:?}", e);
+                tracing::error!(
+                    diagnostic = "blend_tsi_outage",
+                    event = "sdp_activity_tx_failed",
+                    proof_epoch,
+                    chain_epoch,
+                    chain_slot,
+                    provider_id = ?provider_id,
+                    zk_id = ?declaration.zk_id,
+                    declaration_id = ?declaration.id,
+                    stage = "create",
+                    error = %e,
+                    "Failed to create SDP activity transaction"
+                );
                 metrics::activity_tx_failures_total();
                 return None;
             }
         };
 
+        let tx_id = signed_tx.hash();
+        tracing::debug!(
+            diagnostic = "blend_tsi_outage",
+            event = "sdp_activity_tx_created",
+            proof_epoch,
+            chain_epoch,
+            chain_slot,
+            provider_id = ?provider_id,
+            zk_id = ?declaration.zk_id,
+            declaration_id = ?declaration.id,
+            tx_id = ?tx_id,
+            "Created SDP activity transaction"
+        );
+
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
-            tracing::error!("Failed to post activity to mempool: {:?}", e);
+            tracing::error!(
+                diagnostic = "blend_tsi_outage",
+                event = "sdp_activity_tx_failed",
+                proof_epoch,
+                chain_epoch,
+                chain_slot,
+                provider_id = ?provider_id,
+                zk_id = ?declaration.zk_id,
+                declaration_id = ?declaration.id,
+                stage = "submit",
+                tx_id = ?tx_id,
+                error = %e,
+                "Failed to submit SDP activity transaction"
+            );
             metrics::activity_mempool_failures_total();
             return None;
         }
 
+        tracing::info!(
+            diagnostic = "blend_tsi_outage",
+            event = "sdp_activity_tx_submitted",
+            proof_epoch,
+            chain_epoch,
+            chain_slot,
+            provider_id = ?provider_id,
+            zk_id = ?declaration.zk_id,
+            declaration_id = ?declaration.id,
+            tx_id = ?tx_id,
+            "Submitted SDP activity transaction"
+        );
         metrics::activity_success_total();
         Some(declaration.tip)
     }
@@ -603,7 +727,7 @@ where
         mempool_adapter: &MempoolAdapter,
         chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
     ) {
-        let Ok(ref declaration) = self
+        let Ok(RuntimeDeclarationContext { declaration, .. }) = self
             .try_fetch_runtime_declaration(declaration_id, chain_api)
             .await
         else {

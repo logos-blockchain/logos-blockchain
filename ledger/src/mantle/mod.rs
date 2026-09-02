@@ -155,9 +155,9 @@ impl LedgerState {
             self.sdp
                 .try_apply_header(&config.sdp_config, last_epoch_state, epoch_state)?;
         self.sdp = new_sdp;
-        self.pow =
-            self.pow
-                .try_apply_header(last_epoch_state, epoch_state, &config.pow_config.reward);
+        self.pow = self
+            .pow
+            .try_apply_header(last_epoch_state, epoch_state, config);
         Ok((self, effect))
     }
 
@@ -219,13 +219,13 @@ impl LedgerState {
         utxo_tree: &UtxoTree,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
-        let (result, events) = self
+        let (sdp, events) = self
             .sdp
             .try_apply_sdp_declaration(utxo_tree, sdp_declare_op, &config.sdp_config)
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply SDP declare message"),
             )?;
-        self.sdp = result;
+        self.sdp = sdp;
         Ok((self, events))
     }
 
@@ -234,13 +234,13 @@ impl LedgerState {
         sdp_active_op: &SDPActiveOp,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
-        let (result, events) = self
+        let (sdp, events) = self
             .sdp
             .apply_active_msg(sdp_active_op, &config.sdp_config)
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply SDP active message"),
             )?;
-        self.sdp = result;
+        self.sdp = sdp;
         Ok((self, events))
     }
 

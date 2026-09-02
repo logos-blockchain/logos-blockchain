@@ -1,4 +1,4 @@
-use lb_utils::blake_rng::BlakeRng;
+use rand_chacha::ChaCha20Rng;
 use tokio::sync::oneshot;
 
 use crate::{
@@ -44,7 +44,7 @@ impl<
         RuntimeServiceId,
     >
 where
-    Backend: BlendBackend<NodeId, BlakeRng, ProofsVerifier, RuntimeServiceId>,
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId>,
     Network: PayloadDispatcher<RuntimeServiceId>,
     StateStorage: lb_services_utils::overwatch::recovery::RecoveryBackend<
             RuntimeServiceId,
@@ -55,7 +55,7 @@ where
     type PayloadDispatcher = Network;
     type BackendSettings = Backend::Settings;
     type NodeId = NodeId;
-    type Rng = BlakeRng;
+    type Rng = ChaCha20Rng;
     type ProofsGenerator = ProofsGenerator;
 }
 

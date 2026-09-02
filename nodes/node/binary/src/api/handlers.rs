@@ -13,14 +13,14 @@ use axum::{
 use futures::FutureExt as _;
 use lb_api_service::http::{
     DynError, blend,
-    consensus::{self, Cryptarchia},
+    consensus::{self, Cryptarchia, leader::LeaderClaimResponseBody},
     libp2p, mantle, mempool, pow,
     storage::StorageAdapter,
 };
 use lb_blend_service::message::ProxyServiceMessage;
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_chain_leader_service::api::ChainLeaderServiceData;
-use lb_chain_service::{ConsensusMsg, Slot, api::CryptarchiaServiceApi};
+use lb_chain_service::{ChainServiceInfo, ConsensusMsg, Slot, api::CryptarchiaServiceApi};
 use lb_core::{
     block::Block,
     events::Events,
@@ -77,11 +77,12 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tokio_stream::StreamExt as _;
 use tracing::debug;
+use utoipa::ToSchema;
 
 use crate::{
     TimeService,
     api::{
-        errors::{ApiError, BlocksStreamHandlerError, BlocksStreamWindowError},
+        errors::{ApiError, BlocksStreamHandlerError, BlocksStreamWindowError, ErrorBody},
         openapi::schema,
         queries::{BlockRangeQuery, BlocksStreamRequest},
         responses::{self, overwatch::get_relay},
@@ -106,8 +107,10 @@ fn validate_max_tx_fee(
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct DialPeerRequestBody {
+    /// Multiaddress of the peer to dial.
+    #[schema(value_type = String)]
     pub addr: Multiaddr,
 }
 
@@ -425,7 +428,7 @@ where
     post,
     path = paths::MANTLE_STATUS,
     responses(
-        (status = 200, description = "Query the mempool status of the cl service", body = Vec<<T as Transaction>::Hash>),
+        (status = 200, description = "Query the mempool status of the cl service", body = Vec<TxHash>),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -496,7 +499,7 @@ pub struct CryptarchiaInfoQuery {
     get,
     path = paths::CRYPTARCHIA_INFO,
     responses(
-        (status = 200, description = "Query consensus information", body = lb_consensus::CryptarchiaInfo),
+        (status = 200, description = "Query consensus information", body = ChainServiceInfo),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -619,7 +622,7 @@ where
     path = paths::DIAL_PEER,
     request_body = DialPeerRequestBody,
     responses(
-        (status = 200, description = "Dial a network peer", body = PeerId),
+        (status = 200, description = "Dial a network peer", body = String),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -645,7 +648,7 @@ where
     get,
     path = paths::BLEND_NETWORK_INFO,
     responses(
-        (status = 200, description = "Query the blend network information", body = Option<lb_blend_service::message::NetworkInfo<PeerId>>),
+        (status = 200, description = "Query the blend network information", body = Option<Object>),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -664,7 +667,7 @@ where
 #[utoipa::path(
     post,
     path = paths::BLEND_JOIN_NETWORK,
-    request_body = BlendJoinNetworkRequestBody,
+    request_body = JoinBlendRequestBody,
     responses(
         (status = 200, description = "Join the blend network", body = Option<lb_core::sdp::DeclarationId>),
         (status = 500, description = "Internal server error", body = ErrorBody),
@@ -1297,7 +1300,7 @@ where
     get,
     path = paths::MANTLE_SDP_DECLARATIONS,
     responses(
-        (status = 200, description = "Get current SDP declarations keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, lb_core::sdp::Declaration>),
+        (status = 200, description = "Get current SDP declarations keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, Object>),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1315,7 +1318,7 @@ where
     get,
     path = paths::MANTLE_SDP_SNAPSHOT,
     responses(
-        (status = 200, description = "Get the SDP snapshot for the current epoch keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, lb_core::sdp::Declaration>),
+        (status = 200, description = "Get the SDP snapshot for the current epoch keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, Object>),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1333,7 +1336,7 @@ where
     post,
     path = paths::LEADER_CLAIM,
     responses(
-        (status = 200, description = "Leader claim transaction submitted", body = lb_api_service::http::consensus::leader::LeaderClaimResponseBody),
+        (status = 200, description = "Leader claim transaction submitted", body = LeaderClaimResponseBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1348,7 +1351,7 @@ where
 }
 
 #[utoipa::path(
-    post,
+    put,
     path = paths::POW_START_MINING,
     responses(
         (status = 200, description = "PoW mining started"),
@@ -1366,7 +1369,7 @@ where
 }
 
 #[utoipa::path(
-    post,
+    put,
     path = paths::POW_STOP_MINING,
     responses(
         (status = 200, description = "PoW mining stopped"),
@@ -1384,21 +1387,62 @@ where
 }
 
 #[utoipa::path(
-    post,
-    path = paths::POW_CLAIM,
+    put,
+    path = paths::POW_START_AUTO_CLAIM,
     responses(
-        (status = 200, description = "PoW reward-claim transactions submitted", body = lb_api_service::http::pow::PoWClaimResponseBody),
+        (status = 200, description = "PoW auto-claim started"),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
-pub async fn pow_claim<PoW, RuntimeServiceId>(
+pub async fn pow_start_auto_claim<PoW, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
 ) -> Response
 where
     PoW: PoWServiceData,
     RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
 {
-    make_request_and_return_response!(pow::claim::<PoW, RuntimeServiceId>(&handle))
+    make_request_and_return_response!(pow::start_auto_claim::<PoW, RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    put,
+    path = paths::POW_STOP_AUTO_CLAIM,
+    responses(
+        (status = 200, description = "PoW auto-claim stopped"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn pow_stop_auto_claim<PoW, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    PoW: PoWServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
+{
+    make_request_and_return_response!(pow::stop_auto_claim::<PoW, RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    post,
+    path = paths::POW_CLAIM,
+    request_body = Option<pow::PoWClaimRequestBody>,
+    responses(
+        (status = 200, description = "PoW reward-claim transactions submitted", body = pow::PoWClaimResponseBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn pow_claim<PoW, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    // An absent or empty body means "pay the auto-claim target", so the body
+    // is optional rather than required.
+    body: Option<Json<pow::PoWClaimRequestBody>>,
+) -> Response
+where
+    PoW: PoWServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<PoW>,
+{
+    let claim_address = body.and_then(|Json(body)| body.claim_address);
+    make_request_and_return_response!(pow::claim::<PoW, RuntimeServiceId>(&handle, claim_address))
 }
 
 #[utoipa::path(
@@ -1493,7 +1537,7 @@ where
     get,
     path = paths::BLOCK_EVENTS,
     responses(
-        (status = 200, description = "Block events", body = Events),
+        (status = 200, description = "Block events", body = Object),
         (status = 404, description = "Block not found", body = ErrorBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )

@@ -22,8 +22,8 @@ use lb_core::{
     header::HeaderId,
     mantle::{SignedMantleTx, traits::Hashable, transactions::states::Preverified},
 };
+use lb_http_api_common::metrics::http_metrics_middleware;
 pub use lb_http_api_common::settings::AxumBackendSettings;
-use lb_http_api_common::{metrics::http_metrics_middleware, paths};
 use lb_sdp_service::{
     mempool::SdpMempoolAdapter, state::SdpStateStorage as SdpStateStorageTrait,
     wallet::SdpWalletAdapter,
@@ -56,12 +56,25 @@ use crate::{
         handlers::{
             blend_join_network, channel, channel_deposit, leader_claim, post_activity,
             post_declaration, post_set_declaration_id, post_withdrawal, pow_claim,
-            pow_claimable_rewards, pow_start_mining, pow_stop_mining,
+            pow_claimable_rewards, pow_start_auto_claim, pow_start_mining, pow_stop_auto_claim,
+            pow_stop_mining,
         },
         openapi::ApiDoc,
+        routes::api_routes,
         tracing::reload_tracing_filter,
     },
 };
+
+/// Builds the axum router from the shared route table.
+///
+/// Only the `$handler` half of each row is used; the `OpenAPI` half is matched
+/// and discarded. Expanded inside `AxumBackend::serve`, where the handler type
+/// parameters are in scope.
+macro_rules! build_router {
+    ($( $method:ident $path:expr => $doc:path, $handler:expr ; )*) => {
+        Router::new()$(.route($path, routing::$method($handler)))*
+    };
+}
 
 pub(crate) type BlockStorageBackend = RocksBackend;
 type BlockStorageService<RuntimeServiceId> = StorageService<BlockStorageBackend, RuntimeServiceId>;
@@ -195,7 +208,6 @@ where
         })
     }
 
-    #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     async fn serve(self, handle: OverwatchHandle<RuntimeServiceId>) -> Result<(), Self::Error> {
         let mut builder = CorsLayer::new();
         if self.settings.cors_origins.is_empty() {
@@ -211,220 +223,8 @@ where
             );
         }
 
-        let app = Router::new()
-            .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-            .route(paths::NODE_VERSION, routing::get(version))
-            .route(
-                paths::MANTLE_METRICS,
-                routing::get(mantle_metrics::<MempoolStorageAdapter, RuntimeServiceId>),
-            )
-            .route(
-                paths::MANTLE_STATUS,
-                routing::post(mantle_status::<MempoolStorageAdapter, RuntimeServiceId>),
-            )
-            .route(
-                paths::CRYPTARCHIA_INFO,
-                routing::get(cryptarchia_info::<RuntimeServiceId>),
-            )
-            .route(
-                paths::TIME_INFO,
-                routing::get(time_info::<RuntimeServiceId>),
-            )
-            .route(
-                paths::CRYPTARCHIA_HEADERS,
-                routing::get(cryptarchia_headers::<RuntimeServiceId>),
-            )
-            .route(
-                paths::CRYPTARCHIA_LIB_STREAM,
-                routing::get(cryptarchia_lib_stream::<RuntimeServiceId>),
-            )
-            .route(
-                paths::NETWORK_INFO,
-                routing::get(libp2p_info::<RuntimeServiceId>),
-            )
-            .route(
-                paths::DIAL_PEER,
-                routing::post(dial_peer::<RuntimeServiceId>),
-            )
-            .route(
-                paths::BLEND_NETWORK_INFO,
-                routing::get(blend_info::<BlendService, RuntimeServiceId>),
-            )
-            .route(
-                paths::BLEND_JOIN_NETWORK,
-                routing::post(blend_join_network::<BlendService, RuntimeServiceId>),
-            )
-            .route(
-                paths::BLEND_PENDING_TRANSACTIONS,
-                routing::get(blend_pending_transactions::<BlendService, RuntimeServiceId>),
-            )
-            .route(
-                paths::MEMPOOL_ADD_TX,
-                routing::post(add_tx::<MempoolStorageAdapter, RuntimeServiceId>),
-            )
-            .route(
-                paths::BLEND_DISPERSE_TRANSACTION,
-                routing::post(blend_tx::<BlendService, RuntimeServiceId>),
-            )
-            .route(
-                paths::MEMPOOL_VIEW,
-                routing::get(mempool_view::<MempoolStorageAdapter, RuntimeServiceId>),
-            )
-            .route(paths::CHANNEL, routing::get(channel::<RuntimeServiceId>))
-            .route(
-                paths::CHANNEL_DEPOSIT,
-                routing::post(
-                    channel_deposit::<WalletService, MempoolStorageAdapter, RuntimeServiceId>,
-                ),
-            )
-            .route(
-                paths::SDP_POST_DECLARATION,
-                routing::post(
-                    post_declaration::<
-                        SdpMempool,
-                        SdpWallet,
-                        Cryptarchia<RuntimeServiceId>,
-                        SdpStateStorage,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
-                paths::SDP_POST_ACTIVITY,
-                routing::post(
-                    post_activity::<
-                        SdpMempool,
-                        SdpWallet,
-                        Cryptarchia<RuntimeServiceId>,
-                        SdpStateStorage,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
-                paths::SDP_POST_WITHDRAWAL,
-                routing::post(
-                    post_withdrawal::<
-                        SdpMempool,
-                        SdpWallet,
-                        Cryptarchia<RuntimeServiceId>,
-                        SdpStateStorage,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
-                paths::SDP_POST_SET_DECLARATION_ID,
-                routing::post(
-                    post_set_declaration_id::<
-                        SdpMempool,
-                        SdpWallet,
-                        Cryptarchia<RuntimeServiceId>,
-                        SdpStateStorage,
-                        RuntimeServiceId,
-                    >,
-                ),
-            )
-            .route(
-                paths::MANTLE_SDP_DECLARATIONS,
-                routing::get(get_sdp_declarations::<RuntimeServiceId>),
-            )
-            .route(
-                paths::MANTLE_SDP_SNAPSHOT,
-                routing::get(get_sdp_snapshot::<RuntimeServiceId>),
-            )
-            .route(
-                paths::LEADER_CLAIM,
-                routing::post(leader_claim::<ChainLeader, RuntimeServiceId>),
-            )
-            .route(
-                paths::POW_START_MINING,
-                routing::put(pow_start_mining::<PoWService, RuntimeServiceId>),
-            )
-            .route(
-                paths::POW_STOP_MINING,
-                routing::put(pow_stop_mining::<PoWService, RuntimeServiceId>),
-            )
-            .route(
-                paths::POW_CLAIM,
-                routing::post(pow_claim::<PoWService, RuntimeServiceId>),
-            )
-            .route(
-                paths::POW_CLAIMABLE_REWARDS,
-                routing::get(pow_claimable_rewards::<PoWService, RuntimeServiceId>),
-            )
-            .route(
-                paths::LEADER_CLAIM_VOUCHERS,
-                routing::get(wallet::get_claimable_vouchers::<WalletService, _>),
-            )
-            .route(
-                paths::wallet::BALANCE,
-                routing::get(wallet::get_balance::<WalletService, _>),
-            )
-            .route(
-                paths::MANTLE_GAS_PRICES,
-                routing::get(get_gas_prices::<RuntimeServiceId>),
-            )
-            .route(
-                paths::wallet::TRANSACTIONS_TRANSFER_FUNDS,
-                routing::post(
-                    wallet::post_transactions_transfer_funds::<
-                        WalletService,
-                        MempoolStorageAdapter,
-                        _,
-                    >,
-                ),
-            )
-            .route(
-                paths::wallet::SIGN_TX_ED25519,
-                routing::post(wallet::sign_tx_ed25519::<WalletService, MempoolStorageAdapter, _>),
-            )
-            .route(
-                paths::wallet::SIGN_TX_ZK,
-                routing::post(wallet::sign_tx_zk::<WalletService, MempoolStorageAdapter, _>),
-            )
-            .route(
-                paths::wallet::FUND,
-                routing::post(wallet::fund::<WalletService, MempoolStorageAdapter, _>),
-            )
-            .route(
-                paths::admin::TRACING_FILTER,
-                routing::put(reload_tracing_filter::<RuntimeServiceId>),
-            );
-
-        let app = app.route(
-            paths::BLOCKS_STREAM,
-            routing::get(
-                blocks_stream::<
-                    BlockStorageBackend,
-                    CryptarchiaConsensus<_, _, _, _>,
-                    RuntimeServiceId,
-                >,
-            ),
-        );
-
-        let app = app.route(
-            paths::BLOCKS_RANGE_STREAM,
-            routing::get(blocks_range_stream::<BlockStorageBackend, RuntimeServiceId>),
-        );
-
-        let app = app
-            .route(
-                paths::BLOCKS,
-                routing::get(immutable_blocks::<BlockStorageBackend, RuntimeServiceId>),
-            )
-            .route(
-                paths::BLOCKS_DETAIL,
-                routing::get(block::<StorageAdapter, RuntimeServiceId>),
-            )
-            .route(
-                paths::BLOCK_EVENTS,
-                routing::get(block_events::<RuntimeServiceId>),
-            )
-            .route(
-                paths::TRANSACTION,
-                routing::get(transaction::<StorageAdapter, RuntimeServiceId>),
-            );
+        let app = api_routes!(build_router)
+            .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()));
 
         let app = app
             .with_state(handle.clone())

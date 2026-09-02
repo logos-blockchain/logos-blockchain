@@ -10,12 +10,15 @@ use lb_core::{
         channel::ChannelState,
         gas::GasCost,
         ledger::{Inputs, NoteId, Outputs},
-        ops::channel::{
-            ChannelId, MsgId, channel_transfer::ChannelTransferOp, deposit::Metadata,
-            inscribe::Inscription, withdraw::ChannelWithdrawOp,
+        ops::{
+            OpProof,
+            channel::{
+                ChannelId, MsgId, channel_transfer::ChannelTransferOp, deposit::Metadata,
+                inscribe::Inscription, withdraw::ChannelWithdrawOp,
+            },
         },
         traits::Hashable as _,
-        transactions::{TxHash, states::Unverified},
+        transactions::{TxHash, mantle_tx::RawMantleTx, states::Unverified},
     },
 };
 use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
@@ -75,6 +78,36 @@ impl PublishResult {
     pub const fn inscription_id(&self) -> InscriptionId {
         self.tx.tx_hash()
     }
+}
+
+/// A channel-config transaction built and funded by the SDK, handed back for
+/// external multi-sig signing before submission.
+///
+/// Produced by
+/// [`prepare_channel_config`](super::SequencerClient::prepare_channel_config)
+/// and consumed by
+/// [`submit_channel_config`](super::SequencerClient::submit_channel_config).
+/// The caller collects a signature from each key holder over
+/// [`Self::sign_payload`], assembles an ascending-by-index
+/// `Vec<IndexedSignature>`, and submits it alongside the (unchanged) prepared
+/// value. `tx` and `transfer_proof` are opaque to the caller — they carry the
+/// funded transaction and its fee-transfer proof straight back into
+/// submission.
+#[derive(Debug, Clone)]
+pub struct PreparedChannelConfig {
+    pub(crate) tx: RawMantleTx,
+    pub(crate) transfer_proof: Option<OpProof>,
+    /// The exact bytes each accredited key must sign (the funded tx hash's
+    /// signing bytes).
+    pub sign_payload: Vec<u8>,
+    /// The channel's current accredited keys, in index order. Each collected
+    /// signature must be indexed by this key's position here. Empty for an
+    /// unclaimed channel, which needs no signatures.
+    pub accredited_keys: Vec<Ed25519PublicKey>,
+    /// The channel's current `configuration_threshold` — how many of the
+    /// `accredited_keys` must sign for the config to be valid. `0` for an
+    /// unclaimed channel.
+    pub signing_threshold: u16,
 }
 
 /// One withdraw to bundle atomically with an inscription.

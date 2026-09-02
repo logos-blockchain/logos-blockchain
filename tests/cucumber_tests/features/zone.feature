@@ -279,6 +279,45 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
+  # Distinct participants sign a config prepared by SEQ_A: no step signs on
+  # another sequencer's behalf. Escalates single-signer -> 2-of-2 -> 2-of-3.
+  Scenario: Multi-sig channel config escalates across independent signers
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers          |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B, SEQ_C |
+    When node "NODE_1" is at height 1 in 120 seconds
+    And wallet "WALLET_1A" sends 30 notes of 1000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+    And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
+    And I start zone sequencer "SEQ_A" with indexer
+    And I start zone sequencer "SEQ_B"
+    And sequencer "SEQ_A" prepares zone config transaction "CHANNEL_CONFIG_1" with threshold 1 authorizing:
+      | alias |
+      | SEQ_A |
+    And sequencer "SEQ_A" submits prepared zone config transaction "CHANNEL_CONFIG_1"
+    Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
+    When sequencer "SEQ_A" prepares zone config transaction "CHANNEL_CONFIG_2" with threshold 2 authorizing:
+      | alias |
+      | SEQ_A |
+      | SEQ_B |
+    And sequencer "SEQ_A" signs prepared zone config transaction "CHANNEL_CONFIG_2"
+    And sequencer "SEQ_A" submits prepared zone config transaction "CHANNEL_CONFIG_2"
+    Then zone transaction "CHANNEL_CONFIG_2" is finalized in 180 seconds
+    When sequencer "SEQ_A" prepares zone config transaction "CHANNEL_CONFIG_3" with threshold 2 authorizing:
+      | alias |
+      | SEQ_A |
+      | SEQ_B |
+      | SEQ_C |
+    And sequencer "SEQ_B" signs prepared zone config transaction "CHANNEL_CONFIG_3"
+    And sequencer "SEQ_A" signs prepared zone config transaction "CHANNEL_CONFIG_3"
+    And sequencer "SEQ_B" submits prepared zone config transaction "CHANNEL_CONFIG_3"
+    Then zone transaction "CHANNEL_CONFIG_3" is finalized in 180 seconds
+    And I stop all nodes
+
+  @zone_ci
   Scenario: Round-robin waits for turn and submits pending messages
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |

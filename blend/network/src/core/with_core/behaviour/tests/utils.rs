@@ -230,7 +230,7 @@ pub fn build_memberships<Behaviour: NetworkBehaviour>(
         .map(|swarm| Node {
             id: *swarm.local_peer_id(),
             address: Multiaddr::empty(),
-            public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
+            public_key: UnsecuredEd25519Key::generate_with_chacha_rng().public_key(),
         })
         .collect::<Vec<_>>();
     nodes

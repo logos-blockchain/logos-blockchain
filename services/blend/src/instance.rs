@@ -9,6 +9,7 @@ use overwatch::{
     overwatch::OverwatchHandle,
     services::{AsServiceId, ServiceData},
 };
+use tracing::info;
 
 use crate::{
     core::{
@@ -168,13 +169,48 @@ where
         local_node_id: CoreService::NodeId,
         network_settings: PayloadDispatcherSettingsOfService<CoreService, RuntimeServiceId>,
     ) -> Result<Self, modes::Error> {
-        match to_mode {
+        let previous_mode = self.mode();
+        let selected_mode = to_mode.as_str();
+        let result = match to_mode {
             Mode::Core => self.transition_to_core(overwatch_handle).await,
             Mode::Edge => self.transition_to_edge(overwatch_handle).await,
             Mode::Broadcast => {
                 self.transition_to_broadcast(overwatch_handle, local_node_id, network_settings)
                     .await
             }
+        };
+        if let Ok(instance) = &result {
+            let resulting_mode = instance.mode();
+            let mode_changed = previous_mode != resulting_mode;
+            info!(
+                target: crate::LOG_TARGET,
+                diagnostic = "blend_tsi_outage",
+                event = "blend_mode_applied",
+                selected_mode,
+                previous_mode = previous_mode.as_str(),
+                resulting_mode = resulting_mode.as_str(),
+                mode_changed,
+                "Applied selected Blend mode"
+            );
+            if mode_changed {
+                info!(
+                    target: crate::LOG_TARGET,
+                    diagnostic = "blend_tsi_outage",
+                    event = "blend_mode_changed",
+                    previous_mode = previous_mode.as_str(),
+                    new_mode = resulting_mode.as_str(),
+                    "Blend mode changed"
+                );
+            }
+        }
+        result
+    }
+
+    const fn mode(&self) -> Mode {
+        match self {
+            Self::Core(_) => Mode::Core,
+            Self::Edge(_) | Self::EdgeAfterCore { .. } => Mode::Edge,
+            Self::Broadcast(_) | Self::BroadcastAfterCore { .. } => Mode::Broadcast,
         }
     }
 
@@ -291,7 +327,7 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Mode {
     Core,
     Edge,
@@ -303,12 +339,30 @@ impl Mode {
     where
         NodeId: Eq + Hash,
     {
-        if membership.size() < minimal_network_size {
+        let mode = if membership.size() < minimal_network_size {
             Self::Broadcast
         } else if membership.contains_local() {
             Self::Core
         } else {
             Self::Edge
+        };
+        info!(
+            target: crate::LOG_TARGET,
+            diagnostic = "blend_tsi_outage",
+            event = "blend_mode_chosen",
+            mode = mode.as_str(),
+            membership_count = membership.size(),
+            local_is_member = membership.contains_local(),
+            "Selected Blend mode from latched membership"
+        );
+        mode
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Core => "core",
+            Self::Edge => "edge",
+            Self::Broadcast => "broadcast",
         }
     }
 }
