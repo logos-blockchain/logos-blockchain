@@ -192,11 +192,12 @@ mod tests {
 
     #[test]
     fn reservations_are_unique_across_processes() {
+        const CHILD_COUNT: usize = 4;
+        const TIMEOUT: Duration = Duration::from_secs(20);
+
         let _guard = RESERVATION_TEST_LOCK
             .lock()
             .expect("reservation test lock should be available");
-        const CHILD_COUNT: usize = 4;
-        const TIMEOUT: Duration = Duration::from_secs(20);
 
         let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
         let release_path = temp_dir.path().join("release");
