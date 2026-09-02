@@ -12,7 +12,7 @@ use std::{
 use backend::{MempoolError, Status};
 use futures::Stream;
 use lb_core::mantle::transactions::hash::PrefixedKey;
-use tokio::sync::oneshot::Sender;
+use tokio::sync::{broadcast, oneshot::Sender};
 pub use tx::{service::TxMempoolService, settings::TxMempoolSettings};
 
 /// A stream of the transactions whose hash shares one reference prefix.
@@ -49,6 +49,10 @@ where
         items: Vec<Key>,
         reply_channel: Sender<Vec<Status>>,
     },
+    /// Subscribe to the transactions this node accepts.
+    SubscribeToAccepted {
+        reply_channel: Sender<broadcast::Receiver<Item>>,
+    },
 }
 
 impl<BlockId, Payload, Item, Key> Debug for MempoolMsg<BlockId, Payload, Item, Key>
@@ -73,6 +77,7 @@ where
             Self::Remove { ids } => write!(f, "MempoolMsg::Prune{{ids: {ids:?}}}"),
             Self::Metrics { .. } => write!(f, "MempoolMsg::Metrics"),
             Self::Status { items, .. } => write!(f, "MempoolMsg::Status{{items: {items:?}}}"),
+            Self::SubscribeToAccepted { .. } => write!(f, "MempoolMsg::SubscribeToAccepted"),
         }
     }
 }

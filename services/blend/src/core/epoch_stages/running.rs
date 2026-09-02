@@ -212,6 +212,12 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
         )
     }
 
+    /// The epoch being drained, for a caller that has to name it once it is
+    /// finished with.
+    pub const fn previous_epoch(&self) -> Epoch {
+        self.previous.epoch()
+    }
+
     /// Gives up the epoch being drained, leaving the current one whole —
     /// proposals included, because a transition period ending is not an epoch
     /// change. What the drained epoch still held is dropped: past its

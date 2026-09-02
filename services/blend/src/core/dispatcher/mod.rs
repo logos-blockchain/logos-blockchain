@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 
+use futures::stream::BoxStream;
 use lb_network_service::{NetworkService, backends::NetworkBackend};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Serialize, de::DeserializeOwned};
@@ -34,4 +35,8 @@ pub trait PayloadDispatcher<RuntimeServiceId> {
 
     /// Deliver a decapsulated payload to the local service that owns it.
     async fn dispatch(&self, payload: BlendPayload);
+
+    /// The payloads appearing on the broadcasting channel, whichever node's
+    /// exit door put them there — this node's own included.
+    async fn observe_broadcasts(&self) -> BoxStream<'static, BlendPayload>;
 }

@@ -22,6 +22,12 @@ pub struct Config {
     pub core: CoreConfig,
     #[serde(default)]
     pub edge: EdgeConfig,
+    #[serde(default = "default_blend_failure_fallback")]
+    pub blend_failure_fallback: bool,
+}
+
+fn default_blend_failure_fallback() -> bool {
+    true
 }
 
 pub struct RequiredValues {
@@ -44,6 +50,7 @@ impl Config {
                 backend: BackendConfig::default(),
             },
             edge: EdgeConfig::default(),
+            blend_failure_fallback: default_blend_failure_fallback(),
         }
     }
 
@@ -57,5 +64,9 @@ impl Config {
 
     pub fn set_secret_zk_key_id(&mut self, key_id: KeyId) {
         self.core.zk.secret_key_kms_id = key_id;
+    }
+
+    pub const fn force_blend_broadcast(&mut self) {
+        self.blend_failure_fallback = false;
     }
 }

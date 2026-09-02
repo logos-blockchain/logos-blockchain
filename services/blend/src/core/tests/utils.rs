@@ -2,7 +2,7 @@ use core::cell::RefCell;
 use std::{num::NonZeroU64, pin::Pin, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{Stream, StreamExt as _, stream, stream::BoxStream};
 use lb_blend::{
     message::{
         crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
@@ -64,6 +64,7 @@ use crate::{
         state::RecoveryServiceState,
         tests::RuntimeServiceId,
     },
+    delivery::DeliveryLogic,
     epoch::CoreEpochPublicInfo,
     message::{BlendPayload, NetworkInfo},
     settings::TimingSettings,
@@ -86,12 +87,13 @@ pub fn new_membership(size: u8) -> (Membership<NodeId>, UnsecuredEd25519Key) {
 
 /// Creates a [`BlendConfig`] with the given parameters and reasonable defaults
 /// for the rest.
-pub fn settings<BackendSettings>(
+pub fn settings<BackendSettings, BroadcastSettings>(
     local_private_key: UnsecuredEd25519Key,
     minimum_network_size: NonZeroU64,
     backend_settings: BackendSettings,
     data_replication_factor: u64,
-) -> BlendConfig<BackendSettings> {
+    broadcast_settings: BroadcastSettings,
+) -> BlendConfig<BackendSettings, BroadcastSettings> {
     BlendConfig {
         backend: backend_settings,
         scheduler: SchedulerSettings {
@@ -112,6 +114,8 @@ pub fn settings<BackendSettings>(
         data_replication_factor,
         activity_threshold_sensitivity: 1,
         pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
+        blend_failure_fallback: true,
+        broadcast: broadcast_settings,
     }
 }
 
@@ -332,6 +336,27 @@ where
     async fn dispatch(&self, _payload: BlendPayload) {
         note_outgoing_message();
     }
+
+    async fn observe_broadcasts(&self) -> BoxStream<'static, BlendPayload> {
+        stream::empty().boxed()
+    }
+}
+
+/// A delivery tracker for a test that is not about the direct broadcast: it
+/// watches a broadcasting channel nothing ever appears on, so nothing this node
+/// releases is ever seen delivered.
+///
+/// That is deliberately the pessimistic case, and it is still quiet: the
+/// deadline is [`TEST_DELIVERY_DEADLINE`] rounds of one second each, and no
+/// test here runs long enough to reach one.
+#[must_use]
+pub fn no_deliveries_to_watch() -> DeliveryLogic {
+    let timings = timing_settings();
+    DeliveryLogic::watching(
+        timings.delivery_deadline,
+        timings.round_duration,
+        stream::empty().boxed(),
+    )
 }
 
 pub struct TestNetworkBackend {

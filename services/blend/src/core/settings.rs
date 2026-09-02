@@ -13,7 +13,6 @@ use crate::settings::TimingSettings;
 #[derive(Clone, Debug)]
 pub struct StartingBlendConfig<BackendSettings, NetworkSettings> {
     pub backend: BackendSettings,
-    pub network: NetworkSettings,
     pub scheduler: SchedulerSettings,
     pub time: TimingSettings,
     pub zk: ZkSettings,
@@ -24,12 +23,14 @@ pub struct StartingBlendConfig<BackendSettings, NetworkSettings> {
     /// `R_c`: replication factor for data messages.
     pub data_replication_factor: u64,
     pub activity_threshold_sensitivity: u64,
+    pub broadcast: NetworkSettings,
+    pub blend_failure_fallback: bool,
 }
 
 /// Same values as [`StartingBlendConfig`] but with the secret key exfiltrated
 /// from the KMS.
 #[derive(Clone)]
-pub struct RunningBlendConfig<BackendSettings> {
+pub struct RunningBlendConfig<BackendSettings, BroadcastSettings> {
     pub backend: BackendSettings,
     pub scheduler: SchedulerSettings,
     pub time: TimingSettings,
@@ -40,9 +41,11 @@ pub struct RunningBlendConfig<BackendSettings> {
     pub data_replication_factor: u64,
     pub activity_threshold_sensitivity: u64,
     pub pow_mining_pool: Arc<ThreadPool>,
+    pub broadcast: BroadcastSettings,
+    pub blend_failure_fallback: bool,
 }
 
-impl<BackendSettings> RunningBlendConfig<BackendSettings> {
+impl<BackendSettings, BroadcastSettings> RunningBlendConfig<BackendSettings, BroadcastSettings> {
     pub fn epoch_core_quota(&self, membership_size: usize) -> Quota {
         self.scheduler
             .cover
@@ -82,6 +85,20 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
             round_duration: self.time.round_duration,
             rounds_per_epoch: self.time.rounds_per_epoch,
             num_blend_layers: self.num_blend_layers,
+        }
+    }
+
+    #[must_use]
+    pub const fn max_data_message_delay_in_rounds(&self) -> NonZeroU64 {
+        let delay_per_hop_in_rounds = self.scheduler.delayer.maximum_release_delay_in_rounds.get();
+        match NonZeroU64::new(
+            self.num_blend_layers
+                .get()
+                .saturating_mul(delay_per_hop_in_rounds.saturating_add(1)),
+        ) {
+            Some(deadline) => deadline,
+            // Not `expect`, to keep this a `const fn`.
+            None => panic!("Both factors of the delivery deadline are non-zero."),
         }
     }
 }

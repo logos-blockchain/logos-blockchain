@@ -19,8 +19,9 @@ use crate::{
         current_epoch::CurrentEpoch,
         handlers::Error,
         tests::utils::{
-            MockLeaderProofsGenerator, NodeId, TestBackend, overwatch_handle, settings, spawn_run,
-            spawn_run_with_pol,
+            MockLeaderProofsGenerator, NodeId, RunningEdgeService, TEST_DELIVERY_DEADLINE,
+            TEST_ROUND, TestBackend, overwatch_handle, settings, spawn_run, spawn_run_with_pol,
+            spawn_run_without_direct_broadcast,
         },
     },
     epoch_info::PolEpochInfo,
@@ -42,7 +43,12 @@ async fn run_with_epoch_transition() {
     let local_node = NodeId(99);
     let mut core_node = NodeId(0);
     let minimal_network_size = 1;
-    let (_, epoch_sender, msg_sender, mut node_id_receiver) = spawn_run(
+    let RunningEdgeService {
+        epochs: epoch_sender,
+        messages: msg_sender,
+        blended_to: mut node_id_receiver,
+        ..
+    } = spawn_run(
         local_node,
         minimal_network_size,
         Some(membership(&[core_node], local_node)),
@@ -78,6 +84,161 @@ async fn run_with_epoch_transition() {
     );
 }
 
+/// [`run`] broadcasts a block proposal in the clear once the Blend network has
+/// had the delivery deadline to deliver it and has not.
+///
+/// An edge node holds no connections into the network and sees none of its
+/// traffic, so the deadline is the only thing that tells it anything — and what
+/// it does at the deadline is what a core node does, since a block that never
+/// reaches the broadcasting channel is a slot the chain loses either way.
+#[test_log::test(tokio::test)]
+async fn a_proposal_the_network_never_delivers_is_broadcast_in_the_clear() {
+    let local_node = NodeId(99);
+    let core_node = NodeId(0);
+    let proposal = vec![7; 8];
+    let RunningEdgeService {
+        messages: msg_sender,
+        blended_to: mut node_id_receiver,
+        mut broadcasting_channel,
+        ..
+    } = spawn_run(local_node, 1, Some(membership(&[core_node], local_node))).await;
+
+    msg_sender
+        .send(BlendPayload::BlockProposal(proposal.clone()).into())
+        .await
+        .expect("channel opened");
+    // It goes into the Blend network first: the direct broadcast is the last
+    // step and never the first.
+    assert_eq!(
+        node_id_receiver.recv().await.expect("channel opened"),
+        core_node
+    );
+    assert!(
+        broadcasting_channel.dispatched.try_recv().is_err(),
+        "nothing is revealed while the network still has time to deliver it"
+    );
+
+    let broadcast = timeout(
+        TEST_ROUND * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
+        broadcasting_channel.dispatched.recv(),
+    )
+    .await
+    .expect("the deadline must expire within the deadline")
+    .expect("channel opened");
+    assert_eq!(broadcast, BlendPayload::BlockProposal(proposal));
+}
+
+/// [`run`] leaves a proposal alone once it has seen it on the broadcasting
+/// channel, however it got there.
+#[test_log::test(tokio::test)]
+async fn a_proposal_the_network_delivers_is_never_broadcast_in_the_clear() {
+    let local_node = NodeId(99);
+    let core_node = NodeId(0);
+    let proposal = vec![7; 8];
+    let RunningEdgeService {
+        messages: msg_sender,
+        blended_to: mut node_id_receiver,
+        mut broadcasting_channel,
+        ..
+    } = spawn_run(local_node, 1, Some(membership(&[core_node], local_node))).await;
+
+    msg_sender
+        .send(BlendPayload::BlockProposal(proposal.clone()).into())
+        .await
+        .expect("channel opened");
+    assert_eq!(
+        node_id_receiver.recv().await.expect("channel opened"),
+        core_node
+    );
+
+    // Some exit node broadcast it, which is all the sender ever learns.
+    broadcasting_channel
+        .carrying
+        .send(BlendPayload::BlockProposal(proposal))
+        .expect("the service is subscribed");
+
+    assert!(
+        timeout(
+            TEST_ROUND * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
+            broadcasting_channel.dispatched.recv(),
+        )
+        .await
+        .is_err(),
+        "a delivered proposal must not be revealed by its proposer"
+    );
+}
+
+/// An operator that turns the direct broadcast off keeps the node unlinkable to
+/// every payload it sends, and loses the slots the Blend network drops.
+#[test_log::test(tokio::test)]
+async fn a_node_that_does_not_bypass_never_broadcasts_in_the_clear() {
+    let local_node = NodeId(99);
+    let core_node = NodeId(0);
+    let RunningEdgeService {
+        messages: msg_sender,
+        blended_to: mut node_id_receiver,
+        mut broadcasting_channel,
+        ..
+    } = spawn_run_without_direct_broadcast(
+        local_node,
+        1,
+        Some(membership(&[core_node], local_node)),
+    )
+    .await;
+
+    msg_sender
+        .send(BlendPayload::BlockProposal(vec![7; 8]).into())
+        .await
+        .expect("channel opened");
+    assert_eq!(
+        node_id_receiver.recv().await.expect("channel opened"),
+        core_node
+    );
+
+    assert!(
+        timeout(
+            TEST_ROUND * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
+            broadcasting_channel.dispatched.recv(),
+        )
+        .await
+        .is_err(),
+        "nothing is revealed, however long the network takes"
+    );
+}
+
+/// A transaction is watched for through the mempool exactly as a proposal is
+/// watched for on the chain's topic.
+#[test_log::test(tokio::test)]
+async fn a_transaction_the_network_never_delivers_is_broadcast_in_the_clear() {
+    let local_node = NodeId(99);
+    let core_node = NodeId(0);
+    let transaction = vec![3; 8];
+    let RunningEdgeService {
+        messages: msg_sender,
+        blended_to: mut node_id_receiver,
+        mut broadcasting_channel,
+        ..
+    } = spawn_run(local_node, 1, Some(membership(&[core_node], local_node))).await;
+
+    msg_sender
+        .send(BlendPayload::Transaction(transaction.clone()).into())
+        .await
+        .expect("channel opened");
+    assert_eq!(
+        node_id_receiver.recv().await.expect("channel opened"),
+        core_node
+    );
+
+    let broadcast = timeout(
+        TEST_ROUND * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap(),
+        broadcasting_channel.dispatched.recv(),
+    )
+    .await
+    .expect("the deadline must expire within the deadline")
+    .expect("channel opened");
+    assert_eq!(broadcast, BlendPayload::Transaction(transaction));
+}
+
 /// [`run`] blends a transaction, drawing its layer proofs from the `PoW` branch
 /// rather than from leadership quota.
 ///
@@ -90,7 +251,12 @@ async fn run_blends_a_transaction() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
     let minimal_network_size = 1;
-    let (_, _epoch_sender, msg_sender, mut node_id_receiver) = spawn_run(
+    let RunningEdgeService {
+        epochs: _epoch_sender,
+        messages: msg_sender,
+        blended_to: mut node_id_receiver,
+        ..
+    } = spawn_run(
         local_node,
         minimal_network_size,
         Some(membership(&[core_node], local_node)),
@@ -114,7 +280,11 @@ async fn run_shuts_down_if_new_membership_is_small() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
     let minimal_network_size = 1;
-    let (join_handle, epoch_sender, _, _) = spawn_run(
+    let RunningEdgeService {
+        handle: join_handle,
+        epochs: epoch_sender,
+        ..
+    } = spawn_run(
         local_node,
         minimal_network_size,
         Some(membership(&[core_node], local_node)),
@@ -135,7 +305,11 @@ async fn run_fails_if_local_is_core_in_new_membership() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
     let minimal_network_size = 1;
-    let (join_handle, epoch_sender, _, _) = spawn_run(
+    let RunningEdgeService {
+        handle: join_handle,
+        epochs: epoch_sender,
+        ..
+    } = spawn_run(
         local_node,
         minimal_network_size,
         Some(membership(&[core_node], local_node)),
@@ -338,13 +512,19 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_blended() {
     // first poll of the stream.
     let pol_gate = PolGate::setup();
 
-    let (_join_handle, _epoch_sender, msg_sender, mut node_id_receiver) =
-        spawn_run_with_pol::<GatedPolStreamProvider>(
-            local_node,
-            1,
-            Some(membership(&[core_node], local_node)),
-        )
-        .await;
+    let RunningEdgeService {
+        handle: _join_handle,
+        epochs: _epoch_sender,
+        messages: msg_sender,
+        blended_to: mut node_id_receiver,
+        ..
+    } = spawn_run_with_pol::<GatedPolStreamProvider>(
+        local_node,
+        1,
+        Some(membership(&[core_node], local_node)),
+        true,
+    )
+    .await;
 
     // The gate is shut, so there is no handler yet: this is the window the
     // proposal used to die in.
@@ -387,8 +567,13 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
 
-    let (_join_handle, _epoch_sender, msg_sender, mut node_id_receiver) =
-        spawn_run(local_node, 1, Some(membership(&[core_node], local_node))).await;
+    let RunningEdgeService {
+        handle: _join_handle,
+        epochs: _epoch_sender,
+        messages: msg_sender,
+        blended_to: mut node_id_receiver,
+        ..
+    } = spawn_run(local_node, 1, Some(membership(&[core_node], local_node))).await;
 
     // One byte over what a payload can hold, so encapsulating it fails the same
     // way however long it waits.

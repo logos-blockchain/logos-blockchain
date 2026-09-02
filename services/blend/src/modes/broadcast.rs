@@ -98,7 +98,7 @@ where
 
 #[cfg(test)]
 pub mod tests {
-    use futures::StreamExt as _;
+    use futures::{StreamExt as _, stream, stream::BoxStream};
     use lb_network_service::{NetworkService, backends::NetworkBackend, message::NetworkMsg};
     use overwatch::{
         DynError, OpaqueServiceResourcesHandle,
@@ -288,6 +288,10 @@ pub mod tests {
                 .send(message)
                 .await
                 .unwrap();
+        }
+
+        async fn observe_broadcasts(&self) -> BoxStream<'static, BlendPayload> {
+            stream::empty().boxed()
         }
     }
 

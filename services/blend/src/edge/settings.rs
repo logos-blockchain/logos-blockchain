@@ -8,7 +8,7 @@ use rayon::ThreadPool;
 use crate::{core::settings::CoverTrafficSettings, settings::TimingSettings};
 
 #[derive(Clone, Debug)]
-pub struct StartingBlendConfig<BackendSettings> {
+pub struct StartingBlendConfig<BackendSettings, BroadcastSettings> {
     pub backend: BackendSettings,
     pub time: TimingSettings,
     pub non_ephemeral_signing_key_id: KeyId,
@@ -17,12 +17,15 @@ pub struct StartingBlendConfig<BackendSettings> {
     pub cover: CoverTrafficSettings,
     /// `R_c`: replication factor for data messages.
     pub data_replication_factor: u64,
+    pub max_blend_delay_in_rounds: NonZeroU64,
+    pub broadcast: BroadcastSettings,
+    pub blend_failure_fallback: bool,
 }
 
 /// Same values as [`StartingBlendConfig`] but with the secret key exfiltrated
 /// from the KMS.
 #[derive(Clone)]
-pub struct RunningBlendConfig<BackendSettings> {
+pub struct RunningBlendConfig<BackendSettings, BroadcastSettings> {
     pub backend: BackendSettings,
     pub time: TimingSettings,
     pub non_ephemeral_signing_key: UnsecuredEd25519Key,
@@ -31,9 +34,12 @@ pub struct RunningBlendConfig<BackendSettings> {
     pub cover: CoverTrafficSettings,
     pub data_replication_factor: u64,
     pub pow_mining_pool: Arc<ThreadPool>,
+    pub max_blend_delay_in_rounds: NonZeroU64,
+    pub blend_failure_fallback: bool,
+    pub broadcast: BroadcastSettings,
 }
 
-impl<BackendSettings> RunningBlendConfig<BackendSettings> {
+impl<BackendSettings, BroadcastSettings> RunningBlendConfig<BackendSettings, BroadcastSettings> {
     pub fn epoch_pow_quota(&self) -> Quota {
         self.num_blend_layers
             .get()
@@ -54,6 +60,19 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
             Err(_) => {
                 panic!("Leadership Quota must fit within the width the `PoQ` circuit allows.")
             }
+        }
+    }
+
+    #[must_use]
+    pub const fn max_data_message_delay_in_rounds(&self) -> NonZeroU64 {
+        match NonZeroU64::new(
+            self.num_blend_layers
+                .get()
+                .saturating_mul(self.max_blend_delay_in_rounds.get().saturating_add(1)),
+        ) {
+            Some(deadline) => deadline,
+            // Not `expect`, to keep this a `const fn`.
+            None => panic!("Both factors of the delivery deadline are non-zero."),
         }
     }
 }

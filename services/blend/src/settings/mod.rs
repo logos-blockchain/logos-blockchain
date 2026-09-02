@@ -15,15 +15,15 @@ mod timing;
 pub use self::timing::TimingSettings;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Settings<CoreBackendSettings, EdgeBackendSettings, NetworkSettings> {
-    pub common: CommonSettings,
-    pub core: CoreSettings<CoreBackendSettings, NetworkSettings>,
+pub struct Settings<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings> {
+    pub common: CommonSettings<BroadcastSettings>,
+    pub core: CoreSettings<CoreBackendSettings>,
     pub edge: EdgeSettings<EdgeBackendSettings>,
 }
 
-impl<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>
-    From<Settings<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>>
-    for CoreConfig<CoreBackendSettings, NetworkSettings>
+impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
+    From<Settings<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>>
+    for CoreConfig<CoreBackendSettings, BroadcastSettings>
 {
     fn from(
         Settings {
@@ -35,21 +35,21 @@ impl<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>
                     non_ephemeral_signing_key_id,
                     num_blend_layers,
                     data_replication_factor,
+                    broadcast,
+                    blend_failure_fallback,
                 },
             core:
                 CoreSettings {
                     backend,
-                    network,
                     scheduler,
                     zk,
                     activity_threshold_sensitivity,
                 },
             ..
-        }: Settings<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>,
+        }: Settings<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>,
     ) -> Self {
         Self {
             backend,
-            network,
             scheduler,
             time,
             zk,
@@ -59,13 +59,15 @@ impl<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>
             recovery_data,
             data_replication_factor,
             activity_threshold_sensitivity,
+            broadcast,
+            blend_failure_fallback,
         }
     }
 }
 
-impl<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>
-    From<Settings<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>>
-    for EdgeConfig<EdgeBackendSettings>
+impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
+    From<Settings<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>>
+    for EdgeConfig<EdgeBackendSettings, BroadcastSettings>
 {
     fn from(
         Settings {
@@ -73,10 +75,12 @@ impl<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>
                 CommonSettings {
                     minimum_network_size,
                     time,
+                    recovery_data,
                     non_ephemeral_signing_key_id,
                     num_blend_layers,
                     data_replication_factor,
-                    ..
+                    broadcast,
+                    blend_failure_fallback,
                 },
             edge: EdgeSettings { backend },
             core:
@@ -84,7 +88,7 @@ impl<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>
                     scheduler: SchedulerSettings { cover, .. },
                     ..
                 },
-        }: Settings<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>,
+        }: Settings<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>,
     ) -> Self {
         Self {
             backend,
@@ -94,6 +98,8 @@ impl<CoreBackendSettings, EdgeBackendSettings, NetworkSettings>
             minimum_network_size,
             cover,
             data_replication_factor,
+            broadcast,
+            blend_failure_fallback,
         }
     }
 }

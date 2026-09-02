@@ -20,13 +20,17 @@ use lb_poq::{CORE_MERKLE_TREE_HEIGHT, Quota};
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
 use rayon::ThreadPoolBuilder;
-use tokio::sync::oneshot;
+use tokio::{
+    sync::{mpsc, oneshot},
+    time::sleep,
+};
 
 use crate::{
     core::{
         HandleEpochEventOutput,
         backends::BlendBackend,
         complete_transition_period,
+        dispatcher::PayloadDispatcher,
         epoch_stages::{
             running::{CurrentEpoch, CurrentEpochDuringTransition},
             transitioning::TransitioningEpoch,
@@ -35,15 +39,17 @@ use crate::{
         initialize, post_initialize, retire, run_event_loop,
         state::ServiceState,
         tests::utils::{
-            MockKmsAdapter, MockProofsVerifier, NodeId, TestBlendBackend, TestBlendBackendEvent,
-            TestPayloadDispatcher, backend_epoch_info, dummy_overwatch_resources,
-            dummy_pol_private_inputs, new_crypto_processor, new_epoch_info, new_membership,
-            new_stream, outgoing_messages_recorder, published_epochs_recorder,
+            MockKmsAdapter, MockProofsVerifier, NodeId, TEST_DELIVERY_DEADLINE, TestBlendBackend,
+            TestBlendBackendEvent, TestPayloadDispatcher, backend_epoch_info,
+            dummy_overwatch_resources, dummy_pol_private_inputs, new_crypto_processor,
+            new_epoch_info, new_membership, new_stream, no_deliveries_to_watch,
+            outgoing_messages_recorder, published_epochs_recorder,
             recorded_set_epoch_private_calls, reset_set_epoch_private_calls, reward_epoch_info,
             scheduler_epoch_info, scheduler_settings, sdp_relay, seeded_release_delay_rng,
             settings, timing_settings, wait_for_blend_backend_event,
         },
     },
+    delivery::DeliveryLogic,
     epoch::{CoreEpochInfo, CoreEpochPublicInfo},
     epoch_info::PolEpochInfo,
     membership::{MembershipInfo, ZkInfo, chain::BlendEpochState},
@@ -54,6 +60,7 @@ use crate::{
             GatedPowProofsGenerator, MockCoreAndLeaderProofsGenerator, PolAwareProofsGenerator,
             PowGate, recorded_starting_core_key_indices, reset_starting_core_key_indices,
         },
+        dispatcher::{TestBroadcastingChannel, TestPayloadDispatcher as ObservingDispatcher},
         epoch::{GatedPolStreamProvider, OncePolStreamProvider, PolGate},
     },
 };
@@ -1242,6 +1249,7 @@ async fn complete_old_epoch_after_main_loop_done() {
     let join_handle = tokio::spawn(async move {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
+        let mut deliveries = no_deliveries_to_watch();
 
         let retiring_epoch = run_event_loop(
             inbound_relay,
@@ -1259,6 +1267,7 @@ async fn complete_old_epoch_after_main_loop_done() {
                 current_public_info,
             ),
             pending_transactions,
+            &mut deliveries,
             current_recovery_checkpoint,
         )
         .await;
@@ -1271,6 +1280,7 @@ async fn complete_old_epoch_after_main_loop_done() {
             sdp_relay,
             rng,
             retiring_epoch,
+            &mut deliveries,
         )
         .await;
     });
@@ -1388,6 +1398,7 @@ async fn stop_on_empty_epoch() {
     let join_handle = tokio::spawn(async move {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
+        let mut deliveries = no_deliveries_to_watch();
 
         let retiring_epoch = run_event_loop(
             inbound_relay,
@@ -1405,6 +1416,7 @@ async fn stop_on_empty_epoch() {
                 current_public_info,
             ),
             pending_transactions,
+            &mut deliveries,
             current_recovery_checkpoint,
         )
         .await;
@@ -1417,6 +1429,7 @@ async fn stop_on_empty_epoch() {
             sdp_relay,
             rng,
             retiring_epoch,
+            &mut deliveries,
         )
         .await;
     });
@@ -1523,6 +1536,7 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
     let join_handle = tokio::spawn(async move {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
+        let mut deliveries = no_deliveries_to_watch();
 
         let retiring_epoch = run_event_loop(
             inbound_relay,
@@ -1540,6 +1554,7 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
                 current_public_info,
             ),
             pending_transactions,
+            &mut deliveries,
             current_recovery_checkpoint,
         )
         .await;
@@ -1552,6 +1567,7 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
             sdp_relay,
             rng,
             retiring_epoch,
+            &mut deliveries,
         )
         .await;
     });
@@ -2126,6 +2142,175 @@ async fn test_initialize_drops_activity_proof_older_than_one_epoch() {
 /// most visibly at startup, when the node wins the very first slot it is asked
 /// to lead. The proposal used to be encapsulated where it arrived, fail, and be
 /// dropped with an error, silently losing a block this node had just produced.
+/// A round short enough that a test can wait out a whole delivery deadline
+/// without being slow: the deadline is a count of rounds, and the protocol's
+/// floor of twelve of them is what the tests here have to sit through.
+const FAST_ROUND: Duration = Duration::from_millis(20);
+
+/// How long a test is willing to wait for the deadline to expire.
+fn past_the_deadline() -> Duration {
+    FAST_ROUND * u32::try_from(TEST_DELIVERY_DEADLINE.get() + 4).unwrap()
+}
+
+/// Runs the core event loop over a two-node membership, with both sides of
+/// Blend's exit door in the test's hands.
+async fn spawn_core_watching_the_broadcasting_channel() -> (
+    mpsc::Sender<ServiceMessage<NodeId>>,
+    TestBroadcastingChannel,
+) {
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let mut settings = settings(
+        local_private_key,
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+    // No cover traffic, so the only message that can come out is the proposal.
+    // See the `PoW` liveness test for why this quota silences it.
+    settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
+    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+    settings.time.round_duration = FAST_ROUND;
+
+    let (inbound_relay, inbound_message_sender) = new_stream();
+    let (mut blend_message_stream, _blend_message_sender) = new_stream();
+    let (membership_stream, membership_sender) = new_stream();
+
+    membership_sender
+        .send(test_blend_epoch_state(
+            0,
+            MembershipInfo {
+                membership,
+                zk: Some(ZkInfo {
+                    root: ZkHash::ZERO,
+                    core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
+                }),
+            },
+        ))
+        .await
+        .unwrap();
+
+    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources();
+
+    let (
+        mut remaining_epoch_stream,
+        current_public_info,
+        crypto_processor,
+        current_recovery_checkpoint,
+        pending_transactions,
+        message_scheduler,
+        mut backend,
+        mut rng,
+    ) = initialize::<
+        NodeId,
+        TestBlendBackend,
+        ObservingDispatcher,
+        MockCoreAndLeaderProofsGenerator,
+        MockProofsVerifier,
+        MockKmsAdapter,
+        RuntimeServiceId,
+    >(
+        settings.clone(),
+        membership_stream,
+        overwatch_handle.clone(),
+        MockKmsAdapter,
+        &sdp_relay,
+        None,
+        state_updater,
+        seeded_release_delay_rng(),
+    )
+    .await;
+
+    let (payload_dispatcher, broadcasting_channel) = ObservingDispatcher::new();
+    tokio::spawn(async move {
+        let secret_pol_info_stream =
+            post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
+        let mut deliveries = DeliveryLogic::watching(
+            settings.time.delivery_deadline,
+            settings.time.round_duration,
+            PayloadDispatcher::<RuntimeServiceId>::observe_broadcasts(&payload_dispatcher).await,
+        );
+        run_event_loop(
+            inbound_relay,
+            &mut blend_message_stream,
+            secret_pol_info_stream,
+            &mut remaining_epoch_stream,
+            &settings,
+            &mut backend,
+            &payload_dispatcher,
+            &sdp_relay,
+            &mut rng,
+            CurrentEpoch::new(
+                crypto_processor,
+                message_scheduler.into(),
+                current_public_info,
+            ),
+            pending_transactions,
+            &mut deliveries,
+            current_recovery_checkpoint,
+        )
+        .await;
+    });
+
+    (inbound_message_sender, broadcasting_channel)
+}
+
+/// A core node reacts to a delivery failure exactly as an edge node does: at
+/// the delivery deadline it puts the proposal on the broadcasting channel
+/// itself.
+#[test_log::test(tokio::test)]
+async fn a_proposal_the_network_never_delivers_is_broadcast_in_the_clear() {
+    let proposal = b"proposal".to_vec();
+    let (inbound_message_sender, mut broadcasting_channel) =
+        spawn_core_watching_the_broadcasting_channel().await;
+
+    inbound_message_sender
+        .send(ServiceMessage::Blend(BlendPayload::BlockProposal(
+            proposal.clone(),
+        )))
+        .await
+        .unwrap();
+
+    let broadcast =
+        tokio::time::timeout(past_the_deadline(), broadcasting_channel.dispatched.recv())
+            .await
+            .expect("the deadline should have expired by now")
+            .expect("the service should still be running");
+    assert_eq!(broadcast, BlendPayload::BlockProposal(proposal));
+}
+
+/// Seeing the proposal come out of the Blend network is what cancels the direct
+/// broadcast, and it does not matter whose exit node put it there.
+#[test_log::test(tokio::test)]
+async fn a_proposal_the_network_delivers_is_never_broadcast_in_the_clear() {
+    let proposal = b"proposal".to_vec();
+    let (inbound_message_sender, mut broadcasting_channel) =
+        spawn_core_watching_the_broadcasting_channel().await;
+
+    inbound_message_sender
+        .send(ServiceMessage::Blend(BlendPayload::BlockProposal(
+            proposal.clone(),
+        )))
+        .await
+        .unwrap();
+    // Give the proposal time to be encapsulated and released before saying it
+    // came out the other side, so that the observation cannot land first.
+    sleep(FAST_ROUND * 4).await;
+    broadcasting_channel
+        .carrying
+        .send(BlendPayload::BlockProposal(proposal))
+        .expect("the service is subscribed");
+
+    assert!(
+        tokio::time::timeout(past_the_deadline(), broadcasting_channel.dispatched.recv())
+            .await
+            .is_err(),
+        "a delivered proposal must not be revealed by its proposer"
+    );
+}
+
 #[test_log::test(tokio::test)]
 async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
     let minimal_network_size = 2;
@@ -2197,6 +2382,7 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
     tokio::spawn(async move {
         let secret_pol_info_stream =
             post_initialize::<GatedPolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
+        let mut deliveries = no_deliveries_to_watch();
         run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
@@ -2213,6 +2399,7 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
                 current_public_info,
             ),
             pending_transactions,
+            &mut deliveries,
             current_recovery_checkpoint,
         )
         .await;
@@ -2336,6 +2523,7 @@ async fn the_previous_epoch_keeps_releasing_under_its_own_epoch() {
     tokio::spawn(async move {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
+        let mut deliveries = no_deliveries_to_watch();
         run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
@@ -2352,6 +2540,7 @@ async fn the_previous_epoch_keeps_releasing_under_its_own_epoch() {
                 current_public_info,
             ),
             pending_transactions,
+            &mut deliveries,
             current_recovery_checkpoint,
         )
         .await;
@@ -2478,6 +2667,7 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
     tokio::spawn(async move {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
+        let mut deliveries = no_deliveries_to_watch();
         run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
@@ -2494,6 +2684,7 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
                 current_public_info,
             ),
             pending_transactions,
+            &mut deliveries,
             current_recovery_checkpoint,
         )
         .await;
@@ -2607,6 +2798,7 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
     tokio::spawn(async move {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
+        let mut deliveries = no_deliveries_to_watch();
         run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
@@ -2623,6 +2815,7 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
                 current_public_info,
             ),
             pending_transactions,
+            &mut deliveries,
             current_recovery_checkpoint,
         )
         .await;
@@ -2664,7 +2857,7 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
 /// Waits for the service to send one message onwards, failing rather than
 /// hanging if it never does.
 async fn expect_outgoing_message(
-    outgoing_messages: &mut tokio::sync::mpsc::UnboundedReceiver<()>,
+    outgoing_messages: &mut mpsc::UnboundedReceiver<()>,
     expectation: &str,
 ) {
     // Generous next to the release round the message has to wait for, and only
