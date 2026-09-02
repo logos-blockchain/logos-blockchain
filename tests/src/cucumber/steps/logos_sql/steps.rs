@@ -96,6 +96,32 @@ async fn step_query_agreement(
 }
 
 #[then(
+    expr = "Logos SQL instance {string} returns text {string} from this {logos_sql_database} query in {int} seconds:"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first mutable argument"
+)]
+async fn step_text_query_result(
+    world: &mut CucumberWorld,
+    step: &Step,
+    instance_alias: String,
+    expected: String,
+    database: DatabaseKind,
+    timeout_seconds: u64,
+) -> StepResult {
+    assertions::wait_for_text_query_result(
+        world,
+        &instance_alias,
+        &sql_docstring(step)?,
+        &expected,
+        database,
+        timeout_seconds,
+    )
+    .await
+}
+
+#[then(
     expr = "exactly one of Logos SQL writes {string} and {string} is displaced in {int} seconds"
 )]
 #[expect(

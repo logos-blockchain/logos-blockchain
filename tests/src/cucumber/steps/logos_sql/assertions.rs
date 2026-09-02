@@ -101,6 +101,37 @@ pub(super) async fn wait_for_query_agreement(
     }
 }
 
+pub(super) async fn wait_for_text_query_result(
+    world: &CucumberWorld,
+    instance_alias: &str,
+    query: &str,
+    expected: &str,
+    database: DatabaseKind,
+    timeout_seconds: u64,
+) -> StepResult {
+    let deadline = Instant::now() + Duration::from_secs(timeout_seconds);
+    let expected_rows = vec![vec![Value::Text(expected.to_owned())]];
+
+    loop {
+        let observation = match query_rows(world, instance_alias, query, database) {
+            Ok(actual) if actual == expected_rows => return Ok(()),
+            Ok(actual) => format!("returned {actual:?}"),
+            Err(error) => error.to_string(),
+        };
+
+        if Instant::now() >= deadline {
+            return Err(StepError::Timeout {
+                message: format!(
+                    "Logos SQL instance '{instance_alias}' did not return text '{expected}' from its {} query: {observation}",
+                    database.name()
+                ),
+            });
+        }
+
+        sleep(POLL_INTERVAL).await;
+    }
+}
+
 pub(super) async fn wait_for_one_displaced_write(
     world: &CucumberWorld,
     left_alias: &str,

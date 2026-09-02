@@ -344,5 +344,12 @@ Feature: Logos SQL
         FROM messages
         ORDER BY id
         """
+      And Logos SQL instance "SQL_A" returns text "branch B" from this live query in 30 seconds:
+        """
+        SELECT body
+        FROM messages
+        WHERE id = 1
+        """
+      And Logos SQL write "BRANCH_A_WRITE" is displaced in 180 seconds
       And exactly one of Logos SQL writes "BRANCH_A_WRITE" and "BRANCH_B_WRITE" is displaced in 180 seconds
       And I stop all nodes
