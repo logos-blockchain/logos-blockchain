@@ -214,7 +214,7 @@ pub(super) async fn build_and_fund_config<Node>(
     posting_timeout: SlotTimeout,
     configuration_threshold: u16,
     transfer_threshold: u16,
-) -> Result<(RawMantleTx, Option<OpProof>), Error>
+) -> Result<(Ops, Option<OpProof>), Error>
 where
     Node: adapter::Node + Sync,
 {
@@ -239,10 +239,10 @@ where
 /// ascending by index. Pass an empty vec to configure an unclaimed channel,
 /// whose configuration requires no signatures (the empty multi-sig proof).
 pub(super) fn assemble_channel_config_tx(
-    config_tx: RawMantleTx,
+    config_tx: Ops,
     transfer_proof: Option<OpProof>,
     signatures: Vec<IndexedSignature>,
-) -> Result<MantleTransaction<Unverified>, Error> {
+) -> Result<SignedOps<Unverified, StandardMode>, Error> {
     let signatures = signatures
         .try_into()
         .map_err(|e| Error::Network(format!("too many channel-config signatures: {e:?}")))?;
@@ -254,7 +254,9 @@ pub(super) fn assemble_channel_config_tx(
         transfer_proof,
     )?;
 
-    Ok(MantleTransaction::new(config_tx, ops_proofs))
+    SignedOps::from_parts(config_tx, ops_proofs).map_err(|error| {
+        Error::Network(format!("failed to assemble channel config tx: {error:?}"))
+    })
 }
 
 /// Build, fund, and single-signer-sign a `ChannelConfig` transaction.

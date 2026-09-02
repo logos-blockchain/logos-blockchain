@@ -18,7 +18,7 @@ use lb_core::{
             },
         },
         traits::Hashable as _,
-        transactions::{TxHash, mantle_tx::RawMantleTx, states::Unverified},
+        transactions::{Ops, TxHash, states::Unverified},
     },
 };
 use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
@@ -95,7 +95,7 @@ impl PublishResult {
 /// submission.
 #[derive(Debug, Clone)]
 pub struct PreparedChannelConfig {
-    pub(crate) tx: RawMantleTx,
+    pub(crate) tx: Ops,
     pub(crate) transfer_proof: Option<OpProof>,
     /// The exact bytes each accredited key must sign (the funded tx hash's
     /// signing bytes).

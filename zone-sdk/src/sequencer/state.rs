@@ -4,8 +4,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         SignedOps,
-        ledger::verification_mode::StandardMode,
-        ledger::{Inputs, NoteId, Outputs},
+        ledger::{Inputs, NoteId, Outputs, verification_mode::StandardMode},
         ops::{
             OpRef,
             channel::{ChannelId, MsgId, inscribe::Inscription},
@@ -334,7 +333,7 @@ impl TxState {
     /// deposited notes being pinned).
     pub fn submit_pin_deposit(
         &mut self,
-        signed_tx: MantleTransaction<Unverified>,
+        signed_tx: SignedOps<Unverified, StandardMode>,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,

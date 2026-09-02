@@ -4,9 +4,11 @@ use lb_common_http_client::{ApiBlock, ProcessedBlockEvent, Slot};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        ledger::{Inputs, Outputs},
         SignedOps,
-        ledger::verification_mode::{StandardMode, VerificationMode},
+        ledger::{
+            Inputs, Outputs,
+            verification_mode::{StandardMode, VerificationMode},
+        },
         ops::{
             OpId as _, OpRef,
             channel::{ChannelId, MsgId, inscribe::Inscription},
@@ -195,7 +197,7 @@ where
 /// non-finalized counterpart of the finalized deposit stream, surfaced so a
 /// consumer can pin a deposit before it finalizes.
 fn block_channel_deposits(
-    transactions: &[MantleTransaction<Unverified>],
+    transactions: &[SignedOps<Unverified, StandardMode>],
     channel_id: ChannelId,
     l1_slot: Slot,
     deposit_events: &DepositEvents,
@@ -344,10 +346,8 @@ fn observe_channel_inscriptions(
     classified: &[BlockChannelTx],
     transactions: &[SignedOps<Unverified, StandardMode>],
 ) {
-    let by_hash: HashMap<TxHash, &SignedOps<Unverified, StandardMode>> = transactions
-        .iter()
-        .map(|tx| (tx.op_refs().hash(), tx))
-        .collect();
+    let by_hash: HashMap<TxHash, &SignedOps<Unverified, StandardMode>> =
+        transactions.iter().map(|tx| (tx.hash(), tx)).collect();
     for block_tx in classified {
         let (info, bundle) = match block_tx {
             BlockChannelTx::Inscription(i) => (i, PendingBundle::Plain),
@@ -383,14 +383,12 @@ fn observe_channel_inscriptions(
 /// deposit. Runs before the classification is stored or mirrored.
 fn demote_non_identity_pin_deposits(
     channel_txs: &mut [BlockChannelTx],
-    transactions: &[MantleTransaction<Unverified>],
+    transactions: &[SignedOps<Unverified, StandardMode>],
     channel_id: ChannelId,
     state: &TxState,
 ) {
-    let by_hash: HashMap<TxHash, &MantleTransaction<Unverified>> = transactions
-        .iter()
-        .map(|tx| (tx.mantle_tx().hash(), tx))
-        .collect();
+    let by_hash: HashMap<TxHash, &SignedOps<Unverified, StandardMode>> =
+        transactions.iter().map(|tx| (tx.hash(), tx)).collect();
     for block_tx in channel_txs.iter_mut() {
         let BlockChannelTx::PinDeposit(a) = block_tx else {
             continue;
@@ -413,11 +411,11 @@ fn demote_non_identity_pin_deposits(
 /// cannot compare) is treated as non-identity.
 fn is_identity_deposit_transfer(
     state: &TxState,
-    tx: &MantleTransaction<Unverified>,
+    tx: &SignedOps<Unverified, StandardMode>,
     channel_id: ChannelId,
 ) -> bool {
-    let Some(transfer) = tx.mantle_tx().ops().iter().find_map(|op| match op {
-        Op::ChannelTransfer(t) if t.channel_id == channel_id => Some(t),
+    let Some(transfer) = tx.op_refs_iter().find_map(|op| match op {
+        OpRef::ChannelTransfer(t) if t.channel_id == channel_id => Some(t),
         _ => None,
     }) else {
         return false;
@@ -1174,7 +1172,6 @@ mod tests {
         mantle::{
             Note, NoteId, Op, Value,
             channel::{SlotTimeframe, SlotTimeout},
-            ledger::NoteId,
             ops::{
                 OpProof,
                 channel::{
@@ -1452,7 +1449,7 @@ mod tests {
             Op::ChannelInscribe(inscribe),
             Op::ChannelTransfer(transfer),
         ]);
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.hash();
 
         let genesis = header_id(0);
         let block = header_id(1);
@@ -1520,7 +1517,7 @@ mod tests {
             Op::ChannelInscribe(inscribe),
             Op::ChannelTransfer(transfer),
         ]);
-        let tx_hash = tx.mantle_tx().hash();
+        let tx_hash = tx.hash();
 
         let genesis = header_id(0);
         let block = header_id(1);
@@ -1565,7 +1562,7 @@ mod tests {
         assert_eq!(update.adopted.len(), 1);
         match &update.adopted[0] {
             ChannelUpdateTx::Custom(adopted_tx) => {
-                assert_eq!(adopted_tx.mantle_tx().hash(), tx_hash);
+                assert_eq!(adopted_tx.hash(), tx_hash);
             }
             other => panic!("expected Custom, got {other:?}"),
         }

@@ -2,8 +2,7 @@ use lb_core::{
     mantle::{
         SignedOps,
         channel::{SlotTimeframe, SlotTimeout},
-        ledger::NoteId,
-        ledger::verification_mode::StandardMode,
+        ledger::{NoteId, verification_mode::StandardMode},
         ops::channel::{MsgId, config::Keys, inscribe::Inscription},
         transactions::{Ops, states::Unverified},
     },

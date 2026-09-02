@@ -781,6 +781,7 @@ where
     /// computation, status queueing and checkpointing. Scoped to single-signer
     /// (centralized) channels — only the sequencer's own signature proves the
     /// transfer and withdraw ops.
+    #[expect(clippy::too_many_lines, reason = "single bundle assembly pipeline")]
     pub(super) async fn do_publish_atomic_withdraw(
         &mut self,
         inscribe: Inscription,
@@ -1030,9 +1031,11 @@ where
         let own_sig = build_sign_tx(tx.hash(), &self.signing_key);
         let ops_proofs =
             build_atomic_bundle_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
-        let signed_tx = MantleTransaction::new(tx, ops_proofs);
+        let signed_tx = SignedOps::from_parts(tx, ops_proofs).map_err(|error| {
+            Error::Network(format!("failed to build signed atomic fund tx: {error:?}"))
+        })?;
 
-        let tx_hash = signed_tx.mantle_tx().hash();
+        let tx_hash = signed_tx.hash();
 
         debug!(target: TARGET,
             "Prepared pin-deposit: payload={:?}, parent={}, msg_id={}, tx={}, notes={}",
