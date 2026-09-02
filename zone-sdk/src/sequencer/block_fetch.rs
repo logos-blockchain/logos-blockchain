@@ -195,7 +195,7 @@ where
 /// non-finalized counterpart of the finalized deposit stream, surfaced so a
 /// consumer can pin a deposit before it finalizes.
 fn block_channel_deposits(
-    transactions: &[SignedMantleTx<Unverified>],
+    transactions: &[MantleTransaction<Unverified>],
     channel_id: ChannelId,
     l1_slot: Slot,
     deposit_events: &DepositEvents,
@@ -383,11 +383,11 @@ fn observe_channel_inscriptions(
 /// deposit. Runs before the classification is stored or mirrored.
 fn demote_non_identity_pin_deposits(
     channel_txs: &mut [BlockChannelTx],
-    transactions: &[SignedMantleTx<Unverified>],
+    transactions: &[MantleTransaction<Unverified>],
     channel_id: ChannelId,
     state: &TxState,
 ) {
-    let by_hash: HashMap<TxHash, &SignedMantleTx<Unverified>> = transactions
+    let by_hash: HashMap<TxHash, &MantleTransaction<Unverified>> = transactions
         .iter()
         .map(|tx| (tx.mantle_tx().hash(), tx))
         .collect();
@@ -413,7 +413,7 @@ fn demote_non_identity_pin_deposits(
 /// cannot compare) is treated as non-identity.
 fn is_identity_deposit_transfer(
     state: &TxState,
-    tx: &SignedMantleTx<Unverified>,
+    tx: &MantleTransaction<Unverified>,
     channel_id: ChannelId,
 ) -> bool {
     let Some(transfer) = tx.mantle_tx().ops().iter().find_map(|op| match op {

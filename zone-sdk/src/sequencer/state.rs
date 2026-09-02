@@ -333,7 +333,7 @@ impl TxState {
     /// deposited notes being pinned).
     pub fn submit_pin_deposit(
         &mut self,
-        signed_tx: SignedMantleTx<Unverified>,
+        signed_tx: MantleTransaction<Unverified>,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,

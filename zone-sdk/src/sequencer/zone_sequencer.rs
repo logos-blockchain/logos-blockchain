@@ -1031,7 +1031,7 @@ where
         let own_sig = build_sign_tx(tx.hash(), &self.signing_key);
         let ops_proofs =
             build_atomic_bundle_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
-        let signed_tx = SignedMantleTx::new(tx, ops_proofs);
+        let signed_tx = MantleTransaction::new(tx, ops_proofs);
 
         let tx_hash = signed_tx.mantle_tx().hash();
 
