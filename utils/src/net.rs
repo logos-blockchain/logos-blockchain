@@ -173,8 +173,10 @@ mod tests {
     use std::{
         collections::HashSet,
         env, fs,
+        net::{TcpListener, UdpSocket},
         path::{Path, PathBuf},
         process::{Command, Stdio},
+        sync::Mutex,
         thread,
         time::{Duration, Instant},
     };
@@ -186,9 +188,13 @@ mod tests {
 
     const CHILD_MARKER_ENV: &str = "LOGOS_PORT_BLOCK_TEST_MARKER";
     const CHILD_RELEASE_ENV: &str = "LOGOS_PORT_BLOCK_TEST_RELEASE";
+    static RESERVATION_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn reservations_are_unique_across_processes() {
+        let _guard = RESERVATION_TEST_LOCK
+            .lock()
+            .expect("reservation test lock should be available");
         const CHILD_COUNT: usize = 4;
         const TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -254,6 +260,9 @@ mod tests {
 
     #[test]
     fn reservation_preserves_full_tcp_and_udp_halves() {
+        let _guard = RESERVATION_TEST_LOCK
+            .lock()
+            .expect("reservation test lock should be available");
         let mut allocator = ReservedPortBlock::try_new().expect("a test port block should exist");
         let block_start = allocator.block_start();
         let half_block_size = TEST_PORT_BLOCK_SIZE / 2;
@@ -298,6 +307,28 @@ mod tests {
             claim_port <= claim_range_end,
             "the lease must map into the candidate block's claim range"
         );
+    }
+
+    #[test]
+    fn reservation_skips_a_block_with_orphaned_data_ports() {
+        let _guard = RESERVATION_TEST_LOCK
+            .lock()
+            .expect("reservation test lock should be available");
+        let tcp_port = TEST_PORT_RANGE_START;
+        let udp_port = TEST_PORT_RANGE_START + TEST_PORT_BLOCK_SIZE / 2;
+        let tcp_socket = TcpListener::bind(("127.0.0.1", tcp_port))
+            .expect("the first block's TCP probe port should be available");
+        let udp_socket = UdpSocket::bind(("127.0.0.1", udp_port))
+            .expect("the first block's UDP probe port should be available");
+
+        let allocator = ReservedPortBlock::try_new().expect("a later test port block should exist");
+
+        assert_ne!(
+            allocator.block_start(),
+            TEST_PORT_RANGE_START,
+            "an occupied data port must make the allocator skip the entire block"
+        );
+        drop((tcp_socket, udp_socket));
     }
 
     #[test]
