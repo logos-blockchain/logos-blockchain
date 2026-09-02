@@ -58,6 +58,8 @@ async fn step_query_cryptarchia_info_all_nodes(world: &mut CucumberWorld, step: 
 
 #[then(expr = "I stop all nodes")]
 async fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
+    world.logos_sql.shutdown_all().await?;
+
     let runtime_dir_by_node_name: Vec<(String, String)> = world
         .nodes_info
         .iter()

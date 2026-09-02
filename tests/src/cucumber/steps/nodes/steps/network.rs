@@ -350,6 +350,71 @@ async fn step_node_is_at_height(
     }
 }
 
+#[when(expr = "I record node {string} height as {string}")]
+async fn step_record_node_height(
+    world: &mut CucumberWorld,
+    node_name: String,
+    height_alias: String,
+) -> StepResult {
+    let height = world
+        .resolve_node_http_client(&node_name)?
+        .consensus_info()
+        .await?
+        .cryptarchia_info
+        .height;
+
+    world
+        .node_height_snapshots
+        .record_height(height_alias.clone(), height)?;
+
+    info!(
+        target: TARGET,
+        node = %node_name,
+        alias = %height_alias,
+        height,
+        "Recorded node height"
+    );
+
+    Ok(())
+}
+
+#[then(
+    expr = "node {string} reaches {int} blocks beyond recorded height {string} in {int} seconds"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step entrypoints must take `&mut World`"
+)]
+async fn step_node_reaches_blocks_beyond_recorded_height(
+    world: &mut CucumberWorld,
+    node_name: String,
+    additional_blocks: u64,
+    height_alias: String,
+    timeout_seconds: u64,
+) -> StepResult {
+    let recorded_height = world.node_height_snapshots.height(&height_alias)?;
+    let expected_height = recorded_height.saturating_add(additional_blocks);
+    let client = world.resolve_node_http_client(&node_name)?;
+    let deadline = Instant::now() + Duration::from_secs(timeout_seconds);
+
+    loop {
+        let height = client.consensus_info().await?.cryptarchia_info.height;
+        if height >= expected_height {
+            return Ok(());
+        }
+
+        if Instant::now() >= deadline {
+            return Err(StepError::Timeout {
+                message: format!(
+                    "node '{node_name}' did not reach height {expected_height}; current height is {height}"
+                ),
+            });
+        }
+
+        sleep(Duration::from_millis(100)).await;
+    }
+}
+
 #[when(expr = "node {string} is exactly at height")]
 #[then(expr = "node {string} is exactly at height")]
 async fn step_node_is_exactly_at_height(

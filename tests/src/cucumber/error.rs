@@ -107,6 +107,10 @@ pub enum StepError {
     },
     #[error(transparent)]
     BoundedError(#[from] BoundedError),
+    #[error(transparent)]
+    LogosSql(#[from] logos_sql::Error),
+    #[error(transparent)]
+    Sqlite(#[from] rusqlite::Error),
 }
 
 pub type StepResult = Result<(), StepError>;

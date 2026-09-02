@@ -204,6 +204,19 @@ jobs:
 
       - *check_peer_success
 
+      # Feature: Logos SQL (@logos_sql_ci)
+      - name: Run cucumber suite - Logos SQL
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
+        with:
+          suite_tag: "@logos_sql_ci"
+          suite_name: logos-sql
+          artifact_subdir: "Logos SQL"
+          max_concurrent_scenarios: "1"
+
+      - *check_peer_success
+
       # Feature: CLI utility binary (@cli_ci)
       - name: Run cucumber suite - CLI utilities
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}

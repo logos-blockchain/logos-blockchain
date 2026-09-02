@@ -1,6 +1,7 @@
 pub mod defaults;
 pub mod error;
 pub mod fee_reserve;
+pub mod logos_sql;
 pub mod steps;
 pub mod utils;
 pub mod wallet;

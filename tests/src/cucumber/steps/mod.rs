@@ -5,6 +5,7 @@ pub mod workloads;
 pub mod cluster;
 pub mod fees;
 pub mod k8s;
+pub mod logos_sql;
 pub mod mempool;
 pub mod nodes;
 pub mod parse_steps;

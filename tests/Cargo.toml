@@ -50,10 +50,12 @@ lb-wallet                        = { workspace = true }
 lb-zksign                        = { workspace = true }
 lb-zone-sdk                      = { workspace = true }
 libp2p                           = { workspace = true }
+logos-sql                        = { workspace = true }
 num-bigint                       = { workspace = true }
 rand                             = { workspace = true }
 reqwest                          = { features = ["json"], workspace = true }
 rpds                             = { workspace = true }
+rusqlite                         = { workspace = true }
 serde                            = { features = ["derive"], workspace = true }
 serde_json                       = { workspace = true }
 serde_yaml                       = { workspace = true }

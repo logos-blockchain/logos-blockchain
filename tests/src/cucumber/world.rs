@@ -60,6 +60,7 @@ use crate::{
         },
         error::{StepError, StepResult},
         fee_reserve::{SCENARIO_FEE_ACCOUNT_NAME, ScenarioFeeState},
+        logos_sql::LogosSqlState,
         steps::{
             tokio_console::profile::TokioConsoleProfile,
             zone::runner::{
@@ -951,6 +952,42 @@ pub struct ClusterState {
     pub sdp_funding_config: SdpFundingConfig,
 }
 
+/// Named node heights captured for comparisons in later scenario steps.
+#[derive(Default)]
+pub struct NodeHeightSnapshots {
+    recorded_heights: HashMap<String, u64>,
+}
+
+impl NodeHeightSnapshots {
+    /// Records a node height under a scenario-defined name.
+    pub fn record_height(&mut self, alias: String, height: u64) -> StepResult {
+        if self.recorded_heights.contains_key(&alias) {
+            return Err(StepError::LogicalError {
+                message: format!("node height alias '{alias}' is already recorded"),
+            });
+        }
+
+        self.recorded_heights.insert(alias, height);
+
+        Ok(())
+    }
+
+    /// Resolves a previously recorded node height.
+    pub fn height(&self, alias: &str) -> Result<u64, StepError> {
+        self.recorded_heights
+            .get(alias)
+            .copied()
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!("node height alias '{alias}' is not recorded"),
+            })
+    }
+
+    #[must_use]
+    fn len(&self) -> usize {
+        self.recorded_heights.len()
+    }
+}
+
 /// Runtime observations collected by the tagged Blend/TSI diagnostic
 /// scenarios.
 #[derive(Default)]
@@ -1163,6 +1200,8 @@ pub struct CucumberWorld {
     pub cluster: ClusterState,
     /// Manual: List of nodes with their info.
     pub nodes_info: HashMap<String, NodeInfo>,
+    /// Node heights captured for comparisons in later scenario steps.
+    pub node_height_snapshots: NodeHeightSnapshots,
     /// Node-startup configuration overrides.
     pub startup: NodeStartupConfig,
     /// Snapshot save/restore configuration.
@@ -1179,6 +1218,8 @@ pub struct CucumberWorld {
     pub blend_diagnostics: BlendDiagnosticState,
     /// Manual: Zone-specific state for SDK/sequencer scenarios.
     pub zone: ZoneState,
+    /// Logos SQL runtimes and writes owned by this scenario.
+    pub logos_sql: LogosSqlState,
     /// Manual: Per-node Tokio console profiling requested by Cucumber steps.
     pub tokio_console_profile: TokioConsoleProfile,
     /// Manual: Per-block gas prices recorded by the fee-market steps,
@@ -1203,6 +1244,7 @@ pub struct CucumberWorld {
 
 impl Drop for CucumberWorld {
     fn drop(&mut self) {
+        self.logos_sql.clear();
         self.zone.clear();
         self.scanner.shutdown();
         self.wallet_registry.shutdown();
@@ -1389,6 +1431,8 @@ impl Debug for CucumberWorld {
                 &self.startup.manual_node_config_overrides,
             )
             .field("zone", &self.zone.debug_summary())
+            .field("logos_sql", &self.logos_sql)
+            .field("recorded_node_heights", &self.node_height_snapshots.len())
             .field(
                 "initial_override_peers_display",
                 &initial_peers_override_display(self.startup.initial_peers_override.as_ref()),
