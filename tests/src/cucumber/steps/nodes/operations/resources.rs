@@ -2,10 +2,11 @@ use super::*;
 
 #[must_use]
 pub fn genesis_block_utxos(genesis_tx: &lb_core::mantle::transactions::GenesisTx) -> Vec<Utxo> {
-    let transfer_op = genesis_tx.genesis_transfer().clone();
-    let transfer_id = transfer_op.op_id();
+    let transfer_signed_operation = genesis_tx.transfer();
+    let transfer_id = transfer_signed_operation.operation().op_id();
 
-    transfer_op
+    transfer_signed_operation
+        .operation()
         .outputs
         .iter()
         .enumerate()

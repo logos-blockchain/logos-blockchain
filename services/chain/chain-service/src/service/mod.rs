@@ -17,9 +17,8 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        TxGasCalculator,
+        OpRef, TxGasCalculator,
         ledger::verification_mode::StandardMode,
-        ops::Op,
         traits::{MantleTx, PreverifiedMantleTransaction, SignedMantleTx},
         transactions::{GasPrices, states::Preverified},
     },
@@ -35,7 +34,6 @@ use overwatch::{
     services::{relay::InboundRelay, state::StateUpdater},
 };
 use serde::{Serialize, de::DeserializeOwned};
-use time::format_description::modifier::YearRange::Standard;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{debug, error, info, instrument, trace, warn};
 
@@ -577,8 +575,8 @@ where
     };
 
     for tx in block.transactions_iter() {
-        for op in tx.mantle_tx().ops() {
-            let Op::SDPActive(active) = op else {
+        for op in tx.op_refs_iter() {
+            let OpRef::SDPActive(active) = op else {
                 continue;
             };
             let Some(previous_declaration) = parent_state
@@ -819,7 +817,7 @@ where
         .store_block_data(
             header.id(),
             header.parent(),
-            block,
+            block.clone(),
             applied.events,
             immutable_blocks,
         )

@@ -25,7 +25,6 @@ use lb_core::{
         OpRef, SignedOps,
         gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
-        ops::Op,
         traits::{Hashable, MantleTx, SignedMantleTx, StorageSize},
         transactions::{hash::TxHash, states::Preverified},
     },
@@ -70,7 +69,7 @@ where
     Tx: MantleTx,
 {
     for (tx, active) in block.transactions_iter().flat_map(|tx| {
-        tx.op_refs().filter_map(move |op| match op {
+        tx.op_refs_iter().filter_map(move |op| match op {
             OpRef::SDPActive(active) => Some((tx, active)),
             _ => None,
         })

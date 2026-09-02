@@ -198,6 +198,10 @@ impl MantleTx for Ops {
     fn op_refs(&self) -> OpRefs<'_> {
         self.by_ref()
     }
+
+    fn op_refs_iter(&self) -> impl Iterator<Item = OpRef<'_>> {
+        self.iter().map(Op::by_ref)
+    }
 }
 
 impl Serialize for Ops {

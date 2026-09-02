@@ -1,3 +1,5 @@
+use lb_core::mantle::transactions::Ops;
+
 use super::*;
 
 /// Builds the funding transfer that creates the note consumed by an atomic
@@ -173,7 +175,7 @@ pub async fn publish_atomic_zone_withdraw(
 /// ZK keys.
 pub(super) async fn sign_tx_zk(
     node_url: &Url,
-    tx: &RawMantleTx,
+    ops: &Ops,
     public_keys: Vec<ZkPublicKey>,
 ) -> Result<ZkSignature, ZoneTestError> {
     let request_url =
@@ -186,7 +188,7 @@ pub(super) async fn sign_tx_zk(
         .post(
             request_url,
             &WalletSignTxZkRequestBody {
-                tx_hash: tx.hash(),
+                tx_hash: ops.hash(),
                 pks: ZkPublicKeys::try_from(public_keys)?,
             },
         )

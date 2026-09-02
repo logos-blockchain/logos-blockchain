@@ -637,7 +637,7 @@ pub async fn wait_for_transactions_finalized(
                 })?
             {
                 for tx in &block.transactions {
-                    let hash = tx.mantle_tx().hash();
+                    let hash = tx.hash();
                     if expected.contains(&hash) {
                         found.insert(hash);
                     }

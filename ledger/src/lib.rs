@@ -792,29 +792,30 @@ impl LedgerState {
                 tx_events.extend(events);
             }
             SignedOp::SDPDeclare(signed_operation) => {
-                let operation = signed_operation.operation();
+                let operation = signed_operation.operation().clone();
                 let (mantle_ledger, events) = self.mantle_ledger.try_apply_sdp_declaration(
                     signed_operation,
                     self.cryptarchia_ledger.latest_utxos(),
                     config,
                 )?;
                 self.mantle_ledger = mantle_ledger;
-                self.log_sdp_declaration_evaluation(operation, &self.mantle_ledger, config);
+                self.log_sdp_declaration_evaluation(&operation, &self.mantle_ledger, config);
                 tx_events.extend(events);
             }
             SignedOp::SDPActive(signed_operation) => {
-                let operation = signed_operation.operation();
+                let operation = signed_operation.operation().clone();
                 let previous_active_epoch = tracing::enabled!(tracing::Level::TRACE).then(|| {
                     self.mantle_ledger
                         .sdp_ledger()
                         .get_declaration(&operation.declaration_id)
                         .map(|declaration| declaration.active)
                 });
-                let (mantle_ledger, events) =
-                    self.mantle_ledger.try_apply_sdp_active(op, config)?;
+                let (mantle_ledger, events) = self
+                    .mantle_ledger
+                    .try_apply_sdp_active(signed_operation, config)?;
                 self.mantle_ledger = mantle_ledger;
                 self.log_sdp_activity_evaluation(
-                    operation,
+                    &operation,
                     &self.mantle_ledger,
                     config,
                     tx_hash,

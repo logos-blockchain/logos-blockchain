@@ -35,7 +35,7 @@ tracing                       = { workspace = true }
 
 [dev-dependencies]
 divan      = { workspace = true }
-lb-core    = { features = ["unsafe-test-functions"], workspace = true }
+lb-core    = { features = ["test-utils", "unsafe-test-functions"], workspace = true }
 lb-zksign  = { workspace = true }
 rand       = { features = ["std", "std_rng"], workspace = true }
 serde_json = { features = ["alloc"], workspace = true }

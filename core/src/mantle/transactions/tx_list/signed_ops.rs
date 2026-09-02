@@ -246,6 +246,10 @@ impl<State: VerificationState, Mode: VerificationMode> MantleTx for SignedOps<St
     fn op_refs(&self) -> OpRefs<'_> {
         self.op_refs()
     }
+
+    fn op_refs_iter(&self) -> impl Iterator<Item = OpRef<'_>> {
+        self.op_refs_iter()
+    }
 }
 
 impl<State: VerificationState, Mode: VerificationMode> SignedMantleTx<State, Mode>

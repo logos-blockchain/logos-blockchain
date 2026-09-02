@@ -451,7 +451,10 @@ impl Cryptarchia {
         self.verify_uncles(&block)?;
 
         let block_uncle_headers_slots = block.uncle_headers().slots();
+        let leader_proof = header.leader_proof().clone();
+
         let transactions = block.into_transactions();
+
         // Apply the block to the ledger, and batch-verify ZK proofs.
         // This ledger update is not finalized yet, and will be committed only after
         // checking if the block is accepted by the consensus engine.
@@ -461,7 +464,7 @@ impl Cryptarchia {
                 id,
                 parent,
                 slot,
-                header.leader_proof(),
+                &leader_proof,
                 &block_uncle_headers_slots,
                 transactions.into_iter(),
             )

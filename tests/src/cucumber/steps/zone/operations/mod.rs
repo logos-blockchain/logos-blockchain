@@ -15,7 +15,7 @@ use lb_common_http_client::{CommonHttpClient, Slot};
 use lb_core::{
     crypto::Hash,
     mantle::{
-        Note, Op, OpProof, RawMantleTx, Utxo, Value,
+        Note, Op, OpProof, Utxo, Value,
         gas::GasCost,
         ledger::{Inputs, NoteId, Outputs, OutputsError},
         ops::{

@@ -426,6 +426,7 @@ impl SdpLedger {
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let operation = declaration.operation();
+        let operation_id = operation.id();
 
         let Some(service_state) = self.services.get_mut(&operation.service_type) else {
             return Err(Error::ServiceNotFound(operation.service_type));
@@ -442,7 +443,7 @@ impl SdpLedger {
             })
             .map_err(|(_signed_operation, error)| error)?;
 
-        if let Some(declaration) = result.declarations.get(&op.id()) {
+        if let Some(declaration) = result.declarations.get(&operation_id) {
             let inactivity_period = config
                 .service_params
                 .get(&declaration.service_type)
@@ -455,7 +456,7 @@ impl SdpLedger {
                 event = "sdp_genesis_declaration_applied",
                 canonical = true,
                 provider_id = ?declaration.provider_id,
-                declaration_id = ?op.id(),
+                declaration_id = ?operation_id,
                 ledger_epoch = u32::from(self.epoch),
                 ledger_slot = 0u64,
                 initial_active_epoch = u32::from(declaration.active),
@@ -476,6 +477,7 @@ impl SdpLedger {
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let operation = signed_operation.operation();
+        let operation_service_type = operation.service_type;
 
         let Some(service_state) = self.services.get(&operation.service_type) else {
             return Err(Error::ServiceNotFound(operation.service_type));
@@ -493,7 +495,7 @@ impl SdpLedger {
 
         self.service_notes = result.service_notes;
         self.services
-            .get_mut(&op.service_type)
+            .get_mut(&operation_service_type)
             .expect("service was checked before execution")
             .update_declarations(result.declarations);
         Ok((self, events))
@@ -687,7 +689,10 @@ mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
     use lb_core::{
-        mantle::{ledger::Utxos, ops::ZkAndEd25519Proof},
+        mantle::{
+            ledger::Utxos,
+            ops::{ZkAndEd25519Proof, op_proof::placeholders::PlaceholderProof as _},
+        },
         sdp::{Locator, SNAPSHOT_FINALIZATION_DELAY},
     };
     use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr};
@@ -812,12 +817,17 @@ mod tests {
             provider_id: ProviderId(signing_key.public_key()),
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
+        let placeholder_proof = ZkAndEd25519Proof::placeholder();
+        let declare_signed_operation =
+            SignedOperation::new(declare_op, placeholder_proof).into_state_trusted();
+        let operation_id = declare_signed_operation.operation().id();
+
         let (ledger, _) = ledger
-            .try_apply_sdp_declaration(&utxo_tree(vec![utxo]), &declare_op, &config)
+            .try_apply_sdp_declaration(&utxo_tree(vec![utxo]), declare_signed_operation, &config)
             .unwrap();
         let original = ledger.clone();
         let active_op = SDPActiveOp {
-            declaration_id: declare_op.id(),
+            declaration_id: operation_id,
             nonce: 1,
             metadata: ActivityMetadata::Blend(Box::new(generate_activity_proof(
                 &zk_key,
@@ -826,6 +836,9 @@ mod tests {
                 &config.service_rewards_params.blend,
             ))),
         };
+        let placeholder_proof = ZkSignature::placeholder();
+        let active_signed_operation =
+            SignedOperation::new(active_op, placeholder_proof).into_state_trusted();
 
         // The freshly-created rewards state has no target epoch yet, so reward
         // calculation fails after operation execution has produced its updated
@@ -834,7 +847,7 @@ mod tests {
         assert_eq!(
             ledger
                 .clone()
-                .apply_active_msg(&active_op, &config)
+                .apply_active_msg(active_signed_operation, &config)
                 .unwrap_err(),
             Error::RewardsError(RewardsError::TargetEpochNotSet)
         );

@@ -201,6 +201,10 @@ impl MantleTx for GenesisTx {
     fn op_refs(&self) -> OpRefs<'_> {
         self.signed_ops.op_refs()
     }
+
+    fn op_refs_iter(&self) -> impl Iterator<Item = OpRef<'_>> {
+        self.signed_ops.op_refs_iter()
+    }
 }
 
 impl GenesisTxTrait for GenesisTx {
