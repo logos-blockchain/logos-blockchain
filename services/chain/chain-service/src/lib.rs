@@ -38,6 +38,7 @@ use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
 pub use lb_ledger::EpochState;
 use lb_ledger::LedgerState;
+use lb_log_targets::chain;
 use lb_network_service::message::ChainSyncEvent;
 use lb_services_utils::{
     overwatch::{RecoveryData, RecoveryOperator},
@@ -83,7 +84,7 @@ use crate::{
 // Limit the number of blocks returned by GetHeaders
 const SERVICE_ID: &str = "Chain";
 
-pub(crate) const LOG_TARGET: &str = "chain::service";
+pub(crate) const LOG_TARGET: &str = chain::service::ROOT;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -811,7 +812,7 @@ where
         // 1. Probably related to too many generics.
         // 2. It seems `span` requires a `const` string literal.
         run_service
-            .instrument(span!(Level::TRACE, SERVICE_ID))
+            .instrument(span!(target: LOG_TARGET, Level::TRACE, SERVICE_ID))
             .await;
 
         Ok(())
@@ -842,6 +843,7 @@ where
     fn notify_service_ready(&self) {
         self.service_resources_handle.status_updater.notify_ready();
         info!(
+            target: LOG_TARGET,
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
@@ -999,7 +1001,7 @@ where
             }
         };
         if let Err(e) = new_block_subscription_sender.send(init_event) {
-            debug!("No new-block subscribers to notify: {e}");
+            debug!(target: LOG_TARGET, "No new-block subscribers to notify: {e}");
         }
 
         // Phase 1: Collect and load blocks in (LIB, tip].

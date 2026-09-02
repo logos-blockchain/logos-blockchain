@@ -10,12 +10,13 @@ use std::{
 };
 
 pub use config::*;
+use lb_log_targets::cryptarchia;
 use lb_utils::bounded::UpperBoundedVec;
 use rpds::{HashTrieMapSync, HashTrieSetSync};
 use thiserror::Error;
 pub use time::{Epoch, EpochConfig, Slot};
 
-pub(crate) const LOG_TARGET: &str = "cryptarchia::engine";
+pub(crate) const LOG_TARGET: &str = cryptarchia::engine::ROOT;
 
 /// Slots occupied by the uncles a block references.
 pub type UncleSlots = UpperBoundedVec<Slot, MAX_UNCLES>;

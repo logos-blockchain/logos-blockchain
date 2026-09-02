@@ -25,13 +25,14 @@ use lb_core::{
     sdp::service_notes::ServiceNotes,
 };
 use lb_cryptarchia_engine::Slot;
+use lb_log_targets::ledger;
 use lb_mmr::MerkleMountainRange;
 use sdp::Error as SdpLedgerError;
 use tracing::error;
 
 use crate::{Config, EpochState, UtxoTree, mantle::sdp::HeaderEffect};
 
-const LOG_TARGET: &str = "ledger::mantle";
+const LOG_TARGET: &str = ledger::mantle::ROOT;
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum Error {

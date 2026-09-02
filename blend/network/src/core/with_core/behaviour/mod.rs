@@ -927,6 +927,7 @@ impl<ObservationWindowClockProvider, ProofsVerifier>
         excluded_peer: Option<PeerId>,
     ) -> Result<(), SendError> {
         tracing::trace!(
+            target: LOG_TARGET,
             "Forwarding message with id {:?} to current epoch peers. Negotiated peers: {:?}. Excluded peer: {excluded_peer:?}",
             hex::encode(fr_to_bytes(&message.id())),
             self.negotiated_peers()

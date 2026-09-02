@@ -33,6 +33,7 @@ use lb_core::{
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
 use lb_ledger::LedgerState;
+use lb_log_targets::chain;
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
@@ -80,6 +81,7 @@ where
             .get_declaration(&active.declaration_id)
             .map(|declaration| declaration.provider_id);
         tracing::debug!(
+            target: LOG_TARGET,
             diagnostic = "blend_tsi_outage",
             event = "sdp_activity_selected_for_proposal",
             tx_id = ?tx.hash(),
@@ -125,7 +127,7 @@ pub type WinningPolSlotStream = Pin<Box<dyn Stream<Item = WinningSlotFuture> + S
 const WINNING_POL_EPOCH_HANDOFF_BUFFER_SIZE: usize = 2;
 const SERVICE_ID: &str = "ChainLeader";
 
-pub(crate) const LOG_TARGET: &str = "chain_leader::service";
+pub(crate) const LOG_TARGET: &str = chain::leader::ROOT;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -434,15 +436,16 @@ where
 
         // Wait until the chain becomes Online mode.
         // We should not propose blocks while the chain is in Bootstrapping mode.
-        info!("Waiting for chain to become online");
+        info!(target: LOG_TARGET, "Waiting for chain to become online");
         cryptarchia_api
             .wait_until_chain_becomes_online()
             .await
             .expect("Waiting for chain to be online should succeed");
-        info!("Chain is online. Starting block proposals.");
+        info!(target: LOG_TARGET, "Chain is online. Starting block proposals.");
 
         self.service_resources_handle.status_updater.notify_ready();
         info!(
+            target: LOG_TARGET,
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
@@ -538,7 +541,9 @@ where
         // Hypothesis:
         // 1. Probably related to too many generics.
         // 2. It seems `span` requires a `const` string literal.
-        async_loop.instrument(span!(Level::TRACE, SERVICE_ID)).await;
+        async_loop
+            .instrument(span!(target: LOG_TARGET, Level::TRACE, SERVICE_ID))
+            .await;
 
         Ok(())
     }
@@ -610,6 +615,7 @@ where
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>,
 {
     #[instrument(
+        target = LOG_TARGET,
         level = "debug",
         skip(
             relays,
@@ -692,6 +698,7 @@ where
                         }
                         Err(err) => {
                             tracing::trace!(
+                                target: LOG_TARGET,
                                 tx = ?tx.hash(),
                                 %err,
                                 "deferred ZKP verification failed during block assembly",
@@ -701,6 +708,7 @@ where
                     },
                     Err(err) => {
                         tracing::trace!(
+                            target: LOG_TARGET,
                             "tx {:?} not (yet) applicable during block assembly: {:?}",
                             tx.hash(),
                             err
@@ -723,7 +731,7 @@ where
                 .remove_transactions(&invalid_tx_hashes)
                 .await
         {
-            error!("Failed to remove invalid transactions from mempool: {e:?}");
+            error!(target: LOG_TARGET, "Failed to remove invalid transactions from mempool: {e:?}");
         }
 
         let valid_tx_stream = stream::iter(valid_txs);
@@ -735,6 +743,7 @@ where
         }
 
         info!(
+            target: LOG_TARGET,
             "proposed block {:?} with {} transactions ({} removed)",
             block.header().id(),
             block.transactions_iter().len(),
@@ -823,7 +832,7 @@ where
     ) {
         let result = Self::build_and_submit_claim_tx(cryptarchia, wallet, mempool, config).await;
         if resp_tx.send(result).is_err() {
-            error!("Failed to send claim response");
+            error!(target: LOG_TARGET, "Failed to send claim response");
         }
     }
 

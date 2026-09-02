@@ -190,13 +190,13 @@ where
                 reply_channel
                     .send(Ok((self.cryptarchia.tip(), outcome.reorged_txs)))
                     .unwrap_or_else(|_| {
-                        error!("Could not send process block result through channel");
+                        error!(target: LOG_TARGET, "Could not send process block result through channel");
                     });
             }
             Err(e) => {
                 log_process_block_error(&e);
                 reply_channel.send(Err(e)).unwrap_or_else(|_| {
-                    error!("Could not send process block error through channel");
+                    error!(target: LOG_TARGET, "Could not send process block error through channel");
                 });
             }
         }
@@ -293,21 +293,21 @@ where
                         phase: Phase::TAG,
                     })
                     .unwrap_or_else(|e| {
-                        error!("Could not send consensus info through channel: {:?}", e);
+                        error!(target: LOG_TARGET, "Could not send consensus info through channel: {:?}", e);
                     });
             }
             Query::NewBlockSubscribe { sender } => {
                 sender
                     .send(self.new_block_subscription_sender.subscribe())
                     .unwrap_or_else(|_| {
-                        error!("Could not subscribe to new block channel");
+                        error!(target: LOG_TARGET, "Could not subscribe to new block channel");
                     });
             }
             Query::LibSubscribe { sender } => {
                 sender
                     .send(self.lib_subscription_sender.subscribe())
                     .unwrap_or_else(|_| {
-                        error!("Could not subscribe to LIB updates channel");
+                        error!(target: LOG_TARGET, "Could not subscribe to LIB updates channel");
                     });
             }
             Query::GetHeaders {
@@ -326,9 +326,9 @@ where
                     to_ancestor,
                     self.relays.storage_adapter().clone(),
                 );
-                reply_channel
-                    .send(stream)
-                    .unwrap_or_else(|_| error!("could not send block stream through channel"));
+                reply_channel.send(stream).unwrap_or_else(
+                    |_| error!(target: LOG_TARGET, "could not send block stream through channel"),
+                );
             }
             Query::GetLedgerState {
                 block_id,
@@ -336,7 +336,7 @@ where
             } => {
                 let ledger_state = self.cryptarchia.ledger.state(&block_id).cloned();
                 reply_channel.send(ledger_state).unwrap_or_else(|_| {
-                    error!("Could not send ledger state through channel");
+                    error!(target: LOG_TARGET, "Could not send ledger state through channel");
                 });
             }
             Query::GetSdpDeclarations { reply_channel } => {
@@ -355,7 +355,7 @@ where
                     })
                     .collect();
                 reply_channel.send(declarations).unwrap_or_else(|_| {
-                    error!("Could not send SDP declarations through channel");
+                    error!(target: LOG_TARGET, "Could not send SDP declarations through channel");
                 });
             }
             Query::GetSdpSnapshot { reply_channel } => {
@@ -378,7 +378,7 @@ where
                     })
                     .unwrap_or_default();
                 reply_channel.send(declarations).unwrap_or_else(|_| {
-                    error!("Could not send SDP snapshot through channel");
+                    error!(target: LOG_TARGET, "Could not send SDP snapshot through channel");
                 });
             }
             Query::GetEpochState {
@@ -387,7 +387,7 @@ where
             } => {
                 let result = self.cryptarchia.epoch_state_for_slot(slot);
                 reply_channel.send(result).unwrap_or_else(|_| {
-                    error!("Could not send epoch state through channel");
+                    error!(target: LOG_TARGET, "Could not send epoch state through channel");
                 });
             }
             Query::GetEpochStateWithSource {
@@ -400,7 +400,7 @@ where
                     log_epoch_state_query(query_result);
                 }
                 reply_channel.send(result).unwrap_or_else(|_| {
-                    error!("Could not send epoch state through channel");
+                    error!(target: LOG_TARGET, "Could not send epoch state through channel");
                 });
             }
             Query::GetEpochConfig { reply_channel } => {
@@ -408,13 +408,13 @@ where
                 reply_channel
                     .send((config.epoch_config, config.consensus_config.clone()))
                     .unwrap_or_else(|_| {
-                        error!("Could not send epoch config through channel");
+                        error!(target: LOG_TARGET, "Could not send epoch config through channel");
                     });
             }
             Query::GetBlockEvents { id, reply_channel } => {
                 let events = self.relays.storage_adapter().get_block_events(&id).await;
                 reply_channel.send(events).unwrap_or_else(|_| {
-                    error!("Could not send block events through channel");
+                    error!(target: LOG_TARGET, "Could not send block events through channel");
                 });
             }
             Query::SelectUncles {
@@ -424,14 +424,14 @@ where
             } => {
                 let uncles = self.select_uncles(parent, slot).await;
                 reply_channel.send(uncles).unwrap_or_else(|_| {
-                    error!("Could not send uncles through channel");
+                    error!(target: LOG_TARGET, "Could not send uncles through channel");
                 });
             }
             Query::SubscribeChainOnline { sender } => {
                 sender
                     .send(self.chain_online_notifier.subscribe())
                     .unwrap_or_else(|_| {
-                        error!("Could not subscribe to new block channel");
+                        error!(target: LOG_TARGET, "Could not subscribe to new block channel");
                     });
             }
         }
@@ -762,6 +762,7 @@ fn log_canonical_blend_snapshots<Tx>(cryptarchia: &Cryptarchia, block: &Block<Tx
 /// Otherwise, the [`Cryptarchia`] is unchanged and an error is returned.
 #[expect(clippy::allow_attributes_without_reason)]
 #[instrument(
+    target = LOG_TARGET,
     level = "debug",
     skip(cryptarchia, block, relays, new_block_subscription_sender, lib_broadcaster),
     fields(block_id = %block.header().id(), tx_count = block.transactions_iter().count(), current_slot = ?current_slot)
@@ -845,7 +846,7 @@ where
         }
     };
     if let Err(e) = new_block_subscription_sender.send(processed_block_event) {
-        debug!("No new-block subscribers to notify: {e}");
+        debug!(target: LOG_TARGET, "No new-block subscribers to notify: {e}");
     }
 
     if prev_lib != new_lib {
@@ -869,7 +870,7 @@ where
         };
 
         if let Err(e) = broadcast_finalized_block(relays.broadcast_relay(), block_info).await {
-            warn!("Failed to notify finalized-block subscribers: {e}");
+            warn!(target: LOG_TARGET, "Failed to notify finalized-block subscribers: {e}");
         }
 
         let lib_update = LibUpdate {
@@ -881,7 +882,7 @@ where
         };
 
         if let Err(e) = lib_broadcaster.send(lib_update) {
-            warn!("No LIB-update subscribers to notify: {e}");
+            warn!(target: LOG_TARGET, "No LIB-update subscribers to notify: {e}");
         }
     }
 

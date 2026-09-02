@@ -3,9 +3,12 @@ use std::{fmt::Debug, num::NonZeroU64};
 use async_trait::async_trait;
 use lb_core::header::HeaderId;
 use lb_ledger::{IntentStatus, LedgerState};
+use lb_log_targets::sdp;
 use overwatch::DynError;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
+
+const LOG_TARGET: &str = sdp::ROOT;
 
 /// Tracks the status of a submitted intent on the ledger.
 ///
@@ -86,7 +89,7 @@ where
             Ok(IntentStatus::Applied) => return Ok(Outcome::Finalized),
             Ok(IntentStatus::NotApplied) => {}
             Err(err) => {
-                warn!(%err, "failed to check the intent status in the LIB ledger: continuing tracking");
+                warn!(target: LOG_TARGET, %err, "failed to check the intent status in the LIB ledger: continuing tracking");
             }
         }
 

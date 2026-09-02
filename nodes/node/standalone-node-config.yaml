@@ -223,18 +223,13 @@ tracing:
   tracing: None
   filter: !Env
     filters:
-      ledger: DEBUG
       reqwest: WARN
-      chain_leader: DEBUG
-      chain: DEBUG
       libp2p_gossipsub: ERROR
       h2: WARN
       hyper: WARN
       tower: WARN
       tonic: WARN
-      chain_network: DEBUG
       opentelemetry_sdk: WARN
-      cryptarchia: DEBUG
       rustls: WARN
       '*': WARN
       opentelemetry: WARN

@@ -17,6 +17,7 @@ bytes                 = { features = ["serde"], workspace = true }
 futures               = { workspace = true }
 lb-core               = { workspace = true }
 lb-cryptarchia-engine = { workspace = true }
+lb-log-targets        = { workspace = true }
 libp2p                = { workspace = true }
 libp2p-stream         = { workspace = true }
 rand                  = { workspace = true }

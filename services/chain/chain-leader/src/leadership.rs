@@ -19,6 +19,7 @@ use lb_key_management_system_service::{
     operators::zk::leader::BuildPrivateInputsWithLeaderKey,
 };
 use lb_ledger::{EpochState, UtxoTree};
+use lb_log_targets::chain;
 use lb_time_service::{EpochSlotTickStream, SlotTick, TimeServiceMessage};
 use lb_utils::tokio::task::spawn_blocking;
 use lb_wallet_service::{
@@ -33,10 +34,12 @@ use tokio::{
 };
 
 use crate::{
-    LOG_TARGET, WinningPolEpochSlots, WinningPolSlotStream, WinningSlotFuture,
+    WinningPolEpochSlots, WinningPolSlotStream, WinningSlotFuture,
     kms::{KmsAdapter, PreloadKmsService},
     metrics,
 };
+
+const LOG_TARGET: &str = chain::leader::LEADERSHIP;
 
 /// Return a leadership proof and signing key if the current slot is a winning
 /// one for any of the eligible UTXOs, for use in a block proposal.

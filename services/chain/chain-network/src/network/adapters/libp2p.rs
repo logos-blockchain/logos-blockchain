@@ -8,6 +8,7 @@ use lb_core::{
     mantle::traits::MantleTxWithProofs,
 };
 use lb_cryptarchia_sync::GetTipResponse;
+use lb_log_targets::chain;
 use lb_network_service::{
     NetworkService,
     backends::libp2p::{
@@ -35,6 +36,8 @@ type Relay<T, RuntimeServiceId> =
 type BlockStreamItem<Tx> = Result<(HeaderId, Block<Tx>), DynError>;
 type FirstBlockResponse<Tx> = Result<Option<BlockStreamItem<Tx>>, DynError>;
 type BlockDownloadStream<Tx> = BoxedStream<BlockStreamItem<Tx>>;
+
+const LOG_TARGET: &str = chain::network::LIBP2P;
 
 #[derive(Clone)]
 pub struct LibP2pAdapter<Tx, RuntimeServiceId>
@@ -119,7 +122,7 @@ where
             ))))
             .await
         {
-            tracing::error!("error subscribing to {topic}: {e}");
+            tracing::error!(target: LOG_TARGET, "error subscribing to {topic}: {e}");
         }
     }
 
@@ -177,11 +180,12 @@ where
     async fn new(settings: Self::Settings, network_relay: Relay<Libp2p, RuntimeServiceId>) -> Self {
         let relay = network_relay.clone();
         tracing::debug!(
+            target: LOG_TARGET,
             "Subscribing chain-network adapter to pubsub topic {}",
             settings.topic
         );
         Self::subscribe(&relay, settings.topic.as_str()).await;
-        tracing::trace!("Starting up...");
+        tracing::trace!(target: LOG_TARGET, "Starting up...");
         // this wait seems to be helpful in some cases since we give the time
         // to the network to establish connections before we start sending messages
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -209,13 +213,13 @@ where
             {
                 Ok(proposal) => Some(proposal),
                 Err(e) => {
-                    tracing::debug!("unrecognized gossipsub message: {e}");
+                    tracing::debug!(target: LOG_TARGET, "unrecognized gossipsub message: {e}");
                     None
                 }
             },
             Ok(_) => None,
             Err(BroadcastStreamRecvError::Lagged(n)) => {
-                tracing::error!("lagged messages: {n}");
+                tracing::error!(target: LOG_TARGET, "lagged messages: {n}");
                 None
             }
         })))
@@ -235,14 +239,14 @@ where
         let stream = receiver.await.map_err(Box::new)?;
         Ok(Box::new(stream.filter_map(|event| {
             event
-                .map_err(|e| tracing::error!("lagged messages: {e}"))
+                .map_err(|e| tracing::error!(target: LOG_TARGET, "lagged messages: {e}"))
                 .ok()
         })))
     }
 
     async fn request_tip(&self, peer: Self::PeerId) -> Result<GetTipResponse, DynError> {
         let started_at = Instant::now();
-        tracing::debug!("Requesting chain tip from peer {peer:?}");
+        tracing::debug!(target: LOG_TARGET, "Requesting chain tip from peer {peer:?}");
         let (reply_sender, receiver) = oneshot::channel();
         if let Err((e, _)) = self
             .network_relay
@@ -267,7 +271,7 @@ where
         let connected_peers = match Self::get_connected_peers(&self.network_relay).await {
             Ok(peers) => peers,
             Err(e) => {
-                tracing::warn!("tip poll: failed to fetch connected peers: {e}");
+                tracing::warn!(target: LOG_TARGET, "tip poll: failed to fetch connected peers: {e}");
                 return Box::new(stream::empty::<GetTipResponse>());
             }
         };
@@ -277,7 +281,7 @@ where
             .choose_multiple(&mut thread_rng(), max_peers);
 
         if sampled.is_empty() {
-            tracing::debug!("tip poll: no connected peers to sample");
+            tracing::debug!(target: LOG_TARGET, "tip poll: no connected peers to sample");
             return Box::new(stream::empty::<GetTipResponse>());
         }
         let result_stream = FuturesStreamExt::filter_map(
@@ -294,14 +298,15 @@ where
                     )))
                     .await
                 {
-                    tracing::debug!("tip poll: failed to send GetTip to peer {peer:?}: {e}");
+                    tracing::debug!(target: LOG_TARGET, "tip poll: failed to send GetTip to peer {peer:?}: {e}");
                     None
                 } else {
                     match receiver.await.ok() {
                         None => None,
                         Some(Err(e)) => {
                             tracing::debug!(
-                                "tip poll: failed to send GetTip to peer {peer:?}: {e}"
+                                target: LOG_TARGET,
+                                "tip poll: GetTip request to peer {peer:?} failed: {e}"
                             );
                             None
                         }
@@ -323,6 +328,7 @@ where
     ) -> Result<BoxedStream<Result<(HeaderId, Self::Block), DynError>>, DynError> {
         let additional_blocks_len = additional_blocks.len();
         tracing::debug!(
+            target: LOG_TARGET,
             "Requesting blocks from peer {peer:?} for target block {target_block:?} from local tip {local_tip:?} with immutable block {latest_immutable_block:?} and {additional_blocks_len} additional blocks"
         );
         let (reply_sender, receiver) = oneshot::channel();
@@ -375,6 +381,7 @@ where
         )
         .collect();
         tracing::debug!(
+            target: LOG_TARGET,
             "Selecting peers for target block {target_block:?} from local tip {local_tip:?} with immutable block {latest_immutable_block:?}; selected_peers={peers_to_request:?}, connected={}, discovered={}, additional_blocks={}",
             connected_peers.len(),
             discovered_peers.len(),
@@ -405,7 +412,7 @@ where
                         )
                         .await?;
 
-                    tracing::debug!("received a stream of orphan parents from peer: {peer}");
+                    tracing::debug!(target: LOG_TARGET, "received a stream of orphan parents from peer: {peer}");
 
                     Ok(stream)
                 }

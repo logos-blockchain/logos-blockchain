@@ -39,6 +39,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Slot, UncleSlots};
 use lb_groth16::{AdditiveGroup as _, Fr};
+use lb_log_targets::ledger;
 use mantle::LedgerState as MantleLedger;
 use rpds::HashTrieMapSync;
 use thiserror::Error;
@@ -49,6 +50,7 @@ use crate::{
 };
 
 const WINDOW_SIZE: usize = 120;
+const LOG_TARGET: &str = ledger::ROOT;
 
 /// Denominator of 1/(`I_max` * `D1_target` * `Delta_t` * `T`)
 /// That correspond to `BLOCK_PER_YEAR` / (`MAX_INFLATION` * `KPI_FEE_TARGET` *
@@ -485,6 +487,7 @@ impl LedgerState {
             // Check the transaction is balanced
             let total_gas_cost = tx.total_gas_cost::<Profile>(&gas_prices)?;
             tracing::debug!(
+                target: LOG_TARGET,
                 balance,
                 total_gas_cost = total_gas_cost.into_inner(),
                 storage_gas_price = ?self.cryptarchia_ledger.storage_gas_price(),
@@ -650,6 +653,7 @@ impl LedgerState {
                 parameters.inactivity_period.into_inner().into_inner()
             });
         tracing::trace!(
+            target: LOG_TARGET,
             diagnostic = "blend_tsi_outage",
             event = "sdp_declaration_applied",
             evaluation_context = "candidate",
@@ -688,6 +692,7 @@ impl LedgerState {
                 parameters.inactivity_period.into_inner().into_inner()
             });
         tracing::trace!(
+            target: LOG_TARGET,
             diagnostic = "blend_tsi_outage",
             event = "sdp_activity_applied",
             evaluation_context = "candidate",

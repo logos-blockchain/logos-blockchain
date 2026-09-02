@@ -12,10 +12,13 @@ use lb_blend_proofs::{
 };
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
+use lb_log_targets::blend;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::encap::ProofsVerifier;
+
+const LOG_TARGET: &str = blend::message::ROOT;
 
 /// The inputs required to verify a Proof of Quota, without the signing key,
 /// which is retrieved from the public header of the message layer being
@@ -69,7 +72,7 @@ impl ProofsVerifier for RealProofsVerifier {
     type Error = Error;
 
     fn new(public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
-        tracing::trace!("Generating new proof verifier with public inputs: {public_inputs:?}");
+        tracing::trace!(target: LOG_TARGET, "Generating new proof verifier with public inputs: {public_inputs:?}");
         Self {
             current_inputs: public_inputs,
         }
@@ -85,6 +88,7 @@ impl ProofsVerifier for RealProofsVerifier {
         // Try with current input, and if it fails, try with the previous one, if any
         // (i.e., within the epoch transition period).
         tracing::trace!(
+            target: LOG_TARGET,
             "Verifying proof of quota with key nullifier {:?}, signing key: {signing_key:?}, public core inputs: {core:?} and leader inputs: {leader:?}.",
             hex::encode(fr_to_bytes(&proof.key_nullifier()))
         );
@@ -99,6 +103,7 @@ impl ProofsVerifier for RealProofsVerifier {
             .map_err(Error::ProofOfQuota);
 
         tracing::trace!(
+            target: LOG_TARGET,
             "Proof verification time: {} ms.",
             start.elapsed().as_millis()
         );

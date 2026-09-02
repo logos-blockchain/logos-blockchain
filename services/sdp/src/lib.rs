@@ -26,6 +26,7 @@ use lb_core::{
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_ledger::{Intent, IntentStatus, LedgerState};
+use lb_log_targets::sdp;
 use lb_services_utils::overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -43,6 +44,8 @@ use crate::{
     state::{SdpState, SdpStateStorage},
     wallet::{SdpWalletAdapter, SdpWalletConfig},
 };
+
+const LOG_TARGET: &str = sdp::ROOT;
 
 #[derive(Debug, Error)]
 pub enum SdpError {
@@ -214,6 +217,7 @@ where
 
         self.service_resources_handle.status_updater.notify_ready();
         tracing::info!(
+            target: LOG_TARGET,
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
@@ -305,7 +309,7 @@ where
         chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
     ) {
         let Some(tracker) = self.active_message_tracker.as_mut() else {
-            trace!("no active message tracker exists");
+            trace!(target: LOG_TARGET, "no active message tracker exists");
             return;
         };
 
@@ -320,7 +324,7 @@ where
                 .await;
             }
             Err(err) => {
-                error!(%err, "active message tracker failed to handle tip");
+                error!(target: LOG_TARGET, %err, "active message tracker failed to handle tip");
             }
         }
     }
@@ -347,10 +351,10 @@ where
                 .await;
             }
             intent::Outcome::WaitingforMoreTipChanges => {
-                trace!("active message tracker waiting for more tip changes before status check");
+                trace!(target: LOG_TARGET, "active message tracker waiting for more tip changes before status check");
             }
             intent::Outcome::Finalized => {
-                debug!("active message intent has been finalized in the LIB: dropping the tracker");
+                debug!(target: LOG_TARGET, "active message intent has been finalized in the LIB: dropping the tracker");
                 self.active_message_tracker = None;
                 self.update_state();
             }
@@ -367,12 +371,12 @@ where
     ) {
         match status {
             IntentStatus::NotApplied => {
-                trace!("active message status: not applied in the tip ledger: resubmitting it");
+                trace!(target: LOG_TARGET, "active message status: not applied in the tip ledger: resubmitting it");
                 self.submit_activity(activity, wallet_adapter, mempool_adapter, chain_api)
                     .await;
             }
             IntentStatus::Applied => {
-                trace!("active message status: applied in the tip ledger: keep tracking it");
+                trace!(target: LOG_TARGET, "active message status: applied in the tip ledger: keep tracking it");
             }
         }
     }
@@ -391,13 +395,16 @@ where
             .await?
             .map_or_else(
                 || {
-                    tracing::warn!(?declaration_id, "Declaration not found in ledger");
+                    tracing::warn!(target: LOG_TARGET, ?declaration_id, "Declaration not found in ledger");
                     Err(SdpError::DeclarationNotFound(declaration_id))
                 },
                 |declaration| {
                     tracing::info!(
-                        ?declaration.declaration.id,
-                        declaration.declaration.nonce,
+                        target: LOG_TARGET,
+                        {
+                            declaration.declaration.id = ?declaration.declaration.id,
+                            declaration.declaration.nonce = declaration.declaration.nonce,
+                        },
                         "Loaded declaration from ledger"
                     );
                     Ok(declaration)
@@ -417,6 +424,7 @@ where
         } = chain_api.info().await?;
         let tip = cryptarchia_info.tip;
         tracing::debug!(
+            target: LOG_TARGET,
             "Fetching declaration state for {declaration_id:?} from ledger tip {tip:?}"
         );
 
@@ -457,18 +465,19 @@ where
             Ok(_) => Ok(()),
             Err(e) => match e {
                 SdpError::ChainApi(err) => {
-                    tracing::error!("Chain API error during declaration resolution: {err}");
+                    tracing::error!(target: LOG_TARGET, "Chain API error during declaration resolution: {err}");
                     Err(err)
                 }
                 SdpError::DeclarationNotFound(id) => {
                     tracing::warn!(
+                        target: LOG_TARGET,
                         declaration_id = ?id,
                         "Declaration not found in ledger"
                     );
                     Ok(())
                 }
                 SdpError::LedgerStateNotFound(tip) => {
-                    tracing::error!("Could not find ledger state for tip {tip:?}");
+                    tracing::error!(target: LOG_TARGET, "Could not find ledger state for tip {tip:?}");
                     Err(format!("Missing ledger state at {tip:?}").into())
                 }
             },
@@ -492,6 +501,7 @@ where
         let zk_id = declaration.zk_id;
 
         tracing::debug!(
+            target: LOG_TARGET,
             diagnostic = "blend_tsi_outage",
             event = "sdp_declaration_submission_requested",
             provider_id = ?provider_id,
@@ -506,7 +516,7 @@ where
         {
             Ok(tx) => tx,
             Err(e) => {
-                tracing::error!("Failed to create declaration transaction: {:?}", e);
+                tracing::error!(target: LOG_TARGET, "Failed to create declaration transaction: {:?}", e);
                 metrics::declaration_tx_failures_total();
                 return;
             }
@@ -514,6 +524,7 @@ where
 
         let tx_id = signed_tx.hash();
         tracing::debug!(
+            target: LOG_TARGET,
             diagnostic = "blend_tsi_outage",
             event = "sdp_declaration_tx_created",
             provider_id = ?provider_id,
@@ -524,12 +535,13 @@ where
         );
 
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
-            tracing::error!("Failed to post declaration to mempool: {:?}", e);
+            tracing::error!(target: LOG_TARGET, "Failed to post declaration to mempool: {:?}", e);
             metrics::declaration_mempool_failures_total();
             return;
         }
 
         tracing::info!(
+            target: LOG_TARGET,
             diagnostic = "blend_tsi_outage",
             event = "sdp_declaration_submitted",
             provider_id = ?provider_id,
@@ -540,7 +552,7 @@ where
         );
 
         if let Err(e) = reply_channel.send(Ok(declaration_id)) {
-            tracing::error!("Failed to send post declaration response: {:?}", e);
+            tracing::error!(target: LOG_TARGET, "Failed to send post declaration response: {:?}", e);
         } else {
             metrics::declaration_success_total();
         }
@@ -557,7 +569,7 @@ where
         chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
     ) {
         let Some(declaration_id) = self.declaration_id else {
-            tracing::error!("No declaration_id set. Cannot post activity without declaration.");
+            tracing::error!(target: LOG_TARGET, "No declaration_id set. Cannot post activity without declaration.");
             return;
         };
 
@@ -581,7 +593,7 @@ where
             ))
             .is_some()
         {
-            debug!("active message tracker replaced");
+            debug!(target: LOG_TARGET, "active message tracker replaced");
         }
         self.update_state();
     }
@@ -599,6 +611,7 @@ where
         chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
     ) -> Option<HeaderId> {
         trace!(
+            target: LOG_TARGET,
             epoch = ?activity.metadata.submission_epoch(),
             "submitting activity message"
         );
@@ -612,18 +625,19 @@ where
             .try_fetch_runtime_declaration(activity.declaration_id, chain_api)
             .await
         else {
-            tracing::error!("Can't find declaration. Cannot post activity without declaration.");
+            tracing::error!(target: LOG_TARGET, "Can't find declaration. Cannot post activity without declaration.");
             return None;
         };
 
         let Some(nonce) = declaration.nonce.checked_add(1) else {
-            tracing::error!("Can't bump nonce");
+            tracing::error!(target: LOG_TARGET, "Can't bump nonce");
             return None;
         };
 
         let proof_epoch = u32::from(activity.metadata.origin_epoch());
 
         tracing::debug!(
+            target: LOG_TARGET,
             diagnostic = "blend_tsi_outage",
             event = "sdp_activity_submission_requested",
             proof_epoch,
@@ -650,6 +664,7 @@ where
             Ok(tx) => tx,
             Err(e) => {
                 tracing::error!(
+                    target: LOG_TARGET,
                     diagnostic = "blend_tsi_outage",
                     event = "sdp_activity_tx_failed",
                     proof_epoch,
@@ -669,6 +684,7 @@ where
 
         let tx_id = signed_tx.hash();
         tracing::debug!(
+            target: LOG_TARGET,
             diagnostic = "blend_tsi_outage",
             event = "sdp_activity_tx_created",
             proof_epoch,
@@ -683,6 +699,7 @@ where
 
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
             tracing::error!(
+                target: LOG_TARGET,
                 diagnostic = "blend_tsi_outage",
                 event = "sdp_activity_tx_failed",
                 proof_epoch,
@@ -701,6 +718,7 @@ where
         }
 
         tracing::info!(
+            target: LOG_TARGET,
             diagnostic = "blend_tsi_outage",
             event = "sdp_activity_tx_submitted",
             proof_epoch,
@@ -731,13 +749,13 @@ where
             .try_fetch_runtime_declaration(declaration_id, chain_api)
             .await
         else {
-            tracing::error!("Can't find declaration. Cannot post activity without declaration.");
+            tracing::error!(target: LOG_TARGET, "Can't find declaration. Cannot post activity without declaration.");
             metrics::withdrawal_validation_failures_total();
             return;
         };
 
         let Some(nonce) = declaration.nonce.checked_add(1) else {
-            tracing::error!("Can't bump nonce");
+            tracing::error!(target: LOG_TARGET, "Can't bump nonce");
             metrics::withdrawal_validation_failures_total();
             return;
         };
@@ -756,14 +774,14 @@ where
         {
             Ok(tx) => tx,
             Err(e) => {
-                tracing::error!("Failed to create withdrawal transaction: {:?}", e);
+                tracing::error!(target: LOG_TARGET, "Failed to create withdrawal transaction: {:?}", e);
                 metrics::withdrawal_tx_failures_total();
                 return;
             }
         };
 
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
-            tracing::error!("Failed to post withdrawal to mempool: {:?}", e);
+            tracing::error!(target: LOG_TARGET, "Failed to post withdrawal to mempool: {:?}", e);
             metrics::withdrawal_mempool_failures_total();
             return;
         }
@@ -786,7 +804,7 @@ where
             .await;
 
         if let Err(e) = reply_channel.send(result) {
-            tracing::error!("Failed to send response for set declaration: {e:?}");
+            tracing::error!(target: LOG_TARGET, "Failed to send response for set declaration: {e:?}");
         }
     }
 
@@ -825,7 +843,7 @@ where
             .await
         {
             Ok(()) => {
-                debug!("creating tracker for the restored active message");
+                debug!(target: LOG_TARGET, "creating tracker for the restored active message");
                 self.active_message_tracker = Some(IntentTracker::new(
                     activity,
                     self.active_message_tracker_config.clone(),
@@ -834,7 +852,7 @@ where
                 ));
             }
             Err(reason) => {
-                warn!(%reason, "dropping the stale restored active message");
+                warn!(target: LOG_TARGET, %reason, "dropping the stale restored active message");
                 self.update_state();
             }
         }
