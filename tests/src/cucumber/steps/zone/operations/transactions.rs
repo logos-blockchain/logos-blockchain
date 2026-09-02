@@ -1,3 +1,5 @@
+use lb_core::mantle::{MantleTransaction, transactions::OpProofs};
+
 use super::*;
 
 /// Builds a regular channel deposit for an existing funding note with the
@@ -166,7 +168,7 @@ pub async fn submit_zone_channel_split(
         .map_err(|error| ZoneTestError::SplitTransfer {
             message: format!("multi-sig proof assembly failed: {error:?}"),
         })?;
-    let mut ops_proofs = OpsProofs::new_unchecked(vec![OpProof::ChannelMultiSigProof(proof)]);
+    let mut ops_proofs = OpProofs::from([OpProof::ChannelMultiSigProof(proof)]);
     if let Some(transfer_proof) = response.transfer_proof {
         ops_proofs
             .try_push(transfer_proof)
@@ -175,7 +177,7 @@ pub async fn submit_zone_channel_split(
             })?;
     }
 
-    let signed_tx = SignedMantleTx::new(funded_tx, ops_proofs);
+    let signed_tx = MantleTransaction::new(funded_tx, ops_proofs);
     node.submit_transaction(&signed_tx)
         .await
         .map_err(|error| ZoneTestError::SplitTransfer {
@@ -215,15 +217,12 @@ pub async fn submit_atomic_zone_deposit(
         })?;
 
     let user_sig = sign_tx_zk(node_url, &tx, vec![funding_public_key]).await?;
-    let signed_tx = SignedMantleTx::new(
-        tx,
-        [
-            OpProof::ZkSig(user_sig.clone()),
-            OpProof::ZkSig(user_sig),
-            OpProof::Ed25519Sig(sequencer_sig),
-        ]
-        .into(),
-    );
+    let op_proofs = OpProofs::from([
+        OpProof::ZkSig(user_sig.clone()),
+        OpProof::ZkSig(user_sig),
+        OpProof::Ed25519Sig(sequencer_sig),
+    ]);
+    let signed_tx = MantleTransaction::new(tx, op_proofs);
 
     let (result, _cp) = client
         .submit_signed_tx(signed_tx, msg_id)
@@ -246,7 +245,7 @@ pub(super) async fn build_funded_custom_tx(
     funding_pk: ZkPublicKey,
     payloads: &[Inscription],
     mut parent: MsgId,
-) -> Result<(SignedMantleTx<Unverified>, MsgId), ZoneTestError> {
+) -> Result<(MantleTransaction<Unverified>, MsgId), ZoneTestError> {
     let signer = signing_key.public_key();
     let mut tx_builder = MantleTxBuilder::new();
     for payload in payloads {
@@ -282,16 +281,16 @@ pub(super) async fn build_funded_custom_tx(
     // proven by the sequencer key over the funded tx hash.
     let funded_tx = response.funded_tx;
     let signature = signing_key.sign_payload(funded_tx.hash().as_signing_bytes().as_ref());
-    let mut ops_proofs =
-        OpsProofs::new_unchecked(vec![OpProof::Ed25519Sig(signature); payloads.len()]);
+    let mut op_proofs =
+        OpProofs::new_unchecked(vec![OpProof::Ed25519Sig(signature); payloads.len()]);
     if let Some(proof) = response.transfer_proof {
-        ops_proofs
+        op_proofs
             .try_push(proof)
             .map_err(|error| ZoneTestError::BuildCustomTx {
                 message: format!("too many operation proofs: {error:?}"),
             })?;
     }
-    let signed_tx = SignedMantleTx::new(funded_tx, ops_proofs);
+    let signed_tx = MantleTransaction::new(funded_tx, op_proofs);
 
     Ok((signed_tx, parent))
 }

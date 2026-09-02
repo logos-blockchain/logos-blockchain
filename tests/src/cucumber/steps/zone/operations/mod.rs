@@ -30,7 +30,7 @@ use lb_core::{
             transfer::TransferOp,
         },
         traits::Hashable as _,
-        transactions::{OpsProofs, builder::MantleTxBuilder, states::Unverified},
+        transactions::{builder::MantleTxBuilder, states::Unverified},
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
@@ -42,7 +42,6 @@ use lb_http_api_common::bodies::{
     },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, ZkPublicKeys, ZkSignature};
-use lb_node::SignedMantleTx;
 use lb_testing_framework::NodeHttpClient;
 use lb_zone_sdk::{
     adapter::NodeHttpClient as ZoneNodeHttpClient,
