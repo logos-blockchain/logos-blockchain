@@ -26,7 +26,7 @@ pub struct Config {
     pub blend_failure_fallback: bool,
 }
 
-fn default_blend_failure_fallback() -> bool {
+const fn default_blend_failure_fallback() -> bool {
     true
 }
 
@@ -66,7 +66,10 @@ impl Config {
         self.core.zk.secret_key_kms_id = key_id;
     }
 
-    pub const fn force_blend_broadcast(&mut self) {
+    /// Keeps every payload inside the Blend network, whatever happens to it:
+    /// one the network fails to deliver is lost rather than broadcast in the
+    /// clear.
+    pub const fn disable_blend_failure_fallback(&mut self) {
         self.blend_failure_fallback = false;
     }
 }

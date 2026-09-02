@@ -15,7 +15,8 @@ use lb_time_service::backends::NtpTimeBackend;
 use libp2p::PeerId;
 
 use crate::generic_services::{
-    CryptarchiaService, MempoolNetworkAdapter, MempoolPool, SdpService, blend::pol::PolInfoProvider,
+    ChainNetworkService, CryptarchiaService, MempoolNetworkAdapter, MempoolPool, SdpService,
+    blend::pol::PolInfoProvider,
 };
 
 pub(crate) mod pol;
@@ -26,6 +27,7 @@ pub type BlendPayloadDispatcher<RuntimeServiceId> =
     lb_blend_service::core::dispatcher::libp2p::Libp2pPayloadDispatcher<
         MempoolNetworkAdapter<RuntimeServiceId>,
         MempoolPool<RuntimeServiceId>,
+        ChainNetworkService<RuntimeServiceId>,
         RuntimeServiceId,
     >;
 

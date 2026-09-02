@@ -259,6 +259,7 @@ where
         + Sync,
     RuntimeServiceId: AsServiceId<NetworkService<Dispatcher::Backend, RuntimeServiceId>>
         + AsServiceId<Dispatcher::MempoolService>
+        + AsServiceId<Dispatcher::ChainNetworkService>
         + AsServiceId<SdpService>
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + AsServiceId<ChainService>
@@ -336,7 +337,16 @@ where
                 .relay::<Dispatcher::MempoolService>()
                 .await
                 .expect("Relay with mempool service should be available.");
-            Dispatcher::new(network_relay, mempool_relay, blend_config.broadcast.clone())
+            let chain_network_relay = overwatch_handle
+                .relay::<Dispatcher::ChainNetworkService>()
+                .await
+                .expect("Relay with chain network service should be available.");
+            Dispatcher::new(
+                network_relay,
+                mempool_relay,
+                chain_network_relay,
+                blend_config.broadcast.clone(),
+            )
         }
         .await;
 
@@ -401,7 +411,6 @@ where
             activity_threshold_sensitivity: blend_config.activity_threshold_sensitivity,
             pow_mining_pool: new_mining_pool(),
             blend_failure_fallback: blend_config.blend_failure_fallback,
-            broadcast: blend_config.broadcast,
         };
         let (
             mut remaining_epoch_stream,
@@ -520,7 +529,7 @@ async fn initialize<
     KmsAdapter,
     RuntimeServiceId,
 >(
-    blend_config: RunningBlendConfig<Backend::Settings, Dispatcher::Settings>,
+    blend_config: RunningBlendConfig<Backend::Settings>,
     public_epoch_stream: impl Stream<Item = BlendEpochState<NodeId>> + Send + Unpin + 'static,
     overwatch_handle: OverwatchHandle<RuntimeServiceId>,
     kms_adapter: KmsAdapter,
@@ -854,7 +863,7 @@ async fn run_event_loop<
              + Unpin
              + Send
          ),
-    blend_config: &RunningBlendConfig<Backend::Settings, Dispatcher::Settings>,
+    blend_config: &RunningBlendConfig<Backend::Settings>,
     backend: &mut Backend,
     payload_dispatcher: &Dispatcher,
     sdp_relay: &OutboundRelay<SdpMessage>,
@@ -1028,7 +1037,7 @@ async fn run_current_epoch<
              + Unpin
              + Send
          ),
-    blend_config: &RunningBlendConfig<Backend::Settings, Dispatcher::Settings>,
+    blend_config: &RunningBlendConfig<Backend::Settings>,
     backend: &mut Backend,
     payload_dispatcher: &Dispatcher,
     sdp_relay: &OutboundRelay<SdpMessage>,
@@ -1118,7 +1127,7 @@ async fn run_during_transition<
              + Unpin
              + Send
          ),
-    blend_config: &RunningBlendConfig<Backend::Settings, Dispatcher::Settings>,
+    blend_config: &RunningBlendConfig<Backend::Settings>,
     backend: &mut Backend,
     payload_dispatcher: &Dispatcher,
     sdp_relay: &OutboundRelay<SdpMessage>,
@@ -1213,7 +1222,7 @@ async fn handle_service_message<
     message: ServiceMessage<NodeId>,
     pending_proposals: &mut PendingProposals,
     pending_transactions: &mut PendingTransactions,
-    blend_config: &RunningBlendConfig<Backend::Settings, NetworkSettings>,
+    blend_config: &RunningBlendConfig<Backend::Settings>,
     backend: &Backend,
     recovery_checkpoint: ServiceState<Backend::Settings, NetworkSettings>,
 ) -> ServiceState<Backend::Settings, NetworkSettings>
@@ -1390,7 +1399,7 @@ async fn rotate<
     new_epoch_info: MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>,
     components: Components<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>,
     latest_secret_pol_info: &mut Option<PolEpochInfo>,
-    blend_config: &RunningBlendConfig<Backend::Settings, Dispatcher::Settings>,
+    blend_config: &RunningBlendConfig<Backend::Settings>,
     backend: &mut Backend,
     recovery_checkpoint: ServiceState<Backend::Settings, Dispatcher::Settings>,
 ) -> StageOutcome<
@@ -1658,7 +1667,7 @@ async fn handle_epoch_event<
     RuntimeServiceId,
 >(
     new_epoch_info: MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>,
-    settings: &RunningBlendConfig<Backend::Settings, NetworkSettings>,
+    settings: &RunningBlendConfig<Backend::Settings>,
     current_cryptographic_processor: CurrentEpochCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -2480,7 +2489,7 @@ async fn handle_release_round_for_old_epoch<
     let data_messages_relay_futures = data_messages
         .into_iter()
         .inspect(|data_message_to_blend| {
-            deliveries.mark_scheduled_payload_as_released(data_message_to_blend.id())
+            deliveries.mark_scheduled_payload_as_released(data_message_to_blend.id());
         })
         .map(|data_message_to_blend| -> BoxFuture<'_, ()> {
             backend.publish(data_message_to_blend, epoch).boxed()

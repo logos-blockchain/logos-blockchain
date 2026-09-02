@@ -36,8 +36,8 @@ use crate::{
     core::{
         dispatcher::PayloadDispatcher as PayloadDispatcherTrait,
         service_components::{
-            BlendBackendSettingsOfService, MempoolOfService, MessageComponents,
-            NetworkBackendOfService, PayloadDispatcherSettingsOfService,
+            BlendBackendSettingsOfService, ChainNetworkOfService, MempoolOfService,
+            MessageComponents, NetworkBackendOfService, PayloadDispatcherSettingsOfService,
             ServiceComponents as CoreServiceComponents,
         },
     },
@@ -141,6 +141,7 @@ where
                 RuntimeServiceId,
             >,
         > + AsServiceId<MempoolOfService<CoreService, RuntimeServiceId>>
+        + AsServiceId<ChainNetworkOfService<CoreService, RuntimeServiceId>>
         + AsServiceId<SdpService>
         + Debug
         + Display

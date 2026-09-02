@@ -30,7 +30,7 @@ pub struct StartingBlendConfig<BackendSettings, NetworkSettings> {
 /// Same values as [`StartingBlendConfig`] but with the secret key exfiltrated
 /// from the KMS.
 #[derive(Clone)]
-pub struct RunningBlendConfig<BackendSettings, BroadcastSettings> {
+pub struct RunningBlendConfig<BackendSettings> {
     pub backend: BackendSettings,
     pub scheduler: SchedulerSettings,
     pub time: TimingSettings,
@@ -41,11 +41,10 @@ pub struct RunningBlendConfig<BackendSettings, BroadcastSettings> {
     pub data_replication_factor: u64,
     pub activity_threshold_sensitivity: u64,
     pub pow_mining_pool: Arc<ThreadPool>,
-    pub broadcast: BroadcastSettings,
     pub blend_failure_fallback: bool,
 }
 
-impl<BackendSettings, BroadcastSettings> RunningBlendConfig<BackendSettings, BroadcastSettings> {
+impl<BackendSettings> RunningBlendConfig<BackendSettings> {
     pub fn epoch_core_quota(&self, membership_size: usize) -> Quota {
         self.scheduler
             .cover

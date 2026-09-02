@@ -15,7 +15,7 @@ use crate::{
     core::{
         dispatcher::PayloadDispatcher as PayloadDispatcherTrait,
         service_components::{
-            MempoolOfService, MessageComponents, NetworkBackendOfService,
+            ChainNetworkOfService, MempoolOfService, MessageComponents, NetworkBackendOfService,
             PayloadDispatcherSettingsOfService, ServiceComponents as CoreServiceComponents,
         },
     },
@@ -68,6 +68,7 @@ where
                 RuntimeServiceId,
             >,
         > + AsServiceId<MempoolOfService<CoreService, RuntimeServiceId>>
+        + AsServiceId<ChainNetworkOfService<CoreService, RuntimeServiceId>>
         + Debug
         + Display
         + Clone
@@ -388,7 +389,7 @@ mod tests {
     use super::*;
     use crate::{
         modes::broadcast_tests::{TestMessage, TestNetworkBackend, TestPayloadDispatcher},
-        test_utils::mempool::TestMempoolService,
+        test_utils::parked::{TestChainNetworkService, TestMempoolService},
     };
 
     const LOCAL_NODE_ID: u8 = 99;
@@ -758,6 +759,7 @@ mod tests {
         edge: EdgeService,
         network: NetworkService<TestNetworkBackend, RuntimeServiceId>,
         mempool: TestMempoolService<RuntimeServiceId>,
+        chain_network: TestChainNetworkService<RuntimeServiceId>,
     }
 
     async fn start_network_service(handle: &OverwatchHandle<RuntimeServiceId>) {
@@ -857,6 +859,7 @@ mod tests {
             edge: (),
             network: NetworkConfig { backend: () },
             mempool: (),
+            chain_network: (),
         }
     }
 

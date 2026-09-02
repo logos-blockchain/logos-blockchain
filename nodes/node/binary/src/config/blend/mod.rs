@@ -85,7 +85,6 @@ impl ServiceConfig {
                     rounds_per_epoch: self
                         .deployment
                         .rounds_per_epoch(slots_per_epoch, &slot_duration),
-                    delivery_deadline: self.deployment.max_data_message_delay_in_rounds(),
                 },
                 data_replication_factor: self.deployment.common.data_replication_factor,
             },

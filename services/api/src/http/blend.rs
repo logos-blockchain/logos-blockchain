@@ -69,9 +69,7 @@ where
     Transaction: SerializeOp,
     RuntimeServiceId: AsServiceId<BlendService> + Debug + Sync + Display + 'static,
 {
-    // Encoded the same way the mempool gossips transactions, so that whichever
-    // node exits this one decodes what it expects.
-    let payload = BlendPayload::transaction(transaction.to_bytes()?.to_vec())?;
+    let payload = BlendPayload::from_transaction(&transaction)?;
     let relay = handle.relay::<BlendService>().await?;
 
     relay

@@ -75,17 +75,19 @@ impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
                 CommonSettings {
                     minimum_network_size,
                     time,
-                    recovery_data,
                     non_ephemeral_signing_key_id,
                     num_blend_layers,
                     data_replication_factor,
                     broadcast,
                     blend_failure_fallback,
+                    // An edge node keeps nothing across a restart, so the recovery
+                    // state this carries is not one of the things it takes.
+                    ..
                 },
             edge: EdgeSettings { backend },
             core:
                 CoreSettings {
-                    scheduler: SchedulerSettings { cover, .. },
+                    scheduler: SchedulerSettings { cover, delayer },
                     ..
                 },
         }: Settings<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>,
@@ -100,6 +102,10 @@ impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
             data_replication_factor,
             broadcast,
             blend_failure_fallback,
+            // An edge node has no release schedule of its own, but the deadline it
+            // waits out is the one a core node's schedule implies, so it takes the
+            // same delay bound the core scheduler is configured with.
+            max_blend_delay_in_rounds: delayer.maximum_release_delay_in_rounds,
         }
     }
 }

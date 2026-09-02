@@ -9,8 +9,9 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 
 use crate::{
-    core::dispatcher::PayloadDispatcher, message::BlendPayload,
-    test_utils::mempool::TestMempoolService,
+    core::dispatcher::PayloadDispatcher,
+    message::BlendPayload,
+    test_utils::parked::{TestChainNetworkService, TestMempoolService},
 };
 
 const CHANNEL_SIZE: usize = 32;
@@ -54,6 +55,7 @@ where
     RuntimeServiceId: Send + 'static,
 {
     type Backend = TestNetworkBackend;
+    type ChainNetworkService = TestChainNetworkService<RuntimeServiceId>;
     type MempoolService = TestMempoolService<RuntimeServiceId>;
     type Settings = ();
 
@@ -62,6 +64,7 @@ where
             <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
         >,
         _mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
+        _chain_network_relay: OutboundRelay<<Self::ChainNetworkService as ServiceData>::Message>,
         (): Self::Settings,
     ) -> Self {
         Self::new().0

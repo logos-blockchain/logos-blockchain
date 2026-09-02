@@ -5,15 +5,17 @@ use core::{
 };
 
 use futures::{StreamExt as _, stream, stream::BoxStream};
+use lb_chain_network_service::Message as ChainNetworkMsg;
+use lb_codec::BinaryEncode as _;
 use lb_core::{
-    codec::{DeserializeOp as _, SerializeOp as _},
+    codec::DeserializeOp as _,
     header::HeaderId,
     mantle::{traits::Hashable, transactions::hash::PrefixedKey},
 };
 use lb_log_targets::blend;
 use lb_network_service::{
     NetworkService,
-    backends::libp2p::{Command, Libp2p, Message, PubSubCommand, TopicHash},
+    backends::libp2p::{Command, Libp2p, PubSubCommand},
     message::NetworkMsg,
 };
 use lb_storage_service::StorageService;
@@ -32,18 +34,20 @@ use crate::message::BlendPayload;
 const LOG_TARGET: &str = blend::service::CORE;
 
 type MempoolRelay<Item, Key> = OutboundRelay<MempoolMsg<HeaderId, Item, Item, Key>>;
+type ChainNetworkRelay<Item> = OutboundRelay<ChainNetworkMsg<Item>>;
 
 /// A payload dispatcher for a node whose network service uses the libp2p
 /// backend.
-pub struct Libp2pPayloadDispatcher<MempoolNetAdapter, Mempool, RuntimeServiceId>
+pub struct Libp2pPayloadDispatcher<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId>
 where
     Mempool: RecoverableMempool<BlockId = HeaderId>,
 {
     network_relay:
         OutboundRelay<<NetworkService<Libp2p, RuntimeServiceId> as ServiceData>::Message>,
     mempool_relay: MempoolRelay<Mempool::Item, Mempool::Key>,
+    chain_network_relay: ChainNetworkRelay<Mempool::Item>,
     settings: Libp2pBroadcastSettings,
-    _phantom: PhantomData<(MempoolNetAdapter, RuntimeServiceId)>,
+    _phantom: PhantomData<(MempoolNetAdapter, ChainNetwork, RuntimeServiceId)>,
 }
 
 /// Settings used to broadcast messages to the network service that uses libp2p
@@ -53,11 +57,13 @@ pub struct Libp2pBroadcastSettings {
     pub topic: String,
 }
 
-impl<MempoolNetAdapter, Mempool, RuntimeServiceId>
-    Libp2pPayloadDispatcher<MempoolNetAdapter, Mempool, RuntimeServiceId>
+impl<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId>
+    Libp2pPayloadDispatcher<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId>
 where
-    Mempool: RecoverableMempool<BlockId = HeaderId>,
+    Mempool: RecoverableMempool<BlockId = HeaderId> + Sync,
+    Mempool::Key: PrefixedKey<Prefix: Send + Sync>,
     MempoolNetAdapter: Sync,
+    ChainNetwork: Sync,
     RuntimeServiceId: Sync,
 {
     /// Broadcast an unencrypted message to the network by publishing the
@@ -78,49 +84,64 @@ where
     }
 }
 
-impl<MempoolNetAdapter, Mempool, RuntimeServiceId>
-    Libp2pPayloadDispatcher<MempoolNetAdapter, Mempool, RuntimeServiceId>
+impl<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId>
+    Libp2pPayloadDispatcher<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId>
 where
-    Mempool: RecoverableMempool<BlockId = HeaderId>,
-    Mempool::Item: Clone + Serialize + Send + 'static,
+    Mempool: RecoverableMempool<BlockId = HeaderId> + Sync,
+    Mempool::Item: Clone + Serialize + Send + Sync + 'static,
     Mempool::Key: PrefixedKey<Prefix: Send + Sync> + Send + 'static,
     MempoolNetAdapter: Sync,
+    ChainNetwork: Sync,
     RuntimeServiceId: Sync,
 {
-    async fn observe_block_proposals(&self) -> BoxStream<'static, BlendPayload> {
-        let (sender, receiver) = oneshot::channel();
-        if let Err((e, _)) = self
-            .network_relay
-            .send(NetworkMsg::SubscribeToPubSub { sender })
-            .await
-        {
-            tracing::error!(target: LOG_TARGET, "Failed to ask the network service for the broadcasting channel: {e}");
-            return stream::empty().boxed();
-        }
-        let Ok(broadcasts) = receiver.await else {
-            tracing::error!(target: LOG_TARGET, "The network service dropped the broadcasting-channel subscription.");
-            return stream::empty().boxed();
-        };
+    /// The block proposals the local chain network receives, whether they
+    /// arrived over the network or through this node's own exit door.
+    ///
+    /// Asked of the chain network rather than of its gossipsub topic, because
+    /// the chain network is what owns proposals: it is what this node's exit
+    /// puts them in front of and what carries them on, so a proposal reaching
+    /// the network and a proposal reaching the chain network are the same
+    /// event.
+    ///
+    /// The relay is cloned rather than borrowed so that the subscription can be
+    /// deferred to the first poll of the stream it returns: it is answered by a
+    /// service loop that may not have started yet, and a sender must not have
+    /// to wait on that before it can blend anything.
+    fn observe_block_proposals(
+        &self,
+    ) -> impl Future<Output = BoxStream<'static, BlendPayload>> + Send + 'static {
+        let chain_network_relay = self.chain_network_relay.clone();
+        async move {
+            let (result_sender, receiver) = oneshot::channel();
+            if let Err((e, _)) = chain_network_relay
+                .send(ChainNetworkMsg::SubscribeToProposals { result_sender })
+                .await
+            {
+                tracing::error!(target: LOG_TARGET, "Failed to ask the chain network for the proposals it receives: {e}");
+                return stream::empty().boxed();
+            }
+            let Ok(received) = receiver.await else {
+                tracing::error!(target: LOG_TARGET, "The chain network dropped the received-proposal subscription.");
+                return stream::empty().boxed();
+            };
 
-        let block_topic = TopicHash::from_raw(self.settings.topic.clone());
-        broadcasts
-            .filter_map(move |message| {
-                ready(match message {
-                    Ok(Message { data, topic, .. }) if topic == block_topic => {
-                        Some(BlendPayload::BlockProposal(data))
-                    }
-                    // Some other topic: a proposal only ever travels on this one.
-                    Ok(_) => None,
+            BroadcastStream::new(received)
+            .filter_map(|proposal| {
+                ready(match proposal {
+                    // Encoded the way it was handed to Blend, so that the two are the
+                    // same bytes and comparing them is all the sender has to do.
+                    Ok(proposal) => Some(BlendPayload::BlockProposal(proposal.encode_to_vec())),
                     // A lagging observer can only miss a delivery, never invent one, so the
                     // worst it costs is a payload broadcast in the clear that need not have
                     // been.
                     Err(BroadcastStreamRecvError::Lagged(missed)) => {
-                        tracing::warn!(target: LOG_TARGET, "Missed {missed} broadcasting-channel messages; a delivered proposal may be broadcast directly anyway.");
+                        tracing::warn!(target: LOG_TARGET, "Missed {missed} received proposals; a delivered proposal may be broadcast directly anyway.");
                         None
                     }
                 })
             })
             .boxed()
+        }
     }
 
     /// The transactions the local mempool accepts, whether they arrived over
@@ -130,33 +151,37 @@ where
     /// mempool is what owns transactions: it is what this node's exit hands
     /// them to and what gossips them on, so a transaction reaching the network
     /// and a transaction reaching the mempool are the same event.
-    async fn observe_transactions(&self) -> BoxStream<'static, BlendPayload> {
-        let (reply_channel, receiver) = oneshot::channel();
-        if let Err((e, _)) = self
-            .mempool_relay
-            .send(MempoolMsg::SubscribeToAccepted { reply_channel })
-            .await
-        {
-            tracing::error!(target: LOG_TARGET, "Failed to ask the mempool for the transactions it accepts: {e}");
-            return stream::empty().boxed();
-        }
-        let Ok(accepted) = receiver.await else {
-            tracing::error!(target: LOG_TARGET, "The mempool dropped the accepted-transaction subscription.");
-            return stream::empty().boxed();
-        };
+    ///
+    /// Deferred to the first poll for the same reason as
+    /// [`observe_block_proposals`](Self::observe_block_proposals).
+    fn observe_transactions(
+        &self,
+    ) -> impl Future<Output = BoxStream<'static, BlendPayload>> + Send + 'static {
+        let mempool_relay = self.mempool_relay.clone();
+        async move {
+            let (reply_channel, receiver) = oneshot::channel();
+            if let Err((e, _)) = mempool_relay
+                .send(MempoolMsg::SubscribeToAccepted { reply_channel })
+                .await
+            {
+                tracing::error!(target: LOG_TARGET, "Failed to ask the mempool for the transactions it accepts: {e}");
+                return stream::empty().boxed();
+            }
+            let Ok(accepted) = receiver.await else {
+                tracing::error!(target: LOG_TARGET, "The mempool dropped the accepted-transaction subscription.");
+                return stream::empty().boxed();
+            };
 
-        BroadcastStream::new(accepted)
+            BroadcastStream::new(accepted)
             .filter_map(|transaction| {
                 ready(match transaction {
                     // Encoded the way it was handed to Blend, so that the two are the
                     // same bytes and comparing them is all the sender has to do.
-                    Ok(transaction) => transaction
-                        .to_bytes()
+                    Ok(transaction) => BlendPayload::from_transaction(&transaction)
                         .inspect_err(|e| {
-                            tracing::error!(target: LOG_TARGET, "A transaction the mempool accepted does not re-encode: {e}");
+                            tracing::debug!(target: LOG_TARGET, "A transaction the mempool accepted is not one Blend could have carried: {e}");
                         })
-                        .ok()
-                        .map(|bytes| BlendPayload::Transaction(bytes.to_vec())),
+                        .ok(),
                     Err(BroadcastStreamRecvError::Lagged(missed)) => {
                         tracing::warn!(target: LOG_TARGET, "Missed {missed} accepted transactions; a delivered transaction may be broadcast directly anyway.");
                         None
@@ -164,16 +189,19 @@ where
                 })
             })
             .boxed()
+        }
     }
 }
 
-impl<MempoolNetAdapter, Mempool, RuntimeServiceId>
-    Libp2pPayloadDispatcher<MempoolNetAdapter, Mempool, RuntimeServiceId>
+impl<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId>
+    Libp2pPayloadDispatcher<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId>
 where
-    Mempool: RecoverableMempool<BlockId = HeaderId>,
-    Mempool::Item: Hashable<Hash = Mempool::Key> + serde::de::DeserializeOwned + Send + 'static,
-    Mempool::Key: PrefixedKey<Prefix: Send + Sync> + Send + 'static,
+    Mempool: RecoverableMempool<BlockId = HeaderId> + Sync,
+    Mempool::Item:
+        Hashable<Hash = Mempool::Key> + serde::de::DeserializeOwned + Send + Sync + 'static,
+    Mempool::Key: PrefixedKey<Prefix: Send + Sync> + Send + Sync + 'static,
     MempoolNetAdapter: Sync,
+    ChainNetwork: Sync,
     RuntimeServiceId: Sync,
 {
     /// Submit a decapsulated transaction to the local mempool after validating
@@ -213,8 +241,8 @@ where
 }
 
 #[async_trait::async_trait]
-impl<MempoolNetAdapter, Mempool, RuntimeServiceId> PayloadDispatcher<RuntimeServiceId>
-    for Libp2pPayloadDispatcher<MempoolNetAdapter, Mempool, RuntimeServiceId>
+impl<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId> PayloadDispatcher<RuntimeServiceId>
+    for Libp2pPayloadDispatcher<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId>
 where
     Mempool: RecoverableMempool<BlockId = HeaderId, RecoveryState: 'static> + Send + Sync + 'static,
     Mempool::Item: Hashable<Hash = Mempool::Key>
@@ -222,8 +250,9 @@ where
         + Serialize
         + serde::de::DeserializeOwned
         + Send
+        + Sync
         + 'static,
-    Mempool::Key: PrefixedKey<Prefix: Send + Sync> + Send + 'static,
+    Mempool::Key: PrefixedKey<Prefix: Send + Sync> + Send + Sync + 'static,
     Mempool::Settings: Clone + Send + Sync + 'static,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync + 'static,
     MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>
@@ -231,6 +260,8 @@ where
         + Sync
         + 'static,
     MempoolNetAdapter::Settings: Clone + Send + Sync + 'static,
+    ChainNetwork: ServiceData<Message = ChainNetworkMsg<Mempool::Item>> + Send + Sync + 'static,
+    Self: Sync,
     RuntimeServiceId: Clone
         + Debug
         + Display
@@ -245,6 +276,7 @@ where
         >,
 {
     type Backend = Libp2p;
+    type ChainNetworkService = ChainNetwork;
     type MempoolService =
         TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>;
     type Settings = Libp2pBroadcastSettings;
@@ -254,11 +286,13 @@ where
             <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
         >,
         mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
+        chain_network_relay: OutboundRelay<<Self::ChainNetworkService as ServiceData>::Message>,
         settings: Self::Settings,
     ) -> Self {
         Self {
             network_relay,
             mempool_relay,
+            chain_network_relay,
             settings,
             _phantom: PhantomData,
         }
@@ -272,9 +306,11 @@ where
     }
 
     async fn observe_broadcasts(&self) -> BoxStream<'static, BlendPayload> {
+        // `once(..).flatten()` is what defers each subscription to the first poll,
+        // so that neither has to be answered before the caller's loop can start.
         stream::select(
-            self.observe_block_proposals().await,
-            self.observe_transactions().await,
+            stream::once(self.observe_block_proposals()).flatten(),
+            stream::once(self.observe_transactions()).flatten(),
         )
         .boxed()
     }

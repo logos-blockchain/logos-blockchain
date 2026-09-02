@@ -1,4 +1,6 @@
 mod imp {
+    use lb_blend::message::PayloadType;
+
     const ACTION_PUBLISH: &str = "publish";
     const ACTION_FORWARD: &str = "forward";
 
@@ -75,6 +77,31 @@ mod imp {
     /// caught doing — an invalid `PoQ` among the reasons.
     pub fn core_peer_blocked(reason: &'static str) {
         lb_tracing::increase_counter_u64!(blend_core_peers_blocked_total, 1, reason = reason);
+    }
+
+    /// Reports a payload the Blend network failed to deliver within the
+    /// delivery deadline, and that this node therefore broadcast in the clear.
+    ///
+    /// Labelled by what the payload was, because the two failures mean
+    /// different things: a proposal that had to be bypassed is a block whose
+    /// proposer is now linkable to it, while a transaction that had to be is
+    /// one the sender is linkable to. A rate that is not near zero says the
+    /// Blend network is failing to carry this node's traffic.
+    pub fn payload_bypassed_blend(payload_type: PayloadType) {
+        lb_tracing::increase_counter_u64!(
+            blend_payloads_bypassed_total,
+            1,
+            payload_type = payload_type_label(payload_type)
+        );
+    }
+
+    const fn payload_type_label(payload_type: PayloadType) -> &'static str {
+        match payload_type {
+            PayloadType::BlockProposal => "block_proposal",
+            PayloadType::Transaction => "transaction",
+            // Never bypassed: a cover message carries no payload to deliver.
+            PayloadType::Cover => "cover",
+        }
     }
 }
 

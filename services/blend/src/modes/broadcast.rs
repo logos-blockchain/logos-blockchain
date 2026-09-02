@@ -37,6 +37,7 @@ where
             ServiceData<Message = BackendNetworkMsg<Adapter::Backend, RuntimeServiceId>>,
         RuntimeServiceId: AsServiceId<NetworkService>
             + AsServiceId<Adapter::MempoolService>
+            + AsServiceId<Adapter::ChainNetworkService>
             + Debug
             + Display
             + Send
@@ -51,7 +52,10 @@ where
         .await?;
         let relay = overwatch_handle.relay::<NetworkService>().await?;
         let mempool_relay = overwatch_handle.relay::<Adapter::MempoolService>().await?;
-        let adapter = Adapter::new(relay, mempool_relay, network_settings);
+        let chain_network_relay = overwatch_handle
+            .relay::<Adapter::ChainNetworkService>()
+            .await?;
+        let adapter = Adapter::new(relay, mempool_relay, chain_network_relay, network_settings);
         Ok(Self {
             adapter,
             node_id,
@@ -114,7 +118,7 @@ pub mod tests {
     use tracing::{debug, info};
 
     use super::*;
-    use crate::test_utils::mempool::TestMempoolService;
+    use crate::test_utils::parked::{TestChainNetworkService, TestMempoolService};
 
     #[test_log::test(test)]
     fn broadcast_mode() {
@@ -174,6 +178,7 @@ pub mod tests {
     struct Services {
         network: TestNetworkService,
         mempool: TestMempoolService<RuntimeServiceId>,
+        chain_network: TestChainNetworkService<RuntimeServiceId>,
     }
 
     pub struct TestNetworkService {
@@ -259,6 +264,7 @@ pub mod tests {
         RuntimeServiceId: Send + 'static,
     {
         type Backend = TestNetworkBackend;
+        type ChainNetworkService = TestChainNetworkService<RuntimeServiceId>;
         type MempoolService = TestMempoolService<RuntimeServiceId>;
         type Settings = ();
 
@@ -267,6 +273,9 @@ pub mod tests {
                 <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
             >,
             _mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
+            _chain_network_relay: OutboundRelay<
+                <Self::ChainNetworkService as ServiceData>::Message,
+            >,
             (): Self::Settings,
         ) -> Self {
             let (broadcasted_messages_sender, broadcasted_messages_receiver) = mpsc::channel(100);
@@ -328,6 +337,7 @@ pub mod tests {
         ServicesServiceSettings {
             network: (),
             mempool: (),
+            chain_network: (),
         }
     }
 }

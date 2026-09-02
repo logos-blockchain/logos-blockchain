@@ -5,6 +5,7 @@ use lb_blend::message::{
     PayloadType, encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
 };
 use lb_core::{
+    codec::SerializeOp,
     mantle::NoteId,
     sdp::{DeclarationId, Locator},
 };
@@ -88,12 +89,30 @@ pub enum BlendPayload {
 }
 
 impl BlendPayload {
-    /// Wraps a transaction for blending, refusing one that could never fit.
+    /// Encodes a transaction for blending, refusing one that could never fit.
+    ///
+    /// The one place a transaction is turned into the bytes Blend carries. Both
+    /// ends of the round trip go through it — the sender, handing the
+    /// transaction over, and the sender again, recognising it coming back off
+    /// the broadcasting channel — so the two cannot disagree about what the
+    /// bytes are, which is the whole basis on which a delivery is told from a
+    /// loss.
     // TODO: This will go once we move away from `Vec<u8>` and into strong types
     // for each message type Blend supports.
-    pub fn transaction(transaction: Vec<u8>) -> Result<Self, TransactionTooLarge> {
+    pub fn from_transaction<Transaction>(
+        transaction: &Transaction,
+    ) -> Result<Self, TransactionNotBlendable>
+    where
+        Transaction: SerializeOp,
+    {
+        Self::transaction(transaction.to_bytes()?.to_vec())
+    }
+
+    /// [`from_transaction`](Self::from_transaction) for a caller that has the
+    /// encoding already.
+    pub fn transaction(transaction: Vec<u8>) -> Result<Self, TransactionNotBlendable> {
         if transaction.len() > MAX_PAYLOAD_BODY_SIZE {
-            return Err(TransactionTooLarge {
+            return Err(TransactionNotBlendable::TooLarge {
                 size: transaction.len(),
                 maximum: MAX_PAYLOAD_BODY_SIZE,
             });
@@ -128,12 +147,13 @@ impl BlendPayload {
     }
 }
 
-/// A transaction too large to fit in a Blend payload.
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-#[error("Transaction of {size} bytes exceeds the {maximum} a Blend payload can carry.")]
-pub struct TransactionTooLarge {
-    pub size: usize,
-    pub maximum: usize,
+/// Why a transaction cannot be carried by the Blend network.
+#[derive(Debug, thiserror::Error)]
+pub enum TransactionNotBlendable {
+    #[error("Transaction of {size} bytes exceeds the {maximum} a Blend payload can carry.")]
+    TooLarge { size: usize, maximum: usize },
+    #[error("Transaction cannot be encoded: {0}")]
+    Encoding(#[from] lb_core::codec::Error),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]

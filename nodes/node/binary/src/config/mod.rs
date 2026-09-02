@@ -476,7 +476,7 @@ pub fn update_blend(blend: &mut BlendConfig, blend_args: BlendArgs) {
     } = blend_args;
 
     if no_blend_fallback {
-        blend.force_blend_broadcast();
+        blend.disable_blend_failure_fallback();
     }
 
     if let Some(addr) = blend_addr {

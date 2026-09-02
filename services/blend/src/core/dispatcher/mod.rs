@@ -20,8 +20,11 @@ pub mod libp2p;
 pub trait PayloadDispatcher<RuntimeServiceId> {
     /// The network backend used by the network service.
     type Backend: NetworkBackend<RuntimeServiceId> + 'static;
-    /// The mempool service transactions are handed over to.
+    /// The mempool service transactions are handed over to, and asked about
+    /// the ones it accepts.
     type MempoolService: ServiceData<Message: Send + 'static> + 'static;
+    /// The chain-network service asked about the block proposals it receives.
+    type ChainNetworkService: ServiceData<Message: Send + 'static> + 'static;
     /// Settings used to broadcast messages using the network service.
     type Settings: Clone + Debug + Serialize + DeserializeOwned + Send + Sync + 'static;
 
@@ -30,6 +33,7 @@ pub trait PayloadDispatcher<RuntimeServiceId> {
             <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
         >,
         mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
+        chain_network_relay: OutboundRelay<<Self::ChainNetworkService as ServiceData>::Message>,
         settings: Self::Settings,
     ) -> Self;
 

@@ -55,10 +55,8 @@ use crate::{
 
 const LOG_TARGET: &str = blend::service::EDGE;
 
-type RunningSettings<Backend, NodeId, BroadcastSettings, RuntimeServiceId> = RunningBlendConfig<
-    <Backend as BlendBackend<NodeId, RuntimeServiceId>>::Settings,
-    BroadcastSettings,
->;
+type RunningSettings<Backend, NodeId, RuntimeServiceId> =
+    RunningBlendConfig<<Backend as BlendBackend<NodeId, RuntimeServiceId>>::Settings>;
 
 pub struct BlendService<
     Backend,
@@ -150,6 +148,7 @@ where
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>
         + AsServiceId<NetworkService<Dispatcher::Backend, RuntimeServiceId>>
         + AsServiceId<Dispatcher::MempoolService>
+        + AsServiceId<Dispatcher::ChainNetworkService>
         + Display
         + Debug
         + Clone
@@ -168,6 +167,10 @@ where
         })
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn run(mut self) -> Result<(), overwatch::DynError> {
         let Self {
             service_resources_handle:
@@ -205,7 +208,16 @@ where
                 .relay::<Dispatcher::MempoolService>()
                 .await
                 .expect("Relay with mempool service should be available.");
-            Dispatcher::new(network_relay, mempool_relay, settings.broadcast.clone())
+            let chain_network_relay = overwatch_handle
+                .relay::<Dispatcher::ChainNetworkService>()
+                .await
+                .expect("Relay with chain network service should be available.");
+            Dispatcher::new(
+                network_relay,
+                mempool_relay,
+                chain_network_relay,
+                settings.broadcast.clone(),
+            )
         };
 
         let kms = KmsServiceApi::<PreloadKmsService<_>, RuntimeServiceId>::new(
@@ -247,7 +259,7 @@ where
             ),
             Box::pin(inbound_relay),
             local_node_id,
-            RunningSettings::<Backend, _, Dispatcher::Settings, _> {
+            RunningSettings::<Backend, _, _> {
                 backend: settings.backend,
                 cover: settings.cover,
                 non_ephemeral_signing_key,
@@ -256,7 +268,6 @@ where
                 time: settings.time,
                 data_replication_factor: settings.data_replication_factor,
                 pow_mining_pool: new_mining_pool(),
-                broadcast: settings.broadcast,
                 blend_failure_fallback: settings.blend_failure_fallback,
                 max_blend_delay_in_rounds: settings.max_blend_delay_in_rounds,
             },
@@ -310,7 +321,7 @@ async fn run<Backend, NodeId, ProofsGenerator, Dispatcher, PolInfoProvider, Runt
     >,
     mut inbound_relay: impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin,
     local_node_id: NodeId,
-    settings: RunningSettings<Backend, NodeId, Dispatcher::Settings, RuntimeServiceId>,
+    settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
     payload_dispatcher: Dispatcher,
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     notify_ready: impl Fn(),

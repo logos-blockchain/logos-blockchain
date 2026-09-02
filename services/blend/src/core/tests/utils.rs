@@ -69,7 +69,7 @@ use crate::{
     message::{BlendPayload, NetworkInfo},
     settings::TimingSettings,
     test_utils,
-    test_utils::mempool::TestMempoolService,
+    test_utils::parked::{TestChainNetworkService, TestMempoolService},
 };
 
 pub type NodeId = [u8; 32];
@@ -87,13 +87,12 @@ pub fn new_membership(size: u8) -> (Membership<NodeId>, UnsecuredEd25519Key) {
 
 /// Creates a [`BlendConfig`] with the given parameters and reasonable defaults
 /// for the rest.
-pub fn settings<BackendSettings, BroadcastSettings>(
+pub fn settings<BackendSettings>(
     local_private_key: UnsecuredEd25519Key,
     minimum_network_size: NonZeroU64,
     backend_settings: BackendSettings,
     data_replication_factor: u64,
-    broadcast_settings: BroadcastSettings,
-) -> BlendConfig<BackendSettings, BroadcastSettings> {
+) -> BlendConfig<BackendSettings> {
     BlendConfig {
         backend: backend_settings,
         scheduler: SchedulerSettings {
@@ -115,7 +114,6 @@ pub fn settings<BackendSettings, BroadcastSettings>(
         activity_threshold_sensitivity: 1,
         pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
         blend_failure_fallback: true,
-        broadcast: broadcast_settings,
     }
 }
 
@@ -320,6 +318,7 @@ where
     RuntimeServiceId: Send + 'static,
 {
     type Backend = TestNetworkBackend;
+    type ChainNetworkService = TestChainNetworkService<RuntimeServiceId>;
     type MempoolService = TestMempoolService<RuntimeServiceId>;
     type Settings = ();
 
@@ -328,6 +327,7 @@ where
             <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
         >,
         _mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
+        _chain_network_relay: OutboundRelay<<Self::ChainNetworkService as ServiceData>::Message>,
         _settings: Self::Settings,
     ) -> Self {
         Self
@@ -347,14 +347,13 @@ where
 /// releases is ever seen delivered.
 ///
 /// That is deliberately the pessimistic case, and it is still quiet: the
-/// deadline is [`TEST_DELIVERY_DEADLINE`] rounds of one second each, and no
-/// test here runs long enough to reach one.
+/// deadline is the one [`settings`] implies, of rounds a second long, and no
+/// test here runs long enough to reach it.
 #[must_use]
-pub fn no_deliveries_to_watch() -> DeliveryLogic {
-    let timings = timing_settings();
+pub fn no_deliveries_to_watch(settings: &BlendConfig<()>) -> DeliveryLogic {
     DeliveryLogic::watching(
-        timings.delivery_deadline,
-        timings.round_duration,
+        settings.max_data_message_delay_in_rounds(),
+        settings.time.round_duration,
         stream::empty().boxed(),
     )
 }

@@ -26,7 +26,6 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
     core::settings::CoverTrafficSettings,
-    delivery::DirectBroadcast,
     edge::{
         backends::BlendBackend, handlers::Error, run, settings::RunningBlendConfig as BlendConfig,
         tests::test_blend_epoch_state,
@@ -47,8 +46,18 @@ use crate::{
 /// have to sit through [`TEST_DELIVERY_DEADLINE`] of them.
 pub const TEST_ROUND: Duration = Duration::from_millis(20);
 
-/// `T_D` for the tests, in rounds.
-pub const TEST_DELIVERY_DEADLINE: NonZeroU64 = NonZeroU64::new(6).unwrap();
+/// `ß_c` for the tests.
+const TEST_BLEND_LAYERS: NonZeroU64 = NonZeroU64::new(1).unwrap();
+/// `∆max` for the tests: the rounds a blend node may hold a message for.
+const TEST_MAX_BLEND_DELAY: NonZeroU64 = NonZeroU64::new(5).unwrap();
+
+/// `T_D` for the tests, in rounds — derived from the two above exactly as the
+/// service derives it, so the two cannot drift apart.
+pub const TEST_DELIVERY_DEADLINE: NonZeroU64 =
+    match NonZeroU64::new(TEST_BLEND_LAYERS.get() * (TEST_MAX_BLEND_DELAY.get() + 1)) {
+        Some(deadline) => deadline,
+        None => unreachable!(),
+    };
 
 pub struct MockLeaderProofsGenerator;
 
@@ -89,7 +98,7 @@ pub async fn spawn_run(
         local_node,
         minimal_network_size,
         initial_membership,
-        DirectBroadcast::Enabled,
+        true,
     )
     .await
 }
@@ -104,7 +113,7 @@ pub async fn spawn_run_without_direct_broadcast(
         local_node,
         minimal_network_size,
         initial_membership,
-        DirectBroadcast::Disabled,
+        false,
     )
     .await
 }
@@ -116,7 +125,7 @@ pub async fn spawn_run_with_pol<PolProvider>(
     local_node: NodeId,
     minimal_network_size: u64,
     initial_membership: Option<Membership<NodeId>>,
-    direct_broadcast: DirectBroadcast,
+    blend_failure_fallback: bool,
 ) -> RunningEdgeService
 where
     PolProvider: PolInfoProvider<usize, Stream: Unpin + Send> + Send + 'static,
@@ -136,7 +145,7 @@ where
         .map(|membership| test_blend_epoch_state(0.into(), membership));
 
     let mut settings = settings(local_node, minimal_network_size, node_id_sender);
-    settings.direct_broadcast = direct_broadcast;
+    settings.blend_failure_fallback = blend_failure_fallback;
     let (payload_dispatcher, broadcasting_channel) = TestPayloadDispatcher::new();
     let join_handle = tokio::spawn(async move {
         Box::pin(run::<
@@ -179,10 +188,10 @@ pub fn settings(
             round_duration: TEST_ROUND,
             rounds_per_observation_window: NonZeroU64::new(1).unwrap(),
             epoch_transition_period: Duration::from_secs(1),
-            delivery_deadline: TEST_DELIVERY_DEADLINE,
         },
         non_ephemeral_signing_key: key(local_id).0,
-        num_blend_layers: NonZeroU64::new(1).unwrap(),
+        num_blend_layers: TEST_BLEND_LAYERS,
+        max_blend_delay_in_rounds: TEST_MAX_BLEND_DELAY,
         backend: msg_sender,
         minimum_network_size: NonZeroU64::new(minimum_network_size).unwrap(),
         cover: CoverTrafficSettings::default(),

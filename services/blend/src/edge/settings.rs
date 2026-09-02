@@ -25,7 +25,7 @@ pub struct StartingBlendConfig<BackendSettings, BroadcastSettings> {
 /// Same values as [`StartingBlendConfig`] but with the secret key exfiltrated
 /// from the KMS.
 #[derive(Clone)]
-pub struct RunningBlendConfig<BackendSettings, BroadcastSettings> {
+pub struct RunningBlendConfig<BackendSettings> {
     pub backend: BackendSettings,
     pub time: TimingSettings,
     pub non_ephemeral_signing_key: UnsecuredEd25519Key,
@@ -36,10 +36,9 @@ pub struct RunningBlendConfig<BackendSettings, BroadcastSettings> {
     pub pow_mining_pool: Arc<ThreadPool>,
     pub max_blend_delay_in_rounds: NonZeroU64,
     pub blend_failure_fallback: bool,
-    pub broadcast: BroadcastSettings,
 }
 
-impl<BackendSettings, BroadcastSettings> RunningBlendConfig<BackendSettings, BroadcastSettings> {
+impl<BackendSettings> RunningBlendConfig<BackendSettings> {
     pub fn epoch_pow_quota(&self) -> Quota {
         self.num_blend_layers
             .get()
