@@ -8,7 +8,7 @@ mod relays;
 mod wallet;
 
 use core::fmt::Debug;
-use std::{fmt::Display, iter, pin::Pin, time::Duration};
+use std::{fmt::Display, pin::Pin, time::Duration};
 
 use futures::{Stream, StreamExt as _, stream};
 use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
@@ -32,7 +32,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
-use lb_ledger::LedgerState;
+use lb_ledger::{LedgerState, PendingBlockState};
 use lb_log_targets::chain;
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
@@ -120,6 +120,105 @@ pub type WinningSlotFuture = Pin<Box<dyn Future<Output = Option<LeaderPrivate>> 
 /// [`WinningSlotFuture`] per slot in the epoch's range. The consumer drives the
 /// futures and filters out the non-winning (`None`) slots.
 pub type WinningPolSlotStream = Pin<Box<dyn Stream<Item = WinningSlotFuture> + Send + Unpin>>;
+
+/// Progress made while selecting transactions for a block proposal.
+enum AssemblyState {
+    Progress,
+    NoProgress,
+    GasCapacityReached,
+}
+
+/// Result of applying mempool candidates to the pending block state.
+struct TransactionSelection {
+    pending_block_state: PendingBlockState,
+    selected_txs: Vec<SignedOps<Preverified, StandardMode>>,
+    invalid_tx_hashes: Vec<TxHash>,
+}
+
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "Dependency retries and distinct invalid, proof, and block-capacity outcomes"
+)]
+fn select_transactions(
+    mut pending_block_state: PendingBlockState,
+    mut pending: Vec<SignedOps<Preverified, StandardMode>>,
+    ledger_config: &lb_ledger::Config,
+) -> TransactionSelection {
+    let mut selected_txs = Vec::new();
+
+    // A transaction may only become valid once another transaction it depends
+    // on has already been applied. Repeatedly attempt to apply the pending
+    // transactions, retrying the full set of failures each round, while a
+    // round keeps adding new transactions to the block.
+    let mut assembly_state = AssemblyState::Progress;
+    while matches!(assembly_state, AssemblyState::Progress) {
+        assembly_state = AssemblyState::NoProgress;
+        let mut still_pending = Vec::with_capacity(pending.len());
+
+        for tx in std::mem::take(&mut pending) {
+            match pending_block_state
+                .clone()
+                .try_apply_transaction::<_, HeaderId, MainnetGasProfile>(ledger_config, &tx)
+            {
+                Ok((next_pending_block_state, _events, deferred_zkps)) => {
+                    match deferred_zkps.verify() {
+                        Ok(()) => {
+                            pending_block_state = next_pending_block_state;
+                            selected_txs.push(tx);
+                            assembly_state = AssemblyState::Progress;
+                        }
+                        Err(err) => {
+                            tracing::trace!(
+                                target: LOG_TARGET,
+                                tx = ?tx.hash(),
+                                %err,
+                                "deferred ZKP verification failed during block assembly",
+                            );
+                            still_pending.push(tx);
+                        }
+                    }
+                }
+                Err(err @ lb_ledger::LedgerError::TooMuchExecutionGas { .. }) => {
+                    tracing::trace!(
+                        target: LOG_TARGET,
+                        tx = ?tx.hash(),
+                        %err,
+                        "block execution gas limit reached during block assembly",
+                    );
+                    assembly_state = AssemblyState::GasCapacityReached;
+                    break;
+                }
+                Err(err) => {
+                    tracing::trace!(
+                        target: LOG_TARGET,
+                        "tx {:?} not (yet) applicable during block assembly: {:?}",
+                        tx.hash(),
+                        err
+                    );
+                    still_pending.push(tx);
+                }
+            }
+        }
+
+        pending = still_pending;
+    }
+
+    // Transactions that never became applicable are genuinely invalid against
+    // this block's ledger state and can be evicted from the mempool. If assembly
+    // stopped at the gas limit, unprocessed transactions are not invalid and
+    // must remain in the mempool.
+    let invalid_tx_hashes = if matches!(assembly_state, AssemblyState::GasCapacityReached) {
+        Vec::new()
+    } else {
+        pending.iter().map(Hashable::hash).collect()
+    };
+
+    TransactionSelection {
+        pending_block_state,
+        selected_txs,
+        invalid_tx_hashes,
+    }
+}
 
 /// Number of epochs to buffer for late subscribers to the winning `PoL` slots
 /// stream. Subscribers will almost certainly consume each epoch at some point,
@@ -667,66 +766,19 @@ where
                 &uncle_headers.slots(),
                 ledger_config,
             )?;
+        let pending_block_state = ledger_state.begin_pending_block();
 
         // Collect all candidate transactions up front so the ones that fail can
         // be retried across multiple rounds.
-        let mut pending: Vec<_> = tx_stream.collect().await;
-
-        let mut valid_txs = Vec::new();
-
-        // A transaction may only become valid once another transaction it depends
-        // on has already been applied. Repeatedly attempt to apply the pending
-        // transactions, retrying the full set of failures each round, while a
-        // round keeps adding new transactions to the block.
-        let mut applied_any = true;
-        while applied_any {
-            applied_any = false;
-            let mut still_pending = Vec::with_capacity(pending.len());
-
-            for tx in pending {
-                match ledger_state
-                    .clone()
-                    .try_apply_contents::<_, HeaderId, MainnetGasProfile>(
-                        ledger_config,
-                        // Tx is cloned eagerly: `try_apply_contents` consumes the tx, but we need
-                        // it for the block if it is valid.
-                        // Avoidable if we made the ledger hand it back.
-                        iter::once(tx.clone()),
-                    ) {
-                    Ok((new_state, _events, deferred_zkps)) => match deferred_zkps.verify() {
-                        Ok(()) => {
-                            ledger_state = new_state;
-                            valid_txs.push(tx);
-                            applied_any = true;
-                        }
-                        Err(err) => {
-                            tracing::trace!(
-                                target: LOG_TARGET,
-                                tx = ?tx.hash(),
-                                %err,
-                                "deferred ZKP verification failed during block assembly",
-                            );
-                            still_pending.push(tx);
-                        }
-                    },
-                    Err(err) => {
-                        tracing::trace!(
-                            target: LOG_TARGET,
-                            "tx {:?} not (yet) applicable during block assembly: {:?}",
-                            tx.hash(),
-                            err
-                        );
-                        still_pending.push(tx);
-                    }
-                }
-            }
-
-            pending = still_pending;
-        }
-
-        // Transactions that never became applicable are genuinely invalid against
-        // this block's ledger state and can be evicted from the mempool.
-        let invalid_tx_hashes: Vec<_> = pending.iter().map(Hashable::hash).collect();
+        let TransactionSelection {
+            pending_block_state,
+            selected_txs,
+            invalid_tx_hashes,
+        } = select_transactions(
+            pending_block_state,
+            tx_stream.collect().await,
+            ledger_config,
+        );
 
         if !invalid_tx_hashes.is_empty()
             && let Err(e) = relays
@@ -737,12 +789,12 @@ where
             error!(target: LOG_TARGET, "Failed to remove invalid transactions from mempool: {e:?}");
         }
 
-        let valid_tx_stream = stream::iter(valid_txs);
+        let valid_tx_stream = stream::iter(selected_txs);
         let txs = txs_for_block(valid_tx_stream).await;
 
         let block = Block::create(parent, slot, uncle_headers, proof, txs, signing_key)?;
         if tracing::enabled!(Level::DEBUG) {
-            log_sdp_activity_selected_for_proposal(&block, &ledger_state);
+            log_sdp_activity_selected_for_proposal(&block, pending_block_state.ledger_state());
         }
 
         info!(
@@ -912,6 +964,24 @@ where
 
 #[cfg(test)]
 mod tests {
+    use lb_core::{
+        mantle::{
+            Note, Op, OpProof, TxGasCalculator as _, Utxo,
+            channel::{SlotTimeframe, SlotTimeout},
+            ledger::{Inputs, Outputs},
+            ops::{
+                channel::{
+                    ChannelId, MsgId,
+                    config::{ChannelConfigOp, Keys},
+                },
+                transfer::TransferOp,
+            },
+            transactions::{OpProofs, Ops, states::Unverified},
+        },
+        proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+    };
+    use lb_key_management_system_service::keys::ZkKey;
+
     use super::*;
 
     #[derive(Clone)]
@@ -923,6 +993,144 @@ mod tests {
         fn storage_size(&self) -> usize {
             self.size
         }
+    }
+
+    // Two transactions at this multiplier exceed the block execution-gas limit,
+    // while each transaction remains below it.
+    const HIGH_GAS_CONFIG_SIGNATURES: usize = 28_514;
+
+    fn build_high_execution_gas_ops(
+        transaction_index: usize,
+        channel_signing_key: &Ed25519Key,
+        funding_key: &ZkKey,
+    ) -> (Utxo, Ops) {
+        let mut channel_id = [0; 32];
+        channel_id[..size_of::<usize>()].copy_from_slice(&transaction_index.to_le_bytes());
+
+        let funding_utxo = Utxo::new(
+            channel_id,
+            0,
+            Note::new(10_000_000, funding_key.to_public_key()),
+        );
+        let transfer = TransferOp::new(
+            Inputs::try_new(vec![funding_utxo.id()]).unwrap(),
+            Outputs::try_new(Vec::new()).unwrap(),
+        );
+
+        let channel_config = ChannelConfigOp {
+            channel: ChannelId::from(channel_id),
+            parent: MsgId::root(),
+            keys: Keys::from(channel_signing_key.public_key()),
+            posting_timeframe: SlotTimeframe::from(0),
+            posting_timeout: SlotTimeout::from(0),
+            configuration_threshold: 1,
+            transfer_threshold: 1,
+        };
+
+        let ops = Ops::from([Op::Transfer(transfer), Op::ChannelConfig(channel_config)]);
+        (funding_utxo, ops)
+    }
+
+    fn sign_high_execution_gas_ops(
+        ops: Ops,
+        channel_signing_key: &Ed25519Key,
+        funding_key: &ZkKey,
+    ) -> SignedOps<Preverified, StandardMode> {
+        let tx_hash = ops.hash();
+        let zk_signature =
+            ZkKey::multi_sign(std::slice::from_ref(funding_key), &tx_hash.to_fr()).unwrap();
+        let channel_signature =
+            channel_signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
+        let channel_signatures = (0..HIGH_GAS_CONFIG_SIGNATURES)
+            .map(|index| IndexedSignature::new(index as u16, channel_signature))
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let channel_proof = ChannelMultiSigProof::try_new(channel_signatures).unwrap();
+        let proofs = OpProofs::from([
+            OpProof::ZkSig(zk_signature),
+            OpProof::ChannelMultiSigProof(channel_proof),
+        ]);
+
+        SignedOps::<Unverified, StandardMode>::from_parts(ops, proofs)
+            .unwrap()
+            .preverify()
+            .unwrap()
+    }
+
+    fn high_execution_gas_transaction(
+        transaction_index: usize,
+        channel_signing_key: &Ed25519Key,
+        funding_key: &ZkKey,
+    ) -> (Utxo, SignedOps<Preverified, StandardMode>) {
+        let (funding_utxo, ops) =
+            build_high_execution_gas_ops(transaction_index, channel_signing_key, funding_key);
+        let transaction = sign_high_execution_gas_ops(ops, channel_signing_key, funding_key);
+
+        (funding_utxo, transaction)
+    }
+
+    #[tokio::test]
+    async fn gas_limited_selection_returns_canonically_applicable_prefix() {
+        const CANDIDATE_COUNT: usize = 2;
+
+        let config = leadership::test_config();
+        let channel_signing_key = Ed25519Key::from_bytes(&[7; 32]);
+        let funding_key = ZkKey::zero();
+        let (funding_utxos, candidates): (Vec<_>, Vec<_>) = (0..CANDIDATE_COUNT)
+            .map(|transaction_index| {
+                high_execution_gas_transaction(
+                    transaction_index,
+                    &channel_signing_key,
+                    &funding_key,
+                )
+            })
+            .unzip();
+
+        let ledger_state = LedgerState::from_utxos(funding_utxos, &config);
+        let gas_prices = ledger_state.get_gas_prices();
+        let individual_gas = candidates[0]
+            .execution_gas_consumption::<MainnetGasProfile>(&gas_prices)
+            .unwrap();
+        assert!(candidates.iter().all(|candidate| {
+            candidate
+                .execution_gas_consumption::<MainnetGasProfile>(&gas_prices)
+                .unwrap()
+                == individual_gas
+        }));
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| candidate.storage_size() <= MAX_BLOCK_TRANSACTIONS_SIZE)
+        );
+        let all_candidates_result = ledger_state
+            .clone()
+            .try_apply_contents::<_, HeaderId, MainnetGasProfile>(
+                &config,
+                candidates.iter().cloned(),
+            );
+        let all_candidates_error = all_candidates_result.err();
+        assert!(
+            matches!(
+                &all_candidates_error,
+                Some(lb_ledger::LedgerError::TooMuchExecutionGas { .. })
+            ),
+            "individual gas: {individual_gas:?}, error: {all_candidates_error:?}"
+        );
+
+        let selection = select_transactions(
+            ledger_state.clone().begin_pending_block(),
+            candidates,
+            &config,
+        );
+        assert_eq!(selection.selected_txs.len(), CANDIDATE_COUNT - 1);
+        assert!(selection.invalid_tx_hashes.is_empty());
+
+        let block_txs = txs_for_block(stream::iter(selection.selected_txs)).await;
+        assert_eq!(block_txs.len(), CANDIDATE_COUNT - 1);
+        ledger_state
+            .try_apply_contents::<_, HeaderId, MainnetGasProfile>(&config, block_txs.into_iter())
+            .expect("the selected prefix must pass canonical application");
     }
 
     #[tokio::test]

@@ -27,6 +27,8 @@ use lb_wallet_service::{
     api::{WalletApi, WalletApiError, WalletServiceData},
 };
 use overwatch::services::{AsServiceId, relay::OutboundRelay};
+#[cfg(test)]
+pub use pol_tests::test_config;
 use rand::rngs::OsRng;
 use tokio::{
     sync::{mpsc, oneshot},
@@ -742,7 +744,7 @@ mod pol_tests {
         }
     }
 
-    fn test_config() -> lb_ledger::Config {
+    pub fn test_config() -> lb_ledger::Config {
         lb_ledger::Config {
             epoch_config: EpochConfig {
                 epoch_stake_distribution_stabilization: NonZero::new(3u8).unwrap(),
