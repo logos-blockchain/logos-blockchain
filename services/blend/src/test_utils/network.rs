@@ -96,10 +96,10 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for TestNetworkBackend {
     async fn process(&self, (): Self::Message) {}
 
     async fn subscribe_to_pubsub(&mut self) -> BroadcastStream<Self::PubSubEvent> {
-        BroadcastStream::new(broadcast::channel(CHANNEL_SIZE).1)
+        unimplemented!()
     }
 
     async fn subscribe_to_chainsync(&mut self) -> BroadcastStream<Self::ChainSyncEvent> {
-        BroadcastStream::new(broadcast::channel(CHANNEL_SIZE).1)
+        unimplemented!()
     }
 }
