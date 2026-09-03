@@ -216,7 +216,7 @@ where
                 network_relay,
                 mempool_relay,
                 chain_network_relay,
-                settings.broadcast.clone(),
+                settings.network.clone(),
             )
         };
 

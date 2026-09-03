@@ -49,7 +49,6 @@ where
         items: Vec<Key>,
         reply_channel: Sender<Vec<Status>>,
     },
-    /// Subscribe to the transactions this node accepts.
     SubscribeToAccepted {
         reply_channel: Sender<broadcast::Receiver<Item>>,
     },

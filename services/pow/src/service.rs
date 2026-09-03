@@ -1510,7 +1510,7 @@ where
     BlendService::NodeId: Send,
     RuntimeServiceId: Sync,
 {
-    let payload = BlendPayload::from_transaction(&signed_tx)?;
+    let payload = BlendPayload::try_from_transaction(&signed_tx)?;
     blend_api.publish(payload).await?;
     Ok(())
 }

@@ -60,10 +60,8 @@ pub struct Libp2pBroadcastSettings {
 impl<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId>
     Libp2pPayloadDispatcher<MempoolNetAdapter, Mempool, ChainNetwork, RuntimeServiceId>
 where
-    Mempool: RecoverableMempool<BlockId = HeaderId> + Sync,
-    Mempool::Key: PrefixedKey<Prefix: Send + Sync>,
+    Mempool: RecoverableMempool<BlockId = HeaderId>,
     MempoolNetAdapter: Sync,
-    ChainNetwork: Sync,
     RuntimeServiceId: Sync,
 {
     /// Broadcast an unencrypted message to the network by publishing the
@@ -94,43 +92,27 @@ where
     ChainNetwork: Sync,
     RuntimeServiceId: Sync,
 {
-    /// The block proposals the local chain network receives, whether they
-    /// arrived over the network or through this node's own exit door.
-    ///
-    /// Asked of the chain network rather than of its gossipsub topic, because
-    /// the chain network is what owns proposals: it is what this node's exit
-    /// puts them in front of and what carries them on, so a proposal reaching
-    /// the network and a proposal reaching the chain network are the same
-    /// event.
-    ///
-    /// The relay is cloned rather than borrowed so that the subscription can be
-    /// deferred to the first poll of the stream it returns: it is answered by a
-    /// service loop that may not have started yet, and a sender must not have
-    /// to wait on that before it can blend anything.
-    fn observe_block_proposals(
-        &self,
-    ) -> impl Future<Output = BoxStream<'static, BlendPayload>> + Send + 'static {
+    async fn observe_block_proposals(&self) -> BoxStream<'static, BlendPayload> {
         let chain_network_relay = self.chain_network_relay.clone();
-        async move {
-            let (result_sender, receiver) = oneshot::channel();
-            if let Err((e, _)) = chain_network_relay
-                .send(ChainNetworkMsg::SubscribeToProposals { result_sender })
-                .await
-            {
-                tracing::error!(target: LOG_TARGET, "Failed to ask the chain network for the proposals it receives: {e}");
-                return stream::empty().boxed();
-            }
-            let Ok(received) = receiver.await else {
-                tracing::error!(target: LOG_TARGET, "The chain network dropped the received-proposal subscription.");
-                return stream::empty().boxed();
-            };
+        let (result_sender, receiver) = oneshot::channel();
+        if let Err((e, _)) = chain_network_relay
+            .send(ChainNetworkMsg::SubscribeToProposals { result_sender })
+            .await
+        {
+            tracing::error!(target: LOG_TARGET, "Failed to ask the chain network for the proposals it receives: {e}");
+            return stream::empty().boxed();
+        }
+        let Ok(received) = receiver.await else {
+            tracing::error!(target: LOG_TARGET, "The chain network dropped the received-proposal subscription.");
+            return stream::empty().boxed();
+        };
 
-            BroadcastStream::new(received)
+        BroadcastStream::new(received)
             .filter_map(|proposal| {
                 ready(match proposal {
                     // Encoded the way it was handed to Blend, so that the two are the
-                    // same bytes and comparing them is all the sender has to do.
-                    Ok(proposal) => Some(BlendPayload::BlockProposal(proposal.encode_to_vec())),
+                    // same bytes and comparing them is all the sender has to do. Failure to encode as Blend requires means the payload was most likely sent outside of Blend and hence does not need to be returned in the stream.
+                    Ok(proposal) => BlendPayload::try_from_proposal(&proposal).ok(),
                     // A lagging observer can only miss a delivery, never invent one, so the
                     // worst it costs is a payload broadcast in the clear that need not have
                     // been.
@@ -141,43 +123,29 @@ where
                 })
             })
             .boxed()
-        }
     }
 
-    /// The transactions the local mempool accepts, whether they arrived over
-    /// the network or through this node's own exit door.
-    ///
-    /// Asked of the mempool rather than of its gossipsub topic, because the
-    /// mempool is what owns transactions: it is what this node's exit hands
-    /// them to and what gossips them on, so a transaction reaching the network
-    /// and a transaction reaching the mempool are the same event.
-    ///
-    /// Deferred to the first poll for the same reason as
-    /// [`observe_block_proposals`](Self::observe_block_proposals).
-    fn observe_transactions(
-        &self,
-    ) -> impl Future<Output = BoxStream<'static, BlendPayload>> + Send + 'static {
+    async fn observe_transactions(&self) -> BoxStream<'static, BlendPayload> {
         let mempool_relay = self.mempool_relay.clone();
-        async move {
-            let (reply_channel, receiver) = oneshot::channel();
-            if let Err((e, _)) = mempool_relay
-                .send(MempoolMsg::SubscribeToAccepted { reply_channel })
-                .await
-            {
-                tracing::error!(target: LOG_TARGET, "Failed to ask the mempool for the transactions it accepts: {e}");
-                return stream::empty().boxed();
-            }
-            let Ok(accepted) = receiver.await else {
-                tracing::error!(target: LOG_TARGET, "The mempool dropped the accepted-transaction subscription.");
-                return stream::empty().boxed();
-            };
+        let (reply_channel, receiver) = oneshot::channel();
+        if let Err((e, _)) = mempool_relay
+            .send(MempoolMsg::SubscribeToAccepted { reply_channel })
+            .await
+        {
+            tracing::error!(target: LOG_TARGET, "Failed to ask the mempool for the transactions it accepts: {e}");
+            return stream::empty().boxed();
+        }
+        let Ok(accepted) = receiver.await else {
+            tracing::error!(target: LOG_TARGET, "The mempool dropped the accepted-transaction subscription.");
+            return stream::empty().boxed();
+        };
 
-            BroadcastStream::new(accepted)
+        BroadcastStream::new(accepted)
             .filter_map(|transaction| {
                 ready(match transaction {
                     // Encoded the way it was handed to Blend, so that the two are the
                     // same bytes and comparing them is all the sender has to do.
-                    Ok(transaction) => BlendPayload::from_transaction(&transaction)
+                    Ok(transaction) => BlendPayload::try_from_transaction(&transaction)
                         .inspect_err(|e| {
                             tracing::debug!(target: LOG_TARGET, "A transaction the mempool accepted is not one Blend could have carried: {e}");
                         })
@@ -189,7 +157,6 @@ where
                 })
             })
             .boxed()
-        }
     }
 }
 
@@ -261,7 +228,6 @@ where
         + 'static,
     MempoolNetAdapter::Settings: Clone + Send + Sync + 'static,
     ChainNetwork: ServiceData<Message = ChainNetworkMsg<Mempool::Item>> + Send + Sync + 'static,
-    Self: Sync,
     RuntimeServiceId: Clone
         + Debug
         + Display

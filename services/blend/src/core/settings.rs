@@ -8,11 +8,12 @@ use lb_utils::math::PositiveF64;
 use rayon::ThreadPool;
 use serde::{Deserialize, Serialize};
 
-use crate::settings::TimingSettings;
+use crate::settings::{TimingSettings, max_data_message_delay_in_rounds};
 
 #[derive(Clone, Debug)]
 pub struct StartingBlendConfig<BackendSettings, NetworkSettings> {
     pub backend: BackendSettings,
+    pub network: NetworkSettings,
     pub scheduler: SchedulerSettings,
     pub time: TimingSettings,
     pub zk: ZkSettings,
@@ -23,7 +24,6 @@ pub struct StartingBlendConfig<BackendSettings, NetworkSettings> {
     /// `R_c`: replication factor for data messages.
     pub data_replication_factor: u64,
     pub activity_threshold_sensitivity: u64,
-    pub broadcast: NetworkSettings,
     pub blend_failure_fallback: bool,
 }
 
@@ -89,16 +89,10 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
 
     #[must_use]
     pub const fn max_data_message_delay_in_rounds(&self) -> NonZeroU64 {
-        let delay_per_hop_in_rounds = self.scheduler.delayer.maximum_release_delay_in_rounds.get();
-        match NonZeroU64::new(
-            self.num_blend_layers
-                .get()
-                .saturating_mul(delay_per_hop_in_rounds.saturating_add(1)),
-        ) {
-            Some(deadline) => deadline,
-            // Not `expect`, to keep this a `const fn`.
-            None => panic!("Both factors of the delivery deadline are non-zero."),
-        }
+        max_data_message_delay_in_rounds(
+            self.num_blend_layers,
+            self.scheduler.delayer.maximum_release_delay_in_rounds,
+        )
     }
 }
 

@@ -1,3 +1,4 @@
+use ::core::num::NonZeroU64;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -59,7 +60,7 @@ impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
             recovery_data,
             data_replication_factor,
             activity_threshold_sensitivity,
-            broadcast,
+            network: broadcast,
             blend_failure_fallback,
         }
     }
@@ -80,8 +81,6 @@ impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
                     data_replication_factor,
                     broadcast,
                     blend_failure_fallback,
-                    // An edge node keeps nothing across a restart, so the recovery
-                    // state this carries is not one of the things it takes.
                     ..
                 },
             edge: EdgeSettings { backend },
@@ -100,12 +99,28 @@ impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
             minimum_network_size,
             cover,
             data_replication_factor,
-            broadcast,
+            network: broadcast,
             blend_failure_fallback,
             // An edge node has no release schedule of its own, but the deadline it
             // waits out is the one a core node's schedule implies, so it takes the
             // same delay bound the core scheduler is configured with.
             max_blend_delay_in_rounds: delayer.maximum_release_delay_in_rounds,
         }
+    }
+}
+
+#[must_use]
+pub const fn max_data_message_delay_in_rounds(
+    num_blend_layers: NonZeroU64,
+    max_blend_delay_in_rounds: NonZeroU64,
+) -> NonZeroU64 {
+    match NonZeroU64::new(
+        num_blend_layers
+            .get()
+            .saturating_mul(max_blend_delay_in_rounds.get().saturating_add(1)),
+    ) {
+        Some(delay) => delay,
+        // Not `expect`, to keep this a `const fn`.
+        None => panic!("Both factors of the delivery deadline are non-zero."),
     }
 }

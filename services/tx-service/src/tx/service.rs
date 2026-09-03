@@ -42,9 +42,6 @@ use crate::{
 };
 
 const LOG_TARGET: &str = mempool::SERVICE;
-
-/// How many accepted transactions a subscriber may fall behind by before it
-/// starts missing them.
 const ACCEPTED_ITEMS_BUFFER: usize = 64;
 
 type MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId> =

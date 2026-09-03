@@ -77,10 +77,6 @@ const SERVICE_ID: &str = "ChainNetwork";
 pub(crate) const LOG_TARGET: &str = chain::network::ROOT;
 const FUTURE_BLOCK_MAX_RETRIES: usize = 3;
 const FUTURE_BLOCK_RETRY_DELAY: Duration = Duration::from_millis(500);
-
-/// How many received proposals a subscriber may fall behind by before it starts
-/// missing them. A subscriber that lags can only miss a delivery, never invent
-/// one, so the cost is bounded.
 const RECEIVED_PROPOSALS_BUFFER: usize = 64;
 
 #[derive(Debug, Error)]
@@ -110,22 +106,13 @@ pub enum Error {
 #[derive(Debug)]
 #[expect(
     clippy::large_enum_variant,
-    reason = "boxing a block would cost every apply an allocation to spare the rare subscription eight bytes"
+    reason = "Boxing a block in `ApplyBlockAndReconcileMempool` would cost in every apply an allocation to spare the rare subscription eight bytes."
 )]
 pub enum Message<Tx> {
     ApplyBlockAndReconcileMempool {
         block: Block<Tx>,
         resp: oneshot::Sender<Result<(), Error>>,
     },
-    /// Subscribe to the block proposals this node receives.
-    ///
-    /// This is the chain's half of the Logos Blockchain broadcasting channel: a
-    /// proposal is broadcast by being gossiped to the chain networks of the
-    /// network, so what a node sees arrive here is what it sees delivered.
-    /// Blend watches it for the proposals it handed over, which is how it tells
-    /// a delivery from a loss. The gossipsub layer echoes back what this node
-    /// publishes itself, so a proposal that leaves Blend at this node's own
-    /// exit arrives here too.
     SubscribeToProposals {
         result_sender: oneshot::Sender<broadcast::Receiver<Proposal>>,
     },
@@ -168,9 +155,7 @@ pub struct ChainNetwork<
     TimeBackend::Settings: Clone + Send + Sync,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    /// The proposals this node receives, for whoever needs to know that one
-    /// reached the network — Blend, watching for the ones it handed over.
-    received_proposals: broadcast::Sender<Proposal>,
+    received_proposals_sender: broadcast::Sender<Proposal>,
 }
 
 impl<Cryptarchia, NetAdapter, Mempool, MempoolNetAdapter, TimeBackend, RuntimeServiceId> ServiceData
@@ -271,10 +256,10 @@ where
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
         _initial_state: Self::State,
     ) -> Result<Self, DynError> {
-        let (received_proposals, _) = broadcast::channel(RECEIVED_PROPOSALS_BUFFER);
+        let (received_proposals_sender, _) = broadcast::channel(RECEIVED_PROPOSALS_BUFFER);
         Ok(Self {
             service_resources_handle,
-            received_proposals,
+            received_proposals_sender,
         })
     }
 
@@ -518,7 +503,7 @@ where
                     }
 
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
-                        Self::handle_message(msg, &self.received_proposals, &relays).await;
+                        Self::handle_message(msg, &self.received_proposals_sender, &relays).await;
                     }
                 }
             }
@@ -810,14 +795,9 @@ where
         }
     }
 
-    /// Tells whoever is watching the broadcasting channel that this proposal
-    /// has reached it.
-    ///
-    /// Nobody subscribing is the normal case — only a node that blends its own
-    /// proposals has a reason to — so a send with no receivers is not an error.
     fn note_received_proposal(&self, proposal: &Proposal) {
-        if self.received_proposals.receiver_count() > 0 {
-            drop(self.received_proposals.send(proposal.clone()));
+        if self.received_proposals_sender.receiver_count() > 0 {
+            drop(self.received_proposals_sender.send(proposal.clone()));
         }
     }
 

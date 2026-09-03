@@ -40,7 +40,6 @@ pub trait PayloadDispatcher<RuntimeServiceId> {
     /// Deliver a decapsulated payload to the local service that owns it.
     async fn dispatch(&self, payload: BlendPayload);
 
-    /// The payloads appearing on the broadcasting channel, whichever node's
-    /// exit door put them there — this node's own included.
+    /// Return a stream of payloads appearing on the broadcasting channel.
     async fn observe_broadcasts(&self) -> BoxStream<'static, BlendPayload>;
 }

@@ -5,10 +5,13 @@ use lb_key_management_system_service::{backend::preload::KeyId, keys::UnsecuredE
 use lb_poq::Quota;
 use rayon::ThreadPool;
 
-use crate::{core::settings::CoverTrafficSettings, settings::TimingSettings};
+use crate::{
+    core::settings::CoverTrafficSettings,
+    settings::{TimingSettings, max_data_message_delay_in_rounds},
+};
 
 #[derive(Clone, Debug)]
-pub struct StartingBlendConfig<BackendSettings, BroadcastSettings> {
+pub struct StartingBlendConfig<BackendSettings, NetworkSettings> {
     pub backend: BackendSettings,
     pub time: TimingSettings,
     pub non_ephemeral_signing_key_id: KeyId,
@@ -18,7 +21,7 @@ pub struct StartingBlendConfig<BackendSettings, BroadcastSettings> {
     /// `R_c`: replication factor for data messages.
     pub data_replication_factor: u64,
     pub max_blend_delay_in_rounds: NonZeroU64,
-    pub broadcast: BroadcastSettings,
+    pub network: NetworkSettings,
     pub blend_failure_fallback: bool,
 }
 
@@ -64,14 +67,6 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
 
     #[must_use]
     pub const fn max_data_message_delay_in_rounds(&self) -> NonZeroU64 {
-        match NonZeroU64::new(
-            self.num_blend_layers
-                .get()
-                .saturating_mul(self.max_blend_delay_in_rounds.get().saturating_add(1)),
-        ) {
-            Some(deadline) => deadline,
-            // Not `expect`, to keep this a `const fn`.
-            None => panic!("Both factors of the delivery deadline are non-zero."),
-        }
+        max_data_message_delay_in_rounds(self.num_blend_layers, self.max_blend_delay_in_rounds)
     }
 }

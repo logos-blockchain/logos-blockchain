@@ -1,3 +1,5 @@
+use core::fmt::{self, Display, Formatter};
+
 use lb_blend_crypto::fill_random_bytes;
 use lb_codec::{BinaryDecode, BinaryEncode, DecodeError, take};
 use serde::{Deserialize, Serialize};
@@ -29,6 +31,16 @@ impl PayloadType {
     #[must_use]
     pub const fn is_data_message(&self) -> bool {
         matches!(self, Self::BlockProposal | Self::Transaction)
+    }
+}
+
+impl AsRef<str> for PayloadType {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Cover => "cover",
+            Self::BlockProposal => "block_proposal",
+            Self::Transaction => "transaction",
+        }
     }
 }
 

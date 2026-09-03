@@ -345,7 +345,7 @@ where
                 network_relay,
                 mempool_relay,
                 chain_network_relay,
-                blend_config.broadcast.clone(),
+                blend_config.network.clone(),
             )
         }
         .await;
