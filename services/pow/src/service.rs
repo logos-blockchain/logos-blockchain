@@ -5,14 +5,14 @@ use std::{
     marker::PhantomData,
     num::{NonZeroU64, NonZeroUsize},
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, LazyLock},
     time::Duration,
 };
 
 use futures::{Stream, StreamExt as _};
 use lb_blend_service::{
     api::{ApiError as BlendApiError, BlendServiceApi, BlendServiceData},
-    message::{BlendPayload, TransactionTooLarge},
+    message::{BlendPayload, MAX_PAYLOAD_BODY_SIZE, TransactionTooLarge},
 };
 use lb_chain_service::{
     ProcessedBlockEvent, Slot,
@@ -40,7 +40,10 @@ use lb_core::{
         },
     },
 };
-use lb_key_management_system_keys::keys::{MAX_ZK_SIGNING_KEYS, UnsecuredZkKey, ZkPublicKey};
+use lb_groth16::COMPRESSED_PROOF_SIZE;
+use lb_key_management_system_keys::keys::{
+    MAX_ZK_SIGNING_KEYS, UnsecuredZkKey, ZkPublicKey, ZkSignature,
+};
 use lb_ledger::LedgerState;
 use lb_log_targets::pow;
 use lb_services_utils::{
@@ -53,7 +56,7 @@ use lb_storage_service::{
 use lb_time_service::{TimeService, TimeServiceMessage, backends::TimeBackend};
 use lb_utils::bounded::BoundedError;
 use lb_wallet_service::api::{WalletApi, WalletApiError, WalletServiceData};
-use lb_zksign::ZkSignError;
+use lb_zksign::{ZkSignError, ZkSignProof};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     overwatch::OverwatchHandle,
@@ -73,7 +76,7 @@ use tracing::{
     error,
     log::{info, warn},
 };
-
+use crate::PoWError::SignedOps;
 use crate::tickets::{TicketGenerator, WinningTicket};
 
 const LOG_TARGET: &str = pow::ROOT;
@@ -1251,6 +1254,59 @@ const fn max_claims_by_ops() -> usize {
     claims
 }
 
+/// Size, in bytes, of the claim transaction a batch of `claims` tickets
+/// produces once signed, measured through the codec [`publish_reward_claim`]
+/// encodes with on a transaction of exactly that shape.
+///
+/// The probe is assembled from zeroed claims and a zeroed signature, and
+/// shares [`transfer_ops`], [`push_reward_claim_ops`] and
+/// [`claim_ops_proofs`] with the real builder so its shape cannot drift from
+/// one. Values do not change the encoded length — the codec uses fixed-width
+/// integers, and a signature is a fixed-size byte triple — so the probe
+/// measures the real batch, and nothing here is signed: it costs microseconds
+/// rather than a proof per transfer group.
+///
+/// [`claim_tx_size_matches_a_signed_transaction`] pins that equivalence.
+fn claim_tx_size(claims: usize) -> Result<u64, PoWError> {
+    let claim = ClaimPowRewardOp {
+        epoch_nonce: *ZkPublicKey::zero().as_fr(),
+        block_hash: [0u8; 32],
+        public_key: ZkPublicKey::zero(),
+    };
+    let signature = ZkSignature::new(ZkSignProof::from_bytes(&[0u8; COMPRESSED_PROOF_SIZE]));
+    let groups = claims.div_ceil(MAX_TRANSFER_INPUTS);
+
+    let probe_claims = vec![claim.clone(); claims];
+    let note_ids = vec![Utxo::new(claim.op_id(), 0, Note::new(0, claim.public_key)).id(); claims];
+    let transfers = transfer_ops(&note_ids, ZkPublicKey::zero(), &vec![0; groups])?;
+
+    let mantle_tx =
+        push_reward_claim_ops(MantleTxBuilder::new(), &probe_claims, transfers)?.build()?;
+    let ops_proofs = claim_ops_proofs(claims, std::iter::repeat_n(signature, groups))?;
+
+    Ok(SignedOps::new(mantle_tx, ops_proofs).bytes_size()?)
+}
+
+/// Largest claim count whose transaction still fits the body of a Blend
+/// payload, the transport every claim is published over.
+///
+/// This binds well before [`max_claims_by_ops`] does: 255 ops' worth of claims
+/// serializes to nearly twice what a payload can carry, and a transaction over
+/// the limit is rejected by [`publish_reward_claim`] *after* its (CPU-heavy)
+/// signatures have been produced. Capping the batch here keeps that failure
+/// from ever being reached.
+///
+/// Resolved once, by shrinking a probe batch from the op cap until it fits, so
+/// the limit follows the encoding rather than restating it.
+static MAX_CLAIMS_BY_PAYLOAD_SIZE: LazyLock<usize> = LazyLock::new(|| {
+    (1..=max_claims_by_ops())
+        .rev()
+        .find(|&claims| {
+            claim_tx_size(claims).is_ok_and(|size| size <= MAX_PAYLOAD_BODY_SIZE as u64)
+        })
+        .expect("a single-claim tx fits a Blend payload")
+});
+
 /// Builds and signs a single self-funding reward-claim transaction from a batch
 /// of winning tickets.
 ///
@@ -1261,9 +1317,9 @@ const fn max_claims_by_ops() -> usize {
 /// freshly minted UTXOs, reconstructed here from the same data the ledger uses,
 /// and is signed by those notes' owning keys.
 ///
-/// Only as many claims are taken as `reward_pool` can fund and the per-tx op
-/// limit allows. Returns the signed tx together with the number of tickets (a
-/// prefix of `tickets`) it actually claims.
+/// Only as many claims are taken as `reward_pool` can fund, the per-tx op
+/// limit allows, and a Blend payload can carry. Returns the signed tx together
+/// with the number of tickets (a prefix of `tickets`) it actually claims.
 ///
 /// `reward_pool` is passed in rather than read from `ledger_state` so a caller
 /// publishing several transactions back to back can draw down its own running
@@ -1304,32 +1360,33 @@ async fn build_reward_claim_tx_inner(
         leader_reward_amount: 0,
     };
 
-    // Take as many claims as the pool can fund and the op budget allows.
+    // Take as many claims as the pool can fund, the op budget allows, and a
+    // Blend payload can carry.
     let claim_count = tickets
         .len()
         .min((reward_pool / reward_value) as usize)
-        .min(max_claims_by_ops());
+        .min(max_claims_by_ops())
+        .min(*MAX_CLAIMS_BY_PAYLOAD_SIZE);
     if claim_count == 0 {
         return Err(PoWError::RewardPoolExhausted);
     }
     let tickets = &tickets[..claim_count];
+    let claims: Vec<ClaimPowRewardOp> = tickets.iter().map(|(_, claim)| claim.clone()).collect();
 
     // Reconstruct the id of the UTXO each claim mints (op_id, output 0, reward
     // note), so the transfers can spend them.
-    let note_ids: Vec<NoteId> = tickets
+    let note_ids: Vec<NoteId> = claims
         .iter()
-        .map(|(_, claim)| {
-            Utxo::new(claim.op_id(), 0, Note::new(reward_value, claim.public_key)).id()
-        })
+        .map(|claim| Utxo::new(claim.op_id(), 0, Note::new(reward_value, claim.public_key)).id())
         .collect();
 
     // Size the change against the final tx shape, then spread the fee across
     // the transfer outputs.
-    let fee = estimate_reward_claim_fee(tickets, &note_ids, claim_address, &context)?;
+    let fee = estimate_reward_claim_fee(&claims, &note_ids, claim_address, &context)?;
     let change_outputs = change_outputs(&note_ids, reward_value, fee)?;
     let transfers = transfer_ops(&note_ids, claim_address, &change_outputs)?;
 
-    let mantle_tx = push_reward_claim_ops(MantleTxBuilder::new(), tickets, transfers)?.build()?;
+    let mantle_tx = push_reward_claim_ops(MantleTxBuilder::new(), &claims, transfers)?.build()?;
 
     // Sign each transfer with the keys owning its input notes (a
     // multi-signature over the whole tx hash). Signing is a ZK proof
@@ -1347,16 +1404,9 @@ async fn build_reward_claim_tx_inner(
     })
     .await??;
 
-    // Proofs follow the op order: a `None` per claim in the group, then that
-    // group's transfer `ZkSig`.
-    let mut ops_proofs = OpProofs::empty();
-    for (group, zk_sig) in tickets.chunks(MAX_TRANSFER_INPUTS).zip(zk_sigs) {
-        for _ in group {
-            ops_proofs.try_push(OpProof::None(NoOpProof))?;
-        }
-        ops_proofs.try_push(OpProof::ZkSig(zk_sig))?;
-    }
+    let ops_proofs = claim_ops_proofs(claim_count, zk_sigs)?;
     let tx = SignedOps::from_parts(mantle_tx, ops_proofs)?;
+
     Ok((tx, claim_count))
 }
 
@@ -1385,19 +1435,37 @@ fn transfer_ops(
 /// transfer. This is where the leaf ops are wrapped into their [`Op`] variants.
 fn push_reward_claim_ops(
     mut builder: MantleTxBuilder,
-    tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
+    claims: &[ClaimPowRewardOp],
     transfers: Vec<TransferOp>,
 ) -> Result<MantleTxBuilder, PoWError> {
-    for (claim_group, transfer) in tickets.chunks(MAX_TRANSFER_INPUTS).zip(transfers) {
+    for (claim_group, transfer) in claims.chunks(MAX_TRANSFER_INPUTS).zip(transfers) {
         builder = builder
-            .extend_ops(
-                claim_group
-                    .iter()
-                    .map(|(_, claim)| Op::ClaimPowReward(claim.clone())),
-            )?
+            .extend_ops(claim_group.iter().cloned().map(Op::ClaimPowReward))?
             .push_op(Op::Transfer(transfer))?;
     }
     Ok(builder)
+}
+
+/// The proof list a claim transaction carries, in op order: a `None` proof per
+/// claim in a group, then that group's transfer signature.
+///
+/// Shared with [`claim_tx_size`], so a probe transaction is proved-for exactly
+/// as the real one is.
+fn claim_ops_proofs(
+    claims: usize,
+    zk_sigs: impl IntoIterator<Item = ZkSignature>,
+) -> Result<OpProofs, PoWError> {
+    let mut ops_proofs = OpProofs::empty();
+    let mut remaining = claims;
+    for zk_sig in zk_sigs {
+        let group = remaining.min(MAX_TRANSFER_INPUTS);
+        remaining -= group;
+        for _ in 0..group {
+            ops_proofs.try_push(OpProof::None(NoOpProof))?;
+        }
+        ops_proofs.try_push(OpProof::ZkSig(zk_sig))?;
+    }
+    Ok(ops_proofs)
 }
 
 /// The change value each transfer group returns: the reward its notes carry,
@@ -1452,7 +1520,7 @@ where
 /// shape. The change output values do not affect gas, so it is measured against
 /// zero-value outputs.
 fn estimate_reward_claim_fee(
-    tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
+    claims: &[ClaimPowRewardOp],
     note_ids: &[NoteId],
     claim_address: ZkPublicKey,
     context: &OpsContext,
@@ -1460,7 +1528,7 @@ fn estimate_reward_claim_fee(
     // Change values don't affect gas, so probe with zero-value outputs.
     let num_groups = note_ids.len().div_ceil(MAX_TRANSFER_INPUTS);
     let transfers = transfer_ops(note_ids, claim_address, &vec![0; num_groups])?;
-    let fee = push_reward_claim_ops(MantleTxBuilder::new(), tickets, transfers)?
+    let fee = push_reward_claim_ops(MantleTxBuilder::new(), claims, transfers)?
         .minimum_gas_cost::<MainnetGasProfile>(context)?
         .into_inner();
     Ok(fee)
@@ -1472,6 +1540,7 @@ mod tests {
 
     use lb_chain_service::Slot;
     use lb_core::{
+        codec::SerializeOp as _,
         header::HeaderId,
         mantle::{
             Note, NoteId, OpProofRef, OpRef, SignedOps, Utxo,
@@ -1488,8 +1557,9 @@ mod tests {
     use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey};
 
     use super::{
-        AutoClaimSettings, AutoClaimTick, ClaimTarget, MAX_TRANSFER_INPUTS, PoWError,
-        PoWServiceState, build_reward_claim_tx_inner, change_outputs, claimable_rewards_info,
+        AutoClaimSettings, AutoClaimTick, ClaimTarget, MAX_CLAIMS_BY_PAYLOAD_SIZE,
+        MAX_PAYLOAD_BODY_SIZE, MAX_TRANSFER_INPUTS, PoWError, PoWServiceState,
+        build_reward_claim_tx_inner, change_outputs, claim_tx_size, claimable_rewards_info,
         estimate_reward_claim_fee, max_claims_by_ops, neediest_target, prune_expired_tickets,
         push_reward_claim_ops, slot_period_elapsed, transfer_ops,
     };
@@ -1527,10 +1597,16 @@ mod tests {
         }
     }
 
-    /// Asserts a built tx respects the transaction's own structural limits: the
-    /// op budget, the per-transfer signing-key limit, and a correctly-typed
-    /// proof per op (the last via the ledger's stateless `preverify`).
+    /// Asserts a built tx respects every limit it has to clear: the op budget,
+    /// the per-transfer signing-key limit, a correctly-typed proof per op (via
+    /// the ledger's stateless `preverify`), and the Blend payload body it is
+    /// published in.
     fn assert_within_tx_limits(tx: &SignedOps<Unverified, StandardMode>) {
+        let size = tx.to_bytes().expect("built tx should serialize").len();
+        assert!(
+            size <= MAX_PAYLOAD_BODY_SIZE,
+            "tx of {size} bytes exceeds the {MAX_PAYLOAD_BODY_SIZE} a Blend payload carries"
+        );
         let op_refs = tx.op_refs();
         assert!(
             op_refs.len() <= MAX_OPS_PER_TX,
@@ -1734,12 +1810,12 @@ mod tests {
 
     #[test]
     fn push_reward_claim_ops_interleaves_claims_and_transfers() {
-        let tickets: Vec<_> = std::iter::repeat_with(ticket).take(40).collect();
+        let claims: Vec<_> = std::iter::repeat_with(|| ticket().1).take(40).collect();
         let notes: Vec<NoteId> = (0u8..40).map(note_id).collect();
         let changes = change_outputs(&notes, 100, 0).unwrap();
         let transfers = transfer_ops(&notes, ZkPublicKey::zero(), &changes).unwrap();
 
-        let tx = push_reward_claim_ops(MantleTxBuilder::new(), &tickets, transfers)
+        let tx = push_reward_claim_ops(MantleTxBuilder::new(), &claims, transfers)
             .unwrap()
             .build()
             .unwrap();
@@ -1762,10 +1838,10 @@ mod tests {
 
     #[test]
     fn estimate_reward_claim_fee_is_positive_with_nonzero_gas_prices() {
-        let tickets = vec![ticket()];
+        let claims = vec![ticket().1];
         let notes = vec![note_id(0)];
         let fee =
-            estimate_reward_claim_fee(&tickets, &notes, ZkPublicKey::zero(), &context()).unwrap();
+            estimate_reward_claim_fee(&claims, &notes, ZkPublicKey::zero(), &context()).unwrap();
         assert!(fee > 0);
     }
 
@@ -1912,15 +1988,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_reward_claim_tx_caps_claims_to_the_op_limit_and_stays_within_it() {
-        // More tickets and pool room than the op budget allows: the cap is the
-        // op limit, and the resulting tx must still fit within it.
-        let cap = max_claims_by_ops();
+    async fn build_reward_claim_tx_caps_claims_to_what_a_blend_payload_carries() {
+        // More tickets and pool room than any cap allows. The payload budget
+        // is the tightest of the three, so it is the one that binds, and the
+        // resulting tx must fit the payload a claim is published in.
+        let cap = *MAX_CLAIMS_BY_PAYLOAD_SIZE;
+        assert!(
+            cap < max_claims_by_ops(),
+            "the payload budget is expected to bind before the op budget"
+        );
         let tickets: Vec<_> = std::iter::repeat_with(ticket).take(cap + 50).collect();
         let (tx, claimed) = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
             REWARD,
-            POOL, // POOL / REWARD = 1000 > cap, so the op limit binds
+            POOL, // POOL / REWARD = 1000 > cap, so the pool does not bind
             GasPrices::new(1, 1),
             &tickets,
         )
@@ -1937,9 +2018,48 @@ mod tests {
         let transfers = ops.len() - claims;
         assert_eq!(claims, cap);
         assert_eq!(transfers, cap.div_ceil(MAX_TRANSFER_INPUTS));
-        // The cap is the largest batch that still fits the op budget exactly.
-        assert!(ops.len() <= MAX_OPS_PER_TX);
-        assert!(claims + 1 + (claims + 1).div_ceil(MAX_TRANSFER_INPUTS) > MAX_OPS_PER_TX);
+    }
+
+    /// [`claim_tx_size`] measures a probe transaction rather than the one that
+    /// is published, so the two shapes have to encode identically. This is
+    /// what pins that: it compares the probe against really signed
+    /// transactions at a single claim, a pair in one group, a full group, and
+    /// the claim that opens the next one, so both the per-claim and per-group
+    /// terms are covered.
+    ///
+    /// A failure here means the probe has drifted from what
+    /// `build_reward_claim_tx_inner` builds — an op, a proof, or a transfer
+    /// the real transaction carries and the probe does not, or vice versa.
+    /// Fix the probe to match the builder; do not adjust the expected sizes,
+    /// and do not relax this test. A probe that over-estimates needlessly
+    /// shrinks every batch, and one that under-estimates puts the node back to
+    /// building claims Blend refuses to carry.
+    #[tokio::test]
+    async fn claim_tx_size_matches_a_signed_transaction() {
+        for claims in [1, 2, MAX_TRANSFER_INPUTS, MAX_TRANSFER_INPUTS + 1] {
+            let tickets: Vec<_> = std::iter::repeat_with(ticket).take(claims).collect();
+            let (tx, _) = build_reward_claim_tx_inner(
+                ZkPublicKey::zero(),
+                REWARD,
+                POOL,
+                GasPrices::new(1, 1),
+                &tickets,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                tx.to_bytes().unwrap().len() as u64,
+                claim_tx_size(claims).unwrap(),
+                "probe disagrees with a signed tx at {claims} claim(s)"
+            );
+        }
+    }
+
+    #[test]
+    fn the_payload_cap_is_the_largest_batch_a_payload_carries() {
+        let claims = *MAX_CLAIMS_BY_PAYLOAD_SIZE;
+        assert!(claim_tx_size(claims).unwrap() <= MAX_PAYLOAD_BODY_SIZE as u64);
+        assert!(claim_tx_size(claims + 1).unwrap() > MAX_PAYLOAD_BODY_SIZE as u64);
     }
 
     /// A winning ticket anchored to a block at `block_slot`.

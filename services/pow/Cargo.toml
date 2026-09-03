@@ -23,6 +23,7 @@ tracing      = { workspace = true }
 lb-blend-service              = { workspace = true }
 lb-chain-service              = { workspace = true }
 lb-core                       = { workspace = true }
+lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-ledger                     = { workspace = true }
 lb-log-targets                = { workspace = true }
@@ -35,7 +36,6 @@ lb-zksign                     = { workspace = true }
 overwatch                     = { workspace = true }
 
 [dev-dependencies]
-lb-groth16 = { workspace = true }
 serde_json = { workspace = true }
 tokio      = { features = ["macros", "rt"], workspace = true }
 

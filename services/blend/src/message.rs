@@ -1,8 +1,8 @@
 use core::fmt::{self, Debug, Formatter};
 
+pub use lb_blend::message::MAX_PAYLOAD_BODY_SIZE;
 use lb_blend::message::{
-    MAX_PAYLOAD_BODY_SIZE, PayloadType,
-    encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
+    PayloadType, encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
 };
 use lb_core::{
     mantle::NoteId,
