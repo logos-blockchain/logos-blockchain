@@ -2,9 +2,12 @@ pub mod libp2p;
 
 use std::fmt::Debug;
 
+use futures::stream::BoxStream;
 use lb_network_service::{NetworkService, backends::NetworkBackend};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Serialize, de::DeserializeOwned};
+
+use crate::message::NetworkMessage;
 
 /// A trait for communicating with the network service, which is used to
 /// broadcast fully unwrapped messages returned from the blend backend.
@@ -23,4 +26,9 @@ pub trait NetworkAdapter<RuntimeServiceId> {
     /// Broadcast a message to the network service using the specified broadcast
     /// settings.
     async fn broadcast(&self, message: Vec<u8>, broadcast_settings: Self::BroadcastSettings);
+
+    /// Return a stream of payloads appearing on the broadcasting channel.
+    async fn observe_broadcasts(
+        &self,
+    ) -> BoxStream<'static, NetworkMessage<Self::BroadcastSettings>>;
 }

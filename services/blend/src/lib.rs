@@ -53,6 +53,7 @@ use crate::{
 };
 
 pub mod core;
+pub mod delivery;
 pub mod edge;
 pub mod epoch;
 pub mod epoch_info;

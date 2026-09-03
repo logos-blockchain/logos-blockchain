@@ -66,15 +66,15 @@ impl LeaderProofsGenerator for MockLeaderProofsGenerator {
 }
 
 pub type BlendEdgeService<RuntimeServiceId> = lb_blend_service::edge::BlendService<
-        lb_blend_service::edge::backends::libp2p::Libp2pBlendBackend,
-        PeerId,
-        <lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId> as lb_blend_service::core::network::NetworkAdapter<RuntimeServiceId>>::BroadcastSettings,
-        RealLeaderProofsGenerator,
-        NtpTimeBackend,
-        CryptarchiaService<RuntimeServiceId>,
-        PolInfoProvider,
-        RuntimeServiceId
-    >;
+    lb_blend_service::edge::backends::libp2p::Libp2pBlendBackend,
+    PeerId,
+    lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId>,
+    RealLeaderProofsGenerator,
+    NtpTimeBackend,
+    CryptarchiaService<RuntimeServiceId>,
+    PolInfoProvider,
+    RuntimeServiceId,
+>;
 pub type BlendService<RuntimeServiceId> = lb_blend_service::BlendService<
     BlendCoreService<RuntimeServiceId>,
     BlendEdgeService<RuntimeServiceId>,

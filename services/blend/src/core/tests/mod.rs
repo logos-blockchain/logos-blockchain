@@ -1136,6 +1136,7 @@ async fn complete_old_epoch_after_main_loop_done() {
             crypto_processor,
             current_public_info,
             current_recovery_checkpoint,
+            None,
         )
         .await;
 
@@ -1145,6 +1146,7 @@ async fn complete_old_epoch_after_main_loop_done() {
             backend,
             TestNetworkAdapter,
             sdp_relay,
+            None,
             old_epoch_message_scheduler,
             rng,
             old_epoch_blending_token_collector,
@@ -1283,6 +1285,7 @@ async fn stop_on_empty_epoch() {
             crypto_processor,
             current_public_info,
             current_recovery_checkpoint,
+            None,
         )
         .await;
 
@@ -1292,6 +1295,7 @@ async fn stop_on_empty_epoch() {
             backend,
             TestNetworkAdapter,
             sdp_relay,
+            None,
             old_epoch_message_scheduler,
             rng,
             old_epoch_blending_token_collector,
@@ -1419,6 +1423,7 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
             crypto_processor,
             current_public_info,
             current_recovery_checkpoint,
+            None,
         )
         .await;
 
@@ -1428,6 +1433,7 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
             backend,
             TestNetworkAdapter,
             sdp_relay,
+            None,
             old_epoch_message_scheduler,
             rng,
             old_epoch_blending_token_collector,

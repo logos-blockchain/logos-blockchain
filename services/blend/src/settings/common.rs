@@ -18,4 +18,5 @@ pub struct CommonSettings {
     #[serde(skip)]
     pub recovery_data: RecoveryData,
     pub data_replication_factor: u64,
+    pub blend_failure_fallback: bool,
 }

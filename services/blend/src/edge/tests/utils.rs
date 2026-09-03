@@ -26,8 +26,14 @@ use crate::{
         backends::BlendBackend, handlers::Error, run, settings::RunningBlendConfig as BlendConfig,
         tests::test_blend_epoch_state,
     },
-    settings::TimingSettings,
-    test_utils::{crypto::mock_blend_proof, epoch::OncePolStreamProvider, membership::key},
+    message::NetworkMessage,
+    settings::{TimingSettings, max_data_message_delay_in_rounds, round_duration_in_seconds},
+    test_utils::{
+        crypto::mock_blend_proof,
+        epoch::OncePolStreamProvider,
+        membership::key,
+        network::{TestBroadcastingChannel, TestNetworkAdapter},
+    },
 };
 
 pub struct MockLeaderProofsGenerator;
@@ -46,6 +52,26 @@ impl LeaderProofsGenerator for MockLeaderProofsGenerator {
     }
 }
 
+/// The round these tests run on, which is the shortest a deployment may use.
+///
+/// Sitting through a whole delivery deadline costs them nothing: the fallback
+/// tests run on a paused clock, which jumps to the next timer the moment every
+/// task is idle.
+pub const TEST_ROUND: Duration = Duration::from_secs(1);
+/// `∆max` for the tests: the rounds a blend node may hold a message for.
+pub const TEST_MAX_BLEND_DELAY: NonZeroU64 = NonZeroU64::new(1).unwrap();
+/// `ß_c` for the tests.
+pub const TEST_BLEND_LAYERS: NonZeroU64 = NonZeroU64::new(1).unwrap();
+
+/// `T_D` for the tests, in rounds: the very derivation the service makes from
+/// the settings above, so the tests wait exactly as long as the code they
+/// exercise and the two cannot drift apart.
+pub const TEST_DELIVERY_DEADLINE: NonZeroU64 = max_data_message_delay_in_rounds(
+    TEST_BLEND_LAYERS,
+    TEST_MAX_BLEND_DELAY,
+    round_duration_in_seconds(TEST_ROUND),
+);
+
 pub async fn spawn_run(
     local_node: NodeId,
     minimal_network_size: u64,
@@ -53,8 +79,9 @@ pub async fn spawn_run(
 ) -> (
     JoinHandle<Result<(), Error>>,
     mpsc::Sender<Membership<NodeId>>,
-    mpsc::Sender<Vec<u8>>,
+    mpsc::Sender<NetworkMessage<()>>,
     mpsc::Receiver<NodeId>,
+    TestBroadcastingChannel,
 ) {
     let (epoch_sender, epoch_receiver) = mpsc::channel(1);
     let (msg_sender, msg_receiver) = mpsc::channel(1);
@@ -71,16 +98,19 @@ pub async fn spawn_run(
         .map(|membership| test_blend_epoch_state(0.into(), membership));
 
     let settings = settings(local_node, minimal_network_size, node_id_sender);
+    let (network_adapter, broadcasting_channel) = TestNetworkAdapter::new();
     let join_handle = tokio::spawn(async move {
         Box::pin(run::<
             TestBackend,
             _,
+            TestNetworkAdapter,
             MockLeaderProofsGenerator,
             OncePolStreamProvider,
             _,
         >(
             UninitializedEpochEventStream::new(epoch_stream, Duration::ZERO),
             ReceiverStream::new(msg_receiver),
+            network_adapter,
             settings,
             &overwatch_handle(),
             || {},
@@ -88,7 +118,13 @@ pub async fn spawn_run(
         .await
     });
 
-    (join_handle, epoch_sender, msg_sender, node_id_receiver)
+    (
+        join_handle,
+        epoch_sender,
+        msg_sender,
+        node_id_receiver,
+        broadcasting_channel,
+    )
 }
 
 pub fn settings(
@@ -99,16 +135,18 @@ pub fn settings(
     BlendConfig {
         time: TimingSettings {
             rounds_per_epoch: NonZeroU64::new(1).unwrap(),
-            round_duration: Duration::from_secs(1),
+            round_duration: TEST_ROUND,
             rounds_per_observation_window: NonZeroU64::new(1).unwrap(),
             epoch_transition_period: Duration::from_secs(1),
         },
         non_ephemeral_signing_key: key(local_id).0,
-        num_blend_layers: NonZeroU64::new(1).unwrap(),
+        num_blend_layers: TEST_BLEND_LAYERS,
         backend: msg_sender,
         minimum_network_size: NonZeroU64::new(minimum_network_size).unwrap(),
         cover: CoverTrafficSettings::default(),
         data_replication_factor: 0,
+        blend_failure_fallback: true,
+        max_blend_delay_in_rounds: TEST_MAX_BLEND_DELAY,
     }
 }
 

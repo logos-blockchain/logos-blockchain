@@ -1,3 +1,5 @@
+use std::{num::NonZeroU64, time::Duration};
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -34,6 +36,7 @@ impl<CoreBackendSettings, EdgeBackendSettings>
                     non_ephemeral_signing_key_id,
                     num_blend_layers,
                     data_replication_factor,
+                    blend_failure_fallback,
                 },
             core:
                 CoreSettings {
@@ -56,6 +59,7 @@ impl<CoreBackendSettings, EdgeBackendSettings>
             recovery_data,
             data_replication_factor,
             activity_threshold_sensitivity,
+            blend_failure_fallback,
         }
     }
 }
@@ -72,12 +76,13 @@ impl<CoreBackendSettings, EdgeBackendSettings>
                     non_ephemeral_signing_key_id,
                     num_blend_layers,
                     data_replication_factor,
+                    blend_failure_fallback,
                     ..
                 },
             edge: EdgeSettings { backend },
             core:
                 CoreSettings {
-                    scheduler: SchedulerSettings { cover, .. },
+                    scheduler: SchedulerSettings { cover, delayer },
                     ..
                 },
         }: Settings<CoreBackendSettings, EdgeBackendSettings>,
@@ -90,6 +95,44 @@ impl<CoreBackendSettings, EdgeBackendSettings>
             minimum_network_size,
             cover,
             data_replication_factor,
+            blend_failure_fallback,
+            // An edge node has no release schedule of its own, but the deadline it
+            // waits out is the one a core node's schedule implies, so it takes the
+            // same delay bound the core scheduler is configured with.
+            max_blend_delay_in_rounds: delayer.maximum_release_delay_in_rounds,
         }
+    }
+}
+
+#[must_use]
+pub const fn round_duration_in_seconds(round_duration: Duration) -> NonZeroU64 {
+    match NonZeroU64::new(round_duration.as_secs()) {
+        Some(seconds) => seconds,
+        None => panic!("Round duration must be at least one second."),
+    }
+}
+
+#[must_use]
+pub const fn max_data_message_delay_in_rounds(
+    num_blend_layers: NonZeroU64,
+    max_blend_delay_in_rounds: NonZeroU64,
+    round_duration_in_seconds: NonZeroU64,
+) -> NonZeroU64 {
+    let dissemination_delay_in_rounds = Duration::from_secs(1)
+        .as_secs()
+        .div_ceil(round_duration_in_seconds.get());
+    match NonZeroU64::new(
+        num_blend_layers
+            .get()
+            .saturating_mul(
+                max_blend_delay_in_rounds
+                    .get()
+                    .saturating_add(dissemination_delay_in_rounds),
+            )
+            .saturating_add(dissemination_delay_in_rounds),
+    ) {
+        Some(delay) => delay,
+        // Not `expect`, to keep this a `const fn`.
+        None => panic!("Both factors of the delivery deadline are non-zero."),
     }
 }

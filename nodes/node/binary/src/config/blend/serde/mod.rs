@@ -22,6 +22,14 @@ pub struct Config {
     pub core: CoreConfig,
     #[serde(default)]
     pub edge: EdgeConfig,
+    /// Whether a payload the Blend network fails to deliver within the delivery
+    /// deadline is broadcast in the clear rather than lost.
+    #[serde(default = "default_blend_failure_fallback")]
+    pub blend_failure_fallback: bool,
+}
+
+const fn default_blend_failure_fallback() -> bool {
+    true
 }
 
 pub struct RequiredValues {
@@ -43,6 +51,7 @@ impl Config {
                 zk: ZkSettings { secret_key_kms_id },
                 backend: BackendConfig::default(),
             },
+            blend_failure_fallback: default_blend_failure_fallback(),
             edge: EdgeConfig::default(),
         }
     }
@@ -53,6 +62,10 @@ impl Config {
 
     pub fn set_non_ephemeral_signing_key_id(&mut self, key_id: KeyId) {
         self.non_ephemeral_signing_key_id = key_id;
+    }
+
+    pub const fn disable_blend_failure_fallback(&mut self) {
+        self.blend_failure_fallback = false;
     }
 
     pub fn set_secret_zk_key_id(&mut self, key_id: KeyId) {

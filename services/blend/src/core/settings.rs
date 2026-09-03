@@ -6,7 +6,9 @@ use lb_services_utils::overwatch::{RecoveryData, StorageRecoverySettings};
 use lb_utils::math::NonNegativeF64;
 use serde::{Deserialize, Serialize};
 
-use crate::settings::TimingSettings;
+use crate::settings::{
+    TimingSettings, max_data_message_delay_in_rounds, round_duration_in_seconds,
+};
 
 #[derive(Clone, Debug)]
 pub struct StartingBlendConfig<BackendSettings> {
@@ -21,6 +23,7 @@ pub struct StartingBlendConfig<BackendSettings> {
     /// `R_c`: replication factor for data messages.
     pub data_replication_factor: u64,
     pub activity_threshold_sensitivity: u64,
+    pub blend_failure_fallback: bool,
 }
 
 /// Same values as [`StartingBlendConfig`] but with the secret key exfiltrated
@@ -36,6 +39,7 @@ pub struct RunningBlendConfig<BackendSettings> {
     pub minimum_network_size: NonZeroU64,
     pub data_replication_factor: u64,
     pub activity_threshold_sensitivity: u64,
+    pub blend_failure_fallback: bool,
 }
 
 impl<BackendSettings> RunningBlendConfig<BackendSettings> {
@@ -64,6 +68,15 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
             rounds_per_epoch: self.time.rounds_per_epoch,
             num_blend_layers: self.num_blend_layers,
         }
+    }
+
+    #[must_use]
+    pub const fn max_data_message_delay_in_rounds(&self) -> NonZeroU64 {
+        max_data_message_delay_in_rounds(
+            self.num_blend_layers,
+            self.scheduler.delayer.maximum_release_delay_in_rounds,
+            round_duration_in_seconds(self.time.round_duration),
+        )
     }
 }
 

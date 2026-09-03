@@ -29,6 +29,7 @@ use lb_key_management_system_service::{
     operators::ed25519::exfiltrate_secret_key::LeakSecretKeyOperator,
 };
 use lb_log_targets::blend;
+use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
 use lb_time_service::TimeService;
 use overwatch::{
@@ -46,6 +47,8 @@ use tokio::sync::oneshot;
 use tracing::{debug, error, info};
 
 use crate::{
+    core::network::NetworkAdapter,
+    delivery::{FailureDetector, broadcast_undelivered_messages, next_undelivered_messages},
     edge::{
         handlers::{Error, MessageHandler},
         settings::RunningBlendConfig,
@@ -64,7 +67,7 @@ type RunningSettings<Backend, NodeId, RuntimeServiceId> =
 pub struct BlendService<
     Backend,
     NodeId,
-    BroadcastSettings,
+    NetAdapter,
     ProofsGenerator,
     TimeBackend,
     ChainService,
@@ -73,15 +76,22 @@ pub struct BlendService<
 > where
     Backend: BlendBackend<NodeId, RuntimeServiceId>,
     NodeId: Clone,
+    NetAdapter: NetworkAdapter<RuntimeServiceId>,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    _phantom: PhantomData<(ProofsGenerator, TimeBackend, ChainService, PolInfoProvider)>,
+    _phantom: PhantomData<(
+        NetAdapter,
+        ProofsGenerator,
+        TimeBackend,
+        ChainService,
+        PolInfoProvider,
+    )>,
 }
 
 impl<
     Backend,
     NodeId,
-    BroadcastSettings,
+    NetAdapter,
     ProofsGenerator,
     TimeBackend,
     ChainService,
@@ -91,7 +101,7 @@ impl<
     for BlendService<
         Backend,
         NodeId,
-        BroadcastSettings,
+        NetAdapter,
         ProofsGenerator,
         TimeBackend,
         ChainService,
@@ -101,18 +111,19 @@ impl<
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId>,
     NodeId: Clone,
+    NetAdapter: NetworkAdapter<RuntimeServiceId>,
 {
     type Settings = StartingBlendConfig<Backend::Settings>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
-    type Message = ServiceMessage<BroadcastSettings, NodeId>;
+    type Message = ServiceMessage<NetAdapter::BroadcastSettings, NodeId>;
 }
 
 #[async_trait::async_trait]
 impl<
     Backend,
     NodeId,
-    BroadcastSettings,
+    NetAdapter,
     ProofsGenerator,
     TimeBackend,
     ChainService,
@@ -122,7 +133,7 @@ impl<
     for BlendService<
         Backend,
         NodeId,
-        BroadcastSettings,
+        NetAdapter,
         ProofsGenerator,
         TimeBackend,
         ChainService,
@@ -132,7 +143,11 @@ impl<
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId> + Send + Sync,
     NodeId: Clone + Debug + Eq + Hash + Send + Sync + node_id::TryFrom + 'static,
-    BroadcastSettings: Serialize + DeserializeOwned + Send,
+    NetAdapter: NetworkAdapter<
+            RuntimeServiceId,
+            BroadcastSettings: Serialize + DeserializeOwned + Eq + Hash + Unpin + Send + Sync,
+        > + Send
+        + Sync,
     ProofsGenerator: LeaderProofsGenerator + Send,
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
     ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
@@ -141,6 +156,7 @@ where
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + AsServiceId<ChainService>
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>
+        + AsServiceId<NetworkService<NetAdapter::Backend, RuntimeServiceId>>
         + Display
         + Debug
         + Clone
@@ -214,29 +230,32 @@ where
             )
             .await;
 
-        let messages_to_blend_stream = Box::pin(inbound_relay.filter_map(async |msg| {
-            match msg {
-                ServiceMessage::Blend(message) => Some(
-                    NetworkMessage::<BroadcastSettings>::to_bytes(&message)
-                        .expect("NetworkMessage should be able to be serialized")
-                        .to_vec(),
-                ),
-                ServiceMessage::GetNetworkInfo { reply } => {
-                    drop(reply.send(Some(NetworkInfo {
-                        node_id: local_node_id.clone(),
-                        core_info: None,
-                    })));
-                    None
-                }
+        let messages_to_blend_stream = Box::pin(inbound_relay.filter_map(async |msg| match msg {
+            ServiceMessage::Blend(message) => Some(message),
+            ServiceMessage::GetNetworkInfo { reply } => {
+                drop(reply.send(Some(NetworkInfo {
+                    node_id: local_node_id.clone(),
+                    core_info: None,
+                })));
+                None
             }
         }));
 
-        run::<Backend, _, ProofsGenerator, PolInfoProvider, _>(
+        let network_adapter = {
+            let network_relay = overwatch_handle
+                .relay::<NetworkService<_, _>>()
+                .await
+                .expect("Relay with network service should be available.");
+            NetAdapter::new(network_relay)
+        };
+
+        run::<Backend, _, NetAdapter, ProofsGenerator, PolInfoProvider, _>(
             UninitializedEpochEventStream::new(
                 public_epoch_stream,
                 settings.time.epoch_transition_period,
             ),
             messages_to_blend_stream,
+            network_adapter,
             RunningSettings::<Backend, _, _> {
                 backend: settings.backend,
                 cover: settings.cover,
@@ -245,6 +264,8 @@ where
                 minimum_network_size: settings.minimum_network_size,
                 time: settings.time,
                 data_replication_factor: settings.data_replication_factor,
+                blend_failure_fallback: settings.blend_failure_fallback,
+                max_blend_delay_in_rounds: settings.max_blend_delay_in_rounds,
             },
             &overwatch_handle,
             || {
@@ -288,11 +309,14 @@ where
     clippy::cognitive_complexity,
     reason = "TODO: address this in a dedicated refactor"
 )]
-async fn run<Backend, NodeId, ProofsGenerator, PolInfoProvider, RuntimeServiceId>(
+async fn run<Backend, NodeId, NetAdapter, ProofsGenerator, PolInfoProvider, RuntimeServiceId>(
     public_epoch_stream: UninitializedEpochEventStream<
         impl Stream<Item = BlendEpochState<NodeId>> + Unpin,
     >,
-    mut incoming_message_stream: impl Stream<Item = Vec<u8>> + Send + Unpin,
+    mut incoming_message_stream: impl Stream<Item = NetworkMessage<NetAdapter::BroadcastSettings>>
+    + Send
+    + Unpin,
+    network_adapter: NetAdapter,
     settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     notify_ready: impl Fn(),
@@ -300,6 +324,10 @@ async fn run<Backend, NodeId, ProofsGenerator, PolInfoProvider, RuntimeServiceId
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId> + Sync + Send,
     NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
+    NetAdapter: NetworkAdapter<
+            RuntimeServiceId,
+            BroadcastSettings: Serialize + Eq + Hash + Unpin + Send + Sync,
+        > + Sync,
     ProofsGenerator: LeaderProofsGenerator + Send,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Unpin>,
     RuntimeServiceId: Clone + Send + Sync,
@@ -331,6 +359,20 @@ where
         MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
     > = None;
 
+    // What this node has handed to the Blend network and not seen come out of it.
+    // An edge node reaches the same verdict as a core node and reacts the same way,
+    // only later: it sees none of the network's traffic, so the deadline is all it
+    // has. `None` when the operator has turned the fallback off.
+    let mut failure_detector = if settings.blend_failure_fallback {
+        Some(FailureDetector::new(
+            settings.max_data_message_delay_in_rounds(),
+            settings.time.round_duration,
+            network_adapter.observe_broadcasts().await,
+        ))
+    } else {
+        None
+    };
+
     loop {
         tokio::select! {
             Some(EpochEvent::NewEpoch(new_public_epoch_info)) = remaining_public_epoch_stream.next() => {
@@ -338,10 +380,16 @@ where
                 match handle_new_epoch_event(&current_epoch_info, &mut current_secret_epoch_info, &mut current_epoch_message_handler, settings.clone(), overwatch_handle.clone()) {
                     Err(Error::NetworkIsTooSmall(_)) => {
                         info!(target: LOG_TARGET, "New membership does not satisfy edge node condition, edge service shutting down.");
+                        if let Some(failure_detector) = failure_detector {
+                            failure_detector.drain_pending_message_queue(&network_adapter).await;
+                        }
                         return Ok(());
                     }
                     Err(e) => {
                         error!(target: LOG_TARGET, "Error when handling new public epoch: {e:?}, edge service shutting down.");
+                        if let Some(failure_detector) = failure_detector {
+                            failure_detector.drain_pending_message_queue(&network_adapter).await;
+                        }
                         return Err(e);
                     }
                     Ok(()) => {}
@@ -352,10 +400,16 @@ where
                 match handle_new_epoch_event(&current_epoch_info, &mut current_secret_epoch_info, &mut current_epoch_message_handler, settings.clone(), overwatch_handle.clone()) {
                     Err(Error::NetworkIsTooSmall(_)) => {
                         info!(target: LOG_TARGET, "New membership does not satisfy edge node condition, edge service shutting down.");
+                        if let Some(failure_detector) = failure_detector {
+                            failure_detector.drain_pending_message_queue(&network_adapter).await;
+                        }
                         return Ok(());
                     }
                     Err(e) => {
                         error!(target: LOG_TARGET, "Error when handling new secret epoch: {e:?}, edge service shutting down.");
+                        if let Some(failure_detector) = failure_detector {
+                            failure_detector.drain_pending_message_queue(&network_adapter).await;
+                        }
                         return Err(e);
                     }
                     Ok(()) => {}
@@ -367,15 +421,29 @@ where
                     tracing::warn!(target: LOG_TARGET, "Received a message to blend, but no active message handler is available to process it because the secret PoL info for the current epoch is not yet available. Ignoring the message.");
                     continue;
                 };
+                let serialized = NetworkMessage::<NetAdapter::BroadcastSettings>::to_bytes(&message)
+                    .expect("NetworkMessage should be able to be serialized")
+                    .to_vec();
                 let message_copies = settings.data_replication_factor.checked_add(1).unwrap();
                 for _ in 0..message_copies {
-                    handler.handle_message_to_blend(message.clone()).await;
+                    handler.handle_message_to_blend(serialized.clone()).await;
                 }
+                // An edge node sends what it encapsulates, so the deadline of what it
+                // carries starts here rather than at some later release round.
+                if let Some(failure_detector) = failure_detector.as_mut() {
+                    failure_detector.mark_payload_as_blended(message);
+                }
+            }
+            Some(undelivered) = next_undelivered_messages(failure_detector.as_mut()) => {
+                broadcast_undelivered_messages(undelivered.into_iter(), &network_adapter).await;
             }
             else => {
                 // All input streams have terminated (e.g. disorderly shutdown).
                 // Exit cleanly instead of letting `select!` panic.
                 debug!(target: LOG_TARGET, "All input streams terminated, edge service shutting down.");
+                if let Some(failure_detector) = failure_detector {
+                    failure_detector.drain_pending_message_queue(&network_adapter).await;
+                }
                 return Ok(());
             }
         }
