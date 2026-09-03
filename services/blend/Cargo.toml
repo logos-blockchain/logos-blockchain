@@ -54,7 +54,6 @@ tracing                          = { workspace = true }
 lb-blend          = { features = ["unsafe-test-functions"], workspace = true }
 libp2p            = { features = ["plaintext", "tcp", "yamux"], workspace = true }
 libp2p-swarm-test = { workspace = true }
-serde_json        = { workspace = true }
 test-log          = { features = ["trace"], workspace = true }
 tokio             = { features = ["test-util"], workspace = true }
 
