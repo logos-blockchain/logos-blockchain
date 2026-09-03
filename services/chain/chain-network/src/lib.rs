@@ -30,6 +30,7 @@ use lb_core::{
 };
 pub use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_ledger::EpochState;
+use lb_log_targets::chain;
 use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
@@ -73,7 +74,7 @@ use crate::{
 
 const SERVICE_ID: &str = "ChainNetwork";
 
-pub(crate) const LOG_TARGET: &str = "chain_network::service";
+pub(crate) const LOG_TARGET: &str = chain::network::ROOT;
 const FUTURE_BLOCK_MAX_RETRIES: usize = 3;
 const FUTURE_BLOCK_RETRY_DELAY: Duration = Duration::from_millis(500);
 
@@ -306,15 +307,16 @@ where
             .await
         {
             Ok(_) => {
-                info!("Initial Block Download completed successfully");
+                info!(target: LOG_TARGET, "Initial Block Download completed successfully");
                 // Notify chain-service that IBD is complete so it can start the prolonged
                 // bootstrap timer
                 if let Err(e) = relays.cryptarchia().notify_ibd_completed().await {
-                    error!("Failed to notify chain-service of IBD completion: {e:?}");
+                    error!(target: LOG_TARGET, "Failed to notify chain-service of IBD completion: {e:?}");
                 }
             }
             Err(e) => {
                 error!(
+                    target: LOG_TARGET,
                     "Initial Block Download failed: {e:?}. Initiating graceful shutdown. Retry with different bootstrap peers"
                 );
                 if let Err(shutdown_err) = self
@@ -323,7 +325,7 @@ where
                     .shutdown()
                     .await
                 {
-                    error!("Failed to shutdown overwatch: {shutdown_err:?}");
+                    error!(target: LOG_TARGET, "Failed to shutdown overwatch: {shutdown_err:?}");
                 }
 
                 return Err(DynError::from(format!(
@@ -444,7 +446,9 @@ where
                             .await
                         {
                             Ok(()) => {
-                                trace!(counter.consensus_processed_blocks = 1);
+                                trace!(target: LOG_TARGET, {
+                                    counter.consensus_processed_blocks = 1
+                                }, "Processed consensus block");
                             }
                             Err(e) => {
                                 error!(target: LOG_TARGET, "Error processing orphan downloader block: {e:?}");
@@ -500,7 +504,9 @@ where
         // Hypothesis:
         // 1. Probably related to too many generics.
         // 2. It seems `span` requires a `const` string literal.
-        async_loop.instrument(span!(Level::TRACE, SERVICE_ID)).await;
+        async_loop
+            .instrument(span!(target: LOG_TARGET, Level::TRACE, SERVICE_ID))
+            .await;
 
         Ok(())
     }
@@ -544,6 +550,7 @@ where
     fn notify_service_ready(&self) {
         self.service_resources_handle.status_updater.notify_ready();
         info!(
+            target: LOG_TARGET,
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
@@ -696,7 +703,9 @@ where
             Ok(()) => {
                 metrics::consensus_observe_apply_block_ok(started_at.elapsed());
                 orphan_downloader.remove_orphan(&block_id);
-                trace!(counter.consensus_processed_blocks = 1);
+                trace!(target: LOG_TARGET, {
+                    counter.consensus_processed_blocks = 1
+                }, "Processed consensus block");
             }
             Err(err) => {
                 metrics::consensus_observe_apply_block_err(&err);
@@ -737,15 +746,15 @@ where
         let content_size = 0; // TODO: calculate the actual content size
         let transactions = block.transactions_iter().len();
 
-        trace!(
+        trace!(target: LOG_TARGET, {
             counter.received_blocks = 1,
             transactions = transactions,
             bytes = content_size
-        );
-        trace!(
+        }, "Received block");
+        trace!(target: LOG_TARGET, {
             histogram.received_blocks_data = content_size,
             transactions = transactions,
-        );
+        }, "Recorded received block size");
     }
 
     /// Hand a tip discovered by the watchdog to the orphan downloader and
@@ -957,6 +966,7 @@ where
 /// A [`Block`] is only added if it's valid
 #[expect(clippy::allow_attributes_without_reason)]
 #[instrument(
+    target = LOG_TARGET,
     level = "debug",
     skip(block, cryptarchia, mempool_adapter),
     fields(block_id = %block.header().id(), tx_count = block.transactions().len())
@@ -973,7 +983,7 @@ where
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
-    trace!("Received proposal with ID: {:?}", block.header().id());
+    trace!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.header().id());
 
     let (tip, reorged_txs) = cryptarchia.apply_block(block.clone()).await?;
     let reorged_tx_count = reorged_txs.len();
@@ -984,6 +994,7 @@ where
     // honest chain later when this node proposes blocks.
     if tip == block.header().id() {
         debug!(
+            target: LOG_TARGET,
             "Applied block {:?} to the canonical chain; included {} transactions and will reinsert {} reorged transactions",
             block.header().id(),
             included_tx_count,
@@ -997,9 +1008,12 @@ where
                     .collect::<Vec<_>>(),
             )
             .await
-            .unwrap_or_else(|e| error!("Could not mark transactions in block: {e}"));
+            .unwrap_or_else(
+                |e| error!(target: LOG_TARGET, "Could not mark transactions in block: {e}"),
+            );
     } else {
         debug!(
+            target: LOG_TARGET,
             "Applied block {:?} off the canonical chain; keeping {} included transactions in mempool because the current tip is {:?}",
             block.header().id(),
             included_tx_count,
@@ -1012,7 +1026,7 @@ where
         let mempool_adapter = mempool_adapter.clone();
         async move {
             if let Err(e) = mempool_adapter.add_transaction(tx).await {
-                error!("Could not reinsert a reorged tx into mempool: {e:?}");
+                error!(target: LOG_TARGET, "Could not reinsert a reorged tx into mempool: {e:?}");
             }
         }
     }))

@@ -21,6 +21,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
 use lb_groth16::{Fr, fr_from_bytes};
+use lb_log_targets::ledger;
 use lb_utxotree::MerklePath;
 
 use crate::{
@@ -33,6 +34,8 @@ use crate::{
         sdp::SdpLedger,
     },
 };
+
+const LOG_TARGET: &str = ledger::cryptarchia::ROOT;
 
 // corresponds to the denominator of q
 const EXECUTION_MARKET_EMA_DENOMINATOR: u128 = 10;
@@ -307,6 +310,7 @@ impl LedgerState {
                 .compute_lottery_values(total_stake);
 
             tracing::info!(
+                target: LOG_TARGET,
                 old_epoch = ?current_epoch,
                 new_epoch = ?new_epoch,
                 old_total_stake = self.epoch_state.total_stake,
@@ -391,6 +395,7 @@ impl LedgerState {
             }
 
             tracing::warn!(
+                target: LOG_TARGET,
                 old_epoch = ?current_epoch,
                 new_epoch = ?new_epoch,
                 epochs_skipped = new_epoch.strict_sub(current_epoch).strict_sub(1.into()).into_inner(),

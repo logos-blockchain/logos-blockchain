@@ -11,10 +11,11 @@ use std::marker::PhantomData;
 use lb_blend_service::message::{BlendPayload, ProxyServiceMessage, ServiceMessage};
 use lb_codec::BinaryEncode as _;
 use lb_core::block::Proposal;
+use lb_log_targets::chain;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use tracing::error;
 
-use crate::LOG_TARGET;
+const LOG_TARGET: &str = chain::leader::BLEND;
 
 pub struct BlendAdapter<BlendService>
 where

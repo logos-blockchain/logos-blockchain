@@ -151,7 +151,7 @@ impl OldEpochBlendingTokenCollector {
         let (winning_activity_proof, distance) = winning_activity_proof_with_distance?;
 
         tracing::trace!(
-            LOG_TARGET,
+            target: LOG_TARGET,
             "Computed activity proof for epoch {}: {winning_activity_proof:?} with Hamming distance {distance:?}",
             self.collector.epoch,
         );

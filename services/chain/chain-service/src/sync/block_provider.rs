@@ -11,6 +11,7 @@ use futures::{StreamExt as _, TryStreamExt as _, future, stream, stream::BoxStre
 use lb_core::{block::Block, header::HeaderId};
 use lb_cryptarchia_engine::{Branch, Slot};
 use lb_cryptarchia_sync::{BlocksResponse, BlocksUnavailableReason, ProviderResponse};
+use lb_log_targets::chain;
 use lb_storage_service::{StorageMsg, api::chain::StorageChainApi, backends::StorageBackend};
 use overwatch::DynError;
 use serde::Serialize;
@@ -19,6 +20,8 @@ use tokio::sync::{mpsc::Sender, oneshot};
 use tracing::{debug, error};
 
 use crate::{relays::StorageRelay, sync::config::BlockProviderConfig};
+
+const LOG_TARGET: &str = chain::service::sync::BLOCK_PROVIDER;
 
 #[derive(Debug, Error, Clone)]
 pub enum GetBlocksError {
@@ -84,6 +87,7 @@ where
         reply_sender: Sender<BlocksResponse>,
     ) {
         debug!(
+            target: LOG_TARGET,
             "Providing blocks:
             target_block={target_block:?},
             known_blocks={known_blocks:?},"
@@ -96,7 +100,7 @@ where
             Ok(stream) => {
                 let response = ProviderResponse::Available(stream);
                 if let Err(e) = reply_sender.send(response).await {
-                    error!("Failed to send blocks stream: {e}");
+                    error!(target: LOG_TARGET, "Failed to send blocks stream: {e}");
                 }
             }
             Err(e) => {
@@ -144,6 +148,7 @@ where
 
         if let (Some(start_block), Some(end_block)) = (path.first(), path.last()) {
             debug!(
+                target: LOG_TARGET,
                 "Prepared block stream from {:?} to {:?} with {} path entries",
                 start_block,
                 end_block,
@@ -564,11 +569,12 @@ where
     async fn send_error(reason: BlocksUnavailableReason, reply_sender: Sender<BlocksResponse>) {
         if let BlocksUnavailableReason::BlockNotFound(target) = &reason {
             error!(
+                target: LOG_TARGET,
                 ?target,
                 "Failed to create a block stream: requested target block is unavailable"
             );
         } else {
-            error!(reason = %reason, "Failed to create a block stream");
+            error!(target: LOG_TARGET, reason = %reason, "Failed to create a block stream");
         }
 
         if let Err(e) = reply_sender
@@ -576,7 +582,7 @@ where
             .await
             .map_err(|_| GetBlocksError::SendError("Failed to send error response".to_owned()))
         {
-            error!("Failed to send error response: {e}");
+            error!(target: LOG_TARGET, "Failed to send error response: {e}");
         }
     }
 }

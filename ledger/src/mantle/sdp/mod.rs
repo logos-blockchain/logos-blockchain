@@ -29,12 +29,13 @@ use lb_core::{
     },
 };
 use lb_cryptarchia_engine::Epoch;
+use lb_log_targets::ledger;
 use rewards::{Error as RewardsError, Rewards};
 use tracing::debug;
 
 use crate::{EpochState, UtxoTree, mantle::sdp::rewards::blend};
 
-const LOG_TARGET: &str = "ledger::mantle::sdp";
+const LOG_TARGET: &str = ledger::mantle::SDP;
 
 type Declarations = rpds::RedBlackTreeMapSync<DeclarationId, Declaration>;
 

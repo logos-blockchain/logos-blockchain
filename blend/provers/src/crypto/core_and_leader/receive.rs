@@ -12,8 +12,11 @@ use lb_blend_message::{
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::X25519PrivateKey;
+use lb_log_targets::blend;
 
 use crate::crypto::EncapsulatedMessageWithVerifiedPublicHeader;
+
+const LOG_TARGET: &str = blend::processor::core_and_leader::RECEIVE;
 
 /// [`EpochCryptographicProcessor`] is responsible for only unwrapping the
 /// messages addressed to the local node.
@@ -115,6 +118,7 @@ where
         message: EncapsulatedMessageWithVerifiedPublicHeader,
     ) -> Result<MultiLayerDecapsulationOutput, Error> {
         tracing::trace!(
+            target: LOG_TARGET,
             "Attempt at batch-decapsulating message with PoQ nullifier and key: ({:?}, {:?})",
             message.public_header().signing_key(),
             message.public_header().proof_of_quota().key_nullifier()

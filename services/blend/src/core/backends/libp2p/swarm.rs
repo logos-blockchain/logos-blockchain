@@ -875,6 +875,7 @@ where
         message_type: metrics::InboundMessageType,
     ) {
         tracing::trace!(
+            target: LOG_TARGET,
             "Received message from a peer: {msg:?} from epoch {epoch:?} of type {message_type:?}."
         );
 
