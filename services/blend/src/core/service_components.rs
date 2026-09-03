@@ -73,8 +73,6 @@ pub type MempoolOfService<Service, RuntimeServiceId> = <<Service as ServiceCompo
     RuntimeServiceId,
 >>::PayloadDispatcher as PayloadDispatcher<RuntimeServiceId>>::MempoolService;
 
-/// The chain-network service the core service's dispatcher asks about the
-/// proposals it receives.
 pub type ChainNetworkOfService<Service, RuntimeServiceId> = <<Service as ServiceComponents<
     RuntimeServiceId,
 >>::PayloadDispatcher as PayloadDispatcher<RuntimeServiceId>>::ChainNetworkService;

@@ -118,7 +118,7 @@ pub mod tests {
     use tracing::{debug, info};
 
     use super::*;
-    use crate::test_utils::parked::{TestChainNetworkService, TestMempoolService};
+    use crate::test_utils::mocks::{TestChainNetworkService, TestMempoolService};
 
     #[test_log::test(test)]
     fn broadcast_mode() {

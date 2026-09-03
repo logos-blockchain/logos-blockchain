@@ -83,8 +83,6 @@ pub type BlendEdgeService<RuntimeServiceId> = lb_blend_service::edge::BlendServi
     lb_blend_service::edge::backends::libp2p::Libp2pBlendBackend,
     PeerId,
     RealLeaderAndPowProofsGenerator,
-    // An edge node needs the same exit door as a core node: a proposal the Blend
-    // network fails to deliver is broadcast directly by whoever proposed it.
     BlendPayloadDispatcher<RuntimeServiceId>,
     NtpTimeBackend,
     CryptarchiaService<RuntimeServiceId>,

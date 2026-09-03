@@ -69,8 +69,6 @@ impl ServiceConfig {
                 non_ephemeral_signing_key_id: self.user.non_ephemeral_signing_key_id,
                 num_blend_layers: self.deployment.common.num_blend_layers,
                 minimum_network_size: self.deployment.common.minimum_network_size.into(),
-                // Where Blend hands a block proposal over to the rest of the
-                // node, and where a sender watches for its own.
                 broadcast: Libp2pBroadcastSettings {
                     topic: cryptarchia_deployment.gossipsub_protocol.clone(),
                 },

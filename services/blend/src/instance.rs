@@ -389,7 +389,7 @@ mod tests {
     use super::*;
     use crate::{
         modes::broadcast_tests::{TestMessage, TestNetworkBackend, TestPayloadDispatcher},
-        test_utils::parked::{TestChainNetworkService, TestMempoolService},
+        test_utils::mocks::{TestChainNetworkService, TestMempoolService},
     };
 
     const LOCAL_NODE_ID: u8 = 99;

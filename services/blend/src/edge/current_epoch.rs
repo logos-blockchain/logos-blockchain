@@ -98,6 +98,11 @@ impl<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
         self.awaiting_mut().proposals.queue(proposal, copies);
     }
 
+    #[must_use]
+    pub const fn proposals(&self) -> &PendingProposals {
+        &self.awaiting().proposals
+    }
+
     pub const fn proposals_mut(&mut self) -> &mut PendingProposals {
         &mut self.awaiting_mut().proposals
     }

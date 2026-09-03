@@ -11,7 +11,7 @@ use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use crate::{
     core::dispatcher::PayloadDispatcher,
     message::BlendPayload,
-    test_utils::parked::{TestChainNetworkService, TestMempoolService},
+    test_utils::mocks::{TestChainNetworkService, TestMempoolService},
 };
 
 const CHANNEL_SIZE: usize = 32;

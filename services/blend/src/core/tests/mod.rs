@@ -30,6 +30,7 @@ use crate::{
         HandleEpochEventOutput,
         backends::BlendBackend,
         complete_transition_period,
+        delivery::FailureDetector,
         dispatcher::PayloadDispatcher,
         epoch_stages::{
             running::{CurrentEpoch, CurrentEpochDuringTransition},
@@ -42,14 +43,12 @@ use crate::{
             MockKmsAdapter, MockProofsVerifier, NodeId, TestBlendBackend, TestBlendBackendEvent,
             TestPayloadDispatcher, backend_epoch_info, dummy_overwatch_resources,
             dummy_pol_private_inputs, new_crypto_processor, new_epoch_info, new_membership,
-            new_stream, no_deliveries_to_watch, outgoing_messages_recorder,
-            published_epochs_recorder, recorded_set_epoch_private_calls,
-            reset_set_epoch_private_calls, reward_epoch_info, scheduler_epoch_info,
-            scheduler_settings, sdp_relay, seeded_release_delay_rng, settings, timing_settings,
-            wait_for_blend_backend_event,
+            new_stream, outgoing_messages_recorder, published_epochs_recorder,
+            recorded_set_epoch_private_calls, reset_set_epoch_private_calls, reward_epoch_info,
+            scheduler_epoch_info, scheduler_settings, sdp_relay, seeded_release_delay_rng,
+            settings, timing_settings, wait_for_blend_backend_event,
         },
     },
-    delivery::DeliveryLogic,
     epoch::{CoreEpochInfo, CoreEpochPublicInfo},
     epoch_info::PolEpochInfo,
     membership::{MembershipInfo, ZkInfo, chain::BlendEpochState},
@@ -1249,7 +1248,6 @@ async fn complete_old_epoch_after_main_loop_done() {
     let join_handle = tokio::spawn(async move {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
-        let mut deliveries = no_deliveries_to_watch(&settings);
 
         let retiring_epoch = run_event_loop(
             inbound_relay,
@@ -1267,7 +1265,7 @@ async fn complete_old_epoch_after_main_loop_done() {
                 current_public_info,
             ),
             pending_transactions,
-            &mut deliveries,
+            None,
             current_recovery_checkpoint,
         )
         .await;
@@ -1280,7 +1278,7 @@ async fn complete_old_epoch_after_main_loop_done() {
             sdp_relay,
             rng,
             retiring_epoch,
-            &mut deliveries,
+            None,
         )
         .await;
     });
@@ -1398,7 +1396,6 @@ async fn stop_on_empty_epoch() {
     let join_handle = tokio::spawn(async move {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
-        let mut deliveries = no_deliveries_to_watch(&settings);
 
         let retiring_epoch = run_event_loop(
             inbound_relay,
@@ -1416,7 +1413,7 @@ async fn stop_on_empty_epoch() {
                 current_public_info,
             ),
             pending_transactions,
-            &mut deliveries,
+            None,
             current_recovery_checkpoint,
         )
         .await;
@@ -1429,7 +1426,7 @@ async fn stop_on_empty_epoch() {
             sdp_relay,
             rng,
             retiring_epoch,
-            &mut deliveries,
+            None,
         )
         .await;
     });
@@ -1536,7 +1533,6 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
     let join_handle = tokio::spawn(async move {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
-        let mut deliveries = no_deliveries_to_watch(&settings);
 
         let retiring_epoch = run_event_loop(
             inbound_relay,
@@ -1554,7 +1550,7 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
                 current_public_info,
             ),
             pending_transactions,
-            &mut deliveries,
+            None,
             current_recovery_checkpoint,
         )
         .await;
@@ -1567,7 +1563,7 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
             sdp_relay,
             rng,
             retiring_epoch,
-            &mut deliveries,
+            None,
         )
         .await;
     });
@@ -2141,6 +2137,10 @@ const FAST_ROUND: Duration = Duration::from_millis(20);
 
 /// Runs the core event loop over a two-node membership, with both sides of
 /// Blend's exit door in the test's hands.
+///
+/// Hands back the delivery deadline the settings imply along with them, so that
+/// a test times itself against the deadline it is actually running under rather
+/// than against a constant that can drift from it.
 async fn spawn_core_watching_the_broadcasting_channel() -> (
     mpsc::Sender<ServiceMessage<NodeId>>,
     TestBroadcastingChannel,
@@ -2159,10 +2159,8 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
     settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
     settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
     settings.time.round_duration = FAST_ROUND;
-    // Generously past the deadline the settings imply, so the wait is only ever
-    // reached when the assertion has already failed.
-    let past_the_deadline = FAST_ROUND
-        * u32::try_from(settings.max_data_message_delay_in_rounds().get() + 4)
+    let deadline = FAST_ROUND
+        * u32::try_from(settings.max_data_message_delay_in_rounds().get())
             .expect("The test deadline is a handful of rounds.");
 
     let (inbound_relay, inbound_message_sender) = new_stream();
@@ -2220,7 +2218,7 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
     tokio::spawn(async move {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
-        let mut deliveries = DeliveryLogic::watching(
+        let mut deliveries = FailureDetector::new(
             settings.max_data_message_delay_in_rounds(),
             settings.time.round_duration,
             PayloadDispatcher::<RuntimeServiceId>::observe_broadcasts(&payload_dispatcher).await,
@@ -2241,17 +2239,18 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
                 current_public_info,
             ),
             pending_transactions,
-            &mut deliveries,
+            Some(&mut deliveries),
             current_recovery_checkpoint,
         )
         .await;
     });
 
-    (
-        inbound_message_sender,
-        broadcasting_channel,
-        past_the_deadline,
-    )
+    (inbound_message_sender, broadcasting_channel, deadline)
+}
+
+/// Long enough that reaching it means the assertion has already failed.
+fn past(deadline: Duration) -> Duration {
+    deadline + FAST_ROUND * 4
 }
 
 /// A core node reacts to a delivery failure exactly as an edge node does: at
@@ -2260,7 +2259,7 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
 #[test_log::test(tokio::test)]
 async fn a_proposal_the_network_never_delivers_is_broadcast_in_the_clear() {
     let proposal = b"proposal".to_vec();
-    let (inbound_message_sender, mut broadcasting_channel, past_the_deadline) =
+    let (inbound_message_sender, mut broadcasting_channel, deadline) =
         spawn_core_watching_the_broadcasting_channel().await;
 
     inbound_message_sender
@@ -2270,7 +2269,7 @@ async fn a_proposal_the_network_never_delivers_is_broadcast_in_the_clear() {
         .await
         .unwrap();
 
-    let broadcast = tokio::time::timeout(past_the_deadline, broadcasting_channel.dispatched.recv())
+    let broadcast = tokio::time::timeout(past(deadline), broadcasting_channel.dispatched.recv())
         .await
         .expect("the deadline should have expired by now")
         .expect("the service should still be running");
@@ -2282,7 +2281,7 @@ async fn a_proposal_the_network_never_delivers_is_broadcast_in_the_clear() {
 #[test_log::test(tokio::test)]
 async fn a_proposal_the_network_delivers_is_never_broadcast_in_the_clear() {
     let proposal = b"proposal".to_vec();
-    let (inbound_message_sender, mut broadcasting_channel, past_the_deadline) =
+    let (inbound_message_sender, mut broadcasting_channel, deadline) =
         spawn_core_watching_the_broadcasting_channel().await;
 
     inbound_message_sender
@@ -2291,16 +2290,17 @@ async fn a_proposal_the_network_delivers_is_never_broadcast_in_the_clear() {
         )))
         .await
         .unwrap();
-    // Give the proposal time to be encapsulated and released before saying it
-    // came out the other side, so that the observation cannot land first.
-    sleep(FAST_ROUND * 4).await;
+    // Halfway to the deadline: past the round the proposal is released in, so
+    // that the observation cannot land before the message it answers, and well
+    // short of the deadline it has to cancel.
+    sleep(deadline / 2).await;
     broadcasting_channel
         .carrying
         .send(BlendPayload::BlockProposal(proposal))
         .expect("the service is subscribed");
 
     assert!(
-        tokio::time::timeout(past_the_deadline, broadcasting_channel.dispatched.recv())
+        tokio::time::timeout(past(deadline), broadcasting_channel.dispatched.recv())
             .await
             .is_err(),
         "a delivered proposal must not be revealed by its proposer"
@@ -2386,7 +2386,6 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
     tokio::spawn(async move {
         let secret_pol_info_stream =
             post_initialize::<GatedPolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
-        let mut deliveries = no_deliveries_to_watch(&settings);
         run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
@@ -2403,7 +2402,7 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
                 current_public_info,
             ),
             pending_transactions,
-            &mut deliveries,
+            None,
             current_recovery_checkpoint,
         )
         .await;
@@ -2527,7 +2526,6 @@ async fn the_previous_epoch_keeps_releasing_under_its_own_epoch() {
     tokio::spawn(async move {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
-        let mut deliveries = no_deliveries_to_watch(&settings);
         run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
@@ -2544,7 +2542,7 @@ async fn the_previous_epoch_keeps_releasing_under_its_own_epoch() {
                 current_public_info,
             ),
             pending_transactions,
-            &mut deliveries,
+            None,
             current_recovery_checkpoint,
         )
         .await;
@@ -2671,7 +2669,6 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
     tokio::spawn(async move {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
-        let mut deliveries = no_deliveries_to_watch(&settings);
         run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
@@ -2688,7 +2685,7 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
                 current_public_info,
             ),
             pending_transactions,
-            &mut deliveries,
+            None,
             current_recovery_checkpoint,
         )
         .await;
@@ -2802,7 +2799,6 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
     tokio::spawn(async move {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
-        let mut deliveries = no_deliveries_to_watch(&settings);
         run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
@@ -2819,7 +2815,7 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
                 current_public_info,
             ),
             pending_transactions,
-            &mut deliveries,
+            None,
             current_recovery_checkpoint,
         )
         .await;

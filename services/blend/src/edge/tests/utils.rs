@@ -32,7 +32,7 @@ use crate::{
     },
     epoch_info::PolInfoProvider,
     message::ServiceMessage,
-    settings::TimingSettings,
+    settings::{TimingSettings, max_data_message_delay_in_rounds},
     test_utils::{
         crypto::mock_blend_proof,
         dispatcher::{TestBroadcastingChannel, TestPayloadDispatcher},
@@ -51,13 +51,12 @@ const TEST_BLEND_LAYERS: NonZeroU64 = NonZeroU64::new(1).unwrap();
 /// `∆max` for the tests: the rounds a blend node may hold a message for.
 const TEST_MAX_BLEND_DELAY: NonZeroU64 = NonZeroU64::new(5).unwrap();
 
-/// `T_D` for the tests, in rounds — derived from the two above exactly as the
-/// service derives it, so the two cannot drift apart.
+/// `T_D` for the tests, in rounds: the very derivation the service makes from
+/// the two settings above, so the tests wait exactly as long as the code they
+/// exercise and the two cannot drift apart. Pick a different deadline by
+/// changing one of those, never by restating this.
 pub const TEST_DELIVERY_DEADLINE: NonZeroU64 =
-    match NonZeroU64::new(TEST_BLEND_LAYERS.get() * (TEST_MAX_BLEND_DELAY.get() + 1)) {
-        Some(deadline) => deadline,
-        None => unreachable!(),
-    };
+    max_data_message_delay_in_rounds(TEST_BLEND_LAYERS, TEST_MAX_BLEND_DELAY);
 
 pub struct MockLeaderProofsGenerator;
 

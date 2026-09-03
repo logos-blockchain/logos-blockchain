@@ -64,12 +64,11 @@ use crate::{
         state::RecoveryServiceState,
         tests::RuntimeServiceId,
     },
-    delivery::DeliveryLogic,
     epoch::CoreEpochPublicInfo,
     message::{BlendPayload, NetworkInfo},
     settings::TimingSettings,
     test_utils,
-    test_utils::parked::{TestChainNetworkService, TestMempoolService},
+    test_utils::mocks::{TestChainNetworkService, TestMempoolService},
 };
 
 pub type NodeId = [u8; 32];
@@ -340,22 +339,6 @@ where
     async fn observe_broadcasts(&self) -> BoxStream<'static, BlendPayload> {
         stream::empty().boxed()
     }
-}
-
-/// A delivery tracker for a test that is not about the direct broadcast: it
-/// watches a broadcasting channel nothing ever appears on, so nothing this node
-/// releases is ever seen delivered.
-///
-/// That is deliberately the pessimistic case, and it is still quiet: the
-/// deadline is the one [`settings`] implies, of rounds a second long, and no
-/// test here runs long enough to reach it.
-#[must_use]
-pub fn no_deliveries_to_watch(settings: &BlendConfig<()>) -> DeliveryLogic {
-    DeliveryLogic::watching(
-        settings.max_data_message_delay_in_rounds(),
-        settings.time.round_duration,
-        stream::empty().boxed(),
-    )
 }
 
 pub struct TestNetworkBackend {

@@ -622,14 +622,14 @@ async fn secret_pol_info_arriving_keeps_queued_proposals() {
 
     // The path the secret-`PoL` arm takes, which is not an epoch change: it
     // rebuilds the handler and must leave everything else this epoch owns.
-    let mut current_epoch = current_epoch.with_secret_info(
+    let current_epoch = current_epoch.with_secret_info(
         test_pol_epoch_info(Epoch::new(1)),
         settings,
         overwatch_handle(),
     );
 
     assert_eq!(
-        next_local_message(current_epoch.proposals_mut(), &PendingTransactions::new()),
+        next_local_message(current_epoch.proposals(), &PendingTransactions::new()),
         Some(NextLocalMessage::ProposalCopy(b"proposal")),
         "a proposal waiting for this epoch's leadership proofs must survive them arriving"
     );

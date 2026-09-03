@@ -44,7 +44,7 @@ use tracing::{debug, error, info};
 
 use crate::{
     core::dispatcher::PayloadDispatcher,
-    delivery::{DeliveryLogic, broadcast_undelivered_payloads},
+    delivery::{FailureDetector, broadcast_undelivered_messages, next_undelivered_messages},
     edge::{current_epoch::CurrentEpoch, handlers::Error, settings::RunningBlendConfig},
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     kms::PreloadKmsService,
@@ -195,10 +195,6 @@ where
         )
         .await?;
 
-        // An edge node holds no connections into the Blend network and sees none of
-        // its traffic, so the broadcasting channel is the only thing it can watch —
-        // and the only way it has of putting a payload the network dropped where the
-        // chain will still see it.
         let payload_dispatcher = {
             let network_relay = overwatch_handle
                 .relay::<NetworkService<Dispatcher::Backend, _>>()
@@ -373,18 +369,16 @@ where
         };
     let mut pending_transactions = PendingTransactions::new();
 
-    // What this node has handed to the Blend network and not seen come out of it.
-    // An edge node reaches the same verdict as a core node and reacts the same way,
-    // only later: it sees none of the network's traffic, so the deadline is all it
-    // has.
-    let mut deliveries = if settings.blend_failure_fallback {
-        DeliveryLogic::watching(
+    // `None` when the operator has turned the fallback off, which records
+    // nothing, watches nothing and can reveal nothing.
+    let mut failure_detection = if settings.blend_failure_fallback {
+        Some(FailureDetector::new(
             settings.max_data_message_delay_in_rounds(),
             settings.time.round_duration,
             payload_dispatcher.observe_broadcasts().await,
-        )
+        ))
     } else {
-        DeliveryLogic::blended()
+        None
     };
 
     loop {
@@ -406,8 +400,8 @@ where
                     Ok(next) => current_epoch = next.with_available_secret_info(&mut current_secret_epoch_info, settings.clone(), overwatch_handle.clone()),
                 }
             }
-            Some(undelivered) = deliveries.next() => {
-                broadcast_undelivered_payloads(undelivered.into_iter(), &payload_dispatcher).await;
+            Some(undelivered_messages) = next_undelivered_messages(failure_detection.as_mut()) => {
+                broadcast_undelivered_messages(undelivered_messages.into_iter(), &payload_dispatcher).await;
             }
             Some(new_secret_pol_info) = secret_pol_info_stream.next() => {
                 current_secret_epoch_info = Some(new_secret_pol_info);
@@ -441,16 +435,15 @@ where
                 match encapsulation_result {
                     EncapsulationResult::Complete(encapsulation) => {
                         let LocalEncapsulation { message, kind } = *encapsulation;
-                        // An edge node releases what it encapsulates, there and then, so
-                        // the payload it carries is claimed from the queue that still
-                        // holds it and the deadline starts on the spot.
                         let payload = match kind {
-                            MessageKind::Proposal => current_epoch.proposals_mut().head().map(|proposal| BlendPayload::BlockProposal(proposal.to_vec())),
+                            MessageKind::Proposal => current_epoch.proposals().head().map(|proposal| BlendPayload::BlockProposal(proposal.to_vec())),
                             MessageKind::Transaction => pending_transactions.head().map(|transaction| BlendPayload::Transaction(transaction.to_vec())),
                         }
                         .expect("A message was encapsulated, so the payload it carries is queued.");
                         current_epoch.send(message).await;
-                        deliveries.mark_payload_as_released(payload);
+                        if let Some(failure_detection) = failure_detection.as_mut() {
+                            failure_detection.mark_payload_as_blended(payload);
+                        }
                         match kind {
                             MessageKind::Proposal => current_epoch.proposals_mut().mark_copy_as_sent(),
                             MessageKind::Transaction => drop(pending_transactions.mark_as_sent()),

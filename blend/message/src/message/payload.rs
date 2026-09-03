@@ -1,5 +1,3 @@
-use core::fmt::{self, Display, Formatter};
-
 use lb_blend_crypto::fill_random_bytes;
 use lb_codec::{BinaryDecode, BinaryEncode, DecodeError, take};
 use serde::{Deserialize, Serialize};
