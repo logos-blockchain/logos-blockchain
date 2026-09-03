@@ -37,7 +37,7 @@ use crate::{
 pub mod utils;
 
 /// [`run`] forwards messages to the core nodes in the updated membership.
-#[test_log::test(tokio::test)]
+#[test_log::test(tokio::test(start_paused = true))]
 #[ignore = "We need a different test setup since we are not blocking the edge tokio task until the secret PoL info is fetched, which makes this test flaky."]
 async fn run_with_epoch_transition() {
     let local_node = NodeId(99);
@@ -91,7 +91,7 @@ async fn run_with_epoch_transition() {
 /// traffic, so the deadline is the only thing that tells it anything — and what
 /// it does at the deadline is what a core node does, since a block that never
 /// reaches the broadcasting channel is a slot the chain loses either way.
-#[test_log::test(tokio::test)]
+#[test_log::test(tokio::test(start_paused = true))]
 async fn a_proposal_the_network_never_delivers_is_broadcast_in_the_clear() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
@@ -130,7 +130,7 @@ async fn a_proposal_the_network_never_delivers_is_broadcast_in_the_clear() {
 
 /// [`run`] leaves a proposal alone once it has seen it on the broadcasting
 /// channel, however it got there.
-#[test_log::test(tokio::test)]
+#[test_log::test(tokio::test(start_paused = true))]
 async fn a_proposal_the_network_delivers_is_never_broadcast_in_the_clear() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
@@ -170,7 +170,7 @@ async fn a_proposal_the_network_delivers_is_never_broadcast_in_the_clear() {
 
 /// An operator that turns the direct broadcast off keeps the node unlinkable to
 /// every payload it sends, and loses the slots the Blend network drops.
-#[test_log::test(tokio::test)]
+#[test_log::test(tokio::test(start_paused = true))]
 async fn a_node_that_does_not_bypass_never_broadcasts_in_the_clear() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
@@ -208,7 +208,7 @@ async fn a_node_that_does_not_bypass_never_broadcasts_in_the_clear() {
 
 /// A transaction is watched for through the mempool exactly as a proposal is
 /// watched for on the chain's topic.
-#[test_log::test(tokio::test)]
+#[test_log::test(tokio::test(start_paused = true))]
 async fn a_transaction_the_network_never_delivers_is_broadcast_in_the_clear() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
@@ -246,7 +246,7 @@ async fn a_transaction_the_network_never_delivers_is_broadcast_in_the_clear() {
 /// secret `PoL` info does is not dropped: it waits in the queue until there is
 /// a message handler to encapsulate it, which is the same queue that keeps the
 /// puzzle search off the event loop.
-#[test_log::test(tokio::test)]
+#[test_log::test(tokio::test(start_paused = true))]
 async fn run_blends_a_transaction() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
@@ -275,7 +275,7 @@ async fn run_blends_a_transaction() {
 
 /// [`run`] shuts down gracefully if a new membership is smaller than the
 /// minimum network size.
-#[test_log::test(tokio::test)]
+#[test_log::test(tokio::test(start_paused = true))]
 async fn run_shuts_down_if_new_membership_is_small() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
@@ -300,7 +300,7 @@ async fn run_shuts_down_if_new_membership_is_small() {
 }
 
 /// [`run`] fails if the local node is not edge in a new membership.
-#[test_log::test(tokio::test)]
+#[test_log::test(tokio::test(start_paused = true))]
 async fn run_fails_if_local_is_core_in_new_membership() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
@@ -343,7 +343,7 @@ fn test_pol_epoch_info(epoch: Epoch) -> PolEpochInfo {
 
 /// `handle_new_epoch_event` creates a new message handler with the provided
 /// epoch's public and private inputs, and replaces it on the next epoch.
-#[test_log::test(tokio::test)]
+#[test_log::test(tokio::test(start_paused = true))]
 async fn handle_new_secret_epoch_info_recreates_handler() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
@@ -391,7 +391,7 @@ fn test_blend_epoch_state(epoch: Epoch, membership: Membership<NodeId>) -> Blend
 /// Two consecutive public epoch infos with no private in between (e.g. the
 /// node had no winning slot in the first epoch). The handler must stay down
 /// as long as no secret `PoL` info is available.
-#[test_log::test(tokio::test)]
+#[test_log::test(tokio::test(start_paused = true))]
 async fn two_publics_without_private_in_between() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
@@ -427,7 +427,7 @@ async fn two_publics_without_private_in_between() {
 
 /// Public arrives first, then private for the same epoch: handler is created
 /// on the second call once both sides line up on the same epoch.
-#[test_log::test(tokio::test)]
+#[test_log::test(tokio::test(start_paused = true))]
 async fn public_then_private_same_epoch_creates_handler() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
@@ -455,7 +455,7 @@ async fn public_then_private_same_epoch_creates_handler() {
 
 /// Secret arrives for an epoch ahead of the current public (mismatch), then
 /// public catches up to the same epoch: handler is created on the match.
-#[test_log::test(tokio::test)]
+#[test_log::test(tokio::test(start_paused = true))]
 async fn private_then_public_same_epoch_creates_handler() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
@@ -503,7 +503,7 @@ async fn private_then_public_same_epoch_creates_handler() {
 /// visibly at startup, when the node wins the very first slot it is asked to
 /// lead. The proposal used to be dropped with a warning in that window,
 /// silently losing a block this node had just produced.
-#[test_log::test(tokio::test)]
+#[test_log::test(tokio::test(start_paused = true))]
 async fn a_proposal_arriving_before_the_pol_info_is_still_blended() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
@@ -562,7 +562,7 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_blended() {
 /// The head of the queue is retried before anything else is looked at, so one
 /// that keeps failing — a payload too large to fit, which will not shrink by
 /// waiting — would take the whole queue down with it.
-#[test_log::test(tokio::test)]
+#[test_log::test(tokio::test(start_paused = true))]
 async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
@@ -605,7 +605,7 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
 /// This is the window the queue exists for: a proposal that landed before this
 /// epoch's leadership proofs were possible is waiting for exactly this event.
 /// Discarding here would put back the bug the queue removes.
-#[test_log::test(tokio::test)]
+#[test_log::test(tokio::test(start_paused = true))]
 async fn secret_pol_info_arriving_keeps_queued_proposals() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
@@ -642,7 +642,7 @@ async fn secret_pol_info_arriving_keeps_queued_proposals() {
 /// looking at which epoch the info named, so learning about the next epoch
 /// early stopped this node blending for the current one until the public info
 /// caught up. Nothing about a future epoch says anything about this one.
-#[test_log::test(tokio::test)]
+#[test_log::test(tokio::test(start_paused = true))]
 async fn secret_pol_info_for_another_epoch_leaves_this_one_alone() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);

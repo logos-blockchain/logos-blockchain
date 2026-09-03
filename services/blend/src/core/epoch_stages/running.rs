@@ -212,8 +212,6 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier, Rng>
         )
     }
 
-    /// The epoch being drained, for a caller that has to name it once it is
-    /// finished with.
     pub const fn previous_epoch(&self) -> Epoch {
         self.previous.epoch()
     }

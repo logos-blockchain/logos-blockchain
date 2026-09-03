@@ -69,23 +69,23 @@ impl FailureDetector {
         }
     }
 
-    /// Drops the block proposals an expiring epoch leaves behind.
-    pub fn drop_proposals_for_epoch(&mut self, expiring: Epoch) {
+    /// When the transition period for an old epoch ends, any pending block
+    /// proposals are discarded. This function allows the caller to clear the
+    /// queue of proposals that have been encapsulated but not yet released for
+    /// such epochs.
+    pub fn drop_unreleased_payloads_for_epoch(&mut self, expiring: Epoch) {
         let before = self.encapsulated.len();
-        self.encapsulated.retain(|_, (epoch, payload)| {
-            *epoch != expiring || !matches!(payload, BlendPayload::BlockProposal(_))
-        });
+        self.encapsulated.retain(|_, (epoch, _)| *epoch != expiring);
         let dropped = before.checked_sub(self.encapsulated.len()).unwrap();
         if dropped > 0 {
             tracing::debug!(
                 target: LOG_TARGET,
-                "Dropping the payloads of {dropped} block proposal(s) that epoch {expiring:?} never released."
+                "Epoch {expiring:?} ended without releasing {dropped} locally-generated message(s). No need to monitor as they will never be broadcasted."
             );
         }
     }
 
     /// How many payloads are waiting for the Blend network to deliver them.
-    #[cfg(test)]
     #[must_use]
     pub fn outstanding_payloads_count(&self) -> usize {
         self.inner.outstanding_payloads_count()
@@ -194,22 +194,62 @@ mod tests {
         );
     }
 
+    /// A message that expires with its epoch never reached a peer, so there is
+    /// no delivery to have failed and nothing to answer for in the clear.
     #[tokio::test(start_paused = true)]
-    async fn an_expiring_epoch_takes_its_proposals_and_leaves_its_transactions() {
+    async fn an_expiring_epoch_drops_what_it_never_released() {
+        let (mut detection, start, _channel) = new_failure_monitor();
+        detection.mark_payload_as_encapsulated(id(1), proposal(), Epoch::new(0));
+        detection.mark_payload_as_encapsulated(id(2), transaction(), Epoch::new(0));
+
+        detection.drop_unreleased_payloads_for_epoch(Epoch::new(0));
+
+        assert_eq!(detection.outstanding_payloads_count(), 0);
+        assert!(
+            until(&mut detection, start, DEADLINE.get() + 2)
+                .await
+                .is_empty(),
+            "a payload no peer ever saw must not be revealed by the fallback"
+        );
+    }
+
+    /// Nothing of the expiring epoch may be left in the map: its scheduler is
+    /// gone, so the release that would claim the entry can no longer happen and
+    /// the entry would sit there for the life of the process.
+    #[tokio::test(start_paused = true)]
+    async fn an_expiring_epoch_leaves_nothing_that_can_never_be_claimed() {
         let (mut detection, ..) = new_failure_monitor();
         detection.mark_payload_as_encapsulated(id(1), proposal(), Epoch::new(0));
         detection.mark_payload_as_encapsulated(id(2), transaction(), Epoch::new(0));
-        detection.mark_payload_as_encapsulated(id(3), proposal(), Epoch::new(1));
 
-        detection.drop_proposals_for_epoch(Epoch::new(0));
-        for released in [id(1), id(2), id(3)] {
+        detection.drop_unreleased_payloads_for_epoch(Epoch::new(0));
+        detection.drop_unreleased_payloads_for_epoch(Epoch::new(0));
+
+        for released in [id(1), id(2)] {
             detection.mark_encapsulated_payload_as_released(released);
         }
-
         assert_eq!(
             detection.outstanding_payloads_count(),
-            2,
-            "the expiring epoch's proposal is gone, its transaction and the next epoch's proposal are not"
+            0,
+            "the entries are gone, and a release that arrives late finds nothing to start a deadline for"
+        );
+    }
+
+    /// The epoch still running keeps what it has: its scheduler is alive and
+    /// those messages are still going out.
+    #[tokio::test(start_paused = true)]
+    async fn an_expiring_epoch_leaves_the_current_one_alone() {
+        let (mut detection, ..) = new_failure_monitor();
+        detection.mark_payload_as_encapsulated(id(1), proposal(), Epoch::new(1));
+
+        detection.drop_unreleased_payloads_for_epoch(Epoch::new(0));
+
+        assert_eq!(detection.outstanding_payloads_count(), 0);
+        detection.mark_encapsulated_payload_as_released(id(1));
+        assert_eq!(
+            detection.outstanding_payloads_count(),
+            1,
+            "the current epoch's message still goes out, and its deadline starts when it does"
         );
     }
 }

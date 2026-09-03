@@ -8,7 +8,9 @@ use lb_utils::math::PositiveF64;
 use rayon::ThreadPool;
 use serde::{Deserialize, Serialize};
 
-use crate::settings::{TimingSettings, max_data_message_delay_in_rounds};
+use crate::settings::{
+    TimingSettings, max_data_message_delay_in_rounds, round_duration_in_seconds,
+};
 
 #[derive(Clone, Debug)]
 pub struct StartingBlendConfig<BackendSettings, NetworkSettings> {
@@ -92,6 +94,7 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
         max_data_message_delay_in_rounds(
             self.num_blend_layers,
             self.scheduler.delayer.maximum_release_delay_in_rounds,
+            round_duration_in_seconds(self.time.round_duration),
         )
     }
 }

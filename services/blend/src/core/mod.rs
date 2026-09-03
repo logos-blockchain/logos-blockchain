@@ -1191,11 +1191,11 @@ where
                     // The epoch being drained is finished with, but this one is
                     // not: `end_transition` keeps it whole, proposals and all.
                     EpochEvent::TransitionPeriodExpired => {
-                        // Past its transition period the drained epoch has no peers
-                        // left that would accept what it releases, so whatever of it
-                        // was still queued is never going out.
+                        // Its scheduler is about to go, so whatever that epoch
+                        // encapsulated and never released can no longer be sent
+                        // and is nothing left to wait on.
                         if let Some(failure_detector) = failure_detector.as_deref_mut() {
-                            failure_detector.drop_proposals_for_epoch(during_transition.previous_epoch());
+                            failure_detector.drop_unreleased_payloads_for_epoch(during_transition.previous_epoch());
                         }
                         return StageOutcome::NewEpoch {
                             next: during_transition.end_transition().into(),
@@ -1636,16 +1636,39 @@ async fn retire<
                 broadcast_undelivered_messages(undelivered.into_iter(), &payload_dispatcher).await;
             }
             Some(EpochEvent::TransitionPeriodExpired) = remaining_epoch_stream.next() => {
+                // Its scheduler is about to go, so whatever that epoch
+                // encapsulated and never released can no longer be sent
+                // and is nothing left to wait on.
                 if let Some(failure_detector) = failure_detector.as_deref_mut() {
-                    failure_detector.drop_proposals_for_epoch(epoch);
+                    failure_detector.drop_unreleased_payloads_for_epoch(epoch);
                 }
                 handle_epoch_transition_expired(&mut backend, retiring_epoch.into_tokens(), &sdp_relay).await;
                 // Now the core service is no longer needed for the current (new) epoch,
                 // and the remaining epoch transition has been completed,
-                // so finishing the retirement process.
-                return;
+                // so finishing the retirement process — bar the deadlines this
+                // epoch's own releases are still owed.
+                return acknowledge_pending_messages(failure_detector, &payload_dispatcher).await;
             }
         }
+    }
+}
+
+/// Waits out the delivery deadlines of whatever this node released and has not
+/// seen come out of the Blend network, broadcasting in the clear each payload
+/// whose deadline expires.
+async fn acknowledge_pending_messages<Dispatcher, RuntimeServiceId>(
+    failure_detector: Option<&mut FailureDetector>,
+    payload_dispatcher: &Dispatcher,
+) where
+    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
+{
+    let Some(failure_detector) = failure_detector else {
+        return;
+    };
+    while failure_detector.outstanding_payloads_count() > 0
+        && let Some(undelivered) = failure_detector.next().await
+    {
+        broadcast_undelivered_messages(undelivered.into_iter(), payload_dispatcher).await;
     }
 }
 
@@ -1992,8 +2015,8 @@ where
     ProofsVerifier: ProofsVerifierTrait,
 {
     let mut state_updater = current_recovery_checkpoint.start_updating();
-    // The epoch this message was built under, and the one whose end takes it
-    // with it if it is never released.
+    // The epoch this message is built under, and the one whose end takes it with
+    // it if it is never released.
     let epoch = cryptographic_processor.epoch();
 
     // Before blending the data message, we try to peel off any outer layers that

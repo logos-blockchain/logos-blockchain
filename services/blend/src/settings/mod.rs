@@ -1,4 +1,4 @@
-use ::core::num::NonZeroU64;
+use ::core::{num::NonZeroU64, time::Duration};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -110,14 +110,31 @@ impl<CoreBackendSettings, EdgeBackendSettings, BroadcastSettings>
 }
 
 #[must_use]
+pub const fn round_duration_in_seconds(round_duration: Duration) -> NonZeroU64 {
+    match NonZeroU64::new(round_duration.as_secs()) {
+        Some(seconds) => seconds,
+        None => panic!("Round duration must be at least one second."),
+    }
+}
+
+#[must_use]
 pub const fn max_data_message_delay_in_rounds(
     num_blend_layers: NonZeroU64,
     max_blend_delay_in_rounds: NonZeroU64,
+    round_duration_in_seconds: NonZeroU64,
 ) -> NonZeroU64 {
+    let dissemination_delay_in_rounds = Duration::from_secs(1)
+        .as_secs()
+        .div_ceil(round_duration_in_seconds.get());
     match NonZeroU64::new(
         num_blend_layers
             .get()
-            .saturating_mul(max_blend_delay_in_rounds.get().saturating_add(1)),
+            .saturating_mul(
+                max_blend_delay_in_rounds
+                    .get()
+                    .saturating_add(dissemination_delay_in_rounds),
+            )
+            .saturating_add(dissemination_delay_in_rounds),
     ) {
         Some(delay) => delay,
         // Not `expect`, to keep this a `const fn`.

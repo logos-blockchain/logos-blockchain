@@ -2130,10 +2130,12 @@ async fn test_initialize_drops_activity_proof_older_than_one_epoch() {
     );
 }
 
-/// A round short enough that a test can wait out a whole delivery deadline
-/// without being slow: the deadline is a count of rounds, and the tests here
-/// have to sit through several of them.
-const FAST_ROUND: Duration = Duration::from_millis(20);
+/// The round the fallback tests run on, which is the shortest a deployment may
+/// use.
+///
+/// Sitting through a whole delivery deadline costs them nothing: they run on a
+/// paused clock, which jumps to the next timer the moment every task is idle.
+const FALLBACK_TEST_ROUND: Duration = Duration::from_secs(1);
 
 /// Runs the core event loop over a two-node membership, with both sides of
 /// Blend's exit door in the test's hands.
@@ -2158,8 +2160,8 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
     // See the `PoW` liveness test for why this quota silences it.
     settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
     settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
-    settings.time.round_duration = FAST_ROUND;
-    let deadline = FAST_ROUND
+    settings.time.round_duration = FALLBACK_TEST_ROUND;
+    let deadline = FALLBACK_TEST_ROUND
         * u32::try_from(settings.max_data_message_delay_in_rounds().get())
             .expect("The test deadline is a handful of rounds.");
 
@@ -2250,13 +2252,13 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
 
 /// Long enough that reaching it means the assertion has already failed.
 fn past(deadline: Duration) -> Duration {
-    deadline + FAST_ROUND * 4
+    deadline + FALLBACK_TEST_ROUND * 4
 }
 
 /// A core node reacts to a delivery failure exactly as an edge node does: at
 /// the delivery deadline it puts the proposal on the broadcasting channel
 /// itself.
-#[test_log::test(tokio::test)]
+#[test_log::test(tokio::test(start_paused = true))]
 async fn a_proposal_the_network_never_delivers_is_broadcast_in_the_clear() {
     let proposal = b"proposal".to_vec();
     let (inbound_message_sender, mut broadcasting_channel, deadline) =
@@ -2278,7 +2280,7 @@ async fn a_proposal_the_network_never_delivers_is_broadcast_in_the_clear() {
 
 /// Seeing the proposal come out of the Blend network is what cancels the direct
 /// broadcast, and it does not matter whose exit node put it there.
-#[test_log::test(tokio::test)]
+#[test_log::test(tokio::test(start_paused = true))]
 async fn a_proposal_the_network_delivers_is_never_broadcast_in_the_clear() {
     let proposal = b"proposal".to_vec();
     let (inbound_message_sender, mut broadcasting_channel, deadline) =

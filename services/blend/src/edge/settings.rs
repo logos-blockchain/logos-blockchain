@@ -7,7 +7,7 @@ use rayon::ThreadPool;
 
 use crate::{
     core::settings::CoverTrafficSettings,
-    settings::{TimingSettings, max_data_message_delay_in_rounds},
+    settings::{TimingSettings, max_data_message_delay_in_rounds, round_duration_in_seconds},
 };
 
 #[derive(Clone, Debug)]
@@ -67,6 +67,10 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
 
     #[must_use]
     pub const fn max_data_message_delay_in_rounds(&self) -> NonZeroU64 {
-        max_data_message_delay_in_rounds(self.num_blend_layers, self.max_blend_delay_in_rounds)
+        max_data_message_delay_in_rounds(
+            self.num_blend_layers,
+            self.max_blend_delay_in_rounds,
+            round_duration_in_seconds(self.time.round_duration),
+        )
     }
 }

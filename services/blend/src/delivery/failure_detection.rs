@@ -23,7 +23,7 @@ pub struct FailureDetector {
     current_round: Round,
     payload_broadcasts: Fuse<BoxStream<'static, BlendPayload>>,
     /// Messages sent out via Blend but not yet observed in the broadcasting
-    /// channel.
+    /// channel, each against the round it was last released in.
     unacknowledged_blended_payloads: HashMap<BlendPayload, Round>,
 }
 
@@ -66,13 +66,12 @@ impl FailureDetector {
                     .inner()
                     .checked_add(u128::from(self.maximum_blending_delay.get()))
                     .expect("Round calculation overflow.")
-                    <= now.inner()
+                    < now.inner()
             });
         self.unacknowledged_blended_payloads = still_waiting;
         expired.into_keys().collect()
     }
 
-    #[cfg(test)]
     #[must_use]
     pub fn outstanding_payloads_count(&self) -> usize {
         self.unacknowledged_blended_payloads.len()
@@ -160,6 +159,33 @@ mod tests {
             detection.outstanding_payloads_count(),
             0,
             "it is broadcast exactly once"
+        );
+    }
+
+    /// The deadline is a count of rounds, but what it owes a payload is a
+    /// duration, and a payload is recorded against the round already in
+    /// progress. Counting from that round number alone would spend whatever of
+    /// it had already elapsed before the payload was ever released.
+    #[tokio::test(start_paused = true)]
+    async fn a_payload_is_never_revealed_before_its_full_deadline_has_elapsed() {
+        let (mut detection, start, _channel) = watching();
+        // Half a round in: the worst case for a count of rounds, and the case an
+        // inclusive comparison against the round number gets wrong.
+        let released_at = start + ROUND * 2 + ROUND / 2;
+        let _turned = until(&mut detection, start, 2).await;
+        tokio::time::sleep_until(released_at).await;
+        detection.mark_payload_as_blended(proposal());
+
+        let rounds = u32::try_from(DEADLINE.get()).expect("The deadline is a few rounds.");
+        let expired = tokio::time::timeout(ROUND * (rounds + 3), detection.next())
+            .await
+            .expect("the deadline must expire eventually")
+            .expect("an interval never ends, so neither does the detector");
+
+        assert_eq!(expired, vec![proposal()]);
+        assert!(
+            released_at.elapsed() >= ROUND * rounds,
+            "revealing a proposal before the network has had its full deadline is the one thing the deadline exists to prevent"
         );
     }
 
