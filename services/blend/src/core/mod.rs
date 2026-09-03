@@ -101,7 +101,9 @@ use crate::{
         settings::{RunningBlendConfig, StartingBlendConfig},
         state::{RecoveryServiceState, ServiceState, StateUpdater as ServiceStateUpdater},
     },
-    delivery::{broadcast_undelivered_messages, next_undelivered_messages},
+    delivery::{
+        acknowledge_pending_messages, broadcast_undelivered_messages, next_undelivered_messages,
+    },
     epoch::{CoreEpochInfo, CoreEpochPublicInfo, MaybeEmptyCoreEpochInfo},
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     kms::PreloadKmsService,
@@ -1650,25 +1652,6 @@ async fn retire<
                 return acknowledge_pending_messages(failure_detector, &payload_dispatcher).await;
             }
         }
-    }
-}
-
-/// Waits out the delivery deadlines of whatever this node released and has not
-/// seen come out of the Blend network, broadcasting in the clear each payload
-/// whose deadline expires.
-async fn acknowledge_pending_messages<Dispatcher, RuntimeServiceId>(
-    failure_detector: Option<&mut FailureDetector>,
-    payload_dispatcher: &Dispatcher,
-) where
-    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
-{
-    let Some(failure_detector) = failure_detector else {
-        return;
-    };
-    while failure_detector.outstanding_payloads_count() > 0
-        && let Some(undelivered) = failure_detector.next().await
-    {
-        broadcast_undelivered_messages(undelivered.into_iter(), payload_dispatcher).await;
     }
 }
 

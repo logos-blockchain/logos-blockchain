@@ -44,7 +44,10 @@ use tracing::{debug, error, info};
 
 use crate::{
     core::dispatcher::PayloadDispatcher,
-    delivery::{FailureDetector, broadcast_undelivered_messages, next_undelivered_messages},
+    delivery::{
+        FailureDetector, acknowledge_pending_messages, broadcast_undelivered_messages,
+        next_undelivered_messages,
+    },
     edge::{current_epoch::CurrentEpoch, handlers::Error, settings::RunningBlendConfig},
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     kms::PreloadKmsService,
@@ -387,10 +390,12 @@ where
                 match CurrentEpoch::try_new(new_public_epoch_info, &settings) {
                     Err(Error::NetworkIsTooSmall(_)) => {
                         info!(target: LOG_TARGET, "New membership does not satisfy edge node condition, edge service shutting down.");
+                        acknowledge_pending_messages(failure_detection.as_mut(), &payload_dispatcher).await;
                         return Ok(());
                     }
                     Err(e) => {
                         error!(target: LOG_TARGET, "Error when handling new public epoch: {e:?}, edge service shutting down.");
+                        acknowledge_pending_messages(failure_detection.as_mut(), &payload_dispatcher).await;
                         return Err(e);
                     }
                     // The epoch this replaces takes its queued proposals with
@@ -460,6 +465,7 @@ where
                 // All input streams have terminated (e.g. disorderly shutdown).
                 // Exit cleanly instead of letting `select!` panic.
                 debug!(target: LOG_TARGET, "All input streams terminated, edge service shutting down.");
+                acknowledge_pending_messages(failure_detection.as_mut(), &payload_dispatcher).await;
                 return Ok(());
             }
         }

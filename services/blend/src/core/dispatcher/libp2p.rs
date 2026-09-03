@@ -257,10 +257,21 @@ where
     }
 
     async fn observe_broadcasts(&self) -> BoxStream<'static, BlendPayload> {
+        let proposals_stream =
+            stream::once(observe_block_proposals(self.chain_network_relay.clone())).flatten();
+        let transactions_stream =
+            stream::once(observe_transactions(self.mempool_relay.clone())).flatten();
+
+        // Each half is followed by a `None` marking its end, so that whichever ends
+        // first stops the merge rather than merely dropping out of it.
         stream::select(
-            stream::once(observe_block_proposals(self.chain_network_relay.clone())).flatten(),
-            stream::once(observe_transactions(self.mempool_relay.clone())).flatten(),
+            proposals_stream.map(Some).chain(stream::once(ready(None))),
+            transactions_stream
+                .map(Some)
+                .chain(stream::once(ready(None))),
         )
+        .take_while(|observed| ready(observed.is_some()))
+        .map(|observed| observed.expect("`take_while` stops at the first end marker."))
         .boxed()
     }
 }
