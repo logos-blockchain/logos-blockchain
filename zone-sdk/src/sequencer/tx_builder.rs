@@ -254,9 +254,8 @@ pub(super) fn assemble_channel_config_tx(
         transfer_proof,
     )?;
 
-    SignedOps::from_parts(config_tx, ops_proofs).map_err(|error| {
-        Error::Network(format!("failed to assemble channel config tx: {error:?}"))
-    })
+    SignedOps::from_parts(config_tx, ops_proofs)
+        .map_err(|error| Error::Network(format!("failed to assemble channel config tx: {error:?}")))
 }
 
 /// Build, fund, and single-signer-sign a `ChannelConfig` transaction.
