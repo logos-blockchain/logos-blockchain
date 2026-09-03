@@ -1,4 +1,5 @@
 use core::{
+    future::poll_fn,
     mem::take,
     num::NonZeroU64,
     pin::Pin,
@@ -15,16 +16,23 @@ use lb_blend::scheduling::message_scheduler::round_info::Round;
 use tokio::time::{MissedTickBehavior, interval};
 use tokio_stream::wrappers::IntervalStream;
 
-use crate::message::BlendPayload;
+use crate::{
+    LOG_TARGET, core::dispatcher::PayloadDispatcher, delivery::broadcast_undelivered_messages,
+    message::BlendPayload,
+};
+
+struct BlendedPayloadDetails {
+    released_at: Round,
+    broadcasted: bool,
+}
 
 pub struct FailureDetector {
     maximum_blending_delay: NonZeroU64,
     rounds_clock: IntervalStream,
     current_round: Round,
     payload_broadcasts: Fuse<BoxStream<'static, BlendPayload>>,
-    /// Messages sent out via Blend but not yet observed in the broadcasting
-    /// channel, each against the round it was last released in.
-    unacknowledged_blended_payloads: HashMap<BlendPayload, Round>,
+    /// Messages sent out via Blend, up to the round their deadline passes.
+    unacknowledged_blended_payloads: HashMap<BlendPayload, BlendedPayloadDetails>,
 }
 
 impl FailureDetector {
@@ -49,32 +57,78 @@ impl FailureDetector {
     }
 
     pub fn mark_payload_as_blended(&mut self, payload: BlendPayload) {
-        let current_round = self.current_round;
+        let released_at = self.current_round;
         self.unacknowledged_blended_payloads
-            .insert(payload, current_round);
+            .entry(payload)
+            // Overwrite the release time if the payload is blended again (in case of multiple
+            // copies), so that the last copy released is the one whose deadline
+            // decides.
+            .and_modify(|blended| blended.released_at = released_at)
+            .or_insert(BlendedPayloadDetails {
+                released_at,
+                broadcasted: false,
+            });
     }
 
     fn mark_payload_as_delivered(&mut self, payload: &BlendPayload) {
-        self.unacknowledged_blended_payloads.remove(payload);
+        if let Some(blended) = self.unacknowledged_blended_payloads.get_mut(payload) {
+            blended.broadcasted = true;
+        }
     }
 
     fn take_expired_payloads(&mut self, now: Round) -> Vec<BlendPayload> {
-        let (expired, still_waiting) = take(&mut self.unacknowledged_blended_payloads)
-            .into_iter()
-            .partition(|(_, released_at)| {
-                released_at
-                    .inner()
-                    .checked_add(u128::from(self.maximum_blending_delay.get()))
-                    .expect("Round calculation overflow.")
-                    < now.inner()
-            });
+        let (expired, still_waiting): (HashMap<_, _>, HashMap<_, _>) =
+            take(&mut self.unacknowledged_blended_payloads)
+                .into_iter()
+                .partition(|(_, blended)| {
+                    blended
+                        .released_at
+                        .inner()
+                        .checked_add(u128::from(self.maximum_blending_delay.get()))
+                        .expect("Round calculation overflow.")
+                        < now.inner()
+                });
         self.unacknowledged_blended_payloads = still_waiting;
-        expired.into_keys().collect()
+        expired
+            .into_iter()
+            // Only yield the ones that have not already been seen in the meanwhile.
+            .filter_map(|(payload, blended)| (!blended.broadcasted).then_some(payload))
+            .collect()
     }
 
+    #[cfg(test)]
     #[must_use]
     pub fn outstanding_payloads_count(&self) -> usize {
         self.unacknowledged_blended_payloads.len()
+    }
+
+    /// Waits out the delivery deadlines this node still owes, broadcasting in
+    /// the clear each payload whose deadline expires.
+    pub async fn drain_pending_message_queue<Dispatcher, RuntimeServiceId>(
+        mut self,
+        payload_dispatcher: &Dispatcher,
+    ) where
+        Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
+    {
+        loop {
+            let expired = poll_fn(|cx| {
+                if self.unacknowledged_blended_payloads.is_empty() {
+                    return Poll::Ready(None);
+                }
+                match self.poll_next_unpin(cx) {
+                    Poll::Ready(expired) => Poll::Ready(expired),
+                    Poll::Pending if self.unacknowledged_blended_payloads.is_empty() => {
+                        Poll::Ready(None)
+                    }
+                    Poll::Pending => Poll::Pending,
+                }
+            })
+            .await;
+            let Some(undelivered) = expired else {
+                return;
+            };
+            broadcast_undelivered_messages(undelivered.into_iter(), payload_dispatcher).await;
+        }
     }
 }
 
@@ -86,8 +140,18 @@ impl Stream for FailureDetector {
             // Take what the broadcasting channel has for us before looking at the clock,
             // so that a payload delivered in this very round is never the one the same
             // round reveals.
-            while let Poll::Ready(Some(delivered)) = self.payload_broadcasts.poll_next_unpin(cx) {
-                self.mark_payload_as_delivered(&delivered);
+            loop {
+                match self.payload_broadcasts.poll_next_unpin(cx) {
+                    Poll::Pending => break,
+                    Poll::Ready(Some(delivered)) => self.mark_payload_as_delivered(&delivered),
+                    Poll::Ready(None) => {
+                        tracing::error!(
+                            target: LOG_TARGET,
+                            "Lost sight of the broadcasting channel; a delivery can no longer be told from a loss, so the direct broadcast is disabled for the rest of this run."
+                        );
+                        return Poll::Ready(None);
+                    }
+                }
             }
             match self.rounds_clock.poll_next_unpin(cx) {
                 Poll::Pending => return Poll::Pending,
@@ -255,7 +319,9 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_round_in_which_nothing_expires_does_not_wake_the_loop() {
-        let (mut detection, ..) = watching();
+        // The channel is held open: an idle sender is one that can still see the
+        // broadcasting channel, not one that has lost it.
+        let (mut detection, _start, _channel) = watching();
         assert!(
             tokio::time::timeout(ROUND * 40, detection.next())
                 .await
@@ -264,15 +330,48 @@ mod tests {
         );
     }
 
+    /// The broadcasting channel is the only evidence of delivery there is.
+    /// Without it every payload looks lost, so carrying on would answer a
+    /// broken observer by revealing everything this node sends — the
+    /// opposite of what the fallback is for.
     #[tokio::test(start_paused = true)]
-    async fn a_broadcasting_channel_that_ends_does_not_stop_the_deadline() {
+    async fn losing_sight_of_the_broadcasting_channel_stops_the_detection() {
         let mut detection = FailureDetector::new(DEADLINE, ROUND, stream::empty().boxed());
         let start = Instant::now();
         detection.mark_payload_as_blended(proposal());
 
+        assert!(
+            until(&mut detection, start, DEADLINE.get() + 2)
+                .await
+                .is_empty(),
+            "a node that cannot see the channel must not answer that by revealing its own traffic"
+        );
         assert_eq!(
-            until(&mut detection, start, DEADLINE.get() + 2).await,
-            vec![proposal()]
+            detection.next().await,
+            None,
+            "the branch this feeds is disabled outright rather than polled forever"
+        );
+    }
+
+    /// With replication a proposal goes out as two messages, and the second may
+    /// be released after the first has already been seen delivered. Gossipsub
+    /// drops the duplicate, so no second observation is coming to cancel a
+    /// deadline the second release would start.
+    #[tokio::test(start_paused = true)]
+    async fn a_copy_released_after_a_delivery_is_not_revealed() {
+        let (mut detection, start, channel) = watching();
+        detection.mark_payload_as_blended(proposal());
+        channel.send(proposal()).expect("the watch is listening");
+        // Let the delivery land before the second copy goes out.
+        assert!(until(&mut detection, start, 2).await.is_empty());
+
+        detection.mark_payload_as_blended(proposal());
+
+        assert!(
+            until(&mut detection, start, DEADLINE.get() + 4)
+                .await
+                .is_empty(),
+            "the proposal is on the chain; a later copy of it is not a reason to reveal it"
         );
     }
 }

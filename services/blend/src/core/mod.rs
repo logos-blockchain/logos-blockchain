@@ -101,9 +101,7 @@ use crate::{
         settings::{RunningBlendConfig, StartingBlendConfig},
         state::{RecoveryServiceState, ServiceState, StateUpdater as ServiceStateUpdater},
     },
-    delivery::{
-        acknowledge_pending_messages, broadcast_undelivered_messages, next_undelivered_messages,
-    },
+    delivery::{broadcast_undelivered_messages, next_undelivered_messages},
     epoch::{CoreEpochInfo, CoreEpochPublicInfo, MaybeEmptyCoreEpochInfo},
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     kms::PreloadKmsService,
@@ -506,7 +504,7 @@ where
             sdp_relay,
             rng,
             retiring_epoch,
-            failure_detector.as_mut(),
+            failure_detector.take(),
         )
         .await;
 
@@ -1614,7 +1612,7 @@ async fn retire<
     sdp_relay: OutboundRelay<SdpMessage>,
     mut rng: Rng,
     mut retiring_epoch: RetiringEpoch<Rng, ProofsVerifier>,
-    mut failure_detector: Option<&mut FailureDetector>,
+    mut failure_detector: Option<FailureDetector>,
 ) where
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
@@ -1632,16 +1630,16 @@ async fn retire<
                 handle_incoming_blend_message_from_old_epoch(incoming_message, message_scheduler, crypto_processor, blending_token_collector);
             }
             Some(round_info) = retiring_epoch.scheduler_mut().next() => {
-                handle_release_round_for_old_epoch(round_info, &mut rng, &backend, &payload_dispatcher, failure_detector.as_deref_mut(), epoch).await;
+                handle_release_round_for_old_epoch(round_info, &mut rng, &backend, &payload_dispatcher, failure_detector.as_mut(), epoch).await;
             }
-            Some(undelivered) = next_undelivered_messages(failure_detector.as_deref_mut()) => {
+            Some(undelivered) = next_undelivered_messages(failure_detector.as_mut()) => {
                 broadcast_undelivered_messages(undelivered.into_iter(), &payload_dispatcher).await;
             }
             Some(EpochEvent::TransitionPeriodExpired) = remaining_epoch_stream.next() => {
                 // Its scheduler is about to go, so whatever that epoch
                 // encapsulated and never released can no longer be sent
                 // and is nothing left to wait on.
-                if let Some(failure_detector) = failure_detector.as_deref_mut() {
+                if let Some(failure_detector) = failure_detector.as_mut() {
                     failure_detector.drop_unreleased_payloads_for_epoch(epoch);
                 }
                 handle_epoch_transition_expired(&mut backend, retiring_epoch.into_tokens(), &sdp_relay).await;
@@ -1649,7 +1647,12 @@ async fn retire<
                 // and the remaining epoch transition has been completed,
                 // so finishing the retirement process — bar the deadlines this
                 // epoch's own releases are still owed.
-                return acknowledge_pending_messages(failure_detector, &payload_dispatcher).await;
+                if let Some(failure_detector) = failure_detector {
+                    failure_detector
+                        .drain_pending_message_queue(&payload_dispatcher)
+                        .await;
+                }
+                return;
             }
         }
     }

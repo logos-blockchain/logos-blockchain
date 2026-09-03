@@ -11,7 +11,9 @@ use lb_blend::message::MessageIdentifier;
 use lb_chain_service::Epoch;
 
 use crate::{
-    core::LOG_TARGET, delivery::FailureDetector as InnerFailureDetector, message::BlendPayload,
+    core::{LOG_TARGET, dispatcher::PayloadDispatcher},
+    delivery::FailureDetector as InnerFailureDetector,
+    message::BlendPayload,
 };
 
 /// Wrapper around [`crate::delivery::FailureDetector`] that adds support for
@@ -86,9 +88,23 @@ impl FailureDetector {
     }
 
     /// How many payloads are waiting for the Blend network to deliver them.
+    #[cfg(test)]
     #[must_use]
     pub fn outstanding_payloads_count(&self) -> usize {
         self.inner.outstanding_payloads_count()
+    }
+
+    /// See
+    /// [`FailureDetector::drain_pending_message_queue`](InnerFailureDetector::drain_pending_message_queue).
+    pub async fn drain_pending_message_queue<Dispatcher, RuntimeServiceId>(
+        self,
+        payload_dispatcher: &Dispatcher,
+    ) where
+        Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
+    {
+        self.inner
+            .drain_pending_message_queue(payload_dispatcher)
+            .await;
     }
 }
 
