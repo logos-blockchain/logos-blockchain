@@ -19,7 +19,7 @@ use lb_chain_service::{
     api::{ApiError as ChainApiError, CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
-    codec::{Error as CodecError, SerializeOp as _},
+    codec::{Error as CodecError, SerializeOp},
     events::{Event, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
@@ -76,7 +76,7 @@ use tracing::{
     error,
     log::{info, warn},
 };
-use crate::PoWError::SignedOps;
+
 use crate::tickets::{TicketGenerator, WinningTicket};
 
 const LOG_TARGET: &str = pow::ROOT;
@@ -1280,11 +1280,12 @@ fn claim_tx_size(claims: usize) -> Result<u64, PoWError> {
     let note_ids = vec![Utxo::new(claim.op_id(), 0, Note::new(0, claim.public_key)).id(); claims];
     let transfers = transfer_ops(&note_ids, ZkPublicKey::zero(), &vec![0; groups])?;
 
-    let mantle_tx =
-        push_reward_claim_ops(MantleTxBuilder::new(), &probe_claims, transfers)?.build()?;
+    let ops = push_reward_claim_ops(MantleTxBuilder::new(), &probe_claims, transfers)?.build()?;
     let ops_proofs = claim_ops_proofs(claims, std::iter::repeat_n(signature, groups))?;
 
-    Ok(SignedOps::new(mantle_tx, ops_proofs).bytes_size()?)
+    Ok(SerializeOp::bytes_size(
+        &SignedOps::<_, StandardMode>::from_parts(ops, ops_proofs)?,
+    )?)
 }
 
 /// Largest claim count whose transaction still fits the body of a Blend

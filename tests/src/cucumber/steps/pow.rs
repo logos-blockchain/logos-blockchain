@@ -277,8 +277,8 @@ async fn claims_in_transaction(node: &NodeHttpClient, tx_hash: TxHash) -> Result
         |block| {
             let tx = block.transactions.iter().find(|tx| tx.hash() == tx_hash)?;
             Some(
-                tx.ops_with_proof()
-                    .filter(|(op, _proof)| matches!(op, Op::ClaimPowReward(_)))
+                tx.op_refs_iter()
+                    .filter(|op| matches!(op, OpRef::ClaimPowReward(_)))
                     .count(),
             )
         },
