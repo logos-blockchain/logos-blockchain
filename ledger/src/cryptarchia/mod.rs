@@ -1118,7 +1118,7 @@ pub mod tests {
         crate::config::RewardPoWConfig {
             reward_pool_genesis: 1_000_000_000,
             epoch_reward_genesis: 1_000_000,
-            initial_difficulty_seed: 1_000,
+            initial_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
             target_claims_per_block: 100,
