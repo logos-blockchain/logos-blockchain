@@ -1,7 +1,7 @@
 pub mod backends;
 mod current_epoch;
 mod handlers;
-pub mod service_components;
+pub(crate) mod service_components;
 pub mod settings;
 #[cfg(test)]
 mod tests;
@@ -40,19 +40,15 @@ use overwatch::{
 };
 use settings::StartingBlendConfig;
 use tokio::sync::oneshot;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 use crate::{
     core::dispatcher::PayloadDispatcher,
     delivery::{FailureDetector, broadcast_undelivered_messages, next_undelivered_messages},
-    edge::{
-        current_epoch::CurrentEpoch,
-        service_components::{Components, EdgeNetworkSettingsOf},
-        settings::RunningBlendConfig,
-    },
+    edge::{current_epoch::CurrentEpoch, handlers::Error, settings::RunningBlendConfig},
     epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     kms::PreloadKmsService,
-    membership::{self, chain::BlendEpochState, node_id},
+    membership::{self, chain::BlendEpoch, node_id},
     message::{DataPayload, NetworkInfo, ServiceMessage},
     pending::{EncapsulationResult, LocalEncapsulation, MessageKind, PendingTransactions},
 };
@@ -62,65 +58,97 @@ const LOG_TARGET: &str = blend::service::EDGE;
 type RunningSettings<Backend, NodeId, RuntimeServiceId> =
     RunningBlendConfig<<Backend as BlendBackend<NodeId, RuntimeServiceId>>::Settings>;
 
-pub struct BlendService<Edge, RuntimeServiceId>
-where
-    Edge: Components<
-            RuntimeServiceId,
-            NodeId: Clone,
-            Backend: BlendBackend<Edge::NodeId, RuntimeServiceId>,
-            Dispatcher: PayloadDispatcher<RuntimeServiceId>,
-        >,
+pub struct BlendService<
+    Backend,
+    NodeId,
+    ProofsGenerator,
+    Dispatcher,
+    TimeBackend,
+    ChainService,
+    PolInfoProvider,
+    RuntimeServiceId,
+> where
+    Backend: BlendBackend<NodeId, RuntimeServiceId>,
+    NodeId: Clone,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId>,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    _phantom: PhantomData<fn() -> Edge>,
+    _phantom: PhantomData<(
+        ProofsGenerator,
+        Dispatcher,
+        TimeBackend,
+        ChainService,
+        PolInfoProvider,
+    )>,
 }
 
-impl<Edge, RuntimeServiceId> ServiceData for BlendService<Edge, RuntimeServiceId>
+impl<
+    Backend,
+    NodeId,
+    ProofsGenerator,
+    Dispatcher,
+    TimeBackend,
+    ChainService,
+    PolInfoProvider,
+    RuntimeServiceId,
+> ServiceData
+    for BlendService<
+        Backend,
+        NodeId,
+        ProofsGenerator,
+        Dispatcher,
+        TimeBackend,
+        ChainService,
+        PolInfoProvider,
+        RuntimeServiceId,
+    >
 where
-    Edge: Components<
-            RuntimeServiceId,
-            NodeId: Clone,
-            Backend: BlendBackend<Edge::NodeId, RuntimeServiceId>,
-            Dispatcher: PayloadDispatcher<RuntimeServiceId>,
-        >,
+    Backend: BlendBackend<NodeId, RuntimeServiceId>,
+    NodeId: Clone,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId>,
 {
-    type Settings = StartingBlendConfig<
-        <Edge::Backend as BlendBackend<Edge::NodeId, RuntimeServiceId>>::Settings,
-        EdgeNetworkSettingsOf<Edge, RuntimeServiceId>,
-    >;
+    type Settings = StartingBlendConfig<Backend::Settings, Dispatcher::Settings>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
-    type Message = ServiceMessage<Edge::NodeId>;
+    type Message = ServiceMessage<NodeId>;
 }
 
 #[async_trait::async_trait]
-impl<Edge, RuntimeServiceId> ServiceCore<RuntimeServiceId> for BlendService<Edge, RuntimeServiceId>
+impl<
+    Backend,
+    NodeId,
+    ProofsGenerator,
+    Dispatcher,
+    TimeBackend,
+    ChainService,
+    PolInfoProvider,
+    RuntimeServiceId,
+> ServiceCore<RuntimeServiceId>
+    for BlendService<
+        Backend,
+        NodeId,
+        ProofsGenerator,
+        Dispatcher,
+        TimeBackend,
+        ChainService,
+        PolInfoProvider,
+        RuntimeServiceId,
+    >
 where
-    Edge: Components<
-            RuntimeServiceId,
-            NodeId: Clone + Debug + Eq + Hash + Send + Sync + node_id::TryFrom + 'static,
-            Backend: BlendBackend<Edge::NodeId, RuntimeServiceId> + Send + Sync,
-            ProofsGenerator: LeaderAndPowProofsGenerator + Send,
-            Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
-            TimeBackend: lb_time_service::backends::TimeBackend + Send,
-            ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
-            PolInfoProvider: PolInfoProviderTrait<
-                RuntimeServiceId,
-                Stream: Send + Unpin + 'static,
-            > + Send,
-        > + Send
-        + 'static,
+    Backend: BlendBackend<NodeId, RuntimeServiceId> + Send + Sync,
+    NodeId: Clone + Debug + Eq + Hash + Send + Sync + node_id::TryFrom + 'static,
+    ProofsGenerator: LeaderAndPowProofsGenerator + Send,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
+    TimeBackend: lb_time_service::backends::TimeBackend + Send,
+    ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
+    PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
     RuntimeServiceId: AsServiceId<Self>
-        + AsServiceId<TimeService<Edge::TimeBackend, RuntimeServiceId>>
-        + AsServiceId<Edge::ChainService>
+        + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
+        + AsServiceId<ChainService>
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>
-        + AsServiceId<
-            NetworkService<
-                <Edge::Dispatcher as PayloadDispatcher<RuntimeServiceId>>::Backend,
-                RuntimeServiceId,
-            >,
-        > + AsServiceId<<Edge::Dispatcher as PayloadDispatcher<RuntimeServiceId>>::MempoolService>
-        + AsServiceId<<Edge::Dispatcher as PayloadDispatcher<RuntimeServiceId>>::ChainNetworkService>
+        + AsServiceId<NetworkService<Dispatcher::Backend, RuntimeServiceId>>
+        + AsServiceId<Dispatcher::MempoolService>
+        + AsServiceId<Dispatcher::ChainNetworkService>
         + Display
         + Debug
         + Clone
@@ -163,33 +191,24 @@ where
             Some(Duration::from_mins(1)),
             TimeService<_, _>,
             PreloadKmsService<_>,
-            NetworkService<
-                <Edge::Dispatcher as PayloadDispatcher<RuntimeServiceId>>::Backend,
-                _,
-            >
+            NetworkService<Dispatcher::Backend, _>
         )
         .await?;
 
         let payload_dispatcher = {
             let network_relay = overwatch_handle
-                .relay::<NetworkService<
-                    <Edge::Dispatcher as PayloadDispatcher<RuntimeServiceId>>::Backend,
-                    _,
-                >>()
+                .relay::<NetworkService<Dispatcher::Backend, _>>()
                 .await
                 .expect("Relay with network service should be available.");
             let mempool_relay = overwatch_handle
-                .relay::<<Edge::Dispatcher as PayloadDispatcher<RuntimeServiceId>>::MempoolService>(
-                )
+                .relay::<Dispatcher::MempoolService>()
                 .await
                 .expect("Relay with mempool service should be available.");
             let chain_network_relay = overwatch_handle
-                .relay::<
-                    <Edge::Dispatcher as PayloadDispatcher<RuntimeServiceId>>::ChainNetworkService,
-                >()
+                .relay::<Dispatcher::ChainNetworkService>()
                 .await
                 .expect("Relay with chain network service should be available.");
-            <Edge::Dispatcher as PayloadDispatcher<RuntimeServiceId>>::new(
+            Dispatcher::new(
                 network_relay,
                 mempool_relay,
                 chain_network_relay,
@@ -215,33 +234,28 @@ where
                 .await
                 .expect("Failed to retrieve non-ephemeral signing key from KMS.")
         };
-        let local_node_id = <Edge::NodeId as node_id::TryFrom>::try_from_provider_id(
-            &non_ephemeral_signing_key.public_key().to_bytes(),
-        )
-        .expect("non-ephemeral signing key should decode into a valid node id");
+        let local_node_id =
+            NodeId::try_from_provider_id(&non_ephemeral_signing_key.public_key().to_bytes())
+                .expect("non-ephemeral signing key should decode into a valid node id");
 
-        let public_epoch_stream = membership::chain::subscribe::<
-            Edge::ChainService,
-            Edge::NodeId,
-            Edge::TimeBackend,
-            RuntimeServiceId,
-        >(
-            &overwatch_handle,
-            non_ephemeral_signing_key.public_key(),
-            // No ZK stuff needs to be computed by edge nodes, so no ZK key is specified here.
-            None,
-            "blend_edge_service",
-        )
-        .await;
+        let public_epoch_stream =
+            membership::chain::subscribe::<ChainService, NodeId, TimeBackend, RuntimeServiceId>(
+                &overwatch_handle,
+                non_ephemeral_signing_key.public_key(),
+                // No ZK stuff needs to be computed by edge nodes, so no ZK key is specified here.
+                None,
+                "blend_edge_service",
+            )
+            .await;
 
-        run::<Edge, _>(
+        run::<Backend, _, ProofsGenerator, _, PolInfoProvider, _>(
             UninitializedEpochEventStream::new(
                 public_epoch_stream,
                 settings.time.epoch_transition_period,
             ),
-            &mut Box::pin(inbound_relay),
+            Box::pin(inbound_relay),
             local_node_id,
-            RunningSettings::<Edge::Backend, _, _> {
+            RunningSettings::<Backend, _, _> {
                 backend: settings.backend,
                 cover: settings.cover,
                 non_ephemeral_signing_key,
@@ -264,9 +278,11 @@ where
                 );
             },
         )
-        .await;
-
-        Ok(())
+        .await
+        .map_err(|e| {
+            error!(target: LOG_TARGET, "Edge blend service is being terminated with error: {e:?}");
+            e.into()
+        })
     }
 }
 
@@ -295,25 +311,23 @@ where
     clippy::too_many_lines,
     reason = "TODO: address this in a dedicated refactor"
 )]
-async fn run<Edge, RuntimeServiceId>(
+async fn run<Backend, NodeId, ProofsGenerator, Dispatcher, PolInfoProvider, RuntimeServiceId>(
     public_epoch_stream: UninitializedEpochEventStream<
-        impl Stream<Item = BlendEpochState<Edge::NodeId>> + Unpin,
+        impl Stream<Item = BlendEpoch<NodeId>> + Unpin,
     >,
-    inbound_relay: &mut (impl Stream<Item = ServiceMessage<Edge::NodeId>> + Send + Unpin),
-    local_node_id: Edge::NodeId,
-    settings: RunningSettings<Edge::Backend, Edge::NodeId, RuntimeServiceId>,
-    payload_dispatcher: Edge::Dispatcher,
+    mut inbound_relay: impl Stream<Item = ServiceMessage<NodeId>> + Send + Unpin,
+    local_node_id: NodeId,
+    settings: RunningSettings<Backend, NodeId, RuntimeServiceId>,
+    payload_dispatcher: Dispatcher,
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     notify_ready: impl Fn(),
-) where
-    Edge: Components<
-            RuntimeServiceId,
-            NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
-            Backend: BlendBackend<Edge::NodeId, RuntimeServiceId> + Sync + Send,
-            ProofsGenerator: LeaderAndPowProofsGenerator + Send,
-            PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Unpin>,
-            Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
-        >,
+) -> Result<(), Error>
+where
+    Backend: BlendBackend<NodeId, RuntimeServiceId> + Sync + Send,
+    NodeId: Clone + Debug + Eq + Hash + Send + Sync + 'static,
+    ProofsGenerator: LeaderAndPowProofsGenerator + Send,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
+    PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Unpin>,
     RuntimeServiceId: Clone + Send + Sync,
 {
     let (current_epoch_info, mut remaining_public_epoch_stream) = public_epoch_stream
@@ -323,36 +337,26 @@ async fn run<Edge, RuntimeServiceId>(
 
     info!(
         target: LOG_TARGET,
-        members = current_epoch_info.membership_info.membership.size(),
-        local_node_index = current_epoch_info.membership_info.membership.local_index(),
-        has_zk = current_epoch_info.membership_info.zk.is_some(),
+        members = current_epoch_info.1.membership.size(),
+        local_node_index = current_epoch_info.1.membership.local_index(),
+        has_zk = current_epoch_info.1.zk.is_some(),
         "current membership is ready"
     );
+
+    let mut current_epoch: CurrentEpoch<Backend, NodeId, ProofsGenerator, RuntimeServiceId> =
+        CurrentEpoch::try_new(current_epoch_info, &settings)
+            .expect("The initial membership should satisfy the edge node condition");
 
     notify_ready();
 
     // No need to wait for the PoL stream to return an element. We just move on and
     // will have a `None` handler until secret info for an epoch is passed to this
     // service.
-    let mut secret_pol_info_stream = Edge::PolInfoProvider::subscribe(overwatch_handle)
+    let mut secret_pol_info_stream = PolInfoProvider::subscribe(overwatch_handle)
         .await
         .expect("Should not fail to subscribe to secret PoL info stream.");
 
     let mut current_secret_epoch_info: Option<PolEpochInfo> = None;
-    // The epoch owns its proposals, so a new one takes them with it; a
-    // transaction is not slot-bound and outlives every epoch it waits through.
-    let mut current_epoch: CurrentEpoch<
-        Edge::Backend,
-        Edge::NodeId,
-        Edge::ProofsGenerator,
-        RuntimeServiceId,
-    > = match CurrentEpoch::try_new(current_epoch_info, &settings) {
-        None => {
-            info!(target: LOG_TARGET, "Initial membership no longer calls for edge mode, shutting down.");
-            return;
-        }
-        Some(epoch) => epoch,
-    };
     let mut pending_transactions = PendingTransactions::new();
 
     // `None` when the operator has turned the fallback off, which records
@@ -371,15 +375,25 @@ async fn run<Edge, RuntimeServiceId>(
         tokio::select! {
             Some(EpochEvent::NewEpoch(new_public_epoch_info)) = remaining_public_epoch_stream.next() => {
                 match CurrentEpoch::try_new(new_public_epoch_info, &settings) {
-                    None => {
-                        info!(target: LOG_TARGET, "New membership no longer calls for edge mode, shutting down.");
-                        return;
+                    Err(Error::NetworkIsTooSmall(_)) => {
+                        info!(target: LOG_TARGET, "New membership does not satisfy edge node condition, edge service shutting down.");
+                        if let Some(failure_detection) = failure_detection {
+                            failure_detection.drain_pending_message_queue(&payload_dispatcher).await;
+                        }
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        error!(target: LOG_TARGET, "Error when handling new public epoch: {e:?}, edge service shutting down.");
+                        if let Some(failure_detection) = failure_detection {
+                            failure_detection.drain_pending_message_queue(&payload_dispatcher).await;
+                        }
+                        return Err(e);
                     }
                     // The epoch this replaces takes its queued proposals with
                     // it: they were built for slots it owned, and blending them
                     // under the new one would spend the quota its own block
                     // needs.
-                    Some(next) => current_epoch = next.with_available_secret_info(&mut current_secret_epoch_info, settings.clone(), overwatch_handle.clone()),
+                    Ok(next) => current_epoch = next.with_available_secret_info(&mut current_secret_epoch_info, settings.clone(), overwatch_handle.clone()),
                 }
             }
             Some(undelivered_messages) = next_undelivered_messages(failure_detection.as_mut()) => {
@@ -442,7 +456,10 @@ async fn run<Edge, RuntimeServiceId>(
                 // All input streams have terminated (e.g. disorderly shutdown).
                 // Exit cleanly instead of letting `select!` panic.
                 debug!(target: LOG_TARGET, "All input streams terminated, edge service shutting down.");
-                return;
+                if let Some(failure_detection) = failure_detection {
+                    failure_detection.drain_pending_message_queue(&payload_dispatcher).await;
+                }
+                return Ok(());
             }
         }
     }

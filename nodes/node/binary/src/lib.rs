@@ -262,8 +262,8 @@ pub async fn get_services_to_start(
 ) -> Result<Vec<RuntimeServiceId>, OverwatchError> {
     let mut service_ids = app.handle().retrieve_service_ids().await?;
 
-    // Exclude core and edge blend services, which will be started
-    // on demand by the blend orchestrator bservice.
+    // Exclude core, edge and broadcast blend services, which will be started
+    // on demand by the blend orchestrator service.
     let blend_inner_service_ids = [
         RuntimeServiceId::BlendCore,
         RuntimeServiceId::BlendEdge,

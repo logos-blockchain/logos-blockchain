@@ -17,6 +17,7 @@ use tokio::{
 use crate::{
     edge::{
         current_epoch::CurrentEpoch,
+        handlers::Error,
         tests::utils::{
             MockLeaderProofsGenerator, NodeId, RunningEdgeService, TEST_DELIVERY_DEADLINE,
             TEST_ROUND, TestBackend, overwatch_handle, settings, spawn_run, spawn_run_with_pol,
@@ -24,7 +25,7 @@ use crate::{
         },
     },
     epoch_info::PolEpochInfo,
-    membership::chain::BlendEpochState,
+    membership::chain::{BlendEpoch, BlendEpochState},
     message::{DataPayload, ServiceMessage},
     pending::{NextLocalMessage, PendingTransactions, next_local_message},
     test_utils::{
@@ -295,9 +296,7 @@ async fn run_shuts_down_if_new_membership_is_small() {
         .send(membership(&[], local_node))
         .await
         .expect("channel opened");
-    join_handle
-        .await
-        .expect("the edge service should stop cleanly, not panic");
+    assert!(matches!(join_handle.await.unwrap(), Ok(())));
 }
 
 /// [`run`] fails if the local node is not edge in a new membership.
@@ -322,14 +321,10 @@ async fn run_fails_if_local_is_core_in_new_membership() {
         .send(membership(&[local_node], local_node))
         .await
         .expect("channel opened");
-
-    // The service stops. It no longer says *why* — that reason lived in an
-    // error variant restating a rule `Mode::choose` now owns — and the only
-    // thing that ever mattered is that a node the membership makes a core node
-    // stops running as an edge node.
-    join_handle
-        .await
-        .expect("the edge service should stop cleanly, not panic");
+    assert!(matches!(
+        join_handle.await.unwrap(),
+        Err(Error::LocalIsCoreNode)
+    ));
 }
 
 fn test_pol_epoch_info(epoch: Epoch) -> PolEpochInfo {
@@ -381,16 +376,18 @@ async fn handle_new_secret_epoch_info_recreates_handler() {
     assert_eq!(current_epoch.info().epoch, Epoch::new(3));
 }
 
-fn test_blend_epoch_state(epoch: Epoch, membership: Membership<NodeId>) -> BlendEpochState<NodeId> {
-    BlendEpochState {
-        pow_difficulty: ZkHash::ZERO,
-        epoch,
-        nonce: Fr::ZERO,
-        aged: Fr::ZERO,
-        lottery_0: Fr::ZERO,
-        lottery_1: Fr::ZERO,
-        membership_info: membership.into(),
-    }
+fn test_blend_epoch_state(epoch: Epoch, membership: Membership<NodeId>) -> BlendEpoch<NodeId> {
+    (
+        BlendEpochState {
+            pow_difficulty: ZkHash::ZERO,
+            epoch,
+            nonce: Fr::ZERO,
+            aged: Fr::ZERO,
+            lottery_0: Fr::ZERO,
+            lottery_1: Fr::ZERO,
+        },
+        membership.into(),
+    )
 }
 
 /// Two consecutive public epoch infos with no private in between (e.g. the

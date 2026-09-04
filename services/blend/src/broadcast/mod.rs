@@ -23,25 +23,15 @@ use crate::{
     broadcast::settings::StartingBlendConfig,
     core::dispatcher::PayloadDispatcher,
     kms::PreloadKmsService,
-    membership::{self, MembershipInfo, chain::BlendEpochState, node_id},
+    membership::{self, MembershipInfo, node_id},
     message::{NetworkInfo, ServiceMessage},
-    mode::Mode,
+    mode::{Mode, ModeMembership},
 };
 
+pub mod service_components;
 pub mod settings;
 
 const LOG_TARGET: &str = blend::service::BROADCAST;
-
-pub trait Components<RuntimeServiceId> {
-    /// How this node is identified in a membership.
-    type NodeId;
-    /// Where a payload goes. The only collaborator this mode really has.
-    type Dispatcher;
-    /// Where slot ticks come from, for the epoch stream.
-    type TimeBackend;
-    /// Where membership comes from, so the mode can tell when it should stop.
-    type ChainService;
-}
 
 /// The Blend service in broadcast mode.
 ///
@@ -51,47 +41,41 @@ pub trait Components<RuntimeServiceId> {
 /// orchestrator while core and edge were services — so the subsystem was two
 /// and a half services, and broadcast was the one mode that could not be
 /// started, stopped or reasoned about like the others.
-pub struct BlendService<C, RuntimeServiceId>
+pub struct BlendService<NodeId, Dispatcher, TimeBackend, ChainService, RuntimeServiceId>
 where
-    C: Components<RuntimeServiceId, Dispatcher: PayloadDispatcher<RuntimeServiceId>>,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId>,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    _phantom: PhantomData<fn() -> C>,
+    #[expect(clippy::type_complexity, reason = "Marker field.")]
+    _phantom: PhantomData<fn() -> (NodeId, Dispatcher, TimeBackend, ChainService)>,
 }
 
-impl<C, RuntimeServiceId> ServiceData for BlendService<C, RuntimeServiceId>
+impl<NodeId, Dispatcher, TimeBackend, ChainService, RuntimeServiceId> ServiceData
+    for BlendService<NodeId, Dispatcher, TimeBackend, ChainService, RuntimeServiceId>
 where
-    C: Components<RuntimeServiceId, Dispatcher: PayloadDispatcher<RuntimeServiceId>>,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId>,
 {
-    type Settings =
-        StartingBlendConfig<<C::Dispatcher as PayloadDispatcher<RuntimeServiceId>>::Settings>;
+    type Settings = StartingBlendConfig<Dispatcher::Settings>;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
-    type Message = ServiceMessage<C::NodeId>;
+    type Message = ServiceMessage<NodeId>;
 }
 
 #[async_trait]
-impl<C, RuntimeServiceId> ServiceCore<RuntimeServiceId> for BlendService<C, RuntimeServiceId>
+impl<NodeId, Dispatcher, TimeBackend, ChainService, RuntimeServiceId> ServiceCore<RuntimeServiceId>
+    for BlendService<NodeId, Dispatcher, TimeBackend, ChainService, RuntimeServiceId>
 where
-    C: Components<
-            RuntimeServiceId,
-            NodeId: Clone + Debug + Eq + Hash + Send + Sync + node_id::TryFrom + 'static,
-            Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
-            TimeBackend: lb_time_service::backends::TimeBackend + Send,
-            ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
-        > + Send
-        + 'static,
+    NodeId: Clone + Debug + Eq + Hash + Send + Sync + node_id::TryFrom + 'static,
+    Dispatcher: PayloadDispatcher<RuntimeServiceId> + Send + Sync,
+    TimeBackend: lb_time_service::backends::TimeBackend + Send,
+    ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
     RuntimeServiceId: AsServiceId<Self>
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>
-        + AsServiceId<C::ChainService>
-        + AsServiceId<TimeService<C::TimeBackend, RuntimeServiceId>>
-        + AsServiceId<
-            NetworkService<
-                <C::Dispatcher as PayloadDispatcher<RuntimeServiceId>>::Backend,
-                RuntimeServiceId,
-            >,
-        > + AsServiceId<<C::Dispatcher as PayloadDispatcher<RuntimeServiceId>>::MempoolService>
-        + AsServiceId<<C::Dispatcher as PayloadDispatcher<RuntimeServiceId>>::ChainNetworkService>
+        + AsServiceId<ChainService>
+        + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
+        + AsServiceId<NetworkService<Dispatcher::Backend, RuntimeServiceId>>
+        + AsServiceId<Dispatcher::MempoolService>
+        + AsServiceId<Dispatcher::ChainNetworkService>
         + Clone
         + Debug
         + Display
@@ -131,21 +115,21 @@ where
             NetworkService<_, _>,
             TimeService<_, _>,
             PreloadKmsService<_>,
-            C::ChainService
+            ChainService
         )
         .await?;
 
-        let payload_dispatcher = <C::Dispatcher as PayloadDispatcher<RuntimeServiceId>>::new(
+        let payload_dispatcher = <Dispatcher as PayloadDispatcher<RuntimeServiceId>>::new(
             overwatch_handle
                 .relay::<NetworkService<_, _>>()
                 .await
                 .expect("Relay with network service should be available."),
             overwatch_handle
-                .relay::<<C::Dispatcher as PayloadDispatcher<RuntimeServiceId>>::MempoolService>()
+                .relay::<Dispatcher::MempoolService>()
                 .await
                 .expect("Relay with mempool service should be available."),
             overwatch_handle
-                .relay::<<C::Dispatcher as PayloadDispatcher<RuntimeServiceId>>::ChainNetworkService>()
+                .relay::<Dispatcher::ChainNetworkService>()
                 .await
                 .expect("Relay with chain network service should be available."),
             settings.network,
@@ -162,35 +146,34 @@ where
             panic!("Non-ephemeral signing key must be an Ed25519 key");
         };
         let local_node_id =
-            <C::NodeId as node_id::TryFrom>::try_from_provider_id(signing_public_key.as_bytes())
+            <NodeId as node_id::TryFrom>::try_from_provider_id(signing_public_key.as_bytes())
                 .expect("non-ephemeral signing public key should decode into a valid node id");
 
         // No zk key: a broadcast node never mints a proof, so it has no use for
         // a Merkle path into the core tree.
-        let membership_stream = membership::chain::subscribe::<
-            C::ChainService,
-            C::NodeId,
-            C::TimeBackend,
-            RuntimeServiceId,
-        >(
-            overwatch_handle,
-            signing_public_key,
-            None,
-            "blend_broadcast_service",
-        )
-        .await
-        .map(
-            |BlendEpochState {
-                 membership_info, ..
-             }| membership_info,
+        let membership_stream =
+            membership::chain::subscribe::<ChainService, NodeId, TimeBackend, RuntimeServiceId>(
+                overwatch_handle,
+                signing_public_key,
+                None,
+                "blend_broadcast_service",
+            )
+            .await
+            .map(|(_, membership_info)| membership_info);
+        let (membership_info, mut remaining_membership_stream) =
+            UninitializedEpochEventStream::new(
+                membership_stream,
+                settings.time.epoch_transition_period,
+            )
+            .await_first_ready()
+            .await
+            .expect("The current epoch state must be ready");
+
+        assert!(
+            ModeMembership::resolve(membership_info, settings.minimum_network_size).mode()
+                == Mode::Broadcast,
+            "The initial membership must satisfy the broadcast node condition."
         );
-        let (_, mut remaining_membership_stream) = UninitializedEpochEventStream::new(
-            membership_stream,
-            settings.time.epoch_transition_period,
-        )
-        .await_first_ready()
-        .await
-        .expect("The current epoch state must be ready");
 
         status_updater.notify_ready();
         info!(
@@ -236,8 +219,9 @@ async fn run<NodeId, Dispatcher, RuntimeServiceId>(
             Some(epoch_event) = membership_stream.next() => {
                 // A transition period expiring is not a mode change: there is
                 // nothing draining here to expire.
-                if let EpochEvent::NewEpoch(MembershipInfo { membership, .. }) = epoch_event
-                    && Mode::choose(&membership, minimum_network_size) != Mode::Broadcast
+                if let EpochEvent::NewEpoch(membership_info) = epoch_event
+                    && ModeMembership::resolve(membership_info, minimum_network_size).mode()
+                        != Mode::Broadcast
                 {
                     info!(target: LOG_TARGET, "New membership no longer calls for broadcast mode, shutting down.");
                     return;
@@ -309,10 +293,7 @@ mod tests {
     }
 
     fn epoch(members: &[NodeId]) -> EpochEvent<MembershipInfo<NodeId>> {
-        EpochEvent::NewEpoch(MembershipInfo {
-            membership: membership(members, LOCAL),
-            zk: None,
-        })
+        EpochEvent::NewEpoch(membership(members, LOCAL).into())
     }
 
     /// A broadcast node's only collaborator, recording what it was handed.
@@ -379,9 +360,10 @@ mod tests {
         let (dispatched_sender, mut dispatched) = mpsc::unbounded_channel();
         let dispatcher = RecordingDispatcher(dispatched_sender);
 
-        PayloadDispatcher::<()>::dispatch(
+        handle_inbound_message::<_, _, ()>(
+            ServiceMessage::Blend(BlendPayload::BlockProposal(b"proposal".to_vec())),
             &dispatcher,
-            BlendPayload::BlockProposal(b"proposal".to_vec()),
+            &LOCAL,
         )
         .await;
         assert_eq!(

@@ -37,7 +37,6 @@ use tokio::{
 };
 
 use crate::{
-    metrics,
     core::{
         backends::{
             BackendEpochInfo,
@@ -49,6 +48,7 @@ use crate::{
         settings::RunningBlendConfig as BlendConfig,
     },
     message::{CoreInfo, NetworkInfo},
+    metrics,
 };
 
 /// Cooldown before re-dialing the entire membership after every eligible peer

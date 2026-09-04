@@ -1,38 +1,19 @@
-use crate::{
-    BlendService,
-    core::{
-        backends::BlendBackend as CoreBlendBackend, dispatcher::PayloadDispatcher,
-        service_components::Components as CoreComponents,
-    },
-    edge::{
-        backends::BlendBackend as EdgeBlendBackend,
-        service_components::Components as EdgeComponents,
-    },
-};
+use overwatch::services::ServiceData;
 
-/// Exposes the node id [`BlendService`] identifies peers by, without requiring
-/// a caller to name its generic parameters.
+use crate::{BlendService, broadcast, core, edge};
+
+/// Exposes associated types for external modules that depend on
+/// [`BlendService`], without requiring them to specify its generic parameters.
 pub trait ServiceComponents {
     type NodeId;
 }
 
-impl<Core, Edge, Broadcast, SdpService, RuntimeServiceId> ServiceComponents
-    for BlendService<Core, Edge, Broadcast, SdpService, RuntimeServiceId>
+impl<CoreService, EdgeService, BroadcastService, SdpService, RuntimeServiceId> ServiceComponents
+    for BlendService<CoreService, EdgeService, BroadcastService, SdpService, RuntimeServiceId>
 where
-    Core: CoreComponents<RuntimeServiceId>,
-    Core::Backend: CoreBlendBackend<
-            Core::NodeId,
-            rand_chacha::ChaCha20Rng,
-            Core::ProofsVerifier,
-            RuntimeServiceId,
-        >,
-    Core::Dispatcher: PayloadDispatcher<RuntimeServiceId>,
-    Edge: EdgeComponents<
-            RuntimeServiceId,
-            NodeId: Clone,
-            Dispatcher: PayloadDispatcher<RuntimeServiceId>,
-        >,
-    Edge::Backend: EdgeBlendBackend<Edge::NodeId, RuntimeServiceId>,
+    CoreService: ServiceData + core::service_components::ServiceComponents<RuntimeServiceId>,
+    EdgeService: ServiceData + edge::service_components::ServiceComponents,
+    BroadcastService: ServiceData + broadcast::service_components::ServiceComponents,
 {
-    type NodeId = Core::NodeId;
+    type NodeId = CoreService::NodeId;
 }

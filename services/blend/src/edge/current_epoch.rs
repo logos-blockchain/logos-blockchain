@@ -3,27 +3,26 @@
 use core::{hash::Hash, num::NonZeroU64};
 
 use lb_blend::{
-    membership::Membership,
     message::{
         crypto::proofs::PoQVerificationInputsMinusSigningKey,
         encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
     },
-    proofs::quota::{
-        inputs::prove::public::{CoreInputs, LeaderInputs, PowInputs},
-        pow::PowTarget,
-    },
+    proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs, PowInputs},
     scheduling::message_blend::provers::leader_and_pow::LeaderAndPowProofsGenerator,
 };
 use lb_chain_service::Epoch;
-use lb_groth16::Fr;
 use overwatch::overwatch::OverwatchHandle;
 use tracing::debug;
 
 use crate::{
-    edge::{LOG_TARGET, RunningSettings, backends::BlendBackend, handlers::MessageHandler},
+    edge::{
+        LOG_TARGET, RunningSettings,
+        backends::BlendBackend,
+        handlers::{Error, MessageHandler},
+    },
     epoch_info::PolEpochInfo,
-    membership::{MembershipInfo, ZkInfo, chain::BlendEpochState},
-    mode::Mode,
+    membership::chain::{BlendEpoch, BlendEpochState},
+    mode::{EdgeMembership, ModeMembership},
     pending::{
         EncapsulationResult, MessageKind, NextLocalMessage, PendingProposals, PendingTransactions,
         next_local_message, resolve_encapsulation,
@@ -46,27 +45,9 @@ pub enum CurrentEpoch<Backend, NodeId, ProofsGenerator, RuntimeServiceId> {
 /// in this epoch, so a rotation makes it worthless. Transactions are not
 /// slot-bound and are held outside, by whatever outlives epochs.
 pub struct AwaitingSecretInfo<NodeId> {
-    info: ValidBlendEpochState<NodeId>,
+    info: BlendEpochState,
+    membership: EdgeMembership<NodeId>,
     proposals: PendingProposals,
-}
-
-/// Epoch state for a valid Blend session (i.e., membership above the minimum
-/// network size).
-#[derive(Clone, Debug)]
-pub struct ValidBlendEpochState<NodeId> {
-    pub epoch: Epoch,
-    pub nonce: Fr,
-    pub aged: Fr,
-    pub lottery_0: Fr,
-    pub lottery_1: Fr,
-    pub pow_difficulty: PowTarget,
-    pub membership_info: ValidMembershipInfo<NodeId>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ValidMembershipInfo<NodeId> {
-    pub membership: Membership<NodeId>,
-    pub zk: ZkInfo,
 }
 
 /// The same epoch, once both halves are in and a handler exists to mint for it.
@@ -117,7 +98,7 @@ impl<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
     }
 
     #[cfg(test)]
-    pub const fn info(&self) -> &ValidBlendEpochState<NodeId> {
+    pub const fn info(&self) -> &BlendEpochState {
         &self.awaiting().info
     }
 
@@ -137,42 +118,26 @@ where
     /// A new epoch, which by definition has no handler yet: one needs secret
     /// `PoL` info that has not been matched to it.
     ///
-    /// `None` when the membership no longer calls for edge mode, which shuts
-    /// the service down. Deciding it here is what makes the rest of this type
+    /// `Err` when the membership does not call for edge mode, which shuts the
+    /// service down. Deciding it here is what makes the rest of this type
     /// unconditional: a `CurrentEpoch` that exists is one whose membership was
     /// accepted, so nothing downstream has to ask again.
     pub fn try_new(
-        BlendEpochState {
-            aged,
-            epoch,
-            lottery_0,
-            lottery_1,
-            membership_info: MembershipInfo { membership, zk },
-            nonce,
-            pow_difficulty,
-        }: BlendEpochState<NodeId>,
+        (info, membership_info): BlendEpoch<NodeId>,
         settings: &RunningSettings<Backend, NodeId, RuntimeServiceId>,
-    ) -> Option<Self> {
-        if Mode::choose(&membership, settings.minimum_network_size) != Mode::Edge {
-            return None;
-        }
+    ) -> Result<Self, Error> {
+        let size = membership_info.membership.size();
+        let membership =
+            match ModeMembership::resolve(membership_info, settings.minimum_network_size) {
+                ModeMembership::Broadcast => return Err(Error::NetworkIsTooSmall(size)),
+                ModeMembership::Core(_) => return Err(Error::LocalIsCoreNode),
+                ModeMembership::Edge(membership) => membership,
+            };
 
-        let zk_info =
-            zk.expect("A membership large enough to blend through carries its `zk` info.");
-
-        Some(Self::AwaitingSecretInfo(AwaitingSecretInfo {
-            info: ValidBlendEpochState {
-                epoch,
-                nonce,
-                aged,
-                lottery_0,
-                lottery_1,
-                pow_difficulty,
-                membership_info: ValidMembershipInfo {
-                    membership,
-                    zk: zk_info,
-                },
-            },
+        let epoch = info.epoch;
+        Ok(Self::AwaitingSecretInfo(AwaitingSecretInfo {
+            info,
+            membership,
             proposals: PendingProposals::new(epoch),
         }))
     }
@@ -236,9 +201,9 @@ where
                 quota: settings.cover.epoch_core_quota(
                     settings.num_blend_layers,
                     &settings.time,
-                    awaiting.info.membership_info.membership.size(),
+                    awaiting.membership.membership.size(),
                 ),
-                zk_root: awaiting.info.membership_info.zk.root,
+                zk_root: awaiting.membership.zk_root,
             },
             leader: LeaderInputs {
                 lottery_0: awaiting.info.lottery_0,
@@ -256,7 +221,7 @@ where
         debug!(target: LOG_TARGET, "Creating new handler for epoch {:?}", awaiting.info.epoch);
         let handler = MessageHandler::new(
             settings,
-            awaiting.info.membership_info.membership.clone(),
+            awaiting.membership.membership.clone(),
             new_public_inputs,
             secret_epoch_info.winning_pol_info_stream,
             overwatch_handle,

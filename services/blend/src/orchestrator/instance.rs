@@ -13,7 +13,7 @@ use tracing::info;
 
 use crate::{
     membership::MembershipInfo,
-    mode::Mode,
+    mode::{Mode, ModeMembership},
     orchestrator::{self, OnDemandServiceMode},
 };
 
@@ -112,9 +112,9 @@ where
         NodeId: Eq + Hash,
     {
         match event {
-            EpochEvent::NewEpoch(MembershipInfo { membership, .. }) => {
+            EpochEvent::NewEpoch(membership_info) => {
                 self.transition(
-                    Mode::choose(&membership, minimum_network_size),
+                    ModeMembership::resolve(membership_info, minimum_network_size).mode(),
                     overwatch_handle,
                 )
                 .await
