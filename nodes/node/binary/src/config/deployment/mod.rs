@@ -1,5 +1,7 @@
 use core::time::Duration;
+use std::sync::OnceLock;
 
+use lb_core::mantle::transactions::genesis_tx::ChainId;
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 use serde::{Deserialize, Serialize};
@@ -23,7 +25,40 @@ pub struct DeploymentSettings {
     pub mempool: MempoolDeploymentSettings,
 }
 
+/// The chain ID of the deployment this process was started with.
+///
+/// The chain ID is fixed for the lifetime of a node: it is baked into the
+/// deployment settings (see [`SERIALIZED_DEPLOYMENT`]) or into whichever
+/// deployment file overrides them, and is never renegotiated at runtime.
+/// [`run_node_from_config`](crate::run_node_from_config) records it here at
+/// startup so read-only callers — the HTTP API and the C bindings — can answer
+/// with it directly instead of relaying to the chain service for a value that
+/// cannot change.
+static CHAIN_ID: OnceLock<ChainId> = OnceLock::new();
+
+/// Records the chain ID of the deployment this process runs.
+///
+/// Called once from [`run_node_from_config`](crate::run_node_from_config).
+/// Later calls are ignored, so a second node started in the same process keeps
+/// reporting the first one's chain ID; nothing in the node starts two.
+pub(crate) fn record_chain_id(chain_id: ChainId) {
+    drop(CHAIN_ID.set(chain_id));
+}
+
+/// The chain ID this process was started on, or `None` before the node has
+/// been built from its configuration.
+#[must_use]
+pub fn chain_id() -> Option<&'static ChainId> {
+    CHAIN_ID.get()
+}
+
 impl DeploymentSettings {
+    /// The chain this deployment targets, read off the genesis inscription.
+    #[must_use]
+    pub fn chain_id(&self) -> ChainId {
+        self.cryptarchia.chain_id()
+    }
+
     #[must_use]
     pub const fn blend_round_duration(&self) -> Duration {
         self.blend.round_duration(&self.time.slot_duration)
