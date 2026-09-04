@@ -1,4 +1,5 @@
 use super::*;
+use crate::cucumber::steps::nodes::diagnostics::log_blend_relay_event;
 
 // Sort nodes_to_start with empty peers first to ensure standalone nodes start
 // before connected nodes, then by dependency order to ensure all peers of a
@@ -116,6 +117,9 @@ pub async fn start_node(
     let runtime_dir_prefix = format!("{node_name}_");
     let final_dir_ignore_list = matching_child_dirs(&persist_dir, &runtime_dir_prefix);
     let tokio_console_node = startup_settings.tokio_console_node.clone();
+    let blend_relays = world.blend_relays.clone();
+    let relay_node_name = node_name.to_owned();
+    let relay_preexisting = world.blend_relays.metadata(node_name)?.is_some();
     let scenario_wallet_key_ids = world
         .wallet_registry
         .wallet_accounts
@@ -134,6 +138,7 @@ pub async fn start_node(
         .with_peers(startup_settings.peer_selection)
         .with_persist_dir(persist_dir)
         .create_patch(move |mut config: RunConfig| {
+            let declared_blend_address = config.user.blend.core.backend.listening_address.clone();
             prepare_config_patch(
                 &mut config,
                 startup_settings.join_external_network,
@@ -146,10 +151,15 @@ pub async fn start_node(
                 startup_settings.tokio_console_node.as_ref(),
                 &scenario_wallet_key_ids,
             )?;
+            blend_relays.configure_provider(
+                &relay_node_name,
+                &mut config,
+                &declared_blend_address,
+            )?;
             Ok(config)
         });
 
-    let started_node = {
+    let start_result = {
         let cluster = world
             .cluster
             .local_cluster
@@ -159,8 +169,35 @@ pub async fn start_node(
             .await
             .inspect_err(|e| {
                 warn!(target: TARGET, "Step `{step}` error: {e}");
-            })?
+            })
     };
+    let started_node = match start_result {
+        Ok(started_node) => started_node,
+        Err(error) => {
+            if !relay_preexisting
+                && let Err(cleanup_error) = world.blend_relays.remove_provider(node_name)
+            {
+                warn!(
+                    target: TARGET,
+                    node = node_name,
+                    error = %cleanup_error,
+                    "Failed to remove provisional Blend relay after node-start failure"
+                );
+            }
+            return Err(error.into());
+        }
+    };
+
+    if let Some(metadata) = world.blend_relays.metadata(node_name)? {
+        log_blend_relay_event(
+            world,
+            "blend_relay_configured",
+            node_name,
+            metadata.declared_addr,
+            metadata.backend_addr,
+            "setup",
+        );
+    }
 
     let node_final_dir = extract_child_dir_name(
         &world.lifecycle.scenario_base_dir,

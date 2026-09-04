@@ -63,6 +63,7 @@ use crate::{
         fee_reserve::{SCENARIO_FEE_ACCOUNT_NAME, ScenarioFeeState},
         logos_sql::LogosSqlState,
         steps::{
+            nodes::BlendRelayRegistry,
             tokio_console::profile::TokioConsoleProfile,
             zone::runner::{
                 Event, IndexedSignature, InscriptionId, PreparedChannelConfig, SequencerCheckpoint,
@@ -935,6 +936,8 @@ pub struct ScenarioLifecycle {
     pub genesis_time: Option<GenesisTime>,
     /// Base directory for scenario artifacts like logs and generated configs.
     pub scenario_base_dir: PathBuf,
+    /// Cucumber scenario name used in scenario-local diagnostic artifacts.
+    pub scenario_name: Option<String>,
     /// Automated: Scenario specification
     pub spec: ScenarioSpec,
     /// Automated: Runtime state for the scenario.
@@ -1033,10 +1036,17 @@ impl NodeHeightSnapshots {
 pub struct BlendDiagnosticState {
     /// Current phase of the diagnostic scenario.
     pub phase: Option<BlendDiagnosticPhase>,
+    /// Node whose Time-service clock drives the diagnostic observation.
+    pub reference_node: Option<String>,
     /// Number of epoch-observation steps completed by the scenario.
     pub observation_count: u32,
     /// Nodes successfully stopped during the diagnostic outage phase.
     pub stopped_nodes: HashSet<String>,
+    /// Nodes whose Blend endpoint is intentionally unreachable during the
+    /// diagnostic outage phase while their processes remain running.
+    pub blend_unreachable_nodes: HashSet<String>,
+    /// Whether this scenario has written its diagnostic timeline header.
+    pub timeline_header_written: Mutex<bool>,
 }
 
 /// Node-startup configuration written by steps before nodes start and consumed
@@ -1255,6 +1265,8 @@ pub struct CucumberWorld {
     pub fork_groups: ForkGroups,
     /// Runtime observations for the tagged Blend/TSI diagnostics.
     pub blend_diagnostics: BlendDiagnosticState,
+    /// Opt-in test-owned UDP relays for controllable Blend reachability tests.
+    pub(crate) blend_relays: BlendRelayRegistry,
     /// Manual: Zone-specific state for SDK/sequencer scenarios.
     pub zone: ZoneState,
     /// Logos SQL runtimes and writes owned by this scenario.
@@ -1285,6 +1297,7 @@ impl Drop for CucumberWorld {
     fn drop(&mut self) {
         self.logos_sql.clear();
         self.zone.clear();
+        self.blend_relays.shutdown();
         self.scanner.shutdown();
         self.wallet_registry.shutdown();
     }
@@ -1496,6 +1509,10 @@ impl Debug for CucumberWorld {
             )
             .field("blend_diagnostic_phase", &self.blend_diagnostics.phase)
             .field(
+                "blend_diagnostic_reference_node",
+                &self.blend_diagnostics.reference_node,
+            )
+            .field(
                 "blend_diagnostic_observation_count",
                 &self.blend_diagnostics.observation_count,
             )
@@ -1503,6 +1520,11 @@ impl Debug for CucumberWorld {
                 "blend_diagnostic_stopped_nodes",
                 &self.blend_diagnostics.stopped_nodes,
             )
+            .field(
+                "blend_diagnostic_unreachable_nodes",
+                &self.blend_diagnostics.blend_unreachable_nodes,
+            )
+            .field("blend_relays", &self.blend_relays.is_enabled().ok())
             .field("sdp_funding_config", &self.cluster.sdp_funding_config)
             .field(
                 "deployment_config_override_path",
@@ -1756,6 +1778,11 @@ impl CucumberWorld {
         if let Some(topology) = self.lifecycle.spec.topology.as_mut() {
             topology.scenario_base_dir = log_dir;
         }
+    }
+
+    /// Set the name of the current Cucumber scenario.
+    pub fn set_scenario_name(&mut self, scenario_name: &str) {
+        self.lifecycle.scenario_name = Some(scenario_name.to_owned());
     }
 
     pub fn set_test_context(&mut self, test_context: String) {

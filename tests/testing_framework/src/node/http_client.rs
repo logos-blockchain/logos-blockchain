@@ -16,6 +16,7 @@ use lb_core::{
     sdp::{Declaration, DeclarationId, Locator},
 };
 use lb_http_api_common::{
+    TimeInfo,
     bodies::{
         blend::JoinBlendRequestBody,
         mantle::GasPricesResponseBody,
@@ -77,6 +78,14 @@ impl NodeHttpClient {
         self.with_timeout(
             "Consensus info request",
             self.http_client.consensus_info(self.base_url.clone()),
+        )
+        .await
+    }
+
+    pub async fn time_info(&self) -> Result<TimeInfo, Error> {
+        self.with_timeout(
+            "Time info request",
+            self.http_client.time_info(self.base_url.clone()),
         )
         .await
     }
