@@ -252,6 +252,13 @@ pub struct BlendArgs {
 
     #[clap(long = "blend-secret-key-id", env = "BLEND_SECRET_KEY_ID")]
     pub blend_secret_key_id: Option<KeyId>,
+
+    #[clap(
+        long = "blend-abstain-on-failure",
+        env = "BLEND_ABSTAIN_ON_FAILURE",
+        default_value_t = false
+    )]
+    pub abstain_on_failure: bool,
 }
 
 #[derive(Parser, Debug, Default, Clone, Copy)]
@@ -475,7 +482,12 @@ pub fn update_blend(blend: &mut BlendConfig, blend_args: BlendArgs) {
         blend_addr,
         blend_signing_key_id,
         blend_secret_key_id,
+        abstain_on_failure,
     } = blend_args;
+
+    if abstain_on_failure {
+        blend.abstain_on_failure();
+    }
 
     if let Some(addr) = blend_addr {
         blend.set_listening_address(addr);

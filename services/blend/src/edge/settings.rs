@@ -2,7 +2,10 @@ use core::num::NonZeroU64;
 
 use lb_key_management_system_service::{backend::preload::KeyId, keys::UnsecuredEd25519Key};
 
-use crate::{core::settings::CoverTrafficSettings, settings::TimingSettings};
+use crate::{
+    core::settings::CoverTrafficSettings,
+    settings::{TimingSettings, max_data_message_delay_in_rounds},
+};
 
 #[derive(Clone, Debug)]
 pub struct StartingBlendConfig<BackendSettings> {
@@ -14,6 +17,8 @@ pub struct StartingBlendConfig<BackendSettings> {
     pub cover: CoverTrafficSettings,
     /// `R_c`: replication factor for data messages.
     pub data_replication_factor: u64,
+    pub abstain_on_failure: bool,
+    pub max_blend_delay_in_rounds: NonZeroU64,
 }
 
 /// Same values as [`StartingBlendConfig`] but with the secret key exfiltrated
@@ -27,6 +32,8 @@ pub struct RunningBlendConfig<BackendSettings> {
     pub minimum_network_size: NonZeroU64,
     pub cover: CoverTrafficSettings,
     pub data_replication_factor: u64,
+    pub abstain_on_failure: bool,
+    pub max_blend_delay_in_rounds: NonZeroU64,
 }
 
 impl<BackendSettings> RunningBlendConfig<BackendSettings> {
@@ -38,5 +45,10 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
         num_blend_layers
             .checked_add(additional_encapsulations)
             .expect("Overflow when computing leadership quota.")
+    }
+
+    #[must_use]
+    pub const fn max_data_message_delay_in_rounds(&self) -> NonZeroU64 {
+        max_data_message_delay_in_rounds(self.num_blend_layers, self.max_blend_delay_in_rounds)
     }
 }

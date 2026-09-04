@@ -2,7 +2,7 @@ use core::cell::RefCell;
 use std::{num::NonZeroU64, pin::Pin, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{Stream, StreamExt as _, stream::BoxStream};
 use lb_blend::{
     message::{
         crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
@@ -112,6 +112,7 @@ pub fn settings<BackendSettings>(
         num_blend_layers: NonZeroU64::try_from(1).unwrap(),
         minimum_network_size,
         data_replication_factor,
+        abstain_on_failure: false,
         activity_threshold_sensitivity: 1,
     }
 }
@@ -256,6 +257,12 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for TestNetworkAdapter {
     }
 
     async fn broadcast(&self, _message: Vec<u8>, _broadcast_settings: Self::BroadcastSettings) {}
+
+    async fn observe_broadcasts(
+        &self,
+    ) -> BoxStream<'static, crate::message::NetworkMessage<Self::BroadcastSettings>> {
+        futures::stream::empty().boxed()
+    }
 }
 
 pub struct TestNetworkBackend {

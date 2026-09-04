@@ -260,6 +260,15 @@ pub mod tests {
             }
         }
 
+        async fn observe_broadcasts(
+            &self,
+        ) -> futures::stream::BoxStream<
+            'static,
+            crate::message::NetworkMessage<Self::BroadcastSettings>,
+        > {
+            futures::StreamExt::boxed(futures::stream::empty())
+        }
+
         async fn broadcast(&self, message: Vec<u8>, _: Self::BroadcastSettings) {
             debug!("Broadcasting message: {message:?}");
             self.relay

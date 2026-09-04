@@ -8,17 +8,19 @@ use lb_blend::{
 use lb_chain_service::Epoch;
 use lb_core::crypto::ZkHash;
 use lb_groth16::{AdditiveGroup as _, Fr};
-use tokio::time::sleep;
+use tokio::{sync::mpsc, time::sleep};
 
 use crate::{
     edge::{
         handlers::Error,
         tests::utils::{
-            MockLeaderProofsGenerator, NodeId, TestBackend, overwatch_handle, settings, spawn_run,
+            MockLeaderProofsGenerator, NodeId, TEST_DELIVERY_DEADLINE, TEST_ROUND, TestBackend,
+            overwatch_handle, settings, spawn_run,
         },
     },
     epoch_info::PolEpochInfo,
     membership::chain::BlendEpochState,
+    message::NetworkMessage,
     test_utils::membership::membership,
 };
 
@@ -31,7 +33,7 @@ async fn run_with_epoch_transition() {
     let local_node = NodeId(99);
     let mut core_node = NodeId(0);
     let minimal_network_size = 1;
-    let (_, epoch_sender, msg_sender, mut node_id_receiver) = spawn_run(
+    let (_, epoch_sender, msg_sender, mut node_id_receiver, _broadcasting_channel) = spawn_run(
         local_node,
         minimal_network_size,
         Some(membership(&[core_node], local_node)),
@@ -39,7 +41,13 @@ async fn run_with_epoch_transition() {
     .await;
 
     // A message should be forwarded to the core node 0.
-    msg_sender.send(vec![0]).await.expect("channel opened");
+    msg_sender
+        .send(NetworkMessage {
+            message: vec![0],
+            broadcast_settings: (),
+        })
+        .await
+        .expect("channel opened");
     assert_eq!(
         node_id_receiver.recv().await.expect("channel opened"),
         core_node
@@ -54,7 +62,13 @@ async fn run_with_epoch_transition() {
     sleep(Duration::from_millis(100)).await;
 
     // A message should be forwarded to the core node 1.
-    msg_sender.send(vec![0]).await.expect("channel opened");
+    msg_sender
+        .send(NetworkMessage {
+            message: vec![0],
+            broadcast_settings: (),
+        })
+        .await
+        .expect("channel opened");
     assert_eq!(
         node_id_receiver.recv().await.expect("channel opened"),
         core_node
@@ -68,7 +82,7 @@ async fn run_shuts_down_if_new_membership_is_small() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
     let minimal_network_size = 1;
-    let (join_handle, epoch_sender, _, _) = spawn_run(
+    let (join_handle, epoch_sender, _, _, _broadcasting_channel) = spawn_run(
         local_node,
         minimal_network_size,
         Some(membership(&[core_node], local_node)),
@@ -89,7 +103,7 @@ async fn run_fails_if_local_is_core_in_new_membership() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
     let minimal_network_size = 1;
-    let (join_handle, epoch_sender, _, _) = spawn_run(
+    let (join_handle, epoch_sender, _, _, _broadcasting_channel) = spawn_run(
         local_node,
         minimal_network_size,
         Some(membership(&[core_node], local_node)),
@@ -127,7 +141,7 @@ fn test_pol_epoch_info(epoch: Epoch) -> PolEpochInfo {
 async fn handle_new_secret_epoch_info_recreates_handler() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
-    let (node_id_sender, _node_id_receiver) = tokio::sync::mpsc::channel(1);
+    let (node_id_sender, _node_id_receiver) = mpsc::channel(1);
 
     let settings = settings(local_node, 1, node_id_sender);
     let overwatch = overwatch_handle();
@@ -186,7 +200,7 @@ fn test_blend_epoch_state(epoch: Epoch, membership: Membership<NodeId>) -> Blend
 async fn two_publics_without_private_in_between() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
-    let (node_id_sender, _node_id_receiver) = tokio::sync::mpsc::channel(1);
+    let (node_id_sender, _node_id_receiver) = mpsc::channel(1);
 
     let settings = settings(local_node, 1, node_id_sender);
     let overwatch = overwatch_handle();
@@ -230,7 +244,7 @@ async fn two_publics_without_private_in_between() {
 async fn public_then_private_same_epoch_creates_handler() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
-    let (node_id_sender, _node_id_receiver) = tokio::sync::mpsc::channel(1);
+    let (node_id_sender, _node_id_receiver) = mpsc::channel(1);
 
     let settings = settings(local_node, 1, node_id_sender);
     let overwatch = overwatch_handle();
@@ -276,7 +290,7 @@ async fn public_then_private_same_epoch_creates_handler() {
 async fn private_then_public_same_epoch_creates_handler() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
-    let (node_id_sender, _node_id_receiver) = tokio::sync::mpsc::channel(1);
+    let (node_id_sender, _node_id_receiver) = mpsc::channel(1);
 
     let settings = settings(local_node, 1, node_id_sender);
     let overwatch = overwatch_handle();
@@ -317,5 +331,89 @@ async fn private_then_public_same_epoch_creates_handler() {
             .expect("Handler must be created")
             .epoch(),
         Epoch::new(1)
+    );
+}
+
+/// Blends `payload` and waits until the backend reports it going out, so that
+/// what follows is timed from a release that has actually happened.
+async fn blend_and_await_release(
+    msg_sender: &mpsc::Sender<NetworkMessage<()>>,
+    node_ids: &mut mpsc::Receiver<NodeId>,
+    payload: NetworkMessage<()>,
+) {
+    // The handler needs this epoch's secret `PoL` info, which arrives on its own
+    // task; until it has, a message to blend is dropped with a warning.
+    for _ in 0..RELEASE_ATTEMPTS {
+        msg_sender
+            .send(payload.clone())
+            .await
+            .expect("channel opened");
+        if tokio::time::timeout(TEST_ROUND, node_ids.recv())
+            .await
+            .is_ok_and(|sent| sent.is_some())
+        {
+            return;
+        }
+    }
+    panic!("the edge node never blended the payload");
+}
+
+/// How many rounds the helper above will keep offering the payload for.
+const RELEASE_ATTEMPTS: usize = 10;
+
+/// A payload the Blend network never delivers is put on the broadcasting
+/// channel by its sender, once the deadline has passed and not before.
+#[test_log::test(tokio::test(start_paused = true))]
+async fn a_payload_the_network_never_delivers_is_broadcast_in_the_clear() {
+    let local_node = NodeId(99);
+    let (_, epoch_sender, msg_sender, mut node_ids, mut broadcasting_channel) =
+        spawn_run(local_node, 1, Some(membership(&[NodeId(0)], local_node))).await;
+    drop(epoch_sender);
+
+    let payload = NetworkMessage {
+        message: b"proposal".to_vec(),
+        broadcast_settings: (),
+    };
+    blend_and_await_release(&msg_sender, &mut node_ids, payload.clone()).await;
+
+    let rounds = u32::try_from(TEST_DELIVERY_DEADLINE.get()).expect("a few rounds");
+    let broadcast = tokio::time::timeout(
+        TEST_ROUND * (rounds + 4),
+        broadcasting_channel.broadcasted.recv(),
+    )
+    .await
+    .expect("the deadline should have expired by now")
+    .expect("the service should still be running");
+    assert_eq!(broadcast, payload);
+}
+
+/// Seeing the payload come out of the Blend network is what cancels the direct
+/// broadcast, and it does not matter whose exit node put it there.
+#[test_log::test(tokio::test(start_paused = true))]
+async fn a_payload_the_network_delivers_is_never_broadcast_in_the_clear() {
+    let local_node = NodeId(99);
+    let (_, epoch_sender, msg_sender, mut node_ids, mut broadcasting_channel) =
+        spawn_run(local_node, 1, Some(membership(&[NodeId(0)], local_node))).await;
+    drop(epoch_sender);
+
+    let payload = NetworkMessage {
+        message: b"proposal".to_vec(),
+        broadcast_settings: (),
+    };
+    blend_and_await_release(&msg_sender, &mut node_ids, payload.clone()).await;
+    broadcasting_channel
+        .carrying
+        .send(payload)
+        .expect("the service is subscribed");
+
+    let rounds = u32::try_from(TEST_DELIVERY_DEADLINE.get()).expect("a few rounds");
+    assert!(
+        tokio::time::timeout(
+            TEST_ROUND * (rounds + 4),
+            broadcasting_channel.broadcasted.recv()
+        )
+        .await
+        .is_err(),
+        "a delivered payload must not be revealed by its sender"
     );
 }

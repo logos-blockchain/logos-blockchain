@@ -1,4 +1,7 @@
-use crate::edge::{BlendService, backends::BlendBackend};
+use crate::{
+    core::network::NetworkAdapter,
+    edge::{BlendService, backends::BlendBackend},
+};
 
 /// Exposes associated types for external modules that depend on
 /// [`BlendService`], without requiring them to specify its generic parameters.
@@ -6,6 +9,9 @@ pub trait ServiceComponents {
     /// Settings for broadcasting messages that have passed through the blend
     /// network.
     type BroadcastSettings;
+    /// The adapter that puts a payload on the broadcasting channel, which an
+    /// edge node needs to broadcast one the network failed to deliver.
+    type NetworkAdapter;
     type ProofsGenerator;
     type BackendSettings;
     /// Chain service, used by the proxy to derive membership from the chain.
@@ -17,7 +23,7 @@ pub trait ServiceComponents {
 impl<
     Backend,
     NodeId,
-    BroadcastSettings,
+    NetAdapter,
     ProofsGenerator,
     TimeBackend,
     ChainService,
@@ -27,7 +33,7 @@ impl<
     for BlendService<
         Backend,
         NodeId,
-        BroadcastSettings,
+        NetAdapter,
         ProofsGenerator,
         TimeBackend,
         ChainService,
@@ -37,9 +43,11 @@ impl<
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId>,
     NodeId: Clone,
+    NetAdapter: NetworkAdapter<RuntimeServiceId>,
 {
     type BackendSettings = Backend::Settings;
-    type BroadcastSettings = BroadcastSettings;
+    type BroadcastSettings = NetAdapter::BroadcastSettings;
+    type NetworkAdapter = NetAdapter;
     type ProofsGenerator = ProofsGenerator;
     type ChainService = ChainService;
     type TimeBackend = TimeBackend;

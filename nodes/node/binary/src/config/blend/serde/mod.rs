@@ -22,6 +22,8 @@ pub struct Config {
     pub core: CoreConfig,
     #[serde(default)]
     pub edge: EdgeConfig,
+    #[serde(default)]
+    pub abstain_on_failure: bool,
 }
 
 pub struct RequiredValues {
@@ -43,6 +45,7 @@ impl Config {
                 zk: ZkSettings { secret_key_kms_id },
                 backend: BackendConfig::default(),
             },
+            abstain_on_failure: bool::default(),
             edge: EdgeConfig::default(),
         }
     }
@@ -53,6 +56,10 @@ impl Config {
 
     pub fn set_non_ephemeral_signing_key_id(&mut self, key_id: KeyId) {
         self.non_ephemeral_signing_key_id = key_id;
+    }
+
+    pub const fn abstain_on_failure(&mut self) {
+        self.abstain_on_failure = true;
     }
 
     pub fn set_secret_zk_key_id(&mut self, key_id: KeyId) {

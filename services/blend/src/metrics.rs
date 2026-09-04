@@ -70,6 +70,12 @@ mod imp {
     pub fn inbound_messages_dropped(count: u64) {
         lb_tracing::increase_counter_u64!(blend_inbound_messages_dropped_total, count);
     }
+
+    /// Reports a payload the Blend network failed to deliver within the
+    /// delivery deadline, and that this node therefore broadcast in the clear.
+    pub fn message_bypassed_blend() {
+        lb_tracing::increase_counter_u64!(blend_messages_bypassed_total, 1);
+    }
 }
 
 pub use imp::*;
